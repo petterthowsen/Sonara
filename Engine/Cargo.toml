@@ -23,7 +23,7 @@ chrono = "0.4"
 
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }
-clack-extensions = { git = "https://github.com/prokopyl/clack" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "params"] }
 libloading = "0.8"
 
 # Serialization for plugin state

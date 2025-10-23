@@ -1,3 +1,4 @@
+@tool
 class_name SmartLineEdit extends Control
 
 ## Value type enum: NUMERIC for float/int values, STRING for text values

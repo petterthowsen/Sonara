@@ -577,10 +577,9 @@ func _on_audio_engine_connected() -> void:
 
 func _on_playhead_received(values) -> void:
 	"""Called when audio engine sends playhead update."""
+	# AudioEngineOSC normalizes all values to Array, so extract first element
 	var tick_value = 0
-	if values is int:
-		tick_value = values
-	elif values is Array and values.size() > 0:
+	if values is Array and values.size() > 0:
 		tick_value = values[0]
 	else:
 		print("[Editor] WARNING: Unexpected playhead format: ", values)
@@ -599,21 +598,23 @@ func _on_playhead_received(values) -> void:
 
 func _on_playing_received(values) -> void:
 	"""Called when audio engine playing state changes."""
-	if values is int:
-		var playing = values != 0
-		if is_playing != playing:
-			is_playing = playing
+	# AudioEngineOSC normalizes all values to Array, so extract first element
+	var playing_value = values[0] if values is Array and values.size() > 0 else values
+	var playing = (playing_value != 0)
+	
+	if is_playing != playing:
+		is_playing = playing
 
-			# Update UI
-			if play_button:
-				play_button.set_pressed_no_signal(playing)
+		# Update UI
+		if play_button:
+			play_button.set_pressed_no_signal(playing)
 
-			# Emit signals
-			if playing:
-				playback_started.emit()
-				set_process(true)
-				print("[Editor] Playback started (from engine)")
-			else:
-				playback_stopped.emit()
-				set_process(false)
-				print("[Editor] Playback stopped (from engine)")
+		# Emit signals
+		if playing:
+			playback_started.emit()
+			set_process(true)
+			print("[Editor] Playback started (from engine)")
+		else:
+			playback_stopped.emit()
+			set_process(false)
+			print("[Editor] Playback stopped (from engine)")

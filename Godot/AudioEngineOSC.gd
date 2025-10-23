@@ -101,8 +101,10 @@ func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_
 func listen(address: String, callback: Callable) -> void:
 	"""Register a callback for incoming OSC messages matching the address.
 
-	The callback will be called with the OSC message arguments (values).
-	Example: listen('/channel/1/peak', _on_peak_received)
+	The callback will be called with the OSC message arguments as an Array.
+	Example: listen('/channel/1/peak', func(args: Array): print(args[0], args[1]))
+	
+	Note: Callbacks always receive an Array, even for single-value messages.
 	"""
 	if not listeners.has(address):
 		listeners[address] = []
@@ -135,11 +137,19 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			engine_connected.emit()
 			print("[AudioEngineOSC] Engine connected!")
 
+	# Normalize values to always be an Array for consistent callback interface
+	var args: Array
+	if values is Array:
+		args = values
+	else:
+		# Single value - wrap in array
+		args = [values]
+
 	# Route to registered listeners
 	if listeners.has(address):
 		for callback in listeners[address]:
-			callback.call(values)
+			callback.call(args)
 
 	# Debug logging for unhandled messages (at reduced frequency)
 	elif randf() > 0.99:
-		print("[AudioEngineOSC] Unhandled message: ", address, " = ", values)
+		print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)

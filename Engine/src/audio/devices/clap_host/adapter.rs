@@ -6,6 +6,7 @@ use clack_host::prelude::*;
 use clack_host::events::event_types::*;
 use clack_host::events::UnknownEvent;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
+use clack_host::utils::Cookie;
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamValue, ParamInfo};
 use super::host_impl::{SonaraHost, SonaraHostShared, SonaraHostMainThread, SonaraHostAudioProcessor};
 use super::PluginError;
@@ -39,7 +40,11 @@ pub struct ClapDeviceAdapter {
     // Store note-on/off events separately since UnknownEvent is a DST
     note_on_events: Vec<NoteOnEvent>,
     note_off_events: Vec<NoteOffEvent>,
+    param_value_events: Vec<ParamValueEvent>,
     output_event_buffer: EventBuffer,
+    
+    // Current parameter values (for get_parameter)
+    current_param_values: HashMap<ParamId, ParamValue>,
     
     // State
     sample_rate: f32,
@@ -116,7 +121,7 @@ impl ClapDeviceAdapter {
         let plugin_id_cstr = descriptor.id()
             .ok_or_else(|| PluginError::InvalidPluginId("Missing plugin ID".to_string()))?;
         
-        let instance = PluginInstance::<SonaraHost>::new(
+        let mut instance = PluginInstance::<SonaraHost>::new(
             |_| SonaraHostShared,
             |_| SonaraHostMainThread,
             &bundle,
@@ -124,18 +129,19 @@ impl ClapDeviceAdapter {
             &host_info
         ).map_err(|e| PluginError::InitializationFailed(format!("Failed to create plugin instance: {:?}", e)))?;
         
-        // 4. Query parameters (if plugin supports params extension)
-        let param_info_cache = Vec::new(); // TODO: Query params via extension
+        // 4. Parameters will be queried after activation
+        // (CLAP requires plugin to be fully initialized to query params)
+        let param_info_cache = Vec::new();
         let param_map = HashMap::new();
         let reverse_param_map = HashMap::new();
+        
+        tracing::info!("Successfully loaded plugin: {}", device_name);
         
         // 5. Pre-allocate buffers (2 channels stereo for now)
         let input_buffers = vec![vec![0.0f32; max_buffer_size]; 2];
         let output_buffers = vec![vec![0.0f32; max_buffer_size]; 2];
         let input_ports = AudioPorts::with_capacity(2, 1);
         let output_ports = AudioPorts::with_capacity(2, 1);
-        
-        tracing::info!("Successfully loaded plugin: {}", device_name);
         
         Ok(Self {
             device_id,
@@ -155,7 +161,9 @@ impl ClapDeviceAdapter {
             output_ports,
             note_on_events: Vec::with_capacity(128),
             note_off_events: Vec::with_capacity(128),
+            param_value_events: Vec::with_capacity(32),
             output_event_buffer: EventBuffer::new(),
+            current_param_values: HashMap::new(),
             sample_rate,
             max_buffer_size,
             is_active: false,  // Plugin created but not activated
@@ -172,6 +180,14 @@ impl ClapDeviceAdapter {
         
         let mut instance = self.instance.take()
             .ok_or_else(|| PluginError::ActivationFailed("No plugin instance".to_string()))?;
+        
+        // Query parameters before activation (plugin must be initialized but not activated)
+        tracing::info!("Querying plugin parameters...");
+        let (param_infos, clap_to_our, our_to_clap) = Self::query_parameters(&mut instance);
+        self.param_info_cache = param_infos;
+        self.param_map = clap_to_our;
+        self.reverse_param_map = our_to_clap;
+        tracing::info!("Loaded {} parameters from plugin", self.param_info_cache.len());
         
         let audio_config = PluginAudioConfiguration {
             sample_rate: self.sample_rate as f64,
@@ -212,6 +228,81 @@ impl ClapDeviceAdapter {
             }
         }
         DeviceCategory::Effect
+    }
+    
+    /// Query parameters from a CLAP plugin instance
+    fn query_parameters(
+        instance: &mut PluginInstance<SonaraHost>
+    ) -> (Vec<super::super::ParamInfo>, HashMap<ClapId, u32>, HashMap<u32, ClapId>) {
+        use clack_extensions::params::PluginParams;
+        
+        // Get a main thread handle to query the plugin
+        let mut handle = instance.plugin_handle();
+        
+        // Try to get the params extension
+        let Some(params_ext): Option<PluginParams> = handle.get_extension() else {
+            tracing::info!("Plugin does not support params extension");
+            return (Vec::new(), HashMap::new(), HashMap::new());
+        };
+        
+        // Query parameter count
+        let param_count = params_ext.count(&mut handle);
+        tracing::info!("Plugin has {} parameters", param_count);
+        
+        if param_count == 0 {
+            return (Vec::new(), HashMap::new(), HashMap::new());
+        }
+        
+        // Allocate output structures
+        let mut param_infos = Vec::with_capacity(param_count as usize);
+        let mut clap_to_our_id = HashMap::new();
+        let mut our_to_clap_id = HashMap::new();
+        
+        // Query each parameter
+        for i in 0..param_count {
+            use clack_extensions::params::ParamInfoBuffer;
+            
+            let mut buffer = ParamInfoBuffer::new();
+            
+            if let Some(clap_info) = params_ext.get_info(&mut handle, i, &mut buffer) {
+                // Extract parameter information
+                let name = std::str::from_utf8(clap_info.name)
+                    .unwrap_or("Unknown")
+                    .trim_end_matches('\0')
+                    .to_string();
+                
+                let clap_id = clap_info.id;
+                let our_id = i; // Use index as our sequential ID
+                
+                // Map IDs
+                clap_to_our_id.insert(clap_id, our_id);
+                our_to_clap_id.insert(our_id, clap_id);
+                
+                // Create our ParamInfo
+                let param_info = super::super::ParamInfo {
+                    id: our_id,
+                    name,
+                    unit: String::new(), // CLAP doesn't expose units in the same way
+                    min: clap_info.min_value as f32,
+                    max: clap_info.max_value as f32,
+                    default: clap_info.default_value as f32,
+                    is_automation_safe: clap_info.flags.contains(
+                        clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE
+                    ),
+                };
+                
+                tracing::debug!(
+                    "  Param {}: {} (ID: {:?}, range: {:.2}-{:.2}, default: {:.2})",
+                    i, param_info.name, clap_id, param_info.min, param_info.max, param_info.default
+                );
+                
+                param_infos.push(param_info);
+            } else {
+                tracing::warn!("Failed to query parameter info for index {}", i);
+            }
+        }
+        
+        (param_infos, clap_to_our_id, our_to_clap_id)
     }
 }
 
@@ -281,10 +372,11 @@ impl AudioDevice for ClapDeviceAdapter {
             )
         }]);
         
-        // 3. Prepare events (convert to references)
+        // 3. Prepare events (convert to references - include MIDI and parameter events)
         let note_events_refs: Vec<&UnknownEvent> = self.note_on_events.iter()
             .map(|e| e.as_unknown())
             .chain(self.note_off_events.iter().map(|e| e.as_unknown()))
+            .chain(self.param_value_events.iter().map(|e| e.as_unknown()))
             .collect();
         let input_events = InputEvents::from_buffer(&note_events_refs);
         let mut output_events = OutputEvents::from_buffer(&mut self.output_event_buffer);
@@ -329,6 +421,7 @@ impl AudioDevice for ClapDeviceAdapter {
         // 6. Clear event buffers for next block
         self.note_on_events.clear();
         self.note_off_events.clear();
+        self.param_value_events.clear();
     }
     
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
@@ -352,13 +445,43 @@ impl AudioDevice for ClapDeviceAdapter {
     }
     
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
-        // TODO: Map our ParamId to CLAP's ClapId and send ParamValueEvent
-        tracing::debug!("Set parameter {} = {}", param_id, value);
+        // Map our sequential ParamId to CLAP's ClapId
+        let Some(&clap_id) = self.reverse_param_map.get(&param_id) else {
+            tracing::warn!("Parameter ID {} not found in plugin", param_id);
+            return;
+        };
+        
+        // Get the parameter info to denormalize the value
+        let param_info = self.param_info_cache.get(param_id as usize);
+        let denormalized_value = if let Some(info) = param_info {
+            // Denormalize from 0.0-1.0 to the parameter's actual range
+            info.min as f64 + (value as f64 * (info.max - info.min) as f64)
+        } else {
+            value as f64 // Fallback: assume parameter is already in correct range
+        };
+        
+        // Create parameter value event
+        let event = ParamValueEvent::new(
+            0,  // Sample offset (immediate)
+            clap_id,
+            Pckn::new(0u16, 0u16, 0u16, 0u32),  // Port, channel, key, note_id (not used for global params)
+            denormalized_value,
+            Cookie::empty()
+        );
+        
+        // Queue the event for the next process block
+        self.param_value_events.push(event);
+        
+        // Update our local cache
+        self.current_param_values.insert(param_id, value);
+        
+        tracing::debug!("Set parameter {} = {} (CLAP ID: {:?}, denormalized: {:.2})", 
+            param_id, value, clap_id, denormalized_value);
     }
     
-    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-        // TODO: Query plugin's current parameter value
-        None
+    fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
+        // Return cached value
+        self.current_param_values.get(&param_id).copied()
     }
     
     fn device_id(&self) -> &str {
@@ -385,6 +508,7 @@ impl AudioDevice for ClapDeviceAdapter {
         // Clear event buffers and audio buffers
         self.note_on_events.clear();
         self.note_off_events.clear();
+        self.param_value_events.clear();
         self.input_buffers.iter_mut().for_each(|b| b.fill(0.0));
         self.output_buffers.iter_mut().for_each(|b| b.fill(0.0));
         tracing::debug!("Plugin reset: {}", self.device_name);

@@ -631,9 +631,7 @@ impl OscServer {
                 ("/plugin/info".to_string(), args)
             }
             EngineStatus::PluginParameterInfo { channel_id, device_position, param_id, name, min, max, default } => {
-                ("/plugin/param/info".to_string(), vec![
-                    OscType::Int(channel_id as i32),
-                    OscType::Int(device_position as i32),
+                (format!("/channel/{}/device/{}/param/info", channel_id, device_position), vec![
                     OscType::Int(param_id as i32),
                     OscType::String(name),
                     OscType::Float(min),
@@ -642,9 +640,7 @@ impl OscServer {
                 ])
             }
             EngineStatus::PluginParameterCount { channel_id, device_position, count } => {
-                ("/plugin/param/count".to_string(), vec![
-                    OscType::Int(channel_id as i32),
-                    OscType::Int(device_position as i32),
+                (format!("/channel/{}/device/{}/param/count", channel_id, device_position), vec![
                     OscType::Int(count as i32),
                 ])
             }

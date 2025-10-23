@@ -92,23 +92,24 @@ All messages follow the resource-based path pattern established in the main OSC 
 
 **Rust → Godot (parameter count):**
 ```
-/plugin/param/count [channel_id, device_position, count]
-  channel_id:      int (channel ID)
-  device_position: int (device position)
-  count:           int (number of parameters)
+/channel/{channel_id}/device/{device_position}/param/count [count]
+  count: int (number of parameters)
 ```
 
 **Rust → Godot (for each parameter):**
 ```
-/plugin/param/info [channel_id, device_position, param_id, name, min, max, default]
-  channel_id:      int    (channel ID)
-  device_position: int    (device position)
-  param_id:        int    (parameter ID, sequential 0-based)
-  name:            string (parameter name, e.g., "Cutoff")
-  min:             float  (minimum value)
-  max:             float  (maximum value)
-  default:         float  (default value)
+/channel/{channel_id}/device/{device_position}/param/info [param_id, name, min, max, default]
+  param_id: int    (parameter ID, sequential 0-based)
+  name:     string (parameter name, e.g., "Cutoff")
+  min:      float  (minimum value)
+  max:      float  (maximum value)
+  default:  float  (default value)
 ```
+
+**Notes:**
+- Uses path-based routing (consistent with `/channel/{id}/peak` pattern)
+- Each channel only listens to its own parameter messages
+- More efficient than argument-based routing with global listeners
 
 ### Set Plugin Parameter
 

@@ -217,6 +217,7 @@ source = "git+https://github.com/prokopyl/clack#5deaa1be9b5af7078d75cbe54abefee1
 dependencies = [
  "bitflags 2.9.4",
  "clack-common",
+ "clack-host",
  "clap-sys",
 ]
 

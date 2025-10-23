@@ -15,7 +15,7 @@ const CompactParameterControlScene = preload("res://components/device/compact/Co
 var device : DeviceInstance
 
 
-func _unbind_from_device(dev : DeviceInstance):
+func _unbind_from_device(_dev : DeviceInstance):
 	_clear_parameter_controls()
 
 
@@ -28,6 +28,12 @@ func bind_to_device(dev : DeviceInstance):
 	enabled.value = dev.enabled
 	name_label.text = dev.get_display_name()
 	_create_parameter_controls()
+	
+	# Listen for parameter updates (for plugins that load params asynchronously)
+	var channel = Sonara.editor.project.get_channel_by_id(dev.channel_id)
+	if channel:
+		if not channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
+			channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 
 func _create_parameter_controls() -> void:
@@ -58,3 +64,15 @@ func _create_parameter_control_for_param(param: DeviceParameter) -> void:
 	# Setup the control with device instance and parameter ID
 	control.setup(device, param.id)
 	parameters_box.add_child(control)
+
+
+## Handle device parameters updated (for plugins that load parameters asynchronously)
+func _on_device_parameters_updated(device_pos: int) -> void:
+	if not device:
+		return
+	
+	# Check if this update is for our device
+	if device.position == device_pos:
+		print("[DevicePanel] Parameters updated for device %s, refreshing UI" % device.device.name)
+		_clear_parameter_controls()
+		_create_parameter_controls()

@@ -1,6 +1,13 @@
-[gd_scene load_steps=2 format=3 uid="uid://8vyptyjju6y8"]
+[gd_scene load_steps=3 format=3 uid="uid://8vyptyjju6y8"]
 
 [ext_resource type="Script" uid="uid://bc01lde4l6svk" path="res://browser/Browser.gd" id="1_ugyrj"]
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_ugyrj"]
+content_margin_left = 4.0
+content_margin_top = 0.0
+content_margin_right = 4.0
+content_margin_bottom = 0.0
+color = Color(0.30078125, 0.30078125, 0.30078125, 1)
 
 [node name="Browser" type="VBoxContainer"]
 anchors_preset = 15
@@ -38,7 +45,9 @@ clear_button_enabled = true
 select_all_on_focus = true
 
 [node name="HSeparator" type="HSeparator" parent="Content/VBox"]
+visible = false
 layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_ugyrj")
 
 [node name="Tabs" type="ScrollContainer" parent="Content/VBox"]
 custom_minimum_size = Vector2(120, 0)
