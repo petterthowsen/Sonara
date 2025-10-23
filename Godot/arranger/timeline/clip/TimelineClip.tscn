@@ -1,0 +1,105 @@
+[gd_scene load_steps=7 format=3 uid="uid://5xix36ox2gu4"]
+
+[ext_resource type="Script" uid="uid://dsqohehuqnchw" path="res://arranger/timeline/clip/TimelineClip.gd" id="1_timeline_clip"]
+[ext_resource type="Script" uid="uid://crj36c8i65ql" path="res://arranger/timeline/clip/MidiclipRenderer.gd" id="2_c74fi"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hpdcv"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.16, 0.16, 0.16, 0.5058824)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.43137255, 0.43137255, 0.43137255, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_c74fi"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.2, 0.2, 0.2, 0.49019608)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.52734375, 0.52734375, 0.52734375, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ehbcd"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.24, 0.24, 0.24, 0.5372549)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.7890625, 0.7890625, 0.7890625, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w6h2l"]
+content_margin_left = 6.0
+content_margin_top = 2.0
+content_margin_right = 6.0
+content_margin_bottom = 2.0
+bg_color = Color(0, 0, 0, 0.29803923)
+border_width_bottom = 1
+border_color = Color(0.43, 0.43, 0.43, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_detail = 5
+
+[node name="Clip" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 214.0
+offset_bottom = 82.0
+size_flags_vertical = 3
+mouse_filter = 1
+script = ExtResource("1_timeline_clip")
+style_normal = SubResource("StyleBoxFlat_hpdcv")
+style_hovered = SubResource("StyleBoxFlat_c74fi")
+style_selected = SubResource("StyleBoxFlat_ehbcd")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")
+
+[node name="Label" type="Label" parent="VBoxContainer/Header"]
+layout_mode = 2
+mouse_filter = 1
+text = "Clip Name"
+text_overrun_behavior = 3
+
+[node name="ClipRenderer" type="Control" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 1
+script = ExtResource("2_c74fi")

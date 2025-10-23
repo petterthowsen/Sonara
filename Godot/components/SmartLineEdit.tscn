@@ -1,0 +1,67 @@
+[gd_scene load_steps=4 format=3 uid="uid://cpgs8hy6ujmxj"]
+
+[ext_resource type="Script" uid="uid://b8wqrhhe6o2m3" path="res://components/SmartLineEdit.gd" id="1_gmlna"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_1hr2l"]
+shadow_size = 2
+shadow_color = Color(0, 0, 0, 0.6745098)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_an1hh"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0, 0, 0, 1)
+border_width_bottom = 2
+border_color = Color(0, 0, 0, 0.6)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="SmartLineEdit" type="Control"]
+layout_mode = 3
+anchors_preset = 14
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_gmlna")
+
+[node name="Label" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+mouse_filter = 1
+text = "-6 dB"
+label_settings = SubResource("LabelSettings_1hr2l")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="LineEdit" type="LineEdit" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 16
+theme_override_styles/focus = SubResource("StyleBoxFlat_an1hh")
+text = "-6"
+alignment = 1
+max_length = 5
+context_menu_enabled = false
+emoji_menu_enabled = false
+drag_and_drop_selection_enabled = false
+flat = true
+select_all_on_focus = true
+caret_blink = true

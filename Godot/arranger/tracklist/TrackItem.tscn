@@ -1,0 +1,141 @@
+[gd_scene load_steps=8 format=3 uid="uid://ca1ed008xlb1o"]
+
+[ext_resource type="Script" uid="uid://cjjiuujvntxw0" path="res://arranger/tracklist/TrackItem.gd" id="1_q68hb"]
+[ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="2_shsim"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_w2atu"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_q68hb"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+bg_color = Color(0.1, 0.1, 0.1, 0.6)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bcy77"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+bg_color = Color(1, 0, 0, 0.5568628)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ks7bc"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+bg_color = Color(0.8, 0.65333337, 0, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_shsim"]
+bg_color = Color(0.8, 0.41333333, 0, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[node name="Track" type="MarginContainer"]
+custom_minimum_size = Vector2(123, 32)
+offset_right = 185.0
+offset_bottom = 38.0
+script = ExtResource("1_q68hb")
+
+[node name="HBox" type="HBoxContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Volumeter" type="Control" parent="HBox"]
+custom_minimum_size = Vector2(12, 0)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("2_shsim")
+min_width = 12
+bg_color = Color(0, 0, 0, 0.5019608)
+bar_color = Color(0.83, 0.83, 0.83, 0.49411765)
+peak = 0.655
+volume_db = -60.0
+
+[node name="MarginContainer" type="MarginContainer" parent="HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 3.0
+theme_override_constants/margin_left = 2
+theme_override_constants/margin_top = 3
+theme_override_constants/margin_right = 3
+theme_override_constants/margin_bottom = 0
+
+[node name="VBox" type="VBoxContainer" parent="HBox/MarginContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 20.0
+
+[node name="Top" type="FlowContainer" parent="HBox/MarginContainer/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="HBox/MarginContainer/VBox/Top"]
+custom_minimum_size = Vector2(35, 30)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Synth One"
+label_settings = SubResource("LabelSettings_w2atu")
+vertical_alignment = 1
+autowrap_mode = 3
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="Toggles" type="FlowContainer" parent="HBox/MarginContainer/VBox/Top"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+alignment = 2
+last_wrap_alignment = 2
+
+[node name="ArmToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles"]
+custom_minimum_size = Vector2(30, 30)
+layout_mode = 2
+size_flags_stretch_ratio = 0.33
+theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
+toggle_mode = true
+text = "R"
+
+[node name="SoloMute" type="FlowContainer" parent="HBox/MarginContainer/VBox/Top/Toggles"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="SoloToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles/SoloMute"]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
+toggle_mode = true
+text = "S"
+
+[node name="MuteToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles/SoloMute"]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
+toggle_mode = true
+text = "M"
+
+[node name="Bottom" type="FlowContainer" parent="HBox/MarginContainer/VBox"]
+layout_mode = 2
+size_flags_vertical = 6
+alignment = 2

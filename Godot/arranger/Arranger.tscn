@@ -1,0 +1,172 @@
+[gd_scene load_steps=11 format=3 uid="uid://dwx58rtumvnkj"]
+
+[ext_resource type="Script" uid="uid://3rv0d2u2oata" path="res://arranger/Arranger.gd" id="1_bh1i7"]
+[ext_resource type="PackedScene" uid="uid://cx5s8jbwq0dt2" path="res://arranger/tracklist/TrackList.tscn" id="1_hqaxx"]
+[ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_dtx23"]
+[ext_resource type="Script" uid="uid://csw2ec1s52u2m" path="res://components/GridHelper.gd" id="3_nqsw4"]
+[ext_resource type="PackedScene" uid="uid://cyvwigrev1rtt" path="res://arranger/timeline/Timeline.tscn" id="4_dtx23"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bh1i7"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.16796875, 0.16796875, 0.16796875, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="Resource" id="Resource_t0y6b"]
+script = ExtResource("3_nqsw4")
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tv7ag"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.1328125, 0.1328125, 0.1328125, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_q3thm"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.1, 0.1, 0.1, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cmtxc"]
+content_margin_left = 4.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.1640625, 0.1640625, 0.1640625, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="ArrangeView" type="VBoxContainer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_bh1i7")
+
+[node name="VSplitContainer" type="VSplitContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 6
+
+[node name="ArrangeTop" type="PanelContainer" parent="VSplitContainer"]
+layout_mode = 2
+
+[node name="HBox" type="HBoxContainer" parent="VSplitContainer/ArrangeTop"]
+layout_mode = 2
+
+[node name="TracklistHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox"]
+custom_minimum_size = Vector2(187, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_bh1i7")
+
+[node name="Buttons" type="HBoxContainer" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader"]
+layout_mode = 2
+
+[node name="AddTrackButton" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/Buttons"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+text = "+"
+
+[node name="TimelineHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VBox" type="VBoxContainer" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader"]
+layout_mode = 2
+
+[node name="Ruler" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("2_dtx23")
+grid_helper = SubResource("Resource_t0y6b")
+
+[node name="VScroll" type="ScrollContainer" parent="VSplitContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 2
+
+[node name="HSplit" type="HSplitContainer" parent="VSplitContainer/VScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="TracksPanel" type="PanelContainer" parent="VSplitContainer/VScroll/HSplit"]
+z_index = 1
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_tv7ag")
+
+[node name="VBox" type="VBoxContainer" parent="VSplitContainer/VScroll/HSplit/TracksPanel"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="TrackList" parent="VSplitContainer/VScroll/HSplit/TracksPanel/VBox" instance=ExtResource("1_hqaxx")]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 1
+
+[node name="TimelinePanel" type="PanelContainer" parent="VSplitContainer/VScroll/HSplit"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_q3thm")
+
+[node name="HScroll" type="ScrollContainer" parent="VSplitContainer/VScroll/HSplit/TimelinePanel"]
+layout_mode = 2
+horizontal_scroll_mode = 2
+vertical_scroll_mode = 0
+
+[node name="Timeline" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll" instance=ExtResource("4_dtx23")]
+layout_mode = 2
+
+[node name="Overlay" type="Control" parent="VSplitContainer/VScroll/HSplit/TimelinePanel"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Playhead" type="ColorRect" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay"]
+custom_minimum_size = Vector2(1, 0)
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+grow_vertical = 2
+size_flags_horizontal = 0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.78431374)
+
+[node name="ArrangerBottom" type="PanelContainer" parent="."]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_cmtxc")
+
+[node name="HBoxContainer" type="HBoxContainer" parent="ArrangerBottom"]
+layout_mode = 2
+
+[node name="Buttons" type="HBoxContainer" parent="ArrangerBottom/HBoxContainer"]
+layout_mode = 2
+
+[node name="Button" type="Button" parent="ArrangerBottom/HBoxContainer/Buttons"]
+layout_mode = 2
+text = "A"

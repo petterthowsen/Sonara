@@ -1,0 +1,85 @@
+[gd_scene load_steps=6 format=3 uid="uid://c07tx27b6f3o"]
+
+[ext_resource type="Script" uid="uid://d2hhmluxnli62" path="res://mixer/ChannelContextMenu.gd" id="1_3cfc4"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_w3qfh"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h3piv"]
+content_margin_left = 0.0
+content_margin_top = 4.0
+content_margin_right = 0.0
+content_margin_bottom = 4.0
+bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.22265625, 0.22265625, 0.22265625, 1)
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+shadow_size = 1
+shadow_offset = Vector2(1, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_i42wi"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
+draw_center = false
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_f3rnv"]
+content_margin_left = 4.0
+content_margin_top = 0.0
+content_margin_right = 4.0
+content_margin_bottom = 0.0
+color = Color(0.5, 0.5, 0.5, 1)
+grow_begin = -1.0
+grow_end = -1.0
+
+[node name="ChannelContextMenu" type="PopupPanel"]
+oversampling_override = 1.0
+position = Vector2i(55, 0)
+size = Vector2i(158, 100)
+visible = true
+theme_override_styles/panel = SubResource("StyleBoxFlat_h3piv")
+script = ExtResource("1_3cfc4")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+offset_top = 4.0
+offset_right = 156.0
+offset_bottom = 94.0
+
+[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_i42wi")
+
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
+layout_mode = 2
+
+[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header/HBox"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+color = Color(0.4191594, 0.734375, 0.3184204, 1)
+edit_alpha = false
+edit_intensity = false
+
+[node name="Label" parent="VBoxContainer/Header/HBox" instance=ExtResource("2_w3qfh")]
+layout_mode = 2
+size_flags_horizontal = 3
+value_type = 1
+display_format = "%s"
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
+
+[node name="DisableCheckbox" type="CheckButton" parent="VBoxContainer"]
+layout_mode = 2
+tooltip_text = "Disable to save memory"
+text = "Disabled"

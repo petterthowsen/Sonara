@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "godot-mcp": {
+         "command": "node",
+         "args": [
+           "/home/pelatho/Documents/AI_LLM/MCP/ee0pdt-godot-mcp/server/dist/index.js"
+         ],
+         "env": {
+           "MCP_TRANSPORT": "stdio"
+         }
+    }
+  }
+}

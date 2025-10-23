@@ -1,0 +1,23 @@
+# Rust/Cargo
+Engine/target/
+Engine/**/*.rs.bk
+Engine/*.pdb
+Engine/logs/*.log
+
+# Godot 4+ specific ignores
+Godot/.godot/
+Godot/.nomedia
+
+# Godot-specific ignores
+Godot/.import/
+Godot/export.cfg
+Godot/export_credentials.cfg
+Godot/*.tmp
+
+# Imported translations (automatically generated from CSV files)
+Godot/*.translation
+
+# Mono-specific ignores
+Godot/.mono/
+Godot/data_*/
+Godot/mono_crash.*.json

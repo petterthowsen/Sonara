@@ -1,0 +1,15 @@
+---
+alwaysApply: true
+---
+# Overview
+
+Sonara is a Linux-First DAW built on Rust Audio Engine and Godot Front End.
+
+Audio engine is in ./Engine while the godot project is in ./Godot
+
+OSC is used for communication between backend audio and godot front end.
+
+## Conventions
+
+- Middle C = C3 = Midi #60
+- 960 PPQ standard

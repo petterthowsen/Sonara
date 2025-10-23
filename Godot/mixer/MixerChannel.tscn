@@ -1,0 +1,472 @@
+[gd_scene load_steps=23 format=3 uid="uid://d2pk5lsj80cg4"]
+
+[ext_resource type="PackedScene" uid="uid://de6qmyspkqaw7" path="res://components/meter/Meter.tscn" id="1_nssln"]
+[ext_resource type="Script" uid="uid://cb0xf0d0kij7f" path="res://mixer/MixerChannel.gd" id="1_o7qmb"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_xa46q"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_hah71"]
+[ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_m2250"]
+[ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_cybrc"]
+[ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_1hr2l"]
+[ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
+resource_local_to_scene = true
+bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 2
+border_width_bottom = 1
+border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yexk5"]
+resource_local_to_scene = true
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0, 0.71894944, 0.35271025, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_xv6e8"]
+font_size = 14
+shadow_size = 2
+shadow_color = Color(0, 0, 0, 0.32156864)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8wi2u"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0, 0, 0, 0.49803922)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hah71"]
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0.1882353, 0.1882353, 0.1882353, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_an1hh"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+draw_center = false
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nssln"]
+content_margin_left = 4.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+draw_center = false
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xa46q"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.14117648, 0.14117648, 0.14117648, 1)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+corner_detail = 10
+shadow_size = 1
+shadow_offset = Vector2(1, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pfcwk"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.6, 0.12, 0.12, 1)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+corner_detail = 10
+shadow_size = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_m2250"]
+bg_color = Color(0.8, 0.65333337, 0, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cybrc"]
+bg_color = Color(0.8, 0.41333333, 0, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_573y5"]
+content_margin_left = 4.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0, 0, 0, 1)
+draw_center = false
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1hr2l"]
+content_margin_left = 4.0
+content_margin_top = 0.0
+content_margin_right = 4.0
+content_margin_bottom = 0.0
+bg_color = Color(0.1, 0.1, 0.1, 0.6)
+draw_center = false
+corner_detail = 5
+
+[sub_resource type="LabelSettings" id="LabelSettings_xa46q"]
+font_size = 12
+shadow_size = 2
+shadow_color = Color(0, 0, 0, 0.6745098)
+
+[node name="MixerChannel" type="PanelContainer" groups=["mixer_channel"]]
+custom_minimum_size = Vector2(50, 0)
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 56.0
+grow_vertical = 2
+size_flags_horizontal = 0
+focus_mode = 2
+mouse_default_cursor_shape = 10
+theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
+script = ExtResource("1_o7qmb")
+
+[node name="HBox" type="HBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="VBox" type="VBoxContainer" parent="HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="Header" type="Panel" parent="HBox/VBox"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+size_flags_vertical = 0
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_yexk5")
+
+[node name="SmartLineEdit" parent="HBox/VBox/Header" instance=ExtResource("2_xa46q")]
+layout_mode = 1
+anchors_preset = 15
+anchor_top = 0.0
+anchor_bottom = 1.0
+mouse_filter = 1
+value_type = 1
+display_format = "%s"
+
+[node name="Label" parent="HBox/VBox/Header/SmartLineEdit" index="0"]
+text = "Layered Bass"
+label_settings = SubResource("LabelSettings_xv6e8")
+autowrap_mode = 3
+text_overrun_behavior = 4
+
+[node name="LineEdit" parent="HBox/VBox/Header/SmartLineEdit" index="1"]
+anchors_preset = 14
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_top = -15.5
+offset_bottom = 15.5
+text = "Layer"
+max_length = 0
+expand_to_text_length = true
+flat = false
+
+[node name="BigMeter" parent="HBox/VBox" groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
+visible = false
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+size_flags_stretch_ratio = 3.0
+peak_left = 0.9
+peak_right = 0.5
+bars_spacing = 2
+bar_bg_color = Color(0.0859375, 0.0859375, 0.0859375, 1)
+bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
+bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
+bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
+tick_color = Color(1, 1, 1, 0.39215687)
+zero_db_color = Color(1, 1, 1, 0.74509805)
+tick_font_size = 14
+volume_db = -6.0
+fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
+
+[node name="DeviceList" parent="HBox/VBox" instance=ExtResource("8_xa46q")]
+custom_minimum_size = Vector2(0, 87.88)
+layout_mode = 2
+size_flags_stretch_ratio = 1.3
+theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
+hide_parameters = true
+
+[node name="Sends" type="ScrollContainer" parent="HBox/VBox" groups=["mixer_channel_sends"]]
+custom_minimum_size = Vector2(0, 68)
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="SendsPanel" type="PanelContainer" parent="HBox/VBox/Sends"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_hah71")
+
+[node name="FlowContainer" type="FlowContainer" parent="HBox/VBox/Sends/SendsPanel"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="SendControl" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("3_hah71")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl"]
+layout_mode = 2
+text = "FX 1"
+horizontal_alignment = 1
+
+[node name="SendControl2" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl2"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("3_hah71")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl2"]
+layout_mode = 2
+text = "FX 2"
+horizontal_alignment = 1
+
+[node name="SendControl3" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl3"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("3_hah71")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl3"]
+layout_mode = 2
+text = "FX 3"
+horizontal_alignment = 1
+
+[node name="SendControl4" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl4"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("3_hah71")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl4"]
+layout_mode = 2
+text = "FX 4"
+horizontal_alignment = 1
+
+[node name="IO" type="PanelContainer" parent="HBox/VBox" groups=["mixer_channel_io"]]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_an1hh")
+
+[node name="OutputMenuButtton" type="MenuButton" parent="HBox/VBox/IO"]
+layout_mode = 2
+text = "Master"
+flat = false
+text_overrun_behavior = 3
+autowrap_mode = 2
+item_count = 1
+popup/item_0/text = "Master"
+popup/item_0/id = 0
+
+[node name="Controls" type="PanelContainer" parent="HBox/VBox" groups=["mixer_channels_controls"]]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_nssln")
+
+[node name="FlowContainer" type="FlowContainer" parent="HBox/VBox/Controls"]
+layout_mode = 2
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="ArmToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer"]
+custom_minimum_size = Vector2(16, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.3
+theme_override_styles/normal = SubResource("StyleBoxFlat_xa46q")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_pfcwk")
+toggle_mode = true
+text = "R"
+
+[node name="SoloMute" type="FlowContainer" parent="HBox/VBox/Controls/FlowContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="SoloToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer/SoloMute"]
+custom_minimum_size = Vector2(22, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_m2250")
+toggle_mode = true
+text = "S"
+
+[node name="MuteToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer/SoloMute"]
+custom_minimum_size = Vector2(22, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_cybrc")
+toggle_mode = true
+text = "M"
+
+[node name="Panning" type="PanelContainer" parent="HBox/VBox"]
+layout_mode = 2
+focus_mode = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_573y5")
+
+[node name="HSlider" type="Control" parent="HBox/VBox/Panning"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+mouse_filter = 1
+mouse_default_cursor_shape = 2
+script = ExtResource("3_m2250")
+min_value = -100.0
+max_value = 100.0
+bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
+fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
+
+[node name="DualPanSlider" type="Control" parent="HBox/VBox/Panning"]
+visible = false
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+mouse_filter = 1
+mouse_default_cursor_shape = 2
+script = ExtResource("4_cybrc")
+min_value = -100.0
+max_value = 100.0
+a_value = -0.5
+b_value = 0.0
+bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
+fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
+alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
+
+[node name="Volume" type="PanelContainer" parent="HBox/VBox"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")
+
+[node name="HBox" type="HBoxContainer" parent="HBox/VBox/Volume"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="CompactMeter" parent="HBox/VBox/Volume/HBox" groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
+layout_mode = 2
+peak_left = 0.9
+peak_right = 0.5
+bars_spacing = 6
+bar_bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
+bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
+bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
+bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
+tick_color = Color(1, 1, 1, 0.39215687)
+zero_db_color = Color(1, 1, 1, 0.74509805)
+tick_font_size = 14
+show_fader = true
+fader_bg_color = Color(0.14642392, 0.11433411, 0.23046875, 1)
+volume_db = -6.0
+fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
+
+[node name="Fader" type="Control" parent="HBox/VBox/Volume/HBox" groups=["mixer_channel_fader"]]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+script = ExtResource("6_1hr2l")
+value = -6.0
+bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
+fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
+
+[node name="SmartLineEdit" parent="HBox/VBox/Volume/HBox/Fader" instance=ExtResource("2_xa46q")]
+layout_mode = 1
+mouse_filter = 1
+suffix = "dB"
+edit_via_click = false
+
+[node name="Label" parent="HBox/VBox/Volume/HBox/Fader/SmartLineEdit" index="0"]
+label_settings = SubResource("LabelSettings_xa46q")
+
+[node name="Details" type="VBoxContainer" parent="HBox"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DeviceList" parent="HBox/Details" instance=ExtResource("8_xa46q")]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
+
+[node name="PanModePopup" type="PopupMenu" parent="."]
+oversampling_override = 1.0
+title = "Pan Mode"
+size = Vector2i(174, 100)
+item_count = 2
+item_0/text = "Stereo Combined"
+item_0/checkable = 1
+item_0/checked = true
+item_0/id = 0
+item_1/text = "Stereo Dual"
+item_1/checkable = 1
+item_1/id = 1
+
+[editable path="HBox/VBox/Header/SmartLineEdit"]
+[editable path="HBox/VBox/BigMeter"]
+[editable path="HBox/VBox/Volume/HBox/CompactMeter"]
+[editable path="HBox/VBox/Volume/HBox/Fader/SmartLineEdit"]

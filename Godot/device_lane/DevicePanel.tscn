@@ -1,0 +1,139 @@
+[gd_scene load_steps=11 format=3 uid="uid://brth8uue4ow8b"]
+
+[ext_resource type="Script" uid="uid://in8ekhi5eyta" path="res://components/LightButton.gd" id="1_1cidk"]
+[ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://device_lane/DevicePanel.gd" id="1_v0u3q"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_khhpn"]
+content_margin_left = 2.0
+content_margin_top = 1.0
+content_margin_right = 8.0
+content_margin_bottom = 1.0
+bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="Gradient" id="Gradient_jx3fc"]
+interpolation_mode = 2
+offsets = PackedFloat32Array(0.005, 0.40784314, 0.9843137, 1.025)
+colors = PackedColorArray(0.9954834, 1, 0.421875, 1, 1, 0.73399997, 0.16000003, 0.8235294, 1.0000141, 0.63806397, 0.33012754, 0.0251396, 1, 0.63390625, 0.33999997, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_7u30j"]
+gradient = SubResource("Gradient_jx3fc")
+fill = 1
+fill_from = Vector2(0.4957265, 0.5)
+fill_to = Vector2(0.14529915, 0.14102565)
+
+[sub_resource type="LabelSettings" id="LabelSettings_r4rlf"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7u30j"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+expand_margin_bottom = 3.0
+
+[sub_resource type="ButtonGroup" id="ButtonGroup_1cidk"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v0u3q"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
+draw_center = false
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="Device" type="PanelContainer"]
+offset_right = 339.0
+offset_bottom = 107.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
+script = ExtResource("1_v0u3q")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_khhpn")
+
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Enabled" type="Control" parent="VBoxContainer/Header/HBox"]
+layout_mode = 2
+size_flags_vertical = 4
+script = ExtResource("1_1cidk")
+diameter = 18.0
+light_color = Color(1, 0.815, 0.26, 1)
+light_texture = SubResource("GradientTexture2D_7u30j")
+border_color = Color(0, 0, 0, 1)
+value = true
+
+[node name="Name" type="Label" parent="VBoxContainer/Header/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "PolySynth"
+label_settings = SubResource("LabelSettings_r4rlf")
+
+[node name="TabButtons" type="HBoxContainer" parent="VBoxContainer/Header/HBox"]
+layout_mode = 2
+size_flags_vertical = 8
+
+[node name="ParamsButton" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+layout_mode = 2
+theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
+toggle_mode = true
+button_pressed = true
+button_group = SubResource("ButtonGroup_1cidk")
+text = "Parameters"
+
+[node name="ParamsButton2" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+visible = false
+layout_mode = 2
+theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
+toggle_mode = true
+button_group = SubResource("ButtonGroup_1cidk")
+text = "Parameters"
+
+[node name="Content" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_v0u3q")
+
+[node name="Parameters" type="ScrollContainer" parent="VBoxContainer/Content"]
+layout_mode = 2
+follow_focus = true
+horizontal_scroll_mode = 0
+
+[node name="VBox" type="VBoxContainer" parent="VBoxContainer/Content/Parameters"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 4

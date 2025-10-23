@@ -1,0 +1,10 @@
+---
+globs: Engine/**/*
+alwaysApply: false
+---
+## Rust Code Style
+
+- Follow standard Rust conventions (`cargo fmt`)
+- Add docstrings to public APIs
+- Never use allocations, blocking calls, or fallible locks in the audio callback thread
+- Use `info!`, `warn!`, `error!` macros for logging (not `println!`)

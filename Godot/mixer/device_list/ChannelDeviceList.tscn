@@ -1,0 +1,44 @@
+[gd_scene load_steps=4 format=3 uid="uid://csa4qoy44e5vn"]
+
+[ext_resource type="Script" uid="uid://1ll71lnbrlnm" path="res://mixer/device_list/ChannelDeviceList.gd" id="1_ekfn8"]
+[ext_resource type="PackedScene" uid="uid://dul180dx6ngl4" path="res://components/device/compact/CompactDevicePanel.tscn" id="2_npgpv"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_npgpv"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.09411765, 0.09411765, 0.09411765, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="DeviceList" type="PanelContainer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_npgpv")
+script = ExtResource("1_ekfn8")
+
+[node name="ScrollContainer" type="ScrollContainer" parent="."]
+layout_mode = 2
+follow_focus = true
+horizontal_scroll_mode = 0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 1
+
+[node name="CompactDevicePanel" parent="ScrollContainer/VBoxContainer" instance=ExtResource("2_npgpv")]
+layout_mode = 2
+
+[node name="CompactDevicePanel2" parent="ScrollContainer/VBoxContainer" instance=ExtResource("2_npgpv")]
+layout_mode = 2

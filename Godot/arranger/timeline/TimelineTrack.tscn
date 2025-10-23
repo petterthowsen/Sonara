@@ -1,0 +1,17 @@
+[gd_scene load_steps=2 format=3 uid="uid://bgufua4orq6jp"]
+
+[ext_resource type="Script" uid="uid://dconl3o2mb655" path="res://arranger/timeline/TimelineTrack.gd" id="1_timeline_track"]
+
+[node name="TimelineTrack" type="Control"]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 102.0
+offset_bottom = 60.0
+size_flags_horizontal = 3
+size_flags_vertical = 0
+mouse_filter = 1
+script = ExtResource("1_timeline_track")
+grid_color_bar = Color(1, 1, 1, 1)
+grid_color_beat = Color(1.9610009, 1.9610009, 1.9610009, 0.5254902)
+grid_color_tick = Color(0.51, 0.51, 0.51, 0.5176471)

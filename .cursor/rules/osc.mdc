@@ -1,0 +1,19 @@
+---
+description: When wiring Godot to Audio Engine via OSC
+alwaysApply: false
+---
+### Modifying Data and Syncing to Audio Engine
+
+**The pattern** (object-oriented, self-synchronizing):
+1. UI calls data object setter (e.g., `channel.set_volume(-6.0)`)
+2. Data object updates internal state
+3. Data object sends OSC message to audio engine
+4. Data object emits signal (e.g., `volume_changed.emit(-6.0)`)
+5. UI listens to signal and updates display
+
+**Adding a new syncable property:**
+1. Add property to data class (e.g., `Channel.gd`)
+2. Add signal: `signal property_changed(value)`
+3. Add setter method that sends OSC and emits signal
+4. Add to `sync_to_engine()` method
+5. UI connects to signal in `bind_to_channel()`

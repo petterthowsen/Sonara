@@ -1,0 +1,390 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**Sonara** is a Linux Digital Audio Workstation with:
+- **Godot Engine (GDScript)** for the UI layer
+- **Rust audio engine** for real-time audio processing using CPAL and Clap/VST Plugin discovery and hosting
+- **OSC** for bi-directional communication between UI and audio engine
+
+## Conventions
+
+### MIDI
+- **Middle C = C3 = MIDI #60** (used throughout the codebase)
+
+## Building and Running
+
+### Audio Engine (Rust)
+```bash
+cd Engine
+
+# Development build
+cargo build
+
+# Release build (optimized)
+cargo build --release
+
+# Run the engine
+cargo run --release
+```
+
+## Testing
+
+### Rust Engine Tests
+```bash
+cd Engine
+cargo test
+```
+
+## Architecture
+
+### Communication Flow
+
+**Architecture (Object-oriented, self-synchronizing data):**
+```
+UI Components → Data Objects (Channel/Track/Project) → AudioEngineOSC → Rust Engine
+                         ↓                                      ↕
+                    emit signals                          OSC/UDP 7000/7001
+                         ↓
+                  UI Components (listen)
+
+Each data object manages its own audio engine sync via signals:
+- Channel.set_volume() → sends OSC + emits volume_changed signal → MixerChannel updates UI
+- Channel._on_peak_received() → emits peak_updated signal → MixerChannel updates meter
+```
+
+**Key components:**
+- **AudioEngineOSC** (`Godot/AudioEngineOSC.gd`): Low-level OSC transport with `send()` and `listen()` methods
+- **Project** (`Godot/data/Project.gd`): Owns channels/tracks, manages ID allocation, `connect_to_engine()` cascades to all data
+- **Channel** (`Godot/data/Channel.gd`): Self-syncing data object with unique ID, property setters, and signals
+- **Track** (`Godot/data/Track.gd`): Self-syncing data object with unique ID, manages clips/MIDI
+- **Editor** (`Godot/editor/Editor.gd`): Project lifecycle manager, coordinates UI, simplified from previous design
+- **UI Components** (MixerChannel, etc.): Connect directly to data object signals, call data setters (not Editor methods)
+
+### Thread Model
+The Rust audio engine uses a **lock-free architecture** for real-time safety:
+
+- **Main Thread**: OSC server, initialization, and command reception
+- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations/locks allowed)
+- **Communication**: Crossbeam unbounded MPMC channels for command passing
+
+Commands flow: OSC → Main thread → Crossbeam channel → Audio thread (try_recv)
+Status flows: Audio thread → Crossbeam channel → Main thread → OSC client → Godot
+
+### Audio Processing Pipeline
+The audio engine (`Engine/src/audio/engine.rs`) processes audio in this order:
+1. Process pending commands from channel (non-blocking `try_recv`)
+2. Clear all channel audio buffers
+3. If playing: advance playhead tick-by-tick, triggering MIDI note on/off events
+4. Generate audio samples from active voices (sine wave oscillators)
+5. Write samples to track's output channel buffer
+6. Mix channels: apply gain/pan, route to output channels
+7. Output master channel (ID 0) to audio hardware via CPAL
+8. Update peak meters for all channels
+9. Send periodic status updates (playhead, meters) at 20Hz
+
+### OSC Protocol
+Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful style).
+
+**Godot → Rust (port 7000)**:
+- Transport: `/transport/play`, `/transport/stop`, `/transport/seek [ticks]`
+- Channels: `/channel/{id}/create [name]`, `/channel/{id}/volume [db]`, `/channel/{id}/mute [0|1]`
+- Tracks: `/track/{id}/create [channel_id]`, `/track/{id}/add_note [note_id, note, start, dur, vel]`
+
+**Rust → Godot (port 7001)**:
+- Transport status: `/status/playhead [ticks]`, `/status/playing [0|1]`
+- Meter updates: `/channel/{id}/peak [peak_left, peak_right]`
+
+See `OSC_PROTOCOL.md` for full documentation.
+
+### File Structure
+```
+Engine/src/
+  main.rs              # Entry point, OSC server initialization
+  audio/
+    mod.rs             # Module declarations
+    engine.rs          # Core audio engine initialization and main loop
+    commands.rs        # Command processing and OSC message handling
+    processing.rs      # Audio processing logic and callback management
+    mixing.rs          # Audio mixing and routing logic
+    types.rs           # Type definitions: Channel, Track, Voice, etc.
+    devices/
+      mod.rs         # Device module declarations
+      oscillator.rs  # Voice synthesis (sine wave oscillator)
+      delay.rs       # Delay effect device
+    io/
+      mod.rs         # IO module declarations
+      wav.rs         # WAV file reading/writing
+  osc/
+    mod.rs           # Module declarations
+    server.rs        # OSC server/client, path-based message routing
+
+Godot/
+  AudioEngineOSC.gd    # Low-level OSC transport (send/listen interface)
+  editor/Editor.gd     # Project lifecycle manager (simplified)
+  arranger/            # Timeline/arrangement view
+  mixer/               # Mixer view with channel strips
+  clip_editor/         # MIDI clip editing
+  components/          # Reusable UI components (sliders, knobs, meters)
+  data/                # Self-synchronizing data structures:
+    README.md          # Comprehensive documentation of data model
+    
+    # Main Data Models
+    Project.gd         # Main project container with tempo, time signature, PPQ settings
+    Track.gd           # Timeline track containing clips and automation
+    Channel.gd         # Mixer channel for audio processing and routing
+    SendConfig.gd      # Auxiliary send routing configuration
+    Clip.gd            # Audio or MIDI clip on the timeline
+    ClipInstance.gd    # Instance of a clip with playback state and position tracking
+    AutomationLane.gd  # Parameter automation over time
+
+    # Device-related
+    Device.gd          # Audio effect/instrument device definition
+    DeviceInstance.gd  # Instance of a device with parameter values
+    DeviceParameter.gd # Parameter definition for devices
+    
+    # Clip-related
+    MidiEvent.gd       # MIDI event data structure
+    MidiNote.gd        # MIDI note data structure
+    
+    # Godot-local
+    Waveform.gd        # Audio waveform display data
+    MultiResWaveform.gd # Multi-resolution waveform for efficient display
+```
+
+## Key Implementation Details
+
+### Timing and Synchronization
+- Audio engine is the **master clock** (driven by audio callback)
+- Tick-based sequencing with fractional accumulation for sub-sample accuracy
+- Default: 960 PPQ (pulses per quarter note)
+- Playhead updates sent to Godot at 20Hz for UI smoothness
+- Godot interpolates playhead position between updates
+
+### MIDI Note Scheduling
+MIDI notes are scheduled as `ScheduledNote` structs containing:
+- `track_id`, `start_tick`, `duration_ticks`, `note` (MIDI number), `velocity`
+- Notes are checked every audio frame for exact-tick note on/off events
+- Active voices stored in `HashMap<MidiNote, Voice>` per track
+- Voice uses phase accumulator for sine wave generation at MIDI note frequency
+
+### Audio Clip BPM-Based Time Stretching
+Audio clips automatically time-stretch and pitch-shift based on project BPM:
+
+**Key concepts:**
+- Each `Clip` (audio) stores `recorded_bpm: f32` = BPM the audio was originally recorded at
+- `ClipInstance` playback position is tracked per-instance in `Track.audio_playback_positions: HashMap<ClipInstanceId, f64>`
+- Stretch factor calculated as: `stretch = project_bpm / clip.recorded_bpm`
+- Example: Audio recorded at 120 BPM playing in a 200 BPM project → stretch = 1.667x (faster + pitched up)
+
+**Implementation details:**
+- Audio playback position advances per-frame with fractional sample tracking (not per-tick) to maintain smoothness
+- Advance amount per frame: `(stretch_factor × device_sample_rate) / clip_sample_rate`
+- Linear interpolation handles fractional sample positions smoothly across any stretch factor
+- Looping respects stretch factor: loop points are converted to clip samples and scaled by stretch
+- Positions reset on Stop/Seek commands, and removed when clips finish playing
+- **Critical**: Position must be tracked continuously frame-by-frame, not recalculated from tick position (which causes aliasing at high stretch factors)
+
+**Godot side:**
+- Set `clip.recorded_bpm` when creating audio clips (should default to project tempo if not specified)
+- Audio naturally syncs to timeline BPM changes without requiring UI updates
+- Can be changed in clip properties dialog and serialized to project files
+
+### Channel Routing and IO
+**Channel Types:**
+- `INSTRUMENT`: MIDI instrument tracks (created via `create_instrument_track()`)
+- `AUDIO`: Audio tracks (created via `create_audio_track()`)
+- `BUS`: Bus/group channels for routing (created via `create_bus_channel()`)
+
+**Routing Hierarchy:**
+- Each track outputs to a channel via `default_channel_id`
+- Channels route to other channels via `output_channel_id` (default = 1 = Master)
+- Master channel (ID 1) routes to device outputs via `device_output_id` (ID 1000+)
+- ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels, 1000+ = hardware devices
+
+**IO Menu (MixerChannel):**
+- Regular channels show: Master + available bus channels
+- Master channel shows: Device outputs only
+- Menu rebuilt dynamically when channels are added/deleted
+- Button text displays current routing target (e.g., "Master", "Bus 1", "Default Output")
+
+**Example routing flow:** Track 0 → Channel 2 (INSTRUMENT) → Channel 1 (Master) → Device 1000 (hardware)
+
+**Implementation:**
+- Mute/solo/gain/pan applied during mix phase
+- Peak metering happens after mixing
+- Routing changes via `channel.set_route(output_id)` or master's `device_output_id`
+- Uses signal-based updates: routing change → OSC sent + signal emitted → UI updated
+
+### Lock-Free Design
+The audio callback **never blocks**:
+- Uses `try_recv()` instead of blocking `recv()`
+- Uses `Mutex` with immediate failure if lock is contested (skip buffer on failure)
+- No heap allocations in audio thread
+- Pre-allocated channel buffers (sized at initialization)
+
+### Audio Mixing Implementation
+**Three-phase mixing with hierarchical routing support:**
+
+1. **First Pass - Fader/Pan Application**:
+   - Apply volume (dB → linear gain) and pan coefficients to each channel's buffer
+   - Only channels with local audio (INSTRUMENT, AUDIO, Master) have meaningful buffers at this stage
+   - BUS channels start empty but pass through the first pass to apply their fader settings to empty buffers
+   - Pan is applied ONLY in this pass (constant-power panning)
+   - **Important**: Peak detection must check BOTH left AND right channels (not just left) to detect audio that's been panned
+
+2. **Second Pass - Hierarchical Routing (Multi-Pass)**:
+   - Route audio from source channels to their `output_channel_id` destinations
+   - Use multiple passes to support nested routing (e.g., Track → Bus → Master)
+   - Track which channels have been processed to avoid re-routing the same audio multiple times
+   - **Critical**: Only apply GAIN during routing, NOT pan (pan was already applied in pass 1)
+   - Check BOTH channels when detecting if a channel has audio to route
+   - For each routing operation:
+     - Fetch source buffer from tracking HashMap (fader-applied state)
+     - Get destination channel's gain and apply it
+     - Mix into destination's buffer
+
+3. **Third Pass - Device Output**:
+   - Output Master channel (ID 1) to audio hardware via CPAL
+   - Update peak meters for all channels
+   - Peak meters show post-fader, post-routing levels
+
+**Routing Rules (enforced in UI and validated in engine)**:
+- INSTRUMENT/AUDIO channels can route TO: BUS channels or Master (ID 1)
+- INSTRUMENT/AUDIO channels can route FROM: Nothing (they generate local audio only)
+- BUS channels can route TO: Other BUS channels or Master (ID 1)
+- BUS channels can route FROM: Other channels (receive routed audio)
+- Master (ID 1) always routes TO: Device outputs (ID 1000+)
+
+**Common Pitfalls**:
+- Applying pan twice (first pass + routing pass) causes signal loss
+- Only checking left channel for peak can miss audio panned to right
+- Not tracking processed channels causes audio to be mixed multiple times in hierarchical routing
+- Allowing INSTRUMENT→INSTRUMENT routing creates ambiguity (which audio wins: local generation or routed input?)
+
+## Common Development Patterns
+
+### Modifying Data and Syncing to Audio Engine
+
+**The pattern** (object-oriented, self-synchronizing):
+1. UI calls data object setter (e.g., `channel.set_volume(-6.0)`)
+2. Data object updates internal state
+3. Data object sends OSC message to audio engine
+4. Data object emits signal (e.g., `volume_changed.emit(-6.0)`)
+5. UI listens to signal and updates display
+
+**Adding a new syncable property:**
+1. Add property to data class (e.g., `Channel.gd`)
+2. Add signal: `signal property_changed(value)`
+3. Add setter method that sends OSC and emits signal
+4. Add to `sync_to_engine()` method
+5. UI connects to signal in `bind_to_channel()`
+
+### Creating Channels and Tracks
+
+**Track Creation Convenience Methods:**
+```gdscript
+# Creates track + INSTRUMENT channel pair
+var result = project.create_instrument_track("Instrument Name")
+var track = result["track"]
+var channel = result["channel"]  # Type: INSTRUMENT
+
+# Creates track + AUDIO channel pair
+var result = project.create_audio_track("Audio Name")
+
+# Creates track + BUS channel pair (for grouping)
+var result = project.create_group_track("Group Name")
+
+# Creates standalone BUS channel (no track)
+var channel = project.create_bus_channel("Bus Name")  # Type: BUS
+```
+
+**Mixer UI Channel Creation:**
+- Left pane "Add" button → creates INSTRUMENT channel (for manual mixing)
+- Right pane "Add" button → creates BUS channel (for groups/submixes)
+
+### Channel Routing
+
+**UI Constraints (MixerChannel.gd)**:
+- INSTRUMENT/AUDIO channels: routing menu shows ONLY BUS channels + Master
+- BUS channels: routing menu shows ONLY other BUS channels + Master
+- This prevents invalid hierarchies like Track → Track
+
+**Engine Validation (Channel.gd)**:
+- `set_route()` validates routing in both UI and engine
+- Prevents self-routing (channel can't route to itself)
+- Rejects any invalid routing combinations
+
+**Implementation Pattern**:
+```gdscript
+# In MixerChannel.gd - rebuild routing menu
+func _rebuild_output_menu():
+    # Only show BUS channels as routing targets
+    for ch in project.channels:
+        if ch.id != channel.id and ch.id != 1:  # Exclude self and master
+            if ch.channel_type == Channel.ChannelType.BUS:  # ONLY BUS channels
+                popup.add_item(ch.name, ch.id)
+```
+
+### Adding a New OSC Message Type
+1. Add variant to `AudioCommand` enum in `Engine/src/audio/engine.rs`
+2. Add handler in `process_command()` function
+3. Add OSC parsing in `Engine/src/osc/server.rs` (use path-based routing)
+4. Add sender to data object (e.g., `Channel.set_property()` calls `AudioEngineOSC.send()`)
+5. For incoming messages, add listener in data object's `connect_to_engine()`
+6. Update `OSC_PROTOCOL.md` documentation
+
+## Logging and Debugging
+
+### Rust Engine Logs
+Logs written to `Engine/logs/engine.log` (overwrites on each unique session).
+Uses `tracing` crate. Key events logged:
+- Audio device initialization
+- OSC connection/disconnection
+- Command processing (play/stop, channel creation, MIDI notes)
+- Tick advancement (every 100 ticks during playback)
+
+### Godot Console
+Uses `print()` with prefixes like `[Editor]`, `[AudioEngineOSC]`.
+Enable verbose OSC logging in `AudioEngineOSC.gd` if needed.
+
+To view recent Godot logs:
+```bash
+cat /home/pelatho/.var/app/io.github.MakovWait.Godots/data/godot/app_userdata/Godot/logs/godot.log
+```
+
+## Troubleshooting
+
+### Port Conflicts
+If port 7000 or 7001 is in use:
+```bash
+lsof -ti:7000 | xargs kill -9
+lsof -ti:7001 | xargs kill -9
+```
+
+## Code Style and Guidelines
+
+### General Programming Guidelines
+1. **File Size Limit**: Files should never exceed 1000 lines, ideally less than 600 lines. Refactor immediately if this occurs.
+2. **DRY (Don't Repeat Yourself)**: If using the same logic twice, abstract it into a reusable function/module.
+3. **KISS (Keep It Simple)**: Prefer simple, boring solutions over clever tricks - especially avoid hacky workarounds.
+4. **Organization**: If organization becomes confusing, stop and re-think. Ask questions like "Should I move X to Y and reorganize this?"
+5. **Debugging**: Fail fast, print to console during feature development and testing. For debugging, add extensive logs and request user feedback.
+
+### GDScript Style (Godot)
+1. **Spacing**: Use two newlines between class functions
+2. **Comments**: Most properties and functions should have a brief comment explaining their purpose/responsibility, unless positively self-evident
+3. **Configurability**: Things that control overall design or behavior of a node that could be subject to change/tweaking should have a configurable property
+4. Never modify .tscn files directly, use the godot tools available to you.
+
+### Rust Style (Audio Engine)
+- Follow standard Rust conventions (`cargo fmt`)
+- Add docstrings to public APIs
+- Never use allocations, blocking calls, or fallible locks in the audio callback thread
+- Use `info!`, `warn!`, `error!` macros for logging (not `println!`)
+
+## Finding Documentation
+
+- Get docs on Clack via context7 (`/prokopyl/clack`)

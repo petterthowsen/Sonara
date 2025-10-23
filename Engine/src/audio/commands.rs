@@ -1,0 +1,719 @@
+use crossbeam::channel::Sender;
+use std::collections::HashMap;
+use tracing::{info, warn};
+
+use super::types::*;
+use super::devices::AudioDevice;
+
+/// Commands that can be sent to the audio engine
+#[derive(Debug, Clone)]
+pub enum AudioCommand {
+    // Project management
+    InitProject(ProjectSettings),
+    ClearProject,
+
+    // Transport control
+    Play,
+    Pause,
+    Stop,
+    Seek(Tick),
+    SetTempo(f32),
+    SetTimeSignature(i32, i32),
+
+    // Channel management
+    CreateChannel { id: ChannelId, name: String },
+    SetChannelVolume { id: ChannelId, db: f32 },
+    SetChannelPan { id: ChannelId, pan_left: f32, pan_right: Option<f32> },
+    SetChannelPanMode { id: ChannelId, mode: i32 },
+    SetChannelMute { id: ChannelId, mute: bool },
+    SetChannelSolo { id: ChannelId, solo: bool },
+    SetChannelRoute { id: ChannelId, output_id: Option<ChannelId> },
+
+    // Track management
+    CreateTrack { id: TrackId, channel_id: ChannelId },
+
+    // Clip management (new architecture)
+    CreateClip { id: ClipId, name: String, clip_type: String },
+    RemoveClip { id: ClipId },
+    AddNoteToClip { clip_id: ClipId, note_id: NoteId, note: MidiNote, start_tick: Tick, duration_ticks: Tick, velocity: MidiVelocity },
+    RemoveNoteFromClip { clip_id: ClipId, note_id: NoteId },
+    UpdateClipNote { clip_id: ClipId, note_id: NoteId, note: MidiNote, start_tick: Tick, duration_ticks: Tick, velocity: MidiVelocity },
+    LoadAudioClip { clip_id: ClipId, samples: Vec<f32>, sample_rate: u32, channels: usize },
+
+    // ClipInstance management
+    CreateClipInstance { track_id: TrackId, instance_id: ClipInstanceId, clip_id: ClipId, start_tick: Tick, duration_ticks: Tick },
+    RemoveClipInstance { track_id: TrackId, instance_id: ClipInstanceId },
+    UpdateClipInstancePosition { track_id: TrackId, instance_id: ClipInstanceId, start_tick: Tick, duration_ticks: Tick },
+    UpdateClipInstanceTranspose { track_id: TrackId, instance_id: ClipInstanceId, transpose: i8 },
+    UpdateClipInstanceGain { track_id: TrackId, instance_id: ClipInstanceId, gain_db: f32 },
+    UpdateClipInstanceMute { track_id: TrackId, instance_id: ClipInstanceId, muted: bool },
+    UpdateClipInstanceLoop { track_id: TrackId, instance_id: ClipInstanceId, enabled: bool, start_tick: Tick, length_ticks: Tick },
+
+    // Device management
+    AddDeviceToChannel { channel_id: ChannelId, device_id: String, position: i32, active: bool, enabled: bool },
+    RemoveDeviceFromChannel { channel_id: ChannelId, position: usize },
+    ClearChannelDevices { channel_id: ChannelId },
+    SetDeviceParameter { channel_id: ChannelId, device_position: usize, param_id: u32, value: f32 },
+    SetDeviceActive { channel_id: ChannelId, device_position: usize, active: bool },
+    SetDeviceEnabled { channel_id: ChannelId, device_position: usize, enabled: bool },
+
+    // Plugin management
+    ScanPlugins,
+    GetPluginParameters { channel_id: ChannelId, device_position: usize },
+    SavePluginState { channel_id: ChannelId, device_position: usize },
+    LoadPluginState { channel_id: ChannelId, device_position: usize, state_base64: String },
+}
+
+/// Response from commands that return data
+#[derive(Debug, Clone)]
+pub enum CommandResponse {
+    NoteAdded(NoteId),
+}
+
+/// Status updates from audio thread
+#[derive(Debug, Clone)]
+pub enum EngineStatus {
+    PlayheadUpdate(Tick),
+    PlayingStateChanged(bool),
+    ChannelPeaks { id: ChannelId, peak_left: f32, peak_right: f32 },
+    
+    // Plugin discovery responses
+    PluginScanComplete { count: usize },
+    PluginInfo {
+        id: String,
+        name: String,
+        vendor: String,
+        version: String,
+        category: String,
+        description: Option<String>,
+    },
+    
+    // Plugin parameter responses
+    PluginParameterInfo {
+        channel_id: ChannelId,
+        device_position: usize,
+        param_id: u32,
+        name: String,
+        min: f32,
+        max: f32,
+        default: f32,
+    },
+    PluginParameterCount {
+        channel_id: ChannelId,
+        device_position: usize,
+        count: usize,
+    },
+    
+    // Plugin state responses
+    PluginStateSaved {
+        channel_id: ChannelId,
+        device_position: usize,
+        state_base64: String,
+    },
+}
+
+/// Shared state between audio thread and command thread
+pub struct EngineState {
+    pub settings: ProjectSettings,
+    pub device_sample_rate: f32,  // Actual audio device sample rate (immutable)
+    pub channels: HashMap<ChannelId, Channel>,
+    pub tracks: HashMap<TrackId, Track>,
+    pub clips: HashMap<ClipId, Clip>,  // Global clip pool
+    pub output_devices: Vec<OutputDevice>,  // Available hardware outputs (IDs 1000+)
+    pub plugin_scanner: super::devices::clap_host::PluginScanner,  // CLAP plugin discovery
+    pub is_playing: bool,
+    pub current_tick: Tick,
+}
+
+impl Clone for EngineState {
+    fn clone(&self) -> Self {
+        // Can't derive Clone because Channel has trait objects (AudioDevice)
+        // This is only used for command processing, which we don't use Clone for
+        panic!("EngineState cannot be cloned (contains non-cloneable trait objects)");
+    }
+}
+
+impl Default for EngineState {
+    fn default() -> Self {
+        Self {
+            settings: ProjectSettings::default(),
+            device_sample_rate: 48000.0,  // Default, will be overridden
+            channels: HashMap::new(),
+            tracks: HashMap::new(),
+            clips: HashMap::new(),
+            output_devices: Vec::new(),
+            plugin_scanner: super::devices::clap_host::PluginScanner::new(),
+            is_playing: false,
+            current_tick: 0,
+        }
+    }
+}
+
+/// Process a command (called from audio thread)
+pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: usize, status_tx: &Sender<EngineStatus>) -> Option<EngineStatus> {
+    match cmd {
+        AudioCommand::InitProject(settings) => {
+            state.settings = settings;
+            info!("Project initialized: {}bpm, {}/{}, PPQ={}",
+                state.settings.tempo,
+                state.settings.time_numerator,
+                state.settings.time_denominator,
+                state.settings.ppq);
+        }
+        AudioCommand::ClearProject => {
+            state.channels.clear();
+            state.tracks.clear();
+            state.clips.clear();
+            state.current_tick = 0;
+            info!("Project cleared");
+        }
+        AudioCommand::Play => {
+            state.is_playing = true;
+            let position = state.settings.format_tick_position(state.current_tick);
+            info!("Playback started at {}", position);
+            return Some(EngineStatus::PlayingStateChanged(true));
+        }
+        AudioCommand::Pause => {
+            state.is_playing = false;
+            let position = state.settings.format_tick_position(state.current_tick);
+            info!("Playback paused at {}", position);
+            return Some(EngineStatus::PlayingStateChanged(false));
+        }
+        AudioCommand::Stop => {
+            let position = state.settings.format_tick_position(state.current_tick);
+            state.is_playing = false;
+            state.current_tick = 0;
+            // Reset all channels and tracks
+            for channel in state.channels.values_mut() {
+                channel.active_voices.clear();
+                for device in &mut channel.devices {
+                    device.reset();
+                }
+            }
+            for track in state.tracks.values_mut() {
+                track.audio_playback_positions.clear();
+            }
+            info!("Playback stopped (was at {})", position);
+            // Send both playing state change and playhead reset
+            // Note: only one status can be returned, so we'll send playhead via the channel
+            // and return playing state
+            let _ = status_tx.send(EngineStatus::PlayheadUpdate(0));
+            return Some(EngineStatus::PlayingStateChanged(false));
+        }
+        AudioCommand::Seek(tick) => {
+            state.current_tick = tick;
+            // Reset all channels and tracks on seek
+            for channel in state.channels.values_mut() {
+                channel.active_voices.clear();
+                for device in &mut channel.devices {
+                    device.reset();
+                }
+            }
+            for track in state.tracks.values_mut() {
+                track.audio_playback_positions.clear();
+            }
+            info!("Seeked to tick {}", tick);
+        }
+        AudioCommand::SetTempo(tempo) => {
+            state.settings.tempo = tempo;
+            info!("Tempo set to {}", tempo);
+        }
+        AudioCommand::SetTimeSignature(num, den) => {
+            state.settings.time_numerator = num;
+            state.settings.time_denominator = den;
+            info!("Time signature set to {}/{}", num, den);
+        }
+        AudioCommand::CreateChannel { id, name } => {
+            let channel = Channel::new(id, name.clone(), buffer_size, state.device_sample_rate);
+            state.channels.insert(id, channel);
+            info!("Channel {} created: {} [total channels: {}]", id, name, state.channels.len());
+        }
+        AudioCommand::SetChannelVolume { id, db } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.volume_db = db;
+            }
+        }
+        AudioCommand::SetChannelPan { id, pan_left, pan_right } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                if let Some(pan_r) = pan_right {
+                    // Dual pan mode (STEREO_DUAL)
+                    channel.pan_left = pan_left.clamp(-1.0, 1.0);
+                    channel.pan_right = pan_r.clamp(-1.0, 1.0);
+                } else {
+                    // Single pan value (STEREO_COMBINED, STEREO_BALANCE, MONO)
+                    channel.pan = pan_left.clamp(-1.0, 1.0);
+                }
+            }
+        }
+        AudioCommand::SetChannelPanMode { id, mode } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.pan_mode = mode.into();
+            }
+        }
+        AudioCommand::SetChannelMute { id, mute } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.mute = mute;
+            }
+        }
+        AudioCommand::SetChannelSolo { id, solo } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.solo = solo;
+            }
+        }
+        AudioCommand::SetChannelRoute { id, output_id } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.output_channel_id = output_id;
+                info!("Channel {} routed to {:?}", id, output_id);
+            } else {
+                warn!("Cannot set route for channel {} (not found)", id);
+            }
+        }
+        AudioCommand::CreateTrack { id, channel_id } => {
+            let track = Track::new(id, channel_id);
+            state.tracks.insert(id, track);
+            info!("Track {} created, routed to channel {}", id, channel_id);
+        }
+
+        // Clip management commands
+        AudioCommand::CreateClip { id, name, clip_type } => {
+            use super::types::ClipType;
+            let clip_type_enum = match clip_type.as_str() {
+                "midi" | "Midi" => ClipType::Midi,
+                "audio" | "Audio" => ClipType::Audio,
+                _ => {
+                    warn!("Unknown clip type: {}, defaulting to Midi", clip_type);
+                    ClipType::Midi
+                }
+            };
+            let clip = Clip::new(id.clone(), name.clone(), clip_type_enum);
+            state.clips.insert(id.clone(), clip);
+            info!("Clip created: {} ({})", name, id);
+        }
+        AudioCommand::RemoveClip { id } => {
+            if state.clips.remove(&id).is_some() {
+                info!("Clip removed: {}", id);
+            } else {
+                warn!("Clip not found for removal: {}", id);
+            }
+        }
+        AudioCommand::AddNoteToClip { clip_id, note_id, note, start_tick, duration_ticks, velocity } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                let clip_note = ClipNote {
+                    id: note_id,
+                    note,
+                    velocity,
+                    start_tick,
+                    duration_ticks,
+                };
+                clip.midi_notes.push(clip_note);
+                // Update content length if needed
+                let note_end = start_tick + duration_ticks;
+                if note_end > clip.content_length_ticks {
+                    clip.content_length_ticks = note_end;
+                }
+                info!("Note {} added to clip {}: note={} start={} dur={}",
+                    note_id, clip_id, note, start_tick, duration_ticks);
+            } else {
+                warn!("Clip not found for add note: {}", clip_id);
+            }
+        }
+        AudioCommand::RemoveNoteFromClip { clip_id, note_id } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                let initial_len = clip.midi_notes.len();
+                clip.midi_notes.retain(|n| n.id != note_id);
+                if clip.midi_notes.len() != initial_len {
+                    info!("Note {} removed from clip {}", note_id, clip_id);
+                    // Recalculate content length
+                    clip.content_length_ticks = clip.midi_notes.iter()
+                        .map(|n| n.start_tick + n.duration_ticks)
+                        .max()
+                        .unwrap_or(0);
+                } else {
+                    warn!("Note {} not found in clip {}", note_id, clip_id);
+                }
+            } else {
+                warn!("Clip not found for remove note: {}", clip_id);
+            }
+        }
+        AudioCommand::UpdateClipNote { clip_id, note_id, note, start_tick, duration_ticks, velocity } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                if let Some(clip_note) = clip.midi_notes.iter_mut().find(|n| n.id == note_id) {
+                    clip_note.note = note;
+                    clip_note.start_tick = start_tick;
+                    clip_note.duration_ticks = duration_ticks;
+                    clip_note.velocity = velocity;
+                    // Recalculate content length
+                    clip.content_length_ticks = clip.midi_notes.iter()
+                        .map(|n| n.start_tick + n.duration_ticks)
+                        .max()
+                        .unwrap_or(0);
+                    info!("Note {} updated in clip {}", note_id, clip_id);
+                } else {
+                    warn!("Note {} not found in clip {}", note_id, clip_id);
+                }
+            } else {
+                warn!("Clip not found for update note: {}", clip_id);
+            }
+        }
+        AudioCommand::LoadAudioClip { clip_id, samples, sample_rate, channels } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                info!("Storing audio clip: {} total values, {} channels (= {} frames)",
+                    samples.len(), channels, samples.len() / channels);
+
+                clip.audio_samples = samples.clone();
+                clip.audio_sample_rate = sample_rate;
+                clip.audio_channels = channels;
+
+                // Calculate content length in ticks
+                let sample_count = samples.len() / channels;
+                let duration_seconds = sample_count as f32 / sample_rate as f32;
+                // Assuming 120 BPM = 2 beats per second, PPQ = 960 ticks per beat
+                let beats = duration_seconds * 2.0;
+                clip.content_length_ticks = (beats * 960.0) as i64;
+
+                info!("Audio clip {} loaded: {} samples, {} Hz, {} channels, {} ticks",
+                    clip_id, sample_count, sample_rate, channels, clip.content_length_ticks);
+            } else {
+                warn!("Clip not found for load audio: {}", clip_id);
+            }
+        }
+
+        // ClipInstance management commands
+        AudioCommand::CreateClipInstance { track_id, instance_id, clip_id, start_tick, duration_ticks } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                let instance = ClipInstance::new(instance_id.clone(), clip_id.clone(), start_tick, duration_ticks);
+                track.clip_instances.push(instance);
+                info!("ClipInstance {} created on track {}: clip={} start={} dur={}",
+                    instance_id, track_id, clip_id, start_tick, duration_ticks);
+            } else {
+                warn!("Track not found for create instance: {}", track_id);
+            }
+        }
+        AudioCommand::RemoveClipInstance { track_id, instance_id } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                let initial_len = track.clip_instances.len();
+                track.clip_instances.retain(|i| i.id != instance_id);
+                if track.clip_instances.len() != initial_len {
+                    info!("ClipInstance {} removed from track {}", instance_id, track_id);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for remove instance: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstancePosition { track_id, instance_id, start_tick, duration_ticks } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
+                    instance.start_tick = start_tick;
+                    instance.duration_ticks = duration_ticks;
+                    info!("ClipInstance {} position updated: start={} dur={}", instance_id, start_tick, duration_ticks);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for update instance position: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstanceTranspose { track_id, instance_id, transpose } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
+                    instance.transpose = transpose;
+                    info!("ClipInstance {} transpose updated: {}", instance_id, transpose);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for update instance transpose: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstanceGain { track_id, instance_id, gain_db } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
+                    instance.gain_offset = gain_db;
+                    info!("ClipInstance {} gain updated: {} dB", instance_id, gain_db);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for update instance gain: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstanceMute { track_id, instance_id, muted } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
+                    instance.muted = muted;
+                    info!("ClipInstance {} mute updated: {}", instance_id, muted);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for update instance mute: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstanceLoop { track_id, instance_id, enabled, start_tick, length_ticks } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
+                    instance.loop_enabled = enabled;
+                    instance.loop_start_ticks = start_tick;
+                    instance.loop_length_ticks = length_ticks;
+                    info!("ClipInstance {} loop updated: enabled={} start={} length={}",
+                        instance_id, enabled, start_tick, length_ticks);
+                } else {
+                    warn!("ClipInstance {} not found on track {}", instance_id, track_id);
+                }
+            } else {
+                warn!("Track not found for update instance loop: {}", track_id);
+            }
+        }
+
+        // Device management commands
+        AudioCommand::AddDeviceToChannel { channel_id, device_id, position, active, enabled } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                // Factory: create device by ID (builtin or plugin)
+                let mut device: Option<Box<dyn super::devices::AudioDevice>> = match device_id.as_str() {
+                    // Built-in devices
+                    "sonara.builtin.oscillator" => {
+                        Some(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate)))
+                    }
+                    "sonara.builtin.delay" => {
+                        Some(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0)))
+                    }
+                    // CLAP plugins
+                    id => {
+                        if let Some(descriptor) = state.plugin_scanner.get_plugin(id) {
+                            info!("Loading CLAP plugin: {} ({}) [active={}, enabled={}]", 
+                                descriptor.name, id, active, enabled);
+                            match super::devices::clap_host::ClapDeviceAdapter::new(
+                                &descriptor.path,
+                                id,
+                                state.device_sample_rate,
+                                buffer_size, // Use actual audio callback buffer size
+                            ) {
+                                Ok(mut adapter) => {
+                                    // Activate plugin if requested
+                                    if active {
+                                        if let Err(e) = adapter.activate() {
+                                            warn!("Failed to activate plugin {}: {}", id, e);
+                                        }
+                                    }
+                                    // Set enabled state
+                                    adapter.set_enabled(enabled);
+                                    info!("CLAP plugin {} loaded successfully", id);
+                                    Some(Box::new(adapter))
+                                }
+                                Err(e) => {
+                                    warn!("Failed to load CLAP plugin {}: {}", id, e);
+                                    None
+                                }
+                            }
+                        } else {
+                            warn!("Unknown device ID: {}", device_id);
+                            None
+                        }
+                    }
+                };
+
+                if let Some(mut device) = device {
+                    // Set enabled state for all devices
+                    device.set_enabled(enabled);
+                    
+                    let insert_pos = if position < 0 {
+                        channel.devices.len()  // Append to end
+                    } else {
+                        (position as usize).min(channel.devices.len())  // Insert at position or at end
+                    };
+                    channel.devices.insert(insert_pos, device);
+                    info!("Device {} added to channel {} at position {} [active={}, enabled={}]", 
+                        device_id, channel_id, insert_pos, active, enabled);
+                }
+            } else {
+                warn!("Channel {} not found for add device", channel_id);
+            }
+        }
+        AudioCommand::RemoveDeviceFromChannel { channel_id, position } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if position < channel.devices.len() {
+                    channel.devices.remove(position);
+                    info!("Device removed from channel {} at position {}", channel_id, position);
+                } else {
+                    warn!("Invalid device position {} for channel {}", position, channel_id);
+                }
+            } else {
+                warn!("Channel {} not found for remove device", channel_id);
+            }
+        }
+        AudioCommand::ClearChannelDevices { channel_id } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                channel.devices.clear();
+                info!("All devices cleared from channel {}", channel_id);
+            } else {
+                warn!("Channel {} not found for clear devices", channel_id);
+            }
+        }
+        AudioCommand::SetDeviceParameter { channel_id, device_position, param_id, value } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if channel.set_device_parameter(device_position, param_id, value) {
+                    info!("Device parameter set: channel={} device={} param={} value={}",
+                        channel_id, device_position, param_id, value);
+                } else {
+                    warn!("Invalid device position {} for channel {}", device_position, channel_id);
+                }
+            } else {
+                warn!("Channel {} not found for set device parameter", channel_id);
+            }
+        }
+        AudioCommand::SetDeviceActive { channel_id, device_position, active } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    if active && !device.is_active() {
+                        // Activate
+                        match device.activate() {
+                            Ok(_) => {
+                                info!("Device activated: channel={} device={}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to activate device at channel {} position {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    } else if !active && device.is_active() {
+                        // Deactivate
+                        match device.deactivate() {
+                            Ok(_) => {
+                                info!("Device deactivated: channel={} device={}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to deactivate device at channel {} position {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    }
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for set device active", channel_id);
+            }
+        }
+        AudioCommand::SetDeviceEnabled { channel_id, device_position, enabled } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    device.set_enabled(enabled);
+                    info!("Device {} set to {}: channel={} device={}", 
+                        if enabled { "enabled" } else { "disabled" },
+                        if enabled { "enabled" } else { "bypassed" },
+                        channel_id, device_position);
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for set device enabled", channel_id);
+            }
+        }
+
+        // Plugin management commands
+        AudioCommand::ScanPlugins => {
+            info!("Starting plugin scan...");
+            match state.plugin_scanner.scan() {
+                Ok(count) => {
+                    info!("Plugin scan complete: {} plugins found", count);
+                    
+                    // Send info for each discovered plugin
+                    for plugin in state.plugin_scanner.all_plugins() {
+                        let category_str = match plugin.category {
+                            super::devices::DeviceCategory::Instrument => "instrument",
+                            super::devices::DeviceCategory::Effect => "effect",
+                            super::devices::DeviceCategory::Utility => "utility",
+                        }.to_string();
+                        
+                        let _ = status_tx.send(EngineStatus::PluginInfo {
+                            id: plugin.id.clone(),
+                            name: plugin.name.clone(),
+                            vendor: plugin.vendor.clone(),
+                            version: plugin.version.clone(),
+                            category: category_str,
+                            description: plugin.description.clone(),
+                        });
+                    }
+                    
+                    // Send completion message last
+                    return Some(EngineStatus::PluginScanComplete { count });
+                }
+                Err(e) => {
+                    warn!("Plugin scan failed: {}", e);
+                }
+            }
+        }
+
+        AudioCommand::GetPluginParameters { channel_id, device_position } => {
+            if let Some(channel) = state.channels.get(&channel_id) {
+                if let Some(device) = channel.devices.get(device_position) {
+                    let params = device.parameters();
+                    info!("Querying {} parameters for device at channel {} position {}",
+                        params.len(), channel_id, device_position);
+                    
+                    // Send parameter count
+                    let _ = status_tx.send(EngineStatus::PluginParameterCount {
+                        channel_id,
+                        device_position,
+                        count: params.len(),
+                    });
+                    
+                    // Send parameter info for each parameter
+                    for (idx, param) in params.iter().enumerate() {
+                        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+                            channel_id,
+                            device_position,
+                            param_id: idx as u32,
+                            name: param.name.clone(),
+                            min: param.min,
+                            max: param.max,
+                            default: param.default,
+                        });
+                    }
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for get plugin parameters", channel_id);
+            }
+        }
+
+        AudioCommand::SavePluginState { channel_id, device_position } => {
+            if let Some(channel) = state.channels.get(&channel_id) {
+                if let Some(device) = channel.devices.get(device_position) {
+                    // Try to get state from device (if it's a CLAP plugin)
+                    // For now, return empty state - will implement state extension later
+                    info!("Save plugin state requested for channel {} device {}",
+                        channel_id, device_position);
+                    let _ = status_tx.send(EngineStatus::PluginStateSaved {
+                        channel_id,
+                        device_position,
+                        state_base64: String::new(), // TODO: Implement state save
+                    });
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for save plugin state", channel_id);
+            }
+        }
+
+        AudioCommand::LoadPluginState { channel_id, device_position, state_base64 } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(_device) = channel.devices.get_mut(device_position) {
+                    // TODO: Implement state load via CLAP state extension
+                    info!("Load plugin state requested for channel {} device {} ({} bytes)",
+                        channel_id, device_position, state_base64.len());
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for load plugin state", channel_id);
+            }
+        }
+    }
+
+    None
+}

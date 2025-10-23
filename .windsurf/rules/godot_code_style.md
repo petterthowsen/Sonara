@@ -1,0 +1,14 @@
+---
+trigger: model_decision
+description: when writing Godot code (gdscript)
+---
+
+# Godot Code Guidelines
+
+When working on Godot scenes / UI, delegate to the user to set up scene nodes and properties.
+
+When writing gdscript, follow these guidelines:
+
+1. Use two newlines between class functions.
+2. Most properties and functions should have a comment that briefly explains its purpose responsibility, unless positively self-evident.
+3. Things that control overall design or behavior of a node that could likely be subject to change/tweaking should probably have a configurable property.

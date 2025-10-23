@@ -1,0 +1,33 @@
+---
+globs: Godot/**/*.gd
+alwaysApply: false
+---
+# Godot Architecture
+
+## Editor.gd
+Entry-point is editor/Editor.gd and tscn file and initializes together a series of major UI loosely-coupled self-contained systems: Arranger, Mixer, Clip Editor etc.
+
+## Data model layer
+data/ contains self-synchronizing (via osc) data models (Project, Track, Channel, Clip, ClipInstance etc.)
+
+## Components
+in ./components A set of small reusable custom UI controls such as Meters, Sliders, RotaryKnobs etc.
+
+
+## Utilities
+
+- `Midi` class is a static class with midi, note and frequency conversion functions.
+- `Sonara` singleton provides access to the Editor instance via `Sonara.editor`.
+- `GridHelper` is a stateful representation of musical time and position information, used by the Timeline, MidiEditor and Ruler classes.
+
+## OSC
+
+AudioEngineOSC.gd is a Low-level OSC transport class with `send` and `listen` interface.
+
+## Lifecycle and OSC syncing
+
+1. Editor.gd initializes a `Project`
+2. Project establishes connection to audio engine via AudioEngineOSC.
+3. Project.create_track and similar methods call OSC and emit signals
+4. Engine > Godot: UI listens to project/track/channel/clip signals and update UI
+5. Godot > Engine: UI callbacks call set_[prop] setters on data objects to auto-sync to audio enine.
