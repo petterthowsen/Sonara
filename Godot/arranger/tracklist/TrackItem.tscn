@@ -1,9 +1,15 @@
-[gd_scene load_steps=8 format=3 uid="uid://ca1ed008xlb1o"]
+[gd_scene load_steps=10 format=3 uid="uid://ca1ed008xlb1o"]
 
 [ext_resource type="Script" uid="uid://cjjiuujvntxw0" path="res://arranger/tracklist/TrackItem.gd" id="1_q68hb"]
 [ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="2_shsim"]
+[ext_resource type="Script" uid="uid://bj2urc8velriu" path="res://components/DropZone.gd" id="3_q68hb"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_vc4i6"]
 
-[sub_resource type="LabelSettings" id="LabelSettings_w2atu"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
+resource_local_to_scene = true
+bg_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
+border_color = Color(0, 0, 0, 0)
+corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_q68hb"]
 content_margin_left = 2.0
@@ -43,17 +49,29 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[node name="Track" type="MarginContainer"]
-custom_minimum_size = Vector2(123, 32)
-offset_right = 185.0
-offset_bottom = 38.0
+[node name="TrackItem" type="PanelContainer" node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "drop_zone")]
+custom_minimum_size = Vector2(123, 24)
+offset_right = 224.0
+offset_bottom = 36.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_vc4i6")
 script = ExtResource("1_q68hb")
+volumeter = NodePath("VBoxContainer/HBox/Volumeter")
+label = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Label")
+arm_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/ArmToggle")
+solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute/SoloToggle")
+mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute/MuteToggle")
+drop_zone = NodePath("DropZone")
 
-[node name="HBox" type="HBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="HBox" type="BoxContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Volumeter" type="Control" parent="HBox"]
+[node name="Volumeter" type="Control" parent="VBoxContainer/HBox"]
+visible = false
 custom_minimum_size = Vector2(12, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -64,35 +82,44 @@ bar_color = Color(0.83, 0.83, 0.83, 0.49411765)
 peak = 0.655
 volume_db = -60.0
 
-[node name="MarginContainer" type="MarginContainer" parent="HBox"]
+[node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/HBox"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 3.0
 theme_override_constants/margin_left = 2
 theme_override_constants/margin_top = 3
 theme_override_constants/margin_right = 3
 theme_override_constants/margin_bottom = 0
 
-[node name="VBox" type="VBoxContainer" parent="HBox/MarginContainer"]
+[node name="Box" type="BoxContainer" parent="VBoxContainer/HBox/MarginContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 20.0
+theme_override_constants/separation = 2
+vertical = true
 
-[node name="Top" type="FlowContainer" parent="HBox/MarginContainer/VBox"]
+[node name="Top" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box"]
 layout_mode = 2
+size_flags_vertical = 3
 
-[node name="Label" type="Label" parent="HBox/MarginContainer/VBox/Top"]
-custom_minimum_size = Vector2(35, 30)
+[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top" instance=ExtResource("3_vc4i6")]
+custom_minimum_size = Vector2(24.015, 17.445)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Synth One"
-label_settings = SubResource("LabelSettings_w2atu")
-vertical_alignment = 1
-autowrap_mode = 3
+mouse_filter = 1
+value_type = 1
+
+[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="0"]
+text = "Full Strings asd asd "
+horizontal_alignment = 0
 clip_text = true
 text_overrun_behavior = 3
 
-[node name="Toggles" type="FlowContainer" parent="HBox/MarginContainer/VBox/Top"]
+[node name="LineEdit" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="1"]
+offset_top = -6.7775
+offset_bottom = 6.7775
+alignment = 0
+
+[node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_constants/h_separation = 4
@@ -100,8 +127,8 @@ theme_override_constants/v_separation = 4
 alignment = 2
 last_wrap_alignment = 2
 
-[node name="ArmToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles"]
-custom_minimum_size = Vector2(30, 30)
+[node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles"]
+custom_minimum_size = Vector2(30, 18)
 layout_mode = 2
 size_flags_stretch_ratio = 0.33
 theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
@@ -109,7 +136,7 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
 toggle_mode = true
 text = "R"
 
-[node name="SoloMute" type="FlowContainer" parent="HBox/MarginContainer/VBox/Top/Toggles"]
+[node name="SoloMute" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 4
@@ -117,8 +144,8 @@ theme_override_constants/v_separation = 4
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="SoloToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles/SoloMute"]
-custom_minimum_size = Vector2(28, 28)
+[node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute"]
+custom_minimum_size = Vector2(28, 18)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
@@ -126,8 +153,8 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
 toggle_mode = true
 text = "S"
 
-[node name="MuteToggle" type="Button" parent="HBox/MarginContainer/VBox/Top/Toggles/SoloMute"]
-custom_minimum_size = Vector2(28, 28)
+[node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute"]
+custom_minimum_size = Vector2(28, 18)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
@@ -135,7 +162,29 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
 toggle_mode = true
 text = "M"
 
-[node name="Bottom" type="FlowContainer" parent="HBox/MarginContainer/VBox"]
+[node name="Bottom" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box"]
+visible = false
 layout_mode = 2
 size_flags_vertical = 6
 alignment = 2
+
+[node name="empty" type="Control" parent="VBoxContainer"]
+custom_minimum_size = Vector2(0, 2)
+layout_mode = 2
+
+[node name="DropZone" type="Control" parent="."]
+z_index = 1
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+size_flags_vertical = 10
+mouse_filter = 1
+script = ExtResource("3_q68hb")
+dropzone_size = 8.0
+line_position = 2
+idle_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
+available_color = Color(0.46666667, 0.46666667, 0.46666667, 1)
+hover_color = Color(0.64166665, 0.5, 1, 1)
+hover_thickness = 2.0
+always_show = true
+
+[editable path="VBoxContainer/HBox/MarginContainer/Box/Top/Label"]

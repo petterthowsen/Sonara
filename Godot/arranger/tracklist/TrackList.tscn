@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://cx5s8jbwq0dt2"]
+[gd_scene load_steps=3 format=3 uid="uid://cx5s8jbwq0dt2"]
 
 [ext_resource type="Script" uid="uid://dogqvoq0bijcg" path="res://arranger/tracklist/TrackList.gd" id="1_0le0t"]
+[ext_resource type="PackedScene" uid="uid://ca1ed008xlb1o" path="res://arranger/tracklist/TrackItem.tscn" id="2_0le0t"]
 
 [node name="TrackList" type="VBoxContainer"]
 anchors_preset = 15
@@ -10,3 +11,6 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 2
 script = ExtResource("1_0le0t")
+
+[node name="Track" parent="." instance=ExtResource("2_0le0t")]
+layout_mode = 2

@@ -86,6 +86,9 @@ func _on_track_added(track: Track) -> void:
 	# Set timeline reference for grid drawing
 	timeline_track.timeline = self
 
+	# Connect to track signals for reordering
+	track.order_changed.connect(_on_track_order_changed)
+
 	# Connect drag signals to forward to Arranger
 	if arranger:
 		if not timeline_track.clip_drag_started.is_connected(arranger._on_clip_drag_started):
@@ -104,6 +107,51 @@ func _on_track_added(track: Track) -> void:
 	_update_timeline_width()
 
 	print("[Timeline] Timeline track added for: ", track.name, " at index ", index, " with order ", track.order)
+
+
+func _on_track_order_changed(_new_order: int) -> void:
+	"""Handle track order changes to update visual order."""
+	if not project:
+		return
+	
+	print("[Timeline] Track order changed, updating visual order")
+	_update_visual_order()
+
+
+func _update_visual_order() -> void:
+	"""Update UI to match hierarchical track order."""
+	if not project:
+		return
+	
+	# Get flat visual list from hierarchy
+	var visual_tracks = project.get_visual_track_list()
+	
+	# Reorder children to match visual order
+	for i in range(visual_tracks.size()):
+		var track = visual_tracks[i]
+		var timeline_track = _find_timeline_track(track)
+		if timeline_track:
+			move_child(timeline_track, i)
+	
+	# Rebuild timeline_tracks array to match visual order
+	timeline_tracks.clear()
+	for i in range(get_child_count()):
+		var child = get_child(i)
+		if child is TimelineTrack:
+			timeline_tracks.append(child as TimelineTrack)
+	
+	print("[Timeline] Updated visual order (%d tracks)" % visual_tracks.size())
+
+
+func _find_timeline_track(track: Track) -> TimelineTrack:
+	"""Find the TimelineTrack UI element for a given track."""
+	for child in get_children():
+		if child is TimelineTrack:
+			var item = child as TimelineTrack
+			if item.track == track:
+				return item
+	return null
+
 
 # ============================================================================
 # INTERNAL HELPERS

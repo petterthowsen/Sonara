@@ -14,7 +14,7 @@ const CompactParameterControlScene = preload("res://components/device/compact/Co
 @onready var parameters : PanelContainer = $Parameters
 @onready var parameters_box : VBoxContainer = $Parameters/VBox
 @onready var header : PanelContainer = $Header
-@onready var enabled_light : LightButton = $Header/HBoxContainer/Enabled
+@onready var device_light: DeviceLightButton = $Header/HBoxContainer/DeviceLight
 @onready var name_label : Label = $Header/HBoxContainer/Name
 @onready var collapse_button : Button = $Header/HBoxContainer/CollapseToggle
 
@@ -67,7 +67,8 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 	# Set panel title to device name and position
 	name_label.text = device_instance.device.name
 	name_label.tooltip_text = device_instance.device.name
-	enabled_light.value = device_instance.enabled
+	
+	device_light.bind_to_device_instance(device_instance)
 	
 	tooltip_text = device_instance.device.name
 	

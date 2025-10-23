@@ -186,6 +186,11 @@ func find_mixer_channel_ui_for_channel(channel : Channel) -> MixerChannel:
 	for mc in right_channels.get_children():
 		if mc.channel == channel:
 			return mc
+	
+	# Master channel is in right_pane_hbox, not in right_channels
+	for mc in right_pane_hbox.get_children():
+		if mc is MixerChannel and mc.channel == channel:
+			return mc
 
 	return null
 

@@ -125,18 +125,20 @@ class GridLine:
 		type = line_type
 		bar_number = bar_num
 
-func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0) -> Array[GridLine]:
+func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0, use_scroll: bool = true) -> Array[GridLine]:
 	"""
 	Generate grid lines for the visible range.
 	start_x/end_x are in pixel space (before scroll adjustment).
 	offset_x is horizontal offset (e.g., piano keyboard width).
+	use_scroll: if true, adjust for scroll_position (for fixed overlays like Ruler). If false, don't adjust (for scrolled content like Timeline).
 	Returns array of GridLine objects ready for drawing.
 	"""
 	var lines: Array[GridLine] = []
 	
-	# Convert to ticks, accounting for scroll position
-	var start_ticks = pixels_to_ticks(start_x + scroll_position)
-	var end_ticks = pixels_to_ticks(end_x + scroll_position)
+	# Convert to ticks, accounting for scroll position if requested
+	var scroll_offset = scroll_position if use_scroll else 0.0
+	var start_ticks = pixels_to_ticks(start_x + scroll_offset)
+	var end_ticks = pixels_to_ticks(end_x + scroll_offset)
 	
 	var ticks_per_bar = get_ticks_per_bar()
 	var ticks_per_beat = get_ticks_per_beat()
@@ -150,7 +152,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0)
 	var tick = first_bar_tick
 	
 	while tick <= end_ticks:
-		var x = ticks_to_pixels(tick) - scroll_position + offset_x
+		var x = ticks_to_pixels(tick) - scroll_offset + offset_x
 		lines.append(GridLine.new(x, GridLineType.BAR, bar_number))
 		tick += ticks_per_bar
 		bar_number += 1
@@ -163,7 +165,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0)
 		
 		while tick <= end_ticks:
 			if (tick % ticks_per_bar) != 0:  # Skip if it's a bar line
-				var x = ticks_to_pixels(tick) - scroll_position + offset_x
+				var x = ticks_to_pixels(tick) - scroll_offset + offset_x
 				lines.append(GridLine.new(x, GridLineType.BEAT))
 			tick += ticks_per_beat
 	
@@ -176,7 +178,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0)
 		while tick <= end_ticks:
 			# Skip if it's a bar or beat line
 			if (tick % ticks_per_bar) != 0 and (tick % ticks_per_beat) != 0:
-				var x = ticks_to_pixels(tick) - scroll_position + offset_x
+				var x = ticks_to_pixels(tick) - scroll_offset + offset_x
 				lines.append(GridLine.new(x, GridLineType.SUBDIVISION))
 			tick += ticks_per_subdivision
 	

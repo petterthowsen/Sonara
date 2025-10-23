@@ -181,7 +181,7 @@ func _on_label_gui_input(event: InputEvent) -> void:
 	if not edit_via_click or disabled or is_editing:
 		return
 
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var current_time = Time.get_ticks_msec() / 1000.0
 		var time_since_last_click = current_time - _last_click_time
 

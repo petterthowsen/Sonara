@@ -1,7 +1,7 @@
 [gd_scene load_steps=11 format=3 uid="uid://brth8uue4ow8b"]
 
-[ext_resource type="Script" uid="uid://in8ekhi5eyta" path="res://components/LightButton.gd" id="1_1cidk"]
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://device_lane/DevicePanel.gd" id="1_v0u3q"]
+[ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
 content_margin_left = 0.0
@@ -29,8 +29,8 @@ corner_detail = 5
 
 [sub_resource type="Gradient" id="Gradient_jx3fc"]
 interpolation_mode = 2
-offsets = PackedFloat32Array(0.005, 0.40784314, 0.9843137, 1.025)
-colors = PackedColorArray(0.9954834, 1, 0.421875, 1, 1, 0.73399997, 0.16000003, 0.8235294, 1.0000141, 0.63806397, 0.33012754, 0.0251396, 1, 0.63390625, 0.33999997, 0)
+offsets = PackedFloat32Array(0.005, 0.40784314, 1, 1.025)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.8235294, 1, 1, 1, 0.023529412, 1, 0.63390625, 0.33999997, 0)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_7u30j"]
 gradient = SubResource("Gradient_jx3fc")
@@ -86,15 +86,21 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_khhpn")
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="Enabled" type="Control" parent="VBoxContainer/Header/HBox"]
+[node name="DeviceLight" type="Control" parent="VBoxContainer/Header/HBox"]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_vertical = 4
-script = ExtResource("1_1cidk")
-diameter = 18.0
-light_color = Color(1, 0.815, 0.26, 1)
+script = ExtResource("2_1cidk")
+diameter = 24.0
+light_color_inactive_disabled = Color(0.2, 0.2, 0.2, 0)
+light_color_active_disabled = Color(0.38, 0.098799996, 0.098799996, 0)
+light_color_active_enabled = Color(0.8828125, 0.84832764, 0, 1)
 light_texture = SubResource("GradientTexture2D_7u30j")
-border_color = Color(0, 0, 0, 1)
-value = true
+border_color_inactive = Color(0.73046875, 0, 0, 1)
+border_color_active = Color(0.82421875, 0.82421875, 0.82421875, 1)
+border_thickness = 1.5
+test_active = true
+test_enabled = true
 
 [node name="Name" type="Label" parent="VBoxContainer/Header/HBox"]
 layout_mode = 2

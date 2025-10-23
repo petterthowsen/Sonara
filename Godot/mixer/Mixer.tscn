@@ -85,20 +85,14 @@ script = ExtResource("2_64am7")
 [node name="MixerChannel" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_mn7va")
-border_color = null
-border_color_selected = null
 
 [node name="MixerChannel2" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_a1ece")
-border_color = null
-border_color_selected = null
 
 [node name="MixerChannel3" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_mhjkb")
-border_color = null
-border_color_selected = null
 
 [node name="Options" type="CenterContainer" parent="HSplit/LeftPane/HBox"]
 layout_mode = 2
@@ -140,8 +134,6 @@ script = ExtResource("2_64am7")
 layout_mode = 2
 mouse_default_cursor_shape = 0
 theme_override_styles/panel = SubResource("StyleBoxFlat_ywjo5")
-border_color = null
-border_color_selected = null
 
 [node name="Toolbar" type="PanelContainer" parent="."]
 layout_mode = 2

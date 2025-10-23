@@ -15,3 +15,6 @@ script = ExtResource("1_timeline_track")
 grid_color_bar = Color(1, 1, 1, 1)
 grid_color_beat = Color(1.9610009, 1.9610009, 1.9610009, 0.5254902)
 grid_color_tick = Color(0.51, 0.51, 0.51, 0.5176471)
+bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
+border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
+border_thickness = 2.0

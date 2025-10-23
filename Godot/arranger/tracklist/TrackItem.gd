@@ -1,5 +1,5 @@
 @tool
-class_name TrackItem extends MarginContainer
+class_name TrackItem extends PanelContainer
 
 @export var bg_color := Color.CORNFLOWER_BLUE:
 	set(c):
@@ -7,11 +7,14 @@ class_name TrackItem extends MarginContainer
 		queue_redraw()
 
 # UI References
-@onready var volumeter: Volumeter = $HBox/Volumeter
-@onready var label: Label = $HBox/MarginContainer/VBox/Top/Label
-@onready var arm_toggle: Button = $HBox/MarginContainer/VBox/Top/Toggles/ArmToggle
-@onready var solo_toggle: Button = $HBox/MarginContainer/VBox/Top/Toggles/SoloMute/SoloToggle
-@onready var mute_toggle: Button = $HBox/MarginContainer/VBox/Top/Toggles/SoloMute/MuteToggle
+@export var volumeter: Volumeter
+@export var label: SmartLineEdit
+@export var arm_toggle: Button
+@export var solo_toggle: Button 
+@export var mute_toggle: Button
+
+# at the bottom, a drop zone
+@export var drop_zone: DropZone
 
 # Data binding
 var track: Track = null
@@ -38,23 +41,29 @@ func _ready():
 		# Connect volumeter signal for volume changes
 		if volumeter:
 			volumeter.volume_changed.connect(_on_volumeter_volume_changed)
+		
+		# Connect label (SmartLineEdit) for track name changes
+		if label:
+			label.value_changed.connect(_on_label_value_changed)
+		
+		# Set up drop zone
+		if drop_zone:
+			# Filter to only accept TrackDrag data
+			drop_zone.accepts_data = func(data): return data is TrackDrag
+			drop_zone.drop_accepted.connect(_on_drop_zone_drop)
 
 	queue_redraw()
 
 
-func _draw() -> void:
-	# draw bg
-	draw_rect(Rect2(0, 0, size.x, size.y), bg_color, true, -1.0, true)
-	
-	# draw border
-	draw_rect(Rect2(0, size.y - 1, size.x, 2), Color(0,0,0,0.5), true, -1.0, true)
+func _enter_tree() -> void:
+	queue_redraw()
 
 
 func _gui_input(event: InputEvent) -> void:
 	var mouse = get_local_mouse_position()
 
 	# Detect resize area at bottom edge
-	if mouse.y > size.y - 4:
+	if mouse.y >= size.y - 4:
 		mouse_default_cursor_shape = Control.CURSOR_VSIZE
 
 		# Handle mouse down to start resizing
@@ -98,15 +107,6 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 	"""Bind this UI element to a Track data object and its associated channel."""
 	print("[TrackItem] bind_to_track called: track=", t.name if t else "null", " project=", project)
 
-	# Disconnect from old track if any
-	if track:
-		if track.color_changed.is_connected(_on_track_color_changed):
-			track.color_changed.disconnect(_on_track_color_changed)
-		if track.height_changed.is_connected(_on_track_height_changed):
-			track.height_changed.disconnect(_on_track_height_changed)
-		if track.default_channel_id_changed.is_connected(_on_track_channel_id_changed):
-			track.default_channel_id_changed.disconnect(_on_track_channel_id_changed)
-
 	# Disconnect from old channel if any
 	_unbind_from_channel()
 
@@ -119,6 +119,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 		track.color_changed.connect(_on_track_color_changed)
 		track.height_changed.connect(_on_track_height_changed)
 		track.default_channel_id_changed.connect(_on_track_channel_id_changed)
+		track.parent_changed.connect(_on_track_parent_changed)
 
 	# Look up and bind to the track's channel
 	_bind_to_track_channel()
@@ -133,10 +134,11 @@ func _update_from_track() -> void:
 	
 	# Update height to match track height
 	custom_minimum_size.y = track.height
+	size.y = track.height
 	
 	# Update label
 	if label:
-		label.text = track.name
+		label.set_value(track.name)
 	
 	# Update toggles
 	if arm_toggle:
@@ -147,7 +149,10 @@ func _update_from_track() -> void:
 		mute_toggle.set_pressed_no_signal(track.muted)
 
 	# Apply track color to background
-	_update_track_bg_color(track.color)
+	_update_track_bg_color()
+	
+	# Apply nesting level indentation
+	_update_nesting_indent()
 
 # ============================================================================
 # CHANNEL BINDING AND SYNC
@@ -209,9 +214,10 @@ func _update_volumeter_from_channel() -> void:
 # TRACK SIGNAL CALLBACKS
 # ============================================================================
 
-func _on_track_color_changed(new_color: Color) -> void:
-	"""React to track color changes."""
-	_update_track_bg_color(new_color)
+func _update_track_bg_color() -> void:
+	"""Update the background color of the track item to the track's track_color."""
+	var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
+	stylebox.bg_color = track.track_color
 
 
 func _on_track_height_changed(new_height: int) -> void:
@@ -226,14 +232,33 @@ func _on_track_channel_id_changed(new_channel_id: int) -> void:
 	_bind_to_track_channel()
 
 
-func _update_track_bg_color(color: Color) -> void:
-	"""Update background color from track color."""
-	if color != Color.WHITE:
-		bg_color = color
-		bg_color.v = clamp(bg_color.v, 0.1, 0.7)
-	else:
-		# Fallback to a neutral dark color if no color set
-		bg_color = Color.from_string("#444444", Color.WHITE)
+func _on_track_parent_changed(_new_parent_id: int) -> void:
+	"""React to track parent changes - update nesting indent."""
+	_update_nesting_indent()
+
+func _on_track_color_changed(_c : Color) -> void:
+	"""React to track color changes - update background color."""
+	_update_track_bg_color()
+
+
+func _update_nesting_indent() -> void:
+	"""Apply left margin based on track's nesting level by modifying StyleBox."""
+	
+	var nesting_level = track.get_nesting_level(current_project)
+	var indent_pixels = nesting_level * 12
+	
+	# Get the panel stylebox and modify its left margin
+	var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
+	
+	# Set the left content margin for indentation
+	stylebox.border_width_left = indent_pixels
+	
+	# color the border = to parent track color
+	var parent_track = current_project.get_track_by_id(track.parent_track_id)
+	if parent_track:
+		stylebox.border_color = parent_track.track_color
+	
+	print("[TrackItem] Track '", track.name, "' nesting level: ", nesting_level, " indent: ", indent_pixels, "px")
 
 
 # ============================================================================
@@ -251,6 +276,13 @@ func _on_solo_toggled(pressed: bool) -> void:
 func _on_mute_toggled(pressed: bool) -> void:
 	if track:
 		track.muted = pressed
+
+
+func _on_label_value_changed(new_value: String) -> void:
+	"""Update track name when label is edited."""
+	if track:
+		track.name = new_value
+		print("[TrackItem] Track name changed to: ", new_value)
 
 
 # ============================================================================
@@ -282,3 +314,127 @@ func _on_channel_peak_updated(left: float, right: float) -> void:
 		return
 
 	volumeter.peak = max(left, right)
+
+
+# ============================================================================
+# DRAG AND DROP
+# ============================================================================
+
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	"""Start dragging this track."""
+	if not track or Engine.is_editor_hint():
+		return null
+	
+	# Create drag preview
+	var preview = _create_drag_preview()
+	
+	# Create drag data
+	var drag_data = TrackDrag.new(self, track, preview)
+	set_drag_preview(preview)
+	
+	print("[TrackItem] Started dragging track: ", track.name)
+	return drag_data
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	"""Check if we can accept a track drop for foldering."""
+	if not data is TrackDrag or not track:
+		return false
+	
+	var drag_data = data as TrackDrag
+	
+	# Can't drop on self
+	if drag_data.track == track:
+		return false
+	
+	# Can only drop on FOLDER tracks for foldering
+	if track.type != Track.TrackType.FOLDER:
+		return false
+	
+	# Can't make a folder a child of itself (circular reference check)
+	if drag_data.track.type == Track.TrackType.FOLDER:
+		if _would_create_circular_reference(drag_data.track):
+			return false
+	
+	return true
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	"""Accept a track drop - add to folder."""
+	if not data is TrackDrag or not current_project or not track:
+		return
+	
+	var drag_data = data as TrackDrag
+	drag_data.destination = self
+	
+	# Add dragged track to this folder
+	current_project.add_track_to_folder(drag_data.track.id, track.id)
+	
+	print("[TrackItem] Added track '%s' to folder '%s'" % [drag_data.track.name, track.name])
+
+
+func _on_drop_zone_drop(data: Variant) -> void:
+	"""Handle drop on the drop zone - insert after this track."""
+	if not data is TrackDrag or not current_project or not track:
+		return
+	
+	var drag_data = data as TrackDrag
+	
+	# Get TrackList to handle reordering
+	var track_list = _get_track_list()
+	if track_list:
+		track_list.insert_track_after(drag_data.track, track)
+		print("[TrackItem] Requested insert '%s' after '%s'" % [drag_data.track.name, track.name])
+
+
+func _create_drag_preview() -> Control:
+	"""Create a visual preview for dragging."""
+	var preview = PanelContainer.new()
+	var label_node = Label.new()
+	label_node.text = track.name
+	label_node.add_theme_color_override("font_color", Color.WHITE)
+	preview.add_child(label_node)
+	
+	# Style the preview
+	var style = StyleBoxFlat.new()
+	style.bg_color = track.color
+	style.bg_color.a = 0.8
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	preview.add_theme_stylebox_override("panel", style)
+	
+	# Set minimum size
+	preview.custom_minimum_size = Vector2(100, 30)
+	
+	return preview
+
+
+func _would_create_circular_reference(dragged_folder: Track) -> bool:
+	"""Check if making this track a child of dragged_folder would create circular reference."""
+	if not current_project or not track:
+		return false
+	
+	# Walk up the parent chain from this track
+	var current_parent_id = track.parent_track_id
+	while current_parent_id >= 0:
+		if current_parent_id == dragged_folder.id:
+			return true  # Dragged folder is already an ancestor
+		
+		var parent = current_project.get_track_by_id(current_parent_id)
+		if not parent:
+			break
+		current_parent_id = parent.parent_track_id
+	
+	return false
+
+
+func _get_track_list() -> TrackList:
+	"""Get the TrackList parent."""
+	var node = get_parent()
+	while node:
+		if node is TrackList:
+			return node as TrackList
+		node = node.get_parent()
+	return null

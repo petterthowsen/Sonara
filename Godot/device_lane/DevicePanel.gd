@@ -4,7 +4,9 @@ class_name DevicePanel extends PanelContainer
 const CompactParameterControlScene = preload("res://components/device/compact/CompactParameterControl.tscn")
 
 @onready var header : PanelContainer = $VBoxContainer/Header
-@onready var enabled : LightButton = $VBoxContainer/Header/HBox/Enabled
+
+# light button toggles inactive/active and enabled/disabled
+@onready var device_light: DeviceLightButton = $VBoxContainer/Header/HBox/DeviceLight
 @onready var name_label : Label = $VBoxContainer/Header/HBox/Name
 @onready var tab_buttons : HBoxContainer = $VBoxContainer/Header/HBox/TabButtons
 @onready var params_button : Button = $VBoxContainer/Header/HBox/TabButtons/ParamsButton
@@ -15,6 +17,8 @@ const CompactParameterControlScene = preload("res://components/device/compact/Co
 var device : DeviceInstance
 
 
+## This should not really happen.
+## unless we pool device panels, but that's a lot of work for little gain.
 func _unbind_from_device(_dev : DeviceInstance):
 	_clear_parameter_controls()
 
@@ -25,7 +29,7 @@ func bind_to_device(dev : DeviceInstance):
 	device = dev
 	
 	await ready
-	enabled.value = dev.enabled
+	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
 	_create_parameter_controls()
 	

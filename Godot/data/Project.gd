@@ -235,6 +235,13 @@ func get_channel_by_id(channel_id: int) -> Channel:
 
 func add_track(track: Track) -> void:
 	"""Add an existing track to the project."""
+	# Set order relative to siblings
+	var sibling_count = 0
+	for t in tracks:
+		if t.parent_track_id == track.parent_track_id:
+			sibling_count += 1
+	track.order = sibling_count
+	
 	tracks.append(track)
 	track_added.emit(track)
 
@@ -260,6 +267,60 @@ func get_track_by_id(track_id: int) -> Track:
 		if track.id == track_id:
 			return track
 	return null
+
+
+func get_track_children(track: Track) -> Array[Track]:
+	"""Get direct children of a track (not recursive)."""
+	var children: Array[Track] = []
+	if track.type == Track.TrackType.FOLDER:
+		for child_id in track.child_track_ids:
+			var child = get_track_by_id(child_id)
+			if child:
+				children.append(child)
+		# Sort by order
+		children.sort_custom(func(a, b): return a.order < b.order)
+	return children
+
+
+func get_track_siblings(track: Track) -> Array[Track]:
+	"""Get sibling tracks (tracks with same parent)."""
+	var siblings: Array[Track] = []
+	for t in tracks:
+		if t != track and t.parent_track_id == track.parent_track_id:
+			siblings.append(t)
+	# Sort by order
+	siblings.sort_custom(func(a, b): return a.order < b.order)
+	return siblings
+
+
+func get_visual_track_list() -> Array[Track]:
+	"""Build a flat list of tracks in visual order from the hierarchy."""
+	var result: Array[Track] = []
+	
+	# Get root tracks (no parent)
+	var root_tracks: Array[Track] = []
+	for track in tracks:
+		if track.parent_track_id < 0:
+			root_tracks.append(track)
+	
+	# Sort root tracks by order
+	root_tracks.sort_custom(func(a, b): return a.order < b.order)
+	
+	# Recursively add each root and its descendants
+	for root in root_tracks:
+		_add_track_and_descendants_to_list(root, result)
+	
+	return result
+
+
+func _add_track_and_descendants_to_list(track: Track, result: Array[Track]) -> void:
+	"""Recursively add a track and all its descendants to a list."""
+	result.append(track)
+	
+	if track.type == Track.TrackType.FOLDER:
+		var children = get_track_children(track)
+		for child in children:
+			_add_track_and_descendants_to_list(child, result)
 
 
 # ============================================================================
@@ -414,15 +475,15 @@ func create_bus_channel(bus_name: String = "Bus") -> Channel:
 	return create_channel(bus_name, Channel.ChannelType.BUS)
 
 
-# Create group track (folder) with optional channel
-func create_group_track(group_name: String = "Group", with_channel: bool = true) -> Dictionary:
-	"""Create a group track (folder) with optional channel."""
-	var track = create_track(group_name)
-	track.type = Track.TrackType.GROUP
+# Create folder track with optional channel
+func create_folder_track(folder_name: String = "Folder", with_channel: bool = true) -> Dictionary:
+	"""Create a folder track with optional channel."""
+	var track = create_track(folder_name)
+	track.type = Track.TrackType.FOLDER
 
 	var channel = null
 	if with_channel:
-		channel = create_channel(group_name, Channel.ChannelType.BUS)
+		channel = create_channel(folder_name, Channel.ChannelType.BUS)
 		track.default_channel_id = channel.id
 
 		# Reconnect track to update routing (if project is connected)
@@ -433,29 +494,54 @@ func create_group_track(group_name: String = "Group", with_channel: bool = true)
 	return {"track": track, "channel": channel}
 
 
-# Add track to group
-func add_track_to_group(track_id: int, group_id: int) -> bool:
-	"""Add a track to a group track."""
+# Add track to folder
+func add_track_to_folder(track_id: int, folder_id: int) -> bool:
+	"""Add a track to a folder track."""
 	var track = get_track_by_id(track_id)
-	var group = get_track_by_id(group_id)
+	var folder = get_track_by_id(folder_id)
 
-	if not track or not group:
+	if not track or not folder:
 		return false
-	if group.type != Track.TrackType.GROUP:
+	if folder.type != Track.TrackType.FOLDER:
 		return false
 
 	# Remove from old parent if any
-	if track.parent_track_id >= 0:
-		var old_parent = get_track_by_id(track.parent_track_id)
+	var old_parent_id = track.parent_track_id
+	if old_parent_id >= 0:
+		var old_parent = get_track_by_id(old_parent_id)
 		if old_parent:
 			old_parent.child_track_ids.erase(track_id)
+			# Renumber old siblings to fill the gap
+			_renumber_siblings(old_parent_id)
+	elif old_parent_id < 0:
+		# Was a root track, renumber root siblings
+		_renumber_siblings(-1)
 
 	# Add to new parent
-	track.parent_track_id = group_id
-	if not group.child_track_ids.has(track_id):
-		group.child_track_ids.append(track_id)
+	track.parent_track_id = folder_id
+	if not folder.child_track_ids.has(track_id):
+		folder.child_track_ids.append(track_id)
+	
+	# Set order to be last child of the folder
+	var children = get_track_children(folder)
+	track.order = children.size() - 1  # Already added, so size - 1
 
 	return true
+
+
+func _renumber_siblings(parent_id: int) -> void:
+	"""Renumber all tracks with the same parent to have sequential order."""
+	var siblings: Array[Track] = []
+	for t in tracks:
+		if t.parent_track_id == parent_id:
+			siblings.append(t)
+	
+	# Sort by current order
+	siblings.sort_custom(func(a, b): return a.order < b.order)
+	
+	# Renumber
+	for i in range(siblings.size()):
+		siblings[i].order = i
 
 
 # ============================================================================

@@ -12,10 +12,38 @@ signal clip_drag_started(source_track: Track, selected_clip_uis: Array, selected
 signal clip_drag_moved(global_position: Vector2)  # Cross-track drag position update
 signal clip_drag_ended(global_position: Vector2)  # Cross-track drag ended
 
-@export var grid_color_bar: Color = "#000"
-@export var grid_color_beat: Color = "#151515"
-@export var grid_color_tick: Color = "#353535"
-@export var bg_color: Color = "#555"
+@export var grid_color_bar: Color = "#000":
+	set(value):
+		grid_color_bar = value
+		queue_redraw()
+
+@export var grid_color_beat: Color = "#151515":
+	set(value):
+		grid_color_beat = value
+		queue_redraw()
+
+@export var grid_color_tick: Color = "#353535":
+	set(value):
+		grid_color_tick = value
+		queue_redraw()
+
+@export var bg_color: Color = "#555":
+	set(value):
+		bg_color = value
+		queue_redraw()
+
+@export_group("Border")
+@export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3):
+	set(value):
+		border_color = value
+		queue_redraw()
+
+@export var border_thickness: float = 1.0:
+	set(value):
+		border_thickness = value
+		queue_redraw()
+
+@export_group("")
 
 # Data binding
 var track: Track = null
@@ -95,9 +123,6 @@ func _update_from_track() -> void:
 
 	# Set minimum height to match track height
 	custom_minimum_size.y = track.height
-
-	# Update background color based on track color (subtle tint)
-	bg_color = track.color.darkened(0.7)
 
 	# Create clip instances for all clips in track
 	_update_clips()
@@ -251,11 +276,20 @@ func _on_clip_drag_ended(clip_ui: Node, global_position: Vector2) -> void:
 
 func _draw():
 	# Draw background
-	draw_rect(Rect2(Vector2(0, 0), size), bg_color, true, -1.0, false)
+	var col = bg_color
+	if Sonara.get_config("appearence/color_timeline_by_track", true):
+		col = Color.from_hsv(track.color.h, track.color.s, bg_color.v)
+
+	draw_rect(Rect2(Vector2(0, 0), size), col, true, -1.0, false)
 	
 	# Draw grid lines
 	if timeline and Sonara and Sonara.editor and Sonara.editor.project:
 		_draw_grid()
+	
+	# Draw bottom border
+	if border_thickness > 0:
+		var border_y = size.y - border_thickness
+		draw_rect(Rect2(0, border_y, size.x, border_thickness), border_color, true)
 	
 	# TODO: Draw clips
 
@@ -264,12 +298,14 @@ func _draw_grid() -> void:
 	if not timeline or not timeline.grid_helper:
 		return
 	
-	# Calculate visible range
+	# Calculate visible range (in local coordinates)
 	var start_x = 0.0
 	var end_x = size.x
 	
 	# Get grid lines from shared grid_helper
-	var grid_lines = timeline.grid_helper.get_visible_grid_lines(start_x, end_x, 0.0)
+	# use_scroll = false because TimelineTrack is inside a ScrollContainer
+	# which automatically handles the viewport translation
+	var grid_lines = timeline.grid_helper.get_visible_grid_lines(start_x, end_x, 0.0, false)
 	
 	# Draw each grid line
 	for line in grid_lines:

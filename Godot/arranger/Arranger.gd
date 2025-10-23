@@ -22,6 +22,7 @@ class_name Arranger extends VBoxContainer
 @onready var timeline_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TimelineHeader
 
 @onready var add_track_button: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/Buttons/AddTrackButton
+@onready var add_folder_button: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/Buttons/AddFolderButton
 
 @onready var v_split : VSplitContainer = $VSplitContainer
 
@@ -74,6 +75,7 @@ func _ready():
 
 	# Connect add track button
 	add_track_button.pressed.connect(_on_add_track_pressed)
+	add_folder_button.pressed.connect(_on_add_folder_pressed)
 
 	# Set up custom scroll handling by intercepting gui_input on scroll containers
 	v_scroll.gui_input.connect(_on_scroll_container_input.bind(v_scroll))
@@ -84,6 +86,7 @@ func _ready():
 
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
+	_on_h_split_dragged(h_split.split_offset)
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
@@ -327,9 +330,35 @@ func _on_add_track_pressed() -> void:
 
 	# Set visual properties (channel color already set by project.create_channel())
 	new_track.color = new_channel.color
-	new_track.height = 60
 
 	print("[Arranger] Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
+
+
+func _on_add_folder_pressed() -> void:
+	"""Create and add a new folder track with corresponding bus channel to the project."""
+	if not current_project:
+		push_warning("[Arranger] Cannot add folder: No project active")
+		return
+
+	# Count existing folders for naming
+	var folder_count = 0
+	for track in current_project.tracks:
+		if track.type == Track.TrackType.FOLDER:
+			folder_count += 1
+	
+	var folder_name = "Folder %d" % (folder_count + 1)
+
+	# Use Project's create_folder_track method
+	# This creates both folder track and bus channel with proper linking
+	var result = current_project.create_folder_track(folder_name, true)
+	var new_folder = result["track"] as Track
+	var new_channel = result["channel"] as Channel
+
+	# Set visual properties
+	new_folder.color = new_channel.color
+	new_folder.height = 60
+
+	print("[Arranger] Added folder '%s' (ID %d) with bus channel (ID %d)" % [folder_name, new_folder.id, new_channel.id])
 
 # ============================================================================
 # PROJECT LIFECYCLE
@@ -448,7 +477,9 @@ func _on_timeline_track_selection_changed(selected_clips: Array[ClipInstance], t
 func _on_clip_drag_started(source_track: Track, selected_clip_uis: Array, selected_instances: Array[ClipInstance]) -> void:
 	"""Handle cross-track drag start - store origin state."""
 	_dragging_source_track = source_track
-	_dragging_origin_track_index = current_project.tracks.find(source_track)
+	# Use visual track list for correct hierarchical ordering
+	var visual_tracks = current_project.get_visual_track_list()
+	_dragging_origin_track_index = visual_tracks.find(source_track)
 	_dragging_origin_mouse_pos = get_global_mouse_position()
 	print("[Arranger] Drag started from track %s (index %d)" % [source_track.name, _dragging_origin_track_index])
 
@@ -510,6 +541,9 @@ func _move_selected_clips_by_track_delta(track_delta: int) -> void:
 	if track_delta == 0:
 		return
 
+	# Use visual track list for correct hierarchical ordering
+	var visual_tracks = current_project.get_visual_track_list()
+
 	# Collect all clips that will be moved and their source tracks
 	var clips_to_move: Array = []  # Array of {clip: ClipInstance, from_track: Track, to_track: Track}
 
@@ -519,16 +553,16 @@ func _move_selected_clips_by_track_delta(track_delta: int) -> void:
 		if not source_track:
 			continue
 
-		# Get the target track index
-		var source_index = current_project.tracks.find(source_track)
+		# Get the target track index using visual ordering
+		var source_index = visual_tracks.find(source_track)
 		var target_index = source_index + track_delta
 
 		# Check bounds
-		if target_index < 0 or target_index >= current_project.tracks.size():
+		if target_index < 0 or target_index >= visual_tracks.size():
 			print("[Arranger] Skip track %d: target index %d out of bounds" % [source_index, target_index])
 			continue
 
-		var target_track = current_project.tracks[target_index]
+		var target_track = visual_tracks[target_index]
 		var selected_clips = _track_selections[track_id]
 
 		for clip in selected_clips:
@@ -597,7 +631,7 @@ func _on_h_split_dragged(offset: int) -> void:
 
 	_syncing_split = true
 	# Sync TracklistHeader width to match the split offset, accounting for the draggable area
-	tracklist_header.custom_minimum_size.x = offset + 9
+	tracklist_header.custom_minimum_size.x = offset + 7
 	_syncing_split = false
 
 

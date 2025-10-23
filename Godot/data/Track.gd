@@ -1,6 +1,6 @@
 class_name Track extends RefCounted
 
-enum TrackType { AUDIO, INSTRUMENT, GROUP }
+enum TrackType { AUDIO, INSTRUMENT, FOLDER }
 
 # ============================================================================
 # SIGNALS
@@ -11,6 +11,8 @@ signal clip_instance_removed(instance: ClipInstance)
 signal color_changed(new_color: Color)
 signal height_changed(new_height: int)
 signal default_channel_id_changed(new_channel_id: int)
+signal order_changed(new_order: int)
+signal parent_changed(new_parent_id: int)
 
 # ============================================================================
 # PROPERTIES
@@ -24,7 +26,15 @@ var name: String = "Track"
 var type: TrackType = TrackType.INSTRUMENT
 var _color: Color = Color.WHITE
 var color_by_channel: bool = true  # If true, color syncs with default_channel_id's color
-var order: int = 0  # Display order in arranger (lower = top, higher = bottom)
+var _order: int = 0  # Display order in arranger (lower = top, higher = bottom)
+
+var order: int:
+	get:
+		return _order
+	set(value):
+		if _order != value:
+			_order = value
+			order_changed.emit(_order)
 
 # Timeline data (PPQ-based positions)
 var clip_instances: Array[ClipInstance] = []  # Array of ClipInstance objects
@@ -42,12 +52,21 @@ var default_channel_id: int:
 			default_channel_id_changed.emit(value)
 
 # Grouping/hierarchy
-var parent_track_id: int = -1  # -1 = top level, otherwise ID of parent Track
-var child_track_ids: Array[int] = []  # For GROUP tracks, IDs of child tracks
-var is_group_expanded: bool = true  # UI state for group tracks
+var _parent_track_id: int = -1  # -1 = top level, otherwise ID of parent Track
+
+var parent_track_id: int:
+	get:
+		return _parent_track_id
+	set(value):
+		if _parent_track_id != value:
+			_parent_track_id = value
+			parent_changed.emit(_parent_track_id)
+
+var child_track_ids: Array[int] = []  # For FOLDER tracks, IDs of child tracks
+var is_folder_expanded: bool = true  # UI state for folder tracks
 
 # UI state
-var _height: int = 60  # Track height in pixels
+var _height: int = 38  # Track height in pixels
 var folded: bool = false  # Collapsed in UI
 var muted: bool = false
 var solo: bool = false
@@ -68,6 +87,35 @@ func _init(track_id: int = -1):
 # ============================================================================
 # PROPERTIES
 # ============================================================================
+
+func get_nesting_level(project: Project = null) -> int:
+	"""Calculate nesting level by traversing parent chain. Returns 0 for top-level tracks."""
+	if _parent_track_id < 0:
+		return 0
+	
+	if project == null:
+		# Can't calculate without project reference
+		return 0
+	
+	var level = 0
+	var current_parent_id = _parent_track_id
+	var visited_ids = []  # Prevent infinite loops
+	
+	while current_parent_id >= 0:
+		# Guard against circular references
+		if current_parent_id in visited_ids:
+			push_error("[Track %d] Circular parent reference detected!" % id)
+			break
+		visited_ids.append(current_parent_id)
+		
+		level += 1
+		var parent = project.get_track_by_id(current_parent_id)
+		if parent == null:
+			break
+		current_parent_id = parent._parent_track_id
+	
+	return level
+
 
 func get_color() -> Color:
 	"""Get track color, either from channel or own color."""
@@ -91,6 +139,18 @@ var color: Color:
 		return get_color()
 	set(value):
 		set_color(value)
+
+
+# Color for the track in the tracklist
+# It depends on user config and can be muted or saturated.
+var track_color : Color:
+	get:
+		var c = color
+		c.v = clamp(c.v, 0.3, 0.7)
+		c.s = clamp(c.s, 0.1, 0.8)
+		return c
+	set(value):
+		track_color = color
 
 
 func set_height(new_height: int) -> void:
@@ -298,13 +358,13 @@ func to_json() -> Dictionary:
 		"type": TrackType.keys()[type],
 		"color": _color.to_html(),
 		"color_by_channel": color_by_channel,
-		"order": order,
+		"order": _order,
 		"clip_instances": clip_instances.map(func(i): return i.to_json()),
 		"automation_lanes": automation_lanes.map(func(a): return a.to_json()) if not automation_lanes.is_empty() else [],
 		"default_channel_id": default_channel_id,
 		"parent_track_id": parent_track_id,
 		"child_track_ids": child_track_ids,
-		"is_group_expanded": is_group_expanded,
+		"is_folder_expanded": is_folder_expanded,
 		"height": _height,
 		"folded": folded,
 		"muted": muted,
@@ -330,8 +390,8 @@ static func from_json(data: Dictionary) -> Track:
 	track.default_channel_id = data.get("default_channel_id", -1)
 	track.parent_track_id = data.get("parent_track_id", -1)
 	track.child_track_ids = data.get("child_track_ids", [])
-	track.is_group_expanded = data.get("is_group_expanded", true)
-	track.height = data.get("height", 60)
+	track.is_folder_expanded = data.get("is_folder_expanded", true)
+	track.height = data.get("height", 38)
 	track.folded = data.get("folded", false)
 	track.muted = data.get("muted", false)
 	track.solo = data.get("solo", false)

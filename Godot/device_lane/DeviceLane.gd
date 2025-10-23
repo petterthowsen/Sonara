@@ -9,6 +9,17 @@ const DevicePanelScene : PackedScene = preload("res://device_lane/DevicePanel.ts
 
 var channel : Channel
 
+
+func _ready():
+	# Connect to the Mixer's channel_focused signal via Sonara.editor
+	Sonara.editor.channel_focused.connect(_on_channel_focused)
+
+
+func _on_channel_focused(focused_channel: Channel):
+	"""Called when a channel is focused in the mixer."""
+	if focused_channel:
+		bind_to_channel(focused_channel)
+
 func _get_header_stylebox() -> StyleBoxFlat:
 	return header.get_theme_stylebox("panel")
 

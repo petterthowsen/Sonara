@@ -1,7 +1,8 @@
-[gd_scene load_steps=17 format=3 uid="uid://d17wdwntyd1ni"]
+[gd_scene load_steps=18 format=3 uid="uid://d17wdwntyd1ni"]
 
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="1_i0blf"]
 [ext_resource type="PackedScene" uid="uid://dwx58rtumvnkj" path="res://arranger/Arranger.tscn" id="2_i1ssp"]
+[ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="2_x2y5v"]
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="3_i1ssp"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="4_52o2w"]
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://device_lane/DeviceLane.gd" id="5_85wto"]
@@ -12,7 +13,6 @@
 content_margin_left = 4.0
 content_margin_top = 4.0
 content_margin_right = 4.0
-content_margin_bottom = 4.0
 bg_color = Color(0.1, 0.1, 0.1, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
@@ -129,18 +129,13 @@ layout_mode = 2
 
 [node name="MainMenu" type="MenuBar" parent="VBox/MainBar"]
 layout_mode = 2
+script = ExtResource("2_x2y5v")
 
 [node name="File" type="PopupMenu" parent="VBox/MainBar/MainMenu"]
 oversampling_override = 1.0
-item_count = 1
-item_0/text = "New"
-item_0/id = 0
 
 [node name="Edit" type="PopupMenu" parent="VBox/MainBar/MainMenu"]
 oversampling_override = 1.0
-item_count = 1
-item_0/text = "New"
-item_0/id = 0
 
 [node name="Middle" type="HBoxContainer" parent="VBox/MainBar"]
 layout_mode = 2
@@ -221,14 +216,17 @@ size_flags_horizontal = 8
 size_flags_vertical = 0
 
 [node name="Minimize" type="Button" parent="VBox/MainBar/WindowButtons"]
+custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "_"
 
 [node name="Maximize" type="Button" parent="VBox/MainBar/WindowButtons"]
+custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "+"
 
 [node name="Quit" type="Button" parent="VBox/MainBar/WindowButtons"]
+custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "X"
 

@@ -157,24 +157,24 @@ auto_lane.points.append(point2)
 track.automation_lanes.append(auto_lane)
 ```
 
-### Create a Group Track
+### Create a Folder Track
 
 ```gdscript
-# Create group with channel (for group processing)
-var result = project.create_group_track("Drums", true)
-var drums_group = result["track"]
+# Create folder with channel (for folder processing)
+var result = project.create_folder_track("Drums", true)
+var drums_folder = result["track"]
 var drums_channel = result["channel"]
 
-# Add tracks to group
+# Add tracks to folder
 var kick_idx = project.tracks.find(kick_track)
 var snare_idx = project.tracks.find(snare_track)
-var group_idx = project.tracks.find(drums_group)
+var folder_idx = project.tracks.find(drums_folder)
 
-project.add_track_to_group(kick_idx, group_idx)
-project.add_track_to_group(snare_idx, group_idx)
+project.add_track_to_folder(kick_idx, folder_idx)
+project.add_track_to_folder(snare_idx, folder_idx)
 
-# Process entire group through drums_channel
-drums_channel.volume = -3.0  # Group volume
+# Process entire folder through drums_channel
+drums_channel.volume = -3.0  # Folder volume
 ```
 
 ### Add a Send

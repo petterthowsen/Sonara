@@ -38,6 +38,7 @@ var _value := false
 	set(value):
 		if _value != value:
 			_value = value
+			toggled.emit(value)
 			queue_redraw()
 	get:
 		return _value
@@ -66,6 +67,12 @@ func _on_mouse_exited():
 	_hovering = false
 	queue_redraw()
 
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			value = !value
+			accept_event()
+
 func _draw() -> void:
 	var center = Vector2(radius, radius)
 	
@@ -77,13 +84,3 @@ func _draw() -> void:
 	
 	if value:
 		draw_texture_rect(light_texture, Rect2(0, 0, size.x, size.y), false, Color.WHITE)
-		# draw light
-		#var l_c = light_color
-		#if _hovering:
-			#l_c = l_c.lightened(0.1)
-		#draw_circle(center, r, l_c, true, -1.0, true)
-		
-		# draw shine
-		#var shine_c = l_c.lightened(0.5)
-		#shine_c.a = 0.1
-		#draw_circle(center + Vector2(-1, -1), r - 2, shine_c, true, -1.0, true)
