@@ -21,13 +21,16 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use tracing::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
-use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType};
+use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, HostGui, HostGuiImpl, GuiSize};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer};
 
 // Import shared memory types from the engine crate
 use engine::audio::devices::clap_host::shared_memory::SharedMemory;
@@ -96,13 +99,165 @@ struct PluginParameterInfo {
     is_automation_safe: bool,
 }
 
-// Minimal host implementation for subprocess
+// Host implementation for subprocess with GUI support
 struct SubprocessHost;
 
+/// Shared state accessible by all plugin threads
+#[derive(Clone)]
+struct SubprocessHostShared {
+    timers: Arc<Mutex<HashMap<clack_extensions::timer::TimerId, Timer>>>,
+    next_timer_id: Arc<Mutex<u32>>,
+}
+
+impl SubprocessHostShared {
+    fn new() -> Self {
+        Self {
+            timers: Arc::new(Mutex::new(HashMap::new())),
+            next_timer_id: Arc::new(Mutex::new(0)),
+        }
+    }
+    
+    /// Tick all timers and return list of IDs that should fire
+    fn tick_timers(&self) -> Vec<clack_extensions::timer::TimerId> {
+        let now = Instant::now();
+        let mut timers = self.timers.lock().unwrap();
+        timers
+            .values_mut()
+            .filter_map(|timer| {
+                if timer.tick(now) {
+                    Some(timer.id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+/// A single timer instance
+struct Timer {
+    id: clack_extensions::timer::TimerId,
+    interval: Duration,
+    last_triggered: Option<Instant>,
+}
+
+impl Timer {
+    fn new(id: clack_extensions::timer::TimerId, interval: Duration) -> Self {
+        Self {
+            id,
+            interval,
+            last_triggered: None,
+        }
+    }
+    
+    /// Returns true if timer should fire
+    fn tick(&mut self, now: Instant) -> bool {
+        match self.last_triggered {
+            None => {
+                self.last_triggered = Some(now);
+                true
+            }
+            Some(last) => {
+                if now.duration_since(last) >= self.interval {
+                    self.last_triggered = Some(now);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
 impl HostHandlers for SubprocessHost {
-    type Shared<'s> = ();
-    type MainThread<'a> = ();
+    type Shared<'s> = SubprocessHostShared;
+    type MainThread<'a> = SubprocessHostMainThread<'a>;
     type AudioProcessor<'a> = ();
+    
+    fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
+        // Register extensions required by many plugins (e.g., DPF-based plugins)
+        builder.register::<HostGui>();
+        builder.register::<HostTimer>();
+    }
+}
+
+/// Main thread state - holds mutable timer data
+struct SubprocessHostMainThread<'a> {
+    shared: &'a SubprocessHostShared,
+}
+
+impl<'a> MainThreadHandler<'a> for SubprocessHostMainThread<'a> {
+    // No main thread callbacks needed
+}
+
+impl<'a> SharedHandler<'a> for SubprocessHostShared {
+    fn request_restart(&self) {
+        // We don't support runtime restart
+        info!("Plugin requested restart (not supported)");
+    }
+
+    fn request_process(&self) {
+        // We're already processing continuously
+    }
+
+    fn request_callback(&self) {
+        // Main thread callbacks are called continuously in our event loop
+    }
+}
+
+impl HostGuiImpl for SubprocessHostShared {
+    fn resize_hints_changed(&self) {
+        // We don't support resize hints
+        info!("Plugin GUI resize hints changed");
+    }
+
+    fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
+        info!("Plugin GUI requested resize to {}x{}", new_size.width, new_size.height);
+        // For floating windows, the plugin manages its own window size
+        Ok(())
+    }
+
+    fn request_show(&self) -> Result<(), HostError> {
+        info!("Plugin GUI requested show");
+        Ok(())
+    }
+
+    fn request_hide(&self) -> Result<(), HostError> {
+        info!("Plugin GUI requested hide");
+        Ok(())
+    }
+
+    fn closed(&self, was_destroyed: bool) {
+        info!("Plugin GUI closed (destroyed: {})", was_destroyed);
+    }
+}
+
+impl HostTimerImpl for SubprocessHostMainThread<'_> {
+    fn register_timer(&mut self, period_ms: u32) -> Result<clack_extensions::timer::TimerId, HostError> {
+        // Clamp to reasonable range (10ms minimum for performance)
+        let period_ms = period_ms.max(10);
+        let interval = Duration::from_millis(period_ms as u64);
+        
+        let mut next_id = self.shared.next_timer_id.lock().unwrap();
+        *next_id += 1;
+        let timer_id = clack_extensions::timer::TimerId(*next_id);
+        drop(next_id);
+        
+        let timer = Timer::new(timer_id, interval);
+        self.shared.timers.lock().unwrap().insert(timer_id, timer);
+        
+        info!("Registered timer {} with interval {}ms", timer_id.0, period_ms);
+        Ok(timer_id)
+    }
+
+    fn unregister_timer(&mut self, timer_id: clack_extensions::timer::TimerId) -> Result<(), HostError> {
+        if self.shared.timers.lock().unwrap().remove(&timer_id).is_some() {
+            info!("Unregistered timer {}", timer_id.0);
+            Ok(())
+        } else {
+            Err(HostError::Message("Unknown timer ID"))
+        }
+    }
 }
 
 /// Receive a file descriptor from a Unix domain socket
@@ -183,6 +338,7 @@ fn main() {
 struct PluginState {
     bundle: PluginBundle,
     instance: PluginInstance<SubprocessHost>,
+    shared: Arc<SubprocessHostShared>,
     gui_open: bool,
     activated: bool,
     processing: bool,
@@ -417,7 +573,7 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
             }
         }
         
-        // Process audio and GUI callbacks (separate from command handling)
+        // Process audio, GUI callbacks, and timers (separate from command handling)
         let mut processed_audio = false;
         if let Some(ref mut state) = plugin_state {
             // Process audio if plugin is activated and processing
@@ -435,9 +591,21 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                 }
             }
             
+            // Process timers - check which ones need to fire
+            let triggered_timers = state.shared.tick_timers();
+            if !triggered_timers.is_empty() {
+                // Get timer extension and fire callbacks
+                let mut handle = state.instance.plugin_handle();
+                if let Some(timer_ext) = handle.get_extension::<PluginTimer>() {
+                    for timer_id in triggered_timers {
+                        timer_ext.on_timer(&mut handle, timer_id);
+                    }
+                }
+            }
+            
             // Process GUI callbacks if plugin is open
+            // This is the critical call that keeps plugin GUIs responsive
             if state.gui_open {
-                // This is the critical call that keeps plugin GUIs responsive
                 state.instance.call_on_main_thread_callback();
             }
         }
@@ -468,7 +636,7 @@ fn process_command(
             info!("Shared memory name: {}", shm_name);
             
             info!("Step 1: Loading plugin from disk...");
-            let (bundle, instance) = match load_plugin(&plugin_path, &plugin_id, sample_rate, max_buffer_size) {
+            let (bundle, instance, shared) = match load_plugin(&plugin_path, &plugin_id, sample_rate, max_buffer_size) {
                 Ok(result) => {
                     info!("Step 2: Plugin loaded successfully, now creating shared memory...");
                     result
@@ -524,6 +692,7 @@ fn process_command(
             *plugin_state = Some(PluginState {
                 bundle,
                 instance,
+                shared,
                 gui_open: false,
                 activated: false,
                 processing: false,
@@ -774,7 +943,7 @@ fn load_plugin(
     plugin_id: &str,
     _sample_rate: f32,
     _max_buffer_size: usize,
-) -> Result<(PluginBundle, PluginInstance<SubprocessHost>), String> {
+) -> Result<(PluginBundle, PluginInstance<SubprocessHost>, Arc<SubprocessHostShared>), String> {
     // Load bundle
     let bundle = unsafe {
         PluginBundle::load(plugin_path)
@@ -805,17 +974,21 @@ fn load_plugin(
     let plugin_id_cstr = descriptor.id()
         .ok_or_else(|| "Missing plugin ID".to_string())?;
     
+    // Create shared state for timer and GUI support
+    let shared = Arc::new(SubprocessHostShared::new());
+    let shared_for_instance = Arc::clone(&shared);
+    
     // Create plugin instance
     let instance = PluginInstance::<SubprocessHost>::new(
-        |_| (),
-        |_| (),
+        move |_| shared_for_instance.as_ref().clone(),  // Clone the shared state for plugin
+        |shared_ref| SubprocessHostMainThread { shared: shared_ref },  // Main thread state
         &bundle,
         plugin_id_cstr,
         &host_info
     ).map_err(|e| format!("Failed to create plugin instance: {:?}", e))?;
     
     info!("Plugin loaded successfully");
-    Ok((bundle, instance))
+    Ok((bundle, instance, shared))
 }
 
 /// Open plugin GUI

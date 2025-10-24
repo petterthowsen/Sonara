@@ -4,6 +4,18 @@
 
 Sonara implements **subprocess-based CLAP plugin hosting** for crash isolation, GUI support, and security. Each plugin runs in its own process and communicates with the main engine via IPC (Inter-Process Communication).
 
+## Recent Changes (October 2024)
+
+### ✅ Plugin GUI Support Fixed
+- **Issue**: DPF-based plugins crashed with `hostGui != nullptr` and `hostTimer != nullptr` assertions
+- **Root Cause**: Minimal `SubprocessHost` implementation missing required CLAP extensions
+- **Solution**:
+  - Added `HostGui` extension with `HostGuiImpl` trait on `SubprocessHostShared`
+  - Added `HostTimer` extension with `HostTimerImpl` trait on `SubprocessHostMainThread`
+  - Integrated timer processing into main event loop (fires callbacks every ~1ms)
+  - Fixed GUI command routing in `commands.rs` to recognize `SubprocessClapAdapter`
+- **Result**: Plugin GUIs now open successfully in floating windows with proper animations
+
 ## Architecture Diagram
 
 ```
@@ -100,12 +112,14 @@ Sonara implements **subprocess-based CLAP plugin hosting** for crash isolation, 
 - Managing plugin loading state (async initialization)
 - Reading/writing shared memory ring buffers
 - Non-blocking command sending
+- GUI control (open/close/has_gui methods)
 
 **Key Features:**
 - **Async Loading**: Plugin loads in background thread to avoid blocking audio
 - **Lock-free Audio Path**: Uses `try_lock()` to never block audio thread
 - **Fire-and-forget Commands**: Reset/SetParameter don't wait for responses
 - **Three States**: Loading → Ready → Failed
+- **GUI Methods**: `open_gui()`, `close_gui()`, `has_gui()`, `is_gui_open()`
 
 ### 3. Shared Memory (`shared_memory.rs`, `platform_shm.rs`)
 
@@ -151,11 +165,28 @@ loop {
     //    - Write to output ring buffer
     //    - Process up to 8 chunks per iteration
     
-    // 3. Call plugin GUI callbacks (if GUI open)
+    // 3. Process timers
+    //    - Check which timers need to fire
+    //    - Call plugin's on_timer() callbacks
+    //    - Essential for GUI animations
     
-    // 4. Sleep 1ms if no activity (prevents busy-waiting)
+    // 4. Call plugin GUI callbacks (if GUI open)
+    //    - instance.call_on_main_thread_callback()
+    //    - Keeps GUI responsive
+    
+    // 5. Sleep 1ms if no activity (prevents busy-waiting)
 }
 ```
+
+**Host Extensions:**
+
+The subprocess implements these CLAP host extensions:
+- **HostGui**: Required by most plugins with GUIs (e.g., DPF-based plugins)
+  - Handles resize requests, show/hide, window close events
+- **HostTimer**: Required for GUI animations and periodic updates
+  - Minimum interval: 10ms (clamped for performance)
+  - Thread-safe using Arc<Mutex<HashMap>>
+  - Fires in main event loop alongside GUI callbacks
 
 **Audio Processing:**
 - **Variable Chunk Size**: 128-512 samples (adapts to available data)
@@ -279,20 +310,65 @@ Total typical latency:       ~18-20ms
 - Verify FD 3 is properly inherited
 - Ensure shared memory size matches layout
 
+### Issue: Plugin crashes with "hostGui != nullptr" assertion
+**Cause**: Plugin requires HostGui extension but host doesn't provide it
+**Solution**:
+- Ensure `HostHandlers::declare_extensions()` registers `HostGui`
+- Implement `HostGuiImpl` trait on shared state
+- Common with DPF-based plugins
+
+### Issue: Plugin crashes with "hostTimer != nullptr" assertion
+**Cause**: Plugin requires HostTimer extension for GUI updates
+**Solution**:
+- Ensure `HostHandlers::declare_extensions()` registers `HostTimer`
+- Implement `HostTimerImpl` trait on main thread handler
+- Common with DPF-based plugins that animate their GUIs
+
+### Issue: Plugin GUI doesn't open
+**Cause**: Command routing fails to recognize subprocess adapter type
+**Solution**:
+- Check `AudioCommand::OpenPluginGui` handler tries downcasting to `SubprocessClapAdapter`
+- Ensure it's checked before the legacy `ClapDeviceAdapter`
+
 ### Issue: High latency / 1+ second delay
 **Cause**: Ring buffers too large
 **Solution**:
 - Reduce buffer multiplier in `SharedMemoryLayout::new()`
 - Use 2x buffering instead of 4x+
 
-## Future Improvements
+## Current Status
 
-### Planned
+### ✅ Working Features
+- **Audio Processing**: Plugins process audio via shared memory ring buffers
+- **GUI Support**: Plugin GUIs open in floating windows (X11 on Linux)
+- **Timer Support**: GUI animations and periodic updates work properly
+- **Crash Isolation**: Plugin crashes don't affect the main engine
+- **Async Loading**: Plugins load in background threads without blocking audio
+
+### 🚧 Known Issues & TODOs
+
+#### High Priority
+1. **Parameter Control**:
+   - [ ] Implement `SetParameter` command handling in subprocess
+   - [ ] Implement `GetParameter` for reading current values
+   - [ ] Implement `GetParameterInfo` for discovering plugin parameters
+   - [ ] Add parameter change notifications (plugin → engine)
+
+2. **GUI Window Management**:
+   - [ ] Force plugin GUI windows to stay above Godot app window
+   - [ ] Implement window focus management
+   - [ ] Handle window close events properly
+
+#### Medium Priority
+3. **State Serialization**: Save/load plugin state via IPC
+4. **MIDI Support**: Pass MIDI events through shared memory queue
+5. **Multi-instance Support**: Multiple instances of the same plugin
+
+### Planned Optimizations
 1. **Eventfd Signaling**: Replace polling with event-driven wakeup
 2. **Priority Scheduling**: Set subprocess to real-time priority
 3. **CPU Affinity**: Pin subprocess to specific cores
-4. **State Serialization**: Save/load plugin state via IPC
-5. **Parameter Caching**: Cache parameter values to avoid IPC roundtrips
+4. **Parameter Caching**: Cache parameter values to avoid IPC roundtrips
 
 ### Under Consideration
 1. **GPU Offloading**: Share GPU resources for visual plugins

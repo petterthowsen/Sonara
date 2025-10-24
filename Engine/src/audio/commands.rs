@@ -748,15 +748,25 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         AudioCommand::OpenPluginGui { channel_id, device_position } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
-                    // Try to downcast to ClapDeviceAdapter to access GUI methods
-                    use super::devices::clap_host::ClapDeviceAdapter;
-                    if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
-                        match clap_device.open_gui() {
+                    // Try subprocess adapter first (preferred)
+                    use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
+                    if let Some(subprocess_device) = (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>() {
+                        match subprocess_device.open_gui() {
                             Ok(()) => {
-                                info!("Opened GUI for plugin at channel {} device {}", channel_id, device_position);
+                                info!("Opened GUI for subprocess plugin at channel {} device {}", channel_id, device_position);
                             }
                             Err(e) => {
-                                warn!("Failed to open plugin GUI at channel {} device {}: {}", 
+                                warn!("Failed to open subprocess plugin GUI at channel {} device {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    } else if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
+                        match clap_device.open_gui() {
+                            Ok(()) => {
+                                info!("Opened GUI for in-process plugin at channel {} device {}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to open in-process plugin GUI at channel {} device {}: {}", 
                                     channel_id, device_position, e);
                             }
                         }
@@ -774,15 +784,25 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         AudioCommand::ClosePluginGui { channel_id, device_position } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
-                    // Try to downcast to ClapDeviceAdapter to access GUI methods
-                    use super::devices::clap_host::ClapDeviceAdapter;
-                    if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
-                        match clap_device.close_gui() {
+                    // Try subprocess adapter first (preferred)
+                    use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
+                    if let Some(subprocess_device) = (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>() {
+                        match subprocess_device.close_gui() {
                             Ok(()) => {
-                                info!("Closed GUI for plugin at channel {} device {}", channel_id, device_position);
+                                info!("Closed GUI for subprocess plugin at channel {} device {}", channel_id, device_position);
                             }
                             Err(e) => {
-                                warn!("Failed to close plugin GUI at channel {} device {}: {}", 
+                                warn!("Failed to close subprocess plugin GUI at channel {} device {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    } else if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
+                        match clap_device.close_gui() {
+                            Ok(()) => {
+                                info!("Closed GUI for in-process plugin at channel {} device {}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to close in-process plugin GUI at channel {} device {}: {}", 
                                     channel_id, device_position, e);
                             }
                         }
