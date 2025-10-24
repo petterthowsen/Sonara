@@ -1,7 +1,15 @@
 #!/bin/bash
-# Run the DAW audio engine
+# Build and run the Sonara audio engine
 
 cd "$(dirname "$0")"
 
-echo "Building and running DAW Audio Engine..."
-cargo run --release
+echo "🔨 Building Sonara Audio Engine..."
+cargo build --bin engine || exit 1
+
+echo ""
+echo "🚀 Starting Sonara Audio Engine..."
+echo "   (Listening on OSC port 7000, sending to port 7001)"
+echo ""
+
+# Run with RUST_LOG for better logging
+RUST_LOG=engine=info,warn cargo run --bin engine

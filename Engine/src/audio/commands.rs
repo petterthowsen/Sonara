@@ -129,6 +129,7 @@ pub struct EngineState {
     pub clips: HashMap<ClipId, Clip>,  // Global clip pool
     pub output_devices: Vec<OutputDevice>,  // Available hardware outputs (IDs 1000+)
     pub plugin_scanner: super::devices::clap_host::PluginScanner,  // CLAP plugin discovery
+    pub process_manager: std::sync::Arc<super::devices::clap_host::ProcessManager>,  // Subprocess manager for CLAP plugins
     pub is_playing: bool,
     pub current_tick: Tick,
 }
@@ -143,6 +144,9 @@ impl Clone for EngineState {
 
 impl Default for EngineState {
     fn default() -> Self {
+        let process_manager = std::sync::Arc::new(super::devices::clap_host::ProcessManager::new());
+        process_manager.start_monitoring();
+        
         Self {
             settings: ProjectSettings::default(),
             device_sample_rate: 48000.0,  // Default, will be overridden
@@ -151,6 +155,7 @@ impl Default for EngineState {
             clips: HashMap::new(),
             output_devices: Vec::new(),
             plugin_scanner: super::devices::clap_host::PluginScanner::new(),
+            process_manager,
             is_playing: false,
             current_tick: 0,
         }
@@ -490,24 +495,23 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                     // CLAP plugins
                     id => {
                         if let Some(descriptor) = state.plugin_scanner.get_plugin(id) {
-                            info!("Loading CLAP plugin: {} ({}) [active={}, enabled={}]", 
+                            info!("Loading CLAP plugin in subprocess: {} ({}) [active={}, enabled={}]", 
                                 descriptor.name, id, active, enabled);
-                            match super::devices::clap_host::ClapDeviceAdapter::new(
-                                &descriptor.path,
+                            
+                            // Use subprocess-based adapter for better crash isolation and GUI support
+                            match super::devices::clap_host::SubprocessClapAdapter::new(
+                                std::sync::Arc::clone(&state.process_manager),
+                                channel_id as u32,
+                                position as usize,
+                                descriptor.path.clone(),
                                 id,
                                 state.device_sample_rate,
-                                buffer_size, // Use actual audio callback buffer size
+                                buffer_size,
                             ) {
-                                Ok(mut adapter) => {
-                                    // Activate plugin if requested
-                                    if active {
-                                        if let Err(e) = adapter.activate() {
-                                            warn!("Failed to activate plugin {}: {}", id, e);
-                                        }
-                                    }
-                                    // Set enabled state
-                                    adapter.set_enabled(enabled);
-                                    info!("CLAP plugin {} loaded successfully", id);
+                                Ok(adapter) => {
+                                    // Note: Don't activate on audio thread! It will be activated later.
+                                    // Activation requires IPC which is too slow for real-time audio thread.
+                                    info!("CLAP plugin {} loaded successfully in subprocess (activation deferred)", id);
                                     Some(Box::new(adapter))
                                 }
                                 Err(e) => {
