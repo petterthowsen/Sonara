@@ -3,7 +3,7 @@ alwaysApply: true
 ---
 # Overview
 
-Sonara is a Linux-First DAW built on Rust Audio Engine and Godot Front End.
+Sonara is a Linux-First DAW built on Rust and Godot Engine.
 
 Audio engine is in ./Engine while the godot project is in ./Godot
 

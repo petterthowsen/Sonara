@@ -89,30 +89,6 @@ fn process_block(&mut self, inputs, outputs, sample_count) {
 
 ## Test Results
 
-### ✅ Successful Tests
-
-**Plugin Loading with Active=true:**
-```
-Loading CLAP plugin: Dragonfly Room Reverb [active=true, enabled=true]
-Plugin activated: Dragonfly Room Reverb
-Device added to channel 2 at position 0 [active=true, enabled=true]
-```
-
-**Enable/Disable (Bypass):**
-```
-Set device enabled state: channel=2 device=0 enabled=false  ✓
-Set device enabled state: channel=2 device=0 enabled=true   ✓
-```
-
-**Activate/Deactivate:**
-```
-Set device active state: channel=2 device=1 active=true  ✓
-Set device active state: channel=2 device=1 active=false ✓
-```
-
-**Parameter Queries (Active Plugin):**
-```
-Dragonfly Room Reverb: 12 parameters exposed ✓
 ```
 
 ## Benefits
@@ -130,14 +106,6 @@ for i in range(200):
 ```gdscript
 # Instant bypass toggle
 device.enabled = not device.enabled  # Zero latency!
-```
-
-### CPU Management
-```gdscript
-# Deactivate plugins not in use
-if not track.has_clips_near(playhead):
-    for device in track.devices:
-        device.active = false  # Free RAM
 ```
 
 ## Performance Impact
