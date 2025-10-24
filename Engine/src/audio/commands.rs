@@ -62,6 +62,10 @@ pub enum AudioCommand {
     GetPluginParameters { channel_id: ChannelId, device_position: usize },
     SavePluginState { channel_id: ChannelId, device_position: usize },
     LoadPluginState { channel_id: ChannelId, device_position: usize, state_base64: String },
+    
+    // Plugin GUI
+    OpenPluginGui { channel_id: ChannelId, device_position: usize },
+    ClosePluginGui { channel_id: ChannelId, device_position: usize },
 }
 
 /// Response from commands that return data
@@ -475,7 +479,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         AudioCommand::AddDeviceToChannel { channel_id, device_id, position, active, enabled } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 // Factory: create device by ID (builtin or plugin)
-                let mut device: Option<Box<dyn super::devices::AudioDevice>> = match device_id.as_str() {
+                let device: Option<Box<dyn super::devices::AudioDevice>> = match device_id.as_str() {
                     // Built-in devices
                     "sonara.builtin.oscillator" => {
                         Some(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate)))
@@ -704,7 +708,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
 
         AudioCommand::SavePluginState { channel_id, device_position } => {
             if let Some(channel) = state.channels.get(&channel_id) {
-                if let Some(device) = channel.devices.get(device_position) {
+                if let Some(_device) = channel.devices.get(device_position) {
                     // Try to get state from device (if it's a CLAP plugin)
                     // For now, return empty state - will implement state extension later
                     info!("Save plugin state requested for channel {} device {}",
@@ -733,6 +737,59 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                 }
             } else {
                 warn!("Channel {} not found for load plugin state", channel_id);
+            }
+        }
+        
+        // Plugin GUI commands (must be called on main thread when instance is available)
+        AudioCommand::OpenPluginGui { channel_id, device_position } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    // Try to downcast to ClapDeviceAdapter to access GUI methods
+                    use super::devices::clap_host::ClapDeviceAdapter;
+                    if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
+                        match clap_device.open_gui() {
+                            Ok(()) => {
+                                info!("Opened GUI for plugin at channel {} device {}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to open plugin GUI at channel {} device {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    } else {
+                        warn!("Device at channel {} position {} is not a CLAP plugin", channel_id, device_position);
+                    }
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for open plugin GUI", channel_id);
+            }
+        }
+        
+        AudioCommand::ClosePluginGui { channel_id, device_position } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    // Try to downcast to ClapDeviceAdapter to access GUI methods
+                    use super::devices::clap_host::ClapDeviceAdapter;
+                    if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
+                        match clap_device.close_gui() {
+                            Ok(()) => {
+                                info!("Closed GUI for plugin at channel {} device {}", channel_id, device_position);
+                            }
+                            Err(e) => {
+                                warn!("Failed to close plugin GUI at channel {} device {}: {}", 
+                                    channel_id, device_position, e);
+                            }
+                        }
+                    } else {
+                        warn!("Device at channel {} position {} is not a CLAP plugin", channel_id, device_position);
+                    }
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for close plugin GUI", channel_id);
             }
         }
     }

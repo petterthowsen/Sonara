@@ -157,6 +157,16 @@ Examples:
 - **activate**: Load/unload device (affects RAM, parameters visible/hidden)
 - **enable**: Bypass device (zero-latency, maintains state)
 
+**Plugin GUI Control (CLAP plugins only)**
+```
+/channel/{id}/device/{position}/gui/open
+/channel/{id}/device/{position}/gui/close
+```
+- Opens/closes floating plugin GUI window
+- Only works for CLAP plugins that support the GUI extension
+- Can be called while plugin is activated and processing audio
+- GUI state is managed by the plugin, not the host
+
 **Query Parameters (works for both built-in and plugins)**
 ```
 /plugin/get_parameters [i:channel_id, i:device_position]

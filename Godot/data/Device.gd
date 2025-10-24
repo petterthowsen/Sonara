@@ -91,6 +91,12 @@ func get_parameters() -> Array[DeviceParameter]:
 ## HELPER METHODS
 ## ============================================================================
 
+## Check if this device has a native GUI
+## Returns true for CLAP plugins (which may have native GUIs)
+## Returns false for built-in devices (which use DeviceLane UI)
+func has_gui() -> bool:
+	return device_type == DeviceType.CLAP
+
 ## Get a human-readable device type string
 func get_device_type_string() -> String:
 	match device_type:

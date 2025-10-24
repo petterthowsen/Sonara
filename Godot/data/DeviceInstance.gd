@@ -113,6 +113,24 @@ func set_active(p_active : bool) -> void:
 	AudioEngineOSC.send("/channel/%d/device/%d/activate" % [channel_id, position], [1 if p_active else 0])
 
 
+## Open the native GUI for this device (if supported)
+func open_gui() -> void:
+	if not device.has_gui():
+		push_warning("[DeviceInstance] Device %s does not have a native GUI" % device.name)
+		return
+	
+	if active:
+		AudioEngineOSC.send("/channel/%d/device/%d/gui/open" % [channel_id, position], [])
+
+
+## Close the native GUI for this device (if supported)
+func close_gui() -> void:
+	if not device.has_gui():
+		return
+	
+	AudioEngineOSC.send("/channel/%d/device/%d/gui/close" % [channel_id, position], [])
+
+
 ## Connect to audio engine: listen for state updates
 func connect_to_engine() -> void:
 	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]

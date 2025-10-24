@@ -521,6 +521,26 @@ impl OscServer {
                     })?;
                 }
             }
+            ["channel", channel_id_str, "device", device_pos_str, "gui", "open"] => {
+                if let (Ok(channel_id), Ok(device_position)) =
+                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
+                    info!("Open plugin GUI: channel={} device={}", channel_id, device_position);
+                    command_tx.send(AudioCommand::OpenPluginGui {
+                        channel_id,
+                        device_position,
+                    })?;
+                }
+            }
+            ["channel", channel_id_str, "device", device_pos_str, "gui", "close"] => {
+                if let (Ok(channel_id), Ok(device_position)) =
+                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
+                    info!("Close plugin GUI: channel={} device={}", channel_id, device_position);
+                    command_tx.send(AudioCommand::ClosePluginGui {
+                        channel_id,
+                        device_position,
+                    })?;
+                }
+            }
             ["channel", channel_id_str, "remove_device"] => {
                 if let (Ok(channel_id), Some(OscType::Int(position))) =
                     (channel_id_str.parse::<usize>(), args.first()) {

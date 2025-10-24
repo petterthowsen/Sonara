@@ -64,9 +64,9 @@ This plan covers discovery, loading, parameter mapping, threading, GUI integrati
 
 ### Next Steps (Phase 4)
 - ✅ **Parameter UI auto-generation** - Implemented! Queries params via `/plugin/get_parameters`, auto-builds UI
+- ✅ **Plugin GUI support (floating windows)** - Implemented! Double-click CLAP plugin opens native GUI
 - ⏳ Plugin state save/load for projects
 - ⏳ Parameter automation lanes
-- ⏳ Plugin GUI support (floating windows, optional)
 
 ---
 
@@ -933,6 +933,25 @@ base64 = "0.22"
 
 ---
 
+### Floating Window GUI Implementation (Phase 4)
+**Problem:** Initial design consumed the plugin instance during audio activation, making it unavailable for GUI operations.
+
+**Root Cause:** The `activate()` method was taking ownership of `self.instance`, moving it into the audio processor. This violated CLAP's threading model where the instance must remain available on the main thread for GUI, parameters, and state operations.
+
+**Solution:** Changed `instance: Option<PluginInstance>` to `instance: PluginInstance` (always available). The `activate()` method now borrows the instance instead of consuming it:
+- **Main thread**: GUI operations, parameter queries, state management use `instance.plugin_handle()`
+- **Audio thread**: Real-time processing uses the `audio_processor` returned by `activate()`
+
+**Implementation:**
+- Added `open_gui()` and `close_gui()` methods to `ClapDeviceAdapter`
+- Added OSC endpoints: `/channel/{id}/device/{pos}/gui/open` and `/gui/close`
+- Modified `CompactDevicePanel._on_double_clicked()`: CLAP plugins open native GUI, built-in devices open DeviceLane
+- GUI can be opened/closed at any time, even during playback
+
+**Result:** Floating windows work correctly, following CLAP's threading model. Plugins can show their native GUI while processing audio.
+
+---
+
 ## Issues Encountered & Fixed
 
 ### Buffer Size Mismatch (Phase 3)
@@ -1008,8 +1027,8 @@ base64 = "0.22"
 
 ### Week 4-5: Advanced Features (In Progress)
 - [x] Parameter UI auto-generation (query via `/plugin/get_parameters`)
+- [x] Plugin GUI (floating windows) - Double-click CLAP plugin to open native GUI
 - [?] State serialization in project save/load
-- [ ] Plugin GUI (floating windows)
 - [ ] Latency compensation
 - [ ] Preset management
 - [ ] Multi-threading optimization

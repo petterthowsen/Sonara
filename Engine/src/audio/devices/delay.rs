@@ -242,4 +242,8 @@ impl AudioDevice for DelayDevice {
     fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
     }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }

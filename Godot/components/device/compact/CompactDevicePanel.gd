@@ -170,17 +170,22 @@ func _on_collapse_button_toggled(button_pressed: bool) -> void:
 
 
 func _on_double_clicked() -> void:
-	"""Handle double-click - select channel and open DeviceLane with focus on this device."""
-	if not device_instance:
+	"""Handle double-click - for devices with native GUI, open it; otherwise open DeviceLane."""
+	if not device_instance:	
 		return
 	
-	# Get the channel from the project
+	# If device has a native GUI, open it
+	if device_instance.device.has_gui():
+		device_instance.open_gui()
+		return
+	
+	# For built-in devices: get the channel and open DeviceLane
 	var channel: Channel = Sonara.editor.project.get_channel_by_id(device_instance.channel_id)
 	if not channel:
 		push_warning("[CompactDevicePanel] Cannot find channel with ID %d" % device_instance.channel_id)
 		return
 	
-	# Select the channel in the mixer (this will emit channel_focused)
+	# For built-in devices: Select the channel in the mixer (this will emit channel_focused)
 	Sonara.editor.mixer.select_channel(channel)
 	
 	# Show DeviceLane if hidden

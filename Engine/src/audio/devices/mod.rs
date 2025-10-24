@@ -188,4 +188,10 @@ pub trait AudioDevice: Send {
     fn set_enabled(&mut self, _enabled: bool) {
         // Default: no-op for built-in devices
     }
+    
+    // === Type Downcasting ===
+    
+    /// Get mutable reference to self as `Any` for downcasting
+    /// Used to access device-specific methods (e.g. CLAP GUI)
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }

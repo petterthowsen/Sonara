@@ -2,11 +2,17 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use crossbeam::channel::{unbounded, Sender, Receiver};
 use clack_host::prelude::*;
 use clack_host::events::event_types::*;
 use clack_host::events::UnknownEvent;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 use clack_host::utils::Cookie;
+use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType};
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamValue, ParamInfo};
 use super::host_impl::{SonaraHost, SonaraHostShared, SonaraHostMainThread, SonaraHostAudioProcessor};
 use super::PluginError;
@@ -22,7 +28,7 @@ pub struct ClapDeviceAdapter {
     
     // Bundle and instance (lifetime: bundle outlives instance)
     _bundle: PluginBundle,
-    instance: Option<PluginInstance<SonaraHost>>,
+    instance: PluginInstance<SonaraHost>,  // Keep instance alive for GUI and parameter operations
     audio_processor: Option<PluginAudioProcessorEnum<SonaraHost>>,
     
     // Parameter mapping (CLAP param ID -> our sequential ParamId)
@@ -50,9 +56,19 @@ pub struct ClapDeviceAdapter {
     sample_rate: f32,
     max_buffer_size: usize,
     
+    // Main thread callback flag
+    pending_main_thread_callback: Arc<AtomicBool>,
+    
+    // GUI thread management
+    gui_thread: Option<JoinHandle<()>>,
+    gui_thread_shutdown: Arc<AtomicBool>,
+    
     // Lifecycle and bypass state
     is_active: bool,
     is_enabled: bool,
+    
+    // GUI state (only used on main thread)
+    gui_open: bool,
 }
 
 impl ClapDeviceAdapter {
@@ -121,9 +137,9 @@ impl ClapDeviceAdapter {
         let plugin_id_cstr = descriptor.id()
             .ok_or_else(|| PluginError::InvalidPluginId("Missing plugin ID".to_string()))?;
         
-        let mut instance = PluginInstance::<SonaraHost>::new(
+        let instance = PluginInstance::<SonaraHost>::new(
             |_| SonaraHostShared,
-            |_| SonaraHostMainThread,
+            |_| SonaraHostMainThread::new(),
             &bundle,
             plugin_id_cstr,
             &host_info
@@ -150,7 +166,7 @@ impl ClapDeviceAdapter {
             device_version,
             category,
             _bundle: bundle,
-            instance: Some(instance),
+            instance,  // Keep instance for GUI operations
             audio_processor: None,
             param_map,
             reverse_param_map,
@@ -166,8 +182,12 @@ impl ClapDeviceAdapter {
             current_param_values: HashMap::new(),
             sample_rate,
             max_buffer_size,
+            pending_main_thread_callback: Arc::new(AtomicBool::new(false)),
+            gui_thread: None,
+            gui_thread_shutdown: Arc::new(AtomicBool::new(false)),
             is_active: false,  // Plugin created but not activated
             is_enabled: true,  // Default to enabled (not bypassed)
+            gui_open: false,   // GUI not open initially
         })
     }
     
@@ -178,12 +198,9 @@ impl ClapDeviceAdapter {
             return Ok(());
         }
         
-        let mut instance = self.instance.take()
-            .ok_or_else(|| PluginError::ActivationFailed("No plugin instance".to_string()))?;
-        
         // Query parameters before activation (plugin must be initialized but not activated)
         tracing::info!("Querying plugin parameters...");
-        let (param_infos, clap_to_our, our_to_clap) = Self::query_parameters(&mut instance);
+        let (param_infos, clap_to_our, our_to_clap) = Self::query_parameters(&mut self.instance);
         self.param_info_cache = param_infos;
         self.param_map = clap_to_our;
         self.reverse_param_map = our_to_clap;
@@ -195,7 +212,8 @@ impl ClapDeviceAdapter {
             max_frames_count: self.max_buffer_size as u32,
         };
         
-        let audio_processor = instance.activate(
+        // Activate returns an audio processor but keeps the instance alive
+        let audio_processor = self.instance.activate(
             |_, _| SonaraHostAudioProcessor,
             audio_config
         ).map_err(|e| PluginError::ActivationFailed(format!("Activation failed: {:?}", e)))?;
@@ -542,15 +560,22 @@ impl AudioDevice for ClapDeviceAdapter {
         }
         
         // Stop processing and deactivate
-        if let Some(_processor) = self.audio_processor.take() {
-            // Processor is dropped, which stops processing
-            tracing::info!("Plugin {} deactivated (processor dropped)", self.device_name);
+        if let Some(processor) = self.audio_processor.take() {
+            // Stop the processor and return it to deactivate properly
+            let stopped = match processor {
+                PluginAudioProcessorEnum::Started(started) => started.stop_processing(),
+                _ => return Err("Plugin processor in invalid state".to_string()),
+            };
+            
+            // Deactivate the plugin (returns control to main thread)
+            self.instance.deactivate(stopped);
+            tracing::info!("Plugin {} deactivated", self.device_name);
         }
         
         self.is_active = false;
         
-        // Clear parameters when inactive
-        self.param_info_cache.clear();
+        // Keep parameters available even when inactive
+        // (User might want to see/edit them in the UI)
         
         Ok(())
     }
@@ -569,11 +594,152 @@ impl AudioDevice for ClapDeviceAdapter {
             !enabled
         );
     }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
-// Implement Drop to ensure proper cleanup
+impl ClapDeviceAdapter {
+    /// Open the plugin's GUI window (floating window mode)
+    /// 
+    /// This must be called on the main thread, not the audio thread.
+    /// Can be called while the plugin is activated for audio processing.
+    pub fn open_gui(&mut self) -> Result<(), String> {
+        if self.gui_open {
+            return Ok(()); // Already open
+        }
+        
+        // Get the plugin instance handle (instance is always available)
+        let mut handle = self.instance.plugin_handle();
+        
+        // Try to get the GUI extension
+        let Some(gui_ext): Option<PluginGui> = handle.get_extension() else {
+            return Err("Plugin does not support GUI extension".to_string());
+        };
+        
+        // Use the default API for the current platform (X11 on Linux)
+        let Some(api_type) = GuiApiType::default_for_current_platform() else {
+            return Err("No GUI API available for current platform".to_string());
+        };
+        
+        let config = GuiConfiguration {
+            api_type,
+            is_floating: true, // We're using floating windows
+        };
+        
+        // Check if the plugin supports this API
+        if !gui_ext.is_api_supported(&mut handle, config) {
+            return Err(format!("Plugin does not support {:?} GUI API", api_type));
+        }
+        
+        // Create the GUI
+        gui_ext.create(&mut handle, config)
+            .map_err(|e| format!("Failed to create plugin GUI: {}", e))?;
+        
+        // For floating windows, we suggest a title (plugin will use it for its window)
+        let title_cstr = std::ffi::CString::new(format!("{} - Sonara", self.device_name))
+            .unwrap_or_else(|_| std::ffi::CString::new("Plugin - Sonara").unwrap());
+        gui_ext.suggest_title(&mut handle, &title_cstr);
+        
+        // Show the window
+        tracing::info!("Calling gui_ext.show()...");
+        gui_ext.show(&mut handle)
+            .map_err(|e| format!("Failed to show plugin GUI: {}", e))?;
+        tracing::info!("gui_ext.show() returned successfully");
+        
+        // Process callbacks intensively for the first second to let the window appear
+        // X11 windows need event processing to become visible
+        tracing::info!("Processing initial callbacks to make window visible...");
+        for i in 0..100 {
+            self.instance.call_on_main_thread_callback();
+            std::thread::sleep(Duration::from_millis(10));
+            
+            // Check if window appeared every 10 iterations
+            if i % 10 == 0 {
+                tracing::debug!("Callback batch {} complete", i / 10);
+            }
+        }
+        tracing::info!("Initial callback processing complete");
+        
+        // TODO: Spawn a dedicated thread to keep processing callbacks
+        // Challenge: PluginInstance is not Send, so it must stay on this thread
+        // Solution for later: Create a separate process per plugin with IPC
+        
+        self.gui_open = true;
+        tracing::info!("✅ Plugin GUI opened for: {}", self.device_name);
+        tracing::warn!("⚠️  GUI may become unresponsive without continuous callback processing");
+        tracing::warn!("⚠️  TODO: Implement dedicated GUI thread or process per plugin");
+        Ok(())
+    }
+    
+    /// Close the plugin's GUI window
+    /// 
+    /// This must be called on the main thread, not the audio thread.
+    pub fn close_gui(&mut self) -> Result<(), String> {
+        if !self.gui_open {
+            return Ok(()); // Already closed
+        }
+        
+        // Get the plugin instance handle (instance is always available)
+        let mut handle = self.instance.plugin_handle();
+        
+        // Try to get the GUI extension
+        let Some(gui_ext): Option<PluginGui> = handle.get_extension() else {
+            return Err("Plugin does not support GUI extension".to_string());
+        };
+        
+        // Hide the window first
+        let _ = gui_ext.hide(&mut handle); // Ignore errors, might already be hidden
+        
+        // Destroy the GUI resources
+        gui_ext.destroy(&mut handle);
+        
+        self.gui_open = false;
+        tracing::info!("Closed GUI for plugin: {}", self.device_name);
+        Ok(())
+    }
+    
+    /// Check if the plugin supports a GUI
+    pub fn has_gui(&mut self) -> bool {
+        let handle = self.instance.plugin_handle();
+        handle.get_extension::<PluginGui>().is_some()
+    }
+    
+    /// Check if the GUI is currently open
+    pub fn is_gui_open(&self) -> bool {
+        self.gui_open
+    }
+    
+    /// Process pending main thread callbacks for the plugin
+    /// 
+    /// This should be called periodically (e.g., from Godot's process loop)
+    /// to keep plugin GUIs responsive. This is a temporary solution until
+    /// we implement proper per-plugin processes.
+    pub fn process_callbacks(&mut self) {
+        if self.gui_open {
+            self.instance.call_on_main_thread_callback();
+        }
+    }
+}
+
 impl Drop for ClapDeviceAdapter {
     fn drop(&mut self) {
+        // Shutdown GUI thread if running
+        if self.gui_thread.is_some() {
+            self.gui_thread_shutdown.store(true, Ordering::Relaxed);
+            if let Some(handle) = self.gui_thread.take() {
+                tracing::info!("Waiting for GUI thread to exit for: {}", self.device_name);
+                let _ = handle.join(); // Wait for thread to finish
+            }
+        }
+        
+        // Close GUI if it's still open
+        if self.gui_open {
+            tracing::info!("Closing GUI for plugin on drop: {}", self.device_name);
+            let _ = self.close_gui(); // Ignore errors during cleanup
+        }
+        
         if self.audio_processor.is_some() {
             tracing::info!("Deactivating plugin: {}", self.device_name);
             // The audio processor will be dropped here
