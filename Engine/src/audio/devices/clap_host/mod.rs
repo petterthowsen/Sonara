@@ -6,17 +6,17 @@
 pub mod discovery;
 pub mod host_impl;
 pub mod adapter;
-pub mod ipc_protocol;
-pub mod platform_shm;
-pub mod shared_memory;
-pub mod process_manager;
 pub mod subprocess_adapter;
+
+// Subprocess adapter submodules are private (accessed through SubprocessClapAdapter)
 
 pub use discovery::{PluginScanner, PluginDescriptor};
 pub use host_impl::SonaraHost;
 pub use adapter::ClapDeviceAdapter;
-pub use process_manager::ProcessManager;
 pub use subprocess_adapter::SubprocessClapAdapter;
+
+// Re-export IPC types for convenience
+pub use crate::audio::ipc::{ProcessManager, PluginCommand, PluginResponse};
 
 use std::fmt;
 

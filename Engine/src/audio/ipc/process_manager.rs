@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
 use std::io::IoSlice;
 
-use super::ipc_protocol::{PluginCommand, PluginResponse, SharedMemoryLayout};
+use super::protocol::{PluginCommand, PluginResponse, SharedMemoryLayout};
 use super::shared_memory::SharedMemory;
 
 /// Plugin process handle

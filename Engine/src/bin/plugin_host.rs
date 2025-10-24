@@ -34,8 +34,7 @@ use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer};
 use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 // Import shared memory types from the engine crate
-use engine::audio::devices::clap_host::shared_memory::SharedMemory;
-use engine::audio::devices::clap_host::ipc_protocol::SharedMemoryLayout;
+use engine::audio::ipc::{SharedMemory, SharedMemoryLayout};
 
 // IPC Protocol types (duplicated here for the subprocess binary)
 #[derive(Debug, Clone, Serialize, Deserialize)]

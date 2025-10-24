@@ -131,7 +131,7 @@ pub struct EngineState {
     pub clips: HashMap<ClipId, Clip>,  // Global clip pool
     pub output_devices: Vec<OutputDevice>,  // Available hardware outputs (IDs 1000+)
     pub plugin_scanner: super::devices::clap_host::PluginScanner,  // CLAP plugin discovery
-    pub process_manager: std::sync::Arc<super::devices::clap_host::ProcessManager>,  // Subprocess manager for CLAP plugins
+    pub process_manager: std::sync::Arc<super::ipc::ProcessManager>,  // Subprocess manager for CLAP plugins
     pub is_playing: bool,
     pub current_tick: Tick,
 }
@@ -146,7 +146,7 @@ impl Clone for EngineState {
 
 impl Default for EngineState {
     fn default() -> Self {
-        let process_manager = std::sync::Arc::new(super::devices::clap_host::ProcessManager::new());
+        let process_manager = std::sync::Arc::new(super::ipc::ProcessManager::new());
         process_manager.start_monitoring();
         
         Self {

@@ -1,4 +1,5 @@
 //! CLAP plugin adapter that implements the AudioDevice trait
+// this is the in-process CLAP plugin adapter, currently not used.
 
 use std::collections::HashMap;
 use std::path::Path;

@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::os::unix::io::RawFd;
-use super::ipc_protocol::{MidiEvent, ControlData, SharedMemoryLayout, RingBufferStats};
+use super::protocol::{MidiEvent, ControlData, SharedMemoryLayout, RingBufferStats};
 use super::platform_shm::PlatformSharedMemory;
 
 /// Audio ring buffer (single-producer, single-consumer, lock-free)
