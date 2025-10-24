@@ -1,0 +1,7 @@
+---
+description: When debugging audio engine.
+alwaysApply: false
+---
+# Debugging
+
+The engine log in `./Engine/logs/engine.log` contains logs from the last session. Use cat, tail, grep to inspect. 

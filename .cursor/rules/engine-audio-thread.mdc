@@ -1,0 +1,175 @@
+---
+description: When working with the audio thread / DSP / mixing / routing
+alwaysApply: false
+---
+# Audio Thread & Mixing Logic
+
+## Audio Thread Safety (Critical)
+
+The audio callback thread is real-time and must **NEVER**:
+- Block on locks (use `try_lock()` or skip the frame)
+- Allocate heap memory (`Vec::new()`, `HashMap::new()`, etc.)
+- Call blocking operations (I/O, sleep, channel `recv()`)
+- Hold locks across multiple audio operations
+
+**Pattern: Skip on lock failure**
+```rust
+// Correct: Non-blocking with skip-on-failure
+if let Ok(guard) = command_rx.try_recv() {
+    process_command(guard);
+}
+// If channel empty, skip - audio continues playing
+
+// Wrong: Blocking = audio dropout
+let guard = command_rx.recv().unwrap();  // BLOCKS!
+```
+
+## Audio Processing Pipeline
+
+The audio engine processes each callback in this order:
+
+1. **Read pending commands** (non-blocking `try_recv()`)
+2. **Clear all channel buffers** (start fresh each frame)
+3. **Generate audio** (advance playhead, trigger MIDI notes, run instruments)
+4. **Mix audio** (apply faders, pan, route channels, output hardware)
+5. **Meter audio** (peak detection on output)
+6. **Send status updates** (20Hz, not every frame)
+
+Location: `Engine/src/audio/processing.rs`
+
+## Three-Phase Mixing
+
+Audio mixing happens in **three strictly ordered phases**. Critical: each phase has specific rules.
+
+### Phase 1: Fader & Pan Application (Per-Channel)
+
+**What**: Apply volume (dB → linear gain) and pan to each channel's local audio.
+
+**Which channels have audio here**:
+- INSTRUMENT channels (synth output)
+- AUDIO channels (samples)
+- Master channel (accumulates routed audio)
+- BUS channels start empty (but go through for fader consistency)
+
+**Operations**:
+- Apply volume gain to both L/R
+- Apply constant-power pan (only here, never again)
+- **Critical**: Peak detection must check BOTH L and R channels (panned audio might be silent on L, loud on R)
+
+**Anti-pattern**: Applying pan again in phase 2 = signal loss. Don't do this.
+
+Location: `Engine/src/audio/mixing.rs::phase1_apply_faders_and_pan()`
+
+### Phase 2: Hierarchical Routing (Multi-Pass)
+
+**What**: Route audio from source channels to their `output_channel_id` destinations.
+
+**Order matters**: Multiple passes needed for nested routing (Track → Bus → Master).
+
+**Operations per pass**:
+1. For each channel that needs routing:
+   - Get source buffer (fader-applied state from phase 1)
+   - Get source channel's gain
+   - Apply gain to source buffer
+   - Mix result into destination channel
+   - Mark source as "processed"
+
+2. Repeat passes until all channels routed (typically 2-3 passes for normal routing depth)
+
+**Critical rules**:
+- Only apply GAIN during routing, NEVER pan again (already applied)
+- Check BOTH L and R channels when detecting if audio exists
+- Track processed channels to avoid routing same audio multiple times
+- BUS channels pass through to accumulate routed audio
+- Master channel (ID 1) is final destination for all routed audio
+
+**Routing constraints** (validated in UI, enforced here):
+- INSTRUMENT/AUDIO channels route TO: BUS channels or Master
+- BUS channels route TO: Other BUS channels or Master
+- Master always routes TO: Device outputs (ID 1000+)
+
+**Anti-patterns**:
+- INSTRUMENT→INSTRUMENT routing (ambiguous which audio wins)
+- Applying pan during routing (reduces signal)
+- Not tracking processed channels (audio mixed multiple times)
+
+Location: `Engine/src/audio/mixing.rs::phase2_hierarchical_routing()`
+
+### Phase 3: Device Output & Metering
+
+**What**: Output mixed Master channel to hardware, then meter all channels.
+
+**Operations**:
+1. Get Master channel (ID 1) final buffer
+2. Write to hardware via CPAL
+3. For each channel, measure peak levels (post-fader, post-routing)
+4. Send peak meter updates to Godot
+
+**Peak detection rule**: Check both L and R channels independently (stereo signals).
+
+Location: `Engine/src/audio/mixing.rs::phase3_device_output_and_metering()`
+
+## Channel Routing Model
+
+**Channel types**:
+- `INSTRUMENT`: Generates MIDI synth audio, routes to Bus or Master
+- `AUDIO`: Plays samples via Clips, routes to Bus or Master
+- `BUS`: Groups/submixes, receives routed audio, routes to other BUS or Master
+- `MASTER`: Final mix, always routes to device outputs
+
+**ID allocation scheme**:
+- 0 = null/no output
+- 1 = Master
+- 2-999 = user channels (INSTRUMENT, AUDIO, BUS)
+- 1000+ = hardware device outputs
+
+**Routing stored as**:
+- Regular channels: `channel.output_channel_id` (points to Master by default)
+- Master channel: `channel.device_output_id` (points to hardware device, default 1000)
+
+**Implementation**:
+```rust
+// Route track audio to destination
+let dest_id = source_channel.output_channel_id;
+let dest = channels.get_mut(dest_id)?;
+dest.mix_in(&source_channel);  // Routed audio added to destination
+```
+
+## Key Data Structures
+
+**Channel**: Holds stereo audio buffer (L/R arrays), fader (dB), pan, mute, output routing
+- `id`: Channel identifier (1-999 for user channels)
+- `buffer_l, buffer_r`: Stereo audio (cleared each frame)
+- `volume_db`: Current fader level
+- `pan`: -1.0 (left) to +1.0 (right)
+- `mute`: If true, buffer stays silent
+- `output_channel_id`: Where this channel routes to
+
+**Track**: Plays audio/MIDI, references a channel
+- `default_channel_id`: Which channel to output to
+- `oscillator` (INSTRUMENT): Synth generator
+- `clips` (AUDIO): Sample playback with stretch factor based on BPM
+
+## Timing & Synchronization
+
+- Audio callback is master clock (driven by audio hardware)
+- Playhead advanced tick-by-tick (960 PPQ)
+- Playhead updates sent to Godot at 20Hz (interpolated for smooth UI)
+- Audio clips auto-stretch based on project BPM vs. recorded BPM
+
+## Common Pitfalls
+
+1. **Applying pan twice**: Once in phase 1, never in phase 2
+2. **Not checking both L+R**: Peak detection might miss panned audio
+3. **Blocking on locks**: Use `try_lock()` with skip-on-failure pattern
+4. **Not tracking processed channels**: Audio routed multiple times in hierarchical mixing
+5. **Allocating memory**: Pre-allocate all buffers at init time, never in callback
+6. **Allowing invalid routing**: INSTRUMENT→INSTRUMENT creates ambiguous audio source
+
+## Related Files
+
+- `Engine/src/audio/mixing.rs`: Full mixing implementation (all three phases)
+- `Engine/src/audio/processing.rs`: Callback pipeline orchestration
+- `Engine/src/audio/engine.rs`: Engine initialization and types
+- `Engine/src/audio/types.rs`: Channel, Track, Voice data structures
+- `engine_architecture.mdc`: High-level architecture overview
