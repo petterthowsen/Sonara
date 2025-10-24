@@ -151,8 +151,6 @@ func _refresh_asset_list() -> void:
 	# Populate Devices tab
 	_populate_devices_tab()
 
-	print("[Browser] Refreshed assets")
-
 
 func _filter_assets(assets: Array[Asset]) -> Array[Asset]:
 	"""Filter assets based on current search filter."""
@@ -277,7 +275,6 @@ func _on_asset_selected(index: int, asset_type: Asset.TYPE) -> void:
 	if asset is Asset:
 		asset_selected.emit(asset)
 		AssetService.mark_asset_used(asset.path)
-		print("[Browser] Selected asset: %s" % asset.get_display_name())
 
 
 func _on_assets_updated() -> void:
@@ -285,7 +282,6 @@ func _on_assets_updated() -> void:
 
 
 func _on_asset_added(asset: Asset) -> void:
-	print("[Browser] Asset added: %s" % asset.get_display_name())
 	_refresh_asset_list()
 
 

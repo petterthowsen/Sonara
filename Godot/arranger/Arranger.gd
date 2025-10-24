@@ -90,6 +90,7 @@ func _ready():
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
+	Sonara.editor.project_closed.connect(_on_project_closed)
 	Sonara.editor.playhead_moved.connect(_on_playhead_moved)
 	Sonara.editor.tempo_changed.connect(_on_tempo_changed)
 	Sonara.editor.time_signature_changed.connect(_on_time_signature_changed)
@@ -381,12 +382,17 @@ func _on_project_activated(project: Project) -> void:
 	timeline.grid_helper = grid_helper
 	ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
 	
-	# Initialize timeline with project
-	timeline.set_project(project)
-
 	# Connect to project's track signals
 	current_project.track_added.connect(_on_track_added)
+	current_project.track_removed.connect(_on_track_removed)
 	current_project.start_position_changed.connect(_on_start_position_changed)
+	
+	# Initialize timeline with project
+	timeline.set_project(project)
+	
+	# Connect to existing tracks (Timeline creates TimelineTrack UI for them, but doesn't emit signals)
+	for track in project.tracks:
+		_on_track_added(track)
 
 	# Connect ruler signals and initialize with current start position
 	if ruler:
@@ -396,11 +402,20 @@ func _on_project_activated(project: Project) -> void:
 	print("[Arranger] Project activated: ", project.project_name)
 
 
+func _on_project_closed() -> void:
+	"""Disconnect from current project signals."""
+	if current_project:
+		_unbind_from_project()
+	current_project = null
+
+
 func _unbind_from_project() -> void:
 	"""Disconnect from current project signals."""
 	if current_project:
 		if current_project.track_added.is_connected(_on_track_added):
 			current_project.track_added.disconnect(_on_track_added)
+		if current_project.track_removed.is_connected(_on_track_removed):
+			current_project.track_removed.disconnect(_on_track_removed)
 		if current_project.start_position_changed.is_connected(_on_start_position_changed):
 			current_project.start_position_changed.disconnect(_on_start_position_changed)
 
@@ -413,6 +428,8 @@ func _unbind_from_project() -> void:
 	# Clear selection state
 	_track_selections.clear()
 	_timeline_tracks.clear()
+
+	current_project = null
 
 
 # ============================================================================
@@ -439,6 +456,21 @@ func _on_track_added(track: Track) -> void:
 	# Store reference for later lookup
 	_timeline_tracks[timeline_track] = track
 
+
+func _on_track_removed(track: Track) -> void:
+	"""Clean up selection tracking when a track is removed."""
+	# Clear selection state for this track
+	_track_selections.erase(track.id)
+	
+	# Remove from timeline_tracks mapping
+	for timeline_track in _timeline_tracks.keys():
+		if _timeline_tracks[timeline_track] == track:
+			_timeline_tracks.erase(timeline_track)
+			break
+	
+	print("[Arranger] Cleaned up tracking for removed track: ", track.name)
+
+
 func _on_timeline_track_clicked(ticks: int, _pixels: float) -> void:
 	"""Handle timeline track click to set playhead position."""
 	if Sonara and Sonara.editor:
@@ -458,19 +490,27 @@ func _on_deselect_other_tracks_requested(requesting_track: Track) -> void:
 
 func _on_timeline_track_selection_changed(selected_clips: Array[ClipInstance], track: Track) -> void:
 	"""Handle selection changes in a track."""
+	print("[Arranger] Timeline track selection changed")
+	print("  - track: ", track.id if track else "null")
+	print("  - selected_clips count: ", selected_clips.size())
+	
 	if selected_clips.is_empty():
 		# Track has no selection
 		_track_selections.erase(track.id)
 	else:
 		# Track has selection
 		_track_selections[track.id] = selected_clips
+		print("  - First clip: ", selected_clips[0])
+		print("  - clip_id: ", selected_clips[0].clip_id)
+		print("  - clip: ", selected_clips[0].clip)
 
 	# Emit signal with multi-track awareness
 	var is_multi_track = _track_selections.size() > 1
 	var all_selected : Array[ClipInstance] = []
 	for clips_array in _track_selections.values():
 		all_selected.append_array(clips_array)
-
+	
+	print("  - Emitting clips_selected with ", all_selected.size(), " clips")
 	clips_selected.emit(all_selected, is_multi_track)
 
 

@@ -193,6 +193,10 @@ func _update_clip_positions() -> void:
 
 func _on_clip_select_requested(clip_ui: Node, add_to_selection: bool) -> void:
 	"""Handle clip selection request (shift-aware)."""
+	print("[TimelineTrack] Clip select requested")
+	print("  - clip_ui: ", clip_ui)
+	print("  - add_to_selection: ", add_to_selection)
+	
 	if not add_to_selection:
 		# Normal click: deselect all OTHER tracks first, then deselect clips in this track
 		deselect_other_tracks_requested.emit()
@@ -232,11 +236,17 @@ func _deselect_all() -> void:
 
 func _emit_selection_changed() -> void:
 	"""Emit selection changed signal with currently selected clip instances."""
+	print("[TimelineTrack] _emit_selection_changed called")
+	print("  - track: ", track.id if track else "null")
+	print("  - selected_clips count: ", selected_clips.size())
+	
 	var selected_instances: Array[ClipInstance] = []
 	for clip_ui in selected_clips:
 		if clip_ui.clip_instance:
 			selected_instances.append(clip_ui.clip_instance)
+			print("  - Adding clip instance: ", clip_ui.clip_instance.clip_id)
 
+	print("  - Emitting selection_changed with ", selected_instances.size(), " instances")
 	selection_changed.emit(selected_instances)
 
 func _on_clip_move_requested(clip_ui: Node, new_start_ticks: int) -> void:
@@ -353,6 +363,9 @@ func _on_double_click(pos: Vector2) -> void:
 	# Set clip properties
 	new_clip.color = track.color.lightened(0.2)
 	new_clip.content_length_ticks = project.ppq * 4  # Default: 4 beats
+	
+	# Add clip to project pool (required for serialization!)
+	project.add_clip(new_clip)
 
 	# Create a ClipInstance on this track
 	var ppq = project.ppq

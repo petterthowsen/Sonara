@@ -34,7 +34,9 @@ signal track_focused(track : Track)
 # NODE REFERENCES
 # ============================================================================
 
-@onready var main_menu: MenuBar = $VBox/MainBar/MainMenu
+@onready var main_menu: MainMenu = $VBox/MainBar/MainMenu
+
+@onready var file_dialog : FileDialog = $FileDialog
 
 @onready var play_button: Button = $VBox/MainBar/Middle/TransportControls/Buttons/PlayButton
 @onready var stop_button: Button = $VBox/MainBar/Middle/TransportControls/Buttons/StopButton
@@ -110,7 +112,13 @@ func _ready():
 	open_project(new_project)
 	
 	# for testing, create a instrument track
-	project.create_instrument_track() 
+	project.create_instrument_track()
+
+	# add polysynth builti n device to the track
+	var channel := project.get_channel_by_id(2) #0 = null, 1 = master, 2 = first user channel
+	var osc_device = AssetService.get_device("sonara.builtin.oscillator")
+	var device_instance = DeviceInstance.new(osc_device, channel.id, 0, true, true)
+	channel.add_device(device_instance)
 
 
 func _connect_ui_signals():
@@ -127,7 +135,7 @@ func _connect_ui_signals():
 	
 	# Mixer
 	mixer.channel_focused.connect(_on_mixer_channel_focused)
-
+	
 
 func _on_mixer_channel_focused(channel : Channel):
 	if focused_channel != channel:
@@ -460,6 +468,10 @@ func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) 
 		return
 	
 	var last := clips[-1]
+	print("[Editor] Emitting clip_instance_selected signal")
+	print("  - clip instance: ", last)
+	print("  - clip_id: ", last.clip_id)
+	print("  - clip: ", last.clip)
 	clip_instance_selected.emit(last)
 
 

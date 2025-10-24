@@ -47,6 +47,11 @@ func _ready():
 
 
 func _on_editor_clip_instance_selected(clip_instance : ClipInstance):
+	print("[ClipEditor] Clip instance selected: ", clip_instance)
+	print("  - clip_id: ", clip_instance.clip_id if clip_instance else "null")
+	print("  - clip: ", clip_instance.clip if clip_instance else "null")
+	print("  - is_visible: ", is_visible_in_tree())
+	
 	# Store the clip instance - will bind when we become visible
 	pending_clip_instance = clip_instance
 	
@@ -77,9 +82,14 @@ func _on_visibility_changed():
 	
 func _bind_pending_clip():
 	"""Bind the pending clip instance to the midi editor."""
+	print("[ClipEditor] _bind_pending_clip called")
 	if not pending_clip_instance:
+		print("  - No pending clip instance!")
 		return
-		
+	
+	print("  - Binding to clip instance: ", pending_clip_instance.id)
+	print("  - clip_id: ", pending_clip_instance.clip_id)
+	print("  - clip: ", pending_clip_instance.clip)
 	midi_editor.bind_to_clip_instance(pending_clip_instance)
 
 	# Clear pending clip

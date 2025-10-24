@@ -23,6 +23,10 @@ pub struct OscillatorDevice {
 
     // Track if a note is currently playing
     note_active: bool,
+    
+    // Lifecycle state
+    is_active: bool,
+    is_enabled: bool,
 }
 
 
@@ -35,6 +39,8 @@ impl OscillatorDevice {
             current_phase: 0.0,
             current_frequency: 440.0,
             note_active: false,
+            is_active: true,
+            is_enabled: true,
         }
     }
 
@@ -80,6 +86,24 @@ impl OscillatorDevice {
 
 impl AudioDevice for OscillatorDevice {
     fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        // Handle inactive state (device not loaded)
+        if !self.is_active {
+            // Output silence
+            for sample in outputs.iter_mut() {
+                *sample = 0.0;
+            }
+            return;
+        }
+        
+        // Handle disabled state (bypassed - pass through silence for instruments)
+        if !self.is_enabled {
+            // Instruments output silence when bypassed (no input to pass through)
+            for sample in outputs.iter_mut() {
+                *sample = 0.0;
+            }
+            return;
+        }
+        
         // Only generate audio if a note is active
         if !self.note_active {
             // Fill output buffer with silence
@@ -195,5 +219,33 @@ impl AudioDevice for OscillatorDevice {
         self.current_phase = 0.0;
         self.current_frequency = 440.0;
         self.note_active = false;
+    }
+    
+    // === Lifecycle Management ===
+    
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+    
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+    
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        // Clear state when deactivating
+        self.reset();
+        Ok(())
+    }
+    
+    // === Bypass Control ===
+    
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+    
+    fn set_enabled(&mut self, enabled: bool) {
+        self.is_enabled = enabled;
     }
 }

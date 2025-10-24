@@ -5,6 +5,7 @@ class_name Project extends RefCounted
 # ============================================================================
 
 signal track_added(track: Track)
+signal track_removed(track: Track)
 signal channel_added(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
@@ -77,6 +78,9 @@ func connect_to_engine() -> void:
 	# Send project initialization
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
 
+	# Mark as connected BEFORE syncing (so _sync_clip_to_engine doesn't early-return)
+	_is_connected = true
+
 	# Sync all clips to engine (must happen before tracks, since tracks reference clips)
 	for clip_id in clips.keys():
 		_sync_clip_to_engine(clips[clip_id])
@@ -89,7 +93,6 @@ func connect_to_engine() -> void:
 	for track in tracks:
 		track.connect_to_engine()
 
-	_is_connected = true
 	print("[Project] Connected to audio engine")
 
 
@@ -118,14 +121,17 @@ func disconnect_from_engine() -> void:
 func _sync_clip_to_engine(clip: Clip) -> void:
 	"""Sync a clip and its MIDI notes or audio data to the audio engine."""
 	if not _is_connected:
+		print("[Project] WARNING: _sync_clip_to_engine called but not connected!")
 		return
 
 	# Create clip in engine
 	var clip_type_str = "midi" if clip.type == Clip.ClipType.MIDI else "audio"
+	print("[Project] Creating %s clip in engine: %s" % [clip_type_str, clip.id])
 	AudioEngineOSC.send("/clip/create", [clip.id, clip_type_str, clip.name])
 
 	# Sync MIDI notes (if MIDI clip)
 	if clip.type == Clip.ClipType.MIDI:
+		print("[Project] Syncing %d MIDI notes for clip: %s" % [clip.midi_notes.size(), clip.id])
 		for note in clip.midi_notes:
 			AudioEngineOSC.send("/clip/%s/add_note" % clip.id, [
 				note.id,
@@ -269,6 +275,46 @@ func get_track_by_id(track_id: int) -> Track:
 	return null
 
 
+func remove_track(track_id: int) -> bool:
+	"""Remove a track from the project. Returns true if successful."""
+	var track = get_track_by_id(track_id)
+	if not track:
+		return false
+	
+	# If it's a folder, recursively remove children first
+	if track.type == Track.TrackType.FOLDER:
+		# Make a copy of child_track_ids since we'll be modifying it
+		var children_to_remove = track.child_track_ids.duplicate()
+		for child_id in children_to_remove:
+			remove_track(child_id)
+	
+	# Remove from parent's child list if applicable
+	if track.parent_track_id >= 0:
+		var parent = get_track_by_id(track.parent_track_id)
+		if parent:
+			parent.child_track_ids.erase(track_id)
+			# Renumber remaining siblings
+			_renumber_siblings(track.parent_track_id)
+	else:
+		# Was a root track, renumber root siblings
+		_renumber_siblings(-1)
+	
+	# Disconnect from engine if connected
+	if _is_connected and track._is_connected:
+		track.disconnect_from_engine()
+	
+	# Remove from tracks array
+	var index = tracks.find(track)
+	if index >= 0:
+		tracks.remove_at(index)
+	
+	# Emit signal before cleanup
+	track_removed.emit(track)
+	
+	print("[Project] Track removed: %s (ID: %d)" % [track.name, track_id])
+	return true
+
+
 func get_track_children(track: Track) -> Array[Track]:
 	"""Get direct children of a track (not recursive)."""
 	var children: Array[Track] = []
@@ -345,6 +391,7 @@ func add_clip(clip: Clip) -> void:
 		push_warning("[Project] Clip with ID %s already exists, replacing" % clip.id)
 
 	clips[clip.id] = clip
+	print("[Project] Added clip to pool: %s (total clips: %d)" % [clip.id, clips.size()])
 
 	# Sync to engine if connected
 	if _is_connected:
@@ -552,7 +599,9 @@ func _renumber_siblings(parent_id: int) -> void:
 func to_json() -> Dictionary:
 	# Serialize clip pool
 	var clips_array = []
+	print("[Project] Serializing %d clips from pool: %s" % [clips.size(), str(clips.keys())])
 	for clip_id in clips.keys():
+		print("[Project] Serializing clip: %s" % clip_id)
 		clips_array.append(clips[clip_id].to_json())
 
 	return {

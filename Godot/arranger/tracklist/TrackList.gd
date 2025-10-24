@@ -43,6 +43,7 @@ func _on_project_activated(project: Project) -> void:
 
 	# Connect to project's track signals
 	current_project.track_added.connect(_on_track_added)
+	current_project.track_removed.connect(_on_track_removed)
 
 	# Sync UI with existing tracks
 	for i in range(current_project.tracks.size()):
@@ -61,8 +62,11 @@ func _on_project_closed() -> void:
 
 func _unbind_from_project() -> void:
 	"""Disconnect from current project signals."""
-	if current_project and current_project.track_added.is_connected(_on_track_added):
-		current_project.track_added.disconnect(_on_track_added)
+	if current_project:
+		if current_project.track_added.is_connected(_on_track_added):
+			current_project.track_added.disconnect(_on_track_added)
+		if current_project.track_removed.is_connected(_on_track_removed):
+			current_project.track_removed.disconnect(_on_track_removed)
 
 
 func _on_track_added(track: Track) -> void:
@@ -102,6 +106,28 @@ func _on_track_added(track: Track) -> void:
 	track_items[index] = track_item
 
 	print("[TrackList] Track added: ", track.name, " at index ", index, " with order ", track.order)
+
+
+func _on_track_removed(track: Track) -> void:
+	"""Remove the TrackItem UI element for the removed track."""
+	var track_item = _find_track_item(track)
+	if not track_item:
+		push_warning("[TrackList] Track item not found for removed track: %s" % track.name)
+		return
+	
+	# Disconnect from track signals
+	if track.order_changed.is_connected(_on_track_order_changed):
+		track.order_changed.disconnect(_on_track_order_changed)
+	
+	# Remove from track_items array
+	var index = track_items.find(track_item)
+	if index >= 0:
+		track_items.remove_at(index)
+	
+	# Remove from scene tree and free
+	track_item.queue_free()
+	
+	print("[TrackList] Track item removed for: ", track.name)
 
 
 func _on_track_order_changed(_new_order: int) -> void:

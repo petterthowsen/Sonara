@@ -157,8 +157,6 @@ func _on_plugin_info_received(args: Array) -> void:
 	
 	# Emit signal for this new plugin
 	assets_changed.emit([asset] as Array[Asset], [] as Array[Asset], [] as Array[Asset])
-	
-	print("[DeviceAssetProvider] Discovered plugin: %s (%s) by %s" % [plugin_name, category_str, vendor])
 
 
 ## Handle plugin scan completion

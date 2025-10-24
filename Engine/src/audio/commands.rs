@@ -77,6 +77,10 @@ pub enum EngineStatus {
     PlayingStateChanged(bool),
     ChannelPeaks { id: ChannelId, peak_left: f32, peak_right: f32 },
     
+    // Device state changes
+    DeviceActiveChanged { channel_id: ChannelId, device_position: usize, active: bool },
+    DeviceEnabledChanged { channel_id: ChannelId, device_position: usize, enabled: bool },
+    
     // Plugin discovery responses
     PluginScanComplete { count: usize },
     PluginInfo {
@@ -571,6 +575,12 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         match device.activate() {
                             Ok(_) => {
                                 info!("Device activated: channel={} device={}", channel_id, device_position);
+                                // Send status update back to UI
+                                let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
+                                    channel_id,
+                                    device_position,
+                                    active: true,
+                                });
                             }
                             Err(e) => {
                                 warn!("Failed to activate device at channel {} position {}: {}", 
@@ -582,6 +592,12 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         match device.deactivate() {
                             Ok(_) => {
                                 info!("Device deactivated: channel={} device={}", channel_id, device_position);
+                                // Send status update back to UI
+                                let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
+                                    channel_id,
+                                    device_position,
+                                    active: false,
+                                });
                             }
                             Err(e) => {
                                 warn!("Failed to deactivate device at channel {} position {}: {}", 
@@ -604,6 +620,12 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         if enabled { "enabled" } else { "disabled" },
                         if enabled { "enabled" } else { "bypassed" },
                         channel_id, device_position);
+                    // Send status update back to UI
+                    let _ = status_tx.send(EngineStatus::DeviceEnabledChanged {
+                        channel_id,
+                        device_position,
+                        enabled,
+                    });
                 } else {
                     warn!("Device not found at channel {} position {}", channel_id, device_position);
                 }

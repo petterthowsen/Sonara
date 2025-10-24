@@ -32,7 +32,6 @@ var parameter_id: int = -1
 # ============================================================================
 func _ready() -> void:
 	"""Setup UI nodes and connect signals."""
-	print("[CompactParameterControl] _ready() called")
 
 	# Connect slider signal
 	if slider_node:
@@ -40,7 +39,6 @@ func _ready() -> void:
 
 	# If already set up with device, update UI now that nodes are ready
 	if device_instance and parameter:
-		print("[CompactParameterControl] Updating UI after _ready()")
 		_update_ui()
 
 
@@ -66,7 +64,6 @@ func setup(p_device_instance: DeviceInstance, p_parameter_id: int) -> void:
 		push_error("Parameter %d not found in device" % parameter_id)
 		return
 
-	print("[CompactParameterControl] Parameter found: %s" % parameter.name)
 
 	# UI will be updated in _ready() when @onready nodes are available
 	# Don't call _update_ui() here - nodes aren't ready yet
@@ -75,14 +72,11 @@ func setup(p_device_instance: DeviceInstance, p_parameter_id: int) -> void:
 	if device_instance.parameter_changed.is_connected(_on_parameter_changed):
 		device_instance.parameter_changed.disconnect(_on_parameter_changed)
 	device_instance.parameter_changed.connect(_on_parameter_changed)
-	print("[CompactParameterControl] Signal connected")
 
 
 ## Update the displayed value
 func _update_ui() -> void:
 	"""Update all UI elements based on current parameter state."""
-	print("[CompactParameterControl] _update_ui() called for param: %s" % parameter.name if parameter else "null")
-
 	if not parameter or not device_instance:
 		print("[CompactParameterControl] _update_ui() early return - parameter=%s, device_instance=%s" % [parameter != null, device_instance != null])
 		return

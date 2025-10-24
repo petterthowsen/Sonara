@@ -75,11 +75,22 @@ size_flags_horizontal = 3
 value_type = 1
 display_format = "%s"
 
+[node name="Label" parent="VBoxContainer/Header/HBox/Label" index="0"]
+text = "0.0"
+
+[node name="LineEdit" parent="VBoxContainer/Header/HBox/Label" index="1"]
+max_length = 200
+flat = false
+
 [node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
 
-[node name="DisableCheckbox" type="CheckButton" parent="VBoxContainer"]
+[node name="ActiveCheckbox" type="CheckButton" parent="VBoxContainer"]
 layout_mode = 2
 tooltip_text = "Disable to save memory"
-text = "Disabled"
+disabled = true
+button_pressed = true
+text = "Active"
+
+[editable path="VBoxContainer/Header/HBox/Label"]

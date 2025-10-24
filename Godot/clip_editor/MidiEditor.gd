@@ -85,6 +85,11 @@ func unbind():
 	note_editor.unbind()
 
 func bind_to_clip_instance(ci : ClipInstance):
+	print("[MidiEditor] bind_to_clip_instance called")
+	print("  - clip_instance: ", ci)
+	print("  - clip_id: ", ci.clip_id if ci else "null")
+	print("  - clip: ", ci.clip if ci else "null")
+	
 	if clip_instance:
 		unbind()
 	

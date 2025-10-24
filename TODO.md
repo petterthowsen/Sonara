@@ -8,33 +8,20 @@
 - [ ] Keep audio engine running live so reverb/delay effects can settle after stopping.
     ^ I think that's implemented? sort of?
     - [ ] Live Midi input for armed tracks outputs to target track
-- [x] Transport control improvements
-    - [x] Play: starts from current playhead position
-    - [x] Play while playing: pauses and seeks to start_position
-    - [x] Shift+Space: smart play/pause toggle (plays if stopped, pause_here if playing)
-    - [x] Stop: pause and seeks to start_position if playing, resets start_position to origin if stopped
-    - [x] Start position indicator and click-to-set on ruler
 
 
 ## Audio Backend
 - [ ] RMS Metering
-- [ ] Critical: Need to refactor server.rs, currently monolithic file (!)
 
 
 # UI
 - [ ] Arranger Timeline
-    - [x] Horizontal/Time zoom should be relative to current position, not 0,0
-        - [x] Cursor-relative zoom (zooms toward cursor position)
-        - [x] Snap-to-origin zoom (locks to 0,0 when scrolled close to start)
     - [ ] Cut/Copy/Paste/Duplicate clips
 - [ ] Connect TrackItem ui controls to target channel (fader, solo, mute)
 - [ ] TimelineHeader
     - [x] TimelineHeader should be vertically resizable
-    - [ ] Auxiliary Tracks (real-time ruler, chord track, and marking tracks)
+    - [ ] Auxiliary Rulers/"Tracks" (real-time ruler, chord track, and marking tracks)
     - [ ] Ruler
-        - [x] Draw arrow at the current start_time (blue arrow pointing up from bottom)
-        - [x] Click emits a signal with the tick position (snapped to grid)
-        - [x] Clicking sets start_position and seeks playhead there
         - [ ] Click-and-drag enters multidimension zoom mode (moving vertically zooms, horizontally scrolls), or simply emitt a signal and let Arranger/Timeine handle it.
 - [ ] Clips
     - [x] ClipInstances can be dragged to other tracks
@@ -45,15 +32,16 @@
     - [x] Click empty area deselects all
 - [ ] Smooth meter components (lerp?)
 - [ ] **CRITICAL**: Undo/Redo using command pattern
-- [ ] Save/Load projects
+- [x] Save/Load projects
 - [ ] Welcome Screen with recent projects, templates and settings
-- [ ] Browser metadata should save outside user://config.json, maybe user://assets.json
+- [x] Browser metadata should save outside user://config.json, maybe user://assets.json
 - [ ] Duplicate Channel
 - [ ] Duplicate Track
 - [ ] TimelineClip should inherit color of the track its on?
-- [ ] Tracks
-    - [ ] TrackItem color should inherit from bound channel
-    - [ ] Make tracks selectable and re-orderable (drag to reorder)
+- [ ] Arranger: Tracks
+    - [x] TrackItem color should inherit from bound channel
+    - [x] Reorderable tracks
+    - [x] Folder tracks
     - [ ] Right-click popup menu with:
         - [ ] Rename track
         - [ ] Change track color
@@ -61,8 +49,9 @@
 - [ ] Clip Editor / NoteEditor
     - [ ] NoteEditor bug: erase-mode is sometimes stuck on even after releasing right-mouse
         ^ maybe VisualNote is consuming the release event somehow?
-    - [ ] When editing a clip, closing the clip editor, deselecting the clip, reselecting it and opening the clip editor, current notes aren't visible
-
+    - [x] When editing a clip, closing the clip editor, deselecting the clip, reselecting it and opening the clip editor, current notes aren't visible
+- [ ] Mixer
+    - [x] double-clicking a device in a CompactDeviceList should select the channel and open DeviceLane (if hidden), then grab_focus the DevicePanel there.
 
 ## Hardware, MIDI
 - [ ] Implement MIDI support

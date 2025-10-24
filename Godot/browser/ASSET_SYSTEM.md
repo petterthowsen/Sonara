@@ -174,7 +174,10 @@ func _drop_data(position, data):
 
 ## Configuration
 
-Default configuration (auto-created):
+Configuration is stored in `~/.config/sonara/` directory:
+
+### config.json
+Main configuration file with asset discovery settings:
 ```json
 {
   "assets": {
@@ -183,14 +186,7 @@ Default configuration (auto-created):
       "~/Music/MIDI"
     ],
     "scan_interval_seconds": 5.0,
-    "enabled_providers": ["filesystem", "devices"],
-    "metadata": {
-      "/absolute/path/to/asset.wav": {
-        "favorite": true,
-        "tags": ["drums", "kick"],
-        "last_used": 1729320000
-      }
-    }
+    "enabled_providers": ["filesystem", "devices"]
   }
 }
 ```
@@ -198,7 +194,23 @@ Default configuration (auto-created):
 Access via:
 ```gdscript
 var scan_paths = Sonara.get_config("assets/scan_paths", [])
-var metadata = Sonara.get_config("assets/metadata", {})
+```
+
+### assets.json
+Separate cache file for asset metadata (favorites, tags, usage tracking):
+```json
+{
+  "/absolute/path/to/asset.wav": {
+    "favorite": true,
+    "tags": ["drums", "kick"],
+    "last_used": 1729320000
+  },
+  "/absolute/path/to/melody.mid": {
+    "favorite": false,
+    "tags": ["ambient", "pad"],
+    "last_used": 1729310000
+  }
+}
 ```
 
 ## Future Enhancements (Post-MVP)

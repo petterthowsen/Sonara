@@ -180,6 +180,9 @@ func connect_to_engine() -> void:
 	if default_channel_id >= 0:
 		AudioEngineOSC.send("/track/%d/create" % id, [default_channel_id])
 
+		# Mark as connected BEFORE syncing instances (so _sync_clip_instance_to_engine doesn't early-return)
+		_is_connected = true
+
 		# Sync all clip instances
 		for instance in clip_instances:
 			_sync_clip_instance_to_engine(instance)
@@ -189,8 +192,10 @@ func connect_to_engine() -> void:
 				instance.clip.midi_note_added.connect(_on_clip_note_added.bind(instance))
 				instance.clip.midi_note_removed.connect(_on_clip_note_removed.bind(instance))
 				instance.clip.midi_note_changed.connect(_on_clip_note_changed.bind(instance))
+	else:
+		# Track not routed to a channel, but still mark as connected
+		_is_connected = true
 
-	_is_connected = true
 	print("[Track %d] Connected to audio engine" % id)
 
 
@@ -210,11 +215,17 @@ func disconnect_from_engine() -> void:
 
 func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 	"""Sync clip instance to the audio engine using new clip/instance API."""
-	if not _is_connected or not instance.clip:
+	if not _is_connected:
+		print("[Track %d] WARNING: _sync_clip_instance_to_engine called but not connected!" % id)
+		return
+	
+	if not instance.clip:
+		print("[Track %d] WARNING: instance %s has no clip reference!" % [id, instance.id])
 		return
 
 	# Send clip instance to engine
 	# Engine will resolve notes from the clip pool during playback
+	print("[Track %d] Syncing instance %s (clip: %s) to engine" % [id, instance.id, instance.clip_id])
 	AudioEngineOSC.send("/track/%d/add_instance" % id, [
 		instance.id,
 		instance.clip_id,
@@ -277,7 +288,7 @@ func add_clip_instance(instance: ClipInstance) -> void:
 	"""Add a clip instance to this track."""
 	# Set the track reference on the instance (ClipInstances ALWAYS belong to a track)
 	instance.track = self
-
+	
 	clip_instances.append(instance)
 
 	# Sync to engine if connected
@@ -389,7 +400,11 @@ static func from_json(data: Dictionary) -> Track:
 	track.order = data.get("order", 0)
 	track.default_channel_id = data.get("default_channel_id", -1)
 	track.parent_track_id = data.get("parent_track_id", -1)
-	track.child_track_ids = data.get("child_track_ids", [])
+	
+	# Convert child_track_ids to typed array
+	var child_ids = data.get("child_track_ids", [])
+	track.child_track_ids.assign(child_ids)
+	
 	track.is_folder_expanded = data.get("is_folder_expanded", true)
 	track.height = data.get("height", 38)
 	track.folded = data.get("folded", false)

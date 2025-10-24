@@ -320,19 +320,19 @@ impl AudioDevice for ClapDeviceAdapter {
             return;
         }
         
-        // Handle bypass (device disabled)
-        if !self.is_enabled {
-            // Pass audio through unprocessed
+        // Handle inactive state (plugin not loaded - pass through to save RAM)
+        if !self.is_active {
+            // Pass audio through unprocessed (transparent when not loaded)
             let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
             outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
             return;
         }
         
-        // Handle inactive state
-        if !self.is_active {
-            // Output silence (plugin not activated)
-            let output_len = (sample_count * 2).min(outputs.len());
-            outputs[..output_len].fill(0.0);
+        // Handle bypass (device disabled but still loaded)
+        if !self.is_enabled {
+            // Pass audio through unprocessed
+            let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
             return;
         }
         

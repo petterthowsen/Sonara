@@ -71,7 +71,6 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="Volumeter" type="Control" parent="VBoxContainer/HBox"]
-visible = false
 custom_minimum_size = Vector2(12, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -109,7 +108,7 @@ mouse_filter = 1
 value_type = 1
 
 [node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="0"]
-text = "Full Strings asd asd "
+text = "0.0"
 horizontal_alignment = 0
 clip_text = true
 text_overrun_behavior = 3
@@ -118,6 +117,7 @@ text_overrun_behavior = 3
 offset_top = -6.7775
 offset_bottom = 6.7775
 alignment = 0
+max_length = 200
 
 [node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top"]
 custom_minimum_size = Vector2(100, 0)

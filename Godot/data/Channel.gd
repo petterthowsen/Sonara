@@ -119,6 +119,10 @@ func connect_to_engine() -> void:
 
 	# Sync current state to engine
 	sync_to_engine()
+	
+	# Connect all device instances to engine
+	for device_inst in devices:
+		device_inst.connect_to_engine()
 
 	_is_connected = true
 	print("[Channel %d] Connected to audio engine" % id)
@@ -131,6 +135,10 @@ func disconnect_from_engine() -> void:
 
 	# Unlisten from OSC messages
 	AudioEngineOSC.unlisten("/channel/%d/peak" % id, _on_peak_received)
+	
+	# Disconnect all device instances from engine
+	for device_inst in devices:
+		device_inst.disconnect_from_engine()
 	
 	# Unlisten from device parameter listeners
 	for device_pos in _param_listeners.keys():
@@ -156,6 +164,15 @@ func sync_to_engine() -> void:
 	else:
 		# Regular channels: route to output channel
 		AudioEngineOSC.send("/channel/%d/route" % id, [output_channel_id])
+	
+	# Sync all devices to engine (for project loading)
+	for device_inst in devices:
+		AudioEngineOSC.send("/channel/%d/add_device" % id, [device_inst.device.device_id, device_inst.position])
+		device_inst.sync_to_engine()
+		
+		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
+		if device_inst.device.device_type != Device.DeviceType.BuiltIn:
+			_query_plugin_parameters(device_inst.position)
 
 
 # ============================================================================
@@ -358,6 +375,10 @@ func add_device(device_instance: DeviceInstance, position: int = -1) -> void:
 
 	# Connect to device parameter changes
 	device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
+	
+	# Connect device instance to engine (for state sync)
+	if _is_connected:
+		device_instance.connect_to_engine()
 
 	device_added.emit(device_instance, position)
 	print("[Channel %d] Device added at position %d: %s" % [id, position, device_instance.device.name])
@@ -375,6 +396,10 @@ func remove_device(position: int) -> void:
 
 	var removed_device = devices[position]
 	var device_id = removed_device.device.device_id
+
+	# Disconnect device instance from engine
+	if _is_connected:
+		removed_device.disconnect_from_engine()
 
 	# Disconnect from device signals
 	removed_device.parameter_changed.disconnect(_on_device_parameter_changed)
@@ -440,7 +465,7 @@ func to_json() -> Dictionary:
 		"phase_invert": phase_invert,
 		"output_channel_id": output_channel_id,
 		"send_channels": send_channels.map(func(s): return s.to_json()) if not send_channels.is_empty() else [],
-		# fx_chain and instrument will be serialized when implemented
+		"devices": devices.map(func(d): return d.to_json()) if not devices.is_empty() else []
 	}
 
 
@@ -475,6 +500,18 @@ static func from_json(data: Dictionary) -> Channel:
 	# TODO: Load send_channels when SendConfig exists
 	# for send_data in data.get("send_channels", []):
 	#     channel.send_channels.append(SendConfig.from_json(send_data))
+	
+	# Load devices (do NOT use add_device - that would sync to engine prematurely)
+	# Devices will be synced to engine when channel.connect_to_engine() is called
+	for device_data in data.get("devices", []):
+		if device_data is Dictionary:
+			var device_instance = DeviceInstance.from_json(device_data)
+			if device_instance:
+				var pos = device_instance.position
+				channel.devices.append(device_instance)
+				
+				# Connect to device parameter changes (same as add_device does)
+				device_instance.parameter_changed.connect(channel._on_device_parameter_changed.bindv([pos]))
 
 	return channel
 

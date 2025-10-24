@@ -312,7 +312,7 @@ func _rebuild_all_routing_menus() -> void:
 func _on_channel_request_context_menu(channel : Channel):
 	var mc : MixerChannel = find_mixer_channel_ui_for_channel(channel)
 	if mc:
-		channel_ctx_menu.channel = channel
+		channel_ctx_menu.bind_to_channel(channel)
 		var c_pos = get_global_mouse_position()
 		var c_size = channel_ctx_menu.get_contents_minimum_size()
 		channel_ctx_menu.popup(Rect2(c_pos, c_size))

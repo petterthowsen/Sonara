@@ -71,8 +71,7 @@ func set_value(new_value: Variant) -> void:
 			push_error("Value failed validation: %s" % _value_string)
 			return
 
-	if is_inside_tree():
-		_update_label_from_value()
+	_update_label_from_value()
 
 
 ## Get the current value as its appropriate type

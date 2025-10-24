@@ -615,6 +615,16 @@ impl OscServer {
                     OscType::Float(peak_right),
                 ])
             }
+            EngineStatus::DeviceActiveChanged { channel_id, device_position, active } => {
+                (format!("/channel/{}/device/{}/active", channel_id, device_position), vec![
+                    OscType::Int(if active { 1 } else { 0 })
+                ])
+            }
+            EngineStatus::DeviceEnabledChanged { channel_id, device_position, enabled } => {
+                (format!("/channel/{}/device/{}/enabled", channel_id, device_position), vec![
+                    OscType::Int(if enabled { 1 } else { 0 })
+                ])
+            }
             EngineStatus::PluginScanComplete { count } => {
                 ("/plugin/scan_complete".to_string(), vec![OscType::Int(count as i32)])
             }

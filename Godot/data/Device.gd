@@ -13,6 +13,12 @@ enum DeviceCategory { Instrument, Effect, Utility }
 
 ## Unique device identifier (e.g., "sonara.builtin.oscillator", "clap:path/to/plugin")
 var device_id: String = ""
+var id : String:
+	get:
+		return device_id
+	set(id):
+		device_id = id
+
 
 ## Human-readable device name (e.g., "Oscillator", "Delay")
 var name: String = ""
@@ -122,6 +128,12 @@ func get_icon() -> String:
 			return "Tool"
 		_:
 			return "AudioBusInput"
+
+
+## Get a shortened version of the device name for compact displays
+## Example: "Dragonfly Hall Reverb" -> "D. Hall Rev"
+func get_short_name(max_length: int = 15) -> String:
+	return Utils.shorten_text(name, max_length)
 
 
 ## ============================================================================

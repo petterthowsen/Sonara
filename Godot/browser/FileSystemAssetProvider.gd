@@ -21,6 +21,7 @@ var _file_mod_times: Dictionary[String, int] = {}
 # Hot-reload monitoring
 var _scan_interval: float = 5.0
 var _tree: SceneTree
+var _first_scan: bool = true  # Track if this is the first scan
 
 
 # ============================================================================
@@ -58,8 +59,9 @@ func _schedule_next_scan() -> void:
 
 
 func scan() -> void:
-	print("[FileSystemAssetProvider] Scanning for assets...")
-
+	if _first_scan:
+		print("[FileSystemAssetProvider] Starting initial asset scan...")
+	
 	var scan_paths = Sonara.get_config("assets/scan_paths", [])
 	var new_assets: Array[Asset] = []
 
@@ -67,11 +69,13 @@ func scan() -> void:
 		var expanded_path = _expand_path(path)
 		_scan_directory(expanded_path, new_assets)
 
-	# Detect changes
+	# Detect changes (logs only if assets added/removed/changed)
 	_detect_changes(new_assets)
 	_assets = new_assets
-
-	print("[FileSystemAssetProvider] Scan complete: %d assets found" % _assets.size())
+	
+	if _first_scan:
+		print("[FileSystemAssetProvider] Initial scan complete: %d assets found" % _assets.size())
+		_first_scan = false
 
 
 func get_assets() -> Array[Asset]:
@@ -183,4 +187,5 @@ func _detect_changes(new_assets: Array[Asset]) -> void:
 
 	# Emit signal if changes detected
 	if added.size() > 0 or removed.size() > 0 or modified.size() > 0:
+		print("[FileSystemAssetProvider] Assets changed: +%d, -%d, ~%d" % [added.size(), removed.size(), modified.size()])
 		assets_changed.emit(added, removed, modified)

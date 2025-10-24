@@ -166,7 +166,7 @@ value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/SmartLineEdit" index="0"]
-text = "Layered Bass"
+text = "0.0"
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 text_overrun_behavior = 4
@@ -442,6 +442,7 @@ suffix = "dB"
 edit_via_click = false
 
 [node name="Label" parent="HBox/VBox/Volume/HBox/Fader/SmartLineEdit" index="0"]
+text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
 [node name="Details" type="VBoxContainer" parent="HBox"]

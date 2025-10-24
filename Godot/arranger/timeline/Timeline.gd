@@ -37,6 +37,7 @@ func set_project(new_project: Project) -> void:
 	if project:
 		# Connect to project's track signals
 		project.track_added.connect(_on_track_added)
+		project.track_removed.connect(_on_track_removed)
 		
 		# Sync UI with existing tracks
 		for i in range(project.tracks.size()):
@@ -54,6 +55,8 @@ func _unbind_from_project() -> void:
 	if project:
 		if project.track_added.is_connected(_on_track_added):
 			project.track_added.disconnect(_on_track_added)
+		if project.track_removed.is_connected(_on_track_removed):
+			project.track_removed.disconnect(_on_track_removed)
 	
 	_clear_all_tracks()
 	project = null
@@ -80,11 +83,11 @@ func _on_track_added(track: Track) -> void:
 	add_child(timeline_track)
 	move_child(timeline_track, insert_position)
 
+	# Set timeline reference for grid drawing (MUST be set before bind_to_track)
+	timeline_track.timeline = self
+
 	# Bind to track data
 	timeline_track.bind_to_track(track, index)
-
-	# Set timeline reference for grid drawing
-	timeline_track.timeline = self
 
 	# Connect to track signals for reordering
 	track.order_changed.connect(_on_track_order_changed)
@@ -107,6 +110,31 @@ func _on_track_added(track: Track) -> void:
 	_update_timeline_width()
 
 	print("[Timeline] Timeline track added for: ", track.name, " at index ", index, " with order ", track.order)
+
+
+func _on_track_removed(track: Track) -> void:
+	"""Remove the TimelineTrack UI element for the removed track."""
+	var timeline_track = _find_timeline_track(track)
+	if not timeline_track:
+		push_warning("[Timeline] Timeline track not found for removed track: %s" % track.name)
+		return
+	
+	# Disconnect from track signals
+	if track.order_changed.is_connected(_on_track_order_changed):
+		track.order_changed.disconnect(_on_track_order_changed)
+	
+	# Remove from timeline_tracks array
+	var index = timeline_tracks.find(timeline_track)
+	if index >= 0:
+		timeline_tracks.remove_at(index)
+	
+	# Remove from scene tree and free
+	timeline_track.queue_free()
+	
+	# Update timeline width in case this affects layout
+	_update_timeline_width()
+	
+	print("[Timeline] Timeline track removed for: ", track.name)
 
 
 func _on_track_order_changed(_new_order: int) -> void:

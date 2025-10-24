@@ -48,7 +48,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/meter/peak` | `i:channel_id, f:peak_left, f:peak_right` | Peak levels (linear 0.0-1.0+) |
+| `/channel/{id}/peak` | `f:peak_left, f:peak_right` | Peak levels (linear 0.0-1.0+) |
 
 ### Track Management (Godot -> Rust)
 
@@ -90,10 +90,17 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/channel/{id}/device/{position}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
 | `/channel/{id}/device/{position}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
 
+### Device State Updates (Rust -> Godot)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/channel/{id}/device/{position}/active` | `i:0_or_1` | Device activated/deactivated (engine confirms state) |
+| `/channel/{id}/device/{position}/enabled` | `i:0_or_1` | Device enabled/disabled (engine confirms state) |
+
 #### Built-In Devices
 
 **Oscillator (`sonara.builtin.oscillator`)**
-- **Type:** Instrument (receives MIDI)
+- **Type:** Instrument (receives MIDI) 
 - **Params:**
   - `0`: Waveform (0.0-1.0: Sine, Square, Sawtooth, Triangle)
   - `1`: Amplitude (0.0-1.0)

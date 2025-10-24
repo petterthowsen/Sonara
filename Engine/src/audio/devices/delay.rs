@@ -17,6 +17,10 @@ pub struct DelayDevice {
     delay_ms: f32,
     wet_amount: f32,  // 0.0 = dry only, 1.0 = 100% wet
     feedback: f32,    // 0.0-0.99 (internal, not exposed as parameter)
+    
+    // Lifecycle state
+    is_active: bool,
+    is_enabled: bool,
 }
 
 
@@ -34,6 +38,8 @@ impl DelayDevice {
             delay_ms: 250.0,
             wet_amount: 0.5,
             feedback: 0.6,
+            is_active: true,
+            is_enabled: true,
         }
     }
 
@@ -54,6 +60,22 @@ impl DelayDevice {
 
 impl AudioDevice for DelayDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        // Handle inactive state (device not loaded - pass through to save RAM)
+        if !self.is_active {
+            // Pass audio through unprocessed (effects are transparent when not loaded)
+            let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            return;
+        }
+        
+        // Handle disabled state (bypassed - pass through)
+        if !self.is_enabled {
+            // Pass audio through unprocessed
+            let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            return;
+        }
+        
         let buffer_size = self.buffer.len();
         // Convert delay time to buffer positions (samples per channel * 2 for stereo interleaved)
         let delay_frames = ((self.delay_ms / 1000.0) * self.sample_rate).ceil() as usize;
@@ -191,5 +213,33 @@ impl AudioDevice for DelayDevice {
     fn reset(&mut self) {
         self.buffer.fill(0.0);
         self.write_pos = 0;
+    }
+    
+    // === Lifecycle Management ===
+    
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+    
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+    
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+        // Clear buffers when deactivating
+        self.reset();
+        Ok(())
+    }
+    
+    // === Bypass Control ===
+    
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+    
+    fn set_enabled(&mut self, enabled: bool) {
+        self.is_enabled = enabled;
     }
 }

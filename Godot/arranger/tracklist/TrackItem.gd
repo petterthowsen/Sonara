@@ -399,6 +399,7 @@ func _create_drag_preview() -> Control:
 	var style = StyleBoxFlat.new()
 	style.bg_color = track.color
 	style.bg_color.a = 0.8
+	style.bg_color.v = 0.5
 	style.corner_radius_bottom_left = 4
 	style.corner_radius_bottom_right = 4
 	style.corner_radius_top_left = 4
@@ -406,7 +407,9 @@ func _create_drag_preview() -> Control:
 	preview.add_theme_stylebox_override("panel", style)
 	
 	# Set minimum size
-	preview.custom_minimum_size = Vector2(100, 30)
+	preview.custom_minimum_size = Vector2(size.x, 30)
+
+	preview.z_index = 1000
 	
 	return preview
 

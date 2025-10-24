@@ -108,6 +108,8 @@ func _ready():
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 
+	title.value_changed.connect(_on_title_value_changed)
+
 	header.gui_input.connect(_on_header_gui_input)
 
 	# panning mode control
@@ -127,6 +129,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 	"""Bind this UI element to a Channel data object."""
 	# Disconnect from old channel if any
 	if channel:
+		channel.name_changed.disconnect(_on_channel_name_changed)
 		channel.volume_changed.disconnect(_on_channel_volume_changed)
 		channel.mute_changed.disconnect(_on_channel_mute_changed)
 		channel.solo_changed.disconnect(_on_channel_solo_changed)
@@ -136,12 +139,14 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.route_changed.disconnect(_on_channel_route_changed)
 		channel.device_added.disconnect(_on_channel_device_added)
 		channel.device_removed.disconnect(_on_channel_device_removed)
+		channel.color_changed.disconnect(_on_channel_color_changed)
 
 	channel = ch
 	project = proj
 
 	# Connect to channel signals
 	if channel:
+		channel.name_changed.connect(_on_channel_name_changed)
 		channel.volume_changed.connect(_on_channel_volume_changed)
 		channel.mute_changed.connect(_on_channel_mute_changed)
 		channel.solo_changed.connect(_on_channel_solo_changed)
@@ -151,6 +156,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.route_changed.connect(_on_channel_route_changed)
 		channel.device_added.connect(_on_channel_device_added)
 		channel.device_removed.connect(_on_channel_device_removed)
+		channel.color_changed.connect(_on_channel_color_changed)
 
 		# Bind device list to channel
 		if device_list and device_list is ChannelDeviceList:
@@ -171,25 +177,19 @@ func _update_from_channel() -> void:
 		title.set_value(channel.name)
 
 	# Update header color from channel color
-	if header:
-		var stylebox = header.get_theme_stylebox("panel")
-		if stylebox:
-			stylebox.bg_color = channel.color
+	var stylebox : StyleBoxFlat = header.get_theme_stylebox("panel")
+	stylebox.bg_color = channel.color
 
 	# Update toggles
-	if solo_toggle:
-		solo_toggle.set_pressed_no_signal(channel.solo)
+	solo_toggle.set_pressed_no_signal(channel.solo)
 
-	if mute_toggle:
-		mute_toggle.set_pressed_no_signal(channel.mute)
+	mute_toggle.set_pressed_no_signal(channel.mute)
 
 	# Update volume slider
-	if bottom_volume_slider:
-		bottom_volume_slider.set_value_no_signal(channel.volume)
+	bottom_volume_slider.set_value_no_signal(channel.volume)
 
 	# Update meter (peak levels)
-	if big_meter:
-		big_meter.set_peak_levels(channel.peak_left, channel.peak_right)
+	big_meter.set_peak_levels(channel.peak_left, channel.peak_right)
 	
 	# Update output button text
 	_update_output_button_text()
@@ -346,6 +346,8 @@ func _stop_resize():
 	is_resizing = false
 	mouse_default_cursor_shape = Control.CURSOR_ARROW
 
+func _on_title_value_changed(new_name : String) -> void:
+	channel.set_name(new_name)
 
 func _on_header_gui_input(event : InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -361,6 +363,7 @@ func _on_header_gui_input(event : InputEvent) -> void:
 			_start_move()
 		elif is_moving  and event.is_released():
 			_stop_move()
+
 
 
 func _start_move():
@@ -412,6 +415,9 @@ func _stop_move():
 # ============================================================================
 # CHANNEL SIGNAL CALLBACKS - Data changes from Channel
 # ============================================================================
+func _on_channel_name_changed(new_name : String) -> void:
+	"""React to name changes from Channel."""
+	title.set_value(new_name)
 
 func _on_channel_volume_changed(db: float) -> void:
 	"""React to volume changes from Channel."""
@@ -430,6 +436,11 @@ func _on_channel_solo_changed(value: bool) -> void:
 	"""React to solo changes from Channel."""
 	if solo_toggle:
 		solo_toggle.set_pressed_no_signal(value)
+
+
+func _on_channel_color_changed(new_color : Color) -> void:
+	var stylebox : StyleBoxFlat = header.get_theme_stylebox("panel")
+	stylebox.bg_color = new_color
 
 
 func _on_channel_peak_updated(left: float, right: float) -> void:

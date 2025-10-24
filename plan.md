@@ -1002,13 +1002,14 @@ base64 = "0.22"
 - [x] Progressive plugin discovery with live updates
 - [x] Fixed buffer size mismatch (512 → 8192 max_buffer_size)
 - [x] Tested with real plugin (Dragonfly Hall Reverb)
-- [ ] Parameter UI auto-generation (deferred to Phase 4)
-- [ ] State serialization in project save/load (deferred to Phase 4)
+- [x] Parameter UI auto-generation (deferred to Phase 4)
+- [?] State serialization in project save/load (deferred to Phase 4)
+    - [x] Parameter serialization
 
 ### Week 4-5: Advanced Features (In Progress)
 - [x] Parameter UI auto-generation (query via `/plugin/get_parameters`)
-- [ ] State serialization in project save/load
-- [ ] Plugin GUI (floating windows) - Optional, may skip
+- [?] State serialization in project save/load
+- [ ] Plugin GUI (floating windows)
 - [ ] Latency compensation
 - [ ] Preset management
 - [ ] Multi-threading optimization

@@ -25,6 +25,10 @@ var _providers: Array[AssetProvider] = []
 # All discovered assets (keyed by path for fast lookup)
 var _assets_by_path: Dictionary[String, Asset] = {}
 
+# Asset metadata cache (favorites, tags, last_used)
+# Structure: { "asset_path": { "favorite": bool, "tags": Array, "last_used": int } }
+var _asset_metadata: Dictionary = {}
+
 # Whether service is ready
 var _is_ready: bool = false
 var _is_scanning: bool = false
@@ -36,6 +40,7 @@ var _is_scanning: bool = false
 
 func _ready() -> void:
 	print("[AssetService] Initializing...")
+	_load_asset_cache()
 	_setup_default_config()
 	_initialize_providers()
 	print("[AssetService] Ready")
@@ -193,13 +198,11 @@ func is_ready() -> bool:
 
 ## Mark asset as favorite
 func set_favorite(asset_path: String, is_favorite: bool) -> void:
-	var metadata = Sonara.get_config("assets/metadata", {})
-	if not metadata.has(asset_path):
-		metadata[asset_path] = {}
+	if not _asset_metadata.has(asset_path):
+		_asset_metadata[asset_path] = {}
 
-	metadata[asset_path]["favorite"] = is_favorite
-	Sonara.set_config("assets/metadata", metadata)
-	Sonara.save_config()
+	_asset_metadata[asset_path]["favorite"] = is_favorite
+	_save_asset_cache()
 
 	var asset = find_asset(asset_path)
 	if asset:
@@ -208,17 +211,15 @@ func set_favorite(asset_path: String, is_favorite: bool) -> void:
 
 ## Add tag to asset
 func add_tag(asset_path: String, tag: String) -> void:
-	var metadata = Sonara.get_config("assets/metadata", {})
-	if not metadata.has(asset_path):
-		metadata[asset_path] = {}
+	if not _asset_metadata.has(asset_path):
+		_asset_metadata[asset_path] = {}
 
-	var tags: Array[String] = metadata[asset_path].get("tags", [])
+	var tags: Array[String] = _asset_metadata[asset_path].get("tags", [])
 	if not tag in tags:
 		tags.append(tag)
 
-	metadata[asset_path]["tags"] = tags
-	Sonara.set_config("assets/metadata", metadata)
-	Sonara.save_config()
+	_asset_metadata[asset_path]["tags"] = tags
+	_save_asset_cache()
 
 	var asset = find_asset(asset_path)
 	if asset:
@@ -227,16 +228,14 @@ func add_tag(asset_path: String, tag: String) -> void:
 
 ## Remove tag from asset
 func remove_tag(asset_path: String, tag: String) -> void:
-	var metadata = Sonara.get_config("assets/metadata", {})
-	if not metadata.has(asset_path):
+	if not _asset_metadata.has(asset_path):
 		return
 
-	var tags: Array[String] = metadata[asset_path].get("tags", [])
+	var tags: Array[String] = _asset_metadata[asset_path].get("tags", [])
 	tags.erase(tag)
 
-	metadata[asset_path]["tags"] = tags
-	Sonara.set_config("assets/metadata", metadata)
-	Sonara.save_config()
+	_asset_metadata[asset_path]["tags"] = tags
+	_save_asset_cache()
 
 	var asset = find_asset(asset_path)
 	if asset:
@@ -245,24 +244,21 @@ func remove_tag(asset_path: String, tag: String) -> void:
 
 ## Record asset as used
 func mark_asset_used(asset_path: String) -> void:
-	var metadata = Sonara.get_config("assets/metadata", {})
-	if not metadata.has(asset_path):
-		metadata[asset_path] = {}
+	if not _asset_metadata.has(asset_path):
+		_asset_metadata[asset_path] = {}
 
-	metadata[asset_path]["last_used"] = Time.get_unix_time_from_system()
-	Sonara.set_config("assets/metadata", metadata)
-	Sonara.save_config()
+	_asset_metadata[asset_path]["last_used"] = Time.get_unix_time_from_system()
+	_save_asset_cache()
 
 	var asset = find_asset(asset_path)
 	if asset:
 		asset.mark_as_used()
 
 
-## Load metadata for an asset from config
+## Load metadata for an asset from cache
 func _load_asset_metadata(asset: Asset) -> void:
-	var metadata = Sonara.get_config("assets/metadata", {})
-	if metadata.has(asset.path):
-		var asset_meta = metadata[asset.path]
+	if _asset_metadata.has(asset.path):
+		var asset_meta = _asset_metadata[asset.path]
 		asset.favorite = asset_meta.get("favorite", false)
 		asset.tags = asset_meta.get("tags", [] as Array[String])
 		asset.last_used = asset_meta.get("last_used", 0)
@@ -305,9 +301,55 @@ func _setup_default_config() -> void:
 				"~/Music"
 			],
 			"scan_interval_seconds": 30.0,
-			"enabled_providers": ["filesystem", "devices"],
-			"metadata": {}
+			"enabled_providers": ["filesystem", "devices"]
 		}
 		Sonara.set_config("assets", default_config)
 		Sonara.save_config()
 		print("[AssetService] Created default asset configuration")
+
+
+# ============================================================================
+# ASSET CACHE (assets.json)
+# ============================================================================
+
+## Get the assets cache file path
+func _get_asset_cache_path() -> String:
+	return Sonara.get_config_dir() + "/assets.json"
+
+
+## Load asset metadata cache from disk
+func _load_asset_cache() -> void:
+	var cache_path = _get_asset_cache_path()
+	if FileAccess.file_exists(cache_path):
+		var file = FileAccess.open(cache_path, FileAccess.READ)
+		if file:
+			var json_string = file.get_as_text()
+			file.close()
+			
+			var json = JSON.new()
+			var error = json.parse(json_string)
+			if error == OK:
+				_asset_metadata = json.data
+				print("[AssetService] Asset cache loaded from: ", cache_path)
+			else:
+				push_error("[AssetService] Failed to parse asset cache JSON: " + json.get_error_message())
+				_asset_metadata = {}
+		else:
+			push_error("[AssetService] Failed to open asset cache file: " + cache_path)
+			_asset_metadata = {}
+	else:
+		print("[AssetService] No asset cache found, starting fresh")
+		_asset_metadata = {}
+
+
+## Save asset metadata cache to disk
+func _save_asset_cache() -> void:
+	var cache_path = _get_asset_cache_path()
+	var file = FileAccess.open(cache_path, FileAccess.WRITE)
+	if file:
+		var json_string = JSON.stringify(_asset_metadata, "\t")
+		file.store_string(json_string)
+		file.close()
+		# Cache saved silently (too verbose to log every time)
+	else:
+		push_error("[AssetService] Failed to save asset cache to: " + cache_path)

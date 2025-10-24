@@ -98,11 +98,21 @@ func unbind():
 
 
 func bind(ci : ClipInstance):
+	print("[NoteEditor] bind called")
+	print("  - clip_instance: ", ci)
+	print("  - clip_id: ", ci.clip_id if ci else "null")
+	print("  - clip property: ", ci.clip if ci else "null")
+	print("  - clip (computed): ", clip)
+	
 	if clip_instance != ci:
 		if clip_instance:
 			unbind()
 		
 		clip_instance = ci
+		
+		print("  - After assignment, clip property: ", ci.clip if ci else "null")
+		print("  - After assignment, clip (computed): ", clip)
+		
 		_load_clip_notes()
 		queue_sort()
 	
@@ -204,6 +214,14 @@ func _update_single_note_position(note: VisualNote) -> void:
 	note.update_label_visibility(note_height)
 
 func _load_clip_notes() -> void:
+	print("[NoteEditor] _load_clip_notes called")
+	print("  - clip: ", clip)
+	print("  - clip_instance: ", clip_instance)
+	
+	if not clip:
+		print("[NoteEditor] ERROR: No clip to load!")
+		return
+	
 	selected_note = null
 	
 	# Load all notes from clip and assign IDs

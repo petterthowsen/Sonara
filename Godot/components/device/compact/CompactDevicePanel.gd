@@ -47,6 +47,15 @@ func _ready() -> void:
 	_update_ui_visibility()
 
 
+func _gui_input(event: InputEvent) -> void:
+	"""Handle GUI input - specifically double-click to open device in DeviceLane."""
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.double_click:
+			_on_double_clicked()
+			accept_event()
+
+
 # ============================================================================
 # PUBLIC METHODS
 # ============================================================================
@@ -65,7 +74,7 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 	await ready
 
 	# Set panel title to device name and position
-	name_label.text = device_instance.device.name
+	name_label.text = device_instance.device.get_short_name()
 	name_label.tooltip_text = device_instance.device.name
 	
 	device_light.bind_to_device_instance(device_instance)
@@ -158,3 +167,35 @@ func _on_collapse_button_toggled(button_pressed: bool) -> void:
 	# Update parameters panel visibility
 	parameters.visible = not collapsed
 	print("[CompactDevicePanel] Collapsed state changed to: %s" % collapsed)
+
+
+func _on_double_clicked() -> void:
+	"""Handle double-click - select channel and open DeviceLane with focus on this device."""
+	if not device_instance:
+		return
+	
+	# Get the channel from the project
+	var channel: Channel = Sonara.editor.project.get_channel_by_id(device_instance.channel_id)
+	if not channel:
+		push_warning("[CompactDevicePanel] Cannot find channel with ID %d" % device_instance.channel_id)
+		return
+	
+	# Select the channel in the mixer (this will emit channel_focused)
+	Sonara.editor.mixer.select_channel(channel)
+	
+	# Show DeviceLane if hidden
+	if not Sonara.editor.device_lane.visible:
+		Sonara.editor.seconday_panel.show()
+		Sonara.editor.device_lane.show()
+		# DeviceLane will auto-bind to the focused channel via channel_focused signal
+	
+	# Wait a frame for the DeviceLane to update with the new channel
+	await get_tree().process_frame
+	
+	# Find the corresponding DevicePanel in the DeviceLane and grab focus
+	var device_panel: DevicePanel = Sonara.editor.device_lane.find_device_panel(device_instance)
+	if device_panel:
+		device_panel.grab_focus()
+		print("[CompactDevicePanel] Grabbed focus on DevicePanel for device: %s" % device_instance.device.name)
+	else:
+		push_warning("[CompactDevicePanel] Could not find DevicePanel for device: %s" % device_instance.device.name)
