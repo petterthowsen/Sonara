@@ -91,6 +91,7 @@ impl AudioEngine {
             &default_device,
             &config.into(),
             command_rx,
+            command_tx.clone(),
             status_tx,
             state.clone(),
         )?;
@@ -112,6 +113,7 @@ impl AudioEngine {
         device: &Device,
         config: &StreamConfig,
         command_rx: Receiver<AudioCommand>,
+        command_tx: Sender<AudioCommand>,
         status_tx: Sender<EngineStatus>,
         state: Arc<Mutex<EngineState>>,
     ) -> Result<Stream> {
@@ -136,7 +138,7 @@ impl AudioEngine {
                 // Process any pending commands (lock-free)
                 while let Ok(cmd) = command_rx.try_recv() {
                     if let Ok(mut state) = state.lock() {
-                        if let Some(status) = process_command(&mut state, cmd, max_buffer_size, &status_tx) {
+                        if let Some(status) = process_command(&mut state, cmd, max_buffer_size, &status_tx, &command_tx) {
                             let _ = status_tx.send(status);
                         }
                     }

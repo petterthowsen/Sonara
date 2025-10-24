@@ -645,6 +645,11 @@ impl OscServer {
                     OscType::Int(if enabled { 1 } else { 0 })
                 ])
             }
+            EngineStatus::DeviceReady { .. } => {
+                // DeviceReady is handled internally (triggers parameter re-send)
+                // No need to send it to Godot
+                return;
+            }
             EngineStatus::PluginScanComplete { count } => {
                 ("/plugin/scan_complete".to_string(), vec![OscType::Int(count as i32)])
             }

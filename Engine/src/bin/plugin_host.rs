@@ -31,6 +31,7 @@ use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, HostGui, HostGuiImpl, GuiSize};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer};
+use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 // Import shared memory types from the engine crate
 use engine::audio::devices::clap_host::shared_memory::SharedMemory;
@@ -350,6 +351,9 @@ struct PluginState {
     // Audio processing buffers
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
+    
+    // Pending parameter changes (param_id, clap_id, denormalized_value)
+    pending_param_changes: Vec<(u32, ClapId, f64)>,
 }
 
 /// Check if there's audio data available to process
@@ -702,6 +706,7 @@ fn process_command(
                 shared_memory,
                 input_buffers,
                 output_buffers,
+                pending_param_changes: Vec::new(),
             });
             
             info!("Step 7: ✅ Plugin state stored, sending InitializeSuccess response");
@@ -926,6 +931,179 @@ fn process_command(
             None
         }
         
+        PluginCommand::GetParameterInfo => {
+            if let Some(ref mut state) = plugin_state {
+                // Get plugin handle to query parameters
+                let mut handle = state.instance.plugin_handle();
+                
+                // Try to get the params extension
+                let params_ext: Option<PluginParams> = handle.get_extension();
+                
+                if let Some(params) = params_ext {
+                    let param_count = params.count(&mut handle);
+                    let mut param_infos = Vec::with_capacity(param_count as usize);
+                    
+                    // Query each parameter
+                    for i in 0..param_count {
+                        let mut buffer = ParamInfoBuffer::new();
+                        
+                        if let Some(clap_info) = params.get_info(&mut handle, i, &mut buffer) {
+                            let name = std::str::from_utf8(clap_info.name)
+                                .unwrap_or("Unknown")
+                                .trim_end_matches('\0')
+                                .to_string();
+                            
+                            let param_info = PluginParameterInfo {
+                                id: i, // Use sequential index as ID
+                                name,
+                                unit: String::new(), // CLAP doesn't expose units separately
+                                min: clap_info.min_value as f32,
+                                max: clap_info.max_value as f32,
+                                default: clap_info.default_value as f32,
+                                is_automation_safe: clap_info.flags.contains(
+                                    clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE
+                                ),
+                            };
+                            
+                            param_infos.push(param_info);
+                        }
+                    }
+                    
+                    info!("✅ Queried {} parameters from plugin", param_infos.len());
+                    Some(PluginResponse::ParameterInfo { params: param_infos })
+                } else {
+                    info!("Plugin does not support params extension");
+                    Some(PluginResponse::ParameterInfo { params: Vec::new() })
+                }
+            } else {
+                Some(PluginResponse::Error {
+                    command: "GetParameterInfo".to_string(),
+                    error: "Plugin not initialized".to_string(),
+                })
+            }
+        }
+        
+        PluginCommand::GetParameter { param_id } => {
+            if let Some(ref mut state) = plugin_state {
+                // Get plugin handle
+                let mut handle = state.instance.plugin_handle();
+                
+                // Try to get the params extension
+                let params_ext: Option<PluginParams> = handle.get_extension();
+                
+                if let Some(params) = params_ext {
+                    // First, get parameter info to get the CLAP ID
+                    let mut buffer = ParamInfoBuffer::new();
+                    
+                    if let Some(clap_info) = params.get_info(&mut handle, param_id, &mut buffer) {
+                        let clap_id = clap_info.id;
+                        
+                        // Get the current value
+                        if let Some(value) = params.get_value(&mut handle, clap_id) {
+                            // Normalize value to 0.0-1.0 range
+                            let normalized = ((value - clap_info.min_value) / 
+                                             (clap_info.max_value - clap_info.min_value)) as f32;
+                            
+                            Some(PluginResponse::ParameterValue {
+                                param_id,
+                                value: normalized.clamp(0.0, 1.0),
+                            })
+                        } else {
+                            Some(PluginResponse::Error {
+                                command: "GetParameter".to_string(),
+                                error: format!("Failed to get value for parameter {}", param_id),
+                            })
+                        }
+                    } else {
+                        Some(PluginResponse::Error {
+                            command: "GetParameter".to_string(),
+                            error: format!("Parameter {} not found", param_id),
+                        })
+                    }
+                } else {
+                    Some(PluginResponse::Error {
+                        command: "GetParameter".to_string(),
+                        error: "Plugin does not support params extension".to_string(),
+                    })
+                }
+            } else {
+                Some(PluginResponse::Error {
+                    command: "GetParameter".to_string(),
+                    error: "Plugin not initialized".to_string(),
+                })
+            }
+        }
+        
+        PluginCommand::SetParameter { param_id, value } => {
+            if let Some(ref mut state) = plugin_state {
+                // Get plugin handle
+                let mut handle = state.instance.plugin_handle();
+                
+                // Try to get the params extension
+                let params_ext: Option<PluginParams> = handle.get_extension();
+                
+                if let Some(params) = params_ext {
+                    // Get parameter info to denormalize the value
+                    let mut buffer = ParamInfoBuffer::new();
+                    
+                    if let Some(clap_info) = params.get_info(&mut handle, param_id, &mut buffer) {
+                        let clap_id = clap_info.id;
+                        
+                        // Denormalize from 0.0-1.0 to actual parameter range
+                        let denormalized = clap_info.min_value + 
+                            (value as f64 * (clap_info.max_value - clap_info.min_value));
+                        
+                        info!("Queuing parameter change: {} = {} (denormalized: {:.2})", 
+                            param_id, value, denormalized);
+                        
+                        // Queue the parameter change to be applied in the next flush/process call
+                        state.pending_param_changes.push((param_id, clap_id, denormalized));
+                        
+                        // Immediately flush to the plugin if not processing
+                        // This ensures parameter changes are applied even when audio isn't running
+                        use clack_host::events::event_types::ParamValueEvent;
+                        use clack_host::events::Pckn;
+                        use clack_host::utils::Cookie;
+                        use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
+                        
+                        let mut input_events = EventBuffer::new();
+                        let event = ParamValueEvent::new(
+                            0,  // Sample offset
+                            clap_id,
+                            Pckn::new(0u16, 0u16, 0u16, 0u32),
+                            denormalized,
+                            Cookie::empty()
+                        );
+                        input_events.push(&event);
+                        
+                        let mut output_events = EventBuffer::new();
+                        let input_events_view = InputEvents::from_buffer(&input_events);
+                        let mut output_events_view = OutputEvents::from_buffer(&mut output_events);
+                        
+                        // Use flush to immediately apply parameter change
+                        params.flush(&mut handle, &input_events_view, &mut output_events_view);
+                        
+                        None // No response needed (fire-and-forget)
+                    } else {
+                        Some(PluginResponse::Error {
+                            command: "SetParameter".to_string(),
+                            error: format!("Parameter {} not found", param_id),
+                        })
+                    }
+                } else {
+                    Some(PluginResponse::Error {
+                        command: "SetParameter".to_string(),
+                        error: "Plugin does not support params extension".to_string(),
+                    })
+                }
+            } else {
+                Some(PluginResponse::Error {
+                    command: "SetParameter".to_string(),
+                    error: "Plugin not initialized".to_string(),
+                })
+            }
+        }
+        
         _ => {
             // TODO: Implement remaining commands
             warn!("Command not yet implemented: {:?}", cmd);
@@ -967,7 +1145,7 @@ fn load_plugin(
     let host_info = HostInfo::new(
         "Sonara Plugin Host",
         "Sonara Project",
-        "https://github.com/sonara",
+        "https://thowsenmedia.itch.io/sonara",
         "0.1.0"
     ).map_err(|e| format!("Failed to create host info: {:?}", e))?;
     

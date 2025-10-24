@@ -6,7 +6,21 @@ Sonara implements **subprocess-based CLAP plugin hosting** for crash isolation, 
 
 ## Recent Changes (October 2024)
 
-### ✅ Plugin GUI Support Fixed
+### ✅ Plugin Parameter Control Implemented
+- **Feature**: Full parameter get/set/query functionality for CLAP plugins
+- **Implementation**:
+  - `GetParameterInfo` command queries all parameters from plugin via CLAP params extension
+  - `GetParameter` retrieves current normalized values (0.0-1.0)
+  - `SetParameter` sets parameter values with immediate flush (works even when audio stopped)
+  - Parameters cached in `SubprocessClapAdapter` for fast access
+  - Automatic normalization to 0.0-1.0 range (consistent with builtin devices)
+- **Race Condition Fix**:
+  - **Issue**: Godot would query parameters before background thread finished caching them
+  - **Solution**: Added `DeviceReady` command sent when plugin finishes loading
+  - Engine automatically re-sends parameter info to Godot when ready
+- **Result**: All plugin parameters now appear in Godot UI and are fully controllable
+
+### ✅ Plugin GUI Support Fixed  
 - **Issue**: DPF-based plugins crashed with `hostGui != nullptr` and `hostTimer != nullptr` assertions
 - **Root Cause**: Minimal `SubprocessHost` implementation missing required CLAP extensions
 - **Solution**:
@@ -344,15 +358,18 @@ Total typical latency:       ~18-20ms
 - **Timer Support**: GUI animations and periodic updates work properly
 - **Crash Isolation**: Plugin crashes don't affect the main engine
 - **Async Loading**: Plugins load in background threads without blocking audio
+- **Parameter Control**: Full get/set/query with automatic normalization and race condition handling
 
 ### 🚧 Known Issues & TODOs
 
 #### High Priority
-1. **Parameter Control**:
-   - [ ] Implement `SetParameter` command handling in subprocess
-   - [ ] Implement `GetParameter` for reading current values
-   - [ ] Implement `GetParameterInfo` for discovering plugin parameters
-   - [ ] Add parameter change notifications (plugin → engine)
+1. **Parameter Control**: ✅ **COMPLETE** (October 2024)
+   - [x] Implement `SetParameter` command handling in subprocess
+   - [x] Implement `GetParameter` for reading current values
+   - [x] Implement `GetParameterInfo` for discovering plugin parameters
+   - [x] Fix race condition with async loading (DeviceReady notification)
+   - [x] Automatic parameter broadcast to Godot when plugin finishes loading
+   - [ ] Add parameter change notifications (plugin → engine) - Future enhancement
 
 2. **GUI Window Management**:
    - [ ] Force plugin GUI windows to stay above Godot app window
@@ -452,6 +469,7 @@ Engine/src/bin/
 ## Related Documentation
 
 - `OSC_PROTOCOL.md` - Engine ↔ Godot communication
-- `PLUGIN_GUI_STATUS.md` - GUI implementation status
+- `PLUGIN_OSC_PROTOCOL.md` - Plugin-specific OSC commands
+- `PLUGIN_PARAM_IMPLEMENTATION.md` - Parameter control implementation details
 - `IMPLEMENTATION_LOG.md` - Development history
 

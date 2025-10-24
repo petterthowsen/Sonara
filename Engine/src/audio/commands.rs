@@ -56,6 +56,7 @@ pub enum AudioCommand {
     SetDeviceParameter { channel_id: ChannelId, device_position: usize, param_id: u32, value: f32 },
     SetDeviceActive { channel_id: ChannelId, device_position: usize, active: bool },
     SetDeviceEnabled { channel_id: ChannelId, device_position: usize, enabled: bool },
+    DeviceReady { channel_id: ChannelId, device_position: usize },
 
     // Plugin management
     ScanPlugins,
@@ -84,6 +85,7 @@ pub enum EngineStatus {
     // Device state changes
     DeviceActiveChanged { channel_id: ChannelId, device_position: usize, active: bool },
     DeviceEnabledChanged { channel_id: ChannelId, device_position: usize, enabled: bool },
+    DeviceReady { channel_id: ChannelId, device_position: usize },
     
     // Plugin discovery responses
     PluginScanComplete { count: usize },
@@ -163,7 +165,7 @@ impl Default for EngineState {
 }
 
 /// Process a command (called from audio thread)
-pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: usize, status_tx: &Sender<EngineStatus>) -> Option<EngineStatus> {
+pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: usize, status_tx: &Sender<EngineStatus>, command_tx: &Sender<AudioCommand>) -> Option<EngineStatus> {
     match cmd {
         AudioCommand::InitProject(settings) => {
             state.settings = settings;
@@ -507,6 +509,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                                 id,
                                 state.device_sample_rate,
                                 buffer_size,
+                                Some(command_tx.clone()),
                             ) {
                                 Ok(adapter) => {
                                     // Note: Don't activate on audio thread! It will be activated later.
@@ -709,6 +712,39 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                 warn!("Channel {} not found for get plugin parameters", channel_id);
             }
         }
+        
+        AudioCommand::DeviceReady { channel_id, device_position } => {
+            info!("Device ready notification for channel {} position {}, re-sending parameters", channel_id, device_position);
+            
+            // Re-send parameter info now that device is ready
+            if let Some(channel) = state.channels.get(&channel_id) {
+                if let Some(device) = channel.devices.get(device_position) {
+                    let params = device.parameters();
+                    
+                    if !params.is_empty() {
+                        // Send parameter count
+                        let _ = status_tx.send(EngineStatus::PluginParameterCount {
+                            channel_id,
+                            device_position,
+                            count: params.len(),
+                        });
+                        
+                        // Send parameter info for each parameter
+                        for (idx, param) in params.iter().enumerate() {
+                            let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+                                channel_id,
+                                device_position,
+                                param_id: idx as u32,
+                                name: param.name.clone(),
+                                min: param.min,
+                                max: param.max,
+                                default: param.default,
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         AudioCommand::SavePluginState { channel_id, device_position } => {
             if let Some(channel) = state.channels.get(&channel_id) {
@@ -799,7 +835,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                     } else if let Some(clap_device) = (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>() {
                         match clap_device.close_gui() {
                             Ok(()) => {
-                                info!("Closed GUI for in-process plugin at channel {} device {}", channel_id, device_position);
+                                    info!("Closed GUI for in-process plugin at channel {} device {}", channel_id, device_position);
                             }
                             Err(e) => {
                                 warn!("Failed to close in-process plugin GUI at channel {} device {}: {}", 

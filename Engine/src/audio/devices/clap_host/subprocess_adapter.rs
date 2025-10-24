@@ -6,9 +6,11 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamValue, ParamInfo};
-use super::ipc_protocol::{PluginCommand, PluginResponse, MidiEvent, PluginParameterInfo};
+use super::ipc_protocol::{PluginCommand, PluginResponse, MidiEvent};
 use super::shared_memory::SharedMemory;
-use super::process_manager::{ProcessManager, PluginProcess};
+use super::process_manager::ProcessManager;
+use crossbeam::channel::Sender;
+use crate::audio::commands::AudioCommand;
 use tracing::{info, warn, error};
 
 /// Loading state for async plugin initialization
@@ -35,8 +37,8 @@ pub struct SubprocessClapAdapter {
     process_manager: Arc<ProcessManager>,
     loading_state: Arc<Mutex<LoadingState>>, // Only locked during initialization, not audio processing
     
-    // Cached parameter info
-    param_info_cache: Vec<ParamInfo>,
+    // Cached parameter info (shared with background loading thread)
+    param_info_cache: Arc<Mutex<Vec<ParamInfo>>>,
     
     // Audio configuration
     sample_rate: f32,
@@ -59,6 +61,7 @@ impl SubprocessClapAdapter {
         plugin_id: &str,
         sample_rate: f32,
         max_buffer_size: usize,
+        command_tx: Option<Sender<AudioCommand>>,
     ) -> Result<Self, String> {
         info!(
             "🚀 Creating subprocess CLAP adapter (async): {} (SR: {}, buffer: {})",
@@ -73,7 +76,7 @@ impl SubprocessClapAdapter {
         let device_vendor = "Unknown".to_string();
         let device_version = "1.0".to_string();
         let category = DeviceCategory::Effect;
-        let param_info_cache = Vec::new();
+        let param_info_cache = Arc::new(Mutex::new(Vec::new()));
         
         // Create loading state (starts as Loading)
         let loading_state = Arc::new(Mutex::new(LoadingState::Loading));
@@ -84,6 +87,9 @@ impl SubprocessClapAdapter {
         let plugin_path_clone = plugin_path.clone();
         let plugin_id_clone = plugin_id.to_string();
         let loading_state_clone = Arc::clone(&loading_state);
+        let param_cache_clone = Arc::clone(&param_info_cache);
+        let channel_id_clone = channel_id as usize;
+        let device_position_clone = device_position;
         
         std::thread::spawn(move || {
             info!("🔄 Background thread: Loading plugin subprocess...");
@@ -112,7 +118,7 @@ impl SubprocessClapAdapter {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         
                         // Now send activation commands (in separate critical section)
-                        {
+                        let param_info_cache = {
                             info!("🔄 Activating plugin: {}", plugin_id_clone);
                             
                             let mut process_guard = process.lock().unwrap();
@@ -131,15 +137,6 @@ impl SubprocessClapAdapter {
                                     Ok(PluginResponse::ActivateResult { success, error }) => {
                                         if success {
                                             info!("✅ Plugin activated successfully");
-                                            
-                                            // Start processing
-                                            info!("🔄 Starting audio processing...");
-                                            info!("📤 Sending StartProcessing command...");
-                                            if let Err(e) = process_guard.send_command(PluginCommand::StartProcessing) {
-                                                error!("❌ Failed to send StartProcessing command: {}", e);
-                                            } else {
-                                                info!("✅ Audio processing started");
-                                            }
                                         } else {
                                             error!("❌ Failed to activate plugin: {}", error.unwrap_or_default());
                                         }
@@ -153,6 +150,55 @@ impl SubprocessClapAdapter {
                                     }
                                 }
                             }
+                            
+                            // Query parameter info BEFORE starting processing to avoid response buffering issues
+                            info!("🔄 Querying plugin parameters...");
+                            let param_info_cache = if let Err(e) = process_guard.send_command(PluginCommand::GetParameterInfo) {
+                                error!("❌ Failed to send GetParameterInfo command: {}", e);
+                                Vec::new()
+                            } else {
+                                match process_guard.recv_response() {
+                                    Ok(PluginResponse::ParameterInfo { params }) => {
+                                        info!("✅ Plugin has {} parameters", params.len());
+                                        
+                                        // Convert to ParamInfo format
+                                        params.iter().map(|p| ParamInfo {
+                                            id: p.id,
+                                            name: p.name.clone(),
+                                            unit: p.unit.clone(),
+                                            min: p.min,
+                                            max: p.max,
+                                            default: p.default,
+                                            is_automation_safe: p.is_automation_safe,
+                                        }).collect()
+                                    }
+                                    Ok(resp) => {
+                                        error!("❌ Unexpected response to GetParameterInfo: {:?}", resp);
+                                        Vec::new()
+                                    }
+                                    Err(e) => {
+                                        error!("❌ Failed to receive GetParameterInfo response: {}", e);
+                                        Vec::new()
+                                    }
+                                }
+                            };
+                            
+                            // Now start processing (after querying parameters)
+                            info!("🔄 Starting audio processing...");
+                            if let Err(e) = process_guard.send_command(PluginCommand::StartProcessing) {
+                                error!("❌ Failed to send StartProcessing command: {}", e);
+                            } else {
+                                // Don't wait for ProcessingStarted response - it's fire-and-forget
+                                info!("✅ StartProcessing command sent");
+                            }
+                            
+                            param_info_cache
+                        };
+                        
+                        // Update parameter cache
+                        {
+                            let mut cache = param_cache_clone.lock().unwrap();
+                            *cache = param_info_cache.clone();
                         }
                         
                         // Update state to Ready
@@ -160,7 +206,19 @@ impl SubprocessClapAdapter {
                             let mut state = loading_state_clone.lock().unwrap();
                             *state = LoadingState::Ready(shared_memory);
                         }
-                        info!("✅ Plugin subprocess fully loaded and activated: {}", plugin_id_clone);
+                        
+                        info!("✅ Plugin subprocess fully loaded and activated: {} ({} params)", 
+                            plugin_id_clone, param_info_cache.len());
+                        
+                        // Notify that device is ready (triggers parameter re-send)
+                        if let Some(ref cmd_tx) = command_tx {
+                            let _ = cmd_tx.send(AudioCommand::DeviceReady {
+                                channel_id: channel_id_clone,
+                                device_position: device_position_clone,
+                            });
+                            info!("📤 Sent DeviceReady notification for channel {} position {}", 
+                                channel_id_clone, device_position_clone);
+                        }
                     } else {
                         let mut state = loading_state_clone.lock().unwrap();
                         *state = LoadingState::Failed("Failed to get process handle".to_string());
@@ -354,10 +412,38 @@ impl AudioDevice for SubprocessClapAdapter {
         }
     }
     
-    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-        // TODO: Query from subprocess
-        // For now, return None
-        None
+    fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
+        // Query parameter value from subprocess
+        let process_arc = self.process_manager.get_process(&self.process_key)?;
+        
+        // Use try_lock to avoid blocking (this might be called from audio thread)
+        let mut process_guard = match process_arc.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                warn!("Could not get lock to query parameter - process busy");
+                return None;
+            }
+        };
+        
+        // Send command
+        if let Err(e) = process_guard.send_command(PluginCommand::GetParameter { param_id }) {
+            error!("Failed to send GetParameter command: {}", e);
+            return None;
+        }
+        
+        // Receive response (with timeout to avoid blocking)
+        let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        match process_guard.recv_response() {
+            Ok(PluginResponse::ParameterValue { param_id: _, value }) => Some(value),
+            Ok(resp) => {
+                warn!("Unexpected response to GetParameter: {:?}", resp);
+                None
+            }
+            Err(e) => {
+                warn!("Failed to receive GetParameter response: {}", e);
+                None
+            }
+        }
     }
     
     fn device_id(&self) -> &str {
@@ -377,7 +463,8 @@ impl AudioDevice for SubprocessClapAdapter {
     }
     
     fn parameters(&self) -> Vec<ParamInfo> {
-        self.param_info_cache.clone()
+        // Return cached parameters (safe to lock here, not on audio thread)
+        self.param_info_cache.lock().unwrap().clone()
     }
     
     fn reset(&mut self) {
