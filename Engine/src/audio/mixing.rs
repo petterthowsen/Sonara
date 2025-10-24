@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use crossbeam::channel::Sender;
 use tracing::info;
 
 use super::types::*;
-use super::commands::EngineState;
+use super::commands::{EngineState, EngineStatus};
 
 /// Mix channels and output to audio device
-pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize) {
+pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize, status_tx: &Sender<EngineStatus>) {
     // Check if any channel has solo
     let has_solo = state.channels.values().any(|c| c.solo);
 
@@ -32,6 +33,36 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     let sample_count = state.channels.values().next().map(|c| c.buffer_left.len()).unwrap_or(0);
     for channel in state.channels.values_mut() {
         channel.process_device_chain(sample_count);
+        
+        // Check for pending parameter changes from CLAP plugins (GUI/modulation changes)
+        for (device_pos, device) in channel.devices.iter_mut().enumerate() {
+            // Try to downcast to ClapDeviceAdapter (in-process)
+            if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>() {
+                let pending_changes = clap_adapter.take_pending_param_changes();
+                for (param_id, value) in pending_changes {
+                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                        channel_id: channel.id,
+                        device_position: device_pos,
+                        param_id,
+                        value,
+                    });
+                }
+            }
+            // Also check SubprocessClapAdapter (subprocess-based plugins)
+            else if let Some(subprocess_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>() {
+                // Poll for unsolicited ParameterValueChanged messages from subprocess
+                if let Some(pending_changes) = subprocess_adapter.poll_parameter_changes() {
+                    for (param_id, value) in pending_changes {
+                        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                            channel_id: channel.id,
+                            device_position: device_pos,
+                            param_id,
+                            value,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // Second pass: Apply each channel's fader (gain/pan) to its own buffer
@@ -182,6 +213,21 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 // Process the bus's effect chain on the accumulated routed audio
                 // Effects (like delay) should process the mixed audio
                 bus_ch.process_device_chain(sample_count);
+                
+                // Check for pending parameter changes from CLAP plugins on buses
+                for (device_pos, device) in bus_ch.devices.iter_mut().enumerate() {
+                    if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>() {
+                        let pending_changes = clap_adapter.take_pending_param_changes();
+                        for (param_id, value) in pending_changes {
+                            let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                                channel_id: bus_id,
+                                device_position: device_pos,
+                                param_id,
+                                value,
+                            });
+                        }
+                    }
+                }
 
                 // Apply the bus's pan to the received audio
                 // This is separate from source panning - it pans the entire bus mix

@@ -160,6 +160,12 @@ pub enum PluginResponse {
     
     /// Subprocess shutting down
     ShutdownAck,
+    
+    /// Parameter value changed (unsolicited, from plugin GUI/modulation)
+    ParameterValueChanged {
+        param_id: u32,
+        value: f32,  // Normalized 0.0-1.0
+    },
 }
 
 /// Parameter metadata

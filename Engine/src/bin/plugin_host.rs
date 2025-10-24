@@ -86,6 +86,7 @@ enum PluginResponse {
     ResetComplete,
     Error { command: String, error: String },
     ShutdownAck,
+    ParameterValueChanged { param_id: u32, value: f32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,8 +352,33 @@ struct PluginState {
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
     
+    // Event buffer for plugin output events (parameter changes, etc.)
+    output_event_buffer: EventBuffer,
+    
     // Pending parameter changes (param_id, clap_id, denormalized_value)
     pending_param_changes: Vec<(u32, ClapId, f64)>,
+}
+
+/// Process output events from the plugin (parameter changes, etc.)
+fn process_output_events(state: &mut PluginState) {
+    use clack_host::events::event_types::ParamValueEvent;
+    
+    // Iterate through events in the output buffer
+    for event in state.output_event_buffer.iter() {
+        // Check if this is a parameter value event
+        if let Some(param_event) = event.as_event::<ParamValueEvent>() {
+            let Some(clap_id) = param_event.param_id() else {
+                continue;  // Skip events without valid param ID
+            };
+            let value = param_event.value();
+            
+            // Store for sending to main process
+            // (param_id, clap_id, denormalized_value)
+            state.pending_param_changes.push((u32::MAX, clap_id, value));
+            
+            info!("Plugin changed parameter (CLAP ID: {:?}) to {:.4}", clap_id, value);
+        }
+    }
 }
 
 /// Check if there's audio data available to process
@@ -448,7 +474,7 @@ fn process_audio(state: &mut PluginState) {
     
     // Process MIDI events (TODO: Read from shared memory MIDI queue)
     let input_events = InputEvents::empty();
-    let mut output_events = OutputEvents::void();
+    let mut output_events = OutputEvents::from_buffer(&mut state.output_event_buffer);
     
     // Process audio through plugin
     match started_processor.process(
@@ -480,6 +506,13 @@ fn process_audio(state: &mut PluginState) {
             warn!("Plugin processing error: {:?}", e);
         }
     }
+    
+    // Process output events to detect parameter changes
+    // These are sent back to the main process for UI updates
+    process_output_events(state);
+    
+    // Clear event buffer for next iteration
+    state.output_event_buffer.clear();
 }
 
 /// Main plugin host event loop
@@ -548,9 +581,12 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                             let response = process_command(cmd, &mut plugin_state, unix_socket_fd);
                             
                             if let Some(resp) = response {
+                                info!("📤 Sending response: {:?}", resp);
                                 let resp_json = serde_json::to_string(&resp)?;
+                                info!("📤 Response JSON: {}", resp_json);
                                 writeln!(stream, "{}", resp_json)?;
                                 stream.flush()?;
+                                info!("📤 Response sent and flushed");
                             }
                             
                             command_received = true;
@@ -610,6 +646,77 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
             // This is the critical call that keeps plugin GUIs responsive
             if state.gui_open {
                 state.instance.call_on_main_thread_callback();
+                
+                // Poll for parameter changes from the GUI even when not processing audio
+                // This is critical: GUI parameter changes are only visible through output events,
+                // but we only collect output events during process() or flush() calls
+                let mut handle = state.instance.plugin_handle();
+                if let Some(params_ext) = handle.get_extension::<PluginParams>() {
+                    use clack_host::events::io::{InputEvents, OutputEvents};
+                    
+                    let input_events = InputEvents::empty();
+                    let mut output_events = OutputEvents::from_buffer(&mut state.output_event_buffer);
+                    
+                    // Flush with empty input to collect any pending output events from GUI
+                    params_ext.flush(&mut handle, &input_events, &mut output_events);
+                    
+                    // Process the collected output events
+                    process_output_events(state);
+                    state.output_event_buffer.clear();
+                }
+            }
+            
+            // Send pending parameter changes back to main process
+            if !state.pending_param_changes.is_empty() {
+                // Get parameter extension to map CLAP IDs to sequential param_ids
+                let mut handle = state.instance.plugin_handle();
+                if let Some(params_ext) = handle.get_extension::<PluginParams>() {
+                    let param_count = params_ext.count(&mut handle);
+                    
+                    // Process each pending change
+                    for (_placeholder_id, clap_id, denormalized_value) in state.pending_param_changes.drain(..) {
+                        // Find sequential param_id by iterating through parameters
+                        let mut param_id_opt = None;
+                        let mut param_info_opt = None;
+                        
+                        for i in 0..param_count {
+                            let mut buffer = ParamInfoBuffer::new();
+                            if let Some(info) = params_ext.get_info(&mut handle, i, &mut buffer) {
+                                if info.id == clap_id {
+                                    param_id_opt = Some(i);
+                                    param_info_opt = Some((info.min_value, info.max_value));
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if let (Some(param_id), Some((min_val, max_val))) = (param_id_opt, param_info_opt) {
+                            // Normalize value from plugin's range to 0.0-1.0
+                            let range = max_val - min_val;
+                            let normalized = if range.abs() > f64::EPSILON {
+                                ((denormalized_value - min_val) / range).clamp(0.0, 1.0) as f32
+                            } else {
+                                0.5
+                            };
+                            
+                            // Send ParameterValueChanged response
+                            let resp = PluginResponse::ParameterValueChanged {
+                                param_id,
+                                value: normalized,
+                            };
+                            
+                            if let Ok(resp_json) = serde_json::to_string(&resp) {
+                                if let Err(e) = writeln!(stream, "{}", resp_json) {
+                                    warn!("Failed to send parameter change: {}", e);
+                                } else if let Err(e) = stream.flush() {
+                                    warn!("Failed to flush parameter change: {}", e);
+                                } else {
+                                    info!("📤 Sent ParameterValueChanged: param_id={}, value={:.4}", param_id, normalized);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         
@@ -705,6 +812,7 @@ fn process_command(
                 shared_memory,
                 input_buffers,
                 output_buffers,
+                output_event_buffer: EventBuffer::new(),
                 pending_param_changes: Vec::new(),
             });
             
@@ -718,22 +826,27 @@ fn process_command(
         }
         
         PluginCommand::OpenGui => {
+            info!("📥 Received OpenGui command");
             if let Some(ref mut state) = plugin_state {
                 if state.gui_open {
+                    info!("GUI already open, returning GuiOpened");
                     return Some(PluginResponse::GuiOpened);
                 }
                 
+                info!("Attempting to open GUI...");
                 match open_plugin_gui(&mut state.instance) {
                     Ok(()) => {
                         state.gui_open = true;
-                        info!("✅ GUI opened successfully");
+                        info!("✅ GUI opened successfully, returning GuiOpened response");
                         Some(PluginResponse::GuiOpened)
                     }
                     Err(e) => {
+                        warn!("❌ Failed to open GUI: {}", e);
                         Some(PluginResponse::GuiError { error: e })
                     }
                 }
             } else {
+                warn!("❌ Cannot open GUI: Plugin not initialized");
                 Some(PluginResponse::GuiError {
                     error: "Plugin not initialized".to_string(),
                 })

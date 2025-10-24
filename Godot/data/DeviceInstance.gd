@@ -61,10 +61,21 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 ## ============================================================================
 
 ## Set a parameter value (normalized 0.0-1.0)
+## This is called from UI controls and syncs to the engine.
+## Does NOT emit signal - signal is emitted when engine echoes back via OSC.
+## This ensures server is the single source of truth.
 func set_parameter_normalized(param_id: int, normalized_value: float) -> void:
 	if param_id in parameter_values:
-		parameter_values[param_id] = clamp(normalized_value, 0.0, 1.0)
-		parameter_changed.emit(param_id, parameter_values[param_id])
+		var new_value = clamp(normalized_value, 0.0, 1.0)
+		var old_value = parameter_values[param_id]
+		
+		# Only sync if value actually changed
+		if abs(old_value - new_value) > 0.0001:
+			# Update local cache (for immediate visual feedback)
+			parameter_values[param_id] = new_value
+			
+			# Sync to engine - it will echo back and we'll emit signal then
+			sync_parameter_to_engine(param_id)
 
 
 ## Get a parameter value (normalized 0.0-1.0)
@@ -138,15 +149,21 @@ func connect_to_engine() -> void:
 	
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
+	
+	# Use wildcard pattern to listen for ALL parameter changes for this device
+	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
+	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
 
 
 ## Disconnect from audio engine: stop listening
 func disconnect_from_engine() -> void:
 	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]
 	var enabled_addr = "/channel/%d/device/%d/enabled" % [channel_id, position]
+	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
 	
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
+	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
 
 
 ## ============================================================================
@@ -169,6 +186,42 @@ func _on_enabled_received(values: Array) -> void:
 		if enabled != new_enabled:
 			enabled = new_enabled
 			enabled_changed.emit(enabled)
+
+
+func _on_parameter_value_received_wildcard(values: Array, address: String) -> void:
+	"""Handle parameter value changes via wildcard pattern.
+	Parse param_id from the OSC address: /channel/X/device/Y/param/ID/value"""
+	# Parse parameter ID from address: /channel/2/device/1/param/5/value -> 5
+	var parts = address.split("/")
+	if parts.size() < 7:
+		push_warning("[DeviceInstance] Invalid parameter address format: %s" % address)
+		return
+	
+	var param_id = int(parts[6])  # parts[6] is the parameter ID
+	_on_parameter_value_received(values, param_id)
+
+
+func _on_parameter_value_received(values: Array, param_id: int) -> void:
+	"""Handle parameter value changes from the engine (all changes, including echoes).
+	This is the ONLY place we emit parameter_changed signal, ensuring server is source of truth.
+	Receives both: echoes of our UI changes AND plugin-initiated changes (GUI, preset, modulation)."""
+	if values.size() < 1:
+		return
+	
+	var new_value = float(values[0])
+	
+	# Update parameter if it exists
+	if param_id not in parameter_values:
+		push_warning("[DeviceInstance] Received update for unknown parameter %d" % param_id)
+		return
+	
+	var old_value = parameter_values[param_id]
+	if abs(old_value - new_value) > 0.0001:  # Floating point tolerance
+		parameter_values[param_id] = clamp(new_value, 0.0, 1.0)
+		
+		# Always emit signal - this is the single source of truth for all parameter changes
+		parameter_changed.emit(param_id, parameter_values[param_id])
+
 
 ## Sync this device instance's parameters to the audio engine (bulk sync)
 ## TODO: Implement this
@@ -205,9 +258,9 @@ func to_json() -> Dictionary:
 ## Deserialize from JSON
 static func from_json(data: Dictionary) -> DeviceInstance:
 	var device_id = data.get("device_id", "")
-	var device = AssetService.get_device(device_id)
+	var loaded_device = AssetService.get_device(device_id)
 	
-	if not device:
+	if not loaded_device:
 		push_error("[DeviceInstance] Failed to load device: " + device_id)
 		return null
 	
@@ -216,7 +269,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	var is_active = data.get("active", true)
 	var is_enabled = data.get("enabled", true)
 	
-	var instance = DeviceInstance.new(device, chan_id, pos, is_active, is_enabled)
+	var instance = DeviceInstance.new(loaded_device, chan_id, pos, is_active, is_enabled)
 	instance.id = data.get("id", instance.id)  # Restore original ID
 	
 	# Restore parameter values

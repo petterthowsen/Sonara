@@ -33,7 +33,8 @@ func bind_to_device(dev : DeviceInstance):
 	name_label.text = dev.get_display_name()
 	_create_parameter_controls()
 	
-	# Listen for parameter updates (for plugins that load params asynchronously)
+	# Listen for parameter list updates (when plugins load params asynchronously)
+	# Individual CompactParameterControls already listen to parameter value changes
 	var channel = Sonara.editor.project.get_channel_by_id(dev.channel_id)
 	if channel:
 		if not channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
@@ -77,6 +78,5 @@ func _on_device_parameters_updated(device_pos: int) -> void:
 	
 	# Check if this update is for our device
 	if device.position == device_pos:
-		print("[DevicePanel] Parameters updated for device %s, refreshing UI" % device.device.name)
 		_clear_parameter_controls()
 		_create_parameter_controls()

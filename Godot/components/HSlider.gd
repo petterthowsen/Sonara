@@ -29,8 +29,10 @@ var _value := 0.0
 	get:
 		return _value
 
-func set_value_no_signal(value : float):
-	_value = value
+func set_value_no_signal(val : float):
+	_value = val
+	if is_inside_tree():
+		queue_redraw()
 
 # When bidirectional, the middle value is centered visually
 @export var bidirectional := true:

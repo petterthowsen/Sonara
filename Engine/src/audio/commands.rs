@@ -120,6 +120,21 @@ pub enum EngineStatus {
         device_position: usize,
         state_base64: String,
     },
+    
+    // Plugin parameter value changes (from plugin GUI or internal modulation)
+    PluginParameterValueChanged {
+        channel_id: ChannelId,
+        device_position: usize,
+        param_id: u32,
+        value: f32,  // Normalized 0.0-1.0
+    },
+}
+
+impl EngineStatus {
+    /// Check if this status is a parameter change (for debug logging)
+    pub fn is_param_change(&self) -> bool {
+        matches!(self, EngineStatus::PluginParameterValueChanged { .. })
+    }
 }
 
 /// Shared state between audio thread and command thread

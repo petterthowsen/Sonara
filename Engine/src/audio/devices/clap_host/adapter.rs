@@ -53,6 +53,9 @@ pub struct ClapDeviceAdapter {
     // Current parameter values (for get_parameter)
     current_param_values: HashMap<ParamId, ParamValue>,
     
+    // Parameter changes detected from plugin output events (for status updates)
+    pending_param_changes: Vec<(ParamId, ParamValue)>,
+    
     // State
     sample_rate: f32,
     max_buffer_size: usize,
@@ -181,6 +184,7 @@ impl ClapDeviceAdapter {
             param_value_events: Vec::with_capacity(32),
             output_event_buffer: EventBuffer::new(),
             current_param_values: HashMap::new(),
+            pending_param_changes: Vec::new(),
             sample_rate,
             max_buffer_size,
             pending_main_thread_callback: Arc::new(AtomicBool::new(false)),
@@ -437,10 +441,14 @@ impl AudioDevice for ClapDeviceAdapter {
             }
         }
         
-        // 6. Clear event buffers for next block
+        // 6. Process output events from the buffer (parameter changes from plugin)
+        self.process_output_events();
+        
+        // 7. Clear event buffers for next block
         self.note_on_events.clear();
         self.note_off_events.clear();
         self.param_value_events.clear();
+        self.output_event_buffer.clear();
     }
     
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
@@ -672,6 +680,51 @@ impl ClapDeviceAdapter {
         tracing::warn!("⚠️  GUI may become unresponsive without continuous callback processing");
         tracing::warn!("⚠️  TODO: Implement dedicated GUI thread or process per plugin");
         Ok(())
+    }
+    
+    /// Process output events from the plugin (parameter changes, etc.)
+    fn process_output_events(&mut self) {
+        use clack_host::events::event_types::ParamValueEvent;
+        
+        // Iterate through events in the output buffer
+        for event in self.output_event_buffer.iter() {
+            // Check if this is a parameter value event
+            if let Some(param_event) = event.as_event::<ParamValueEvent>() {
+                let Some(clap_id) = param_event.param_id() else {
+                    continue;  // Skip events without valid param ID
+                };
+                let value = param_event.value();
+                
+                // Map CLAP ID to our ParamId
+                if let Some(&param_id) = self.param_map.get(&clap_id) {
+                    // Get parameter info to normalize the value
+                    if let Some(param_info) = self.param_info_cache.get(param_id as usize) {
+                        // Normalize value from plugin's range to 0.0-1.0
+                        let normalized_value = if (param_info.max - param_info.min).abs() > f32::EPSILON {
+                            ((value as f32 - param_info.min) / (param_info.max - param_info.min)).clamp(0.0, 1.0)
+                        } else {
+                            0.5 // Fallback for zero-range parameters
+                        };
+                        
+                        // Update cache
+                        self.current_param_values.insert(param_id, normalized_value);
+                        
+                        // Store for status update
+                        self.pending_param_changes.push((param_id, normalized_value));
+                        
+                        tracing::debug!(
+                            "Plugin changed parameter {} to {} (CLAP ID: {:?}, denormalized: {:.2})",
+                            param_id, normalized_value, clap_id, value
+                        );
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Take pending parameter changes (returns and clears the list)
+    pub fn take_pending_param_changes(&mut self) -> Vec<(ParamId, ParamValue)> {
+        std::mem::take(&mut self.pending_param_changes)
     }
     
     /// Close the plugin's GUI window

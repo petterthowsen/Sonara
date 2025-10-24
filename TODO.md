@@ -1,5 +1,17 @@
 # TODO
 
+# Bugs / Issues
+
+**plugin shutdown** causes:
+```
+2025-10-24T19:05:09.541831Z  INFO ThreadId(01) 📥 Received command: Shutdown
+2025-10-24T19:05:09.541854Z  INFO ThreadId(01) Shutdown command received
+2025-10-24T19:05:09.541926Z  INFO ThreadId(01) Unmapping shared memory (fd=5)
+2025-10-24T19:05:09.542019Z  INFO ThreadId(01) Plugin host subprocess exiting
+fatal runtime error: IO Safety violation: owned file descriptor already closed, aborting
+./run.sh: line 15: 1031002 Aborted                 (core dumped) RUST_LOG=engine=info,warn cargo run --bin engine
+```
+
 ## Audio Engine (Rust Backend)
 
 ### Core Audio
@@ -7,6 +19,10 @@
 - [ ] Plugin latency compensation
 - [ ] Improve logging of plugins
 - [ ] Performance profiling - expose CPU/memory usage metrics via OSC for UI display
+
+### Plugins
+- [ ] Crash / Error handling, send info to Godot for UI notifications
+- [ ] Plugin GUI windows should be forced to stay over Godot App
 
 ### Threading & Performance
 - [ ] CPU affinity for audio thread and plugin processing

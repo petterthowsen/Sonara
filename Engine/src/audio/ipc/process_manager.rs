@@ -144,6 +144,37 @@ impl PluginProcess {
             .map_err(|e| format!("Failed to parse response '{}': {}", line.trim(), e))
     }
     
+    /// Try to receive a response without blocking (for polling unsolicited messages)
+    pub fn try_recv_response(&mut self) -> Result<PluginResponse, String> {
+        use std::io::Read;
+        
+        let socket = self.socket.as_mut().ok_or("Socket not available")?;
+        let mut line = String::new();
+        let mut byte_buf = [0u8; 1];
+        
+        // Read byte-by-byte until newline (non-blocking)
+        loop {
+            match socket.read(&mut byte_buf) {
+                Ok(0) => return Err("Connection closed".to_string()),
+                Ok(_) => {
+                    let ch = byte_buf[0] as char;
+                    if ch == '\n' {
+                        break;
+                    }
+                    line.push(ch);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data available, return immediately
+                    return Err("No data available".to_string());
+                }
+                Err(e) => return Err(format!("Failed to read response: {}", e)),
+            }
+        }
+        
+        serde_json::from_str(&line.trim())
+            .map_err(|e| format!("Failed to parse response '{}': {}", line.trim(), e))
+    }
+    
     /// Set read timeout for socket operations
     pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> Result<(), String> {
         let socket = self.socket.as_ref().ok_or("Socket not available")?;

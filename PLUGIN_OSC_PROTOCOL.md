@@ -131,6 +131,27 @@ All messages follow the resource-based path pattern established in the main OSC 
 - Plugin adapter handles conversion to native parameter range
 - Real-time safe (no allocations in audio thread)
 
+### Parameter Value Changes (Plugin → Host)
+
+**Rust → Godot (automatic notifications):**
+```
+/channel/{channel_id}/device/{device_position}/param/{param_id}/value [value]
+  value: float (normalized 0.0-1.0)
+```
+
+**Example:**
+```
+/channel/2/device/0/param/5/value [0.82]
+```
+
+**Description:** Sent automatically when a plugin changes its own parameter value (e.g., via GUI interaction, preset loading, or internal modulation). Allows the UI to stay synchronized with plugin state.
+
+**Notes:**
+- Sent from audio thread after each process block
+- Only sent when plugin reports parameter changes via CLAP output events
+- UI should update parameter controls to reflect new values
+- Real-time safe (no blocking operations)
+
 ---
 
 ## Plugin State Management

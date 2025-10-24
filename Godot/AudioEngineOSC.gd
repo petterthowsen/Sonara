@@ -145,11 +145,49 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		# Single value - wrap in array
 		args = [values]
 
-	# Route to registered listeners
+	# Route to registered listeners (exact match first, then wildcards)
+	var routed = false
+	
+	# Try exact match
 	if listeners.has(address):
 		for callback in listeners[address]:
 			callback.call(args)
+		routed = true
+	
+	# Try wildcard patterns
+	for pattern in listeners.keys():
+		if pattern.contains("*") and _matches_wildcard(address, pattern):
+			for callback in listeners[pattern]:
+				callback.call(args, address)  # Pass address so callback can parse it
+			routed = true
+	
+	# Debug logging for unrouted messages
+	if not routed:
+		if address.contains("/param/") and address.ends_with("/value"):
+			# Parameter change with no listener
+			if randf() < 0.05:  # Only log 5% to reduce spam
+				print("[AudioEngineOSC] ⚠️  No listener for: " + address)
+		elif randf() > 0.99:
+			# Other unhandled messages
+			print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)
 
-	# Debug logging for unhandled messages (at reduced frequency)
-	elif randf() > 0.99:
-		print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)
+
+## Check if an address matches a wildcard pattern
+## Pattern format: "/channel/2/device/1/param/*/value" matches "/channel/2/device/1/param/5/value"
+func _matches_wildcard(address: String, pattern: String) -> bool:
+	# Split both into segments
+	var addr_parts = address.split("/")
+	var pattern_parts = pattern.split("/")
+	
+	# Must have same number of segments
+	if addr_parts.size() != pattern_parts.size():
+		return false
+	
+	# Check each segment
+	for i in range(addr_parts.size()):
+		if pattern_parts[i] == "*":
+			continue  # Wildcard matches anything
+		if addr_parts[i] != pattern_parts[i]:
+			return false
+	
+	return true

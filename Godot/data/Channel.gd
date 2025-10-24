@@ -436,9 +436,13 @@ func get_device_count() -> int:
 # ============================================================================
 
 func _on_device_parameter_changed(param_id: int, value: float, position: int) -> void:
-	"""Handle parameter change from a device instance."""
-	if _is_connected:
-		AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [id, position, param_id], [value])
+	"""Handle parameter change from a device instance.
+	
+	NOTE: We do NOT send to engine here - DeviceInstance.set_parameter_normalized() 
+	already handles sending. This callback only relays the signal for UI notifications.
+	Sending here would create a feedback loop with engine echoes.
+	"""
+	# Relay signal for UI notifications (other UI components may listen to Channel's signal)
 	device_parameter_changed.emit(position, param_id, value)
 
 
@@ -623,4 +627,4 @@ func _on_device_param_info_received(args: Array, device_pos: int) -> void:
 			_pending_param_queries.erase(device_pos)
 			_unlisten_device_params(device_pos)
 			device_parameters_updated.emit(device_pos)
-			print("[Channel %d] All parameters loaded for device %d" % [id, device_pos])
+			print("[Channel %d] All parameters loaded for device %d (wildcard listener already active)" % [id, device_pos])

@@ -621,6 +621,7 @@ impl OscServer {
 
     /// Send a status update to the client
     fn send_status_update(socket: &UdpSocket, client_port: u16, status: EngineStatus) {
+        let is_param_change = status.is_param_change();
         let (addr, args) = match status {
             EngineStatus::PlayheadUpdate(ticks) => {
                 ("/status/playhead".to_string(), vec![OscType::Int(ticks as i32)])
@@ -686,6 +687,11 @@ impl OscServer {
                     OscType::String(state_base64),
                 ])
             }
+            EngineStatus::PluginParameterValueChanged { channel_id, device_position, param_id, value } => {
+                let addr = format!("/channel/{}/device/{}/param/{}/value", channel_id, device_position, param_id);
+                info!("📡 Sending OSC: {} [{}]", addr, value);
+                (addr, vec![OscType::Float(value)])
+            }
         };
 
         let msg = OscMessage {
@@ -697,7 +703,15 @@ impl OscServer {
         if let Ok(buf) = rosc::encoder::encode(&packet) {
             let client_addr = format!("127.0.0.1:{}", client_port);
             if let Ok(addr) = client_addr.parse::<SocketAddr>() {
-                let _ = socket.send_to(&buf, addr);
+                match socket.send_to(&buf, addr) {
+                    Ok(bytes) => {
+                        // Only log param changes for debugging
+                        if is_param_change {
+                            info!("📡 OSC sent: {} bytes to {}", bytes, addr);
+                        }
+                    }
+                    Err(e) => warn!("Failed to send OSC: {}", e),
+                }
             }
         }
     }

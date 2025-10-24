@@ -177,7 +177,7 @@ impl AudioEngine {
                 }
 
                 // Mix channels and output
-                mix_and_output(&mut state, data, channels);
+                mix_and_output(&mut state, data, channels, &status_tx);
 
                 // Update peaks
                 for channel in state.channels.values_mut() {

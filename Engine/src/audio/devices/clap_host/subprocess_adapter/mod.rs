@@ -388,6 +388,43 @@ impl SubprocessClapAdapter {
     pub fn is_gui_open(&self) -> bool {
         self.gui_open
     }
+    
+    /// Poll for unsolicited parameter change messages from subprocess (non-blocking)
+    /// Returns parameter changes as (param_id, normalized_value) pairs
+    pub fn poll_parameter_changes(&mut self) -> Option<Vec<(u32, f32)>> {
+        use crate::audio::ipc::protocol::PluginResponse;
+        
+        let process = self.process_manager.get_process(&self.process_key)?;
+        let mut process_guard = process.lock().ok()?;
+        
+        // Try non-blocking read with very short timeout (don't block audio thread!)
+        let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_micros(100)));
+        
+        let mut changes = Vec::new();
+        
+        // Keep reading while there are messages available (non-blocking)
+        loop {
+            match process_guard.try_recv_response() {
+                Ok(PluginResponse::ParameterValueChanged { param_id, value }) => {
+                    changes.push((param_id, value));
+                }
+                Ok(_) => {
+                    // Got some other response - ignore it (shouldn't happen for unsolicited messages)
+                    break;
+                }
+                Err(_) => {
+                    // No more messages available or error
+                    break;
+                }
+            }
+        }
+        
+        if !changes.is_empty() {
+            Some(changes)
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for SubprocessClapAdapter {
