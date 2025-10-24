@@ -4,213 +4,46 @@ alwaysApply: false
 ---
 # Plugin Architecture: Subprocess-Based CLAP Hosting
 
-## Core Design Principles
+## Overview
 
-Sonara uses **subprocess isolation** for CLAP plugins to achieve crash isolation, GUI support, and security. Each plugin runs in its own process with IPC (Inter-Process Communication).
+- Each CLAP plugin runs in its own subprocess for crash isolation, GUI compatibility, and sandboxing.
+- Engine-side code speaks to the subprocess through TCP IPC and shared-memory ring buffers; `SubprocessClapAdapter` is the AudioDevice entry point.
 
-**Key Benefits**: Crash isolation, independent GUI event loop, security sandboxing
-**Key Tradeoff**: 6-20ms added latency, memory overhead per plugin
-**Reference**: PLUGIN_ARCHITECTURE.md for comprehensive technical details
+## Key Components
 
-## Architecture Overview
+- `subprocess_adapter.rs`: Manages async lifecycle, shared memory handles, and engine-visible state.
+- `process_manager.rs`: Spawns the subprocess, creates `memfd` regions, and passes FDs over Unix sockets.
+- `shared_memory.rs` + `platform_shm.rs`: Lock-free audio/MIDI ring buffers backed by the shared `memfd`.
+- `plugin_host.rs`: Subprocess executable; runs CLAP plugin, host extensions, and IPC loop.
 
-```
-Engine Process                        Plugin Subprocess
-┌──────────────────┐                ┌──────────────────┐
-│ AudioDevice API  │                │ CLAP Plugin      │
-│ ↓                │                │ ↑                │
-│ Shared Memory    │◄──IPC Socket──►│ Event Loop       │
-│ Ring Buffers     │                │ GUI Callbacks    │
-└──────────────────┘                └──────────────────┘
-  Audio Thread                         Plugin Thread
-```
+## Audio Thread Contract
 
-## File Structure
+- Never block, allocate, or take contended locks on the audio thread; prefer `try_lock()` and skip work if unavailable.
+- Check ring-buffer capacity before read/write; treat return values defensively because IPC peers may lag.
 
-`Engine/src/audio/devices/clap_host/`:
-- **mod.rs**: Module exports, PluginError enum
-- **discovery.rs**: Plugin scanning, PluginDescriptor
-- **subprocess_adapter.rs**: AudioDevice impl, async loading
-- **process_manager.rs**: Subprocess spawning, TCP/Unix sockets
-- **shared_memory.rs**: Lock-free ring buffers for audio/MIDI
-- **ipc_protocol.rs**: Command/response types
-- **platform_shm.rs**: Linux memfd_create wrapper
-- **host_impl.rs**: CLAP host callbacks
+## Lifecycle
 
-`Engine/src/bin/plugin_host.rs`: Subprocess executable with event loop
+- Adapter loads plugins on a background thread and transitions Loading → Ready → Failed; expose audio only when Ready.
+- Shared memory FD is sent via `SCM_RIGHTS`; clear `FD_CLOEXEC` before fork so the child can mmap it.
+- Losing the TCP connection indicates a dead subprocess—mark Failed and drop the device.
 
-## Lock-Free Audio Path
+## IPC Commands
 
-**Critical Rule**: Audio thread NEVER blocks, allocates, or waits on locks.
-
-Implementation:
-- Use `try_lock()` instead of `lock()`
-- Skip frame if lock fails (audio continues)
-- All audio operations are non-blocking
-- Ring buffers use atomic positions (no synchronization)
-
-```rust
-// Correct: Non-blocking with skip-on-failure
-if let Ok(guard) = shared_memory.try_lock() {
-    buffer.read_from(&mut guard.input);
-}
-// If lock fails, skip frame - audio plays normally
-
-// Wrong: Blocking - causes audio glitches
-let guard = shared_memory.lock().unwrap();  // BLOCKS!
-```
-
-## Ring Buffer Operations
-
-Lock-free shared memory ring buffers for audio/MIDI communication:
-
-**Layout**:
-1. Input audio ring buffer (256KB max)
-2. Output audio ring buffer (256KB max)
-3. MIDI event queue (256 events)
-4. Control data (atomic read/write positions)
-
-**Operations** (all non-blocking):
-- `write(samples)`: Add audio, returns samples written
-- `read(samples)`: Remove audio, returns samples read
-- `available()`: How many samples ready to read
-- `free_space()`: How many samples can write
-
-**Key Pattern**:
-```rust
-// DO: Check space before writing
-if buffer.free_space() >= samples.len() {
-    buffer.write(samples);
-}
-
-// DO: Check available before reading
-let available = buffer.available();
-let to_read = samples.len().min(available);
-buffer.read(&mut output[..to_read]);
-
-// DON'T: Assume operations succeed
-buffer.write(samples).unwrap();  // Could panic
-```
-
-## Async Plugin Loading
-
-Subprocess spawn and initialization would block audio thread. Solution: spawn background thread for blocking work.
-
-**State Machine**:
-- `Loading`: Subprocess spawning, initialization in progress
-- `Ready`: Subprocess ready, audio can process
-- `Failed`: Initialization failed
-
-**Pattern**:
-```rust
-let loading_state = Arc::new(Mutex::new(LoadingState::Loading));
-let ls = Arc::clone(&loading_state);
-std::thread::spawn(move || {
-    // Blocking work: spawn subprocess, init CLAP, etc.
-    *ls.lock().unwrap() = LoadingState::Ready(shm);
-});
-// Return immediately - adapter ready, audio can start
-```
-
-Location: subprocess_adapter.rs lines 82-135
-
-## IPC Protocol (TCP Commands)
-
-Command types sent Engine → Subprocess:
-- `Initialize`: Plugin path, config, sample rate
-- `Activate`: Prepare plugin for audio processing
-- `StartProcessing`: Begin audio processing
-- `SetParameter`: Set normalized parameter (0.0-1.0)
-- `GetParameterInfo`: Query plugin parameter metadata
-- `GetParameter`: Read current parameter value
-- `OpenGui`/`CloseGui`: GUI control
-- `Reset`: Clear buffers, stop voices
-- `Shutdown`: Graceful termination
-
-**Fire-and-Forget Pattern**: SetParameter, OpenGui, Reset don't wait for responses (audio thread can't block).
-
-**Blocking Queries**: GetParameter, GetParameterInfo wait for response (OSC thread, not audio thread).
+- Engine issues Initialize, Activate, StartProcessing, Shutdown, Reset, OpenGui/CloseGui.
+- `SetParameter`/`OpenGui`/`Reset` must be fire-and-forget from the engine; the subprocess denormalizes parameter values and calls `params.flush()` immediately so edits apply even while audio is stopped.
+- `GetParameterInfo` and `GetParameter` expect responses; only non-audio threads should call them.
 
 ## Parameter Handling
 
-**Normalization**:
-- Engine ↔ Godot: 0.0-1.0 normalized range
-- Plugin native: Device-specific (e.g., dB, Hz)
-- Conversion: `(plugin_value - min) / (max - min) = normalized`
+- Engine ↔ Godot use normalized 0.0–1.0 values; convert with min/max stored in `ParamInfo`.
+- Cache parameter metadata in `Arc<Mutex<Vec<ParamInfo>>>` before signaling Ready so UI consumers receive a complete list.
+- Value queries grab the subprocess with `try_lock()` and a short timeout to avoid starving realtime work.
 
-**Parameter Info Caching**:
-- Queried once during plugin activation
-- Cached in `Arc<Mutex<Vec<ParamInfo>>>`
-- Used for UI parameter display
-- Race condition fixed via `DeviceReady` notification (October 2024)
+## GUI Support
 
-## File Descriptor Passing (FD Passing)
+- The subprocess implements CLAP HostGui + HostTimer; the event loop ticks timers (~1 ms) and runs `on_main_thread_callback()` to keep plugin windows responsive.
 
-Secure method to share memory between processes using SCM_RIGHTS:
+## Monitoring
 
-**Why**: No global namespace, automatic cleanup on exit, better than named shared memory
-
-**Implementation**:
-1. Engine creates shared memory via `memfd_create()`
-2. Engine creates Unix socket pair
-3. Engine sends shared memory FD via SCM_RIGHTS
-4. Subprocess receives on FD 3, mmaps it
-
-**Critical Rules**:
-- FD must be inherited (use pre_exec hook, not dup2)
-- Clear FD_CLOEXEC before fork
-- Subprocess must open TCP socket before listening
-- Timeout needed for FD handshake
-
-Location: process_manager.rs lines 40-87
-
-## GUI Callback Handling
-
-Plugin GUIs require two CLAP host extensions:
-
-**HostGui**: Handles resize requests, show/hide, window close
-**HostTimer**: Fires periodic callbacks for GUI animations (10-30ms intervals)
-
-**Event Loop Order**:
-1. Read TCP commands (non-blocking)
-2. Process audio chunks (variable 128-512 samples)
-3. Tick timers, fire GUI callbacks
-4. Call `on_main_thread_callback()`
-5. Sleep 1ms if idle
-
-Location: plugin_host.rs main event loop (~line 900+)
-
-## Common Patterns & Anti-patterns
-
-**Pattern: Variable Chunk Audio Processing**
-- Process "up to 8 chunks" per event loop iteration
-- Minimum: 128 samples when available
-- Rationale: Minimize latency, avoid buffer overflow
-
-**Pattern: Subprocess Health Monitoring**
-```bash
-# Check subprocess running
-ps aux | grep plugin_host
-
-# Verify FD 3 (shared memory)
-cat /proc/<PID>/fd/3
-
-# Check memory mapping
-cat /proc/<PID>/maps
-```
-
-**Anti-pattern: Blocking in audio thread**
-```rust
-// NEVER do this:
-let guard = state.lock().unwrap();  // Blocks = audio glitch
-process.send_and_wait(cmd)?;         // Waits = audio glitch
-std::thread::sleep(Duration::ms(1)); // Sleeps = audio glitch
-```
-
-## Related Documentation
-
-- **PLUGIN_ARCHITECTURE.md**: Complete technical reference, diagrams, latency budget
-- **DEVICE_ARCHITECTURE.md**: AudioDevice trait specification
-- **subprocess_adapter.rs:82-135**: Async loading implementation
-- **process_manager.rs:200+**: Subprocess spawn with FD passing
-- **plugin_host.rs**: Subprocess executable, event loop
+- Treat subprocess exit or IPC timeouts as fatal; clean up shared memory and transition to Failed.
+- When debugging, verify the subprocess binary is running and still holds the shared-memory FD (see `/proc/<pid>/fd/3`).
