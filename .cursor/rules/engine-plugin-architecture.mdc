@@ -1,31 +1,49 @@
 ---
-globs: Engine/src/audio/devices/clap_host/**/*.rs, Engine/src/bin/plugin_host.rs
 alwaysApply: false
+description: Applies when working on the subprocess-based plugin host or shared IPC infrastructure.
 ---
 # Plugin Architecture: Subprocess-Based CLAP Hosting
 
 ## Overview
 
-- Each CLAP plugin runs in its own subprocess for crash isolation, GUI compatibility, and sandboxing.
-- Engine-side code speaks to the subprocess through TCP IPC and shared-memory ring buffers; `SubprocessClapAdapter` is the AudioDevice entry point.
+- CLAP plugins live in dedicated subprocesses for crash isolation, GUI compatibility, and sandboxing.
+- Engine/device code talks to the subprocess through the reusable `audio/ipc` layer (command protocol + shared-memory ring buffers).
+- `SubprocessClapAdapter` integrates the subprocess host into the audio device graph without blocking the audio thread.
 
-## Key Components
+## Structure
 
-- `subprocess_adapter.rs`: Manages async lifecycle, shared memory handles, and engine-visible state.
-- `process_manager.rs`: Spawns the subprocess, creates `memfd` regions, and passes FDs over Unix sockets.
-- `shared_memory.rs` + `platform_shm.rs`: Lock-free audio/MIDI ring buffers backed by the shared `memfd`.
+- `audio/ipc/` (format agnostic):
+  - `process_manager.rs`: Owns subprocess lifecycle, command sockets, and shared-memory allocation.
+  - `shared_memory.rs`/`platform_shm.rs`: Lock-free interleaved audio + MIDI ring buffers backed by `memfd` (Unix) or OS-specific shared memory.
+  - `protocol.rs`: Defines `PluginCommand`/`PluginResponse`, serialization, and framing (currently length-prefixed TCP).
+- `clap_host/subprocess_adapter/`:
+  - `mod.rs`: Adapter entry point, implements `AudioDevice`, maintains cached state, and delegates.
+  - `lifecycle.rs`: Background loading thread, `LoadingState` transitions, and registration with `ProcessManager`.
+  - `parameter.rs`: Metadata cache, denormalization helpers, and synchronous `GetParameter` IPC helpers.
+  - `gui.rs`: CLAP GUI host extensions, window tokens, and timer bridging.
 - `plugin_host.rs`: Subprocess executable; runs CLAP plugin, host extensions, and IPC loop.
+
+## Lifecycle
+
+- Each adapter instance registers a unique `process_key` with `ProcessManager`, which reuses subprocesses per plugin instance and routes commands/responses.
+- `spawn_loading_thread` loads the plugin asynchronously: create shared memory, send Initialize/Activate, populate parameter cache, then publish `LoadingState::Ready`.
+- `LoadingState` stays behind a `Mutex`; audio thread access must use `try_lock()` and gracefully pass through audio while the plugin is still loading.
+- Background loading threads may emit engine `AudioCommand`s (e.g., for transport sync); keep cross-thread communication through provided channels only.
+
+## Audio + IPC Flow
+
+- Audio thread interaction:
+  - Read `LoadingState` with `try_lock()`. On `Loading`/`Failed`, copy inputs to outputs and exit early.
+  - On `Ready`, grab the shared `Arc<SharedMemory>` and write interleaved buffers via non-blocking ring-buffer APIs.
+  - Always check write/read counts; drop extra input frames and zero-fill outputs when the peer under-produces.
+- `ProcessManager` owns the TCP socket pair and shared-memory handles. It delivers commands/responses to adapters via synchronized channels (with short critical sections only).
+- Subprocess polls the shared-memory buffers inside its event loop; the engine can add signaling (eventfd) later without changing the adapter contract.
 
 ## Audio Thread Contract
 
 - Never block, allocate, or take contended locks on the audio thread; prefer `try_lock()` and skip work if unavailable.
-- Check ring-buffer capacity before read/write; treat return values defensively because IPC peers may lag.
-
-## Lifecycle
-
-- Adapter loads plugins on a background thread and transitions Loading → Ready → Failed; expose audio only when Ready.
-- Shared memory FD is sent via `SCM_RIGHTS`; clear `FD_CLOEXEC` before fork so the child can mmap it.
-- Losing the TCP connection indicates a dead subprocess—mark Failed and drop the device.
+- Treat IPC data defensively: stale responses or partial buffer availability must not panic or block.
+- Ring buffers encode stereo frames; keep writes/reads aligned to `sample_count * channels`.
 
 ## IPC Commands
 
@@ -35,15 +53,18 @@ alwaysApply: false
 
 ## Parameter Handling
 
-- Engine ↔ Godot use normalized 0.0–1.0 values; convert with min/max stored in `ParamInfo`.
-- Cache parameter metadata in `Arc<Mutex<Vec<ParamInfo>>>` before signaling Ready so UI consumers receive a complete list.
-- Value queries grab the subprocess with `try_lock()` and a short timeout to avoid starving realtime work.
+- Engine ↔ Godot use normalized 0.0–1.0 values; `parameter.rs` handles conversion with min/max stored in `ParamInfo`.
+- Cache parameter metadata in `Arc<Mutex<Vec<ParamInfo>>>` before signalling Ready so UI consumers receive a complete list.
+- `parameter.rs` issues blocking IPC from non-audio threads only; guard shared state with `Mutex`/`Option` locks that never appear on the realtime path.
 
 ## GUI Support
 
-- The subprocess implements CLAP HostGui + HostTimer; the event loop ticks timers (~1 ms) and runs `on_main_thread_callback()` to keep plugin windows responsive.
+- `gui.rs` translates Godot window requests into CLAP HostGui + HostTimer operations.
+- Subprocess event loop ticks timers (~1 ms) and runs `on_main_thread_callback()` to keep plugin windows responsive.
+- GUI state lives outside the audio thread; hold `gui_open` flags in the adapter to avoid redundant IPC.
 
-## Monitoring
+## Failure Handling
 
-- Treat subprocess exit or IPC timeouts as fatal; clean up shared memory and transition to Failed.
-- When debugging, verify the subprocess binary is running and still holds the shared-memory FD (see `/proc/<pid>/fd/3`).
+- Losing the TCP connection or subprocess exit marks `LoadingState::Failed` and forces pass-through audio; adapters should surface errors via logs and device UI.
+- Shared-memory handles stay owned by `ProcessManager`; dropping the last `Arc` cleans up OS resources automatically.
+- When debugging, confirm the subprocess binary is alive and still holds the shared-memory FD (e.g., `/proc/<pid>/fd/3`).

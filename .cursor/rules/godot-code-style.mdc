@@ -1,5 +1,5 @@
 ---
-description: when writing Godot code (gdscript)
+globs: Godot/**/*.gd
 alwaysApply: false
 ---
 # Godot Code Guidelines
