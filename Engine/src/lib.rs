@@ -5,4 +5,5 @@
 
 pub mod audio;
 pub mod osc;
+pub mod window_manager;
 

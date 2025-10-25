@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
 use crate::audio::io::load_wav_file;
+use crate::window_manager::WindowManager;
 
 /// OSC server that receives messages from Godot UI and sends status updates
 pub struct OscServer {
@@ -42,6 +43,7 @@ impl OscServer {
         command_tx: Sender<AudioCommand>,
         status_rx: Receiver<EngineStatus>,
         log_writer: Arc<Mutex<File>>,
+        window_manager: &mut WindowManager,
     ) -> Result<()> {
         let mut buf = [0u8; 2048];
         
@@ -71,13 +73,14 @@ impl OscServer {
                     
                     // Parse OSC packet
                     if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
-                        if let Err(e) = self.handle_packet(packet, &command_tx, &log_writer) {
+                        if let Err(e) = self.handle_packet(packet, &command_tx, &log_writer, window_manager) {
                             warn!("Error handling OSC packet: {}", e);
                         }
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data available, sleep briefly
+                    // No data available, process window events and sleep briefly
+                    window_manager.pump_events();
                     thread::sleep(Duration::from_millis(1));
                 }
                 Err(e) => {
@@ -88,12 +91,12 @@ impl OscServer {
     }
 
     /// Handle an incoming OSC packet
-    fn handle_packet(&self, packet: OscPacket, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>) -> Result<()> {
+    fn handle_packet(&self, packet: OscPacket, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>, window_manager: &mut WindowManager) -> Result<()> {
         match packet {
-            OscPacket::Message(msg) => self.handle_message(msg, command_tx, log_writer),
+            OscPacket::Message(msg) => self.handle_message(msg, command_tx, log_writer, window_manager),
             OscPacket::Bundle(bundle) => {
                 for packet in bundle.content {
-                    self.handle_packet(packet, command_tx, log_writer)?;
+                    self.handle_packet(packet, command_tx, log_writer, window_manager)?;
                 }
                 Ok(())
             }
@@ -151,7 +154,7 @@ impl OscServer {
     }
 
     /// Handle an individual OSC message
-    fn handle_message(&self, msg: OscMessage, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>) -> Result<()> {
+    fn handle_message(&self, msg: OscMessage, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>, window_manager: &mut WindowManager) -> Result<()> {
         let addr = msg.addr.as_str();
         let args = &msg.args;
 
@@ -525,9 +528,19 @@ impl OscServer {
                 if let (Ok(channel_id), Ok(device_position)) =
                     (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
                     info!("Open plugin GUI: channel={} device={}", channel_id, device_position);
+
+                    // Create window for embedded plugin GUI (blocks until created)
+                    let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                    let window_handle = window_manager.create_window(process_key.clone(), 800, 600);
+
+                    if window_handle.is_none() {
+                        warn!("⚠️  Failed to create window for plugin GUI, falling back to floating mode");
+                    }
+
                     command_tx.send(AudioCommand::OpenPluginGui {
                         channel_id,
                         device_position,
+                        window_handle,
                     })?;
                 }
             }
@@ -535,6 +548,11 @@ impl OscServer {
                 if let (Ok(channel_id), Ok(device_position)) =
                     (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
                     info!("Close plugin GUI: channel={} device={}", channel_id, device_position);
+
+                    // Destroy window
+                    let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                    window_manager.destroy_window(&process_key);
+
                     command_tx.send(AudioCommand::ClosePluginGui {
                         channel_id,
                         device_position,

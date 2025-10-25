@@ -359,11 +359,16 @@ impl AudioDevice for SubprocessClapAdapter {
 impl SubprocessClapAdapter {
     /// Open plugin GUI (subprocess will handle event loop)
     pub fn open_gui(&mut self) -> Result<(), String> {
+        self.open_gui_with_handle(None)
+    }
+
+    /// Open plugin GUI with provided window handle for embedded mode
+    pub fn open_gui_with_handle(&mut self, window_handle: Option<u64>) -> Result<(), String> {
         if self.gui_open {
             return Ok(());
         }
-        
-        gui::open_gui(&self.process_manager, &self.process_key, &self.device_name)?;
+
+        gui::open_gui(&self.process_manager, &self.process_key, &self.device_name, window_handle)?;
         self.gui_open = true;
         Ok(())
     }

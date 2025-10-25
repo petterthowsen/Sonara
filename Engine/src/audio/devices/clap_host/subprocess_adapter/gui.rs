@@ -11,21 +11,32 @@ pub fn open_gui(
     process_manager: &Arc<ProcessManager>,
     process_key: &str,
     device_name: &str,
+    window_handle: Option<u64>,
 ) -> Result<(), String> {
     let process = process_manager.get_process(process_key)
         .ok_or_else(|| "Plugin process not found".to_string())?;
-    
+
     let mut process = process.lock().unwrap();
-    process.send_command(PluginCommand::OpenGui)?;
-    
-    match process.recv_response()? {
+
+    // Set a generous timeout for GUI operations (plugins can take time to open windows)
+    // GUI initialization may involve X11/Wayland connection, resource loading, etc.
+    process.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+
+    process.send_command(PluginCommand::OpenGui { window_handle })?;
+
+    let result = match process.recv_response()? {
         PluginResponse::GuiOpened => {
             info!("✅ Plugin GUI opened: {}", device_name);
             Ok(())
         }
         PluginResponse::GuiError { error } => Err(error),
         _ => Err("Unexpected response".to_string()),
-    }
+    };
+
+    // Reset timeout to default (no timeout)
+    let _ = process.set_read_timeout(None);
+
+    result
 }
 
 /// Close plugin GUI window

@@ -65,7 +65,7 @@ pub enum AudioCommand {
     LoadPluginState { channel_id: ChannelId, device_position: usize, state_base64: String },
     
     // Plugin GUI
-    OpenPluginGui { channel_id: ChannelId, device_position: usize },
+    OpenPluginGui { channel_id: ChannelId, device_position: usize, window_handle: Option<u64> },
     ClosePluginGui { channel_id: ChannelId, device_position: usize },
 }
 
@@ -796,18 +796,19 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         }
         
         // Plugin GUI commands (must be called on main thread when instance is available)
-        AudioCommand::OpenPluginGui { channel_id, device_position } => {
+        AudioCommand::OpenPluginGui { channel_id, device_position, window_handle } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
                     // Try subprocess adapter first (preferred)
                     use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
                     if let Some(subprocess_device) = (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>() {
-                        match subprocess_device.open_gui() {
+                        match subprocess_device.open_gui_with_handle(window_handle) {
                             Ok(()) => {
-                                info!("Opened GUI for subprocess plugin at channel {} device {}", channel_id, device_position);
+                                info!("Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?})",
+                                    channel_id, device_position, window_handle);
                             }
                             Err(e) => {
-                                warn!("Failed to open subprocess plugin GUI at channel {} device {}: {}", 
+                                warn!("Failed to open subprocess plugin GUI at channel {} device {}: {}",
                                     channel_id, device_position, e);
                             }
                         }
@@ -817,7 +818,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                                 info!("Opened GUI for in-process plugin at channel {} device {}", channel_id, device_position);
                             }
                             Err(e) => {
-                                warn!("Failed to open in-process plugin GUI at channel {} device {}: {}", 
+                                warn!("Failed to open in-process plugin GUI at channel {} device {}: {}",
                                     channel_id, device_position, e);
                             }
                         }

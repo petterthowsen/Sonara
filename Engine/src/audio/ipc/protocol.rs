@@ -54,7 +54,10 @@ pub enum PluginCommand {
     GetParameterInfo,
     
     /// Open plugin GUI
-    OpenGui,
+    OpenGui {
+        /// X11 window handle for embedded mode (None = use floating mode)
+        window_handle: Option<u64>,
+    },
     
     /// Close plugin GUI
     CloseGui,

@@ -1,5 +1,6 @@
 mod audio;
 mod osc;
+mod window_manager;
 
 use anyhow::Result;
 use tracing::info;
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use audio::AudioEngine;
 use osc::OscServer;
+use window_manager::WindowManager;
 
 // Wrapper to make Arc<Mutex<File>> implement MakeWriter for tracing_subscriber
 struct RotatableWriter {
@@ -80,6 +82,10 @@ fn main() -> Result<()> {
     let command_tx = engine.command_sender();
     let status_rx = engine.status_receiver();
 
+    // Create window manager for plugin GUIs
+    let mut window_manager = WindowManager::new();
+    info!("Window manager initialized");
+
     // Create OSC server
     let osc_server = OscServer::new(7000)?;
     info!("OSC server ready on port 7000 (receives from Godot)");
@@ -88,7 +94,7 @@ fn main() -> Result<()> {
     info!("DAW Audio Engine is running. Press Ctrl+C to exit.");
 
     // Run OSC server (this blocks)
-    osc_server.run(command_tx, status_rx, log_handle)?;
+    osc_server.run(command_tx, status_rx, log_handle, &mut window_manager)?;
 
     Ok(())
 }

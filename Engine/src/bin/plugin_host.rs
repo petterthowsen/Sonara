@@ -29,9 +29,10 @@ use serde::{Deserialize, Serialize};
 
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
-use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, HostGui, HostGuiImpl, GuiSize};
+use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, HostGui, HostGuiImpl, GuiSize, Window};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer};
 use clack_extensions::params::{PluginParams, ParamInfoBuffer};
+use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 
 // Import shared memory types from the engine crate
 use engine::audio::ipc::{SharedMemory, SharedMemoryLayout};
@@ -53,7 +54,9 @@ enum PluginCommand {
     SetParameter { param_id: u32, value: f32 },
     GetParameter { param_id: u32 },
     GetParameterInfo,
-    OpenGui,
+    OpenGui {
+        window_handle: Option<u64>,
+    },
     CloseGui,
     HasGui,
     SaveState,
@@ -177,6 +180,7 @@ impl HostHandlers for SubprocessHost {
     
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
         // Register extensions required by many plugins (e.g., DPF-based plugins)
+        builder.register::<HostLog>();
         builder.register::<HostGui>();
         builder.register::<HostTimer>();
     }
@@ -238,15 +242,15 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
         // Clamp to reasonable range (10ms minimum for performance)
         let period_ms = period_ms.max(10);
         let interval = Duration::from_millis(period_ms as u64);
-        
+
         let mut next_id = self.shared.next_timer_id.lock().unwrap();
         *next_id += 1;
         let timer_id = clack_extensions::timer::TimerId(*next_id);
         drop(next_id);
-        
+
         let timer = Timer::new(timer_id, interval);
         self.shared.timers.lock().unwrap().insert(timer_id, timer);
-        
+
         info!("Registered timer {} with interval {}ms", timer_id.0, period_ms);
         Ok(timer_id)
     }
@@ -257,6 +261,21 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
             Ok(())
         } else {
             Err(HostError::Message("Unknown timer ID"))
+        }
+    }
+}
+
+impl HostLogImpl for SubprocessHostShared {
+    fn log(&self, severity: LogSeverity, message: &str) {
+        // Route plugin logs through tracing
+        match severity {
+            LogSeverity::Debug => tracing::debug!("[PLUGIN] {}", message),
+            LogSeverity::Info => tracing::info!("[PLUGIN] {}", message),
+            LogSeverity::Warning => tracing::warn!("[PLUGIN] {}", message),
+            LogSeverity::Error => tracing::error!("[PLUGIN] {}", message),
+            LogSeverity::Fatal => tracing::error!("[PLUGIN FATAL] {}", message),
+            LogSeverity::HostMisbehaving => tracing::error!("[HOST MISBEHAVING] {}", message),
+            LogSeverity::PluginMisbehaving => tracing::error!("[PLUGIN MISBEHAVING] {}", message),
         }
     }
 }
@@ -363,14 +382,14 @@ struct PluginState {
     max_buffer_size: usize,
     audio_processor: Option<PluginAudioProcessorEnum<SubprocessHost>>,
     shared_memory: Option<SharedMemory>,
-    
+
     // Audio processing buffers
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
-    
+
     // Event buffer for plugin output events (parameter changes, etc.)
     output_event_buffer: EventBuffer,
-    
+
     // Pending parameter changes (param_id, clap_id, denormalized_value)
     pending_param_changes: Vec<(u32, ClapId, f64)>,
 }
@@ -651,12 +670,12 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                     }
                 }
             }
-            
+
             // Process GUI callbacks if plugin is open
             // This is the critical call that keeps plugin GUIs responsive
             if state.gui_open {
                 state.instance.call_on_main_thread_callback();
-                
+
                 // Poll for parameter changes from the GUI even when not processing audio
                 // This is critical: GUI parameter changes are only visible through output events,
                 // but we only collect output events during process() or flush() calls
@@ -846,17 +865,17 @@ fn process_command(
             })
         }
         
-        PluginCommand::OpenGui => {
-            info!("📥 Received OpenGui command");
+        PluginCommand::OpenGui { window_handle } => {
+            info!("📥 Received OpenGui command (window_handle: {:?})", window_handle);
             if let Some(ref mut state) = plugin_state {
                 if state.gui_open {
                     info!("GUI already open, returning GuiOpened");
                     return Some(PluginResponse::GuiOpened);
                 }
-                
+
                 info!("Attempting to open GUI...");
-                match open_plugin_gui(&mut state.instance) {
-                    Ok(()) => {
+                match open_plugin_gui(&mut state.instance, window_handle) {
+                    Ok(_) => {
                         state.gui_open = true;
                         info!("✅ GUI opened successfully, returning GuiOpened response");
                         Some(PluginResponse::GuiOpened)
@@ -1303,37 +1322,129 @@ fn load_plugin(
 }
 
 /// Open plugin GUI
-fn open_plugin_gui(instance: &mut PluginInstance<SubprocessHost>) -> Result<(), String> {
+fn open_plugin_gui(
+    instance: &mut PluginInstance<SubprocessHost>,
+    window_handle: Option<u64>,
+) -> Result<(), String> {
     let mut handle = instance.plugin_handle();
-    
+
+    info!("🎨 Step 1: Getting GUI extension...");
     let Some(gui_ext): Option<PluginGui> = handle.get_extension() else {
+        error!("❌ Plugin does not support GUI extension");
         return Err("Plugin does not support GUI extension".to_string());
     };
-    
+    info!("✅ GUI extension available");
+
+    info!("🎨 Step 2: Getting default GUI API for platform...");
     let Some(api_type) = GuiApiType::default_for_current_platform() else {
+        error!("❌ No GUI API available for current platform");
         return Err("No GUI API available for current platform".to_string());
     };
-    
-    let config = GuiConfiguration {
-        api_type,
-        is_floating: true,
+    info!("✅ Using GUI API: {:?}", api_type);
+
+    // Determine mode based on whether we have a window handle
+    let config = if window_handle.is_some() {
+        info!("🎨 Step 3: Using embedded mode with provided window handle");
+        GuiConfiguration {
+            api_type,
+            is_floating: false,
+        }
+    } else {
+        info!("🎨 Step 3: Using floating mode (no window handle provided)");
+        GuiConfiguration {
+            api_type,
+            is_floating: true,
+        }
     };
-    
+
+    // Check if plugin supports the chosen mode
+    info!("🎨 Step 4: Checking if plugin supports {:?} (floating={})...", api_type, config.is_floating);
     if !gui_ext.is_api_supported(&mut handle, config) {
-        return Err(format!("Plugin does not support {:?} GUI API", api_type));
+        error!("❌ Plugin does not support {:?} in {} mode",
+            api_type, if config.is_floating { "floating" } else { "embedded" });
+        return Err(format!("Plugin does not support {:?} GUI API in {} mode",
+            api_type, if config.is_floating { "floating" } else { "embedded" }));
     }
-    
+    info!("✅ Plugin supports {:?} with floating={}", api_type, config.is_floating);
+
+    info!("🎨 Step 5: Creating GUI...");
     gui_ext.create(&mut handle, config)
-        .map_err(|e| format!("Failed to create GUI: {}", e))?;
-    
-    let title = std::ffi::CString::new("Plugin - Sonara").unwrap();
-    gui_ext.suggest_title(&mut handle, &title);
-    
-    gui_ext.show(&mut handle)
-        .map_err(|e| format!("Failed to show GUI: {}", e))?;
-    
-    info!("Plugin GUI opened");
-    Ok(())
+        .map_err(|e| {
+            error!("❌ Failed to create GUI: {}", e);
+            format!("Failed to create GUI: {}", e)
+        })?;
+    info!("✅ GUI created");
+
+    // For embedded mode, use the provided window handle
+    if !config.is_floating {
+        let handle_value = window_handle.ok_or("No window handle provided for embedded mode")?;
+        info!("🎨 Step 6: Setting parent window for embedded plugin (handle: 0x{:x})...", handle_value);
+
+        let parent_window = Window::from_x11_handle(handle_value);
+
+        unsafe {
+            gui_ext.set_parent(&mut handle, parent_window)
+                .map_err(|e| {
+                    error!("❌ Failed to set parent window: {}", e);
+                    format!("Failed to set parent window: {}", e)
+                })?;
+        }
+        info!("✅ Parent window set to 0x{:x}", handle_value);
+
+        info!("🎨 Step 7: Setting window title...");
+        let title = std::ffi::CString::new("Plugin - Sonara").unwrap();
+        gui_ext.suggest_title(&mut handle, &title);
+
+        info!("🎨 Step 8: Showing GUI window...");
+        gui_ext.show(&mut handle)
+            .map_err(|e| {
+                error!("❌ Failed to show GUI: {}", e);
+                format!("Failed to show GUI: {}", e)
+            })?;
+
+        info!("✅ Plugin GUI opened successfully (embedded mode)");
+        Ok(())
+    } else {
+        // Floating mode - plugin manages its own window
+        info!("🎨 Step 5: Setting transient window (for floating mode)...");
+        // For floating windows, set_transient tells the plugin which window to float above
+        // Pass X11 root window (0) since we don't have a parent window
+        let transient_window = Window::from_x11_handle(0);
+
+        unsafe {
+            match gui_ext.set_transient(&mut handle, transient_window) {
+                Ok(()) => info!("✅ Transient window set"),
+                Err(e) => {
+                    // Non-fatal - some plugins might not need this
+                    warn!("⚠️  Failed to set transient window (non-fatal): {}", e);
+                }
+            }
+        }
+
+        info!("🎨 Step 6: Setting window title...");
+        let title = std::ffi::CString::new("Plugin - Sonara").unwrap();
+        gui_ext.suggest_title(&mut handle, &title);
+
+        info!("🎨 Step 7: Showing GUI window...");
+        gui_ext.show(&mut handle)
+            .map_err(|e| {
+                error!("❌ Failed to show GUI: {}", e);
+                format!("Failed to show GUI: {}", e)
+            })?;
+
+        // For floating windows, immediately pump the main thread callback a few times
+        // Some plugins need this to actually create/show their window
+        info!("🎨 Step 8: Pumping main thread callbacks to ensure window appears...");
+        drop(handle); // Release the handle before calling callback
+        for _i in 0..10 {
+            instance.call_on_main_thread_callback();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        info!("✅ Pumped main thread callbacks");
+
+        info!("✅ Plugin GUI opened successfully (floating mode)");
+        Ok(())
+    }
 }
 
 /// Close plugin GUI
