@@ -10,6 +10,8 @@ signal channel_added(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
+signal engine_connected()
+signal engine_disconnected()
 
 # ============================================================================
 # PROPERTIES
@@ -48,6 +50,11 @@ var modified_date: int = 0
 
 # Connection state
 var _is_connected: bool = false
+
+
+## Check if project is connected to engine
+func is_connected_to_engine() -> bool:
+	return _is_connected
 
 # ============================================================================
 # LIFECYCLE
@@ -94,6 +101,7 @@ func connect_to_engine() -> void:
 		track.connect_to_engine()
 
 	print("[Project] Connected to audio engine")
+	engine_connected.emit()
 
 
 func disconnect_from_engine() -> void:
@@ -116,6 +124,7 @@ func disconnect_from_engine() -> void:
 
 	_is_connected = false
 	print("[Project] Disconnected from audio engine")
+	engine_disconnected.emit()
 
 
 func _sync_clip_to_engine(clip: Clip) -> void:

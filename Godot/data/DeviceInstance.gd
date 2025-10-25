@@ -261,7 +261,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	var loaded_device = AssetService.get_device(device_id)
 	
 	if not loaded_device:
-		push_error("[DeviceInstance] Failed to load device: " + device_id)
+		print("[DeviceInstance] Device not found (may need plugin scan): %s" % device_id)
 		return null
 	
 	var chan_id = data.get("channel_id", 0)

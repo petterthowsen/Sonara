@@ -36,6 +36,9 @@ signal track_focused(track : Track)
 
 @onready var main_menu: MainMenu = $VBox/MainBar/MainMenu
 
+# engine panel shows connect/disconnect button and engine status
+@onready var engine_panel: EnginePanel = $VBox/MainBar/EnginePanel
+
 @onready var file_dialog : FileDialog = $FileDialog
 
 @onready var play_button: Button = $VBox/MainBar/Middle/TransportControls/Buttons/PlayButton

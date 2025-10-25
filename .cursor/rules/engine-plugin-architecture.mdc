@@ -21,7 +21,16 @@ description: Applies when working on the subprocess-based plugin host or shared 
   - `lifecycle.rs`: Background loading thread, `LoadingState` transitions, and registration with `ProcessManager`.
   - `parameter.rs`: Metadata cache, denormalization helpers, and synchronous `GetParameter` IPC helpers.
   - `gui.rs`: CLAP GUI host extensions, window tokens, and timer bridging.
-- `plugin_host.rs`: Subprocess executable; runs CLAP plugin, host extensions, and IPC loop.
+- `plugin_host/` (subprocess crate):
+  - `mod.rs`: Module wiring and re-exports for subprocess host.
+  - `event_loop.rs`: Main loop that interleaves command IO, audio processing, timers, and GUI callbacks from the plugin.
+  - `commands.rs`: JSON command dispatcher; owns initialization/activation, shared memory setup, parameter/GUI commands.
+  - `operations.rs`: Higher-level helpers for loading CLAP bundles, creating GUI instances, and wiring parent windows.
+  - `host.rs`: CLAP host implementation (`SubprocessHost*`) including timer management and GUI resize notifications.
+  - `state.rs`: Runtime state container (`PluginState`) plus helpers for audio processing and output event handling.
+  - `ipc_utils.rs`: Unix FD receive helpers used during shared-memory handshake.
+  - `protocol.rs`: Command/response enum definitions shared with the engine.
+- `bin/plugin_host.rs`: Thin entry point that initializes tracing, parses arguments, connects sockets, and calls `run_plugin_host()`.
 
 ## Lifecycle
 

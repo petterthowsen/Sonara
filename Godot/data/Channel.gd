@@ -516,6 +516,10 @@ static func from_json(data: Dictionary) -> Channel:
 				
 				# Connect to device parameter changes (same as add_device does)
 				device_instance.parameter_changed.connect(channel._on_device_parameter_changed.bindv([pos]))
+			else:
+				# Device not found - skip it but log
+				var device_id = device_data.get("device_id", "unknown")
+				print("[Channel] Skipping missing device: %s (run Edit > Scan Plugins)" % device_id)
 
 	return channel
 

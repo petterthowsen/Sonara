@@ -1,0 +1,79 @@
+# Shows Engine Status, Performance Metrics
+# and a connect/disconnect button
+class_name EnginePanel extends PanelContainer
+
+@onready var performance_text: RichTextLabel = $HBox/PerformanceText
+@onready var status_label: Label = $HBox/StatusLabel
+@onready var connect_button: Button = $HBox/ConnectButton
+
+
+func _ready() -> void:
+	# Connect to button signal
+	connect_button.pressed.connect(_on_connect_button_pressed)
+	
+	# Connect to editor signals
+	Sonara.editor.project_opened.connect(_on_project_opened)
+	Sonara.editor.project_closed.connect(_on_project_closed)
+	
+	# Initialize UI state (no project active)
+	_update_ui_no_project()
+
+
+func _on_project_opened(project: Project) -> void:
+	"""Handle project opened event."""
+	# Connect to project engine connection signals
+	project.engine_connected.connect(_on_engine_connected)
+	project.engine_disconnected.connect(_on_engine_disconnected)
+	
+	# Update UI based on current connection state
+	_update_ui(project.is_connected_to_engine())
+
+
+func _on_project_closed() -> void:
+	"""Handle project closed event."""
+	_update_ui_no_project()
+
+
+func _on_engine_connected() -> void:
+	"""Handle engine connection established."""
+	_update_ui(true)
+
+
+func _on_engine_disconnected() -> void:
+	"""Handle engine connection closed."""
+	_update_ui(false)
+
+
+func _on_connect_button_pressed() -> void:
+	"""Handle connect/disconnect button press."""
+	if not Sonara.editor.project:
+		return
+	
+	var project = Sonara.editor.project
+	
+	if project.is_connected_to_engine():
+		# Disconnect
+		project.disconnect_from_engine()
+	else:
+		# Connect
+		project.connect_to_engine()
+
+
+func _update_ui_no_project() -> void:
+	"""Update UI when no project is active."""
+	status_label.text = "No Project"
+	connect_button.text = "Connect"
+	connect_button.disabled = true
+	performance_text.text = ""
+
+
+func _update_ui(connected: bool) -> void:
+	"""Update UI based on connection state."""
+	if connected:
+		status_label.text = "Connected"
+		connect_button.text = "Disconnect"
+		connect_button.disabled = false
+	else:
+		status_label.text = "Disconnected"
+		connect_button.text = "Connect"
+		connect_button.disabled = false

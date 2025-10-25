@@ -1,13 +1,29 @@
-[gd_scene load_steps=18 format=3 uid="uid://d17wdwntyd1ni"]
+[gd_scene load_steps=21 format=3 uid="uid://d17wdwntyd1ni"]
 
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="1_i0blf"]
 [ext_resource type="PackedScene" uid="uid://dwx58rtumvnkj" path="res://arranger/Arranger.tscn" id="2_i1ssp"]
 [ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="2_x2y5v"]
+[ext_resource type="Script" uid="uid://cyscqn1lg7s3g" path="res://editor/EnginePanel.gd" id="3_4x3xt"]
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="3_i1ssp"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="4_52o2w"]
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://device_lane/DeviceLane.gd" id="5_85wto"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="5_jp84s"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="6_x2y5v"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4x3xt"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="LabelSettings" id="LabelSettings_4x3xt"]
+font_size = 14
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_5kcm4"]
 content_margin_left = 4.0
@@ -126,6 +142,7 @@ theme_override_constants/separation = 4
 
 [node name="MainBar" type="HBoxContainer" parent="VBox"]
 layout_mode = 2
+theme_override_constants/separation = 32
 
 [node name="MainMenu" type="MenuBar" parent="VBox/MainBar"]
 layout_mode = 2
@@ -136,6 +153,41 @@ oversampling_override = 1.0
 
 [node name="Edit" type="PopupMenu" parent="VBox/MainBar/MainMenu"]
 oversampling_override = 1.0
+
+[node name="EnginePanel" type="PanelContainer" parent="VBox/MainBar"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_4x3xt")
+script = ExtResource("3_4x3xt")
+
+[node name="HBox" type="HBoxContainer" parent="VBox/MainBar/EnginePanel"]
+layout_mode = 2
+
+[node name="PerformanceText" type="RichTextLabel" parent="VBox/MainBar/EnginePanel/HBox"]
+visible = false
+custom_minimum_size = Vector2(97.51, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/normal_font_size = 12
+bbcode_enabled = true
+text = "CPU: 50%
+RAM: 3GB"
+fit_content = true
+scroll_active = false
+autowrap_mode = 0
+vertical_alignment = 1
+
+[node name="StatusLabel" type="Label" parent="VBox/MainBar/EnginePanel/HBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Connecting..."
+label_settings = SubResource("LabelSettings_4x3xt")
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="ConnectButton" type="Button" parent="VBox/MainBar/EnginePanel/HBox"]
+layout_mode = 2
+toggle_mode = true
+text = "Connect"
 
 [node name="Middle" type="HBoxContainer" parent="VBox/MainBar"]
 layout_mode = 2

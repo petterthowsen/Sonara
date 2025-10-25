@@ -5,7 +5,7 @@ class_name MainMenu extends MenuBar
 enum  MENU { File, Edit }
 
 enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
-enum EDIT { Undo, Redo, Sep1, Preferences }
+enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Sep2, Preferences }
 
 enum DialogMode { OPEN, SAVE, SAVE_AS }
 
@@ -32,6 +32,8 @@ func _ready() -> void:
 	edit.add_item("Undo", EDIT.Undo)
 	edit.add_item("Redo", EDIT.Redo)
 	edit.add_separator("", EDIT.Sep1)
+	edit.add_item("Scan Plugins", EDIT.Scan_Plugins)
+	edit.add_separator("", EDIT.Sep2)
 	edit.add_item("Preferences", EDIT.Preferences)
 	
 	# disable project-dependent items initially (no project open yet)
@@ -78,6 +80,8 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_undo()
 			EDIT.Redo:
 				_on_redo()
+			EDIT.Scan_Plugins:
+				_on_scan_plugins()
 			EDIT.Preferences:
 				_on_preferences()
 
@@ -193,6 +197,12 @@ func _on_redo() -> void:
 	"""Redo last undone action."""
 	# TODO: Implement redo system
 	print("[MainMenu] Redo not yet implemented")
+
+
+func _on_scan_plugins() -> void:
+	"""Trigger plugin scan via AssetService."""
+	print("[MainMenu] Scanning plugins...")
+	AssetService.scan_plugins()
 
 
 func _on_preferences() -> void:

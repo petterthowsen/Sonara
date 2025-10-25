@@ -192,6 +192,16 @@ func is_ready() -> bool:
 	return _is_ready
 
 
+## Manually trigger plugin scan
+func scan_plugins() -> void:
+	print("[AssetService] Manually triggering plugin scan...")
+	for provider in _providers:
+		if provider is DeviceAssetProvider:
+			(provider as DeviceAssetProvider).trigger_plugin_scan()
+			return
+	push_warning("[AssetService] No DeviceAssetProvider found")
+
+
 # ============================================================================
 # METADATA MANAGEMENT
 # ============================================================================
