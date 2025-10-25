@@ -5,14 +5,16 @@
 //! - macOS: shm_open() + mmap() (TODO)
 //! - Windows: CreateFileMapping() (TODO)
 
-use std::os::unix::io::{AsRawFd, RawFd, BorrowedFd};
+use std::os::unix::io::{AsRawFd, RawFd, BorrowedFd, OwnedFd, FromRawFd};
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 use nix::unistd::ftruncate;
 use tracing::{error, info};
 
 /// Platform-specific shared memory region
 pub struct PlatformSharedMemory {
-    fd: RawFd,
+    // Use OwnedFd - the SINGLE owner of this file descriptor
+    // Drop will close it automatically and safely
+    fd: OwnedFd,
     ptr: *mut u8,
     size: usize,
 }
@@ -30,31 +32,34 @@ impl PlatformSharedMemory {
         let name_cstr = CString::new(name)
             .map_err(|e| format!("Invalid name: {}", e))?;
         
-        let fd = unsafe {
+        let raw_fd = unsafe {
             libc::memfd_create(
                 name_cstr.as_ptr(),
                 libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
             )
         };
         
-        if fd < 0 {
+        if raw_fd < 0 {
             return Err(format!("memfd_create failed: {}", 
                 std::io::Error::last_os_error()));
         }
         
-        // Set size
-        let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
-        ftruncate(&borrowed_fd, size as i64)
+        // Wrap in OwnedFd - this is now the SINGLE owner
+        let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        info!("🔍 Created OwnedFd for FD {} from memfd_create", fd.as_raw_fd());
+        
+        // Set size (borrow the fd for syscall)
+        ftruncate(&fd, size as i64)
             .map_err(|e| format!("ftruncate failed: {}", e))?;
         
-        // Map memory
+        // Map memory (borrow the fd for syscall)
         let ptr_nonnull = unsafe {
             mmap(
                 None,
                 std::num::NonZeroUsize::new(size).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
-                &borrowed_fd,
+                &fd,
                 0,
             ).map_err(|e| format!("mmap failed: {}", e))?
         };
@@ -70,35 +75,43 @@ impl PlatformSharedMemory {
     }
     
     /// Map existing shared memory from file descriptor
+    /// Takes ownership of the FD (caller must ensure FD is valid and won't be closed elsewhere)
     #[cfg(target_os = "linux")]
     pub fn from_fd(fd: RawFd, size: usize) -> Result<Self, String> {
-        info!("Mapping shared memory from fd={} ({} bytes)", fd, size);
+        info!("🗺️  Mapping shared memory from fd={} ({} bytes)", fd, size);
         
-        let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+        // Wrap in OwnedFd - this is now the SINGLE owner
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let fd_after_wrap = owned_fd.as_raw_fd();
+        
+        info!("   📍 Input FD={}, OwnedFd.as_raw_fd()={}", fd, fd_after_wrap);
+        info!("   Calling mmap on FD {}", fd_after_wrap);
         let ptr_nonnull = unsafe {
             mmap(
                 None,
                 std::num::NonZeroUsize::new(size).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
-                &borrowed_fd,
+                &owned_fd,
                 0,
             ).map_err(|e| format!("mmap failed: {}", e))?
         };
         
         let ptr = ptr_nonnull.as_ptr() as *mut u8;
-        info!("Shared memory mapped at {:?}", ptr);
+        let fd_after_mmap = owned_fd.as_raw_fd();
+        info!("✅ Shared memory mapped at {:?}, OwnedFd.as_raw_fd()={}", ptr, fd_after_mmap);
         
         Ok(Self {
-            fd,
+            fd: owned_fd,
             ptr,
             size,
         })
     }
     
-    /// Get raw file descriptor (for passing to subprocess)
+    /// Get raw file descriptor (for passing to subprocess via SCM_RIGHTS)
+    /// This borrows the FD - we remain the owner
     pub fn as_raw_fd(&self) -> RawFd {
-        self.fd
+        self.fd.as_raw_fd()
     }
     
     /// Get raw memory pointer
@@ -129,9 +142,10 @@ impl PlatformSharedMemory {
 
 impl Drop for PlatformSharedMemory {
     fn drop(&mut self) {
-        info!("Unmapping shared memory (fd={})", self.fd);
+        let fd_num = self.fd.as_raw_fd();
+        info!("🔍 Dropping PlatformSharedMemory with FD {}", fd_num);
         
-        // Unmap memory
+        // Unmap memory first
         if let Err(e) = unsafe {
             let ptr = std::ptr::NonNull::new_unchecked(self.ptr as *mut std::ffi::c_void);
             munmap(ptr, self.size)
@@ -139,10 +153,10 @@ impl Drop for PlatformSharedMemory {
             error!("Failed to munmap: {}", e);
         }
         
-        // Close file descriptor (memfd_create FDs are automatically cleaned up)
-        unsafe {
-            libc::close(self.fd);
-        }
+        // OwnedFd will automatically close the FD when it drops
+        // No manual close needed - this is the correct pattern!
+        info!("✅ About to drop OwnedFd for FD {} (this will close it)", fd_num);
+        // Drop happens here when function ends
     }
 }
 

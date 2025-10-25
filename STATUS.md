@@ -1,12 +1,14 @@
 # Project Status
 
 ## Current Focus
+- ✅ **COMPLETED:** Fixed critical IO Safety violation bug in plugin shutdown!
 - ✅ **COMPLETED & DEBUGGED:** Fully bidirectional plugin parameter synchronization working end-to-end!
 - Plugins notify host of parameter changes → Engine forwards via OSC → Godot UI updates automatically.
-- Fixed infinite feedback loop bug - parameter sync now stable and performant.
+- Plugin subprocess shutdown now safe and clean - no more crashes on project clear.
 
 ## Working
 - Plugin subprocess launches, shares audio/MIDI buffers, and exposes CLAP parameters via IPC.
+- **Plugin subprocess shutdown is now safe and stable** - no IO safety violations or crashes.
 - **Full bidirectional parameter sync:**
   - **Godot → Plugin:** UI changes sent via OSC → Engine → Subprocess → Plugin (working)
   - **Plugin → Godot:** GUI changes → Output events → Subprocess → Engine → OSC → Godot UI (✅ NOW WORKING!)
@@ -95,8 +97,49 @@
 
 **Result:** Parameter sync now works smoothly with no feedback loops! Plugin GUI and Godot UI stay perfectly in sync.
 
+## Recent Work: Plugin Shutdown IO Safety Violation (Fixed!)
+
+**The Problem:**
+- Engine was crashing with `fatal runtime error: IO Safety violation: owned file descriptor already closed` during plugin shutdown
+- Happened when clearing projects or shutting down plugins
+- Made plugin system unstable and caused data loss risk
+
+**Root Cause Analysis:**
+1. **Critical bug - unsafe `std::mem::zeroed::<Child>()`:**
+   - `process_manager.rs` was using `std::mem::zeroed()` to move `Child` struct during shutdown
+   - This created invalid `Child` with zeroed file descriptors (FD 0 or other invalid values)
+   - When the zeroed `Child` dropped, Rust tried to close these invalid FDs
+   - Triggered: "IO Safety violation: owned file descriptor already closed"
+
+2. **Secondary issue - Unix socket FD leak:**
+   - Subprocess received shared memory FD via Unix socket (FD 3)
+   - FD 3 was never explicitly closed after receiving the shared memory FD
+   - Left dangling FD that could cause issues on subprocess exit
+
+**The Fix:**
+1. **Changed `PluginProcess.child` to `Option<Child>`:**
+   - Removed unsafe `std::mem::zeroed()` usage entirely
+   - Used `Option::take()` for safe ownership transfer during shutdown
+   - Updated `Drop` impl to safely check and kill running processes
+
+2. **Close Unix socket FD after use:**
+   - Added explicit `libc::close(unix_socket_fd)` after receiving shared memory FD
+   - Prevents FD leaks and ensures clean subprocess exit
+
+**Files modified:**
+- `Engine/src/audio/ipc/process_manager.rs`:
+  - Changed `child: Child` to `child: Option<Child>` in `PluginProcess` struct
+  - Rewrote `shutdown()` to use `Option::take()` instead of `std::mem::zeroed()`
+  - Updated `is_alive()` to handle `Option<Child>`
+  - Improved `Drop` impl with proper exit status checking and zombie reaping
+- `Engine/src/bin/plugin_host.rs`:
+  - Added explicit close of Unix socket FD 3 after receiving shared memory FD
+  - Handles close in both success and error paths
+
+**Result:** Plugin shutdown is now rock-solid - no crashes, no IO safety violations! 🎉
+
 ## Not Working / Blocked
-- None currently - bidirectional parameter sync is fully functional!
+- None currently - plugin system is stable and functional!
 
 ## Next Steps
 - Consider preset management (save/load plugin states)

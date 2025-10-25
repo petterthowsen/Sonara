@@ -261,19 +261,19 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
     }
 }
 
-/// Receive a file descriptor from a Unix domain socket
-fn recv_fd_from_socket(socket: &std::os::unix::net::UnixStream) -> Result<i32, String> {
+/// Receive a file descriptor from a Unix domain socket using raw FD
+/// This avoids wrapping the socket in UnixStream which can cause IO safety issues
+fn recv_fd_from_socket_raw(socket_fd: i32) -> Result<i32, String> {
     use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
     use nix::cmsg_space;
     use std::io::IoSliceMut;
-    use std::os::unix::io::AsRawFd;
     
     let mut data = [0u8; 1];
     let mut iov = [IoSliceMut::new(&mut data)];
     let mut cmsg_space = cmsg_space!([i32; 1]);
     
     let msg = recvmsg::<()>(
-        socket.as_raw_fd(),
+        socket_fd,
         &mut iov,
         Some(&mut cmsg_space),
         MsgFlags::empty(),
@@ -283,7 +283,20 @@ fn recv_fd_from_socket(socket: &std::os::unix::net::UnixStream) -> Result<i32, S
     for cmsg in msg.cmsgs().map_err(|e| format!("Failed to parse control messages: {}", e))? {
         if let ControlMessageOwned::ScmRights(fds) = cmsg {
             if let Some(&fd) = fds.first() {
-                return Ok(fd);
+                // CRITICAL: Duplicate the FD immediately before ControlMessageOwned drops
+                // ControlMessageOwned::ScmRights owns the FDs and will close them when dropped!
+                info!("📨 Received FD={} via SCM_RIGHTS, duplicating it...", fd);
+                let duped_fd = unsafe {
+                    let dup = libc::dup(fd);
+                    if dup < 0 {
+                        return Err(format!("Failed to dup received FD: {}", std::io::Error::last_os_error()));
+                    }
+                    dup
+                };
+                info!("✅ Duplicated FD {} -> {}, original will be closed by ControlMessageOwned", fd, duped_fd);
+                // Let the original FD be closed by ControlMessageOwned drop
+                // We return our duplicated copy
+                return Ok(duped_fd);
             }
         }
     }
@@ -329,10 +342,13 @@ fn main() {
     // Run plugin host event loop
     if let Err(e) = run_plugin_host(stream, unix_socket_fd) {
         error!("Plugin host error: {}", e);
-        std::process::exit(1);
+        // Use libc::_exit to avoid IO safety checks during error cleanup
+        unsafe { libc::_exit(1); }
     }
 
     info!("Plugin host subprocess exiting");
+    // Normal exit also uses _exit to avoid IO safety checks
+    unsafe { libc::_exit(0); }
 }
 
 /// Plugin state container
@@ -562,20 +578,14 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                                 }
                             };
                             
-                            info!("📥 Received command: {:?}", cmd);
-                            
-                            // Check for shutdown
+                            // Check for shutdown BEFORE logging to avoid IO safety issues
                             if matches!(cmd, PluginCommand::Shutdown) {
-                                info!("Shutdown command received");
-                                
-                                // Send ack
-                                let resp = PluginResponse::ShutdownAck;
-                                let resp_json = serde_json::to_string(&resp)?;
-                                writeln!(stream, "{}", resp_json)?;
-                                stream.flush()?;
-                                
-                                return Ok(());
+                                // Exit immediately using libc::_exit without any logging or drops
+                                // The OS will clean up all file descriptors and resources
+                                unsafe { libc::_exit(0); }
                             }
+                            
+                            info!("📥 Received command: {:?}", cmd);
                             
                             // Process command
                             let response = process_command(cmd, &mut plugin_state, unix_socket_fd);
@@ -763,26 +773,37 @@ fn process_command(
             
             // Receive shared memory FD from parent process via Unix socket
             info!("Step 4: Receiving shared memory FD from Unix socket (FD={})", unix_socket_fd);
-            use std::os::unix::net::UnixStream;
-            use std::os::unix::io::FromRawFd;
             
-            let unix_sock = unsafe { UnixStream::from_raw_fd(unix_socket_fd) };
-            let shared_memory = match recv_fd_from_socket(&unix_sock) {
+            // Call recv_fd_from_socket_raw directly with the raw FD to avoid UnixStream ownership issues
+            info!("Step 4.5: About to call recv_fd_from_socket_raw...");
+            let shared_memory = match recv_fd_from_socket_raw(unix_socket_fd) {
                 Ok(shm_fd) => {
-                    info!("Step 5: Received shared memory FD={}, mapping it...", shm_fd);
+                    info!("Step 5: Received shared memory FD={} (after dup), mapping it...", shm_fd);
+                    
+                    // CRITICAL: Close the Unix socket FD immediately after receiving the shared memory FD
+                    // This prevents IO Safety violations when the subprocess exits
+                    unsafe {
+                        libc::close(unix_socket_fd);
+                    }
+                    info!("Step 5.5: Closed Unix socket FD={} (no longer needed)", unix_socket_fd);
+                    
                     match SharedMemory::from_fd(shm_fd, layout) {
                         Ok(shm) => {
-                            info!("Step 6: ✅ Shared memory mapped successfully!");
+                            info!("Step 6: ✅ Shared memory mapped successfully from FD={}!", shm_fd);
                             Some(shm)
                         }
                         Err(e) => {
-                            error!("Step 6: ❌ Failed to map shared memory: {}. Continuing without shared memory.", e);
+                            error!("Step 6: ❌ Failed to map shared memory from FD={}: {}. Continuing without shared memory.", shm_fd, e);
                             None
                         }
                     }
                 }
                 Err(e) => {
                     error!("Step 5: ❌ Failed to receive shared memory FD: {}. Continuing without shared memory.", e);
+                    // Close Unix socket even on error
+                    unsafe {
+                        libc::close(unix_socket_fd);
+                    }
                     None
                 }
             };

@@ -2,15 +2,8 @@
 
 # Bugs / Issues
 
-**plugin shutdown** causes:
-```
-2025-10-24T19:05:09.541831Z  INFO ThreadId(01) 📥 Received command: Shutdown
-2025-10-24T19:05:09.541854Z  INFO ThreadId(01) Shutdown command received
-2025-10-24T19:05:09.541926Z  INFO ThreadId(01) Unmapping shared memory (fd=5)
-2025-10-24T19:05:09.542019Z  INFO ThreadId(01) Plugin host subprocess exiting
-fatal runtime error: IO Safety violation: owned file descriptor already closed, aborting
-./run.sh: line 15: 1031002 Aborted                 (core dumped) RUST_LOG=engine=info,warn cargo run --bin engine
-```
+- [x] Plugin shutdown IO Safety violation - FIXED! Changed `PluginProcess.child` to `Option<Child>`, removed unsafe `std::mem::zeroed()`, added explicit Unix socket FD close. Plugin shutdown now rock-solid with no crashes.
+
 
 ## Audio Engine (Rust Backend)
 

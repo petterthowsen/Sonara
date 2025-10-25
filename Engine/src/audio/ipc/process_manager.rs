@@ -23,8 +23,8 @@ pub struct PluginProcess {
     /// Process ID
     pub pid: u32,
     
-    /// Child process handle
-    child: Child,
+    /// Child process handle (Option to safely handle ownership during shutdown)
+    child: Option<Child>,
     
     /// Control socket (wrapped in Option for interior mutability pattern)
     socket: Option<TcpStream>,
@@ -184,10 +184,14 @@ impl PluginProcess {
     
     /// Check if process is still alive
     pub fn is_alive(&mut self) -> bool {
-        match self.child.try_wait() {
-            Ok(Some(_)) => false, // Process exited
-            Ok(None) => true,     // Still running
-            Err(_) => false,      // Error checking status
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(_)) => false, // Process exited
+                Ok(None) => true,     // Still running
+                Err(_) => false,      // Error checking status
+            }
+        } else {
+            false // No child process
         }
     }
     
@@ -205,29 +209,29 @@ impl PluginProcess {
             warn!("Failed to send shutdown command: {}", e);
         }
         
-        // Wait for process to exit (with timeout)
-        let wait_result = thread::spawn({
-            let mut child = std::mem::replace(&mut self.child, unsafe {
-                // This is a hack to avoid moving self.child
-                // In production, we'd use Option<Child> instead
-                std::mem::zeroed()
-            });
-            move || child.wait()
-        }).join();
+        // Half-close write side to prevent EPIPE, then drop socket
+        if let Some(socket) = self.socket.take() {
+            use std::net::Shutdown;
+            let _ = socket.shutdown(Shutdown::Write); // Ignore errors - already closing
+            drop(socket);
+            info!("Closed control socket");
+        }
         
-        match wait_result {
-            Ok(Ok(status)) => {
-                info!("Plugin subprocess exited: {}", status);
-                Ok(())
+        // Wait for process to exit - SAFE VERSION using Option<Child>
+        if let Some(mut child) = self.child.take() {
+            match child.wait() {
+                Ok(status) => {
+                    info!("Plugin subprocess exited: {}", status);
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("Error waiting for subprocess: {}", e);
+                    Err(format!("Error waiting for subprocess: {}", e))
+                }
             }
-            Ok(Err(e)) => {
-                error!("Error waiting for subprocess: {}", e);
-                Err(format!("Error waiting for subprocess: {}", e))
-            }
-            Err(_) => {
-                error!("Thread panic while waiting for subprocess");
-                Err("Thread panic".to_string())
-            }
+        } else {
+            info!("Plugin subprocess already shut down");
+            Ok(())
         }
     }
 }
@@ -235,9 +239,23 @@ impl PluginProcess {
 impl Drop for PluginProcess {
     fn drop(&mut self) {
         // Force kill if still running
-        if self.is_alive() {
-            warn!("Force killing plugin subprocess: {}", self.plugin_id);
-            let _ = self.child.kill();
+        if let Some(mut child) = self.child.take() {
+            // Check if still running using try_wait (non-blocking)
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Already exited
+                    info!("Plugin subprocess already exited in Drop: {} (status: {})", self.plugin_id, status);
+                }
+                Ok(None) => {
+                    // Still running, force kill
+                    warn!("Force killing plugin subprocess in Drop: {}", self.plugin_id);
+                    let _ = child.kill();
+                    let _ = child.wait(); // Reap the zombie process
+                }
+                Err(e) => {
+                    error!("Error checking subprocess status in Drop: {}", e);
+                }
+            }
         }
     }
 }
@@ -361,13 +379,15 @@ impl ProcessManager {
         info!("Sending shared memory FD={} to subprocess via Unix socket", shm_fd);
         send_fd(&unix_sock_parent, shm_fd)?;
         
-        // Keep the Unix socket child alive (subprocess inherited it)
-        std::mem::forget(unix_sock_child);
+        // Drop both unix sockets - we're done with them
+        // The subprocess has its own copy of the FD (dup'd by the kernel during SCM_RIGHTS)
+        drop(unix_sock_parent);
+        drop(unix_sock_child);
         
         // Create process handle
         let mut process = PluginProcess {
             pid,
-            child,
+            child: Some(child), // Wrap in Option for safe ownership handling
             socket: Some(socket),
             shared_memory: Arc::new(shared_memory),
             plugin_id: plugin_id.clone(),
