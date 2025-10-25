@@ -59,9 +59,11 @@ description: Applies when working on the subprocess-based plugin host or shared 
 
 ## GUI Support
 
-- `gui.rs` translates Godot window requests into CLAP HostGui + HostTimer operations.
-- Subprocess event loop ticks timers (~1 ms) and runs `on_main_thread_callback()` to keep plugin windows responsive.
-- GUI state lives outside the audio thread; hold `gui_open` flags in the adapter to avoid redundant IPC.
+- `WindowManager` (winit thread) creates and tracks host windows. `OscServer` requests a window, receives the X11 handle, then calls `AudioCommand::OpenPluginGui` so `SubprocessClapAdapter::open_gui_with_handle()` can forward that handle through IPC (`PluginCommand::OpenGui { window_handle }`). Plugins that ignore the handle still work in floating mode.
+- Initial sizing and resizability come from CLAP host API: adapter queries `gui_ext.get_size()`/`can_resize()` and forwards the dimensions to the main thread via `EngineStatus::PluginGuiResizeRequest`. The OSC main loop resizes + shows the window before the user ever sees it.
+- Runtime resize requests flow `HostGui::request_resize()` → IPC → audio thread → status channel → main loop → `WindowManager::resize_window()`. All GUI-related statuses are handled in the main loop and are not forwarded back to Godot.
+- Close lifecycle is synchronized: engine only destroys the window after the subprocess responds with `PluginResponse::GuiClosed`, which emits `EngineStatus::PluginGuiClosed`. User-initiated closes originate from the window thread, which triggers `AudioCommand::ClosePluginGui` and waits for the same acknowledgment to avoid X11 errors.
+- `SubprocessClapAdapter` keeps `gui_open` state, resets it even on IPC errors, and sends a final `PluginGuiClosed` in `Drop` so orphaned windows are reclaimed if the device is removed or the adapter is dropped unexpectedly.
 
 ## Failure Handling
 

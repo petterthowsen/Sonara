@@ -5,6 +5,11 @@ use super::commands::EngineState;
 
 /// Process audio for one buffer
 pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
+    // Only process MIDI and advance playhead when playing
+    if !state.is_playing {
+        return;
+    }
+    
     // IMPORTANT: Use actual device sample rate for timing, not project setting
     let ticks_per_sample = (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
     let mut tick_accumulator = 0.0;

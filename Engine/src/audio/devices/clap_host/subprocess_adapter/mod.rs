@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamValue, ParamInfo};
 use crate::audio::ipc::{PluginCommand, PluginResponse, MidiEvent, SharedMemory, ProcessManager};
 use crossbeam::channel::Sender;
-use crate::audio::commands::AudioCommand;
+use crate::audio::commands::{AudioCommand, EngineStatus};
 use tracing::{info, warn, error};
 
 mod lifecycle;
@@ -38,6 +38,11 @@ pub struct SubprocessClapAdapter {
     sample_rate: f32,
     max_buffer_size: usize,
     
+    // Plugin position (for sending GUI close notifications)
+    channel_id: u32,
+    device_position: usize,
+    status_tx: Option<Sender<EngineStatus>>,
+    
     // State
     is_active: bool,
     is_enabled: bool,
@@ -56,6 +61,7 @@ impl SubprocessClapAdapter {
         sample_rate: f32,
         max_buffer_size: usize,
         command_tx: Option<Sender<AudioCommand>>,
+        status_tx: Option<Sender<EngineStatus>>,
     ) -> Result<Self, String> {
         info!(
             "🚀 Creating subprocess CLAP adapter (async): {} (SR: {}, buffer: {})",
@@ -102,6 +108,9 @@ impl SubprocessClapAdapter {
             param_info_cache,
             sample_rate,
             max_buffer_size,
+            channel_id,
+            device_position,
+            status_tx,
             is_active: false,
             is_enabled: true,
             gui_open: false,
@@ -445,9 +454,19 @@ impl SubprocessClapAdapter {
 
 impl Drop for SubprocessClapAdapter {
     fn drop(&mut self) {
-        // Close GUI if open
+        // Close GUI if open and notify window manager
         if self.gui_open {
             let _ = self.close_gui();
+            
+            // Notify window manager to destroy the window
+            if let Some(ref status_tx) = self.status_tx {
+                let _ = status_tx.send(EngineStatus::PluginGuiClosed {
+                    channel_id: self.channel_id as usize,
+                    device_position: self.device_position,
+                });
+                info!("Sent PluginGuiClosed notification during drop: channel={} device={}", 
+                    self.channel_id, self.device_position);
+            }
         }
         
         // Shutdown subprocess

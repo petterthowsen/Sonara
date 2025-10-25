@@ -210,6 +210,13 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         AudioCommand::Pause => {
             state.is_playing = false;
             let position = state.settings.format_tick_position(state.current_tick);
+            // Reset all devices to stop any playing notes/voices
+            for channel in state.channels.values_mut() {
+                channel.active_voices.clear();
+                for device in &mut channel.devices {
+                    device.reset();
+                }
+            }
             info!("Playback paused at {}", position);
             return Some(EngineStatus::PlayingStateChanged(false));
         }
@@ -529,6 +536,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                                 state.device_sample_rate,
                                 buffer_size,
                                 Some(command_tx.clone()),
+                                Some(status_tx.clone()),
                             ) {
                                 Ok(adapter) => {
                                     // Note: Don't activate on audio thread! It will be activated later.

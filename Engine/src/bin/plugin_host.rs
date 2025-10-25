@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize};
 
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
+use clack_host::events::event_types::{NoteOnEvent, NoteOffEvent};
+use clack_host::events::{Pckn, UnknownEvent};
 use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, HostGui, HostGuiImpl, GuiSize, Window};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer};
 use clack_extensions::params::{PluginParams, ParamInfoBuffer};
@@ -521,8 +523,48 @@ fn process_audio(state: &mut PluginState) {
         )
     }]);
     
-    // Process MIDI events (TODO: Read from shared memory MIDI queue)
-    let input_events = InputEvents::empty();
+    // Read MIDI events from shared memory queue
+    let mut midi_queue = shm.midi_queue();
+    let mut note_on_events = Vec::new();
+    let mut note_off_events = Vec::new();
+    
+    // Read all available MIDI events
+    while let Some(midi_event) = midi_queue.read() {
+        if midi_event.is_note_on == 1 {
+            // Note On
+            let event = NoteOnEvent::new(
+                midi_event.sample_offset,
+                Pckn::new(0u16, 0u16, midi_event.note as u16, midi_event.note as u32),
+                midi_event.velocity as f64 / 127.0,
+            );
+            note_on_events.push(event);
+            info!("Plugin receiving Note ON: {} vel={} at sample {}", midi_event.note, midi_event.velocity, midi_event.sample_offset);
+        } else {
+            // Note Off
+            let event = NoteOffEvent::new(
+                midi_event.sample_offset,
+                Pckn::new(0u16, 0u16, midi_event.note as u16, midi_event.note as u32),
+                midi_event.velocity as f64 / 127.0,
+            );
+            note_off_events.push(event);
+            info!("Plugin receiving Note OFF: {} vel={} at sample {}", midi_event.note, midi_event.velocity, midi_event.sample_offset);
+        }
+    }
+    drop(midi_queue); // Release borrow
+    
+    // Create event references (must live as long as InputEvents)
+    let event_refs: Vec<&UnknownEvent> = note_on_events.iter()
+        .map(|e| e.as_unknown())
+        .chain(note_off_events.iter().map(|e| e.as_unknown()))
+        .collect();
+    
+    // Create InputEvents with our MIDI events
+    let input_events = if event_refs.is_empty() {
+        InputEvents::empty()
+    } else {
+        InputEvents::from_buffer(&event_refs)
+    };
+    
     let mut output_events = OutputEvents::from_buffer(&mut state.output_event_buffer);
     
     // Process audio through plugin
@@ -630,8 +672,24 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                                 info!("📤 Sending response: {:?}", resp);
                                 let resp_json = serde_json::to_string(&resp)?;
                                 info!("📤 Response JSON: {}", resp_json);
-                                writeln!(stream, "{}", resp_json)?;
-                                stream.flush()?;
+                                
+                                // Try to send response, but treat broken pipe as normal shutdown
+                                if let Err(e) = writeln!(stream, "{}", resp_json) {
+                                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                                        info!("Parent closed connection while sending response, shutting down");
+                                        unsafe { libc::_exit(0); }
+                                    }
+                                    return Err(Box::new(e));
+                                }
+                                if let Err(e) = stream.flush() {
+                                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                                        info!("Parent closed connection while flushing response, shutting down");
+                                        unsafe { libc::_exit(0); }
+                                    }
+                                    return Err(Box::new(e));
+                                }
                                 info!("📤 Response sent and flushed");
                             }
                             
@@ -650,6 +708,12 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No more data available right now, exit read loop
                     break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                          e.kind() == std::io::ErrorKind::ConnectionReset => {
+                    // Parent process closed the connection, this is a normal shutdown
+                    info!("Control socket closed by parent ({}), shutting down", e);
+                    unsafe { libc::_exit(0); }
                 }
                 Err(e) => {
                     error!("Socket read error: {}", e);
@@ -753,8 +817,18 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                             
                             if let Ok(resp_json) = serde_json::to_string(&resp) {
                                 if let Err(e) = writeln!(stream, "{}", resp_json) {
+                                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                                        info!("Parent closed connection while sending parameter change, shutting down");
+                                        unsafe { libc::_exit(0); }
+                                    }
                                     warn!("Failed to send parameter change: {}", e);
                                 } else if let Err(e) = stream.flush() {
+                                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                                        info!("Parent closed connection while flushing parameter change, shutting down");
+                                        unsafe { libc::_exit(0); }
+                                    }
                                     warn!("Failed to flush parameter change: {}", e);
                                 } else {
                                     info!("📤 Sent ParameterValueChanged: param_id={}, value={:.4}", param_id, normalized);
@@ -779,8 +853,18 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
             
             if let Ok(resp_json) = serde_json::to_string(&resp) {
                 if let Err(e) = writeln!(stream, "{}", resp_json) {
+                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                        info!("Parent closed connection while sending unsolicited response, shutting down");
+                        unsafe { libc::_exit(0); }
+                    }
                     warn!("Failed to send unsolicited response: {}", e);
                 } else if let Err(e) = stream.flush() {
+                    if e.kind() == std::io::ErrorKind::BrokenPipe || 
+                       e.kind() == std::io::ErrorKind::ConnectionReset {
+                        info!("Parent closed connection while flushing unsolicited response, shutting down");
+                        unsafe { libc::_exit(0); }
+                    }
                     warn!("Failed to flush unsolicited response: {}", e);
                 }
             }
@@ -1123,9 +1207,84 @@ fn process_command(
         }
         
         PluginCommand::Reset => {
-            // Reset is typically a no-op for plugins
-            // Just acknowledge it
-            None
+            if let Some(ref mut state) = plugin_state {
+                // Send "all notes off" MIDI messages (CC 123) to ensure voices stop
+                // Many plugins require explicit note-off messages, not just reset()
+                if let Some(ref mut processor) = state.audio_processor {
+                    if let PluginAudioProcessorEnum::Started(ref mut started_processor) = processor {
+                        // Send note-off for all possible MIDI notes (0-127) on all channels (0-15)
+                        let mut note_off_events = Vec::new();
+                        for channel in 0..16u16 {
+                            for note in 0..128u16 {
+                                let event = NoteOffEvent::new(
+                                    0, // sample offset
+                                    Pckn::new(0u16, channel, note, note as u32),
+                                    0.0, // velocity
+                                );
+                                note_off_events.push(event);
+                            }
+                        }
+                        
+                        // Convert to event references
+                        let event_refs: Vec<&UnknownEvent> = note_off_events.iter()
+                            .map(|e| e.as_unknown())
+                            .collect();
+                        
+                        // Process these note-offs through the plugin
+                        let input_events = InputEvents::from_buffer(&event_refs);
+                        let mut output_events = OutputEvents::from_buffer(&mut state.output_event_buffer);
+                        
+                        // Create empty audio buffers for this reset pass
+                        for buf in &mut state.input_buffers {
+                            buf.fill(0.0);
+                        }
+                        for buf in &mut state.output_buffers {
+                            buf.fill(0.0);
+                        }
+                        
+                        let mut input_ports = AudioPorts::with_capacity(2, 1);
+                        let mut output_ports = AudioPorts::with_capacity(2, 1);
+                        
+                        let input_audio = input_ports.with_input_buffers([AudioPortBuffer {
+                            latency: 0,
+                            channels: AudioPortBufferType::f32_input_only(
+                                state.input_buffers.iter_mut()
+                                    .map(|b| InputChannel::constant(&mut b[..64]))
+                            )
+                        }]);
+                        
+                        let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+                            latency: 0,
+                            channels: AudioPortBufferType::f32_output_only(
+                                state.output_buffers.iter_mut()
+                                    .map(|b| &mut b[..64])
+                            )
+                        }]);
+                        
+                        // Process to deliver all note-offs
+                        let _ = started_processor.process(
+                            &input_audio,
+                            &mut output_audio,
+                            &input_events,
+                            &mut output_events,
+                            None,
+                            None,
+                        );
+                        
+                        // Now call reset() to clear internal state
+                        started_processor.reset();
+                        info!("Plugin reset: sent all-notes-off and called reset()");
+                    }
+                }
+                
+                // Clear MIDI event queue to prevent any queued events from playing
+                if let Some(ref mut shm) = state.shared_memory {
+                    let mut midi_queue = shm.midi_queue();
+                    midi_queue.clear();
+                    info!("MIDI queue cleared during reset");
+                }
+            }
+            Some(PluginResponse::ResetComplete)
         }
         
         PluginCommand::GetParameterInfo => {

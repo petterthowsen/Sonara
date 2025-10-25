@@ -8,12 +8,13 @@ alwaysApply: false
 
 The Rust audio engine uses a **lock-free architecture** for real-time safety:
 
-- **Main Thread**: OSC server, initialization, and command reception
-- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations/locks allowed)
-- **Communication**: Crossbeam unbounded MPMC channels for command passing
+- **Main Thread**: Owns `OscServer`, initializes systems, relays OSC commands to audio thread, and brokers GUI events.
+- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations/locks allowed).
+- **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
+- **Communication**: Crossbeam unbounded MPMC channels between main ↔ audio threads, plus `std::sync::mpsc` channels from audio statuses → main loop → window thread.
 
-Commands flow: OSC → Main thread → Crossbeam channel → Audio thread (try_recv)
-Status flows: Audio thread → Crossbeam channel → Main thread → OSC client → Godot
+Commands flow: OSC → Main thread → Audio thread.  
+Status + GUI events flow: Audio thread → Main thread → (a) OSC client → Godot, (b) window manager for resize/close handling.
 
 ### Audio Processing Pipeline
 The audio engine (`Engine/src/audio/engine.rs`) processes audio in this order:
@@ -171,3 +172,4 @@ The audio callback **never blocks**:
 ## Finding Documentation
 
 - Get docs on Clack via context7 (`/prokopyl/clack`)
+

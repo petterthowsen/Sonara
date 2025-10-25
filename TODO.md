@@ -84,8 +84,8 @@
 - [x] Click empty area deselects all
 
 ### Clip Editor / Note Editor
-- [ ] NoteEditor bug: erase-mode is sometimes stuck on even after releasing right-mouse
-    ^ maybe VisualNote is consuming the release event somehow?
+- [x] NoteEditor bug: erase-mode is sometimes stuck on even after releasing right-mouse
+    ^ Fixed by adding global _input() handler to catch right-mouse release even when consumed by child nodes
 - [x] When editing a clip, closing the clip editor, deselecting the clip, reselecting it and opening the clip editor, current notes aren't visible
 
 ### Mixer

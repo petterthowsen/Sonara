@@ -50,6 +50,11 @@ var resizing_note: VisualNote = null
 var resize_start_duration: int = 0
 var resize_start_mouse_pos: Vector2 = Vector2.ZERO
 
+# Newly placed note state (waiting for drag to start)
+var placed_note_awaiting_drag: VisualNote = null
+var placed_note_mouse_pos: Vector2 = Vector2.ZERO
+const DRAG_THRESHOLD: float = 3.0  # Pixels to move before starting drag
+
 # Erase mode state
 var erasing_mode: bool = false
 var last_erased_note: VisualNote = null
@@ -93,15 +98,19 @@ var default_note_length_ticks: int = 960  # Default to 1 beat (960 ticks at 960 
 @export var extra_width_bars: int = 4  # Extra space to the right of rightmost note
 
 func unbind():
+	# Clear all visual notes
 	for node in get_children():
 		node.queue_free()
+	
+	# Clear clip instance reference so that rebinding will reload notes
+	clip_instance = null
 
 
 func bind(ci : ClipInstance):
 	print("[NoteEditor] bind called")
 	print("  - clip_instance: ", ci)
 	print("  - clip_id: ", ci.clip_id if ci else "null")
-	print("  - clip property: ", ci.clip if ci else "null")
+	print("  - clip property: ", str(ci.clip) if ci else "null")
 	print("  - clip (computed): ", clip)
 	
 	if clip_instance != ci:
@@ -110,7 +119,7 @@ func bind(ci : ClipInstance):
 		
 		clip_instance = ci
 		
-		print("  - After assignment, clip property: ", ci.clip if ci else "null")
+		print("  - After assignment, clip property: ", str(ci.clip) if ci else "null")
 		print("  - After assignment, clip (computed): ", clip)
 		
 		_load_clip_notes()
@@ -127,8 +136,8 @@ func _notification(what):
 	if what == NOTIFICATION_SORT_CHILDREN:
 		_update_note_positions()
 
-func _place_note_at_position(pos: Vector2, start_dragging: bool = true) -> VisualNote:
-	"""Place a MIDI note at the given position and optionally start dragging it."""
+func _place_note_at_position(pos: Vector2) -> VisualNote:
+	"""Place a MIDI note at the given position. Drag will start if mouse moves."""
 	if not clip:
 		print("No clip loaded in MIDI editor")
 		return null
@@ -148,6 +157,19 @@ func _place_note_at_position(pos: Vector2, start_dragging: bool = true) -> Visua
 	
 	# Use stored default note length
 	var default_length_ticks = default_note_length_ticks
+	var end_tick = tick_position + default_length_ticks
+	
+	# Cut/merge overlapping notes at this pitch before adding the new note
+	var affected_notes = clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick)
+	
+	# Remove visual notes for any notes that were affected
+	if not affected_notes.is_empty():
+		print("[NoteEditor] Cut/merged %d overlapping notes" % affected_notes.size())
+		# Reload all visual notes to reflect changes (simpler than tracking individual changes)
+		for child in get_children():
+			if child is VisualNote:
+				child.queue_free()
+		call_deferred("_reload_visual_notes_after_cut")
 	
 	# Get unique note ID from project
 	var note_id = -1
@@ -157,7 +179,12 @@ func _place_note_at_position(pos: Vector2, start_dragging: bool = true) -> Visua
 		#TODO: incremening ID can be handled by Clip itself.
 
 	# Add note data to clip (clip will emit signal, Track will sync to engine)
+	# Now that we've cut overlapping notes, this should succeed
 	var note_data = clip.add_midi_note(note_id, midi_note_num, 100, tick_position, default_length_ticks)
+	if note_data == null:
+		push_error("[NoteEditor] Failed to add note after cutting overlaps - this shouldn't happen!")
+		return null
+	
 	print("[MidiEditor] Added note %d: MIDI=%d start=%d duration=%d (Track will sync)" % [note_data.id, midi_note_num, tick_position, default_length_ticks])
 
 	# Create visual note instance
@@ -172,12 +199,15 @@ func _place_note_at_position(pos: Vector2, start_dragging: bool = true) -> Visua
 	
 	print("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_length_ticks])
 	
-	# If requested, immediately start dragging the newly placed note
-	if start_dragging:
-		_start_place_and_drag(note_instance)
-	else:
-		# Only update width if not dragging (will update on drag end)
-		update_container_width()
+	# Select the note
+	if selected_note and selected_note != note_instance:
+		selected_note.set_selected(false)
+	selected_note = note_instance
+	note_instance.set_selected(true)
+	
+	# Set up state to wait for drag to start (only if mouse moves)
+	placed_note_awaiting_drag = note_instance
+	placed_note_mouse_pos = get_global_mouse_position()
 	
 	return note_instance
 
@@ -250,6 +280,20 @@ func _load_clip_notes() -> void:
 	print("[MidiEditor] Loaded %d notes from clip '%s'" % [clip.midi_notes.size(), clip.name])
 
 
+func _reload_visual_notes_after_cut() -> void:
+	"""
+	Reload all visual notes from the clip data.
+	Called after cutting/merging overlapping notes to refresh the UI.
+	"""
+	# Clear existing visual notes
+	for child in get_children():
+		if child is VisualNote:
+			child.queue_free()
+	
+	# Reload from clip
+	_load_clip_notes()
+
+
 # ============================================================================
 # COORDINATE CONVERSION
 # ============================================================================
@@ -273,6 +317,28 @@ func pixels_to_ticks(pixels: float) -> int:
 # ============================================================================
 # INPUT
 # ============================================================================
+
+func _input(event: InputEvent) -> void:
+	"""
+	Global input handler - used to catch events that might be consumed by child nodes.
+	Specifically handles right mouse button release to ensure erase mode always exits properly.
+	"""
+	if not visible or not is_visible_in_tree():
+		return
+	
+	if event is InputEventMouseButton:
+		var mevent = event as InputEventMouseButton
+		
+		# Always catch right mouse button release to exit erase mode
+		if mevent.button_index == MOUSE_BUTTON_RIGHT and mevent.is_released():
+			if erasing_mode or interaction_mode == InteractionMode.ERASING:
+				print("[NoteEditor] Right mouse released - exiting erase mode (global handler)")
+				interaction_mode = InteractionMode.NONE
+				erasing_mode = false
+				last_erased_note = null
+				get_viewport().set_input_as_handled()
+
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mevent = event as InputEventMouseButton
@@ -297,8 +363,8 @@ func _gui_input(event: InputEvent) -> void:
 							_on_drag_started(clicked_note)
 							interaction_mode = InteractionMode.DRAGGING
 					else:
-						# Place new note and start dragging
-						_place_note_at_position(mevent.position, true)
+						# Place new note (drag will start if mouse moves)
+						_place_note_at_position(mevent.position)
 					accept_event()
 			else:
 				# Release - end whatever interaction was happening
@@ -310,11 +376,20 @@ func _gui_input(event: InputEvent) -> void:
 					if dragging_note:
 						_on_drag_ended(dragging_note)
 					interaction_mode = InteractionMode.NONE
+					accept_event()
 				elif interaction_mode == InteractionMode.RESIZING:
 					if resizing_note:
 						_on_resize_ended(resizing_note)
 					interaction_mode = InteractionMode.NONE
-				accept_event()
+					accept_event()
+				elif placed_note_awaiting_drag:
+					# Mouse released without dragging - just finalize the placement
+					print("[NoteEditor] Note placed without drag")
+					update_container_width()
+					placed_note_awaiting_drag = null
+					accept_event()
+				else:
+					accept_event()
 		
 		# Right mouse button - erase mode
 		elif mevent.button_index == MOUSE_BUTTON_RIGHT:
@@ -338,6 +413,19 @@ func _gui_input(event: InputEvent) -> void:
 	
 	elif event is InputEventMouseMotion:
 		var mevent = event as InputEventMouseMotion
+		
+		# Check if we have a newly placed note waiting for drag to start
+		if placed_note_awaiting_drag and placed_note_awaiting_drag.midi_note_data:
+			var current_mouse_pos = get_global_mouse_position()
+			var distance = current_mouse_pos.distance_to(placed_note_mouse_pos)
+			
+			if distance >= DRAG_THRESHOLD:
+				# Mouse moved far enough - start dragging
+				print("[NoteEditor] Starting drag after placement (moved %.1f pixels)" % distance)
+				_start_place_and_drag(placed_note_awaiting_drag)
+				placed_note_awaiting_drag = null
+				accept_event()
+				return
 		
 		# Handle active interactions
 		if interaction_mode == InteractionMode.BOX_SELECTING:
@@ -637,6 +725,20 @@ func paste_at_position(tick_position: int) -> void:
 	# Get notes positioned at the paste location
 	var notes_to_paste = clipboard.get_notes_at_position(tick_position)
 	
+	# Cut overlapping notes for each note we're about to paste
+	var total_affected = 0
+	for note_data in notes_to_paste:
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+		var affected = clip.cut_overlapping_notes_at_pitch(note_data.note, note_data.start_tick, end_tick)
+		total_affected += affected.size()
+	
+	# If we cut anything, reload visual notes
+	if total_affected > 0:
+		print("[NoteEditor] Paste cut/merged %d overlapping notes" % total_affected)
+		for child in get_children():
+			if child is VisualNote:
+				child.queue_free()
+	
 	# Clear current selection
 	_clear_selection()
 	
@@ -648,7 +750,11 @@ func paste_at_position(tick_position: int) -> void:
 		project.next_note_id += 1
 		
 		# Add to clip (clip will emit signal, Track will sync to engine)
-		clip.add_midi_note_data(note_data)
+		# Should succeed now that we've cut overlaps
+		var added = clip.add_midi_note_data(note_data)
+		if added == null:
+			push_warning("[NoteEditor] Failed to paste note at pitch=%d, start=%d" % [note_data.note, note_data.start_tick])
+			continue
 		
 		# Create visual note
 		var note_instance = visual_note_scene.instantiate()
@@ -872,11 +978,33 @@ func _on_drag_ended(note: VisualNote) -> void:
 	"""Handle note drag end."""
 	if dragging_note != note or not note.midi_note_data:
 		return
-
-	# Notify clip that note changed (clip will emit signal, Track will sync to engine)
-	if clip:
-		clip.update_midi_note(note.midi_note_data)
-		print("[MidiEditor] Updated note %d position (Track will sync)" % note.midi_note_data.id)
+	
+	var note_data = note.midi_note_data
+	var end_tick = note_data.start_tick + note_data.duration_ticks
+	
+	# Check if this note now overlaps with any other notes at the same pitch
+	# Cut/merge those notes if needed (exclude this note from comparison)
+	var affected_notes = clip.cut_overlapping_notes_at_pitch(
+		note_data.note, 
+		note_data.start_tick, 
+		end_tick,
+		note_data.id  # Exclude this note from comparison
+	)
+	
+	# Reload visual notes if we cut anything
+	if not affected_notes.is_empty():
+		print("[NoteEditor] Drag ended - cut/merged %d overlapping notes" % affected_notes.size())
+		# Clear all visual notes
+		for child in get_children():
+			if child is VisualNote:
+				child.queue_free()
+		# Reload from clip
+		call_deferred("_reload_visual_notes_after_cut")
+	else:
+		# No overlaps - just update this note
+		if clip:
+			clip.update_midi_note(note.midi_note_data)
+			print("[MidiEditor] Updated note %d position (Track will sync)" % note.midi_note_data.id)
 
 	# Update container width in case note was moved to the right
 	update_container_width()
@@ -933,11 +1061,33 @@ func _on_resize_ended(note: VisualNote) -> void:
 	# Store the new note length as default for future notes
 	default_note_length_ticks = note.midi_note_data.duration_ticks
 	print("[MidiEditor] Updated default note length to %d ticks" % default_note_length_ticks)
-
-	# Notify clip that note changed (clip will emit signal, Track will sync to engine)
-	if clip:
-		clip.update_midi_note(note.midi_note_data)
-		print("[MidiEditor] Updated note %d duration (Track will sync)" % note.midi_note_data.id)
+	
+	var note_data = note.midi_note_data
+	var end_tick = note_data.start_tick + note_data.duration_ticks
+	
+	# Check if this note now overlaps with any other notes at the same pitch
+	# Cut/merge those notes if needed (exclude this note from comparison)
+	var affected_notes = clip.cut_overlapping_notes_at_pitch(
+		note_data.note, 
+		note_data.start_tick, 
+		end_tick,
+		note_data.id  # Exclude this note from comparison
+	)
+	
+	# Reload visual notes if we cut anything
+	if not affected_notes.is_empty():
+		print("[NoteEditor] Resize ended - cut/merged %d overlapping notes" % affected_notes.size())
+		# Clear all visual notes
+		for child in get_children():
+			if child is VisualNote:
+				child.queue_free()
+		# Reload from clip
+		call_deferred("_reload_visual_notes_after_cut")
+	else:
+		# No overlaps - just update this note
+		if clip:
+			clip.update_midi_note(note.midi_note_data)
+			print("[MidiEditor] Updated note %d duration (Track will sync)" % note.midi_note_data.id)
 
 	# Update container width in case note was extended to the right
 	update_container_width()

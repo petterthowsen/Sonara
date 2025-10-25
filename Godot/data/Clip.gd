@@ -80,6 +80,18 @@ func _generate_uuid() -> String:
 
 func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, duration: int) -> MidiNoteData:
 	"""Add a MIDI note to the clip. note_id must be unique (assigned by Project)."""
+	var end_tick = start_tick + duration
+	
+	# Check for overlapping notes at the same pitch
+	for existing_note in midi_notes:
+		if existing_note.note == note:
+			var existing_end_tick = existing_note.start_tick + existing_note.duration_ticks
+			# Check if there's any time overlap
+			if start_tick < existing_end_tick and end_tick > existing_note.start_tick:
+				push_warning("[Clip] Rejecting overlapping note: pitch=%d, start=%d, duration=%d (conflicts with note id=%d at start=%d)" % 
+					[note, start_tick, duration, existing_note.id, existing_note.start_tick])
+				return null
+	
 	var midi_note = MidiNoteData.new()
 	midi_note.id = note_id
 	midi_note.note = note
@@ -162,6 +174,112 @@ func get_notes_in_range(start_tick: int, end_tick: int) -> Array[MidiNoteData]:
 		if note.start_tick < end_tick and note.get_end_tick() > start_tick:
 			notes.append(note)
 	return notes
+
+
+func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tick: int, exclude_note_id: int = -1) -> Array[MidiNoteData]:
+	"""
+	Cut/trim existing notes at the given pitch that overlap with the new note range.
+	Returns an array of notes that were modified or removed.
+	
+	Args:
+		pitch: MIDI note number to check
+		new_start_tick: Start tick of the new/moved note
+		new_end_tick: End tick of the new/moved note
+		exclude_note_id: Note ID to exclude from comparison (to avoid comparing a note against itself)
+	
+	Logic:
+	- If existing note fully contains the new note -> split into two notes (before and after)
+	- If existing note starts before new note -> trim its end
+	- If existing note ends after new note -> trim its start
+	- If existing note is fully contained -> remove it
+	"""
+	var affected_notes: Array[MidiNoteData] = []
+	var notes_to_add: Array[MidiNoteData] = []  # New notes created from splits
+	
+	# Find all overlapping notes at the same pitch
+	var i = 0
+	while i < midi_notes.size():
+		var existing_note = midi_notes[i]
+		var existing_end_tick = existing_note.get_end_tick()
+		
+		# Skip the note we're comparing against itself
+		if existing_note.id == exclude_note_id:
+			i += 1
+			continue
+		
+		# Only process notes at the same pitch
+		if existing_note.note != pitch:
+			i += 1
+			continue
+		
+		# Check if there's any time overlap
+		if new_start_tick >= existing_end_tick or new_end_tick <= existing_note.start_tick:
+			i += 1
+			continue
+		
+		# This note overlaps - handle it
+		affected_notes.append(existing_note)
+		
+		# Case 1: Existing note fully contains the new note -> split into two
+		if existing_note.start_tick < new_start_tick and existing_end_tick > new_end_tick:
+			print("[Clip] Splitting note %d (start=%d, end=%d) around new note (start=%d, end=%d)" % 
+				[existing_note.id, existing_note.start_tick, existing_end_tick, new_start_tick, new_end_tick])
+			
+			# Create the "after" portion (keep original ID for the first part)
+			var after_note = MidiNoteData.new()
+			if Sonara and Sonara.editor and Sonara.editor.project:
+				after_note.id = Sonara.editor.project.next_note_id
+				Sonara.editor.project.next_note_id += 1
+			after_note.note = existing_note.note
+			after_note.velocity = existing_note.velocity
+			after_note.start_tick = new_end_tick
+			after_note.duration_ticks = existing_end_tick - new_end_tick
+			notes_to_add.append(after_note)
+			
+			# Trim the existing note to end at new note start
+			existing_note.duration_ticks = new_start_tick - existing_note.start_tick
+			update_midi_note(existing_note)
+		
+		# Case 2: Existing note starts before new note -> trim its end
+		elif existing_note.start_tick < new_start_tick:
+			print("[Clip] Trimming end of note %d (was end=%d, now end=%d)" % 
+				[existing_note.id, existing_end_tick, new_start_tick])
+			existing_note.duration_ticks = new_start_tick - existing_note.start_tick
+			update_midi_note(existing_note)
+		
+		# Case 3: Existing note ends after new note -> trim its start
+		elif existing_end_tick > new_end_tick:
+			print("[Clip] Trimming start of note %d (was start=%d, now start=%d)" % 
+				[existing_note.id, existing_note.start_tick, new_end_tick])
+			existing_note.start_tick = new_end_tick
+			existing_note.duration_ticks = existing_end_tick - new_end_tick
+			update_midi_note(existing_note)
+		
+		# Case 4: Existing note is fully contained within new note -> remove it
+		else:
+			print("[Clip] Removing fully overlapped note %d" % existing_note.id)
+			midi_notes.remove_at(i)
+			if _synced_to_engine:
+				var osc_path = "/clip/%s/remove_note" % id
+				AudioEngineOSC.send(osc_path, [existing_note.id])
+			midi_note_removed.emit(existing_note)
+			continue  # Don't increment i, we removed an element
+		
+		i += 1
+	
+	# Add any new notes created from splits
+	for new_note in notes_to_add:
+		midi_notes.append(new_note)
+		if _synced_to_engine:
+			var osc_path = "/clip/%s/add_note" % id
+			AudioEngineOSC.send(osc_path, [new_note.id, new_note.note, new_note.start_tick, new_note.duration_ticks, new_note.velocity])
+		midi_note_added.emit(new_note)
+	
+	if not affected_notes.is_empty():
+		modified_date = Time.get_unix_time_from_system()
+		clip_modified.emit()
+	
+	return affected_notes
 
 
 func get_content_length() -> int:
