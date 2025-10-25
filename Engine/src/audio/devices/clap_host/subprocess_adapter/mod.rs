@@ -359,18 +359,24 @@ impl AudioDevice for SubprocessClapAdapter {
 impl SubprocessClapAdapter {
     /// Open plugin GUI (subprocess will handle event loop)
     pub fn open_gui(&mut self) -> Result<(), String> {
-        self.open_gui_with_handle(None)
+        self.open_gui_with_handle(None).map(|_| ())
     }
 
     /// Open plugin GUI with provided window handle for embedded mode
-    pub fn open_gui_with_handle(&mut self, window_handle: Option<u64>) -> Result<(), String> {
+    /// Returns (width, height, is_resizable) if successful
+    pub fn open_gui_with_handle(&mut self, window_handle: Option<u64>) -> Result<(u32, u32, bool), String> {
         if self.gui_open {
-            return Ok(());
+            // Already open - query current size
+            // For now, return a default since we can't easily query after opening
+            return Ok((800, 600, true));
         }
 
-        gui::open_gui(&self.process_manager, &self.process_key, &self.device_name, window_handle)?;
+        let (width, height, is_resizable) = gui::open_gui(&self.process_manager, &self.process_key, &self.device_name, window_handle)?;
         self.gui_open = true;
-        Ok(())
+        
+        info!("Plugin GUI opened with size: {}x{} (resizable: {})", width, height, is_resizable);
+        
+        Ok((width, height, is_resizable))
     }
     
     /// Close plugin GUI
@@ -379,9 +385,14 @@ impl SubprocessClapAdapter {
             return Ok(());
         }
         
-        gui::close_gui(&self.process_manager, &self.process_key, &self.device_name)?;
+        let result = gui::close_gui(&self.process_manager, &self.process_key, &self.device_name);
+        
+        // Always mark GUI as closed, even if IPC fails
+        // The window is being destroyed regardless, and keeping gui_open=true
+        // will cause subsequent opens to return stale size data
         self.gui_open = false;
-        Ok(())
+        
+        result
     }
     
     /// Check if GUI is supported

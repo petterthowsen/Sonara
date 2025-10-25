@@ -47,12 +47,40 @@ impl OscServer {
     ) -> Result<()> {
         let mut buf = [0u8; 2048];
         
+        // GUI events from audio thread that need window manager access
+        enum GuiEvent {
+            Resize { channel_id: usize, device_position: usize, width: u32, height: u32 },
+            Closed { channel_id: usize, device_position: usize },
+        }
+        
+        // Channel for forwarding GUI events from status thread to main loop
+        let (gui_event_tx, gui_event_rx) = std::sync::mpsc::channel();
+        
         // Spawn status sender thread
         let socket_clone = self.socket.try_clone()?;
         let client_port = self.client_port;
         thread::spawn(move || {
             loop {
                 if let Ok(status) = status_rx.recv_timeout(Duration::from_millis(10)) {
+                    // Forward GUI events to main loop
+                    match &status {
+                        EngineStatus::PluginGuiResizeRequest { channel_id, device_position, width, height } => {
+                            let _ = gui_event_tx.send(GuiEvent::Resize {
+                                channel_id: *channel_id,
+                                device_position: *device_position,
+                                width: *width,
+                                height: *height,
+                            });
+                        }
+                        EngineStatus::PluginGuiClosed { channel_id, device_position } => {
+                            let _ = gui_event_tx.send(GuiEvent::Closed {
+                                channel_id: *channel_id,
+                                device_position: *device_position,
+                            });
+                        }
+                        _ => {}
+                    }
+                    
                     Self::send_status_update(&socket_clone, client_port, status);
                 }
             }
@@ -60,6 +88,43 @@ impl OscServer {
         
         // Main receive loop
         loop {
+            // Check for GUI events
+            while let Ok(event) = gui_event_rx.try_recv() {
+                match event {
+                    GuiEvent::Resize { channel_id, device_position, width, height } => {
+                        let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                        info!("🔄 Resizing window {} to {}x{}", process_key, width, height);
+                        window_manager.resize_window(&process_key, width, height);
+                        // Show the window now that it's the right size
+                        window_manager.show_window(&process_key);
+                    }
+                    GuiEvent::Closed { channel_id, device_position } => {
+                        let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                        info!("🗑️  Plugin confirmed GUI closed, destroying window: {}", process_key);
+                        window_manager.destroy_window(&process_key);
+                    }
+                }
+            }
+            
+            // Check for window close events (user clicked X)
+            while let Ok(process_key) = window_manager.close_event_rx.try_recv() {
+                info!("🗑️  Window close requested by user: {}", process_key);
+                // Parse channel_id and device_position from process_key (format: "plugin_3_0")
+                if let Some(parts) = process_key.strip_prefix("plugin_") {
+                    let parts: Vec<&str> = parts.split('_').collect();
+                    if parts.len() == 2 {
+                        if let (Ok(channel_id), Ok(device_position)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                            // Send CloseGui command to cleanup plugin state
+                            // Window will be destroyed when we receive PluginGuiClosed status
+                            let _ = command_tx.send(AudioCommand::ClosePluginGui {
+                                channel_id,
+                                device_position,
+                            });
+                        }
+                    }
+                }
+            }
+            
             match self.socket.recv_from(&mut buf) {
                 Ok((size, addr)) => {
                     // Remember client address for sending status updates
@@ -666,6 +731,16 @@ impl OscServer {
             }
             EngineStatus::DeviceReady { .. } => {
                 // DeviceReady is handled internally (triggers parameter re-send)
+                // No need to send it to Godot
+                return;
+            }
+            EngineStatus::PluginGuiResizeRequest { .. } => {
+                // GUI resize is handled by the main loop with access to WindowManager
+                // No need to send it to Godot  
+                return;
+            }
+            EngineStatus::PluginGuiClosed { .. } => {
+                // GUI close is handled by the main loop with access to WindowManager
                 // No need to send it to Godot
                 return;
             }

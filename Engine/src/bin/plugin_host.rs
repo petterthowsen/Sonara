@@ -80,7 +80,11 @@ enum PluginResponse {
     ProcessingStopped,
     ParameterValue { param_id: u32, value: f32 },
     ParameterInfo { params: Vec<PluginParameterInfo> },
-    GuiOpened,
+    GuiOpened {
+        width: u32,
+        height: u32,
+        is_resizable: bool,
+    },
     GuiClosed,
     HasGuiResponse { supported: bool },
     GuiError { error: String },
@@ -90,6 +94,7 @@ enum PluginResponse {
     Error { command: String, error: String },
     ShutdownAck,
     ParameterValueChanged { param_id: u32, value: f32 },
+    GuiResizeRequest { width: u32, height: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,13 +116,16 @@ struct SubprocessHost;
 struct SubprocessHostShared {
     timers: Arc<Mutex<HashMap<clack_extensions::timer::TimerId, Timer>>>,
     next_timer_id: Arc<Mutex<u32>>,
+    /// Channel to send unsolicited responses (like GUI resize requests)
+    response_tx: std::sync::mpsc::Sender<PluginResponse>,
 }
 
 impl SubprocessHostShared {
-    fn new() -> Self {
+    fn new(response_tx: std::sync::mpsc::Sender<PluginResponse>) -> Self {
         Self {
             timers: Arc::new(Mutex::new(HashMap::new())),
             next_timer_id: Arc::new(Mutex::new(0)),
+            response_tx,
         }
     }
     
@@ -218,7 +226,13 @@ impl HostGuiImpl for SubprocessHostShared {
 
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
         info!("Plugin GUI requested resize to {}x{}", new_size.width, new_size.height);
-        // For floating windows, the plugin manages its own window size
+        
+        // Send resize request to main loop
+        let _ = self.response_tx.send(PluginResponse::GuiResizeRequest {
+            width: new_size.width,
+            height: new_size.height,
+        });
+        
         Ok(())
     }
 
@@ -560,6 +574,9 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
     stream.set_nonblocking(true)?;
     
     let mut plugin_state: Option<PluginState> = None;
+    
+    // Channel for unsolicited responses (GUI resize, parameter changes, etc.)
+    let (unsolicited_tx, unsolicited_rx) = std::sync::mpsc::channel::<PluginResponse>();
 
     info!("📡 Listening for commands (non-blocking)...");
 
@@ -607,7 +624,7 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
                             info!("📥 Received command: {:?}", cmd);
                             
                             // Process command
-                            let response = process_command(cmd, &mut plugin_state, unix_socket_fd);
+                            let response = process_command(cmd, &mut plugin_state, unix_socket_fd, &unsolicited_tx);
                             
                             if let Some(resp) = response {
                                 info!("📤 Sending response: {:?}", resp);
@@ -749,6 +766,26 @@ fn run_plugin_host(mut stream: TcpStream, unix_socket_fd: i32) -> Result<(), Box
             }
         }
         
+        // Check for unsolicited responses (GUI resize requests, etc.)
+        while let Ok(resp) = unsolicited_rx.try_recv() {
+            match resp {
+                PluginResponse::GuiResizeRequest { width, height } => {
+                    info!("📤 Sending GuiResizeRequest: {}x{}", width, height);
+                }
+                _ => {
+                    info!("📤 Sending unsolicited response: {:?}", resp);
+                }
+            }
+            
+            if let Ok(resp_json) = serde_json::to_string(&resp) {
+                if let Err(e) = writeln!(stream, "{}", resp_json) {
+                    warn!("Failed to send unsolicited response: {}", e);
+                } else if let Err(e) = stream.flush() {
+                    warn!("Failed to flush unsolicited response: {}", e);
+                }
+            }
+        }
+        
         // Only sleep if we didn't process audio and no command was received
         // This keeps latency low for audio processing
         if !processed_audio && !command_received {
@@ -768,6 +805,7 @@ fn process_command(
     cmd: PluginCommand,
     plugin_state: &mut Option<PluginState>,
     unix_socket_fd: i32,
+    unsolicited_tx: &std::sync::mpsc::Sender<PluginResponse>,
 ) -> Option<PluginResponse> {
     match cmd {
         PluginCommand::Initialize { plugin_path, plugin_id, sample_rate, max_buffer_size, shm_name } => {
@@ -775,7 +813,7 @@ fn process_command(
             info!("Shared memory name: {}", shm_name);
             
             info!("Step 1: Loading plugin from disk...");
-            let (bundle, instance, shared) = match load_plugin(&plugin_path, &plugin_id, sample_rate, max_buffer_size) {
+            let (bundle, instance, shared) = match load_plugin(&plugin_path, &plugin_id, sample_rate, max_buffer_size, unsolicited_tx.clone()) {
                 Ok(result) => {
                     info!("Step 2: Plugin loaded successfully, now creating shared memory...");
                     result
@@ -870,15 +908,22 @@ fn process_command(
             if let Some(ref mut state) = plugin_state {
                 if state.gui_open {
                     info!("GUI already open, returning GuiOpened");
-                    return Some(PluginResponse::GuiOpened);
+                    // Query current size for consistency
+                    let mut handle = state.instance.plugin_handle();
+                    if let Some(gui_ext) = handle.get_extension::<PluginGui>() {
+                        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize { width: 800, height: 600 });
+                        let is_resizable = gui_ext.can_resize(&mut handle);
+                        return Some(PluginResponse::GuiOpened { width: size.width, height: size.height, is_resizable });
+                    }
+                    return Some(PluginResponse::GuiOpened { width: 800, height: 600, is_resizable: true });
                 }
 
                 info!("Attempting to open GUI...");
                 match open_plugin_gui(&mut state.instance, window_handle) {
-                    Ok(_) => {
+                    Ok((width, height, is_resizable)) => {
                         state.gui_open = true;
-                        info!("✅ GUI opened successfully, returning GuiOpened response");
-                        Some(PluginResponse::GuiOpened)
+                        info!("✅ GUI opened successfully, returning GuiOpened response with size {}x{} (resizable: {})", width, height, is_resizable);
+                        Some(PluginResponse::GuiOpened { width, height, is_resizable })
                     }
                     Err(e) => {
                         warn!("❌ Failed to open GUI: {}", e);
@@ -1273,6 +1318,7 @@ fn load_plugin(
     plugin_id: &str,
     _sample_rate: f32,
     _max_buffer_size: usize,
+    unsolicited_tx: std::sync::mpsc::Sender<PluginResponse>,
 ) -> Result<(PluginBundle, PluginInstance<SubprocessHost>, Arc<SubprocessHostShared>), String> {
     // Load bundle
     let bundle = unsafe {
@@ -1305,7 +1351,7 @@ fn load_plugin(
         .ok_or_else(|| "Missing plugin ID".to_string())?;
     
     // Create shared state for timer and GUI support
-    let shared = Arc::new(SubprocessHostShared::new());
+    let shared = Arc::new(SubprocessHostShared::new(unsolicited_tx));
     let shared_for_instance = Arc::clone(&shared);
     
     // Create plugin instance
@@ -1325,7 +1371,7 @@ fn load_plugin(
 fn open_plugin_gui(
     instance: &mut PluginInstance<SubprocessHost>,
     window_handle: Option<u64>,
-) -> Result<(), String> {
+) -> Result<(u32, u32, bool), String> {
     let mut handle = instance.plugin_handle();
 
     info!("🎨 Step 1: Getting GUI extension...");
@@ -1374,6 +1420,23 @@ fn open_plugin_gui(
             format!("Failed to create GUI: {}", e)
         })?;
     info!("✅ GUI created");
+    
+    // Query the plugin's preferred size
+    if let Some(size) = gui_ext.get_size(&mut handle) {
+        info!("🎨 Plugin reports preferred size: {}x{}", size.width, size.height);
+        
+        // Send resize request to engine so it can create/resize window appropriately
+        // This happens before set_parent, so the window should be created at the right size
+        let resp = PluginResponse::GuiResizeRequest {
+            width: size.width,
+            height: size.height,
+        };
+        if let Ok(resp_json) = serde_json::to_string(&resp) {
+            // Note: We'd need access to the stream here to send it
+            // For now, the plugin will request resize after opening which works fine
+            info!("🎨 Would send initial size request: {}x{}", size.width, size.height);
+        }
+    }
 
     // For embedded mode, use the provided window handle
     if !config.is_floating {
@@ -1403,7 +1466,13 @@ fn open_plugin_gui(
             })?;
 
         info!("✅ Plugin GUI opened successfully (embedded mode)");
-        Ok(())
+        
+        // Return the plugin's actual size and resizability so the engine can configure the window
+        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize { width: 800, height: 600 });
+        let is_resizable = gui_ext.can_resize(&mut handle);
+        info!("🎨 Final plugin size: {}x{} (resizable: {})", size.width, size.height, is_resizable);
+        
+        Ok((size.width, size.height, is_resizable))
     } else {
         // Floating mode - plugin manages its own window
         info!("🎨 Step 5: Setting transient window (for floating mode)...");
@@ -1443,7 +1512,14 @@ fn open_plugin_gui(
         info!("✅ Pumped main thread callbacks");
 
         info!("✅ Plugin GUI opened successfully (floating mode)");
-        Ok(())
+        
+        // Return the plugin's size and resizability (for consistency)
+        let mut handle = instance.plugin_handle();
+        let gui_ext: PluginGui = handle.get_extension().unwrap();
+        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize { width: 800, height: 600 });
+        let is_resizable = gui_ext.can_resize(&mut handle);
+        
+        Ok((size.width, size.height, is_resizable))
     }
 }
 

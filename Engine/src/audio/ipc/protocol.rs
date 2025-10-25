@@ -126,7 +126,11 @@ pub enum PluginResponse {
     },
     
     /// GUI opened successfully
-    GuiOpened,
+    GuiOpened {
+        width: u32,
+        height: u32,
+        is_resizable: bool,
+    },
     
     /// GUI closed
     GuiClosed,
@@ -168,6 +172,12 @@ pub enum PluginResponse {
     ParameterValueChanged {
         param_id: u32,
         value: f32,  // Normalized 0.0-1.0
+    },
+    
+    /// GUI resize requested (unsolicited, from plugin)
+    GuiResizeRequest {
+        width: u32,
+        height: u32,
     },
 }
 

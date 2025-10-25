@@ -7,12 +7,13 @@ use std::sync::Arc;
 use tracing::info;
 
 /// Open plugin GUI window
+/// Returns (width, height, is_resizable) if successful
 pub fn open_gui(
     process_manager: &Arc<ProcessManager>,
     process_key: &str,
     device_name: &str,
     window_handle: Option<u64>,
-) -> Result<(), String> {
+) -> Result<(u32, u32, bool), String> {
     let process = process_manager.get_process(process_key)
         .ok_or_else(|| "Plugin process not found".to_string())?;
 
@@ -25,9 +26,9 @@ pub fn open_gui(
     process.send_command(PluginCommand::OpenGui { window_handle })?;
 
     let result = match process.recv_response()? {
-        PluginResponse::GuiOpened => {
-            info!("✅ Plugin GUI opened: {}", device_name);
-            Ok(())
+        PluginResponse::GuiOpened { width, height, is_resizable } => {
+            info!("✅ Plugin GUI opened: {} ({}x{}, resizable: {})", device_name, width, height, is_resizable);
+            Ok((width, height, is_resizable))
         }
         PluginResponse::GuiError { error } => Err(error),
         _ => Err("Unexpected response".to_string()),

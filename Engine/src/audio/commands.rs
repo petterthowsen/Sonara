@@ -87,6 +87,10 @@ pub enum EngineStatus {
     DeviceEnabledChanged { channel_id: ChannelId, device_position: usize, enabled: bool },
     DeviceReady { channel_id: ChannelId, device_position: usize },
     
+    // Plugin GUI events
+    PluginGuiResizeRequest { channel_id: ChannelId, device_position: usize, width: u32, height: u32 },
+    PluginGuiClosed { channel_id: ChannelId, device_position: usize },
+    
     // Plugin discovery responses
     PluginScanComplete { count: usize },
     PluginInfo {
@@ -803,9 +807,17 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                     use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
                     if let Some(subprocess_device) = (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>() {
                         match subprocess_device.open_gui_with_handle(window_handle) {
-                            Ok(()) => {
-                                info!("Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?})",
-                                    channel_id, device_position, window_handle);
+                            Ok((width, height, _is_resizable)) => {
+                                info!("Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{})",
+                                    channel_id, device_position, window_handle, width, height);
+                                
+                                // Send resize request so OSC server can resize the window
+                                let _ = status_tx.send(EngineStatus::PluginGuiResizeRequest {
+                                    channel_id,
+                                    device_position,
+                                    width,
+                                    height,
+                                });
                             }
                             Err(e) => {
                                 warn!("Failed to open subprocess plugin GUI at channel {} device {}: {}",
@@ -842,6 +854,11 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         match subprocess_device.close_gui() {
                             Ok(()) => {
                                 info!("Closed GUI for subprocess plugin at channel {} device {}", channel_id, device_position);
+                                // Notify OSC that plugin GUI is closed so it can destroy the window
+                                let _ = status_tx.send(EngineStatus::PluginGuiClosed {
+                                    channel_id,
+                                    device_position,
+                                });
                             }
                             Err(e) => {
                                 warn!("Failed to close subprocess plugin GUI at channel {} device {}: {}", 
@@ -852,6 +869,11 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         match clap_device.close_gui() {
                             Ok(()) => {
                                     info!("Closed GUI for in-process plugin at channel {} device {}", channel_id, device_position);
+                                    // Notify OSC that plugin GUI is closed so it can destroy the window
+                                    let _ = status_tx.send(EngineStatus::PluginGuiClosed {
+                                        channel_id,
+                                        device_position,
+                                    });
                             }
                             Err(e) => {
                                 warn!("Failed to close in-process plugin GUI at channel {} device {}: {}", 

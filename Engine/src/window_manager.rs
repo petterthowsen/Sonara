@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, sync_channel, Sender, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
 use winit::platform::x11::EventLoopBuilderExtX11;
@@ -26,6 +26,16 @@ enum WindowCommand {
         height: u32,
         response: SyncSender<Option<u64>>,
     },
+    /// Resize an existing window
+    Resize {
+        process_key: String,
+        width: u32,
+        height: u32,
+    },
+    /// Show a window (make visible)
+    Show {
+        process_key: String,
+    },
     /// Destroy a window
     Destroy {
         process_key: String,
@@ -36,6 +46,9 @@ enum WindowCommand {
 pub struct WindowManager {
     /// Sender for window commands
     command_tx: Sender<WindowCommand>,
+    
+    /// Receiver for window close events (when user clicks X)
+    pub close_event_rx: std::sync::mpsc::Receiver<String>,
 
     /// Background thread handle (joins on drop)
     _thread_handle: Option<JoinHandle<()>>,
@@ -47,14 +60,16 @@ impl WindowManager {
         info!("Creating WindowManager with dedicated winit thread");
 
         let (command_tx, command_rx) = channel();
+        let (close_event_tx, close_event_rx) = std::sync::mpsc::channel();
 
         // Spawn background thread for winit event loop
         let thread_handle = thread::spawn(move || {
-            run_window_thread(command_rx);
+            run_window_thread(command_rx, close_event_tx);
         });
 
         Self {
             command_tx,
+            close_event_rx,
             _thread_handle: Some(thread_handle),
         }
     }
@@ -88,6 +103,26 @@ impl WindowManager {
                 None
             }
         }
+    }
+
+    /// Resize an existing window and make it visible
+    pub fn resize_window(&mut self, process_key: &str, width: u32, height: u32) {
+        info!("Requesting window resize for process: {} to {}x{}", process_key, width, height);
+
+        let _ = self.command_tx.send(WindowCommand::Resize {
+            process_key: process_key.to_string(),
+            width,
+            height,
+        });
+    }
+    
+    /// Show a window (make it visible)
+    pub fn show_window(&mut self, process_key: &str) {
+        info!("Requesting window show for process: {}", process_key);
+        
+        let _ = self.command_tx.send(WindowCommand::Show {
+            process_key: process_key.to_string(),
+        });
     }
 
     /// Destroy a window
@@ -129,7 +164,7 @@ fn create_window(
         .with_title(format!("Plugin - {}", process_key))
         .with_inner_size(winit::dpi::PhysicalSize::new(width, height))
         .with_resizable(true)
-        .with_visible(true);
+        .with_visible(false);  // Start hidden, will be shown after plugin opens and resizes
 
     let window = event_loop_target
         .create_window(window_attributes)
@@ -141,7 +176,7 @@ fn create_window(
 }
 
 /// Background thread function that runs winit event loop
-fn run_window_thread(command_rx: Receiver<WindowCommand>) {
+fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::sync::mpsc::Sender<String>) {
     info!("🧵 Window thread starting");
 
     // Allow event loop on non-main thread (X11 specific)
@@ -158,6 +193,7 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>) {
 
     let mut windows: HashMap<String, WindowHolder> = HashMap::new();
     let mut pending_creates: Vec<(String, u32, u32, SyncSender<Option<u64>>)> = Vec::new();
+    let mut pending_resizes: Vec<(String, u32, u32)> = Vec::new();
     let mut pending_destroys: Vec<String> = Vec::new();
 
     #[allow(deprecated)]
@@ -167,6 +203,16 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>) {
             match cmd {
                 WindowCommand::Create { process_key, width, height, response } => {
                     pending_creates.push((process_key, width, height, response));
+                }
+                WindowCommand::Resize { process_key, width, height } => {
+                    pending_resizes.push((process_key, width, height));
+                }
+                WindowCommand::Show { process_key } => {
+                    // Show window immediately
+                    if let Some(window_holder) = windows.get(&process_key) {
+                        window_holder.window.set_visible(true);
+                        info!("👁️  Showing window: {}", process_key);
+                    }
                 }
                 WindowCommand::Destroy { process_key } => {
                     pending_destroys.push(process_key);
@@ -178,6 +224,30 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>) {
             Event::NewEvents(_) => {
                 // Create pending windows
                 for (process_key, width, height, response) in pending_creates.drain(..) {
+                    // Check if window already exists (e.g., close failed and window wasn't destroyed)
+                    if let Some(existing_window) = windows.get(&process_key) {
+                        warn!("⚠️  Window {} already exists, reusing existing window", process_key);
+                        let handle = existing_window.window.window_handle().ok().and_then(|wh| {
+                            match wh.as_raw() {
+                                RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
+                                RawWindowHandle::Xcb(xcb) => Some(xcb.window.get() as u64),
+                                _ => None,
+                            }
+                        });
+                        
+                        if let Some(h) = handle {
+                            info!("✅ Reusing existing window: 0x{:x}", h);
+                            let _ = response.send(Some(h));
+                            // Resize and show the existing window
+                            let _ = existing_window.window.request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                            existing_window.window.set_visible(true);
+                        } else {
+                            error!("Failed to get X11 handle for existing window");
+                            let _ = response.send(None);
+                        }
+                        continue;
+                    }
+                    
                     match create_window(
                         event_loop_target,
                         &process_key,
@@ -210,6 +280,16 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>) {
                     }
                 }
 
+                // Resize windows
+                for (process_key, width, height) in pending_resizes.drain(..) {
+                    if let Some(window_holder) = windows.get(&process_key) {
+                        info!("🔄 Resizing window: {} to {}x{}", process_key, width, height);
+                        let _ = window_holder.window.request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                    } else {
+                        error!("Cannot resize window {}: not found", process_key);
+                    }
+                }
+
                 // Destroy windows
                 for process_key in pending_destroys.drain(..) {
                     if windows.remove(&process_key).is_some() {
@@ -220,14 +300,21 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>) {
             Event::WindowEvent { window_id, event } => {
                 match event {
                     WindowEvent::CloseRequested => {
-                        // User closed window - find and remove it
-                        let to_remove = windows.iter()
+                        // User clicked X - hide window and notify OSC to cleanup plugin
+                        // Don't destroy yet - let plugin cleanup first to avoid X errors
+                        let key = windows.iter()
                             .find(|(_, w)| w.window.id() == window_id)
                             .map(|(k, _)| k.clone());
 
-                        if let Some(key) = to_remove {
-                            info!("Window close requested: {}", key);
-                            windows.remove(&key);
+                        if let Some(key) = key {
+                            info!("Window close requested by user: {}", key);
+                            // Hide the window immediately so user sees it close
+                            if let Some(window_holder) = windows.get(&key) {
+                                window_holder.window.set_visible(false);
+                            }
+                            // Notify OSC server so it can tell plugin to cleanup
+                            // OSC will send Destroy command after plugin confirms close
+                            let _ = close_event_tx.send(key);
                         }
                     }
                     WindowEvent::RedrawRequested => {
