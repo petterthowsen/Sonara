@@ -13,6 +13,9 @@
 - [ ] Improve logging of plugins
 - [ ] Performance profiling - expose CPU/memory usage metrics via OSC for UI display
 
+### Devices & Plugins
+- [ ] Multi-in and multi-out for devices
+
 ### Plugins
 - [ ] Crash / Error handling, send info to Godot for UI notifications
 - [ ] Plugin GUI windows should be forced to stay over Godot App
