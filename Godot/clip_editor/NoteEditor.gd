@@ -1,12 +1,12 @@
-class_name NoteContainer extends Container
+class_name OldNoteEditor extends Container
 
 @export var note_height := 20.0:
 	set(nh):
 		if note_height != nh:
 			note_height = nh
 			# Notify parent ScrollContainer that our size changed
+			# and queue relayout
 			update_minimum_size()
-			# Some setting changed, ask for children re-sort.
 			queue_sort()
 
 @export var playhead_color = Color(1.0, 1.0, 1.0, 0.5)  # White with transparency
@@ -35,7 +35,7 @@ var clip: Clip:
 		
 
 # Preload VisualNote scene
-var visual_note_scene = preload("res://clip_editor/VisualNote.tscn")
+const visual_note_scene = preload("res://clip_editor/VisualNote.tscn")
 
 # Clipboard for copy/paste operations
 var clipboard: NoteSelection
@@ -226,7 +226,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		push_error("[NoteEditor] Failed to add note after cutting overlaps - this shouldn't happen!")
 		return null
 	
-	print("[MidiEditor] Added note %d: MIDI=%d start=%d duration=%d (Track will sync)" % [note_data.id, midi_note_num, tick_position, default_length_ticks])
+	print("[NoteEditor] Added note %d: MIDI=%d start=%d duration=%d (Track will sync)" % [note_data.id, midi_note_num, tick_position, default_length_ticks])
 
 	# Visual note was created reactively by _on_clip_note_added signal handler
 	# Just retrieve it from the dictionary
@@ -327,7 +327,7 @@ func _load_clip_notes() -> void:
 	# Update container width to accommodate all notes
 	update_container_width()
 	
-	print("[MidiEditor] Loaded %d notes from clip '%s'" % [clip.midi_notes.size(), clip.name])
+	print("[NoteEditor] Loaded %d notes from clip '%s'" % [clip.midi_notes.size(), clip.name])
 
 
 # ============================================================================
@@ -1554,7 +1554,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 	if total_affected > 0:
 		print("[NoteEditor] Multi-drag ended - cut/merged %d overlapping notes (handled reactively)" % total_affected)
 	
-	print("[MidiEditor] Updated %d note(s) position/duration (Track will sync)" % selected_notes.size())
+	print("[NoteEditor] Updated %d note(s) position/duration (Track will sync)" % selected_notes.size())
 	
 	# Update selection range to reflect new note positions
 	if not selected_notes.is_empty():
@@ -1663,7 +1663,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 
 	# Store the new note length as default for future notes
 	default_note_length_ticks = note.midi_note_data.duration_ticks
-	print("[MidiEditor] Updated default note length to %d ticks" % default_note_length_ticks)
+	print("[NoteEditor] Updated default note length to %d ticks" % default_note_length_ticks)
 	
 	# Process all selected notes
 	var total_affected = 0
@@ -1693,7 +1693,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 	if total_affected > 0:
 		print("[NoteEditor] Multi-resize ended - cut/merged %d overlapping notes (handled reactively)" % total_affected)
 	
-	print("[MidiEditor] Updated %d note(s) duration (Track will sync)" % selected_notes.size())
+	print("[NoteEditor] Updated %d note(s) duration (Track will sync)" % selected_notes.size())
 	
 	# Update selection range to reflect new note durations
 	if not selected_notes.is_empty():

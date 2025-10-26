@@ -1,4 +1,4 @@
-[gd_scene load_steps=23 format=3 uid="uid://d17wdwntyd1ni"]
+[gd_scene load_steps=24 format=3 uid="uid://d17wdwntyd1ni"]
 
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="1_i0blf"]
 [ext_resource type="Script" uid="uid://ce6tt7vbxxjrp" path="res://editor/MainBar.gd" id="2_2m1gq"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://device_lane/DeviceLane.gd" id="5_85wto"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="5_jp84s"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="6_x2y5v"]
+[ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="9_10umj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4x3xt"]
 content_margin_left = 6.0
@@ -337,6 +338,7 @@ size_flags_vertical = 3
 visible = false
 layout_mode = 2
 size_flags_vertical = 3
+script = ExtResource("9_10umj")
 
 [node name="Secondary" type="PanelContainer" parent="VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit"]
 visible = false

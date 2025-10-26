@@ -1,12 +1,11 @@
-[gd_scene load_steps=10 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=9 format=3 uid="uid://v2yhv0y6irr0"]
 
-[ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
+[ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
 [ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
-[ext_resource type="Script" uid="uid://cpkq58sx0pexi" path="res://clip_editor/NoteEditor.gd" id="7_4hncn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4hncn"]
 content_margin_left = 0.0
@@ -28,7 +27,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 2
-script = ExtResource("1_lqnrn")
+script = ExtResource("1_4hncn")
 metadata/_edit_lock_ = true
 
 [node name="LeftPanel" type="PanelContainer" parent="."]
@@ -143,4 +142,4 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 focus_mode = 1
-script = ExtResource("7_4hncn")
+script = ExtResource("1_4hncn")

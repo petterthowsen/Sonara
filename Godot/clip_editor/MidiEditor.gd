@@ -1,7 +1,7 @@
 # Midi Editor
 # 
 # Composed of a VPiano (Vertical Piano keys) on the left side
-# and NoteArea: NoteLanes, GridRenderer and NoteContainer
+# and NoteLanes, GridRenderer and NoteContainer on the right
 #
 # designed to have a ScrollContainer with only vertical scroll enabled
 # I.E VPiano, and notte_area nodes are as tall as the keyboard
@@ -11,21 +11,25 @@
 # horizontal zoom supported by h_scroll but we handle it
 class_name MidiEditor extends ScrollContainer
 
+var logger := Log.make("MidiEditor")
+
 @onready var v_piano: VPiano = $HBox/VPiano
 @onready var note_area: Control = $HBox/NoteArea
 @onready var note_lanes: NoteLanes = $HBox/NoteArea/NoteLanes
 @onready var grid_renderer: GridRenderer = $HBox/NoteArea/GridRenderer
 
 @onready var h_scroll: ScrollContainer = $HBox/NoteArea/HScroll
-@onready var note_editor: NoteContainer = $HBox/NoteArea/HScroll/NoteEditor
+@onready var note_editor: NoteEditor = $HBox/NoteArea/HScroll/NoteEditor
 
 var grid_helper: GridHelper:
 	set(gh):
 		if grid_helper != gh:
+			logger.info("grid_helper changed: ", gh)
 			grid_helper = gh
 			note_lanes.grid_helper = gh
 			note_editor.grid_helper = gh
 			grid_renderer.set_grid_helper(gh)
+
 
 # Local cursor position (in ticks) - propagated to NoteEditor
 var cursor_position_ticks: int = 0:

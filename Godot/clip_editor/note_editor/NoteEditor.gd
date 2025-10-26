@@ -1,0 +1,1002 @@
+## Note editor with input handling and note interaction.
+## Extends NoteContainer and uses NoteSelectionManager for selection operations.
+
+class_name NoteEditor extends NoteContainer
+
+# Selection manager
+var selection_manager: NoteSelectionManager
+
+# Interaction state
+enum InteractionMode { NONE, DRAGGING, RESIZING, ERASING, PLACING_AND_DRAGGING, BOX_SELECTING }
+var interaction_mode: InteractionMode = InteractionMode.NONE
+
+
+# Drag/resize state
+var dragging_note: VisualNote = null
+var drag_start_ticks: int = 0
+var drag_start_midi_note: int = 0
+var drag_start_mouse_pos: Vector2 = Vector2.ZERO
+var drag_start_positions: Dictionary = {}  # note_id -> {start_tick, note, velocity}
+
+var resizing_note: VisualNote = null
+var resize_start_duration: int = 0
+var resize_start_mouse_pos: Vector2 = Vector2.ZERO
+var resize_start_durations: Dictionary = {}  # note_id -> duration_ticks
+
+
+# Drag mode tracking
+enum DragMode { POSITION, RESIZE, VELOCITY }
+var last_drag_mode: DragMode = DragMode.POSITION
+
+
+# Newly placed note state
+var placed_note_awaiting_drag: VisualNote = null
+var placed_note_mouse_pos: Vector2 = Vector2.ZERO
+const DRAG_THRESHOLD: float = 3.0
+
+
+# Erase mode state
+var erasing_mode: bool = false
+var last_erased_note: VisualNote = null
+
+
+# Local cursor position (for paste operations)
+var cursor_position_ticks: int = 0
+
+
+# Default note length for new notes
+var default_note_length_ticks: int = 960:
+	set(value):
+		default_note_length_ticks = value
+
+
+func _ready():
+	# Create selection manager (grid_helper will be set via override below)
+	selection_manager = NoteSelectionManager.new(grid_helper)
+	selection_manager.selection_changed.connect(_on_selection_changed)
+
+
+func _on_selection_changed(notes: Array[VisualNote]) -> void:
+	"""Handle selection changed from selection manager."""
+	# Update default note length if single note selected
+	if notes.size() == 1 and notes[0].midi_note_data:
+		default_note_length_ticks = notes[0].midi_note_data.duration_ticks
+
+
+# Override set_grid_helper to also update selection manager
+func set_grid_helper(gh: GridHelper) -> void:
+	super.set_grid_helper(gh)
+	if selection_manager:
+		selection_manager.grid_helper = gh
+
+
+# Override bind to update default note length from grid helper
+func bind(ci: ClipInstance):
+	super.bind(ci)
+
+	# Initialize default note length from snap interval if not already set
+	if grid_helper and default_note_length_ticks == 960:
+		default_note_length_ticks = grid_helper.get_snap_interval()
+
+
+# Override _draw to include selection rendering
+func _draw() -> void:
+	super._draw()
+	selection_manager.draw_selection(self, size.y)
+
+
+# ============================================================================
+# INPUT
+# ============================================================================
+func _unhandled_input(event: InputEvent) -> void:
+	"""Global input handler - catch events consumed by child nodes."""
+	if not visible or not is_visible_in_tree():
+		return
+
+	if event is InputEventMouseButton:
+		var mevent = event as InputEventMouseButton
+
+		# Always catch right mouse release to exit erase mode
+		if mevent.button_index == MOUSE_BUTTON_RIGHT and mevent.is_released():
+			if erasing_mode or interaction_mode == InteractionMode.ERASING:
+				print("[NoteEditor] Right mouse released - exiting erase mode")
+				interaction_mode = InteractionMode.NONE
+				erasing_mode = false
+				last_erased_note = null
+
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		_handle_mouse_button(event as InputEventMouseButton)
+	elif event is InputEventMouseMotion:
+		_handle_mouse_motion(event as InputEventMouseMotion)
+	elif event is InputEventKey:
+		_handle_key_input(event as InputEventKey)
+
+
+func _handle_mouse_button(mevent: InputEventMouseButton) -> void:
+	"""Handle mouse button input."""
+	# Left mouse button
+	if mevent.button_index == MOUSE_BUTTON_LEFT:
+		if mevent.is_pressed():
+			_handle_left_mouse_press(mevent)
+		else:
+			_handle_left_mouse_release(mevent)
+
+	# Right mouse button - erase mode
+	elif mevent.button_index == MOUSE_BUTTON_RIGHT:
+		if mevent.is_pressed():
+			_handle_right_mouse_press(mevent)
+		elif mevent.is_released():
+			interaction_mode = InteractionMode.NONE
+			erasing_mode = false
+			last_erased_note = null
+
+
+func _handle_left_mouse_press(mevent: InputEventMouseButton) -> void:
+	"""Handle left mouse button press."""
+	var clicked_note = _get_note_at_position(mevent.position)
+
+	if clicked_note:
+		# Clicking on a note
+		if mevent.ctrl_pressed:
+			selection_manager.toggle_note_selection(clicked_note)
+			accept_event()
+		elif clicked_note._is_over_resize_handle(clicked_note.get_local_mouse_position()):
+			_on_resize_started(clicked_note, mevent.position)
+			interaction_mode = InteractionMode.RESIZING
+			accept_event()
+		else:
+			_on_drag_started(clicked_note, mevent.position)
+			interaction_mode = InteractionMode.DRAGGING
+			accept_event()
+	else:
+		# Clicking on empty space
+		if mevent.ctrl_pressed:
+			selection_manager.start_box_selection(mevent.position)
+			interaction_mode = InteractionMode.BOX_SELECTING
+			accept_event()
+		else:
+			_place_note_at_position(mevent.position)
+			accept_event()
+
+
+func _handle_left_mouse_release(mevent: InputEventMouseButton) -> void:
+	"""Handle left mouse button release."""
+	if interaction_mode == InteractionMode.BOX_SELECTING:
+		var notes_in_box = _get_notes_in_box(selection_manager.box_selection_rect)
+		selection_manager.end_box_selection(notes_in_box)
+		queue_redraw()
+		interaction_mode = InteractionMode.NONE
+		accept_event()
+
+	elif interaction_mode == InteractionMode.DRAGGING or interaction_mode == InteractionMode.PLACING_AND_DRAGGING:
+		if dragging_note:
+			_on_drag_ended(dragging_note)
+		interaction_mode = InteractionMode.NONE
+		accept_event()
+
+	elif interaction_mode == InteractionMode.RESIZING:
+		if resizing_note:
+			_on_resize_ended(resizing_note)
+		interaction_mode = InteractionMode.NONE
+		accept_event()
+
+	elif placed_note_awaiting_drag:
+		print("[NoteEditor] Note placed without drag")
+		update_container_width()
+		placed_note_awaiting_drag = null
+		accept_event()
+	else:
+		accept_event()
+
+
+func _handle_right_mouse_press(mevent: InputEventMouseButton) -> void:
+	"""Handle right mouse button press."""
+	interaction_mode = InteractionMode.ERASING
+	erasing_mode = true
+	last_erased_note = null
+
+	var note_under_cursor = _get_note_at_position(mevent.position)
+	if note_under_cursor:
+		_erase_note(note_under_cursor)
+		accept_event()
+	else:
+		selection_manager.clear_selection()
+		print("[NoteEditor] Right-click on empty space - cleared selection, erase mode active")
+
+
+func _handle_mouse_motion(mevent: InputEventMouseMotion) -> void:
+	"""Handle mouse motion input."""
+	# Check for newly placed note waiting for drag
+	if placed_note_awaiting_drag and placed_note_awaiting_drag.midi_note_data:
+		var current_mouse_pos = get_global_mouse_position()
+		var distance = current_mouse_pos.distance_to(placed_note_mouse_pos)
+
+		if distance >= DRAG_THRESHOLD:
+			print("[NoteEditor] Starting drag after placement (moved %.1f pixels)" % distance)
+			_start_place_and_drag(placed_note_awaiting_drag)
+			placed_note_awaiting_drag = null
+			accept_event()
+			return
+
+	# Handle active interactions
+	if interaction_mode == InteractionMode.BOX_SELECTING:
+		selection_manager.update_box_selection(mevent.position)
+		var notes_in_box = _get_notes_in_box(selection_manager.box_selection_rect)
+		selection_manager._set_selected_notes(notes_in_box)
+		queue_redraw()
+		accept_event()
+
+	elif interaction_mode == InteractionMode.DRAGGING or interaction_mode == InteractionMode.PLACING_AND_DRAGGING:
+		if dragging_note:
+			_on_drag_updated(dragging_note, mevent.position)
+			accept_event()
+
+	elif interaction_mode == InteractionMode.RESIZING:
+		if resizing_note:
+			_on_resize_updated(resizing_note, mevent.position)
+			accept_event()
+
+	elif interaction_mode == InteractionMode.ERASING:
+		var note_to_erase = _get_note_at_position(mevent.position)
+		if note_to_erase and note_to_erase != last_erased_note:
+			_erase_note(note_to_erase)
+			accept_event()
+
+
+func _handle_key_input(event: InputEventKey) -> void:
+	"""Handle keyboard input."""
+	if event.is_action_pressed("ui_copy"):
+		selection_manager.copy_selection()
+		accept_event()
+
+	elif event.is_action_pressed("ui_cut"):
+		_cut_selection()
+		accept_event()
+
+	elif event.is_action_pressed("ui_paste"):
+		_paste_at_position(cursor_position_ticks)
+		accept_event()
+
+	elif event.is_action_pressed("ui_duplicate"):
+		_duplicate_selection()
+		accept_event()
+
+	elif event.is_action_pressed("ui_delete"):
+		_delete_selection()
+		accept_event()
+
+	elif event.is_action_pressed("ui_up"):
+		var semitones = 12 if event.ctrl_pressed else 1
+		_move_selection_vertical(semitones)
+		accept_event()
+
+	elif event.is_action_pressed("ui_down"):
+		var semitones = 12 if event.ctrl_pressed else 1
+		_move_selection_vertical(-semitones)
+		accept_event()
+
+	elif event.is_action_pressed("ui_left"):
+		_move_selection_horizontal(-get_snap_interval())
+		accept_event()
+
+	elif event.is_action_pressed("ui_right"):
+		_move_selection_horizontal(get_snap_interval())
+		accept_event()
+
+
+# ============================================================================
+# NOTE PLACEMENT
+# ============================================================================
+func _place_note_at_position(pos: Vector2) -> VisualNote:
+	"""Place a MIDI note at the given position."""
+	if not clip:
+		print("No clip loaded in MIDI editor")
+		return null
+
+	print("placing note at ", pos.y)
+
+	# Clear selection before placing new note
+	selection_manager.clear_selection()
+
+	# Convert position to MIDI note and tick
+	var midi_note_num = y_to_note(pos.y)
+	var pixel_x = pos.x
+	var tick_position = pixels_to_ticks(pixel_x)
+
+	# Snap to grid
+	var snap = get_snap_interval()
+	if snap > 0:
+		@warning_ignore("integer_division")
+		tick_position = (tick_position / snap) * snap
+
+	var end_tick = tick_position + default_note_length_ticks
+
+	# Cut overlapping notes
+	var affected_notes = clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick)
+
+	if not affected_notes.is_empty():
+		print("[NoteEditor] Cut/merged %d overlapping notes" % affected_notes.size())
+
+	# Get unique note ID
+	var note_id = -1
+	if Sonara and Sonara.editor and Sonara.editor.project:
+		note_id = Sonara.editor.project.next_note_id
+		Sonara.editor.project.next_note_id += 1
+
+	# Add note to clip
+	var note_data = clip.add_midi_note(note_id, midi_note_num, 100, tick_position, default_note_length_ticks)
+	if note_data == null:
+		push_error("[NoteEditor] Failed to add note after cutting overlaps")
+		return null
+
+	print("[NoteEditor] Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, default_note_length_ticks])
+
+	# Get visual note created reactively
+	var note_instance = visual_notes_by_id.get(note_data.id)
+	if note_instance == null:
+		push_error("[NoteEditor] Failed to find visual note after creation")
+		return null
+
+	print("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_note_length_ticks])
+
+	# Select the newly placed note
+	selection_manager.selected_note = note_instance
+	selection_manager.selected_notes = [note_instance]
+	note_instance.set_selected(true)
+
+	# Set selection range
+	selection_manager.box_selection_start_tick = tick_position
+	selection_manager.box_selection_end_tick = tick_position + default_note_length_ticks
+	queue_redraw()
+
+	# Wait for drag to start
+	placed_note_awaiting_drag = note_instance
+	placed_note_mouse_pos = get_global_mouse_position()
+
+	return note_instance
+
+
+# ============================================================================
+# NOTE INTERACTION HANDLERS
+# ============================================================================
+func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
+	"""Handle note drag start."""
+	if not note.midi_note_data:
+		return
+
+	# If note not selected, select it
+	if note not in selection_manager.selected_notes:
+		selection_manager.select_note(note)
+
+	dragging_note = note
+	drag_start_ticks = note.midi_note_data.start_tick
+	drag_start_midi_note = note.midi_note_data.note
+	drag_start_mouse_pos = click_position
+	last_drag_mode = DragMode.POSITION
+
+	# Store starting positions for all selected notes
+	drag_start_positions.clear()
+	resize_start_durations.clear()
+	for sel_note in selection_manager.selected_notes:
+		if sel_note.midi_note_data:
+			drag_start_positions[sel_note.midi_note_data.id] = {
+				"start_tick": sel_note.midi_note_data.start_tick,
+				"note": sel_note.midi_note_data.note,
+				"velocity": sel_note.midi_note_data.velocity
+			}
+			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+
+func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
+	"""Handle note drag update (supports shift-to-resize and alt-for-velocity)."""
+	if dragging_note != note or not note.midi_note_data:
+		return
+
+	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
+	var alt_pressed = Input.is_key_pressed(KEY_ALT)
+
+	# Determine current mode
+	var current_mode: DragMode
+	if alt_pressed:
+		current_mode = DragMode.VELOCITY
+	elif shift_pressed:
+		current_mode = DragMode.RESIZE
+	else:
+		current_mode = DragMode.POSITION
+
+	# Check if mode changed
+	if current_mode != last_drag_mode:
+		drag_start_mouse_pos = mouse_pos_local
+
+		# Update stored starting positions
+		for sel_note in selection_manager.selected_notes:
+			if not sel_note.midi_note_data:
+				continue
+			drag_start_positions[sel_note.midi_note_data.id] = {
+				"start_tick": sel_note.midi_note_data.start_tick,
+				"note": sel_note.midi_note_data.note,
+				"velocity": sel_note.midi_note_data.velocity
+			}
+			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+		last_drag_mode = current_mode
+		print("[NoteEditor] Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY"][current_mode])
+
+	var delta_x = mouse_pos_local.x - drag_start_mouse_pos.x
+	var delta_y = mouse_pos_local.y - drag_start_mouse_pos.y
+	var delta_ticks = pixels_to_ticks(delta_x)
+
+	if alt_pressed:
+		# Alt mode: Control velocity
+		var velocity_delta = int(-delta_y / 2.0)
+
+		for sel_note in selection_manager.selected_notes:
+			if not sel_note.midi_note_data:
+				continue
+
+			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
+			if not start_pos:
+				continue
+
+			var start_velocity = start_pos.get("velocity", 100)
+			var new_velocity = clamp(start_velocity + velocity_delta, 1, 127)
+
+			sel_note.midi_note_data.velocity = new_velocity
+			sel_note._update_visual()
+
+	elif shift_pressed:
+		# Shift mode: Control note length
+		for sel_note in selection_manager.selected_notes:
+			if not sel_note.midi_note_data:
+				continue
+
+			var start_duration = resize_start_durations.get(sel_note.midi_note_data.id)
+			if start_duration == null:
+				continue
+
+			var new_duration = max(get_snap_interval(), start_duration + delta_ticks)
+
+			# Apply snapping
+			if grid_helper:
+				var snap_interval = grid_helper.get_snap_interval()
+				new_duration = max(snap_interval, new_duration)
+				@warning_ignore("integer_division")
+				new_duration = int(new_duration / snap_interval) * snap_interval
+
+			sel_note.midi_note_data.duration_ticks = new_duration
+			var note_width = ticks_to_pixels(new_duration)
+			sel_note.size.x = note_width
+	else:
+		# Normal mode: Control position
+		var current_midi_note = y_to_note(mouse_pos_local.y)
+		var delta_midi_note = current_midi_note - drag_start_midi_note
+
+		for sel_note in selection_manager.selected_notes:
+			if not sel_note.midi_note_data:
+				continue
+
+			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
+			if not start_pos:
+				continue
+
+			var new_ticks = max(0, start_pos.start_tick + delta_ticks)
+			var new_midi_note = clamp(start_pos.note + delta_midi_note, 0, 127)
+
+			# Apply snapping
+			if grid_helper:
+				new_ticks = grid_helper.snap_ticks(new_ticks)
+
+			sel_note.midi_note_data.start_tick = new_ticks
+			sel_note.midi_note_data.note = new_midi_note
+
+			var note_x = ticks_to_pixels(new_ticks)
+			var note_y = note_to_y(new_midi_note)
+			sel_note.position = Vector2(note_x, note_y)
+			sel_note._update_visual()
+
+
+func _on_drag_ended(note: VisualNote) -> void:
+	"""Handle note drag end."""
+	if dragging_note != note or not note.midi_note_data:
+		return
+
+	# Check if any note changed
+	var any_changes = false
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+		var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
+		var start_duration = resize_start_durations.get(sel_note.midi_note_data.id)
+
+		if start_pos:
+			if sel_note.midi_note_data.start_tick != start_pos.start_tick or sel_note.midi_note_data.note != start_pos.note:
+				any_changes = true
+				break
+			if sel_note.midi_note_data.velocity != start_pos.get("velocity", 100):
+				any_changes = true
+				break
+		if start_duration != null and sel_note.midi_note_data.duration_ticks != start_duration:
+			any_changes = true
+			break
+
+	if not any_changes:
+		print("[NoteEditor] Drag ended with no changes")
+		dragging_note = null
+		drag_start_positions.clear()
+		resize_start_durations.clear()
+		update_container_width()
+		return
+
+	# Process all selected notes
+	var total_affected = 0
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+
+		var affected_notes = clip.cut_overlapping_notes_at_pitch(
+			note_data.note,
+			note_data.start_tick,
+			end_tick,
+			note_data.id
+		)
+
+		total_affected += affected_notes.size()
+
+		if clip:
+			clip.update_midi_note(note_data)
+
+	if total_affected > 0:
+		print("[NoteEditor] Multi-drag ended - cut/merged %d overlapping notes" % total_affected)
+
+	print("[NoteEditor] Updated %d note(s) position/duration" % selection_manager.selected_notes.size())
+
+	# Update selection range
+	selection_manager._update_selection_range()
+	queue_redraw()
+	update_container_width()
+
+	dragging_note = null
+	drag_start_positions.clear()
+	resize_start_durations.clear()
+
+
+func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
+	"""Handle note resize start."""
+	if not note.midi_note_data:
+		return
+
+	if note not in selection_manager.selected_notes:
+		selection_manager.select_note(note)
+
+	resizing_note = note
+	resize_start_duration = note.midi_note_data.duration_ticks
+	resize_start_mouse_pos = click_position
+
+	# Store starting durations for all selected notes
+	resize_start_durations.clear()
+	for sel_note in selection_manager.selected_notes:
+		if sel_note.midi_note_data:
+			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+
+func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
+	"""Handle note resize update."""
+	if resizing_note != note or not note.midi_note_data:
+		return
+
+	var delta = mouse_pos_local - resize_start_mouse_pos
+	var delta_ticks = pixels_to_ticks(delta.x)
+
+	var new_duration = max(get_snap_interval(), resize_start_duration + delta_ticks)
+
+	# Apply snapping
+	if grid_helper:
+		var snap_interval = grid_helper.get_snap_interval()
+		new_duration = max(snap_interval, new_duration)
+		@warning_ignore("integer_division")
+		new_duration = int(new_duration / snap_interval) * snap_interval
+
+	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
+
+	# Update all selected notes
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_new_duration: int
+
+		if shift_pressed:
+			# Shift: Set all notes to same duration
+			note_new_duration = new_duration
+		else:
+			# Default: Apply same delta to each note
+			var note_start_duration = resize_start_durations.get(sel_note.midi_note_data.id, sel_note.midi_note_data.duration_ticks)
+			note_new_duration = max(get_snap_interval(), note_start_duration + delta_ticks)
+
+			if grid_helper:
+				var snap_interval = grid_helper.get_snap_interval()
+				note_new_duration = max(snap_interval, note_new_duration)
+				@warning_ignore("integer_division")
+				note_new_duration = int(note_new_duration / snap_interval) * snap_interval
+
+		sel_note.midi_note_data.duration_ticks = note_new_duration
+		var note_width = ticks_to_pixels(note_new_duration)
+		sel_note.size.x = note_width
+
+
+func _on_resize_ended(note: VisualNote) -> void:
+	"""Handle note resize end."""
+	if resizing_note != note or not note.midi_note_data:
+		return
+
+	# Store new note length as default
+	default_note_length_ticks = note.midi_note_data.duration_ticks
+	print("[NoteEditor] Updated default note length to %d ticks" % default_note_length_ticks)
+
+	# Process all selected notes
+	var total_affected = 0
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+
+		var affected_notes = clip.cut_overlapping_notes_at_pitch(
+			note_data.note,
+			note_data.start_tick,
+			end_tick,
+			note_data.id
+		)
+
+		total_affected += affected_notes.size()
+
+		if clip:
+			clip.update_midi_note(note_data)
+
+	if total_affected > 0:
+		print("[NoteEditor] Multi-resize ended - cut/merged %d overlapping notes" % total_affected)
+
+	print("[NoteEditor] Updated %d note(s) duration" % selection_manager.selected_notes.size())
+
+	# Update selection range
+	selection_manager._update_selection_range()
+	queue_redraw()
+	update_container_width()
+
+	resizing_note = null
+	resize_start_durations.clear()
+
+
+func _start_place_and_drag(note: VisualNote) -> void:
+	"""Start dragging a newly placed note."""
+	if not note or not note.midi_note_data:
+		return
+
+	interaction_mode = InteractionMode.PLACING_AND_DRAGGING
+	dragging_note = note
+	drag_start_ticks = note.midi_note_data.start_tick
+	drag_start_midi_note = note.midi_note_data.note
+	drag_start_mouse_pos = get_local_mouse_position()
+	last_drag_mode = DragMode.POSITION
+
+	# Select the note
+	if selection_manager.selected_note and selection_manager.selected_note != note:
+		selection_manager.selected_note.set_selected(false)
+	selection_manager.selected_note = note
+	note.set_selected(true)
+
+	# Store starting positions
+	drag_start_positions.clear()
+	resize_start_durations.clear()
+	for sel_note in selection_manager.selected_notes:
+		if sel_note.midi_note_data:
+			drag_start_positions[sel_note.midi_note_data.id] = {
+				"start_tick": sel_note.midi_note_data.start_tick,
+				"note": sel_note.midi_note_data.note,
+				"velocity": sel_note.midi_note_data.velocity
+			}
+			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+	print("[NoteEditor] Started place-and-drag for note %d" % note.midi_note_data.id)
+
+
+func _erase_note(note: VisualNote) -> void:
+	"""Erase a note immediately."""
+	if not note or not note.midi_note_data:
+		return
+
+	last_erased_note = note
+
+	if clip:
+		clip.remove_midi_note(note.midi_note_data)
+		print("[NoteEditor] Erased note %d" % note.midi_note_data.id)
+
+
+# ============================================================================
+# HELPER METHODS FOR SELECTION MANAGER
+# ============================================================================
+func _snap_position_to_grid(pos: Vector2) -> Vector2:
+	"""Snap a position to the grid (both X and Y)."""
+	var snapped_pos = pos
+
+	# Snap Y to note height boundaries
+	var note_num = y_to_note(pos.y)
+	snapped_pos.y = note_to_y(note_num)
+
+	# Snap X to time grid
+	var ticks = grid_helper.pixels_to_ticks(pos.x)
+	ticks = grid_helper.snap_ticks(ticks)
+	snapped_pos.x = grid_helper.ticks_to_pixels(ticks)
+
+	return snapped_pos
+
+
+func _get_notes_in_box(box_rect: Rect2) -> Array[VisualNote]:
+	"""Find all visual notes that intersect with the given box."""
+	var notes: Array[VisualNote] = []
+	for child in get_children():
+		if child is VisualNote:
+			var note_rect = Rect2(child.position, child.size)
+			if box_rect.intersects(note_rect):
+				notes.append(child)
+	return notes
+
+
+# ============================================================================
+# CLIPBOARD OPERATIONS (orchestrates between selection manager and container)
+# ============================================================================
+func _cut_selection() -> void:
+	"""Cut selected notes (copy + delete)."""
+	if selection_manager.selected_notes.is_empty():
+		print("[NoteEditor] No notes selected to cut")
+		return
+
+	selection_manager.copy_selection()
+	_delete_selection()
+
+	print("[NoteEditor] Cut %d notes" % selection_manager.clipboard.notes.size())
+
+
+func _paste_at_position(tick_position: int) -> void:
+	"""Paste clipboard contents at the specified tick position."""
+	if not selection_manager.clipboard or selection_manager.clipboard.is_empty():
+		print("[NoteEditor] Clipboard is empty")
+		return
+
+	if not clip:
+		print("[NoteEditor] No clip loaded")
+		return
+
+	# Snap to grid
+	var snap = get_snap_interval()
+	if snap > 0:
+		@warning_ignore("integer_division")
+		tick_position = (tick_position / snap) * snap
+
+	# Get notes positioned at paste location
+	var notes_to_paste = selection_manager.clipboard.get_notes_at_position(tick_position)
+
+	# Cut overlapping notes
+	var total_affected = 0
+	for note_data in notes_to_paste:
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+		var affected = clip.cut_overlapping_notes_at_pitch(note_data.note, note_data.start_tick, end_tick)
+		total_affected += affected.size()
+
+	if total_affected > 0:
+		print("[NoteEditor] Paste cut/merged %d overlapping notes" % total_affected)
+
+	selection_manager.clear_selection()
+
+	# Add notes to clip
+	var project = Sonara.editor.project
+	var pasted_note_ids: Array[int] = []
+
+	for note_data in notes_to_paste:
+		note_data.id = project.next_note_id
+		project.next_note_id += 1
+
+		var added = clip.add_midi_note_data(note_data)
+		if added == null:
+			push_warning("[NoteEditor] Failed to paste note at pitch=%d, start=%d" % [note_data.note, note_data.start_tick])
+			continue
+
+		pasted_note_ids.append(note_data.id)
+
+	# Select newly pasted notes
+	var pasted_notes: Array[VisualNote] = []
+	for note_id in pasted_note_ids:
+		var note_instance = visual_notes_by_id.get(note_id)
+		if note_instance:
+			pasted_notes.append(note_instance)
+
+	selection_manager._set_selected_notes(pasted_notes)
+	if selection_manager.selected_notes.size() > 0:
+		selection_manager.selected_note = selection_manager.selected_notes[0]
+
+	# Set selection range
+	if not selection_manager.selected_notes.is_empty():
+		selection_manager.box_selection_start_tick = tick_position
+		selection_manager.box_selection_end_tick = tick_position + selection_manager.clipboard.duration_ticks
+		queue_redraw()
+
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+
+	print("[NoteEditor] Pasted %d notes at tick %d (range: %d-%d)" % [
+		pasted_note_ids.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
+	])
+
+
+func _duplicate_selection() -> void:
+	"""Duplicate selected notes immediately after the selection."""
+	if selection_manager.selected_notes.is_empty():
+		print("[NoteEditor] No notes selected to duplicate")
+		return
+
+	var selection_length = selection_manager.box_selection_end_tick - selection_manager.box_selection_start_tick
+	if selection_length <= 0:
+		print("[NoteEditor] Cannot duplicate - invalid selection range")
+		return
+
+	var selection: NoteSelection
+	if selection_manager.box_selection_start_tick > 0 or selection_manager.box_selection_end_tick > 0:
+		selection = NoteSelection.from_visual_notes_with_range(
+			selection_manager.selected_notes,
+			selection_manager.box_selection_start_tick,
+			selection_manager.box_selection_end_tick
+		)
+	else:
+		selection = NoteSelection.from_visual_notes(selection_manager.selected_notes)
+
+	var duplicate_position = selection.end_tick
+
+	# Store clipboard temporarily
+	var old_clipboard = selection_manager.clipboard
+	selection_manager.clipboard = selection
+	_paste_at_position(duplicate_position)
+	selection_manager.clipboard = old_clipboard
+
+	print("[NoteEditor] Duplicated %d notes (duration: %d ticks)" % [selection.notes.size(), selection.duration_ticks])
+
+
+func _delete_selection() -> void:
+	"""Delete all selected notes."""
+	if selection_manager.selected_notes.is_empty():
+		print("[NoteEditor] No notes selected to delete")
+		return
+
+	var count = selection_manager.selected_notes.size()
+
+	# Remove notes in reverse
+	for i in range(selection_manager.selected_notes.size() - 1, -1, -1):
+		var note = selection_manager.selected_notes[i]
+		if is_instance_valid(note) and note.midi_note_data:
+			clip.remove_midi_note(note.midi_note_data)
+			note.queue_free()
+
+	selection_manager.selected_notes.clear()
+	selection_manager.selected_note = null
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+
+	update_container_width()
+
+	print("[NoteEditor] Deleted %d notes" % count)
+
+
+# ============================================================================
+# KEYBOARD NOTE MOVEMENT (orchestrates between selection manager and container)
+# ============================================================================
+func _move_selection_vertical(semitones: int) -> void:
+	"""Move all selected notes up or down by semitones."""
+	if selection_manager.selected_notes.is_empty():
+		return
+
+	# Move all selected notes
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var new_pitch = clamp(note_data.note + semitones, 0, 127)
+		note_data.note = new_pitch
+
+		var note_y = note_to_y(new_pitch)
+		sel_note.position.y = note_y
+		sel_note._update_visual()
+
+	# Process overlaps and sync
+	var total_affected = 0
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+
+		var affected_notes = clip.cut_overlapping_notes_at_pitch(
+			note_data.note,
+			note_data.start_tick,
+			end_tick,
+			note_data.id
+		)
+
+		total_affected += affected_notes.size()
+
+		if clip:
+			clip.update_midi_note(note_data)
+
+	if total_affected > 0:
+		print("[NoteEditor] Keyboard move vertical - cut/merged %d overlapping notes" % total_affected)
+
+	print("[NoteEditor] Moved %d note(s) %+d semitones" % [selection_manager.selected_notes.size(), semitones])
+	update_container_width()
+
+
+func _move_selection_horizontal(delta_ticks: int) -> void:
+	"""Move all selected notes left or right by ticks."""
+	if selection_manager.selected_notes.is_empty():
+		return
+
+	# Move all selected notes
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var new_start = max(0, note_data.start_tick + delta_ticks)
+		note_data.start_tick = new_start
+
+		var note_x = ticks_to_pixels(new_start)
+		sel_note.position.x = note_x
+
+	# Process overlaps and sync
+	var total_affected = 0
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note.midi_note_data:
+			continue
+
+		var note_data = sel_note.midi_note_data
+		var end_tick = note_data.start_tick + note_data.duration_ticks
+
+		var affected_notes = clip.cut_overlapping_notes_at_pitch(
+			note_data.note,
+			note_data.start_tick,
+			end_tick,
+			note_data.id
+		)
+
+		total_affected += affected_notes.size()
+
+		if clip:
+			clip.update_midi_note(note_data)
+
+	if total_affected > 0:
+		print("[NoteEditor] Keyboard move horizontal - cut/merged %d overlapping notes" % total_affected)
+
+	print("[NoteEditor] Moved %d note(s) %+d ticks" % [selection_manager.selected_notes.size(), delta_ticks])
+
+	# Update selection range
+	selection_manager._update_selection_range()
+	queue_redraw()
+	update_container_width()
+
+
+# Override _on_clip_note_removed to handle selection cleanup
+func _on_clip_note_removed(note_data: MidiNoteData) -> void:
+	"""Handle when a note is removed from the clip."""
+	# Remove from selection if selected
+	if note_data.id in visual_notes_by_id:
+		var note_instance = visual_notes_by_id[note_data.id]
+		if note_instance in selection_manager.selected_notes:
+			selection_manager.selected_notes.erase(note_instance)
+		if selection_manager.selected_note == note_instance:
+			selection_manager.selected_note = null
+
+	# Call parent implementation
+	super._on_clip_note_removed(note_data)
