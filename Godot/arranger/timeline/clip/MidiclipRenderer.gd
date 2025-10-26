@@ -46,10 +46,31 @@ func _draw_midi():
 	var note_height = size.y / (note_range + 1)
 	
 	var clip_length_ticks = clip_instance.duration_ticks
+	var clip_offset = clip_instance.clip_offset
+	
+	# Calculate the visible range of the clip (in clip-local ticks)
+	var visible_start = clip_offset
+	var visible_end = clip_offset + clip_length_ticks
 
 	for note:MidiNoteData in clip.midi_notes:
-		var x = remap(note.start_tick, 0, clip_length_ticks, 0, size.x)
-		var w = remap(note.duration_ticks, 0, clip_length_ticks, 0, size.x)
+		var note_end = note.start_tick + note.duration_ticks
+		
+		# Skip notes that are completely outside the visible range
+		if note_end <= visible_start or note.start_tick >= visible_end:
+			continue
+		
+		# Calculate note position relative to the visible window
+		var note_local_start = note.start_tick - clip_offset
+		var note_local_end = note_end - clip_offset
+		
+		# Clip the note to the visible range (handle partial visibility)
+		var draw_start = max(note_local_start, 0)
+		var draw_end = min(note_local_end, clip_length_ticks)
+		var draw_duration = draw_end - draw_start
+		
+		# Map to screen coordinates
+		var x = remap(draw_start, 0, clip_length_ticks, 0, size.x)
+		var w = remap(draw_duration, 0, clip_length_ticks, 0, size.x)
 		
 		# Remap note number to Y position, ensuring it stays within bounds
 		# Note: We subtract note_height because we're drawing from the top down
@@ -76,9 +97,22 @@ func _draw_waveform() -> void:
 	if size.x <= 0:
 		return  # Can't render if width is zero
 
-	# Determine effective samples per pixel based on current rendering size
-	var audio_duration_samples = clip.audio_samples.size() / clip.audio_channels
-	var target_resolution = int(float(audio_duration_samples) / float(size.x))
+	# Calculate the visible portion of the clip
+	var total_audio_samples = clip.audio_samples.size() / clip.audio_channels
+	var clip_duration_ticks = clip.content_length_ticks
+	var clip_offset = clip_instance.clip_offset
+	var instance_duration = clip_instance.duration_ticks
+	
+	# Convert tick offsets to sample positions
+	var offset_ratio = float(clip_offset) / float(clip_duration_ticks) if clip_duration_ticks > 0 else 0.0
+	var duration_ratio = float(instance_duration) / float(clip_duration_ticks) if clip_duration_ticks > 0 else 1.0
+	
+	var start_sample = int(offset_ratio * total_audio_samples)
+	var end_sample = int((offset_ratio + duration_ratio) * total_audio_samples)
+	var visible_samples = end_sample - start_sample
+
+	# Determine effective samples per pixel based on visible region
+	var target_resolution = int(float(visible_samples) / float(size.x))
 
 	# Get the best matching waveform resolution
 	var waveform = clip.audio_waveform.get_waveform_for_resolution(target_resolution)
@@ -91,22 +125,31 @@ func _draw_waveform() -> void:
 	var height_per_channel = size.y / clip.audio_channels
 	var center_y_offset = height_per_channel / 2.0
 
-	# Calculate scale factor to fit waveform data to current rendering size
-	# waveform.duration_pixels is the pre-computed pixel width at that resolution
-	# size.x is the current rendering width (may differ due to zoom)
-	var scale_x = float(size.x) / float(waveform.duration_pixels) if waveform.duration_pixels > 0 else 1.0
+	# Calculate which waveform pixels correspond to the visible region
+	var samples_per_waveform_pixel = waveform.samples_per_pixel
+	var start_waveform_pixel = int(float(start_sample) / float(samples_per_waveform_pixel))
+	var end_waveform_pixel = int(float(end_sample) / float(samples_per_waveform_pixel))
+	var visible_waveform_pixels = end_waveform_pixel - start_waveform_pixel
+
+	# Scale factor to map visible waveform pixels to screen width
+	var scale_x = float(size.x) / float(visible_waveform_pixels) if visible_waveform_pixels > 0 else 1.0
 
 	# Draw waveforms for each channel
 	for ch in range(clip.audio_channels):
 		var peak_data = waveform.peak_data_left if ch == 0 else waveform.peak_data_right
 
-		for waveform_pixel in range(peak_data.size()):
+		# Only draw the visible portion
+		for i in range(visible_waveform_pixels):
+			var waveform_pixel = start_waveform_pixel + i
+			if waveform_pixel >= peak_data.size():
+				break
+				
 			var peak_pair = peak_data[waveform_pixel]
 			var min_sample = peak_pair.x * gain_linear
 			var max_sample = peak_pair.y * gain_linear
 
-			# Scale waveform pixel position to current rendering size
-			var pixel_x = waveform_pixel * scale_x
+			# Map waveform pixel to screen position (relative to visible region)
+			var pixel_x = i * scale_x
 
 			# Remap from [-1, 1] to pixel space
 			var base_y = ch * height_per_channel + center_y_offset

@@ -78,7 +78,7 @@
 ### Clips
 - [x] ClipInstances can be dragged to other tracks
 - [x] ClipInstances can be resized
-- [ ] Implement ClipInstance start/end offset properties to denote which portion of the clip is actually active (clip contents should persist and be visible in ClipEditor however). Also need to respect this in TimelineClip
+- [x] Implement ClipInstance offset property in ticks to allow resizing a clip instance from the left edge, skipping part of the clip's content.
 - [x] Multi-select clips with Shift+click < change this to ctrl instead of shift
 - [x] Single-click deselects other tracks
 - [x] Click empty area deselects all

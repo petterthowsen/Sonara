@@ -68,18 +68,27 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                             }
 
                             for clip_note in &clip.midi_notes {
+                                // Apply clip_offset: only play notes at or after the offset
+                                // Translate clip note position to instance local time
+                                let note_start_in_instance = clip_note.start_tick - instance.clip_offset;
+                                let note_end_in_instance = note_start_in_instance + clip_note.duration_ticks;
+                                
+                                // Skip notes that are before the clip_offset
+                                if note_end_in_instance <= 0 {
+                                    continue;
+                                }
+
                                 // Apply transpose
                                 let transposed_note = (clip_note.note as i16 + instance.transpose as i16)
                                     .clamp(0, 127) as MidiNote;
 
                                 // Note On (only within instance, not at end)
-                                if is_within_instance && clip_note.start_tick == offset_in_instance {
+                                if is_within_instance && note_start_in_instance == offset_in_instance {
                                     note_events.push((*track_id, transposed_note, clip_note.velocity, true));
                                 }
 
                                 // Note Off (allow at instance end)
-                                let note_end = clip_note.start_tick + clip_note.duration_ticks;
-                                if note_end == offset_in_instance {
+                                if note_end_in_instance == offset_in_instance {
                                     note_events.push((*track_id, transposed_note, clip_note.velocity, false));
                                 }
                             }
@@ -127,8 +136,14 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                         // Check if we're in the playback range for this instance
                         if current_pos_in_instance >= 0 && current_pos_in_instance < instance.duration_ticks {
                             // Initialize playback position for this clip instance if not yet started
+                            // Apply clip_offset: start reading from the offset position in the clip
                             if !track.audio_playback_positions.contains_key(&instance.id) {
-                                track.audio_playback_positions.insert(instance.id.clone(), 0.0);
+                                // Convert clip_offset (in ticks) to sample position
+                                // Formula: samples = (ticks / PPQ) * (60 / tempo) * sample_rate
+                                let ticks_to_beats = instance.clip_offset as f64 / state.settings.ppq as f64;
+                                let beats_to_seconds = ticks_to_beats * 60.0 / state.settings.tempo as f64;
+                                let offset_samples = beats_to_seconds * clip.audio_sample_rate as f64;
+                                track.audio_playback_positions.insert(instance.id.clone(), offset_samples);
                             }
 
                             // Get mutable reference to playback position

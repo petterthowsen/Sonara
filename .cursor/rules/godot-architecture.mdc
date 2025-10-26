@@ -13,6 +13,13 @@ data/ contains self-synchronizing (via osc) data models (Project, Track, Channel
 ## Components
 in ./components A set of small reusable custom UI controls such as Meters, Sliders, RotaryKnobs etc.
 
+## Clip Editor
+
+- `ClipEditor.gd` hosts ruler + `MidiEditor`, manages grid helper, cursor position, and binds selected `ClipInstance`.
+- `MidiEditor.gd` composes vertical piano, grid renderer, and scroll containers; owns zoom/scroll behavior and passes bindings to note editor.
+- `note_editor/NoteContainer.gd` renders visual notes, keeps them positioned with grid helper, and listens to clip signals for reactive updates.
+- `note_editor/NoteEditor.gd` extends `NoteContainer` with input handling (drag, resize, placement, erase) and delegates selection state.
+- `note_editor/NoteSelectionManager.gd` tracks multi-note selections, clipboard/box select ranges, and exposes signals without touching scene nodes directly.
 
 ## Utilities
 

@@ -32,6 +32,9 @@ var track: Track = null  # Parent track (set by Track when added)
 var start_ticks: int = 0  # Position on timeline
 var duration_ticks: int = 3840  # How long this instance plays (can differ from clip length)
 
+# Clip content offset (where in the clip's content does this instance start reading from)
+var clip_offset: int = 0  # Offset in ticks into the clip's content (allows trimming from left edge)
+
 # Playback parameters
 var loop_enabled: bool = false  # Whether to loop the clip content (default: disabled)
 var loop_start_ticks: int = 0  # Where in the clip to start looping (offset into clip data)
@@ -79,7 +82,7 @@ func set_position(ticks: int) -> void:
 
 		# Sync to audio engine if we have track reference
 		if track and track._is_connected:
-			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks])
+			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
 
 		position_changed.emit(start_ticks)
 		instance_modified.emit()
@@ -92,9 +95,21 @@ func set_duration(ticks: int) -> void:
 
 		# Sync to audio engine if we have track reference
 		if track and track._is_connected:
-			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks])
+			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
 
 		duration_changed.emit(duration_ticks)
+		instance_modified.emit()
+
+
+func set_clip_offset(offset: int) -> void:
+	"""Set the clip content offset (where to start reading from clip)."""
+	if clip_offset != offset:
+		clip_offset = max(0, offset)  # Minimum 0 ticks
+
+		# Sync to audio engine if we have track reference
+		if track and track._is_connected:
+			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
+
 		instance_modified.emit()
 
 
@@ -128,6 +143,7 @@ func get_midi_notes_for_playback(project_start_tick: int, project_end_tick: int)
 	"""
 	Get MIDI notes from the referenced clip, adjusted for this instance's position and settings.
 	Returns array of dictionaries with absolute timeline positions and transposition applied.
+	Applies clip_offset to only play a portion of the clip.
 	"""
 	if not clip or clip.type != Clip.ClipType.MIDI:
 		return []
@@ -145,14 +161,19 @@ func get_midi_notes_for_playback(project_start_tick: int, project_end_tick: int)
 	if play_start >= play_end:
 		return []  # Instance not in requested range
 
-	# Convert to local instance time
+	# Convert to local instance time (relative to instance start)
 	var local_start = play_start - instance_start
 	var local_end = play_end - instance_start
 
-	# Get notes from clip, applying loop logic
+	# Get notes from clip, applying clip_offset and loop logic
 	for midi_note in clip.midi_notes:
-		var note_start = midi_note.start_tick
-		var note_end = midi_note.get_end_tick()
+		# Apply clip_offset: only consider notes that are at or after the offset
+		var note_start = midi_note.start_tick - clip_offset
+		var note_end = midi_note.get_end_tick() - clip_offset
+		
+		# Skip notes that are before the clip_offset
+		if note_end <= 0:
+			continue
 
 		# Handle looping
 		if loop_enabled:
@@ -199,6 +220,7 @@ func to_json() -> Dictionary:
 		"clip_id": clip_id,
 		"start_ticks": start_ticks,
 		"duration_ticks": duration_ticks,
+		"clip_offset": clip_offset,
 		"loop_enabled": loop_enabled,
 		"loop_start_ticks": loop_start_ticks,
 		"loop_length_ticks": loop_length_ticks,
@@ -213,11 +235,12 @@ func to_json() -> Dictionary:
 
 static func from_json(data: Dictionary) -> ClipInstance:
 	var instance_id = data.get("id", "")
-	var clip_id = data.get("clip_id", "")
-	var instance = ClipInstance.new(instance_id, clip_id)
+	var ref_clip_id = data.get("clip_id", "")
+	var instance = ClipInstance.new(instance_id, ref_clip_id)
 
 	instance.start_ticks = data.get("start_ticks", 0)
 	instance.duration_ticks = data.get("duration_ticks", 3840)
+	instance.clip_offset = data.get("clip_offset", 0)
 	instance.loop_enabled = data.get("loop_enabled", false)
 	instance.loop_start_ticks = data.get("loop_start_ticks", 0)
 	instance.loop_length_ticks = data.get("loop_length_ticks", 3840)

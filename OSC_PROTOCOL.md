@@ -82,11 +82,13 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 |---------|------|-------------|
 | `/track/{id}/add_instance` | `s:instance_id, s:clip_id, i:start_tick, i:duration` | Add clip instance to track timeline |
 | `/track/{id}/remove_instance` | `s:instance_id` | Remove clip instance from track |
-| `/track/{id}/instance/{id}/set_position` | `i:start_tick, i:duration` | Update instance position |
+| `/track/{id}/instance/{id}/set_position` | `i:start_tick, i:duration, i:clip_offset` | Update instance position and content offset (ticks) |
 | `/track/{id}/instance/{id}/set_transpose` | `i:semitones` | Set instance transpose (-12 to +12) |
 | `/track/{id}/instance/{id}/set_gain` | `f:db` | Set instance gain offset in dB |
 | `/track/{id}/instance/{id}/set_mute` | `i:0_or_1` | Set instance mute state |
 | `/track/{id}/instance/{id}/set_loop` | `i:enabled, i:start_tick, i:length` | Configure instance looping |
+
+**Clip Offset:** The `clip_offset` parameter (in ticks) allows a ClipInstance to play only a portion of its source Clip's content. A value of `0` plays from the beginning, while positive values skip the beginning of the clip (useful for trimming or resizing from the left edge). This allows multiple instances of the same Clip to play different portions.
 
 ### Device Management (Godot -> Rust)
 
@@ -248,6 +250,7 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
    - Godot: `/track/0/add_instance "instance_001" "clip_001" 0 1920` (place at tick 0, 2 bars long)
    - Godot: `/track/0/add_instance "instance_002" "clip_001" 3840 1920` (place at tick 3840, transposed)
    - Godot: `/track/0/instance/instance_002/set_transpose 12` (transpose +12 semitones)
+   - Godot: `/track/0/instance/instance_001/set_position 0 960 480` (trim: start at 480 ticks into clip, play 960 ticks)
 
 4. **Playback:**
    - Godot: `/transport/play`

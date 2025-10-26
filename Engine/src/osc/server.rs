@@ -505,14 +505,15 @@ impl OscServer {
             }
             ["track", track_id_str, "instance", instance_id_str, "set_position"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
-                    if let (Some(OscType::Int(start_tick)), Some(OscType::Int(duration))) =
-                        (args.get(0), args.get(1)) {
-                        info!("Set instance {} position: start {} duration {}", instance_id_str, start_tick, duration);
+                    if let (Some(OscType::Int(start_tick)), Some(OscType::Int(duration)), Some(OscType::Int(clip_offset))) =
+                        (args.get(0), args.get(1), args.get(2)) {
+                        info!("Set instance {} position: start {} duration {} offset {}", instance_id_str, start_tick, duration, clip_offset);
                         command_tx.send(AudioCommand::UpdateClipInstancePosition {
                             track_id,
                             instance_id: instance_id_str.to_string(),
                             start_tick: *start_tick as i64,
                             duration_ticks: *duration as i64,
+                            clip_offset: *clip_offset as i64,
                         })?;
                     }
                 }

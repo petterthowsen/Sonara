@@ -123,6 +123,7 @@ pub struct ClipInstance {
     pub clip_id: ClipId,
     pub start_tick: Tick,       // Position on timeline
     pub duration_ticks: Tick,   // How long to play (may differ from clip content length)
+    pub clip_offset: Tick,      // Offset into clip content (allows trimming from left edge)
     pub transpose: i8,          // Semitones (-12 to +12)
     pub gain_offset: f32,       // dB offset
     pub muted: bool,
@@ -138,6 +139,7 @@ impl ClipInstance {
             clip_id,
             start_tick,
             duration_ticks,
+            clip_offset: 0,
             transpose: 0,
             gain_offset: 0.0,
             muted: false,

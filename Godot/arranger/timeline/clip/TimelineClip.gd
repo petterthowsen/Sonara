@@ -40,6 +40,8 @@ var resize_edge: String = ""  # "left" or "right"
 var resize_start_pos: Vector2 = Vector2.ZERO
 var resize_start_ticks: int = 0
 var resize_start_duration: int = 0
+var resize_start_offset: int = 0  # Initial clip_offset when resize started
+var resize_padding_added: int = 0  # Track total padding added during this resize
 @export var resize_edge_size: float = 8.0  # pixel width of resize edge zones
 
 # Exported StyleBoxes for different states
@@ -171,9 +173,11 @@ func _gui_input(event: InputEvent) -> void:
 					is_resizing = true
 					resize_edge = edge
 					resize_start_pos = get_global_mouse_position()
+					resize_padding_added = 0  # Reset padding tracker
 					if clip_instance:
 						resize_start_ticks = clip_instance.start_ticks
 						resize_start_duration = clip_instance.duration_ticks
+						resize_start_offset = clip_instance.clip_offset
 					accept_event()
 				else:
 					# Request selection with shift-key awareness
@@ -211,7 +215,7 @@ func _gui_input(event: InputEvent) -> void:
 		var tick_delta = timeline.pixels_to_ticks(pixel_delta)
 
 		if resize_edge == "left":
-			# Resize from left: adjust start_ticks and duration
+			# Resize from left: adjust start_ticks, duration, and clip_offset
 			var new_start_ticks = resize_start_ticks + tick_delta
 
 			# Snap to grid
@@ -223,15 +227,32 @@ func _gui_input(event: InputEvent) -> void:
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
 
+			# Calculate how much we moved the left edge (accounting for any padding already added)
+			var left_edge_delta = new_start_ticks - resize_start_ticks
+			
+			# Update clip_offset: skip the trimmed portion of the clip
+			# If we moved right (+delta), we need to increase the offset to skip that content
+			# Account for padding we've already added during this resize
+			var new_clip_offset = resize_start_offset + left_edge_delta + resize_padding_added
+			
+			# Handle negative offset: add padding to the beginning of the clip
+			if new_clip_offset < 0:
+				var padding_needed = -new_clip_offset
+				_add_padding_to_clip(padding_needed)
+				resize_padding_added += padding_needed  # Track cumulative padding
+				new_clip_offset = 0  # Reset offset after adding padding
+			
 			# Calculate new duration (original end point stays fixed)
+			# This must happen AFTER padding is added since it may change the instance position
 			var original_end_ticks = resize_start_ticks + resize_start_duration
 			var new_duration = original_end_ticks - new_start_ticks
 
 			# Minimum duration of 1 snap interval (or 1 tick if no snap)
 			var min_duration = snap_interval if snap_interval > 0 else 1
 			new_duration = max(min_duration, new_duration)
-
-			# Update clip instance
+			
+			# Update clip instance (this will sync to engine via OSC)
+			clip_instance.set_clip_offset(new_clip_offset)
 			clip_instance.set_position(new_start_ticks)
 			clip_instance.set_duration(new_duration)
 			_update_from_clip_instance()
@@ -308,3 +329,35 @@ func _on_mouse_entered() -> void:
 func _on_mouse_exited() -> void:
 	"""Handle mouse exiting the clip."""
 	set_hovered(false)
+
+
+func _add_padding_to_clip(padding_ticks: int) -> void:
+	"""Add padding to the beginning of the clip by shifting all content forward.
+	The caller is responsible for moving the ClipInstance backward on the timeline
+	to keep the visual position of the content unchanged."""
+	if not clip_instance or not clip_instance.clip:
+		return
+	
+	var clip = clip_instance.clip
+	
+	if clip.type == Clip.ClipType.MIDI:
+		# Shift all MIDI notes forward
+		for note in clip.midi_notes:
+			note.start_tick += padding_ticks
+		
+		# Increase clip content length
+		clip.content_length_ticks += padding_ticks
+		
+		# Notify the clip that it has been modified (triggers update_note OSC calls)
+		for note in clip.midi_notes:
+			clip.update_midi_note(note)
+		
+		print("[TimelineClip] Added %d ticks of padding to clip %s (new length: %d)" % 
+			[padding_ticks, clip.id, clip.content_length_ticks])
+	
+	elif clip.type == Clip.ClipType.AUDIO:
+		# For audio clips, we'd need to prepend silence samples
+		# This is more complex and requires reprocessing waveforms
+		# For now, we'll just prevent negative offsets for audio clips
+		push_warning("[TimelineClip] Audio clip padding not yet implemented - clamping to 0")
+		# TODO: Implement audio padding by prepending silence samples

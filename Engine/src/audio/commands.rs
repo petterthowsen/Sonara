@@ -44,7 +44,7 @@ pub enum AudioCommand {
     // ClipInstance management
     CreateClipInstance { track_id: TrackId, instance_id: ClipInstanceId, clip_id: ClipId, start_tick: Tick, duration_ticks: Tick },
     RemoveClipInstance { track_id: TrackId, instance_id: ClipInstanceId },
-    UpdateClipInstancePosition { track_id: TrackId, instance_id: ClipInstanceId, start_tick: Tick, duration_ticks: Tick },
+    UpdateClipInstancePosition { track_id: TrackId, instance_id: ClipInstanceId, start_tick: Tick, duration_ticks: Tick, clip_offset: Tick },
     UpdateClipInstanceTranspose { track_id: TrackId, instance_id: ClipInstanceId, transpose: i8 },
     UpdateClipInstanceGain { track_id: TrackId, instance_id: ClipInstanceId, gain_db: f32 },
     UpdateClipInstanceMute { track_id: TrackId, instance_id: ClipInstanceId, muted: bool },
@@ -485,12 +485,19 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                 warn!("Track not found for remove instance: {}", track_id);
             }
         }
-        AudioCommand::UpdateClipInstancePosition { track_id, instance_id, start_tick, duration_ticks } => {
+        AudioCommand::UpdateClipInstancePosition { track_id, instance_id, start_tick, duration_ticks, clip_offset } => {
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if let Some(instance) = track.clip_instances.iter_mut().find(|i| i.id == instance_id) {
                     instance.start_tick = start_tick;
                     instance.duration_ticks = duration_ticks;
-                    info!("ClipInstance {} position updated: start={} dur={}", instance_id, start_tick, duration_ticks);
+                    instance.clip_offset = clip_offset;
+                    
+                    // Reset playback position when clip_offset changes
+                    // (will be re-initialized with new offset on next playback)
+                    track.audio_playback_positions.remove(&instance_id);
+                    
+                    info!("ClipInstance {} position updated: start={} dur={} offset={}", 
+                        instance_id, start_tick, duration_ticks, clip_offset);
                 } else {
                     warn!("ClipInstance {} not found on track {}", instance_id, track_id);
                 }

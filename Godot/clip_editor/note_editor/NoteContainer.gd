@@ -44,9 +44,25 @@ var grid_helper: GridHelper = null:
 
 
 func set_grid_helper(gh: GridHelper) -> void:
+	# Disconnect from old grid_helper if it exists
+	if grid_helper and grid_helper.changed.is_connected(_on_grid_helper_changed):
+		grid_helper.changed.disconnect(_on_grid_helper_changed)
+	
 	grid_helper = gh
+	
+	# Connect to new grid_helper's changed signal
+	if grid_helper:
+		grid_helper.changed.connect(_on_grid_helper_changed)
+	
 	_update_note_positions()
 	update_container_width()
+
+
+func _on_grid_helper_changed() -> void:
+	"""Called when grid_helper properties change (zoom, scroll, time signature, etc.)"""
+	_update_note_positions()
+	update_container_width()
+	queue_redraw()  # Redraw playhead at new zoom level
 
 
 # Playhead position (in clip-local ticks) - for visual playback indicator
@@ -98,6 +114,10 @@ func unbind():
 			clip.midi_note_removed.disconnect(_on_clip_note_removed)
 		if clip.midi_note_changed.is_connected(_on_clip_note_changed):
 			clip.midi_note_changed.disconnect(_on_clip_note_changed)
+	
+	# Disconnect from grid_helper if connected
+	if grid_helper and grid_helper.changed.is_connected(_on_grid_helper_changed):
+		grid_helper.changed.disconnect(_on_grid_helper_changed)
 
 	# Clear all visual notes
 	for node in get_children():
