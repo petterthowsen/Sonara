@@ -31,6 +31,7 @@ pub enum AudioCommand {
 
     // Track management
     CreateTrack { id: TrackId, channel_id: ChannelId },
+    SetTrackRoute { id: TrackId, channel_id: ChannelId },
 
     // Clip management (new architecture)
     CreateClip { id: ClipId, name: String, clip_type: String },
@@ -131,6 +132,12 @@ pub enum EngineStatus {
         device_position: usize,
         param_id: u32,
         value: f32,  // Normalized 0.0-1.0
+    },
+    
+    // Log messages forwarded to Godot UI
+    LogMessage {
+        level: String,  // "warn" or "error"
+        message: String,
     },
 }
 
@@ -314,6 +321,14 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
             state.tracks.insert(id, track);
             info!("Track {} created, routed to channel {}", id, channel_id);
         }
+        AudioCommand::SetTrackRoute { id, channel_id } => {
+            if let Some(track) = state.tracks.get_mut(&id) {
+                track.channel_id = channel_id;
+                info!("Track {} routed to channel {}", id, channel_id);
+            } else {
+                warn!("Cannot set route for track {} (not found)", id);
+            }
+        }
 
         // Clip management commands
         AudioCommand::CreateClip { id, name, clip_type } => {
@@ -339,21 +354,26 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         }
         AudioCommand::AddNoteToClip { clip_id, note_id, note, start_tick, duration_ticks, velocity } => {
             if let Some(clip) = state.clips.get_mut(&clip_id) {
-                let clip_note = ClipNote {
-                    id: note_id,
-                    note,
-                    velocity,
-                    start_tick,
-                    duration_ticks,
-                };
-                clip.midi_notes.push(clip_note);
-                // Update content length if needed
-                let note_end = start_tick + duration_ticks;
-                if note_end > clip.content_length_ticks {
-                    clip.content_length_ticks = note_end;
+                // Check if note with this ID already exists (protect against duplicate OSC messages)
+                if clip.midi_notes.iter().any(|n| n.id == note_id) {
+                    warn!("Note {} already exists in clip {} - ignoring duplicate add command", note_id, clip_id);
+                } else {
+                    let clip_note = ClipNote {
+                        id: note_id,
+                        note,
+                        velocity,
+                        start_tick,
+                        duration_ticks,
+                    };
+                    clip.midi_notes.push(clip_note);
+                    // Update content length if needed
+                    let note_end = start_tick + duration_ticks;
+                    if note_end > clip.content_length_ticks {
+                        clip.content_length_ticks = note_end;
+                    }
+                    info!("Note {} added to clip {}: note={} start={} dur={}",
+                        note_id, clip_id, note, start_tick, duration_ticks);
                 }
-                info!("Note {} added to clip {}: note={} start={} dur={}",
-                    note_id, clip_id, note, start_tick, duration_ticks);
             } else {
                 warn!("Clip not found for add note: {}", clip_id);
             }
@@ -378,6 +398,27 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         }
         AudioCommand::UpdateClipNote { clip_id, note_id, note, start_tick, duration_ticks, velocity } => {
             if let Some(clip) = state.clips.get_mut(&clip_id) {
+                // Check for duplicate notes with same ID (shouldn't happen but let's be defensive)
+                let matching_notes: Vec<_> = clip.midi_notes.iter()
+                    .filter(|n| n.id == note_id)
+                    .collect();
+                
+                if matching_notes.len() > 1 {
+                    warn!("Found {} duplicate notes with ID {} in clip {} - removing duplicates", 
+                        matching_notes.len(), note_id, clip_id);
+                    // Keep only the first one
+                    let mut found_first = false;
+                    clip.midi_notes.retain(|n| {
+                        if n.id == note_id {
+                            if found_first {
+                                return false; // Remove duplicate
+                            }
+                            found_first = true;
+                        }
+                        true
+                    });
+                }
+                
                 if let Some(clip_note) = clip.midi_notes.iter_mut().find(|n| n.id == note_id) {
                     clip_note.note = note;
                     clip_note.start_tick = start_tick;
@@ -388,7 +429,8 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                         .map(|n| n.start_tick + n.duration_ticks)
                         .max()
                         .unwrap_or(0);
-                    info!("Note {} updated in clip {}", note_id, clip_id);
+                    info!("Note {} updated in clip {}: note={} start={} dur={}", 
+                        note_id, clip_id, note, start_tick, duration_ticks);
                 } else {
                     warn!("Note {} not found in clip {}", note_id, clip_id);
                 }

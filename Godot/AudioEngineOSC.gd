@@ -10,6 +10,7 @@ extends Node
 
 signal engine_connected()
 signal engine_disconnected()
+signal engine_log_message(level: String, message: String)  # Emitted for warn/error logs from engine
 
 # ============================================================================
 # CONSTANTS
@@ -17,6 +18,7 @@ signal engine_disconnected()
 
 const ENGINE_SEND_PORT = 7000  # Rust listens here
 const ENGINE_RECEIVE_PORT = 7001  # Godot listens here
+const HEARTBEAT_TIMEOUT_SEC = 3.0  # Disconnect if no heartbeat for 3 seconds
 
 # ============================================================================
 # NODES
@@ -29,7 +31,8 @@ var osc_server: OSCServer
 # STATE
 # ============================================================================
 
-var is_connected: bool = false
+var _is_engine_connected: bool = false
+var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
 
 # OSC message listeners: Dictionary[String, Array[Callable]]
 # Maps OSC address pattern to array of callbacks
@@ -56,6 +59,16 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 	print("[AudioEngineOSC] Ready - listening on port %d, sending to port %d" % [ENGINE_RECEIVE_PORT, ENGINE_SEND_PORT])
+
+
+func _process(_delta: float) -> void:
+	"""Check for heartbeat timeout."""
+	if _is_engine_connected:
+		var time_since_heartbeat = (Time.get_ticks_msec() - _last_heartbeat_time) / 1000.0
+		if time_since_heartbeat > HEARTBEAT_TIMEOUT_SEC:
+			print("[AudioEngineOSC] Heartbeat timeout (%.1fs) - engine disconnected" % time_since_heartbeat)
+			_is_engine_connected = false
+			engine_disconnected.emit()
 
 
 # ============================================================================
@@ -123,6 +136,14 @@ func unlisten(address: String, callback: Callable) -> void:
 		print("[AudioEngineOSC] Unregistered listener for ", address)
 
 
+func reset_connection() -> void:
+	"""Reset connection state (called when project disconnects)."""
+	if _is_engine_connected:
+		_is_engine_connected = false
+		engine_disconnected.emit()
+		print("[AudioEngineOSC] Connection reset")
+
+
 # ============================================================================
 # INTERNAL - OSC message routing
 # ============================================================================
@@ -131,11 +152,34 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 	"""Route incoming OSC messages to registered listeners."""
 
 	# Special handling for connection status messages
-	if address == "/status/playing":
-		if not is_connected:
-			is_connected = true
+	if address == "/status/connected":
+		if not _is_engine_connected and values is Array and values.size() > 0 and values[0] == 1:
+			_is_engine_connected = true
+			_last_heartbeat_time = Time.get_ticks_msec()
 			engine_connected.emit()
 			print("[AudioEngineOSC] Engine connected!")
+	elif address == "/status/playing":
+		if not _is_engine_connected:
+			_is_engine_connected = true
+			_last_heartbeat_time = Time.get_ticks_msec()
+			engine_connected.emit()
+			print("[AudioEngineOSC] Engine connected!")
+	elif address == "/status/heartbeat":
+		# Update last heartbeat time
+		_last_heartbeat_time = Time.get_ticks_msec()
+	
+	# Special handling for log messages
+	elif address == "/log":
+		if values is Array and values.size() >= 2:
+			var level: String = values[0]
+			var message: String = values[1]
+			engine_log_message.emit(level, message)
+			# Also print to console for convenience
+			if level == "error":
+				push_error("[Engine] " + message)
+			elif level == "warn":
+				print("[Engine] warn: " + message)
+			return  # Don't route to other listeners
 
 	# Normalize values to always be an Array for consistent callback interface
 	var args: Array

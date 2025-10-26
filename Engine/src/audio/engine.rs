@@ -15,13 +15,14 @@ use super::mixing::mix_and_output;
 pub struct AudioEngine {
     _stream: Stream,
     command_tx: Sender<AudioCommand>,
+    status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
     status_rx: Receiver<EngineStatus>,
 }
 
 impl AudioEngine {
-    /// Create and initialize a new audio engine
-    pub fn new() -> Result<Self> {
+    /// Create and initialize a new audio engine with provided status channel
+    pub fn with_status_channel(status_tx: Sender<EngineStatus>, status_rx: Receiver<EngineStatus>) -> Result<Self> {
         info!("Initializing DAW audio engine...");
 
         // Get the default audio host
@@ -74,7 +75,6 @@ impl AudioEngine {
 
         // Create command channel for thread-safe communication
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
 
         // Create shared state
         let state = Arc::new(Mutex::new(EngineState::default()));
@@ -86,13 +86,13 @@ impl AudioEngine {
             state_lock.output_devices = output_devices;
         }
 
-        // Build the audio stream
+        // Build the audio stream (pass a clone of status_tx, keep one for log forwarder)
         let stream = Self::build_stream(
             &default_device,
             &config.into(),
             command_rx,
             command_tx.clone(),
-            status_tx,
+            status_tx.clone(),
             state.clone(),
         )?;
 
@@ -103,9 +103,16 @@ impl AudioEngine {
         Ok(Self {
             _stream: stream,
             command_tx,
+            status_tx,
             state,
             status_rx,
         })
+    }
+
+    /// Create and initialize a new audio engine (convenience method)
+    pub fn new() -> Result<Self> {
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        Self::with_status_channel(status_tx, status_rx)
     }
 
     /// Build the audio output stream
@@ -224,6 +231,11 @@ impl AudioEngine {
     /// Get a clone of the command sender for external use
     pub fn command_sender(&self) -> Sender<AudioCommand> {
         self.command_tx.clone()
+    }
+
+    /// Get a handle to send status updates (for log forwarder)
+    pub fn status_sender(&self) -> Sender<EngineStatus> {
+        self.status_tx.clone()
     }
 
     /// Get status receiver for external use

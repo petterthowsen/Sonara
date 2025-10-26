@@ -87,6 +87,20 @@
 - [x] NoteEditor bug: erase-mode is sometimes stuck on even after releasing right-mouse
     ^ Fixed by adding global _input() handler to catch right-mouse release even when consumed by child nodes
 - [x] When editing a clip, closing the clip editor, deselecting the clip, reselecting it and opening the clip editor, current notes aren't visible
+- [x] BUG: note mouse position is slightly wrong when placing/moving notes
+- [X] right-clicking an empty area should deselect any selected notes (and emit that)
+- [x] box-selecting notes should ensure the start/end time of the NoteSelection is at least as large as the start of first note and end of last note.
+- [x] need a clipinstance-local playhead visual (vertcal line) to visualize durring playback
+- [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere", which will:
+    1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"
+    2. while "duplicate-dragging", continually move the duplicates relative to mouse note position
+- [x] Visualize current NoteSelection start and end range
+- [ ] Track vs clip context mode:
+    - [ ] In clip mode: ruler is relative to ClipInstance, draw clip start and end in ruler
+    - [ ] In track mode: show all clips as they appear in entire track, ruler relative to entire track
+- [ ] Multi-clip and multi-track editing: selecting multiple clips renders all notes
+- [x] Color VisualNote by track color
+- [ ] Modifier+right-click to open context menu in NoteEditor
 
 ### Mixer
 - [x] double-clicking a device in a CompactDeviceList should select the channel and open DeviceLane (if hidden), then grab_focus the DevicePanel there

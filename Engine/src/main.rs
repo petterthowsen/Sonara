@@ -1,6 +1,7 @@
 mod audio;
 mod osc;
 mod window_manager;
+mod log_forwarder;
 
 use anyhow::Result;
 use tracing::info;
@@ -12,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use audio::AudioEngine;
 use osc::OscServer;
 use window_manager::WindowManager;
+use log_forwarder::LogForwarder;
 
 // Wrapper to make Arc<Mutex<File>> implement MakeWriter for tracing_subscriber
 struct RotatableWriter {
@@ -66,16 +68,31 @@ fn main() -> Result<()> {
     let log_writer = RotatableWriter::new(log_file);
     let log_handle = log_writer.get_handle();
 
-    // Initialize logging to file (also prints to console via println in code)
-    tracing_subscriber::fmt()
+    // Create status channel FIRST so we can pass it to both the log forwarder and the engine
+    let (status_tx, status_rx) = crossbeam::channel::unbounded();
+
+    // Set up logging with both file writer AND log forwarder to Godot
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::Layer;
+    
+    let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(log_writer)
         .with_ansi(false)  // No color codes in file
+        .with_filter(LevelFilter::INFO);  // Only INFO, WARN, ERROR (no TRACE/DEBUG spam)
+
+    let log_forwarder = LogForwarder::new(status_tx.clone());
+
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(log_forwarder)
         .init();
 
     info!("Starting DAW Audio Engine...");
 
-    // Initialize audio engine
-    let engine = AudioEngine::new()?;
+    // Initialize audio engine with our status channel
+    let engine = AudioEngine::with_status_channel(status_tx, status_rx)?;
     info!("Audio engine initialized");
 
     // Get command sender and status receiver for OSC server

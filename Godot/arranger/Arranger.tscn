@@ -1,9 +1,8 @@
-[gd_scene load_steps=11 format=3 uid="uid://dwx58rtumvnkj"]
+[gd_scene load_steps=9 format=3 uid="uid://dwx58rtumvnkj"]
 
 [ext_resource type="Script" uid="uid://3rv0d2u2oata" path="res://arranger/Arranger.gd" id="1_bh1i7"]
 [ext_resource type="PackedScene" uid="uid://cx5s8jbwq0dt2" path="res://arranger/tracklist/TrackList.tscn" id="1_hqaxx"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_dtx23"]
-[ext_resource type="Script" uid="uid://csw2ec1s52u2m" path="res://components/GridHelper.gd" id="3_nqsw4"]
 [ext_resource type="PackedScene" uid="uid://cyvwigrev1rtt" path="res://arranger/timeline/Timeline.tscn" id="4_dtx23"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bh1i7"]
@@ -17,9 +16,6 @@ corner_radius_top_right = 3
 corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
-
-[sub_resource type="Resource" id="Resource_t0y6b"]
-script = ExtResource("3_nqsw4")
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tv7ag"]
 content_margin_left = 0.0
@@ -57,7 +53,7 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[node name="ArrangeView" type="VBoxContainer"]
+[node name="Arranger" type="VBoxContainer"]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -105,7 +101,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_vertical = 3
 script = ExtResource("2_dtx23")
-grid_helper = SubResource("Resource_t0y6b")
 
 [node name="VScroll" type="ScrollContainer" parent="VSplitContainer"]
 layout_mode = 2

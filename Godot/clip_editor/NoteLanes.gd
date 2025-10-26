@@ -2,11 +2,12 @@
 @tool
 class_name NoteLanes extends Control
 
-@export var grid_helper : GridHelper
+var grid_helper : GridHelper = GridHelper.new()
 @export var key_height := 20.0:
 	set(kh):
 		if key_height != kh:
 			key_height = kh
+			update_minimum_size()
 			queue_redraw()
 
 @export var note_lane_color_white := Color("666"):

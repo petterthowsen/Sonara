@@ -1,6 +1,16 @@
 class_name Project extends RefCounted
 
 # ============================================================================
+# ENUMS
+# ============================================================================
+
+enum ConnectionState {
+	DISCONNECTED,
+	CONNECTING,
+	CONNECTED
+}
+
+# ============================================================================
 # SIGNALS
 # ============================================================================
 
@@ -10,8 +20,7 @@ signal channel_added(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
-signal engine_connected()
-signal engine_disconnected()
+signal connection_state_changed(state: ConnectionState)
 
 # ============================================================================
 # PROPERTIES
@@ -49,12 +58,17 @@ var created_date: int = 0  # Unix timestamp
 var modified_date: int = 0
 
 # Connection state
-var _is_connected: bool = false
+var _connection_state: ConnectionState = ConnectionState.DISCONNECTED
+
+
+## Get current connection state
+func get_connection_state() -> ConnectionState:
+	return _connection_state
 
 
 ## Check if project is connected to engine
 func is_connected_to_engine() -> bool:
-	return _is_connected
+	return _connection_state == ConnectionState.CONNECTED
 
 # ============================================================================
 # LIFECYCLE
@@ -77,16 +91,37 @@ func _init():
 
 func connect_to_engine() -> void:
 	"""Connect project and all data to audio engine."""
-	if _is_connected:
+	if _connection_state != ConnectionState.DISCONNECTED:
 		return
 
 	print("[Project] Connecting to audio engine...")
+	
+	# Set state to CONNECTING
+	_connection_state = ConnectionState.CONNECTING
+	connection_state_changed.emit(ConnectionState.CONNECTING)
 
-	# Send project initialization
+	# Listen for engine connection confirmation
+	if not AudioEngineOSC.engine_connected.is_connected(_on_engine_confirmed_connected):
+		AudioEngineOSC.engine_connected.connect(_on_engine_confirmed_connected)
+	
+	# Listen for engine disconnection
+	if not AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
+		AudioEngineOSC.engine_disconnected.connect(_on_engine_disconnected)
+
+	# Send project initialization (engine will respond with /status/connected)
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
 
-	# Mark as connected BEFORE syncing (so _sync_clip_to_engine doesn't early-return)
-	_is_connected = true
+
+func _on_engine_confirmed_connected() -> void:
+	"""Called when engine confirms it's ready (after receiving /status/connected)."""
+	if _connection_state == ConnectionState.CONNECTED:
+		return  # Already connected
+	
+	print("[Project] Engine confirmed connection, syncing project data...")
+	
+	# Mark as connected so sync methods work
+	_connection_state = ConnectionState.CONNECTED
+	connection_state_changed.emit(ConnectionState.CONNECTED)
 
 	# Sync all clips to engine (must happen before tracks, since tracks reference clips)
 	for clip_id in clips.keys():
@@ -101,15 +136,30 @@ func connect_to_engine() -> void:
 		track.connect_to_engine()
 
 	print("[Project] Connected to audio engine")
-	engine_connected.emit()
+
+
+func _on_engine_disconnected() -> void:
+	"""Called when engine connection is lost (heartbeat timeout)."""
+	if _connection_state == ConnectionState.DISCONNECTED:
+		return  # Already disconnected
+	
+	print("[Project] Engine connection lost!")
+	_connection_state = ConnectionState.DISCONNECTED
+	connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
 
 func disconnect_from_engine() -> void:
 	"""Disconnect project and all data from audio engine."""
-	if not _is_connected:
+	if _connection_state == ConnectionState.DISCONNECTED:
 		return
 
 	print("[Project] Disconnecting from audio engine...")
+
+	# Disconnect signal listeners
+	if AudioEngineOSC.engine_connected.is_connected(_on_engine_confirmed_connected):
+		AudioEngineOSC.engine_connected.disconnect(_on_engine_confirmed_connected)
+	if AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
+		AudioEngineOSC.engine_disconnected.disconnect(_on_engine_disconnected)
 
 	# Disconnect all tracks
 	for track in tracks:
@@ -122,14 +172,17 @@ func disconnect_from_engine() -> void:
 	# Clear project (this clears clips, tracks, channels from engine)
 	AudioEngineOSC.send("/project/clear", [])
 
-	_is_connected = false
+	# Reset AudioEngineOSC connection state
+	AudioEngineOSC.reset_connection()
+
+	_connection_state = ConnectionState.DISCONNECTED
+	connection_state_changed.emit(ConnectionState.DISCONNECTED)
 	print("[Project] Disconnected from audio engine")
-	engine_disconnected.emit()
 
 
 func _sync_clip_to_engine(clip: Clip) -> void:
 	"""Sync a clip and its MIDI notes or audio data to the audio engine."""
-	if not _is_connected:
+	if _connection_state != ConnectionState.CONNECTED:
 		print("[Project] WARNING: _sync_clip_to_engine called but not connected!")
 		return
 
@@ -149,13 +202,6 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 				note.duration_ticks,
 				note.velocity
 			])
-		# Connect to clip signals to keep engine in sync
-		if not clip.midi_note_added.is_connected(_on_clip_note_added):
-			clip.midi_note_added.connect(_on_clip_note_added.bind(clip))
-		if not clip.midi_note_removed.is_connected(_on_clip_note_removed):
-			clip.midi_note_removed.connect(_on_clip_note_removed.bind(clip))
-		if not clip.midi_note_changed.is_connected(_on_clip_note_changed):
-			clip.midi_note_changed.connect(_on_clip_note_changed.bind(clip))
 	else:
 		# Sync audio data (if audio clip)
 		if not clip.audio_file_path.is_empty():
@@ -173,47 +219,16 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 			print("[Project] WARNING: Audio clip %s has no audio_file_path!" % clip.id)
 
 
-func _on_clip_note_added(note: MidiNoteData, clip: Clip) -> void:
-	"""Handle when a note is added to a clip - sync to engine."""
-	if _is_connected:
-		AudioEngineOSC.send("/clip/%s/add_note" % clip.id, [
-			note.id,
-			note.note,
-			note.start_tick,
-			note.duration_ticks,
-			note.velocity
-		])
-
-
-func _on_clip_note_removed(note: MidiNoteData, clip: Clip) -> void:
-	"""Handle when a note is removed from a clip - sync to engine."""
-	if _is_connected:
-		AudioEngineOSC.send("/clip/%s/remove_note" % clip.id, [note.id])
-
-
-func _on_clip_note_changed(note: MidiNoteData, clip: Clip) -> void:
-	"""Handle when a note is changed in a clip - sync to engine."""
-	if _is_connected:
-		AudioEngineOSC.send("/clip/%s/update_note" % clip.id, [
-			note.id,
-			note.note,
-			note.start_tick,
-			note.duration_ticks,
-			note.velocity
-		])
-
-
 # ============================================================================
 # CHANNEL MANAGEMENT
 # ============================================================================
-
 func add_channel(channel: Channel) -> void:
 	"""Add an existing channel to the project."""
 	channels.append(channel)
 	channel_added.emit(channel)
 
 	# Auto-connect if project is connected
-	if _is_connected:
+	if _connection_state == ConnectionState.CONNECTED:
 		channel.connect_to_engine()
 
 
@@ -261,7 +276,7 @@ func add_track(track: Track) -> void:
 	track_added.emit(track)
 
 	# Auto-connect if project is connected
-	if _is_connected:
+	if _connection_state == ConnectionState.CONNECTED:
 		track.connect_to_engine()
 
 
@@ -309,7 +324,7 @@ func remove_track(track_id: int) -> bool:
 		_renumber_siblings(-1)
 	
 	# Disconnect from engine if connected
-	if _is_connected and track._is_connected:
+	if _connection_state == ConnectionState.CONNECTED and track._is_connected:
 		track.disconnect_from_engine()
 	
 	# Remove from tracks array
@@ -403,7 +418,7 @@ func add_clip(clip: Clip) -> void:
 	print("[Project] Added clip to pool: %s (total clips: %d)" % [clip.id, clips.size()])
 
 	# Sync to engine if connected
-	if _is_connected:
+	if _connection_state == ConnectionState.CONNECTED:
 		_sync_clip_to_engine(clip)
 
 	clip_added.emit(clip)
@@ -467,7 +482,7 @@ func remove_clip(clip_id: String) -> bool:
 	# For now, just remove it
 
 	# Remove from engine if connected
-	if _is_connected:
+	if _connection_state == ConnectionState.CONNECTED:
 		AudioEngineOSC.send("/clip/delete", [clip_id])
 
 	clips.erase(clip_id)
@@ -497,12 +512,7 @@ func create_instrument_track(track_name: String = "Instrument") -> Dictionary:
 
 	var channel = create_channel(track_name, Channel.ChannelType.INSTRUMENT)
 
-	track.default_channel_id = channel.id
-
-	# Reconnect track to update routing (if project is connected)
-	if _is_connected and track._is_connected:
-		track.disconnect_from_engine()
-		track.connect_to_engine()
+	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
 
 	return {"track": track, "channel": channel}
 
@@ -515,12 +525,7 @@ func create_audio_track(track_name: String = "Audio") -> Dictionary:
 
 	var channel = create_channel(track_name, Channel.ChannelType.AUDIO)
 
-	track.default_channel_id = channel.id
-
-	# Reconnect track to update routing (if project is connected)
-	if _is_connected and track._is_connected:
-		track.disconnect_from_engine()
-		track.connect_to_engine()
+	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
 
 	return {"track": track, "channel": channel}
 
@@ -531,8 +536,13 @@ func create_bus_channel(bus_name: String = "Bus") -> Channel:
 	return create_channel(bus_name, Channel.ChannelType.BUS)
 
 
+# Create folder track with its own bus channel
+func create_group_track(group_name: String = "Group") -> Dictionary[Track, Channel]:
+	"""Create a group track with a bus channel."""
+	return create_folder_track(group_name, true)
+
 # Create folder track with optional channel
-func create_folder_track(folder_name: String = "Folder", with_channel: bool = true) -> Dictionary:
+func create_folder_track(folder_name: String = "Folder", with_channel: bool = false) -> Dictionary:
 	"""Create a folder track with optional channel."""
 	var track = create_track(folder_name)
 	track.type = Track.TrackType.FOLDER
@@ -543,7 +553,7 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = tr
 		track.default_channel_id = channel.id
 
 		# Reconnect track to update routing (if project is connected)
-		if _is_connected and track._is_connected:
+		if _connection_state == ConnectionState.CONNECTED and track._is_connected:
 			track.disconnect_from_engine()
 			track.connect_to_engine()
 

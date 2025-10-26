@@ -13,7 +13,7 @@ border_width_left = 1
 border_width_top = 1
 border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.43137255, 0.43137255, 0.43137255, 1)
+border_color = Color(0.43, 0.43, 0.43, 0.5019608)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -30,7 +30,7 @@ border_width_left = 1
 border_width_top = 1
 border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.52734375, 0.52734375, 0.52734375, 1)
+border_color = Color(0.53, 0.53, 0.53, 0.49803922)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -67,6 +67,7 @@ corner_radius_top_right = 3
 corner_detail = 5
 
 [node name="Clip" type="Control"]
+clip_contents = true
 layout_mode = 3
 anchors_preset = 0
 offset_right = 214.0
@@ -88,6 +89,7 @@ grow_vertical = 2
 theme_override_constants/separation = 0
 
 [node name="Header" type="PanelContainer" parent="VBoxContainer"]
+show_behind_parent = true
 layout_mode = 2
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")

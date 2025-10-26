@@ -60,6 +60,10 @@ impl OscServer {
         let socket_clone = self.socket.try_clone()?;
         let client_port = self.client_port;
         thread::spawn(move || {
+            use std::time::Instant;
+            let mut last_heartbeat = Instant::now();
+            let heartbeat_interval = Duration::from_secs(1);
+            
             loop {
                 if let Ok(status) = status_rx.recv_timeout(Duration::from_millis(10)) {
                     // Forward GUI events to main loop
@@ -82,6 +86,19 @@ impl OscServer {
                     }
                     
                     Self::send_status_update(&socket_clone, client_port, status);
+                }
+                
+                // Send periodic heartbeat
+                if last_heartbeat.elapsed() >= heartbeat_interval {
+                    let addr = format!("127.0.0.1:{}", client_port);
+                    if let Ok(target) = addr.parse::<SocketAddr>() {
+                        let msg = rosc::encoder::encode(&OscPacket::Message(OscMessage {
+                            addr: "/status/heartbeat".to_string(),
+                            args: vec![OscType::Int(1)],
+                        })).unwrap_or_default();
+                        let _ = socket_clone.send_to(&msg, target);
+                    }
+                    last_heartbeat = Instant::now();
                 }
             }
         });
@@ -281,6 +298,9 @@ impl OscServer {
                         sample_rate: *sr,
                     };
                     command_tx.send(AudioCommand::InitProject(settings))?;
+                    
+                    // Send confirmation that engine is ready
+                    let _ = self.send_message("/status/connected", vec![OscType::Int(1)]);
                 }
             }
             ["project", "clear"] => {
@@ -342,6 +362,15 @@ impl OscServer {
                 if let (Ok(id), Some(OscType::Int(channel_id))) = (id_str.parse::<usize>(), args.first()) {
                     info!("Create track {} -> channel {}", id, channel_id);
                     command_tx.send(AudioCommand::CreateTrack {
+                        id,
+                        channel_id: *channel_id as usize
+                    })?;
+                }
+            }
+            ["track", id_str, "route"] => {
+                if let (Ok(id), Some(OscType::Int(channel_id))) = (id_str.parse::<usize>(), args.first()) {
+                    info!("Route track {} to channel {}", id, channel_id);
+                    command_tx.send(AudioCommand::SetTrackRoute {
                         id,
                         channel_id: *channel_id as usize
                     })?;
@@ -784,6 +813,12 @@ impl OscServer {
                 let addr = format!("/channel/{}/device/{}/param/{}/value", channel_id, device_position, param_id);
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
+            }
+            EngineStatus::LogMessage { level, message } => {
+                ("/log".to_string(), vec![
+                    OscType::String(level),
+                    OscType::String(message),
+                ])
             }
         };
 

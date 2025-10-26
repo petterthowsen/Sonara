@@ -19,7 +19,7 @@ class_name GridRenderer extends Control
 		queue_redraw()
 
 # Grid helper for calculations
-@export var grid_helper: GridHelper
+var grid_helper: GridHelper = GridHelper.new()
 @export var start_position_ticks: int = 0
 
 func set_grid_helper(gh: GridHelper) -> void:

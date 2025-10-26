@@ -34,6 +34,18 @@ signal track_focused(track : Track)
 # NODE REFERENCES
 # ============================================================================
 
+# Top-Level Nodes in the top VBOX:
+
+# main_bar houses main menu, audio engine status, transport controls and window buttons
+@onready var main_bar: HBoxContainer = $VBox/MainBar
+
+# main area has arraner/mixer/editor, and various side panels
+@onready var main: HBoxContainer = $VBox/Main
+
+# bottom has status bar: TODO: implement useful hotkey info of hovered element
+@onready var bottom: PanelContainer = $VBox/Bottom
+
+# file, edit etc
 @onready var main_menu: MainMenu = $VBox/MainBar/MainMenu
 
 # engine panel shows connect/disconnect button and engine status
@@ -82,7 +94,6 @@ var is_modified: bool = false
 var is_playing: bool = false
 var playhead_ticks: int = 0
 var audio_engine_playhead: int = 0  # Authoritative playhead from audio engine
-var playhead_interpolation_speed: float = 0.0  # For smooth UI updates
 
 # Selection State (Channels and tracks)
 var focused_channel : Channel
@@ -370,7 +381,7 @@ func set_tempo(new_tempo: float) -> void:
 	project.tempo = clamp(new_tempo, 20.0, 999.0)
 
 	# Sync to audio engine if connected
-	if project._is_connected:
+	if project.is_connected_to_engine():
 		AudioEngineOSC.send("/transport/tempo", [project.tempo])
 
 	_mark_modified()
@@ -387,7 +398,7 @@ func set_time_signature(numerator: int, denominator: int) -> void:
 	project.time_denominator = denominator
 
 	# Sync to audio engine if connected
-	if project._is_connected:
+	if project.is_connected_to_engine():
 		AudioEngineOSC.send("/transport/time_signature", [numerator, denominator])
 
 	_mark_modified()
@@ -538,6 +549,7 @@ func _ticks_to_bbt(ticks: int) -> Dictionary:
 	
 	return {"bar": bar + 1, "beat": beat + 1, "sixteenth": sixteenth + 1, "tick": tick}
 
+
 func _ticks_to_seconds(ticks: int) -> float:
 	"""Convert ticks to seconds."""
 	if project == null:
@@ -545,6 +557,7 @@ func _ticks_to_seconds(ticks: int) -> float:
 	
 	var seconds_per_tick = 60.0 / (project.tempo * project.ppq)
 	return ticks * seconds_per_tick
+
 
 func _update_view_visibility() -> void:
 	"""Update visibility of arranger and mixer based on current view."""
@@ -554,27 +567,45 @@ func _update_view_visibility() -> void:
 
 	if clip_editor.visible:
 		clip_editor.call_deferred("grab_focus")
+	elif arranger.visible:
+		arranger.call_deferred("grab_focus")
+	elif mixer.visible:
+		mixer.call_deferred("grab_focus")
+
 
 func _process(delta: float) -> void:
 	"""Update playhead during playback with smooth interpolation."""
 	if not is_playing or project == null:
 		return
 	
-	# Interpolate toward audio engine's authoritative playhead for smooth UI
-	if audio_engine_playhead > playhead_ticks:
-		# Calculate expected advance rate
-		var ticks_per_second = (project.tempo * project.ppq) / 60.0
-		var expected_advance = ticks_per_second * delta
+	# Calculate expected advance rate based on tempo
+	var ticks_per_second = (project.tempo * project.ppq) / 60.0
+	var expected_advance = ticks_per_second * delta
+	
+	# Check for large discontinuities (seeks, loops, tempo changes, etc.)
+	var diff = audio_engine_playhead - playhead_ticks
+	@warning_ignore("integer_division")
+	var SNAP_THRESHOLD = project.ppq / 4  # Quarter note - snap immediately for larger jumps
+	
+	if abs(diff) > SNAP_THRESHOLD:
+		# Large jump detected - snap immediately to avoid visible lag
+		playhead_ticks = audio_engine_playhead
+	else:
+		# Small difference - interpolate smoothly with adaptive correction
+		# Correction factor scales with drift size for faster convergence
+		var correction_factor = clamp(abs(diff) / float(project.ppq), 0.05, 0.3)
+		var correction = diff * correction_factor
 		
-		# Interpolate with slight correction toward engine playhead
-		var correction = (audio_engine_playhead - playhead_ticks) * 0.1
-		var advance = expected_advance + correction
+		playhead_ticks += int(expected_advance + correction)
 		
-		playhead_ticks += int(advance)
-		playhead_ticks = min(playhead_ticks, audio_engine_playhead)  # Don't overshoot
-		
-		playhead_moved.emit(playhead_ticks)
-		_update_transport_ui()
+		# Clamp to engine position (handles both forward and backward movement)
+		if diff > 0:
+			playhead_ticks = min(playhead_ticks, audio_engine_playhead)
+		else:
+			playhead_ticks = max(playhead_ticks, audio_engine_playhead)
+	
+	playhead_moved.emit(playhead_ticks)
+	_update_transport_ui()
 
 
 # ============================================================================
@@ -586,7 +617,7 @@ func _on_audio_engine_connected() -> void:
 	print("[Editor] Audio engine connected")
 
 	# Auto-connect project if one is open
-	if project and not project._is_connected:
+	if project and not project.is_connected_to_engine():
 		project.connect_to_engine()
 
 

@@ -2,7 +2,7 @@
 # Visual representation of a MIDI note in the piano roll editor
 # Note: All interaction handling is done by NoteEditor, this class is purely visual
 
-class_name VisualNote extends PanelContainer
+class_name VisualNote extends Panel
 
 # UI references
 @onready var label: Label = $Label
@@ -12,14 +12,15 @@ var midi_note_data: MidiNoteData = null  # Reference to data layer MidiNoteData
 
 # Visual state
 var is_selected: bool = false
-@export var base_color: Color = Color(0.3, 0.6, 0.9)
-@export var selected_color: Color = Color(0.5, 0.8, 1.0)
+var note_color: Color = Color(0.3, 0.6, 0.9)  # Base color (inherited from track)
+@export var selection_brightness_boost: float = 0.3  # How much to brighten when selected
 
 # Resize handle size (pixels from right edge)
 const RESIZE_HANDLE_WIDTH: float = 8.0
 
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
+	focus_mode = Control.FOCUS_NONE
 	
 	# Allow resizing below default minimum (important for vertical zoom)
 	custom_minimum_size = Vector2.ZERO
@@ -43,6 +44,13 @@ func bind_to_note(note: MidiNoteData) -> void:
 	midi_note_data = note
 	_update_visual()
 
+
+func set_color(color: Color) -> void:
+	"""Set the base color for this note (typically from track color)."""
+	note_color = color
+	_update_visual()
+
+
 func set_selected(selected: bool) -> void:
 	"""Set selection state."""
 	is_selected = selected
@@ -53,12 +61,30 @@ func _update_visual() -> void:
 	if not is_node_ready():
 		return
 	
+	# Start with base track color
+	var display_color = note_color
+	
+	# Always apply velocity-based brightness if we have note data
+	if midi_note_data:
+		# Map velocity (1-127) to brightness (0.2-0.8)
+		var velocity = midi_note_data.velocity
+		var velocity_normalized = (velocity - 1) / 126.0  # Normalize to 0.0-1.0
+		var brightness = lerp(0.2, 0.8, velocity_normalized)
+		
+		display_color = Color.from_hsv(
+			display_color.h,
+			display_color.s,
+			brightness
+		)
+	
+	# Override with full brightness if selected
+	if is_selected:
+		display_color.v = clamp(display_color.v + selection_brightness_boost, 0.0, 1.0)
+	
 	# Update color
-	var color = selected_color if is_selected else base_color
-	if has_theme_stylebox_override("panel"):
-		var style: StyleBoxFlat = get_theme_stylebox("panel")
-		if style:
-			style.bg_color = color
+	var style: StyleBoxFlat = get_theme_stylebox("panel")
+	if style:
+		style.bg_color = display_color
 	
 	# Update label
 	if label and midi_note_data:

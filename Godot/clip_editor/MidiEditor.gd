@@ -8,7 +8,7 @@
 #
 # vertical zoom is handled by inc/dec the note lane/piano key heights in sync
 #
-# horizontal zoom handled by h_scroll
+# horizontal zoom supported by h_scroll but we handle it
 class_name MidiEditor extends ScrollContainer
 
 @onready var v_piano: VPiano = $HBox/VPiano
@@ -26,28 +26,12 @@ var grid_helper: GridHelper:
 			note_lanes.grid_helper = gh
 			note_editor.grid_helper = gh
 			grid_renderer.set_grid_helper(gh)
-			grid_helper.changed.connect(_on_grid_helper_changed)
 
 # Local cursor position (in ticks) - propagated to NoteEditor
 var cursor_position_ticks: int = 0:
 	set(value):
 		cursor_position_ticks = value
 		note_editor.cursor_position_ticks = cursor_position_ticks
-
-
-func _ready():
-	# Connect to horizontal scroll events for infinite scrolling
-	if h_scroll:
-		h_scroll.get_h_scroll_bar().value_changed.connect(_on_h_scroll_changed)
-
-
-func _on_grid_helper_changed():
-	pass
-
-
-func _on_h_scroll_changed(_value: float):
-	"""Update container width when scrolling horizontally."""
-	note_editor.update_container_width()
 
 
 # note height: synced to v_piano, note_lanes and note_editor
@@ -57,17 +41,38 @@ var note_height_max := 40
 	set(nh):
 		if note_height != nh:
 			note_height = clamp(nh, note_height_min, note_height_max)
-			v_piano.key_height = note_height
-			note_lanes.key_height = note_height
-			note_editor.note_height = note_height
+			if is_inside_tree():
+				v_piano.key_height = note_height
+				note_lanes.key_height = note_height
+				note_editor.note_height = note_height
 
 var scroll_speed_notes = 2
 
-var scroll_speed_v : int:
+@export var scroll_speed_v : int:
 	get:
 		return scroll_speed_notes * note_height
 
-var scroll_speed_h = 100
+@export var scroll_speed_h = 50
+
+# Zoom sensitivity: multiplier for zoom speed (higher = faster zoom)
+@export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
+@export var zoom_sensitivity_v: int = 1      # Vertical zoom delta per scroll tick
+@export var pan_zoom_sensitivity: float = 0.5  # Zoom factor per pixel of mouse movement when shift+panning (percentage)
+
+# Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
+@export var scroll_smoothing: float = 0.2
+
+# Target scroll positions for smooth scrolling
+var target_scroll_vertical: float = 0.0
+var target_scroll_horizontal: float = 0.0
+
+# Middle mouse button panning state
+var is_panning: bool = false
+var pan_start_mouse_pos: Vector2 = Vector2.ZERO
+var pan_start_scroll_v: float = 0.0
+var pan_start_scroll_h: float = 0.0
+var pan_start_pixels_per_beat: float = 0.0
+var pan_start_h_scroll_mouse_pos: Vector2 = Vector2.ZERO  # Mouse pos relative to h_scroll when pan started
 
 # The clip instance that opened this editor (for context, not edited directly)
 var clip_instance: ClipInstance = null
@@ -78,6 +83,32 @@ var clip: Clip:
 		return clip_instance.clip if clip_instance else null
 	set(clip):
 		pass
+
+func _ready():
+	# Initialize target scroll positions to current values
+	target_scroll_vertical = scroll_vertical
+	target_scroll_horizontal = h_scroll.scroll_horizontal
+	v_piano.key_height = note_height
+	note_lanes.key_height = note_height
+	note_editor.note_height = note_height
+
+func _process(delta: float):
+	# Smooth scroll interpolation
+	if scroll_smoothing > 0:
+		# Lerp vertical scroll
+		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
+		scroll_vertical = int(lerp(float(scroll_vertical), target_scroll_vertical, lerp_factor))
+		
+		# Lerp horizontal scroll
+		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
+		h_scroll.scroll_horizontal = int(new_h_scroll)
+		grid_helper.scroll_position = new_h_scroll
+	else:
+		# Instant scrolling when smoothing is disabled
+		scroll_vertical = int(target_scroll_vertical)
+		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
+		grid_helper.scroll_position = target_scroll_horizontal
+
 
 func unbind():
 	clip = null
@@ -108,14 +139,55 @@ func scroll_to_note(note: int = -1):
 			note = clip.find_average_note()
 	
 	var y = note_editor.note_to_y(note)
-	var target_scroll = y - (size.y * 0.5)
-	scroll_vertical = max(0, target_scroll)
+	target_scroll_vertical = max(0, y - (size.y * 0.5))
 
 
 func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
-	"""Set horizontal zoom level using GridHelper."""
-	if grid_helper:
-		grid_helper.pixels_per_beat = clamp(new_pixels_per_beat, 8.0, 512.0)
+	"""Set horizontal zoom level while maintaining the visual position under the mouse cursor."""
+	if not grid_helper:
+		return
+	
+	# Store old value for ratio calculation
+	var old_pixels_per_beat = grid_helper.pixels_per_beat
+	
+	# Clamp new zoom
+	var clamped_ppb = clamp(new_pixels_per_beat, 8.0, 512.0)
+	
+	# If we hit the limits or no change, don't adjust
+	if clamped_ppb == old_pixels_per_beat:
+		return
+	
+	# Get mouse position relative to h_scroll viewport
+	var h_scroll_mouse_pos = h_scroll.get_local_mouse_position()
+	
+	# Store the current scroll position before zoom
+	var old_scroll = h_scroll.scroll_horizontal
+	
+	# Calculate the zoom ratio
+	var zoom_ratio = clamped_ppb / old_pixels_per_beat
+	
+	# Apply zoom (this triggers grid_helper.changed signal)
+	grid_helper.pixels_per_beat = clamped_ppb
+	
+	# Calculate the content position under the mouse before zoom
+	var old_content_x = old_scroll + h_scroll_mouse_pos.x
+	
+	# Scale the content position by the zoom ratio
+	var new_content_x = old_content_x * zoom_ratio
+	
+	# Calculate the new scroll to keep the same content under the mouse
+	var scroll_offset = new_content_x - h_scroll_mouse_pos.x
+	
+	# Snap to zero if we're close to the start (nice UX touch)
+	var snap_threshold = 30.0
+	if scroll_offset > 0 and scroll_offset < snap_threshold:
+		scroll_offset = 0.0
+	
+	# Apply scroll immediately (bypassing smooth scrolling for zoom)
+	target_scroll_horizontal = max(0, scroll_offset)
+	h_scroll.scroll_horizontal = int(target_scroll_horizontal)
+	grid_helper.scroll_position = target_scroll_horizontal
+	
 
 func _zoom_vertical(delta_note_height: int):
 	"""Zoom vertically while maintaining the visual position of notes at the mouse cursor."""
@@ -144,45 +216,101 @@ func _zoom_vertical(delta_note_height: int):
 	# Calculate the scroll offset needed to keep the note under the mouse
 	var scroll_offset = new_note_y - note_editor_mouse_pos.y
 	
-	# Apply the scroll offset to the current scroll position
-	var target_scroll = scroll_vertical + scroll_offset
-	
-	# Apply the new scroll position
-	scroll_vertical = max(0, target_scroll)
+	# Apply scroll immediately (bypassing smooth scrolling for zoom)
+	target_scroll_vertical = max(0, scroll_vertical + scroll_offset)
+	scroll_vertical = int(target_scroll_vertical)
 
 
 
 func _gui_input(event: InputEvent):
 	if event is InputEventMouseButton:
-		if event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		# Middle mouse button panning
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			if event.pressed:
+				# Start panning
+				is_panning = true
+				pan_start_mouse_pos = event.position
+				pan_start_scroll_v = target_scroll_vertical
+				pan_start_scroll_h = target_scroll_horizontal
+				pan_start_pixels_per_beat = grid_helper.pixels_per_beat if grid_helper else 0.0
+				pan_start_h_scroll_mouse_pos = h_scroll.get_local_mouse_position()
+				accept_event()
+			else:
+				# Stop panning
+				is_panning = false
+				accept_event()
+		
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			if event.alt_pressed:
 				# alt scroll up: scroll left
-				h_scroll.scroll_horizontal -= scroll_speed_h
-				# sync to grid helper
-				grid_helper.scroll_position = h_scroll.scroll_horizontal
+				target_scroll_horizontal = max(0, target_scroll_horizontal - scroll_speed_h)
 			elif event.shift_pressed:
 				# horizontal zoom in
-				set_horizontal_zoom(grid_helper.pixels_per_beat * 1.1)
+				set_horizontal_zoom(grid_helper.pixels_per_beat * zoom_sensitivity_h)
 			elif event.ctrl_pressed:
 				# vertical zoom in
-				_zoom_vertical(1)
+				_zoom_vertical(zoom_sensitivity_v)
 			else:
 				# vertical scroll up
-				scroll_vertical -= scroll_speed_v
+				target_scroll_vertical = max(0, target_scroll_vertical - scroll_speed_v)
 			accept_event()
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if event.alt_pressed:
 				# alt scroll down: scroll right
-				h_scroll.scroll_horizontal += scroll_speed_h
-				# sync to grid helper
-				grid_helper.scroll_position = h_scroll.scroll_horizontal
+				target_scroll_horizontal += scroll_speed_h
 			elif event.shift_pressed:
 				# horizontal zoom out
-				set_horizontal_zoom(grid_helper.pixels_per_beat * 0.9)
+				set_horizontal_zoom(grid_helper.pixels_per_beat / zoom_sensitivity_h)
 			elif event.ctrl_pressed:
 				# vertical zoom out
-				_zoom_vertical(-1)
+				_zoom_vertical(-zoom_sensitivity_v)
 			else:
 				# scroll down
-				scroll_vertical += scroll_speed_v
+				target_scroll_vertical += scroll_speed_v
+			accept_event()
+	
+	elif event is InputEventMouseMotion:
+		if is_panning:
+			# Calculate the delta from the starting position
+			var delta = event.position - pan_start_mouse_pos
+			
+			# Zoom or scroll based on modifiers
+			if event.shift_pressed:
+				# Shift + middle mouse: delta.y controls horizontal zoom proportionally, anchored at mouse position
+				# Negative delta.y (moving up) = zoom in, positive (moving down) = zoom out
+				# Scale the sensitivity by the starting zoom level for consistent feel across all zoom levels
+				var zoom_factor = 1.0 - (delta.y * pan_zoom_sensitivity / 50)
+				var new_ppb = pan_start_pixels_per_beat * zoom_factor
+				new_ppb = clamp(new_ppb, 8.0, 512.0)
+				
+				# Calculate zoom ratio
+				var zoom_ratio = new_ppb / pan_start_pixels_per_beat
+				
+				# Calculate the content position under the mouse anchor point before zoom
+				var old_content_x = pan_start_scroll_h + pan_start_h_scroll_mouse_pos.x
+				
+				# Scale by zoom ratio
+				var new_content_x = old_content_x * zoom_ratio
+				
+				# Calculate new scroll to keep the same content under the anchor point
+				var zoom_scroll = new_content_x - pan_start_h_scroll_mouse_pos.x
+				
+				# Apply zoom
+				grid_helper.pixels_per_beat = new_ppb
+				
+				# Apply horizontal panning on top of zoom scroll adjustment
+				target_scroll_horizontal = max(0, zoom_scroll - delta.x)
+				
+				# Vertical scroll not affected when shift is pressed
+				target_scroll_vertical = pan_start_scroll_v
+			else:
+				# Normal panning: Update scroll positions (negative delta because we're moving the viewport opposite to mouse movement)
+				target_scroll_horizontal = max(0, pan_start_scroll_h - delta.x)
+				target_scroll_vertical = max(0, pan_start_scroll_v - delta.y)
+			
+			# For panning, apply immediately for better responsiveness
+			h_scroll.scroll_horizontal = int(target_scroll_horizontal)
+			scroll_vertical = int(target_scroll_vertical)
+			grid_helper.scroll_position = target_scroll_horizontal
+			
 			accept_event()

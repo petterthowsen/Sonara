@@ -48,8 +48,21 @@ var default_channel_id: int:
 		return _default_channel_id
 	set(value):
 		if _default_channel_id != value:
+			var is_now_routed = value >= 0
 			_default_channel_id = value
 			default_channel_id_changed.emit(value)
+			
+			# Handle connection state changes
+			if _is_connected:
+				if is_now_routed:
+					# Update routing to new channel
+					AudioEngineOSC.send("/track/%d/route" % id, [value])
+				else:
+					# Routing removed, disconnect
+					disconnect_from_engine()
+			elif is_now_routed:
+				# Not connected but now has routing, try to connect
+				connect_to_engine()
 
 # Grouping/hierarchy
 var _parent_track_id: int = -1  # -1 = top level, otherwise ID of parent Track
@@ -82,6 +95,7 @@ var _is_connected: bool = false
 func _init(track_id: int = -1):
 	"""Initialize track with unique ID."""
 	id = track_id
+	color = Color.from_hsv(randf(), randf_range(0.4, 0.8), randf_range(0.3, 0.6))
 
 
 # ============================================================================
@@ -186,17 +200,11 @@ func connect_to_engine() -> void:
 		# Sync all clip instances
 		for instance in clip_instances:
 			_sync_clip_instance_to_engine(instance)
-
-			# Listen to source clip changes to re-sync
-			if instance.clip:
-				instance.clip.midi_note_added.connect(_on_clip_note_added.bind(instance))
-				instance.clip.midi_note_removed.connect(_on_clip_note_removed.bind(instance))
-				instance.clip.midi_note_changed.connect(_on_clip_note_changed.bind(instance))
+		
+		print("[Track %d] Connected to audio engine (routed to channel %d)" % [id, default_channel_id])
 	else:
-		# Track not routed to a channel, but still mark as connected
-		_is_connected = true
-
-	print("[Track %d] Connected to audio engine" % id)
+		# Track not routed to a channel - don't connect yet
+		print("[Track %d] Not connected (no routing)" % id)
 
 
 func disconnect_from_engine() -> void:
@@ -251,21 +259,21 @@ func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 		])
 
 
-func _on_clip_note_added(note: MidiNoteData, instance: ClipInstance) -> void:
+func _on_clip_note_added(_note: MidiNoteData, _instance: ClipInstance) -> void:
 	"""Handle when a note is added to the source clip."""
 	# Clip changes are handled by Project.gd which syncs the clip to engine
 	# Engine automatically updates all instances during playback
 	pass
 
 
-func _on_clip_note_removed(note: MidiNoteData, instance: ClipInstance) -> void:
+func _on_clip_note_removed(_note: MidiNoteData, _instance: ClipInstance) -> void:
 	"""Handle when a note is removed from the source clip."""
 	# Clip changes are handled by Project.gd which syncs the clip to engine
 	# Engine automatically updates all instances during playback
 	pass
 
 
-func _on_clip_note_changed(note: MidiNoteData, instance: ClipInstance) -> void:
+func _on_clip_note_changed(_note: MidiNoteData, _instance: ClipInstance) -> void:
 	"""Handle when a note is changed in the source clip."""
 	# Clip changes are handled by Project.gd which syncs the clip to engine
 	# Engine automatically updates all instances during playback

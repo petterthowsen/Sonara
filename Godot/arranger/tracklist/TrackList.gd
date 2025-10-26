@@ -7,6 +7,9 @@ class_name TrackList extends VBoxContainer
 # Scene to instantiate for each track
 const track_item_scene: PackedScene = preload("res://arranger/tracklist/TrackItem.tscn")
 
+# context menu to show when right-clicking empty area
+@onready var context_menu: TrackListContextMenu = $ContextMenu
+
 # Track items indexed by track index
 var track_items: Array[TrackItem] = []
 
@@ -16,7 +19,8 @@ var current_project: Project = null
 func _ready():
 	# remove any nodes
 	for child in get_children():
-		child.free()
+		if child is TrackItem:
+			child.free()
 	
 	# Ensure TrackList fills parent so empty areas can receive drops
 	size_flags_vertical = Control.SIZE_FILL | Control.SIZE_EXPAND
@@ -29,10 +33,17 @@ func _ready():
 	# Enable drag and drop
 	set_drag_forwarding(Callable(self, "_get_drag_data"), Callable(self, "_can_drop_data"), Callable(self, "_drop_data"))
 
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		context_menu.popup(Rect2(get_global_mouse_position() - Vector2.ONE * 10, Vector2.ZERO))
+		# force grab focus to the context menu
+		context_menu.grab_focus()
+		accept_event()
+
 # ============================================================================
 # EDITOR/PROJECT SIGNAL CALLBACKS
 # ============================================================================
-
 func _on_project_activated(project: Project) -> void:
 	"""Called when a project is activated - bind to its signals and sync UI."""
 	# Clean up old connections if any
@@ -56,8 +67,10 @@ func _on_project_closed() -> void:
 	"""Clear all track items when project closes."""
 	if current_project:
 		_unbind_from_project()
+
+	_clear_all_track_items()
+
 	current_project = null
-	_clear_all_tracks()
 
 
 func _unbind_from_project() -> void:
@@ -143,18 +156,14 @@ func _on_track_order_changed(_new_order: int) -> void:
 # INTERNAL HELPERS
 # ============================================================================
 
-func _clear_all_tracks() -> void:
+func _clear_all_track_items() -> void:
 	"""Remove all track items."""
 	for track_item in track_items:
-		if track_item:
+		if track_item is TrackItem:
 			track_item.queue_free()
+	
 	track_items.clear()
 	
-	# Also clear any remaining children
-	for child in get_children():
-		child.queue_free()
-	
-	print("[TrackList] All tracks cleared")
 
 func _find_insert_position(order: int) -> int:
 	"""Find the correct position to insert a track based on its order value."""

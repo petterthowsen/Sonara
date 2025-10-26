@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3 uid="uid://bu4kbbib0fo4d"]
+[gd_scene load_steps=4 format=3 uid="uid://bu4kbbib0fo4d"]
 
 [ext_resource type="Script" uid="uid://d3da2pljq85j3" path="res://clip_editor/VisualNote.gd" id="1_ilw01"]
 
@@ -13,12 +13,15 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[node name="MidiNote" type="PanelContainer"]
+[sub_resource type="LabelSettings" id="LabelSettings_ilw01"]
+shadow_color = Color(0, 0, 0, 0.49019608)
+
+[node name="MidiNote" type="Panel"]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_right = -1213.0
-offset_bottom = -697.0
+offset_right = -1199.0
+offset_bottom = -701.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_7ep2o")
@@ -27,10 +30,17 @@ base_color = Color(0.20828247, 0.45796743, 0.7109375, 1)
 selected_color = Color(0.50775146, 0.7571668, 0.921875, 1)
 
 [node name="Label" type="Label" parent="."]
-visible = false
-layout_mode = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 2.0
+offset_top = -7.0
+offset_right = -2.0
+offset_bottom = 7.0
+grow_horizontal = 2
+grow_vertical = 2
 size_flags_vertical = 1
 text = "C3"
+label_settings = SubResource("LabelSettings_ilw01")
 vertical_alignment = 1
-autowrap_mode = 1
-text_overrun_behavior = 3

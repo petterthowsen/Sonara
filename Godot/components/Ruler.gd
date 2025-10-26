@@ -14,7 +14,7 @@ class_name Ruler extends Control
 @export var offset_x: float = 0.0  # Horizontal draw offset (e.g., for piano keyboard width)
 
 # Grid helper for calculations
-@export var grid_helper: GridHelper
+var grid_helper: GridHelper = GridHelper.new()
 var start_position_ticks: int = 0
 
 # Signal when user clicks to set start position

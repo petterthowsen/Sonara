@@ -8,6 +8,7 @@ class_name VPiano extends Control
 	set(kh):
 		if key_height != kh:
 			key_height = kh
+			update_minimum_size()
 			queue_redraw()
 
 @export var minimum_width := 100.0:

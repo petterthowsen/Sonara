@@ -25,6 +25,14 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 |---------|------|-------------|
 | `/status/playhead` | `i:ticks` | Current playhead position (sent periodically) |
 | `/status/playing` | `i:0_or_1` | Playback state (0=stopped, 1=playing) |
+| `/status/connected` | `i:1` | Engine ready confirmation (sent after `/project/init`) |
+| `/status/heartbeat` | `i:1` | Periodic heartbeat (sent every 1 second to detect disconnection) |
+
+### Engine Logging (Rust -> Godot)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/log` | `s:level, s:message` | Warning/error logs from engine (level: "warn" or "error") |
 
 ### Project Setup (Godot -> Rust)
 
@@ -55,6 +63,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | Address | Args | Description |
 |---------|------|-------------|
 | `/track/{id}/create` | `i:channel_id` | Create track with ID, routed to channel |
+| `/track/{id}/route` | `i:channel_id` | Update track output routing to channel (-1 for none) |
 | `/track/{id}/clear_midi` | - | Clear all MIDI notes for track |
 
 ### Clip Management (Godot -> Rust) - NEW
@@ -206,9 +215,18 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
 1. Godot starts and creates OSCClient + OSCServer
 2. Rust engine starts listening on port 7000
 3. Godot sends `/project/init` message
-4. Rust responds with `/status/playing 0` to confirm connection
-5. Godot sends channel/track setup
-6. Godot sends `/transport/play` to start
+4. Rust responds with `/status/connected 1` to confirm engine is ready
+5. Godot syncs all project data (clips, channels, tracks) after receiving confirmation
+6. Engine sends `/status/heartbeat 1` every second to maintain connection
+7. If Godot doesn't receive a heartbeat for 3 seconds, connection is marked as lost
+8. Godot sends `/transport/play` to start playback
+
+**Connection States:**
+- **Disconnected**: No connection to engine (UI shows "Disconnected")
+- **Connecting**: Waiting for engine response (UI shows "Connecting...")
+- **Connected**: Engine confirmed and heartbeats received (UI shows "Connected")
+
+**Note:** Heartbeat system ensures UI accurately reflects engine status, detecting crashes or process termination.
 
 ## Data Flow Example
 

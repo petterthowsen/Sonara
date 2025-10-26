@@ -1,9 +1,8 @@
-[gd_scene load_steps=13 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=9 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
-[ext_resource type="Script" uid="uid://csw2ec1s52u2m" path="res://components/GridHelper.gd" id="3_pgn5n"]
 [ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
@@ -11,21 +10,6 @@
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_akhqx"]
 bg_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
-
-[sub_resource type="Resource" id="Resource_akhqx"]
-script = ExtResource("3_pgn5n")
-scroll_position = null
-metadata/_custom_type_script = "uid://csw2ec1s52u2m"
-
-[sub_resource type="Resource" id="Resource_j0nq3"]
-script = ExtResource("3_pgn5n")
-scroll_position = null
-metadata/_custom_type_script = "uid://csw2ec1s52u2m"
-
-[sub_resource type="Resource" id="Resource_4hncn"]
-script = ExtResource("3_pgn5n")
-scroll_position = null
-metadata/_custom_type_script = "uid://csw2ec1s52u2m"
 
 [node name="ClipEditor" type="HBoxContainer"]
 anchors_preset = 15
@@ -59,7 +43,6 @@ custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 script = ExtResource("2_q0vl8")
 offset_x = 100.0
-grid_helper = SubResource("Resource_akhqx")
 
 [node name="MidiEditor" type="ScrollContainer" parent="MainPanel/VBox"]
 layout_mode = 2
@@ -67,6 +50,9 @@ size_flags_vertical = 3
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 script = ExtResource("3_1pvpx")
+note_height = 30
+zoom_sensitivity_v = 3
+scroll_smoothing = 0.41
 
 [node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/MidiEditor"]
 layout_mode = 2
@@ -99,7 +85,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("5_akhqx")
-grid_helper = SubResource("Resource_j0nq3")
+key_height = 0.0
 note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
@@ -116,7 +102,6 @@ script = ExtResource("6_j0nq3")
 bar_line_color = Color(0.25, 0.25, 0.25, 1)
 beat_line_color = Color(0.1875, 0.1875, 0.1875, 1)
 subdivision_line_color = Color(0.14453125, 0.14453125, 0.14453125, 1)
-grid_helper = SubResource("Resource_4hncn")
 
 [node name="HScroll" type="ScrollContainer" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 layout_mode = 1

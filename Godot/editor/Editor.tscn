@@ -1,11 +1,13 @@
-[gd_scene load_steps=21 format=3 uid="uid://d17wdwntyd1ni"]
+[gd_scene load_steps=23 format=3 uid="uid://d17wdwntyd1ni"]
 
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="1_i0blf"]
+[ext_resource type="Script" uid="uid://ce6tt7vbxxjrp" path="res://editor/MainBar.gd" id="2_2m1gq"]
 [ext_resource type="PackedScene" uid="uid://dwx58rtumvnkj" path="res://arranger/Arranger.tscn" id="2_i1ssp"]
 [ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="2_x2y5v"]
 [ext_resource type="Script" uid="uid://cyscqn1lg7s3g" path="res://editor/EnginePanel.gd" id="3_4x3xt"]
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="3_i1ssp"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="4_52o2w"]
+[ext_resource type="Script" uid="uid://bfx70o648n4b8" path="res://editor/WindowButtons.gd" id="4_dcsty"]
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://device_lane/DeviceLane.gd" id="5_85wto"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="5_jp84s"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="6_x2y5v"]
@@ -143,6 +145,7 @@ theme_override_constants/separation = 4
 [node name="MainBar" type="HBoxContainer" parent="VBox"]
 layout_mode = 2
 theme_override_constants/separation = 32
+script = ExtResource("2_2m1gq")
 
 [node name="MainMenu" type="MenuBar" parent="VBox/MainBar"]
 layout_mode = 2
@@ -177,9 +180,10 @@ autowrap_mode = 0
 vertical_alignment = 1
 
 [node name="StatusLabel" type="Label" parent="VBox/MainBar/EnginePanel/HBox"]
+modulate = Color(0.7578125, 0.33746338, 0.33746338, 1)
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
-text = "Connecting..."
+text = "Disconnected"
 label_settings = SubResource("LabelSettings_4x3xt")
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -266,6 +270,7 @@ select_all_on_focus = true
 layout_mode = 2
 size_flags_horizontal = 8
 size_flags_vertical = 0
+script = ExtResource("4_dcsty")
 
 [node name="Minimize" type="Button" parent="VBox/MainBar/WindowButtons"]
 custom_minimum_size = Vector2(28, 0)

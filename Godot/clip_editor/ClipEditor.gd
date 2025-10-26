@@ -27,6 +27,8 @@ var cursor_position_ticks: int = 0:
 
 # Store pending clip instance until we become visible
 var pending_clip_instance: ClipInstance = null
+# Track the currently bound clip instance for playhead conversion
+var bound_clip_instance: ClipInstance = null
 
 func _ready():
 	grid_helper = GridHelper.new()
@@ -44,12 +46,13 @@ func _ready():
 		Sonara.editor.clip_instance_selected.connect(_on_editor_clip_instance_selected)
 		Sonara.editor.tempo_changed.connect(_on_editor_tempo_changed)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
+		Sonara.editor.playhead_moved.connect(_on_editor_playhead_moved)
 
 
 func _on_editor_clip_instance_selected(clip_instance : ClipInstance):
 	print("[ClipEditor] Clip instance selected: ", clip_instance)
 	print("  - clip_id: ", clip_instance.clip_id if clip_instance else "null")
-	print("  - clip: ", clip_instance.clip if clip_instance else "null")
+	print("  - clip: ", str(clip_instance.clip) if clip_instance else "null")
 	print("  - is_visible: ", is_visible_in_tree())
 	
 	# Store the clip instance - will bind when we become visible
@@ -91,6 +94,9 @@ func _bind_pending_clip():
 	print("  - clip_id: ", pending_clip_instance.clip_id)
 	print("  - clip: ", pending_clip_instance.clip)
 	midi_editor.bind_to_clip_instance(pending_clip_instance)
+	
+	# Store as bound clip instance for playhead conversion
+	bound_clip_instance = pending_clip_instance
 
 	# Clear pending clip
 	pending_clip_instance = null
@@ -104,3 +110,16 @@ func _on_ruler_position_requested(ticks: int):
 	"""Handle ruler clicks - set cursor position."""
 	cursor_position_ticks = ticks
 	print("[ClipEditor] Cursor position set to tick %d" % ticks)
+
+
+func _on_editor_playhead_moved(global_playhead_ticks: int):
+	"""Handle global playhead updates from Editor."""
+	# Convert global playhead to clip-local playhead (relative to clip instance start)
+	var local_playhead_ticks = 0
+	if bound_clip_instance:
+		# Convert to clip-local position (relative to clip instance start)
+		local_playhead_ticks = global_playhead_ticks - bound_clip_instance.start_ticks
+	
+	# Pass to MidiEditor
+	if midi_editor and midi_editor.note_editor:
+		midi_editor.note_editor.playhead_ticks = local_playhead_ticks

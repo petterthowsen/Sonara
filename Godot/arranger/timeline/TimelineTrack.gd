@@ -289,6 +289,7 @@ func _draw():
 	var col = bg_color
 	if Sonara.get_config("appearence/color_timeline_by_track", true):
 		col = Color.from_hsv(track.color.h, track.color.s, bg_color.v)
+		col.a = 0.5
 
 	draw_rect(Rect2(Vector2(0, 0), size), col, true, -1.0, false)
 	
@@ -357,11 +358,11 @@ func _on_double_click(pos: Vector2) -> void:
 
 	# Create a new Clip in the project's clip pool
 	var clip_type = Clip.ClipType.MIDI if track.type == Track.TrackType.INSTRUMENT else Clip.ClipType.AUDIO
-	var clip_name = "Clip %d" % (project.clips.size() + 1)
+	var clip_name = track.name + " %d" % (project.clips.size() + 1)
 	var new_clip = project.create_clip(clip_name, clip_type)
 
 	# Set clip properties
-	new_clip.color = track.color.lightened(0.2)
+	new_clip.color = track.color
 	new_clip.content_length_ticks = project.ppq * 4  # Default: 4 beats
 	
 	# Add clip to project pool (required for serialization!)

@@ -245,7 +245,7 @@ impl SharedMemory {
     
     /// Get input audio ring buffer (engine writes, plugin reads)
     /// Safe to call with &self - ring buffer uses atomic operations internally
-    pub fn input_buffer(&self) -> AudioRingBuffer {
+    pub fn input_buffer(&self) -> AudioRingBuffer<'_> {
         let buffer_slice = unsafe {
             let ptr = self.memory.as_ptr().add(self.layout.input_offset) as *mut f32;
             std::slice::from_raw_parts_mut(ptr, self.layout.input_buffer_size)
@@ -261,7 +261,7 @@ impl SharedMemory {
     
     /// Get output audio ring buffer (plugin writes, engine reads)
     /// Safe to call with &self - ring buffer uses atomic operations internally
-    pub fn output_buffer(&self) -> AudioRingBuffer {
+    pub fn output_buffer(&self) -> AudioRingBuffer<'_> {
         let buffer_slice = unsafe {
             let ptr = self.memory.as_ptr().add(self.layout.output_offset) as *mut f32;
             std::slice::from_raw_parts_mut(ptr, self.layout.output_buffer_size)
@@ -277,7 +277,7 @@ impl SharedMemory {
     
     /// Get MIDI event queue (engine writes, plugin reads)
     /// Safe to call with &self - ring buffer uses atomic operations internally
-    pub fn midi_queue(&self) -> MidiEventQueue {
+    pub fn midi_queue(&self) -> MidiEventQueue<'_> {
         let event_slice = unsafe {
             let ptr = self.memory.as_ptr().add(self.layout.midi_offset) as *mut MidiEvent;
             std::slice::from_raw_parts_mut(ptr, self.layout.midi_queue_size)

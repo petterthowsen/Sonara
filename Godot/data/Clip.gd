@@ -105,7 +105,6 @@ func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, dura
 
 	# Sync note to audio engine
 	var osc_path = "/clip/%s/add_note" % id
-	print("[Clip] Sending OSC: %s with args [%d, %d, %d, %d, %d]" % [osc_path, note_id, note, start_tick, duration, velocity])
 	AudioEngineOSC.send(osc_path, [note_id, note, start_tick, duration, velocity])
 
 	modified_date = Time.get_unix_time_from_system()
@@ -135,7 +134,6 @@ func remove_midi_note(midi_note: MidiNoteData) -> bool:
 		# Sync to audio engine if clip exists on engine
 		if _synced_to_engine:
 			var osc_path = "/clip/%s/remove_note" % id
-			print("[Clip] Sending OSC: %s with args [%d]" % [osc_path, midi_note.id])
 			AudioEngineOSC.send(osc_path, [midi_note.id])
 
 		modified_date = Time.get_unix_time_from_system()
@@ -146,12 +144,18 @@ func remove_midi_note(midi_note: MidiNoteData) -> bool:
 
 
 func update_midi_note(midi_note: MidiNoteData) -> void:
-	"""Notify that a MIDI note has been modified."""
+	"""Notify that a MIDI note has been modified.
+	
+	Note: If the note is currently playing, the active voice won't change until
+	playback is stopped and restarted. Updates only affect future Note On events.
+	"""
 	# Sync to audio engine if clip exists on engine
 	if _synced_to_engine:
 		var osc_path = "/clip/%s/update_note" % id
-		print("[Clip] Sending OSC: %s with args [%d, %d, %d, %d, %d]" % [osc_path, midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity])
 		AudioEngineOSC.send(osc_path, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity])
+		print("[Clip] Updated note %d in clip %s: pitch=%d start=%d dur=%d" % [midi_note.id, id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks])
+	else:
+		push_warning("[Clip] Attempted to update note %d but clip %s not synced to engine!" % [midi_note.id, id])
 
 	modified_date = Time.get_unix_time_from_system()
 	midi_note_changed.emit(midi_note)

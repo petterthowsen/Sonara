@@ -21,12 +21,11 @@ func _ready() -> void:
 
 func _on_project_opened(project: Project) -> void:
 	"""Handle project opened event."""
-	# Connect to project engine connection signals
-	project.engine_connected.connect(_on_engine_connected)
-	project.engine_disconnected.connect(_on_engine_disconnected)
+	# Connect to project connection state signal
+	project.connection_state_changed.connect(_on_connection_state_changed)
 	
 	# Update UI based on current connection state
-	_update_ui(project.is_connected_to_engine())
+	_update_ui_from_state(project.get_connection_state())
 
 
 func _on_project_closed() -> void:
@@ -34,14 +33,9 @@ func _on_project_closed() -> void:
 	_update_ui_no_project()
 
 
-func _on_engine_connected() -> void:
-	"""Handle engine connection established."""
-	_update_ui(true)
-
-
-func _on_engine_disconnected() -> void:
-	"""Handle engine connection closed."""
-	_update_ui(false)
+func _on_connection_state_changed(state: Project.ConnectionState) -> void:
+	"""Handle connection state change."""
+	_update_ui_from_state(state)
 
 
 func _on_connect_button_pressed() -> void:
@@ -67,13 +61,18 @@ func _update_ui_no_project() -> void:
 	performance_text.text = ""
 
 
-func _update_ui(connected: bool) -> void:
+func _update_ui_from_state(state: Project.ConnectionState) -> void:
 	"""Update UI based on connection state."""
-	if connected:
-		status_label.text = "Connected"
-		connect_button.text = "Disconnect"
-		connect_button.disabled = false
-	else:
-		status_label.text = "Disconnected"
-		connect_button.text = "Connect"
-		connect_button.disabled = false
+	match state:
+		Project.ConnectionState.DISCONNECTED:
+			status_label.text = "Disconnected"
+			connect_button.text = "Connect"
+			connect_button.disabled = false
+		Project.ConnectionState.CONNECTING:
+			status_label.text = "Connecting..."
+			connect_button.text = "Cancel"
+			connect_button.disabled = false
+		Project.ConnectionState.CONNECTED:
+			status_label.text = "Connected"
+			connect_button.text = "Disconnect"
+			connect_button.disabled = false

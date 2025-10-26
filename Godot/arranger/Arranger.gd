@@ -51,6 +51,28 @@ var pan_start_pos: Vector2 = Vector2.ZERO
 var pan_start_h_scroll: float = 0.0
 var pan_start_v_scroll: float = 0.0
 
+# Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
+@export var scroll_smoothing: float = 0.5
+
+# Scroll speeds
+@export var scroll_speed_h: int = 50   # Horizontal scroll speed per wheel tick
+@export var scroll_speed_v: int = 30   # Vertical scroll speed per wheel tick
+
+# Zoom sensitivity: multiplier for zoom speed (higher = faster zoom)
+@export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
+@export var zoom_sensitivity_v: float = 1.1  # Vertical zoom multiplier per scroll tick (for track heights)
+
+# Target scroll positions for smooth scrolling
+var target_scroll_vertical: float = 0.0
+var target_scroll_horizontal: float = 0.0
+
+# Target zoom values for smooth zooming
+var target_pixels_per_beat: float = 0.0  # Horizontal zoom target
+var target_track_height: float = 0.0     # Vertical zoom target (average height)
+
+# Active zoom flags (to prevent interference with manual resizing)
+var _is_zooming_vertically: bool = false
+
 # Current project reference
 var current_project: Project = null
 
@@ -72,6 +94,14 @@ signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 func _ready():
 	# Set Timeline reference for drag event forwarding
 	timeline.arranger = self
+
+	# Initialize target scroll positions to current values
+	target_scroll_vertical = v_scroll.scroll_vertical
+	target_scroll_horizontal = h_scroll.scroll_horizontal
+	
+	# Initialize target zoom values
+	target_pixels_per_beat = grid_helper.pixels_per_beat
+	target_track_height = 80.0  # Default, will be updated when project loads
 
 	# Connect add track button
 	add_track_button.pressed.connect(_on_add_track_pressed)
@@ -100,8 +130,64 @@ func _ready():
 	_update_playhead_position()
 
 
-func _process(_delta: float) -> void:
-	"""Update ruler and playhead every frame to sync with timeline."""
+func _process(delta: float) -> void:
+	"""Update ruler, playhead, smooth scrolling, and smooth zooming every frame."""
+	# Smooth scroll and zoom interpolation
+	if scroll_smoothing > 0:
+		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
+		
+		# Lerp vertical scroll
+		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
+		
+		# Lerp horizontal scroll
+		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
+		h_scroll.scroll_horizontal = int(new_h_scroll)
+		grid_helper.scroll_position = new_h_scroll
+		
+		# Lerp horizontal zoom (pixels per beat)
+		var current_ppb = grid_helper.pixels_per_beat
+		var new_ppb = lerp(current_ppb, target_pixels_per_beat, lerp_factor)
+		if abs(new_ppb - target_pixels_per_beat) > 0.01:  # Only update if difference is significant
+			timeline.set_zoom(new_ppb)
+		
+		# Lerp vertical zoom (track heights) - only if actively zooming
+		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
+			# Calculate current average height
+			var total_height = 0.0
+			for track in current_project.tracks:
+				total_height += track.height
+			var current_avg_height = total_height / current_project.tracks.size()
+			
+			# Lerp to target
+			var new_avg_height = lerp(current_avg_height, target_track_height, lerp_factor)
+			
+			# Only update if difference is significant
+			if abs(new_avg_height - target_track_height) > 0.5:
+				_apply_track_heights(int(new_avg_height))
+			else:
+				# Stop zooming when we've reached the target
+				_is_zooming_vertically = false
+	else:
+		# Instant scrolling/zooming when smoothing is disabled
+		v_scroll.scroll_vertical = int(target_scroll_vertical)
+		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
+		grid_helper.scroll_position = target_scroll_horizontal
+		
+		# Instant zoom
+		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:
+			timeline.set_zoom(target_pixels_per_beat)
+		
+		# Instant vertical zoom - only if actively zooming
+		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
+			var total_height = 0.0
+			for track in current_project.tracks:
+				total_height += track.height
+			var current_avg_height = total_height / current_project.tracks.size()
+			if abs(current_avg_height - target_track_height) > 0.5:
+				_apply_track_heights(int(target_track_height))
+			else:
+				_is_zooming_vertically = false
+	
 	_update_ruler()
 	_update_playhead_position()
 
@@ -121,10 +207,15 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and is_panning:
 		var current_pos = event.global_position
 		var delta = current_pos - pan_start_pos
-		h_scroll.scroll_horizontal = int(pan_start_h_scroll - delta.x)
-		# Update grid_helper to keep it in sync
-		grid_helper.scroll_position = h_scroll.scroll_horizontal
-		v_scroll.scroll_vertical = int(pan_start_v_scroll - delta.y)
+		# Direct scroll for panning (bypass smoothing for responsive feel)
+		var new_h_scroll = int(pan_start_h_scroll - delta.x)
+		h_scroll.scroll_horizontal = new_h_scroll
+		target_scroll_horizontal = new_h_scroll
+		grid_helper.scroll_position = new_h_scroll
+		
+		var new_v_scroll = int(pan_start_v_scroll - delta.y)
+		v_scroll.scroll_vertical = new_v_scroll
+		target_scroll_vertical = new_v_scroll
 		accept_event()
 
 # ============================================================================
@@ -134,69 +225,71 @@ func _gui_input(event: InputEvent) -> void:
 func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollContainer) -> void:
 	"""Intercept scroll events on scroll containers."""
 	if event is InputEventMouseButton and event.pressed:
-		var scroll_amount = 0.0
 		var is_scroll_up = false
 		
 		# Detect scroll wheel
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			scroll_amount = -30.0
 			is_scroll_up = true
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			scroll_amount = 30.0
 			is_scroll_up = false
+		else:
+			return  # Not a scroll event
 		
-		if scroll_amount != 0.0:
-			# Shift + Scroll = Horizontal zoom
-			if event.shift_pressed:
-				if grid_helper:
-					# Calculate the zoom point - use cursor position for better UX
-					# Get cursor position relative to the h_scroll viewport
-					var viewport_width = h_scroll.size.x
-					var local_mouse_x = h_scroll.get_local_mouse_position().x
+		# Handle scroll/zoom based on modifiers
+		# Shift + Scroll = Horizontal zoom
+		if event.shift_pressed:
+			if grid_helper:
+				# Calculate the zoom point - use cursor position for better UX
+				# Get cursor position relative to the h_scroll viewport
+				var viewport_width = h_scroll.size.x
+				var local_mouse_x = h_scroll.get_local_mouse_position().x
 
-					# Clamp to visible viewport bounds
-					var zoom_point_x = clamp(local_mouse_x, 0.0, viewport_width)
+				# Clamp to visible viewport bounds
+				var zoom_point_x = clamp(local_mouse_x, 0.0, viewport_width)
 
-					# Convert to timeline pixel position (scroll_offset + local position)
-					var zoom_pixel_x = h_scroll.scroll_horizontal + zoom_point_x
-					var zoom_ticks = grid_helper.pixels_to_ticks(int(zoom_pixel_x))
+				# Convert to timeline pixel position (scroll_offset + local position)
+				var zoom_pixel_x = h_scroll.scroll_horizontal + zoom_point_x
 
-					# Check if scroll position is close to origin (within 1 beat worth of pixels)
-					var one_beat_pixels = grid_helper.pixels_per_beat
-					var near_origin = h_scroll.scroll_horizontal < one_beat_pixels
+				# Check if scroll position is close to origin (within 1 beat worth of pixels)
+				var one_beat_pixels = grid_helper.pixels_per_beat
+				var near_origin = h_scroll.scroll_horizontal < one_beat_pixels
 
-					# Apply zoom
-					var zoom_factor = 1.1 if is_scroll_up else 0.9
-					var new_zoom = grid_helper.pixels_per_beat * zoom_factor
-					timeline.set_zoom(new_zoom)
+				# Calculate target zoom using zoom_sensitivity_h
+				var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
+				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, 8.0, 512.0)
 
-					# Adjust scroll position
-					if near_origin:
-						# Lock to origin - keep scroll at 0
-						h_scroll.scroll_horizontal = 0
-					else:
-						# Normal cursor-relative zoom
-						var new_zoom_pixel_x = grid_helper.ticks_to_pixels(zoom_ticks)
-						var new_scroll = new_zoom_pixel_x - zoom_point_x
-						h_scroll.scroll_horizontal = int(max(0.0, new_scroll))
+				# Adjust scroll position to keep content under cursor
+				# Note: scroll adjustment needs to account for the eventual zoom change
+				# For now, we adjust based on target zoom to prevent drift
+				if near_origin:
+					# Lock to origin - keep scroll at 0
+					target_scroll_horizontal = 0
+				else:
+					# Calculate expected position after zoom
+					var zoom_ratio = target_pixels_per_beat / grid_helper.pixels_per_beat
+					var new_content_x = zoom_pixel_x * zoom_ratio
+					var new_scroll = new_content_x - zoom_point_x
+					target_scroll_horizontal = max(0.0, new_scroll)
 
-					# Update ruler when zoom changes
-					_update_ruler()
-					scroll_container.accept_event()
-			# Ctrl + Scroll = Vertical zoom (track heights)
-			elif event.ctrl_pressed:
-				_zoom_tracks_vertically(is_scroll_up)
+				# Update ruler when zoom changes
+				_update_ruler()
 				scroll_container.accept_event()
-			# Alt + Scroll = Horizontal scroll
-			elif event.alt_pressed:
-				if h_scroll:
-					h_scroll.scroll_horizontal += int(scroll_amount)
-					scroll_container.accept_event()
-			# Normal Scroll = Vertical scroll
-			else:
-				if v_scroll:
-					v_scroll.scroll_vertical += int(scroll_amount)
-					scroll_container.accept_event()
+		# Ctrl + Scroll = Vertical zoom (track heights)
+		elif event.ctrl_pressed:
+			_zoom_tracks_vertically(is_scroll_up)
+			scroll_container.accept_event()
+		# Alt + Scroll = Horizontal scroll
+		elif event.alt_pressed:
+			if h_scroll:
+				var scroll_delta = -scroll_speed_h if is_scroll_up else scroll_speed_h
+				target_scroll_horizontal = max(0, target_scroll_horizontal + scroll_delta)
+				scroll_container.accept_event()
+		# Normal Scroll = Vertical scroll
+		else:
+			if v_scroll:
+				var scroll_delta = -scroll_speed_v if is_scroll_up else scroll_speed_v
+				target_scroll_vertical = max(0, target_scroll_vertical + scroll_delta)
+				scroll_container.accept_event()
 
 func _on_h_scroll_changed(_value: float) -> void:
 	"""Update ruler and playhead when horizontal scroll changes."""
@@ -243,16 +336,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			var current_pos = get_global_mouse_position()
 			var delta = current_pos - pan_start_pos
 			if h_scroll:
-				h_scroll.scroll_horizontal = int(pan_start_h_scroll - delta.x)
-				# Also update grid_helper to keep it in sync
+				# Direct scroll for panning (bypass smoothing for responsive feel)
+				var new_h_scroll = int(pan_start_h_scroll - delta.x)
+				h_scroll.scroll_horizontal = new_h_scroll
+				target_scroll_horizontal = new_h_scroll
 				if grid_helper:
-					grid_helper.scroll_position = h_scroll.scroll_horizontal
+					grid_helper.scroll_position = new_h_scroll
 			if v_scroll:
-				v_scroll.scroll_vertical = int(pan_start_v_scroll - delta.y)
+				var new_v_scroll = int(pan_start_v_scroll - delta.y)
+				v_scroll.scroll_vertical = new_v_scroll
+				target_scroll_vertical = new_v_scroll
 			get_viewport().set_input_as_handled()
 
 func _zoom_tracks_vertically(zoom_in: bool) -> void:
-	"""Zoom tracks vertically by adjusting their heights."""
+	"""Zoom tracks vertically by adjusting their heights (smoothly)."""
 	if not current_project or current_project.tracks.size() == 0:
 		return
 
@@ -262,8 +359,8 @@ func _zoom_tracks_vertically(zoom_in: bool) -> void:
 		total_height += track.height
 	var avg_height = total_height / current_project.tracks.size()
 
-	# Calculate new height
-	var zoom_factor = 1.1 if zoom_in else 0.9
+	# Calculate new target height using zoom_sensitivity_v
+	var zoom_factor = zoom_sensitivity_v if zoom_in else (1.0 / zoom_sensitivity_v)
 	var new_height = avg_height * zoom_factor
 
 	# Get minimum height from TrackItem (check first available TrackItem)
@@ -274,12 +371,21 @@ func _zoom_tracks_vertically(zoom_in: bool) -> void:
 				min_height = max(min_height, child.get_minimum_size().y)
 				break
 
-	# Clamp to reasonable bounds
-	new_height = clamp(new_height, min_height, 200.0)
+	# Clamp to reasonable bounds and set as target
+	target_track_height = clamp(new_height, min_height, 200.0)
+	
+	# Enable vertical zoom interpolation
+	_is_zooming_vertically = true
 
+
+func _apply_track_heights(new_height: int) -> void:
+	"""Apply the given height to all tracks (called during smooth zoom interpolation)."""
+	if not current_project:
+		return
+	
 	# Update all tracks to the new height
 	for track in current_project.tracks:
-		track.height = int(new_height)
+		track.height = new_height
 
 	# Force UI update by triggering track item refresh
 	if track_list:
@@ -381,6 +487,14 @@ func _on_project_activated(project: Project) -> void:
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper
 	ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
+	
+	# Initialize target zoom values from project
+	target_pixels_per_beat = grid_helper.pixels_per_beat
+	if project.tracks.size() > 0:
+		var total_height = 0.0
+		for track in project.tracks:
+			total_height += track.height
+		target_track_height = total_height / project.tracks.size()
 	
 	# Connect to project's track signals
 	current_project.track_added.connect(_on_track_added)
