@@ -11,6 +11,9 @@ var log := Log.make("ClipEditor")
 @onready var ruler: Ruler = $MainPanel/VBox/Ruler
 @onready var midi_editor = $MainPanel/VBox/MidiEditor
 
+# for multi-track clip editing
+@onready var track_selector: ClipEditorTrackList = $LeftPanel/VBox/ClipsTrackList/TrackSelector
+
 var grid_helper: GridHelper:
 	set(gh):
 		if grid_helper != gh:
@@ -121,7 +124,7 @@ func _on_editor_playhead_moved(global_playhead_ticks: int):
 	if bound_clip_instance:
 		# Convert to clip-local position (relative to clip instance start)
 		local_playhead_ticks = global_playhead_ticks - bound_clip_instance.start_ticks
-	
+
 	# Pass to MidiEditor
-	if midi_editor and midi_editor.note_editor:
-		midi_editor.note_editor.playhead_ticks = local_playhead_ticks
+	if midi_editor:
+		midi_editor.playhead_ticks = local_playhead_ticks

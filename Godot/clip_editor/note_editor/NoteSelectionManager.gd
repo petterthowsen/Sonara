@@ -265,24 +265,5 @@ func copy_selection() -> void:
 	print("[NoteSelectionManager] Copied %d notes (duration: %d ticks)" % [clipboard.notes.size(), clipboard.duration_ticks])
 
 
-# ============================================================================
-# DRAWING
-# ============================================================================
-func draw_selection(c: CanvasItem, height: float) -> void:
-	"""Draw box selection and selection range markers."""
-	# Draw box selection while actively selecting
-	if is_box_selecting and box_selection_rect.size.length() > 0:
-		c.draw_rect(box_selection_rect, Color(1.0, 1.0, 1.0, 0.1))
-		c.draw_rect(box_selection_rect, Color(1.0, 1.0, 1.0, 0.5), false, 2.0)
-
-	# Draw selection range markers
-	var selection_length = box_selection_end_tick - box_selection_start_tick
-	if not selected_notes.is_empty() and selection_length > 0:
-		var start_x = grid_helper.ticks_to_pixels(box_selection_start_tick)
-		var end_x = grid_helper.ticks_to_pixels(box_selection_end_tick)
-
-		var line_color = Color(0.4, 0.8, 1.0, 0.6)
-		var line_width = 2.0
-
-		c.draw_line(Vector2(start_x, 0), Vector2(start_x, height), line_color, line_width)
-		c.draw_line(Vector2(end_x, 0), Vector2(end_x, height), line_color, line_width)
+# Drawing removed - now handled by MidiEditor._draw()
+# Selection state is read from MidiEditor for rendering

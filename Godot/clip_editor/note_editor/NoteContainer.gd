@@ -29,11 +29,6 @@ const visual_note_scene = preload("res://clip_editor/VisualNote.tscn")
 			update_minimum_size()
 			queue_sort()
 
-# TODO: Move this to MidiEditor since we may layer multiple NoteContainers for multi-track editing.
-# (no need for multiple playheads stacked on top of each other)
-@export var playhead_color = Color(1.0, 1.0, 1.0, 0.5)
-@export var playhead_width = 2.0
-
 # Horizontal scrolling configuration
 @export var min_width_bars: int = 8		# minimum width in bars
 @export var extra_width_bars: int = 4		# extra width to the right of the rightmost note
@@ -62,16 +57,7 @@ func _on_grid_helper_changed() -> void:
 	"""Called when grid_helper properties change (zoom, scroll, time signature, etc.)"""
 	_update_note_positions()
 	update_container_width()
-	queue_redraw()  # Redraw playhead at new zoom level
 
-
-# Playhead position (in clip-local ticks) - for visual playback indicator
-# TODO: move this to MidiEditor !
-var playhead_ticks: int = -1:
-	set(value):
-		if playhead_ticks != value:
-			playhead_ticks = value
-			queue_redraw()
 
 # Should be set to track or clip color
 var note_color = Color(0.3, 0.6, 0.9):
@@ -360,13 +346,3 @@ func _get_note_at_position(pos: Vector2) -> VisualNote:
 			if rect.has_point(pos):
 				return child
 	return null
-
-
-func _draw() -> void:
-	"""Draw the playhead."""
-	var height = size.y
-
-	# Draw playhead line (clip-local position)
-	if playhead_ticks >= 0:
-		var playhead_x = ticks_to_pixels(playhead_ticks)
-		draw_line(Vector2(playhead_x, 0), Vector2(playhead_x, height), playhead_color, playhead_width)

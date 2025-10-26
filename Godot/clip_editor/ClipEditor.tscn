@@ -1,11 +1,14 @@
-[gd_scene load_steps=9 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=14 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
+[ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
+[ext_resource type="Script" uid="uid://dyy120i4phgvv" path="res://clip_editor/ClipEditorTrackList.gd" id="2_4hncn"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
 [ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
+[ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4hncn"]
 content_margin_left = 0.0
@@ -20,6 +23,13 @@ corner_detail = 5
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_akhqx"]
 bg_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
 
+[sub_resource type="Gradient" id="Gradient_aar7r"]
+colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_ytm0k"]
+gradient = SubResource("Gradient_aar7r")
+width = 3
+
 [node name="ClipEditor" type="HBoxContainer"]
 anchors_preset = 15
 anchor_right = 1.0
@@ -27,7 +37,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 2
-script = ExtResource("1_4hncn")
+script = ExtResource("1_lqnrn")
 metadata/_edit_lock_ = true
 
 [node name="LeftPanel" type="PanelContainer" parent="."]
@@ -50,6 +60,7 @@ custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_vertical = 3
 wraparound_items = false
+script = ExtResource("2_4hncn")
 
 [node name="MainPanel" type="PanelContainer" parent="."]
 layout_mode = 2
@@ -143,3 +154,23 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 focus_mode = 1
 script = ExtResource("1_4hncn")
+
+[node name="Playhead" type="TextureRect" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+custom_minimum_size = Vector2(3, 0)
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_left = -3.0
+grow_vertical = 2
+mouse_filter = 2
+texture = SubResource("GradientTexture1D_ytm0k")
+
+[node name="Overlays" type="Control" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("9_ytm0k")
