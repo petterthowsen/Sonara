@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=10 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
@@ -7,6 +7,16 @@
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://cpkq58sx0pexi" path="res://clip_editor/NoteEditor.gd" id="7_4hncn"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4hncn"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.14901961, 0.14901961, 0.14901961, 1)
+border_width_bottom = 2
+border_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
+corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_akhqx"]
 bg_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
@@ -22,11 +32,25 @@ script = ExtResource("1_lqnrn")
 metadata/_edit_lock_ = true
 
 [node name="LeftPanel" type="PanelContainer" parent="."]
-visible = false
 layout_mode = 2
 
 [node name="VBox" type="VBoxContainer" parent="LeftPanel"]
 layout_mode = 2
+
+[node name="Header" type="PanelContainer" parent="LeftPanel/VBox"]
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_4hncn")
+
+[node name="ClipsTrackList" type="VBoxContainer" parent="LeftPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="TrackSelector" type="ItemList" parent="LeftPanel/VBox/ClipsTrackList"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_vertical = 3
+wraparound_items = false
 
 [node name="MainPanel" type="PanelContainer" parent="."]
 layout_mode = 2

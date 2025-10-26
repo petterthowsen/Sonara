@@ -1,5 +1,7 @@
 class_name ClipEditor extends HBoxContainer
 
+var log := Log.make("ClipEditor")
+
 # left panel will show track list when showing multiple clips, with buttons to switch between clips
 @onready var left_panel: PanelContainer = $LeftPanel
 
@@ -50,10 +52,10 @@ func _ready():
 
 
 func _on_editor_clip_instance_selected(clip_instance : ClipInstance):
-	print("[ClipEditor] Clip instance selected: ", clip_instance)
-	print("  - clip_id: ", clip_instance.clip_id if clip_instance else "null")
-	print("  - clip: ", str(clip_instance.clip) if clip_instance else "null")
-	print("  - is_visible: ", is_visible_in_tree())
+	log.info("Clip instance selected: ", clip_instance)
+	log.info("  - clip_id: ", clip_instance.clip_id if clip_instance else "null")
+	log.info("  - clip: ", str(clip_instance.clip) if clip_instance else "null")
+	log.info("  - is_visible: ", is_visible_in_tree())
 	
 	# Store the clip instance - will bind when we become visible
 	pending_clip_instance = clip_instance
@@ -85,14 +87,14 @@ func _on_visibility_changed():
 	
 func _bind_pending_clip():
 	"""Bind the pending clip instance to the midi editor."""
-	print("[ClipEditor] _bind_pending_clip called")
+	log.info(" _bind_pending_clip called")
 	if not pending_clip_instance:
-		print("  - No pending clip instance!")
+		log.info("  - No pending clip instance!")
 		return
 	
-	print("  - Binding to clip instance: ", pending_clip_instance.id)
-	print("  - clip_id: ", pending_clip_instance.clip_id)
-	print("  - clip: ", pending_clip_instance.clip)
+	log.info("  - Binding to clip instance: ", pending_clip_instance.id)
+	log.info("  - clip_id: ", pending_clip_instance.clip_id)
+	log.info("  - clip: ", pending_clip_instance.clip)
 	midi_editor.bind_to_clip_instance(pending_clip_instance)
 	
 	# Store as bound clip instance for playhead conversion
@@ -109,7 +111,7 @@ func _on_grid_helper_changed():
 func _on_ruler_position_requested(ticks: int):
 	"""Handle ruler clicks - set cursor position."""
 	cursor_position_ticks = ticks
-	print("[ClipEditor] Cursor position set to tick %d" % ticks)
+	log.info("Cursor position set to tick ", ticks)
 
 
 func _on_editor_playhead_moved(global_playhead_ticks: int):
