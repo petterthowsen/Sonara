@@ -13,7 +13,7 @@
 #   Width of TracksPanel is synced to the TracklistHeader
 #
 # Track Height
-#  Tracks can have independently varying heights, these must be synced to the height of visual track grid in thhe timeline (and midi/audio clips)
+#  Tracks can have independently varying heights, these must be synced to the height of visual track grid in the timeline (and midi/audio clips)
 class_name Arranger extends VBoxContainer
 
 # ArrangerTop
@@ -79,14 +79,7 @@ var current_project: Project = null
 # Shared grid helper for timeline and ruler
 var grid_helper: GridHelper = GridHelper.new()  # Default grid helper instance
 
-# Selection tracking (track_id -> Array[ClipInstance])
-var _track_selections: Dictionary = {}  # Tracks which clips are selected in each track
 var _timeline_tracks: Dictionary = {}   # Maps TimelineTrack to its corresponding Track
-
-# Cross-track drag state
-var _dragging_source_track: Track = null
-var _dragging_origin_track_index: int = -1
-var _dragging_origin_mouse_pos: Vector2 = Vector2.ZERO
 
 # Signal for multi-track selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
@@ -122,7 +115,6 @@ func _ready():
 	Sonara.editor.project_activated.connect(_on_project_activated)
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	Sonara.editor.playhead_moved.connect(_on_playhead_moved)
-	Sonara.editor.tempo_changed.connect(_on_tempo_changed)
 	Sonara.editor.time_signature_changed.connect(_on_time_signature_changed)
 	
 	# Initial ruler and playhead update
@@ -300,20 +292,11 @@ func _on_playhead_moved(_ticks: int) -> void:
 	"""Update playhead visual position when playhead moves."""
 	_update_playhead_position()
 
-func _on_tempo_changed(_tempo: float) -> void:
-	"""Update grid helper when tempo changes (currently tempo doesn't affect grid calculations)."""
-	# Note: Tempo doesn't directly affect grid spacing, only playback speed
-	# Grid is based on PPQ and time signature, not tempo
-	pass
-
 func _on_time_signature_changed(numerator: int, denominator: int) -> void:
 	"""Update grid helper when time signature changes."""
-	if not grid_helper:
-		return
 	
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
-	print("[Arranger] Time signature changed to %d/%d" % [numerator, denominator])
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Handle middle mouse button panning (only if not handled by child controls)."""
@@ -326,10 +309,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					pan_start_h_scroll = h_scroll.scroll_horizontal
 				if v_scroll:
 					pan_start_v_scroll = v_scroll.scroll_vertical
-				get_viewport().set_input_as_handled()
+				accept_event()
 			else:
 				is_panning = false
-				get_viewport().set_input_as_handled()
+				accept_event()
 	
 	elif event is InputEventMouseMotion:
 		if is_panning:
@@ -346,7 +329,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				var new_v_scroll = int(pan_start_v_scroll - delta.y)
 				v_scroll.scroll_vertical = new_v_scroll
 				target_scroll_vertical = new_v_scroll
-			get_viewport().set_input_as_handled()
+			accept_event()
 
 func _zoom_tracks_vertically(zoom_in: bool) -> void:
 	"""Zoom tracks vertically by adjusting their heights (smoothly)."""
@@ -396,8 +379,6 @@ func _apply_track_heights(new_height: int) -> void:
 
 func _update_ruler() -> void:
 	"""Update ruler with current scroll position."""
-	if not grid_helper:
-		return
 	
 	# Update scroll position (ruler and timeline share the same grid_helper instance)
 	grid_helper.scroll_position = h_scroll.scroll_horizontal
@@ -539,8 +520,6 @@ func _unbind_from_project() -> void:
 	# Clear timeline
 	timeline.set_project(null)
 
-	# Clear selection state
-	_track_selections.clear()
 	_timeline_tracks.clear()
 
 	current_project = null
@@ -562,20 +541,13 @@ func _on_track_added(track: Track) -> void:
 
 	if not timeline_track.empty_area_clicked.is_connected(_on_timeline_track_clicked):
 		timeline_track.empty_area_clicked.connect(_on_timeline_track_clicked)
-	# Connect to selection changes
-	if not timeline_track.selection_changed.is_connected(_on_timeline_track_selection_changed):
-		timeline_track.selection_changed.connect(_on_timeline_track_selection_changed.bind(track))
-	# Connect to deselect request (for single-track selection)
-	timeline_track.deselect_other_tracks_requested.connect(_on_deselect_other_tracks_requested.bind(track))
+	
 	# Store reference for later lookup
 	_timeline_tracks[timeline_track] = track
 
 
 func _on_track_removed(track: Track) -> void:
 	"""Clean up selection tracking when a track is removed."""
-	# Clear selection state for this track
-	_track_selections.erase(track.id)
-	
 	# Remove from timeline_tracks mapping
 	for timeline_track in _timeline_tracks.keys():
 		if _timeline_tracks[timeline_track] == track:
@@ -590,83 +562,6 @@ func _on_timeline_track_clicked(ticks: int, _pixels: float) -> void:
 	if Sonara and Sonara.editor:
 		Sonara.editor.set_playhead(ticks)
 		print("[Arranger] Set playhead to tick %d" % ticks)
-
-func _on_deselect_other_tracks_requested(requesting_track: Track) -> void:
-	"""Handle request to deselect all other tracks (single-track selection mode)."""
-	# Deselect all tracks except the requesting one
-	for timeline_track in _timeline_tracks.keys():
-		var track = _timeline_tracks[timeline_track]
-		if track != requesting_track:
-			# Deselect this track
-			timeline_track._deselect_all()
-			timeline_track._emit_selection_changed()
-
-
-func _on_timeline_track_selection_changed(selected_clips: Array[ClipInstance], track: Track) -> void:
-	"""Handle selection changes in a track."""
-	print("[Arranger] Timeline track selection changed")
-	print("  - track: ", track.id if track else "null")
-	print("  - selected_clips count: ", selected_clips.size())
-	
-	if selected_clips.is_empty():
-		# Track has no selection
-		_track_selections.erase(track.id)
-	else:
-		# Track has selection
-		_track_selections[track.id] = selected_clips
-		print("  - First clip: ", selected_clips[0])
-		print("  - clip_id: ", selected_clips[0].clip_id)
-		print("  - clip: ", selected_clips[0].clip)
-
-	# Emit signal with multi-track awareness
-	var is_multi_track = _track_selections.size() > 1
-	var all_selected : Array[ClipInstance] = []
-	for clips_array in _track_selections.values():
-		all_selected.append_array(clips_array)
-	
-	print("  - Emitting clips_selected with ", all_selected.size(), " clips")
-	clips_selected.emit(all_selected, is_multi_track)
-
-
-func _on_clip_drag_started(source_track: Track, selected_clip_uis: Array, selected_instances: Array[ClipInstance]) -> void:
-	"""Handle cross-track drag start - store origin state."""
-	_dragging_source_track = source_track
-	# Use visual track list for correct hierarchical ordering
-	var visual_tracks = current_project.get_visual_track_list()
-	_dragging_origin_track_index = visual_tracks.find(source_track)
-	_dragging_origin_mouse_pos = get_global_mouse_position()
-	print("[Arranger] Drag started from track %s (index %d)" % [source_track.name, _dragging_origin_track_index])
-
-
-func _on_clip_drag_moved(global_position: Vector2) -> void:
-	"""Handle cross-track drag movement - move clips as mouse moves between tracks."""
-	if not _dragging_source_track or _dragging_origin_track_index < 0:
-		return
-
-	# Calculate target track index based on mouse Y position
-	var target_track_index = _get_track_index_at_position(global_position)
-	if target_track_index < 0:
-		return
-
-	# Calculate delta from CURRENT position (not original), so we only move by 1 track at a time
-	var track_delta = target_track_index - _dragging_origin_track_index
-
-	if track_delta == 0:
-		# Still in same track, no movement needed
-		return
-
-	# Move all selected clips by track_delta
-	_move_selected_clips_by_track_delta(track_delta)
-
-	# Update origin to current position so next move is incremental
-	_dragging_origin_track_index = target_track_index
-
-
-func _on_clip_drag_ended(global_position: Vector2) -> void:
-	"""Handle cross-track drag end - finalize position."""
-	_dragging_source_track = null
-	_dragging_origin_track_index = -1
-	_dragging_origin_mouse_pos = Vector2.ZERO
 
 
 func _get_track_index_at_position(global_position: Vector2) -> int:
@@ -690,57 +585,6 @@ func _get_track_index_at_position(global_position: Vector2) -> int:
 	return -1
 
 
-func _move_selected_clips_by_track_delta(track_delta: int) -> void:
-	"""Move all selected clips by track_delta, maintaining relative positions."""
-	if track_delta == 0:
-		return
-
-	# Use visual track list for correct hierarchical ordering
-	var visual_tracks = current_project.get_visual_track_list()
-
-	# Collect all clips that will be moved and their source tracks
-	var clips_to_move: Array = []  # Array of {clip: ClipInstance, from_track: Track, to_track: Track}
-
-	for track_id in _track_selections.keys():
-		# Find the source track by ID
-		var source_track = _find_track_by_id(track_id)
-		if not source_track:
-			continue
-
-		# Get the target track index using visual ordering
-		var source_index = visual_tracks.find(source_track)
-		var target_index = source_index + track_delta
-
-		# Check bounds
-		if target_index < 0 or target_index >= visual_tracks.size():
-			print("[Arranger] Skip track %d: target index %d out of bounds" % [source_index, target_index])
-			continue
-
-		var target_track = visual_tracks[target_index]
-		var selected_clips = _track_selections[track_id]
-
-		for clip in selected_clips:
-			clips_to_move.append({
-				"clip": clip,
-				"from_track": source_track,
-				"to_track": target_track
-			})
-
-	# Move all clips
-	for move_info in clips_to_move:
-		var clip = move_info["clip"] as ClipInstance
-		var from_track = move_info["from_track"] as Track
-		var to_track = move_info["to_track"] as Track
-
-		from_track.remove_clip_instance(clip)
-		to_track.add_clip_instance(clip)
-
-	print("[Arranger] Moved %d clips by %d tracks" % [clips_to_move.size(), track_delta])
-
-	# Update selection state to reflect new track locations
-	_update_selection_after_move()
-
-
 func _find_track_by_id(track_id: int) -> Track:
 	"""Find a track by its ID."""
 	for track in current_project.tracks:
@@ -759,23 +603,6 @@ func _get_timeline_track_for_track(track: Track) -> TimelineTrack:
 		return timeline.timeline_tracks[track_index]
 
 	return null
-
-
-func _update_selection_after_move() -> void:
-	"""Update selection dictionary after clips are moved to new tracks."""
-	var new_selections: Dictionary = {}
-
-	for track_id in _track_selections.keys():
-		var old_track = _find_track_by_id(track_id)
-		if not old_track:
-			continue
-
-		# The clips should now be on different tracks, but we need to find them
-		# For now, just clear old selections and let UI refresh
-		# This is imperfect but works for basic functionality
-
-	# Clear and let selection be recalculated through normal UI flow
-	_track_selections.clear()
 
 
 func _on_h_split_dragged(offset: int) -> void:

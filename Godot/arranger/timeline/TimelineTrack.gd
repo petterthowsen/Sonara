@@ -4,13 +4,6 @@
 @tool
 class_name TimelineTrack extends Control
 
-# Signals
-signal empty_area_clicked(ticks: int, pixels: float)
-signal selection_changed(selected_clips: Array[ClipInstance])  # Emitted when selection changes in this track
-signal deselect_other_tracks_requested  # Request to deselect all other tracks before selecting in this one
-signal clip_drag_started(source_track: Track, selected_clip_uis: Array, selected_instances: Array[ClipInstance])  # Cross-track drag initiated
-signal clip_drag_moved(global_position: Vector2)  # Cross-track drag position update
-signal clip_drag_ended(global_position: Vector2)  # Cross-track drag ended
 
 @export var grid_color_bar: Color = "#000":
 	set(value):
@@ -54,8 +47,13 @@ var timeline: Timeline = null
 
 # Clip UI instances
 const TimelineClipScene = preload("res://arranger/timeline/clip/TimelineClip.tscn")
-var clip_instances: Array = []  # Array of TimelineClip instances
-var selected_clips: Array = []  # Array of selected TimelineClip instances (multi-select)
+var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
+
+# ============================================================================
+# SIGNALS
+# ============================================================================
+signal empty_area_clicked(ticks: int, pixels: float)
+
 
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
@@ -67,7 +65,7 @@ func _gui_input(event: InputEvent) -> void:
 	
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			# Check if we clicked on a clip < is this needed? I think TimlineClips swallow the event
+			# Check if we clicked on a clip
 			var clicked_on_clip = false
 			for clip_instance in clip_instances:
 				if clip_instance and clip_instance.get_rect().has_point(event.position):
@@ -76,9 +74,7 @@ func _gui_input(event: InputEvent) -> void:
 
 			if not clicked_on_clip:
 				# Clicked on empty area - deselect all (in this track and others)
-				deselect_other_tracks_requested.emit()
-				_deselect_all()
-				_emit_selection_changed()
+				#deselect other tracks
 
 				if timeline:
 					var click_ticks = timeline.pixels_to_ticks(event.position.x)
@@ -93,6 +89,9 @@ func _gui_input(event: InputEvent) -> void:
 				if event.double_click:
 					_on_double_click(event.position)
 
+# ============================================================================
+# BINDING
+# ============================================================================
 func bind_to_track(t: Track, idx: int) -> void:
 	"""Bind this timeline track to a Track data object and listen for changes."""
 	# Disconnect from old track if any
@@ -143,9 +142,10 @@ func _update_clips() -> void:
 	# Clear existing UI clip instances
 	for clip_ui in clip_instances:
 		if clip_ui:
+			if timeline:
+				timeline.unregister_clip_ui(clip_ui)
 			clip_ui.queue_free()
 	clip_instances.clear()
-	selected_clips.clear()
 
 	# Create new UI instances for each ClipInstance in the track
 	for clip_inst in track.clip_instances:
@@ -154,11 +154,8 @@ func _update_clips() -> void:
 		clip_ui.bind_to_clip_instance(clip_inst, timeline, track.color)
 
 		# Connect signals
-		clip_ui.select_requested.connect(_on_clip_select_requested)
-		clip_ui.clip_move_requested.connect(_on_clip_move_requested)
-		clip_ui.drag_started.connect(_on_clip_drag_started)
-		clip_ui.drag_moved.connect(_on_clip_drag_moved)
-		clip_ui.drag_ended.connect(_on_clip_drag_ended)
+		if timeline:
+			timeline.register_clip_ui(clip_ui)
 
 		clip_instances.append(clip_ui)
 
@@ -187,103 +184,11 @@ func _update_clip_positions() -> void:
 			clip_ui.custom_minimum_size.x = width
 			clip_ui.size.x = width
 
-# ============================================================================
-# CLIP INTERACTION
-# ============================================================================
-
-func _on_clip_select_requested(clip_ui: Node, add_to_selection: bool) -> void:
-	"""Handle clip selection request (shift-aware)."""
-	print("[TimelineTrack] Clip select requested")
-	print("  - clip_ui: ", clip_ui)
-	print("  - add_to_selection: ", add_to_selection)
-	
-	if not add_to_selection:
-		# Normal click: deselect all OTHER tracks first, then deselect clips in this track
-		deselect_other_tracks_requested.emit()
-		_deselect_all()
-		_select_clip(clip_ui)
-	else:
-		# Shift+click: toggle this clip in selection
-		if clip_ui in selected_clips:
-			_deselect_clip(clip_ui)
-		else:
-			_select_clip(clip_ui)
-
-	# Emit selection changed signal
-	_emit_selection_changed()
-
-
-func _select_clip(clip_ui: Node) -> void:
-	"""Add a clip to the selection."""
-	if clip_ui not in selected_clips:
-		selected_clips.append(clip_ui)
-		clip_ui.set_selected(true)
-
-
-func _deselect_clip(clip_ui: Node) -> void:
-	"""Remove a clip from the selection."""
-	if clip_ui in selected_clips:
-		selected_clips.erase(clip_ui)
-		clip_ui.set_selected(false)
-
-
-func _deselect_all() -> void:
-	"""Deselect all clips."""
-	for clip_ui in selected_clips:
-		clip_ui.set_selected(false)
-	selected_clips.clear()
-
-
-func _emit_selection_changed() -> void:
-	"""Emit selection changed signal with currently selected clip instances."""
-	print("[TimelineTrack] _emit_selection_changed called")
-	print("  - track: ", track.id if track else "null")
-	print("  - selected_clips count: ", selected_clips.size())
-	
-	var selected_instances: Array[ClipInstance] = []
-	for clip_ui in selected_clips:
-		if clip_ui.clip_instance:
-			selected_instances.append(clip_ui.clip_instance)
-			print("  - Adding clip instance: ", clip_ui.clip_instance.clip_id)
-
-	print("  - Emitting selection_changed with ", selected_instances.size(), " instances")
-	selection_changed.emit(selected_instances)
-
-func _on_clip_move_requested(clip_ui: Node, new_start_ticks: int) -> void:
-	"""Handle clip move request."""
-	if clip_ui.clip_instance:
-		# Update clip instance position (ClipInstance has setters that emit signals and sync to engine)
-		clip_ui.clip_instance.set_position(new_start_ticks)
-
-		# Update visual position
-		var new_x = timeline.ticks_to_pixels(new_start_ticks)
-		clip_ui.position.x = new_x
-
-func _on_clip_drag_started(clip_ui: Node, clip_instance: ClipInstance) -> void:
-	"""Handle cross-track drag start - drag the entire selection."""
-	# Emit drag started with all selected clips
-	var selected_instances: Array[ClipInstance] = []
-	for clip_ui_item in selected_clips:
-		if clip_ui_item.clip_instance:
-			selected_instances.append(clip_ui_item.clip_instance)
-
-	clip_drag_started.emit(track, selected_clips, selected_instances)
-
-
-func _on_clip_drag_moved(clip_ui: Node, global_position: Vector2) -> void:
-	"""Handle cross-track drag movement."""
-	clip_drag_moved.emit(global_position)
-
-
-func _on_clip_drag_ended(clip_ui: Node, global_position: Vector2) -> void:
-	"""Handle cross-track drag end."""
-	clip_drag_ended.emit(global_position)
 
 
 # ============================================================================
 # DRAWING
 # ============================================================================
-
 func _draw():
 	# Draw background
 	var col = bg_color
@@ -337,7 +242,6 @@ func _draw_grid() -> void:
 # ============================================================================
 # INPUT HANDLING
 # ============================================================================
-
 func _on_double_click(pos: Vector2) -> void:
 	"""Handle double-click to create a clip instance."""
 	if not timeline or not Sonara or not Sonara.editor or not Sonara.editor.project:
@@ -369,17 +273,16 @@ func _on_double_click(pos: Vector2) -> void:
 	project.add_clip(new_clip)
 
 	# Create a ClipInstance on this track
-	var ppq = project.ppq
-	var instance = track.create_clip_instance(new_clip, snapped_ticks, ppq * 4)
-
 	# UI will be updated automatically via clip_instance_added signal
+	var ppq = project.ppq
+	track.create_clip_instance(new_clip, snapped_ticks, ppq * 4)
+
 
 
 # ============================================================================
-# DRAG AND DROP SUPPORT (Asset drops from Browser)
+# DROP SUPPORT (Asset drops from Browser)
 # ============================================================================
-
-func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	"""Accept Asset drops from Browser."""
 	return data is Asset
 
@@ -412,13 +315,9 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 	# Create instance on this track
 	# Use the clip's actual content length for audio clips, or default for MIDI
-	var instance_duration = clip.content_length_ticks if clip.type == Clip.ClipType.AUDIO else project.ppq * 4
-	var instance = track.create_clip_instance(clip, drop_ticks, instance_duration)
-
 	# UI will be updated automatically via clip_instance_added signal
-
-	# Mark asset as used
-	AssetService.mark_asset_used(asset.path)
+	var instance_duration = clip.content_length_ticks
+	track.create_clip_instance(clip, drop_ticks, instance_duration)
 
 	print("[TimelineTrack] Created %s clip from: %s" % [
 		"audio" if asset.is_audio() else "MIDI",
@@ -427,7 +326,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 
 # ============================================================================
-# TRACK SIGNAL HANDLERS
+# SIGNAL HANDLERS
 # ============================================================================
 
 func _on_clip_instance_added(instance: ClipInstance) -> void:
@@ -438,11 +337,8 @@ func _on_clip_instance_added(instance: ClipInstance) -> void:
 	clip_ui.bind_to_clip_instance(instance, timeline, track.color)
 
 	# Connect signals
-	clip_ui.select_requested.connect(_on_clip_select_requested)
-	clip_ui.clip_move_requested.connect(_on_clip_move_requested)
-	clip_ui.drag_started.connect(_on_clip_drag_started)
-	clip_ui.drag_moved.connect(_on_clip_drag_moved)
-	clip_ui.drag_ended.connect(_on_clip_drag_ended)
+	if timeline:
+		timeline.register_clip_ui(clip_ui)
 
 	clip_instances.append(clip_ui)
 
@@ -459,8 +355,9 @@ func _on_clip_instance_removed(instance: ClipInstance) -> void:
 		var clip_ui = clip_instances[i]
 		if clip_ui and clip_ui.clip_instance == instance:
 			# Deselect if it was selected
-			if clip_ui in selected_clips:
-				selected_clips.erase(clip_ui)
+			if timeline:
+				timeline.unregister_clip_ui(clip_ui)
+				timeline.notify_clip_instance_removed(instance)
 			clip_ui.queue_free()
 			clip_instances.remove_at(i)
 			break

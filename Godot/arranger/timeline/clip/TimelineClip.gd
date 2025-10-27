@@ -180,11 +180,9 @@ func _gui_input(event: InputEvent) -> void:
 						resize_start_offset = clip_instance.clip_offset
 					accept_event()
 				else:
-					# Request selection with shift-key awareness
-					var add_to_selection = Input.is_action_pressed("ui_select")
-					if event is InputEventMouseButton:
-						add_to_selection = event.shift_pressed
-					select_requested.emit(self, add_to_selection)
+					# Request selection with ctrl-key awareness
+					var additive = Input.is_key_pressed(KEY_CTRL)
+					select_requested.emit(self, additive)
 					# Prepare for drag (don't start yet - wait for threshold)
 					is_dragging = true
 					drag_activated = false
@@ -200,8 +198,8 @@ func _gui_input(event: InputEvent) -> void:
 					resize_edge = ""
 					accept_event()
 				elif is_dragging:
-					if is_cross_track_drag and clip_instance:
-						# Emit drag ended for cross-track moves
+					if drag_activated and clip_instance:
+						# Emit drag ended for both horizontal and cross-track drags
 						drag_ended.emit(self, get_global_mouse_position())
 					is_dragging = false
 					drag_activated = false
@@ -300,25 +298,24 @@ func _gui_input(event: InputEvent) -> void:
 			if is_cross_track_drag:
 				# Cross-track drag: emit position updates
 				drag_moved.emit(self, mouse_pos)
-				accept_event()
-			else:
-				# Horizontal drag: reposition within track
-				var pixel_delta = mouse_delta.x
-				var tick_delta = timeline.pixels_to_ticks(pixel_delta)
-				var new_start_ticks = drag_start_ticks + tick_delta
+			
+			# Horizontal drag component
+			var pixel_delta = mouse_delta.x
+			var tick_delta = timeline.pixels_to_ticks(pixel_delta)
+			var new_start_ticks = drag_start_ticks + tick_delta
 
-				# Snap to grid
-				var snap_interval = timeline.get_snap_interval()
-				if snap_interval > 0:
-					@warning_ignore("integer_division")
-					new_start_ticks = (new_start_ticks / snap_interval) * snap_interval
+			# Snap to grid
+			var snap_interval = timeline.get_snap_interval()
+			if snap_interval > 0:
+				@warning_ignore("integer_division")
+				new_start_ticks = (new_start_ticks / snap_interval) * snap_interval
 
-				# Clamp to positive values
-				new_start_ticks = max(0, new_start_ticks)
+			# Clamp to positive values
+			new_start_ticks = max(0, new_start_ticks)
 
-				# Emit move request
-				clip_move_requested.emit(self, new_start_ticks)
-				accept_event()
+			# Emit move request
+			clip_move_requested.emit(self, new_start_ticks)
+			accept_event()
 
 
 func _on_mouse_entered() -> void:

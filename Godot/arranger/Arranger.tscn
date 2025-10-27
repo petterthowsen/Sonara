@@ -60,6 +60,11 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_bh1i7")
+scroll_smoothing = null
+scroll_speed_h = null
+scroll_speed_v = null
+zoom_sensitivity_h = null
+zoom_sensitivity_v = null
 
 [node name="VSplitContainer" type="VSplitContainer" parent="."]
 layout_mode = 2

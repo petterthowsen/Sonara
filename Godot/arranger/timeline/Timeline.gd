@@ -14,13 +14,35 @@ var project: Project = null
 const MIN_TIMELINE_BARS: int = 32  # Show at least 32 bars
 
 # Grid helper for consistent snapping (set by Arranger)
-var grid_helper: GridHelper
+var grid_helper: GridHelper:
+	get:
+		return _grid_helper
+	set(value):
+		_grid_helper = value
+		if clip_selection_manager:
+			clip_selection_manager.grid_helper = value
+var _grid_helper: GridHelper = null
 
 # Reference to Arranger for forwarding drag events
 var arranger: Node = null
 
+var clip_selection_manager: ClipSelectionManager = ClipSelectionManager.new()
+
+var _drag_active: bool = false
+var _drag_cross_track: bool = false
+var _drag_anchor_instance: ClipInstance = null
+var _drag_initial_positions: Dictionary = {}  # ClipInstance -> int
+var _drag_initial_track_indices: Dictionary = {}  # ClipInstance -> int
+var _drag_selected_instances: Array[ClipInstance] = []
+var _drag_current_tick_delta: int = 0
+var _drag_pending_track_delta: int = 0
+var clip_clipboard: ClipSelection = null
+
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
+	clip_selection_manager.set_context(self, grid_helper)
+	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
+	clip_selection_manager.box_selection_changed.connect(func(_rect): queue_redraw())
 
 
 # ============================================================================
@@ -71,10 +93,7 @@ func _on_track_added(track: Track) -> void:
 		return
 
 	# Instantiate TimelineTrack
-	var timeline_track = TimelineTrack.new()
-	if timeline_track == null:
-		push_error("[Timeline] Failed to instantiate TimelineTrack")
-		return
+	var timeline_track := TimelineTrack.new()
 
 	# Find correct position based on order property
 	var insert_position = _find_insert_position(track.order)
@@ -91,15 +110,6 @@ func _on_track_added(track: Track) -> void:
 
 	# Connect to track signals for reordering
 	track.order_changed.connect(_on_track_order_changed)
-
-	# Connect drag signals to forward to Arranger
-	if arranger:
-		if not timeline_track.clip_drag_started.is_connected(arranger._on_clip_drag_started):
-			timeline_track.clip_drag_started.connect(arranger._on_clip_drag_started)
-		if not timeline_track.clip_drag_moved.is_connected(arranger._on_clip_drag_moved):
-			timeline_track.clip_drag_moved.connect(arranger._on_clip_drag_moved)
-		if not timeline_track.clip_drag_ended.is_connected(arranger._on_clip_drag_ended):
-			timeline_track.clip_drag_ended.connect(arranger._on_clip_drag_ended)
 
 	# Store reference
 	if index >= timeline_tracks.size():
@@ -127,6 +137,14 @@ func _on_track_removed(track: Track) -> void:
 	var index = timeline_tracks.find(timeline_track)
 	if index >= 0:
 		timeline_tracks.remove_at(index)
+
+	# Remove selection references for clips on this track
+	if clip_selection_manager:
+		for clip_ui in timeline_track.clip_instances:
+			if clip_ui:
+				clip_selection_manager.unregister_clip_ui(clip_ui)
+				if clip_ui.clip_instance:
+					clip_selection_manager.remove_instance(clip_ui.clip_instance)
 	
 	# Remove from scene tree and free
 	timeline_track.queue_free()
@@ -189,12 +207,29 @@ func _clear_all_tracks() -> void:
 	"""Remove all timeline tracks."""
 	for timeline_track in timeline_tracks:
 		if timeline_track:
+			if clip_selection_manager:
+				for clip_ui in timeline_track.clip_instances:
+					if clip_ui:
+						clip_selection_manager.unregister_clip_ui(clip_ui)
+						if clip_ui.clip_instance:
+							clip_selection_manager.remove_instance(clip_ui.clip_instance)
 			timeline_track.queue_free()
 	timeline_tracks.clear()
+	_drag_active = false
+	_drag_cross_track = false
+	_drag_anchor_instance = null
+	_drag_initial_positions.clear()
+	_drag_initial_track_indices.clear()
+	_drag_selected_instances.clear()
+	_drag_current_tick_delta = 0
+	_drag_pending_track_delta = 0
 	
 	# Also clear any remaining children
 	for child in get_children():
 		child.queue_free()
+
+	if clip_selection_manager:
+		clip_selection_manager.clear_selection()
 	
 	print("[Timeline] All timeline tracks cleared")
 
@@ -214,12 +249,31 @@ func _find_insert_position(order: int) -> int:
 
 func _gui_input(event: InputEvent) -> void:
 	""" handle left-click empty area to set playhead position """
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_pos = get_local_mouse_position()
-		var click_ticks = pixels_to_ticks(local_pos.x)
-		var snapped_ticks = grid_helper.snap_ticks(click_ticks)
-		Sonara.editor.set_playhead(snapped_ticks)
-		accept_event()
+		if event.pressed:
+			var additive = Input.is_key_pressed(KEY_CTRL)
+			if additive and clip_selection_manager:
+				clip_selection_manager.start_box_selection(local_pos)
+				accept_event()
+				return
+
+			if clip_selection_manager:
+				clip_selection_manager.clear_selection()
+
+			var click_ticks = pixels_to_ticks(local_pos.x)
+			var snapped_ticks = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
+			Sonara.editor.set_playhead(snapped_ticks)
+			accept_event()
+		else:
+			if clip_selection_manager and clip_selection_manager.is_box_selecting:
+				var instances = _get_clip_instances_in_rect(clip_selection_manager.box_rect)
+				clip_selection_manager.end_box_selection(instances)
+				accept_event()
+	elif event is InputEventMouseMotion:
+		if clip_selection_manager and clip_selection_manager.is_box_selecting:
+			clip_selection_manager.update_box_selection(get_local_mouse_position())
+			accept_event()
 
 
 # ============================================================================
@@ -243,6 +297,7 @@ func _redraw_all_tracks() -> void:
 			# Update clip positions when zoom changes
 			if timeline_track.has_method("_update_clip_positions"):
 				timeline_track._update_clip_positions()
+	queue_redraw()
 
 
 func get_snap_interval() -> int:
@@ -287,8 +342,466 @@ func _update_timeline_width() -> void:
 # ============================================================================
 func ticks_to_pixels(ticks: int) -> float:
 	"""Convert ticks to pixel position."""
+	if not grid_helper:
+		return float(ticks)
 	return grid_helper.ticks_to_pixels(ticks)
 
 func pixels_to_ticks(pixels: float) -> int:
 	"""Convert pixel position to ticks."""
+	if not grid_helper:
+		return int(pixels)
 	return grid_helper.pixels_to_ticks(pixels)
+
+
+func register_clip_ui(clip_ui: TimelineClip) -> void:
+	if clip_selection_manager:
+		clip_selection_manager.register_clip_ui(clip_ui)
+	if not clip_ui:
+		return
+	var move_callable := Callable(self, "_on_clip_move_requested")
+	if not clip_ui.clip_move_requested.is_connected(move_callable):
+		clip_ui.clip_move_requested.connect(move_callable)
+
+	var drag_start_callable := Callable(self, "_on_clip_drag_started")
+	if not clip_ui.drag_started.is_connected(drag_start_callable):
+		clip_ui.drag_started.connect(drag_start_callable)
+
+	var drag_move_callable := Callable(self, "_on_clip_drag_moved")
+	if not clip_ui.drag_moved.is_connected(drag_move_callable):
+		clip_ui.drag_moved.connect(drag_move_callable)
+
+	var drag_end_callable := Callable(self, "_on_clip_drag_ended")
+	if not clip_ui.drag_ended.is_connected(drag_end_callable):
+		clip_ui.drag_ended.connect(drag_end_callable)
+
+
+func unregister_clip_ui(clip_ui: TimelineClip) -> void:
+	if clip_selection_manager:
+		clip_selection_manager.unregister_clip_ui(clip_ui)
+	if not clip_ui:
+		return
+	var move_callable := Callable(self, "_on_clip_move_requested")
+	if clip_ui.clip_move_requested.is_connected(move_callable):
+		clip_ui.clip_move_requested.disconnect(move_callable)
+	var drag_start_callable := Callable(self, "_on_clip_drag_started")
+	if clip_ui.drag_started.is_connected(drag_start_callable):
+		clip_ui.drag_started.disconnect(drag_start_callable)
+	var drag_move_callable := Callable(self, "_on_clip_drag_moved")
+	if clip_ui.drag_moved.is_connected(drag_move_callable):
+		clip_ui.drag_moved.disconnect(drag_move_callable)
+	var drag_end_callable := Callable(self, "_on_clip_drag_ended")
+	if clip_ui.drag_ended.is_connected(drag_end_callable):
+		clip_ui.drag_ended.disconnect(drag_end_callable)
+
+
+func notify_clip_instance_removed(instance: ClipInstance) -> void:
+	if clip_selection_manager:
+		clip_selection_manager.remove_instance(instance)
+
+
+func get_selected_clip_instances() -> Array[ClipInstance]:
+	if clip_selection_manager:
+		return clip_selection_manager.get_selected_instances()
+	return []
+
+
+func _get_clip_instances_in_rect(rect: Rect2) -> Array[ClipInstance]:
+	var hits: Array[ClipInstance] = []
+	if rect.size.length() == 0:
+		return hits
+
+	var check_rect := rect.abs()
+	for track in timeline_tracks:
+		if not track:
+			continue
+		var track_top_left = track.position
+		var track_rect = Rect2(track_top_left, track.size)
+		if not check_rect.intersects(track_rect):
+			continue
+
+		for clip_ui in track.clip_instances:
+			if not clip_ui:
+				continue
+			var clip_rect = Rect2(track_top_left + clip_ui.position, clip_ui.size)
+			if check_rect.intersects(clip_rect):
+				var inst = clip_ui.clip_instance
+				if inst and not hits.has(inst):
+					hits.append(inst)
+	return hits
+
+
+func _ensure_drag_initialized(instance: ClipInstance, cross_track: bool) -> void:
+	if not instance:
+		return
+	if not _drag_active:
+		_drag_active = true
+		_drag_cross_track = cross_track
+		_drag_anchor_instance = instance
+		_drag_initial_positions.clear()
+		_drag_initial_track_indices.clear()
+		_drag_selected_instances = clip_selection_manager.get_selected_instances()
+		if _drag_selected_instances.is_empty():
+			_drag_selected_instances = [instance]
+		for inst in _drag_selected_instances:
+			if not inst:
+				continue
+			_drag_initial_positions[inst] = inst.start_ticks
+			_drag_initial_track_indices[inst] = _get_track_index_for_instance(inst)
+		_drag_current_tick_delta = 0
+		_drag_pending_track_delta = 0
+	elif cross_track:
+		_drag_cross_track = true
+
+
+func _apply_horizontal_drag(delta_ticks: int) -> void:
+	if not _drag_active:
+		return
+	if delta_ticks == _drag_current_tick_delta:
+		return
+	_drag_current_tick_delta = delta_ticks
+	var tracks_to_refresh: Array[TimelineTrack] = []
+	for inst in _drag_initial_positions.keys():
+		var base_start: int = _drag_initial_positions[inst]
+		var new_start = max(0, base_start + delta_ticks)
+		if inst.start_ticks == new_start:
+			continue
+		inst.set_position(new_start)
+		var track_ui = _get_timeline_track_for_instance(inst)
+		if track_ui and not tracks_to_refresh.has(track_ui):
+			tracks_to_refresh.append(track_ui)
+	for track_ui in tracks_to_refresh:
+		if track_ui:
+			track_ui._update_clip_positions()
+			track_ui.queue_redraw()
+	queue_redraw()
+
+
+func _apply_vertical_drag(delta_tracks: int) -> void:
+	if not _drag_active or delta_tracks == 0:
+		return
+	var allowed_delta = _clamp_track_delta(delta_tracks)
+	if allowed_delta == 0:
+		return
+
+	var target_instances: Array[ClipInstance] = []
+	target_instances.assign(_drag_selected_instances)
+
+	for inst in target_instances:
+		if not inst:
+			continue
+		var origin_index = _drag_initial_track_indices.get(inst, _get_track_index_for_instance(inst))
+		if origin_index == -1:
+			continue
+		var target_index = origin_index + allowed_delta
+		if target_index < 0 or target_index >= timeline_tracks.size():
+			continue
+		var target_track_node: TimelineTrack = timeline_tracks[target_index]
+		if not target_track_node or not target_track_node.track:
+			continue
+		if target_track_node.track.type == Track.TrackType.FOLDER:
+			continue
+		var current_track: Track = inst.track
+		if current_track == target_track_node.track:
+			continue
+		current_track.remove_clip_instance(inst)
+		target_track_node.track.add_clip_instance(inst)
+
+	_drag_pending_track_delta = allowed_delta
+	if not target_instances.is_empty():
+		clip_selection_manager.select_instances(target_instances)
+	queue_redraw()
+
+
+func _finish_drag() -> void:
+	if not _drag_active:
+		return
+	_drag_active = false
+	_drag_cross_track = false
+	_drag_anchor_instance = null
+	_drag_initial_positions.clear()
+	_drag_initial_track_indices.clear()
+	_drag_selected_instances.clear()
+	_drag_current_tick_delta = 0
+	_drag_pending_track_delta = 0
+	clip_selection_manager.refresh_after_modification()
+	queue_redraw()
+
+
+func _clamp_track_delta(requested_delta: int) -> int:
+	return _compute_allowed_track_delta(_drag_selected_instances, _drag_initial_track_indices, requested_delta)
+
+
+func _compute_allowed_track_delta(instances: Array[ClipInstance], initial_indices: Dictionary, requested_delta: int) -> int:
+	if requested_delta == 0:
+		return 0
+	var direction = 1 if requested_delta > 0 else -1
+	var allowed_delta = requested_delta
+	while allowed_delta != 0:
+		var valid = true
+		for inst in instances:
+			if not inst:
+				continue
+			var origin_index = initial_indices.get(inst, _get_track_index_for_instance(inst))
+			if origin_index == -1:
+				continue
+			var target_index = origin_index + allowed_delta
+			if target_index < 0 or target_index >= timeline_tracks.size():
+				valid = false
+				break
+			var target_track_node: TimelineTrack = timeline_tracks[target_index]
+			if not target_track_node or not target_track_node.track:
+				valid = false
+				break
+			if target_track_node.track.type == Track.TrackType.FOLDER:
+				valid = false
+				break
+		if valid:
+			return allowed_delta
+		allowed_delta -= direction
+	return 0
+
+
+func _get_track_index_for_instance(instance: ClipInstance) -> int:
+	for i in range(timeline_tracks.size()):
+		var track_node: TimelineTrack = timeline_tracks[i]
+		for clip_ui in track_node.clip_instances:
+			if clip_ui and clip_ui.clip_instance == instance:
+				return i
+	return -1
+
+
+func _get_timeline_track_for_instance(instance: ClipInstance) -> TimelineTrack:
+	var index = _get_track_index_for_instance(instance)
+	if index >= 0 and index < timeline_tracks.size():
+		return timeline_tracks[index]
+	return null
+
+
+func _find_track_index_at_global_position(global_position: Vector2) -> int:
+	var local_pos = make_canvas_position_local(global_position)
+	var y = local_pos.y
+	for i in range(timeline_tracks.size()):
+		var track_node: TimelineTrack = timeline_tracks[i]
+		var track_top = track_node.position.y
+		var track_bottom = track_top + track_node.size.y
+		if y >= track_top and y <= track_bottom:
+			return i
+	return -1
+
+
+func copy_selection_to_clipboard() -> void:
+	if not clip_selection_manager or not clip_selection_manager.has_selection():
+		clip_clipboard = null
+		print("[Timeline] Copy skipped - no clips selected")
+		return
+	clip_clipboard = clip_selection_manager.selection.clone()
+	print("[Timeline] Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
+
+
+func cut_selection_to_clipboard() -> void:
+	if not clip_selection_manager or not clip_selection_manager.has_selection():
+		clip_clipboard = null
+		print("[Timeline] Cut skipped - no clips selected")
+		return
+	clip_clipboard = clip_selection_manager.selection.clone()
+	var selected = clip_selection_manager.get_selected_instances()
+	for inst in selected:
+		if inst and inst.track:
+			inst.track.remove_clip_instance(inst)
+	clip_selection_manager.clear_selection()
+	print("[Timeline] Cut %d clips to clipboard" % selected.size())
+
+
+func paste_clipboard() -> void:
+	if clip_clipboard == null or clip_clipboard.is_empty():
+		print("[Timeline] Paste skipped - clipboard empty")
+		return
+	if not Sonara.editor or not Sonara.editor.project:
+		push_warning("[Timeline] Cannot paste clips - no active project")
+		return
+	var playhead_ticks: int = Sonara.editor.playhead_ticks
+	var reference_selection := clip_clipboard
+	var base_start := reference_selection.start_tick
+	var delta_ticks := playhead_ticks - base_start
+	var new_instances: Array[ClipInstance] = []
+	for original_inst in reference_selection.clip_instances:
+		if not original_inst:
+			continue
+		var target_track: Track = original_inst.track
+		if not target_track:
+			continue
+		if target_track.type == Track.TrackType.FOLDER:
+			continue
+		var clip_ref: Clip = original_inst.clip
+		if not clip_ref:
+			continue
+		var new_start = max(0, original_inst.start_ticks + delta_ticks)
+		var new_instance = target_track.create_clip_instance(clip_ref, new_start, original_inst.duration_ticks)
+		new_instance.set_clip_offset(original_inst.clip_offset)
+		new_instance.set_loop_enabled(original_inst.loop_enabled)
+		new_instance.loop_start_ticks = original_inst.loop_start_ticks
+		new_instance.loop_length_ticks = original_inst.loop_length_ticks
+		new_instance.transpose = original_inst.transpose
+		new_instance.gain_offset = original_inst.gain_offset
+		new_instance.muted = original_inst.muted
+		new_instance.fade_in_ticks = original_inst.fade_in_ticks
+		new_instance.fade_out_ticks = original_inst.fade_out_ticks
+		new_instance.color_override = original_inst.color_override
+		new_instances.append(new_instance)
+
+	if new_instances.is_empty():
+		print("[Timeline] Paste created no clips (all skipped)")
+		return
+	clip_selection_manager.select_instances(new_instances)
+	clip_selection_manager.refresh_after_modification()
+	_refresh_tracks_for_instances(new_instances)
+	print("[Timeline] Pasted %d clips at playhead %d" % [new_instances.size(), playhead_ticks])
+
+
+func move_selection_by_ticks(delta_ticks: int) -> void:
+	if delta_ticks == 0:
+		return
+	var selected = clip_selection_manager.get_selected_instances()
+	if selected.is_empty():
+		return
+	var tracks_to_refresh: Array[TimelineTrack] = []
+	for inst in selected:
+		if not inst:
+			continue
+		var new_start = max(0, inst.start_ticks + delta_ticks)
+		if new_start == inst.start_ticks:
+			continue
+		inst.set_position(new_start)
+		var track_ui = _get_timeline_track_for_instance(inst)
+		if track_ui and not tracks_to_refresh.has(track_ui):
+			tracks_to_refresh.append(track_ui)
+	for track_ui in tracks_to_refresh:
+		if track_ui:
+			track_ui._update_clip_positions()
+			track_ui.queue_redraw()
+	clip_selection_manager.refresh_after_modification()
+	queue_redraw()
+
+
+func move_selection_by_tracks(delta_tracks: int) -> void:
+	if delta_tracks == 0:
+		return
+	var selected = clip_selection_manager.get_selected_instances()
+	if selected.is_empty():
+		return
+	var initial_indices: Dictionary = {}
+	for inst in selected:
+		if inst:
+			initial_indices[inst] = _get_track_index_for_instance(inst)
+	var allowed_delta = _compute_allowed_track_delta(selected, initial_indices, delta_tracks)
+	if allowed_delta == 0:
+		return
+	for inst in selected:
+		if not inst:
+			continue
+		var origin_index: int = initial_indices.get(inst, -1)
+		if origin_index == -1:
+			continue
+		var target_index = origin_index + allowed_delta
+		if target_index < 0 or target_index >= timeline_tracks.size():
+			continue
+		var target_track_node: TimelineTrack = timeline_tracks[target_index]
+		if not target_track_node or not target_track_node.track:
+			continue
+		if inst.track:
+			inst.track.remove_clip_instance(inst)
+		target_track_node.track.add_clip_instance(inst)
+	clip_selection_manager.select_instances(selected)
+	clip_selection_manager.refresh_after_modification()
+	_refresh_tracks_for_instances(selected)
+	queue_redraw()
+	print("[Timeline] Moved selection by %d track(s)" % allowed_delta)
+
+
+func _refresh_tracks_for_instances(instances: Array[ClipInstance]) -> void:
+	var tracks_to_refresh: Array[TimelineTrack] = []
+	for inst in instances:
+		if not inst:
+			continue
+		var track_ui = _get_timeline_track_for_instance(inst)
+		if track_ui and not tracks_to_refresh.has(track_ui):
+			tracks_to_refresh.append(track_ui)
+	for track_ui in tracks_to_refresh:
+		if track_ui:
+			track_ui._update_clip_positions()
+			track_ui.queue_redraw()
+
+
+func _on_clip_move_requested(clip_ui: TimelineClip, new_start_ticks: int) -> void:
+	if not clip_ui or not clip_ui.clip_instance:
+		return
+	_ensure_drag_initialized(clip_ui.clip_instance, false)
+	var original_start: int = _drag_initial_positions.get(clip_ui.clip_instance, clip_ui.clip_instance.start_ticks)
+	var delta = new_start_ticks - original_start
+	_apply_horizontal_drag(delta)
+
+
+func _on_clip_drag_started(clip_ui: TimelineClip, _instance: ClipInstance) -> void:
+	if not clip_ui or not clip_ui.clip_instance:
+		return
+	_ensure_drag_initialized(clip_ui.clip_instance, true)
+
+
+func _on_clip_drag_moved(clip_ui: TimelineClip, global_position: Vector2) -> void:
+	if not clip_ui or not clip_ui.clip_instance:
+		return
+	_ensure_drag_initialized(clip_ui.clip_instance, true)
+	var anchor_index = _drag_initial_track_indices.get(clip_ui.clip_instance, _get_track_index_for_instance(clip_ui.clip_instance))
+	var target_index = _find_track_index_at_global_position(global_position)
+	if anchor_index == -1 or target_index == -1:
+		return
+	_drag_pending_track_delta = target_index - anchor_index
+
+
+func _on_clip_drag_ended(clip_ui: TimelineClip, _global_position: Vector2) -> void:
+	if not clip_ui or not clip_ui.clip_instance:
+		_finish_drag()
+		return
+	if _drag_cross_track and _drag_pending_track_delta != 0:
+		_apply_vertical_drag(_drag_pending_track_delta)
+	_finish_drag()
+
+
+func _draw() -> void:
+	if not clip_selection_manager:
+		return
+
+	var theme_fill = Color(1, 1, 1, 0.1)
+	var theme_stroke = Color(1, 1, 1, 0.4)
+
+	if clip_selection_manager.is_box_selecting and clip_selection_manager.box_rect.size.length() > 0:
+		var rect := clip_selection_manager.box_rect.abs()
+		draw_rect(rect, theme_fill, true)
+		draw_rect(rect, theme_stroke, false, 2.0)
+
+	var bounds = clip_selection_manager.get_selection_bounds()
+	if bounds.x != bounds.y:
+		var start_x = ticks_to_pixels(bounds.x)
+		var end_x = ticks_to_pixels(bounds.y)
+		draw_line(Vector2(start_x, 0), Vector2(start_x, size.y), theme_stroke, 2.0)
+		draw_line(Vector2(end_x, 0), Vector2(end_x, size.y), theme_stroke, 2.0)
+
+
+func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:
+	if arranger and arranger.has_signal("clips_selected"):
+		arranger.emit_signal("clips_selected", instances, _selection_has_multiple_tracks(instances))
+
+
+func _selection_has_multiple_tracks(instances: Array[ClipInstance]) -> bool:
+	if instances.size() < 2:
+		return false
+	var track_id := -99999
+	for inst in instances:
+		if not inst or not inst.track:
+			continue
+		if track_id == -99999:
+			track_id = inst.track.id
+			continue
+		if inst.track.id != track_id:
+			return true
+	return false
