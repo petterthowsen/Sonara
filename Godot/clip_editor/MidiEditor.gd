@@ -20,8 +20,24 @@ var logger := Log.make("MidiEditor")
 @onready var note_lanes: NoteLanes = $HBox/NoteArea/NoteLanes
 @onready var grid_renderer: GridRenderer = $HBox/NoteArea/GridRenderer
 
+# h_scroll Contains all NoteEditors
 @onready var h_scroll: ScrollContainer = $HBox/NoteArea/HScroll
-@onready var note_editor: NoteEditor = $HBox/NoteArea/HScroll/NoteEditor
+var note_editors : Array[NoteEditor] = []
+
+# Track-mode state
+var track_mode: bool = false  # True when displaying multiple clips across tracks
+var current_track: Track = null:  # Active track in track-mode
+	set(value):
+		if current_track != value:
+			current_track = value
+			_update_note_editor_states()
+
+# Primary note editor (backwards compatibility, first in note_editors array)
+var note_editor: NoteEditor:
+	get:
+		if note_editors.is_empty():
+			return null
+		return note_editors[0]
 
 @onready var playhead: TextureRect = $HBox/NoteArea/Playhead
 
@@ -44,22 +60,29 @@ var grid_helper: GridHelper:
 
 			grid_helper = gh
 			note_lanes.grid_helper = gh
-			note_editor.grid_helper = gh
 			grid_renderer.set_grid_helper(gh)
+			
+			# Update all note editors
+			for editor in note_editors:
+				if editor:
+					editor.grid_helper = gh
 
 			# Connect to new grid_helper's changed signal
 			if grid_helper:
 				grid_helper.changed.connect(_on_grid_helper_changed)
 
 
-# Local cursor position (in ticks) - propagated to NoteEditor
+# Local cursor position (in ticks) - propagated to NoteEditor(s)
 var cursor_position_ticks: int = 0:
 	set(value):
 		cursor_position_ticks = value
-		note_editor.cursor_position_ticks = cursor_position_ticks
+		# Update all note editors
+		for editor in note_editors:
+			if editor:
+				editor.cursor_position_ticks = cursor_position_ticks
 
 
-# note height: synced to v_piano, note_lanes and note_editor
+# note height: synced to v_piano, note_lanes and note_editor(s)
 var note_height_min := 8
 var note_height_max := 40
 @export var note_height := 20:
@@ -69,7 +92,10 @@ var note_height_max := 40
 			if is_inside_tree():
 				v_piano.key_height = note_height
 				note_lanes.key_height = note_height
-				note_editor.note_height = note_height
+				# Update all note editors
+				for editor in note_editors:
+					if editor:
+						editor.note_height = note_height
 
 var scroll_speed_notes = 2
 
@@ -115,7 +141,14 @@ func _ready():
 	target_scroll_horizontal = h_scroll.scroll_horizontal
 	v_piano.key_height = note_height
 	note_lanes.key_height = note_height
-	note_editor.note_height = note_height
+	
+	# Find existing NoteEditor in scene tree (from .tscn)
+	var scene_note_editor = h_scroll.get_node_or_null("NoteEditor")
+	if scene_note_editor:
+		note_editors.append(scene_note_editor)
+		scene_note_editor.note_height = note_height
+		if grid_helper:
+			scene_note_editor.grid_helper = grid_helper
 
 func _process(delta: float):
 	# Smooth scroll interpolation
@@ -139,21 +172,96 @@ func _process(delta: float):
 
 
 func unbind():
+	"""Unbind all clip instances and clear note editors."""
 	clip = null
 	clip_instance = null
-	note_editor.unbind()
+	track_mode = false
+	current_track = null
+	
+	# Unbind all note editors
+	for editor in note_editors:
+		if editor:
+			editor.unbind()
+	
+	# Keep only the first editor (from scene tree), remove any dynamically created ones
+	while note_editors.size() > 1:
+		var editor = note_editors.pop_back()
+		if editor:
+			editor.queue_free()
 
 func bind_to_clip_instance(ci : ClipInstance):
-	print("[MidiEditor] bind_to_clip_instance called")
+	"""Bind to a single clip instance (clip-mode)."""
+	print("[MidiEditor] bind_to_clip_instance called (clip-mode)")
 	print("  - clip_instance: ", ci)
 	print("  - clip_id: ", ci.clip_id if ci else "null")
 	print("  - clip: ", ci.clip if ci else "null")
 	
-	if clip_instance:
+	if clip_instance or track_mode:
 		unbind()
 	
+	track_mode = false
 	clip_instance = ci
-	note_editor.bind(clip_instance)
+	
+	# Bind to the first (and only) note editor
+	if note_editor:
+		note_editor.bind(clip_instance)
+		# Clip-mode: no position offset (notes show at clip-local positions)
+		note_editor.position_offset_ticks = 0
+	
+	call_deferred("scroll_to_note")
+
+
+func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
+	"""Bind to multiple clips in track-mode (song-relative positioning)."""
+	logger.info("[MidiEditor] bind_to_clips called (track-mode)")
+	logger.info("  - %d clips across %d tracks" % [clips.size(), tracks.size()])
+	
+	# Unbind previous state
+	if clip_instance or track_mode:
+		unbind()
+	
+	track_mode = true
+	
+	# Create a NoteEditor for each clip
+	for i in range(clips.size()):
+		var clip_inst = clips[i]
+		if not clip_inst or not clip_inst.clip:
+			continue
+		
+		# Reuse first editor, create new ones for the rest
+		var editor: NoteEditor
+		if i < note_editors.size():
+			editor = note_editors[i]
+		else:
+			# Create new NoteEditor instance
+			editor = NoteEditor.new()
+			h_scroll.add_child(editor)
+			note_editors.append(editor)
+			
+			# Configure editor
+			editor.note_height = note_height
+			editor.grid_helper = grid_helper
+			editor.cursor_position_ticks = cursor_position_ticks
+		
+		# Bind to clip
+		editor.bind(clip_inst)
+		
+		# Track-mode: set position offset to clip's start position for song-relative display
+		editor.position_offset_ticks = clip_inst.start_ticks
+		
+		# Set color from track
+		if clip_inst.track:
+			editor.note_color = clip_inst.track.color
+		
+		logger.info("  - Bound editor %d to clip '%s' on track '%s' (offset: %d ticks)" % [i, clip_inst.clip.name, clip_inst.track.name if clip_inst.track else "null", clip_inst.start_ticks])
+	
+	# Store reference to first clip for convenience
+	if not clips.is_empty():
+		clip_instance = clips[0]
+	
+	# Set first track as active by default
+	if not tracks.is_empty():
+		current_track = tracks[0]
 	
 	call_deferred("scroll_to_note")
 
@@ -591,3 +699,29 @@ func _update_playhead_position() -> void:
 	# Position relative to note_area, accounting for h_scroll offset
 	playhead.position.x = playhead_x_content - h_scroll.scroll_horizontal + h_scroll.position.x
 	playhead.position.x -= 3 # offset to center the playhead on the pixel, it's 3px wide.
+
+
+func _update_note_editor_states() -> void:
+	"""Update visual state of note editors based on current_track."""
+	if not track_mode or not current_track:
+		# In clip-mode, ensure first editor is active
+		for i in range(note_editors.size()):
+			var editor = note_editors[i]
+			if editor:
+				editor.z_index = 2 if i == 0 else 0
+				editor.modulate.a = 1.0 if i == 0 else 0.5
+		return
+	
+	# In track-mode, activate editor matching current_track
+	for editor in note_editors:
+		if not editor or not editor.clip_instance or not editor.clip_instance.track:
+			continue
+		
+		var is_active = editor.clip_instance.track == current_track
+		
+		# Active editor: on top, full opacity
+		# Inactive editors: behind, half opacity for context
+		editor.z_index = 2 if is_active else 0
+		editor.modulate.a = 1.0 if is_active else 0.5
+	
+	logger.info("[MidiEditor] Updated editor states for track: %s" % current_track.name)

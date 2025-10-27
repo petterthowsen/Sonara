@@ -7,7 +7,19 @@ var selected_track : Track = null
 
 signal track_selected(tack : Track)
 
+func set_tracks(track_list: Array[Track]):
+	"""Set the track list directly."""
+	tracks.clear()
+	clear()
+	
+	for track in track_list:
+		if track:
+			tracks.append(track)
+			add_item(track.name)
+
+
 func set_tracks_from_clips(clipInstances : Array[ClipInstance]):
+	"""Extract unique tracks from clip instances and set them."""
 	tracks.clear()
 	clear()
 	

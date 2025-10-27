@@ -68,25 +68,34 @@ Implement track-mode for MidiEditor to enable editing multiple clips across diff
   - [x] ui_left/ui_right for horizontal movement
   - [x] ui_up/ui_down for vertical movement (track changes)
 
-#### Phase 3: Track-Mode Detection & Activation
-- [ ] Detect when selection spans multiple tracks
-  - [ ] Track which tracks are represented in selection
-  - [ ] Trigger track-mode when count > 1
+#### Phase 3: Track-Mode Detection & Activation ✓ COMPLETED
+- [x] Detect when selection spans multiple tracks
+  - [x] Track which tracks are represented in selection
+  - [x] Trigger track-mode when count > 1
   
-- [ ] ClipEditor track-mode flag/state
-  - [ ] Pass track-mode boolean to ClipEditor
-  - [ ] Pass selected clips data structure
-  - [ ] Pass track references/IDs
+- [x] ClipEditor track-mode flag/state
+  - [x] Pass track-mode boolean to ClipEditor
+  - [x] Pass selected clips data structure
+  - [x] Pass track references/IDs
+
+**Changes:**
+- **Editor.gd**: Added `clips_selected(clips, multi_track)` signal, updated `_on_arranger_clips_selected()` to emit new signal
+- **ClipEditor.gd**: Added `track_mode` flag, `selected_clips` and `selected_tracks` arrays, replaced single-clip handler with `_on_editor_clips_selected()`
+- **ClipEditor.gd**: Added `_bind_track_mode()` and `_bind_clip_mode()` to handle both modes (track-mode defers to Phase 4 for full implementation)
 
 #### Phase 4: Track-Mode MidiEditor
-- [ ] Update Ruler for song-relative positioning
-  - [ ] Switch from clip-local to project-global timeline
-  - [ ] Show absolute song position instead of clip offset
+- [x] Update Ruler for song-relative positioning
+  - [x] Switch from clip-local to project-global timeline
+  - [x] Show absolute song position instead of clip offset
   
-- [ ] MidiEditor track-mode rendering
-  - [ ] Display notes from multiple clips
-  - [ ] Visual distinction between clips/tracks (colors, lanes)
-  - [ ] Handle overlapping clips
+- [x] MidiEditor track-mode rendering
+  - [x] Display notes from multiple clips
+  - [x] Create NoteEditor instances for each clip
+  - [x] Bind clips to editors with track colors
+  - [x] Current track selection system (z-index, opacity)
+  - [x] Track selector integration to switch active track
+  - [x] Song-relative note positioning (position_offset_ticks applied to each editor)
+  - [ ] Handle overlapping clips gracefully
   
 - [ ] Track-mode editing behavior
   - [ ] Notes edited in correct clip context
@@ -107,13 +116,38 @@ Implement track-mode for MidiEditor to enable editing multiple clips across diff
   - Clipping: Selection visuals clipped to note_area (exclude VPiano)
   - Architecture ready for multi-track editing: Multiple NoteEditors can be layered and controlled
 
+- **Phase 3 Complete**: Track-mode detection and ClipEditor wiring
+  - Multi-clip selection signal flow: Timeline → Arranger → Editor → ClipEditor
+  - ClipEditor receives array of selected clips and multi_track flag
+  - ClipEditor extracts unique tracks from selection
+  - Mode detection: track_mode = true when clips span multiple tracks
+  - Track selector populated with selected tracks in track-mode
+
+- **Phase 4 Partial - NEEDS REDESIGN**: Song-relative ruler and multi-clip rendering
+  - ✅ Ruler shows absolute song ticks (not clip-local) when track_mode = true
+  - ✅ Playhead conversion skips clip offset subtraction in track-mode
+  - ✅ Cursor position interpreted as song-relative in track-mode
+  - ✅ Song-relative positioning: notes offset by clip.start_ticks
+  - ✅ Active track system with opacity and z-index
+  - ✅ Track selector integration
+  
+  - ❌ **CRITICAL ISSUE**: Currently only shows SELECTED clips
+    - Should show ALL clips from selected tracks across entire timeline
+    - Example: Track 1 has 5 clips, user selects 1 → should display all 5
+    - Current approach: one NoteEditor per selected clip
+    - Needed approach: one NoteEditor per TRACK, showing all that track's clips
+    - Need to refactor bind_to_clips() to iterate tracks, not clips
+    - Each NoteEditor needs to handle multiple clips from its track
+
 ### Not Working / Blocked
-- **Phase 0 requires testing** before proceeding to Phase 1:
-  - [x] Test box selection (Ctrl+drag)
-  - [x] Test note placement, dragging, resizing
-  - [x] Test erase mode (right-click)
-  - [x] Test keyboard shortcuts (copy/paste/delete/arrows)
-  - [x] Test zoom and scroll behavior
-  - [x] Verify playhead rendering
-  - [x] Verify selection markers appear correctly
+- **Phase 4 Track-Mode Architecture Issue**:
+  - Current implementation shows only selected clips, not all track clips
+  - Need to redesign NoteEditor/NoteContainer to handle multiple clips per track
+  - Options:
+    1. Single NoteEditor per track, iterate all track.clip_instances
+    2. Multiple NoteEditors per track (one per clip), managed differently
+    3. Virtual composite clip approach
+  - This blocks full track-mode completion
+
+- **Phase 0 testing complete** ✓
 - Timeline shift+click range selection still pending implementation (Phase 1)

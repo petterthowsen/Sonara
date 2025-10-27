@@ -25,7 +25,8 @@ signal playback_stopped()
 signal playhead_moved(ticks: int)
 
 # Selection / Focus
-signal clip_instance_selected(instance: ClipInstance)  # Emitted when a clip instance is selected
+signal clip_instance_selected(instance: ClipInstance)  # DEPRECATED: Use clips_selected instead
+signal clips_selected(clips: Array[ClipInstance], multi_track: bool)  # Emitted when clip selection changes
 
 signal channel_focused(channel : Channel)
 signal track_focused(track : Track)
@@ -478,15 +479,15 @@ func _on_time_signature_changed(text: String) -> void:
 
 func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) -> void:
 	"""Handle clip selection from Arranger."""
-	if clips.is_empty():
-		return
+	print("[Editor] Clips selected: %d clips, multi_track=%s" % [clips.size(), multi_track])
 	
-	var last := clips[-1]
-	print("[Editor] Emitting clip_instance_selected signal")
-	print("  - clip instance: ", last)
-	print("  - clip_id: ", last.clip_id)
-	print("  - clip: ", last.clip)
-	clip_instance_selected.emit(last)
+	# Emit new multi-clip signal
+	clips_selected.emit(clips, multi_track)
+	
+	# Also emit old single-clip signal for backwards compatibility (if any clips selected)
+	if not clips.is_empty():
+		var last := clips[-1]
+		clip_instance_selected.emit(last)
 
 
 # ============================================================================

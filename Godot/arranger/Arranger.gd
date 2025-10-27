@@ -85,9 +85,6 @@ var _timeline_tracks: Dictionary = {}   # Maps TimelineTrack to its correspondin
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
 func _ready():
-	# Set Timeline reference for drag event forwarding
-	timeline.arranger = self
-
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = v_scroll.scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal
@@ -110,6 +107,9 @@ func _ready():
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
 	_on_h_split_dragged(h_split.split_offset)
+
+	# Connect to Timeline signals
+	timeline.clips_selected.connect(_on_timeline_clips_selected)
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
@@ -295,7 +295,6 @@ func _on_time_signature_changed(numerator: int, denominator: int) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	print("[Arranger] gui input")
 	_handle_input(event)
 
 
@@ -308,7 +307,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	var timeline_has_point = timeline.get_global_rect().has_point(mouse_position)
 	if not timeline_has_point:
 		return
-	print("[Arranger] unhandled input")
 	_handle_input(event)
 
 
@@ -665,3 +663,8 @@ func _on_ruler_start_position_requested(ticks: int) -> void:
 		if Sonara and Sonara.editor:
 			Sonara.editor.set_playhead(ticks)
 		print("[Arranger] Set start position to tick %d and seeked playhead" % ticks)
+
+
+func _on_timeline_clips_selected(clips: Array[ClipInstance], multi_track: bool) -> void:
+	"""Re-emit Timeline's clip selection signal."""
+	clips_selected.emit(clips, multi_track)

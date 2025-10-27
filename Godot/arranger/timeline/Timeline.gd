@@ -23,10 +23,10 @@ var grid_helper: GridHelper:
 			clip_selection_manager.grid_helper = value
 var _grid_helper: GridHelper = null
 
-# Reference to Arranger for forwarding drag events
-var arranger: Node = null
-
 var clip_selection_manager: ClipSelectionManager = ClipSelectionManager.new()
+
+# Signal emitted when clip selection changes
+signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
 var _drag_active: bool = false
 var _drag_cross_track: bool = false
@@ -824,8 +824,8 @@ func _draw() -> void:
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:
-	if arranger and arranger.has_signal("clips_selected"):
-		arranger.emit_signal("clips_selected", instances, _selection_has_multiple_tracks(instances))
+	# Emit Timeline's own signal with selection data and multi-track flag
+	clips_selected.emit(instances, _selection_has_multiple_tracks(instances))
 
 
 func _selection_has_multiple_tracks(instances: Array[ClipInstance]) -> bool:

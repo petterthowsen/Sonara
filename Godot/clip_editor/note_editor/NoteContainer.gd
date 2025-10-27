@@ -77,6 +77,16 @@ var horizonal_scroll_position: float = 0.0:
 		update_container_width()
 
 
+# Position offset for song-relative positioning in track-mode
+# Set to clip_instance.start_ticks in track-mode, 0 in clip-mode
+var position_offset_ticks: int = 0:
+	set(value):
+		if position_offset_ticks != value:
+			position_offset_ticks = value
+			_update_note_positions()
+			update_container_width()
+
+
 # The clip instance that opened this editor (for context, not edited directly)
 var clip_instance: ClipInstance = null
 
@@ -165,7 +175,8 @@ func _update_single_note_position(note: VisualNote) -> void:
 		return
 
 	var note_data = note.midi_note_data
-	var note_x = ticks_to_pixels(note_data.start_tick)
+	# Apply position offset for song-relative positioning in track-mode
+	var note_x = ticks_to_pixels(note_data.start_tick + position_offset_ticks)
 	var note_y = note_to_y(note_data.note)
 	var note_width = ticks_to_pixels(note_data.duration_ticks)
 
