@@ -15,11 +15,11 @@ in ./components A set of small reusable custom UI controls such as Meters, Slide
 
 ## Clip Editor
 
-- `ClipEditor.gd` hosts ruler + `MidiEditor`, manages grid helper, cursor position, and binds selected `ClipInstance`.
-- `MidiEditor.gd` composes vertical piano, grid renderer, and scroll containers; owns zoom/scroll behavior and passes bindings to note editor.
-- `note_editor/NoteContainer.gd` renders visual notes, keeps them positioned with grid helper, and listens to clip signals for reactive updates.
-- `note_editor/NoteEditor.gd` extends `NoteContainer` with input handling (drag, resize, placement, erase) and delegates selection state.
-- `note_editor/NoteSelectionManager.gd` tracks multi-note selections, clipboard/box select ranges, and exposes signals without touching scene nodes directly.
+- `ClipEditor.gd` listens to `Sonara.editor.clips_selected`, decides between clip-mode and track-mode, and binds the ruler, cursor, and `MidiEditor` to either a single clip or the multi-track selection (song-relative ticks in track-mode).
+- `MidiEditor.gd` owns input and drawing for note editing, renders selection/playhead overlays, and delegates edits to one or more `NoteEditor` instances; in track-mode it builds one editor per track, offsets clips by `start_ticks`, and keeps a `current_track` focus.
+- `note_editor/NoteContainer.gd` renders notes for either a single `ClipInstance` or the set of clips on a track via `bind_to_clips`, applying per-clip offsets while staying in sync with `GridHelper`.
+- `note_editor/NoteEditor.gd` extends `NoteContainer`, exposes a public API (place, erase, move, resize) called from `MidiEditor`, and keeps `NoteSelectionManager` as the data source for selection/clipboard state.
+- `note_editor/NoteSelectionManager.gd` manages multi-note selection, clipboard payloads, and box-select ranges; `MidiEditor` now consumes its signals to drive all selection visuals.
 
 ## Timeline & Grid
 

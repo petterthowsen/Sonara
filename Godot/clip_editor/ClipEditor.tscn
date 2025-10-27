@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=15 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
@@ -22,6 +22,18 @@ corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_akhqx"]
 bg_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ytm0k"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.05, 0.05, 0.05, 0.6745098)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
 
 [sub_resource type="Gradient" id="Gradient_aar7r"]
 colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
@@ -72,11 +84,23 @@ layout_mode = 2
 theme_override_constants/separation = 2
 metadata/_edit_lock_ = true
 
-[node name="Ruler" type="Control" parent="MainPanel/VBox"]
+[node name="PanelContainer" type="HBoxContainer" parent="MainPanel/VBox"]
+layout_mode = 2
+
+[node name="MainHeader" type="PanelContainer" parent="MainPanel/VBox/PanelContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ytm0k")
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel/VBox/PanelContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Ruler" type="Control" parent="MainPanel/VBox/PanelContainer/VBox"]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
+size_flags_horizontal = 3
 script = ExtResource("2_q0vl8")
-offset_x = 100.0
 
 [node name="MidiEditor" type="ScrollContainer" parent="MainPanel/VBox"]
 layout_mode = 2
@@ -85,11 +109,7 @@ horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 script = ExtResource("3_1pvpx")
 note_height = 30
-scroll_speed_v = null
-scroll_speed_h = null
-zoom_sensitivity_h = null
 zoom_sensitivity_v = 3
-pan_zoom_sensitivity = null
 scroll_smoothing = 0.41
 
 [node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/MidiEditor"]

@@ -247,7 +247,6 @@ func _find_insert_position(order: int) -> int:
 
 
 func _gui_input(event: InputEvent) -> void:
-	print("[Timeline] gui input")
 	""" handle left-click empty area to set playhead position """
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_pos = get_local_mouse_position()
@@ -275,8 +274,6 @@ func _gui_input(event: InputEvent) -> void:
 		if clip_selection_manager and clip_selection_manager.is_box_selecting:
 			clip_selection_manager.update_box_selection(get_local_mouse_position())
 			accept_event()
-
-	print("[Timeline] Not handled")
 
 # ============================================================================
 # ZOOM AND SCROLL

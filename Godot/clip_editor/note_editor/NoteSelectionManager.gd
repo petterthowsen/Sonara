@@ -29,6 +29,19 @@ var box_selection_end_tick: int = 0
 var grid_helper: GridHelper
 
 
+# Coordinate conversion callback
+# This allows the container to provide the correct coordinate space (song-relative or clip-local)
+# without NoteSelectionManager needing to know about modes, clips, or offsets
+var get_note_song_position: Callable = func(note: VisualNote) -> Dictionary:
+	# Default: use clip-local coordinates from note data
+	if note and note.midi_note_data:
+		return {
+			"start_tick": note.midi_note_data.start_tick,
+			"end_tick": note.midi_note_data.start_tick + note.midi_note_data.duration_ticks
+		}
+	return {"start_tick": 0, "end_tick": 0}
+
+
 func _init(gh: GridHelper) -> void:
 	grid_helper = gh
 
@@ -76,27 +89,22 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 		return
 
 	is_box_selecting = false
-	
+
 	# Update selection with provided notes
 	_set_selected_notes(notes_in_box)
 
-	# If no notes were selected, invalidate the selection
+	# KEEP boundaries at grid-snapped positions - NEVER adjust based on notes
+	# This allows selecting empty space and ensures boundaries follow grid, not notes
+	# The box_selection_start_tick and box_selection_end_tick were already set by update_box_selection()
+
 	if selected_notes.is_empty():
-		box_selection_start_tick = 0
-		box_selection_end_tick = 0
-		print("[NoteSelectionManager] Box selection cleared - no notes in range")
-		return
-
-	# Expand box selection time range to include all selected notes
-	for visual_note in selected_notes:
-		if not visual_note.midi_note_data:
-			continue
-		var note_data = visual_note.midi_note_data
-		var note_start = note_data.start_tick
-		var note_end = note_data.start_tick + note_data.duration_ticks
-
-		box_selection_start_tick = min(box_selection_start_tick, note_start)
-		box_selection_end_tick = max(box_selection_end_tick, note_end)
+		print("[NoteSelectionManager] Box selection completed - no notes, boundaries at grid: %d-%d" % [
+			box_selection_start_tick, box_selection_end_tick
+		])
+	else:
+		print("[NoteSelectionManager] Box selection completed - %d notes, boundaries at grid: %d-%d" % [
+			selected_notes.size(), box_selection_start_tick, box_selection_end_tick
+		])
 
 	selection_changed.emit(selected_notes)
 
@@ -206,10 +214,11 @@ func select_note(note: VisualNote) -> void:
 	selected_notes = [note]
 	note.set_selected(true)
 
-	# Set selection range
+	# Set selection range using coordinate conversion callback
 	if note.midi_note_data:
-		box_selection_start_tick = note.midi_note_data.start_tick
-		box_selection_end_tick = note.midi_note_data.start_tick + note.midi_note_data.duration_ticks
+		var pos = get_note_song_position.call(note)
+		box_selection_start_tick = pos["start_tick"]
+		box_selection_end_tick = pos["end_tick"]
 
 	selection_changed.emit(selected_notes)
 	#container.queue_redraw()
@@ -226,9 +235,11 @@ func _update_selection_range() -> void:
 	for sel_note in selected_notes:
 		if not sel_note.midi_note_data:
 			continue
-		var note_data = sel_note.midi_note_data
-		var note_start = note_data.start_tick
-		var note_end = note_data.start_tick + note_data.duration_ticks
+		
+		# Use coordinate conversion callback to get song-relative position
+		var pos = get_note_song_position.call(sel_note)
+		var note_start = pos["start_tick"]
+		var note_end = pos["end_tick"]
 
 		if first_note:
 			box_selection_start_tick = note_start

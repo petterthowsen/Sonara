@@ -8,7 +8,10 @@ var log := Log.make("ClipEditor")
 # main panel shows ruler and midi editor
 @onready var main_panel: PanelContainer = $MainPanel
 
-@onready var ruler: Ruler = $MainPanel/VBox/Ruler
+@onready var main_header: PanelContainer = $MainPanel/VBox/PanelContainer/MainHeader
+
+@onready var ruler: Ruler = $MainPanel/VBox/PanelContainer/VBox/Ruler
+
 @onready var midi_editor = $MainPanel/VBox/MidiEditor
 
 # for multi-track clip editing
@@ -152,14 +155,12 @@ func _bind_track_mode():
 	# The playhead conversion in _on_editor_playhead_moved will NOT subtract clip offset
 	# This means tick 0 = song start, not clip start
 	
-	# Bind MidiEditor to all selected clips in track-mode
+	# Bind MidiEditor to track-mode
+	# NOTE: MidiEditor now fetches ALL clips from each track internally
 	if not selected_clips.is_empty():
 		midi_editor.bind_to_clips(selected_clips, selected_tracks)
 		# Keep bound_clip_instance for reference, but track_mode flag determines playhead behavior
 		bound_clip_instance = selected_clips[0]
-	
-	# TODO Phase 4: Handle overlapping clips properly
-	# TODO Phase 4: Layer NoteEditors with clip position offsets
 
 
 func _bind_clip_mode():

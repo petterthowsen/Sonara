@@ -39,6 +39,30 @@ var note_editor: NoteEditor:
 			return null
 		return note_editors[0]
 
+
+func get_active_note_editor() -> NoteEditor:
+	"""Get the currently active note editor (respects track selection in track-mode)."""
+	if not track_mode or not current_track:
+		# Single-clip mode: use first editor
+		return note_editor
+
+	# Track-mode: find editor matching current_track
+	for editor in note_editors:
+		if not editor:
+			continue
+
+		var editor_track: Track = null
+		if editor.multi_clip_mode and editor.track:
+			editor_track = editor.track
+		elif editor.clip_instance and editor.clip_instance.track:
+			editor_track = editor.clip_instance.track
+
+		if editor_track == current_track:
+			return editor
+
+	# Fallback to first editor
+	return note_editor
+
 @onready var playhead: TextureRect = $HBox/NoteArea/Playhead
 
 # overlays help render noteselection boundaries and selection box
@@ -212,22 +236,29 @@ func bind_to_clip_instance(ci : ClipInstance):
 
 
 func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
-	"""Bind to multiple clips in track-mode (song-relative positioning)."""
+	"""Bind to multiple clips in track-mode (song-relative positioning).
+
+	NEW BEHAVIOR: Creates one NoteEditor per TRACK, showing ALL clips on each track.
+	This gives a complete timeline view for each selected track.
+	"""
 	logger.info("[MidiEditor] bind_to_clips called (track-mode)")
 	logger.info("  - %d clips across %d tracks" % [clips.size(), tracks.size()])
-	
+
 	# Unbind previous state
 	if clip_instance or track_mode:
 		unbind()
-	
+
 	track_mode = true
-	
-	# Create a NoteEditor for each clip
-	for i in range(clips.size()):
-		var clip_inst = clips[i]
-		if not clip_inst or not clip_inst.clip:
-			continue
-		
+
+	# Create one NoteEditor per TRACK (not per clip)
+	for i in range(tracks.size()):
+		var track = tracks[i]
+
+		# Get ALL clips from this track (entire timeline, not just selected clips)
+		var all_track_clips = track.clip_instances
+
+		logger.info("  - Track %d: '%s' has %d total clips" % [i, track.name, all_track_clips.size()])
+
 		# Reuse first editor, create new ones for the rest
 		var editor: NoteEditor
 		if i < note_editors.size():
@@ -237,32 +268,28 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 			editor = NoteEditor.new()
 			h_scroll.add_child(editor)
 			note_editors.append(editor)
-			
+
 			# Configure editor
 			editor.note_height = note_height
 			editor.grid_helper = grid_helper
 			editor.cursor_position_ticks = cursor_position_ticks
-		
-		# Bind to clip
-		editor.bind(clip_inst)
-		
-		# Track-mode: set position offset to clip's start position for song-relative display
-		editor.position_offset_ticks = clip_inst.start_ticks
-		
+
+		# Bind to ALL clips on this track (multi-clip mode)
+		editor.bind_to_clips(all_track_clips, track)
+
 		# Set color from track
-		if clip_inst.track:
-			editor.note_color = clip_inst.track.color
-		
-		logger.info("  - Bound editor %d to clip '%s' on track '%s' (offset: %d ticks)" % [i, clip_inst.clip.name, clip_inst.track.name if clip_inst.track else "null", clip_inst.start_ticks])
-	
-	# Store reference to first clip for convenience
+		editor.note_color = track.color
+
+		logger.info("  - Bound editor %d to track '%s' with %d clips" % [i, track.name, all_track_clips.size()])
+
+	# Store reference to first clip for convenience (optional, may not be used)
 	if not clips.is_empty():
 		clip_instance = clips[0]
-	
+
 	# Set first track as active by default
 	if not tracks.is_empty():
 		current_track = tracks[0]
-	
+
 	call_deferred("scroll_to_note")
 
 
@@ -366,14 +393,16 @@ func _unhandled_input(event: InputEvent):
 	if event is InputEventMouseButton:
 		var mevent = event as InputEventMouseButton
 
-		# Always catch right mouse release to exit erase mode
+		# Always catch right mouse release to exit erase mode (safety handler)
 		if mevent.button_index == MOUSE_BUTTON_RIGHT and mevent.is_released():
-			if note_editor.erasing_mode or note_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
-				print("[MidiEditor] Right mouse released - forcing erase mode exit")
-				note_editor.interaction_mode = NoteEditor.InteractionMode.NONE
-				note_editor.erasing_mode = false
-				note_editor.last_erased_note = null
+			var active_editor = get_active_note_editor()
+			if active_editor and (active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING):
+				print("[MidiEditor] Right mouse released - forcing erase mode exit (safety handler)")
+				active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+				active_editor.erasing_mode = false
+				active_editor.last_erased_note = null
 				_update_selection_overlays()
+				accept_event()
 
 
 func _gui_input(event: InputEvent):
@@ -477,8 +506,10 @@ func _gui_input(event: InputEvent):
 			_handle_note_editing_mouse_motion(event)
 
 	elif event is InputEventKey:
-		# Delegate keyboard input to note editor
-		note_editor.handle_key_input(event)
+		# Delegate keyboard input to active note editor
+		var active_editor = get_active_note_editor()
+		if active_editor:
+			active_editor.handle_key_input(event)
 
 
 # ============================================================================
@@ -486,8 +517,12 @@ func _gui_input(event: InputEvent):
 # ============================================================================
 func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 	"""Delegate mouse button events to note editor."""
-	# Convert mouse position to note_editor local space
-	var note_editor_pos = note_editor.make_canvas_position_local(mevent.global_position)
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
+
+	# Convert mouse position to active note_editor local space
+	var note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
 
 	# Left mouse button
 	if mevent.button_index == MOUSE_BUTTON_LEFT:
@@ -506,29 +541,33 @@ func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 
 func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button press for note editing."""
-	var clicked_note = note_editor.get_note_at_position(note_editor_pos)
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
+
+	var clicked_note = active_editor.get_note_at_position(note_editor_pos)
 
 	if clicked_note:
 		# Clicking on a note
 		if mevent.ctrl_pressed:
-			note_editor.selection_manager.toggle_note_selection(clicked_note)
+			active_editor.selection_manager.toggle_note_selection(clicked_note)
 			accept_event()
 		elif clicked_note._is_over_resize_handle(clicked_note.get_local_mouse_position()):
-			note_editor._on_resize_started(clicked_note, note_editor_pos)
-			note_editor.interaction_mode = NoteEditor.InteractionMode.RESIZING
+			active_editor._on_resize_started(clicked_note, note_editor_pos)
+			active_editor.interaction_mode = NoteEditor.InteractionMode.RESIZING
 			accept_event()
 		else:
-			note_editor._on_drag_started(clicked_note, note_editor_pos)
-			note_editor.interaction_mode = NoteEditor.InteractionMode.DRAGGING
+			active_editor._on_drag_started(clicked_note, note_editor_pos)
+			active_editor.interaction_mode = NoteEditor.InteractionMode.DRAGGING
 			accept_event()
 	else:
 		# Clicking on empty space
 		if mevent.ctrl_pressed:
-			note_editor.selection_manager.start_box_selection(note_editor_pos)
-			note_editor.interaction_mode = NoteEditor.InteractionMode.BOX_SELECTING
+			active_editor.selection_manager.start_box_selection(note_editor_pos)
+			active_editor.interaction_mode = NoteEditor.InteractionMode.BOX_SELECTING
 			accept_event()
 		else:
-			note_editor.place_note_at_position(note_editor_pos)
+			active_editor.place_note_at_position(note_editor_pos)
 			accept_event()
 
 	_update_selection_overlays()
@@ -536,28 +575,32 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 
 func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button release for note editing."""
-	if note_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
-		var notes_in_box = note_editor.get_notes_in_box(note_editor.selection_manager.box_selection_rect)
-		note_editor.selection_manager.end_box_selection(notes_in_box)
-		note_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
+
+	if active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
+		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
+		active_editor.selection_manager.end_box_selection(notes_in_box)
+		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		accept_event()
 
-	elif note_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or note_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
-		if note_editor.dragging_note:
-			note_editor._on_drag_ended(note_editor.dragging_note)
-		note_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
+		if active_editor.dragging_note:
+			active_editor._on_drag_ended(active_editor.dragging_note)
+		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		accept_event()
 
-	elif note_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
-		if note_editor.resizing_note:
-			note_editor._on_resize_ended(note_editor.resizing_note)
-		note_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
+		if active_editor.resizing_note:
+			active_editor._on_resize_ended(active_editor.resizing_note)
+		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		accept_event()
 
-	elif note_editor.placed_note_awaiting_drag:
+	elif active_editor.placed_note_awaiting_drag:
 		print("[MidiEditor] Note placed without drag")
-		note_editor.update_container_width()
-		note_editor.placed_note_awaiting_drag = null
+		active_editor.update_container_width()
+		active_editor.placed_note_awaiting_drag = null
 		accept_event()
 	else:
 		accept_event()
@@ -567,16 +610,20 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 
 func _handle_right_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle right mouse button press for erase mode."""
-	note_editor.interaction_mode = NoteEditor.InteractionMode.ERASING
-	note_editor.erasing_mode = true
-	note_editor.last_erased_note = null
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
 
-	var note_under_cursor = note_editor.get_note_at_position(note_editor_pos)
+	active_editor.interaction_mode = NoteEditor.InteractionMode.ERASING
+	active_editor.erasing_mode = true
+	active_editor.last_erased_note = null
+
+	var note_under_cursor = active_editor.get_note_at_position(note_editor_pos)
 	if note_under_cursor:
-		note_editor.erase_note(note_under_cursor)
+		active_editor.erase_note(note_under_cursor)
 		accept_event()
 	else:
-		note_editor.selection_manager.clear_selection()
+		active_editor.selection_manager.clear_selection()
 		print("[MidiEditor] Right-click on empty space - cleared selection, erase mode active")
 
 	_update_selection_overlays()
@@ -584,55 +631,63 @@ func _handle_right_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouse
 
 func _handle_right_mouse_release() -> void:
 	"""Handle right mouse button release - exit erase mode."""
-	if note_editor.erasing_mode or note_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
+
+	if active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
 		print("[MidiEditor] Right mouse released - exiting erase mode")
-		note_editor.interaction_mode = NoteEditor.InteractionMode.NONE
-		note_editor.erasing_mode = false
-		note_editor.last_erased_note = null
+		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		active_editor.erasing_mode = false
+		active_editor.last_erased_note = null
 		_update_selection_overlays()
 
 
 func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 	"""Delegate mouse motion to note editor."""
-	var note_editor_pos = note_editor.make_canvas_position_local(mevent.global_position)
+	var active_editor = get_active_note_editor()
+	if not active_editor:
+		return
+
+	var note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
 
 	# Check for newly placed note waiting for drag
-	if note_editor.placed_note_awaiting_drag and note_editor.placed_note_awaiting_drag.midi_note_data:
+	if active_editor.placed_note_awaiting_drag and active_editor.placed_note_awaiting_drag.midi_note_data:
 		var current_mouse_pos = get_global_mouse_position()
-		var distance = current_mouse_pos.distance_to(note_editor.placed_note_mouse_pos)
+		var distance = current_mouse_pos.distance_to(active_editor.placed_note_mouse_pos)
 
-		if distance >= note_editor.DRAG_THRESHOLD:
+		if distance >= active_editor.DRAG_THRESHOLD:
 			print("[MidiEditor] Starting drag after placement (moved %.1f pixels)" % distance)
-			note_editor.start_place_and_drag(note_editor.placed_note_awaiting_drag)
-			note_editor.placed_note_awaiting_drag = null
+			active_editor.start_place_and_drag(active_editor.placed_note_awaiting_drag)
+			active_editor.placed_note_awaiting_drag = null
 			accept_event()
 			_update_selection_overlays()
 			return
 
 	# Handle active interactions
-	if note_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
-		note_editor.selection_manager.update_box_selection(note_editor_pos)
-		var notes_in_box = note_editor.get_notes_in_box(note_editor.selection_manager.box_selection_rect)
-		note_editor.selection_manager._set_selected_notes(notes_in_box)
+	if active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
+		active_editor.selection_manager.update_box_selection(note_editor_pos)
+		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
+		active_editor.selection_manager._set_selected_notes(notes_in_box)
 		accept_event()
 		_update_selection_overlays()
 
-	elif note_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or note_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
-		if note_editor.dragging_note:
-			note_editor._on_drag_updated(note_editor.dragging_note, note_editor_pos)
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
+		if active_editor.dragging_note:
+			active_editor._on_drag_updated(active_editor.dragging_note, note_editor_pos)
 			accept_event()
 			_update_selection_overlays()
 
-	elif note_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
-		if note_editor.resizing_note:
-			note_editor._on_resize_updated(note_editor.resizing_note, note_editor_pos)
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
+		if active_editor.resizing_note:
+			active_editor._on_resize_updated(active_editor.resizing_note, note_editor_pos)
 			accept_event()
 			_update_selection_overlays()
 
-	elif note_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
-		var note_to_erase = note_editor.get_note_at_position(note_editor_pos)
-		if note_to_erase and note_to_erase != note_editor.last_erased_note:
-			note_editor.erase_note(note_to_erase)
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
+		var note_to_erase = active_editor.get_note_at_position(note_editor_pos)
+		if note_to_erase and note_to_erase != active_editor.last_erased_note:
+			active_editor.erase_note(note_to_erase)
 			accept_event()
 			_update_selection_overlays()
 
@@ -642,16 +697,17 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 # ============================================================================
 func _update_selection_overlays() -> void:
 	"""Update overlays with current selection state."""
-	if not note_editor or not note_editor.selection_manager or not grid_helper or not overlays:
+	var active_editor = get_active_note_editor()
+	if not active_editor or not active_editor.selection_manager or not grid_helper or not overlays:
 		return
 
-	var sm := note_editor.selection_manager
+	var sm = active_editor.selection_manager
 
 	# Update box selection
 	overlays.is_box_selecting = sm.is_box_selecting
 	if sm.is_box_selecting and sm.box_selection_rect.size.length() > 0:
-		# Transform box from note_editor space to overlays space
-		var box_global_pos = note_editor.get_global_transform() * sm.box_selection_rect.position
+		# Transform box from active_editor space to overlays space
+		var box_global_pos = active_editor.get_global_transform() * sm.box_selection_rect.position
 		var box_local_pos = overlays.make_canvas_position_local(box_global_pos)
 		overlays.box_selection_rect = Rect2(box_local_pos, sm.box_selection_rect.size)
 	else:
@@ -660,18 +716,25 @@ func _update_selection_overlays() -> void:
 
 	# Update selection range markers
 	var selection_length = sm.box_selection_end_tick - sm.box_selection_start_tick
-	overlays.show_selection_markers = not sm.selected_notes.is_empty() and selection_length > 0
+	overlays.show_selection_markers = selection_length > 0
 
 	if overlays.show_selection_markers:
-		# Get X positions in note_editor content space
-		var start_x = grid_helper.ticks_to_pixels(sm.box_selection_start_tick)
-		var end_x = grid_helper.ticks_to_pixels(sm.box_selection_end_tick)
+		# Use the box_selection_start_tick and box_selection_end_tick directly
+		# These are grid-snapped positions from the user's box selection gesture
+		# In track-mode, these are already song-relative ticks (from ruler conversion)
+		# In clip-mode, these are clip-local ticks
+		# Do NOT add clip offsets - the ticks are already in the correct coordinate space
 
-		# Transform to overlays local space
-		var marker_start_global = note_editor.get_global_transform() * Vector2(start_x, 0)
-		var marker_end_global = note_editor.get_global_transform() * Vector2(end_x, 0)
-		overlays.selection_start_x = overlays.make_canvas_position_local(marker_start_global).x
-		overlays.selection_end_x = overlays.make_canvas_position_local(marker_end_global).x
+		var start_tick = sm.box_selection_start_tick
+		var end_tick = sm.box_selection_end_tick
+
+		# Convert to pixels in content space
+		var start_x_content = grid_helper.ticks_to_pixels(start_tick)
+		var end_x_content = grid_helper.ticks_to_pixels(end_tick)
+
+		# Position relative to note_area, accounting for h_scroll offset (same as playhead)
+		overlays.selection_start_x = start_x_content - h_scroll.scroll_horizontal + h_scroll.position.x
+		overlays.selection_end_x = end_x_content - h_scroll.scroll_horizontal + h_scroll.position.x
 
 	overlays.queue_redraw()
 
@@ -708,20 +771,32 @@ func _update_note_editor_states() -> void:
 		for i in range(note_editors.size()):
 			var editor = note_editors[i]
 			if editor:
-				editor.z_index = 2 if i == 0 else 0
+				editor.z_index = 1 if i == 0 else 0
 				editor.modulate.a = 1.0 if i == 0 else 0.5
 		return
-	
+
 	# In track-mode, activate editor matching current_track
 	for editor in note_editors:
-		if not editor or not editor.clip_instance or not editor.clip_instance.track:
+		if not editor:
 			continue
-		
-		var is_active = editor.clip_instance.track == current_track
-		
-		# Active editor: on top, full opacity
-		# Inactive editors: behind, half opacity for context
-		editor.z_index = 2 if is_active else 0
+
+		# Get the track this editor is bound to
+		var editor_track: Track = null
+		if editor.multi_clip_mode and editor.track:
+			# Multi-clip mode: editor is bound to a track
+			editor_track = editor.track
+		elif editor.clip_instance and editor.clip_instance.track:
+			# Single-clip mode: get track from clip instance
+			editor_track = editor.clip_instance.track
+
+		if not editor_track:
+			continue
+
+		var is_active = editor_track == current_track
+
+		# Active editor: on top (z=1), full opacity
+		# Inactive editors: behind (z=0), half opacity for context
+		editor.z_index = 1 if is_active else 0
 		editor.modulate.a = 1.0 if is_active else 0.5
 	
 	logger.info("[MidiEditor] Updated editor states for track: %s" % current_track.name)
