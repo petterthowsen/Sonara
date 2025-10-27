@@ -96,12 +96,11 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")
 
 [node name="Label" type="Label" parent="VBoxContainer/Header"]
 layout_mode = 2
-mouse_filter = 1
 text = "Clip Name"
 text_overrun_behavior = 3
 
 [node name="ClipRenderer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
-mouse_filter = 1
+mouse_filter = 2
 script = ExtResource("2_c74fi")

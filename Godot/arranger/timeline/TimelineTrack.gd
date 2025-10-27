@@ -134,6 +134,7 @@ func _on_track_height_changed(new_height: int) -> void:
 	custom_minimum_size.y = new_height
 	_update_clip_sizes(new_height)  # Resize clips to match new track height
 
+
 func _update_clips() -> void:
 	"""Create/update TimelineClip UI instances for all clip instances in the track."""
 	if track == null or timeline == null:
@@ -163,6 +164,7 @@ func _update_clips() -> void:
 	await get_tree().process_frame
 	_update_clip_sizes()
 
+
 func _update_clip_sizes(height: int = -1) -> void:
 	"""Update the size of all clip instances to match track height."""
 	# Use provided height, or fall back to current size.y
@@ -171,6 +173,7 @@ func _update_clip_sizes(height: int = -1) -> void:
 		if clip_instance:
 			clip_instance.custom_minimum_size.y = clip_height
 			clip_instance.size.y = clip_height
+
 
 func _update_clip_positions() -> void:
 	"""Update positions and widths of all clips based on current zoom."""
@@ -207,7 +210,6 @@ func _draw():
 		var border_y = size.y - border_thickness
 		draw_rect(Rect2(0, border_y, size.x, border_thickness), border_color, true)
 	
-	# TODO: Draw clips
 
 func _draw_grid() -> void:
 	"""Draw vertical grid lines using GridHelper."""
@@ -238,6 +240,7 @@ func _draw_grid() -> void:
 				
 				GridHelper.GridLineType.SUBDIVISION:
 					draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_tick, 1.0)
+
 
 # ============================================================================
 # INPUT HANDLING

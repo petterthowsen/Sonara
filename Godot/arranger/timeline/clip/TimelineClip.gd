@@ -51,6 +51,7 @@ var resize_padding_added: int = 0  # Track total padding added during this resiz
 
 func _ready() -> void:
 	"""Connect to built-in hover signals."""
+	focus_mode = Control.FOCUS_CLICK
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -180,8 +181,11 @@ func _gui_input(event: InputEvent) -> void:
 						resize_start_offset = clip_instance.clip_offset
 					accept_event()
 				else:
-					# Request selection with ctrl-key awareness
-					var additive = Input.is_key_pressed(KEY_CTRL)
+					grab_focus()
+					# Request selection with modifier awareness
+					var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
+					if event.shift_pressed and not additive:
+						additive = true
 					select_requested.emit(self, additive)
 					# Prepare for drag (don't start yet - wait for threshold)
 					is_dragging = true

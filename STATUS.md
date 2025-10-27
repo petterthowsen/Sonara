@@ -24,48 +24,49 @@ Implement track-mode for MidiEditor to enable editing multiple clips across diff
 - **NoteSelectionManager.gd**: Removed `draw_selection()` method.
 
 #### Phase 1: Multi-Clip Selection in Timeline
-- [ ] Create ClipSelection class (similar to NoteSelection)
-  - [ ] Track selected ClipInstances
-  - [ ] Manage selection state and signals
-  - [ ] Support for box-select range tracking
+- [x] Create ClipSelection class (similar to NoteSelection)
+  - [x] Track selected ClipInstances
+  - [x] Manage selection state and signals
+  - [x] Support for box-select range tracking
 
-- [ ] Add multi-clip selection support in Timeline
-  - [ ] Click to select single clip
-  - [ ] Ctrl+Click to add/remove clips from selection
+- [x] Add multi-clip selection support in Timeline
+  - [x] Click to select single clip
+  - [x] Ctrl+Click to add/remove clips from selection
   - [ ] Shift+Click for range selection
-  - [ ] Ctrl+Click-and-drag for box-select
-  - [ ] Visual feedback in _draw() (selection box, clip highlights/outlines)
-  
+  - [x] Ctrl+Click-and-drag for box-select
+  - [x] Visual feedback in _draw() (selection box, clip highlights/outlines)
+  - [x] Drag selected clips horizontally/vertically (multi-clip aware)
+
 #### Phase 2: Clipboard & Edit Operations
-- [ ] Implement clipboard system for clips
-  - [ ] Data structure to hold copied/cut clip data
-  - [ ] Preserve clip properties (position, track, content)
+- [x] Implement clipboard system for clips
+  - [x] Data structure to hold copied/cut clip data
+  - [x] Preserve clip properties (position, track, content)
   
-- [ ] Cut operation
-  - [ ] Remove selected clips and store in clipboard
-  - [ ] Send delete commands to audio engine
+- [x] Cut operation
+  - [x] Remove selected clips and store in clipboard
+  - [x] Send delete commands to audio engine
   
-- [ ] Copy operation
-  - [ ] Copy selected clips to clipboard without removing
+- [x] Copy operation
+  - [x] Copy selected clips to clipboard without removing
   
-- [ ] Paste operation
-  - [ ] Insert clipboard clips at playhead/cursor position
-  - [ ] Handle track assignment for pasted clips
-  - [ ] Create new ClipInstances and send to engine
+- [x] Paste operation
+  - [x] Insert clipboard clips at playhead/cursor position
+  - [x] Handle track assignment for pasted clips
+  - [x] Create new ClipInstances and send to engine
   
-- [ ] Duplicate operation
-  - [ ] Copy and immediately paste at offset position
-  - [ ] Or duplicate in place with slight offset
+- [x] Duplicate operation
+  - [x] Copy and immediately paste at offset position
+  - [x] Or duplicate in place with slight offset
   
-- [ ] Keyboard shortcuts using Godot UI actions
-  - [ ] ui_cut for cut operation
-  - [ ] ui_copy for copy operation
-  - [ ] ui_paste for paste operation
-  - [ ] ui_duplicate for duplicate operation
+- [x] Keyboard shortcuts using Godot UI actions
+  - [x] ui_cut for cut operation
+  - [x] ui_copy for copy operation
+  - [x] ui_paste for paste operation
+  - [x] ui_duplicate for duplicate operation
   
-- [ ] Clip movement with arrow keys
-  - [ ] ui_left/ui_right for horizontal movement
-  - [ ] ui_up/ui_down for vertical movement (track changes)
+- [x] Clip movement with arrow keys
+  - [x] ui_left/ui_right for horizontal movement
+  - [x] ui_up/ui_down for vertical movement (track changes)
 
 #### Phase 3: Track-Mode Detection & Activation
 - [ ] Detect when selection spans multiple tracks
@@ -115,3 +116,4 @@ Implement track-mode for MidiEditor to enable editing multiple clips across diff
   - [x] Test zoom and scroll behavior
   - [x] Verify playhead rendering
   - [x] Verify selection markers appear correctly
+- Timeline shift+click range selection still pending implementation (Phase 1)

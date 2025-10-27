@@ -39,7 +39,6 @@ var _drag_pending_track_delta: int = 0
 var clip_clipboard: ClipSelection = null
 
 func _ready():
-	mouse_filter = Control.MOUSE_FILTER_PASS
 	clip_selection_manager.set_context(self, grid_helper)
 	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
 	clip_selection_manager.box_selection_changed.connect(func(_rect): queue_redraw())
@@ -248,11 +247,13 @@ func _find_insert_position(order: int) -> int:
 
 
 func _gui_input(event: InputEvent) -> void:
+	print("[Timeline] gui input")
 	""" handle left-click empty area to set playhead position """
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_pos = get_local_mouse_position()
 		if event.pressed:
-			var additive = Input.is_key_pressed(KEY_CTRL)
+			grab_focus()
+			var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
 			if additive and clip_selection_manager:
 				clip_selection_manager.start_box_selection(local_pos)
 				accept_event()
@@ -275,6 +276,7 @@ func _gui_input(event: InputEvent) -> void:
 			clip_selection_manager.update_box_selection(get_local_mouse_position())
 			accept_event()
 
+	print("[Timeline] Not handled")
 
 # ============================================================================
 # ZOOM AND SCROLL
@@ -342,8 +344,6 @@ func _update_timeline_width() -> void:
 # ============================================================================
 func ticks_to_pixels(ticks: int) -> float:
 	"""Convert ticks to pixel position."""
-	if not grid_helper:
-		return float(ticks)
 	return grid_helper.ticks_to_pixels(ticks)
 
 func pixels_to_ticks(pixels: float) -> int:
@@ -353,45 +353,51 @@ func pixels_to_ticks(pixels: float) -> int:
 	return grid_helper.pixels_to_ticks(pixels)
 
 
+func get_move_step_ticks() -> int:
+	var interval = get_snap_interval()
+	if interval <= 0:
+		if project and project.ppq > 0:
+			return max(1, project.ppq / 4)
+		return 1
+	return interval
+
+
 func register_clip_ui(clip_ui: TimelineClip) -> void:
 	if clip_selection_manager:
 		clip_selection_manager.register_clip_ui(clip_ui)
 	if not clip_ui:
 		return
-	var move_callable := Callable(self, "_on_clip_move_requested")
-	if not clip_ui.clip_move_requested.is_connected(move_callable):
-		clip_ui.clip_move_requested.connect(move_callable)
+	if not clip_ui.clip_move_requested.is_connected(_on_clip_move_requested):
+		clip_ui.clip_move_requested.connect(_on_clip_move_requested)
 
-	var drag_start_callable := Callable(self, "_on_clip_drag_started")
-	if not clip_ui.drag_started.is_connected(drag_start_callable):
-		clip_ui.drag_started.connect(drag_start_callable)
+	if not clip_ui.drag_started.is_connected(_on_clip_drag_started):
+		clip_ui.drag_started.connect(_on_clip_drag_started)
 
-	var drag_move_callable := Callable(self, "_on_clip_drag_moved")
-	if not clip_ui.drag_moved.is_connected(drag_move_callable):
-		clip_ui.drag_moved.connect(drag_move_callable)
+	if not clip_ui.drag_moved.is_connected(_on_clip_drag_moved):
+		clip_ui.drag_moved.connect(_on_clip_drag_moved)
 
-	var drag_end_callable := Callable(self, "_on_clip_drag_ended")
-	if not clip_ui.drag_ended.is_connected(drag_end_callable):
-		clip_ui.drag_ended.connect(drag_end_callable)
+	if not clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
+		clip_ui.drag_ended.connect(_on_clip_drag_ended)
 
 
 func unregister_clip_ui(clip_ui: TimelineClip) -> void:
 	if clip_selection_manager:
 		clip_selection_manager.unregister_clip_ui(clip_ui)
+	
 	if not clip_ui:
 		return
-	var move_callable := Callable(self, "_on_clip_move_requested")
-	if clip_ui.clip_move_requested.is_connected(move_callable):
-		clip_ui.clip_move_requested.disconnect(move_callable)
-	var drag_start_callable := Callable(self, "_on_clip_drag_started")
-	if clip_ui.drag_started.is_connected(drag_start_callable):
-		clip_ui.drag_started.disconnect(drag_start_callable)
-	var drag_move_callable := Callable(self, "_on_clip_drag_moved")
-	if clip_ui.drag_moved.is_connected(drag_move_callable):
-		clip_ui.drag_moved.disconnect(drag_move_callable)
-	var drag_end_callable := Callable(self, "_on_clip_drag_ended")
-	if clip_ui.drag_ended.is_connected(drag_end_callable):
-		clip_ui.drag_ended.disconnect(drag_end_callable)
+	
+	if clip_ui.clip_move_requested.is_connected(_on_clip_move_requested):
+		clip_ui.clip_move_requested.disconnect(_on_clip_move_requested)
+	
+	if clip_ui.drag_started.is_connected(_on_clip_drag_started):
+		clip_ui.drag_started.disconnect(_on_clip_drag_started)
+	
+	if clip_ui.drag_moved.is_connected(_on_clip_drag_moved):
+		clip_ui.drag_moved.disconnect(_on_clip_drag_moved)
+	
+	if clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
+		clip_ui.drag_ended.disconnect(_on_clip_drag_ended)
 
 
 func notify_clip_instance_removed(instance: ClipInstance) -> void:
@@ -613,28 +619,39 @@ func cut_selection_to_clipboard() -> void:
 
 
 func paste_clipboard() -> void:
-	if clip_clipboard == null or clip_clipboard.is_empty():
+	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
+	var new_instances = paste_clipboard_at(playhead_ticks)
+	if new_instances.is_empty():
 		print("[Timeline] Paste skipped - clipboard empty")
-		return
+	else:
+		print("[Timeline] Pasted %d clips at playhead %d" % [new_instances.size(), playhead_ticks])
+
+
+func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true) -> Array[ClipInstance]:
 	if not Sonara.editor or not Sonara.editor.project:
 		push_warning("[Timeline] Cannot paste clips - no active project")
-		return
-	var playhead_ticks: int = Sonara.editor.playhead_ticks
-	var reference_selection := clip_clipboard
-	var base_start := reference_selection.start_tick
-	var delta_ticks := playhead_ticks - base_start
+		return []
+
+	var source := selection_source
+	if source == null:
+		source = clip_clipboard
+
+	if source == null or source.is_empty():
+		return []
+
+	var delta_ticks := target_tick - source.start_tick
 	var new_instances: Array[ClipInstance] = []
-	for original_inst in reference_selection.clip_instances:
+
+	for original_inst in source.get_sorted_by_start():
 		if not original_inst:
 			continue
 		var target_track: Track = original_inst.track
-		if not target_track:
-			continue
-		if target_track.type == Track.TrackType.FOLDER:
+		if not target_track or target_track.type == Track.TrackType.FOLDER:
 			continue
 		var clip_ref: Clip = original_inst.clip
 		if not clip_ref:
 			continue
+
 		var new_start = max(0, original_inst.start_ticks + delta_ticks)
 		var new_instance = target_track.create_clip_instance(clip_ref, new_start, original_inst.duration_ticks)
 		new_instance.set_clip_offset(original_inst.clip_offset)
@@ -650,12 +667,31 @@ func paste_clipboard() -> void:
 		new_instances.append(new_instance)
 
 	if new_instances.is_empty():
-		print("[Timeline] Paste created no clips (all skipped)")
-		return
-	clip_selection_manager.select_instances(new_instances)
-	clip_selection_manager.refresh_after_modification()
+		return []
+
+	if update_selection and clip_selection_manager:
+		clip_selection_manager.select_instances(new_instances)
+		clip_selection_manager.refresh_after_modification()
+
 	_refresh_tracks_for_instances(new_instances)
-	print("[Timeline] Pasted %d clips at playhead %d" % [new_instances.size(), playhead_ticks])
+	return new_instances
+
+
+func duplicate_selection() -> void:
+	if not clip_selection_manager or not clip_selection_manager.has_selection():
+		return
+
+	var selection_clone = clip_selection_manager.selection.clone()
+	if selection_clone.is_empty():
+		return
+
+	var previous_clipboard = clip_clipboard
+	clip_clipboard = selection_clone
+	var new_instances = paste_clipboard_at(selection_clone.end_tick, selection_clone, true)
+	clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
+
+	if not new_instances.is_empty():
+		print("[Timeline] Duplicated %d clips starting at %d" % [new_instances.size(), selection_clone.end_tick])
 
 
 func move_selection_by_ticks(delta_ticks: int) -> void:

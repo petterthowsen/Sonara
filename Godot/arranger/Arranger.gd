@@ -117,9 +117,31 @@ func _ready():
 	Sonara.editor.playhead_moved.connect(_on_playhead_moved)
 	Sonara.editor.time_signature_changed.connect(_on_time_signature_changed)
 	
+	mouse_entered.connect(_on_mouse_entered)
+	mouse_exited.connect(_on_mouse_exited)
+	visibility_changed.connect(_on_visibility_changed)
+
 	# Initial ruler and playhead update
 	_update_ruler()
 	_update_playhead_position()
+
+
+func _on_mouse_entered() -> void:
+	print("[Arranger] mouse entered")
+	grab_click_focus()
+	
+
+func _on_mouse_exited() -> void:
+	print("[Arranger] mouse exited")
+	release_focus()
+
+
+func _on_visibility_changed() -> void:
+	print("[Arranger] visibility changed")
+	if is_visible_in_tree():
+		grab_click_focus()
+	else:
+		release_focus()
 
 
 func _process(delta: float) -> void:
@@ -182,33 +204,6 @@ func _process(delta: float) -> void:
 	
 	_update_ruler()
 	_update_playhead_position()
-
-func _gui_input(event: InputEvent) -> void:
-	"""Handle middle-mouse button panning from timeline area."""
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
-		if event.pressed:
-			is_panning = true
-			pan_start_pos = event.global_position
-			pan_start_h_scroll = h_scroll.scroll_horizontal
-			pan_start_v_scroll = v_scroll.scroll_vertical
-			accept_event()
-		else:
-			is_panning = false
-			accept_event()
-	
-	elif event is InputEventMouseMotion and is_panning:
-		var current_pos = event.global_position
-		var delta = current_pos - pan_start_pos
-		# Direct scroll for panning (bypass smoothing for responsive feel)
-		var new_h_scroll = int(pan_start_h_scroll - delta.x)
-		h_scroll.scroll_horizontal = new_h_scroll
-		target_scroll_horizontal = new_h_scroll
-		grid_helper.scroll_position = new_h_scroll
-		
-		var new_v_scroll = int(pan_start_v_scroll - delta.y)
-		v_scroll.scroll_vertical = new_v_scroll
-		target_scroll_vertical = new_v_scroll
-		accept_event()
 
 # ============================================================================
 # INPUT HANDLING
@@ -298,38 +293,78 @@ func _on_time_signature_changed(numerator: int, denominator: int) -> void:
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
 
+
+func _gui_input(event: InputEvent) -> void:
+	print("[Arranger] gui input")
+	_handle_input(event)
+
+
 func _unhandled_input(event: InputEvent) -> void:
+	var visible_in_tree = is_visible_in_tree()
+	if not visible_in_tree:
+		return
+
+	var mouse_position = get_global_mouse_position()
+	var timeline_has_point = timeline.get_global_rect().has_point(mouse_position)
+	if not timeline_has_point:
+		return
+	print("[Arranger] unhandled input")
+	_handle_input(event)
+
+
+func _handle_input(event: InputEvent) -> void:
 	"""Handle middle mouse button panning (only if not handled by child controls)."""
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_MIDDLE:
-			if event.pressed:
-				is_panning = true
-				pan_start_pos = get_global_mouse_position()
-				if h_scroll:
-					pan_start_h_scroll = h_scroll.scroll_horizontal
-				if v_scroll:
-					pan_start_v_scroll = v_scroll.scroll_vertical
-				accept_event()
-			else:
-				is_panning = false
-				accept_event()
-	
-	elif event is InputEventMouseMotion:
-		if is_panning:
-			var current_pos = get_global_mouse_position()
-			var delta = current_pos - pan_start_pos
-			if h_scroll:
-				# Direct scroll for panning (bypass smoothing for responsive feel)
-				var new_h_scroll = int(pan_start_h_scroll - delta.x)
-				h_scroll.scroll_horizontal = new_h_scroll
-				target_scroll_horizontal = new_h_scroll
-				if grid_helper:
-					grid_helper.scroll_position = new_h_scroll
-			if v_scroll:
-				var new_v_scroll = int(pan_start_v_scroll - delta.y)
-				v_scroll.scroll_vertical = new_v_scroll
-				target_scroll_vertical = new_v_scroll
+	if event is InputEventKey and event.pressed:
+		if event.is_action_pressed("ui_copy"):
+			timeline.copy_selection_to_clipboard()
 			accept_event()
+		elif event.is_action_pressed("ui_cut"):
+			timeline.cut_selection_to_clipboard()
+			accept_event()
+		elif event.is_action_pressed("ui_paste"):
+			timeline.paste_clipboard()
+			accept_event()
+		elif event.is_action_pressed("ui_duplicate"):
+			timeline.duplicate_selection()
+			accept_event()
+		elif timeline.clip_selection_manager.has_selection():
+			if event.is_action_pressed("ui_left"):
+				timeline.move_selection_by_ticks(-timeline.get_move_step_ticks())
+				accept_event()
+			elif (event.keycode == KEY_RIGHT or event.is_action_pressed("ui_right")):
+				timeline.move_selection_by_ticks(timeline.get_move_step_ticks())
+				accept_event()
+			elif (event.keycode == KEY_UP or event.is_action_pressed("ui_up")):
+				timeline.move_selection_by_tracks(-1)
+				accept_event()
+			elif (event.keycode == KEY_DOWN or event.is_action_pressed("ui_down")):
+				timeline.move_selection_by_tracks(1)
+				accept_event()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
+		if event.pressed:
+			is_panning = true
+			pan_start_pos = event.global_position
+			pan_start_h_scroll = h_scroll.scroll_horizontal
+			pan_start_v_scroll = v_scroll.scroll_vertical
+			accept_event()
+		else:
+			is_panning = false
+			accept_event()
+		
+	elif event is InputEventMouseMotion and is_panning:
+		var current_pos = event.global_position
+		var delta = current_pos - pan_start_pos
+		# Direct scroll for panning (bypass smoothing for responsive feel)
+		var new_h_scroll = int(pan_start_h_scroll - delta.x)
+		h_scroll.scroll_horizontal = new_h_scroll
+		target_scroll_horizontal = new_h_scroll
+		grid_helper.scroll_position = new_h_scroll
+		
+		var new_v_scroll = int(pan_start_v_scroll - delta.y)
+		v_scroll.scroll_vertical = new_v_scroll
+		target_scroll_vertical = new_v_scroll
+		accept_event()
+
 
 func _zoom_tracks_vertically(zoom_in: bool) -> void:
 	"""Zoom tracks vertically by adjusting their heights (smoothly)."""
