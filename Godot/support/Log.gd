@@ -26,6 +26,9 @@ func info(...message: Array[Variant]):
 	if print_to_console:
 		print("[" + print_prefix + "] INFO: " + " ".join(message))
 
+func warn(...msg : Array[Variant]):
+	warning.callv(msg)
+
 func warning(...message: Array[Variant]):
 	warning_messages.append(" ".join(message))
 	if print_to_console:

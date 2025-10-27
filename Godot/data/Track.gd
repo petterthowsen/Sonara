@@ -8,6 +8,7 @@ enum TrackType { AUDIO, INSTRUMENT, FOLDER }
 
 signal clip_instance_added(instance: ClipInstance)
 signal clip_instance_removed(instance: ClipInstance)
+signal name_changed(new_name: String)
 signal color_changed(new_color: Color)
 signal height_changed(new_height: int)
 signal default_channel_id_changed(new_channel_id: int)
@@ -22,7 +23,16 @@ signal parent_changed(new_parent_id: int)
 var id: int = -1
 
 # Basic properties
-var name: String = "Track"
+var _name: String = "Track"
+
+var name: String:
+	get:
+		return _name
+	set(value):
+		if _name != value:
+			_name = value
+			name_changed.emit(_name)
+
 var type: TrackType = TrackType.INSTRUMENT
 var _color: Color = Color.WHITE
 var color_by_channel: bool = true  # If true, color syncs with default_channel_id's color

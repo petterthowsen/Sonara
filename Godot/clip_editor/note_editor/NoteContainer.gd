@@ -600,8 +600,48 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 	@warning_ignore("integer_division")
 	var clip_start_ticks = int(tick / ticks_per_bar) * ticks_per_bar
 
-	# Default clip length: 4 bars
-	var clip_length_ticks = ticks_per_bar * 4
+	# Find previous and next clips on the track
+	var prev_clip_end: int = -1
+	var next_clip_start: int = -1
+	
+	for instance in track.clip_instances:
+		var clip_end = instance.start_ticks + instance.duration_ticks
+		
+		# Check for previous clip
+		if clip_end <= clip_start_ticks:
+			if prev_clip_end == -1 or clip_end > prev_clip_end:
+				prev_clip_end = clip_end
+		
+		# Check for next clip
+		if instance.start_ticks > clip_start_ticks:
+			if next_clip_start == -1 or instance.start_ticks < next_clip_start:
+				next_clip_start = instance.start_ticks
+	
+	# Adjust start position if it overlaps with previous clip
+	if prev_clip_end != -1 and clip_start_ticks < prev_clip_end:
+		# Snap to bar after previous clip ends
+		@warning_ignore("integer_division")
+		clip_start_ticks = ((prev_clip_end + ticks_per_bar - 1) / ticks_per_bar) * ticks_per_bar
+		logger.info("  - Adjusted start to %d to avoid previous clip" % clip_start_ticks)
+
+	# Calculate clip length
+	var default_length = ticks_per_bar * 4  # Default: 4 bars
+	var clip_length_ticks: int
+	
+	if next_clip_start != -1:
+		# Constrain to end before the next clip
+		var max_length = next_clip_start - clip_start_ticks
+		
+		# Ensure there's actually space for a clip
+		if max_length <= 0:
+			logger.error("Cannot create clip: no space between existing clips at tick %d" % tick)
+			return null
+		
+		clip_length_ticks = min(default_length, max_length)
+		logger.info("  - Constrained length to %d ticks (next clip at %d)" % [clip_length_ticks, next_clip_start])
+	else:
+		# No next clip, use default length
+		clip_length_ticks = default_length
 
 	# Create clip in project
 	var project = Sonara.editor.project
@@ -618,10 +658,17 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 
 	logger.info("Created clip '%s' (instance: %s) at tick %d (length: %d)" % [clip.name, clip_instance.id, clip_start_ticks, clip_length_ticks])
 
-	# Rebind to refresh the container with the new clip
-	# Store current clips and add the new one
-	var updated_clips = clip_instances.duplicate()
-	updated_clips.append(clip_instance)
-	bind_to_clips(updated_clips, track)
+	# Add the new clip instance to our tracking and connect signals
+	# (no need to rebind everything, just add the new one)
+	clip_instances.append(clip_instance)
+	
+	# Connect to new clip's signals for reactive updates
+	if clip and not clip.midi_note_added.is_connected(_on_clip_note_added):
+		clip.midi_note_added.connect(_on_clip_note_added)
+		clip.midi_note_removed.connect(_on_clip_note_removed)
+		clip.midi_note_changed.connect(_on_clip_note_changed)
+	
+	# Refresh container width to account for new clip
+	update_container_width()
 
 	return clip_instance

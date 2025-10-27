@@ -149,7 +149,6 @@ theme_override_constants/separation = 4
 [node name="Compact" type="Button" parent="Toolbar/HBox/Toggles"]
 layout_mode = 2
 toggle_mode = true
-button_pressed = true
 text = "Compact"
 
 [node name="IO" type="Button" parent="Toolbar/HBox/Toggles"]

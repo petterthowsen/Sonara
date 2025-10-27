@@ -15,7 +15,7 @@ var log := Log.make("ClipEditor")
 @onready var midi_editor = $MainPanel/VBox/MidiEditor
 
 # for multi-track clip editing
-@onready var track_selector: ClipEditorTrackList = $LeftPanel/VBox/ClipsTrackList/TrackSelector
+@onready var track_selector: ClipEditorTrackList = $LeftPanel/VBox/ClipEditorTrackList
 
 var grid_helper: GridHelper:
 	set(gh):

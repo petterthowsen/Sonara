@@ -113,6 +113,7 @@ func start_editing() -> void:
 	line_edit.grab_click_focus.call_deferred()
 	line_edit.grab_focus.call_deferred()
 	line_edit.text = _value_string
+	line_edit.select_all()
 	is_editing = true
 
 

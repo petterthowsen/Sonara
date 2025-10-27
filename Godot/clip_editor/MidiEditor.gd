@@ -776,6 +776,7 @@ func _update_note_editor_states() -> void:
 		return
 
 	# In track-mode, activate editor matching current_track
+	# an sort it last
 	for editor in note_editors:
 		if not editor:
 			continue
@@ -798,5 +799,6 @@ func _update_note_editor_states() -> void:
 		# Inactive editors: behind (z=0), half opacity for context
 		editor.z_index = 1 if is_active else 0
 		editor.modulate.a = 1.0 if is_active else 0.5
+		editor.move_to_front()
 	
 	logger.info("[MidiEditor] Updated editor states for track: %s" % current_track.name)

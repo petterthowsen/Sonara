@@ -1,0 +1,23 @@
+[gd_scene load_steps=3 format=3 uid="uid://b7lrguwu6rrj7"]
+
+[ext_resource type="Script" uid="uid://cskinljgd88nm" path="res://clip_editor/tracklist/ClipEditorTrackListItem.gd" id="1_vgqjk"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_vgqjk"]
+resource_local_to_scene = true
+font_size = 12
+
+[node name="ClipEditorTrackListItem" type="BoxContainer"]
+custom_minimum_size = Vector2(0, 24)
+offset_right = 100.0
+offset_bottom = 26.0
+size_flags_horizontal = 3
+script = ExtResource("1_vgqjk")
+
+[node name="Label" type="Label" parent="."]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Double Basses and stuff "
+label_settings = SubResource("LabelSettings_vgqjk")
+vertical_alignment = 1
+text_overrun_behavior = 3

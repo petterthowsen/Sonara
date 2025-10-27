@@ -354,6 +354,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			sel_note.midi_note_data.duration_ticks = new_duration
 			var note_width = ticks_to_pixels(new_duration)
 			sel_note.size.x = note_width
+
+			default_note_length_ticks = new_duration
 	else:
 		# Normal mode: Control position
 		var current_midi_note = y_to_note(mouse_pos_local.y)

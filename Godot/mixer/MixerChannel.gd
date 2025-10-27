@@ -481,7 +481,8 @@ func _get_minimum_size() -> Vector2:
 
 func set_mode(m : Mode):
 	mode = m
-	device_list.hide_parameters = true
+	if is_inside_tree():
+		device_list.hide_parameters = true
 	_update_size_for_mode()
 
 

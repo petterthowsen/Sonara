@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3 uid="uid://bnyr34msk4b3r"]
+
+[ext_resource type="Script" uid="uid://dyy120i4phgvv" path="res://clip_editor/tracklist/ClipEditorTrackList.gd" id="1_ocoxm"]
+[ext_resource type="PackedScene" uid="uid://b7lrguwu6rrj7" path="res://clip_editor/tracklist/ClipEditorTrackListItem.tscn" id="2_hx6st"]
+
+[node name="ClipEditorTrackList" type="PanelContainer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ocoxm")
+
+[node name="Items" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="ClipEditorTrackListItem" parent="Items" instance=ExtResource("2_hx6st")]
+layout_mode = 2

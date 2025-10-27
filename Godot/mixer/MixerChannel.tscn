@@ -129,7 +129,7 @@ shadow_size = 2
 shadow_color = Color(0, 0, 0, 0.6745098)
 
 [node name="MixerChannel" type="PanelContainer" groups=["mixer_channel"]]
-custom_minimum_size = Vector2(50, 0)
+custom_minimum_size = Vector2(100, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_right = 56.0
@@ -139,6 +139,7 @@ focus_mode = 2
 mouse_default_cursor_shape = 10
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
+mode = 1
 
 [node name="HBox" type="HBoxContainer" parent="."]
 layout_mode = 2
@@ -166,7 +167,6 @@ value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/SmartLineEdit" index="0"]
-text = "0.0"
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 text_overrun_behavior = 4
@@ -187,8 +187,7 @@ visible = false
 custom_minimum_size = Vector2(0, 200)
 layout_mode = 2
 size_flags_stretch_ratio = 3.0
-peak_left = 0.9
-peak_right = 0.5
+peak_left = 0.0
 bars_spacing = 2
 bar_bg_color = Color(0.0859375, 0.0859375, 0.0859375, 1)
 bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
@@ -410,8 +409,7 @@ theme_override_constants/separation = 4
 
 [node name="CompactMeter" parent="HBox/VBox/Volume/HBox" groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
 layout_mode = 2
-peak_left = 0.9
-peak_right = 0.5
+peak_left = 0.0
 bars_spacing = 6
 bar_bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
 bar_color_low = Color(0.728, 0.8, 0.08000002, 1)

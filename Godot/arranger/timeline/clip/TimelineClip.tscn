@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3 uid="uid://5xix36ox2gu4"]
+[gd_scene load_steps=8 format=3 uid="uid://5xix36ox2gu4"]
 
 [ext_resource type="Script" uid="uid://dsqohehuqnchw" path="res://arranger/timeline/clip/TimelineClip.gd" id="1_timeline_clip"]
 [ext_resource type="Script" uid="uid://crj36c8i65ql" path="res://arranger/timeline/clip/MidiclipRenderer.gd" id="2_c74fi"]
@@ -66,6 +66,10 @@ corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_detail = 5
 
+[sub_resource type="LabelSettings" id="LabelSettings_c74fi"]
+font_size = 14
+font_color = Color(0.86328125, 0.86328125, 0.86328125, 1)
+
 [node name="Clip" type="Control"]
 clip_contents = true
 layout_mode = 3
@@ -97,6 +101,7 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")
 [node name="Label" type="Label" parent="VBoxContainer/Header"]
 layout_mode = 2
 text = "Clip Name"
+label_settings = SubResource("LabelSettings_c74fi")
 text_overrun_behavior = 3
 
 [node name="ClipRenderer" type="Control" parent="VBoxContainer"]

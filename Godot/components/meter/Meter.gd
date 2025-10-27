@@ -76,6 +76,11 @@ func set_peak_levels(left : float, right : float) -> void:
 func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
+	
+	peak_left = 0
+	peak_right = 0
+	rms_left = 0
+	rms_right = 0
 
 
 func _on_mouse_entered():

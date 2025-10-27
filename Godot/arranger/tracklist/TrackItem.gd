@@ -116,6 +116,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 
 	# Connect to track signals
 	if track:
+		track.name_changed.connect(_on_track_name_changed)
 		track.color_changed.connect(_on_track_color_changed)
 		track.height_changed.connect(_on_track_height_changed)
 		track.default_channel_id_changed.connect(_on_track_channel_id_changed)
@@ -235,6 +236,13 @@ func _on_track_channel_id_changed(new_channel_id: int) -> void:
 func _on_track_parent_changed(_new_parent_id: int) -> void:
 	"""React to track parent changes - update nesting indent."""
 	_update_nesting_indent()
+
+
+func _on_track_name_changed(new_name: String) -> void:
+	"""React to track name changes - update label."""
+	if label:
+		label.set_value(new_name)
+
 
 func _on_track_color_changed(_c : Color) -> void:
 	"""React to track color changes - update background color."""

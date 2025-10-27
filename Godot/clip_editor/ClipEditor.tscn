@@ -2,8 +2,8 @@
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
-[ext_resource type="Script" uid="uid://dyy120i4phgvv" path="res://clip_editor/ClipEditorTrackList.gd" id="2_4hncn"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
+[ext_resource type="PackedScene" uid="uid://bnyr34msk4b3r" path="res://clip_editor/tracklist/ClipEditorTrackList.tscn" id="2_ytm0k"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
 [ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
@@ -63,16 +63,9 @@ custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_4hncn")
 
-[node name="ClipsTrackList" type="VBoxContainer" parent="LeftPanel/VBox"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="TrackSelector" type="ItemList" parent="LeftPanel/VBox/ClipsTrackList"]
+[node name="ClipEditorTrackList" parent="LeftPanel/VBox" instance=ExtResource("2_ytm0k")]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
-size_flags_vertical = 3
-wraparound_items = false
-script = ExtResource("2_4hncn")
 
 [node name="MainPanel" type="PanelContainer" parent="."]
 layout_mode = 2

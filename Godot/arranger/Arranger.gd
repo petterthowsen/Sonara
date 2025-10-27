@@ -127,12 +127,14 @@ func _ready():
 
 
 func _on_mouse_entered() -> void:
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
+	
 	print("[Arranger] mouse entered")
 	grab_click_focus()
 	
 
 func _on_mouse_exited() -> void:
-	print("[Arranger] mouse exited")
 	release_focus()
 
 
