@@ -51,7 +51,8 @@ func _register_builtin_devices() -> void:
 	# Create built-in devices
 	var builtin_list = [
 		Device.create_builtin_oscillator(),
-		Device.create_builtin_delay()
+		Device.create_builtin_delay(),
+		Device.create_builtin_sfizz()
 	]
 	
 	# Add to device registry

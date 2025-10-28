@@ -18,6 +18,9 @@ cpal = "0.15"
 # Audio file format support
 rustwav = "0.3.8"  # WAV file reading with advanced format support
 
+# Sample engines
+sfizz = { git = "https://github.com/petterthowsen/rust-sfizz" }
+
 # OSC communication
 rosc = "0.10"
 

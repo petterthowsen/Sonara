@@ -1,0 +1,386 @@
+//! Sfizz SFZ Sample Engine Device
+//!
+//! Provides built-in SFZ sample playback using the sfizz library.
+//! Supports background loading of SFZ files for real-time safety.
+
+use super::{AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow};
+use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use tracing::{info, warn, error};
+
+/// Wrapper around sfizz::Synth that implements Send
+/// Safety: sfizz is thread-safe when properly synchronized via Mutex
+struct SendSynth(sfizz::Synth);
+unsafe impl Send for SendSynth {}
+
+/// Loading state for async SFZ file loading
+#[derive(Clone)]
+enum LoadingState {
+    /// No SFZ file loaded
+    Idle,
+    /// SFZ file is being loaded in background thread
+    Loading,
+    /// Sfizz synth ready and loaded
+    Ready(Arc<Mutex<SendSynth>>),
+    /// Failed to load SFZ file
+    Failed(String),
+}
+
+/// Sfizz SFZ sample engine device
+pub struct SfizzDevice {
+    // Audio configuration
+    sample_rate: f32,
+    max_buffer_size: usize,
+
+    // Sfizz synth (wrapped in LoadingState for background loading)
+    loading_state: Arc<Mutex<LoadingState>>,
+
+    // Current SFZ file path (for reporting)
+    sfz_path: Arc<Mutex<Option<PathBuf>>>,
+
+    // Pre-allocated buffers for planar audio conversion
+    left_buffer: Vec<f32>,
+    right_buffer: Vec<f32>,
+
+    // Lifecycle state
+    is_active: bool,
+    is_enabled: bool,
+}
+
+// Safety: sfizz::Synth contains raw pointers but is thread-safe when used properly
+// We ensure thread safety by only accessing it from the audio thread via Mutex
+unsafe impl Send for SfizzDevice {}
+
+impl SfizzDevice {
+    pub fn new(sample_rate: f32, max_buffer_size: usize) -> Self {
+        info!("Creating SfizzDevice (SR: {}, buffer: {})", sample_rate, max_buffer_size);
+
+        Self {
+            sample_rate,
+            max_buffer_size,
+            loading_state: Arc::new(Mutex::new(LoadingState::Idle)),
+            sfz_path: Arc::new(Mutex::new(None)),
+            left_buffer: vec![0.0; max_buffer_size],
+            right_buffer: vec![0.0; max_buffer_size],
+            is_active: true,
+            is_enabled: true,
+        }
+    }
+
+    /// Load an SFZ file asynchronously (non-blocking)
+    pub fn load_sfz_async(&mut self, path: PathBuf) {
+        info!("📂 Loading SFZ file asynchronously: {:?}", path);
+
+        // Update state to Loading
+        {
+            let mut state = self.loading_state.lock().unwrap();
+            *state = LoadingState::Loading;
+        }
+
+        // Update current path
+        {
+            let mut sfz_path = self.sfz_path.lock().unwrap();
+            *sfz_path = Some(path.clone());
+        }
+
+        // Clone Arc references for background thread
+        let loading_state = Arc::clone(&self.loading_state);
+        let sample_rate = self.sample_rate;
+        let max_buffer_size = self.max_buffer_size;
+
+        // Spawn background loading thread
+        std::thread::spawn(move || {
+            info!("🔄 Background thread: Loading SFZ file...");
+
+            // Create sfizz synth
+            let synth_result = sfizz::Synth::new();
+
+            match synth_result {
+                Ok(mut synth) => {
+                    // Configure sample rate and buffer size
+                    synth.set_sample_rate(sample_rate);
+
+                    if let Err(e) = synth.set_block_size(max_buffer_size) {
+                        error!("❌ Failed to set sfizz block size: {:?}", e);
+                        let mut state = loading_state.lock().unwrap();
+                        *state = LoadingState::Failed(format!("Failed to set block size: {:?}", e));
+                        return;
+                    }
+
+                    // Load SFZ file (blocking operation, but on background thread)
+                    match synth.load_sfz(&path) {
+                        Ok(_) => {
+                            info!("✅ SFZ file loaded successfully: {:?}", path);
+
+                            // Update state to Ready
+                            let mut state = loading_state.lock().unwrap();
+                            *state = LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to load SFZ file: {:?}", e);
+                            let mut state = loading_state.lock().unwrap();
+                            *state = LoadingState::Failed(format!("Failed to load SFZ: {:?}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("❌ Failed to create sfizz synth: {:?}", e);
+                    let mut state = loading_state.lock().unwrap();
+                    *state = LoadingState::Failed(format!("Failed to create synth: {:?}", e));
+                }
+            }
+        });
+    }
+
+    /// Get current loading state (for status reporting)
+    pub fn get_loading_state_description(&self) -> String {
+        let state = self.loading_state.lock().unwrap();
+        match &*state {
+            LoadingState::Idle => "No SFZ loaded".to_string(),
+            LoadingState::Loading => "Loading...".to_string(),
+            LoadingState::Ready(_) => {
+                let path = self.sfz_path.lock().unwrap();
+                if let Some(p) = &*path {
+                    format!("Ready: {}", p.display())
+                } else {
+                    "Ready".to_string()
+                }
+            }
+            LoadingState::Failed(err) => format!("Failed: {}", err),
+        }
+    }
+}
+
+impl AudioDevice for SfizzDevice {
+    fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        // Handle inactive state (device not loaded)
+        if !self.is_active {
+            // Output silence
+            for sample in outputs.iter_mut() {
+                *sample = 0.0;
+            }
+            return;
+        }
+
+        // Handle disabled state (bypassed - pass through silence for instruments)
+        if !self.is_enabled {
+            // Instruments output silence when bypassed (no input to pass through)
+            for sample in outputs.iter_mut() {
+                *sample = 0.0;
+            }
+            return;
+        }
+
+        // CRITICAL: Check loading state with try_lock (non-blocking!)
+        // If we can't get the lock, just output silence (better than blocking)
+        let loading_state_result = self.loading_state.try_lock();
+        let synth = match loading_state_result {
+            Ok(state) => {
+                match &*state {
+                    LoadingState::Idle => {
+                        // No SFZ loaded, output silence
+                        for sample in outputs.iter_mut() {
+                            *sample = 0.0;
+                        }
+                        return;
+                    }
+                    LoadingState::Loading => {
+                        // Still loading, output silence
+                        for sample in outputs.iter_mut() {
+                            *sample = 0.0;
+                        }
+                        return;
+                    }
+                    LoadingState::Ready(synth) => {
+                        // Clone Arc for use outside this scope
+                        Arc::clone(synth)
+                    }
+                    LoadingState::Failed(_err) => {
+                        // Failed to load, output silence
+                        for sample in outputs.iter_mut() {
+                            *sample = 0.0;
+                        }
+                        return;
+                    }
+                }
+            }
+            Err(_) => {
+                // Couldn't get lock (loading in progress), output silence
+                for sample in outputs.iter_mut() {
+                    *sample = 0.0;
+                }
+                return;
+            }
+        };
+
+        // Try to lock the synth (non-blocking)
+        let mut synth_guard = match synth.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // Couldn't get synth lock, output silence
+                for sample in outputs.iter_mut() {
+                    *sample = 0.0;
+                }
+                return;
+            }
+        };
+
+        // Prepare planar buffers for sfizz (it expects separate L/R channels)
+        let mut output_buffers: Vec<&mut [f32]> = vec![
+            &mut self.left_buffer[..sample_count],
+            &mut self.right_buffer[..sample_count],
+        ];
+
+        // Render audio (sfizz renders to planar buffers)
+        // Access inner Synth via .0
+        match synth_guard.0.render_block(&mut output_buffers) {
+            Ok(_) => {
+                // Convert from planar to interleaved stereo
+                for i in 0..sample_count {
+                    let left_idx = i * 2;
+                    let right_idx = i * 2 + 1;
+
+                    if left_idx < outputs.len() {
+                        outputs[left_idx] = self.left_buffer[i];
+                    }
+                    if right_idx < outputs.len() {
+                        outputs[right_idx] = self.right_buffer[i];
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Sfizz render error: {:?}", e);
+                // Output silence on error
+                for sample in outputs.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+        }
+    }
+
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
+        // Try to get loading state (non-blocking)
+        let loading_state_result = self.loading_state.try_lock();
+        let synth = match loading_state_result {
+            Ok(state) => {
+                match &*state {
+                    LoadingState::Ready(synth) => Arc::clone(synth),
+                    _ => return, // Not ready, ignore MIDI
+                }
+            }
+            Err(_) => return, // Can't get lock, ignore MIDI
+        };
+
+        // Try to lock the synth (non-blocking)
+        let mut synth_guard = match synth.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return, // Can't get synth lock, ignore MIDI
+        };
+
+        // Send MIDI event to sfizz
+        // Access inner Synth via .0
+        if is_note_on {
+            synth_guard.0.note_on(note, velocity);
+        } else {
+            synth_guard.0.note_off(note, velocity);
+        }
+    }
+
+    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {
+        // TODO: Implement CC automation via sfizz wrapper extensions
+        // For now, parameters are not supported
+    }
+
+    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+        // TODO: Implement CC automation via sfizz wrapper extensions
+        None
+    }
+
+    fn device_id(&self) -> &str {
+        "sonara.builtin.sfizz"
+    }
+
+    fn device_name(&self) -> &str {
+        "Sfizz SFZ Sampler"
+    }
+
+    fn device_category(&self) -> DeviceCategory {
+        DeviceCategory::Instrument
+    }
+
+    fn device_variant(&self) -> DeviceVariant {
+        DeviceVariant::BuiltIn
+    }
+
+    fn midi_ports(&self) -> Vec<MidiPort> {
+        vec![MidiPort {
+            id: 0,
+            name: "MIDI In".to_string(),
+            flow: PortFlow::Input,
+        }]
+    }
+
+    fn parameters(&self) -> Vec<ParamInfo> {
+        // TODO: Add CC automation parameters when sfizz wrapper supports it
+        Vec::new()
+    }
+
+    fn reset(&mut self) {
+        // Try to get loading state (non-blocking)
+        let loading_state_result = self.loading_state.try_lock();
+        let synth = match loading_state_result {
+            Ok(state) => {
+                match &*state {
+                    LoadingState::Ready(synth) => Arc::clone(synth),
+                    _ => return, // Not ready, nothing to reset
+                }
+            }
+            Err(_) => return, // Can't get lock, skip reset
+        };
+
+        // Try to lock the synth (non-blocking)
+        let mut synth_guard = match synth.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return, // Can't get synth lock, skip reset
+        };
+
+        // Silence all notes
+        // Access inner Synth via .0
+        synth_guard.0.all_sound_off();
+    }
+
+    // === Lifecycle Management ===
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.is_active = true;
+        Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        self.is_active = false;
+
+        // Clear loading state to free memory
+        let mut state = self.loading_state.lock().unwrap();
+        *state = LoadingState::Idle;
+
+        Ok(())
+    }
+
+    // === Bypass Control ===
+
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.is_enabled = enabled;
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}

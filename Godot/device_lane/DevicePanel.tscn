@@ -69,8 +69,8 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="Device" type="PanelContainer"]
-offset_right = 339.0
-offset_bottom = 107.0
+offset_right = 209.0
+offset_bottom = 128.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
 
@@ -112,21 +112,22 @@ label_settings = SubResource("LabelSettings_r4rlf")
 layout_mode = 2
 size_flags_vertical = 8
 
-[node name="ParamsButton" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+[node name="Parameters" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
 toggle_mode = true
 button_pressed = true
 button_group = SubResource("ButtonGroup_1cidk")
-text = "Parameters"
+text = "P"
 
-[node name="ParamsButton2" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
-visible = false
+[node name="File" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
 toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
-text = "Parameters"
+text = "F"
 
 [node name="Content" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
@@ -143,3 +144,31 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 4
+
+[node name="File" type="VBoxContainer" parent="VBoxContainer/Content"]
+visible = false
+layout_mode = 2
+alignment = 1
+
+[node name="StatusLabel" type="Label" parent="VBoxContainer/Content/File"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "No File Loaded"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="LoadButton" type="Button" parent="VBoxContainer/Content/File"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "Load File"
+
+[node name="FileDialog" type="FileDialog" parent="."]
+oversampling_override = 1.0
+title = "Open a SFZ File"
+size = Vector2i(1732, 360)
+ok_button_text = "Load"
+file_mode = 0
+display_mode = 1
+access = 2
+filters = PackedStringArray("*.sfz")

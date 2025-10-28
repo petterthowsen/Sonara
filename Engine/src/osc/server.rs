@@ -619,6 +619,18 @@ impl OscServer {
                     })?;
                 }
             }
+            ["channel", channel_id_str, "device", device_pos_str, "load_file"] => {
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(file_path))) =
+                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>(), args.first()) {
+                    info!("Load file into device: channel={} device={} path={}",
+                          channel_id, device_position, file_path);
+                    command_tx.send(AudioCommand::LoadDeviceFile {
+                        channel_id,
+                        device_position,
+                        file_path: file_path.clone(),
+                    })?;
+                }
+            }
             ["channel", channel_id_str, "device", device_pos_str, "gui", "open"] => {
                 if let (Ok(channel_id), Ok(device_position)) =
                     (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {

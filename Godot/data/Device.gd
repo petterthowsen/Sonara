@@ -53,6 +53,15 @@ var audio_in_channels: int = 2
 ## Number of audio output channels
 var audio_out_channels: int = 2
 
+## Whether this device supports loading files (e.g., SFZ, samples)
+var supports_file_loading: bool = false
+
+## Supported file extensions for file loading (e.g., [".sfz", ".SFZ"])
+var supported_file_extensions: Array[String] = []
+
+## Description of supported file types (e.g., "SFZ Sample Files")
+var file_type_description: String = ""
+
 
 ## ============================================================================
 ## INITIALIZATION
@@ -197,5 +206,23 @@ static func create_builtin_delay() -> Device:
 	wet_amount_param.default_value = 0.5
 	wet_amount_param.description = "Mix between dry (0.0) and wet (1.0)"
 	device.add_parameter(wet_amount_param)
+
+	return device
+
+
+## Create a built-in SFZ sampler device
+static func create_builtin_sfizz() -> Device:
+	var device = Device.new("sonara.builtin.sfizz", "SFZ Sampler", DeviceCategory.Instrument)
+	device.title = "SFZ Sampler"
+	device.description = "SFZ sample player powered by Sfizz."
+	device.author = "Sonara"
+	device.accepts_midi = true
+	device.audio_in_channels = 0
+	device.audio_out_channels = 2
+	
+	# File loading support
+	device.supports_file_loading = true
+	device.supported_file_extensions = [".sfz", ".SFZ"] as Array[String]
+	device.file_type_description = "SFZ Sample Files"
 
 	return device

@@ -1,9 +1,11 @@
 mod oscillator;
 mod delay;
+mod sfizz_device;
 pub mod clap_host;
 
 pub use oscillator::OscillatorDevice;
 pub use delay::DelayDevice;
+pub use sfizz_device::SfizzDevice;
 pub use clap_host::{PluginScanner, PluginDescriptor, ClapDeviceAdapter};
 
 /// Parameter ID (normalized 0.0-1.0, host/device agnostic)

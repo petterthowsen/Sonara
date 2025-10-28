@@ -57,6 +57,7 @@ pub enum AudioCommand {
     SetDeviceParameter { channel_id: ChannelId, device_position: usize, param_id: u32, value: f32 },
     SetDeviceActive { channel_id: ChannelId, device_position: usize, active: bool },
     SetDeviceEnabled { channel_id: ChannelId, device_position: usize, enabled: bool },
+    LoadDeviceFile { channel_id: ChannelId, device_position: usize, file_path: String },
     DeviceReady { channel_id: ChannelId, device_position: usize },
 
     // Plugin management
@@ -569,6 +570,9 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                     "sonara.builtin.delay" => {
                         Some(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0)))
                     }
+                    "sonara.builtin.sfizz" => {
+                        Some(Box::new(super::devices::SfizzDevice::new(state.device_sample_rate, buffer_size)))
+                    }
                     // CLAP plugins
                     id => {
                         if let Some(descriptor) = state.plugin_scanner.get_plugin(id) {
@@ -703,7 +707,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
                     device.set_enabled(enabled);
-                    info!("Device {} set to {}: channel={} device={}", 
+                    info!("Device {} set to {}: channel={} device={}",
                         if enabled { "enabled" } else { "disabled" },
                         if enabled { "enabled" } else { "bypassed" },
                         channel_id, device_position);
@@ -718,6 +722,25 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                 }
             } else {
                 warn!("Channel {} not found for set device enabled", channel_id);
+            }
+        }
+        AudioCommand::LoadDeviceFile { channel_id, device_position, file_path } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    // Try to downcast to SfizzDevice
+                    if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<super::devices::SfizzDevice>() {
+                        info!("Loading SFZ file into device: channel={} device={} path={}",
+                            channel_id, device_position, file_path);
+                        sfizz_device.load_sfz_async(std::path::PathBuf::from(file_path));
+                    } else {
+                        warn!("Device at channel {} position {} does not support file loading",
+                            channel_id, device_position);
+                    }
+                } else {
+                    warn!("Device not found at channel {} position {}", channel_id, device_position);
+                }
+            } else {
+                warn!("Channel {} not found for load device file", channel_id);
             }
         }
 

@@ -1,0 +1,8 @@
+// Simple test SFZ - single sample kick drum
+// This is a minimal SFZ for testing sfizz integration
+// Replace the sample path with an actual WAV file
+
+<region>
+sample=*sine  // sfizz built-in sine wave generator
+key=36        // C2 (kick drum note)
+ampeg_release=0.5
