@@ -51,7 +51,15 @@ pub enum AudioCommand {
     UpdateClipInstanceLoop { track_id: TrackId, instance_id: ClipInstanceId, enabled: bool, start_tick: Tick, length_ticks: Tick },
 
     // Device management
-    AddDeviceToChannel { channel_id: ChannelId, device_id: String, position: i32, active: bool, enabled: bool },
+    AddDeviceToChannel { 
+        channel_id: ChannelId, 
+        device_id: String, 
+        device_type: String,  // "builtin", "clap", "lv2", "vst3"
+        device_file: String,  // Path to plugin file (empty for built-ins)
+        position: i32, 
+        active: bool, 
+        enabled: bool 
+    },
     RemoveDeviceFromChannel { channel_id: ChannelId, position: usize },
     ClearChannelDevices { channel_id: ChannelId },
     SetDeviceParameter { channel_id: ChannelId, device_position: usize, param_id: u32, value: f32 },
@@ -102,6 +110,7 @@ pub enum EngineStatus {
         version: String,
         category: String,
         description: Option<String>,
+        path: String,  // Path to plugin file
     },
     
     // Plugin parameter responses
@@ -559,33 +568,47 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
         }
 
         // Device management commands
-        AudioCommand::AddDeviceToChannel { channel_id, device_id, position, active, enabled } => {
+        AudioCommand::AddDeviceToChannel { channel_id, device_id, device_type, device_file, position, active, enabled } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                // Factory: create device by ID (builtin or plugin)
-                let device: Option<Box<dyn super::devices::AudioDevice>> = match device_id.as_str() {
+                // Factory: create device by type
+                let device: Option<Box<dyn super::devices::AudioDevice>> = match device_type.as_str() {
                     // Built-in devices
-                    "sonara.builtin.oscillator" => {
-                        Some(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate)))
-                    }
-                    "sonara.builtin.delay" => {
-                        Some(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0)))
-                    }
-                    "sonara.builtin.sfizz" => {
-                        Some(Box::new(super::devices::SfizzDevice::new(state.device_sample_rate, buffer_size)))
+                    "builtin" => {
+                        match device_id.as_str() {
+                            "sonara.builtin.oscillator" => {
+                                info!("Loading built-in oscillator [active={}, enabled={}]", active, enabled);
+                                Some(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate)))
+                            }
+                            "sonara.builtin.delay" => {
+                                info!("Loading built-in delay [active={}, enabled={}]", active, enabled);
+                                Some(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0)))
+                            }
+                            "sonara.builtin.sfizz" => {
+                                info!("Loading built-in sfizz [active={}, enabled={}]", active, enabled);
+                                Some(Box::new(super::devices::SfizzDevice::new(state.device_sample_rate, buffer_size)))
+                            }
+                            _ => {
+                                warn!("Unknown built-in device ID: {}", device_id);
+                                None
+                            }
+                        }
                     }
                     // CLAP plugins
-                    id => {
-                        if let Some(descriptor) = state.plugin_scanner.get_plugin(id) {
-                            info!("Loading CLAP plugin in subprocess: {} ({}) [active={}, enabled={}]", 
-                                descriptor.name, id, active, enabled);
+                    "clap" => {
+                        if device_file.is_empty() {
+                            warn!("CLAP plugin {} missing file path", device_id);
+                            None
+                        } else {
+                            info!("Loading CLAP plugin {} from {} [active={}, enabled={}]", 
+                                device_id, device_file, active, enabled);
                             
                             // Use subprocess-based adapter for better crash isolation and GUI support
                             match super::devices::clap_host::SubprocessClapAdapter::new(
                                 std::sync::Arc::clone(&state.process_manager),
                                 channel_id as u32,
                                 position as usize,
-                                descriptor.path.clone(),
-                                id,
+                                std::path::PathBuf::from(&device_file),
+                                &device_id,
                                 state.device_sample_rate,
                                 buffer_size,
                                 Some(command_tx.clone()),
@@ -594,18 +617,19 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                                 Ok(adapter) => {
                                     // Note: Don't activate on audio thread! It will be activated later.
                                     // Activation requires IPC which is too slow for real-time audio thread.
-                                    info!("CLAP plugin {} loaded successfully in subprocess (activation deferred)", id);
+                                    info!("CLAP plugin {} loaded successfully in subprocess (activation deferred)", device_id);
                                     Some(Box::new(adapter))
                                 }
                                 Err(e) => {
-                                    warn!("Failed to load CLAP plugin {}: {}", id, e);
+                                    warn!("Failed to load CLAP plugin {}: {}", device_id, e);
                                     None
                                 }
                             }
-                        } else {
-                            warn!("Unknown device ID: {}", device_id);
-                            None
                         }
+                    }
+                    _ => {
+                        warn!("Unknown device type: {} (supported: builtin, clap)", device_type);
+                        None
                     }
                 };
 
@@ -766,6 +790,7 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                             version: plugin.version.clone(),
                             category: category_str,
                             description: plugin.description.clone(),
+                            path: plugin.path.to_string_lossy().to_string(),
                         });
                     }
                     

@@ -167,7 +167,18 @@ func sync_to_engine() -> void:
 	
 	# Sync all devices to engine (for project loading)
 	for device_inst in devices:
-		AudioEngineOSC.send("/channel/%d/add_device" % id, [device_inst.device.device_id, device_inst.position])
+		# Send device ID, position, active, enabled, type, and file path
+		var active = 1 if device_inst.active else 0
+		var enabled = 1 if device_inst.enabled else 0
+		var device_type = _get_device_type_string(device_inst.device.device_type)
+		AudioEngineOSC.send("/channel/%d/add_device" % id, [
+			device_inst.device.device_id, 
+			device_inst.position,
+			active,
+			enabled,
+			device_type,  # "builtin", "clap", "lv2", "vst3"
+			device_inst.device.plugin_path  # File path (empty for built-ins)
+		])
 		device_inst.sync_to_engine()
 		
 		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
@@ -342,6 +353,19 @@ func get_linear_gain() -> float:
 	return Sonara.db_to_lin(volume)
 
 
+## Convert Device.DeviceType enum to string for OSC
+func _get_device_type_string(device_type: Device.DeviceType) -> String:
+	match device_type:
+		Device.DeviceType.BuiltIn:
+			return "builtin"
+		Device.DeviceType.CLAP:
+			return "clap"
+		Device.DeviceType.LV2:
+			return "lv2"
+		_:
+			return "builtin"
+
+
 # ============================================================================
 # DEVICE CHAIN MANAGEMENT
 # ============================================================================
@@ -365,7 +389,18 @@ func add_device(device_instance: DeviceInstance, position: int = -1) -> void:
 
 	# Sync to engine
 	if _is_connected:
-		AudioEngineOSC.send("/channel/%d/add_device" % id, [device_instance.device.device_id, position])
+		# Send device ID, position, active, enabled, type, and file path
+		var active = 1 if device_instance.active else 0
+		var enabled = 1 if device_instance.enabled else 0
+		var device_type = _get_device_type_string(device_instance.device.device_type)
+		AudioEngineOSC.send("/channel/%d/add_device" % id, [
+			device_instance.device.device_id, 
+			position,
+			active,
+			enabled,
+			device_type,  # "builtin", "clap", "lv2", "vst3"
+			device_instance.device.plugin_path  # File path (empty for built-ins)
+		])
 		# Also sync the device's parameters
 		device_instance.sync_to_engine()
 		

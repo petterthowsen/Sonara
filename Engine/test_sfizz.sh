@@ -18,7 +18,9 @@ oscsend localhost 7000 /channel/create i 2 s "SFZ Channel"
 sleep 0.1
 
 echo "Step 2: Adding sfizz device to channel 2, position 0"
-oscsend localhost 7000 /channel/2/add_device s "sonara.builtin.sfizz" i 0 i 1 i 1
+# Format: device_id, position, active, enabled, type, file
+# Note: Last 3 params are optional, but we specify them for clarity
+oscsend localhost 7000 /channel/2/add_device s "sonara.builtin.sfizz" i 0 i 1 i 1 s "builtin" s ""
 sleep 0.1
 
 echo "Step 3: Loading SFZ file: $SFZ_FILE"

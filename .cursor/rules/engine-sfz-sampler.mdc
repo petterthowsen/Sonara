@@ -1,0 +1,45 @@
+---
+description: When implementing or modifying the built-in SFZ sampler powered by sfizz.
+alwaysApply: false
+---
+# Built-In SFZ Sampler (Sfizz)
+
+## Overview
+- The engine ships a first-party SFZ instrument implemented in `Engine/src/audio/devices/sfizz_device.rs`.
+- It wraps the `rust-sfizz` crate and is exposed as a built-in device so it follows audio-thread safety rules identical to other native instruments.
+- Godot surfaces the device through `Device.create_builtin_sfizz()` and the asset browser; no other device currently consumes SFZ files.
+
+## Device Identity & Factory Registration
+- Device ID: `sonara.builtin.sfizz`, category `Instrument`, variant `BuiltIn`.
+- Registered in the audio device factory (`AudioCommand::AddDeviceToChannel`); must be reachable with `device_type == "builtin"`.
+- The sampler requires only a MIDI input port; no audio inputs are expected because it is a sound source.
+
+## OSC & Command Contract
+- Loading an instance mirrors other built-ins via `/channel/{id}/add_device [...] "builtin" ""`.
+- SFZ files are supplied after instantiation with `/channel/{id}/device/{position}/load_file [s:sfz_path]`.
+  - The engine maps this to `AudioCommand::LoadDeviceFile`; only the sfizz sampler handles the command today.
+  - Paths are interpreted on the engine host; Godot should resolve user selections to absolute filesystem paths before sending.
+- Engine status updates (e.g., new `PluginInfo`/`PluginScanComplete`) remain unchanged; the sampler does not emit additional OSC messages on load success/failure.
+
+## Loading Model
+- `SfizzDevice::load_sfz_async` spawns a background thread so SFZ parsing never blocks the audio thread.
+- Loading progress is tracked via `LoadingState` (`Idle`, `Loading`, `Ready(Arc<Mutex<SendSynth>>`, `Failed(String)`).
+- Audio thread access follows two-layer `try_lock()`:
+  - `loading_state.try_lock()` returns immediately; on `Loading`/`Failed` the device outputs silence.
+  - A ready synth still sits behind `Arc<Mutex<SendSynth>>`; failure to grab the inner lock also yields silence rather than blocking.
+- Planar ↔ interleaved conversion uses preallocated `left_buffer`/`right_buffer` sized to the device's `max_buffer_size`. Never resize these inside `process_block`.
+
+## MIDI & Audio Handling
+- MIDI input uses the same non-blocking lock strategy; note events are dropped if the synth cannot be locked.
+- Rendering loops over the sample count, writes planar data via `render_block`, and interleaves into the provided stereo buffer.
+- On bypass (`set_enabled(false)`) or inactive state the device outputs silence because it has no audio input to pass through.
+- `reset()` calls `sfizz::Synth::all_sound_off()` when the synth is ready to guarantee note kills on transport stop/seek.
+
+## Lifecycle Expectations
+- `deactivate()` clears the loading state back to `Idle`; callers should re-send a file path when reactivating.
+- The sampler survives device restarts because the sfizz synth lives inside `SendSynth` (wrapper providing `unsafe impl Send`); never access the raw synth outside the guarded Mutex.
+- Background load failures populate `LoadingState::Failed`; future calls to `load_sfz_async` overwrite the state and retry.
+
+## Dependency Notes
+- The build relies on `rust-sfizz` (git dependency) and dynamic `libsndfile`. `build.rs` adds the `sndfile` link directive; keep it in sync when updating the wrapper.
+- Test coverage lives in `Engine/test_sfizz.sh` (manual OSC smoke) and `Engine/test_kick.sfz` (minimal patch). Treat these as fixtures when verifying changes.

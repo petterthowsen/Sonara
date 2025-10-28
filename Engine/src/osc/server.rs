@@ -300,7 +300,10 @@ impl OscServer {
                     command_tx.send(AudioCommand::InitProject(settings))?;
                     
                     // Send confirmation that engine is ready
-                    let _ = self.send_message("/status/connected", vec![OscType::Int(1)]);
+                    match self.send_message("/status/connected", vec![OscType::Int(1)]) {
+                        Ok(_) => info!("Sent /status/connected to Godot"),
+                        Err(e) => warn!("Failed to send /status/connected: {}", e),
+                    }
                 }
             }
             ["project", "clear"] => {
@@ -583,12 +586,22 @@ impl OscServer {
                     let enabled = args.get(3)
                         .and_then(|arg| if let OscType::Int(v) = arg { Some(*v != 0) } else { None })
                         .unwrap_or(true);
+                    // Device type parameter (builtin, clap, lv2, vst3)
+                    let device_type = args.get(4)
+                        .and_then(|arg| if let OscType::String(t) = arg { Some(t.clone()) } else { None })
+                        .unwrap_or_else(|| "builtin".to_string());
+                    // Device file parameter (path to plugin, empty for built-ins)
+                    let device_file = args.get(5)
+                        .and_then(|arg| if let OscType::String(f) = arg { Some(f.clone()) } else { None })
+                        .unwrap_or_default();
                     
-                    info!("Add device {} to channel {} at position {} [active={}, enabled={}]", 
-                        device_id, channel_id, position, active, enabled);
+                    info!("Add device {} (type={}) to channel {} at position {} [active={}, enabled={}]", 
+                        device_id, device_type, channel_id, position, active, enabled);
                     command_tx.send(AudioCommand::AddDeviceToChannel {
                         channel_id,
                         device_id: device_id.clone(),
+                        device_type,
+                        device_file,
                         position: *position,
                         active,
                         enabled,
@@ -789,9 +802,10 @@ impl OscServer {
             EngineStatus::PluginScanComplete { count } => {
                 ("/plugin/scan_complete".to_string(), vec![OscType::Int(count as i32)])
             }
-            EngineStatus::PluginInfo { id, name, vendor, version, category, description } => {
+            EngineStatus::PluginInfo { id, name, vendor, version, category, description, path } => {
+                tracing::info!("📨 Sending plugin info: {} ({})", name, id);
                 let mut args = vec![
-                    OscType::String(id),
+                    OscType::String(id.clone()),
                     OscType::String(name),
                     OscType::String(vendor),
                     OscType::String(version),
@@ -799,6 +813,8 @@ impl OscServer {
                 ];
                 // Add description if present, otherwise send empty string
                 args.push(OscType::String(description.unwrap_or_default()));
+                // Add path
+                args.push(OscType::String(path));
                 ("/plugin/info".to_string(), args)
             }
             EngineStatus::PluginParameterInfo { channel_id, device_position, param_id, name, min, max, default } => {

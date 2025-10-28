@@ -136,7 +136,7 @@ func trigger_plugin_scan() -> void:
 
 ## Handle incoming plugin info from OSC (asynchronous, arrives during scan)
 func _on_plugin_info_received(args: Array) -> void:
-	if args.size() < 6:
+	if args.size() < 7:
 		push_warning("[DeviceAssetProvider] Invalid /plugin/info message: %s" % str(args))
 		return
 	
@@ -146,6 +146,7 @@ func _on_plugin_info_received(args: Array) -> void:
 	var version: String = args[3]
 	var category_str: String = args[4]
 	var description: String = args[5]
+	var plugin_path: String = args[6]
 	
 	# Map category string to Device.DeviceCategory
 	var category: Device.DeviceCategory
@@ -165,6 +166,7 @@ func _on_plugin_info_received(args: Array) -> void:
 	device.version = version
 	device.description = description if description != "" else "CLAP Plugin"
 	device.title = plugin_name
+	device.plugin_path = plugin_path
 	
 	# Determine MIDI support and audio channels based on category
 	if category == Device.DeviceCategory.Instrument:
@@ -308,6 +310,7 @@ func _device_to_cache_data(device: Device) -> Dictionary:
 		"device_id": device.device_id,
 		"name": device.name,
 		"title": device.title,
+		"plugin_path": device.plugin_path,
 		"device_type": Device.DeviceType.keys()[device.device_type],
 		"category": Device.DeviceCategory.keys()[device.category],
 		"version": device.version,
@@ -334,6 +337,7 @@ func _device_from_cache_data(data: Dictionary) -> Device:
 	
 	var device = Device.new(device_id, name, category, device_type)
 	device.title = data.get("title", name)
+	device.plugin_path = data.get("plugin_path", "")
 	device.version = data.get("version", "1.0")
 	device.description = data.get("description", "")
 	device.author = data.get("author", "")

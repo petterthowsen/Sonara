@@ -58,6 +58,12 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                     if is_within_instance || is_at_instance_end {
                         if let Some(clip) = state.clips.get(&instance.clip_id) {
                             let mut offset_in_instance = current_tick - instance.start_tick;
+                            
+                            // Debug: log when we're processing an instance
+                            if current_tick % 960 == 0 {  // Log once per beat
+                                info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes", 
+                                    instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
+                            }
 
                             // Handle looping
                             if instance.loop_enabled && instance.loop_length_ticks > 0 {
@@ -84,7 +90,14 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
 
                                 // Note On (only within instance, not at end)
                                 if is_within_instance && note_start_in_instance == offset_in_instance {
+                                    info!("TRIGGER: Note {} (ID={}) at offset_in_instance={} (global tick {})", 
+                                        transposed_note, clip_note.id, offset_in_instance, current_tick);
                                     note_events.push((*track_id, transposed_note, clip_note.velocity, true));
+                                } else if current_tick % 960 == 0 {
+                                    // Debug: why didn't this note trigger?
+                                    info!("  Note {} (ID={}) not triggered: note_start_in_instance={}, offset_in_instance={}, match={}", 
+                                        clip_note.note, clip_note.id, note_start_in_instance, offset_in_instance,
+                                        note_start_in_instance == offset_in_instance);
                                 }
 
                                 // Note Off (allow at instance end)

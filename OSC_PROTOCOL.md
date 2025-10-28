@@ -94,7 +94,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?` | Add device to channel (active/enabled default to 1) |
+| `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add device to channel (type: "builtin"/"clap"/"lv2"/"vst3", file: path for plugins, empty for built-ins) |
 | `/channel/{id}/remove_device` | `i:position` | Remove device from channel |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{position}/param/{param_id}` | `f:normalized_value` | Set device parameter (0.0-1.0) |
@@ -133,25 +133,34 @@ Scans standard CLAP plugin directories and discovers available plugins.
 **Response:**
 ```
 /plugin/scan_complete [i:count]
+/plugin/info [s:id, s:name, s:vendor, s:version, s:category, s:description, s:path]
 ```
+Each discovered plugin sends a `/plugin/info` message with its metadata and file path. Godot caches these to avoid scanning on every startup.
 
-**Adding Plugins (same as built-in devices!)**
+**Adding Devices**
 ```
-/channel/{id}/add_device [s:plugin_id, i:position, i:active?, i:enabled?]
+/channel/{id}/add_device [s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?]
 ```
-- **active**: 1=load plugin (default), 0=don't load (save RAM)
+- **device_id**: Unique identifier (e.g., "sonara.builtin.oscillator", "michaelwillis.dragonfly.hall")
+- **position**: Position in device chain (-1 = append)
+- **active**: 1=load device (default), 0=don't load (save RAM)
 - **enabled**: 1=process audio (default), 0=bypass
+- **type**: Device type - "builtin", "clap", "lv2", "vst3" (defaults to "builtin")
+- **file**: Path to plugin file (required for plugins, empty for built-ins)
 
 Examples:
 ```bash
-# Load active + enabled (default)
-/channel/2/add_device ["michaelwillis.dragonfly.room", -1]
+# Built-in device (type and file optional)
+/channel/2/add_device ["sonara.builtin.oscillator", -1, 1, 1, "builtin", ""]
+
+# CLAP plugin with explicit type and file
+/channel/2/add_device ["michaelwillis.dragonfly.room", -1, 1, 1, "clap", "/home/user/.clap/dragonfly-reverb.clap"]
 
 # Load inactive (template with 200 plugins)
-/channel/2/add_device ["com.heavysynth", -1, 0, 1]
+/channel/2/add_device ["com.heavysynth", -1, 0, 1, "clap", "/usr/lib/clap/heavysynth.clap"]
 
 # Load bypassed
-/channel/2/add_device ["in.lsp-plug.compressor_mono", -1, 1, 0]
+/channel/2/add_device ["in.lsp-plug.compressor_mono", -1, 1, 0, "clap", "/usr/lib/clap/lsp-plugins.clap"]
 ```
 
 **Plugin State Management**

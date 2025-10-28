@@ -61,7 +61,6 @@ func _ready():
 	
 	if Sonara.editor:
 		Sonara.editor.clips_selected.connect(_on_editor_clips_selected)
-		Sonara.editor.tempo_changed.connect(_on_editor_tempo_changed)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
 		Sonara.editor.playhead_moved.connect(_on_editor_playhead_moved)
 
@@ -78,11 +77,6 @@ func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
 	if is_visible_in_tree():
 		_bind_pending_clips()
 
-
-func _on_editor_tempo_changed(tempo : float):
-	if is_visible_in_tree() or true:
-		grid_helper.tempo = tempo
-	
 
 func _on_editor_time_signature_changed(numerator : int, denominator : int):
 	if is_visible_in_tree() or true:

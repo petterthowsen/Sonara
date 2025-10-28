@@ -70,9 +70,8 @@ var default_channel_id: int:
 				else:
 					# Routing removed, disconnect
 					disconnect_from_engine()
-			elif is_now_routed:
-				# Not connected but now has routing, try to connect
-				connect_to_engine()
+			# Note: We don't auto-connect here if not connected
+			# The Project will call connect_to_engine() when appropriate
 
 # Grouping/hierarchy
 var _parent_track_id: int = -1  # -1 = top level, otherwise ID of parent Track
@@ -89,7 +88,7 @@ var child_track_ids: Array[int] = []  # For FOLDER tracks, IDs of child tracks
 var is_folder_expanded: bool = true  # UI state for folder tracks
 
 # UI state
-var _height: int = 38  # Track height in pixels
+var _height: int = 48  # Track height in pixels
 var folded: bool = false  # Collapsed in UI
 var muted: bool = false
 var solo: bool = false
@@ -251,7 +250,14 @@ func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 		instance.duration_ticks
 	])
 
-	# Sync instance parameters
+	# Sync instance parameters (always sync clip_offset, even if 0, to initialize engine state)
+	if instance.clip_offset != 0:
+		AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [id, instance.id], [
+			instance.start_ticks,
+			instance.duration_ticks,
+			instance.clip_offset
+		])
+	
 	if instance.transpose != 0:
 		AudioEngineOSC.send("/track/%d/instance/%s/set_transpose" % [id, instance.id], [instance.transpose])
 

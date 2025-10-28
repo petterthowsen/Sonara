@@ -66,6 +66,45 @@ func bind_to_clip_instance(inst: ClipInstance, tl: Timeline, t_color: Color = Co
 	# Update UI from clip instance data
 	_update_from_clip_instance()
 
+
+func _find_nearest_clip_left(reference_start: int = -1) -> int:
+	"""Find the end position of the nearest clip to the left of this clip.
+	Returns 0 if no clip is found.
+	If reference_start is provided, uses it instead of the current clip position."""
+	if not clip_instance or not clip_instance.track:
+		return 0
+	
+	var ref_pos = reference_start if reference_start >= 0 else clip_instance.start_ticks
+	var nearest_end = 0
+	for other_instance in clip_instance.track.clip_instances:
+		if other_instance == clip_instance:
+			continue
+		var other_end = other_instance.start_ticks + other_instance.duration_ticks
+		if other_end <= ref_pos and other_end > nearest_end:
+			nearest_end = other_end
+	
+	return nearest_end
+
+
+func _find_nearest_clip_right(reference_end: int = -1) -> int:
+	"""Find the start position of the nearest clip to the right of this clip.
+	Returns a very large number if no clip is found.
+	If reference_end is provided, uses it instead of the current clip end position."""
+	if not clip_instance or not clip_instance.track:
+		return 999999999
+	
+	var ref_pos = reference_end if reference_end >= 0 else (clip_instance.start_ticks + clip_instance.duration_ticks)
+	var nearest_start = 999999999
+	for other_instance in clip_instance.track.clip_instances:
+		if other_instance == clip_instance:
+			continue
+		var other_start = other_instance.start_ticks
+		if other_start >= ref_pos and other_start < nearest_start:
+			nearest_start = other_start
+	
+	return nearest_start
+
+
 func set_selected(selected: bool) -> void:
 	"""Set selection state and update visual."""
 	if is_selected == selected:
@@ -229,6 +268,23 @@ func _gui_input(event: InputEvent) -> void:
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
 
+			# Calculate new duration (original end point stays fixed)
+			var original_end_ticks = resize_start_ticks + resize_start_duration
+			var new_duration = original_end_ticks - new_start_ticks
+
+			# Minimum duration of 1 snap interval (or 1 tick if no snap)
+			var min_duration = snap_interval if snap_interval > 0 else 1
+			new_duration = max(min_duration, new_duration)
+			
+			# Clamp to avoid collisions - find the nearest clip on the left
+			# Use the original resize start position as reference
+			var left_limit = _find_nearest_clip_left(resize_start_ticks)
+			new_start_ticks = max(left_limit, new_start_ticks)
+			
+			# Recalculate duration after clamping
+			new_duration = original_end_ticks - new_start_ticks
+			new_duration = max(min_duration, new_duration)
+			
 			# Calculate how much we moved the left edge (accounting for any padding already added)
 			var left_edge_delta = new_start_ticks - resize_start_ticks
 			
@@ -243,15 +299,6 @@ func _gui_input(event: InputEvent) -> void:
 				_add_padding_to_clip(padding_needed)
 				resize_padding_added += padding_needed  # Track cumulative padding
 				new_clip_offset = 0  # Reset offset after adding padding
-			
-			# Calculate new duration (original end point stays fixed)
-			# This must happen AFTER padding is added since it may change the instance position
-			var original_end_ticks = resize_start_ticks + resize_start_duration
-			var new_duration = original_end_ticks - new_start_ticks
-
-			# Minimum duration of 1 snap interval (or 1 tick if no snap)
-			var min_duration = snap_interval if snap_interval > 0 else 1
-			new_duration = max(min_duration, new_duration)
 			
 			# Update clip instance (this will sync to engine via OSC)
 			clip_instance.set_clip_offset(new_clip_offset)
@@ -273,6 +320,14 @@ func _gui_input(event: InputEvent) -> void:
 
 			# Minimum duration of 1 snap interval (or 1 tick if no snap)
 			var min_duration = snap_interval if snap_interval > 0 else 1
+			new_duration = max(min_duration, new_duration)
+
+			# Clamp to avoid collisions - find the nearest clip on the right
+			# Use the original resize end position as reference
+			var original_end = resize_start_ticks + resize_start_duration
+			var right_limit = _find_nearest_clip_right(original_end)
+			var max_duration = right_limit - resize_start_ticks
+			new_duration = min(new_duration, max_duration)
 			new_duration = max(min_duration, new_duration)
 
 			# Update clip instance
@@ -317,7 +372,7 @@ func _gui_input(event: InputEvent) -> void:
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
 
-			# Emit move request
+			# Emit move request - Timeline will handle collision detection for multi-clip selection
 			clip_move_requested.emit(self, new_start_ticks)
 			accept_event()
 
@@ -342,6 +397,10 @@ func _add_padding_to_clip(padding_ticks: int) -> void:
 	var clip = clip_instance.clip
 	
 	if clip.type == Clip.ClipType.MIDI:
+		print("[TimelineClip] Before padding: %d notes in clip %s" % [clip.midi_notes.size(), clip.id])
+		for note in clip.midi_notes:
+			print("[TimelineClip]   Note %d: start=%d" % [note.id, note.start_tick])
+		
 		# Shift all MIDI notes forward
 		for note in clip.midi_notes:
 			note.start_tick += padding_ticks
@@ -353,8 +412,10 @@ func _add_padding_to_clip(padding_ticks: int) -> void:
 		for note in clip.midi_notes:
 			clip.update_midi_note(note)
 		
-		print("[TimelineClip] Added %d ticks of padding to clip %s (new length: %d)" % 
+		print("[TimelineClip] After padding: Added %d ticks to clip %s (new length: %d)" % 
 			[padding_ticks, clip.id, clip.content_length_ticks])
+		for note in clip.midi_notes:
+			print("[TimelineClip]   Note %d: start=%d" % [note.id, note.start_tick])
 	
 	elif clip.type == Clip.ClipType.AUDIO:
 		# For audio clips, we'd need to prepend silence samples

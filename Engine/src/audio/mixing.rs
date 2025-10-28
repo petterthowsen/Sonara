@@ -149,7 +149,6 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
             if let Some(output_id) = channel.output_channel_id {
                 // Only mix into other channels (ID < 1000), not devices (ID >= 1000)
                 if output_id != id && output_id < 1000 && state.channels.contains_key(&output_id) {
-                    info!("Routing pass {}: Channel {} → {} (peak: {:.6})", routing_pass, id, output_id, peak);
                     mix_operations.push((id, output_id, buf_left, buf_right));
                     processed_channels.insert(id);  // Mark as processed
                     bus_destinations.insert(output_id);  // Track that this channel received routed audio
@@ -175,11 +174,6 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 continue;
             };
 
-            if src_id >= 2 {
-                info!("Routing pass {}: {} → {} with dest_gain={:.6}",
-                    routing_pass, src_id, output_id, dest_gain);
-            }
-
             // Mix into the channel's buffer, applying destination's fader (gain)
             if let Some((dest_left, dest_right)) = channel_buffers.get_mut(&output_id) {
                 for i in 0..buffer_left.len().min(dest_left.len()) {
@@ -194,8 +188,6 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                     output_ch.buffer_left[i] += buffer_left[i] * dest_gain;
                     output_ch.buffer_right[i] += buffer_right[i] * dest_gain;
                 }
-                let peak_after = output_ch.buffer_left.iter().map(|s| s.abs()).fold(0.0, f32::max);
-                info!("Mix applied pass {}: {} → {} (peak after: {:.6})", routing_pass, src_id, output_id, peak_after);
             }
         }
 

@@ -433,6 +433,87 @@ func _get_clip_instances_in_rect(rect: Rect2) -> Array[ClipInstance]:
 	return hits
 
 
+func _clamp_instances_tick_delta(instances: Array[ClipInstance], requested_tick_delta: int, track_delta: int = 0, use_initial_positions: bool = false) -> int:
+	"""Clamp the tick delta to the maximum legal movement without causing collisions.
+	Returns the clamped delta (may be less than requested, or even 0 if no movement is possible).
+	If use_initial_positions is true, uses _drag_initial_positions instead of current positions."""
+	if instances.is_empty():
+		return requested_tick_delta
+	
+	var max_delta = requested_tick_delta
+	var direction = 1 if requested_tick_delta > 0 else -1 if requested_tick_delta < 0 else 0
+	
+	if direction == 0:
+		return 0
+	
+	# For each moving clip, find the maximum it can move before overlapping with another clip
+	for inst in instances:
+		if not inst or not inst.track:
+			continue
+		
+		# Determine which track to check (current or target after vertical move)
+		var check_track: Track = inst.track
+		if track_delta != 0:
+			var current_index = _get_track_index_for_instance(inst)
+			var target_index = current_index + track_delta
+			if target_index >= 0 and target_index < timeline_tracks.size():
+				var target_track_node: TimelineTrack = timeline_tracks[target_index]
+				if target_track_node and target_track_node.track:
+					check_track = target_track_node.track
+		
+		# Use initial position if available, otherwise use current position
+		var inst_start: int
+		if use_initial_positions and _drag_initial_positions.has(inst):
+			inst_start = _drag_initial_positions[inst]
+		else:
+			inst_start = inst.start_ticks
+		
+		var inst_duration = inst.duration_ticks
+		
+		var inst_end = inst_start + inst_duration
+		
+		# Check each clip on the track to see if we would collide
+		for other_instance in check_track.clip_instances:
+			# Skip if it's the same instance or if it's one of the moving instances
+			if other_instance == inst or instances.has(other_instance):
+				continue
+			
+			var other_start = other_instance.start_ticks
+			var other_end = other_instance.start_ticks + other_instance.duration_ticks
+			
+			# Calculate the proposed position with the requested delta
+			var proposed_start = inst_start + requested_tick_delta
+			var proposed_end = proposed_start + inst_duration
+			
+			# Check if the proposed position would cause an overlap
+			if proposed_start < other_end and other_start < proposed_end:
+				# Would overlap - calculate the maximum delta that wouldn't overlap
+				if direction > 0:
+					# Moving right: stop just before this clip
+					var available_space = other_start - inst_end
+					max_delta = min(max_delta, available_space)
+				else:
+					# Moving left: stop just after this clip
+					var available_space = inst_start - other_end
+					max_delta = max(max_delta, -available_space)
+	
+	# Ensure we don't go below zero
+	for inst in instances:
+		if not inst:
+			continue
+		var base_start: int
+		if use_initial_positions and _drag_initial_positions.has(inst):
+			base_start = _drag_initial_positions[inst]
+		else:
+			base_start = inst.start_ticks
+		
+		var new_start = base_start + max_delta
+		if new_start < 0:
+			max_delta = -base_start
+	
+	return max_delta
+
+
 func _ensure_drag_initialized(instance: ClipInstance, cross_track: bool) -> void:
 	if not instance:
 		return
@@ -459,13 +540,18 @@ func _ensure_drag_initialized(instance: ClipInstance, cross_track: bool) -> void
 func _apply_horizontal_drag(delta_ticks: int) -> void:
 	if not _drag_active:
 		return
-	if delta_ticks == _drag_current_tick_delta:
+	
+	# Clamp the delta to avoid collisions (use initial positions for stable calculation)
+	var clamped_delta = _clamp_instances_tick_delta(_drag_selected_instances, delta_ticks, 0, true)
+	
+	if clamped_delta == _drag_current_tick_delta:
 		return
-	_drag_current_tick_delta = delta_ticks
+	
+	_drag_current_tick_delta = clamped_delta
 	var tracks_to_refresh: Array[TimelineTrack] = []
 	for inst in _drag_initial_positions.keys():
 		var base_start: int = _drag_initial_positions[inst]
-		var new_start = max(0, base_start + delta_ticks)
+		var new_start = max(0, base_start + clamped_delta)
 		if inst.start_ticks == new_start:
 			continue
 		inst.set_position(new_start)
@@ -485,6 +571,18 @@ func _apply_vertical_drag(delta_tracks: int) -> void:
 	var allowed_delta = _clamp_track_delta(delta_tracks)
 	if allowed_delta == 0:
 		return
+
+	# Clamp horizontal position to avoid collisions on target tracks (use initial positions)
+	var clamped_tick_delta = _clamp_instances_tick_delta(_drag_selected_instances, _drag_current_tick_delta, allowed_delta, true)
+	
+	# If horizontal position needs adjustment, apply it
+	if clamped_tick_delta != _drag_current_tick_delta:
+		_drag_current_tick_delta = clamped_tick_delta
+		# Update positions with clamped delta
+		for inst in _drag_initial_positions.keys():
+			var base_start: int = _drag_initial_positions[inst]
+			var new_start = max(0, base_start + clamped_tick_delta)
+			inst.set_position(new_start)
 
 	var target_instances: Array[ClipInstance] = []
 	target_instances.assign(_drag_selected_instances)
@@ -637,8 +735,39 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		return []
 
 	var delta_ticks := target_tick - source.start_tick
-	var new_instances: Array[ClipInstance] = []
+	
+	# First, create temporary instances to check for collisions and clamp if needed
+	var temp_instances: Array[ClipInstance] = []
+	for original_inst in source.get_sorted_by_start():
+		if not original_inst:
+			continue
+		var target_track: Track = original_inst.track
+		if not target_track or target_track.type == Track.TrackType.FOLDER:
+			continue
+		var clip_ref: Clip = original_inst.clip
+		if not clip_ref:
+			continue
 
+		var new_start = max(0, original_inst.start_ticks + delta_ticks)
+		
+		# Create a temporary instance for collision checking
+		var temp_inst = ClipInstance.new()
+		temp_inst.clip = clip_ref
+		temp_inst.track = target_track
+		temp_inst.start_ticks = new_start
+		temp_inst.duration_ticks = original_inst.duration_ticks
+		temp_instances.append(temp_inst)
+	
+	# Clamp the delta to avoid collisions
+	var clamped_delta = _clamp_instances_tick_delta(temp_instances, 0)
+	if clamped_delta != 0:
+		# Need to adjust positions
+		for temp_inst in temp_instances:
+			temp_inst.start_ticks += clamped_delta
+		delta_ticks += clamped_delta
+	
+	# Proceed with actual paste using the clamped delta
+	var new_instances: Array[ClipInstance] = []
 	for original_inst in source.get_sorted_by_start():
 		if not original_inst:
 			continue
@@ -697,11 +826,17 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 	var selected = clip_selection_manager.get_selected_instances()
 	if selected.is_empty():
 		return
+	
+	# Clamp the delta to avoid collisions
+	var clamped_delta = _clamp_instances_tick_delta(selected, delta_ticks)
+	if clamped_delta == 0:
+		return
+	
 	var tracks_to_refresh: Array[TimelineTrack] = []
 	for inst in selected:
 		if not inst:
 			continue
-		var new_start = max(0, inst.start_ticks + delta_ticks)
+		var new_start = max(0, inst.start_ticks + clamped_delta)
 		if new_start == inst.start_ticks:
 			continue
 		inst.set_position(new_start)
@@ -729,6 +864,18 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 	var allowed_delta = _compute_allowed_track_delta(selected, initial_indices, delta_tracks)
 	if allowed_delta == 0:
 		return
+	
+	# Clamp horizontal positions to avoid collisions on target tracks
+	var clamped_tick_delta = _clamp_instances_tick_delta(selected, 0, allowed_delta)
+	
+	# If we need to adjust horizontal positions (shouldn't happen with delta=0, but for safety)
+	if clamped_tick_delta != 0:
+		for inst in selected:
+			if not inst:
+				continue
+			var new_start = max(0, inst.start_ticks + clamped_tick_delta)
+			inst.set_position(new_start)
+	
 	for inst in selected:
 		if not inst:
 			continue

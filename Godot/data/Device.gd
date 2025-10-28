@@ -26,6 +26,9 @@ var name: String = ""
 ## Longer, more readable title for display (e.g., "Multi-Waveform Synthesizer", "Stereo Delay with Feedback")
 var title: String = ""
 
+## File path to plugin (for CLAP/LV2/VST3 plugins, empty for built-in)
+var plugin_path: String = ""
+
 ## Device type (BuiltIn, LV2, CLAP)
 var device_type: DeviceType = DeviceType.BuiltIn
 

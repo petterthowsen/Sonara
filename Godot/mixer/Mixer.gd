@@ -135,6 +135,8 @@ func _on_channel_added(channel: Channel) -> void:
 func deselect_channel(ch : Channel, erase := true, emit_deselect := true, emit_changed := true):
 	if selection.has(ch):
 		var mc = find_mixer_channel_ui_for_channel(ch)
+		if not mc:
+			push_error("[Mixer] Cannot find MixerChannel ui for Channel ", ch.id)
 		mc.is_selected = false
 		if erase:
 			selection.erase(ch)

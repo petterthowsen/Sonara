@@ -228,13 +228,22 @@ func open_project(p: Project) -> void:
 	project_opened.emit(project)
 	project_activated.emit(project)
 
-	# Connect to audio engine immediately (OSC messages dropped if engine not running)
+	# Connect to audio engine after ensuring AudioEngineOSC is ready
 	if AudioEngineOSC:
-		# Clear project (this clears clips, tracks, channels from engine)
-		AudioEngineOSC.send("/project/clear", [])
-		project.connect_to_engine()
+		_connect_project_to_engine.call_deferred()
 
 	print("[Editor] Project opened: ", project.project_name)
+
+
+func _connect_project_to_engine() -> void:
+	"""Connect the project to the audio engine after OSC is ready."""
+	# Wait for AudioEngineOSC to be fully initialized
+	while not AudioEngineOSC._is_ready:
+		await get_tree().process_frame
+	
+	# Clear project (this clears clips, tracks, channels from engine)
+	AudioEngineOSC.send("/project/clear", [])
+	project.connect_to_engine()
 
 func close_project() -> void:
 	"""Close the current project."""

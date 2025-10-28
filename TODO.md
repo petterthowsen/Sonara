@@ -103,14 +103,12 @@
 - [ ] Modifier+right-click to open context menu in NoteEditor
 
 ### Mixer
-- [x] double-clicking a device in a CompactDeviceList should select the channel and open DeviceLane (if hidden), then grab_focus the DevicePanel there
 - [ ] Connect TrackItem ui controls to target channel (fader, solo, mute)
-- [ ] Duplicate Channel
+- [ ] Delete, Duplicate Channels
 - [ ] Smooth meter components (lerp?)
 
 ### UI Components & General
 - [ ] **CRITICAL**: Undo/Redo using command pattern
-- [x] Browser metadata should save outside user://config.json, maybe user://assets.json
 
 ### Hardware & MIDI
 - [ ] Implement MIDI support

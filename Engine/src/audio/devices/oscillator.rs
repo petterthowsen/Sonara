@@ -21,9 +21,9 @@ pub struct OscillatorDevice {
     current_phase: f32,
     current_frequency: f32,
 
-    // Track if a note is currently playing
-    note_active: bool,
-    
+    // Track which note is currently playing (None = no note active)
+    current_note: Option<u8>,
+
     // Lifecycle state
     is_active: bool,
     is_enabled: bool,
@@ -38,7 +38,7 @@ impl OscillatorDevice {
             amplitude: 0.3,
             current_phase: 0.0,
             current_frequency: 440.0,
-            note_active: false,
+            current_note: None,
             is_active: true,
             is_enabled: true,
         }
@@ -105,7 +105,7 @@ impl AudioDevice for OscillatorDevice {
         }
         
         // Only generate audio if a note is active
-        if !self.note_active {
+        if self.current_note.is_none() {
             // Fill output buffer with silence
             for sample in outputs.iter_mut() {
                 *sample = 0.0;
@@ -139,10 +139,13 @@ impl AudioDevice for OscillatorDevice {
         if is_note_on {
             // Note On: set frequency and mark as active
             self.current_frequency = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
-            self.note_active = true;
+            self.current_note = Some(note);
         } else {
-            // Note Off: stop generating audio
-            self.note_active = false;
+            // Note Off: only stop if this is the currently active note
+            // Prevents overlapping notes from cutting each other off
+            if self.current_note == Some(note) {
+                self.current_note = None;
+            }
         }
     }
 
@@ -218,7 +221,7 @@ impl AudioDevice for OscillatorDevice {
     fn reset(&mut self) {
         self.current_phase = 0.0;
         self.current_frequency = 440.0;
-        self.note_active = false;
+        self.current_note = None;
     }
     
     // === Lifecycle Management ===

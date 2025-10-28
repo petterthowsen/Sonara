@@ -16,9 +16,16 @@ The sfizz SFZ sample engine has been successfully integrated into Sonara DAW.
 ### 2. Device Registration
 - Added to device factory as `"sonara.builtin.sfizz"`
 - Registered in `src/audio/devices/mod.rs`
-- Device type: Instrument
+- Device type: `builtin`
+- Category: Instrument
 
-### 3. OSC Protocol Extension
+### 3. OSC Protocol Updates
+
+**Updated command:** `/channel/{id}/add_device`
+- Extended to support `device_type` and `device_file` parameters
+- Distinguishes between builtin devices, CLAP plugins, LV2, VST3
+- Backward compatible - defaults to `"builtin"` type
+
 **New command:** `/channel/{id}/device/{pos}/load_file [file_path]`
 - Generic file loading for devices
 - Currently used by SfizzDevice for SFZ files
@@ -28,16 +35,37 @@ The sfizz SFZ sample engine has been successfully integrated into Sonara DAW.
 - Routes file loading requests to specific devices
 - Uses downcasting to check device capabilities
 
+**New status messages:**
+- `PluginInfo` - Reports plugin metadata including file path
+- `PluginScanComplete` - Indicates plugin scan finished
+
 ## Testing
 
 ### Manual OSC Commands
+
+The OSC protocol has been updated to support multiple device types. The new format is:
+
+```bash
+/channel/{id}/add_device [device_id] [position] [active] [enabled] [device_type] [device_file]
+```
+
+**Parameters:**
+- `device_id` (string) - Device identifier (e.g., "sonara.builtin.sfizz")
+- `position` (int) - Position in device chain (-1 = append)
+- `active` (int) - 1=active, 0=inactive (optional, default=1)
+- `enabled` (int) - 1=enabled, 0=bypassed (optional, default=1)
+- `device_type` (string) - "builtin", "clap", "lv2", or "vst3" (optional, default="builtin")
+- `device_file` (string) - Path to plugin file (optional, empty for built-ins)
+
+**Example workflow:**
 
 ```bash
 # 1. Create a channel
 oscsend localhost 7000 /channel/create i 2 s "SFZ Channel"
 
 # 2. Add sfizz device to channel 2
-oscsend localhost 7000 /channel/2/add_device s "sonara.builtin.sfizz" i 0 i 1 i 1
+# Note: Last 3 params (active=1, enabled=1, type="builtin") are optional
+oscsend localhost 7000 /channel/2/add_device s "sonara.builtin.sfizz" i 0 i 1 i 1 s "builtin"
 
 # 3. Load an SFZ file
 oscsend localhost 7000 /channel/2/device/0/load_file s "/path/to/your/file.sfz"
@@ -69,6 +97,34 @@ The rust-sfizz library has been updated to properly handle sndfile linking:
 No workarounds are needed - the build works out of the box.
 
 ## Architecture Details
+
+### Device Factory Pattern
+
+The device factory in `src/audio/commands.rs` now uses a two-level matching system:
+
+```rust
+match device_type.as_str() {
+    "builtin" => {
+        match device_id.as_str() {
+            "sonara.builtin.oscillator" => OscillatorDevice::new(...),
+            "sonara.builtin.delay" => DelayDevice::new(...),
+            "sonara.builtin.sfizz" => SfizzDevice::new(...),
+            _ => None
+        }
+    }
+    "clap" => {
+        // Load CLAP plugin via SubprocessClapAdapter
+        SubprocessClapAdapter::new(..., device_file, ...)
+    }
+    _ => None
+}
+```
+
+This allows:
+- Clean separation between device types
+- Plugin file paths for CLAP/LV2/VST3
+- Future extension for other plugin formats
+- Consistent error handling
 
 ### LoadingState Enum
 ```rust

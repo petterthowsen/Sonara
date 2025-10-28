@@ -33,6 +33,7 @@ var osc_server: OSCServer
 
 var _is_engine_connected: bool = false
 var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
+var _is_ready: bool = false  # Whether OSC server/client are fully initialized
 
 # OSC message listeners: Dictionary[String, Array[Callable]]
 # Maps OSC address pattern to array of callbacks
@@ -55,9 +56,11 @@ func _ready() -> void:
 	osc_server.message_received.connect(_on_osc_message_received)
 	add_child(osc_server)
 
-	# Give the server a moment to start listening
+	# Give the server time to bind and start polling (needs at least 2 frames)
+	await get_tree().process_frame
 	await get_tree().process_frame
 
+	_is_ready = true
 	print("[AudioEngineOSC] Ready - listening on port %d, sending to port %d" % [ENGINE_RECEIVE_PORT, ENGINE_SEND_PORT])
 
 
@@ -77,6 +80,9 @@ func _process(_delta: float) -> void:
 
 func send(address: String, args: Array = []) -> void:
 	"""Send an OSC message to the audio engine."""
+	if not _is_ready:
+		push_warning("[AudioEngineOSC] Attempted to send before ready: %s" % address)
+		return
 	if osc_client:
 		print("sending ", address, " args: ", args)
 		osc_client.send_message(address, args)

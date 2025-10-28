@@ -195,6 +195,7 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 	if clip.type == Clip.ClipType.MIDI:
 		print("[Project] Syncing %d MIDI notes for clip: %s" % [clip.midi_notes.size(), clip.id])
 		for note in clip.midi_notes:
+			print("[Project]   - Note %d: pitch=%d start=%d dur=%d" % [note.id, note.note, note.start_tick, note.duration_ticks])
 			AudioEngineOSC.send("/clip/%s/add_note" % clip.id, [
 				note.id,
 				note.note,
