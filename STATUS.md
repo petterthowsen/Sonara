@@ -105,9 +105,9 @@ Implement track-mode for MidiEditor to enable editing multiple clips across diff
   - [x] Maintain clip instance references for edits
 
 #### Phase 5: Integration & Polish
-- [ ] Update UI to indicate track-mode is active
+- [x] Update UI to indicate track-mode is active
 - [ ] Handle edge cases (empty selection, single track multi-clip)
-- [ ] Test OSC communication for multi-clip scenarios
+- [x] Test OSC communication for multi-clip scenarios
 - [ ] Update documentation
 
 ### Working
