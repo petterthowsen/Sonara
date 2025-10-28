@@ -5,14 +5,12 @@
 # - + group track (folder with a bus)
 class_name TrackListContextMenu extends PopupMenu
 
-
 enum Item {
 	INSTRUMENT_TRACK,
 	AUDIO_TRACK,
 	FOLDER_TRACK,
 	GROUP_TRACK
 }
-
 
 func _init() -> void:
 	# add items to the popup menu

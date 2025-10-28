@@ -62,6 +62,42 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                     }
                 }
             }
+            // Also check SfizzDevice for parameter list changes (after loading new SFZ)
+            else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<super::devices::SfizzDevice>() {
+                if sfizz_device.take_parameters_changed() {
+                    info!("🎹 SFZ parameters changed! Sending parameter list for channel {} device {}", 
+                        channel.id, device_pos);
+                    
+                    // Parameters changed (new SFZ loaded), send updated parameter list to Godot
+                    let params = device.parameters();
+                    
+                    info!("📋 Sending {} parameters to Godot", params.len());
+                    
+                    if !params.is_empty() {
+                        // Send parameter count
+                        let _ = status_tx.send(EngineStatus::PluginParameterCount {
+                            channel_id: channel.id,
+                            device_position: device_pos,
+                            count: params.len(),
+                        });
+                        
+                        // Send parameter info for each parameter
+                        for param in params.iter() {
+                            info!("  Param {}: {} (range {:.2}-{:.2}, default {:.2})", 
+                                param.id, param.name, param.min, param.max, param.default);
+                            let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+                                channel_id: channel.id,
+                                device_position: device_pos,
+                                param_id: param.id,
+                                name: param.name.clone(),
+                                min: param.min,
+                                max: param.max,
+                                default: param.default,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 

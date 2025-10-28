@@ -50,9 +50,9 @@ corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
 [node name="TrackItem" type="PanelContainer" node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "drop_zone")]
-custom_minimum_size = Vector2(123, 24)
+custom_minimum_size = Vector2(123, 38)
 offset_right = 224.0
-offset_bottom = 87.0
+offset_bottom = 36.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_vc4i6")
 script = ExtResource("1_q68hb")
 volumeter = NodePath("VBoxContainer/HBox/Volumeter")
@@ -108,6 +108,7 @@ mouse_filter = 1
 value_type = 1
 
 [node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="0"]
+text = "Track"
 horizontal_alignment = 0
 clip_text = true
 text_overrun_behavior = 3

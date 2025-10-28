@@ -1,8 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://cx5s8jbwq0dt2"]
+[gd_scene load_steps=7 format=3 uid="uid://cx5s8jbwq0dt2"]
 
 [ext_resource type="Script" uid="uid://dogqvoq0bijcg" path="res://arranger/tracklist/TrackList.gd" id="1_0le0t"]
 [ext_resource type="PackedScene" uid="uid://ca1ed008xlb1o" path="res://arranger/tracklist/TrackItem.tscn" id="2_0le0t"]
 [ext_resource type="Script" uid="uid://car1nicfbtoru" path="res://arranger/tracklist/TrackListContextMenu.gd" id="3_hwtjl"]
+[ext_resource type="Script" uid="uid://d07easneqblka" path="res://arranger/tracklist/TrackItemContextMenu.gd" id="4_q580v"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="5_1meqt"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0le0t"]
 resource_local_to_scene = true
@@ -23,6 +25,38 @@ script = ExtResource("1_0le0t")
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_0le0t")
 
-[node name="ContextMenu" type="PopupMenu" parent="."]
+[node name="TrackListContextMenu" type="PopupMenu" parent="."]
 oversampling_override = 1.0
 script = ExtResource("3_hwtjl")
+
+[node name="TrackItemContextMenu" type="PopupPanel" parent="."]
+oversampling_override = 1.0
+size = Vector2i(158, 114)
+visible = true
+script = ExtResource("4_q580v")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="TrackItemContextMenu"]
+custom_minimum_size = Vector2(150, 0)
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 154.0
+offset_bottom = 110.0
+
+[node name="ColorAndName" type="HBoxContainer" parent="TrackItemContextMenu/VBoxContainer"]
+layout_mode = 2
+
+[node name="ColorPickerButton" type="ColorPickerButton" parent="TrackItemContextMenu/VBoxContainer/ColorAndName"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+
+[node name="Name" parent="TrackItemContextMenu/VBoxContainer/ColorAndName" instance=ExtResource("5_1meqt")]
+layout_mode = 2
+size_flags_horizontal = 3
+value_type = 1
+
+[node name="Buttons" type="VBoxContainer" parent="TrackItemContextMenu/VBoxContainer"]
+layout_mode = 2
+
+[node name="Delete" type="Button" parent="TrackItemContextMenu/VBoxContainer/Buttons"]
+layout_mode = 2
+text = "Delete"

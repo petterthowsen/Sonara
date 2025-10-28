@@ -31,11 +31,17 @@ var name: String:
 	set(value):
 		if _name != value:
 			_name = value
-			name_changed.emit(_name)
+			
+			# If syncing to channel, update channel name too
+			if name_by_channel and _linked_channel:
+				_linked_channel.set_name(value)
+			else:
+				name_changed.emit(_name)
 
 var type: TrackType = TrackType.INSTRUMENT
 var _color: Color = Color.WHITE
 var color_by_channel: bool = true  # If true, color syncs with default_channel_id's color
+var name_by_channel: bool = true  # If true, name syncs with default_channel_id's name
 var _order: int = 0  # Display order in arranger (lower = top, higher = bottom)
 
 var order: int:
@@ -58,9 +64,13 @@ var default_channel_id: int:
 		return _default_channel_id
 	set(value):
 		if _default_channel_id != value:
+			var old_channel_id = _default_channel_id
 			var is_now_routed = value >= 0
 			_default_channel_id = value
 			default_channel_id_changed.emit(value)
+			
+			# Handle channel registration for bi-directional linking
+			_update_channel_registration(old_channel_id, value)
 			
 			# Handle connection state changes
 			if _is_connected:
@@ -97,6 +107,10 @@ var armed: bool = false  # Record armed
 # Connection state
 var _is_connected: bool = false
 
+# Channel linking (for bi-directional color/name sync)
+var _linked_channel: Channel = null
+var _project_ref: Project = null  # reference to project for channel lookup
+
 # ============================================================================
 # LIFECYCLE
 # ============================================================================
@@ -104,7 +118,7 @@ var _is_connected: bool = false
 func _init(track_id: int = -1):
 	"""Initialize track with unique ID."""
 	id = track_id
-	color = Color.from_hsv(randf(), randf_range(0.4, 0.8), randf_range(0.3, 0.6))
+	_color = Color.from_hsv(randf(), randf_range(0.4, 0.8), randf_range(0.3, 0.6))
 
 
 # ============================================================================
@@ -142,18 +156,20 @@ func get_nesting_level(project: Project = null) -> int:
 
 func get_color() -> Color:
 	"""Get track color, either from channel or own color."""
-	if color_by_channel and default_channel_id >= 0:
-		# Try to get color from default channel
-		# This requires access to project, which we don't have here
-		# So we rely on the caller to sync this
-		pass
+	if color_by_channel and _linked_channel:
+		return _linked_channel.color
 	return _color
 
 
 func set_color(new_color: Color) -> void:
 	"""Set track's color and emit signal."""
 	_color = new_color
-	color_changed.emit(_color)
+	
+	# If syncing to channel, update channel color too
+	if color_by_channel and _linked_channel:
+		_linked_channel.set_color(new_color)
+	else:
+		color_changed.emit(_color)
 
 
 # Shorthand property for compatibility
@@ -188,6 +204,58 @@ var height: int:
 		return _height
 	set(value):
 		set_height(value)
+
+
+# ============================================================================
+# CHANNEL LINKING
+# ============================================================================
+
+func set_project_ref(project: Project) -> void:
+	"""Set project reference for channel lookup."""
+	_project_ref = project
+	# Update channel link immediately if we have a routing
+	if _default_channel_id >= 0:
+		_update_channel_link()
+
+
+func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> void:
+	"""Update channel registration when routing changes."""
+	if not _project_ref:
+		return
+	
+	# Unregister from old channel
+	if old_channel_id >= 0:
+		var old_channel = _project_ref.get_channel_by_id(old_channel_id)
+		if old_channel:
+			old_channel.unregister_track(self)
+	
+	# Register with new channel
+	if new_channel_id >= 0:
+		var new_channel = _project_ref.get_channel_by_id(new_channel_id)
+		if new_channel:
+			new_channel.register_track(self)
+			_linked_channel = new_channel
+			
+			# Sync color/name from channel if enabled
+			if color_by_channel:
+				_color = new_channel.color
+				color_changed.emit(_color)
+			if name_by_channel:
+				_name = new_channel.name
+				name_changed.emit(_name)
+		else:
+			_linked_channel = null
+	else:
+		_linked_channel = null
+
+
+func _update_channel_link() -> void:
+	"""Update the linked channel reference."""
+	if not _project_ref or _default_channel_id < 0:
+		_linked_channel = null
+		return
+	
+	_linked_channel = _project_ref.get_channel_by_id(_default_channel_id)
 
 
 # ============================================================================
@@ -393,6 +461,7 @@ func to_json() -> Dictionary:
 		"type": TrackType.keys()[type],
 		"color": _color.to_html(),
 		"color_by_channel": color_by_channel,
+		"name_by_channel": name_by_channel,
 		"order": _order,
 		"clip_instances": clip_instances.map(func(i): return i.to_json()),
 		"automation_lanes": automation_lanes.map(func(a): return a.to_json()) if not automation_lanes.is_empty() else [],
@@ -421,6 +490,7 @@ static func from_json(data: Dictionary) -> Track:
 
 	track._color = Color.from_string(data.get("color", "#FFFFFF"), Color.WHITE)
 	track.color_by_channel = data.get("color_by_channel", true)
+	track.name_by_channel = data.get("name_by_channel", true)
 	track.order = data.get("order", 0)
 	track.default_channel_id = data.get("default_channel_id", -1)
 	track.parent_track_id = data.get("parent_track_id", -1)

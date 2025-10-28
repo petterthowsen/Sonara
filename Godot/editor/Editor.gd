@@ -241,8 +241,7 @@ func _connect_project_to_engine() -> void:
 	while not AudioEngineOSC._is_ready:
 		await get_tree().process_frame
 	
-	# Clear project (this clears clips, tracks, channels from engine)
-	AudioEngineOSC.send("/project/clear", [])
+	# Connect project to engine (Project handles clearing and initialization)
 	project.connect_to_engine()
 
 func close_project() -> void:
@@ -624,11 +623,11 @@ func _process(delta: float) -> void:
 
 func _on_audio_engine_connected() -> void:
 	"""Called when audio engine connection is established."""
-	print("[Editor] Audio engine connected")
-
-	# Auto-connect project if one is open
-	if project and not project.is_connected_to_engine():
-		project.connect_to_engine()
+	print("[Editor] Audio engine connected (project connection state: %s)" % (
+		"CONNECTED" if project and project.is_connected_to_engine() else 
+		"CONNECTING" if project and project.get_connection_state() == Project.ConnectionState.CONNECTING else
+		"DISCONNECTED"
+	))
 
 
 func _on_playhead_received(values) -> void:

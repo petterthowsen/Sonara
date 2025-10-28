@@ -8,7 +8,10 @@ class_name TrackList extends VBoxContainer
 const track_item_scene: PackedScene = preload("res://arranger/tracklist/TrackItem.tscn")
 
 # context menu to show when right-clicking empty area
-@onready var context_menu: TrackListContextMenu = $ContextMenu
+@onready var context_menu: TrackListContextMenu = $TrackListContextMenu
+
+# context menu when right-clicking a trackitem
+@onready var track_item_context_menu: TrackItemContextMenu = $TrackItemContextMenu
 
 # Track items indexed by track index
 var track_items: Array[TrackItem] = []
@@ -112,6 +115,9 @@ func _on_track_added(track: Track) -> void:
 	
 	# Connect to track signals for reordering
 	track.order_changed.connect(_on_track_order_changed)
+	
+	# Connect to track item signals
+	track_item.right_clicked.connect(_on_track_item_right_clicked)
 
 	# Store reference
 	if index >= track_items.size():
@@ -150,6 +156,21 @@ func _on_track_order_changed(_new_order: int) -> void:
 	
 	print("[TrackList] Track order changed, updating visual order")
 	_update_visual_order()
+
+
+func _on_track_item_right_clicked(track: Track, mouse_position: Vector2) -> void:
+	"""Show context menu when a track item is right-clicked."""
+	if not track or not track_item_context_menu:
+		return
+	
+	print("[TrackList] Track item right-clicked: ", track.name)
+	
+	# Bind the context menu to the track
+	track_item_context_menu.bind(track, current_project)
+	
+	# Show the context menu at the mouse position
+	track_item_context_menu.popup(Rect2(mouse_position - Vector2.ONE * 10, Vector2.ZERO))
+	track_item_context_menu.grab_focus()
 
 
 # ============================================================================
@@ -237,7 +258,11 @@ func _create_instrument_track_with_device(device: Device) -> void:
 	var track = result["track"] as Track
 	var channel = result["channel"] as Channel
 
-	print("[TrackList] Created track: ", track.name, " (id=", track.id, ")")
+	if not track or not channel:
+		push_error("[TrackList] Invalid track or channel returned")
+		return
+
+	print("[TrackList] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
 	print("[TrackList] Created channel: ", channel.name, " (id=", channel.id, ")")
 
 	# Create device instance and add to channel

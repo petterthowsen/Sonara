@@ -56,7 +56,9 @@ func _ready() -> void:
 	osc_server.message_received.connect(_on_osc_message_received)
 	add_child(osc_server)
 
-	# Give the server time to bind and start polling (needs at least 2 frames)
+	# Wait for OSC server to bind socket and start polling thread
+	# Frame 1: add_child() schedules _ready() on OSCServer
+	# Frame 2: OSCServer._ready() binds UDP socket and starts listening
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -157,22 +159,36 @@ func reset_connection() -> void:
 func _on_osc_message_received(address: String, values, _time) -> void:
 	"""Route incoming OSC messages to registered listeners."""
 
+	# Track if message was handled
+	var routed = false
+
 	# Special handling for connection status messages
 	if address == "/status/connected":
-		if not _is_engine_connected and values is Array and values.size() > 0 and values[0] == 1:
-			_is_engine_connected = true
-			_last_heartbeat_time = Time.get_ticks_msec()
-			engine_connected.emit()
-			print("[AudioEngineOSC] Engine connected!")
+		if not _is_engine_connected:
+			# Check if value is 1 (can be single value or array)
+			var connection_confirmed = false
+			if values is Array and values.size() > 0:
+				connection_confirmed = (values[0] == 1)
+			elif values == 1:
+				connection_confirmed = true
+			
+			if connection_confirmed:
+				_is_engine_connected = true
+				_last_heartbeat_time = Time.get_ticks_msec()
+				engine_connected.emit()
+				print("[AudioEngineOSC] Engine connected!")
+		routed = true
 	elif address == "/status/playing":
 		if not _is_engine_connected:
 			_is_engine_connected = true
 			_last_heartbeat_time = Time.get_ticks_msec()
 			engine_connected.emit()
-			print("[AudioEngineOSC] Engine connected!")
+			print("[AudioEngineOSC] Engine connected (via /status/playing)")
+		routed = true
 	elif address == "/status/heartbeat":
 		# Update last heartbeat time
 		_last_heartbeat_time = Time.get_ticks_msec()
+		routed = true
 	
 	# Special handling for log messages
 	elif address == "/log":
@@ -185,7 +201,7 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 				push_error("[Engine] " + message)
 			elif level == "warn":
 				print("[Engine] warn: " + message)
-			return  # Don't route to other listeners
+		return  # Don't route to other listeners
 
 	# Normalize values to always be an Array for consistent callback interface
 	var args: Array
@@ -196,8 +212,6 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		args = [values]
 
 	# Route to registered listeners (exact match first, then wildcards)
-	var routed = false
-	
 	# Try exact match
 	if listeners.has(address):
 		for callback in listeners[address]:
@@ -217,9 +231,10 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			# Parameter change with no listener
 			if randf() < 0.05:  # Only log 5% to reduce spam
 				print("[AudioEngineOSC] ⚠️  No listener for: " + address)
-		elif randf() > 0.99:
-			# Other unhandled messages
-			print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)
+		else:
+			# Other unhandled messages (reduced frequency to avoid spam)
+			if randf() > 0.95:
+				print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)
 
 
 ## Check if an address matches a wildcard pattern

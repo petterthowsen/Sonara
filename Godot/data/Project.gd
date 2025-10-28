@@ -92,13 +92,13 @@ func _init():
 func connect_to_engine() -> void:
 	"""Connect project and all data to audio engine."""
 	if _connection_state != ConnectionState.DISCONNECTED:
+		print("[Project] Already connected or connecting (state: %d)" % _connection_state)
 		return
 
-	print("[Project] Connecting to audio engine...")
-	
-	# Set state to CONNECTING
+	# Set state to CONNECTING immediately (before any async operations)
 	_connection_state = ConnectionState.CONNECTING
 	connection_state_changed.emit(ConnectionState.CONNECTING)
+	print("[Project] Connecting to audio engine...")
 
 	# Listen for engine connection confirmation
 	if not AudioEngineOSC.engine_connected.is_connected(_on_engine_confirmed_connected):
@@ -108,8 +108,16 @@ func connect_to_engine() -> void:
 	if not AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
 		AudioEngineOSC.engine_disconnected.connect(_on_engine_disconnected)
 
-	# Send project initialization (engine will respond with /status/connected)
+	# Clear any previous project state in engine, then initialize
+	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
+	
+	# Check if engine is already connected (signal may have fired before we connected to it)
+	# If so, the /project/init won't send back /status/connected, so we need to sync now
+	if AudioEngineOSC._is_engine_connected:
+		print("[Project] Engine already connected, waiting for /status/connected response")
+		# Note: The /project/init command will still trigger a /status/connected response
+		# which will call _on_engine_confirmed_connected via the signal
 
 
 func _on_engine_confirmed_connected() -> void:
@@ -272,6 +280,9 @@ func add_track(track: Track) -> void:
 		if t.parent_track_id == track.parent_track_id:
 			sibling_count += 1
 	track.order = sibling_count
+	
+	# Set project reference for channel linking
+	track.set_project_ref(self)
 	
 	tracks.append(track)
 	track_added.emit(track)
@@ -514,6 +525,10 @@ func create_instrument_track(track_name: String = "Instrument") -> Dictionary:
 	var channel = create_channel(track_name, Channel.ChannelType.INSTRUMENT)
 
 	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
+	
+	# Connect track to engine now that it has a valid channel
+	if _connection_state == ConnectionState.CONNECTED:
+		track.connect_to_engine()
 
 	return {"track": track, "channel": channel}
 
@@ -527,6 +542,10 @@ func create_audio_track(track_name: String = "Audio") -> Dictionary:
 	var channel = create_channel(track_name, Channel.ChannelType.AUDIO)
 
 	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
+	
+	# Connect track to engine now that it has a valid channel
+	if _connection_state == ConnectionState.CONNECTED:
+		track.connect_to_engine()
 
 	return {"track": track, "channel": channel}
 
@@ -678,6 +697,12 @@ static func from_json(data: Dictionary) -> Project:
 		# Resolve clip references for clip instances
 		for instance in track.clip_instances:
 			instance.clip = project.get_clip(instance.clip_id)
+		
+		# Set project reference for channel linking (BEFORE adding to array)
+		track.set_project_ref(project)
+		
+		# Append directly to avoid triggering track_added signal during load
+		# (signals will be connected when project is activated in Editor)
 		project.tracks.append(track)
 
 	return project

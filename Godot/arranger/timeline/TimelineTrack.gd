@@ -102,6 +102,8 @@ func bind_to_track(t: Track, idx: int) -> void:
 			track.clip_instance_added.disconnect(_on_clip_instance_added)
 		if track.clip_instance_removed.is_connected(_on_clip_instance_removed):
 			track.clip_instance_removed.disconnect(_on_clip_instance_removed)
+		if track.color_changed.is_connected(_on_track_color_changed):
+			track.color_changed.disconnect(_on_track_color_changed)
 
 	track = t
 	track_index = idx
@@ -111,6 +113,7 @@ func bind_to_track(t: Track, idx: int) -> void:
 		track.height_changed.connect(_on_track_height_changed)
 		track.clip_instance_added.connect(_on_clip_instance_added)
 		track.clip_instance_removed.connect(_on_clip_instance_removed)
+		track.color_changed.connect(_on_track_color_changed)
 
 	# Update UI from track data
 	_update_from_track()
@@ -133,6 +136,17 @@ func _on_track_height_changed(new_height: int) -> void:
 	"""React to track height changes."""
 	custom_minimum_size.y = new_height
 	_update_clip_sizes(new_height)  # Resize clips to match new track height
+
+
+func _on_track_color_changed(_new_color: Color) -> void:
+	"""React to track color changes."""
+	# Redraw background with new color
+	queue_redraw()
+	
+	# Update all clip UI colors
+	for clip_ui in clip_instances:
+		if clip_ui:
+			clip_ui.track_color = track.color
 
 
 func _update_clips() -> void:

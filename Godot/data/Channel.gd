@@ -78,9 +78,8 @@ var rms_right: float = 0.0
 # Connection state
 var _is_connected: bool = false
 
-# Plugin parameter query tracking
-var _pending_param_queries: Dictionary = {}  # {device_position: expected_param_count}
-var _param_listeners: Dictionary = {}  # {device_position: {count: Callable, info: Callable}}
+# Track routing (tracks that route to this channel)
+var routed_tracks: Array[Track] = []
 
 # Helper properties
 var is_bus : bool:
@@ -140,11 +139,7 @@ func disconnect_from_engine() -> void:
 	for device_inst in devices:
 		device_inst.disconnect_from_engine()
 	
-	# Unlisten from device parameter listeners
-	for device_pos in _param_listeners.keys():
-		_unlisten_device_params(device_pos)
-	_pending_param_queries.clear()
-	_param_listeners.clear()
+	# DeviceInstances handle their own parameter listeners now
 
 	_is_connected = false
 	print("[Channel %d] Disconnected from audio engine" % id)
@@ -181,9 +176,13 @@ func sync_to_engine() -> void:
 		])
 		device_inst.sync_to_engine()
 		
+		# Connect to device's parameters_updated signal
+		device_inst.parameters_updated.connect(_on_device_parameters_updated.bind(device_inst.position))
+		
 		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
 		if device_inst.device.device_type != Device.DeviceType.BuiltIn:
-			_query_plugin_parameters(device_inst.position)
+			AudioEngineOSC.send("/plugin/get_parameters", [id, device_inst.position])
+			print("[Channel %d] Querying parameters for device at position %d" % [id, device_inst.position])
 
 
 # ============================================================================
@@ -192,10 +191,23 @@ func sync_to_engine() -> void:
 func set_name(new_name : String):
 	name = new_name
 	name_changed.emit(name)
+	
+	# Update all routed tracks that sync name from channel
+	for track in routed_tracks:
+		if track.name_by_channel:
+			track._name = new_name
+			track.name_changed.emit(new_name)
+
 
 func set_color(new_color : Color):
 	color = new_color
 	color_changed.emit(color)
+	
+	# Update all routed tracks that sync color from channel
+	for track in routed_tracks:
+		if track.color_by_channel:
+			track._color = new_color
+			track.color_changed.emit(new_color)
 
 
 func set_volume(value: float) -> void:
@@ -353,6 +365,25 @@ func get_linear_gain() -> float:
 	return Sonara.db_to_lin(volume)
 
 
+# ============================================================================
+# TRACK ROUTING MANAGEMENT
+# ============================================================================
+
+func register_track(track: Track) -> void:
+	"""Register a track that routes to this channel."""
+	if track not in routed_tracks:
+		routed_tracks.append(track)
+		print("[Channel %d] Track '%s' registered (routes to this channel)" % [id, track.name])
+
+
+func unregister_track(track: Track) -> void:
+	"""Unregister a track that no longer routes to this channel."""
+	var idx = routed_tracks.find(track)
+	if idx >= 0:
+		routed_tracks.remove_at(idx)
+		print("[Channel %d] Track '%s' unregistered" % [id, track.name])
+
+
 ## Convert Device.DeviceType enum to string for OSC
 func _get_device_type_string(device_type: Device.DeviceType) -> String:
 	match device_type:
@@ -404,9 +435,13 @@ func add_device(device_instance: DeviceInstance, position: int = -1) -> void:
 		# Also sync the device's parameters
 		device_instance.sync_to_engine()
 		
+		# Connect to device's parameters_updated signal
+		device_instance.parameters_updated.connect(_on_device_parameters_updated.bind(position))
+		
 		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
 		if device_instance.device.device_type != Device.DeviceType.BuiltIn:
-			_query_plugin_parameters(position)
+			AudioEngineOSC.send("/plugin/get_parameters", [id, position])
+			print("[Channel %d] Querying parameters for device at position %d" % [id, position])
 
 	# Connect to device parameter changes
 	device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
@@ -560,110 +595,11 @@ static func from_json(data: Dictionary) -> Channel:
 
 
 # ============================================================================
-# PLUGIN PARAMETER QUERY
+# DEVICE PARAMETER MANAGEMENT
 # ============================================================================
 
-## Query plugin parameters for a device at the specified position
-func _query_plugin_parameters(device_pos: int) -> void:
-	"""Query parameters from a plugin device and setup listeners."""
-	if device_pos < 0 or device_pos >= devices.size():
-		return
-	
-	# Setup listeners for this specific device position
-	_listen_device_params(device_pos)
-	
-	# Track that we're expecting a response
-	_pending_param_queries[device_pos] = 0  # Will be set when we receive count
-	
-	# Send query to engine
-	AudioEngineOSC.send("/plugin/get_parameters", [id, device_pos])
-	print("[Channel %d] Querying parameters for device at position %d" % [id, device_pos])
-
-
-## Setup OSC listeners for a specific device position
-func _listen_device_params(device_pos: int) -> void:
-	var count_addr = "/channel/%d/device/%d/param/count" % [id, device_pos]
-	var info_addr = "/channel/%d/device/%d/param/info" % [id, device_pos]
-	
-	# Create and store callables so we can unlisten later
-	var count_callable = func(args): _on_device_param_count_received(args, device_pos)
-	var info_callable = func(args): _on_device_param_info_received(args, device_pos)
-	
-	_param_listeners[device_pos] = {
-		"count": count_callable,
-		"info": info_callable
-	}
-	
-	AudioEngineOSC.listen(count_addr, count_callable)
-	AudioEngineOSC.listen(info_addr, info_callable)
-
-
-## Remove OSC listeners for a specific device position
-func _unlisten_device_params(device_pos: int) -> void:
-	if device_pos not in _param_listeners:
-		return
-	
-	var count_addr = "/channel/%d/device/%d/param/count" % [id, device_pos]
-	var info_addr = "/channel/%d/device/%d/param/info" % [id, device_pos]
-	
-	var listeners = _param_listeners[device_pos]
-	AudioEngineOSC.unlisten(count_addr, listeners["count"])
-	AudioEngineOSC.unlisten(info_addr, listeners["info"])
-	
-	_param_listeners.erase(device_pos)
-
-
-## Handle parameter count received from engine
-func _on_device_param_count_received(args: Array, device_pos: int) -> void:
-	if args.size() < 1:
-		push_warning("[Channel %d] Invalid param count message" % id)
-		return
-	
-	var count: int = args[0]
-	_pending_param_queries[device_pos] = count
-	print("[Channel %d] Device %d has %d parameters" % [id, device_pos, count])
-
-
-## Handle parameter info received from engine
-func _on_device_param_info_received(args: Array, device_pos: int) -> void:
-	if args.size() < 5:
-		push_warning("[Channel %d] Invalid param info message" % id)
-		return
-	
-	if device_pos < 0 or device_pos >= devices.size():
-		return
-	
-	var param_id: int = args[0]
-	var param_name: String = args[1]
-	var min_val: float = args[2]
-	var max_val: float = args[3]
-	var default_val: float = args[4]
-	
-	# Get the device instance
-	var device_instance = devices[device_pos]
-	var device = device_instance.device
-	
-	# Create DeviceParameter and add to device
-	var param = DeviceParameter.new(param_id, param_name, "")
-	param.min_value = min_val
-	param.max_value = max_val
-	param.default_value = default_val
-	device.add_parameter(param)
-	
-	# Initialize parameter value in device instance
-	device_instance.parameter_values[param_id] = param.value_to_normalized(default_val)
-	
-	print("[Channel %d] Device %d param %d: %s [%.2f - %.2f, default %.2f]" % 
-		[id, device_pos, param_id, param_name, min_val, max_val, default_val])
-	
-	# Check if we've received all parameters
-	if device_pos in _pending_param_queries:
-		var expected_count = _pending_param_queries[device_pos]
-		var received_count = device.parameters.size()
-		
-		if received_count >= expected_count:
-			# All parameters received, emit signal and cleanup
-			_pending_param_queries.erase(device_pos)
-			_unlisten_device_params(device_pos)
-			device_parameters_updated.emit(device_pos)
-			print("[Channel %d] All parameters loaded for device %d (wildcard listener already active)" % [id, device_pos])
+## Handle when a device's parameters are updated (forwarded from DeviceInstance)
+func _on_device_parameters_updated(device_pos: int) -> void:
+	"""Called when a device's parameter list changes (e.g., SFZ file loaded)."""
+	print("[Channel %d] Device %d parameters updated" % [id, device_pos])
+	device_parameters_updated.emit(device_pos)

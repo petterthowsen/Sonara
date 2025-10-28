@@ -11,6 +11,7 @@ class_name DeviceInstance extends RefCounted
 signal parameter_changed(param_id: int, value: float)
 signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
+signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 
 
 ## ============================================================================
@@ -37,6 +38,9 @@ var position: int = 0
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
+
+## Track expected parameter count when receiving parameter info
+var _expected_param_count: int = 0
 
 
 ## ============================================================================
@@ -146,9 +150,13 @@ func close_gui() -> void:
 func connect_to_engine() -> void:
 	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]
 	var enabled_addr = "/channel/%d/device/%d/enabled" % [channel_id, position]
+	var param_count_addr = "/channel/%d/device/%d/param/count" % [channel_id, position]
+	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
 	
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
+	AudioEngineOSC.listen(param_count_addr, _on_param_count_received)
+	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
@@ -159,10 +167,14 @@ func connect_to_engine() -> void:
 func disconnect_from_engine() -> void:
 	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]
 	var enabled_addr = "/channel/%d/device/%d/enabled" % [channel_id, position]
+	var param_count_addr = "/channel/%d/device/%d/param/count" % [channel_id, position]
+	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
 	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
 	
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
+	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
+	AudioEngineOSC.unlisten(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
 
 
@@ -221,6 +233,55 @@ func _on_parameter_value_received(values: Array, param_id: int) -> void:
 		
 		# Always emit signal - this is the single source of truth for all parameter changes
 		parameter_changed.emit(param_id, parameter_values[param_id])
+
+
+func _on_param_count_received(args: Array) -> void:
+	"""Handle parameter count message from engine (start of parameter list)."""
+	if args.size() < 1:
+		push_warning("[DeviceInstance %s] Invalid param count message" % device.name)
+		return
+	
+	var count: int = args[0]
+	_expected_param_count = count
+	
+	# Clear existing parameters when we receive a new count
+	# This handles cases where parameters change (e.g., SFZ file loaded)
+	device.parameters.clear()
+	parameter_values.clear()
+	
+	print("[DeviceInstance %s] Expecting %d parameters" % [device.name, count])
+
+
+func _on_param_info_received(args: Array) -> void:
+	"""Handle parameter info message from engine."""
+	if args.size() < 5:
+		push_warning("[DeviceInstance %s] Invalid param info message" % device.name)
+		return
+	
+	var param_id: int = args[0]
+	var param_name: String = args[1]
+	var min_val: float = args[2]
+	var max_val: float = args[3]
+	var default_val: float = args[4]
+	
+	# Create DeviceParameter and add to device
+	var param = DeviceParameter.new(param_id, param_name, "")
+	param.min_value = min_val
+	param.max_value = max_val
+	param.default_value = default_val
+	device.add_parameter(param)
+	
+	# Initialize parameter value
+	parameter_values[param_id] = param.value_to_normalized(default_val)
+	
+	print("[DeviceInstance %s] Param %d: %s [%.2f - %.2f, default %.2f]" % 
+		[device.name, param_id, param_name, min_val, max_val, default_val])
+	
+	# Check if we've received all expected parameters
+	if device.parameters.size() >= _expected_param_count and _expected_param_count > 0:
+		print("[DeviceInstance %s] All %d parameters loaded" % [device.name, _expected_param_count])
+		_expected_param_count = 0  # Reset
+		parameters_updated.emit()
 
 
 ## Sync this device instance's parameters to the audio engine (bulk sync)

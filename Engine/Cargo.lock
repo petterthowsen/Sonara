@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "sfizz"
 version = "0.1.0"
-source = "git+https://github.com/petterthowsen/rust-sfizz#f61e1634ba83ce3cb6c6c8b37ebf6f1316f76b66"
+source = "git+https://github.com/petterthowsen/rust-sfizz#5786e02a09399552265c31e207efdd61d7787bd2"
 dependencies = [
  "sfizz-sys",
  "thiserror 1.0.69",
@@ -1940,7 +1940,7 @@ dependencies = [
 [[package]]
 name = "sfizz-sys"
 version = "0.1.0"
-source = "git+https://github.com/petterthowsen/rust-sfizz#f61e1634ba83ce3cb6c6c8b37ebf6f1316f76b66"
+source = "git+https://github.com/petterthowsen/rust-sfizz#5786e02a09399552265c31e207efdd61d7787bd2"
 dependencies = [
  "anyhow",
  "bindgen 0.69.5",

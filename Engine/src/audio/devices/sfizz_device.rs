@@ -6,6 +6,7 @@
 use super::{AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow};
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::collections::HashMap;
 use tracing::{info, warn, error};
 
 /// Wrapper around sfizz::Synth that implements Send
@@ -38,6 +39,13 @@ pub struct SfizzDevice {
     // Current SFZ file path (for reporting)
     sfz_path: Arc<Mutex<Option<PathBuf>>>,
 
+    // CC parameters (discovered from loaded SFZ)
+    cc_labels: Arc<Mutex<Vec<sfizz::CcLabel>>>,
+    cc_values: Arc<Mutex<HashMap<u8, f32>>>,  // CC number -> normalized value (0.0-1.0)
+    
+    // Flag to indicate parameters changed (polled by command handler)
+    parameters_changed: Arc<Mutex<bool>>,
+
     // Pre-allocated buffers for planar audio conversion
     left_buffer: Vec<f32>,
     right_buffer: Vec<f32>,
@@ -60,11 +68,22 @@ impl SfizzDevice {
             max_buffer_size,
             loading_state: Arc::new(Mutex::new(LoadingState::Idle)),
             sfz_path: Arc::new(Mutex::new(None)),
+            cc_labels: Arc::new(Mutex::new(Vec::new())),
+            cc_values: Arc::new(Mutex::new(HashMap::new())),
+            parameters_changed: Arc::new(Mutex::new(false)),
             left_buffer: vec![0.0; max_buffer_size],
             right_buffer: vec![0.0; max_buffer_size],
             is_active: true,
             is_enabled: true,
         }
+    }
+    
+    /// Check if parameters have changed and clear the flag (poll-based notification)
+    pub fn take_parameters_changed(&self) -> bool {
+        let mut changed = self.parameters_changed.lock().unwrap();
+        let result = *changed;
+        *changed = false;
+        result
     }
 
     /// Load an SFZ file asynchronously (non-blocking)
@@ -85,6 +104,9 @@ impl SfizzDevice {
 
         // Clone Arc references for background thread
         let loading_state = Arc::clone(&self.loading_state);
+        let cc_labels = Arc::clone(&self.cc_labels);
+        let cc_values = Arc::clone(&self.cc_values);
+        let parameters_changed = Arc::clone(&self.parameters_changed);
         let sample_rate = self.sample_rate;
         let max_buffer_size = self.max_buffer_size;
 
@@ -111,6 +133,49 @@ impl SfizzDevice {
                     match synth.load_sfz(&path) {
                         Ok(_) => {
                             info!("✅ SFZ file loaded successfully: {:?}", path);
+
+                            // Fetch CC labels from the loaded SFZ
+                            let labels = synth.cc_labels();
+                            info!("📋 Discovered {} labeled CC parameters", labels.len());
+                            for label in &labels {
+                                info!("  CC{}: {}", label.cc_number, label.name);
+                            }
+
+                            // Store CC labels and initialize values with sensible defaults
+                            {
+                                let mut cc_labels_guard = cc_labels.lock().unwrap();
+                                *cc_labels_guard = labels.clone();
+                            }
+                            {
+                                let mut cc_values_guard = cc_values.lock().unwrap();
+                                cc_values_guard.clear();
+                                for label in &labels {
+                                    // Set sensible defaults for common CCs
+                                    let default_value = match label.cc_number {
+                                        7 => 1.0,   // Volume: full
+                                        10 => 0.5,  // Pan: center
+                                        11 => 1.0,  // Expression: full
+                                        _ => 0.5,   // Others: middle
+                                    };
+                                    cc_values_guard.insert(label.cc_number, default_value);
+                                    
+                                    // Send initial CC value to synth
+                                    unsafe {
+                                        sfizz::sfizz_send_hdcc(
+                                            synth.as_raw(),
+                                            0,  // delay = 0 (immediate)
+                                            label.cc_number as i32,
+                                            default_value,
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Mark that parameters have changed so they get re-sent to Godot
+                            {
+                                let mut changed = parameters_changed.lock().unwrap();
+                                *changed = true;
+                            }
 
                             // Update state to Ready
                             let mut state = loading_state.lock().unwrap();
@@ -286,14 +351,50 @@ impl AudioDevice for SfizzDevice {
         }
     }
 
-    fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {
-        // TODO: Implement CC automation via sfizz wrapper extensions
-        // For now, parameters are not supported
+    fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
+        // ParamId is the CC number
+        let cc_number = param_id as u8;
+        
+        // Store the value
+        {
+            let mut cc_values = self.cc_values.lock().unwrap();
+            cc_values.insert(cc_number, value);
+        }
+
+        // Send to sfizz synth (non-blocking)
+        let loading_state_result = self.loading_state.try_lock();
+        let synth = match loading_state_result {
+            Ok(state) => {
+                match &*state {
+                    LoadingState::Ready(synth) => Arc::clone(synth),
+                    _ => return, // Not ready, value is stored for when it loads
+                }
+            }
+            Err(_) => return, // Can't get lock, value is stored
+        };
+
+        // Try to lock the synth (non-blocking)
+        let mut synth_guard = match synth.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return, // Can't get synth lock, value is stored
+        };
+
+        // Send HDCC (high-definition CC with normalized 0.0-1.0 value)
+        // Use raw bindings since send_hdcc is not wrapped yet
+        unsafe {
+            sfizz::sfizz_send_hdcc(
+                synth_guard.0.as_raw(),
+                0,  // delay = 0 (immediate)
+                cc_number as i32,
+                value,
+            );
+        }
     }
 
-    fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
-        // TODO: Implement CC automation via sfizz wrapper extensions
-        None
+    fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
+        let cc_number = param_id as u8;
+        let cc_values = self.cc_values.lock().unwrap();
+        cc_values.get(&cc_number).copied()
     }
 
     fn device_id(&self) -> &str {
@@ -321,8 +422,31 @@ impl AudioDevice for SfizzDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        // TODO: Add CC automation parameters when sfizz wrapper supports it
-        Vec::new()
+        // Return CC labels as parameters
+        let cc_labels = self.cc_labels.lock().unwrap();
+        
+        cc_labels
+            .iter()
+            .map(|label| {
+                // Match defaults to initialization values
+                let default = match label.cc_number {
+                    7 => 1.0,   // Volume: full
+                    10 => 0.5,  // Pan: center
+                    11 => 1.0,  // Expression: full
+                    _ => 0.5,   // Others: middle
+                };
+                
+                ParamInfo {
+                    id: label.cc_number as ParamId,
+                    name: label.name.clone(),
+                    unit: String::new(),  // MIDI CC has no unit
+                    min: 0.0,
+                    max: 1.0,
+                    default,
+                    is_automation_safe: true,  // CC automation is real-time safe
+                }
+            })
+            .collect()
     }
 
     fn reset(&mut self) {
@@ -364,8 +488,24 @@ impl AudioDevice for SfizzDevice {
         self.is_active = false;
 
         // Clear loading state to free memory
-        let mut state = self.loading_state.lock().unwrap();
-        *state = LoadingState::Idle;
+        {
+            let mut state = self.loading_state.lock().unwrap();
+            *state = LoadingState::Idle;
+        }
+
+        // Clear CC parameters
+        {
+            let mut cc_labels = self.cc_labels.lock().unwrap();
+            cc_labels.clear();
+        }
+        {
+            let mut cc_values = self.cc_values.lock().unwrap();
+            cc_values.clear();
+        }
+        {
+            let mut changed = self.parameters_changed.lock().unwrap();
+            *changed = false;
+        }
 
         Ok(())
     }

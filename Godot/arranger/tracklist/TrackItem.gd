@@ -1,6 +1,9 @@
 @tool
 class_name TrackItem extends PanelContainer
 
+# Emitted when the track item is right-clicked
+signal right_clicked(track: Track, mouse_position: Vector2)
+
 @export var bg_color := Color.CORNFLOWER_BLUE:
 	set(c):
 		bg_color = c
@@ -61,6 +64,13 @@ func _enter_tree() -> void:
 
 func _gui_input(event: InputEvent) -> void:
 	var mouse = get_local_mouse_position()
+	
+	# Handle right-click for context menu
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if track and not Engine.is_editor_hint():
+			right_clicked.emit(track, get_global_mouse_position())
+			accept_event()
+			return
 
 	# Detect resize area at bottom edge
 	if mouse.y >= size.y - 4:
