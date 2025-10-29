@@ -1,3 +1,6 @@
 **/*.uid
 Engine/logs/**.log
 **/*.log
+AGENTS.md
+CLAUDE.md
+GEMINI.md

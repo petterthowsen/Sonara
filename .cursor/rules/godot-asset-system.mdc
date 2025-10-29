@@ -18,7 +18,8 @@ alwaysApply: false
 
 ## AssetService Autoload
 - Reads `Sonara` config to determine enabled providers and scan paths, then calls `initialize(SceneTree)` on each provider.
-- **No initial scan on startup** - relies on hot-reload timers for first scan (after `scan_interval_seconds`). Users can manually trigger via Edit → Scan Assets.
+- Providers emit cached assets during `initialize()` so `_assets_by_path` is populated via `assets_changed` callbacks before any live scan.
+- **No automatic scan on startup** – relies on hot-reload timers for first scan (after `scan_interval_seconds`). Users can manually trigger via Edit → Scan Assets.
 - `scan()` clears the registry, invokes `provider.scan()`, and consolidates every provider's `get_assets()` result into `_assets_by_path`.
 - Metadata cache lives in `~/.config/sonara/assets.json`; the service loads it on startup, applies it to Assets, and persists on every write.
 - Device-specific helpers (`get_device`, `get_instruments`, `get_effects`) proxy to the device provider, so providers must keep their registries authoritative.

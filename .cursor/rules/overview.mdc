@@ -5,7 +5,7 @@ alwaysApply: true
 
 Sonara is a Linux-First DAW built on Rust and Godot Engine.
 
-Audio engine is in ./Engine while the godot project is in ./Godot
+Audio engine is in ./Engine while the godot UI project is in ./Godot
 
 OSC is used for communication between backend audio and godot front end.
 
@@ -16,6 +16,6 @@ OSC is used for communication between backend audio and godot front end.
 
 ## Project Tracking
 
-- `STATUS.md` documents the current task: spell out the active objective, note what parts already work, and highlight what is still broken or blocked (use short “Working” / “Not Working” sections or bullet lists). Refresh it whenever focus shifts or status changes.
+- `STATUS.md` Used as a medium/long-term notepad for complex problems.
 - `TODO.md` holds the backlog with checkbox items. Mark tasks `[x]` only after the feature is verified working, and add new `[ ]` entries as fresh tasks emerge.
 - Keep both files concise and actionable so engineers can glance them to understand what to tackle next.

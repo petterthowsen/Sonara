@@ -33,16 +33,21 @@ size_flags_vertical = 3
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Options" type="VBoxContainer" parent="Content/VBox"]
+[node name="Options" type="HBoxContainer" parent="Content/VBox"]
 layout_mode = 2
 
 [node name="SearchText" type="LineEdit" parent="Content/VBox/Options"]
 layout_mode = 2
+size_flags_horizontal = 3
 placeholder_text = "Search..."
 emoji_menu_enabled = false
 backspace_deletes_composite_character_enabled = true
 clear_button_enabled = true
 select_all_on_focus = true
+
+[node name="ModeToggle" type="Button" parent="Content/VBox/Options"]
+layout_mode = 2
+text = "List"
 
 [node name="HSeparator" type="HSeparator" parent="Content/VBox"]
 visible = false
