@@ -321,12 +321,12 @@ func _start_resize():
 	
 	var mouse = get_global_mouse_position()
 	resize_mouse_start = mouse
-	resize_width_start = size.x
+	resize_width_start = int(size.x)
 	mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	is_resizing = true
 
 
-func _process(delta : float):
+func _process(_delta : float):
 	if is_resizing:
 		var mouse = get_global_mouse_position()
 		var mouse_delta = resize_mouse_start.x - mouse.x
@@ -375,7 +375,6 @@ func _on_header_gui_input(event : InputEvent) -> void:
 
 func _start_move():
 	if is_resizing: return
-	print("start move")
 	is_moving = true
 	move_mouse_start = get_global_mouse_position()
 	move_index_start = get_index()
@@ -394,19 +393,13 @@ func _update_move():
 	var global_mouse = get_global_mouse_position()
 	var mouse_delta =  global_mouse - move_mouse_start
 	
-	print("mouse delta: ", mouse_delta.x)
-	
 	if global_mouse.x > global_rect.end.x:
-		print("moving right, to ", get_index() + 1)
-
 		# request move to the right
 		move_awaiting = true
 		request_move.emit(get_index() + 1)
 		await get_parent().child_order_changed
 		_move_completed()
 	elif global_mouse.x < global_rect.position.x:
-		print("moving left, to ", get_index() - 1)
-
 		# request move to left
 		move_awaiting = true
 		request_move.emit(get_index() - 1)
@@ -414,7 +407,6 @@ func _update_move():
 		_move_completed()
 
 func _stop_move():
-	print("stop move")
 	is_moving = false
 	move_awaiting = false
 

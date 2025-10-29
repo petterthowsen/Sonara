@@ -5,6 +5,17 @@ use tracing::{info, warn};
 use super::devices::AudioDevice;
 use super::types::*;
 
+/// Parameter information for builtin devices
+#[derive(Debug, Clone)]
+pub struct BuiltinParamInfo {
+    pub id: u32,
+    pub name: String,
+    pub unit: String,
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+}
+
 /// Commands that can be sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
@@ -214,6 +225,7 @@ pub enum AudioCommand {
 
     // Plugin management
     ScanPlugins,
+    AdvertiseBuiltinDevices,
     GetPluginParameters {
         channel_id: ChannelId,
         device_position: usize,
@@ -302,6 +314,21 @@ pub enum EngineStatus {
         category: String,
         description: Option<String>,
         path: String, // Path to plugin file
+    },
+
+    // Builtin device advertisement
+    BuiltinDeviceInfo {
+        id: String,
+        name: String,
+        category: String,
+        description: String,
+        accepts_midi: bool,
+        audio_in_channels: usize,
+        audio_out_channels: usize,
+        parameters: Vec<BuiltinParamInfo>,
+    },
+    BuiltinDevicesComplete {
+        count: usize,
     },
 
     // Plugin parameter responses
@@ -1090,6 +1117,15 @@ pub fn process_command(
                                 state.device_sample_rate,
                             )))
                         }
+                        "sonara.builtin.polysynth" => {
+                            info!(
+                                "Loading built-in polysynth [active={}, enabled={}]",
+                                active, enabled
+                            );
+                            Some(Box::new(super::devices::PolySynthDevice::new(
+                                state.device_sample_rate,
+                            )))
+                        }
                         "sonara.builtin.delay" => {
                             info!(
                                 "Loading built-in delay [active={}, enabled={}]",
@@ -1394,6 +1430,80 @@ pub fn process_command(
                     warn!("Plugin scan failed: {}", e);
                 }
             }
+        }
+
+        AudioCommand::AdvertiseBuiltinDevices => {
+            info!("Advertising builtin devices...");
+            
+            // Helper to create device info from a temporary device instance
+            let create_device_info = |device: Box<dyn super::devices::AudioDevice>| -> EngineStatus {
+                let category_str = match device.device_category() {
+                    super::devices::DeviceCategory::Instrument => "instrument",
+                    super::devices::DeviceCategory::Effect => "effect",
+                    super::devices::DeviceCategory::Utility => "utility",
+                }
+                .to_string();
+
+                let parameters: Vec<BuiltinParamInfo> = device
+                    .parameters()
+                    .into_iter()
+                    .map(|p| BuiltinParamInfo {
+                        id: p.id,
+                        name: p.name,
+                        unit: p.unit,
+                        min: p.min,
+                        max: p.max,
+                        default: p.default,
+                    })
+                    .collect();
+
+                let midi_ports = device.midi_ports();
+                let audio_ports = device.audio_ports();
+                
+                let audio_in = audio_ports
+                    .iter()
+                    .find(|p| matches!(p.flow, super::devices::PortFlow::Input))
+                    .map(|p| p.channels)
+                    .unwrap_or(0);
+                let audio_out = audio_ports
+                    .iter()
+                    .find(|p| matches!(p.flow, super::devices::PortFlow::Output))
+                    .map(|p| p.channels)
+                    .unwrap_or(0);
+
+                EngineStatus::BuiltinDeviceInfo {
+                    id: device.device_id().to_string(),
+                    name: device.device_name().to_string(),
+                    category: category_str,
+                    description: format!("{} v{}", device.device_name(), device.version()),
+                    accepts_midi: !midi_ports.is_empty(),
+                    audio_in_channels: audio_in,
+                    audio_out_channels: audio_out,
+                    parameters,
+                }
+            };
+
+            // Create temp instances of each builtin device and send their info
+            let builtin_devices: Vec<EngineStatus> = vec![
+                create_device_info(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate))),
+                create_device_info(Box::new(super::devices::PolySynthDevice::new(state.device_sample_rate))),
+                create_device_info(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0))),
+                create_device_info(Box::new(super::devices::SfizzDevice::new(
+                    state.device_sample_rate,
+                    buffer_size,
+                    0,
+                    0,
+                    None,
+                ))),
+            ];
+
+            let count = builtin_devices.len();
+            for device_info in builtin_devices {
+                let _ = status_tx.send(device_info);
+            }
+
+            info!("Advertised {} builtin devices", count);
+            return Some(EngineStatus::BuiltinDevicesComplete { count });
         }
 
         AudioCommand::GetPluginParameters {

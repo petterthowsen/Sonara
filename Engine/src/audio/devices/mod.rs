@@ -1,11 +1,13 @@
 pub mod clap_host;
 mod delay;
 mod oscillator;
+mod polysynth;
 mod sfizz_device;
 
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use delay::DelayDevice;
 pub use oscillator::OscillatorDevice;
+pub use polysynth::PolySynthDevice;
 pub use sfizz_device::SfizzDevice;
 
 /// Parameter ID (normalized 0.0-1.0, host/device agnostic)
@@ -19,7 +21,7 @@ pub type ParamValue = f32;
 pub enum DeviceVariant {
     BuiltIn,
     Lv2,  // Future: LV2 plugin
-    Clap, // Future: CLAP plugin
+    Clap,
 }
 
 /// Device category for plugin discovery

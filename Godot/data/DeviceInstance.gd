@@ -63,6 +63,9 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 	enabled = p_enabled
 
 	# Initialize all parameters to default normalized values
+	if device == null:
+		push_error("[DeviceInstance] Created with null device (channel=%d, position=%d)" % [channel_id, position])
+		return
 	for param in device.get_parameters():
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
 

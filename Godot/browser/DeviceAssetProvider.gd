@@ -17,9 +17,11 @@ func _init() -> void:
 
 func initialize(_tree: SceneTree) -> void:
 	print("[DeviceAssetProvider] Initialized")
-	_register_builtin_devices()
+	# Disable hardcoded built-ins; rely on engine advertisement instead
 	_load_plugin_cache()
 	_setup_osc_listeners()
+	# Ask engine to advertise builtin devices so we don't hardcode them here
+	_request_builtin_devices()
 	# Don't auto-scan plugins - user must manually trigger via menu
 	# _trigger_plugin_scan()
 
@@ -50,9 +52,9 @@ func get_assets() -> Array[Asset]:
 func _register_builtin_devices() -> void:
 	# Create built-in devices
 	var builtin_list = [
-		Device.create_builtin_oscillator(),
-		Device.create_builtin_delay(),
-		Device.create_builtin_sfizz()
+		#Device.create_builtin_oscillator(),
+		#Device.create_builtin_delay(),
+		#Device.create_builtin_sfizz()
 	]
 	
 	# Add to device registry
@@ -94,7 +96,22 @@ func _setup_osc_listeners() -> void:
 	print("[DeviceAssetProvider] Registering OSC listeners...")
 	AudioEngineOSC.listen("/plugin/info", _on_plugin_info_received)
 	AudioEngineOSC.listen("/plugin/scan_complete", _on_plugin_scan_complete)
+	# Builtin devices advertised by engine
+	AudioEngineOSC.listen("/builtin/info", _on_builtin_info_received)
+	AudioEngineOSC.listen("/builtin/complete", _on_builtin_complete)
 	print("[DeviceAssetProvider] OSC listeners registered for /plugin/info and /plugin/scan_complete")
+	print("[DeviceAssetProvider] OSC listeners registered for /builtin/info and /builtin/complete")
+
+	# Re-request builtins whenever the engine (re)connects
+	if not AudioEngineOSC.engine_connected.is_connected(_request_builtin_devices):
+		AudioEngineOSC.engine_connected.connect(_request_builtin_devices)
+
+
+## Request builtin devices from engine
+func _request_builtin_devices() -> void:
+	if not AudioEngineOSC:
+		return
+	AudioEngineOSC.send("/builtin/request", [])
 
 
 ## Trigger plugin scan via OSC (public method for manual triggering)
@@ -208,6 +225,97 @@ func _on_plugin_scan_complete(args: Array) -> void:
 	
 	# Save discovered plugins to cache
 	_save_plugin_cache()
+
+
+## ============================================================================
+## BUILTIN DEVICE ADVERTISEMENT (ENGINE → GODOT)
+## =========================================================================
+
+## Handle one builtin device info message
+## Args layout from engine:
+## [id:String, name:String, category:String, description:String, accepts_midi:Int(0|1),
+##  audio_in:Int, audio_out:Int, param_count:Int, then param tuples:
+##  (param_id:Int, name:String, unit:String, min:Float, max:Float, default:Float) ...]
+func _on_builtin_info_received(args: Array) -> void:
+	if args.size() < 8:
+		push_warning("[DeviceAssetProvider] Invalid /builtin/info message: %s" % str(args))
+		return
+
+	var dev_id: String = args[0]
+	var dev_name: String = args[1]
+	var category_str: String = args[2]
+	var description: String = args[3]
+	var accepts_midi: bool = int(args[4]) != 0
+	var audio_in: int = int(args[5])
+	var audio_out: int = int(args[6])
+	var param_count: int = int(args[7])
+
+	var category: Device.DeviceCategory
+	match category_str:
+		"instrument":
+			category = Device.DeviceCategory.Instrument
+		"effect":
+			category = Device.DeviceCategory.Effect
+		"utility":
+			category = Device.DeviceCategory.Utility
+		_:
+			category = Device.DeviceCategory.Effect
+
+	var device := Device.new(dev_id, dev_name, category, Device.DeviceType.BuiltIn)
+	device.title = dev_name
+	device.description = description
+	device.accepts_midi = accepts_midi
+	device.audio_in_channels = audio_in
+	device.audio_out_channels = audio_out
+
+	# Parse parameters
+	var idx := 8
+	for i in range(param_count):
+		if idx + 5 >= args.size():
+			break
+		var p_id: int = int(args[idx + 0])
+		var p_name: String = String(args[idx + 1])
+		var p_unit: String = String(args[idx + 2])
+		var p_min: float = float(args[idx + 3])
+		var p_max: float = float(args[idx + 4])
+		var p_def: float = float(args[idx + 5])
+		idx += 6
+
+		var param := DeviceParameter.new(p_id, p_name, p_unit)
+		param.min_value = p_min
+		param.max_value = p_max
+		param.default_value = p_def
+		# Heuristic: mark common log parameters
+		if p_name.to_lower().findn("time") >= 0 or p_name.to_lower().findn("cutoff") >= 0 or p_name.to_lower().findn("frequency") >= 0:
+			param.is_logarithmic = true
+		device.add_parameter(param)
+
+	# Register/overwrite
+	_devices[dev_id] = device
+
+	# Do not emit assets yet; wait for complete to batch
+
+
+## Handle completion: rebuild assets and emit additions for builtins
+func _on_builtin_complete(args: Array) -> void:
+	var count := int(args[0]) if args.size() > 0 else -1
+	print("[DeviceAssetProvider] Builtin advertisement complete: %d devices" % count)
+
+	# Rebuild asset list
+	scan()
+
+	# Emit added assets for builtins (we don't remove here)
+	var added: Array[Asset] = []
+	for device in _devices.values():
+		if device.device_type == Device.DeviceType.BuiltIn:
+			var asset := Asset.new()
+			asset.type = Asset.TYPE.Device
+			asset.name = device.name
+			asset.path = device.device_id
+			added.append(asset)
+
+	if not added.is_empty():
+		assets_changed.emit(added, [] as Array[Asset], [] as Array[Asset])
 
 
 ## ============================================================================

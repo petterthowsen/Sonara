@@ -29,18 +29,13 @@
 
 ### Built-in Devices
 
-- [ ] Leverage FunDSP library to implement common device types (EQ, Comp etc)
-
-#### PolySynth
-- [ ] ADSR Envelope and Parameters
-- [ ] A Filter (LP or HP) and Filter Envelope would be cool, making plucks possible
-
-#### Delay
-- [ ] Feedback amount parameter
-- [ ] BUG if applied on a bus?: wet amount does not properly mix dry and wet. Dry signal is lacking, even at 0.01% wet
+- [ ] Leverage FunDSP library to implement basic set of builtin devicess
+    - [ ] Remove old Oscilator and Delay
+    - [ ] Implement basic PolySynth device:
+        - two oscilators (configurable type: sine, trianle etc)
 
 ### Save/Load
-- [ ] Backend implementation for save/load projects
+- [x] implementation for save/load projects
 
 ---
 
@@ -113,4 +108,4 @@
 - [ ] Live MIDI input for armed tracks outputs to target track
 - [ ] Caps lock toggles computer keyboard as a virtual midi device, mapping q,2,w,3,e,r,5,t,6,y,7,u,i,9,o,0,p,+ to midi keys, default octave 3, Z transposes down, X transposes up, C lowers vel, V increases velocity
 - [ ] Modulation
-    - [ ] Basic modulation, should be similar to bitwig, allow any channel and device parameter to be modulatable
+    - [ ] Basic modulation, similar to bitwig, allow any channel and device parameter to be modulatable

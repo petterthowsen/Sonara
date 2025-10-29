@@ -127,13 +127,14 @@ func _ready():
 	open_project(new_project)
 	
 	# for testing, create a instrument track
-	project.create_instrument_track()
+	#project.create_instrument_track()
 
-	# add polysynth builti n device to the track
-	var channel := project.get_channel_by_id(2) #0 = null, 1 = master, 2 = first user channel
-	var osc_device = AssetService.get_device("sonara.builtin.oscillator")
-	var device_instance = DeviceInstance.new(osc_device, channel.id, 0, true, true)
-	channel.add_device(device_instance)
+	# Optionally auto-add PolySynth when advertised by engine (skip if not available yet)
+	#var channel := project.get_channel_by_id(2) #0 = null, 1 = master, 2 = first user channel
+	#var polysynth := AssetService.get_device("sonara.builtin.polysynth")
+	#if polysynth:
+	#	var device_instance := DeviceInstance.new(polysynth, channel.id, 0, true, true)
+	#	channel.add_device(device_instance)
 
 
 func _connect_ui_signals():

@@ -159,9 +159,10 @@ func get_short_name(max_length: int = 15) -> String:
 ## ============================================================================
 
 ## Create a built-in oscillator device
+## @deprecated
 static func create_builtin_oscillator() -> Device:
 	var device = Device.new("sonara.builtin.oscillator", "Oscillator", DeviceCategory.Instrument)
-	device.title = "Polysynth"
+	device.title = "Oscillator"
 	device.description = "A polyphonic synthesizer featuring sine, square, sawtooth, and triangle waveforms. Perfect for creating everything from classic synth sounds to experimental textures."
 	device.author = "Sonara"
 	device.accepts_midi = true
@@ -186,6 +187,7 @@ static func create_builtin_oscillator() -> Device:
 
 
 ## Create a built-in delay device
+## @deprecated
 static func create_builtin_delay() -> Device:
 	var device = Device.new("sonara.builtin.delay", "Delay", DeviceCategory.Effect)
 	device.title = "Stereo Delay"

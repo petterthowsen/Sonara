@@ -14,5 +14,6 @@ alwaysApply: true
 You can get docs via context7:
 - `/prokopyl/clack` for clack (clap library)
 - `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2` for Godot Engine
+- `/samiperttu/fundsp` for FunDSP library
 
 Full Source code for clack is also available via ../clack
