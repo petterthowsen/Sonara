@@ -299,6 +299,16 @@ func sync_parameter_to_engine(param_id: int) -> void:
 		AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
 
 
+## Load a file into this device (e.g., SFZ file into sfizz sampler)
+func load_file(file_path: String) -> void:
+	if not device.supports_file_loading:
+		push_error("[DeviceInstance] Device %s does not support file loading" % device.name)
+		return
+	
+	print("[DeviceInstance] Loading file into %s: %s" % [device.name, file_path])
+	AudioEngineOSC.send("/channel/%d/device/%d/load_file" % [channel_id, position], [file_path])
+
+
 ## ============================================================================
 ## SERIALIZATION
 ## ============================================================================

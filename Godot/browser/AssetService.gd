@@ -61,7 +61,7 @@ func _exit_tree() -> void:
 func _initialize_providers() -> void:
 	_providers.clear()
 
-	var enabled_providers = Sonara.get_config("assets/enabled_providers", ["filesystem", "devices"])
+	var enabled_providers = Sonara.get_config("assets/enabled_providers", ["filesystem", "devices", "sfz"])
 
 	# File system provider
 	if "filesystem" in enabled_providers:
@@ -79,8 +79,18 @@ func _initialize_providers() -> void:
 		_providers.append(device_provider)
 		print("[AssetService] Registered DeviceAssetProvider")
 
-	# Initial scan
-	_scan_all_providers()
+	# SFZ sampler provider
+	if "sfz" in enabled_providers:
+		var sfz_provider = SfzAssetProvider.new()
+		sfz_provider.assets_changed.connect(_on_provider_assets_changed)
+		sfz_provider.initialize(get_tree())
+		_providers.append(sfz_provider)
+		print("[AssetService] Registered SfzAssetProvider")
+
+	# Skip initial scan - rely on cache and hot-reload timers
+	# Users can manually trigger scan via Edit > Scan Assets
+	print("[AssetService] Skipping initial scan, relying on cached data")
+	_is_ready = true
 
 
 ## Trigger scan on all providers
@@ -152,6 +162,16 @@ func get_midi_assets() -> Array[Asset]:
 ## Get all device assets
 func get_device_assets() -> Array[Asset]:
 	return get_assets_by_type(Asset.TYPE.Device)
+
+
+## Get all SFZ assets
+func get_sfz_assets() -> Array[Asset]:
+	return get_assets_by_type(Asset.TYPE.SFZ)
+
+
+## Get all SoundFont assets
+func get_soundfont_assets() -> Array[Asset]:
+	return get_assets_by_type(Asset.TYPE.SoundFont)
 
 
 ## Get device by ID (for built-in or plugin devices)
@@ -307,11 +327,14 @@ func _setup_default_config() -> void:
 	# Ensure assets config structure exists
 	if not Sonara.config.has("assets"):
 		var default_config = {
-			"scan_paths": [
-				"~/Music"
-			],
+			"samples": {
+				"paths": ["~/Music"]
+			},
+			"sfz": {
+				"paths": ["~/Music/SFZ"]
+			},
 			"scan_interval_seconds": 30.0,
-			"enabled_providers": ["filesystem", "devices"]
+			"enabled_providers": ["filesystem", "devices", "sfz"]
 		}
 		Sonara.set_config("assets", default_config)
 		Sonara.save_config()

@@ -33,6 +33,8 @@ var _tab_buttons: Dictionary = {}  # Asset.TYPE -> Button
 var _audio_assets: Array[Asset] = []
 var _midi_assets: Array[Asset] = []
 var _device_assets: Array[Asset] = []
+var _sfz_assets: Array[Asset] = []
+var _soundfont_assets: Array[Asset] = []
 
 # Search/filter
 var _search_filter: String = ""
@@ -51,12 +53,14 @@ func _ready() -> void:
 
 func _setup_ui() -> void:
 	# Setup tab buttons
-	_create_tab_button("S", "Samples (Audio + MIDI)", Asset.TYPE.Audio)
+	_create_tab_button("S", "Samples", Asset.TYPE.Audio)
 	_create_tab_button("D", "Devices", Asset.TYPE.Device)
+	_create_tab_button("SFZ", "SFZ", Asset.TYPE.SFZ)
 
 	# Create ItemLists for each category
 	_create_item_list(Asset.TYPE.Audio)
 	_create_item_list(Asset.TYPE.Device)
+	_create_item_list(Asset.TYPE.SFZ)
 
 	# Connect search input
 	search_text.text_changed.connect(_on_search_text_changed)
@@ -133,6 +137,8 @@ func _refresh_asset_list() -> void:
 	_audio_assets.clear()
 	_midi_assets.clear()
 	_device_assets.clear()
+	_sfz_assets.clear()
+	_soundfont_assets.clear()
 
 	# Get all assets and sort by type
 	var all_assets = AssetService.get_all_assets()
@@ -144,9 +150,16 @@ func _refresh_asset_list() -> void:
 				_midi_assets.append(asset)
 			Asset.TYPE.Device:
 				_device_assets.append(asset)
+			Asset.TYPE.SFZ:
+				_sfz_assets.append(asset)
+			Asset.TYPE.SoundFont:
+				_soundfont_assets.append(asset)
 
 	# Populate Samples tab (Audio + MIDI combined)
 	_populate_samples_tab()
+
+	# Populate SFZ tab
+	_populate_sfz_tab()
 
 	# Populate Devices tab
 	_populate_devices_tab()
@@ -196,6 +209,23 @@ func _populate_samples_tab() -> void:
 			item_list.set_item_metadata(idx, asset)
 
 
+func _populate_sfz_tab() -> void:
+	var item_list = _item_lists[Asset.TYPE.SFZ]
+
+	# Filter assets based on search
+	var filtered_sfz = _filter_assets(_sfz_assets)
+
+	if filtered_sfz.is_empty():
+		var message = "(No matches)" if not _search_filter.is_empty() else "(No SFZ instruments)"
+		var idx = item_list.add_item(message)
+		item_list.set_item_disabled(idx, true)
+		return
+
+	for asset in filtered_sfz:
+		var idx = item_list.add_item(asset.get_display_name())
+		item_list.set_item_metadata(idx, asset)
+
+
 func _populate_devices_tab() -> void:
 	var item_list = _item_lists[Asset.TYPE.Device]
 
@@ -242,16 +272,36 @@ func _on_tab_button_pressed(asset_type: Asset.TYPE) -> void:
 
 func _get_drag_data(position: Vector2) -> Variant:
 	var item_list = _item_lists[_current_tab]
-	var selected_idx = item_list.get_item_at_position(position)
-	if selected_idx < 0:
+	var clicked_idx = item_list.get_item_at_position(position)
+	if clicked_idx < 0:
 		return null
 
-	var asset = item_list.get_item_metadata(selected_idx)
-	if not asset is Asset:
-		return null
-
-	asset_requested_drag.emit(asset)
-	return asset
+	# Get all selected items
+	var selected_indices = item_list.get_selected_items()
+	
+	# If nothing is selected, or the clicked item isn't selected, just drag the clicked item
+	if selected_indices.is_empty() or not clicked_idx in selected_indices:
+		var asset = item_list.get_item_metadata(clicked_idx)
+		if not asset is Asset:
+			return null
+		asset_requested_drag.emit(asset)
+		return asset
+	
+	# Multiple items selected - collect all assets
+	var assets: Array[Asset] = []
+	for idx in selected_indices:
+		var asset = item_list.get_item_metadata(idx)
+		if asset is Asset:
+			assets.append(asset)
+			asset_requested_drag.emit(asset)
+	
+	# Return array if multiple, single asset if only one
+	if assets.size() == 1:
+		return assets[0]
+	elif assets.size() > 1:
+		return assets
+	
+	return null
 
 
 func _can_drop_data(position: Vector2, data: Variant) -> bool:

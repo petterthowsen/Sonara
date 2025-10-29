@@ -30,11 +30,28 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
 
     // First pass: Process device chains (instruments and effects)
     // Process effects BEFORE applying fader so fader is applied to final output
+    // IMPORTANT: Skip bus channels here - they'll be processed in Phase 4 after receiving routed audio
     let sample_count = state.channels.values().next().map(|c| c.buffer_left.len()).unwrap_or(0);
+
+    // Identify bus channels (channels that other channels route TO)
+    let mut bus_channel_ids: HashSet<ChannelId> = HashSet::new();
+    for channel in state.channels.values() {
+        if let Some(output_id) = channel.output_channel_id {
+            if output_id < 1000 {  // Only channels, not devices
+                bus_channel_ids.insert(output_id);
+            }
+        }
+    }
+
     for channel in state.channels.values_mut() {
+        // Skip bus channels - they'll be processed in Phase 4 after receiving routed audio
+        if bus_channel_ids.contains(&channel.id) {
+            continue;
+        }
         channel.process_device_chain(sample_count);
-        
+
         // Check for pending parameter changes from CLAP plugins (GUI/modulation changes)
+        // Note: Bus channels will have their parameters checked in Phase 4
         for (device_pos, device) in channel.devices.iter_mut().enumerate() {
             // Try to downcast to ClapDeviceAdapter (in-process)
             if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>() {
@@ -65,14 +82,14 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
             // Also check SfizzDevice for parameter list changes (after loading new SFZ)
             else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<super::devices::SfizzDevice>() {
                 if sfizz_device.take_parameters_changed() {
-                    info!("🎹 SFZ parameters changed! Sending parameter list for channel {} device {}", 
+                    info!("🎹 SFZ parameters changed! Sending parameter list for channel {} device {}",
                         channel.id, device_pos);
-                    
+
                     // Parameters changed (new SFZ loaded), send updated parameter list to Godot
                     let params = device.parameters();
-                    
+
                     info!("📋 Sending {} parameters to Godot", params.len());
-                    
+
                     if !params.is_empty() {
                         // Send parameter count
                         let _ = status_tx.send(EngineStatus::PluginParameterCount {
@@ -80,10 +97,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                             device_position: device_pos,
                             count: params.len(),
                         });
-                        
+
                         // Send parameter info for each parameter
                         for param in params.iter() {
-                            info!("  Param {}: {} (range {:.2}-{:.2}, default {:.2})", 
+                            info!("  Param {}: {} (range {:.2}-{:.2}, default {:.2})",
                                 param.id, param.name, param.min, param.max, param.default);
                             let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                                 channel_id: channel.id,

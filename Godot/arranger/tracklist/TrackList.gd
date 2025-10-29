@@ -209,40 +209,69 @@ func _get_drag_data(at_position: Vector2) -> Variant:
 
 
 func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can drop data (device assets) on the tracklist."""
+	"""Check if we can drop data (device/SFZ assets) on the tracklist."""
 	if not current_project:
 		return false
 
-	# Check if data is a device asset
-	if data is Asset and data.type == Asset.TYPE.Device:
-		return true
+	# Check if data is a single asset
+	if data is Asset:
+		if data.type == Asset.TYPE.Device or data.type == Asset.TYPE.SFZ:
+			return true
+	
+	# Check if data is an array of assets
+	if data is Array:
+		for item in data:
+			if not item is Asset:
+				return false
+			if item.type != Asset.TYPE.Device and item.type != Asset.TYPE.SFZ:
+				return false
+		return data.size() > 0
 
 	return false
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device on the tracklist."""
-	if not data is Asset or not current_project:
+	"""Handle dropping device or SFZ assets (single or multiple) on the tracklist."""
+	if not current_project:
 		return
-
-	var asset = data as Asset
-	if asset.type != Asset.TYPE.Device:
+	
+	# Handle array of assets
+	if data is Array:
+		print("[TrackList] Dropping %d assets" % data.size())
+		for asset in data:
+			if asset is Asset:
+				_handle_single_asset_drop(asset)
 		return
+	
+	# Handle single asset
+	if data is Asset:
+		_handle_single_asset_drop(data)
 
-	print("[TrackList] Device dropped: ", asset.name, " (", asset.path, ")")
 
-	# Get the device metadata
-	var device = AssetService.get_device(asset.path)
-	if not device:
-		push_error("[TrackList] Failed to get device: ", asset.path)
+func _handle_single_asset_drop(asset: Asset) -> void:
+	"""Handle dropping a single asset."""
+	# Handle SFZ asset drops
+	if asset.type == Asset.TYPE.SFZ:
+		print("[TrackList] SFZ dropped: ", asset.name, " (", asset.path, ")")
+		_create_sfz_instrument_track(asset.path, asset.name)
 		return
-
-	# Create instrument track + channel pair
-	if device.category == Device.DeviceCategory.Instrument:
-		_create_instrument_track_with_device(device)
-	elif device.category == Device.DeviceCategory.Effect:
-		# For effects, add to existing selected track or create new track
-		_add_effect_to_track(device)
+	
+	# Handle device asset drops
+	if asset.type == Asset.TYPE.Device:
+		print("[TrackList] Device dropped: ", asset.name, " (", asset.path, ")")
+		
+		# Get the device metadata
+		var device = AssetService.get_device(asset.path)
+		if not device:
+			push_error("[TrackList] Failed to get device: ", asset.path)
+			return
+		
+		# Create instrument track + channel pair
+		if device.category == Device.DeviceCategory.Instrument:
+			_create_instrument_track_with_device(device)
+		elif device.category == Device.DeviceCategory.Effect:
+			# For effects, add to existing selected track or create new track
+			_add_effect_to_track(device)
 
 
 func _create_instrument_track_with_device(device: Device) -> void:
@@ -297,6 +326,42 @@ func _add_effect_to_track(device: Device) -> void:
 	# Channel.add_device() handles OSC sync and emits device_added signal
 	var device_instance = DeviceInstance.new(device, target_channel.id, target_channel.get_device_count())
 	target_channel.add_device(device_instance, -1)
+
+
+func _create_sfz_instrument_track(sfz_path: String, sfz_name: String) -> void:
+	"""Create a new instrument track with sfizz device and load the SFZ file."""
+	print("[TrackList] Creating SFZ instrument track: ", sfz_name)
+	
+	# Get the sfizz device from AssetService
+	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
+	if not sfizz_device:
+		push_error("[TrackList] Failed to get sfizz device")
+		return
+	
+	# Create new instrument track + channel pair
+	var result = current_project.create_instrument_track(sfz_name)
+	if not result:
+		push_error("[TrackList] Failed to create instrument track")
+		return
+	
+	var track = result["track"] as Track
+	var channel = result["channel"] as Channel
+	
+	if not track or not channel:
+		push_error("[TrackList] Invalid track or channel returned")
+		return
+	
+	print("[TrackList] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
+	print("[TrackList] Created channel: ", channel.name, " (id=", channel.id, ")")
+	
+	# Create sfizz device instance and add to channel
+	var device_instance = DeviceInstance.new(sfizz_device, channel.id, 0)
+	channel.add_device(device_instance, -1)
+	
+	# Load the SFZ file into the device
+	# Give the engine a moment to create the device before loading the file
+	await get_tree().create_timer(0.1).timeout
+	device_instance.load_file(sfz_path)
 
 
 # ============================================================================

@@ -1,16 +1,15 @@
-# FileSystemAssetProvider.gd
-# Scans configured directories for audio and MIDI files
+# SfzAssetProvider.gd
+# Scans configured directories for SFZ sampler instrument files
 # Supports hot-reload by monitoring file modification times
 
-class_name FileSystemAssetProvider extends AssetProvider
+class_name SfzAssetProvider extends AssetProvider
 
 # ============================================================================
 # PROPERTIES
 # ============================================================================
 
 # Supported file extensions
-var AUDIO_EXTENSIONS = ["wav", "mp3", "ogg"]
-var MIDI_EXTENSIONS = ["mid", "midi"]
+var SFZ_EXTENSIONS = ["sfz"]
 
 # All assets discovered by this provider
 var _assets: Array[Asset] = []
@@ -29,17 +28,17 @@ var _first_scan: bool = true  # Track if this is the first scan
 # ============================================================================
 
 func _init() -> void:
-	provider_name = "FileSystemAssetProvider"
+	provider_name = "SfzAssetProvider"
 	supports_hot_reload = true
 
 
 func initialize(tree: SceneTree) -> void:
-	print("[FileSystemAssetProvider] Initializing...")
+	print("[SfzAssetProvider] Initializing...")
 	_tree = tree
 	_scan_interval = Sonara.get_config("assets/scan_interval_seconds", 5.0)
 	_load_cache()
 	_setup_hot_reload()
-	print("[FileSystemAssetProvider] Initialized with %.1f second scan interval" % _scan_interval)
+	print("[SfzAssetProvider] Initialized with %.1f second scan interval" % _scan_interval)
 
 
 func _setup_hot_reload() -> void:
@@ -61,9 +60,9 @@ func _schedule_next_scan() -> void:
 
 func scan() -> void:
 	if _first_scan:
-		print("[FileSystemAssetProvider] Starting initial asset scan...")
+		print("[SfzAssetProvider] Starting initial SFZ scan...")
 	
-	var scan_paths = Sonara.get_config("assets/samples/paths", [])
+	var scan_paths = Sonara.get_config("assets/sfz/paths", [])
 	var new_assets: Array[Asset] = []
 
 	for path in scan_paths:
@@ -75,7 +74,7 @@ func scan() -> void:
 	_assets = new_assets
 	
 	if _first_scan:
-		print("[FileSystemAssetProvider] Initial scan complete: %d assets found" % _assets.size())
+		print("[SfzAssetProvider] Initial scan complete: %d SFZ instruments found" % _assets.size())
 		_first_scan = false
 	
 	# Save cache after scan
@@ -102,12 +101,12 @@ func _expand_path(path: String) -> String:
 
 func _scan_directory(dir_path: String, results: Array[Asset]) -> void:
 	if not DirAccess.dir_exists_absolute(dir_path):
-		print("[FileSystemAssetProvider] Directory not found: %s" % dir_path)
+		print("[SfzAssetProvider] Directory not found: %s" % dir_path)
 		return
 
 	var dir = DirAccess.open(dir_path)
 	if dir == null:
-		print("[FileSystemAssetProvider] Failed to open directory: %s" % dir_path)
+		print("[SfzAssetProvider] Failed to open directory: %s" % dir_path)
 		return
 
 	# List all files and directories
@@ -137,18 +136,13 @@ func _scan_directory(dir_path: String, results: Array[Asset]) -> void:
 func _try_create_asset(file_path: String) -> Asset:
 	var extension = file_path.get_extension().to_lower()
 
-	# Determine asset type based on extension
-	var asset_type: Asset.TYPE
-	if extension in AUDIO_EXTENSIONS:
-		asset_type = Asset.TYPE.Audio
-	elif extension in MIDI_EXTENSIONS:
-		asset_type = Asset.TYPE.Midi
-	else:
+	# Only handle SFZ files
+	if not extension in SFZ_EXTENSIONS:
 		return null
 
-	# Create asset
+	# Create asset as SFZ type
 	var asset = Asset.new()
-	asset.type = asset_type
+	asset.type = Asset.TYPE.SFZ
 	asset.path = file_path
 	asset.name = file_path.get_file().trim_suffix("." + extension)
 
@@ -191,7 +185,7 @@ func _detect_changes(new_assets: Array[Asset]) -> void:
 
 	# Emit signal if changes detected
 	if added.size() > 0 or removed.size() > 0 or modified.size() > 0:
-		print("[FileSystemAssetProvider] Assets changed: +%d, -%d, ~%d" % [added.size(), removed.size(), modified.size()])
+		print("[SfzAssetProvider] SFZ assets changed: +%d, -%d, ~%d" % [added.size(), removed.size(), modified.size()])
 		assets_changed.emit(added, removed, modified)
 
 
@@ -200,18 +194,18 @@ func _detect_changes(new_assets: Array[Asset]) -> void:
 # ============================================================================
 
 func _get_cache_path() -> String:
-	return Sonara.get_config_dir() + "/samples_cache.json"
+	return Sonara.get_config_dir() + "/sfz_cache.json"
 
 
 func _load_cache() -> void:
 	var cache_path = _get_cache_path()
 	if not FileAccess.file_exists(cache_path):
-		print("[FileSystemAssetProvider] No cache found")
+		print("[SfzAssetProvider] No cache found")
 		return
 	
 	var file = FileAccess.open(cache_path, FileAccess.READ)
 	if not file:
-		push_error("[FileSystemAssetProvider] Failed to open cache: %s" % cache_path)
+		push_error("[SfzAssetProvider] Failed to open cache: %s" % cache_path)
 		return
 	
 	var json_string = file.get_as_text()
@@ -220,12 +214,12 @@ func _load_cache() -> void:
 	var json = JSON.new()
 	var error = json.parse(json_string)
 	if error != OK:
-		push_error("[FileSystemAssetProvider] Failed to parse cache: %s" % json.get_error_message())
+		push_error("[SfzAssetProvider] Failed to parse cache: %s" % json.get_error_message())
 		return
 	
 	var cache_data = json.data
 	if not cache_data is Dictionary:
-		push_error("[FileSystemAssetProvider] Invalid cache format")
+		push_error("[SfzAssetProvider] Invalid cache format")
 		return
 	
 	# Load assets from cache
@@ -235,7 +229,7 @@ func _load_cache() -> void:
 			continue
 		
 		var asset = Asset.new()
-		asset.type = asset_data.get("type", Asset.TYPE.Audio)
+		asset.type = Asset.TYPE.SFZ
 		asset.path = asset_data.get("path", "")
 		asset.name = asset_data.get("name", "")
 		asset.file_size_bytes = asset_data.get("file_size_bytes", 0)
@@ -244,7 +238,7 @@ func _load_cache() -> void:
 		_assets.append(asset)
 		_file_mod_times[asset.path] = asset.file_modified_time
 	
-	print("[FileSystemAssetProvider] Loaded %d assets from cache" % _assets.size())
+	print("[SfzAssetProvider] Loaded %d SFZ assets from cache" % _assets.size())
 	
 	# Emit assets_changed for cached assets
 	if not _assets.is_empty():
@@ -258,7 +252,6 @@ func _save_cache() -> void:
 	var cached_assets = []
 	for asset in _assets:
 		cached_assets.append({
-			"type": asset.type,
 			"path": asset.path,
 			"name": asset.name,
 			"file_size_bytes": asset.file_size_bytes,
@@ -272,9 +265,10 @@ func _save_cache() -> void:
 	
 	var file = FileAccess.open(cache_path, FileAccess.WRITE)
 	if not file:
-		push_error("[FileSystemAssetProvider] Failed to save cache: %s" % cache_path)
+		push_error("[SfzAssetProvider] Failed to save cache: %s" % cache_path)
 		return
 	
 	var json_string = JSON.stringify(cache_data, "\t")
 	file.store_string(json_string)
 	file.close()
+

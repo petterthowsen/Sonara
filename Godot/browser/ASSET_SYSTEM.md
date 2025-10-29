@@ -18,7 +18,7 @@ The Sonara Asset System provides a flexible, provider-based architecture for dis
 The fundamental data class representing a single asset.
 
 **Properties:**
-- `type: Asset.TYPE` - Audio, Midi, or Device
+- `type: Asset.TYPE` - Audio, Midi, Device, SFZ, or SoundFont
 - `name: String` - Display name
 - `path: String` - Absolute file path
 - `favorite: bool` - User-marked favorites
@@ -30,7 +30,7 @@ The fundamental data class representing a single asset.
 **Helper Methods:**
 - `get_display_name() -> String` - Filename without extension
 - `get_file_extension() -> String` - File extension
-- `is_audio() -> bool`, `is_midi() -> bool` - Type checkers
+- `is_audio() -> bool`, `is_midi() -> bool`, `is_sfz() -> bool`, `is_soundfont() -> bool` - Type checkers
 - `get_icon() -> String` - Godot icon name for UI
 - `mark_as_used() -> void` - Update last_used timestamp
 - `has_changed(current_mod_time: int) -> bool` - Check if file changed
@@ -61,13 +61,16 @@ Concrete provider that scans directories for audio/MIDI files.
 - Hot-reload via `get_tree().create_timer()`
 - Modification time tracking for change detection
 - Configurable scan interval (default: 5 seconds)
+- Asset caching to `samples_cache.json` for instant startup
 
 **Configuration:**
 ```gdscript
 # In Sonara config:
 {
   "assets": {
-    "scan_paths": ["~/Music/Samples", "~/Music/MIDI"],
+    "samples": {
+      "paths": ["~/Music/Samples", "~/Music/MIDI"]
+    },
     "scan_interval_seconds": 5.0
   }
 }
@@ -76,8 +79,48 @@ Concrete provider that scans directories for audio/MIDI files.
 #### `DeviceAssetProvider.gd`
 Stub provider for future LV2/CLAP plugin discovery (Phase 4).
 
+#### `SfzAssetProvider.gd`
+Concrete provider that scans directories for SFZ sampler instrument files.
+
+**Supported Formats:**
+- SFZ: `.sfz`
+
+**Features:**
+- Recursive directory scanning
+- Hidden file filtering (names starting with `.`)
+- Hot-reload via `get_tree().create_timer()`
+- Modification time tracking for change detection
+- Configurable scan interval (inherits from global assets config)
+- Assets are classified as `TYPE.SFZ` (distinct from regular audio files)
+- Asset caching to `sfz_cache.json` for instant startup
+
+**Configuration:**
+```gdscript
+# In Sonara config:
+{
+  "assets": {
+    "sfz": {
+      "paths": ["~/Music/SFZ", "~/Samples"]
+    },
+    "scan_interval_seconds": 5.0,
+    "enabled_providers": ["filesystem", "devices", "sfz"]
+  }
+}
+```
+
+**Notes:**
+- SFZ files are loaded into the built-in sfizz sampler device
+- Use `/channel/{id}/device/{pos}/load_file` OSC command to load SFZ into sfizz
+- Supports the full SFZ spec via the sfizz engine
+
 #### `AssetService.gd` (Singleton Autoload)
 Central registry and query interface for all asset providers.
+
+**Startup Behavior:**
+- On startup, AssetService does NOT perform an initial scan
+- Relies on hot-reload timers (first scan after `scan_interval_seconds`)
+- Users can manually trigger scan via Edit → Scan Assets
+- Faster startup time, especially with large asset libraries
 
 **Key Methods:**
 ```gdscript
@@ -87,6 +130,8 @@ get_assets_by_type(type: Asset.TYPE) -> Array[Asset]
 get_audio_assets() -> Array[Asset]
 get_midi_assets() -> Array[Asset]
 get_device_assets() -> Array[Asset]
+get_sfz_assets() -> Array[Asset]
+get_soundfont_assets() -> Array[Asset]
 find_asset(path: String) -> Asset
 
 # Metadata management
@@ -181,19 +226,28 @@ Main configuration file with asset discovery settings:
 ```json
 {
   "assets": {
-    "scan_paths": [
-      "~/Music/Samples",
-      "~/Music/MIDI"
-    ],
+    "samples": {
+      "paths": [
+        "~/Music/Samples",
+        "~/Music/MIDI"
+      ]
+    },
+    "sfz": {
+      "paths": [
+        "~/Music/SFZ",
+        "~/Samples"
+      ]
+    },
     "scan_interval_seconds": 5.0,
-    "enabled_providers": ["filesystem", "devices"]
+    "enabled_providers": ["filesystem", "devices", "sfz"]
   }
 }
 ```
 
 Access via:
 ```gdscript
-var scan_paths = Sonara.get_config("assets/scan_paths", [])
+var scan_paths = Sonara.get_config("assets/samples/paths", [])
+var sfz_paths = Sonara.get_config("assets/sfz/paths", [])
 ```
 
 ### assets.json

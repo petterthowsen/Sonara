@@ -31,6 +31,17 @@ Signal-based MVC architecture for clean separation between data and UI.
 └──────────────────┘              └──────────────────┘
 ```
 
+## Sonara Autoload & Config System
+
+The `Sonara.gd` autoload owns global configuration and project-directory management.
+
+- **Directory layout** – Config lives under `~/.config/sonara`; projects default to `~/Documents/Sonara`. The autoload ensures both exist on `_ready()`.
+- **Config cache** – `Sonara.config` is lazily loaded JSON. Callers should let the autoload own this dictionary and avoid persisting parallel copies.
+- **Key access** – `Sonara.get_config("section/key", default)` supports slash-separated paths; it returns the supplied default when any segment is missing. `set_config` mirrors the syntax and creates intermediate dictionaries as needed.
+- **Persistence** – After changing values, call `Sonara.save_config()` so updates flush to `config.json`. Skip manual file writes to keep logging and error handling centralized.
+- **Helpers** – `get_config_dir()`, `get_config_path()`, and `get_projects_dir()` return memoized paths; reuse them instead of recomputing environment-dependent strings.
+- **Usage pattern** – Startup systems (AssetService, providers, editor subsystems) should read config in their initialization flow, then cache results rather than hitting the filesystem every frame.
+
 ## Layers
 
 ### 1. Data Layer (Model)

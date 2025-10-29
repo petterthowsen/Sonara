@@ -7,7 +7,7 @@ alwaysApply: false
 ## Overview
 - The engine ships a first-party SFZ instrument implemented in `Engine/src/audio/devices/sfizz_device.rs`.
 - It wraps the `rust-sfizz` crate and is exposed as a built-in device so it follows audio-thread safety rules identical to other native instruments.
-- Godot surfaces the device through `Device.create_builtin_sfizz()` and the asset browser; no other device currently consumes SFZ files.
+- Godot surfaces the device through `Device.create_builtin_sfizz()` and the asset browser; SFZ files are discovered via `SfzAssetProvider` and loaded using the `/load_file` OSC command.
 
 ## Device Identity & Factory Registration
 - Device ID: `sonara.builtin.sfizz`, category `Instrument`, variant `BuiltIn`.

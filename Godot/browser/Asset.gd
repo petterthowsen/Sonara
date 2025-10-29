@@ -1,6 +1,6 @@
 class_name Asset extends RefCounted
 
-enum TYPE { Audio, Midi, Device }
+enum TYPE { Audio, Midi, Device, SFZ, SoundFont }
 
 # ============================================================================
 # CORE PROPERTIES
@@ -57,6 +57,16 @@ func is_midi() -> bool:
 	return type == TYPE.Midi
 
 
+## Check if this is an SFZ instrument
+func is_sfz() -> bool:
+	return type == TYPE.SFZ
+
+
+## Check if this is a SoundFont instrument
+func is_soundfont() -> bool:
+	return type == TYPE.SoundFont
+
+
 ## Get icon name for this asset type
 func get_icon() -> String:
 	match type:
@@ -66,6 +76,10 @@ func get_icon() -> String:
 			return "DockRemove"  # Generic icon for now
 		TYPE.Device:
 			return "AudioBusInput"
+		TYPE.SFZ:
+			return "AudioStreamSample"  # Sample-based instrument
+		TYPE.SoundFont:
+			return "AudioStreamSample"  # Sample-based instrument
 		_:
 			return "File"
 

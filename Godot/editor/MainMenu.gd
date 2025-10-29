@@ -5,7 +5,7 @@ class_name MainMenu extends MenuBar
 enum  MENU { File, Edit }
 
 enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
-enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Sep2, Preferences }
+enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 
 enum DialogMode { OPEN, SAVE, SAVE_AS }
 
@@ -33,6 +33,7 @@ func _ready() -> void:
 	edit.add_item("Redo", EDIT.Redo)
 	edit.add_separator("", EDIT.Sep1)
 	edit.add_item("Scan Plugins", EDIT.Scan_Plugins)
+	edit.add_item("Scan Assets", EDIT.Scan_Assets)
 	edit.add_separator("", EDIT.Sep2)
 	edit.add_item("Preferences", EDIT.Preferences)
 	
@@ -82,6 +83,8 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_redo()
 			EDIT.Scan_Plugins:
 				_on_scan_plugins()
+			EDIT.Scan_Assets:
+				_on_scan_assets()
 			EDIT.Preferences:
 				_on_preferences()
 
@@ -203,6 +206,12 @@ func _on_scan_plugins() -> void:
 	"""Trigger plugin scan via AssetService."""
 	print("[MainMenu] Scanning plugins...")
 	AssetService.scan_plugins()
+
+
+func _on_scan_assets() -> void:
+	"""Trigger asset rescan (audio, MIDI, SFZ, etc.) via AssetService."""
+	print("[MainMenu] Scanning assets...")
+	AssetService.scan()
 
 
 func _on_preferences() -> void:

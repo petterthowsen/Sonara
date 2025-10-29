@@ -1,0 +1,28 @@
+---
+description: Apply when working on the Sonara autoload or code that reads/writes configuration via Sonara.get_config / set_config.
+alwaysApply: false
+---
+# Godot Config System
+
+## Overview
+- `Godot/Sonara.gd` is the autoload that owns global settings, project directory setup, and access helpers for Sonara UI code.
+- Configuration is stored as JSON at `~/.config/sonara/config.json`; the autoload caches the parsed dictionary and exposes helper APIs.
+- Other subsystems (AssetService, providers, UI components) should treat the autoload as the single source of truth for user settings.
+
+## Config Access
+- Use `Sonara.get_config("section/key", default_value)` to read settings. Slash notation walks nested dictionaries and falls back to the provided default on missing keys.
+- Use `Sonara.set_config("section/key", value)` to write settings. It auto-creates intermediate dictionaries; there is no need to pre-check for existence.
+- Avoid reaching into `Sonara.config` directly; the getter ensures the cache is hydrated and centralizes future validation.
+
+## Persistence Rules
+- After modifying settings, call `Sonara.save_config()` to write `config.json`. The method handles JSON serialization, logging, and error reporting.
+- Never write to `config.json` (or other Sonara config files) manually; keep disk I/O inside the autoload to maintain consistent format and messaging.
+- For read-heavy systems, pull config values during initialization and cache them locally rather than invoking `get_config` every frame.
+
+## Directory Helpers
+- `Sonara.get_config_dir()` returns `~/.config/sonara`; `get_config_path()` resolves the `config.json` file. Both values are memoized—reuse them instead of rebuilding paths.
+- `Sonara.get_projects_dir()` defaults to `~/Documents/Sonara` and is created on startup. Callers should respect this default unless user-configurable paths are introduced.
+- The autoload’s `_ensure_config_dir()` and `_ensure_projects_dir()` already run during `_ready()`. Avoid duplicating directory-creation logic elsewhere.
+
+## Related Files
+- `Godot/browser/AssetService.gd` and `Godot/browser/DeviceAssetProvider.gd` store auxiliary JSON caches (e.g., `assets.json`, `plugins.json`) under the same config directory. Use the autoload helpers to resolve paths for any additional caches to keep layout consistent.

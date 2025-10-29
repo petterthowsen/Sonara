@@ -177,13 +177,12 @@ func _on_file_selected(path: String) -> void:
 	
 	print("[DevicePanel] Loading file: %s" % path)
 	
-	# Send OSC command to load file
-	var osc_address = "/channel/%d/device/%d/load_file" % [device.channel_id, device.position]
-	AudioEngineOSC.send(osc_address, [path])
+	# Load file into device
+	device.load_file(path)
 	
 	# Update UI
 	loaded_file_path = path
 	var filename = path.get_file()
 	file_status_label.text = filename
 	
-	print("[DevicePanel] ✓ File load command sent: %s" % filename)
+	print("[DevicePanel] ✓ File loaded: %s" % filename)

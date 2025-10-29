@@ -1,1 +1,3 @@
 **/*.uid
+Engine/logs/**.log
+**/*.log
