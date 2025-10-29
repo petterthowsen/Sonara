@@ -3,20 +3,20 @@
 //! This module provides CLAP plugin loading and hosting capabilities using the clack-host library.
 //! Plugins are adapted to work with Sonara's AudioDevice trait for seamless integration.
 
+pub mod adapter;
 pub mod discovery;
 pub mod host_impl;
-pub mod adapter;
 pub mod subprocess_adapter;
 
 // Subprocess adapter submodules are private (accessed through SubprocessClapAdapter)
 
-pub use discovery::{PluginScanner, PluginDescriptor};
-pub use host_impl::SonaraHost;
 pub use adapter::ClapDeviceAdapter;
+pub use discovery::{PluginDescriptor, PluginScanner};
+pub use host_impl::SonaraHost;
 pub use subprocess_adapter::SubprocessClapAdapter;
 
 // Re-export IPC types for convenience
-pub use crate::audio::ipc::{ProcessManager, PluginCommand, PluginResponse};
+pub use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager};
 
 use std::fmt;
 
@@ -45,7 +45,9 @@ impl fmt::Display for PluginError {
             PluginError::NotFound(msg) => write!(f, "Plugin not found: {}", msg),
             PluginError::LoadError(msg) => write!(f, "Failed to load plugin: {}", msg),
             PluginError::UnsupportedPlugin(msg) => write!(f, "Unsupported plugin: {}", msg),
-            PluginError::InitializationFailed(msg) => write!(f, "Plugin initialization failed: {}", msg),
+            PluginError::InitializationFailed(msg) => {
+                write!(f, "Plugin initialization failed: {}", msg)
+            }
             PluginError::ActivationFailed(msg) => write!(f, "Plugin activation failed: {}", msg),
             PluginError::InvalidPluginId(msg) => write!(f, "Invalid plugin ID: {}", msg),
             PluginError::Other(msg) => write!(f, "Plugin error: {}", msg),
@@ -60,4 +62,3 @@ impl From<Box<dyn std::error::Error>> for PluginError {
         PluginError::Other(err.to_string())
     }
 }
-

@@ -1,12 +1,12 @@
-mod oscillator;
-mod delay;
-mod sfizz_device;
 pub mod clap_host;
+mod delay;
+mod oscillator;
+mod sfizz_device;
 
-pub use oscillator::OscillatorDevice;
+pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use delay::DelayDevice;
+pub use oscillator::OscillatorDevice;
 pub use sfizz_device::SfizzDevice;
-pub use clap_host::{PluginScanner, PluginDescriptor, ClapDeviceAdapter};
 
 /// Parameter ID (normalized 0.0-1.0, host/device agnostic)
 pub type ParamId = u32;
@@ -18,8 +18,8 @@ pub type ParamValue = f32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceVariant {
     BuiltIn,
-    Lv2,      // Future: LV2 plugin
-    Clap,     // Future: CLAP plugin
+    Lv2,  // Future: LV2 plugin
+    Clap, // Future: CLAP plugin
 }
 
 /// Device category for plugin discovery
@@ -42,7 +42,7 @@ pub enum PortFlow {
 pub enum PortType {
     Audio,
     Midi,
-    Control,  // Parameter/automation
+    Control, // Parameter/automation
 }
 
 /// Audio port specification (for plugin compatibility)
@@ -51,7 +51,7 @@ pub struct AudioPort {
     pub id: u32,
     pub name: String,
     pub flow: PortFlow,
-    pub channels: usize,  // 1=mono, 2=stereo, etc.
+    pub channels: usize, // 1=mono, 2=stereo, etc.
 }
 
 /// MIDI port specification (future plugin MIDI input support)
@@ -117,8 +117,8 @@ pub trait AudioDevice: Send {
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue>;
 
     /// Get device metadata
-    fn device_id(&self) -> &str;      // Unique identifier (e.g., "com.example.oscillator")
-    fn device_name(&self) -> &str;    // Human-readable name
+    fn device_id(&self) -> &str; // Unique identifier (e.g., "com.example.oscillator")
+    fn device_name(&self) -> &str; // Human-readable name
     fn device_category(&self) -> DeviceCategory;
     fn device_variant(&self) -> DeviceVariant;
 
@@ -143,7 +143,7 @@ pub trait AudioDevice: Send {
 
     /// Get list of MIDI ports (future plugin support)
     fn midi_ports(&self) -> Vec<MidiPort> {
-        vec![]  // Default: no MIDI ports
+        vec![] // Default: no MIDI ports
     }
 
     /// Get list of parameters
@@ -162,19 +162,19 @@ pub trait AudioDevice: Send {
     /// Check if device is active (buffers allocated, ready for processing)
     /// Active=false means device is dormant to save RAM/CPU
     fn is_active(&self) -> bool {
-        true  // Default: always active for built-in devices
+        true // Default: always active for built-in devices
     }
 
     /// Activate device (allocate buffers, prepare for processing)
     /// For plugins: calls CLAP activate(), exposes parameters
     fn activate(&mut self) -> Result<(), String> {
-        Ok(())  // Default: no-op for built-in devices
+        Ok(()) // Default: no-op for built-in devices
     }
 
     /// Deactivate device (free buffers, minimal memory footprint)
     /// For plugins: calls CLAP deactivate(), hides parameters
     fn deactivate(&mut self) -> Result<(), String> {
-        Ok(())  // Default: no-op for built-in devices
+        Ok(()) // Default: no-op for built-in devices
     }
 
     // === Bypass Control ===
@@ -182,7 +182,7 @@ pub trait AudioDevice: Send {
     /// Check if device is enabled (processing audio vs bypassed)
     /// Enabled=false means audio passes through unprocessed
     fn is_enabled(&self) -> bool {
-        true  // Default: always enabled for built-in devices
+        true // Default: always enabled for built-in devices
     }
 
     /// Set device enabled state (bypass control)
@@ -190,9 +190,9 @@ pub trait AudioDevice: Send {
     fn set_enabled(&mut self, _enabled: bool) {
         // Default: no-op for built-in devices
     }
-    
+
     // === Type Downcasting ===
-    
+
     /// Get mutable reference to self as `Any` for downcasting
     /// Used to access device-specific methods (e.g. CLAP GUI)
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;

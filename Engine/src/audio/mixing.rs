@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
 use crossbeam::channel::Sender;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 
-use super::types::*;
 use super::commands::{EngineState, EngineStatus};
+use super::types::*;
 
 fn db_to_gain(db: f32) -> f32 {
     if db <= -60.0 {
@@ -16,9 +16,9 @@ fn db_to_gain(db: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam::channel::unbounded;
     use crate::audio::commands::EngineState;
     use crate::audio::types::{Channel, PanMode, Send};
+    use crossbeam::channel::unbounded;
 
     fn warm_gain(channel: &mut Channel, iterations: usize) {
         for _ in 0..iterations {
@@ -138,24 +138,37 @@ mod tests {
 }
 
 /// Mix channels and output to audio device
-pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize, status_tx: &Sender<EngineStatus>) {
+pub fn mix_and_output(
+    state: &mut EngineState,
+    data: &mut [f32],
+    channels: usize,
+    status_tx: &Sender<EngineStatus>,
+) {
     // Check if any channel has solo
     let has_solo = state.channels.values().any(|c| c.solo);
 
     static mut DEBUG_FRAME_COUNT: u32 = 0;
     unsafe {
         DEBUG_FRAME_COUNT += 1;
-        if DEBUG_FRAME_COUNT == 10 || DEBUG_FRAME_COUNT % 100 == 0 {  // Log frame 10 and every 100 frames
+        if DEBUG_FRAME_COUNT == 10 || DEBUG_FRAME_COUNT % 100 == 0 {
+            // Log frame 10 and every 100 frames
             let mut ids: Vec<_> = state.channels.keys().copied().collect();
             ids.sort();
-            info!("Channels in mix_and_output (frame {}): {} channels = {:?}", DEBUG_FRAME_COUNT, state.channels.len(), ids);
+            info!(
+                "Channels in mix_and_output (frame {}): {} channels = {:?}",
+                DEBUG_FRAME_COUNT,
+                state.channels.len(),
+                ids
+            );
 
             // Log channel details
             for (&id, ch) in &state.channels {
                 let peak_left = ch.buffer_left.iter().map(|s| s.abs()).fold(0.0, f32::max);
                 let peak_right = ch.buffer_right.iter().map(|s| s.abs()).fold(0.0, f32::max);
-                info!("  Channel {}: vol={:.2}dB pan={:.2} route_to={:?} peak_L={:.6} peak_R={:.6}",
-                    id, ch.volume_db, ch.pan, ch.output_channel_id, peak_left, peak_right);
+                info!(
+                    "  Channel {}: vol={:.2}dB pan={:.2} route_to={:?} peak_L={:.6} peak_R={:.6}",
+                    id, ch.volume_db, ch.pan, ch.output_channel_id, peak_left, peak_right
+                );
             }
         }
     }
@@ -163,14 +176,26 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     // First pass: Process device chains (instruments and effects)
     // Process effects BEFORE applying fader so fader is applied to final output
     // IMPORTANT: Skip bus channels here - they'll be processed in Phase 4 after receiving routed audio
-    let sample_count = state.channels.values().next().map(|c| c.buffer_left.len()).unwrap_or(0);
+    let sample_count = state
+        .channels
+        .values()
+        .next()
+        .map(|c| c.buffer_left.len())
+        .unwrap_or(0);
 
     // Cache pre-fader audio for channels that have pre-fader sends so we can tap the signal before fader
     let mut pre_fader_sources: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
     if sample_count > 0 {
         for (&id, channel) in state.channels.iter() {
-            if channel.send_channels.iter().any(|send| send.pre_fader && !send.muted) {
-                pre_fader_sources.insert(id, (channel.buffer_left.clone(), channel.buffer_right.clone()));
+            if channel
+                .send_channels
+                .iter()
+                .any(|send| send.pre_fader && !send.muted)
+            {
+                pre_fader_sources.insert(
+                    id,
+                    (channel.buffer_left.clone(), channel.buffer_right.clone()),
+                );
             }
         }
     }
@@ -179,7 +204,8 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     let mut bus_channel_ids: HashSet<ChannelId> = HashSet::new();
     for channel in state.channels.values() {
         if let Some(output_id) = channel.output_channel_id {
-            if output_id < 1000 {  // Only channels, not devices
+            if output_id < 1000 {
+                // Only channels, not devices
                 bus_channel_ids.insert(output_id);
             }
         }
@@ -201,7 +227,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
         // Note: Bus channels will have their parameters checked in Phase 4
         for (device_pos, device) in channel.devices.iter_mut().enumerate() {
             // Try to downcast to ClapDeviceAdapter (in-process)
-            if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>() {
+            if let Some(clap_adapter) = device
+                .as_any_mut()
+                .downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>(
+            ) {
                 let pending_changes = clap_adapter.take_pending_param_changes();
                 for (param_id, value) in pending_changes {
                     let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
@@ -213,7 +242,11 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 }
             }
             // Also check SubprocessClapAdapter (subprocess-based plugins)
-            else if let Some(subprocess_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>() {
+            else if let Some(subprocess_adapter) =
+                device
+                    .as_any_mut()
+                    .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
+            {
                 // Poll for unsolicited ParameterValueChanged messages from subprocess
                 if let Some(pending_changes) = subprocess_adapter.poll_parameter_changes() {
                     for (param_id, value) in pending_changes {
@@ -227,7 +260,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 }
             }
             // Also check SfizzDevice for parameter list changes (after loading new SFZ)
-            else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<super::devices::SfizzDevice>() {
+            else if let Some(sfizz_device) = device
+                .as_any_mut()
+                .downcast_mut::<super::devices::SfizzDevice>()
+            {
                 if sfizz_device.take_parameters_changed() {
                     info!("🎹 SFZ parameters changed! Sending parameter list for channel {} device {}",
                         channel.id, device_pos);
@@ -247,8 +283,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
 
                         // Send parameter info for each parameter
                         for param in params.iter() {
-                            info!("  Param {}: {} (range {:.2}-{:.2}, default {:.2})",
-                                param.id, param.name, param.min, param.max, param.default);
+                            info!(
+                                "  Param {}: {} (range {:.2}-{:.2}, default {:.2})",
+                                param.id, param.name, param.min, param.max, param.default
+                            );
                             let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                                 channel_id: channel.id,
                                 device_position: device_pos,
@@ -274,8 +312,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
         // Skip if muted or (solo exists and this channel isn't soloed)
         if channel.mute || (has_solo && !channel.solo) {
             if channel.id >= 2 && channel.id < 1000 {
-                info!("Skipping channel {} (mute={}, solo={}, has_solo={})",
-                    channel.id, channel.mute, channel.solo, has_solo);
+                info!(
+                    "Skipping channel {} (mute={}, solo={}, has_solo={})",
+                    channel.id, channel.mute, channel.solo, has_solo
+                );
             }
             channel.clear_buffers();
             continue;
@@ -312,7 +352,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 if send.muted {
                     continue;
                 }
-                if send.target_channel_id == 0 || send.target_channel_id == source_id || send.target_channel_id >= 1000 {
+                if send.target_channel_id == 0
+                    || send.target_channel_id == source_id
+                    || send.target_channel_id >= 1000
+                {
                     continue;
                 }
                 if !state.channels.contains_key(&send.target_channel_id) {
@@ -324,10 +367,15 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                     continue;
                 }
 
-                let entry = send_accum.entry(send.target_channel_id)
+                let entry = send_accum
+                    .entry(send.target_channel_id)
                     .or_insert_with(|| (vec![0.0; sample_count], vec![0.0; sample_count]));
 
-                let buffer_len = channel.buffer_left.len().min(channel.buffer_right.len()).min(sample_count);
+                let buffer_len = channel
+                    .buffer_left
+                    .len()
+                    .min(channel.buffer_right.len())
+                    .min(sample_count);
                 if buffer_len == 0 {
                     continue;
                 }
@@ -338,8 +386,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                         for i in 0..buffer_len {
                             let left_in = pre_left[i];
                             let right_in = pre_right[i];
-                            let panned_left = left_in * pan.left_to_left + right_in * pan.right_to_left;
-                            let panned_right = left_in * pan.left_to_right + right_in * pan.right_to_right;
+                            let panned_left =
+                                left_in * pan.left_to_left + right_in * pan.right_to_left;
+                            let panned_right =
+                                left_in * pan.left_to_right + right_in * pan.right_to_right;
                             entry.0[i] += panned_left * send_gain;
                             entry.1[i] += panned_right * send_gain;
                         }
@@ -363,7 +413,11 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
             }
 
             let dest_gain = target_ch.get_gain();
-            let len = target_ch.buffer_left.len().min(target_ch.buffer_right.len()).min(sample_count);
+            let len = target_ch
+                .buffer_left
+                .len()
+                .min(target_ch.buffer_right.len())
+                .min(sample_count);
 
             for i in 0..len {
                 target_ch.buffer_left[i] += send_left[i] * dest_gain;
@@ -380,7 +434,10 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     // Collect initial channel buffers
     for (&id, channel) in &state.channels {
         if id < 1000 {
-            channel_buffers.insert(id, (channel.buffer_left.clone(), channel.buffer_right.clone()));
+            channel_buffers.insert(
+                id,
+                (channel.buffer_left.clone(), channel.buffer_right.clone()),
+            );
         }
     }
 
@@ -390,7 +447,7 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     // Single pass routing: collect operations in dependency order
     // Track which channels have been processed to avoid re-routing the same audio
     let mut processed_channels: HashSet<ChannelId> = HashSet::new();
-    processed_channels.insert(1);  // Master never routes further
+    processed_channels.insert(1); // Master never routes further
 
     // Multi-pass routing: up to 10 passes to handle arbitrary nesting
     for routing_pass in 0..10 {
@@ -419,7 +476,7 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
             let peak_right = buf_right.iter().map(|s| s.abs()).fold(0.0, f32::max);
             let peak = peak_left.max(peak_right);
             if peak < 0.0001 {
-                continue;  // No audio to route
+                continue; // No audio to route
             }
 
             // If this channel routes to another channel (not a device), prepare mix operation
@@ -427,8 +484,8 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 // Only mix into other channels (ID < 1000), not devices (ID >= 1000)
                 if output_id != id && output_id < 1000 && state.channels.contains_key(&output_id) {
                     mix_operations.push((id, output_id, buf_left, buf_right));
-                    processed_channels.insert(id);  // Mark as processed
-                    bus_destinations.insert(output_id);  // Track that this channel received routed audio
+                    processed_channels.insert(id); // Mark as processed
+                    bus_destinations.insert(output_id); // Track that this channel received routed audio
                 }
             }
         }
@@ -485,10 +542,13 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                 // Process the bus's effect chain on the accumulated routed audio
                 // Effects (like delay) should process the mixed audio
                 bus_ch.process_device_chain(sample_count);
-                
+
                 // Check for pending parameter changes from CLAP plugins on buses
                 for (device_pos, device) in bus_ch.devices.iter_mut().enumerate() {
-                    if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>() {
+                    if let Some(clap_adapter) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>(
+                    ) {
                         let pending_changes = clap_adapter.take_pending_param_changes();
                         for (param_id, value) in pending_changes {
                             let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
@@ -497,6 +557,21 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                                 param_id,
                                 value,
                             });
+                        }
+                    } else if let Some(subprocess_adapter) =
+                        device
+                            .as_any_mut()
+                            .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
+                    {
+                        if let Some(pending_changes) = subprocess_adapter.poll_parameter_changes() {
+                            for (param_id, value) in pending_changes {
+                                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                                    channel_id: bus_id,
+                                    device_position: device_pos,
+                                    param_id,
+                                    value,
+                                });
+                            }
                         }
                     }
                 }
@@ -509,12 +584,17 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
                     let right_in = bus_ch.buffer_right[i];
 
                     // Apply 4-coefficient pan matrix to bus's mixed audio
-                    bus_ch.buffer_left[i] = left_in * pan.left_to_left + right_in * pan.right_to_left;
-                    bus_ch.buffer_right[i] = left_in * pan.left_to_right + right_in * pan.right_to_right;
+                    bus_ch.buffer_left[i] =
+                        left_in * pan.left_to_left + right_in * pan.right_to_left;
+                    bus_ch.buffer_right[i] =
+                        left_in * pan.left_to_right + right_in * pan.right_to_right;
                 }
 
                 // Update channel_buffers with the post-effect, post-pan audio so it routes correctly next pass
-                channel_buffers.insert(bus_id, (bus_ch.buffer_left.clone(), bus_ch.buffer_right.clone()));
+                channel_buffers.insert(
+                    bus_id,
+                    (bus_ch.buffer_left.clone(), bus_ch.buffer_right.clone()),
+                );
             }
         }
 
@@ -525,7 +605,8 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     // After all routing passes, sync channel_buffers back to state.channels for accurate peak metering
     // This ensures peaks reflect post-effect, post-pan levels
     for (&id, channel) in state.channels.iter_mut() {
-        if id < 1000 {  // Skip device outputs
+        if id < 1000 {
+            // Skip device outputs
             if let Some((buf_left, buf_right)) = channel_buffers.get(&id) {
                 channel.buffer_left.copy_from_slice(buf_left);
                 channel.buffer_right.copy_from_slice(buf_right);

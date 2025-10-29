@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
+use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, PluginGui, Window};
 use clack_host::prelude::*;
-use clack_extensions::gui::{PluginGui, GuiConfiguration, GuiApiType, GuiSize, Window};
 
-use crate::plugin_host::host::{SubprocessHost, SubprocessHostShared, SubprocessHostMainThread};
+use crate::plugin_host::host::{SubprocessHost, SubprocessHostMainThread, SubprocessHostShared};
 use crate::plugin_host::protocol::PluginResponse;
 
 /// Load a CLAP plugin
@@ -68,9 +68,7 @@ pub fn load_plugin(
     // Create plugin instance
     let instance = PluginInstance::<SubprocessHost>::new(
         move |_| shared_for_instance.as_ref().clone(), // Clone the shared state for plugin
-        |shared_ref| SubprocessHostMainThread {
-            shared: shared_ref,
-        }, // Main thread state
+        |shared_ref| SubprocessHostMainThread { shared: shared_ref }, // Main thread state
         &bundle,
         plugin_id_cstr,
         &host_info,
@@ -148,12 +146,10 @@ pub fn open_plugin_gui(
     );
 
     info!("🎨 Step 5: Creating GUI...");
-    gui_ext
-        .create(&mut handle, config)
-        .map_err(|e| {
-            error!("❌ Failed to create GUI: {}", e);
-            format!("Failed to create GUI: {}", e)
-        })?;
+    gui_ext.create(&mut handle, config).map_err(|e| {
+        error!("❌ Failed to create GUI: {}", e);
+        format!("Failed to create GUI: {}", e)
+    })?;
     info!("✅ GUI created");
 
     // Query the plugin's preferred size
@@ -181,8 +177,7 @@ pub fn open_plugin_gui(
 
     // For embedded mode, use the provided window handle
     if !config.is_floating {
-        let handle_value =
-            window_handle.ok_or("No window handle provided for embedded mode")?;
+        let handle_value = window_handle.ok_or("No window handle provided for embedded mode")?;
         info!(
             "🎨 Step 6: Setting parent window for embedded plugin (handle: 0x{:x})...",
             handle_value
@@ -213,12 +208,10 @@ pub fn open_plugin_gui(
         info!("✅ Plugin GUI opened successfully (embedded mode)");
 
         // Return the plugin's actual size and resizability so the engine can configure the window
-        let size = gui_ext
-            .get_size(&mut handle)
-            .unwrap_or(GuiSize {
-                width: 800,
-                height: 600,
-            });
+        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
+            width: 800,
+            height: 600,
+        });
         let is_resizable = gui_ext.can_resize(&mut handle);
         info!(
             "🎨 Final plugin size: {}x{} (resizable: {})",
@@ -268,12 +261,10 @@ pub fn open_plugin_gui(
         // Return the plugin's size and resizability (for consistency)
         let mut handle = instance.plugin_handle();
         let gui_ext: PluginGui = handle.get_extension().unwrap();
-        let size = gui_ext
-            .get_size(&mut handle)
-            .unwrap_or(GuiSize {
-                width: 800,
-                height: 600,
-            });
+        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
+            width: 800,
+            height: 600,
+        });
         let is_resizable = gui_ext.can_resize(&mut handle);
 
         Ok((size.width, size.height, is_resizable))

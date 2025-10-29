@@ -1,20 +1,20 @@
 //! Plugin discovery and scanning for CLAP plugins
 
-use std::path::{Path, PathBuf};
-use std::collections::HashMap;
-use clack_host::prelude::*;
 use super::super::DeviceCategory;
 use super::PluginError;
+use clack_host::prelude::*;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Metadata for a discovered plugin
 #[derive(Debug, Clone)]
 pub struct PluginDescriptor {
-    pub id: String,              // e.g. "com.u-he.diva"
+    pub id: String, // e.g. "com.u-he.diva"
     pub name: String,
     pub vendor: String,
     pub version: String,
     pub category: DeviceCategory,
-    pub path: PathBuf,           // Path to .clap bundle
+    pub path: PathBuf, // Path to .clap bundle
     pub description: Option<String>,
     pub url: Option<String>,
 }
@@ -60,7 +60,7 @@ impl PluginScanner {
     /// Scan all configured paths and discover plugins
     pub fn scan(&mut self) -> Result<usize, PluginError> {
         tracing::info!("Scanning for CLAP plugins in {:?}", self.scan_paths);
-        
+
         self.discovered_plugins.clear();
         let mut total_plugins = 0;
 
@@ -97,7 +97,7 @@ impl PluginScanner {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            
+
             // Check for .clap extension or .so files that might be CLAP plugins
             if let Some(ext) = path.extension() {
                 if ext == "clap" || ext == "so" {
@@ -127,16 +127,21 @@ impl PluginScanner {
         };
 
         // Get the plugin factory
-        let factory = bundle.get_plugin_factory()
+        let factory = bundle
+            .get_plugin_factory()
             .ok_or_else(|| PluginError::UnsupportedPlugin("No plugin factory found".to_string()))?;
 
         // Iterate through all plugins in the bundle
         let mut plugins = Vec::new();
-        
+
         for descriptor in factory.plugin_descriptors() {
             match Self::extract_descriptor_info(&descriptor, path) {
                 Ok(plugin_desc) => {
-                    tracing::info!("Discovered plugin: {} ({})", plugin_desc.name, plugin_desc.id);
+                    tracing::info!(
+                        "Discovered plugin: {} ({})",
+                        plugin_desc.name,
+                        plugin_desc.id
+                    );
                     plugins.push(plugin_desc);
                 }
                 Err(e) => {
@@ -153,33 +158,39 @@ impl PluginScanner {
         descriptor: &clack_host::factory::PluginDescriptor,
         bundle_path: &Path,
     ) -> Result<PluginDescriptor, PluginError> {
-        let id = descriptor.id()
+        let id = descriptor
+            .id()
             .ok_or_else(|| PluginError::InvalidPluginId("Missing plugin ID".to_string()))?
             .to_str()
             .map_err(|e| PluginError::InvalidPluginId(format!("Invalid plugin ID: {:?}", e)))?
             .to_string();
 
-        let name = descriptor.name()
+        let name = descriptor
+            .name()
             .ok_or_else(|| PluginError::Other("Missing plugin name".to_string()))?
             .to_str()
             .map_err(|e| PluginError::Other(format!("Invalid plugin name: {:?}", e)))?
             .to_string();
 
-        let vendor = descriptor.vendor()
+        let vendor = descriptor
+            .vendor()
             .and_then(|v| v.to_str().ok())
             .unwrap_or("Unknown")
             .to_string();
 
-        let version = descriptor.version()
+        let version = descriptor
+            .version()
             .and_then(|v| v.to_str().ok())
             .unwrap_or("0.0.0")
             .to_string();
 
-        let description = descriptor.description()
+        let description = descriptor
+            .description()
             .and_then(|d| d.to_str().ok())
             .map(|s| s.to_string());
 
-        let url = descriptor.url()
+        let url = descriptor
+            .url()
             .and_then(|u| u.to_str().ok())
             .map(|s| s.to_string());
 
@@ -207,8 +218,8 @@ impl PluginScanner {
                     "instrument" | "synthesizer" | "sampler" | "drum-machine" => {
                         return DeviceCategory::Instrument;
                     }
-                    "audio-effect" | "effect" | "reverb" | "delay" | "compressor" | 
-                    "equalizer" | "filter" | "distortion" | "modulation" => {
+                    "audio-effect" | "effect" | "reverb" | "delay" | "compressor" | "equalizer"
+                    | "filter" | "distortion" | "modulation" => {
                         return DeviceCategory::Effect;
                     }
                     "analyzer" | "utility" => {
@@ -267,4 +278,3 @@ mod tests {
         assert_eq!(scanner.scan_paths, custom_paths);
     }
 }
-

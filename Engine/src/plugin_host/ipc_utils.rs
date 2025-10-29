@@ -3,8 +3,8 @@
 //! Provides low-level utilities for receiving file descriptors
 //! via Unix domain sockets using SCM_RIGHTS.
 
-use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use nix::cmsg_space;
+use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use std::io::IoSliceMut;
 use tracing::info;
 

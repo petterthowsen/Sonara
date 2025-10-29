@@ -5,21 +5,23 @@
 
 use tracing::{error, info, warn};
 
+use clack_extensions::gui::{GuiSize, PluginGui};
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
+use clack_host::events::event_types::{NoteOffEvent, ParamValueEvent};
+use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
+use clack_host::events::{Pckn, UnknownEvent};
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
-use clack_host::events::event_types::{NoteOffEvent, ParamValueEvent};
-use clack_host::events::{Pckn, UnknownEvent};
-use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::utils::Cookie;
-use clack_extensions::gui::{PluginGui, GuiSize};
-use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 use crate::audio::ipc::{SharedMemory, SharedMemoryLayout};
 
-use crate::plugin_host::protocol::{PluginCommand, PluginResponse, PluginParameterInfo};
-use crate::plugin_host::state::PluginState;
-use crate::plugin_host::operations::{load_plugin, open_plugin_gui, close_plugin_gui, has_plugin_gui};
 use crate::plugin_host::ipc_utils::recv_fd_from_socket_raw;
+use crate::plugin_host::operations::{
+    close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui,
+};
+use crate::plugin_host::protocol::{PluginCommand, PluginParameterInfo, PluginResponse};
+use crate::plugin_host::state::PluginState;
 
 /// Process a command and return response
 pub fn process_command(
@@ -442,12 +444,13 @@ pub fn process_command(
                             ),
                         }]);
 
-                        let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-                            latency: 0,
-                            channels: AudioPortBufferType::f32_output_only(
-                                state.output_buffers.iter_mut().map(|b| &mut b[..64]),
-                            ),
-                        }]);
+                        let mut output_audio =
+                            output_ports.with_output_buffers([AudioPortBuffer {
+                                latency: 0,
+                                channels: AudioPortBufferType::f32_output_only(
+                                    state.output_buffers.iter_mut().map(|b| &mut b[..64]),
+                                ),
+                            }]);
 
                         // Process to deliver all note-offs
                         let _ = started_processor.process(
@@ -504,9 +507,9 @@ pub fn process_command(
                                 min: clap_info.min_value as f32,
                                 max: clap_info.max_value as f32,
                                 default: clap_info.default_value as f32,
-                                is_automation_safe: clap_info
-                                    .flags
-                                    .contains(clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE),
+                                is_automation_safe: clap_info.flags.contains(
+                                    clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE,
+                                ),
                             };
 
                             param_infos.push(param_info);

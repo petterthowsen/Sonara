@@ -8,8 +8,8 @@ use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
 use crate::audio::io::load_wav_file;
+use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
 use crate::window_manager::WindowManager;
 
 /// OSC server that receives messages from Godot UI and sends status updates
@@ -23,13 +23,13 @@ impl OscServer {
     /// Create a new OSC server listening on the specified port
     pub fn new(port: u16) -> Result<Self> {
         let addr = format!("127.0.0.1:{}", port);
-        let socket = UdpSocket::bind(&addr)
-            .context(format!("Failed to bind OSC server to {}", addr))?;
-        
+        let socket =
+            UdpSocket::bind(&addr).context(format!("Failed to bind OSC server to {}", addr))?;
+
         socket.set_nonblocking(true)?;
-        
+
         info!("OSC server listening on {}", addr);
-        
+
         Ok(Self {
             socket,
             client_addr: None,
@@ -46,16 +46,24 @@ impl OscServer {
         window_manager: &mut WindowManager,
     ) -> Result<()> {
         let mut buf = [0u8; 2048];
-        
+
         // GUI events from audio thread that need window manager access
         enum GuiEvent {
-            Resize { channel_id: usize, device_position: usize, width: u32, height: u32 },
-            Closed { channel_id: usize, device_position: usize },
+            Resize {
+                channel_id: usize,
+                device_position: usize,
+                width: u32,
+                height: u32,
+            },
+            Closed {
+                channel_id: usize,
+                device_position: usize,
+            },
         }
-        
+
         // Channel for forwarding GUI events from status thread to main loop
         let (gui_event_tx, gui_event_rx) = std::sync::mpsc::channel();
-        
+
         // Spawn status sender thread
         let socket_clone = self.socket.try_clone()?;
         let client_port = self.client_port;
@@ -63,12 +71,17 @@ impl OscServer {
             use std::time::Instant;
             let mut last_heartbeat = Instant::now();
             let heartbeat_interval = Duration::from_secs(1);
-            
+
             loop {
                 if let Ok(status) = status_rx.recv_timeout(Duration::from_millis(10)) {
                     // Forward GUI events to main loop
                     match &status {
-                        EngineStatus::PluginGuiResizeRequest { channel_id, device_position, width, height } => {
+                        EngineStatus::PluginGuiResizeRequest {
+                            channel_id,
+                            device_position,
+                            width,
+                            height,
+                        } => {
                             let _ = gui_event_tx.send(GuiEvent::Resize {
                                 channel_id: *channel_id,
                                 device_position: *device_position,
@@ -76,7 +89,10 @@ impl OscServer {
                                 height: *height,
                             });
                         }
-                        EngineStatus::PluginGuiClosed { channel_id, device_position } => {
+                        EngineStatus::PluginGuiClosed {
+                            channel_id,
+                            device_position,
+                        } => {
                             let _ = gui_event_tx.send(GuiEvent::Closed {
                                 channel_id: *channel_id,
                                 device_position: *device_position,
@@ -84,10 +100,10 @@ impl OscServer {
                         }
                         _ => {}
                     }
-                    
+
                     Self::send_status_update(&socket_clone, client_port, status);
                 }
-                
+
                 // Send periodic heartbeat
                 if last_heartbeat.elapsed() >= heartbeat_interval {
                     let addr = format!("127.0.0.1:{}", client_port);
@@ -95,34 +111,46 @@ impl OscServer {
                         let msg = rosc::encoder::encode(&OscPacket::Message(OscMessage {
                             addr: "/status/heartbeat".to_string(),
                             args: vec![OscType::Int(1)],
-                        })).unwrap_or_default();
+                        }))
+                        .unwrap_or_default();
                         let _ = socket_clone.send_to(&msg, target);
                     }
                     last_heartbeat = Instant::now();
                 }
             }
         });
-        
+
         // Main receive loop
         loop {
             // Check for GUI events
             while let Ok(event) = gui_event_rx.try_recv() {
                 match event {
-                    GuiEvent::Resize { channel_id, device_position, width, height } => {
+                    GuiEvent::Resize {
+                        channel_id,
+                        device_position,
+                        width,
+                        height,
+                    } => {
                         let process_key = format!("plugin_{}_{}", channel_id, device_position);
                         info!("🔄 Resizing window {} to {}x{}", process_key, width, height);
                         window_manager.resize_window(&process_key, width, height);
                         // Show the window now that it's the right size
                         window_manager.show_window(&process_key);
                     }
-                    GuiEvent::Closed { channel_id, device_position } => {
+                    GuiEvent::Closed {
+                        channel_id,
+                        device_position,
+                    } => {
                         let process_key = format!("plugin_{}_{}", channel_id, device_position);
-                        info!("🗑️  Plugin confirmed GUI closed, destroying window: {}", process_key);
+                        info!(
+                            "🗑️  Plugin confirmed GUI closed, destroying window: {}",
+                            process_key
+                        );
                         window_manager.destroy_window(&process_key);
                     }
                 }
             }
-            
+
             // Check for window close events (user clicked X)
             while let Ok(process_key) = window_manager.close_event_rx.try_recv() {
                 info!("🗑️  Window close requested by user: {}", process_key);
@@ -130,7 +158,9 @@ impl OscServer {
                 if let Some(parts) = process_key.strip_prefix("plugin_") {
                     let parts: Vec<&str> = parts.split('_').collect();
                     if parts.len() == 2 {
-                        if let (Ok(channel_id), Ok(device_position)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                        if let (Ok(channel_id), Ok(device_position)) =
+                            (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                        {
                             // Send CloseGui command to cleanup plugin state
                             // Window will be destroyed when we receive PluginGuiClosed status
                             let _ = command_tx.send(AudioCommand::ClosePluginGui {
@@ -141,21 +171,23 @@ impl OscServer {
                     }
                 }
             }
-            
+
             match self.socket.recv_from(&mut buf) {
                 Ok((size, addr)) => {
                     // Remember client address for sending status updates
                     if self.client_addr.is_none() {
                         info!("OSC client connected from {}", addr);
                         self.client_addr = Some(addr);
-                        
+
                         // Send connection confirmation
                         let _ = self.send_message("/status/playing", vec![OscType::Int(0)]);
                     }
-                    
+
                     // Parse OSC packet
                     if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
-                        if let Err(e) = self.handle_packet(packet, &command_tx, &log_writer, window_manager) {
+                        if let Err(e) =
+                            self.handle_packet(packet, &command_tx, &log_writer, window_manager)
+                        {
                             warn!("Error handling OSC packet: {}", e);
                         }
                     }
@@ -173,9 +205,17 @@ impl OscServer {
     }
 
     /// Handle an incoming OSC packet
-    fn handle_packet(&self, packet: OscPacket, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>, window_manager: &mut WindowManager) -> Result<()> {
+    fn handle_packet(
+        &self,
+        packet: OscPacket,
+        command_tx: &Sender<AudioCommand>,
+        log_writer: &Arc<Mutex<File>>,
+        window_manager: &mut WindowManager,
+    ) -> Result<()> {
         match packet {
-            OscPacket::Message(msg) => self.handle_message(msg, command_tx, log_writer, window_manager),
+            OscPacket::Message(msg) => {
+                self.handle_message(msg, command_tx, log_writer, window_manager)
+            }
             OscPacket::Bundle(bundle) => {
                 for packet in bundle.content {
                     self.handle_packet(packet, command_tx, log_writer, window_manager)?;
@@ -236,7 +276,13 @@ impl OscServer {
     }
 
     /// Handle an individual OSC message
-    fn handle_message(&self, msg: OscMessage, command_tx: &Sender<AudioCommand>, log_writer: &Arc<Mutex<File>>, window_manager: &mut WindowManager) -> Result<()> {
+    fn handle_message(
+        &self,
+        msg: OscMessage,
+        command_tx: &Sender<AudioCommand>,
+        log_writer: &Arc<Mutex<File>>,
+        window_manager: &mut WindowManager,
+    ) -> Result<()> {
         let addr = msg.addr.as_str();
         let args = &msg.args;
 
@@ -272,7 +318,8 @@ impl OscServer {
             }
             ["transport", "time_signature"] => {
                 if let (Some(OscType::Int(num)), Some(OscType::Int(den))) =
-                    (args.get(0), args.get(1)) {
+                    (args.get(0), args.get(1))
+                {
                     info!("Set time signature to {}/{}", num, den);
                     command_tx.send(AudioCommand::SetTimeSignature(*num, *den))?;
                 }
@@ -280,16 +327,28 @@ impl OscServer {
 
             // Project setup
             ["project", "init"] => {
-                if let (Some(OscType::Float(tempo)), Some(OscType::Int(num)),
-                        Some(OscType::Int(den)), Some(OscType::Int(ppq)),
-                        Some(OscType::Int(sr))) =
-                    (args.get(0), args.get(1), args.get(2), args.get(3), args.get(4)) {
+                if let (
+                    Some(OscType::Float(tempo)),
+                    Some(OscType::Int(num)),
+                    Some(OscType::Int(den)),
+                    Some(OscType::Int(ppq)),
+                    Some(OscType::Int(sr)),
+                ) = (
+                    args.get(0),
+                    args.get(1),
+                    args.get(2),
+                    args.get(3),
+                    args.get(4),
+                ) {
                     // Rotate log file before initializing new project
                     if let Err(e) = Self::rotate_log_file(log_writer) {
                         warn!("Failed to rotate log file: {}", e);
                     }
 
-                    info!("Initialize project: {}bpm {}/{} PPQ={} SR={}", tempo, num, den, ppq, sr);
+                    info!(
+                        "Initialize project: {}bpm {}/{} PPQ={} SR={}",
+                        tempo, num, den, ppq, sr
+                    );
                     let settings = ProjectSettings {
                         tempo: *tempo,
                         time_numerator: *num,
@@ -298,7 +357,7 @@ impl OscServer {
                         sample_rate: *sr,
                     };
                     command_tx.send(AudioCommand::InitProject(settings))?;
-                    
+
                     // Send confirmation that engine is ready
                     match self.send_message("/status/connected", vec![OscType::Int(1)]) {
                         Ok(_) => info!("Sent /status/connected to Godot"),
@@ -313,9 +372,14 @@ impl OscServer {
 
             // Channel management - path-based: /channel/{id}/{command}
             ["channel", id_str, "create"] => {
-                if let (Ok(id), Some(OscType::String(name))) = (id_str.parse::<usize>(), args.first()) {
+                if let (Ok(id), Some(OscType::String(name))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
                     info!("Create channel {} ({})", id, name);
-                    command_tx.send(AudioCommand::CreateChannel { id, name: name.clone() })?;
+                    command_tx.send(AudioCommand::CreateChannel {
+                        id,
+                        name: name.clone(),
+                    })?;
                 }
             }
             ["channel", id_str, "remove"] => {
@@ -325,7 +389,8 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "volume"] => {
-                if let (Ok(id), Some(OscType::Float(db))) = (id_str.parse::<usize>(), args.first()) {
+                if let (Ok(id), Some(OscType::Float(db))) = (id_str.parse::<usize>(), args.first())
+                {
                     command_tx.send(AudioCommand::SetChannelVolume { id, db: *db })?;
                 }
             }
@@ -340,47 +405,77 @@ impl OscServer {
                                 None
                             }
                         });
-                        command_tx.send(AudioCommand::SetChannelPan { id, pan_left: *pan_left, pan_right })?;
+                        command_tx.send(AudioCommand::SetChannelPan {
+                            id,
+                            pan_left: *pan_left,
+                            pan_right,
+                        })?;
                     }
                 }
             }
             ["channel", id_str, "pan_mode"] => {
-                if let (Ok(id), Some(OscType::Int(mode))) = (id_str.parse::<usize>(), args.first()) {
+                if let (Ok(id), Some(OscType::Int(mode))) = (id_str.parse::<usize>(), args.first())
+                {
                     command_tx.send(AudioCommand::SetChannelPanMode { id, mode: *mode })?;
                 }
             }
             ["channel", id_str, "mute"] => {
-                if let (Ok(id), Some(OscType::Int(mute))) = (id_str.parse::<usize>(), args.first()) {
-                    command_tx.send(AudioCommand::SetChannelMute { id, mute: *mute != 0 })?;
+                if let (Ok(id), Some(OscType::Int(mute))) = (id_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetChannelMute {
+                        id,
+                        mute: *mute != 0,
+                    })?;
                 }
             }
             ["channel", id_str, "solo"] => {
-                if let (Ok(id), Some(OscType::Int(solo))) = (id_str.parse::<usize>(), args.first()) {
-                    command_tx.send(AudioCommand::SetChannelSolo { id, solo: *solo != 0 })?;
+                if let (Ok(id), Some(OscType::Int(solo))) = (id_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetChannelSolo {
+                        id,
+                        solo: *solo != 0,
+                    })?;
                 }
             }
             ["channel", id_str, "route"] => {
-                if let (Ok(id), Some(OscType::Int(output_id))) = (id_str.parse::<usize>(), args.first()) {
-                    let output = if *output_id < 0 { None } else { Some(*output_id as usize) };
-                    command_tx.send(AudioCommand::SetChannelRoute { id, output_id: output })?;
+                if let (Ok(id), Some(OscType::Int(output_id))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    let output = if *output_id < 0 {
+                        None
+                    } else {
+                        Some(*output_id as usize)
+                    };
+                    command_tx.send(AudioCommand::SetChannelRoute {
+                        id,
+                        output_id: output,
+                    })?;
                 }
             }
-            
+
             // Send management - path-based: /channel/{id}/send/{target_id}/{command}
             ["channel", id_str, "send", target_str, "add"] => {
-                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                if let (Ok(channel_id), Ok(target_channel_id)) =
+                    (id_str.parse::<usize>(), target_str.parse::<usize>())
+                {
                     // Args: amount_db (float), pre_fader (int 0/1)
-                    let amount_db = args.get(0).and_then(|v| match v {
-                        OscType::Float(f) => Some(*f),
-                        OscType::Int(i) => Some(*i as f32),
-                        _ => None
-                    }).unwrap_or(-12.0);  // Default -12 dB
-                    
-                    let pre_fader = args.get(1).and_then(|v| match v {
-                        OscType::Int(i) => Some(*i != 0),
-                        _ => None
-                    }).unwrap_or(false);  // Default post-fader
-                    
+                    let amount_db = args
+                        .get(0)
+                        .and_then(|v| match v {
+                            OscType::Float(f) => Some(*f),
+                            OscType::Int(i) => Some(*i as f32),
+                            _ => None,
+                        })
+                        .unwrap_or(-12.0); // Default -12 dB
+
+                    let pre_fader = args
+                        .get(1)
+                        .and_then(|v| match v {
+                            OscType::Int(i) => Some(*i != 0),
+                            _ => None,
+                        })
+                        .unwrap_or(false); // Default post-fader
+
                     command_tx.send(AudioCommand::AddSend {
                         channel_id,
                         target_channel_id,
@@ -390,7 +485,9 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "send", target_str, "remove"] => {
-                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                if let (Ok(channel_id), Ok(target_channel_id)) =
+                    (id_str.parse::<usize>(), target_str.parse::<usize>())
+                {
                     command_tx.send(AudioCommand::RemoveSend {
                         channel_id,
                         target_channel_id,
@@ -398,11 +495,13 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "send", target_str, "amount"] => {
-                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                if let (Ok(channel_id), Ok(target_channel_id)) =
+                    (id_str.parse::<usize>(), target_str.parse::<usize>())
+                {
                     if let Some(amount_db) = args.get(0).and_then(|v| match v {
                         OscType::Float(f) => Some(*f),
                         OscType::Int(i) => Some(*i as f32),
-                        _ => None
+                        _ => None,
                     }) {
                         command_tx.send(AudioCommand::SetSendAmount {
                             channel_id,
@@ -413,7 +512,9 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "send", target_str, "pre_fader"] => {
-                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                if let (Ok(channel_id), Ok(target_channel_id)) =
+                    (id_str.parse::<usize>(), target_str.parse::<usize>())
+                {
                     if let Some(OscType::Int(pre_fader)) = args.first() {
                         command_tx.send(AudioCommand::SetSendPreFader {
                             channel_id,
@@ -424,7 +525,9 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "send", target_str, "mute"] => {
-                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                if let (Ok(channel_id), Ok(target_channel_id)) =
+                    (id_str.parse::<usize>(), target_str.parse::<usize>())
+                {
                     if let Some(OscType::Int(muted)) = args.first() {
                         command_tx.send(AudioCommand::SetSendMute {
                             channel_id,
@@ -437,29 +540,36 @@ impl OscServer {
 
             // Track management - path-based: /track/{id}/{command}
             ["track", id_str, "create"] => {
-                if let (Ok(id), Some(OscType::Int(channel_id))) = (id_str.parse::<usize>(), args.first()) {
+                if let (Ok(id), Some(OscType::Int(channel_id))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
                     info!("Create track {} -> channel {}", id, channel_id);
                     command_tx.send(AudioCommand::CreateTrack {
                         id,
-                        channel_id: *channel_id as usize
+                        channel_id: *channel_id as usize,
                     })?;
                 }
             }
             ["track", id_str, "route"] => {
-                if let (Ok(id), Some(OscType::Int(channel_id))) = (id_str.parse::<usize>(), args.first()) {
+                if let (Ok(id), Some(OscType::Int(channel_id))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
                     info!("Route track {} to channel {}", id, channel_id);
                     command_tx.send(AudioCommand::SetTrackRoute {
                         id,
-                        channel_id: *channel_id as usize
+                        channel_id: *channel_id as usize,
                     })?;
                 }
             }
 
             // Clip management - path-based: /clip/{id}/{command}
             ["clip", "create"] => {
-                if let (Some(OscType::String(id)), Some(OscType::String(clip_type)),
-                        Some(OscType::String(name))) =
-                    (args.get(0), args.get(1), args.get(2)) {
+                if let (
+                    Some(OscType::String(id)),
+                    Some(OscType::String(clip_type)),
+                    Some(OscType::String(name)),
+                ) = (args.get(0), args.get(1), args.get(2))
+                {
                     info!("Create clip {} ({}) - {}", id, clip_type, name);
                     command_tx.send(AudioCommand::CreateClip {
                         id: id.clone(),
@@ -471,18 +581,27 @@ impl OscServer {
             ["clip", "delete"] => {
                 if let Some(OscType::String(id)) = args.first() {
                     info!("Delete clip {}", id);
-                    command_tx.send(AudioCommand::RemoveClip {
-                        id: id.clone(),
-                    })?;
+                    command_tx.send(AudioCommand::RemoveClip { id: id.clone() })?;
                 }
             }
             ["clip", id_str, "add_note"] => {
-                if let (Some(OscType::Int(note_id)), Some(OscType::Int(note)),
-                        Some(OscType::Int(start_tick)), Some(OscType::Int(duration)),
-                        Some(OscType::Int(velocity))) =
-                    (args.get(0), args.get(1), args.get(2), args.get(3), args.get(4)) {
-                    info!("Add note to clip {}: note_id {} note {} at tick {} duration {}",
-                          id_str, note_id, note, start_tick, duration);
+                if let (
+                    Some(OscType::Int(note_id)),
+                    Some(OscType::Int(note)),
+                    Some(OscType::Int(start_tick)),
+                    Some(OscType::Int(duration)),
+                    Some(OscType::Int(velocity)),
+                ) = (
+                    args.get(0),
+                    args.get(1),
+                    args.get(2),
+                    args.get(3),
+                    args.get(4),
+                ) {
+                    info!(
+                        "Add note to clip {}: note_id {} note {} at tick {} duration {}",
+                        id_str, note_id, note, start_tick, duration
+                    );
                     command_tx.send(AudioCommand::AddNoteToClip {
                         clip_id: id_str.to_string(),
                         note_id: *note_id as u64,
@@ -503,12 +622,23 @@ impl OscServer {
                 }
             }
             ["clip", id_str, "update_note"] => {
-                if let (Some(OscType::Int(note_id)), Some(OscType::Int(note)),
-                        Some(OscType::Int(start_tick)), Some(OscType::Int(duration)),
-                        Some(OscType::Int(velocity))) =
-                    (args.get(0), args.get(1), args.get(2), args.get(3), args.get(4)) {
-                    info!("Update note in clip {}: note_id {} note {} at tick {} duration {}",
-                          id_str, note_id, note, start_tick, duration);
+                if let (
+                    Some(OscType::Int(note_id)),
+                    Some(OscType::Int(note)),
+                    Some(OscType::Int(start_tick)),
+                    Some(OscType::Int(duration)),
+                    Some(OscType::Int(velocity)),
+                ) = (
+                    args.get(0),
+                    args.get(1),
+                    args.get(2),
+                    args.get(3),
+                    args.get(4),
+                ) {
+                    info!(
+                        "Update note in clip {}: note_id {} note {} at tick {} duration {}",
+                        id_str, note_id, note, start_tick, duration
+                    );
                     command_tx.send(AudioCommand::UpdateClipNote {
                         clip_id: id_str.to_string(),
                         note_id: *note_id as u64,
@@ -520,11 +650,16 @@ impl OscServer {
                 }
             }
             ["clip", id_str, "load_audio_file"] => {
-                if let (Some(OscType::String(file_path)), Some(OscType::Int(sample_rate)),
-                        Some(OscType::Int(channels))) =
-                    (args.get(0), args.get(1), args.get(2)) {
-                    info!("Load audio file into clip {}: {} at {} Hz, {} channels",
-                          id_str, file_path, sample_rate, channels);
+                if let (
+                    Some(OscType::String(file_path)),
+                    Some(OscType::Int(sample_rate)),
+                    Some(OscType::Int(channels)),
+                ) = (args.get(0), args.get(1), args.get(2))
+                {
+                    info!(
+                        "Load audio file into clip {}: {} at {} Hz, {} channels",
+                        id_str, file_path, sample_rate, channels
+                    );
 
                     // Load WAV file
                     match load_wav_file(file_path) {
@@ -548,18 +683,27 @@ impl OscServer {
                         }
                     }
                 } else {
-                    warn!("OSC: load_audio_file missing arguments: got {} args", args.len());
+                    warn!(
+                        "OSC: load_audio_file missing arguments: got {} args",
+                        args.len()
+                    );
                 }
             }
 
             // ClipInstance management - path-based: /track/{track_id}/instance/{command}
             ["track", track_id_str, "add_instance"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
-                    if let (Some(OscType::String(instance_id)), Some(OscType::String(clip_id)),
-                            Some(OscType::Int(start_tick)), Some(OscType::Int(duration))) =
-                        (args.get(0), args.get(1), args.get(2), args.get(3)) {
-                        info!("Add clip instance {} to track {}: clip {} at tick {} duration {}",
-                              instance_id, track_id, clip_id, start_tick, duration);
+                    if let (
+                        Some(OscType::String(instance_id)),
+                        Some(OscType::String(clip_id)),
+                        Some(OscType::Int(start_tick)),
+                        Some(OscType::Int(duration)),
+                    ) = (args.get(0), args.get(1), args.get(2), args.get(3))
+                    {
+                        info!(
+                            "Add clip instance {} to track {}: clip {} at tick {} duration {}",
+                            instance_id, track_id, clip_id, start_tick, duration
+                        );
                         command_tx.send(AudioCommand::CreateClipInstance {
                             track_id,
                             instance_id: instance_id.clone(),
@@ -573,7 +717,10 @@ impl OscServer {
             ["track", track_id_str, "remove_instance"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
                     if let Some(OscType::String(instance_id)) = args.first() {
-                        info!("Remove clip instance {} from track {}", instance_id, track_id);
+                        info!(
+                            "Remove clip instance {} from track {}",
+                            instance_id, track_id
+                        );
                         command_tx.send(AudioCommand::RemoveClipInstance {
                             track_id,
                             instance_id: instance_id.clone(),
@@ -583,9 +730,16 @@ impl OscServer {
             }
             ["track", track_id_str, "instance", instance_id_str, "set_position"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
-                    if let (Some(OscType::Int(start_tick)), Some(OscType::Int(duration)), Some(OscType::Int(clip_offset))) =
-                        (args.get(0), args.get(1), args.get(2)) {
-                        info!("Set instance {} position: start {} duration {} offset {}", instance_id_str, start_tick, duration, clip_offset);
+                    if let (
+                        Some(OscType::Int(start_tick)),
+                        Some(OscType::Int(duration)),
+                        Some(OscType::Int(clip_offset)),
+                    ) = (args.get(0), args.get(1), args.get(2))
+                    {
+                        info!(
+                            "Set instance {} position: start {} duration {} offset {}",
+                            instance_id_str, start_tick, duration, clip_offset
+                        );
                         command_tx.send(AudioCommand::UpdateClipInstancePosition {
                             track_id,
                             instance_id: instance_id_str.to_string(),
@@ -599,7 +753,10 @@ impl OscServer {
             ["track", track_id_str, "instance", instance_id_str, "set_transpose"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
                     if let Some(OscType::Int(semitones)) = args.first() {
-                        info!("Set instance {} transpose: {} semitones", instance_id_str, semitones);
+                        info!(
+                            "Set instance {} transpose: {} semitones",
+                            instance_id_str, semitones
+                        );
                         command_tx.send(AudioCommand::UpdateClipInstanceTranspose {
                             track_id,
                             instance_id: instance_id_str.to_string(),
@@ -634,11 +791,16 @@ impl OscServer {
             }
             ["track", track_id_str, "instance", instance_id_str, "set_loop"] => {
                 if let Ok(track_id) = track_id_str.parse::<usize>() {
-                    if let (Some(OscType::Int(enabled)), Some(OscType::Int(start_tick)),
-                            Some(OscType::Int(length))) =
-                        (args.get(0), args.get(1), args.get(2)) {
-                        info!("Set instance {} loop: enabled={} start={} length={}",
-                              instance_id_str, enabled, start_tick, length);
+                    if let (
+                        Some(OscType::Int(enabled)),
+                        Some(OscType::Int(start_tick)),
+                        Some(OscType::Int(length)),
+                    ) = (args.get(0), args.get(1), args.get(2))
+                    {
+                        info!(
+                            "Set instance {} loop: enabled={} start={} length={}",
+                            instance_id_str, enabled, start_tick, length
+                        );
                         command_tx.send(AudioCommand::UpdateClipInstanceLoop {
                             track_id,
                             instance_id: instance_id_str.to_string(),
@@ -652,24 +814,56 @@ impl OscServer {
 
             // Device management - path-based: /channel/{id}/add_device
             ["channel", channel_id_str, "add_device"] => {
-                if let (Ok(channel_id), Some(OscType::String(device_id)), Some(OscType::Int(position))) =
-                    (channel_id_str.parse::<usize>(), args.get(0), args.get(1)) {
+                if let (
+                    Ok(channel_id),
+                    Some(OscType::String(device_id)),
+                    Some(OscType::Int(position)),
+                ) = (channel_id_str.parse::<usize>(), args.get(0), args.get(1))
+                {
                     // Optional active and enabled parameters (default to true if not provided)
-                    let active = args.get(2)
-                        .and_then(|arg| if let OscType::Int(v) = arg { Some(*v != 0) } else { None })
+                    let active = args
+                        .get(2)
+                        .and_then(|arg| {
+                            if let OscType::Int(v) = arg {
+                                Some(*v != 0)
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or(true);
-                    let enabled = args.get(3)
-                        .and_then(|arg| if let OscType::Int(v) = arg { Some(*v != 0) } else { None })
+                    let enabled = args
+                        .get(3)
+                        .and_then(|arg| {
+                            if let OscType::Int(v) = arg {
+                                Some(*v != 0)
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or(true);
                     // Device type parameter (builtin, clap, lv2, vst3)
-                    let device_type = args.get(4)
-                        .and_then(|arg| if let OscType::String(t) = arg { Some(t.clone()) } else { None })
+                    let device_type = args
+                        .get(4)
+                        .and_then(|arg| {
+                            if let OscType::String(t) = arg {
+                                Some(t.clone())
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or_else(|| "builtin".to_string());
                     // Device file parameter (path to plugin, empty for built-ins)
-                    let device_file = args.get(5)
-                        .and_then(|arg| if let OscType::String(f) = arg { Some(f.clone()) } else { None })
+                    let device_file = args
+                        .get(5)
+                        .and_then(|arg| {
+                            if let OscType::String(f) = arg {
+                                Some(f.clone())
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or_default();
-                    
+
                     info!("Add device {} (type={}) to channel {} at position {} [active={}, enabled={}]", 
                         device_id, device_type, channel_id, position, active, enabled);
                     command_tx.send(AudioCommand::AddDeviceToChannel {
@@ -684,10 +878,17 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "activate"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(active))) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>(), args.first()) {
-                    info!("Set device active state: channel={} device={} active={}",
-                          channel_id, device_position, *active != 0);
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(active))) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Set device active state: channel={} device={} active={}",
+                        channel_id,
+                        device_position,
+                        *active != 0
+                    );
                     command_tx.send(AudioCommand::SetDeviceActive {
                         channel_id,
                         device_position,
@@ -696,10 +897,17 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "enable"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(enabled))) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>(), args.first()) {
-                    info!("Set device enabled state: channel={} device={} enabled={}",
-                          channel_id, device_position, *enabled != 0);
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(enabled))) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Set device enabled state: channel={} device={} enabled={}",
+                        channel_id,
+                        device_position,
+                        *enabled != 0
+                    );
                     command_tx.send(AudioCommand::SetDeviceEnabled {
                         channel_id,
                         device_position,
@@ -708,10 +916,15 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "load_file"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(file_path))) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>(), args.first()) {
-                    info!("Load file into device: channel={} device={} path={}",
-                          channel_id, device_position, file_path);
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(file_path))) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Load file into device: channel={} device={} path={}",
+                        channel_id, device_position, file_path
+                    );
                     command_tx.send(AudioCommand::LoadDeviceFile {
                         channel_id,
                         device_position,
@@ -720,9 +933,14 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "gui", "open"] => {
-                if let (Ok(channel_id), Ok(device_position)) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
-                    info!("Open plugin GUI: channel={} device={}", channel_id, device_position);
+                if let (Ok(channel_id), Ok(device_position)) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                ) {
+                    info!(
+                        "Open plugin GUI: channel={} device={}",
+                        channel_id, device_position
+                    );
 
                     // Create window for embedded plugin GUI (blocks until created)
                     let process_key = format!("plugin_{}_{}", channel_id, device_position);
@@ -740,9 +958,14 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "gui", "close"] => {
-                if let (Ok(channel_id), Ok(device_position)) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>()) {
-                    info!("Close plugin GUI: channel={} device={}", channel_id, device_position);
+                if let (Ok(channel_id), Ok(device_position)) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                ) {
+                    info!(
+                        "Close plugin GUI: channel={} device={}",
+                        channel_id, device_position
+                    );
 
                     // Destroy window
                     let process_key = format!("plugin_{}_{}", channel_id, device_position);
@@ -756,8 +979,12 @@ impl OscServer {
             }
             ["channel", channel_id_str, "remove_device"] => {
                 if let (Ok(channel_id), Some(OscType::Int(position))) =
-                    (channel_id_str.parse::<usize>(), args.first()) {
-                    info!("Remove device from channel {} at position {}", channel_id, position);
+                    (channel_id_str.parse::<usize>(), args.first())
+                {
+                    info!(
+                        "Remove device from channel {} at position {}",
+                        channel_id, position
+                    );
                     command_tx.send(AudioCommand::RemoveDeviceFromChannel {
                         channel_id,
                         position: *position as usize,
@@ -771,11 +998,21 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "param", param_id_str] => {
-                if let (Ok(channel_id), Ok(device_position), Ok(param_id), Some(OscType::Float(value))) =
-                    (channel_id_str.parse::<usize>(), device_pos_str.parse::<usize>(),
-                     param_id_str.parse::<u32>(), args.first()) {
-                    info!("Set device parameter: channel={} device={} param={} value={}",
-                          channel_id, device_position, param_id, value);
+                if let (
+                    Ok(channel_id),
+                    Ok(device_position),
+                    Ok(param_id),
+                    Some(OscType::Float(value)),
+                ) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    param_id_str.parse::<u32>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Set device parameter: channel={} device={} param={} value={}",
+                        channel_id, device_position, param_id, value
+                    );
                     command_tx.send(AudioCommand::SetDeviceParameter {
                         channel_id,
                         device_position,
@@ -792,8 +1029,12 @@ impl OscServer {
             }
             ["plugin", "get_parameters"] => {
                 if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
-                    (args.get(0), args.get(1)) {
-                    info!("Get plugin parameters: channel={} device={}", channel_id, device_position);
+                    (args.get(0), args.get(1))
+                {
+                    info!(
+                        "Get plugin parameters: channel={} device={}",
+                        channel_id, device_position
+                    );
                     command_tx.send(AudioCommand::GetPluginParameters {
                         channel_id: *channel_id as usize,
                         device_position: *device_position as usize,
@@ -802,8 +1043,12 @@ impl OscServer {
             }
             ["plugin", "save_state"] => {
                 if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
-                    (args.get(0), args.get(1)) {
-                    info!("Save plugin state: channel={} device={}", channel_id, device_position);
+                    (args.get(0), args.get(1))
+                {
+                    info!(
+                        "Save plugin state: channel={} device={}",
+                        channel_id, device_position
+                    );
                     command_tx.send(AudioCommand::SavePluginState {
                         channel_id: *channel_id as usize,
                         device_position: *device_position as usize,
@@ -811,11 +1056,18 @@ impl OscServer {
                 }
             }
             ["plugin", "load_state"] => {
-                if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position)),
-                        Some(OscType::String(state_base64))) =
-                    (args.get(0), args.get(1), args.get(2)) {
-                    info!("Load plugin state: channel={} device={} ({} bytes)",
-                          channel_id, device_position, state_base64.len());
+                if let (
+                    Some(OscType::Int(channel_id)),
+                    Some(OscType::Int(device_position)),
+                    Some(OscType::String(state_base64)),
+                ) = (args.get(0), args.get(1), args.get(2))
+                {
+                    info!(
+                        "Load plugin state: channel={} device={} ({} bytes)",
+                        channel_id,
+                        device_position,
+                        state_base64.len()
+                    );
                     command_tx.send(AudioCommand::LoadPluginState {
                         channel_id: *channel_id as usize,
                         device_position: *device_position as usize,
@@ -836,29 +1088,41 @@ impl OscServer {
     fn send_status_update(socket: &UdpSocket, client_port: u16, status: EngineStatus) {
         let is_param_change = status.is_param_change();
         let (addr, args) = match status {
-            EngineStatus::PlayheadUpdate(ticks) => {
-                ("/status/playhead".to_string(), vec![OscType::Int(ticks as i32)])
-            }
-            EngineStatus::PlayingStateChanged(playing) => {
-                ("/status/playing".to_string(), vec![OscType::Int(if playing { 1 } else { 0 })])
-            }
-            EngineStatus::ChannelPeaks { id, peak_left, peak_right } => {
+            EngineStatus::PlayheadUpdate(ticks) => (
+                "/status/playhead".to_string(),
+                vec![OscType::Int(ticks as i32)],
+            ),
+            EngineStatus::PlayingStateChanged(playing) => (
+                "/status/playing".to_string(),
+                vec![OscType::Int(if playing { 1 } else { 0 })],
+            ),
+            EngineStatus::ChannelPeaks {
+                id,
+                peak_left,
+                peak_right,
+            } => {
                 // New path-based format: /channel/{id}/peak [peak_left, peak_right]
-                (format!("/channel/{}/peak", id), vec![
-                    OscType::Float(peak_left),
-                    OscType::Float(peak_right),
-                ])
+                (
+                    format!("/channel/{}/peak", id),
+                    vec![OscType::Float(peak_left), OscType::Float(peak_right)],
+                )
             }
-            EngineStatus::DeviceActiveChanged { channel_id, device_position, active } => {
-                (format!("/channel/{}/device/{}/active", channel_id, device_position), vec![
-                    OscType::Int(if active { 1 } else { 0 })
-                ])
-            }
-            EngineStatus::DeviceEnabledChanged { channel_id, device_position, enabled } => {
-                (format!("/channel/{}/device/{}/enabled", channel_id, device_position), vec![
-                    OscType::Int(if enabled { 1 } else { 0 })
-                ])
-            }
+            EngineStatus::DeviceActiveChanged {
+                channel_id,
+                device_position,
+                active,
+            } => (
+                format!("/channel/{}/device/{}/active", channel_id, device_position),
+                vec![OscType::Int(if active { 1 } else { 0 })],
+            ),
+            EngineStatus::DeviceEnabledChanged {
+                channel_id,
+                device_position,
+                enabled,
+            } => (
+                format!("/channel/{}/device/{}/enabled", channel_id, device_position),
+                vec![OscType::Int(if enabled { 1 } else { 0 })],
+            ),
             EngineStatus::DeviceReady { .. } => {
                 // DeviceReady is handled internally (triggers parameter re-send)
                 // No need to send it to Godot
@@ -866,7 +1130,7 @@ impl OscServer {
             }
             EngineStatus::PluginGuiResizeRequest { .. } => {
                 // GUI resize is handled by the main loop with access to WindowManager
-                // No need to send it to Godot  
+                // No need to send it to Godot
                 return;
             }
             EngineStatus::PluginGuiClosed { .. } => {
@@ -874,10 +1138,19 @@ impl OscServer {
                 // No need to send it to Godot
                 return;
             }
-            EngineStatus::PluginScanComplete { count } => {
-                ("/plugin/scan_complete".to_string(), vec![OscType::Int(count as i32)])
-            }
-            EngineStatus::PluginInfo { id, name, vendor, version, category, description, path } => {
+            EngineStatus::PluginScanComplete { count } => (
+                "/plugin/scan_complete".to_string(),
+                vec![OscType::Int(count as i32)],
+            ),
+            EngineStatus::PluginInfo {
+                id,
+                name,
+                vendor,
+                version,
+                category,
+                description,
+                path,
+            } => {
                 tracing::info!("📨 Sending plugin info: {} ({})", name, id);
                 let mut args = vec![
                     OscType::String(id.clone()),
@@ -892,44 +1165,70 @@ impl OscServer {
                 args.push(OscType::String(path));
                 ("/plugin/info".to_string(), args)
             }
-            EngineStatus::PluginParameterInfo { channel_id, device_position, param_id, name, min, max, default } => {
-                (format!("/channel/{}/device/{}/param/info", channel_id, device_position), vec![
+            EngineStatus::PluginParameterInfo {
+                channel_id,
+                device_position,
+                param_id,
+                name,
+                min,
+                max,
+                default,
+            } => (
+                format!(
+                    "/channel/{}/device/{}/param/info",
+                    channel_id, device_position
+                ),
+                vec![
                     OscType::Int(param_id as i32),
                     OscType::String(name),
                     OscType::Float(min),
                     OscType::Float(max),
                     OscType::Float(default),
-                ])
-            }
-            EngineStatus::PluginParameterCount { channel_id, device_position, count } => {
-                (format!("/channel/{}/device/{}/param/count", channel_id, device_position), vec![
-                    OscType::Int(count as i32),
-                ])
-            }
-            EngineStatus::PluginStateSaved { channel_id, device_position, state_base64 } => {
-                ("/plugin/state/saved".to_string(), vec![
+                ],
+            ),
+            EngineStatus::PluginParameterCount {
+                channel_id,
+                device_position,
+                count,
+            } => (
+                format!(
+                    "/channel/{}/device/{}/param/count",
+                    channel_id, device_position
+                ),
+                vec![OscType::Int(count as i32)],
+            ),
+            EngineStatus::PluginStateSaved {
+                channel_id,
+                device_position,
+                state_base64,
+            } => (
+                "/plugin/state/saved".to_string(),
+                vec![
                     OscType::Int(channel_id as i32),
                     OscType::Int(device_position as i32),
                     OscType::String(state_base64),
-                ])
-            }
-            EngineStatus::PluginParameterValueChanged { channel_id, device_position, param_id, value } => {
-                let addr = format!("/channel/{}/device/{}/param/{}/value", channel_id, device_position, param_id);
+                ],
+            ),
+            EngineStatus::PluginParameterValueChanged {
+                channel_id,
+                device_position,
+                param_id,
+                value,
+            } => {
+                let addr = format!(
+                    "/channel/{}/device/{}/param/{}/value",
+                    channel_id, device_position, param_id
+                );
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
             }
-            EngineStatus::LogMessage { level, message } => {
-                ("/log".to_string(), vec![
-                    OscType::String(level),
-                    OscType::String(message),
-                ])
-            }
+            EngineStatus::LogMessage { level, message } => (
+                "/log".to_string(),
+                vec![OscType::String(level), OscType::String(message)],
+            ),
         };
 
-        let msg = OscMessage {
-            addr,
-            args,
-        };
+        let msg = OscMessage { addr, args };
 
         let packet = OscPacket::Message(msg);
         if let Ok(buf) = rosc::encoder::encode(&packet) {

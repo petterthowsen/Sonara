@@ -68,4 +68,3 @@ impl tracing::field::Visit for MessageVisitor {
         }
     }
 }
-

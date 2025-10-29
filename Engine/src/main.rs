@@ -1,19 +1,19 @@
 mod audio;
+mod log_forwarder;
 mod osc;
 mod window_manager;
-mod log_forwarder;
 
 use anyhow::Result;
-use tracing::info;
-use tracing_subscriber;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
+use tracing::info;
+use tracing_subscriber;
 
 use audio::AudioEngine;
+use log_forwarder::LogForwarder;
 use osc::OscServer;
 use window_manager::WindowManager;
-use log_forwarder::LogForwarder;
 
 // Wrapper to make Arc<Mutex<File>> implement MakeWriter for tracing_subscriber
 struct RotatableWriter {
@@ -72,15 +72,15 @@ fn main() -> Result<()> {
     let (status_tx, status_rx) = crossbeam::channel::unbounded();
 
     // Set up logging with both file writer AND log forwarder to Godot
+    use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::Layer;
-    
+
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(log_writer)
-        .with_ansi(false)  // No color codes in file
-        .with_filter(LevelFilter::INFO);  // Only INFO, WARN, ERROR (no TRACE/DEBUG spam)
+        .with_ansi(false) // No color codes in file
+        .with_filter(LevelFilter::INFO); // Only INFO, WARN, ERROR (no TRACE/DEBUG spam)
 
     let log_forwarder = LogForwarder::new(status_tx.clone());
 

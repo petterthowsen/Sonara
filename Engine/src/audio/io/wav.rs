@@ -1,5 +1,5 @@
-use tracing::info;
 use rustwav::WaveReader;
+use tracing::info;
 
 /// Load WAV file and return samples as Vec<f32>
 ///
@@ -14,8 +14,10 @@ pub fn load_wav_file(file_path: &str) -> std::result::Result<Vec<f32>, Box<dyn s
     let sample_rate = spec.sample_rate;
     let bits_per_sample = spec.bits_per_sample;
 
-    info!("Loading WAV file: {} Hz, {} channels, {} bits/sample",
-        sample_rate, num_channels, bits_per_sample);
+    info!(
+        "Loading WAV file: {} Hz, {} channels, {} bits/sample",
+        sample_rate, num_channels, bits_per_sample
+    );
 
     let mut samples = Vec::new();
 
@@ -52,9 +54,20 @@ pub fn load_wav_file(file_path: &str) -> std::result::Result<Vec<f32>, Box<dyn s
     if !samples.is_empty() {
         let min = samples.iter().cloned().fold(f32::INFINITY, f32::min);
         let max = samples.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let first_10 = samples.iter().take(10).map(|s| format!("{:.6}", s)).collect::<Vec<_>>().join(", ");
-        info!("Loaded {} total samples: min={:.6}, max={:.6} ({} channels × {} frames)",
-            samples.len(), min, max, num_channels, samples.len() / num_channels);
+        let first_10 = samples
+            .iter()
+            .take(10)
+            .map(|s| format!("{:.6}", s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "Loaded {} total samples: min={:.6}, max={:.6} ({} channels × {} frames)",
+            samples.len(),
+            min,
+            max,
+            num_channels,
+            samples.len() / num_channels
+        );
         info!("First 10 samples: {}", first_10);
     }
 

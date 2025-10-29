@@ -1,5 +1,5 @@
-use tracing::info;
 use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use tracing::info;
 
 /// Delay effect device
 ///
@@ -15,21 +15,20 @@ pub struct DelayDevice {
 
     // Parameters
     delay_ms: f32,
-    wet_amount: f32,  // 0.0 = dry only, 1.0 = 100% wet
-    feedback: f32,    // 0.0-0.99 (internal, not exposed as parameter)
-    
+    wet_amount: f32, // 0.0 = dry only, 1.0 = 100% wet
+    feedback: f32,   // 0.0-0.99 (internal, not exposed as parameter)
+
     // Lifecycle state
     is_active: bool,
     is_enabled: bool,
 }
-
 
 impl DelayDevice {
     /// Create delay with maximum delay time (in ms)
     pub fn new(sample_rate: f32, max_delay_ms: f32) -> Self {
         // Calculate buffer size for stereo (L, R interleaved)
         let samples_per_frame = ((max_delay_ms / 1000.0) * sample_rate).ceil() as usize;
-        let buffer_size = samples_per_frame * 2;  // Stereo
+        let buffer_size = samples_per_frame * 2; // Stereo
 
         Self {
             sample_rate,
@@ -57,7 +56,6 @@ impl DelayDevice {
     }
 }
 
-
 impl AudioDevice for DelayDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         // Handle inactive state (device not loaded - pass through to save RAM)
@@ -67,7 +65,7 @@ impl AudioDevice for DelayDevice {
             outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
             return;
         }
-        
+
         // Handle disabled state (bypassed - pass through)
         if !self.is_enabled {
             // Pass audio through unprocessed
@@ -75,7 +73,7 @@ impl AudioDevice for DelayDevice {
             outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
             return;
         }
-        
+
         let buffer_size = self.buffer.len();
         // Convert delay time to buffer positions (samples per channel * 2 for stereo interleaved)
         let delay_frames = ((self.delay_ms / 1000.0) * self.sample_rate).ceil() as usize;
@@ -214,35 +212,35 @@ impl AudioDevice for DelayDevice {
         self.buffer.fill(0.0);
         self.write_pos = 0;
     }
-    
+
     // === Lifecycle Management ===
-    
+
     fn is_active(&self) -> bool {
         self.is_active
     }
-    
+
     fn activate(&mut self) -> Result<(), String> {
         self.is_active = true;
         Ok(())
     }
-    
+
     fn deactivate(&mut self) -> Result<(), String> {
         self.is_active = false;
         // Clear buffers when deactivating
         self.reset();
         Ok(())
     }
-    
+
     // === Bypass Control ===
-    
+
     fn is_enabled(&self) -> bool {
         self.is_enabled
     }
-    
+
     fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
     }
-    
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

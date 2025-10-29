@@ -6,11 +6,11 @@
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
+use clack_host::events::{Pckn, UnknownEvent};
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
-use clack_host::events::event_types::{NoteOnEvent, NoteOffEvent, ParamValueEvent};
-use clack_host::events::{Pckn, UnknownEvent};
-use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 
 use crate::audio::ipc::SharedMemory;
 
@@ -53,9 +53,7 @@ pub fn process_output_events(state: &mut PluginState) {
 
             // Store for sending to main process
             // (param_id, clap_id, denormalized_value)
-            state
-                .pending_param_changes
-                .push((u32::MAX, clap_id, value));
+            state.pending_param_changes.push((u32::MAX, clap_id, value));
 
             info!(
                 "Plugin changed parameter (CLAP ID: {:?}) to {:.4}",
@@ -153,7 +151,10 @@ pub fn process_audio(state: &mut PluginState) {
     let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
         latency: 0,
         channels: AudioPortBufferType::f32_output_only(
-            state.output_buffers.iter_mut().map(|b| &mut b[..chunk_size]),
+            state
+                .output_buffers
+                .iter_mut()
+                .map(|b| &mut b[..chunk_size]),
         ),
     }]);
 
@@ -168,12 +169,7 @@ pub fn process_audio(state: &mut PluginState) {
             // Note On
             let event = NoteOnEvent::new(
                 midi_event.sample_offset,
-                Pckn::new(
-                    0u16,
-                    0u16,
-                    midi_event.note as u16,
-                    midi_event.note as u32,
-                ),
+                Pckn::new(0u16, 0u16, midi_event.note as u16, midi_event.note as u32),
                 midi_event.velocity as f64 / 127.0,
             );
             note_on_events.push(event);
@@ -185,12 +181,7 @@ pub fn process_audio(state: &mut PluginState) {
             // Note Off
             let event = NoteOffEvent::new(
                 midi_event.sample_offset,
-                Pckn::new(
-                    0u16,
-                    0u16,
-                    midi_event.note as u16,
-                    midi_event.note as u32,
-                ),
+                Pckn::new(0u16, 0u16, midi_event.note as u16, midi_event.note as u32),
                 midi_event.velocity as f64 / 127.0,
             );
             note_off_events.push(event);

@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
-use clack_host::prelude::*;
-use clack_extensions::gui::{HostGui, HostGuiImpl, GuiSize};
-use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_host::prelude::*;
 
 use crate::plugin_host::protocol::PluginResponse;
 
@@ -132,7 +132,10 @@ impl HostGuiImpl for SubprocessHostShared {
     }
 
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
-        info!("Plugin GUI requested resize to {}x{}", new_size.width, new_size.height);
+        info!(
+            "Plugin GUI requested resize to {}x{}",
+            new_size.width, new_size.height
+        );
 
         // Send resize request to main loop
         let _ = self.response_tx.send(PluginResponse::GuiResizeRequest {
@@ -172,12 +175,22 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
         let timer = Timer::new(timer_id, interval);
         self.shared.timers.lock().unwrap().insert(timer_id, timer);
 
-        info!("Registered timer {} with interval {}ms", timer_id.0, period_ms);
+        info!(
+            "Registered timer {} with interval {}ms",
+            timer_id.0, period_ms
+        );
         Ok(timer_id)
     }
 
     fn unregister_timer(&mut self, timer_id: TimerId) -> Result<(), HostError> {
-        if self.shared.timers.lock().unwrap().remove(&timer_id).is_some() {
+        if self
+            .shared
+            .timers
+            .lock()
+            .unwrap()
+            .remove(&timer_id)
+            .is_some()
+        {
             info!("Unregistered timer {}", timer_id.0);
             Ok(())
         } else {

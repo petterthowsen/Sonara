@@ -8,16 +8,15 @@
 //!
 //! These components are plugin-format agnostic and can be used for CLAP, VST3, LV2, etc.
 
-pub mod protocol;
-pub mod process_manager;
-pub mod shared_memory;
 pub mod platform_shm;
+pub mod process_manager;
+pub mod protocol;
+pub mod shared_memory;
 
-pub use protocol::{
-    PluginCommand, PluginResponse, PluginParameterInfo,
-    SharedMemoryLayout, MidiEvent, ControlData, RingBufferStats,
-};
-pub use process_manager::{ProcessManager, PluginProcess};
-pub use shared_memory::{SharedMemory, AudioRingBuffer, MidiEventQueue};
 pub use platform_shm::PlatformSharedMemory;
-
+pub use process_manager::{PluginProcess, ProcessManager};
+pub use protocol::{
+    ControlData, MidiEvent, PluginCommand, PluginParameterInfo, PluginResponse, RingBufferStats,
+    SharedMemoryLayout,
+};
+pub use shared_memory::{AudioRingBuffer, MidiEventQueue, SharedMemory};

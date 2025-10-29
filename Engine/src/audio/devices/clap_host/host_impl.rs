@@ -2,14 +2,16 @@
 //!
 //! Implements the required host callbacks for clack-host integration.
 
-use clack_host::prelude::*;
-use clack_extensions::gui::{HostGui, HostGuiImpl, GuiSize};
-use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::audio_ports::{HostAudioPortsImpl, RescanType};
+use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
+use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::note_ports::{HostNotePortsImpl, NoteDialects, NotePortRescanFlags};
-use clack_extensions::params::{HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags};
+use clack_extensions::params::{
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
+};
 use clack_extensions::state::{HostState, HostStateImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_host::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Shared host state (accessible from all threads)
@@ -44,7 +46,11 @@ impl HostGuiImpl for SonaraHostShared {
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
         // Plugin requesting to resize its parent window
         // For floating windows, we don't control the window, so this is ignored
-        tracing::debug!("CLAP plugin requested resize to {}x{}", new_size.width, new_size.height);
+        tracing::debug!(
+            "CLAP plugin requested resize to {}x{}",
+            new_size.width,
+            new_size.height
+        );
         Ok(())
     }
 
@@ -148,13 +154,13 @@ impl HostStateImpl for SonaraHostMainThread {
 }
 
 /// Timer support implementation
-/// 
+///
 /// NOTE: Timers are registered but callbacks are not actively invoked.
 /// Full timer support requires an event loop on the Rust side, which Sonara
 /// doesn't have (Godot handles the main UI loop). This allows plugins to
 /// initialize without assertions, but GUI features that depend on timer
 /// callbacks may not work correctly.
-/// 
+///
 /// TODO: Consider running a background thread that ticks timers and calls
 /// plugin callbacks, or integrate with Godot's process loop via OSC.
 impl HostTimerImpl for SonaraHostMainThread {
@@ -187,15 +193,14 @@ impl HostHandlers for SonaraHost {
     type Shared<'a> = SonaraHostShared;
     type MainThread<'a> = SonaraHostMainThread;
     type AudioProcessor<'a> = SonaraHostAudioProcessor;
-    
+
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
         // Register extensions that plugins commonly expect
         builder
-            .register::<HostLog>()      // Logging support
-            .register::<HostGui>()      // GUI support (floating windows)
-            .register::<HostTimer>()    // Timer callbacks (stub implementation)
-            .register::<HostParams>()   // Parameter notifications
-            .register::<HostState>();   // State save/load support
+            .register::<HostLog>() // Logging support
+            .register::<HostGui>() // GUI support (floating windows)
+            .register::<HostTimer>() // Timer callbacks (stub implementation)
+            .register::<HostParams>() // Parameter notifications
+            .register::<HostState>(); // State save/load support
     }
 }
-

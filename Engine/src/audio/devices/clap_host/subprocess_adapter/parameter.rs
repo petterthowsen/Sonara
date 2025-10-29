@@ -2,9 +2,9 @@
 //!
 //! Handles parameter queries and caching for subprocess plugins.
 
-use std::sync::{Arc, Mutex};
+use crate::audio::devices::{ParamId, ParamInfo, ParamValue};
 use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager};
-use crate::audio::devices::{ParamId, ParamValue, ParamInfo};
+use std::sync::{Arc, Mutex};
 use tracing::{error, warn};
 
 /// Get parameter value from subprocess (with timeout to avoid blocking)
@@ -14,7 +14,7 @@ pub fn get_parameter_value(
     param_id: ParamId,
 ) -> Option<ParamValue> {
     let process_arc = process_manager.get_process(process_key)?;
-    
+
     // Use try_lock to avoid blocking (this might be called from audio thread)
     let mut process_guard = match process_arc.try_lock() {
         Ok(guard) => guard,
@@ -23,13 +23,13 @@ pub fn get_parameter_value(
             return None;
         }
     };
-    
+
     // Send command
     if let Err(e) = process_guard.send_command(PluginCommand::GetParameter { param_id }) {
         error!("Failed to send GetParameter command: {}", e);
         return None;
     }
-    
+
     // Receive response (with timeout to avoid blocking)
     let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_millis(100)));
     match process_guard.recv_response() {
@@ -64,9 +64,9 @@ pub fn set_parameter_value(
             return;
         }
     };
-    
+
     let cmd = PluginCommand::SetParameter { param_id, value };
-    
+
     // Use try_lock to avoid blocking if process is busy
     match process_arc.try_lock() {
         Ok(mut process_guard) => {
@@ -81,4 +81,3 @@ pub fn set_parameter_value(
         }
     };
 }
-

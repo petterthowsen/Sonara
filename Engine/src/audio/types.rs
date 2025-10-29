@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use super::devices::AudioDevice;
+use std::collections::HashMap;
 use tracing::info;
 
 /// Pan mode enumeration (matches Godot's PanMode enum)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PanMode {
-    StereoCombined = 0,  // Single pan knob controls stereo balance
-    StereoDual = 1,      // Separate L/R pan controls
-    StereoBalance = 2,   // Balance between L and R channels
-    Mono = 3,            // Mono panner (single channel)
+    StereoCombined = 0, // Single pan knob controls stereo balance
+    StereoDual = 1,     // Separate L/R pan controls
+    StereoBalance = 2,  // Balance between L and R channels
+    Mono = 3,           // Mono panner (single channel)
 }
 
 impl Default for PanMode {
@@ -76,7 +76,7 @@ pub struct ClipNote {
     pub id: NoteId,
     pub note: MidiNote,
     pub velocity: MidiVelocity,
-    pub start_tick: Tick,      // Relative to clip start (0-based)
+    pub start_tick: Tick, // Relative to clip start (0-based)
     pub duration_ticks: Tick,
 }
 
@@ -122,11 +122,11 @@ impl Clip {
 pub struct ClipInstance {
     pub id: ClipInstanceId,
     pub clip_id: ClipId,
-    pub start_tick: Tick,       // Position on timeline
-    pub duration_ticks: Tick,   // How long to play (may differ from clip content length)
-    pub clip_offset: Tick,      // Offset into clip content (allows trimming from left edge)
-    pub transpose: i8,          // Semitones (-12 to +12)
-    pub gain_offset: f32,       // dB offset
+    pub start_tick: Tick,     // Position on timeline
+    pub duration_ticks: Tick, // How long to play (may differ from clip content length)
+    pub clip_offset: Tick,    // Offset into clip content (allows trimming from left edge)
+    pub transpose: i8,        // Semitones (-12 to +12)
+    pub gain_offset: f32,     // dB offset
     pub muted: bool,
     pub loop_enabled: bool,
     pub loop_start_ticks: Tick, // Relative to clip start
@@ -136,14 +136,19 @@ pub struct ClipInstance {
 /// Send routing configuration
 #[derive(Debug, Clone)]
 pub struct Send {
-    pub target_channel_id: ChannelId,  // Must be a BUS channel
-    pub amount_db: f32,                // Send level in dB (-60.0 to +12.0)
-    pub pre_fader: bool,               // If true, send before channel fader; if false, send after fader
-    pub muted: bool,                   // Mute this send
+    pub target_channel_id: ChannelId, // Must be a BUS channel
+    pub amount_db: f32,               // Send level in dB (-60.0 to +12.0)
+    pub pre_fader: bool, // If true, send before channel fader; if false, send after fader
+    pub muted: bool,     // Mute this send
 }
 
 impl ClipInstance {
-    pub fn new(id: ClipInstanceId, clip_id: ClipId, start_tick: Tick, duration_ticks: Tick) -> Self {
+    pub fn new(
+        id: ClipInstanceId,
+        clip_id: ClipId,
+        start_tick: Tick,
+        duration_ticks: Tick,
+    ) -> Self {
         Self {
             id,
             clip_id,
@@ -168,15 +173,15 @@ impl ClipInstance {
 pub struct Channel {
     pub id: ChannelId,
     pub name: String,
-    pub volume_db: f32,       // dB (-60.0 to +12.0)
-    pub pan: f32,             // -1.0 (left) to +1.0 (right) for STEREO_COMBINED/MONO/BALANCE
-    pub pan_left: f32,        // For STEREO_DUAL mode
-    pub pan_right: f32,       // For STEREO_DUAL mode
-    pub pan_mode: PanMode,    // Pan mode (combined, dual, balance, mono)
+    pub volume_db: f32,    // dB (-60.0 to +12.0)
+    pub pan: f32,          // -1.0 (left) to +1.0 (right) for STEREO_COMBINED/MONO/BALANCE
+    pub pan_left: f32,     // For STEREO_DUAL mode
+    pub pan_right: f32,    // For STEREO_DUAL mode
+    pub pan_mode: PanMode, // Pan mode (combined, dual, balance, mono)
     pub mute: bool,
     pub solo: bool,
     pub output_channel_id: Option<ChannelId>, // None for master/no output
-    
+
     // Sends (parallel routing to BUS channels)
     pub send_channels: Vec<Send>,
 
@@ -187,8 +192,8 @@ pub struct Channel {
     pub peak_right: f32,
 
     // Parameter smoothing (prevents clicks/pops when changing volume)
-    current_gain: f32,        // Smoothed gain value (internal)
-    smoothing_alpha: f32,     // Smoothing coefficient (internal)
+    current_gain: f32,    // Smoothed gain value (internal)
+    smoothing_alpha: f32, // Smoothing coefficient (internal)
 
     // Device chain for processing (instruments or effects)
     pub devices: Vec<Box<dyn AudioDevice>>,
@@ -268,7 +273,7 @@ impl Channel {
         match self.pan_mode {
             PanMode::StereoCombined => {
                 // Constant power panning
-                let angle = (self.pan + 1.0) * 0.5 * FRAC_PI_2;  // Map -1..1 to 0..PI/2
+                let angle = (self.pan + 1.0) * 0.5 * FRAC_PI_2; // Map -1..1 to 0..PI/2
                 PanCoefficients {
                     left_to_left: angle.cos(),
                     right_to_right: angle.sin(),
@@ -330,11 +335,11 @@ impl Channel {
     /// Peaks are calculated directly from the buffer content after all mixing has occurred
     /// The buffer already contains the post-fader audio (gain/pan applied during mixing)
     pub fn update_peaks(&mut self) {
-        self.peak_left = self.buffer_left.iter()
-            .map(|s| s.abs())
-            .fold(0.0, f32::max);
+        self.peak_left = self.buffer_left.iter().map(|s| s.abs()).fold(0.0, f32::max);
 
-        self.peak_right = self.buffer_right.iter()
+        self.peak_right = self
+            .buffer_right
+            .iter()
             .map(|s| s.abs())
             .fold(0.0, f32::max);
     }
@@ -372,8 +377,17 @@ impl Channel {
                 info!("DEVICE CHAIN DEBUG: channel={} sample_count={} buffer_left_len={} device_input_buffer_len={} device_output_buffer_len={} devices={}",
                     self.id, sample_count, self.buffer_left.len(), self.device_input_buffer.len(), self.device_output_buffer.len(), self.devices.len());
                 // Check for non-zero in input
-                let non_zero_left = self.buffer_left.iter().take(sample_count).filter(|&&s| s.abs() > 0.0001).count();
-                let non_zero_left_full = self.buffer_left.iter().filter(|&&s| s.abs() > 0.0001).count();
+                let non_zero_left = self
+                    .buffer_left
+                    .iter()
+                    .take(sample_count)
+                    .filter(|&&s| s.abs() > 0.0001)
+                    .count();
+                let non_zero_left_full = self
+                    .buffer_left
+                    .iter()
+                    .filter(|&&s| s.abs() > 0.0001)
+                    .count();
                 info!("  buffer_left: {} non-zero in first {} samples, {} non-zero in FULL buffer of {} samples",
                     non_zero_left, sample_count, non_zero_left_full, self.buffer_left.len());
             }
@@ -395,10 +409,18 @@ impl Channel {
         for (idx, device) in self.devices.iter_mut().enumerate() {
             if idx % 2 == 0 {
                 // Input from device_input_buffer, output to device_output_buffer
-                device.process_block(&self.device_input_buffer[..], &mut self.device_output_buffer, sample_count);
+                device.process_block(
+                    &self.device_input_buffer[..],
+                    &mut self.device_output_buffer,
+                    sample_count,
+                );
             } else {
                 // Input from device_output_buffer, output to device_input_buffer
-                device.process_block(&self.device_output_buffer[..], &mut self.device_input_buffer, sample_count);
+                device.process_block(
+                    &self.device_output_buffer[..],
+                    &mut self.device_input_buffer,
+                    sample_count,
+                );
             }
         }
 
@@ -424,11 +446,24 @@ impl Channel {
         // Debug output
         unsafe {
             if DEVICE_DEBUG_COUNT <= 10 || (DEVICE_DEBUG_COUNT > 100 && DEVICE_DEBUG_COUNT <= 110) {
-                let non_zero_output = self.buffer_left.iter().take(sample_count).filter(|&&s| s.abs() > 0.0001).count();
-                info!("  AFTER processing: {} non-zero samples in output", non_zero_output);
+                let non_zero_output = self
+                    .buffer_left
+                    .iter()
+                    .take(sample_count)
+                    .filter(|&&s| s.abs() > 0.0001)
+                    .count();
+                info!(
+                    "  AFTER processing: {} non-zero samples in output",
+                    non_zero_output
+                );
                 if non_zero_output > 0 {
                     // Show first non-zero value
-                    if let Some(&val) = self.buffer_left.iter().take(sample_count).find(|&&s| s.abs() > 0.0001) {
+                    if let Some(&val) = self
+                        .buffer_left
+                        .iter()
+                        .take(sample_count)
+                        .find(|&&s| s.abs() > 0.0001)
+                    {
                         info!("    First non-zero value: {}", val);
                     }
                 }
@@ -491,7 +526,7 @@ impl Track {
 #[derive(Debug, Clone)]
 pub struct AudioPlayback {
     pub clip_instance_id: ClipInstanceId,
-    pub current_sample_pos: f64,  // Fractional sample position for smooth playback
+    pub current_sample_pos: f64, // Fractional sample position for smooth playback
     pub is_playing: bool,
 }
 
@@ -510,7 +545,7 @@ impl AudioPlayback {
     /// Example: recorded at 120 BPM, playing at 200 BPM → stretch = 200/120 = 1.667
     pub fn calculate_stretch_factor(project_bpm: f32, recorded_bpm: f32) -> f32 {
         if recorded_bpm <= 0.0 {
-            1.0  // Fallback to 1:1 if invalid BPM
+            1.0 // Fallback to 1:1 if invalid BPM
         } else {
             project_bpm / recorded_bpm
         }
@@ -555,7 +590,10 @@ impl AudioPlayback {
             let left_1 = audio_samples.get(next_left_idx).copied().unwrap_or(0.0);
             let right_1 = audio_samples.get(next_right_idx).copied().unwrap_or(0.0);
 
-            (Self::lerp(left_0, left_1, frac), Self::lerp(right_0, right_1, frac))
+            (
+                Self::lerp(left_0, left_1, frac),
+                Self::lerp(right_0, right_1, frac),
+            )
         } else {
             // Fallback for other channel counts
             (0.0, 0.0)
@@ -628,9 +666,9 @@ impl Voice {
 /// Output device (hardware audio output)
 #[derive(Debug, Clone)]
 pub struct OutputDevice {
-    pub id: ChannelId,      // ID >= 1000
-    pub name: String,       // Device name from CPAL
-    pub is_default: bool,   // Whether this is the default device
+    pub id: ChannelId,    // ID >= 1000
+    pub name: String,     // Device name from CPAL
+    pub is_default: bool, // Whether this is the default device
 }
 
 impl OutputDevice {
@@ -687,7 +725,12 @@ impl ProjectSettings {
         let sixteenths = remaining_after_beats / ticks_per_sixteenth;
         let remaining_ticks = remaining_after_beats % ticks_per_sixteenth;
 
-        (bars + 1, beats as i32 + 1, sixteenths as i32 + 1, remaining_ticks as i32)
+        (
+            bars + 1,
+            beats as i32 + 1,
+            sixteenths as i32 + 1,
+            remaining_ticks as i32,
+        )
     }
 
     /// Format tick position as "bars.beats.sixteenths.ticks" string

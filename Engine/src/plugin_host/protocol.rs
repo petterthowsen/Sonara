@@ -20,8 +20,13 @@ pub enum PluginCommand {
     Deactivate,
     StartProcessing,
     StopProcessing,
-    SetParameter { param_id: u32, value: f32 },
-    GetParameter { param_id: u32 },
+    SetParameter {
+        param_id: u32,
+        value: f32,
+    },
+    GetParameter {
+        param_id: u32,
+    },
     GetParameterInfo,
     OpenGui {
         window_handle: Option<u64>,
@@ -29,7 +34,9 @@ pub enum PluginCommand {
     CloseGui,
     HasGui,
     SaveState,
-    LoadState { state_base64: String },
+    LoadState {
+        state_base64: String,
+    },
     Reset,
     Shutdown,
 }
@@ -43,28 +50,59 @@ pub enum PluginResponse {
         device_version: String,
         category: String,
     },
-    InitializeError { error: String },
-    ActivateResult { success: bool, error: Option<String> },
-    DeactivateResult { success: bool, error: Option<String> },
+    InitializeError {
+        error: String,
+    },
+    ActivateResult {
+        success: bool,
+        error: Option<String>,
+    },
+    DeactivateResult {
+        success: bool,
+        error: Option<String>,
+    },
     ProcessingStarted,
     ProcessingStopped,
-    ParameterValue { param_id: u32, value: f32 },
-    ParameterInfo { params: Vec<PluginParameterInfo> },
+    ParameterValue {
+        param_id: u32,
+        value: f32,
+    },
+    ParameterInfo {
+        params: Vec<PluginParameterInfo>,
+    },
     GuiOpened {
         width: u32,
         height: u32,
         is_resizable: bool,
     },
     GuiClosed,
-    HasGuiResponse { supported: bool },
-    GuiError { error: String },
-    StateSaved { state_base64: String },
-    StateLoadResult { success: bool, error: Option<String> },
+    HasGuiResponse {
+        supported: bool,
+    },
+    GuiError {
+        error: String,
+    },
+    StateSaved {
+        state_base64: String,
+    },
+    StateLoadResult {
+        success: bool,
+        error: Option<String>,
+    },
     ResetComplete,
-    Error { command: String, error: String },
+    Error {
+        command: String,
+        error: String,
+    },
     ShutdownAck,
-    ParameterValueChanged { param_id: u32, value: f32 },
-    GuiResizeRequest { width: u32, height: u32 },
+    ParameterValueChanged {
+        param_id: u32,
+        value: f32,
+    },
+    GuiResizeRequest {
+        width: u32,
+        height: u32,
+    },
 }
 
 /// Information about a plugin parameter

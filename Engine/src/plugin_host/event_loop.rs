@@ -9,13 +9,15 @@ use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-use clack_extensions::params::{PluginParams, ParamInfoBuffer};
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_extensions::timer::PluginTimer;
 use clack_host::events::io::{InputEvents, OutputEvents};
 
-use crate::plugin_host::protocol::{PluginCommand, PluginResponse};
-use crate::plugin_host::state::{PluginState, has_audio_to_process, process_audio, process_output_events};
 use crate::plugin_host::commands::process_command;
+use crate::plugin_host::protocol::{PluginCommand, PluginResponse};
+use crate::plugin_host::state::{
+    has_audio_to_process, process_audio, process_output_events, PluginState,
+};
 
 /// Main plugin host event loop
 ///
@@ -82,8 +84,12 @@ pub fn run_plugin_host(
                             info!("📥 Received command: {:?}", cmd);
 
                             // Process command
-                            let response =
-                                process_command(cmd, &mut plugin_state, unix_socket_fd, &unsolicited_tx);
+                            let response = process_command(
+                                cmd,
+                                &mut plugin_state,
+                                unix_socket_fd,
+                                &unsolicited_tx,
+                            );
 
                             if let Some(resp) = response {
                                 info!("📤 Sending response: {:?}", resp);

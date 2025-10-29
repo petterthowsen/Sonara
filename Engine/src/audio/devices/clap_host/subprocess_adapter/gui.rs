@@ -14,7 +14,8 @@ pub fn open_gui(
     device_name: &str,
     window_handle: Option<u64>,
 ) -> Result<(u32, u32, bool), String> {
-    let process = process_manager.get_process(process_key)
+    let process = process_manager
+        .get_process(process_key)
         .ok_or_else(|| "Plugin process not found".to_string())?;
 
     let mut process = process.lock().unwrap();
@@ -26,8 +27,15 @@ pub fn open_gui(
     process.send_command(PluginCommand::OpenGui { window_handle })?;
 
     let result = match process.recv_response()? {
-        PluginResponse::GuiOpened { width, height, is_resizable } => {
-            info!("✅ Plugin GUI opened: {} ({}x{}, resizable: {})", device_name, width, height, is_resizable);
+        PluginResponse::GuiOpened {
+            width,
+            height,
+            is_resizable,
+        } => {
+            info!(
+                "✅ Plugin GUI opened: {} ({}x{}, resizable: {})",
+                device_name, width, height, is_resizable
+            );
             Ok((width, height, is_resizable))
         }
         PluginResponse::GuiError { error } => Err(error),
@@ -46,12 +54,13 @@ pub fn close_gui(
     process_key: &str,
     device_name: &str,
 ) -> Result<(), String> {
-    let process = process_manager.get_process(process_key)
+    let process = process_manager
+        .get_process(process_key)
         .ok_or_else(|| "Plugin process not found".to_string())?;
-    
+
     let mut process = process.lock().unwrap();
     process.send_command(PluginCommand::CloseGui)?;
-    
+
     match process.recv_response()? {
         PluginResponse::GuiClosed => {
             info!("Closed GUI: {}", device_name);
@@ -63,26 +72,22 @@ pub fn close_gui(
 }
 
 /// Check if plugin supports GUI
-pub fn has_gui(
-    process_manager: &Arc<ProcessManager>,
-    process_key: &str,
-) -> bool {
+pub fn has_gui(process_manager: &Arc<ProcessManager>, process_key: &str) -> bool {
     let Some(process) = process_manager.get_process(process_key) else {
         return false;
     };
-    
+
     let mut process = match process.lock() {
         Ok(p) => p,
         Err(_) => return false,
     };
-    
-    if let Ok(PluginResponse::HasGuiResponse { supported }) = 
-        process.send_command(PluginCommand::HasGui)
-            .and_then(|_| process.recv_response()) 
+
+    if let Ok(PluginResponse::HasGuiResponse { supported }) = process
+        .send_command(PluginCommand::HasGui)
+        .and_then(|_| process.recv_response())
     {
         supported
     } else {
         false
     }
 }
-

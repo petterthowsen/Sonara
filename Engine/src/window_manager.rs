@@ -7,15 +7,15 @@
 //! Uses a dedicated thread running winit's event_loop.run() for proper
 //! X11 event handling. Plugins create their own child windows and GL contexts.
 
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, sync_channel, Sender, Receiver, SyncSender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Commands sent to the window manager thread
 enum WindowCommand {
@@ -33,20 +33,16 @@ enum WindowCommand {
         height: u32,
     },
     /// Show a window (make visible)
-    Show {
-        process_key: String,
-    },
+    Show { process_key: String },
     /// Destroy a window
-    Destroy {
-        process_key: String,
-    },
+    Destroy { process_key: String },
 }
 
 /// Manages plugin GUI windows using winit
 pub struct WindowManager {
     /// Sender for window commands
     command_tx: Sender<WindowCommand>,
-    
+
     /// Receiver for window close events (when user clicks X)
     pub close_event_rx: std::sync::mpsc::Receiver<String>,
 
@@ -77,21 +73,29 @@ impl WindowManager {
     /// Create a window and return its X11 handle
     /// This blocks until the window is created (or creation fails)
     pub fn create_window(&mut self, process_key: String, width: u32, height: u32) -> Option<u64> {
-        info!("Requesting window creation for process: {} ({}x{})", process_key, width, height);
+        info!(
+            "Requesting window creation for process: {} ({}x{})",
+            process_key, width, height
+        );
 
         let (response_tx, response_rx) = sync_channel(1);
 
-        self.command_tx.send(WindowCommand::Create {
-            process_key: process_key.clone(),
-            width,
-            height,
-            response: response_tx,
-        }).ok()?;
+        self.command_tx
+            .send(WindowCommand::Create {
+                process_key: process_key.clone(),
+                width,
+                height,
+                response: response_tx,
+            })
+            .ok()?;
 
         // Wait for response from winit thread
         match response_rx.recv() {
             Ok(Some(handle)) => {
-                info!("✅ Window created for process: {} (handle: 0x{:x})", process_key, handle);
+                info!(
+                    "✅ Window created for process: {} (handle: 0x{:x})",
+                    process_key, handle
+                );
                 Some(handle)
             }
             Ok(None) => {
@@ -107,7 +111,10 @@ impl WindowManager {
 
     /// Resize an existing window and make it visible
     pub fn resize_window(&mut self, process_key: &str, width: u32, height: u32) {
-        info!("Requesting window resize for process: {} to {}x{}", process_key, width, height);
+        info!(
+            "Requesting window resize for process: {} to {}x{}",
+            process_key, width, height
+        );
 
         let _ = self.command_tx.send(WindowCommand::Resize {
             process_key: process_key.to_string(),
@@ -115,11 +122,11 @@ impl WindowManager {
             height,
         });
     }
-    
+
     /// Show a window (make it visible)
     pub fn show_window(&mut self, process_key: &str) {
         info!("Requesting window show for process: {}", process_key);
-        
+
         let _ = self.command_tx.send(WindowCommand::Show {
             process_key: process_key.to_string(),
         });
@@ -164,7 +171,7 @@ fn create_window(
         .with_title(format!("Plugin - {}", process_key))
         .with_inner_size(winit::dpi::PhysicalSize::new(width, height))
         .with_resizable(true)
-        .with_visible(false);  // Start hidden, will be shown after plugin opens and resizes
+        .with_visible(false); // Start hidden, will be shown after plugin opens and resizes
 
     let window = event_loop_target
         .create_window(window_attributes)
@@ -176,14 +183,14 @@ fn create_window(
 }
 
 /// Background thread function that runs winit event loop
-fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::sync::mpsc::Sender<String>) {
+fn run_window_thread(
+    command_rx: Receiver<WindowCommand>,
+    close_event_tx: std::sync::mpsc::Sender<String>,
+) {
     info!("🧵 Window thread starting");
 
     // Allow event loop on non-main thread (X11 specific)
-    let event_loop = match EventLoopBuilder::new()
-        .with_any_thread(true)
-        .build()
-    {
+    let event_loop = match EventLoopBuilder::new().with_any_thread(true).build() {
         Ok(el) => el,
         Err(e) => {
             error!("Failed to create EventLoop in window thread: {}", e);
@@ -201,10 +208,19 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
         // Process commands from main thread
         while let Ok(cmd) = command_rx.try_recv() {
             match cmd {
-                WindowCommand::Create { process_key, width, height, response } => {
+                WindowCommand::Create {
+                    process_key,
+                    width,
+                    height,
+                    response,
+                } => {
                     pending_creates.push((process_key, width, height, response));
                 }
-                WindowCommand::Resize { process_key, width, height } => {
+                WindowCommand::Resize {
+                    process_key,
+                    width,
+                    height,
+                } => {
                     pending_resizes.push((process_key, width, height));
                 }
                 WindowCommand::Show { process_key } => {
@@ -226,7 +242,10 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
                 for (process_key, width, height, response) in pending_creates.drain(..) {
                     // Check if window already exists (e.g., close failed and window wasn't destroyed)
                     if let Some(existing_window) = windows.get(&process_key) {
-                        warn!("⚠️  Window {} already exists, reusing existing window", process_key);
+                        warn!(
+                            "⚠️  Window {} already exists, reusing existing window",
+                            process_key
+                        );
                         let handle = existing_window.window.window_handle().ok().and_then(|wh| {
                             match wh.as_raw() {
                                 RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
@@ -234,12 +253,14 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
                                 _ => None,
                             }
                         });
-                        
+
                         if let Some(h) = handle {
                             info!("✅ Reusing existing window: 0x{:x}", h);
                             let _ = response.send(Some(h));
                             // Resize and show the existing window
-                            let _ = existing_window.window.request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                            let _ = existing_window
+                                .window
+                                .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
                             existing_window.window.set_visible(true);
                         } else {
                             error!("Failed to get X11 handle for existing window");
@@ -247,13 +268,8 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
                         }
                         continue;
                     }
-                    
-                    match create_window(
-                        event_loop_target,
-                        &process_key,
-                        width,
-                        height,
-                    ) {
+
+                    match create_window(event_loop_target, &process_key, width, height) {
                         Ok(window_holder) => {
                             // Get X11 handle
                             let handle = window_holder.window.window_handle().ok().and_then(|wh| {
@@ -283,8 +299,13 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
                 // Resize windows
                 for (process_key, width, height) in pending_resizes.drain(..) {
                     if let Some(window_holder) = windows.get(&process_key) {
-                        info!("🔄 Resizing window: {} to {}x{}", process_key, width, height);
-                        let _ = window_holder.window.request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                        info!(
+                            "🔄 Resizing window: {} to {}x{}",
+                            process_key, width, height
+                        );
+                        let _ = window_holder
+                            .window
+                            .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
                     } else {
                         error!("Cannot resize window {}: not found", process_key);
                     }
@@ -302,7 +323,8 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
                     WindowEvent::CloseRequested => {
                         // User clicked X - hide window and notify OSC to cleanup plugin
                         // Don't destroy yet - let plugin cleanup first to avoid X errors
-                        let key = windows.iter()
+                        let key = windows
+                            .iter()
                             .find(|(_, w)| w.window.id() == window_id)
                             .map(|(k, _)| k.clone());
 
@@ -333,4 +355,3 @@ fn run_window_thread(command_rx: Receiver<WindowCommand>, close_event_tx: std::s
 
     info!("🧵 Window thread exiting");
 }
-

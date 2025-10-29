@@ -5,11 +5,11 @@ use crossbeam::channel::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use super::types::*;
-pub use super::commands::{AudioCommand, CommandResponse, EngineStatus, EngineState};
 use super::commands::process_command;
-use super::processing::process_audio;
+pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
 use super::mixing::mix_and_output;
+use super::processing::process_audio;
+use super::types::*;
 
 /// Audio engine that manages the audio stream and processing
 pub struct AudioEngine {
@@ -22,7 +22,10 @@ pub struct AudioEngine {
 
 impl AudioEngine {
     /// Create and initialize a new audio engine with provided status channel
-    pub fn with_status_channel(status_tx: Sender<EngineStatus>, status_rx: Receiver<EngineStatus>) -> Result<Self> {
+    pub fn with_status_channel(
+        status_tx: Sender<EngineStatus>,
+        status_rx: Receiver<EngineStatus>,
+    ) -> Result<Self> {
         info!("Initializing DAW audio engine...");
 
         // Get the default audio host
@@ -126,7 +129,7 @@ impl AudioEngine {
     ) -> Result<Stream> {
         let sample_rate = config.sample_rate.0;
         let channels = config.channels as usize;
-        
+
         // Use a safe maximum buffer size for plugin allocation
         // CPAL may request variable buffer sizes, so we allocate generously
         // Most systems use 128-2048 frames, but we allow up to 8192 to be safe
@@ -145,7 +148,13 @@ impl AudioEngine {
                 // Process any pending commands (lock-free)
                 while let Ok(cmd) = command_rx.try_recv() {
                     if let Ok(mut state) = state.lock() {
-                        if let Some(status) = process_command(&mut state, cmd, max_buffer_size, &status_tx, &command_tx) {
+                        if let Some(status) = process_command(
+                            &mut state,
+                            cmd,
+                            max_buffer_size,
+                            &status_tx,
+                            &command_tx,
+                        ) {
                             let _ = status_tx.send(status);
                         }
                     }
@@ -163,8 +172,12 @@ impl AudioEngine {
                 for channel in state.channels.values_mut() {
                     if channel.buffer_left.len() != frames {
                         if !logged_buffer_info {
-                            info!("Resizing channel {} buffers from {} to {} frames",
-                                channel.id, channel.buffer_left.len(), frames);
+                            info!(
+                                "Resizing channel {} buffers from {} to {} frames",
+                                channel.id,
+                                channel.buffer_left.len(),
+                                frames
+                            );
                         }
                         channel.resize_buffers(frames);
                     }
@@ -173,8 +186,13 @@ impl AudioEngine {
 
                 // Log buffer size info once
                 if !logged_buffer_info {
-                    info!("Audio callback: data.len()={} channels={} frames={} max_buffer_size={}",
-                        data.len(), channels, frames, max_buffer_size);
+                    info!(
+                        "Audio callback: data.len()={} channels={} frames={} max_buffer_size={}",
+                        data.len(),
+                        channels,
+                        frames,
+                        max_buffer_size
+                    );
                     logged_buffer_info = true;
                 }
 

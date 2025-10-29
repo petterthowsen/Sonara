@@ -26,56 +26,49 @@ pub enum PluginCommand {
         /// For now, we use a name-based approach where subprocess recreates the FD
         shm_name: String,
     },
-    
+
     /// Activate plugin for audio processing
     Activate,
-    
+
     /// Deactivate plugin (stop processing, free buffers)
     Deactivate,
-    
+
     /// Start audio processing
     StartProcessing,
-    
+
     /// Stop audio processing
     StopProcessing,
-    
+
     /// Set parameter value (normalized 0.0-1.0)
-    SetParameter {
-        param_id: u32,
-        value: f32,
-    },
-    
+    SetParameter { param_id: u32, value: f32 },
+
     /// Get current parameter value
-    GetParameter {
-        param_id: u32,
-    },
-    
+    GetParameter { param_id: u32 },
+
     /// Get all parameter info
     GetParameterInfo,
-    
+
     /// Open plugin GUI
     OpenGui {
         /// X11 window handle for embedded mode (None = use floating mode)
         window_handle: Option<u64>,
     },
-    
+
     /// Close plugin GUI
     CloseGui,
-    
+
     /// Check if GUI is supported
     HasGui,
-    
+
     /// Save plugin state
     SaveState,
-    
+
     /// Load plugin state
-    LoadState {
-        state_base64: String,
-    },
-    
+    LoadState { state_base64: String },
+
     /// Reset plugin (clear buffers, stop voices)
     Reset,
-    
+
     /// Shutdown subprocess gracefully
     Shutdown,
 }
@@ -90,95 +83,76 @@ pub enum PluginResponse {
         device_version: String,
         category: String,
     },
-    
+
     /// Initialization failed
-    InitializeError {
-        error: String,
-    },
-    
+    InitializeError { error: String },
+
     /// Activation result
     ActivateResult {
         success: bool,
         error: Option<String>,
     },
-    
+
     /// Deactivation result
     DeactivateResult {
         success: bool,
         error: Option<String>,
     },
-    
+
     /// Processing started
     ProcessingStarted,
-    
+
     /// Processing stopped
     ProcessingStopped,
-    
+
     /// Parameter value response
-    ParameterValue {
-        param_id: u32,
-        value: f32,
-    },
-    
+    ParameterValue { param_id: u32, value: f32 },
+
     /// Parameter info response
-    ParameterInfo {
-        params: Vec<PluginParameterInfo>,
-    },
-    
+    ParameterInfo { params: Vec<PluginParameterInfo> },
+
     /// GUI opened successfully
     GuiOpened {
         width: u32,
         height: u32,
         is_resizable: bool,
     },
-    
+
     /// GUI closed
     GuiClosed,
-    
+
     /// GUI support status
-    HasGuiResponse {
-        supported: bool,
-    },
-    
+    HasGuiResponse { supported: bool },
+
     /// GUI error
-    GuiError {
-        error: String,
-    },
-    
+    GuiError { error: String },
+
     /// Plugin state saved
-    StateSaved {
-        state_base64: String,
-    },
-    
+    StateSaved { state_base64: String },
+
     /// State load result
     StateLoadResult {
         success: bool,
         error: Option<String>,
     },
-    
+
     /// Plugin reset complete
     ResetComplete,
-    
+
     /// Generic error response
-    Error {
-        command: String,
-        error: String,
-    },
-    
+    Error { command: String, error: String },
+
     /// Subprocess shutting down
     ShutdownAck,
-    
+
     /// Parameter value changed (unsolicited, from plugin GUI/modulation)
     ParameterValueChanged {
         param_id: u32,
-        value: f32,  // Normalized 0.0-1.0
+        value: f32, // Normalized 0.0-1.0
     },
-    
+
     /// GUI resize requested (unsolicited, from plugin)
-    GuiResizeRequest {
-        width: u32,
-        height: u32,
-    },
+    GuiResizeRequest { width: u32, height: u32 },
 }
 
 /// Parameter metadata
@@ -206,22 +180,22 @@ pub struct PluginParameterInfo {
 pub struct SharedMemoryLayout {
     /// Size of input audio ring buffer (in samples)
     pub input_buffer_size: usize,
-    
+
     /// Size of output audio ring buffer (in samples)
     pub output_buffer_size: usize,
-    
+
     /// Number of MIDI event slots
     pub midi_queue_size: usize,
-    
+
     /// Offset to input audio buffer
     pub input_offset: usize,
-    
+
     /// Offset to output audio buffer
     pub output_offset: usize,
-    
+
     /// Offset to MIDI queue
     pub midi_offset: usize,
-    
+
     /// Offset to control data
     pub control_offset: usize,
 }
@@ -231,15 +205,15 @@ impl SharedMemoryLayout {
     pub fn new(max_buffer_size: usize) -> Self {
         // Allocate just 2 buffers worth of data for low latency
         // Any more causes noticeable delay
-        let input_buffer_size = max_buffer_size * 2 * 2;  // Stereo * 2 buffers
+        let input_buffer_size = max_buffer_size * 2 * 2; // Stereo * 2 buffers
         let output_buffer_size = max_buffer_size * 2 * 2;
-        let midi_queue_size = 256;  // 256 MIDI events
-        
+        let midi_queue_size = 256; // 256 MIDI events
+
         let input_offset = 0;
         let output_offset = input_offset + input_buffer_size * std::mem::size_of::<f32>();
         let midi_offset = output_offset + output_buffer_size * std::mem::size_of::<f32>();
         let control_offset = midi_offset + midi_queue_size * std::mem::size_of::<MidiEvent>();
-        
+
         Self {
             input_buffer_size,
             output_buffer_size,
@@ -250,7 +224,7 @@ impl SharedMemoryLayout {
             control_offset,
         }
     }
-    
+
     /// Calculate total shared memory size
     pub fn total_size(&self) -> usize {
         self.control_offset + std::mem::size_of::<ControlData>()
@@ -263,16 +237,16 @@ impl SharedMemoryLayout {
 pub struct MidiEvent {
     /// Sample offset within buffer
     pub sample_offset: u32,
-    
+
     /// Note number (0-127)
     pub note: u8,
-    
+
     /// Velocity (0-127)
     pub velocity: u8,
-    
+
     /// 1 = note on, 0 = note off
     pub is_note_on: u8,
-    
+
     /// Padding for alignment
     pub _padding: u8,
 }
@@ -283,28 +257,28 @@ pub struct MidiEvent {
 pub struct ControlData {
     /// Write position in input ring buffer (samples)
     pub input_write_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Read position in input ring buffer (samples)
     pub input_read_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Write position in output ring buffer (samples)
     pub output_write_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Read position in output ring buffer (samples)
     pub output_read_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Write position in MIDI queue (events)
     pub midi_write_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Read position in MIDI queue (events)
     pub midi_read_pos: std::sync::atomic::AtomicUsize,
-    
+
     /// Plugin is processing (1 = yes, 0 = no)
     pub is_processing: std::sync::atomic::AtomicU8,
-    
+
     /// Request shutdown (1 = yes, 0 = no)
     pub shutdown_requested: std::sync::atomic::AtomicU8,
-    
+
     /// Padding for alignment
     _padding: [u8; 6],
 }
@@ -332,4 +306,3 @@ pub struct RingBufferStats {
     pub capacity: usize,
     pub utilization_percent: f32,
 }
-

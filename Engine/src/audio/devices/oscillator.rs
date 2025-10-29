@@ -1,4 +1,6 @@
-use super::{AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow};
+use super::{
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+};
 
 /// Oscillator instrument device
 ///
@@ -29,12 +31,11 @@ pub struct OscillatorDevice {
     is_enabled: bool,
 }
 
-
 impl OscillatorDevice {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             sample_rate,
-            waveform: 0,  // Default sine
+            waveform: 0, // Default sine
             amplitude: 0.3,
             current_phase: 0.0,
             current_frequency: 440.0,
@@ -83,7 +84,6 @@ impl OscillatorDevice {
     }
 }
 
-
 impl AudioDevice for OscillatorDevice {
     fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         // Handle inactive state (device not loaded)
@@ -94,7 +94,7 @@ impl AudioDevice for OscillatorDevice {
             }
             return;
         }
-        
+
         // Handle disabled state (bypassed - pass through silence for instruments)
         if !self.is_enabled {
             // Instruments output silence when bypassed (no input to pass through)
@@ -103,7 +103,7 @@ impl AudioDevice for OscillatorDevice {
             }
             return;
         }
-        
+
         // Only generate audio if a note is active
         if self.current_note.is_none() {
             // Fill output buffer with silence
@@ -127,10 +127,10 @@ impl AudioDevice for OscillatorDevice {
 
             // Output to both channels
             if i < outputs.len() {
-                outputs[i] = sample;      // Left
+                outputs[i] = sample; // Left
             }
             if i + 1 < outputs.len() {
-                outputs[i + 1] = sample;  // Right
+                outputs[i + 1] = sample; // Right
             }
         }
     }
@@ -223,35 +223,35 @@ impl AudioDevice for OscillatorDevice {
         self.current_frequency = 440.0;
         self.current_note = None;
     }
-    
+
     // === Lifecycle Management ===
-    
+
     fn is_active(&self) -> bool {
         self.is_active
     }
-    
+
     fn activate(&mut self) -> Result<(), String> {
         self.is_active = true;
         Ok(())
     }
-    
+
     fn deactivate(&mut self) -> Result<(), String> {
         self.is_active = false;
         // Clear state when deactivating
         self.reset();
         Ok(())
     }
-    
+
     // === Bypass Control ===
-    
+
     fn is_enabled(&self) -> bool {
         self.is_enabled
     }
-    
+
     fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
     }
-    
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

@@ -3,11 +3,13 @@
 //! Provides built-in SFZ sample playback using the sfizz library.
 //! Supports background loading of SFZ files for real-time safety.
 
-use super::{AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow};
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
+use super::{
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+};
 use std::collections::HashMap;
-use tracing::{info, warn, error};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tracing::{error, info, warn};
 
 /// Wrapper around sfizz::Synth that implements Send
 /// Safety: sfizz is thread-safe when properly synchronized via Mutex
@@ -41,8 +43,8 @@ pub struct SfizzDevice {
 
     // CC parameters (discovered from loaded SFZ)
     cc_labels: Arc<Mutex<Vec<sfizz::CcLabel>>>,
-    cc_values: Arc<Mutex<HashMap<u8, f32>>>,  // CC number -> normalized value (0.0-1.0)
-    
+    cc_values: Arc<Mutex<HashMap<u8, f32>>>, // CC number -> normalized value (0.0-1.0)
+
     // Flag to indicate parameters changed (polled by command handler)
     parameters_changed: Arc<Mutex<bool>>,
 
@@ -61,7 +63,10 @@ unsafe impl Send for SfizzDevice {}
 
 impl SfizzDevice {
     pub fn new(sample_rate: f32, max_buffer_size: usize) -> Self {
-        info!("Creating SfizzDevice (SR: {}, buffer: {})", sample_rate, max_buffer_size);
+        info!(
+            "Creating SfizzDevice (SR: {}, buffer: {})",
+            sample_rate, max_buffer_size
+        );
 
         Self {
             sample_rate,
@@ -77,7 +82,7 @@ impl SfizzDevice {
             is_enabled: true,
         }
     }
-    
+
     /// Check if parameters have changed and clear the flag (poll-based notification)
     pub fn take_parameters_changed(&self) -> bool {
         let mut changed = self.parameters_changed.lock().unwrap();
@@ -152,18 +157,18 @@ impl SfizzDevice {
                                 for label in &labels {
                                     // Set sensible defaults for common CCs
                                     let default_value = match label.cc_number {
-                                        7 => 1.0,   // Volume: full
-                                        10 => 0.5,  // Pan: center
-                                        11 => 1.0,  // Expression: full
-                                        _ => 0.5,   // Others: middle
+                                        7 => 1.0,  // Volume: full
+                                        10 => 0.5, // Pan: center
+                                        11 => 1.0, // Expression: full
+                                        _ => 0.5,  // Others: middle
                                     };
                                     cc_values_guard.insert(label.cc_number, default_value);
-                                    
+
                                     // Send initial CC value to synth
                                     unsafe {
                                         sfizz::sfizz_send_hdcc(
                                             synth.as_raw(),
-                                            0,  // delay = 0 (immediate)
+                                            0, // delay = 0 (immediate)
                                             label.cc_number as i32,
                                             default_value,
                                         );
@@ -354,7 +359,7 @@ impl AudioDevice for SfizzDevice {
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         // ParamId is the CC number
         let cc_number = param_id as u8;
-        
+
         // Store the value
         {
             let mut cc_values = self.cc_values.lock().unwrap();
@@ -384,7 +389,7 @@ impl AudioDevice for SfizzDevice {
         unsafe {
             sfizz::sfizz_send_hdcc(
                 synth_guard.0.as_raw(),
-                0,  // delay = 0 (immediate)
+                0, // delay = 0 (immediate)
                 cc_number as i32,
                 value,
             );
@@ -424,26 +429,26 @@ impl AudioDevice for SfizzDevice {
     fn parameters(&self) -> Vec<ParamInfo> {
         // Return CC labels as parameters
         let cc_labels = self.cc_labels.lock().unwrap();
-        
+
         cc_labels
             .iter()
             .map(|label| {
                 // Match defaults to initialization values
                 let default = match label.cc_number {
-                    7 => 1.0,   // Volume: full
-                    10 => 0.5,  // Pan: center
-                    11 => 1.0,  // Expression: full
-                    _ => 0.5,   // Others: middle
+                    7 => 1.0,  // Volume: full
+                    10 => 0.5, // Pan: center
+                    11 => 1.0, // Expression: full
+                    _ => 0.5,  // Others: middle
                 };
-                
+
                 ParamInfo {
                     id: label.cc_number as ParamId,
                     name: label.name.clone(),
-                    unit: String::new(),  // MIDI CC has no unit
+                    unit: String::new(), // MIDI CC has no unit
                     min: 0.0,
                     max: 1.0,
                     default,
-                    is_automation_safe: true,  // CC automation is real-time safe
+                    is_automation_safe: true, // CC automation is real-time safe
                 }
             })
             .collect()

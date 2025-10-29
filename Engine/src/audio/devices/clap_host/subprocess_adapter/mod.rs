@@ -3,17 +3,17 @@
 //! This adapter runs CLAP plugins in separate processes and communicates via IPC.
 //! It replaces the in-process ClapDeviceAdapter for better crash isolation and GUI support.
 
+use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use crate::audio::commands::{AudioCommand, EngineStatus};
+use crate::audio::ipc::{MidiEvent, PluginCommand, PluginResponse, ProcessManager, SharedMemory};
+use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamValue, ParamInfo};
-use crate::audio::ipc::{PluginCommand, PluginResponse, MidiEvent, SharedMemory, ProcessManager};
-use crossbeam::channel::Sender;
-use crate::audio::commands::{AudioCommand, EngineStatus};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
+mod gui;
 mod lifecycle;
 mod parameter;
-mod gui;
 
 pub use lifecycle::LoadingState;
 
@@ -25,24 +25,24 @@ pub struct SubprocessClapAdapter {
     device_vendor: String,
     device_version: String,
     category: DeviceCategory,
-    
+
     // Process communication
     process_key: String,
     process_manager: Arc<ProcessManager>,
     loading_state: Arc<Mutex<LoadingState>>, // Only locked during initialization, not audio processing
-    
+
     // Cached parameter info (shared with background loading thread)
     param_info_cache: Arc<Mutex<Vec<ParamInfo>>>,
-    
+
     // Audio configuration
     sample_rate: f32,
     max_buffer_size: usize,
-    
+
     // Plugin position (for sending GUI close notifications)
     channel_id: u32,
     device_position: usize,
     status_tx: Option<Sender<EngineStatus>>,
-    
+
     // State
     is_active: bool,
     is_enabled: bool,
@@ -70,17 +70,17 @@ impl SubprocessClapAdapter {
 
         // Generate unique key for this plugin instance
         let process_key = format!("ch{}_dev{}", channel_id, device_position);
-        
+
         // Get plugin metadata (immediately available)
         let device_name = plugin_id.to_string();
         let device_vendor = "Unknown".to_string();
         let device_version = "1.0".to_string();
         let category = DeviceCategory::Effect;
         let param_info_cache = Arc::new(Mutex::new(Vec::new()));
-        
+
         // Create loading state (starts as Loading)
         let loading_state = Arc::new(Mutex::new(LoadingState::Loading));
-        
+
         // Spawn subprocess loading in background thread (non-blocking!)
         lifecycle::spawn_loading_thread(
             Arc::clone(&process_manager),
@@ -95,7 +95,7 @@ impl SubprocessClapAdapter {
             device_position,
             command_tx,
         );
-        
+
         let adapter = Self {
             device_id: plugin_id.to_string(),
             device_name: device_name.clone(),
@@ -115,22 +115,27 @@ impl SubprocessClapAdapter {
             is_enabled: true,
             gui_open: false,
         };
-        
-        info!("✅ SubprocessClapAdapter created (loading in background): {}", device_name);
+
+        info!(
+            "✅ SubprocessClapAdapter created (loading in background): {}",
+            device_name
+        );
         Ok(adapter)
     }
-    
+
     /// Send command to subprocess and wait for response
     fn send_command(&mut self, cmd: PluginCommand) -> Result<PluginResponse, String> {
         // Get process handle
-        let process = self.process_manager.get_process(&self.process_key)
+        let process = self
+            .process_manager
+            .get_process(&self.process_key)
             .ok_or_else(|| "Plugin process not found".to_string())?;
-        
+
         let mut process = process.lock().unwrap();
-        
+
         // Send command
         process.send_command(cmd)?;
-        
+
         // Receive response
         process.recv_response()
     }
@@ -145,7 +150,7 @@ impl AudioDevice for SubprocessClapAdapter {
             outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
             return;
         }
-        
+
         // CRITICAL: Check loading state with try_lock (non-blocking!)
         // If we can't get the lock, just pass through audio (better than blocking)
         let loading_state_result = self.loading_state.try_lock();
@@ -178,41 +183,45 @@ impl AudioDevice for SubprocessClapAdapter {
                 return;
             }
         };
-        
+
         // Write input audio to shared memory ring buffer
         // Input is interleaved stereo (L, R, L, R, ...), write as-is
         let interleaved_samples = sample_count * 2; // stereo
         let input_slice = &inputs[..interleaved_samples.min(inputs.len())];
-        
+
         let mut input_buffer = shm.input_buffer();
         let written = input_buffer.write(input_slice);
-        
+
         if written < input_slice.len() {
-            warn!("Input buffer overflow: wrote {}/{} samples", written, input_slice.len());
+            warn!(
+                "Input buffer overflow: wrote {}/{} samples",
+                written,
+                input_slice.len()
+            );
         }
-        
+
         // TODO: Signal subprocess that audio is available (eventfd)
         // For now, the subprocess polls the ring buffer in its event loop
-        
+
         // Read output audio from shared memory ring buffer
         // Output will be interleaved stereo (L, R, L, R, ...)
         let mut output_buffer = shm.output_buffer();
         let output_len = interleaved_samples.min(outputs.len());
         let output_slice = &mut outputs[..output_len];
         let read = output_buffer.read(output_slice);
-        
+
         if read < output_len {
             // Fill remainder with silence if not enough data available
             output_slice[read..].fill(0.0);
         }
-        
+
         // In a real implementation, we'd also:
         // - Signal subprocess via eventfd when audio is available
         // - Wait for subprocess to complete processing (with timeout)
         // - Handle synchronization properly
         // For now, this is fire-and-forget with ring buffer
     }
-    
+
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
         // Check if plugin is ready (non-blocking try_lock)
         let loading_state_result = self.loading_state.try_lock();
@@ -225,7 +234,7 @@ impl AudioDevice for SubprocessClapAdapter {
             }
             Err(_) => return, // Couldn't get lock, drop MIDI event
         };
-        
+
         let event = MidiEvent {
             sample_offset: 0,
             note,
@@ -233,50 +242,41 @@ impl AudioDevice for SubprocessClapAdapter {
             is_note_on: if is_note_on { 1 } else { 0 },
             _padding: 0,
         };
-        
+
         let mut midi_queue = shm.midi_queue();
         if !midi_queue.write(event) {
             warn!("MIDI queue full, dropping event");
         }
     }
-    
+
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
-        parameter::set_parameter_value(
-            &self.process_manager,
-            &self.process_key,
-            param_id,
-            value,
-        );
+        parameter::set_parameter_value(&self.process_manager, &self.process_key, param_id, value);
     }
-    
+
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
-        parameter::get_parameter_value(
-            &self.process_manager,
-            &self.process_key,
-            param_id,
-        )
+        parameter::get_parameter_value(&self.process_manager, &self.process_key, param_id)
     }
-    
+
     fn device_id(&self) -> &str {
         &self.device_id
     }
-    
+
     fn device_name(&self) -> &str {
         &self.device_name
     }
-    
+
     fn device_category(&self) -> DeviceCategory {
         self.category
     }
-    
+
     fn device_variant(&self) -> DeviceVariant {
         DeviceVariant::Clap
     }
-    
+
     fn parameters(&self) -> Vec<ParamInfo> {
         parameter::get_parameters(&self.param_info_cache)
     }
-    
+
     fn reset(&mut self) {
         // CRITICAL: Don't block the audio thread waiting for response!
         // Just send the command and continue (fire-and-forget)
@@ -287,7 +287,7 @@ impl AudioDevice for SubprocessClapAdapter {
                 return;
             }
         };
-        
+
         // Use try_lock to avoid blocking if process is busy
         match process_arc.try_lock() {
             Ok(mut process_guard) => {
@@ -302,20 +302,20 @@ impl AudioDevice for SubprocessClapAdapter {
             }
         };
     }
-    
+
     fn version(&self) -> &str {
         &self.device_version
     }
-    
+
     fn is_active(&self) -> bool {
         self.is_active
     }
-    
+
     fn activate(&mut self) -> Result<(), String> {
         if self.is_active {
             return Ok(());
         }
-        
+
         match self.send_command(PluginCommand::Activate)? {
             PluginResponse::ActivateResult { success, error } => {
                 if success {
@@ -330,15 +330,15 @@ impl AudioDevice for SubprocessClapAdapter {
             _ => Err("Unexpected response".to_string()),
         }
     }
-    
+
     fn deactivate(&mut self) -> Result<(), String> {
         if !self.is_active {
             return Ok(());
         }
-        
+
         // Stop processing first
         self.send_command(PluginCommand::StopProcessing)?;
-        
+
         match self.send_command(PluginCommand::Deactivate)? {
             PluginResponse::DeactivateResult { success, error } => {
                 if success {
@@ -351,15 +351,15 @@ impl AudioDevice for SubprocessClapAdapter {
             _ => Err("Unexpected response".to_string()),
         }
     }
-    
+
     fn is_enabled(&self) -> bool {
         self.is_enabled
     }
-    
+
     fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
     }
-    
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
@@ -373,60 +373,71 @@ impl SubprocessClapAdapter {
 
     /// Open plugin GUI with provided window handle for embedded mode
     /// Returns (width, height, is_resizable) if successful
-    pub fn open_gui_with_handle(&mut self, window_handle: Option<u64>) -> Result<(u32, u32, bool), String> {
+    pub fn open_gui_with_handle(
+        &mut self,
+        window_handle: Option<u64>,
+    ) -> Result<(u32, u32, bool), String> {
         if self.gui_open {
             // Already open - query current size
             // For now, return a default since we can't easily query after opening
             return Ok((800, 600, true));
         }
 
-        let (width, height, is_resizable) = gui::open_gui(&self.process_manager, &self.process_key, &self.device_name, window_handle)?;
+        let (width, height, is_resizable) = gui::open_gui(
+            &self.process_manager,
+            &self.process_key,
+            &self.device_name,
+            window_handle,
+        )?;
         self.gui_open = true;
-        
-        info!("Plugin GUI opened with size: {}x{} (resizable: {})", width, height, is_resizable);
-        
+
+        info!(
+            "Plugin GUI opened with size: {}x{} (resizable: {})",
+            width, height, is_resizable
+        );
+
         Ok((width, height, is_resizable))
     }
-    
+
     /// Close plugin GUI
     pub fn close_gui(&mut self) -> Result<(), String> {
         if !self.gui_open {
             return Ok(());
         }
-        
+
         let result = gui::close_gui(&self.process_manager, &self.process_key, &self.device_name);
-        
+
         // Always mark GUI as closed, even if IPC fails
         // The window is being destroyed regardless, and keeping gui_open=true
         // will cause subsequent opens to return stale size data
         self.gui_open = false;
-        
+
         result
     }
-    
+
     /// Check if GUI is supported
     pub fn has_gui(&mut self) -> bool {
         gui::has_gui(&self.process_manager, &self.process_key)
     }
-    
+
     /// Check if GUI is open
     pub fn is_gui_open(&self) -> bool {
         self.gui_open
     }
-    
+
     /// Poll for unsolicited parameter change messages from subprocess (non-blocking)
     /// Returns parameter changes as (param_id, normalized_value) pairs
     pub fn poll_parameter_changes(&mut self) -> Option<Vec<(u32, f32)>> {
         use crate::audio::ipc::protocol::PluginResponse;
-        
+
         let process = self.process_manager.get_process(&self.process_key)?;
         let mut process_guard = process.lock().ok()?;
-        
+
         // Try non-blocking read with very short timeout (don't block audio thread!)
         let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_micros(100)));
-        
+
         let mut changes = Vec::new();
-        
+
         // Keep reading while there are messages available (non-blocking)
         loop {
             match process_guard.try_recv_response() {
@@ -443,7 +454,7 @@ impl SubprocessClapAdapter {
                 }
             }
         }
-        
+
         if !changes.is_empty() {
             Some(changes)
         } else {
@@ -457,18 +468,20 @@ impl Drop for SubprocessClapAdapter {
         // Close GUI if open and notify window manager
         if self.gui_open {
             let _ = self.close_gui();
-            
+
             // Notify window manager to destroy the window
             if let Some(ref status_tx) = self.status_tx {
                 let _ = status_tx.send(EngineStatus::PluginGuiClosed {
                     channel_id: self.channel_id as usize,
                     device_position: self.device_position,
                 });
-                info!("Sent PluginGuiClosed notification during drop: channel={} device={}", 
-                    self.channel_id, self.device_position);
+                info!(
+                    "Sent PluginGuiClosed notification during drop: channel={} device={}",
+                    self.channel_id, self.device_position
+                );
             }
         }
-        
+
         // Shutdown subprocess
         info!("Shutting down plugin subprocess: {}", self.device_name);
         if let Err(e) = self.process_manager.shutdown_plugin(&self.process_key) {

@@ -1,7 +1,7 @@
 use tracing::info;
 
-use super::types::*;
 use super::commands::EngineState;
+use super::types::*;
 
 /// Process audio for one buffer
 pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
@@ -9,9 +9,10 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
     if !state.is_playing {
         return;
     }
-    
+
     // IMPORTANT: Use actual device sample rate for timing, not project setting
-    let ticks_per_sample = (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
+    let ticks_per_sample =
+        (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
     let mut tick_accumulator = 0.0;
 
     for frame_idx in 0..frames {
@@ -52,15 +53,17 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
 
                     // Allow processing at instance end tick for note off events
                     // but not for note on events (which require being strictly within the instance)
-                    let is_within_instance = current_tick >= instance.start_tick && current_tick < instance.end_tick();
+                    let is_within_instance =
+                        current_tick >= instance.start_tick && current_tick < instance.end_tick();
                     let is_at_instance_end = current_tick == instance.end_tick();
 
                     if is_within_instance || is_at_instance_end {
                         if let Some(clip) = state.clips.get(&instance.clip_id) {
                             let mut offset_in_instance = current_tick - instance.start_tick;
-                            
+
                             // Debug: log when we're processing an instance
-                            if current_tick % 960 == 0 {  // Log once per beat
+                            if current_tick % 960 == 0 {
+                                // Log once per beat
                                 info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes", 
                                     instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
                             }
@@ -68,31 +71,44 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                             // Handle looping
                             if instance.loop_enabled && instance.loop_length_ticks > 0 {
                                 if offset_in_instance >= instance.loop_start_ticks {
-                                    let loop_offset = offset_in_instance - instance.loop_start_ticks;
-                                    offset_in_instance = instance.loop_start_ticks + (loop_offset % instance.loop_length_ticks);
+                                    let loop_offset =
+                                        offset_in_instance - instance.loop_start_ticks;
+                                    offset_in_instance = instance.loop_start_ticks
+                                        + (loop_offset % instance.loop_length_ticks);
                                 }
                             }
 
                             for clip_note in &clip.midi_notes {
                                 // Apply clip_offset: only play notes at or after the offset
                                 // Translate clip note position to instance local time
-                                let note_start_in_instance = clip_note.start_tick - instance.clip_offset;
-                                let note_end_in_instance = note_start_in_instance + clip_note.duration_ticks;
-                                
+                                let note_start_in_instance =
+                                    clip_note.start_tick - instance.clip_offset;
+                                let note_end_in_instance =
+                                    note_start_in_instance + clip_note.duration_ticks;
+
                                 // Skip notes that are before the clip_offset
                                 if note_end_in_instance <= 0 {
                                     continue;
                                 }
 
                                 // Apply transpose
-                                let transposed_note = (clip_note.note as i16 + instance.transpose as i16)
-                                    .clamp(0, 127) as MidiNote;
+                                let transposed_note = (clip_note.note as i16
+                                    + instance.transpose as i16)
+                                    .clamp(0, 127)
+                                    as MidiNote;
 
                                 // Note On (only within instance, not at end)
-                                if is_within_instance && note_start_in_instance == offset_in_instance {
+                                if is_within_instance
+                                    && note_start_in_instance == offset_in_instance
+                                {
                                     info!("TRIGGER: Note {} (ID={}) at offset_in_instance={} (global tick {})", 
                                         transposed_note, clip_note.id, offset_in_instance, current_tick);
-                                    note_events.push((*track_id, transposed_note, clip_note.velocity, true));
+                                    note_events.push((
+                                        *track_id,
+                                        transposed_note,
+                                        clip_note.velocity,
+                                        true,
+                                    ));
                                 } else if current_tick % 960 == 0 {
                                     // Debug: why didn't this note trigger?
                                     info!("  Note {} (ID={}) not triggered: note_start_in_instance={}, offset_in_instance={}, match={}", 
@@ -102,7 +118,12 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
 
                                 // Note Off (allow at instance end)
                                 if note_end_in_instance == offset_in_instance {
-                                    note_events.push((*track_id, transposed_note, clip_note.velocity, false));
+                                    note_events.push((
+                                        *track_id,
+                                        transposed_note,
+                                        clip_note.velocity,
+                                        false,
+                                    ));
                                 }
                             }
                         }
@@ -143,33 +164,51 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                 }
 
                 if let Some(clip) = state.clips.get(&instance.clip_id) {
-                    if clip.clip_type == super::types::ClipType::Audio && !clip.audio_samples.is_empty() {
+                    if clip.clip_type == super::types::ClipType::Audio
+                        && !clip.audio_samples.is_empty()
+                    {
                         let current_pos_in_instance = current_tick - instance.start_tick;
 
                         // Check if we're in the playback range for this instance
-                        if current_pos_in_instance >= 0 && current_pos_in_instance < instance.duration_ticks {
+                        if current_pos_in_instance >= 0
+                            && current_pos_in_instance < instance.duration_ticks
+                        {
                             // Initialize playback position for this clip instance if not yet started
                             // Apply clip_offset: start reading from the offset position in the clip
                             if !track.audio_playback_positions.contains_key(&instance.id) {
                                 // Convert clip_offset (in ticks) to sample position
                                 // Formula: samples = (ticks / PPQ) * (60 / tempo) * sample_rate
-                                let ticks_to_beats = instance.clip_offset as f64 / state.settings.ppq as f64;
-                                let beats_to_seconds = ticks_to_beats * 60.0 / state.settings.tempo as f64;
-                                let offset_samples = beats_to_seconds * clip.audio_sample_rate as f64;
-                                track.audio_playback_positions.insert(instance.id.clone(), offset_samples);
+                                let ticks_to_beats =
+                                    instance.clip_offset as f64 / state.settings.ppq as f64;
+                                let beats_to_seconds =
+                                    ticks_to_beats * 60.0 / state.settings.tempo as f64;
+                                let offset_samples =
+                                    beats_to_seconds * clip.audio_sample_rate as f64;
+                                track
+                                    .audio_playback_positions
+                                    .insert(instance.id.clone(), offset_samples);
                             }
 
                             // Get mutable reference to playback position
-                            let playback_pos = track.audio_playback_positions.get_mut(&instance.id).unwrap();
+                            let playback_pos = track
+                                .audio_playback_positions
+                                .get_mut(&instance.id)
+                                .unwrap();
 
                             // Calculate BPM stretch factor
-                            let stretch_factor = AudioPlayback::calculate_stretch_factor(state.settings.tempo, clip.recorded_bpm);
+                            let stretch_factor = AudioPlayback::calculate_stretch_factor(
+                                state.settings.tempo,
+                                clip.recorded_bpm,
+                            );
 
                             // Calculate samples to advance this frame
                             // stretch_factor * device_sample_rate / clip_sample_rate
-                            let advance_per_sample = (stretch_factor as f64) * (state.device_sample_rate as f64) / (clip.audio_sample_rate as f64);
+                            let advance_per_sample = (stretch_factor as f64)
+                                * (state.device_sample_rate as f64)
+                                / (clip.audio_sample_rate as f64);
 
-                            let clip_sample_len = (clip.audio_samples.len() / clip.audio_channels) as f64;
+                            let clip_sample_len =
+                                (clip.audio_samples.len() / clip.audio_channels) as f64;
 
                             // Get the current interpolated sample
                             let sample_idx = playback_pos.floor() as usize;
@@ -187,7 +226,9 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                                 // Linear interpolation for left channel
                                 if interleaved_idx < clip.audio_samples.len() {
                                     let s0_left = clip.audio_samples[interleaved_idx];
-                                    let s1_left = if interleaved_idx_next < clip.audio_samples.len() && interleaved_idx_next != interleaved_idx {
+                                    let s1_left = if interleaved_idx_next < clip.audio_samples.len()
+                                        && interleaved_idx_next != interleaved_idx
+                                    {
                                         clip.audio_samples[interleaved_idx_next]
                                     } else {
                                         s0_left
@@ -196,9 +237,14 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                                 }
 
                                 // Linear interpolation for right channel
-                                if clip.audio_channels > 1 && interleaved_idx + 1 < clip.audio_samples.len() {
+                                if clip.audio_channels > 1
+                                    && interleaved_idx + 1 < clip.audio_samples.len()
+                                {
                                     let s0_right = clip.audio_samples[interleaved_idx + 1];
-                                    let s1_right = if interleaved_idx_next + 1 < clip.audio_samples.len() && interleaved_idx_next != interleaved_idx {
+                                    let s1_right = if interleaved_idx_next + 1
+                                        < clip.audio_samples.len()
+                                        && interleaved_idx_next != interleaved_idx
+                                    {
                                         clip.audio_samples[interleaved_idx_next + 1]
                                     } else {
                                         s0_right
@@ -220,16 +266,24 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
 
                             // Handle looping
                             if instance.loop_enabled && instance.loop_length_ticks > 0 {
-                                let seconds_per_tick = 60.0 / (state.settings.tempo as f64 * state.settings.ppq as f64);
-                                let loop_start_seconds = instance.loop_start_ticks as f64 * seconds_per_tick;
-                                let loop_length_seconds = instance.loop_length_ticks as f64 * seconds_per_tick;
+                                let seconds_per_tick = 60.0
+                                    / (state.settings.tempo as f64 * state.settings.ppq as f64);
+                                let loop_start_seconds =
+                                    instance.loop_start_ticks as f64 * seconds_per_tick;
+                                let loop_length_seconds =
+                                    instance.loop_length_ticks as f64 * seconds_per_tick;
                                 let clip_sr = clip.audio_sample_rate as f64;
-                                let loop_start_samples = loop_start_seconds * clip_sr * stretch_factor as f64;
-                                let loop_length_samples = loop_length_seconds * clip_sr * stretch_factor as f64;
+                                let loop_start_samples =
+                                    loop_start_seconds * clip_sr * stretch_factor as f64;
+                                let loop_length_samples =
+                                    loop_length_seconds * clip_sr * stretch_factor as f64;
 
-                                if loop_length_samples > 0.0 && *playback_pos >= loop_start_samples + loop_length_samples {
+                                if loop_length_samples > 0.0
+                                    && *playback_pos >= loop_start_samples + loop_length_samples
+                                {
                                     let offset_in_loop = *playback_pos - loop_start_samples;
-                                    *playback_pos = loop_start_samples + (offset_in_loop % loop_length_samples);
+                                    *playback_pos =
+                                        loop_start_samples + (offset_in_loop % loop_length_samples);
                                 }
                             }
                         } else if current_pos_in_instance < 0 {
