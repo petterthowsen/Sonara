@@ -4,10 +4,17 @@ alwaysApply: false
 ---
 # Godot Code Guidelines
 
-When working on Godot scenes / UI, delegate to the user to set up scene nodes and properties.
 
+## GDScript
 When writing gdscript, follow these guidelines:
 
 1. Use two newlines between class functions.
 2. Most properties and functions should have a comment that briefly explains its purpose responsibility, unless positively self-evident.
 3. Things that control overall design or behavior of a node that could likely be subject to change/tweaking should probably have a configurable property.
+4. Never edit .uid, .tscn or other resource types (use Godot Tools)
+
+## Working with Scenes
+
+When working on scenes, use the available godot tools to access and modify scene properties or create new nodes.
+
+Note that scene tree paths must be relative to the scene in question.

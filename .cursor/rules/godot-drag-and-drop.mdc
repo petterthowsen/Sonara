@@ -13,8 +13,6 @@ alwaysApply: false
     func _drop_data(at_position:Vector2, data:Variant)->void
     
 
-Enter fullscreen mode Exit fullscreen mode
-
 The drag and drop mechanism also works in that order:
 
 1.  `_get_drag_data` - returns the data that can be dragged from the current `Control`. In my case, if a slot has an item, then I'll return the item, otherwise `null`.

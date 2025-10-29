@@ -31,6 +31,9 @@ var resize_start_y: float = 0.0
 var resize_start_height: int = 0
 
 func _ready():
+	# Enable focus so TrackItem can receive input events properly
+	focus_mode = Control.FOCUS_CLICK
+	
 	# Connect UI signals
 	if not Engine.is_editor_hint():
 
@@ -56,6 +59,15 @@ func _ready():
 			drop_zone.drop_accepted.connect(_on_drop_zone_drop)
 
 	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	"""Handle drag notifications to show/hide and update state."""
+	if what == NOTIFICATION_DRAG_BEGIN:
+		$VBoxContainer/empty.show()
+	elif what == NOTIFICATION_DRAG_END:
+		$VBoxContainer/empty.hide()
+		
 
 
 func _enter_tree() -> void:
@@ -85,6 +97,7 @@ func _gui_input(event: InputEvent) -> void:
 				accept_event()
 			elif event.is_released() and is_resizing:
 				is_resizing = false
+				grab_focus()
 				accept_event()
 	else:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
@@ -110,6 +123,7 @@ func _input(event: InputEvent) -> void:
 	if is_resizing and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.is_released():
 			is_resizing = false
+			grab_focus()
 			accept_event()
 
 
