@@ -69,6 +69,12 @@ func _ready():
 	io_toggle.toggled.connect(_on_io_toggled)
 	sends_toggle.toggled.connect(_on_sends_toggled)
 	big_meters_toggle.toggled.connect(_on_big_meters_toggled)
+	
+	# Connect context menu signals
+	channel_ctx_menu.delete_requested.connect(_on_channel_delete_requested)
+	
+	# Enable drag and drop on left pane for devices and SFZ files
+	left_pane.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 # ============================================================================
 # EDITOR/PROJECT SIGNAL CALLBACKS
@@ -82,6 +88,7 @@ func _on_project_opened(project: Project) -> void:
 
 	# Connect to project signals
 	project.channel_added.connect(_on_channel_added)
+	project.channel_removed.connect(_on_channel_removed)
 
 	# Build UI for existing channels
 	for i in range(project.channels.size()):
@@ -123,6 +130,10 @@ func _on_channel_added(channel: Channel) -> void:
 	# Update routing menus for all channels since new channel can be a routing target
 	_rebuild_all_routing_menus()
 	
+	# If a BUS channel was added, rebuild all sends panels since this is a new send target
+	if channel.is_bus:
+		_rebuild_all_sends_panels()
+	
 	# listen for right-click
 	channel_item.request_show_context_menu.connect(_on_channel_request_context_menu.bind(channel))
 	
@@ -132,11 +143,47 @@ func _on_channel_added(channel: Channel) -> void:
 	print("[Mixer] Channel added: ", channel.name, " with ID ", channel.id, " and order ", channel.order)
 
 
+func _on_channel_removed(channel: Channel) -> void:
+	"""Remove the MixerChannel UI element when a channel is removed."""
+	var mixer_channel = find_mixer_channel_ui_for_channel(channel)
+	if mixer_channel:
+		# Remove from selection if selected
+		if selection.has(channel):
+			deselect_channel(channel)
+		
+		# Remove from focused if focused
+		if focused_channel == channel:
+			focused_channel = null
+		
+		# Remove the UI element
+		mixer_channel.queue_free()
+		
+		# Update routing menus for remaining channels
+		_rebuild_all_routing_menus()
+		
+		# If a BUS channel was removed, rebuild all sends panels since a send target is gone
+		if channel.is_bus:
+			_rebuild_all_sends_panels()
+		
+		print("[Mixer] Channel removed from UI: ", channel.name, " (ID: ", channel.id, ")")
+
+
+func _on_channel_delete_requested(channel: Channel) -> void:
+	"""Handle delete request from context menu."""
+	if not current_project:
+		return
+	
+	# Confirm deletion (skip for now, directly delete)
+	current_project.remove_channel(channel.id)
+
+
 func deselect_channel(ch : Channel, erase := true, emit_deselect := true, emit_changed := true):
 	if selection.has(ch):
 		var mc = find_mixer_channel_ui_for_channel(ch)
 		if not mc:
 			push_error("[Mixer] Cannot find MixerChannel ui for Channel ", ch.id)
+			return
+		
 		mc.is_selected = false
 		if erase:
 			selection.erase(ch)
@@ -305,6 +352,26 @@ func _rebuild_all_routing_menus() -> void:
 		if child is MixerChannel:
 			child._rebuild_output_menu()
 
+
+func _rebuild_all_sends_panels() -> void:
+	"""Rebuild sends panels for all mixer channels when a new bus is added."""
+	print("[Mixer] Rebuilding all sends panels")
+	
+	# Update left pane channels (instrument/audio channels)
+	for child in left_channels.get_children():
+		if child is MixerChannel and child.sends_panel:
+			child.sends_panel._rebuild_sends_ui()
+	
+	# Update right pane channels (bus channels)
+	for child in right_channels.get_children():
+		if child is MixerChannel and child.sends_panel:
+			child.sends_panel._rebuild_sends_ui()
+	
+	# Update master channel if it exists
+	for child in right_pane_hbox.get_children():
+		if child is MixerChannel and child.sends_panel:
+			child.sends_panel._rebuild_sends_ui()
+
 	# Update master channel
 	for child in right_pane_hbox.get_children():
 		if child is MixerChannel and child.channel and child.channel.is_master:
@@ -318,3 +385,138 @@ func _on_channel_request_context_menu(channel : Channel):
 		var c_pos = get_global_mouse_position()
 		var c_size = channel_ctx_menu.get_contents_minimum_size()
 		channel_ctx_menu.popup(Rect2(c_pos, c_size))
+
+
+# ============================================================================
+# DRAG AND DROP (LEFT PANE ONLY - for creating instrument channels)
+# ============================================================================
+
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	"""Return drag data (not used for mixer)."""
+	return null
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	"""Check if we can drop data (device/SFZ assets) on the left pane."""
+	if not current_project:
+		return false
+
+	# Check if data is a single asset
+	if data is Asset:
+		if data.type == Asset.TYPE.Device or data.type == Asset.TYPE.SFZ:
+			return true
+	
+	# Check if data is an array of assets
+	if data is Array:
+		for item in data:
+			if not item is Asset:
+				return false
+			if item.type != Asset.TYPE.Device and item.type != Asset.TYPE.SFZ:
+				return false
+		return data.size() > 0
+
+	return false
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	"""Handle dropping device or SFZ assets (single or multiple) on the left pane."""
+	if not current_project:
+		return
+	
+	# Handle array of assets
+	if data is Array:
+		print("[Mixer] Dropping %d assets" % data.size())
+		for asset in data:
+			if asset is Asset:
+				_handle_single_asset_drop(asset)
+		return
+	
+	# Handle single asset
+	if data is Asset:
+		_handle_single_asset_drop(data)
+
+
+func _handle_single_asset_drop(asset: Asset) -> void:
+	"""Handle dropping a single asset on the left pane."""
+	# Handle SFZ asset drops
+	if asset.type == Asset.TYPE.SFZ:
+		print("[Mixer] SFZ dropped: ", asset.name, " (", asset.path, ")")
+		_create_sfz_instrument_channel(asset.path, asset.name)
+		return
+	
+	# Handle device asset drops
+	if asset.type == Asset.TYPE.Device:
+		print("[Mixer] Device dropped: ", asset.name, " (", asset.path, ")")
+		
+		# Get the device metadata
+		var device = AssetService.get_device(asset.path)
+		if not device:
+			push_error("[Mixer] Failed to get device: ", asset.path)
+			return
+		
+		# Only create instrument channels for instrument devices
+		if device.category == Device.DeviceCategory.Instrument:
+			_create_instrument_channel_with_device(device)
+		else:
+			push_warning("[Mixer] Cannot drop effect device on empty area. Drop on existing channel instead.")
+
+
+func _create_instrument_channel_with_device(device: Device) -> void:
+	"""Create a new instrument channel with the specified device."""
+	print("[Mixer] Creating instrument channel with device: ", device.name)
+	
+	# Create new instrument track + channel pair
+	var result = current_project.create_instrument_track(device.name)
+	if not result:
+		push_error("[Mixer] Failed to create instrument track")
+		return
+	
+	var track = result["track"] as Track
+	var channel = result["channel"] as Channel
+	
+	if not track or not channel:
+		push_error("[Mixer] Invalid track or channel returned")
+		return
+	
+	print("[Mixer] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
+	print("[Mixer] Created channel: ", channel.name, " (id=", channel.id, ")")
+	
+	# Create device instance and add to channel
+	var device_instance = DeviceInstance.new(device, channel.id, 0)
+	channel.add_device(device_instance, -1)
+
+
+func _create_sfz_instrument_channel(sfz_path: String, sfz_name: String) -> void:
+	"""Create a new instrument channel with sfizz device and load the SFZ file."""
+	print("[Mixer] Creating SFZ instrument channel: ", sfz_name)
+	
+	# Get the sfizz device from AssetService
+	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
+	if not sfizz_device:
+		push_error("[Mixer] Failed to get sfizz device")
+		return
+	
+	# Create new instrument track + channel pair
+	var result = current_project.create_instrument_track(sfz_name)
+	if not result:
+		push_error("[Mixer] Failed to create instrument track")
+		return
+	
+	var track = result["track"] as Track
+	var channel = result["channel"] as Channel
+	
+	if not track or not channel:
+		push_error("[Mixer] Invalid track or channel returned")
+		return
+	
+	print("[Mixer] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
+	print("[Mixer] Created channel: ", channel.name, " (id=", channel.id, ")")
+	
+	# Create sfizz device instance and add to channel
+	var device_instance = DeviceInstance.new(sfizz_device, channel.id, 0)
+	channel.add_device(device_instance, -1)
+	
+	# Load the SFZ file into the device
+	# Give the engine a moment to create the device before loading the file
+	await get_tree().create_timer(0.1).timeout
+	device_instance.load_file(sfz_path)

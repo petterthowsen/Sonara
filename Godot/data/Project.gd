@@ -17,6 +17,7 @@ enum ConnectionState {
 signal track_added(track: Track)
 signal track_removed(track: Track)
 signal channel_added(channel: Channel)
+signal channel_removed(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
@@ -266,6 +267,57 @@ func get_channel_by_id(channel_id: int) -> Channel:
 		if channel.id == channel_id:
 			return channel
 	return null
+
+
+func remove_channel(channel_id: int) -> bool:
+	"""Remove a channel from the project. Returns true if successful."""
+	var channel = get_channel_by_id(channel_id)
+	if not channel:
+		return false
+	
+	# Prevent removing the master channel
+	if channel.is_master:
+		print("[Project] Cannot remove master channel")
+		return false
+	
+	# Reroute any tracks that were using this channel to the master channel
+	for track in channel.routed_tracks.duplicate():
+		# Temporarily disable name/color syncing so track keeps its original identity
+		var old_name_by_channel = track.name_by_channel
+		var old_color_by_channel = track.color_by_channel
+		track.name_by_channel = false
+		track.color_by_channel = false
+		
+		track.default_channel_id = 1  # Route to master (ID 1)
+		
+		# Restore sync settings
+		track.name_by_channel = old_name_by_channel
+		track.color_by_channel = old_color_by_channel
+		
+		print("[Project] Track '%s' rerouted to Master (was using removed channel %d)" % [track.name, channel_id])
+	
+	# Reroute any channels that were routing to this channel to the master channel
+	for ch in channels:
+		if ch.output_channel_id == channel_id:
+			ch.set_route(1)  # Route to master (ID 1)
+			print("[Project] Channel '%s' rerouted to Master (was routing to removed channel %d)" % [ch.name, channel_id])
+	
+	# Disconnect from engine if connected
+	if _connection_state == ConnectionState.CONNECTED and channel._is_connected:
+		channel.disconnect_from_engine()
+		# Tell engine to remove the channel
+		AudioEngineOSC.send("/channel/%d/remove" % channel_id, [])
+	
+	# Remove from channels array
+	var index = channels.find(channel)
+	if index >= 0:
+		channels.remove_at(index)
+	
+	# Emit signal before cleanup
+	channel_removed.emit(channel)
+	
+	print("[Project] Channel removed: %s (ID: %d)" % [channel.name, channel_id])
+	return true
 
 
 # ============================================================================

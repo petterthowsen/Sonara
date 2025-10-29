@@ -22,12 +22,20 @@ pub enum AudioCommand {
 
     // Channel management
     CreateChannel { id: ChannelId, name: String },
+    RemoveChannel { id: ChannelId },
     SetChannelVolume { id: ChannelId, db: f32 },
     SetChannelPan { id: ChannelId, pan_left: f32, pan_right: Option<f32> },
     SetChannelPanMode { id: ChannelId, mode: i32 },
     SetChannelMute { id: ChannelId, mute: bool },
     SetChannelSolo { id: ChannelId, solo: bool },
     SetChannelRoute { id: ChannelId, output_id: Option<ChannelId> },
+    
+    // Send management
+    AddSend { channel_id: ChannelId, target_channel_id: ChannelId, amount_db: f32, pre_fader: bool },
+    RemoveSend { channel_id: ChannelId, target_channel_id: ChannelId },
+    SetSendAmount { channel_id: ChannelId, target_channel_id: ChannelId, amount_db: f32 },
+    SetSendPreFader { channel_id: ChannelId, target_channel_id: ChannelId, pre_fader: bool },
+    SetSendMute { channel_id: ChannelId, target_channel_id: ChannelId, muted: bool },
 
     // Track management
     CreateTrack { id: TrackId, channel_id: ChannelId },
@@ -286,6 +294,13 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
             state.channels.insert(id, channel);
             info!("Channel {} created: {} [total channels: {}]", id, name, state.channels.len());
         }
+        AudioCommand::RemoveChannel { id } => {
+            if let Some(_channel) = state.channels.remove(&id) {
+                info!("Channel {} removed [total channels: {}]", id, state.channels.len());
+            } else {
+                warn!("Cannot remove channel {}: not found", id);
+            }
+        }
         AudioCommand::SetChannelVolume { id, db } => {
             if let Some(channel) = state.channels.get_mut(&id) {
                 channel.volume_db = db;
@@ -324,6 +339,79 @@ pub fn process_command(state: &mut EngineState, cmd: AudioCommand, buffer_size: 
                 info!("Channel {} routed to {:?}", id, output_id);
             } else {
                 warn!("Cannot set route for channel {} (not found)", id);
+            }
+        }
+        
+        // Send management commands
+        AudioCommand::AddSend { channel_id, target_channel_id, amount_db, pre_fader } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                // Check if send already exists to this target
+                if channel.send_channels.iter().any(|s| s.target_channel_id == target_channel_id) {
+                    warn!("Send from channel {} to {} already exists", channel_id, target_channel_id);
+                } else {
+                    channel.send_channels.push(super::types::Send {
+                        target_channel_id,
+                        amount_db,
+                        pre_fader,
+                        muted: false,
+                    });
+                    info!("Send added: channel {} -> {} ({:.1} dB, {})", 
+                        channel_id, target_channel_id, amount_db, 
+                        if pre_fader { "pre-fader" } else { "post-fader" });
+                }
+            } else {
+                warn!("Cannot add send: channel {} not found", channel_id);
+            }
+        }
+        AudioCommand::RemoveSend { channel_id, target_channel_id } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                let initial_len = channel.send_channels.len();
+                channel.send_channels.retain(|s| s.target_channel_id != target_channel_id);
+                if channel.send_channels.len() != initial_len {
+                    info!("Send removed: channel {} -> {}", channel_id, target_channel_id);
+                } else {
+                    warn!("Send not found: channel {} -> {}", channel_id, target_channel_id);
+                }
+            } else {
+                warn!("Cannot remove send: channel {} not found", channel_id);
+            }
+        }
+        AudioCommand::SetSendAmount { channel_id, target_channel_id, amount_db } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(send) = channel.send_channels.iter_mut().find(|s| s.target_channel_id == target_channel_id) {
+                    send.amount_db = amount_db.clamp(-60.0, 12.0);
+                    // Don't log every parameter change (too noisy)
+                } else {
+                    warn!("Cannot set send amount: send not found (channel {} -> {})", channel_id, target_channel_id);
+                }
+            } else {
+                warn!("Cannot set send amount: channel {} not found", channel_id);
+            }
+        }
+        AudioCommand::SetSendPreFader { channel_id, target_channel_id, pre_fader } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(send) = channel.send_channels.iter_mut().find(|s| s.target_channel_id == target_channel_id) {
+                    send.pre_fader = pre_fader;
+                    info!("Send pre-fader set: channel {} -> {} ({})", 
+                        channel_id, target_channel_id, if pre_fader { "pre" } else { "post" });
+                } else {
+                    warn!("Cannot set send pre-fader: send not found (channel {} -> {})", channel_id, target_channel_id);
+                }
+            } else {
+                warn!("Cannot set send pre-fader: channel {} not found", channel_id);
+            }
+        }
+        AudioCommand::SetSendMute { channel_id, target_channel_id, muted } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(send) = channel.send_channels.iter_mut().find(|s| s.target_channel_id == target_channel_id) {
+                    send.muted = muted;
+                    info!("Send mute set: channel {} -> {} ({})", 
+                        channel_id, target_channel_id, if muted { "muted" } else { "unmuted" });
+                } else {
+                    warn!("Cannot set send mute: send not found (channel {} -> {})", channel_id, target_channel_id);
+                }
+            } else {
+                warn!("Cannot set send mute: channel {} not found", channel_id);
             }
         }
         AudioCommand::CreateTrack { id, channel_id } => {

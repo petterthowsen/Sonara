@@ -29,6 +29,11 @@ signal solo_changed(value: bool)
 signal peak_updated(left: float, right: float)
 signal route_changed(output_id: int)
 
+# Send signals
+signal send_added(target_channel_id: int, send_config: SendConfig)
+signal send_removed(target_channel_id: int)
+signal send_changed(target_channel_id: int, send_config: SendConfig)
+
 # Device chain signals
 signal device_added(device_instance: DeviceInstance, position: int)
 signal device_removed(position: int, device_id: String)
@@ -159,6 +164,12 @@ func sync_to_engine() -> void:
 	else:
 		# Regular channels: route to output channel
 		AudioEngineOSC.send("/channel/%d/route" % id, [output_channel_id])
+	
+	# Sync all sends to engine
+	for send in send_channels:
+		AudioEngineOSC.send("/channel/%d/send/%d/add" % [id, send.target_channel_id], [send.amount, 1 if send.pre_fader else 0])
+		if send.muted:
+			AudioEngineOSC.send("/channel/%d/send/%d/mute" % [id, send.target_channel_id], [1])
 	
 	# Sync all devices to engine (for project loading)
 	for device_inst in devices:
@@ -295,6 +306,120 @@ func set_route(output_id: int) -> void:
 	if _is_connected:
 		AudioEngineOSC.send("/channel/%d/route" % id, [output_channel_id])
 	route_changed.emit(output_channel_id)
+
+
+# ============================================================================
+# SEND MANAGEMENT
+# ============================================================================
+
+func add_send(target_channel_id: int, amount_db: float = -12.0, pre_fader: bool = false) -> void:
+	"""Add a send to a BUS channel and sync to audio engine."""
+	# Check if send already exists
+	for send in send_channels:
+		if send.target_channel_id == target_channel_id:
+			print("[Channel %d] Send to channel %d already exists" % [id, target_channel_id])
+			return
+	
+	# Validate target is not self
+	if target_channel_id == id:
+		print("[Channel %d] Cannot send to self" % id)
+		return
+	
+	# Create send config
+	var send_config = SendConfig.new()
+	send_config.target_channel_id = target_channel_id
+	send_config.amount = amount_db
+	send_config.pre_fader = pre_fader
+	send_config.muted = false
+	
+	# Add to local array
+	send_channels.append(send_config)
+	
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/send/%d/add" % [id, target_channel_id], [amount_db, 1 if pre_fader else 0])
+	
+	send_added.emit(target_channel_id, send_config)
+	print("[Channel %d] Send added to channel %d (%.1f dB, %s)" % [id, target_channel_id, amount_db, "pre-fader" if pre_fader else "post-fader"])
+
+
+func remove_send(target_channel_id: int) -> void:
+	"""Remove a send and sync to audio engine."""
+	var found = false
+	for i in range(send_channels.size()):
+		if send_channels[i].target_channel_id == target_channel_id:
+			send_channels.remove_at(i)
+			found = true
+			break
+	
+	if not found:
+		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		return
+	
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/send/%d/remove" % [id, target_channel_id])
+	
+	send_removed.emit(target_channel_id)
+	print("[Channel %d] Send removed to channel %d" % [id, target_channel_id])
+
+
+func set_send_amount(target_channel_id: int, amount_db: float) -> void:
+	"""Set send level and sync to audio engine."""
+	var send_config = get_send(target_channel_id)
+	if not send_config:
+		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		return
+	
+	send_config.amount = clamp(amount_db, -60.0, 12.0)
+	
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/send/%d/amount" % [id, target_channel_id], [send_config.amount])
+	
+	send_changed.emit(target_channel_id, send_config)
+
+
+func set_send_pre_fader(target_channel_id: int, pre_fader: bool) -> void:
+	"""Set send pre/post fader and sync to audio engine."""
+	var send_config = get_send(target_channel_id)
+	if not send_config:
+		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		return
+	
+	send_config.pre_fader = pre_fader
+	
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/send/%d/pre_fader" % [id, target_channel_id], [1 if pre_fader else 0])
+	
+	send_changed.emit(target_channel_id, send_config)
+	print("[Channel %d] Send to channel %d set to %s" % [id, target_channel_id, "pre-fader" if pre_fader else "post-fader"])
+
+
+func set_send_mute(target_channel_id: int, muted: bool) -> void:
+	"""Set send mute state and sync to audio engine."""
+	var send_config = get_send(target_channel_id)
+	if not send_config:
+		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		return
+	
+	send_config.muted = muted
+	
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/send/%d/mute" % [id, target_channel_id], [1 if muted else 0])
+	
+	send_changed.emit(target_channel_id, send_config)
+	print("[Channel %d] Send to channel %d %s" % [id, target_channel_id, "muted" if muted else "unmuted"])
+
+
+func get_send(target_channel_id: int) -> SendConfig:
+	"""Get send configuration for a target channel."""
+	for send in send_channels:
+		if send.target_channel_id == target_channel_id:
+			return send
+	return null
 
 
 # ============================================================================
@@ -571,9 +696,11 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.phase_invert = data.get("phase_invert", false)
 	channel.output_channel_id = data.get("output_channel_id", 1)
 
-	# TODO: Load send_channels when SendConfig exists
-	# for send_data in data.get("send_channels", []):
-	#     channel.send_channels.append(SendConfig.from_json(send_data))
+	# Load send_channels
+	for send_data in data.get("send_channels", []):
+		if send_data is Dictionary:
+			var send_config = SendConfig.from_json(send_data)
+			channel.send_channels.append(send_config)
 	
 	# Load devices (do NOT use add_device - that would sync to engine prematurely)
 	# Devices will be synced to engine when channel.connect_to_engine() is called

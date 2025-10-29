@@ -5,6 +5,138 @@ use tracing::info;
 use super::types::*;
 use super::commands::{EngineState, EngineStatus};
 
+fn db_to_gain(db: f32) -> f32 {
+    if db <= -60.0 {
+        0.0
+    } else {
+        10.0_f32.powf(db / 20.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam::channel::unbounded;
+    use crate::audio::commands::EngineState;
+    use crate::audio::types::{Channel, PanMode, Send};
+
+    fn warm_gain(channel: &mut Channel, iterations: usize) {
+        for _ in 0..iterations {
+            let _ = channel.get_smoothed_gain();
+        }
+    }
+
+    #[test]
+    fn post_fader_send_routes_signal_to_bus() {
+        let buffer_size = 4;
+        let sample_rate = 48_000.0;
+        let mut state = EngineState::default();
+        state.device_sample_rate = sample_rate;
+
+        let mut master = Channel::new(1, "Master".to_string(), buffer_size, sample_rate);
+        master.output_channel_id = Some(1000);
+        master.volume_db = 0.0;
+        master.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut master, 256);
+
+        let mut bus = Channel::new(2, "Bus".to_string(), buffer_size, sample_rate);
+        bus.output_channel_id = Some(1);
+        bus.volume_db = 0.0;
+        bus.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut bus, 256);
+
+        let mut source = Channel::new(3, "Source".to_string(), buffer_size, sample_rate);
+        source.output_channel_id = None;
+        source.volume_db = 0.0;
+        source.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut source, 256);
+        source.buffer_left.fill(0.5);
+        source.buffer_right.fill(0.5);
+        source.send_channels.push(Send {
+            target_channel_id: 2,
+            amount_db: 0.0,
+            pre_fader: false,
+            muted: false,
+        });
+
+        state.channels.insert(1, master);
+        state.channels.insert(2, bus);
+        state.channels.insert(3, source);
+
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![0.0f32; buffer_size * 2];
+        mix_and_output(&mut state, &mut output, 2, &status_tx);
+
+        let bus = state.channels.get(&2).unwrap();
+        assert!((bus.buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((bus.buffer_right[0] - 0.5).abs() < 1e-4);
+
+        let master = state.channels.get(&1).unwrap();
+        assert!((master.buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((master.buffer_right[0] - 0.5).abs() < 1e-4);
+
+        assert!((output[0] - 0.5).abs() < 1e-4);
+        assert!((output[1] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pre_fader_send_bypasses_channel_fader() {
+        let buffer_size = 4;
+        let sample_rate = 48_000.0;
+        let mut state = EngineState::default();
+        state.device_sample_rate = sample_rate;
+
+        let mut master = Channel::new(1, "Master".to_string(), buffer_size, sample_rate);
+        master.output_channel_id = Some(1000);
+        master.volume_db = 0.0;
+        master.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut master, 256);
+
+        let mut bus = Channel::new(2, "Bus".to_string(), buffer_size, sample_rate);
+        bus.output_channel_id = Some(1);
+        bus.volume_db = 0.0;
+        bus.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut bus, 256);
+
+        let mut source = Channel::new(3, "Source".to_string(), buffer_size, sample_rate);
+        source.output_channel_id = None;
+        source.volume_db = -60.0;
+        source.pan_mode = PanMode::StereoBalance;
+        warm_gain(&mut source, 512);
+        source.buffer_left.fill(0.5);
+        source.buffer_right.fill(0.5);
+        source.send_channels.push(Send {
+            target_channel_id: 2,
+            amount_db: 0.0,
+            pre_fader: true,
+            muted: false,
+        });
+
+        state.channels.insert(1, master);
+        state.channels.insert(2, bus);
+        state.channels.insert(3, source);
+
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![0.0f32; buffer_size * 2];
+        mix_and_output(&mut state, &mut output, 2, &status_tx);
+
+        let bus = state.channels.get(&2).unwrap();
+        assert!((bus.buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((bus.buffer_right[0] - 0.5).abs() < 1e-4);
+
+        let master = state.channels.get(&1).unwrap();
+        assert!((master.buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((master.buffer_right[0] - 0.5).abs() < 1e-4);
+
+        let source = state.channels.get(&3).unwrap();
+        assert!(source.buffer_left[0].abs() < 1e-3);
+        assert!(source.buffer_right[0].abs() < 1e-3);
+
+        assert!((output[0] - 0.5).abs() < 1e-4);
+        assert!((output[1] - 0.5).abs() < 1e-4);
+    }
+}
+
 /// Mix channels and output to audio device
 pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize, status_tx: &Sender<EngineStatus>) {
     // Check if any channel has solo
@@ -33,12 +165,27 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
     // IMPORTANT: Skip bus channels here - they'll be processed in Phase 4 after receiving routed audio
     let sample_count = state.channels.values().next().map(|c| c.buffer_left.len()).unwrap_or(0);
 
-    // Identify bus channels (channels that other channels route TO)
+    // Cache pre-fader audio for channels that have pre-fader sends so we can tap the signal before fader
+    let mut pre_fader_sources: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
+    if sample_count > 0 {
+        for (&id, channel) in state.channels.iter() {
+            if channel.send_channels.iter().any(|send| send.pre_fader && !send.muted) {
+                pre_fader_sources.insert(id, (channel.buffer_left.clone(), channel.buffer_right.clone()));
+            }
+        }
+    }
+
+    // Identify bus channels (channels that other channels route TO or receive sends)
     let mut bus_channel_ids: HashSet<ChannelId> = HashSet::new();
     for channel in state.channels.values() {
         if let Some(output_id) = channel.output_channel_id {
             if output_id < 1000 {  // Only channels, not devices
                 bus_channel_ids.insert(output_id);
+            }
+        }
+        for send in &channel.send_channels {
+            if send.target_channel_id < 1000 {
+                bus_channel_ids.insert(send.target_channel_id);
             }
         }
     }
@@ -148,6 +295,83 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
         }
     }
 
+    // Collect send contributions before hierarchical routing so they are processed like regular bus inputs
+    let mut send_accum: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
+    let mut pending_bus_processing: HashSet<ChannelId> = HashSet::new();
+
+    if sample_count > 0 {
+        for (&source_id, channel) in state.channels.iter() {
+            if channel.send_channels.is_empty() {
+                continue;
+            }
+            if channel.mute || (has_solo && !channel.solo) {
+                continue;
+            }
+
+            for send in &channel.send_channels {
+                if send.muted {
+                    continue;
+                }
+                if send.target_channel_id == 0 || send.target_channel_id == source_id || send.target_channel_id >= 1000 {
+                    continue;
+                }
+                if !state.channels.contains_key(&send.target_channel_id) {
+                    continue;
+                }
+
+                let send_gain = db_to_gain(send.amount_db);
+                if send_gain <= 0.0 {
+                    continue;
+                }
+
+                let entry = send_accum.entry(send.target_channel_id)
+                    .or_insert_with(|| (vec![0.0; sample_count], vec![0.0; sample_count]));
+
+                let buffer_len = channel.buffer_left.len().min(channel.buffer_right.len()).min(sample_count);
+                if buffer_len == 0 {
+                    continue;
+                }
+
+                if send.pre_fader {
+                    if let Some((pre_left, pre_right)) = pre_fader_sources.get(&source_id) {
+                        let pan = channel.get_pan_coefficients();
+                        for i in 0..buffer_len {
+                            let left_in = pre_left[i];
+                            let right_in = pre_right[i];
+                            let panned_left = left_in * pan.left_to_left + right_in * pan.right_to_left;
+                            let panned_right = left_in * pan.left_to_right + right_in * pan.right_to_right;
+                            entry.0[i] += panned_left * send_gain;
+                            entry.1[i] += panned_right * send_gain;
+                        }
+                    }
+                } else {
+                    for i in 0..buffer_len {
+                        entry.0[i] += channel.buffer_left[i] * send_gain;
+                        entry.1[i] += channel.buffer_right[i] * send_gain;
+                    }
+                }
+
+                pending_bus_processing.insert(send.target_channel_id);
+            }
+        }
+    }
+
+    for (target_id, (send_left, send_right)) in send_accum.into_iter() {
+        if let Some(target_ch) = state.channels.get_mut(&target_id) {
+            if target_ch.mute || (has_solo && !target_ch.solo) {
+                continue;
+            }
+
+            let dest_gain = target_ch.get_gain();
+            let len = target_ch.buffer_left.len().min(target_ch.buffer_right.len()).min(sample_count);
+
+            for i in 0..len {
+                target_ch.buffer_left[i] += send_left[i] * dest_gain;
+                target_ch.buffer_right[i] += send_right[i] * dest_gain;
+            }
+        }
+    }
+
     // Third pass: Mix channels into their destinations with hierarchical routing support
     // We need multiple passes to handle: Track → Bus → Master
     // Use a buffer copy strategy to track which channels have been processed
@@ -209,8 +433,11 @@ pub fn mix_and_output(state: &mut EngineState, data: &mut [f32], channels: usize
             }
         }
 
-        // If no more operations, we're done
-        if mix_operations.is_empty() {
+        for channel_id in pending_bus_processing.drain() {
+            bus_destinations.insert(channel_id);
+        }
+
+        if mix_operations.is_empty() && bus_destinations.is_empty() {
             break;
         }
 

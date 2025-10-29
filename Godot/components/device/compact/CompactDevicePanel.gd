@@ -45,6 +45,9 @@ func _ready() -> void:
 
 	# Apply initial state
 	_update_ui_visibility()
+	
+	# Enable drag and drop for SFZ files (if device supports file loading)
+	set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -204,3 +207,42 @@ func _on_double_clicked() -> void:
 		print("[CompactDevicePanel] Grabbed focus on DevicePanel for device: %s" % device_instance.device.name)
 	else:
 		push_warning("[CompactDevicePanel] Could not find DevicePanel for device: %s" % device_instance.device.name)
+
+
+# ============================================================================
+# DRAG AND DROP
+# ============================================================================
+
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	"""Return drag data (not used for this panel)."""
+	return null
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	"""Check if we can drop an SFZ file on this device."""
+	if not device_instance or not data is Asset:
+		return false
+	
+	# Only accept SFZ files
+	if data.type != Asset.TYPE.SFZ:
+		return false
+	
+	# Only allow drops on devices that support file loading (sfizz)
+	return device_instance.device.supports_file_loading
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	"""Handle dropping an SFZ file on this device."""
+	if not data is Asset or not device_instance:
+		return
+	
+	var asset = data as Asset
+	if asset.type != Asset.TYPE.SFZ:
+		return
+	
+	print("[CompactDevicePanel] SFZ dropped on device: %s" % asset.name)
+	
+	# Load the SFZ file into the device
+	device_instance.load_file(asset.path)
+	
+	print("[CompactDevicePanel] SFZ loaded: %s" % asset.name)

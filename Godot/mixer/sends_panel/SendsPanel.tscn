@@ -1,0 +1,113 @@
+[gd_scene load_steps=4 format=3 uid="uid://fiuy6u5sed1r"]
+
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="1_uimjy"]
+[ext_resource type="Script" uid="uid://cd20oxxf113um" path="res://mixer/sends_panel/SendsPanel.gd" id="1_y4mpk"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hah71"]
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0.1882353, 0.1882353, 0.1882353, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="SendsPanel" type="PanelContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_hah71")
+script = ExtResource("1_y4mpk")
+
+[node name="FlowContainer" type="FlowContainer" parent="."]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="SendControl" type="BoxContainer" parent="FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("1_uimjy")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="FlowContainer/SendControl"]
+layout_mode = 2
+text = "FX 1"
+horizontal_alignment = 1
+
+[node name="SendControl2" type="BoxContainer" parent="FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl2"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("1_uimjy")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="FlowContainer/SendControl2"]
+layout_mode = 2
+text = "FX 2"
+horizontal_alignment = 1
+
+[node name="SendControl3" type="BoxContainer" parent="FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl3"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("1_uimjy")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="FlowContainer/SendControl3"]
+layout_mode = 2
+text = "FX 3"
+horizontal_alignment = 1
+
+[node name="SendControl4" type="BoxContainer" parent="FlowContainer"]
+layout_mode = 2
+vertical = true
+
+[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl4"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("1_uimjy")
+value = 0.285
+knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
+shadow_color = Color(0, 0, 0, 0.47843137)
+min_rotation_deg = -140.0
+max_rotation_deg = 140.0
+arc_offset = 0.0
+
+[node name="Label" type="Label" parent="FlowContainer/SendControl4"]
+layout_mode = 2
+text = "FX 4"
+horizontal_alignment = 1

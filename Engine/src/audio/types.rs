@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use super::devices::AudioDevice;
+use tracing::info;
 
 /// Pan mode enumeration (matches Godot's PanMode enum)
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,6 +133,15 @@ pub struct ClipInstance {
     pub loop_length_ticks: Tick,
 }
 
+/// Send routing configuration
+#[derive(Debug, Clone)]
+pub struct Send {
+    pub target_channel_id: ChannelId,  // Must be a BUS channel
+    pub amount_db: f32,                // Send level in dB (-60.0 to +12.0)
+    pub pre_fader: bool,               // If true, send before channel fader; if false, send after fader
+    pub muted: bool,                   // Mute this send
+}
+
 impl ClipInstance {
     pub fn new(id: ClipInstanceId, clip_id: ClipId, start_tick: Tick, duration_ticks: Tick) -> Self {
         Self {
@@ -166,6 +176,9 @@ pub struct Channel {
     pub mute: bool,
     pub solo: bool,
     pub output_channel_id: Option<ChannelId>, // None for master/no output
+    
+    // Sends (parallel routing to BUS channels)
+    pub send_channels: Vec<Send>,
 
     // Runtime state (stereo)
     pub buffer_left: Vec<f32>,
@@ -215,6 +228,7 @@ impl Channel {
             mute: false,
             solo: false,
             output_channel_id: Some(1), // Default to master (ID 1)
+            send_channels: Vec::new(),
             buffer_left: vec![0.0; buffer_size],
             buffer_right: vec![0.0; buffer_size],
             peak_left: 0.0,
@@ -351,6 +365,26 @@ impl Channel {
             return;
         }
 
+        static mut DEVICE_DEBUG_COUNT: u32 = 0;
+        unsafe {
+            DEVICE_DEBUG_COUNT += 1;
+            if DEVICE_DEBUG_COUNT <= 10 || (DEVICE_DEBUG_COUNT > 100 && DEVICE_DEBUG_COUNT <= 110) {
+                info!("DEVICE CHAIN DEBUG: channel={} sample_count={} buffer_left_len={} device_input_buffer_len={} device_output_buffer_len={} devices={}",
+                    self.id, sample_count, self.buffer_left.len(), self.device_input_buffer.len(), self.device_output_buffer.len(), self.devices.len());
+                // Check for non-zero in input
+                let non_zero_left = self.buffer_left.iter().take(sample_count).filter(|&&s| s.abs() > 0.0001).count();
+                let non_zero_left_full = self.buffer_left.iter().filter(|&&s| s.abs() > 0.0001).count();
+                info!("  buffer_left: {} non-zero in first {} samples, {} non-zero in FULL buffer of {} samples",
+                    non_zero_left, sample_count, non_zero_left_full, self.buffer_left.len());
+            }
+        }
+
+        // CRITICAL: Clear device buffers to prevent stale data from previous frames
+        // These buffers are allocated for max_buffer_size but only sample_count is active
+        let interleaved_count = sample_count * 2;
+        self.device_input_buffer[..interleaved_count].fill(0.0);
+        self.device_output_buffer[..interleaved_count].fill(0.0);
+
         // Prepare input buffer (convert L/R to interleaved)
         for i in 0..sample_count {
             self.device_input_buffer[i * 2] = self.buffer_left[i];
@@ -385,6 +419,20 @@ impl Channel {
         for i in 0..sample_count {
             self.buffer_left[i] = final_output[i * 2];
             self.buffer_right[i] = final_output[i * 2 + 1];
+        }
+
+        // Debug output
+        unsafe {
+            if DEVICE_DEBUG_COUNT <= 10 || (DEVICE_DEBUG_COUNT > 100 && DEVICE_DEBUG_COUNT <= 110) {
+                let non_zero_output = self.buffer_left.iter().take(sample_count).filter(|&&s| s.abs() > 0.0001).count();
+                info!("  AFTER processing: {} non-zero samples in output", non_zero_output);
+                if non_zero_output > 0 {
+                    // Show first non-zero value
+                    if let Some(&val) = self.buffer_left.iter().take(sample_count).find(|&&s| s.abs() > 0.0001) {
+                        info!("    First non-zero value: {}", val);
+                    }
+                }
+            }
         }
     }
 

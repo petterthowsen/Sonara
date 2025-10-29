@@ -39,6 +39,9 @@ var position: int = 0
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
 
+## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
+var loaded_file_path: String = ""
+
 ## Track expected parameter count when receiving parameter info
 var _expected_param_count: int = 0
 
@@ -161,6 +164,11 @@ func connect_to_engine() -> void:
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
 	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
+	
+	# If this device had a file loaded, reload it after engine connection
+	if loaded_file_path != "":
+		print("[DeviceInstance] Reloading file after engine connection: %s" % loaded_file_path)
+		AudioEngineOSC.send("/channel/%d/device/%d/load_file" % [channel_id, position], [loaded_file_path])
 
 
 ## Disconnect from audio engine: stop listening
@@ -306,6 +314,7 @@ func load_file(file_path: String) -> void:
 		return
 	
 	print("[DeviceInstance] Loading file into %s: %s" % [device.name, file_path])
+	loaded_file_path = file_path
 	AudioEngineOSC.send("/channel/%d/device/%d/load_file" % [channel_id, position], [file_path])
 
 
@@ -322,7 +331,8 @@ func to_json() -> Dictionary:
 		"position": position,
 		"active": active,
 		"enabled": enabled,
-		"parameter_values": parameter_values
+		"parameter_values": parameter_values,
+		"loaded_file_path": loaded_file_path
 	}
 
 
@@ -348,6 +358,9 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	for param_id_str in param_values.keys():
 		var param_id = int(param_id_str) if param_id_str is String else param_id_str
 		instance.parameter_values[param_id] = param_values[param_id_str]
+	
+	# Restore loaded file path (will be reloaded after engine connection)
+	instance.loaded_file_path = data.get("loaded_file_path", "")
 	
 	return instance
 

@@ -13,12 +13,26 @@ var channel : Channel
 func _ready():
 	# Connect to the Mixer's channel_focused signal via Sonara.editor
 	Sonara.editor.channel_focused.connect(_on_channel_focused)
+	
+	# Connect to project lifecycle to clean up when project closes
+	Sonara.editor.project_closed.connect(_on_project_closed)
 
 
 func _on_channel_focused(focused_channel: Channel):
 	"""Called when a channel is focused in the mixer."""
 	if focused_channel:
 		bind_to_channel(focused_channel)
+
+
+func _on_project_closed():
+	"""Called when a project is closed - clean up device lane."""
+	# Unbind from current channel if any
+	if channel:
+		unbind()
+		channel = null
+	
+	# Clear all device panels
+	clear()
 
 func _get_header_stylebox() -> StyleBoxFlat:
 	return header.get_theme_stylebox("panel")

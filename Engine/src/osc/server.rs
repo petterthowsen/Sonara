@@ -318,6 +318,12 @@ impl OscServer {
                     command_tx.send(AudioCommand::CreateChannel { id, name: name.clone() })?;
                 }
             }
+            ["channel", id_str, "remove"] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    info!("Remove channel {}", id);
+                    command_tx.send(AudioCommand::RemoveChannel { id })?;
+                }
+            }
             ["channel", id_str, "volume"] => {
                 if let (Ok(id), Some(OscType::Float(db))) = (id_str.parse::<usize>(), args.first()) {
                     command_tx.send(AudioCommand::SetChannelVolume { id, db: *db })?;
@@ -357,6 +363,75 @@ impl OscServer {
                 if let (Ok(id), Some(OscType::Int(output_id))) = (id_str.parse::<usize>(), args.first()) {
                     let output = if *output_id < 0 { None } else { Some(*output_id as usize) };
                     command_tx.send(AudioCommand::SetChannelRoute { id, output_id: output })?;
+                }
+            }
+            
+            // Send management - path-based: /channel/{id}/send/{target_id}/{command}
+            ["channel", id_str, "send", target_str, "add"] => {
+                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                    // Args: amount_db (float), pre_fader (int 0/1)
+                    let amount_db = args.get(0).and_then(|v| match v {
+                        OscType::Float(f) => Some(*f),
+                        OscType::Int(i) => Some(*i as f32),
+                        _ => None
+                    }).unwrap_or(-12.0);  // Default -12 dB
+                    
+                    let pre_fader = args.get(1).and_then(|v| match v {
+                        OscType::Int(i) => Some(*i != 0),
+                        _ => None
+                    }).unwrap_or(false);  // Default post-fader
+                    
+                    command_tx.send(AudioCommand::AddSend {
+                        channel_id,
+                        target_channel_id,
+                        amount_db,
+                        pre_fader,
+                    })?;
+                }
+            }
+            ["channel", id_str, "send", target_str, "remove"] => {
+                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                    command_tx.send(AudioCommand::RemoveSend {
+                        channel_id,
+                        target_channel_id,
+                    })?;
+                }
+            }
+            ["channel", id_str, "send", target_str, "amount"] => {
+                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                    if let Some(amount_db) = args.get(0).and_then(|v| match v {
+                        OscType::Float(f) => Some(*f),
+                        OscType::Int(i) => Some(*i as f32),
+                        _ => None
+                    }) {
+                        command_tx.send(AudioCommand::SetSendAmount {
+                            channel_id,
+                            target_channel_id,
+                            amount_db,
+                        })?;
+                    }
+                }
+            }
+            ["channel", id_str, "send", target_str, "pre_fader"] => {
+                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                    if let Some(OscType::Int(pre_fader)) = args.first() {
+                        command_tx.send(AudioCommand::SetSendPreFader {
+                            channel_id,
+                            target_channel_id,
+                            pre_fader: *pre_fader != 0,
+                        })?;
+                    }
+                }
+            }
+            ["channel", id_str, "send", target_str, "mute"] => {
+                if let (Ok(channel_id), Ok(target_channel_id)) = (id_str.parse::<usize>(), target_str.parse::<usize>()) {
+                    if let Some(OscType::Int(muted)) = args.first() {
+                        command_tx.send(AudioCommand::SetSendMute {
+                            channel_id,
+                            target_channel_id,
+                            muted: *muted != 0,
+                        })?;
+                    }
                 }
             }
 

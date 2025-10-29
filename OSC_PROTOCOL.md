@@ -45,12 +45,18 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/channel/create` | `i:channel_id, s:name` | Create channel with ID |
-| `/channel/volume` | `i:channel_id, f:db` | Set channel volume in dB |
-| `/channel/pan` | `i:channel_id, f:pan` | Set pan (-1.0 to 1.0) |
-| `/channel/mute` | `i:channel_id, i:0_or_1` | Set mute state |
-| `/channel/solo` | `i:channel_id, i:0_or_1` | Set solo state |
-| `/channel/route` | `i:channel_id, i:output_channel_id` | Set output routing (-1 for none) |
+| `/channel/{id}/create` | `s:name` | Create channel with ID |
+| `/channel/{id}/remove` | - | Remove channel by ID |
+| `/channel/{id}/volume` | `f:db` | Set channel volume in dB |
+| `/channel/{id}/pan` | `f:pan` | Set pan (-1.0 to 1.0) |
+| `/channel/{id}/mute` | `i:0_or_1` | Set mute state |
+| `/channel/{id}/solo` | `i:0_or_1` | Set solo state |
+| `/channel/{id}/route` | `i:output_channel_id` | Set output routing (-1 for none) |
+| `/channel/{id}/send/{target_id}/add` | `f:amount_db, i:pre_fader` | Add send to BUS channel (default: -12 dB, post-fader) |
+| `/channel/{id}/send/{target_id}/remove` | - | Remove send to target channel |
+| `/channel/{id}/send/{target_id}/amount` | `f:amount_db` | Set send level in dB (-60 to +12) |
+| `/channel/{id}/send/{target_id}/pre_fader` | `i:0_or_1` | Set pre/post fader (1=pre, 0=post) |
+| `/channel/{id}/send/{target_id}/mute` | `i:0_or_1` | Mute/unmute send |
 
 ### Channel Metering (Rust -> Godot)
 

@@ -1,11 +1,11 @@
-[gd_scene load_steps=23 format=3 uid="uid://d2pk5lsj80cg4"]
+[gd_scene load_steps=22 format=3 uid="uid://d2pk5lsj80cg4"]
 
 [ext_resource type="PackedScene" uid="uid://de6qmyspkqaw7" path="res://components/meter/Meter.tscn" id="1_nssln"]
 [ext_resource type="Script" uid="uid://cb0xf0d0kij7f" path="res://mixer/MixerChannel.gd" id="1_o7qmb"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_xa46q"]
-[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_hah71"]
 [ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_m2250"]
 [ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_cybrc"]
+[ext_resource type="PackedScene" uid="uid://fiuy6u5sed1r" path="res://mixer/sends_panel/SendsPanel.tscn" id="5_xa46q"]
 [ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_1hr2l"]
 [ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
 
@@ -37,18 +37,6 @@ content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
 bg_color = Color(0, 0, 0, 0.49803922)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hah71"]
-content_margin_left = 6.0
-content_margin_top = 6.0
-content_margin_right = 6.0
-content_margin_bottom = 6.0
-bg_color = Color(0.1882353, 0.1882353, 0.1882353, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -212,102 +200,8 @@ layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
-[node name="SendsPanel" type="PanelContainer" parent="HBox/VBox/Sends"]
+[node name="SendsPanel" parent="HBox/VBox/Sends" instance=ExtResource("5_xa46q")]
 layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_hah71")
-
-[node name="FlowContainer" type="FlowContainer" parent="HBox/VBox/Sends/SendsPanel"]
-layout_mode = 2
-theme_override_constants/h_separation = 8
-theme_override_constants/v_separation = 8
-alignment = 1
-last_wrap_alignment = 2
-
-[node name="SendControl" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
-layout_mode = 2
-vertical = true
-
-[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl"]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-script = ExtResource("3_hah71")
-value = 0.285
-knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
-shadow_color = Color(0, 0, 0, 0.47843137)
-min_rotation_deg = -140.0
-max_rotation_deg = 140.0
-arc_offset = 0.0
-
-[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl"]
-layout_mode = 2
-text = "FX 1"
-horizontal_alignment = 1
-
-[node name="SendControl2" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
-layout_mode = 2
-vertical = true
-
-[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl2"]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-script = ExtResource("3_hah71")
-value = 0.285
-knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
-shadow_color = Color(0, 0, 0, 0.47843137)
-min_rotation_deg = -140.0
-max_rotation_deg = 140.0
-arc_offset = 0.0
-
-[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl2"]
-layout_mode = 2
-text = "FX 2"
-horizontal_alignment = 1
-
-[node name="SendControl3" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
-layout_mode = 2
-vertical = true
-
-[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl3"]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-script = ExtResource("3_hah71")
-value = 0.285
-knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
-shadow_color = Color(0, 0, 0, 0.47843137)
-min_rotation_deg = -140.0
-max_rotation_deg = 140.0
-arc_offset = 0.0
-
-[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl3"]
-layout_mode = 2
-text = "FX 3"
-horizontal_alignment = 1
-
-[node name="SendControl4" type="BoxContainer" parent="HBox/VBox/Sends/SendsPanel/FlowContainer"]
-layout_mode = 2
-vertical = true
-
-[node name="RotaryKnob" type="Control" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl4"]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-script = ExtResource("3_hah71")
-value = 0.285
-knob_color = Color(0.26171875, 0.26171875, 0.26171875, 1)
-shadow_color = Color(0, 0, 0, 0.47843137)
-min_rotation_deg = -140.0
-max_rotation_deg = 140.0
-arc_offset = 0.0
-
-[node name="Label" type="Label" parent="HBox/VBox/Sends/SendsPanel/FlowContainer/SendControl4"]
-layout_mode = 2
-text = "FX 4"
-horizontal_alignment = 1
 
 [node name="IO" type="PanelContainer" parent="HBox/VBox" groups=["mixer_channel_io"]]
 layout_mode = 2

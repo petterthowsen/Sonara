@@ -251,7 +251,6 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_pos = get_local_mouse_position()
 		if event.pressed:
-			grab_focus()
 			var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
 			if additive and clip_selection_manager:
 				clip_selection_manager.start_box_selection(local_pos)

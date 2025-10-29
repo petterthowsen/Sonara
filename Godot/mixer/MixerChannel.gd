@@ -31,6 +31,9 @@ class_name MixerChannel extends PanelContainer
 # compact devices parameter control
 @onready var device_list: ChannelDeviceList = $HBox/VBox/DeviceList
 
+# sends panel
+@onready var sends_panel: SendsPanel = $HBox/VBox/Sends/SendsPanel
+
 # Details pane visibility
 var details_visible := false
 var details_pane_width := 0
@@ -161,6 +164,10 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		# Bind device list to channel
 		if device_list and device_list is ChannelDeviceList:
 			device_list.bind_to_channel(channel)
+		
+		# Bind sends panel to channel
+		if sends_panel and sends_panel is SendsPanel:
+			sends_panel.bind_to_channel(channel, project)
 
 	# Update UI from channel data
 	_update_from_channel()
@@ -643,10 +650,15 @@ func _get_drag_data(at_position: Vector2) -> Variant:
 
 
 func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can drop a device on this channel."""
+	"""Check if we can drop a device or SFZ file on this channel."""
 	if not channel or not data is Asset:
 		return false
 
+	# Handle SFZ file drops (can only be dropped on INSTRUMENT channels)
+	if data.type == Asset.TYPE.SFZ:
+		return channel.channel_type == Channel.ChannelType.INSTRUMENT
+
+	# Handle device drops
 	if data.type != Asset.TYPE.Device:
 		return false
 
@@ -665,11 +677,18 @@ func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device on this channel."""
+	"""Handle dropping a device or SFZ file on this channel."""
 	if not data is Asset or not channel:
 		return
 
 	var asset = data as Asset
+	
+	# Handle SFZ file drops
+	if asset.type == Asset.TYPE.SFZ:
+		_handle_sfz_drop(asset)
+		return
+	
+	# Handle device drops
 	if asset.type != Asset.TYPE.Device:
 		return
 
@@ -685,3 +704,25 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
 	channel.add_device(device_instance, -1)
 	print("[MixerChannel] Device added to channel: %s" % device.device_id)
+
+
+func _handle_sfz_drop(asset: Asset) -> void:
+	"""Handle dropping an SFZ file on this channel."""
+	print("[MixerChannel] SFZ dropped on channel %d: %s" % [channel.id, asset.name])
+	
+	# Get the sfizz device from AssetService
+	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
+	if not sfizz_device:
+		push_error("[MixerChannel] Failed to get sfizz device")
+		return
+	
+	# Create sfizz device instance and add to channel
+	var device_instance = DeviceInstance.new(sfizz_device, channel.id, channel.get_device_count())
+	channel.add_device(device_instance, -1)
+	
+	# Load the SFZ file into the device
+	# Give the engine a moment to create the device before loading the file
+	await get_tree().create_timer(0.1).timeout
+	device_instance.load_file(asset.path)
+	
+	print("[MixerChannel] SFZ loaded into channel: %s" % asset.name)

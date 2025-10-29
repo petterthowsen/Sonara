@@ -2,8 +2,6 @@
 
 # Bugs / Issues
 
-- [x] Plugin shutdown IO Safety violation - FIXED! Changed `PluginProcess.child` to `Option<Child>`, removed unsafe `std::mem::zeroed()`, added explicit Unix socket FD close. Plugin shutdown now rock-solid with no crashes.
-
 
 ## Audio Engine (Rust Backend)
 

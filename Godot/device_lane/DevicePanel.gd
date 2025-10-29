@@ -36,6 +36,11 @@ func _ready() -> void:
 	
 	# Initial tab state
 	_show_parameters_tab()
+	
+	# Enable drag and drop for SFZ files on the panel and key child nodes
+	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
 ## This should not really happen.
@@ -151,9 +156,14 @@ func _configure_file_loading() -> void:
 			filters.append("*%s ; %s Files" % [ext, ext.to_upper().trim_prefix(".")])
 		file_dialog.filters = filters
 		
-		# Reset status
-		loaded_file_path = ""
-		file_status_label.text = "No File Loaded"
+		# Restore loaded file status from device instance (for project load)
+		if device.loaded_file_path != "":
+			loaded_file_path = device.loaded_file_path
+			var filename = loaded_file_path.get_file()
+			file_status_label.text = filename
+		else:
+			loaded_file_path = ""
+			file_status_label.text = "No File Loaded"
 	else:
 		file_button.visible = false
 		# Switch to parameters tab if file tab is hidden
@@ -186,3 +196,47 @@ func _on_file_selected(path: String) -> void:
 	file_status_label.text = filename
 	
 	print("[DevicePanel] ✓ File loaded: %s" % filename)
+
+
+# ============================================================================
+# DRAG AND DROP
+# ============================================================================
+
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	"""Return drag data (not used for this panel)."""
+	return null
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	"""Check if we can drop an SFZ file on this device."""
+	if not device or not data is Asset:
+		return false
+	
+	# Only accept SFZ files
+	if data.type != Asset.TYPE.SFZ:
+		return false
+	
+	# Only allow drops on devices that support file loading (sfizz)
+	return device.device.supports_file_loading
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	"""Handle dropping an SFZ file on this device."""
+	if not data is Asset or not device:
+		return
+	
+	var asset = data as Asset
+	if asset.type != Asset.TYPE.SFZ:
+		return
+	
+	print("[DevicePanel] SFZ dropped on device: %s" % asset.name)
+	
+	# Load the SFZ file into the device
+	device.load_file(asset.path)
+	
+	# Update UI
+	loaded_file_path = asset.path
+	var filename = asset.path.get_file()
+	file_status_label.text = filename
+	
+	print("[DevicePanel] ✓ SFZ loaded: %s" % filename)
