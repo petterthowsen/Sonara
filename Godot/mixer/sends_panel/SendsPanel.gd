@@ -12,6 +12,9 @@ class_name SendsPanel extends PanelContainer
 var channel: Channel = null
 var project: Project = null
 
+# Track signal connections to bus channels for cleanup
+var _bus_signal_connections: Dictionary = {}  # bus_id -> Callable
+
 
 func _ready() -> void:
 	# Wait for binding
@@ -57,6 +60,25 @@ func _on_channel_send_changed(target_channel_id: int, send_config: SendConfig) -
 			var knob = control.get_node_or_null("RotaryKnob")
 			if knob:
 				knob.set_value_no_signal(_db_to_normalized(send_config.amount))
+			
+			# Update label opacity based on send amount
+			var label = control.get_node_or_null("Label")
+			if label:
+				label.modulate.a = 0.5 if send_config.amount <= -60.0 else 1.0
+
+
+func _on_bus_name_changed(bus_id: int, new_name: String) -> void:
+	"""React to a bus channel name change - update the label in the send control."""
+	if not flow_container:
+		return
+	
+	# Find the send control for this bus and update its label
+	for control in flow_container.get_children():
+		if control.has_meta("target_channel_id") and control.get_meta("target_channel_id") == bus_id:
+			var label = control.get_node_or_null("Label")
+			if label:
+				label.text = new_name
+			break
 
 
 func _rebuild_sends_ui() -> void:
@@ -64,6 +86,13 @@ func _rebuild_sends_ui() -> void:
 	if not channel or not project or not flow_container:
 		print("[SendsPanel] Cannot rebuild: channel=%s project=%s flow_container=%s" % [channel != null, project != null, flow_container != null])
 		return
+	
+	# Disconnect from all bus channels we were listening to
+	for bus_id in _bus_signal_connections.keys():
+		var bus_ch = project.get_channel_by_id(bus_id)
+		if bus_ch and _bus_signal_connections[bus_id]:
+			bus_ch.name_changed.disconnect(_bus_signal_connections[bus_id])
+	_bus_signal_connections.clear()
 	
 	# Clear existing send controls
 	for child in flow_container.get_children():
@@ -116,7 +145,18 @@ func _create_send_control(bus_channel: Channel, send_config: SendConfig) -> void
 	var label = Label.new()
 	label.text = bus_channel.name
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	
+	# Dim the label if send amount is effectively 0 (muted)
+	var send_amount = send_config.amount if send_config else -60.0
+	label.modulate.a = 0.5 if send_amount <= -60.0 else 1.0
+	
 	send_control.add_child(label)
+	
+	# Connect to bus channel's name_changed signal to update the label
+	var name_changed_callback = func(new_name: String) -> void:
+		_on_bus_name_changed(bus_channel.id, new_name)
+	bus_channel.name_changed.connect(name_changed_callback)
+	_bus_signal_connections[bus_channel.id] = name_changed_callback
 	
 	flow_container.add_child(send_control)
 
@@ -127,6 +167,14 @@ func _on_send_knob_changed(value: float, target_channel_id: int) -> void:
 		return
 	
 	var amount_db = _normalized_to_db(value)
+	
+	# Update label opacity in real-time as user adjusts the knob
+	for control in flow_container.get_children():
+		if control.has_meta("target_channel_id") and control.get_meta("target_channel_id") == target_channel_id:
+			var label = control.get_node_or_null("Label")
+			if label:
+				label.modulate.a = 0.5 if amount_db <= -60.0 else 1.0
+			break
 	
 	# If send doesn't exist, create it
 	var send_config = channel.get_send(target_channel_id)
