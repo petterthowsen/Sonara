@@ -113,6 +113,20 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 |---------|------|-------------|
 | `/channel/{id}/device/{position}/active` | `i:0_or_1` | Device activated/deactivated (engine confirms state) |
 | `/channel/{id}/device/{position}/enabled` | `i:0_or_1` | Device enabled/disabled (engine confirms state) |
+| `/channel/{id}/device/{position}/loading_state` | `s:state` | Device loading state: "idle", "loading", "ready", "failed:{error}" |
+
+**Loading States:**
+- **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
+- **`loading`**: Device is loading in background thread (e.g., loading large SFZ file or initializing plugin subprocess)
+- **`ready`**: Device fully loaded and ready to process audio
+- **`failed:{error}`**: Loading failed with error message (e.g., "failed:File not found")
+
+Loading state updates are sent automatically during:
+- CLAP plugin subprocess initialization (typically 100-500ms for complex plugins)
+- SFZ file loading via `/channel/{id}/device/{position}/load_file` (can take several seconds for large sample libraries)
+- Device activation/deactivation that requires loading/unloading resources
+
+Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinners or error messages in the UI.
 
 #### Built-In Devices
 

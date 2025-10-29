@@ -272,6 +272,11 @@ pub enum EngineStatus {
         channel_id: ChannelId,
         device_position: usize,
     },
+    DeviceLoadingStateChanged {
+        channel_id: ChannelId,
+        device_position: usize,
+        state: String, // "idle", "loading", "ready", "failed:{error}"
+    },
 
     // Plugin GUI events
     PluginGuiResizeRequest {
@@ -1103,6 +1108,9 @@ pub fn process_command(
                             Some(Box::new(super::devices::SfizzDevice::new(
                                 state.device_sample_rate,
                                 buffer_size,
+                                channel_id as usize,
+                                position as usize,
+                                Some(status_tx.clone()),
                             )))
                         }
                         _ => {

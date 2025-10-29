@@ -6,6 +6,8 @@
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
+use crate::audio::commands::EngineStatus;
+use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -55,6 +57,11 @@ pub struct SfizzDevice {
     // Lifecycle state
     is_active: bool,
     is_enabled: bool,
+
+    // Plugin position (for sending loading state notifications)
+    channel_id: usize,
+    device_position: usize,
+    status_tx: Option<Sender<EngineStatus>>,
 }
 
 // Safety: sfizz::Synth contains raw pointers but is thread-safe when used properly
@@ -62,7 +69,13 @@ pub struct SfizzDevice {
 unsafe impl Send for SfizzDevice {}
 
 impl SfizzDevice {
-    pub fn new(sample_rate: f32, max_buffer_size: usize) -> Self {
+    pub fn new(
+        sample_rate: f32,
+        max_buffer_size: usize,
+        channel_id: usize,
+        device_position: usize,
+        status_tx: Option<Sender<EngineStatus>>,
+    ) -> Self {
         info!(
             "Creating SfizzDevice (SR: {}, buffer: {})",
             sample_rate, max_buffer_size
@@ -80,6 +93,9 @@ impl SfizzDevice {
             right_buffer: vec![0.0; max_buffer_size],
             is_active: true,
             is_enabled: true,
+            channel_id,
+            device_position,
+            status_tx,
         }
     }
 
@@ -101,6 +117,15 @@ impl SfizzDevice {
             *state = LoadingState::Loading;
         }
 
+        // Send loading state
+        if let Some(ref tx) = self.status_tx {
+            let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                channel_id: self.channel_id,
+                device_position: self.device_position,
+                state: "loading".to_string(),
+            });
+        }
+
         // Update current path
         {
             let mut sfz_path = self.sfz_path.lock().unwrap();
@@ -114,6 +139,9 @@ impl SfizzDevice {
         let parameters_changed = Arc::clone(&self.parameters_changed);
         let sample_rate = self.sample_rate;
         let max_buffer_size = self.max_buffer_size;
+        let status_tx = self.status_tx.clone();
+        let channel_id = self.channel_id;
+        let device_position = self.device_position;
 
         // Spawn background loading thread
         std::thread::spawn(move || {
@@ -129,8 +157,18 @@ impl SfizzDevice {
 
                     if let Err(e) = synth.set_block_size(max_buffer_size) {
                         error!("❌ Failed to set sfizz block size: {:?}", e);
+                        let error_msg = format!("Failed to set block size: {:?}", e);
                         let mut state = loading_state.lock().unwrap();
-                        *state = LoadingState::Failed(format!("Failed to set block size: {:?}", e));
+                        *state = LoadingState::Failed(error_msg.clone());
+                        
+                        // Send failed state
+                        if let Some(ref tx) = status_tx {
+                            let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                                channel_id,
+                                device_position,
+                                state: format!("failed:{}", error_msg),
+                            });
+                        }
                         return;
                     }
 
@@ -185,18 +223,47 @@ impl SfizzDevice {
                             // Update state to Ready
                             let mut state = loading_state.lock().unwrap();
                             *state = LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
+                            
+                            // Send ready state
+                            if let Some(ref tx) = status_tx {
+                                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                                    channel_id,
+                                    device_position,
+                                    state: "ready".to_string(),
+                                });
+                            }
                         }
                         Err(e) => {
                             error!("❌ Failed to load SFZ file: {:?}", e);
+                            let error_msg = format!("Failed to load SFZ: {:?}", e);
                             let mut state = loading_state.lock().unwrap();
-                            *state = LoadingState::Failed(format!("Failed to load SFZ: {:?}", e));
+                            *state = LoadingState::Failed(error_msg.clone());
+                            
+                            // Send failed state
+                            if let Some(ref tx) = status_tx {
+                                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                                    channel_id,
+                                    device_position,
+                                    state: format!("failed:{}", error_msg),
+                                });
+                            }
                         }
                     }
                 }
                 Err(e) => {
                     error!("❌ Failed to create sfizz synth: {:?}", e);
+                    let error_msg = format!("Failed to create synth: {:?}", e);
                     let mut state = loading_state.lock().unwrap();
-                    *state = LoadingState::Failed(format!("Failed to create synth: {:?}", e));
+                    *state = LoadingState::Failed(error_msg.clone());
+                    
+                    // Send failed state
+                    if let Some(ref tx) = status_tx {
+                        let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                            channel_id,
+                            device_position,
+                            state: format!("failed:{}", error_msg),
+                        });
+                    }
                 }
             }
         });

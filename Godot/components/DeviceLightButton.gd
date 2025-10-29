@@ -91,17 +91,29 @@ var active : bool:
 	get:
 		if Engine.is_editor_hint():
 			return test_active
-		else:
+		elif device_instance:
 			return device_instance.active
+		else:
+			return false
 
 var enabled : bool:
 	get:
 		if Engine.is_editor_hint():
 			return test_enabled
-		else:
+		elif device_instance:
 			return device_instance.enabled
+		else:
+			return false
+
+var loading_state : String:
+	get:
+		if Engine.is_editor_hint():
+			return "idle"
+		else:
+			return device_instance.loading_state if device_instance else "idle"
 
 var _hovering := false
+var _loading_rotation := 0.0  # Rotation angle for loading animation
 
 func _get_minimum_size() -> Vector2:
 	return Vector2(diameter, diameter)
@@ -110,6 +122,7 @@ func bind_to_device_instance(dev_inst : DeviceInstance):
 	device_instance = dev_inst
 	device_instance.enabled_changed.connect(_on_device_enabled_changed)
 	device_instance.active_changed.connect(_on_device_active_changed)
+	device_instance.loading_state_changed.connect(_on_device_loading_state_changed)
 
 func _on_device_enabled_changed(_enabled : bool):
 	queue_redraw()
@@ -119,7 +132,23 @@ func _on_device_active_changed(_active : bool):
 	queue_redraw()
 	_update_tooltip()
 
+
+func _on_device_loading_state_changed(_state : String):
+	queue_redraw()
+	_update_tooltip()
+
+
 func _update_tooltip() -> void:
+	# Loading/failed states take priority
+	if loading_state == "loading":
+		tooltip_text = "Loading device..."
+		return
+	elif loading_state.begins_with("failed:"):
+		var error = loading_state.substr(7)
+		tooltip_text = "Failed to load: " + error
+		return
+	
+	# Normal active/enabled states
 	if not active and not enabled:
 		tooltip_text = tooltip_text_inactive_disabled
 	elif not active and enabled:
@@ -134,6 +163,16 @@ func _update_tooltip() -> void:
 func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
+	_update_tooltip()
+
+
+func _process(delta: float) -> void:
+	# Animate loading state
+	if loading_state == "loading":
+		_loading_rotation += delta * 3.0  # 3 radians per second
+		if _loading_rotation > TAU:
+			_loading_rotation -= TAU
+		queue_redraw()
 
 func _on_mouse_entered():
 	_hovering = true
@@ -144,6 +183,10 @@ func _on_mouse_exited():
 	queue_redraw()
 
 func _gui_input(event: InputEvent) -> void:
+	# Block input during loading
+	if loading_state == "loading":
+		return
+	
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if event.ctrl_pressed or event.shift_pressed:
@@ -162,19 +205,57 @@ func _draw() -> void:
 	var border_color = border_color_active if active else border_color_inactive
 	
 	var light_color : Color
-	if not active and not enabled:
-		light_color = light_color_inactive_disabled
-	elif not active and enabled:
-		light_color = light_color_inactive_enabled
-	elif active and not enabled:
-		light_color = light_color_active_disabled
-	elif active and enabled:
-		light_color = light_color_active_enabled
+	
+	# Loading state overrides normal coloring
+	if loading_state == "loading":
+		light_color = Color.CORNFLOWER_BLUE  # Blue for loading
+		border_color = Color.DODGER_BLUE
+	elif loading_state.begins_with("failed:"):
+		light_color = Color.DARK_RED  # Dark red for failed
+		border_color = Color.RED
 	else:
-		light_color = Color.HOT_PINK
+		# Normal active/enabled states
+		if not active and not enabled:
+			light_color = light_color_inactive_disabled
+		elif not active and enabled:
+			light_color = light_color_inactive_enabled
+		elif active and not enabled:
+			light_color = light_color_active_disabled
+		elif active and enabled:
+			light_color = light_color_active_enabled
+		else:
+			light_color = Color.HOT_PINK
 	
 	# Draw background
 	draw_circle(center, r, bg_color, true, -1.0, true)
-	draw_circle(center, r+1, border_color, false, border_thickness, true)
+	
+	# Draw border - animated for loading state
+	if loading_state == "loading":
+		_draw_loading_border(center, r + 1, border_color)
+	else:
+		draw_circle(center, r + 1, border_color, false, border_thickness, true)
 	
 	draw_texture_rect(light_texture, Rect2(0, 0, size.x, size.y), false, light_color)
+
+
+func _draw_loading_border(center: Vector2, circle_radius: float, color: Color) -> void:
+	## Draw a rotating dashed circle for loading indicator
+	var segments = 8  # Number of dash segments
+	var dash_length = TAU / (segments * 2)  # Length of each dash
+	
+	for i in range(segments):
+		var angle_start = _loading_rotation + (i * TAU / segments)
+		var angle_end = angle_start + dash_length
+		
+		# Draw arc segment
+		var points = PackedVector2Array()
+		var steps = 8  # Points per arc segment
+		for step in range(steps + 1):
+			var t = float(step) / steps
+			var angle = lerp(angle_start, angle_end, t)
+			var point = center + Vector2(cos(angle), sin(angle)) * circle_radius
+			points.append(point)
+		
+		# Draw the arc segment as a polyline
+		for j in range(points.size() - 1):
+			draw_line(points[j], points[j + 1], color, border_thickness * 2.0, true)

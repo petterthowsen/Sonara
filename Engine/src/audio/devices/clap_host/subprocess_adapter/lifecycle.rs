@@ -2,7 +2,7 @@
 //!
 //! Handles async plugin loading, initialization, and state management.
 
-use crate::audio::commands::AudioCommand;
+use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::ParamInfo;
 use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
 use crossbeam::channel::Sender;
@@ -34,9 +34,19 @@ pub fn spawn_loading_thread(
     channel_id: usize,
     device_position: usize,
     command_tx: Option<Sender<AudioCommand>>,
+    status_tx: Option<Sender<EngineStatus>>,
 ) {
     std::thread::spawn(move || {
         info!("🔄 Background thread: Loading plugin subprocess...");
+        
+        // Send loading state
+        if let Some(ref tx) = status_tx {
+            let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                channel_id,
+                device_position,
+                state: "loading".to_string(),
+            });
+        }
 
         // Spawn plugin subprocess (blocking, but on background thread!)
         let result = process_manager.spawn_plugin(
@@ -169,6 +179,15 @@ pub fn spawn_loading_thread(
                         param_info_cache.len()
                     );
 
+                    // Send ready state
+                    if let Some(ref tx) = status_tx {
+                        let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                            channel_id,
+                            device_position,
+                            state: "ready".to_string(),
+                        });
+                    }
+
                     // Notify that device is ready (triggers parameter re-send)
                     if let Some(ref cmd_tx) = command_tx {
                         let _ = cmd_tx.send(AudioCommand::DeviceReady {
@@ -181,15 +200,34 @@ pub fn spawn_loading_thread(
                         );
                     }
                 } else {
+                    let error_msg = "Failed to get process handle".to_string();
                     let mut state = loading_state.lock().unwrap();
-                    *state = LoadingState::Failed("Failed to get process handle".to_string());
+                    *state = LoadingState::Failed(error_msg.clone());
                     error!("❌ Failed to get process handle for {}", plugin_id);
+                    
+                    // Send failed state
+                    if let Some(ref tx) = status_tx {
+                        let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                            channel_id,
+                            device_position,
+                            state: format!("failed:{}", error_msg),
+                        });
+                    }
                 }
             }
             Err(e) => {
                 let mut state = loading_state.lock().unwrap();
                 *state = LoadingState::Failed(e.clone());
                 error!("❌ Failed to spawn plugin subprocess: {}", e);
+                
+                // Send failed state
+                if let Some(ref tx) = status_tx {
+                    let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                        channel_id,
+                        device_position,
+                        state: format!("failed:{}", e),
+                    });
+                }
             }
         }
     });

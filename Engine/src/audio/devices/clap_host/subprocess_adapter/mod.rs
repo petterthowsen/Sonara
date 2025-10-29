@@ -95,6 +95,7 @@ impl SubprocessClapAdapter {
             channel_id as usize,
             device_position,
             command_tx,
+            status_tx.clone(),
         );
 
         let adapter = Self {

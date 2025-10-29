@@ -1128,6 +1128,14 @@ impl OscServer {
                 // No need to send it to Godot
                 return;
             }
+            EngineStatus::DeviceLoadingStateChanged {
+                channel_id,
+                device_position,
+                state,
+            } => (
+                format!("/channel/{}/device/{}/loading_state", channel_id, device_position),
+                vec![OscType::String(state)],
+            ),
             EngineStatus::PluginGuiResizeRequest { .. } => {
                 // GUI resize is handled by the main loop with access to WindowManager
                 // No need to send it to Godot
