@@ -47,6 +47,7 @@ pub struct SubprocessClapAdapter {
     is_active: bool,
     is_enabled: bool,
     gui_open: bool,
+    pending_param_writes: Vec<(ParamId, ParamValue)>,
 }
 
 impl SubprocessClapAdapter {
@@ -114,6 +115,7 @@ impl SubprocessClapAdapter {
             is_active: false,
             is_enabled: true,
             gui_open: false,
+            pending_param_writes: Vec::new(),
         };
 
         info!(
@@ -250,7 +252,23 @@ impl AudioDevice for SubprocessClapAdapter {
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
-        parameter::set_parameter_value(&self.process_manager, &self.process_key, param_id, value);
+        self.flush_pending_parameters();
+
+        if !parameter::set_parameter_value(
+            &self.process_manager,
+            &self.process_key,
+            param_id,
+            value,
+        ) {
+            if let Some(existing) = self
+                .pending_param_writes
+                .iter()
+                .position(|(pending_id, _)| *pending_id == param_id)
+            {
+                self.pending_param_writes.remove(existing);
+            }
+            self.pending_param_writes.push((param_id, value));
+        }
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
@@ -366,6 +384,52 @@ impl AudioDevice for SubprocessClapAdapter {
 }
 
 impl SubprocessClapAdapter {
+    fn can_send_parameters(&self) -> bool {
+        if self
+            .process_manager
+            .get_process(&self.process_key)
+            .is_none()
+        {
+            return false;
+        }
+
+        if let Ok(state) = self.loading_state.lock() {
+            matches!(*state, LoadingState::Ready(_))
+        } else {
+            false
+        }
+    }
+
+    fn flush_pending_parameters(&mut self) {
+        if self.pending_param_writes.is_empty() {
+            return;
+        }
+
+        if !self.can_send_parameters() {
+            return;
+        }
+
+        let mut remaining = Vec::new();
+        for (param_id, value) in self.pending_param_writes.drain(..) {
+            if !parameter::set_parameter_value(
+                &self.process_manager,
+                &self.process_key,
+                param_id,
+                value,
+            ) {
+                remaining.push((param_id, value));
+            }
+        }
+
+        if !remaining.is_empty() {
+            self.pending_param_writes = remaining;
+        }
+    }
+
+    pub fn on_device_ready(&mut self) {
+        self.flush_pending_parameters();
+    }
+
     /// Open plugin GUI (subprocess will handle event loop)
     pub fn open_gui(&mut self) -> Result<(), String> {
         self.open_gui_with_handle(None).map(|_| ())

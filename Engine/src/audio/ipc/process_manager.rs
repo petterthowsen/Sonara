@@ -254,12 +254,7 @@ impl PluginProcess {
                     if Self::is_unsolicited_response(&response) {
                         return Ok(response);
                     } else {
-                        debug!(
-                            "[ProcessManager] enqueueing synchronous response {:?} for later",
-                            response
-                        );
-                        self.pending_async_responses.push_back(response);
-                        continue;
+                        return Err("No data available".to_string());
                     }
                 }
                 None => return Err("No data available".to_string()),

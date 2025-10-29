@@ -450,7 +450,7 @@ pub fn mix_and_output(
     processed_channels.insert(1); // Master never routes further
 
     // Multi-pass routing: up to 10 passes to handle arbitrary nesting
-    for routing_pass in 0..10 {
+    for _routing_pass in 0..10 {
         let mut mix_operations: Vec<(ChannelId, ChannelId, Vec<f32>, Vec<f32>)> = Vec::new();
 
         for (&id, channel) in &state.channels {

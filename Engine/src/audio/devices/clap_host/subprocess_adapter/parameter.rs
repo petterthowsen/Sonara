@@ -56,28 +56,30 @@ pub fn set_parameter_value(
     process_key: &str,
     param_id: ParamId,
     value: ParamValue,
-) {
+) -> bool {
     let process_arc = match process_manager.get_process(process_key) {
         Some(p) => p,
         None => {
-            warn!("Plugin process not found for set_parameter");
-            return;
+            return false;
         }
     };
 
     let cmd = PluginCommand::SetParameter { param_id, value };
 
-    // Use try_lock to avoid blocking if process is busy
-    match process_arc.try_lock() {
-        Ok(mut process_guard) => {
-            if let Err(e) = process_guard.send_command(cmd) {
-                error!("Failed to send set_parameter command: {}", e);
+    let send_result = {
+        // Use try_lock to avoid blocking if process is busy
+        match process_arc.try_lock() {
+            Ok(mut process_guard) => {
+                if let Err(e) = process_guard.send_command(cmd) {
+                    error!("Failed to send set_parameter command: {}", e);
+                    false
+                } else {
+                    true
+                }
             }
-            // Don't wait for response - this would block the audio thread!
-        }
-        Err(_) => {
-            // Process is busy, skip parameter update (better than blocking)
-            warn!("Skipping parameter update - process is busy");
+            Err(_) => false,
         }
     };
+
+    send_result
 }

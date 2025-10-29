@@ -1442,8 +1442,16 @@ pub fn process_command(
             );
 
             // Re-send parameter info now that device is ready
-            if let Some(channel) = state.channels.get(&channel_id) {
-                if let Some(device) = channel.devices.get(device_position) {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    if let Some(subprocess_device) =
+                        device
+                            .as_any_mut()
+                            .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
+                    {
+                        subprocess_device.on_device_ready();
+                    }
+
                     let params = device.parameters();
 
                     if !params.is_empty() {
