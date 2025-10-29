@@ -26,6 +26,9 @@ pub struct OscillatorDevice {
     // Track which note is currently playing (None = no note active)
     current_note: Option<u8>,
 
+    // Queued MIDI events for the next process_block (frame-accurate)
+    queued_midi: Vec<(usize, u8, u8, bool)>,
+
     // Lifecycle state
     is_active: bool,
     is_enabled: bool,
@@ -40,6 +43,7 @@ impl OscillatorDevice {
             current_phase: 0.0,
             current_frequency: 440.0,
             current_note: None,
+            queued_midi: Vec::with_capacity(64),
             is_active: true,
             is_enabled: true,
         }
@@ -104,49 +108,59 @@ impl AudioDevice for OscillatorDevice {
             return;
         }
 
-        // Only generate audio if a note is active
-        if self.current_note.is_none() {
-            // Fill output buffer with silence
-            for sample in outputs.iter_mut() {
-                *sample = 0.0;
+        // Sort queued MIDI by frame offset and apply while rendering
+        // We'll iterate sample by sample to honor frame offsets
+        // Note: outputs are interleaved stereo
+        let mut events = core::mem::take(&mut self.queued_midi);
+        events.sort_unstable_by_key(|e| e.0);
+
+        let mut next_event_idx = 0usize;
+        for frame in 0..sample_count {
+            while next_event_idx < events.len() && events[next_event_idx].0 == frame {
+                let (_ofs, note, _velocity, is_on) = events[next_event_idx];
+                next_event_idx += 1;
+                if is_on {
+                    self.current_frequency = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
+                    self.current_note = Some(note);
+                    // velocity unused for now; amplitude param controls level
+                } else if self.current_note == Some(note) {
+                    self.current_note = None;
+                }
             }
-            return;
+
+            let out_idx = frame * 2;
+            let sample = if self.current_note.is_some() {
+                self.amplitude * self.generate_waveform(self.current_phase)
+            } else {
+                0.0
+            };
+
+            // Increment phase after generating
+            if self.current_note.is_some() {
+                let phase_increment = self.current_frequency / self.sample_rate;
+                self.current_phase += phase_increment;
+                if self.current_phase >= 1.0 {
+                    self.current_phase -= 1.0;
+                }
+            }
+
+            if out_idx < outputs.len() {
+                outputs[out_idx] = sample;
+            }
+            if out_idx + 1 < outputs.len() {
+                outputs[out_idx + 1] = sample;
+            }
         }
 
-        // Iterate through stereo samples (interleaved: L, R, L, R, ...)
-        for i in (0..sample_count * 2).step_by(2) {
-            // Generate sample
-            let sample = self.amplitude * self.generate_waveform(self.current_phase);
-
-            // Increment phase
-            let phase_increment = self.current_frequency / self.sample_rate;
-            self.current_phase += phase_increment;
-            if self.current_phase >= 1.0 {
-                self.current_phase -= 1.0;
-            }
-
-            // Output to both channels
-            if i < outputs.len() {
-                outputs[i] = sample; // Left
-            }
-            if i + 1 < outputs.len() {
-                outputs[i + 1] = sample; // Right
-            }
-        }
+        // Clear any remaining queued events (should be none)
+        self.queued_midi.clear();
     }
 
-    fn send_midi_event(&mut self, note: u8, _velocity: u8, is_note_on: bool) {
-        if is_note_on {
-            // Note On: set frequency and mark as active
-            self.current_frequency = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
-            self.current_note = Some(note);
-        } else {
-            // Note Off: only stop if this is the currently active note
-            // Prevents overlapping notes from cutting each other off
-            if self.current_note == Some(note) {
-                self.current_note = None;
-            }
-        }
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+        // Queue for next block; bounded queue for RT safety
+        let _ = self
+            .queued_midi
+            .push((frame_offset.min(usize::MAX), note, velocity, is_note_on));
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -222,6 +236,7 @@ impl AudioDevice for OscillatorDevice {
         self.current_phase = 0.0;
         self.current_frequency = 440.0;
         self.current_note = None;
+        self.queued_midi.clear();
     }
 
     // === Lifecycle Management ===

@@ -38,7 +38,7 @@ pub fn spawn_loading_thread(
 ) {
     std::thread::spawn(move || {
         info!("🔄 Background thread: Loading plugin subprocess...");
-        
+
         // Send loading state
         if let Some(ref tx) = status_tx {
             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -204,7 +204,7 @@ pub fn spawn_loading_thread(
                     let mut state = loading_state.lock().unwrap();
                     *state = LoadingState::Failed(error_msg.clone());
                     error!("❌ Failed to get process handle for {}", plugin_id);
-                    
+
                     // Send failed state
                     if let Some(ref tx) = status_tx {
                         let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -219,7 +219,7 @@ pub fn spawn_loading_thread(
                 let mut state = loading_state.lock().unwrap();
                 *state = LoadingState::Failed(e.clone());
                 error!("❌ Failed to spawn plugin subprocess: {}", e);
-                
+
                 // Send failed state
                 if let Some(ref tx) = status_tx {
                     let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {

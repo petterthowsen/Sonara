@@ -1137,7 +1137,10 @@ impl OscServer {
                 device_position,
                 state,
             } => (
-                format!("/channel/{}/device/{}/loading_state", channel_id, device_position),
+                format!(
+                    "/channel/{}/device/{}/loading_state",
+                    channel_id, device_position
+                ),
                 vec![OscType::String(state)],
             ),
             EngineStatus::PluginGuiResizeRequest { .. } => {
@@ -1185,10 +1188,13 @@ impl OscServer {
                 accepts_midi,
                 audio_in_channels,
                 audio_out_channels,
+                supports_file_loading,
+                file_extensions,
+                file_type_description,
                 parameters,
             } => {
                 tracing::info!("📨 Sending builtin device info: {} ({})", name, id);
-                
+
                 // Send device basic info
                 let mut args = vec![
                     OscType::String(id.clone()),
@@ -1198,9 +1204,17 @@ impl OscServer {
                     OscType::Int(if accepts_midi { 1 } else { 0 }),
                     OscType::Int(audio_in_channels as i32),
                     OscType::Int(audio_out_channels as i32),
-                    OscType::Int(parameters.len() as i32),
+                    OscType::Int(if supports_file_loading { 1 } else { 0 }),
+                    OscType::String(file_type_description),
+                    OscType::Int(file_extensions.len() as i32),
                 ];
-                
+
+                for ext in file_extensions {
+                    args.push(OscType::String(ext));
+                }
+
+                args.push(OscType::Int(parameters.len() as i32));
+
                 // Add all parameters inline (id, name, unit, min, max, default)
                 for param in parameters {
                     args.push(OscType::Int(param.id as i32));
@@ -1210,7 +1224,7 @@ impl OscServer {
                     args.push(OscType::Float(param.max));
                     args.push(OscType::Float(param.default));
                 }
-                
+
                 ("/builtin/info".to_string(), args)
             }
             EngineStatus::BuiltinDevicesComplete { count } => (

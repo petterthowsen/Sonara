@@ -325,6 +325,9 @@ pub enum EngineStatus {
         accepts_midi: bool,
         audio_in_channels: usize,
         audio_out_channels: usize,
+        supports_file_loading: bool,
+        file_extensions: Vec<String>,
+        file_type_description: String,
         parameters: Vec<BuiltinParamInfo>,
     },
     BuiltinDevicesComplete {
@@ -388,6 +391,8 @@ pub struct EngineState {
     pub process_manager: std::sync::Arc<super::ipc::ProcessManager>, // Subprocess manager for CLAP plugins
     pub is_playing: bool,
     pub current_tick: Tick,
+    /// Fractional tick accumulator carried across buffers for sample-accurate scheduling
+    pub fractional_tick_accumulator: f64,
 }
 
 impl Clone for EngineState {
@@ -414,6 +419,7 @@ impl Default for EngineState {
             process_manager,
             is_playing: false,
             current_tick: 0,
+            fractional_tick_accumulator: 0.0,
         }
     }
 }
@@ -1434,60 +1440,77 @@ pub fn process_command(
 
         AudioCommand::AdvertiseBuiltinDevices => {
             info!("Advertising builtin devices...");
-            
+
             // Helper to create device info from a temporary device instance
-            let create_device_info = |device: Box<dyn super::devices::AudioDevice>| -> EngineStatus {
-                let category_str = match device.device_category() {
-                    super::devices::DeviceCategory::Instrument => "instrument",
-                    super::devices::DeviceCategory::Effect => "effect",
-                    super::devices::DeviceCategory::Utility => "utility",
-                }
-                .to_string();
+            let create_device_info =
+                |device: Box<dyn super::devices::AudioDevice>| -> EngineStatus {
+                    let category_str = match device.device_category() {
+                        super::devices::DeviceCategory::Instrument => "instrument",
+                        super::devices::DeviceCategory::Effect => "effect",
+                        super::devices::DeviceCategory::Utility => "utility",
+                    }
+                    .to_string();
 
-                let parameters: Vec<BuiltinParamInfo> = device
-                    .parameters()
-                    .into_iter()
-                    .map(|p| BuiltinParamInfo {
-                        id: p.id,
-                        name: p.name,
-                        unit: p.unit,
-                        min: p.min,
-                        max: p.max,
-                        default: p.default,
-                    })
-                    .collect();
+                    let parameters: Vec<BuiltinParamInfo> = device
+                        .parameters()
+                        .into_iter()
+                        .map(|p| BuiltinParamInfo {
+                            id: p.id,
+                            name: p.name,
+                            unit: p.unit,
+                            min: p.min,
+                            max: p.max,
+                            default: p.default,
+                        })
+                        .collect();
 
-                let midi_ports = device.midi_ports();
-                let audio_ports = device.audio_ports();
-                
-                let audio_in = audio_ports
-                    .iter()
-                    .find(|p| matches!(p.flow, super::devices::PortFlow::Input))
-                    .map(|p| p.channels)
-                    .unwrap_or(0);
-                let audio_out = audio_ports
-                    .iter()
-                    .find(|p| matches!(p.flow, super::devices::PortFlow::Output))
-                    .map(|p| p.channels)
-                    .unwrap_or(0);
+                    let midi_ports = device.midi_ports();
+                    let audio_ports = device.audio_ports();
 
-                EngineStatus::BuiltinDeviceInfo {
-                    id: device.device_id().to_string(),
-                    name: device.device_name().to_string(),
-                    category: category_str,
-                    description: format!("{} v{}", device.device_name(), device.version()),
-                    accepts_midi: !midi_ports.is_empty(),
-                    audio_in_channels: audio_in,
-                    audio_out_channels: audio_out,
-                    parameters,
-                }
-            };
+                    let audio_in = audio_ports
+                        .iter()
+                        .find(|p| matches!(p.flow, super::devices::PortFlow::Input))
+                        .map(|p| p.channels)
+                        .unwrap_or(0);
+                    let audio_out = audio_ports
+                        .iter()
+                        .find(|p| matches!(p.flow, super::devices::PortFlow::Output))
+                        .map(|p| p.channels)
+                        .unwrap_or(0);
+
+                    let (supports_file_loading, file_extensions, file_type_description) =
+                        match device.file_loading_support() {
+                            Some(info) => (true, info.extensions, info.description),
+                            None => (false, Vec::new(), String::new()),
+                        };
+
+                    EngineStatus::BuiltinDeviceInfo {
+                        id: device.device_id().to_string(),
+                        name: device.device_name().to_string(),
+                        category: category_str,
+                        description: format!("{} v{}", device.device_name(), device.version()),
+                        accepts_midi: !midi_ports.is_empty(),
+                        audio_in_channels: audio_in,
+                        audio_out_channels: audio_out,
+                        supports_file_loading,
+                        file_extensions,
+                        file_type_description,
+                        parameters,
+                    }
+                };
 
             // Create temp instances of each builtin device and send their info
             let builtin_devices: Vec<EngineStatus> = vec![
-                create_device_info(Box::new(super::devices::OscillatorDevice::new(state.device_sample_rate))),
-                create_device_info(Box::new(super::devices::PolySynthDevice::new(state.device_sample_rate))),
-                create_device_info(Box::new(super::devices::DelayDevice::new(state.device_sample_rate, 5000.0))),
+                create_device_info(Box::new(super::devices::OscillatorDevice::new(
+                    state.device_sample_rate,
+                ))),
+                create_device_info(Box::new(super::devices::PolySynthDevice::new(
+                    state.device_sample_rate,
+                ))),
+                create_device_info(Box::new(super::devices::DelayDevice::new(
+                    state.device_sample_rate,
+                    5000.0,
+                ))),
                 create_device_info(Box::new(super::devices::SfizzDevice::new(
                     state.device_sample_rate,
                     buffer_size,

@@ -20,7 +20,7 @@ pub type ParamValue = f32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceVariant {
     BuiltIn,
-    Lv2,  // Future: LV2 plugin
+    Lv2, // Future: LV2 plugin
     Clap,
 }
 
@@ -64,6 +64,13 @@ pub struct MidiPort {
     pub flow: PortFlow,
 }
 
+/// Describes file loading support for a device
+#[derive(Debug, Clone)]
+pub struct FileLoadingSupport {
+    pub description: String,
+    pub extensions: Vec<String>,
+}
+
 /// Parameter metadata (for UI and parameter automation)
 #[derive(Debug, Clone)]
 pub struct ParamInfo {
@@ -101,11 +108,18 @@ pub trait AudioDevice: Send {
     /// For stereo devices: inputs/outputs are interleaved [L, R, L, R, ...]
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize);
 
-    /// Send a MIDI event to this device (future plugin support)
+    /// Send a MIDI event to this device with a frame offset within the upcoming block
     ///
-    /// Called before `process_block()` to queue MIDI events.
-    /// Plugin instruments will process these during audio generation.
-    fn send_midi_event(&mut self, _note: u8, _velocity: u8, _is_note_on: bool) {
+    /// The `frame_offset` is the sample index in the current processing block at which the
+    /// event must take effect (0 <= frame_offset < sample_count of the next `process_block`).
+    /// Devices should queue these events and apply them when generating audio.
+    fn send_midi_event(
+        &mut self,
+        _note: u8,
+        _velocity: u8,
+        _is_note_on: bool,
+        _frame_offset: usize,
+    ) {
         // Default: ignore MIDI (effects don't need it)
     }
 
@@ -150,6 +164,11 @@ pub trait AudioDevice: Send {
 
     /// Get list of parameters
     fn parameters(&self) -> Vec<ParamInfo>;
+
+    /// Describe file loading capabilities, if any
+    fn file_loading_support(&self) -> Option<FileLoadingSupport> {
+        None
+    }
 
     /// Reset device to default state (clear buffers, stop voices, etc.)
     fn reset(&mut self);

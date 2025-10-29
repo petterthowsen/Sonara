@@ -13,141 +13,128 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
     // IMPORTANT: Use actual device sample rate for timing, not project setting
     let ticks_per_sample =
         (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
-    let mut tick_accumulator = 0.0;
 
+    // Precompute tick boundaries within this buffer with frame offsets
+    let start_tick = state.current_tick;
+    let mut tick_events: Vec<(Tick, usize)> = Vec::new();
+    tick_events.push((start_tick, 0));
+
+    let mut acc = state.fractional_tick_accumulator;
+    let start_acc = acc;
+    let mut tick_cursor = start_tick;
     for frame_idx in 0..frames {
-        let previous_tick = state.current_tick;
-
-        // Advance playhead with fractional accumulation
-        tick_accumulator += ticks_per_sample;
-        let ticks_to_add = tick_accumulator.floor() as Tick;
-
-        // Collect ALL ticks to process in this frame
-        let mut ticks_in_this_frame: Vec<Tick> = vec![];
-
-        if ticks_to_add > 0 {
-            // We crossed at least one tick boundary - process all crossed ticks
-            for t in 1..=ticks_to_add {
-                ticks_in_this_frame.push(previous_tick + t);
-            }
-            state.current_tick += ticks_to_add;
-            tick_accumulator -= ticks_to_add as f64;
-        } else if frame_idx == 0 {
-            // Special case: first frame, check current tick for note events
-            // (handles notes that start exactly at playback position)
-            ticks_in_this_frame.push(previous_tick);
+        acc += ticks_per_sample;
+        while acc >= 1.0 {
+            acc -= 1.0;
+            tick_cursor += 1;
+            tick_events.push((tick_cursor, frame_idx));
         }
+    }
 
-        // Process MIDI events for ALL ticks in this frame
-        for current_tick in &ticks_in_this_frame {
-            let current_tick = *current_tick;
+    // Update global tick and carry fractional forward
+    state.current_tick = tick_cursor;
+    state.fractional_tick_accumulator = acc;
 
-            // Collect note on/off events from clip instances
-            let mut note_events: Vec<(TrackId, MidiNote, MidiVelocity, bool)> = Vec::new();
+    // Dispatch MIDI for each tick event at its exact frame offset
+    for (current_tick, frame_offset) in tick_events.into_iter() {
+        // Collect note on/off events from clip instances
+        let mut note_events: Vec<(TrackId, MidiNote, MidiVelocity, bool)> = Vec::new();
 
-            for (track_id, track) in &state.tracks {
-                for instance in &track.clip_instances {
-                    if instance.muted {
-                        continue;
-                    }
+        for (track_id, track) in &state.tracks {
+            for instance in &track.clip_instances {
+                if instance.muted {
+                    continue;
+                }
 
-                    // Allow processing at instance end tick for note off events
-                    // but not for note on events (which require being strictly within the instance)
-                    let is_within_instance =
-                        current_tick >= instance.start_tick && current_tick < instance.end_tick();
-                    let is_at_instance_end = current_tick == instance.end_tick();
+                // Allow processing at instance end tick for note off events
+                // but not for note on events (which require being strictly within the instance)
+                let is_within_instance =
+                    current_tick >= instance.start_tick && current_tick < instance.end_tick();
+                let is_at_instance_end = current_tick == instance.end_tick();
 
-                    if is_within_instance || is_at_instance_end {
-                        if let Some(clip) = state.clips.get(&instance.clip_id) {
-                            let mut offset_in_instance = current_tick - instance.start_tick;
+                if is_within_instance || is_at_instance_end {
+                    if let Some(clip) = state.clips.get(&instance.clip_id) {
+                        let mut offset_in_instance = current_tick - instance.start_tick;
 
-                            // Debug: log when we're processing an instance
-                            if current_tick % 960 == 0 {
-                                // Log once per beat
-                                info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes", 
-                                    instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
+                        // Debug: log when we're processing an instance
+                        if current_tick % 960 == 0 {
+                            // Log once per beat
+                            info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes", 
+                                instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
+                        }
+
+                        // Handle looping
+                        if instance.loop_enabled && instance.loop_length_ticks > 0 {
+                            if offset_in_instance >= instance.loop_start_ticks {
+                                let loop_offset = offset_in_instance - instance.loop_start_ticks;
+                                offset_in_instance = instance.loop_start_ticks
+                                    + (loop_offset % instance.loop_length_ticks);
+                            }
+                        }
+
+                        for clip_note in &clip.midi_notes {
+                            // Apply clip_offset
+                            let note_start_in_instance =
+                                clip_note.start_tick - instance.clip_offset;
+                            let note_end_in_instance =
+                                note_start_in_instance + clip_note.duration_ticks;
+
+                            if note_end_in_instance <= 0 {
+                                continue;
                             }
 
-                            // Handle looping
-                            if instance.loop_enabled && instance.loop_length_ticks > 0 {
-                                if offset_in_instance >= instance.loop_start_ticks {
-                                    let loop_offset =
-                                        offset_in_instance - instance.loop_start_ticks;
-                                    offset_in_instance = instance.loop_start_ticks
-                                        + (loop_offset % instance.loop_length_ticks);
-                                }
-                            }
-
-                            for clip_note in &clip.midi_notes {
-                                // Apply clip_offset: only play notes at or after the offset
-                                // Translate clip note position to instance local time
-                                let note_start_in_instance =
-                                    clip_note.start_tick - instance.clip_offset;
-                                let note_end_in_instance =
-                                    note_start_in_instance + clip_note.duration_ticks;
-
-                                // Skip notes that are before the clip_offset
-                                if note_end_in_instance <= 0 {
-                                    continue;
-                                }
-
-                                // Apply transpose
-                                let transposed_note = (clip_note.note as i16
-                                    + instance.transpose as i16)
-                                    .clamp(0, 127)
+                            // Apply transpose
+                            let transposed_note =
+                                (clip_note.note as i16 + instance.transpose as i16).clamp(0, 127)
                                     as MidiNote;
 
-                                // Note On (only within instance, not at end)
-                                if is_within_instance
-                                    && note_start_in_instance == offset_in_instance
-                                {
-                                    info!("TRIGGER: Note {} (ID={}) at offset_in_instance={} (global tick {})", 
-                                        transposed_note, clip_note.id, offset_in_instance, current_tick);
-                                    note_events.push((
-                                        *track_id,
-                                        transposed_note,
-                                        clip_note.velocity,
-                                        true,
-                                    ));
-                                } else if current_tick % 960 == 0 {
-                                    // Debug: why didn't this note trigger?
-                                    info!("  Note {} (ID={}) not triggered: note_start_in_instance={}, offset_in_instance={}, match={}", 
-                                        clip_note.note, clip_note.id, note_start_in_instance, offset_in_instance,
-                                        note_start_in_instance == offset_in_instance);
-                                }
-
-                                // Note Off (allow at instance end)
-                                if note_end_in_instance == offset_in_instance {
-                                    note_events.push((
-                                        *track_id,
-                                        transposed_note,
-                                        clip_note.velocity,
-                                        false,
-                                    ));
-                                }
+                            // Note On
+                            if is_within_instance && note_start_in_instance == offset_in_instance {
+                                note_events.push((
+                                    *track_id,
+                                    transposed_note,
+                                    clip_note.velocity,
+                                    true,
+                                ));
                             }
-                        }
-                    }
-                }
-            }
 
-            // Apply collected note events by routing to channel's instrument device
-            for (track_id, note, velocity, is_on) in note_events {
-                if let Some(track) = state.tracks.get_mut(&track_id) {
-                    // Route MIDI to the track's target channel (instrument device)
-                    if let Some(channel) = state.channels.get_mut(&track.channel_id) {
-                        channel.send_midi_event_to_devices(note, velocity, is_on);
-                        if is_on {
-                            info!("Note ON (clip): {} at tick {}", note, current_tick);
-                        } else {
-                            info!("Note OFF (clip): {} at tick {}", note, current_tick);
+                            // Note Off (allow at instance end)
+                            if note_end_in_instance == offset_in_instance {
+                                note_events.push((
+                                    *track_id,
+                                    transposed_note,
+                                    clip_note.velocity,
+                                    false,
+                                ));
+                            }
                         }
                     }
                 }
             }
         }
 
-        let current_tick = state.current_tick;
+        for (track_id, note, velocity, is_on) in note_events {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(channel) = state.channels.get_mut(&track.channel_id) {
+                    channel.send_midi_event_to_devices(note, velocity, is_on, frame_offset);
+                }
+            }
+        }
+    }
+
+    // Generate audio clip content per frame while advancing a local tick cursor
+    let mut render_tick = start_tick;
+    let mut render_acc = start_acc;
+    for frame_idx in 0..frames {
+        // Advance local tick based on ticks_per_sample
+        render_acc += ticks_per_sample;
+        if render_acc >= 1.0 {
+            let inc = render_acc.floor() as Tick;
+            render_tick += inc;
+            render_acc -= inc as f64;
+        }
+
+        let current_tick = render_tick;
 
         // Generate audio from each track
         for track in state.tracks.values_mut() {

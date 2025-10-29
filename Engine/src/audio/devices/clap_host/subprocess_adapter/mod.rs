@@ -225,7 +225,7 @@ impl AudioDevice for SubprocessClapAdapter {
         // For now, this is fire-and-forget with ring buffer
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
         // Check if plugin is ready (non-blocking try_lock)
         let loading_state_result = self.loading_state.try_lock();
         let shm: Arc<SharedMemory> = match loading_state_result {
@@ -239,7 +239,7 @@ impl AudioDevice for SubprocessClapAdapter {
         };
 
         let event = MidiEvent {
-            sample_offset: 0,
+            sample_offset: frame_offset as u32,
             note,
             velocity,
             is_note_on: if is_note_on { 1 } else { 0 },

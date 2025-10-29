@@ -488,19 +488,19 @@ impl AudioDevice for ClapDeviceAdapter {
         self.output_event_buffer.clear();
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
         if is_note_on {
             // Create and store note-on event
             let event = NoteOnEvent::new(
-                0,                                               // Sample offset (frame-accurate timing)
+                frame_offset as u32, // Sample offset (frame-accurate timing)
                 Pckn::new(0u16, 0u16, note as u16, note as u32), // Port, channel, key, note_id
-                velocity as f64 / 127.0,                         // Normalize velocity
+                velocity as f64 / 127.0, // Normalize velocity
             );
             self.note_on_events.push(event);
         } else {
             // Create and store note-off event
             let event = NoteOffEvent::new(
-                0,
+                frame_offset as u32,
                 Pckn::new(0u16, 0u16, note as u16, note as u32),
                 velocity as f64 / 127.0,
             );

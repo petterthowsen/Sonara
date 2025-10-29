@@ -471,11 +471,17 @@ impl Channel {
         }
     }
 
-    /// Send MIDI event to the first device (instrument) only
+    /// Send MIDI event to the first device (instrument) only with a frame offset
     /// Effects in the chain don't receive MIDI
-    pub fn send_midi_event_to_devices(&mut self, note: u8, velocity: u8, is_note_on: bool) {
+    pub fn send_midi_event_to_devices(
+        &mut self,
+        note: u8,
+        velocity: u8,
+        is_note_on: bool,
+        frame_offset: usize,
+    ) {
         if let Some(device) = self.devices.first_mut() {
-            device.send_midi_event(note, velocity, is_note_on);
+            device.send_midi_event(note, velocity, is_note_on, frame_offset);
         }
     }
 

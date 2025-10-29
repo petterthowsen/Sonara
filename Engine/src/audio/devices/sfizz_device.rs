@@ -4,7 +4,8 @@
 //! Supports background loading of SFZ files for real-time safety.
 
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DeviceVariant, FileLoadingSupport, MidiPort, ParamId, ParamInfo,
+    ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
 use crossbeam::channel::Sender;
@@ -62,6 +63,9 @@ pub struct SfizzDevice {
     channel_id: usize,
     device_position: usize,
     status_tx: Option<Sender<EngineStatus>>,
+
+    // Queued MIDI events (frame-accurate within next block)
+    queued_midi: Vec<(usize, u8, u8, bool)>,
 }
 
 // Safety: sfizz::Synth contains raw pointers but is thread-safe when used properly
@@ -96,6 +100,7 @@ impl SfizzDevice {
             channel_id,
             device_position,
             status_tx,
+            queued_midi: Vec::with_capacity(256),
         }
     }
 
@@ -160,7 +165,7 @@ impl SfizzDevice {
                         let error_msg = format!("Failed to set block size: {:?}", e);
                         let mut state = loading_state.lock().unwrap();
                         *state = LoadingState::Failed(error_msg.clone());
-                        
+
                         // Send failed state
                         if let Some(ref tx) = status_tx {
                             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -223,7 +228,7 @@ impl SfizzDevice {
                             // Update state to Ready
                             let mut state = loading_state.lock().unwrap();
                             *state = LoadingState::Ready(Arc::new(Mutex::new(SendSynth(synth))));
-                            
+
                             // Send ready state
                             if let Some(ref tx) = status_tx {
                                 let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -238,7 +243,7 @@ impl SfizzDevice {
                             let error_msg = format!("Failed to load SFZ: {:?}", e);
                             let mut state = loading_state.lock().unwrap();
                             *state = LoadingState::Failed(error_msg.clone());
-                            
+
                             // Send failed state
                             if let Some(ref tx) = status_tx {
                                 let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -255,7 +260,7 @@ impl SfizzDevice {
                     let error_msg = format!("Failed to create synth: {:?}", e);
                     let mut state = loading_state.lock().unwrap();
                     *state = LoadingState::Failed(error_msg.clone());
-                    
+
                     // Send failed state
                     if let Some(ref tx) = status_tx {
                         let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
@@ -363,64 +368,64 @@ impl AudioDevice for SfizzDevice {
         };
 
         // Prepare planar buffers for sfizz (it expects separate L/R channels)
-        let mut output_buffers: Vec<&mut [f32]> = vec![
-            &mut self.left_buffer[..sample_count],
-            &mut self.right_buffer[..sample_count],
-        ];
+        // We'll render in segments to honor frame-accurate MIDI
+        self.left_buffer[..sample_count].fill(0.0);
+        self.right_buffer[..sample_count].fill(0.0);
 
-        // Render audio (sfizz renders to planar buffers)
-        // Access inner Synth via .0
-        match synth_guard.0.render_block(&mut output_buffers) {
-            Ok(_) => {
-                // Convert from planar to interleaved stereo
-                for i in 0..sample_count {
-                    let left_idx = i * 2;
-                    let right_idx = i * 2 + 1;
+        let mut events = std::mem::take(&mut self.queued_midi);
+        events.sort_unstable_by_key(|e| e.0);
 
-                    if left_idx < outputs.len() {
-                        outputs[left_idx] = self.left_buffer[i];
-                    }
-                    if right_idx < outputs.len() {
-                        outputs[right_idx] = self.right_buffer[i];
-                    }
+        let mut cursor = 0usize;
+        for (offset, note, velocity, is_on) in events.into_iter() {
+            let clamped_offset = std::cmp::min(offset, sample_count);
+            if clamped_offset > cursor {
+                let mut seg_buffers: Vec<&mut [f32]> = vec![
+                    &mut self.left_buffer[cursor..clamped_offset],
+                    &mut self.right_buffer[cursor..clamped_offset],
+                ];
+                if let Err(e) = synth_guard.0.render_block(&mut seg_buffers) {
+                    warn!("Sfizz render error: {:?}", e);
+                    break;
                 }
+                cursor = clamped_offset;
             }
-            Err(e) => {
+
+            // Apply event exactly at this frame
+            if is_on {
+                synth_guard.0.note_on(note, velocity);
+            } else {
+                synth_guard.0.note_off(note, velocity);
+            }
+        }
+
+        // Render the remainder of the buffer after the last event
+        if cursor < sample_count {
+            let mut seg_buffers: Vec<&mut [f32]> = vec![
+                &mut self.left_buffer[cursor..sample_count],
+                &mut self.right_buffer[cursor..sample_count],
+            ];
+            if let Err(e) = synth_guard.0.render_block(&mut seg_buffers) {
                 warn!("Sfizz render error: {:?}", e);
-                // Output silence on error
-                for sample in outputs.iter_mut() {
-                    *sample = 0.0;
-                }
+            }
+        }
+
+        // Convert from planar to interleaved stereo
+        for i in 0..sample_count {
+            let left_idx = i * 2;
+            let right_idx = i * 2 + 1;
+            if left_idx < outputs.len() {
+                outputs[left_idx] = self.left_buffer[i];
+            }
+            if right_idx < outputs.len() {
+                outputs[right_idx] = self.right_buffer[i];
             }
         }
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
-        // Try to get loading state (non-blocking)
-        let loading_state_result = self.loading_state.try_lock();
-        let synth = match loading_state_result {
-            Ok(state) => {
-                match &*state {
-                    LoadingState::Ready(synth) => Arc::clone(synth),
-                    _ => return, // Not ready, ignore MIDI
-                }
-            }
-            Err(_) => return, // Can't get lock, ignore MIDI
-        };
-
-        // Try to lock the synth (non-blocking)
-        let mut synth_guard = match synth.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return, // Can't get synth lock, ignore MIDI
-        };
-
-        // Send MIDI event to sfizz
-        // Access inner Synth via .0
-        if is_note_on {
-            synth_guard.0.note_on(note, velocity);
-        } else {
-            synth_guard.0.note_off(note, velocity);
-        }
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+        // Queue event for sample-accurate application in next process_block
+        self.queued_midi
+            .push((frame_offset, note, velocity, is_note_on));
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -483,6 +488,13 @@ impl AudioDevice for SfizzDevice {
 
     fn device_variant(&self) -> DeviceVariant {
         DeviceVariant::BuiltIn
+    }
+
+    fn file_loading_support(&self) -> Option<FileLoadingSupport> {
+        Some(FileLoadingSupport {
+            description: "SFZ Sample Files".to_string(),
+            extensions: vec![".sfz".to_string(), ".SFZ".to_string()],
+        })
     }
 
     fn midi_ports(&self) -> Vec<MidiPort> {

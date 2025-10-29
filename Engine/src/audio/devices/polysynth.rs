@@ -64,7 +64,8 @@ impl Voice {
             }
             1 => {
                 let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g = envelope * square_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g =
+                    envelope * square_hz(self.frequency) * dc(self.velocity * master_volume);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
@@ -78,7 +79,8 @@ impl Voice {
             }
             3 => {
                 let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g = envelope * triangle_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g =
+                    envelope * triangle_hz(self.frequency) * dc(self.velocity * master_volume);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
@@ -151,6 +153,9 @@ pub struct PolySynthDevice {
     // Lifecycle state
     is_active: bool,
     is_enabled: bool,
+
+    // Queued MIDI for frame-accurate scheduling within next block
+    queued_midi: Vec<(usize, u8, u8, bool)>,
 }
 
 impl PolySynthDevice {
@@ -168,6 +173,7 @@ impl PolySynthDevice {
             params_dirty: true,
             is_active: true,
             is_enabled: true,
+            queued_midi: Vec::with_capacity(128),
         }
     }
 
@@ -246,89 +252,97 @@ impl AudioDevice for PolySynthDevice {
         self.rebuild_graphs_if_needed();
 
         // Clear output buffer
-        for sample in outputs.iter_mut() {
-            *sample = 0.0;
-        }
+        outputs[..sample_count * 2].fill(0.0);
 
-        // Sum all active voices
-        for voice in self.voices.iter_mut() {
-            if !voice.is_active {
-                continue;
+        // Sort queued MIDI by offset
+        let mut events = core::mem::take(&mut self.queued_midi);
+        events.sort_unstable_by_key(|e| e.0);
+        let mut next_event_idx = 0usize;
+
+        // Render sample-by-sample to honor event offsets
+        for i in 0..sample_count {
+            // Apply all events scheduled for this sample index
+            while next_event_idx < events.len() && events[next_event_idx].0 == i {
+                let (_ofs, note, velocity, is_on) = events[next_event_idx];
+                next_event_idx += 1;
+
+                if is_on && velocity > 0 {
+                    if let Some(idx) = self.find_voice_for_note(note) {
+                        self.voices[idx].note_on(note, velocity, self.time_counter);
+                        self.voices[idx].build_graph(
+                            self.sample_rate,
+                            self.waveform.load(Ordering::Relaxed),
+                            self.attack.value(),
+                            self.decay.value(),
+                            self.sustain.value(),
+                            self.release.value(),
+                            self.master_volume.value(),
+                        );
+                    } else if let Some(idx) = self.find_free_voice().or_else(|| self.steal_voice())
+                    {
+                        self.voices[idx].note_on(note, velocity, self.time_counter);
+                        self.voices[idx].build_graph(
+                            self.sample_rate,
+                            self.waveform.load(Ordering::Relaxed),
+                            self.attack.value(),
+                            self.decay.value(),
+                            self.sustain.value(),
+                            self.release.value(),
+                            self.master_volume.value(),
+                        );
+                    }
+                } else {
+                    if let Some(idx) = self.find_voice_for_note(note) {
+                        self.voices[idx].note_off();
+                    }
+                }
             }
 
-            if let Some(ref mut graph) = voice.dsp_graph {
-                // Process voice in mono
-                for i in 0..sample_count {
-                    let sample = graph.get_mono();
-
-                    // Check for silence to deactivate voice after release
-                    if sample.abs() < VOICE_SILENCE_THRESHOLD {
+            // Sum all active voices for this sample
+            let mut sample_sum = 0.0f32;
+            for voice in self.voices.iter_mut() {
+                if !voice.is_active {
+                    continue;
+                }
+                if let Some(ref mut graph) = voice.dsp_graph {
+                    let s = graph.get_mono();
+                    if s.abs() < VOICE_SILENCE_THRESHOLD {
                         voice.silent_samples += 1;
-                        // If silent for more than 1000 samples (~20ms at 48kHz), deactivate
                         if voice.silent_samples > 1000 && voice.trigger.value() <= 0.0 {
                             voice.reset();
-                            break;
+                            continue;
                         }
                     } else {
                         voice.silent_samples = 0;
                     }
-
-                    // Mix to stereo output (center pan)
-                    let idx = i * 2;
-                    if idx < outputs.len() {
-                        outputs[idx] += sample; // Left
-                    }
-                    if idx + 1 < outputs.len() {
-                        outputs[idx + 1] += sample; // Right
-                    }
+                    sample_sum += s;
                 }
             }
+
+            let idx = i * 2;
+            if idx < outputs.len() {
+                outputs[idx] += sample_sum;
+            }
+            if idx + 1 < outputs.len() {
+                outputs[idx + 1] += sample_sum;
+            }
         }
+
+        // Clear any leftover queued events
+        self.queued_midi.clear();
 
         // Increment time counter for voice stealing priority
         self.time_counter = self.time_counter.wrapping_add(1);
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool) {
-        if is_note_on && velocity > 0 {
-            // Note On
-            // First check if we're already playing this note (for retriggering)
-            if let Some(idx) = self.find_voice_for_note(note) {
-                // Retrigger the same voice
-                self.voices[idx].note_on(note, velocity, self.time_counter);
-                self.voices[idx].build_graph(
-                    self.sample_rate,
-                    self.waveform.load(Ordering::Relaxed),
-                    self.attack.value(),
-                    self.decay.value(),
-                    self.sustain.value(),
-                    self.release.value(),
-                    self.master_volume.value(),
-                );
-                return;
-            }
-
-            // Find a free voice
-            let voice_idx = self.find_free_voice().or_else(|| self.steal_voice());
-
-            if let Some(idx) = voice_idx {
-                self.voices[idx].note_on(note, velocity, self.time_counter);
-                self.voices[idx].build_graph(
-                    self.sample_rate,
-                    self.waveform.load(Ordering::Relaxed),
-                    self.attack.value(),
-                    self.decay.value(),
-                    self.sustain.value(),
-                    self.release.value(),
-                    self.master_volume.value(),
-                );
-            }
-        } else {
-            // Note Off
-            if let Some(idx) = self.find_voice_for_note(note) {
-                self.voices[idx].note_off();
-            }
-        }
+    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+        // Queue for next block
+        self.queued_midi.push((
+            std::cmp::min(frame_offset, usize::MAX),
+            note,
+            velocity,
+            is_note_on,
+        ));
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -506,4 +520,3 @@ impl AudioDevice for PolySynthDevice {
 fn midi_note_to_hz(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0)
 }
-

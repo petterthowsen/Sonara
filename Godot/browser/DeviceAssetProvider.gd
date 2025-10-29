@@ -234,10 +234,11 @@ func _on_plugin_scan_complete(args: Array) -> void:
 ## Handle one builtin device info message
 ## Args layout from engine:
 ## [id:String, name:String, category:String, description:String, accepts_midi:Int(0|1),
-##  audio_in:Int, audio_out:Int, param_count:Int, then param tuples:
+##  audio_in:Int, audio_out:Int, supports_file_loading:Int(0|1), file_type_description:String,
+##  extension_count:Int, each extension:String..., param_count:Int, then param tuples:
 ##  (param_id:Int, name:String, unit:String, min:Float, max:Float, default:Float) ...]
 func _on_builtin_info_received(args: Array) -> void:
-	if args.size() < 8:
+	if args.size() < 10:
 		push_warning("[DeviceAssetProvider] Invalid /builtin/info message: %s" % str(args))
 		return
 
@@ -248,7 +249,25 @@ func _on_builtin_info_received(args: Array) -> void:
 	var accepts_midi: bool = int(args[4]) != 0
 	var audio_in: int = int(args[5])
 	var audio_out: int = int(args[6])
-	var param_count: int = int(args[7])
+	var supports_file_loading: bool = int(args[7]) != 0
+	var file_type_description: String = String(args[8])
+	var extension_count: int = int(args[9])
+
+	var idx := 10
+	var extensions: Array[String] = []
+	for _i in range(extension_count):
+		if idx >= args.size():
+			push_warning("[DeviceAssetProvider] Missing extension data in /builtin/info message: %s" % str(args))
+			return
+		extensions.append(String(args[idx]))
+		idx += 1
+
+	if idx >= args.size():
+		push_warning("[DeviceAssetProvider] Missing parameter count in /builtin/info message: %s" % str(args))
+		return
+
+	var param_count: int = int(args[idx])
+	idx += 1
 
 	var category: Device.DeviceCategory
 	match category_str:
@@ -267,11 +286,14 @@ func _on_builtin_info_received(args: Array) -> void:
 	device.accepts_midi = accepts_midi
 	device.audio_in_channels = audio_in
 	device.audio_out_channels = audio_out
+	device.supports_file_loading = supports_file_loading
+	device.file_type_description = file_type_description
+	device.supported_file_extensions = extensions
 
 	# Parse parameters
-	var idx := 8
 	for i in range(param_count):
 		if idx + 5 >= args.size():
+			push_warning("[DeviceAssetProvider] Truncated parameter data for builtin device %s" % dev_id)
 			break
 		var p_id: int = int(args[idx + 0])
 		var p_name: String = String(args[idx + 1])
