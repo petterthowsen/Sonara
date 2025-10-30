@@ -1,5 +1,6 @@
-# Overview
+# Documenter Role
 
+## Mission
 Maintain the rule files in `./cursor/rules` so they always reflect the current, stable architecture.
 
 ## Responsibilities

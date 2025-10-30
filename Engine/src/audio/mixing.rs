@@ -339,6 +339,12 @@ pub fn mix_and_output(
     let mut send_accum: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
     let mut pending_bus_processing: HashSet<ChannelId> = HashSet::new();
 
+    static mut SEND_DEBUG_COUNT: u32 = 0;
+    let should_log_sends = unsafe {
+        SEND_DEBUG_COUNT += 1;
+        SEND_DEBUG_COUNT <= 5 || SEND_DEBUG_COUNT % 100 == 0
+    };
+
     if sample_count > 0 {
         for (&source_id, channel) in state.channels.iter() {
             if channel.send_channels.is_empty() {
@@ -380,6 +386,13 @@ pub fn mix_and_output(
                     continue;
                 }
 
+                if should_log_sends {
+                    let source_peak_l = channel.buffer_left.iter().take(buffer_len).map(|s| s.abs()).fold(0.0, f32::max);
+                    let source_peak_r = channel.buffer_right.iter().take(buffer_len).map(|s| s.abs()).fold(0.0, f32::max);
+                    info!("🔊 SEND: Ch{} → Ch{} (gain={:.2}dB={:.4}x, peak_L={:.6}, peak_R={:.6})",
+                        source_id, send.target_channel_id, send.amount_db, send_gain, source_peak_l, source_peak_r);
+                }
+
                 if send.pre_fader {
                     if let Some((pre_left, pre_right)) = pre_fader_sources.get(&source_id) {
                         let pan = channel.get_pan_coefficients();
@@ -409,6 +422,9 @@ pub fn mix_and_output(
     for (target_id, (send_left, send_right)) in send_accum.into_iter() {
         if let Some(target_ch) = state.channels.get_mut(&target_id) {
             if target_ch.mute || (has_solo && !target_ch.solo) {
+                if should_log_sends {
+                    info!("🔇 SEND target {} is muted or not soloed, skipping", target_id);
+                }
                 continue;
             }
 
@@ -419,9 +435,29 @@ pub fn mix_and_output(
                 .min(target_ch.buffer_right.len())
                 .min(sample_count);
 
-            for i in 0..len {
-                target_ch.buffer_left[i] += send_left[i] * dest_gain;
-                target_ch.buffer_right[i] += send_right[i] * dest_gain;
+            let (pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r) = if should_log_sends {
+                let pre_l = target_ch.buffer_left.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
+                let pre_r = target_ch.buffer_right.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
+                
+                for i in 0..len {
+                    target_ch.buffer_left[i] += send_left[i] * dest_gain;
+                    target_ch.buffer_right[i] += send_right[i] * dest_gain;
+                }
+                
+                let post_l = target_ch.buffer_left.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
+                let post_r = target_ch.buffer_right.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
+                (pre_l, pre_r, post_l, post_r)
+            } else {
+                for i in 0..len {
+                    target_ch.buffer_left[i] += send_left[i] * dest_gain;
+                    target_ch.buffer_right[i] += send_right[i] * dest_gain;
+                }
+                (0.0, 0.0, 0.0, 0.0)
+            };
+            
+            if should_log_sends {
+                info!("📥 SEND mixed into Ch{}: dest_gain={:.4}, pre=({:.6},{:.6}), post=({:.6},{:.6}), routes_to={:?}",
+                    target_id, dest_gain, pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r, target_ch.output_channel_id);
             }
         }
     }
@@ -450,12 +486,37 @@ pub fn mix_and_output(
     processed_channels.insert(1); // Master never routes further
 
     // Multi-pass routing: up to 10 passes to handle arbitrary nesting
-    for _routing_pass in 0..10 {
+    static mut ROUTING_DEBUG_COUNT: u32 = 0;
+    let should_log_routing = unsafe {
+        ROUTING_DEBUG_COUNT += 1;
+        ROUTING_DEBUG_COUNT <= 5 || ROUTING_DEBUG_COUNT % 100 == 0
+    };
+
+    for routing_pass in 0..10 {
         let mut mix_operations: Vec<(ChannelId, ChannelId, Vec<f32>, Vec<f32>)> = Vec::new();
+
+        if should_log_routing {
+            info!("🔄 Routing pass {}: processed_channels={:?}", routing_pass, processed_channels);
+        }
+
+        // First, mark buses that need device processing (from sends) - they shouldn't route PRE-device audio
+        let buses_needing_processing: HashSet<ChannelId> = if routing_pass == 0 {
+            pending_bus_processing.iter().copied().collect()
+        } else {
+            HashSet::new()
+        };
 
         for (&id, channel) in &state.channels {
             // Skip if already processed (routed to another channel)
             if processed_channels.contains(&id) {
+                continue;
+            }
+
+            // Skip buses that need to process devices first (they'll route POST-device audio later)
+            if buses_needing_processing.contains(&id) {
+                if should_log_routing {
+                    info!("⏸️  Skipping Ch{} in routing pass {} - needs device processing first", id, routing_pass);
+                }
                 continue;
             }
 
@@ -483,6 +544,9 @@ pub fn mix_and_output(
             if let Some(output_id) = channel.output_channel_id {
                 // Only mix into other channels (ID < 1000), not devices (ID >= 1000)
                 if output_id != id && output_id < 1000 && state.channels.contains_key(&output_id) {
+                    if should_log_routing {
+                        info!("📤 Routing pass {}: Ch{} → Ch{} (peak={:.6})", routing_pass, id, output_id, peak);
+                    }
                     mix_operations.push((id, output_id, buf_left, buf_right));
                     processed_channels.insert(id); // Mark as processed
                     bus_destinations.insert(output_id); // Track that this channel received routed audio
@@ -491,10 +555,20 @@ pub fn mix_and_output(
         }
 
         for channel_id in pending_bus_processing.drain() {
+            if should_log_routing {
+                info!("➕ Adding Ch{} to bus_destinations from pending_bus_processing", channel_id);
+            }
             bus_destinations.insert(channel_id);
         }
 
+        if should_log_routing {
+            info!("🔄 Pass {}: {} mix ops, {} bus dests", routing_pass, mix_operations.len(), bus_destinations.len());
+        }
+
         if mix_operations.is_empty() && bus_destinations.is_empty() {
+            if should_log_routing {
+                info!("✅ Routing complete after {} passes", routing_pass);
+            }
             break;
         }
 
@@ -532,16 +606,38 @@ pub fn mix_and_output(
         // Bus pan is applied to the received routed audio (which already has source pan applied)
         // This allows buses to further pan the mixed signal before routing to their output
         let buses_to_process: Vec<ChannelId> = bus_destinations.iter().copied().collect();
+        
+        if should_log_routing && !buses_to_process.is_empty() {
+            info!("🎛️  Processing {} buses: {:?}", buses_to_process.len(), buses_to_process);
+        }
+        
         for bus_id in buses_to_process {
             if let Some(bus_ch) = state.channels.get_mut(&bus_id) {
                 // Skip if muted or solo-excluded
                 if bus_ch.mute || (has_solo && !bus_ch.solo) {
+                    if should_log_routing {
+                        info!("⏭️  Skipping bus {} (muted or not soloed)", bus_id);
+                    }
                     continue;
+                }
+
+                if should_log_routing {
+                    let pre_l = bus_ch.buffer_left.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
+                    let pre_r = bus_ch.buffer_right.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
+                    info!("🎚️  Bus {} PRE-device: peak=({:.6},{:.6}), devices={}, routes_to={:?}",
+                        bus_id, pre_l, pre_r, bus_ch.devices.len(), bus_ch.output_channel_id);
                 }
 
                 // Process the bus's effect chain on the accumulated routed audio
                 // Effects (like delay) should process the mixed audio
                 bus_ch.process_device_chain(sample_count);
+
+                if should_log_routing {
+                    let post_device_peak_l = bus_ch.buffer_left.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
+                    let post_device_peak_r = bus_ch.buffer_right.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
+                    info!("🎛️  Bus {} POST-device: peak=({:.6},{:.6})",
+                        bus_id, post_device_peak_l, post_device_peak_r);
+                }
 
                 // Check for pending parameter changes from CLAP plugins on buses
                 for (device_pos, device) in bus_ch.devices.iter_mut().enumerate() {
@@ -595,6 +691,14 @@ pub fn mix_and_output(
                     bus_id,
                     (bus_ch.buffer_left.clone(), bus_ch.buffer_right.clone()),
                 );
+
+                // CRITICAL: Remove from processed_channels so the bus can route its POST-device audio in the next pass
+                // This allows buses to route their processed output (e.g., reverb) to master/other buses
+                processed_channels.remove(&bus_id);
+                
+                if should_log_routing {
+                    info!("🔄 Bus {} processed devices, will route POST-device audio in next pass", bus_id);
+                }
             }
         }
 
