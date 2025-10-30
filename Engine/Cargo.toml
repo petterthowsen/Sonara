@@ -19,7 +19,8 @@ cpal = "0.15"
 rustwav = "0.3.8"  # WAV file reading with advanced format support
 
 # DSP library
-fundsp = "0.19.1"  # FunDSP for polyphonic synthesis
+fundsp = "0.19.1"  # FunDSP for polyphonic synthesis (deprecated - slow performance)
+dasp = "0.11.0"    # DASP for high-performance signal processing
 
 # Sample engines
 sfizz = { git = "https://github.com/petterthowsen/rust-sfizz" }
@@ -34,6 +35,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 crossbeam = "0.8"
 chrono = "0.4"
+once_cell = "1.19"  # For static initialization (sine lookup table)
 
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }

@@ -353,12 +353,12 @@ func _on_channel_volume_changed(db_volume: float) -> void:
 	volumeter.set_volume_no_signal(db_volume)
 
 
-func _on_channel_peak_updated(left: float, right: float) -> void:
+func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:
 	"""Channel peak levels updated - update volumeter meter display."""
 	if volumeter == null:
 		return
 
-	volumeter.peak = max(left, right)
+	volumeter.peak = max(peak_left, peak_right)
 
 
 # ============================================================================

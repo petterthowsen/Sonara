@@ -267,6 +267,8 @@ pub enum EngineStatus {
         id: ChannelId,
         peak_left: f32,
         peak_right: f32,
+        rms_left: f32,
+        rms_right: f32,
     },
 
     // Device state changes

@@ -26,7 +26,7 @@ signal pan_changed(value: float)
 signal pan_mode_changed(pan_mode: PanMode)
 signal mute_changed(value: bool)
 signal solo_changed(value: bool)
-signal peak_updated(left: float, right: float)
+signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
 
 # Send signals
@@ -427,13 +427,13 @@ func get_send(target_channel_id: int) -> SendConfig:
 # ============================================================================
 
 func _on_peak_received(values) -> void:
-	#if randf() > 0.9:
-#		print(name, " peak: ", values[0], " | ", values[1])
-	"""Handle incoming peak meter data from audio engine."""
+	"""Handle incoming peak and RMS meter data from audio engine."""
 	if values is Array and values.size() >= 2:
 		peak_left = values[0] as float
 		peak_right = values[1] as float
-		peak_updated.emit(peak_left, peak_right)
+		rms_left = values[2] as float
+		rms_right = values[3] as float
+		peak_updated.emit(peak_left, peak_right, rms_left, rms_right)
 
 
 # ============================================================================

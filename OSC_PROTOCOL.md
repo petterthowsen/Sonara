@@ -62,7 +62,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/channel/{id}/peak` | `f:peak_left, f:peak_right` | Peak levels (linear 0.0-1.0+) |
+| `/channel/{id}/peak` | `f:peak_left, f:peak_right, f:rms_left, f:rms_right` | Peak and RMS levels (linear 0.0-1.0+) |
 
 ### Track Management (Godot -> Rust)
 
@@ -288,8 +288,8 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
    - Rust: Generates sine waves at specified MIDI notes
    - Rust: `/status/playhead 0` (tick 0)
    - Rust: `/status/playhead 240` (tick 240)
-   - Rust: `/channel/1/peak 0.5 0.5` (channel 1 meters)
-   - Rust: `/channel/0/peak 0.4 0.4` (master meters)
+   - Rust: `/channel/1/peak 0.5 0.5 0.3 0.3` (channel 1 meters: peak_L, peak_R, rms_L, rms_R)
+   - Rust: `/channel/0/peak 0.4 0.4 0.25 0.25` (master meters: peak_L, peak_R, rms_L, rms_R)
    - ... continues ...
 
 5. **Edit Clip (affects all instances):**

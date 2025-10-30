@@ -2,12 +2,16 @@ pub mod clap_host;
 mod delay;
 mod oscillator;
 mod polysynth;
+#[deprecated(note = "Use polysynth module instead - FunDSP-based implementation has poor performance")]
+mod polysynth_fundsp;  // Kept for reference/comparison
 mod sfizz_device;
 
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use delay::DelayDevice;
 pub use oscillator::OscillatorDevice;
 pub use polysynth::PolySynthDevice;
+#[deprecated(note = "Use PolySynthDevice from polysynth module instead")]
+pub use polysynth_fundsp::PolySynthDevice as PolySynthDeviceFundsp;
 pub use sfizz_device::SfizzDevice;
 
 /// Parameter ID (normalized 0.0-1.0, host/device agnostic)

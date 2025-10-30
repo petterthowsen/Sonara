@@ -60,7 +60,7 @@ func _schedule_next_scan() -> void:
 
 func scan() -> void:
 	if _first_scan:
-		print("[SfzAssetProvider] Starting initial SFZ scan...")
+		print("[SfzAssetProvider] Starting SFZ scan...")
 	
 	var scan_paths = Sonara.get_config("assets/sfz/paths", [])
 	var new_assets: Array[Asset] = []
@@ -74,7 +74,7 @@ func scan() -> void:
 	_assets = new_assets
 	
 	if _first_scan:
-		print("[SfzAssetProvider] Initial scan complete: %d SFZ instruments found" % _assets.size())
+		print("[SfzAssetProvider] scan complete: %d SFZ instruments found" % _assets.size())
 		_first_scan = false
 	
 	# Save cache after scan

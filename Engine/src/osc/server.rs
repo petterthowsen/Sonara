@@ -1104,11 +1104,18 @@ impl OscServer {
                 id,
                 peak_left,
                 peak_right,
+                rms_left,
+                rms_right,
             } => {
-                // New path-based format: /channel/{id}/peak [peak_left, peak_right]
+                // New path-based format: /channel/{id}/peak [peak_left, peak_right, rms_left, rms_right]
                 (
                     format!("/channel/{}/peak", id),
-                    vec![OscType::Float(peak_left), OscType::Float(peak_right)],
+                    vec![
+                        OscType::Float(peak_left),
+                        OscType::Float(peak_right),
+                        OscType::Float(rms_left),
+                        OscType::Float(rms_right),
+                    ],
                 )
             }
             EngineStatus::DeviceActiveChanged {

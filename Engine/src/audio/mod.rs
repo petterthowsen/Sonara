@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod devices;
+pub mod dsp;
 pub mod engine;
 pub mod io;
 pub mod ipc;

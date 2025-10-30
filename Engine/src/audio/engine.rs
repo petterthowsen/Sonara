@@ -268,6 +268,8 @@ impl AudioEngine {
                             id: channel.id,
                             peak_left: channel.peak_left,
                             peak_right: channel.peak_right,
+                            rms_left: channel.rms_left,
+                            rms_right: channel.rms_right,
                         });
                     }
                 }

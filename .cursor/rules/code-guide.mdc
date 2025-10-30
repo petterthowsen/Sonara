@@ -4,7 +4,7 @@ alwaysApply: true
 # Code Style & Rules
 
 1. Files should never be more than 1000 lines and ideally less than 600 lines. If this occurs, refactor asap.
-2. DRY: Don't repeat yourself. Using the same logic twice? Abstract.
+2. DRY: Don't repeat yourself. Extract common logic into utility functions
 3. KISS: Prefer simple boring solutions over clever tricks - especially hacky workarounds.
 4. Confusing organization? Stop and re-think, ask the user (I.E "Should I move X to Y and reorganize this?")
 5. Fail fast. For debuggng, add extensive logs and ask the user to report back.
@@ -13,7 +13,8 @@ alwaysApply: true
 
 You can get docs via context7:
 - `/prokopyl/clack` for clack (clap library)
+- `/websites/rs_dasp_0_11_0_dasp` for DASP library
+- `/websites/rs_signalsmith-dsp_0_0_2_signalsmith_dsp` for Signalsmith DSP library
 - `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2` for Godot Engine
-- `/samiperttu/fundsp` for FunDSP library
 
 Full Source code for clack is also available via ../clack

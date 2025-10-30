@@ -23,7 +23,7 @@ class_name MixerChannel extends PanelContainer
 # main volume, fader and/or volume
 @onready var volume: PanelContainer = $HBox/VBox/Volume
 @onready var bottom_volume_slider: VolumeSlider = $HBox/VBox/Volume/HBox/Fader
-@onready var botttom_small_meter: Meter = $HBox/VBox/Volume/HBox/CompactMeter
+@onready var bottom_small_meter: Meter = $HBox/VBox/Volume/HBox/CompactMeter
 
 # extra details on the right side can be shown/hidden
 @onready var details: VBoxContainer = $HBox/Details
@@ -103,7 +103,7 @@ func _ready():
 		bottom_volume_slider.value_changed.connect(_on_volume_changed)
 	
 	big_meter.volume_changed.connect(_on_volume_changed)
-	botttom_small_meter.volume_changed.connect(_on_volume_changed)
+	bottom_small_meter.volume_changed.connect(_on_volume_changed)
 	
 	panning_combined_slider.value_changed.connect(_on_pan_changed)
 	panning_dual_slider.values_changed.connect(_on_pan_changed)
@@ -422,7 +422,7 @@ func _on_channel_volume_changed(db: float) -> void:
 	"""React to volume changes from Channel."""
 	if bottom_volume_slider:
 		bottom_volume_slider.set_value_no_signal(db)
-		botttom_small_meter.volume_db = db
+		bottom_small_meter.volume_db = db
 
 
 func _on_channel_mute_changed(value: bool) -> void:
@@ -442,10 +442,12 @@ func _on_channel_color_changed(new_color : Color) -> void:
 	stylebox.bg_color = new_color
 
 
-func _on_channel_peak_updated(left: float, right: float) -> void:
+func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:
 	"""React to peak meter updates from Channel."""
-	big_meter.set_peak_levels(left, right)
-	botttom_small_meter.set_peak_levels(left, right)
+	big_meter.set_peak_levels(peak_left, peak_right)
+	big_meter.set_rms_levels(rms_left, rms_right)
+	bottom_small_meter.set_peak_levels(peak_left, peak_right)
+	bottom_small_meter.set_rms_levels(rms_left, rms_right)
 
 func _on_channel_pan_mode_changed(pan_mode : Channel.PanMode):
 	print("channel pan mode changed. applying to UI...")

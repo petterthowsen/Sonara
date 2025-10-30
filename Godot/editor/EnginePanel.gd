@@ -94,4 +94,4 @@ func _on_engine_load_received(values: Array) -> void:
 	if engine_load_graph and values.size() > 0:
 		var load_value = float(values[0])
 		engine_load_graph.add_point(load_value)
-		performance_text.text = "Engine Load: %.2f%%" % load_value
+		performance_text.text = "Engine Load: %.2f%%" % (load_value * 100.0)

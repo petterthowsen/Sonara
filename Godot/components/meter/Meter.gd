@@ -3,13 +3,21 @@
 @tool
 class_name Meter extends Control
 
-# public inputs (peaks in linear 0..1+, RMS in linear)
-@export var peak_left := 0.0:
-	set(val):
-		peak_left = val
-@export var peak_right := 0.0:
-	set(val):
-		peak_right = val
+# Target values (set from audio engine)
+var _target_peak_left := 0.0
+var _target_peak_right := 0.0
+var _target_rms_left := 0.0
+var _target_rms_right := 0.0
+
+# Smoothed display values (lerped for visual smoothness)
+@export var peak_left := 0.0
+@export var peak_right := 0.0
+@export var rms_left := 0.0
+@export var rms_right := 0.0
+
+# Smoothing factors (lower = smoother but slower response)
+@export var peak_smoothing := 0.3  # Peaks respond quickly
+@export var rms_smoothing := 0.15   # RMS is more averaged
 
 # if enabled, draws a single bar (assumes peak_left/rms_left are the mono signal)
 @export var mono := false
@@ -59,28 +67,29 @@ var mouse_hovered := false
 var peak_combined: float:
 	get: return (peak_left + peak_right) / 2.0
 
-# for now treat RMS as same as peaks (feed your real RMS if you have it)
-var rms_left: float:
-	get: return peak_left
-
-var rms_right: float:
-	get: return peak_right
 
 func set_peak_levels(left : float, right : float) -> void:
-	peak_left = left
-	peak_right = right
-	rms_left = peak_left
-	rms_right = peak_right
+	_target_peak_left = left
+	_target_peak_right = right
+
+
+func set_rms_levels(left : float, right : float) -> void:
+	_target_rms_left = left
+	_target_rms_right = right
 
 
 func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	
-	peak_left = 0
-	peak_right = 0
-	rms_left = 0
-	rms_right = 0
+	peak_left = 0.0
+	peak_right = 0.0
+	rms_left = 0.0
+	rms_right = 0.0
+	_target_peak_left = 0.0
+	_target_peak_right = 0.0
+	_target_rms_left = 0.0
+	_target_rms_right = 0.0
 
 
 func _on_mouse_entered():
@@ -94,8 +103,16 @@ func _on_mouse_exited():
 		queue_redraw()
 
 
-func _process(_delta: float) -> void:
-	# you can add a "silence timeout" later to stop redrawing
+func _process(delta: float) -> void:
+	# Smooth/lerp peak and RMS values for visual smoothness
+	# Peaks fall quickly but rise with slight smoothing
+	peak_left = lerp(peak_left, _target_peak_left, peak_smoothing if _target_peak_left > peak_left else 0.5)
+	peak_right = lerp(peak_right, _target_peak_right, peak_smoothing if _target_peak_right > peak_right else 0.5)
+	
+	# RMS is heavily smoothed in both directions
+	rms_left = lerp(rms_left, _target_rms_left, rms_smoothing)
+	rms_right = lerp(rms_right, _target_rms_right, rms_smoothing)
+	
 	queue_redraw()
 
 	# update cursor based on fader handle hover
