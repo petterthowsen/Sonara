@@ -1,16 +1,33 @@
-[gd_scene load_steps=9 format=3 uid="uid://dwx58rtumvnkj"]
+[gd_scene load_steps=10 format=3 uid="uid://dwx58rtumvnkj"]
 
 [ext_resource type="Script" uid="uid://3rv0d2u2oata" path="res://arranger/Arranger.gd" id="1_bh1i7"]
 [ext_resource type="PackedScene" uid="uid://cx5s8jbwq0dt2" path="res://arranger/tracklist/TrackList.tscn" id="1_hqaxx"]
 [ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_dtx23"]
 [ext_resource type="PackedScene" uid="uid://cyvwigrev1rtt" path="res://arranger/timeline/Timeline.tscn" id="4_dtx23"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
+bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bh1i7"]
 content_margin_left = 4.0
 content_margin_top = 4.0
 content_margin_right = 4.0
 content_margin_bottom = 4.0
-bg_color = Color(0.26666668, 0.26666668, 0.26666668, 1)
+bg_color = Color(0.109375, 0.109375, 0.109375, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dtx23"]
+bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
+draw_center = false
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -22,7 +39,7 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.1328125, 0.1328125, 0.1328125, 1)
+bg_color = Color(0.08, 0.08, 0.08, 0.5019608)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -34,19 +51,7 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.1, 0.1, 0.1, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cmtxc"]
-content_margin_left = 4.0
-content_margin_top = 2.0
-content_margin_right = 4.0
-content_margin_bottom = 2.0
-bg_color = Color(0.1640625, 0.1640625, 0.1640625, 1)
+bg_color = Color(0.09239999, 0.09654, 0.12, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -66,10 +71,11 @@ zoom_sensitivity_v = 1.4
 [node name="VSplitContainer" type="VSplitContainer" parent="."]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/separation = 6
+theme_override_constants/separation = 8
 
 [node name="ArrangeTop" type="PanelContainer" parent="VSplitContainer"]
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_nqsw4")
 
 [node name="HBox" type="HBoxContainer" parent="VSplitContainer/ArrangeTop"]
 layout_mode = 2
@@ -95,6 +101,7 @@ text = "F"
 [node name="TimelineHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox"]
 layout_mode = 2
 size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_dtx23")
 
 [node name="VBox" type="VBoxContainer" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader"]
 layout_mode = 2
@@ -160,11 +167,10 @@ anchor_bottom = 1.0
 grow_vertical = 2
 size_flags_horizontal = 0
 mouse_filter = 2
-color = Color(1, 1, 1, 0.78431374)
+color = Color(1, 1, 1, 0.48235294)
 
 [node name="ArrangerBottom" type="PanelContainer" parent="."]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_cmtxc")
 
 [node name="HBoxContainer" type="HBoxContainer" parent="ArrangerBottom"]
 layout_mode = 2
@@ -173,5 +179,6 @@ layout_mode = 2
 layout_mode = 2
 
 [node name="Button" type="Button" parent="ArrangerBottom/HBoxContainer/Buttons"]
+custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 text = "A"

@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Godot"
-run/main_scene="uid://d17wdwntyd1ni"
+run/main_scene="uid://ckggccuur2ds"
 config/features=PackedStringArray("4.5")
 boot_splash/show_image=false
 config/icon="res://icon.svg"
@@ -136,4 +136,4 @@ ui_delete={
 
 [rendering]
 
-environment/defaults/default_clear_color=Color(0.09375, 0.09375, 0.09375, 1)
+environment/defaults/default_clear_color=Color(0.09411765, 0.09803922, 0.12156863, 1)

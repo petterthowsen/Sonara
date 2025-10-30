@@ -43,12 +43,13 @@ alwaysApply: false
 - Browser UI displays SFZ assets in a dedicated "SFZ" tab with their own ItemList.
 
 ## DeviceAssetProvider
-- Registers built-in devices synchronously (`Device.create_builtin_oscillator`, `..._delay`, `..._sfizz`) and emits a single change set on startup.
-- Maintains `_devices` keyed by `device_id`; `scan()` rebuilds `Asset` handles from the registry so AssetService always sees the current set.
+- On startup, loads cached plugins, registers OSC listeners, and immediately sends `/builtin/request`; the engine answers with `/builtin/info` messages (one per device) followed by `/builtin/complete`.
+- Maintains `_devices` keyed by `device_id`; built-ins and plugins live in the same dictionary so `scan()` rebuilds the full asset list after every advertisement or scan completion.
 - Plugin discovery is manual: `trigger_plugin_scan()` prunes cached plugin assets, then sends `/plugin/scan` via `AudioEngineOSC`.
-- Incoming `/plugin/info` messages provide `[id, name, vendor, version, category, description, path]`; devices store metadata plus CLAP-specific fields.
+- Incoming `/builtin/info` payloads include audio/MIDI capabilities, parameter descriptors, and optional file loading support; the provider batches new built-ins and emits them when `/builtin/complete` arrives.
+- `/plugin/info` messages provide `[id, name, vendor, version, category, description, path]`; devices store metadata plus CLAP-specific fields.
 - `/plugin/scan_complete` triggers `scan()`, emits added plugin assets, and persists the registry to `~/.config/sonara/plugins.json`.
-- Cached plugins are reloaded on startup before the engine responds, so Browser UI stays populated even without a fresh scan.
+- Cached plugins are reloaded on startup before the engine responds, so Browser UI stays populated even without a fresh scan; hot reconnects re-request built-ins by listening to `AudioEngineOSC.engine_connected`.
 
 ## Metadata Cache
 - `AssetService` writes all user metadata (favorite, tags, last_used) to `assets.json` under the same config directory as the plugin cache.

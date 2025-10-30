@@ -1292,6 +1292,10 @@ impl OscServer {
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
             ),
+            EngineStatus::EngineLoad { load } => (
+                "/status/engine_load".to_string(),
+                vec![OscType::Float(load)],
+            ),
         };
 
         let msg = OscMessage { addr, args };

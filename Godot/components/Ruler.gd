@@ -5,9 +5,6 @@ class_name Ruler extends Control
 
 # Visual settings
 @export var bg_color: Color = Color(0.15, 0.15, 0.15)
-@export var bar_line_color: Color = Color(0.8, 0.8, 0.8)
-@export var beat_line_color: Color = Color(0.5, 0.5, 0.5)
-@export var subdivision_line_color: Color = Color(0.35, 0.35, 0.35)
 @export var text_color: Color = Color(0.9, 0.9, 0.9)
 @export var start_position_color: Color = Color(0.2, 0.6, 1.0)  # Blue for start position arrow
 @export var font_size: int = 12
@@ -48,7 +45,8 @@ func set_start_position(ticks: int) -> void:
 
 func _draw():
 	# Draw background
-	draw_rect(Rect2(Vector2(0, 0), size), bg_color, true)
+	var sb_normal = get_theme_stylebox("normal", "Ruler")
+	draw_style_box(sb_normal, Rect2(0, 0, size.x, size.y))
 
 	# Draw ruler markings
 	if grid_helper:
@@ -57,6 +55,11 @@ func _draw():
 
 func _draw_ruler() -> void:
 	"""Draw ruler with bar numbers and beat markers."""
+	
+	var bar_line_color = get_theme_color("bar_line_color", "Ruler")
+	var beat_line_color = get_theme_color("beat_line_color", "Ruler")
+	var subdivision_line_color = get_theme_color("subdivision_line_color", "Ruler")
+	
 	# Calculate visible range (no need to adjust for scroll - GridHelper handles it)
 	var start_x = 0.0
 	var end_x = size.x - offset_x
@@ -94,6 +97,9 @@ func _draw_start_position_arrow() -> void:
 	if not grid_helper:
 		return
 	
+	# theme vars
+	var start_arrow_color = get_theme_color("start_arrow_color", "Ruler")
+
 	# Calculate start position x in pixels (GridHelper handles scroll position)
 	var start_pixel_x = grid_helper.ticks_to_pixels(start_position_ticks) - grid_helper.scroll_position + offset_x
 
@@ -110,7 +116,7 @@ func _draw_start_position_arrow() -> void:
 			Vector2(start_pixel_x + arrow_width / 2.0, size.y - arrow_height),  # Top right
 		])
 
-		draw_colored_polygon(points, start_position_color)
+		draw_colored_polygon(points, start_arrow_color)
 
 		# Draw a thin vertical line from arrow base to top of ruler
 		# Constrain height to max(10, 50% of ruler height)

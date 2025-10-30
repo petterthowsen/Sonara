@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use crossbeam::channel::{Receiver, Sender};
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::info;
 
 use super::commands::process_command;
@@ -139,12 +141,21 @@ impl AudioEngine {
         let mut samples_since_update = 0;
         let update_interval = sample_rate / 20; // 20 Hz updates
 
+        // Performance metrics tracking (using RefCell for interior mutability)
+        let perf_metrics_start = RefCell::new(Instant::now());
+        let perf_metrics_interval = Duration::from_millis(500); // Send metrics every 500ms
+        let cumulative_processing_time = RefCell::new(Duration::ZERO);
+        let cumulative_block_duration = RefCell::new(Duration::ZERO);
+
         // Track if we've logged buffer size info
         let mut logged_buffer_info = false;
 
         let stream = device.build_output_stream(
             config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                // Start timing the audio processing
+                let processing_start = Instant::now();
+
                 // Process any pending commands (lock-free)
                 while let Ok(cmd) = command_rx.try_recv() {
                     if let Ok(mut state) = state.lock() {
@@ -167,6 +178,9 @@ impl AudioEngine {
                 };
 
                 let frames = data.len() / channels;
+                
+                // Calculate block duration (time available for this buffer)
+                let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
 
                 // Resize channel buffers if needed
                 for channel in state.channels.values_mut() {
@@ -207,6 +221,35 @@ impl AudioEngine {
                 // Update peaks
                 for channel in state.channels.values_mut() {
                     channel.update_peaks();
+                }
+
+                // Measure actual processing time
+                let processing_time = processing_start.elapsed();
+
+                // Accumulate performance metrics
+                *cumulative_processing_time.borrow_mut() += processing_time;
+                *cumulative_block_duration.borrow_mut() += block_duration;
+
+                // Send performance metrics every 500ms
+                if perf_metrics_start.borrow().elapsed() >= perf_metrics_interval {
+                    let cum_proc = *cumulative_processing_time.borrow();
+                    let cum_block = *cumulative_block_duration.borrow();
+                    
+                    // Calculate average load: processing_time / block_duration
+                    // If cumulative_block_duration is zero, avoid division by zero
+                    let avg_load = if cum_block.as_secs_f64() > 0.0 {
+                        (cum_proc.as_secs_f64() / cum_block.as_secs_f64()) as f32
+                    } else {
+                        0.0
+                    };
+
+                    // Send engine load update
+                    let _ = status_tx.send(EngineStatus::EngineLoad { load: avg_load });
+
+                    // Reset metrics accumulation
+                    *perf_metrics_start.borrow_mut() = Instant::now();
+                    *cumulative_processing_time.borrow_mut() = Duration::ZERO;
+                    *cumulative_block_duration.borrow_mut() = Duration::ZERO;
                 }
 
                 // Send periodic status updates

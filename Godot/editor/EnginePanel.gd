@@ -5,6 +5,7 @@ class_name EnginePanel extends PanelContainer
 @onready var performance_text: RichTextLabel = $HBox/PerformanceText
 @onready var status_label: Label = $HBox/StatusLabel
 @onready var connect_button: Button = $HBox/ConnectButton
+@onready var engine_load_graph: Graph = $HBox/EngineLoadGraph
 
 
 func _ready() -> void:
@@ -14,6 +15,9 @@ func _ready() -> void:
 	# Connect to editor signals
 	Sonara.editor.project_opened.connect(_on_project_opened)
 	Sonara.editor.project_closed.connect(_on_project_closed)
+	
+	# Connect to audio engine OSC signals
+	_connect_osc_signals()
 	
 	# Initialize UI state (no project active)
 	_update_ui_no_project()
@@ -68,6 +72,9 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 			status_label.text = "Disconnected"
 			connect_button.text = "Connect"
 			connect_button.disabled = false
+			# Clear graph when disconnected
+			if engine_load_graph:
+				engine_load_graph.clear()
 		Project.ConnectionState.CONNECTING:
 			status_label.text = "Connecting..."
 			connect_button.text = "Cancel"
@@ -76,3 +83,15 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 			status_label.text = "Connected"
 			connect_button.text = "Disconnect"
 			connect_button.disabled = false
+
+func _connect_osc_signals() -> void:
+	"""Connect to audio engine OSC signals for performance metrics."""
+	if AudioEngineOSC:
+		AudioEngineOSC.listen("/status/engine_load", _on_engine_load_received)
+
+func _on_engine_load_received(values: Array) -> void:
+	"""Handle engine load metric from audio engine."""
+	if engine_load_graph and values.size() > 0:
+		var load_value = float(values[0])
+		engine_load_graph.add_point(load_value)
+		performance_text.text = "Engine Load: %.2f%%" % load_value

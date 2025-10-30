@@ -45,6 +45,7 @@ description: Applies when working on the subprocess-based plugin host or shared 
   - Read `LoadingState` with `try_lock()`. On `Loading`/`Failed`, copy inputs to outputs and exit early.
   - On `Ready`, grab the shared `Arc<SharedMemory>` and write interleaved buffers via non-blocking ring-buffer APIs.
   - Always check write/read counts; drop extra input frames and zero-fill outputs when the peer under-produces.
+  - MIDI arrives via `AudioDevice::send_midi_event(note, velocity, is_on, frame_offset)`; the adapter forwards it as CLAP `note_on/off` with `sample_offset = frame_offset` so plugins stay sample-accurate.
 - `ProcessManager` owns the TCP socket pair and shared-memory handles. It delivers commands/responses to adapters via synchronized channels (with short critical sections only).
 - Subprocess polls the shared-memory buffers inside its event loop; the engine can add signaling (eventfd) later without changing the adapter contract.
 

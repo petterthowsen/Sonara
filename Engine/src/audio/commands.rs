@@ -370,6 +370,11 @@ pub enum EngineStatus {
         level: String, // "warn" or "error"
         message: String,
     },
+
+    // Performance metrics
+    EngineLoad {
+        load: f32, // CPU load as ratio (0.0-1.0+, where 1.0 = 100% utilization)
+    },
 }
 
 impl EngineStatus {

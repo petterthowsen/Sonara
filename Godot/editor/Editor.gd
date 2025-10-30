@@ -2,7 +2,7 @@
 # Main DAW Editor - manages project lifecycle and UI coordination
 # Data classes (Project, Track, Channel) now handle their own audio engine sync
 
-class_name Editor extends Control
+class_name Editor extends MarginContainer
 
 # ============================================================================
 # SIGNALS - UI event notifications
@@ -38,45 +38,45 @@ signal track_focused(track : Track)
 # Top-Level Nodes in the top VBOX:
 
 # main_bar houses main menu, audio engine status, transport controls and window buttons
-@onready var main_bar: HBoxContainer = $VBox/MainBar
+@onready var main_bar: HBoxContainer = $VBoxContainer/Top
 
 # main area has arraner/mixer/editor, and various side panels
-@onready var main: HBoxContainer = $VBox/Main
+@onready var main: BoxContainer = $VBoxContainer/Middle
 
 # bottom has status bar: TODO: implement useful hotkey info of hovered element
-@onready var bottom: PanelContainer = $VBox/Bottom
+@onready var bottom: VBoxContainer = $VBoxContainer/Bottom
 
 # file, edit etc
-@onready var main_menu: MainMenu = $VBox/MainBar/MainMenu
+@onready var main_menu: MainMenu = $VBoxContainer/Top/MainMenu
 
 # engine panel shows connect/disconnect button and engine status
-@onready var engine_panel: EnginePanel = $VBox/MainBar/EnginePanel
+@onready var engine_panel: EnginePanel = $VBoxContainer/Top/EnginePanel
 
 @onready var file_dialog : FileDialog = $FileDialog
 
-@onready var play_button: Button = $VBox/MainBar/Middle/TransportControls/Buttons/PlayButton
-@onready var stop_button: Button = $VBox/MainBar/Middle/TransportControls/Buttons/StopButton
+@onready var play_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/PlayButton
+@onready var stop_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/StopButton
 
-@onready var tempo_spinbox: SpinBox = $VBox/MainBar/Middle/TransportStatus/HBox/Options/Tempo
-@onready var time_signature_edit: LineEdit = $VBox/MainBar/Middle/TransportStatus/HBox/Options/TimeSignature
+@onready var tempo_spinbox: SpinBox = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/Tempo
+@onready var time_signature_edit: LineEdit = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/TimeSignature
 
-@onready var transport_position_label: Label = $VBox/MainBar/Middle/TransportStatus/HBox/Status/Position
-@onready var transport_time_label: Label = $VBox/MainBar/Middle/TransportStatus/HBox/Status/Time
+@onready var transport_position_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Position
+@onready var transport_time_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Time
 
 # Center area is a Vsplit of primary (large, top) and secondary (below, short) panels
 # - Primary: Arranger/Mixer/ClipEditor (switchable)
 # - Secondary: can show device lane, mini clip editor or mini mixer (switchable)
-@onready var center_vsplit : VSplitContainer = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit
-@onready var primary_panel: PanelContainer = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Primary
-@onready var seconday_panel: PanelContainer = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Secondary
+@onready var center_vsplit : VSplitContainer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter
+@onready var primary_panel: PanelContainer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary
+@onready var seconday_panel: PanelContainer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary
 
 # primary panels: arranger, mixer and clip editor
-@onready var arranger: Arranger = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Primary/Arranger
-@onready var mixer: Mixer = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Primary/Mixer
-@onready var clip_editor: ClipEditor = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Primary/ClipEditor
+@onready var arranger: Arranger = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/Arranger
+@onready var mixer: Mixer = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/Mixer
+@onready var clip_editor: ClipEditor = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary/ClipEditor
 
 # secondary panels
-@onready var device_lane : DeviceLane = $VBox/Main/HSplitContainer/HSplit/CenterArea/VSplit/Secondary/DeviceLane
+@onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane
 
 # ============================================================================
 # STATE
@@ -154,6 +154,11 @@ func _connect_ui_signals():
 	
 
 func _on_mixer_channel_focused(channel : Channel):
+	focus_channel(channel)
+
+
+func focus_channel(channel: Channel) -> void:
+	"""Public API to focus a channel and notify listeners (e.g., DeviceLane)."""
 	if focused_channel != channel:
 		focused_channel = channel
 		channel_focused.emit(channel)

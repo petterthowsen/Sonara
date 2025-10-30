@@ -20,9 +20,9 @@ Status + GUI events flow: Audio thread → Main thread → (a) OSC client → Go
 The audio engine (`Engine/src/audio/engine.rs`) processes audio in this order:
 1. Process pending commands from channel (non-blocking `try_recv`)
 2. Clear all channel audio buffers
-3. If playing: advance playhead tick-by-tick, triggering MIDI note on/off events
-4. Generate audio samples from active voices (sine wave oscillators)
-5. Write samples to track's output channel buffer
+3. If playing: compute tick boundaries for this block using the device sample rate and update the fractional accumulator
+4. Dispatch clip note on/off events to the owning channel with sample-accurate `frame_offset` values so instruments queue MIDI before rendering
+5. Render per-frame audio for each track (audio clips + channel device chains) into channel buffers
 6. Mix channels: apply gain/pan, route to output channels
 7. Output master channel (ID 0) to audio hardware via CPAL
 8. Update peak meters for all channels
@@ -55,8 +55,10 @@ Engine/src/
     types.rs           # Type definitions: Channel, Track, Voice, etc.
     devices/
       mod.rs         # Device module declarations
-      oscillator.rs  # Voice synthesis (sine wave oscillator)
+      oscillator.rs  # Simple builtin oscillator
+      polysynth.rs   # FunDSP-based polyphonic instrument
       delay.rs       # Delay effect device
+      sfizz_device.rs# SFZ sampler backed by sfizz
     io/
       mod.rs         # IO module declarations
       wav.rs         # WAV file reading/writing
@@ -74,6 +76,16 @@ Godot/              # Godot 4.5 UI App
 - Tick-based sequencing with fractional accumulation for sub-sample accuracy
 - 960 PPQ (pulses per quarter note)
 - Playhead updates sent to Godot at 20Hz, interpolated in Godot UI smoothness
+
+### Sample-Accurate Scheduling
+- `processing.rs::process_audio()` precomputes `(tick, frame_offset)` pairs for the current buffer so note events line up with the physical device sample rate (never the project setting).
+- Each channel forwards MIDI to the first device in its chain via `Channel::send_midi_event_to_devices()`; instruments must respect the provided `frame_offset` inside their next `process_block`.
+- `AudioDevice::send_midi_event()` is the single contract point—builtins (Oscillator, PolySynth, Sfizz) and the CLAP adapter queue events and sort them before rendering so envelopes and plugin voices line up exactly with buffer boundaries.
+
+### Built-in Device Advertisement
+- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz) and emitting `/builtin/info` messages.
+- Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
+- `PolySynthDevice` is the new default polyphonic instrument implemented with FunDSP; it supports up to 16 voices, ADSR envelopes, and relies on the sample-accurate MIDI queue for tight triggering.
 
 ### Audio Clip BPM-Based Time Stretching
 Audio clips automatically time-stretch and pitch-shift based on project BPM:
@@ -172,4 +184,3 @@ The audio callback **never blocks**:
 ## Finding Documentation
 
 - Get docs on Clack via context7 (`/prokopyl/clack`)
-

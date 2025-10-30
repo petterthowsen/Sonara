@@ -42,52 +42,58 @@ impl Voice {
     }
 
     /// Build the DSP graph for this voice
+    /// Uses Shared vars for smooth parameter changes without rebuilding
     fn build_graph(
         &mut self,
         sample_rate: f32,
         waveform: u8,
-        attack: f32,
-        decay: f32,
-        sustain: f32,
-        release: f32,
-        master_volume: f32,
+        attack_shared: &Shared,
+        decay_shared: &Shared,
+        sustain_shared: &Shared,
+        release_shared: &Shared,
+        master_volume_shared: &Shared,
     ) {
-        // Create graph based on waveform type, multiplying with envelope and volume
-        // We use dynamic dispatch (Box<dyn AudioUnit>) since different waveforms have different types
+        // Use shared vars with follow() smoothing for smooth parameter changes
+        // ADSR envelope uses constants at build time (envelope shape per voice stays constant)
+        // but volume uses shared var for real-time smooth changes
+        let envelope = var(&self.trigger) >> adsr_live(
+            attack_shared.value(),
+            decay_shared.value(),
+            sustain_shared.value(),
+            release_shared.value(),
+        );
+        
+        // Master volume with smoothing (10ms response time for smooth changes)
+        let volume_smooth = var(master_volume_shared) >> follow(0.01);
+
+        // Create graph based on waveform type
         let graph: Box<dyn AudioUnit> = match waveform {
             0 => {
-                let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g = envelope * sine_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g = envelope * sine_hz(self.frequency) * volume_smooth * dc(self.velocity);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
             }
             1 => {
-                let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g =
-                    envelope * square_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g = envelope * square_hz(self.frequency) * volume_smooth * dc(self.velocity);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
             }
             2 => {
-                let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g = envelope * saw_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g = envelope * saw_hz(self.frequency) * volume_smooth * dc(self.velocity);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
             }
             3 => {
-                let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g =
-                    envelope * triangle_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g = envelope * triangle_hz(self.frequency) * volume_smooth * dc(self.velocity);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
             }
             _ => {
-                let envelope = var(&self.trigger) >> adsr_live(attack, decay, sustain, release);
-                let mut g = envelope * sine_hz(self.frequency) * dc(self.velocity * master_volume);
+                let mut g = envelope * sine_hz(self.frequency) * volume_smooth * dc(self.velocity);
                 g.set_sample_rate(sample_rate as f64);
                 g.allocate();
                 Box::new(g)
@@ -199,29 +205,28 @@ impl PolySynthDevice {
             .map(|(idx, _)| idx)
     }
 
-    /// Rebuild DSP graphs if parameters changed
+    /// Rebuild DSP graphs only for waveform changes (topology change)
+    /// Smooth parameters (ADSR, volume) use Shared vars and don't need rebuilds
     fn rebuild_graphs_if_needed(&mut self) {
         if !self.params_dirty {
             return;
         }
 
         let waveform = self.waveform.load(Ordering::Relaxed);
-        let attack = self.attack.value();
-        let decay = self.decay.value();
-        let sustain = self.sustain.value();
-        let release = self.release.value();
-        let volume = self.master_volume.value();
 
+        // Only rebuild voices that are inactive (will get new waveform on next note-on)
+        // Active voices keep their current waveform until released
+        // This prevents retrigger artifacts during playback
         for voice in self.voices.iter_mut() {
-            if voice.is_active || voice.dsp_graph.is_none() {
+            if !voice.is_active || voice.dsp_graph.is_none() {
                 voice.build_graph(
                     self.sample_rate,
                     waveform,
-                    attack,
-                    decay,
-                    sustain,
-                    release,
-                    volume,
+                    &self.attack,
+                    &self.decay,
+                    &self.sustain,
+                    &self.release,
+                    &self.master_volume,
                 );
             }
         }
@@ -272,11 +277,11 @@ impl AudioDevice for PolySynthDevice {
                         self.voices[idx].build_graph(
                             self.sample_rate,
                             self.waveform.load(Ordering::Relaxed),
-                            self.attack.value(),
-                            self.decay.value(),
-                            self.sustain.value(),
-                            self.release.value(),
-                            self.master_volume.value(),
+                            &self.attack,
+                            &self.decay,
+                            &self.sustain,
+                            &self.release,
+                            &self.master_volume,
                         );
                     } else if let Some(idx) = self.find_free_voice().or_else(|| self.steal_voice())
                     {
@@ -284,11 +289,11 @@ impl AudioDevice for PolySynthDevice {
                         self.voices[idx].build_graph(
                             self.sample_rate,
                             self.waveform.load(Ordering::Relaxed),
-                            self.attack.value(),
-                            self.decay.value(),
-                            self.sustain.value(),
-                            self.release.value(),
-                            self.master_volume.value(),
+                            &self.attack,
+                            &self.decay,
+                            &self.sustain,
+                            &self.release,
+                            &self.master_volume,
                         );
                     }
                 } else {
@@ -354,32 +359,28 @@ impl AudioDevice for PolySynthDevice {
                 self.params_dirty = true;
             }
             1 => {
-                // Attack (0.001-2.0s)
+                // Attack (0.001-2.0s) - smooth parameter, no rebuild needed
+                // Note: ADSR params only affect new voices (existing voices keep their envelope shape)
                 let attack = 0.001 + value * 1.999;
                 self.attack.set_value(attack);
-                self.params_dirty = true;
             }
             2 => {
-                // Decay (0.001-2.0s)
+                // Decay (0.001-2.0s) - smooth parameter, no rebuild needed
                 let decay = 0.001 + value * 1.999;
                 self.decay.set_value(decay);
-                self.params_dirty = true;
             }
             3 => {
-                // Sustain (0.0-1.0)
+                // Sustain (0.0-1.0) - smooth parameter, no rebuild needed
                 self.sustain.set_value(value);
-                self.params_dirty = true;
             }
             4 => {
-                // Release (0.001-3.0s)
+                // Release (0.001-3.0s) - smooth parameter, no rebuild needed
                 let release = 0.001 + value * 2.999;
                 self.release.set_value(release);
-                self.params_dirty = true;
             }
             5 => {
-                // Master Volume (0.0-1.0)
+                // Master Volume (0.0-1.0) - smooth parameter with Shared var + follow(), no rebuild needed
                 self.master_volume.set_value(value);
-                self.params_dirty = true;
             }
             _ => {}
         }

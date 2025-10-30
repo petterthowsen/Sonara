@@ -84,6 +84,19 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 			return
 
+	# TEMP: Until track selection is unified with channel focus, clicking a TrackItem
+	# will focus its routed Channel so DeviceLane updates immediately.
+	# TODO: Revisit when a proper selection model exists across Arranger/Mixer.
+	# Handle left-click: focus routed channel so DeviceLane reacts
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		# Ignore if we're clicking the resize gutter (handled below)
+		if mouse.y < size.y - 4:
+			if channel and Sonara and Sonara.editor:
+				# Use Editor's public API so channel_focused is emitted
+				Sonara.editor.focus_channel(channel)
+				accept_event()
+				return
+
 	# Detect resize area at bottom edge
 	if mouse.y >= size.y - 4:
 		mouse_default_cursor_shape = Control.CURSOR_VSIZE

@@ -11,7 +11,9 @@ When writing gdscript, follow these guidelines:
 1. Use two newlines between class functions.
 2. Most properties and functions should have a comment that briefly explains its purpose responsibility, unless positively self-evident.
 3. Things that control overall design or behavior of a node that could likely be subject to change/tweaking should probably have a configurable property.
-4. Never edit .uid, .tscn or other resource types (use Godot Tools)
+4. Never edit .uid, .tscn or other resource types (use only Godot Tool Functions)
+5. If you want a ternary operator, use `truthy_value if true_condition else falsy_value`.
+
 
 ## Working with Scenes
 

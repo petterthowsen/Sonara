@@ -1,6 +1,7 @@
 # TODO
 
 # Bugs / Issues
+- [ ] Moving a clip from one track to another causes playback of new clip to actually playy on original track.
 
 
 ## Audio Engine (Rust Backend)
@@ -31,8 +32,8 @@
 
 - [ ] Leverage FunDSP library to implement basic set of builtin devicess
     - [ ] Remove old Oscilator and Delay
-    - [ ] Implement basic PolySynth device:
-        - two oscilators (configurable type: sine, trianle etc)
+    - [x] Implement basic PolySynth device
+
 
 ### Save/Load
 - [x] implementation for save/load projects
@@ -48,6 +49,11 @@
 ### Save/Load
 - [x] Save and Load projects (frontend implementation)
 - [ ] Welcome Screen with recent projects, templates and settings
+
+### Export
+- [ ] Export/rendering and bouncing tracks
+- [ ] Export MIDI
+- [ ] Export menu with separate track (stem) selection
 
 ### Arranger & Timeline
 - [ ] Arranger Timeline

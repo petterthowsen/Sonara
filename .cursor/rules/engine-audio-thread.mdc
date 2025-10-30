@@ -29,13 +29,21 @@ let guard = command_rx.recv().unwrap();  // BLOCKS!
 The audio engine processes each callback in this order:
 
 1. **Read pending commands** (non-blocking `try_recv()`)
-2. **Clear all channel buffers** (start fresh each frame)
-3. **Generate audio** (advance playhead, trigger MIDI notes, run instruments)
-4. **Mix audio** (apply faders, pan, route channels, output hardware)
-5. **Meter audio** (peak detection on output)
-6. **Send status updates** (20Hz, not every frame)
+2. **Clear channel buffers** (zero L/R arrays for every channel)
+3. **Advance transport & schedule MIDI** (compute tick → `frame_offset` pairs using the real device sample rate, enqueue MIDI on channels)
+4. **Render audio** (tracks add clip audio per frame; channel devices consume queued MIDI when their `process_block` runs)
+5. **Mix audio** (apply faders/pan, route channels, output hardware)
+6. **Meter audio** (peak detection on output)
+7. **Send status updates** (20Hz, not every frame)
 
 Location: `Engine/src/audio/processing.rs`
+
+## Sample-Accurate MIDI Dispatch
+
+- `process_audio()` builds a `Vec<(Tick, frame_offset)>` so every note on/off from clip instances is tied to an exact sample index inside the upcoming block.
+- `Channel::send_midi_event_to_devices()` forwards events to the first device only; instruments must queue and sort them before generating audio.
+- `AudioDevice::send_midi_event()` now receives the `frame_offset`; built-ins (`OscillatorDevice`, `PolySynthDevice`, `SfizzDevice`) and the CLAP adapter honour it to keep envelopes, voice gates, and plugin note-ons aligned with the hardware clock.
+- Never translate offsets back to ticks inside devices—use the given `frame_offset` directly against the block you are rendering.
 
 ## Three-Phase Mixing
 
@@ -137,23 +145,25 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 
 ## Key Data Structures
 
-**Channel**: Holds stereo audio buffer (L/R arrays), fader (dB), pan, mute, output routing
+**Channel**: Holds stereo audio buffer (L/R arrays), device chain, fader (dB), pan, mute, output routing
 - `id`: Channel identifier (1-999 for user channels)
 - `buffer_l, buffer_r`: Stereo audio (cleared each frame)
 - `volume_db`: Current fader level
 - `pan`: -1.0 (left) to +1.0 (right)
 - `mute`: If true, buffer stays silent
 - `output_channel_id`: Where this channel routes to
+- `devices`: Ordered `Vec<Box<dyn AudioDevice>>`; the first entry is the MIDI instrument, the rest are audio effects
+- `send_midi_event_to_devices(note, velocity, is_on, frame_offset)`: forwards sample-accurate MIDI to the first device only
 
-**Track**: Plays audio/MIDI, references a channel
-- `default_channel_id`: Which channel to output to
-- `oscillator` (INSTRUMENT): Synth generator
-- `clips` (AUDIO): Sample playback with stretch factor based on BPM
+**Track**: Holds sequencing data and routes to a channel
+- `default_channel_id`: Which channel renders this track
+- `clip_instances`: MIDI/audio clip placements that drive sample-accurate scheduling
+- `audio_playback_positions`: Fractional sample cursors for stretching audio clips; cleared when clips end or on stop/seek
 
 ## Timing & Synchronization
 
 - Audio callback is master clock (driven by audio hardware)
-- Playhead advanced tick-by-tick (960 PPQ)
+- Playhead advanced tick-by-tick (960 PPQ) using `ticks_per_sample = tempo * ppq / (60 * device_sample_rate)`
 - Playhead updates sent to Godot at 20Hz (interpolated for smooth UI)
 - Audio clips auto-stretch based on project BPM vs. recorded BPM
 
