@@ -67,12 +67,12 @@ corner_radius_bottom_left = 4
 corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_10umj"]
-bg_color = Color(0.123291016, 0.12799944, 0.15625, 1)
+bg_color = Color(0.075531006, 0.080447726, 0.09765625, 1)
 border_width_left = 2
 border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
-border_color = Color(0.07324219, 0.07672991, 0.09765625, 1)
+border_color = Color(0.16638184, 0.17641193, 0.2265625, 1)
 border_blend = true
 corner_radius_top_left = 4
 corner_radius_top_right = 4

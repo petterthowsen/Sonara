@@ -63,29 +63,55 @@ fn main() -> Result<()> {
     // Create logs directory if it doesn't exist
     fs::create_dir_all("logs")?;
 
-    // Set up file logging with a rotatable writer
-    let log_file = File::create("logs/engine.log")?;
-    let log_writer = RotatableWriter::new(log_file);
-    let log_handle = log_writer.get_handle();
+    // Set up split log writers
+    let info_file = File::create("logs/last_info.log")?;
+    let warn_file = File::create("logs/last_warn.log")?;
+    let combined_file = File::create("logs/last_combined.log")?;
+
+    let info_writer = RotatableWriter::new(info_file);
+    let warn_writer = RotatableWriter::new(warn_file);
+    let combined_writer = RotatableWriter::new(combined_file);
+
+    let log_handles = osc::server::LogWriters {
+        info: info_writer.get_handle(),
+        warn: warn_writer.get_handle(),
+        combined: combined_writer.get_handle(),
+    };
 
     // Create status channel FIRST so we can pass it to both the log forwarder and the engine
     let (status_tx, status_rx) = crossbeam::channel::unbounded();
 
     // Set up logging with both file writer AND log forwarder to Godot
-    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::filter::{self, LevelFilter};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::Layer;
+    use tracing::Level;
 
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(log_writer)
-        .with_ansi(false) // No color codes in file
-        .with_filter(LevelFilter::INFO); // Only INFO, WARN, ERROR (no TRACE/DEBUG spam)
+    // info-only layer (exactly INFO)
+    let info_layer = tracing_subscriber::fmt::layer()
+        .with_writer(info_writer)
+        .with_ansi(false)
+        .with_filter(filter::filter_fn(|meta| meta.level() == &Level::INFO));
+
+    // warn+ layer (WARN and ERROR)
+    let warn_layer = tracing_subscriber::fmt::layer()
+        .with_writer(warn_writer)
+        .with_ansi(false)
+        .with_filter(LevelFilter::WARN);
+
+    // combined: INFO and above
+    let combined_layer = tracing_subscriber::fmt::layer()
+        .with_writer(combined_writer)
+        .with_ansi(false)
+        .with_filter(LevelFilter::INFO);
 
     let log_forwarder = LogForwarder::new(status_tx.clone());
 
     tracing_subscriber::registry()
-        .with(file_layer)
+        .with(info_layer)
+        .with(warn_layer)
+        .with(combined_layer)
         .with(log_forwarder)
         .init();
 
@@ -111,7 +137,7 @@ fn main() -> Result<()> {
     info!("DAW Audio Engine is running. Press Ctrl+C to exit.");
 
     // Run OSC server (this blocks)
-    osc_server.run(command_tx, status_rx, log_handle, &mut window_manager)?;
+    osc_server.run(command_tx, status_rx, log_handles, &mut window_manager)?;
 
     Ok(())
 }

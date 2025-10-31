@@ -17,3 +17,8 @@ alwaysApply: false
 3. Add setter method that sends OSC and emits signal
 4. Add to `sync_to_engine()` method
 5. UI connects to signal in `bind_to_channel()`
+
+### Device Visualization Data
+- Use `AudioEngineOSC.subscribe_device_data(channel_id, device_position, data_type)` / `unsubscribe_device_data(...)` to toggle analyzer streams; they send `/channel/{id}/device/{pos}/data/subscribe|unsubscribe` with the target type (e.g., `"spectrum"`).
+- Incoming `/channel/{id}/device/{pos}/data` messages emit `device_data_received(channel_id, device_position, data_type, blob)` so views can decode custom payloads; FFT analyzers also emit `device_spectrum_received` with a ready-to-use `PackedFloat32Array`.
+- Device visuals extend `DeviceView`, subscribe in `_on_view_shown()`, and must disconnect in `_on_view_hidden()` to avoid leaving the audio engine in a subscribed state when the UI hides the scene.

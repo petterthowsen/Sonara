@@ -1,23 +1,28 @@
 # TODO
 
 # Bugs / Issues
-- [ ] Moving a clip from one track to another causes playback of new clip to actually playy on original track.
+- [ ] Moving a clip from one track to another causes playback of new clip to actually play on original track.
+- [ ] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
 
 
 ## Audio Engine (Rust Backend)
 
+### Debugging
+- [ ] Improve logging: split info/warn levels into separate files. Only keep last N session files. Name them last_info.txt, last_warn.txt and last_combined.txt
+
 ### Core Audio
-- [ ] RMS Metering
+- [x] RMS Metering
 - [ ] Plugin latency compensation
 - [ ] Improve logging of plugins
-- [ ] Performance profiling - expose CPU/memory usage metrics via OSC for UI display
+- [X] Performance profiling: emit engine load metrics via OSC for UI display
 
 ### Devices & Plugins
 - [ ] Multi-in and multi-out for devices
 
 ### Plugins
 - [ ] Crash / Error handling, send info to Godot for UI notifications
-- [ ] Plugin GUI windows should be forced to stay over Godot App
+    - [x] Engine logs a warn and higher are sent over OSC
+- [ ] Plugin GUI windows should be forced to stay above Godot App
 
 ### Threading & Performance
 - [ ] CPU affinity for audio thread and plugin processing
@@ -25,14 +30,20 @@
 - [ ] CPU core assignment for plugin processing
 
 ### Audio Processing
-- [ ] Keep audio engine running live so reverb/delay effects can settle after stopping
-    ^ I think that's implemented? sort of?
+- [ ] Keep audio engine running after playback so insrumens and reverb/delay effects can settle after stopping
 
 ### Built-in Devices
 
-- [ ] Leverage FunDSP library to implement basic set of builtin devicess
+- [ ] Basic MVP Builins
     - [ ] Remove old Oscilator and Delay
-    - [x] Implement basic PolySynth device
+    - [x] PolySynth Device
+    - [x] Spectrum Analyzer
+        - [ ] Stereo Combined mode or layered L/R or M/S
+    - [ ] Filter Device: Resonant Filter with LP/BP/HP modes
+    - [ ] EQ: 10-band parametic equalizer with adjustable type, freq, gain and Q. Built-in spectrum analyzer
+    - [ ] Stereo Delay with time (ms) OR tempo control, feedback amount and wet/dry mix %
+    - [ ] Simple Reverb plugin freeverb style
+    - [ ] Compressor
 
 
 ### Save/Load
@@ -43,15 +54,15 @@
 ## Godot (UI/Frontend)
 
 ### Performance & Debugging
-- [ ] Performance profiling UI - poll audio engine for CPU/memory usage and display in UI
-- [ ] Show audio engine metrics dashboard
+- [x] Show audio engine metrics dashboard
 
 ### Save/Load
 - [x] Save and Load projects (frontend implementation)
 - [ ] Welcome Screen with recent projects, templates and settings
 
 ### Export
-- [ ] Export/rendering and bouncing tracks
+- [ ] Export/rendering
+    - [ ] bouncing tracks to audio clip
 - [ ] Export MIDI
 - [ ] Export menu with separate track (stem) selection
 

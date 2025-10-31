@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://cy8j31jllfcqs" path="res://components/visualization/SpectrumRenderer.gd" id="2_glvo2"]
 
 [node name="SpectrumAnalyzerVisual" type="Control"]
-custom_minimum_size = Vector2(300, 0)
+custom_minimum_size = Vector2(200, 100)
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

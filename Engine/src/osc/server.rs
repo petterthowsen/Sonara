@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use crossbeam::channel::{Receiver, Sender};
 use rosc::{OscMessage, OscPacket, OscType};
-use std::fs::File;
+use std::fs::{self, File};
 use std::net::{SocketAddr, UdpSocket};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -17,6 +18,13 @@ pub struct OscServer {
     socket: UdpSocket,
     client_addr: Option<SocketAddr>,
     client_port: u16,
+}
+
+/// Shared file handles for rotating log writers (info, warn, combined)
+pub struct LogWriters {
+    pub info: Arc<Mutex<File>>,
+    pub warn: Arc<Mutex<File>>,
+    pub combined: Arc<Mutex<File>>,
 }
 
 impl OscServer {
@@ -42,7 +50,7 @@ impl OscServer {
         mut self,
         command_tx: Sender<AudioCommand>,
         status_rx: Receiver<EngineStatus>,
-        log_writer: Arc<Mutex<File>>,
+        log_writers: LogWriters,
         window_manager: &mut WindowManager,
     ) -> Result<()> {
         let mut buf = [0u8; 2048];
@@ -186,7 +194,7 @@ impl OscServer {
                     // Parse OSC packet
                     if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
                         if let Err(e) =
-                            self.handle_packet(packet, &command_tx, &log_writer, window_manager)
+                            self.handle_packet(packet, &command_tx, &log_writers, window_manager)
                         {
                             warn!("Error handling OSC packet: {}", e);
                         }
@@ -209,67 +217,99 @@ impl OscServer {
         &self,
         packet: OscPacket,
         command_tx: &Sender<AudioCommand>,
-        log_writer: &Arc<Mutex<File>>,
+        log_writers: &LogWriters,
         window_manager: &mut WindowManager,
     ) -> Result<()> {
         match packet {
             OscPacket::Message(msg) => {
-                self.handle_message(msg, command_tx, log_writer, window_manager)
+                self.handle_message(msg, command_tx, log_writers, window_manager)
             }
             OscPacket::Bundle(bundle) => {
                 for packet in bundle.content {
-                    self.handle_packet(packet, command_tx, log_writer, window_manager)?;
+                    self.handle_packet(packet, command_tx, log_writers, window_manager)?;
                 }
                 Ok(())
             }
         }
     }
 
-    /// Rotate the log file by renaming the current engine.log to a timestamped file
-    fn rotate_log_file(log_writer: &Arc<Mutex<File>>) -> Result<()> {
+    /// Rotate all log files to timestamped session files and enforce retention
+    fn rotate_log_files(log_writers: &LogWriters) -> Result<()> {
         use chrono::Local;
         use std::io::Write;
 
-        // Generate timestamp for the archived log file
+        const MAX_SESSIONS: usize = 5;
+
+        // Generate timestamp for the archived log files
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-        let archived_name = format!("logs/engine_{}.log", timestamp);
 
-        // Log the rotation event BEFORE rotating (so it goes to the old file)
-        info!("Rotating log file to {}", archived_name);
+        // Helper to rotate a single writer from last_*.txt → session_*_*.log
+        fn rotate_one(current_path: &str, archived_path: &str, writer: &Arc<Mutex<File>>) -> Result<()> {
+            // Announce rotation before swapping handles so message goes to old file
+            info!("Rotating log file to {}", archived_path);
 
-        // Strategy:
-        // 1. Lock the mutex and get mutable access to the File
-        // 2. Flush and drop the old file
-        // 3. Rename the old engine.log file on disk
-        // 4. Create a new engine.log and put it in the mutex
+            if let Ok(mut w) = writer.lock() {
+                let _ = w.flush();
+                *w = File::create(format!("{}.tmp", current_path))?;
+            }
 
-        if let Ok(mut writer) = log_writer.lock() {
-            // Flush any pending writes to the old file
-            let _ = writer.flush();
+            if Path::new(current_path).exists() {
+                fs::rename(current_path, archived_path)?;
+            }
 
-            // Drop the old file by replacing it with a temporary dummy file
-            // This closes the file descriptor to engine.log
-            *writer = File::create("logs/engine.log.tmp")?;
+            // Remove temp and recreate the current file
+            let tmp_path = format!("{}.tmp", current_path);
+            if Path::new(&tmp_path).exists() {
+                fs::remove_file(&tmp_path)?;
+            }
+
+            let new_file = File::create(current_path)?;
+            if let Ok(mut w) = writer.lock() {
+                *w = new_file;
+            }
+
+            Ok(())
         }
 
-        // Now that the old file is closed, we can rename it
-        if std::path::Path::new("logs/engine.log").exists() {
-            std::fs::rename("logs/engine.log", &archived_name)?;
+        // Compose archived names
+        let info_archived = format!("logs/session_{}_info.log", timestamp);
+        let warn_archived = format!("logs/session_{}_warn.log", timestamp);
+        let combined_archived = format!("logs/session_{}_combined.log", timestamp);
+
+        // Rotate each log
+        rotate_one("logs/last_info.log", &info_archived, &log_writers.info)?;
+        rotate_one("logs/last_warn.log", &warn_archived, &log_writers.warn)?;
+        rotate_one("logs/last_combined.log", &combined_archived, &log_writers.combined)?;
+
+        // Enforce retention: keep last N per type
+        fn enforce_retention(prefix: &str, suffix: &str) -> Result<()> {
+            let mut files: Vec<_> = fs::read_dir("logs")?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                .map(|e| e.path())
+                .filter(|p| {
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                        name.starts_with(prefix) && name.ends_with(suffix)
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            files.sort(); // timestamp is in filename, ascending
+            let excess = files.len().saturating_sub(MAX_SESSIONS);
+            if excess > 0 {
+                for p in files.into_iter().take(excess) {
+                    let _ = fs::remove_file(p);
+                }
+            }
+            Ok(())
         }
 
-        // Clean up the temporary file
-        if std::path::Path::new("logs/engine.log.tmp").exists() {
-            std::fs::remove_file("logs/engine.log.tmp")?;
-        }
+        enforce_retention("session_", "_info.log")?;
+        enforce_retention("session_", "_warn.log")?;
+        enforce_retention("session_", "_combined.log")?;
 
-        // Create the new engine.log file and swap it into the mutex
-        let new_file = File::create("logs/engine.log")?;
-
-        if let Ok(mut writer) = log_writer.lock() {
-            *writer = new_file;
-        }
-
-        // Log to the NEW file
         info!("Log rotation complete - new session started");
 
         Ok(())
@@ -280,7 +320,7 @@ impl OscServer {
         &self,
         msg: OscMessage,
         command_tx: &Sender<AudioCommand>,
-        log_writer: &Arc<Mutex<File>>,
+        log_writers: &LogWriters,
         window_manager: &mut WindowManager,
     ) -> Result<()> {
         let addr = msg.addr.as_str();
@@ -340,8 +380,8 @@ impl OscServer {
                     args.get(3),
                     args.get(4),
                 ) {
-                    // Rotate log file before initializing new project
-                    if let Err(e) = Self::rotate_log_file(log_writer) {
+                    // Rotate log files before initializing new project
+                    if let Err(e) = Self::rotate_log_files(log_writers) {
                         warn!("Failed to rotate log file: {}", e);
                     }
 

@@ -60,6 +60,7 @@ Engine/src/
       polysynth_fundsp.rs# Legacy FunDSP variant kept for reference/benchmarks
       delay.rs           # Delay effect device
       sfizz_device.rs    # SFZ sampler backed by sfizz
+      spectrum_analyzer.rs# Utility pass-through FFT analyzer
       clap_host/         # CLAP in-process & subprocess adapters
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
@@ -96,9 +97,15 @@ Godot/              # Godot 4.5 UI App
 - `AudioDevice::send_midi_event()` is the single contract point—builtins (Oscillator, PolySynth, Sfizz) and the CLAP adapter queue events and sort them before rendering so envelopes and plugin voices line up exactly with buffer boundaries.
 
 ### Built-in Device Advertisement
-- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz) and emitting `/builtin/info` messages.
+- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz, Spectrum Analyzer) and emitting `/builtin/info` messages.
 - Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
 - `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. The FunDSP prototype remains available as `PolySynthDeviceFundsp` for comparison but is no longer advertised to the UI.
+- `SpectrumAnalyzerDevice` is a stereo utility that mirrors its input to output while queueing FFT frames; it only performs analysis when Godot holds an active `"spectrum"` subscription to keep the audio callback light.
+
+### Device Data Streams
+- `AudioDevice` now exposes `subscribe_data`, `unsubscribe_data`, and `poll_device_data`; built-ins default to no-op but visualization-capable devices override these hooks to stream binary payloads without allocations in the hot path.
+- Godot issues `/channel/{id}/device/{pos}/data/subscribe|unsubscribe` (`AudioCommand::{Subscribe,Unsubscribe}DeviceData`) so the audio thread knows which payloads to produce.
+- During `mixing.rs` pass 1 and post-routing bus processing the engine calls `device.poll_device_data()`; any yielded `(data_type, Vec<u8>)` becomes `EngineStatus::DeviceData`, which `osc::server` forwards as `/channel/{id}/device/{pos}/data` with `[String data_type, Blob payload]`.
 
 ### DSP Utilities
 - `Engine/src/audio/dsp` centralizes real-time safe building blocks (`Oscillator`, `AdsrEnvelope`, `mix_blocks`) so instruments and effects share optimized code paths.
