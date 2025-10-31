@@ -4,4 +4,17 @@ alwaysApply: false
 ---
 # Debugging
 
-The engine log in `./Engine/logs/engine.log` contains logs from the last session. Use cat, tail, grep to inspect. 
+### Log File Layout
+- Runtime logs live in `./logs/` (next to the engine binary), not inside `Engine/`.
+- The engine writes three live files per session: `last_info.log` (exactly INFO), `last_warn.log` (WARN+), and `last_combined.log` (INFO+).
+- When Godot sends `/project/init`, the server rotates the live files to timestamped `logs/session_<YYYYMMDD_HHMMSS>_{info|warn|combined}.log` and recreates the `last_*` trio.
+- Rotation keeps the newest five archives per severity and deletes older ones, so scrape logs before triggering many sessions in a row.
+
+### Forwarding to Godot
+- A `LogForwarder` tracing layer pushes every WARN/ERROR into the engine status channel as `EngineStatus::LogMessage`.
+- `osc::server` relays log messages to Godot via `/log` with `[level, message]`; `AudioEngineOSC` emits `engine_log_message(level, message)` and prints WARN/ERROR to the editor console.
+- Expect INFO logs only on disk; live UI surfaces WARN/ERROR so designers spot regressions immediately.
+
+### Practical Tips
+- Use `tail -f logs/last_warn.log` while reproducing issues; pair with `tail -f logs/last_info.log` when you need the wider trace.
+- For archived evidence, attach the freshest `logs/session_*.log` trio after reproduction—the filenames encode wall-clock order.

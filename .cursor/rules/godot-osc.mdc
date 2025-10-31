@@ -22,3 +22,7 @@ alwaysApply: false
 - Use `AudioEngineOSC.subscribe_device_data(channel_id, device_position, data_type)` / `unsubscribe_device_data(...)` to toggle analyzer streams; they send `/channel/{id}/device/{pos}/data/subscribe|unsubscribe` with the target type (e.g., `"spectrum"`).
 - Incoming `/channel/{id}/device/{pos}/data` messages emit `device_data_received(channel_id, device_position, data_type, blob)` so views can decode custom payloads; FFT analyzers also emit `device_spectrum_received` with a ready-to-use `PackedFloat32Array`.
 - Device visuals extend `DeviceView`, subscribe in `_on_view_shown()`, and must disconnect in `_on_view_hidden()` to avoid leaving the audio engine in a subscribed state when the UI hides the scene.
+
+### Engine Log Relay
+- The audio engine forwards WARN/ERROR records via `/log` with `[String level, String message]`; level is `"warn"` or `"error"`.
+- `AudioEngineOSC` emits `engine_log_message(level, message)` on receipt and mirrors WARN/ERROR into the Godot output log so designers see runtime issues without tailing files.
