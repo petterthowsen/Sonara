@@ -5,12 +5,25 @@
 
 class_name DeviceAssetProvider extends AssetProvider
 
-## Map builtin device IDs to visual scene paths
-const BUILTIN_VISUAL_SCENES = {
-	"sonara.builtin.spectrum_analyzer": "res://devices/builtin/SpectrumAnalyzerVisual.tscn",
+## Map builtin device IDs to Panel view PackedScenes
+const BUILTIN_PANEL_SCENES = {
+	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerVisual.tscn"),
 	# Future devices:
-	# "sonara.builtin.oscilloscope": "res://devices/builtin/OscilloscopeVisual.tscn",
-	# "sonara.builtin.phase_meter": "res://devices/builtin/PhaseMeterVisual.tscn",
+	# "sonara.builtin.oscilloscope": preload("res://devices/builtin/OscilloscopeVisual.tscn"),
+	# "sonara.builtin.phase_meter": preload("res://devices/builtin/PhaseMeterVisual.tscn"),
+}
+
+## Map builtin device IDs to Large view PackedScenes
+const BUILTIN_LARGE_SCENES = {
+	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerVisual.tscn"),
+}
+
+## Map builtin device IDs to Auxiliary view PackedScenes
+const BUILTIN_AUXILIARY_SCENES = {
+}
+
+## Map builtin device IDs to Compact view PackedScenes
+const BUILTIN_COMPACT_SCENES = {
 }
 
 ## Map builtin device IDs to custom controls scene paths
@@ -61,36 +74,6 @@ func get_assets() -> Array[Asset]:
 ## ============================================================================
 ## BUILT-IN DEVICE REGISTRATION
 ## ============================================================================
-
-## Register all built-in devices (synchronous, called at initialization)
-func _register_builtin_devices() -> void:
-	# Create built-in devices
-	var builtin_list = [
-		#Device.create_builtin_oscillator(),
-		#Device.create_builtin_delay(),
-		#Device.create_builtin_sfizz()
-	]
-	
-	# Add to device registry
-	for device in builtin_list:
-		_devices[device.device_id] = device
-	
-	print("[DeviceAssetProvider] Registered %d built-in devices" % builtin_list.size())
-	
-	# Trigger initial scan to populate assets
-	scan()
-	
-	# Emit signal for initial built-in devices
-	var added_assets: Array[Asset] = []
-	for device in builtin_list:
-		var asset = Asset.new()
-		asset.type = Asset.TYPE.Device
-		asset.name = device.name
-		asset.path = device.device_id
-		added_assets.append(asset)
-	
-	assets_changed.emit(added_assets, [] as Array[Asset], [] as Array[Asset])
-
 
 ## Get a device by ID (built-in or plugin)
 func get_builtin_device(device_id: String) -> Device:
@@ -326,9 +309,21 @@ func _on_builtin_info_received(args: Array) -> void:
 			param.is_logarithmic = true
 		device.add_parameter(param)
 
-	# Register visual scene if available
-	if BUILTIN_VISUAL_SCENES.has(dev_id):
-		device.register_visual_scene(BUILTIN_VISUAL_SCENES[dev_id])
+	# Register Panel view if available
+	if BUILTIN_PANEL_SCENES.has(dev_id):
+		device.register_panel_view(BUILTIN_PANEL_SCENES[dev_id])
+
+	# Register Large view if available
+	if BUILTIN_LARGE_SCENES.has(dev_id):
+		device.register_large_view(BUILTIN_LARGE_SCENES[dev_id])
+
+	# Register Auxiliary view if available
+	if BUILTIN_AUXILIARY_SCENES.has(dev_id):
+		device.register_auxiliary_view(BUILTIN_AUXILIARY_SCENES[dev_id])
+
+	# Register Compact view if available
+	if BUILTIN_COMPACT_SCENES.has(dev_id):
+		device.register_compact_view(BUILTIN_COMPACT_SCENES[dev_id])
 
 	# Register custom controls scene if available
 	if BUILTIN_CONTROLS_SCENES.has(dev_id):

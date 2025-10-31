@@ -198,6 +198,45 @@ func close_gui() -> void:
 	AudioEngineOSC.send("/channel/%d/device/%d/gui/close" % [channel_id, position], [])
 
 
+## =========================================================================
+## VIEW FACTORY
+## =========================================================================
+
+## Create a DeviceView instance for the requested view type using
+## Device's PackedScene registrations. Returns null if unsupported.
+func create_view(view_type: Device.ViewType) -> DeviceView:
+	if device == null:
+		return null
+
+	var scene: PackedScene = null
+	match view_type:
+		Device.ViewType.Panel:
+			scene = device.panel_view_scene
+		Device.ViewType.Large:
+			scene = device.large_view_scene
+		Device.ViewType.Auxiliary:
+			scene = device.auxiliary_view_scene
+		Device.ViewType.Compact:
+			scene = device.compact_view_scene
+		_:
+			scene = null
+
+	if scene == null:
+		return null
+
+	var inst = scene.instantiate()
+	if not inst is DeviceView:
+		push_error("[DeviceInstance] View scene must extend DeviceView")
+		inst.queue_free()
+		return null
+
+	# Annotate the view type if supported
+	if inst.has_method("set_view_type"):
+		inst.set_view_type(view_type)
+
+	return inst
+
+
 ## Connect to audio engine: listen for state updates
 func connect_to_engine() -> void:
 	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]

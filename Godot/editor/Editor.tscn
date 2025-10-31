@@ -477,3 +477,13 @@ autowrap_mode = 0
 
 [node name="FileDialog" type="FileDialog" parent="."]
 oversampling_override = 1.0
+
+[node name="Window" type="Window" parent="."]
+handle_input_locally = false
+oversampling_override = 1.0
+initial_position = 1
+visible = false
+wrap_controls = true
+always_on_top = true
+minimize_disabled = true
+maximize_disabled = true

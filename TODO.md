@@ -8,32 +8,31 @@
 ## Audio Engine (Rust Backend)
 
 ### Debugging
-- [ ] Improve logging: split info/warn levels into separate files. Only keep last N session files. Name them last_info.txt, last_warn.txt and last_combined.txt
+- [x] Improve logging: split info/warn levels into separate files. Only keep last N session files. Name them last_info.txt, last_warn.txt and last_combined.txt
 
 ### Core Audio
+- [ ] Keep audio engine running after playback so insrumens and reverb/delay effects can settle after stopping
 - [x] RMS Metering
 - [ ] Plugin latency compensation
 - [ ] Improve logging of plugins
 - [X] Performance profiling: emit engine load metrics via OSC for UI display
+- [ ] CPU affinity for audio thread and plugin processing
+- [ ] Realtime thread priority configuration
+- [ ] CPU core assignment for plugin processing
 
 ### Devices & Plugins
+- [ ] DeviceInstance and their UIs should init with loading state and wait for Engine updates
 - [ ] Multi-in and multi-out for devices
+- [ ] Add support for enum parameter type for builtins
+- [ ] Refactor DevicePanel and DeviceView system:
+    - [ ]
 
 ### Plugins
 - [ ] Crash / Error handling, send info to Godot for UI notifications
     - [x] Engine logs a warn and higher are sent over OSC
 - [ ] Plugin GUI windows should be forced to stay above Godot App
 
-### Threading & Performance
-- [ ] CPU affinity for audio thread and plugin processing
-- [ ] Realtime thread priority configuration
-- [ ] CPU core assignment for plugin processing
-
-### Audio Processing
-- [ ] Keep audio engine running after playback so insrumens and reverb/delay effects can settle after stopping
-
 ### Built-in Devices
-
 - [ ] Basic MVP Builins
     - [ ] Remove old Oscilator and Delay
     - [x] PolySynth Device

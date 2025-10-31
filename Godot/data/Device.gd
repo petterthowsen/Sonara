@@ -6,6 +6,7 @@ class_name Device extends RefCounted
 
 enum DeviceType { BuiltIn, LV2, CLAP }
 enum DeviceCategory { Instrument, Effect, Utility }
+enum ViewType { Panel, Large, Auxiliary, Compact }
 
 ## ============================================================================
 ## PROPERTIES
@@ -65,8 +66,14 @@ var supported_file_extensions: Array[String] = []
 ## Description of supported file types (e.g., "SFZ Sample Files")
 var file_type_description: String = ""
 
-## Path to visual tab scene (e.g., "res://devices/builtin/SpectrumAnalyzerVisual.tscn")
+## DEPRECATED: Path-based visual scene (use PackedScene registrations below)
 var visual_scene_path: String = ""
+
+## PackedScene references (null when unsupported)
+var panel_view_scene: PackedScene = null
+var large_view_scene: PackedScene = null
+var auxiliary_view_scene: PackedScene = null
+var compact_view_scene: PackedScene = null
 
 ## Path to custom controls scene (optional override for parameters)
 var controls_scene_path: String = ""
@@ -118,9 +125,26 @@ func get_parameters() -> Array[DeviceParameter]:
 ## VISUAL & CONTROLS SCENE REGISTRATION
 ## ============================================================================
 
-## Register a custom visual scene for this device
-func register_visual_scene(path: String) -> void:
-	visual_scene_path = path
+## Registration (PackedScene only)
+func register_panel_view(scene: PackedScene) -> void:
+	panel_view_scene = scene
+
+
+func register_large_view(scene: PackedScene) -> void:
+	large_view_scene = scene
+
+
+func register_auxiliary_view(scene: PackedScene) -> void:
+	auxiliary_view_scene = scene
+
+
+func register_compact_view(scene: PackedScene) -> void:
+	compact_view_scene = scene
+
+
+## Back-compat shim (transition only): map old API to Panel view
+func register_visual_scene(scene: PackedScene) -> void:
+	panel_view_scene = scene
 
 
 ## Register a custom controls scene for this device
@@ -128,9 +152,21 @@ func register_controls_scene(path: String) -> void:
 	controls_scene_path = path
 
 
-## Check if this device has a custom visual scene
-func has_visual() -> bool:
-	return visual_scene_path != ""
+## Availability checks
+func has_panel_view() -> bool:
+	return panel_view_scene != null
+
+
+func has_large_view() -> bool:
+	return large_view_scene != null
+
+
+func has_auxiliary_view() -> bool:
+	return auxiliary_view_scene != null
+
+
+func has_compact_view() -> bool:
+	return compact_view_scene != null
 
 
 ## Check if this device has custom controls

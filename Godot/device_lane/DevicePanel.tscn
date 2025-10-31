@@ -137,11 +137,11 @@ toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
 text = "F"
 
-[node name="Visual" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+[node name="Large" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 toggle_mode = true
-text = "V"
+text = "L"
 
 [node name="Content" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
