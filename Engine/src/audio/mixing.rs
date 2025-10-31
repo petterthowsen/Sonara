@@ -300,6 +300,16 @@ pub fn mix_and_output(
                     }
                 }
             }
+
+            // Poll for device data (spectrum, oscilloscope, etc.)
+            if let Some((data_type, data)) = device.poll_device_data() {
+                let _ = status_tx.try_send(EngineStatus::DeviceData {
+                    channel_id: channel.id,
+                    device_position: device_pos,
+                    data_type,
+                    data,
+                });
+            }
         }
     }
 
@@ -669,6 +679,16 @@ pub fn mix_and_output(
                                 });
                             }
                         }
+                    }
+
+                    // Poll for device data (spectrum, oscilloscope, etc.)
+                    if let Some((data_type, data)) = device.poll_device_data() {
+                        let _ = status_tx.try_send(EngineStatus::DeviceData {
+                            channel_id: bus_id,
+                            device_position: device_pos,
+                            data_type,
+                            data,
+                        });
                     }
                 }
 

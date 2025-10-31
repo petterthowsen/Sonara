@@ -5,6 +5,7 @@ mod polysynth;
 #[deprecated(note = "Use polysynth module instead - FunDSP-based implementation has poor performance")]
 mod polysynth_fundsp;  // Kept for reference/comparison
 mod sfizz_device;
+mod spectrum_analyzer;
 
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use delay::DelayDevice;
@@ -13,6 +14,7 @@ pub use polysynth::PolySynthDevice;
 #[deprecated(note = "Use PolySynthDevice from polysynth module instead")]
 pub use polysynth_fundsp::PolySynthDevice as PolySynthDeviceFundsp;
 pub use sfizz_device::SfizzDevice;
+pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 
 /// Parameter ID (normalized 0.0-1.0, host/device agnostic)
 pub type ParamId = u32;
@@ -221,4 +223,29 @@ pub trait AudioDevice: Send {
     /// Get mutable reference to self as `Any` for downcasting
     /// Used to access device-specific methods (e.g. CLAP GUI)
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    // === Device Data Subscriptions ===
+
+    /// Subscribe to a data stream (e.g., "spectrum", "oscilloscope", "phase")
+    /// Returns error if device doesn't support this data type
+    fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        Err(format!(
+            "Device '{}' does not support '{}' data stream",
+            self.device_name(),
+            data_type
+        ))
+    }
+
+    /// Unsubscribe from a data stream
+    fn unsubscribe_data(&mut self, _data_type: &str) {
+        // Default: no-op (device doesn't support subscriptions)
+    }
+
+    /// Poll for device data (called periodically from audio thread if subscribed)
+    /// Returns (data_type, binary_payload) if data is ready to send
+    /// 
+    /// **CRITICAL**: This must be real-time safe (no allocations in hot path)
+    fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        None // Default: no data to send
+    }
 }

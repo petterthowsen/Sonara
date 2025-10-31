@@ -214,6 +214,59 @@ Examples:
 
 See `PLUGIN_OSC_PROTOCOL.md` for detailed plugin documentation.
 
+### Device Data Subscriptions
+
+Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase meter, etc.):
+
+**Subscribe to Data Stream (Godot → Rust):**
+```
+/channel/{id}/device/{position}/data/subscribe [s:data_type]
+```
+
+**Unsubscribe from Data Stream (Godot → Rust):**
+```
+/channel/{id}/device/{position}/data/unsubscribe [s:data_type]
+```
+
+**Data Types:**
+- `"spectrum"` - Frequency spectrum (FFT magnitude bins in dB)
+- `"oscilloscope"` - Time-domain waveform (future)
+- `"phase"` - Stereo phase correlation (future)
+- `"lufs"` - Integrated loudness (future)
+
+**Device Data Stream (Rust → Godot):**
+```
+/channel/{id}/device/{position}/data [s:data_type, blob:binary_data]
+```
+
+**Data Formats:**
+- **Spectrum**: Binary array of f32 values (dB magnitude per frequency bin)
+  - Array length depends on FFT size (e.g., 1025 bins for 2048 FFT)
+  - Update rate: ~20Hz when subscribed
+  - Range: typically -60dB to +12dB
+
+**Example Usage:**
+```gdscript
+# Subscribe to spectrum data
+AudioEngineOSC.subscribe_device_data(channel_id, device_position, "spectrum")
+
+# Listen for spectrum updates
+AudioEngineOSC.device_spectrum_received.connect(func(ch_id, dev_pos, spectrum):
+    if ch_id == channel_id and dev_pos == device_position:
+        # spectrum is PackedFloat32Array of dB values
+        update_visualization(spectrum)
+)
+
+# Unsubscribe when done
+AudioEngineOSC.unsubscribe_device_data(channel_id, device_position, "spectrum")
+```
+
+**Benefits:**
+- **On-demand streaming**: Only compute/send data when subscribed
+- **Real-time safe**: Non-blocking subscription management
+- **Extensible**: Easy to add new data types (oscilloscope, phase, LUFS)
+- **Per-device**: Multiple devices can stream independently
+
 **Benefits of Active/Enabled System**
 - **Film scoring templates**: Load 200 plugins, keep 150 inactive (~2GB RAM vs ~10GB)
 - **A/B testing**: Toggle bypass instantly without reloading

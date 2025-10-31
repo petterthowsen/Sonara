@@ -45,77 +45,35 @@ Location: `Engine/src/audio/processing.rs`
 - `AudioDevice::send_midi_event()` now receives the `frame_offset`; built-ins (`OscillatorDevice`, `PolySynthDevice`, `SfizzDevice`) and the CLAP adapter honour it to keep envelopes, voice gates, and plugin note-ons aligned with the hardware clock.
 - Never translate offsets back to ticks inside devices—use the given `frame_offset` directly against the block you are rendering.
 
-## Three-Phase Mixing
+## Mixing Pipeline (`mixing.rs::mix_and_output`)
 
-Audio mixing happens in **three strictly ordered phases**. Critical: each phase has specific rules.
+The mixer now runs five passes to support sends, SIMD-aware devices, and bus effects while keeping the callback allocation-free.
 
-### Phase 1: Fader & Pan Application (Per-Channel)
+1. **Device Pre-Pass (non-bus channels)**  
+   - Calls `Channel::process_device_chain()` on every channel that generates its own audio (instrument/audio/master).  
+   - Skips buses so they can process once they hold routed/sent audio.  
+   - CLAP/Sfizz adapters flush pending parameter changes to the UI here.
 
-**What**: Apply volume (dB → linear gain) and pan to each channel's local audio.
+2. **Fader & Pan Pass**  
+   - Applies smoothed gain and constant-power pan to each audible channel.  
+   - Muted channels, or channels excluded by solo, have their buffers cleared to silence to short-circuit later passes.  
+   - This establishes the "post-fader" buffer used for metering and for post-fader sends.
 
-**Which channels have audio here**:
-- INSTRUMENT channels (synth output)
-- AUDIO channels (samples)
-- Master channel (accumulates routed audio)
-- BUS channels start empty (but go through for fader consistency)
+3. **Send Accumulation**  
+   - Iterates `Channel::send_channels` and builds one temporary buffer per target.  
+   - Pre-fader sends tap the cloned pre-pass audio and reapply pan so stereo matches the source; post-fader sends read the pass-2 buffer.  
+   - Send returns are scaled by the destination channel gain (`get_gain()`), so moving a bus fader affects both routes and send returns.
 
-**Operations**:
-- Apply volume gain to both L/R
-- Apply constant-power pan (only here, never again)
-- **Critical**: Peak detection must check BOTH L and R channels (panned audio might be silent on L, loud on R)
+4. **Hierarchical Routing with Bus Post-Processing**  
+   - Multi-pass loop (max 10) routes channels to their `output_channel_id` while tracking which sources were already mixed.  
+   - Only apply gain—never reapply pan while routing.  
+   - After each routing pass, buses that received audio run `process_device_chain()` and reapply their own pan before re-entering the routing loop; this lets bus effects/CLAP plugins operate on the accumulated mix.  
+   - Solo/mute rules still apply, and the master channel is seeded in the processed set so it never forwards audio further.
 
-**Anti-pattern**: Applying pan again in phase 2 = signal loss. Don't do this.
-
-Location: `Engine/src/audio/mixing.rs::phase1_apply_faders_and_pan()`
-
-### Phase 2: Hierarchical Routing (Multi-Pass)
-
-**What**: Route audio from source channels to their `output_channel_id` destinations.
-
-**Order matters**: Multiple passes needed for nested routing (Track → Bus → Master).
-
-**Operations per pass**:
-1. For each channel that needs routing:
-   - Get source buffer (fader-applied state from phase 1)
-   - Get source channel's gain
-   - Apply gain to source buffer
-   - Mix result into destination channel
-   - Mark source as "processed"
-
-2. Repeat passes until all channels routed (typically 2-3 passes for normal routing depth)
-
-**Critical rules**:
-- Only apply GAIN during routing, NEVER pan again (already applied)
-- Check BOTH L and R channels when detecting if audio exists
-- Track processed channels to avoid routing same audio multiple times
-- BUS channels pass through to accumulate routed audio
-- Master channel (ID 1) is final destination for all routed audio
-
-**Routing constraints** (validated in UI, enforced here):
-- INSTRUMENT/AUDIO channels route TO: BUS channels or Master
-- BUS channels route TO: Other BUS channels or Master
-- Master always routes TO: Device outputs (ID 1000+)
-
-**Anti-patterns**:
-- INSTRUMENT→INSTRUMENT routing (ambiguous which audio wins)
-- Applying pan during routing (reduces signal)
-- Not tracking processed channels (audio mixed multiple times)
-
-Location: `Engine/src/audio/mixing.rs::phase2_hierarchical_routing()`
-
-### Phase 3: Device Output & Metering
-
-**What**: Output mixed Master channel to hardware, then meter all channels.
-
-**Operations**:
-1. Get Master channel (ID 1) final buffer
-2. Write to hardware via CPAL
-3. For each channel, measure peak levels (post-fader, post-routing)
-4. Send peak meter updates to Godot
-
-**Peak detection rule**: Check both L and R channels independently (stereo signals).
-
-Location: `Engine/src/audio/mixing.rs::phase3_device_output_and_metering()`
+5. **Master Output & Metering**  
+   - Syncs the working buffers back into `state.channels` for accurate post-pan peaks.  
+   - Copies master (ID 1) to the interleaved CPAL buffer for its bound hardware output (ID ≥1000).  
+   - Peak detection still scans both channels, and status updates are throttled to ~20 Hz outside the callback.
 
 ## Channel Routing Model
 
@@ -134,6 +92,11 @@ Location: `Engine/src/audio/mixing.rs::phase3_device_output_and_metering()`
 **Routing stored as**:
 - Regular channels: `channel.output_channel_id` (points to Master by default)
 - Master channel: `channel.device_output_id` (points to hardware device, default 1000)
+
+**Sends**:
+- `Channel.send_channels` holds `Send { target_channel_id, amount_db, pre_fader, muted }`.
+- `pre_fader == true` taps the cloned pre-fader buffer; otherwise it taps the post-fader buffer.
+- Sends ignore invalid targets (self, IDs ≥1000, muted/solo-blocked buses) to keep the graph acyclic and real-time safe.
 
 **Implementation**:
 ```rust
@@ -154,6 +117,7 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 - `output_channel_id`: Where this channel routes to
 - `devices`: Ordered `Vec<Box<dyn AudioDevice>>`; the first entry is the MIDI instrument, the rest are audio effects
 - `send_midi_event_to_devices(note, velocity, is_on, frame_offset)`: forwards sample-accurate MIDI to the first device only
+- `send_channels`: Vec of `Send` definitions (bus sends/post-fader fx). `Send` stores target channel, gain in dB, `pre_fader`, and `muted` state.
 
 **Track**: Holds sequencing data and routes to a channel
 - `default_channel_id`: Which channel renders this track
@@ -169,16 +133,17 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 
 ## Common Pitfalls
 
-1. **Applying pan twice**: Once in phase 1, never in phase 2
-2. **Not checking both L+R**: Peak detection might miss panned audio
+1. **Applying pan outside the dedicated passes**: Apply once per audible channel (pass 2) and once per bus after it receives audio (pass 4)
+2. **Skipping send destination gain**: Send returns must respect the destination channel fader (`get_gain()`)
 3. **Blocking on locks**: Use `try_lock()` with skip-on-failure pattern
 4. **Not tracking processed channels**: Audio routed multiple times in hierarchical mixing
 5. **Allocating memory**: Pre-allocate all buffers at init time, never in callback
 6. **Allowing invalid routing**: INSTRUMENT→INSTRUMENT creates ambiguous audio source
+7. **Forgetting bus device pass**: Buses must process after ingesting routed audio; do not call `process_device_chain()` on them earlier.
 
 ## Related Files
 
-- `Engine/src/audio/mixing.rs`: Full mixing implementation (all three phases)
+- `Engine/src/audio/mixing.rs`: Full mixing implementation (five-pass pipeline)
 - `Engine/src/audio/processing.rs`: Callback pipeline orchestration
 - `Engine/src/audio/engine.rs`: Engine initialization and types
 - `Engine/src/audio/types.rs`: Channel, Track, Voice data structures

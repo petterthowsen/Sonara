@@ -116,3 +116,15 @@ static func frequency_to_midi(frequency: float) -> int:
 	# Formula: n = 69 + 12 * log2(f / 440)
 	var midi_note = 69 + 12 * (log(frequency / 440.0) / log(2.0))
 	return roundi(clamp(midi_note, MIDI_MIN, MIDI_MAX))
+
+
+static func frequency_to_note_name(frequency: float) -> String:
+	var midi_note = frequency_to_midi(frequency)
+	return midi_to_note_name(midi_note)
+
+
+static func frequency_text(frequency: float, short := true) -> String:
+	if frequency < 1000.0:
+		return str(roundi(frequency)) + ("" if short else " Hz")
+	else:
+		return str(roundi(frequency / 1000.0)) + ("k" if short else " kHz")

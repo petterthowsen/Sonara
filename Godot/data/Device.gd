@@ -65,6 +65,12 @@ var supported_file_extensions: Array[String] = []
 ## Description of supported file types (e.g., "SFZ Sample Files")
 var file_type_description: String = ""
 
+## Path to visual tab scene (e.g., "res://devices/builtin/SpectrumAnalyzerVisual.tscn")
+var visual_scene_path: String = ""
+
+## Path to custom controls scene (optional override for parameters)
+var controls_scene_path: String = ""
+
 
 ## ============================================================================
 ## INITIALIZATION
@@ -94,9 +100,42 @@ func get_parameter(param_id: int) -> DeviceParameter:
 	return null
 
 
+## Get parameter by name (case-insensitive). Returns null if not found
+func get_parameter_by_name(param_name: String) -> DeviceParameter:
+	var target = param_name.strip_edges().to_lower()
+	for param in parameters:
+		if String(param.name).to_lower() == target:
+			return param
+	return null
+
+
 ## Get all parameters
 func get_parameters() -> Array[DeviceParameter]:
 	return parameters
+
+
+## ============================================================================
+## VISUAL & CONTROLS SCENE REGISTRATION
+## ============================================================================
+
+## Register a custom visual scene for this device
+func register_visual_scene(path: String) -> void:
+	visual_scene_path = path
+
+
+## Register a custom controls scene for this device
+func register_controls_scene(path: String) -> void:
+	controls_scene_path = path
+
+
+## Check if this device has a custom visual scene
+func has_visual() -> bool:
+	return visual_scene_path != ""
+
+
+## Check if this device has custom controls
+func has_custom_controls() -> bool:
+	return controls_scene_path != ""
 
 
 ## ============================================================================

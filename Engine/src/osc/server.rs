@@ -1080,6 +1080,44 @@ impl OscServer {
                 }
             }
 
+            // Device data subscriptions: /channel/{id}/device/{pos}/data/subscribe
+            ["channel", channel_id_str, "device", device_pos_str, "data", "subscribe"] => {
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(data_type))) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Subscribe to '{}' data on channel {} device {}",
+                        data_type, channel_id, device_position
+                    );
+                    command_tx.send(AudioCommand::SubscribeDeviceData {
+                        channel_id,
+                        device_position,
+                        data_type: data_type.clone(),
+                    })?;
+                }
+            }
+
+            // Device data unsubscriptions: /channel/{id}/device/{pos}/data/unsubscribe
+            ["channel", channel_id_str, "device", device_pos_str, "data", "unsubscribe"] => {
+                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(data_type))) = (
+                    channel_id_str.parse::<usize>(),
+                    device_pos_str.parse::<usize>(),
+                    args.first(),
+                ) {
+                    info!(
+                        "Unsubscribe from '{}' data on channel {} device {}",
+                        data_type, channel_id, device_position
+                    );
+                    command_tx.send(AudioCommand::UnsubscribeDeviceData {
+                        channel_id,
+                        device_position,
+                        data_type: data_type.clone(),
+                    })?;
+                }
+            }
+
             _ => {
                 warn!("Unknown OSC address: {}", addr);
             }
@@ -1302,6 +1340,15 @@ impl OscServer {
             EngineStatus::EngineLoad { load } => (
                 "/status/engine_load".to_string(),
                 vec![OscType::Float(load)],
+            ),
+            EngineStatus::DeviceData {
+                channel_id,
+                device_position,
+                data_type,
+                data,
+            } => (
+                format!("/channel/{}/device/{}/data", channel_id, device_position),
+                vec![OscType::String(data_type), OscType::Blob(data)],
             ),
         };
 

@@ -250,6 +250,18 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         device_position: usize,
     },
+
+    // Device data subscriptions
+    SubscribeDeviceData {
+        channel_id: ChannelId,
+        device_position: usize,
+        data_type: String, // "spectrum", "oscilloscope", "phase", etc.
+    },
+    UnsubscribeDeviceData {
+        channel_id: ChannelId,
+        device_position: usize,
+        data_type: String,
+    },
 }
 
 /// Response from commands that return data
@@ -377,6 +389,14 @@ pub enum EngineStatus {
     EngineLoad {
         load: f32, // CPU load as ratio (0.0-1.0+, where 1.0 = 100% utilization)
     },
+
+    // Device data subscriptions
+    DeviceData {
+        channel_id: ChannelId,
+        device_position: usize,
+        data_type: String,  // "spectrum", "oscilloscope", "phase", etc.
+        data: Vec<u8>,      // Binary payload (device-specific format)
+    },
 }
 
 impl EngineStatus {
@@ -443,11 +463,12 @@ pub fn process_command(
         AudioCommand::InitProject(settings) => {
             state.settings = settings;
             info!(
-                "Project initialized: {}bpm, {}/{}, PPQ={}",
+                "Project initialized: {}bpm, {}/{}, PPQ={}, SR={}",
                 state.settings.tempo,
                 state.settings.time_numerator,
                 state.settings.time_denominator,
-                state.settings.ppq
+                state.settings.ppq,
+                state.device_sample_rate
             );
         }
         AudioCommand::ClearProject => {
@@ -1162,6 +1183,15 @@ pub fn process_command(
                                 Some(status_tx.clone()),
                             )))
                         }
+                        "sonara.builtin.spectrum_analyzer" => {
+                            info!(
+                                "Loading built-in spectrum analyzer [active={}, enabled={}]",
+                                active, enabled
+                            );
+                            Some(Box::new(super::devices::SpectrumAnalyzerDevice::new(
+                                state.device_sample_rate,
+                            )))
+                        }
                         _ => {
                             warn!("Unknown built-in device ID: {}", device_id);
                             None
@@ -1272,6 +1302,13 @@ pub fn process_command(
                         "Device parameter set: channel={} device={} param={} value={}",
                         channel_id, device_position, param_id, value
                     );
+                    // Echo back to UI so Godot updates its single source of truth and emits parameter_changed
+                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                        channel_id,
+                        device_position,
+                        param_id,
+                        value,
+                    });
                 } else {
                     warn!(
                         "Invalid device position {} for channel {}",
@@ -1524,6 +1561,9 @@ pub fn process_command(
                     0,
                     0,
                     None,
+                ))),
+                create_device_info(Box::new(super::devices::SpectrumAnalyzerDevice::new(
+                    state.device_sample_rate,
                 ))),
             ];
 
@@ -1805,6 +1845,64 @@ pub fn process_command(
                 }
             } else {
                 warn!("Channel {} not found for close plugin GUI", channel_id);
+            }
+        }
+
+        AudioCommand::SubscribeDeviceData {
+            channel_id,
+            device_position,
+            data_type,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    match device.subscribe_data(&data_type) {
+                        Ok(()) => {
+                            info!(
+                                "Subscribed to '{}' data on channel {} device {}",
+                                data_type, channel_id, device_position
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to subscribe to '{}' on channel {} device {}: {}",
+                                data_type, channel_id, device_position, e
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        "Device not found at channel {} position {}",
+                        channel_id, device_position
+                    );
+                }
+            } else {
+                warn!("Channel {} not found for subscribe device data", channel_id);
+            }
+        }
+
+        AudioCommand::UnsubscribeDeviceData {
+            channel_id,
+            device_position,
+            data_type,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.devices.get_mut(device_position) {
+                    device.unsubscribe_data(&data_type);
+                    info!(
+                        "Unsubscribed from '{}' data on channel {} device {}",
+                        data_type, channel_id, device_position
+                    );
+                } else {
+                    warn!(
+                        "Device not found at channel {} position {}",
+                        channel_id, device_position
+                    );
+                }
+            } else {
+                warn!(
+                    "Channel {} not found for unsubscribe device data",
+                    channel_id
+                );
             }
         }
     }

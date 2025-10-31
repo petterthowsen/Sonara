@@ -97,6 +97,48 @@ func get_parameter_normalized(param_id: int) -> float:
 	return parameter_values.get(param_id, 0.5)
 
 
+## Get parameter ID by name (case-insensitive). Returns -1 if not found
+func get_parameter_id_by_name(param_name: String) -> int:
+	if device == null:
+		return -1
+	var p = device.get_parameter_by_name(param_name)
+	return p.id if p else -1
+
+
+## Get parameter value (normalized) by name. Returns 0.5 if not found
+func get_parameter_normalized_by_name(param_name: String) -> float:
+	var pid = get_parameter_id_by_name(param_name)
+	return get_parameter_normalized(pid) if pid >= 0 else 0.5
+
+
+## Set parameter value (normalized) by name
+func set_parameter_normalized_by_name(param_name: String, normalized_value: float) -> void:
+	var pid = get_parameter_id_by_name(param_name)
+	if pid >= 0:
+		set_parameter_normalized(pid, normalized_value)
+
+
+## Get parameter value (real) by name
+func get_parameter_real_by_name(param_name: String) -> float:
+	if device == null:
+		return 0.0
+	var param = device.get_parameter_by_name(param_name)
+	if param:
+		var normalized = get_parameter_normalized(param.id)
+		return param.normalized_to_value(normalized)
+	return 0.0
+
+
+## Set parameter value (real) by name
+func set_parameter_real_by_name(param_name: String, real_value: float) -> void:
+	if device == null:
+		return
+	var param = device.get_parameter_by_name(param_name)
+	if param:
+		var normalized = param.value_to_normalized(real_value)
+		set_parameter_normalized(param.id, normalized)
+
+
 ## Set a parameter value (real range)
 func set_parameter_real(param_id: int, real_value: float) -> void:
 	var param = device.get_parameter(param_id)

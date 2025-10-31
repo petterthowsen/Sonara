@@ -1,0 +1,36 @@
+[gd_scene load_steps=3 format=3 uid="uid://bm3w0sihf1jeb"]
+
+[ext_resource type="Script" uid="uid://btnxg045bye2l" path="res://devices/builtin/SpectrumAnalyzerVisual.gd" id="1_vlvre"]
+[ext_resource type="Script" uid="uid://cy8j31jllfcqs" path="res://components/visualization/SpectrumRenderer.gd" id="2_glvo2"]
+
+[node name="SpectrumAnalyzerVisual" type="Control"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_vlvre")
+
+[node name="SpectrumRenderer" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_glvo2")
+style = 1
+style_bg_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
+style_line_color = Color(0, 0.33333334, 1, 0.4862745)
+style_fill_color = Color(0, 0.3333335, 1, 0.4862745)
+style_grid_color = Color(0.23828125, 0.23828125, 0.23828125, 1)
+style_grid_width = 0.5
+db_range_min = -30.0
+db_range_max = 10.0
+resolution = 1
+fft_size = 1024
+metadata/_custom_type_script = "uid://cy8j31jllfcqs"

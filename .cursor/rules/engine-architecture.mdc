@@ -54,11 +54,24 @@ Engine/src/
     mixing.rs          # Audio mixing and routing logic
     types.rs           # Type definitions: Channel, Track, Voice, etc.
     devices/
-      mod.rs         # Device module declarations
-      oscillator.rs  # Simple builtin oscillator
-      polysynth.rs   # polyphonic instrument
-      delay.rs       # Delay effect device
-      sfizz_device.rs# SFZ sampler backed by sfizz
+      mod.rs             # Device registry/exports
+      oscillator.rs      # Simple builtin oscillator
+      polysynth.rs       # SIMD-optimized block-based polysynth
+      polysynth_fundsp.rs# Legacy FunDSP variant kept for reference/benchmarks
+      delay.rs           # Delay effect device
+      sfizz_device.rs    # SFZ sampler backed by sfizz
+      clap_host/         # CLAP in-process & subprocess adapters
+    dsp/
+      mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
+      envelope.rs
+      oscillator.rs
+      simd.rs
+    ipc/
+      mod.rs             # Shared-memory IPC for out-of-process plugin hosting
+      protocol.rs
+      process_manager.rs
+      shared_memory.rs
+      platform_shm.rs
     io/
       mod.rs         # IO module declarations
       wav.rs         # WAV file reading/writing
@@ -85,7 +98,12 @@ Godot/              # Godot 4.5 UI App
 ### Built-in Device Advertisement
 - Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz) and emitting `/builtin/info` messages.
 - Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
-- `PolySynthDevice` is the new default polyphonic instrument implemented with FunDSP; it supports up to 16 voices, ADSR envelopes, and relies on the sample-accurate MIDI queue for tight triggering.
+- `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. The FunDSP prototype remains available as `PolySynthDeviceFundsp` for comparison but is no longer advertised to the UI.
+
+### DSP Utilities
+- `Engine/src/audio/dsp` centralizes real-time safe building blocks (`Oscillator`, `AdsrEnvelope`, `mix_blocks`) so instruments and effects share optimized code paths.
+- SIMD variants (AVX/SSE/NEON) live alongside scalar fallbacks; callers never branch on CPU features—the helpers detect support internally.
+- DSP helpers must remain allocation-free during audio callbacks; any scratch buffers are pre-sized by the caller (e.g., `PolySynthDevice` reuses `voice_buffer`/`temp_buffer`).
 
 ### Audio Clip BPM-Based Time Stretching
 Audio clips automatically time-stretch and pitch-shift based on project BPM:
@@ -104,31 +122,55 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
 - Positions reset on Stop/Seek commands, and removed when clips finish playing
 - **Critical**: Position must be tracked continuously frame-by-frame, not recalculated from tick position (which causes aliasing at high stretch factors)
 
+### Audio Mixing Implementation
+**`mixing.rs::mix_and_output` orchestrates five passes, keeping the audio thread real-time safe:**
+
+1. **Device Pre-Pass (non-bus channels)**  
+   - Instruments/effects render via `Channel::process_device_chain()` before any fader math so their output becomes the baseline for sends.  
+   - CLAP/Sfizz adapters flush pending parameter changes to the UI here.  
+   - Bus channels are skipped; they process after receiving routed audio in pass 4.
+
+2. **Fader & Pan Pass**  
+   - Applies smoothed gain and constant-power pan to every audible channel (skips muted or solo-excluded channels, clearing their buffers to silence).  
+   - Pan math runs per-sample to avoid clicks; this establishes the "post-fader" buffer used for metering and post-fader sends.
+
+3. **Send Accumulation**  
+   - Iterates `Channel::send_channels` and builds per-target buffers.  
+   - Post-fader sends read the post-pass buffer; pre-fader sends tap the cloned pre-pass audio (with pan reapplied so stereo imaging matches the source).  
+   - Destination faders apply again when sends are mixed in, ensuring bus gain still controls send returns.  
+   - Targets touched here are flagged for device processing in pass 4.
+
+4. **Hierarchical Routing with Bus Processing**  
+   - Multi-pass loop (up to 10 iterations) routes channels to their `output_channel_id`, using the stored buffers so audio is not double-counted.  
+   - Only gain is applied; never reapply pan while routing.  
+   - After each routing pass, buses that received audio run their device chains and reapply bus pan. Once processed they re-enter the routing loop so their post-effect audio can flow further (bus → bus → master).  
+   - Solo/mute gating is honored throughout; the master channel is treated as already processed so it never routes onward.
+
+5. **Master Output & Metering**  
+   - Syncs `channel_buffers` back into `state.channels` for accurate post-pan peaks.  
+   - Master buffer (ID 1) is copied to the interleaved CPAL output for device IDs ≥1000.  
+   - Meter messages still piggyback on the status channel afterward (20 Hz cadence).
+
+**Invariants:**  
+- Never allocate during any pass; all temporary buffers are pre-sized at initialization.  
+- Pan occurs exactly twice: once per audible channel in pass 2, once per bus after it receives mixed audio in pass 4.  
+- Sends ignore invalid targets (self, IDs ≥1000, muted/solo-blocked buses) to avoid denormals and feedback loops.
+
 ### Channel Routing and IO
-**Channel Types:**
-- `INSTRUMENT`: MIDI instrument tracks (created via `create_instrument_track()`)
-- `AUDIO`: Audio tracks (created via `create_audio_track()`)
-- `BUS`: Bus/group channels for routing (created via `create_bus_channel()`)
+**Channel Types:** `INSTRUMENT`, `AUDIO`, `BUS`, `MASTER`
 
 **Routing Hierarchy:**
-- Each track outputs to a channel via `default_channel_id`
-- Channels route to other channels via `output_channel_id` (default = 1 = Master)
-- Master channel (ID 1) routes to device outputs via `device_output_id` (ID 1000+)
-- ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels, 1000+ = hardware devices
+- Tracks target channels via `Track.default_channel_id`.
+- Channels forward audio with `output_channel_id` (default = 1 = Master).  
+- Master channel (ID 1) routes to device outputs (ID ≥ 1000).  
+- ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels/buses, 1000+ = hardware devices.
 
-**IO Menu (MixerChannel):**
-- Regular channels show: Master + available bus channels
-- Master channel shows: Device outputs only
-- Menu rebuilt dynamically when channels are added/deleted
-- Button text displays current routing target (e.g., "Master", "Bus 1", "Default Output")
+**Sends:**  
+- `Channel.send_channels` holds `Send { target_channel_id, amount_db, pre_fader, muted }`.  
+- Pre-fader taps run before fader smoothing; post-fader taps run after.  
+- Send returns respect the destination channel's gain so buses behave consistently with direct routes.
 
-**Example routing flow:** Track 0 → Channel 2 (INSTRUMENT) → Channel 1 (Master) → Device 1000 (hardware)
-
-**Implementation:**
-- Mute/solo/gain/pan applied during mix phase
-- Peak metering happens after mixing
-- Routing changes via `channel.set_route(output_id)` or master's `device_output_id`
-- Uses signal-based updates: routing change → OSC sent + signal emitted → UI updated
+**UI:** Mixer menus only list valid targets (Master + BUS for regular channels, hardware outputs for Master). Routing changes propagate via OSC + Godot signals.
 
 ### Lock-Free Design
 The audio callback **never blocks**:
@@ -136,45 +178,6 @@ The audio callback **never blocks**:
 - Uses `Mutex` with immediate failure if lock is contested (skip buffer on failure)
 - No heap allocations in audio thread
 - Pre-allocated channel buffers (sized at initialization)
-
-### Audio Mixing Implementation
-**Three-phase mixing with hierarchical routing support:**
-
-1. **First Pass - Fader/Pan Application**:
-   - Apply volume (dB → linear gain) and pan coefficients to each channel's buffer
-   - Only channels with local audio (INSTRUMENT, AUDIO, Master) have meaningful buffers at this stage
-   - BUS channels start empty but pass through the first pass to apply their fader settings to empty buffers
-   - Pan is applied ONLY in this pass (constant-power panning)
-   - **Important**: Peak detection must check BOTH left AND right channels (not just left) to detect audio that's been panned
-
-2. **Second Pass - Hierarchical Routing (Multi-Pass)**:
-   - Route audio from source channels to their `output_channel_id` destinations
-   - Use multiple passes to support nested routing (e.g., Track → Bus → Master)
-   - Track which channels have been processed to avoid re-routing the same audio multiple times
-   - **Critical**: Only apply GAIN during routing, NOT pan (pan was already applied in pass 1)
-   - Check BOTH channels when detecting if a channel has audio to route
-   - For each routing operation:
-     - Fetch source buffer from tracking HashMap (fader-applied state)
-     - Get destination channel's gain and apply it
-     - Mix into destination's buffer
-
-3. **Third Pass - Device Output**:
-   - Output Master channel (ID 1) to audio hardware via CPAL
-   - Update peak meters for all channels
-   - Peak meters show post-fader, post-routing levels
-
-**Routing Rules (enforced in UI and validated in engine)**:
-- INSTRUMENT/AUDIO channels can route TO: BUS channels or Master (ID 1)
-- INSTRUMENT/AUDIO channels can route FROM: Nothing (they generate local audio only)
-- BUS channels can route TO: Other BUS channels or Master (ID 1)
-- BUS channels can route FROM: Other channels (receive routed audio)
-- Master (ID 1) always routes TO: Device outputs (ID 1000+)
-
-**Common Pitfalls**:
-- Applying pan twice (first pass + routing pass) causes signal loss
-- Only checking left channel for peak can miss audio panned to right
-- Not tracking processed channels causes audio to be mixed multiple times in hierarchical routing
-- Allowing INSTRUMENT→INSTRUMENT routing creates ambiguity (which audio wins: local generation or routed input?)
 
 ## Common Development Patterns
 

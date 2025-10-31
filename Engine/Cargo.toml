@@ -21,6 +21,7 @@ rustwav = "0.3.8"  # WAV file reading with advanced format support
 # DSP library
 fundsp = "0.19.1"  # FunDSP for polyphonic synthesis (deprecated - slow performance)
 dasp = "0.11.0"    # DASP for high-performance signal processing
+realfft = "3"      # Optimized real-valued FFT for spectrum analysis
 
 # Sample engines
 sfizz = { git = "https://github.com/petterthowsen/rust-sfizz" }

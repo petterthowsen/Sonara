@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://brth8uue4ow8b"]
+[gd_scene load_steps=12 format=3 uid="uid://brth8uue4ow8b"]
 
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
@@ -23,8 +23,6 @@ content_margin_bottom = 1.0
 bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
 corner_detail = 5
 
 [sub_resource type="Gradient" id="Gradient_jx3fc"]
@@ -56,11 +54,11 @@ expand_margin_bottom = 3.0
 [sub_resource type="ButtonGroup" id="ButtonGroup_1cidk"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v0u3q"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
 draw_center = false
 corner_radius_top_left = 3
 corner_radius_top_right = 3
@@ -68,9 +66,18 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_r4rlf"]
+content_margin_left = 3.0
+content_margin_top = 2.0
+content_margin_right = 3.0
+content_margin_bottom = 2.0
+bg_color = Color(0.12890625, 0.12890625, 0.12890625, 1)
+corner_radius_bottom_left = 3
+corner_detail = 5
+
 [node name="Device" type="PanelContainer"]
-offset_right = 209.0
-offset_bottom = 128.0
+offset_right = 179.0
+offset_bottom = 191.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
 
@@ -90,6 +97,7 @@ theme_override_constants/separation = 4
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_vertical = 4
+tooltip_text = "Enabled (Audio is processed. Ctrl-click to deactivate and save RAM)"
 script = ExtResource("2_1cidk")
 diameter = 24.0
 light_color_inactive_disabled = Color(0.2, 0.2, 0.2, 0)
@@ -110,7 +118,7 @@ label_settings = SubResource("LabelSettings_r4rlf")
 
 [node name="TabButtons" type="HBoxContainer" parent="VBoxContainer/Header/HBox"]
 layout_mode = 2
-size_flags_vertical = 8
+size_flags_horizontal = 3
 
 [node name="Parameters" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
 custom_minimum_size = Vector2(28, 0)
@@ -129,28 +137,41 @@ toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
 text = "F"
 
+[node name="Visual" type="Button" parent="VBoxContainer/Header/HBox/TabButtons"]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+toggle_mode = true
+text = "V"
+
 [node name="Content" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_v0u3q")
 
-[node name="Parameters" type="ScrollContainer" parent="VBoxContainer/Content"]
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/Content"]
+layout_mode = 2
+
+[node name="ContentLeft" type="PanelContainer" parent="VBoxContainer/Content/HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
+
+[node name="Parameters" type="ScrollContainer" parent="VBoxContainer/Content/HBoxContainer/ContentLeft"]
 layout_mode = 2
 follow_focus = true
 horizontal_scroll_mode = 0
 
-[node name="VBox" type="VBoxContainer" parent="VBoxContainer/Content/Parameters"]
+[node name="VBox" type="VBoxContainer" parent="VBoxContainer/Content/HBoxContainer/ContentLeft/Parameters"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 4
 
-[node name="File" type="VBoxContainer" parent="VBoxContainer/Content"]
-visible = false
+[node name="File" type="VBoxContainer" parent="VBoxContainer/Content/HBoxContainer/ContentLeft"]
 layout_mode = 2
 alignment = 1
 
-[node name="StatusLabel" type="Label" parent="VBoxContainer/Content/File"]
+[node name="StatusLabel" type="Label" parent="VBoxContainer/Content/HBoxContainer/ContentLeft/File"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "No File Loaded"
@@ -158,14 +179,19 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 3
 
-[node name="LoadButton" type="Button" parent="VBoxContainer/Content/File"]
+[node name="LoadButton" type="Button" parent="VBoxContainer/Content/HBoxContainer/ContentLeft/File"]
 layout_mode = 2
 size_flags_vertical = 4
 text = "Load File"
 
+[node name="ContentRight" type="VBoxContainer" parent="VBoxContainer/Content/HBoxContainer"]
+custom_minimum_size = Vector2(200, 150)
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="FileDialog" type="FileDialog" parent="."]
 oversampling_override = 1.0
-title = "Open a SFZ File"
+title = "Open a File"
 size = Vector2i(1732, 360)
 ok_button_text = "Load"
 file_mode = 0

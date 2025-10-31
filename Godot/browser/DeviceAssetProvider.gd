@@ -5,6 +5,20 @@
 
 class_name DeviceAssetProvider extends AssetProvider
 
+## Map builtin device IDs to visual scene paths
+const BUILTIN_VISUAL_SCENES = {
+	"sonara.builtin.spectrum_analyzer": "res://devices/builtin/SpectrumAnalyzerVisual.tscn",
+	# Future devices:
+	# "sonara.builtin.oscilloscope": "res://devices/builtin/OscilloscopeVisual.tscn",
+	# "sonara.builtin.phase_meter": "res://devices/builtin/PhaseMeterVisual.tscn",
+}
+
+## Map builtin device IDs to custom controls scene paths
+const BUILTIN_CONTROLS_SCENES = {
+	# Example: custom synth UI
+	# "sonara.builtin.polysynth": "res://devices/builtin/PolySynthControls.tscn",
+}
+
 var _assets: Array[Asset] = []
 var _devices: Dictionary = {}  # device_id -> Device (both built-in and plugins)
 var _plugin_cache_loaded: bool = false
@@ -311,6 +325,14 @@ func _on_builtin_info_received(args: Array) -> void:
 		if p_name.to_lower().findn("time") >= 0 or p_name.to_lower().findn("cutoff") >= 0 or p_name.to_lower().findn("frequency") >= 0:
 			param.is_logarithmic = true
 		device.add_parameter(param)
+
+	# Register visual scene if available
+	if BUILTIN_VISUAL_SCENES.has(dev_id):
+		device.register_visual_scene(BUILTIN_VISUAL_SCENES[dev_id])
+
+	# Register custom controls scene if available
+	if BUILTIN_CONTROLS_SCENES.has(dev_id):
+		device.register_controls_scene(BUILTIN_CONTROLS_SCENES[dev_id])
 
 	# Register/overwrite
 	_devices[dev_id] = device

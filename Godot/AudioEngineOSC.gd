@@ -12,6 +12,10 @@ signal engine_connected()
 signal engine_disconnected()
 signal engine_log_message(level: String, message: String)  # Emitted for warn/error logs from engine
 
+# Device data subscriptions
+signal device_data_received(channel_id: int, device_position: int, data_type: String, data: PackedByteArray)
+signal device_spectrum_received(channel_id: int, device_position: int, spectrum: PackedFloat32Array)
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -119,6 +123,16 @@ func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_
 	osc_client.send_message(address, [bytes, sample_rate, channels])
 
 
+## Subscribe to device visualization data (spectrum, oscilloscope, etc.)
+func subscribe_device_data(channel_id: int, device_position: int, data_type: String) -> void:
+	send("/channel/%d/device/%d/data/subscribe" % [channel_id, device_position], [data_type])
+
+
+## Unsubscribe from device visualization data
+func unsubscribe_device_data(channel_id: int, device_position: int, data_type: String) -> void:
+	send("/channel/%d/device/%d/data/unsubscribe" % [channel_id, device_position], [data_type])
+
+
 func listen(address: String, callback: Callable) -> void:
 	"""Register a callback for incoming OSC messages matching the address.
 
@@ -190,6 +204,33 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		_last_heartbeat_time = Time.get_ticks_msec()
 		routed = true
 	
+	# Special handling for device data messages
+	elif address.begins_with("/channel/") and address.ends_with("/data"):
+		# Parse: /channel/{id}/device/{pos}/data
+		var parts = address.split("/")
+		if parts.size() == 5:  # ["", "channel", "{id}", "device", "{pos}", "data"] but only 5 visible?
+			pass  # Actually parts will be: ["", "channel", id, "device", pos, "data"] = 6 parts
+		
+		# Extract channel_id and device_position from address
+		var regex = RegEx.new()
+		regex.compile("/channel/(\\d+)/device/(\\d+)/data")
+		var result = regex.search(address)
+		if result and values is Array and values.size() >= 2:
+			var channel_id = int(result.get_string(1))
+			var device_position = int(result.get_string(2))
+			var data_type: String = values[0]
+			var blob: PackedByteArray = values[1]
+			
+			# Emit general device data signal
+			device_data_received.emit(channel_id, device_position, data_type, blob)
+			
+			# Decode and emit type-specific signals
+			if data_type == "spectrum":
+				var spectrum = _decode_f32_array(blob)
+				device_spectrum_received.emit(channel_id, device_position, spectrum)
+		
+		routed = true
+	
 	# Special handling for log messages
 	elif address == "/log":
 		if values is Array and values.size() >= 2:
@@ -256,3 +297,30 @@ func _matches_wildcard(address: String, pattern: String) -> bool:
 			return false
 	
 	return true
+
+
+## Decode PackedByteArray containing f32 values to PackedFloat32Array
+func _decode_f32_array(blob: PackedByteArray) -> PackedFloat32Array:
+	# OSC blob encoding: 4-byte big-endian length, followed by payload, padded to 4 bytes
+	if blob.size() < 4:
+		return PackedFloat32Array()
+
+	# Parse big-endian length
+	var length := (int(blob[0]) << 24) | (int(blob[1]) << 16) | (int(blob[2]) << 8) | int(blob[3])
+	var end_index := 4 + length
+	if end_index > blob.size():
+		# Corrupt blob; bail out safely
+		return PackedFloat32Array()
+
+	var payload := blob.slice(4, end_index)
+	var float_count := payload.size() / 4  # Each f32 is 4 bytes
+	var result := PackedFloat32Array()
+	result.resize(float_count)
+
+	for i in range(float_count):
+		var offset := i * 4
+		# Payload floats are little-endian (engine serialized native LE inside blob)
+		var bytes := payload.slice(offset, offset + 4)
+		result[i] = bytes.decode_float(0)
+
+	return result
