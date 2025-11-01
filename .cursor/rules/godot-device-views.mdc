@@ -1,0 +1,23 @@
+globs: Godot/device_lane/DevicePanel.gd, Godot/device_lane/DevicePanel.tscn, Godot/data/Device.gd, Godot/data/DeviceInstance.gd, Godot/components/device/**/*.gd
+alwaysApply: false
+---
+# Godot Device Views
+
+## Overview
+- Device metadata exposes up to four view types (`Panel`, `Large`, `Auxiliary`, `Compact`) registered via PackedScene references.
+- All device visuals extend `DeviceView`, which binds to a `DeviceInstance` and supplies `_on_view_shown`/`_on_view_hidden` lifecycle hooks.
+
+## Registration
+- Preload view scenes where device metadata is constructed (e.g., asset provider constants) and call `Device.register_panel_view(preload(...))` or the matching helper; never store file-system paths.
+- `register_visual_scene` remains a temporary shim that routes to the Panel view; new code must use the specific registration helpers.
+- Built-in devices register their views during `/builtin/info` handling before the device enters the provider registry so factories can instantiate immediately.
+
+## DeviceInstance Factory
+- `DeviceInstance.create_view(type)` instantiates the registered PackedScene, asserts the node extends `DeviceView`, sets the `view_type`, and returns it; callers should treat `null` as "view unsupported".
+- Device views implement `_on_bind()` to wire signals and use `_on_view_shown()`/`_on_view_hidden()` for data subscriptions to keep OSC listeners scoped to visibility.
+
+## DevicePanel Orchestration
+- Binding a device loads the Panel view first; if no Panel view exists, the right pane hides entirely.
+- The Large toggle is visible only when `device.has_gui()` or `has_large_view()` is true; pressing it either opens the plugin's native GUI or spawns a `Window` under `Sonara.editor` containing the Large view.
+- `_apply_large_state()` ensures Auxiliary views replace the right pane whenever a Large view is open and the device advertises one; closing the Large window frees the view and returns to the Panel.
+- Views are bound before being added to the scene tree, and every show/hide path calls `_on_view_shown()` or `_on_view_hidden()` so long-running subscriptions clean up reliably.

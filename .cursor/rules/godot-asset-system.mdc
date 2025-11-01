@@ -50,6 +50,7 @@ alwaysApply: false
 - `/plugin/info` messages provide `[id, name, vendor, version, category, description, path]`; devices store metadata plus CLAP-specific fields.
 - `/plugin/scan_complete` triggers `scan()`, emits added plugin assets, and persists the registry to `~/.config/sonara/plugins.json`.
 - Cached plugins are reloaded on startup before the engine responds, so Browser UI stays populated even without a fresh scan; hot reconnects re-request built-ins by listening to `AudioEngineOSC.engine_connected`.
+- Built-in visuals are registered by preloading PackedScenes in provider constants and calling `device.register_panel_view(...)`, `register_large_view(...)`, or `register_auxiliary_view(...)` before the device is stored, so UI factories never rely on string paths at runtime.
 
 ## Metadata Cache
 - `AssetService` writes all user metadata (favorite, tags, last_used) to `assets.json` under the same config directory as the plugin cache.
