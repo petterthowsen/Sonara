@@ -1,6 +1,6 @@
 [gd_scene load_steps=12 format=3 uid="uid://brth8uue4ow8b"]
 
-[ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://device_lane/DevicePanel.gd" id="1_v0u3q"]
+[ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://devices/device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]

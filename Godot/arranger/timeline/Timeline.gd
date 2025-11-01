@@ -291,10 +291,30 @@ func set_scroll_offset(offset: float) -> void:
 func _redraw_all_tracks() -> void:
 	"""Request redraw for all timeline tracks and update clip positions."""
 	for timeline_track in timeline_tracks:
+		if timeline_track:
+			timeline_track._update_clip_positions()
 			timeline_track.queue_redraw()
-			# Update clip positions when zoom changes
-			if timeline_track.has_method("_update_clip_positions"):
-				timeline_track._update_clip_positions()
+	queue_redraw()
+
+
+func refresh_layout() -> void:
+	"""Force a full layout refresh: width, clip sizes, positions, and redraw.
+	Use after the Arranger becomes visible to correct zero-height track sizing when hidden."""
+	_update_timeline_width()
+	for timeline_track in timeline_tracks:
+		if not timeline_track:
+			continue
+		# Ensure clip sizes match current track height (fixes zero-height when previously hidden)
+		var height := int(timeline_track.size.y)
+		# If size is zero (hidden state), fall back to track height when available
+		if height <= 0 and timeline_track.track:
+			height = int(timeline_track.track.height)
+		timeline_track._update_clip_sizes(height)
+		# Update positions after sizes
+		timeline_track._update_clip_positions()
+		# Redraw track
+		timeline_track.queue_redraw()
+	# Redraw timeline container
 	queue_redraw()
 
 

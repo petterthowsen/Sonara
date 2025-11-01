@@ -185,11 +185,13 @@ func _process(delta: float):
 		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
 		h_scroll.scroll_horizontal = int(new_h_scroll)
 		grid_helper.scroll_position = new_h_scroll
+
 	else:
 		# Instant scrolling when smoothing is disabled
 		scroll_vertical = int(target_scroll_vertical)
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 		grid_helper.scroll_position = target_scroll_horizontal
+
 
 	# Update playhead position based on scroll/zoom
 	_update_playhead_position()
@@ -350,6 +352,7 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	target_scroll_horizontal = max(0, scroll_offset)
 	h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 	grid_helper.scroll_position = target_scroll_horizontal
+
 	
 
 func _zoom_vertical(delta_note_height: int):
@@ -499,6 +502,7 @@ func _gui_input(event: InputEvent):
 			h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 			scroll_vertical = int(target_scroll_vertical)
 			grid_helper.scroll_position = target_scroll_horizontal
+
 
 			accept_event()
 		else:

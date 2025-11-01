@@ -65,7 +65,7 @@ mod tests {
 
         let (status_tx, _status_rx) = unbounded();
         let mut output = vec![0.0f32; buffer_size * 2];
-        mix_and_output(&mut state, &mut output, 2, &status_tx);
+        mix_and_output(&mut state, &mut output, 2, buffer_size, &status_tx);
 
         let bus = state.channels.get(&2).unwrap();
         assert!((bus.buffer_left[0] - 0.5).abs() < 1e-4);
@@ -118,7 +118,7 @@ mod tests {
 
         let (status_tx, _status_rx) = unbounded();
         let mut output = vec![0.0f32; buffer_size * 2];
-        mix_and_output(&mut state, &mut output, 2, &status_tx);
+        mix_and_output(&mut state, &mut output, 2, buffer_size, &status_tx);
 
         let bus = state.channels.get(&2).unwrap();
         assert!((bus.buffer_left[0] - 0.5).abs() < 1e-4);
@@ -142,6 +142,7 @@ pub fn mix_and_output(
     state: &mut EngineState,
     data: &mut [f32],
     channels: usize,
+    frames: usize,
     status_tx: &Sender<EngineStatus>,
 ) {
     // Check if any channel has solo
@@ -176,12 +177,7 @@ pub fn mix_and_output(
     // First pass: Process device chains (instruments and effects)
     // Process effects BEFORE applying fader so fader is applied to final output
     // IMPORTANT: Skip bus channels here - they'll be processed in Phase 4 after receiving routed audio
-    let sample_count = state
-        .channels
-        .values()
-        .next()
-        .map(|c| c.buffer_left.len())
-        .unwrap_or(0);
+    let sample_count = frames;
 
     // Cache pre-fader audio for channels that have pre-fader sends so we can tap the signal before fader
     let mut pre_fader_sources: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
@@ -334,7 +330,7 @@ pub fn mix_and_output(
         let pan = channel.get_pan_coefficients();
 
         // Apply smoothed gain and pan per-sample to prevent clicks/pops
-        for i in 0..channel.buffer_left.len() {
+        for i in 0..frames {
             let smoothed_gain = channel.get_smoothed_gain();
             let left_in = channel.buffer_left[i] * smoothed_gain;
             let right_in = channel.buffer_right[i] * smoothed_gain;
@@ -387,11 +383,7 @@ pub fn mix_and_output(
                     .entry(send.target_channel_id)
                     .or_insert_with(|| (vec![0.0; sample_count], vec![0.0; sample_count]));
 
-                let buffer_len = channel
-                    .buffer_left
-                    .len()
-                    .min(channel.buffer_right.len())
-                    .min(sample_count);
+                let buffer_len = frames;
                 if buffer_len == 0 {
                     continue;
                 }
@@ -439,11 +431,7 @@ pub fn mix_and_output(
             }
 
             let dest_gain = target_ch.get_gain();
-            let len = target_ch
-                .buffer_left
-                .len()
-                .min(target_ch.buffer_right.len())
-                .min(sample_count);
+            let len = frames;
 
             let (pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r) = if should_log_sends {
                 let pre_l = target_ch.buffer_left.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
@@ -597,7 +585,7 @@ pub fn mix_and_output(
 
             // Mix into the channel's buffer, applying destination's fader (gain)
             if let Some((dest_left, dest_right)) = channel_buffers.get_mut(&output_id) {
-                for i in 0..buffer_left.len().min(dest_left.len()) {
+                for i in 0..frames {
                     dest_left[i] += buffer_left[i] * dest_gain;
                     dest_right[i] += buffer_right[i] * dest_gain;
                 }
@@ -605,7 +593,7 @@ pub fn mix_and_output(
 
             // Also update the actual channel state so peak meters and output are correct
             if let Some(output_ch) = state.channels.get_mut(&output_id) {
-                for i in 0..buffer_left.len().min(output_ch.buffer_left.len()) {
+                for i in 0..frames {
                     output_ch.buffer_left[i] += buffer_left[i] * dest_gain;
                     output_ch.buffer_right[i] += buffer_right[i] * dest_gain;
                 }
@@ -695,7 +683,7 @@ pub fn mix_and_output(
                 // Apply the bus's pan to the received audio
                 // This is separate from source panning - it pans the entire bus mix
                 let pan = bus_ch.get_pan_coefficients();
-                for i in 0..bus_ch.buffer_left.len() {
+                for i in 0..frames {
                     let left_in = bus_ch.buffer_left[i];
                     let right_in = bus_ch.buffer_right[i];
 

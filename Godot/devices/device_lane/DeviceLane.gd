@@ -1,6 +1,6 @@
 class_name DeviceLane extends HBoxContainer
 
-const DevicePanelScene : PackedScene = preload("res://device_lane/DevicePanel.tscn")
+const DevicePanelScene : PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
 
 @onready var header: Panel = $Header
 @onready var header_label: VerticalLabel = $Header/Label
@@ -8,7 +8,6 @@ const DevicePanelScene : PackedScene = preload("res://device_lane/DevicePanel.ts
 @onready var devices: HBoxContainer = $Content/ScrollContainer/Devices
 
 var channel : Channel
-
 
 func _ready():
 	# Connect to the Mixer's channel_focused signal via Sonara.editor

@@ -70,11 +70,7 @@ var note_color = Color(0.3, 0.6, 0.9):
 					node.set_color(note_color)
 
 
-# Should be set by parent to support infinite scrolling
-var horizonal_scroll_position: float = 0.0:
-	set(value):
-		horizonal_scroll_position = value
-		update_container_width()
+# Horizontal scroll is derived from grid_helper.scroll_position
 
 
 # Position offset for song-relative positioning in track-mode
@@ -291,7 +287,7 @@ func update_container_width() -> void:
 	var min_width_pixels = ticks_to_pixels(min_width_ticks)
 
 	# Get current scroll position and viewport width
-	var scroll_pos = horizonal_scroll_position
+	var scroll_pos = grid_helper.scroll_position if grid_helper else 0.0
 	var viewport_width = get_parent().size.x
 
 	# Find rightmost note position

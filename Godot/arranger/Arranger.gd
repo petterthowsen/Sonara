@@ -142,8 +142,31 @@ func _on_visibility_changed() -> void:
 	print("[Arranger] visibility changed")
 	if is_visible_in_tree():
 		grab_click_focus()
+		# When becoming visible after being hidden (e.g., mixer view active during project load),
+		# force a refresh to recompute timeline width, clip positions and redraw everything.
+		_call_visible_refresh()
 	else:
 		release_focus()
+
+
+func _call_visible_refresh() -> void:
+	"""Defer a full visual refresh to the next frame to ensure layout sizes are valid."""
+	call_deferred("_refresh_after_visible")
+
+
+func _refresh_after_visible() -> void:
+	"""Recompute timeline width, update clip positions and redraw after Arranger becomes visible."""
+	# Ensure scroll/zoom propagated and trigger timeline updates
+	timeline.set_scroll_offset(h_scroll.scroll_horizontal)
+	timeline.set_zoom(grid_helper.pixels_per_beat)
+	
+	# Force full layout refresh on the timeline to fix zero-height clips after being hidden
+	if timeline:
+		timeline.refresh_layout()
+	
+	# Update overlays
+	_update_ruler()
+	_update_playhead_position()
 
 
 func _process(delta: float) -> void:

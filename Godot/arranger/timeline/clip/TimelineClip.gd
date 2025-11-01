@@ -17,10 +17,19 @@ signal drag_ended(clip_ui: TimelineClip, global_position: Vector2)  # Drag ended
 var clip_instance: ClipInstance = null:  # The instance we're displaying
 	set(ci):
 		clip_instance = ci
-		clip_renderer.clip_instance = clip_instance
+		
+		if is_inside_tree():
+			clip_renderer.clip_instance = clip_instance
 
 var timeline: Timeline = null
-var track_color: Color = Color.WHITE
+var track_color: Color = Color.WHITE:
+	set(tc):
+		if track_color != tc:
+			track_color = tc
+			if clip_renderer:
+				clip_renderer.note_color = track_color
+				clip_renderer.note_color.v = max(0.5, track_color.v)
+				clip_renderer.queue_redraw()
 
 # Selection and hover state
 var is_selected: bool = false
@@ -55,6 +64,10 @@ func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	
+	clip_renderer.clip_instance = clip_instance
+	clip_renderer.note_color = track_color
+	clip_renderer.note_color.v = max(0.5, track_color.v)
 
 
 func bind_to_clip_instance(inst: ClipInstance, tl: Timeline, t_color: Color = Color.WHITE) -> void:
@@ -64,7 +77,8 @@ func bind_to_clip_instance(inst: ClipInstance, tl: Timeline, t_color: Color = Co
 	track_color = t_color
 
 	# Update UI from clip instance data
-	_update_from_clip_instance()
+	if is_inside_tree():
+		_update_from_clip_instance()
 
 
 func _find_nearest_clip_left(reference_start: int = -1) -> int:

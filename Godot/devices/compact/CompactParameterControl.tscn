@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=3 uid="uid://q0m43fo1g33u"]
 
-[ext_resource type="Script" uid="uid://bw2ikm8me7k2f" path="res://components/device/compact/CompactParameterControl.gd" id="1_5r7b1"]
+[ext_resource type="Script" uid="uid://bw2ikm8me7k2f" path="res://devices/compact/CompactParameterControl.gd" id="1_5r7b1"]
 [ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="2_ietmg"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ietmg"]

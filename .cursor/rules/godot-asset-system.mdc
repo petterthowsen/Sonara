@@ -47,6 +47,7 @@ alwaysApply: false
 - Maintains `_devices` keyed by `device_id`; built-ins and plugins live in the same dictionary so `scan()` rebuilds the full asset list after every advertisement or scan completion.
 - Plugin discovery is manual: `trigger_plugin_scan()` prunes cached plugin assets, then sends `/plugin/scan` via `AudioEngineOSC`.
 - Incoming `/builtin/info` payloads include audio/MIDI capabilities, parameter descriptors, and optional file loading support; the provider batches new built-ins and emits them when `/builtin/complete` arrives.
+	- Parameter descriptors ship the scalar range plus `param_type` (`"float"`, `"bool"`, `"enum"`), a `syncable` flag, and enum labels; keep these hydrated so UI factories can build the correct controls without heuristics.
 - `/plugin/info` messages provide `[id, name, vendor, version, category, description, path]`; devices store metadata plus CLAP-specific fields.
 - `/plugin/scan_complete` triggers `scan()`, emits added plugin assets, and persists the registry to `~/.config/sonara/plugins.json`.
 - Cached plugins are reloaded on startup before the engine responds, so Browser UI stays populated even without a fresh scan; hot reconnects re-request built-ins by listening to `AudioEngineOSC.engine_connected`.

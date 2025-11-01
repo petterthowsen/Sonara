@@ -4,11 +4,35 @@
 class_name Ruler extends Control
 
 # Visual settings
-@export var bg_color: Color = Color(0.15, 0.15, 0.15)
-@export var text_color: Color = Color(0.9, 0.9, 0.9)
-@export var start_position_color: Color = Color(0.2, 0.6, 1.0)  # Blue for start position arrow
-@export var font_size: int = 12
-@export var offset_x: float = 0.0  # Horizontal draw offset (e.g., for piano keyboard width)
+@export var bg_color: Color = Color(0.15, 0.15, 0.15):
+	set(value):
+		if bg_color != value:
+			bg_color = value
+			queue_redraw()
+
+@export var text_color: Color = Color(0.9, 0.9, 0.9):
+	set(value):
+		if text_color != value:
+			text_color = value
+			queue_redraw()
+
+@export var start_position_color: Color = Color(0.2, 0.6, 1.0):  # Blue for start position arrow
+	set(value):
+		if start_position_color != value:
+			start_position_color = value
+			queue_redraw()
+
+@export var font_size: int = 12:
+	set(value):
+		if font_size != value:
+			font_size = value
+			queue_redraw()
+
+@export var offset_x: float = 0.0:  # Horizontal draw offset (e.g., for piano keyboard width)
+	set(value):
+		if offset_x != value:
+			offset_x = value
+			queue_redraw()
 
 # Grid helper for calculations
 var grid_helper: GridHelper = GridHelper.new()

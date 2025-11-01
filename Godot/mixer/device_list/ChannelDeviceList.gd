@@ -8,7 +8,7 @@
 
 class_name ChannelDeviceList extends PanelContainer
 
-const CompactDevicePanelScene = preload("res://components/device/compact/CompactDevicePanel.tscn")
+const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePanel.tscn")
 
 @onready var scroll_container : ScrollContainer = $ScrollContainer
 @onready var vbox : VBoxContainer = $ScrollContainer/VBoxContainer

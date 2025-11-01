@@ -1,5 +1,6 @@
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicBool, Ordering};
 use tracing::{info, warn};
 
 use super::devices::AudioDevice;
@@ -419,10 +420,42 @@ pub struct EngineState {
     pub output_devices: Vec<OutputDevice>, // Available hardware outputs (IDs 1000+)
     pub plugin_scanner: super::devices::clap_host::PluginScanner, // CLAP plugin discovery
     pub process_manager: std::sync::Arc<super::ipc::ProcessManager>, // Subprocess manager for CLAP plugins
-    pub is_playing: bool,
-    pub current_tick: Tick,
-    /// Fractional tick accumulator carried across buffers for sample-accurate scheduling
-    pub fractional_tick_accumulator: f64,
+    pub is_playing: AtomicBool,
+    pub current_tick: AtomicI64,
+    /// Fractional tick accumulator carried across buffers for sample-accurate scheduling (stored as fixed-point * 1e9)
+    pub fractional_tick_accumulator: AtomicI64,
+}
+
+impl EngineState {
+    /// Get the current tick (lock-free)
+    pub fn get_current_tick(&self) -> Tick {
+        self.current_tick.load(Ordering::Acquire) as Tick
+    }
+
+    /// Set the current tick (lock-free)
+    pub fn set_current_tick(&self, tick: Tick) {
+        self.current_tick.store(tick as i64, Ordering::Release);
+    }
+
+    /// Get the fractional tick accumulator (lock-free)
+    pub fn get_fractional_tick_accumulator(&self) -> f64 {
+        self.fractional_tick_accumulator.load(Ordering::Acquire) as f64 / 1_000_000_000.0
+    }
+
+    /// Set the fractional tick accumulator (lock-free)
+    pub fn set_fractional_tick_accumulator(&self, value: f64) {
+        self.fractional_tick_accumulator.store((value * 1_000_000_000.0) as i64, Ordering::Release);
+    }
+
+    /// Get playing state (lock-free)
+    pub fn get_is_playing(&self) -> bool {
+        self.is_playing.load(Ordering::Acquire)
+    }
+
+    /// Set playing state (lock-free)
+    pub fn set_is_playing(&self, playing: bool) {
+        self.is_playing.store(playing, Ordering::Release);
+    }
 }
 
 impl Clone for EngineState {
@@ -447,9 +480,9 @@ impl Default for EngineState {
             output_devices: Vec::new(),
             plugin_scanner: super::devices::clap_host::PluginScanner::new(),
             process_manager,
-            is_playing: false,
-            current_tick: 0,
-            fractional_tick_accumulator: 0.0,
+            is_playing: AtomicBool::new(false),
+            current_tick: AtomicI64::new(0),
+            fractional_tick_accumulator: AtomicI64::new(0),
         }
     }
 }
@@ -478,18 +511,18 @@ pub fn process_command(
             state.channels.clear();
             state.tracks.clear();
             state.clips.clear();
-            state.current_tick = 0;
+            state.set_current_tick(0);
             info!("Project cleared");
         }
         AudioCommand::Play => {
-            state.is_playing = true;
-            let position = state.settings.format_tick_position(state.current_tick);
+            state.set_is_playing(true);
+            let position = state.settings.format_tick_position(state.get_current_tick());
             info!("Playback started at {}", position);
             return Some(EngineStatus::PlayingStateChanged(true));
         }
         AudioCommand::Pause => {
-            state.is_playing = false;
-            let position = state.settings.format_tick_position(state.current_tick);
+            state.set_is_playing(false);
+            let position = state.settings.format_tick_position(state.get_current_tick());
             // Reset all devices to stop any playing notes/voices
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
@@ -501,9 +534,9 @@ pub fn process_command(
             return Some(EngineStatus::PlayingStateChanged(false));
         }
         AudioCommand::Stop => {
-            let position = state.settings.format_tick_position(state.current_tick);
-            state.is_playing = false;
-            state.current_tick = 0;
+            let position = state.settings.format_tick_position(state.get_current_tick());
+            state.set_is_playing(false);
+            state.set_current_tick(0);
             // Reset all channels and tracks
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
@@ -522,7 +555,7 @@ pub fn process_command(
             return Some(EngineStatus::PlayingStateChanged(false));
         }
         AudioCommand::Seek(tick) => {
-            state.current_tick = tick;
+            state.set_current_tick(tick);
             // Reset all channels and tracks on seek
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();

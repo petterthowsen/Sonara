@@ -1,21 +1,23 @@
-class_name ClipEditor extends HBoxContainer
+class_name ClipEditor extends VBoxContainer
 
 var log := Log.make("ClipEditor")
 
 # left panel will show track list when showing multiple clips, with buttons to switch between clips
-@onready var left_panel: PanelContainer = $LeftPanel
+@onready var left_panel: PanelContainer = $HSplit/LeftPanel
 
 # main panel shows ruler and midi editor
-@onready var main_panel: PanelContainer = $MainPanel
+@onready var main_panel: PanelContainer = $HSplit/MainPanel
 
-@onready var main_header: PanelContainer = $MainPanel/VBox/PanelContainer/MainHeader
+@onready var main_header: PanelContainer = $HSplit/MainPanel/VBox/PanelContainer/MainHeader
+@onready var main_header_options: HBoxContainer = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions
+@onready var track_mode_toggle: Button = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions/TrackModeToggle
 
-@onready var ruler: Ruler = $MainPanel/VBox/PanelContainer/VBox/Ruler
+@onready var ruler: Ruler = $HSplit/MainPanel/VBox/PanelContainer/VBox/Ruler
 
-@onready var midi_editor = $MainPanel/VBox/MidiEditor
+@onready var midi_editor = $HSplit/MainPanel/VBox/MidiEditor
 
 # for multi-track clip editing
-@onready var track_selector: ClipEditorTrackList = $LeftPanel/VBox/ClipEditorTrackList
+@onready var track_selector: ClipEditorTrackList = $HSplit/LeftPanel/VBox/ClipEditorTrackList
 
 var grid_helper: GridHelper:
 	set(gh):

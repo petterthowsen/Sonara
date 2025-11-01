@@ -7,12 +7,12 @@ class_name DeviceAssetProvider extends AssetProvider
 
 ## Map builtin device IDs to Panel view PackedScenes
 const BUILTIN_PANEL_SCENES = {
-	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerVisual.tscn"),
+	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 }
 
 ## Map builtin device IDs to Large view PackedScenes
 const BUILTIN_LARGE_SCENES = {
-	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerVisual.tscn"),
+	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 }
 
 ## Map builtin device IDs to Auxiliary view PackedScenes
@@ -23,16 +23,9 @@ const BUILTIN_AUXILIARY_SCENES = {
 const BUILTIN_COMPACT_SCENES = {
 }
 
-## Map builtin device IDs to custom controls scene paths
-const BUILTIN_CONTROLS_SCENES = {
-	# Example: custom synth UI
-	# "sonara.builtin.polysynth": "res://devices/builtin/PolySynthControls.tscn",
-}
-
 var _assets: Array[Asset] = []
 var _devices: Dictionary = {}  # device_id -> Device (both built-in and plugins)
 var _plugin_cache_loaded: bool = false
-
 
 func _init() -> void:
 	provider_name = "DeviceAssetProvider"
@@ -338,10 +331,6 @@ func _on_builtin_info_received(args: Array) -> void:
 	# Register Compact view if available
 	if BUILTIN_COMPACT_SCENES.has(dev_id):
 		device.register_compact_view(BUILTIN_COMPACT_SCENES[dev_id])
-
-	# Register custom controls scene if available
-	if BUILTIN_CONTROLS_SCENES.has(dev_id):
-		device.register_controls_scene(BUILTIN_CONTROLS_SCENES[dev_id])
 
 	# Register/overwrite
 	_devices[dev_id] = device

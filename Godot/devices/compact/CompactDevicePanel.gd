@@ -6,7 +6,7 @@
 
 class_name CompactDevicePanel extends VBoxContainer
 
-const CompactParameterControlScene = preload("res://components/device/compact/CompactParameterControl.tscn")
+const CompactParameterControlScene = preload("res://devices/compact/CompactParameterControl.tscn")
 
 # ============================================================================
 # NODE REFS

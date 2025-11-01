@@ -1,6 +1,8 @@
 # Draws either midi notes or audio waveform of a clip
 class_name MidiclipRenderer extends Control
 
+@export var note_color := Color("#eee")
+
 var clip_instance : ClipInstance:
 	set(c):
 		if clip_instance:
@@ -8,7 +10,6 @@ var clip_instance : ClipInstance:
 		clip_instance = c
 		clip_instance.clip.clip_modified.connect(_on_clip_modified)
 		queue_redraw()
-
 
 func _on_clip_modified():
 	print("clip modified")
@@ -18,7 +19,6 @@ func _on_clip_modified():
 	# for audio, we should only redraw if audio waveform actually changes.
 	# gain can simply scale the control - faster ;)
 	queue_redraw()
-
 
 func _draw() -> void:
 	if clip_instance and clip_instance.clip:
@@ -43,7 +43,7 @@ func _draw_midi():
 		lowest = highest - 1  # Extend range by 1 to make the note visible
 	
 	# Calculate note height to fit all notes within the control height
-	var note_height = size.y / (note_range + 1)
+	var note_height = size.y / (note_range + 2)
 	
 	var clip_length_ticks = clip_instance.duration_ticks
 	var clip_offset = clip_instance.clip_offset
@@ -79,7 +79,7 @@ func _draw_midi():
 		# Ensure the note stays within vertical bounds
 		y = clamp(y, 0, size.y - note_height)
 		
-		draw_rect(Rect2(x, y, w, note_height), Color.WHITE, true, -1.0, true) 
+		draw_rect(Rect2(x, y, w, note_height), note_color, true, -1.0, true) 
 
 func _draw_waveform() -> void:
 	"""Draw stereo waveform with appropriate resolution based on clip width."""

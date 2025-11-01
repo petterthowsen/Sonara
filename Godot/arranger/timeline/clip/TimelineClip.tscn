@@ -61,17 +61,13 @@ content_margin_right = 6.0
 content_margin_bottom = 2.0
 bg_color = Color(0, 0, 0, 0.29803923)
 border_width_bottom = 1
-border_color = Color(0.43, 0.43, 0.43, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_detail = 5
+border_color = Color(0.3366075, 0.33660766, 0.33660755, 1)
 
 [sub_resource type="LabelSettings" id="LabelSettings_c74fi"]
 font_size = 14
 font_color = Color(0.86328125, 0.86328125, 0.86328125, 1)
 
 [node name="Clip" type="Control"]
-clip_contents = true
 layout_mode = 3
 anchors_preset = 0
 offset_right = 214.0

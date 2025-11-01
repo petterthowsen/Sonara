@@ -1,6 +1,6 @@
 [gd_scene load_steps=3 format=3 uid="uid://bm3w0sihf1jeb"]
 
-[ext_resource type="Script" uid="uid://btnxg045bye2l" path="res://devices/builtin/SpectrumAnalyzerVisual.gd" id="1_vlvre"]
+[ext_resource type="Script" uid="uid://btnxg045bye2l" path="res://devices/builtin/SpectrumAnalyzerDefaultView.gd" id="1_vlvre"]
 [ext_resource type="Script" uid="uid://cy8j31jllfcqs" path="res://components/visualization/SpectrumRenderer.gd" id="2_glvo2"]
 
 [node name="SpectrumAnalyzerVisual" type="Control"]

@@ -1,7 +1,7 @@
 # A full device panel, as shown in the DeviceLane
 class_name DevicePanel extends PanelContainer
 
-const CompactParameterControlScene = preload("res://components/device/compact/CompactParameterControl.tscn")
+const CompactParameterControlScene = preload("res://devices/compact/CompactParameterControl.tscn")
 
 @onready var header : PanelContainer = $VBoxContainer/Header
 

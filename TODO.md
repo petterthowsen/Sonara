@@ -1,7 +1,8 @@
 # TODO
 
 # Bugs / Issues
-- [ ] Moving a clip from one track to another causes playback of new clip to actually play on original track.
+- [?] Moving a clip from one track to another causes playback of new clip to actually play on original track.
+    > I think this is solved.
 - [ ] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
 
 
@@ -11,7 +12,7 @@
 - [x] Improve logging: split info/warn levels into separate files. Only keep last N session files. Name them last_info.txt, last_warn.txt and last_combined.txt
 
 ### Core Audio
-- [ ] Keep audio engine running after playback so insrumens and reverb/delay effects can settle after stopping
+- [ ] Keep audio engine running after playback so instruments (PolySynth) and reverb/delay effects can settle after stopping
 - [x] RMS Metering
 - [ ] Plugin latency compensation
 - [ ] Improve logging of plugins

@@ -1,5 +1,7 @@
 class_name Log extends RefCounted
 
+static var loggers : Dictionary[String, Log] = {}
+
 var print_prefix : String = ""
 
 var debug_messages : Array[String] = []
@@ -14,7 +16,12 @@ func _init(prefix : String, ptc: bool = true):
 	print_to_console = ptc
 
 static func make(prefix: String, ptc := true) -> Log:
-	return Log.new(prefix, ptc)
+	if loggers.has(prefix):
+		push_error("[Log] cannot make log for ", prefix, ". Already exists!")
+	
+	var logger = Log.new(prefix, ptc)
+	Log.loggers[prefix] = logger
+	return logger
 
 func debug(...message: Array[Variant]):
 	debug_messages.append(" ".join(message))

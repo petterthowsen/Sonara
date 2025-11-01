@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=16 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
@@ -9,6 +9,12 @@
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1nvnf"]
+bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
+corner_radius_top_left = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4hncn"]
 content_margin_left = 0.0
@@ -28,11 +34,9 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.05, 0.05, 0.05, 0.6745098)
-corner_radius_top_left = 3
+bg_color = Color(0.14901961, 0.14901961, 0.14901961, 1)
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
 corner_detail = 5
 
 [sub_resource type="Gradient" id="Gradient_aar7r"]
@@ -42,60 +46,78 @@ colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
 gradient = SubResource("Gradient_aar7r")
 width = 3
 
-[node name="ClipEditor" type="HBoxContainer"]
+[node name="ClipEditor" type="VBoxContainer"]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 0
 script = ExtResource("1_lqnrn")
 metadata/_edit_lock_ = true
 
-[node name="LeftPanel" type="PanelContainer" parent="."]
+[node name="HSplit" type="HSplitContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 6
+
+[node name="LeftPanel" type="PanelContainer" parent="HSplit"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_1nvnf")
+
+[node name="VBox" type="VBoxContainer" parent="HSplit/LeftPanel"]
 layout_mode = 2
 
-[node name="VBox" type="VBoxContainer" parent="LeftPanel"]
-layout_mode = 2
-
-[node name="Header" type="PanelContainer" parent="LeftPanel/VBox"]
+[node name="Header" type="PanelContainer" parent="HSplit/LeftPanel/VBox"]
 custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_4hncn")
 
-[node name="ClipEditorTrackList" parent="LeftPanel/VBox" instance=ExtResource("2_ytm0k")]
-custom_minimum_size = Vector2(100, 0)
+[node name="ClipEditorTrackList" parent="HSplit/LeftPanel/VBox" instance=ExtResource("2_ytm0k")]
+custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 
-[node name="MainPanel" type="PanelContainer" parent="."]
+[node name="MainPanel" type="PanelContainer" parent="HSplit"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_akhqx")
 
-[node name="VBox" type="VBoxContainer" parent="MainPanel"]
+[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel"]
 layout_mode = 2
 theme_override_constants/separation = 2
 metadata/_edit_lock_ = true
 
-[node name="PanelContainer" type="HBoxContainer" parent="MainPanel/VBox"]
+[node name="PanelContainer" type="HBoxContainer" parent="HSplit/MainPanel/VBox"]
 layout_mode = 2
 
-[node name="MainHeader" type="PanelContainer" parent="MainPanel/VBox/PanelContainer"]
+[node name="MainHeader" type="PanelContainer" parent="HSplit/MainPanel/VBox/PanelContainer"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ytm0k")
 
-[node name="VBox" type="VBoxContainer" parent="MainPanel/VBox/PanelContainer"]
+[node name="MainOptions" type="HBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader"]
+layout_mode = 2
+
+[node name="TrackModeToggle" type="Button" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions"]
+layout_mode = 2
+size_flags_horizontal = 3
+toggle_mode = true
+text = "Clip Mode"
+
+[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Ruler" type="Control" parent="MainPanel/VBox/PanelContainer/VBox"]
+[node name="Ruler" type="Control" parent="HSplit/MainPanel/VBox/PanelContainer/VBox"]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("2_q0vl8")
+bg_color = Color(0.10747979, 0.107479714, 0.10747973, 1)
+text_color = Color(0.699654, 0.6996533, 0.699653, 1)
+start_position_color = Color(0.32846358, 0.3815926, 1, 1)
 
-[node name="MidiEditor" type="ScrollContainer" parent="MainPanel/VBox"]
+[node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox"]
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
@@ -105,14 +127,15 @@ note_height = 30
 zoom_sensitivity_v = 3
 scroll_smoothing = 0.41
 
-[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/MidiEditor"]
+[node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/MidiEditor"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 metadata/_edit_lock_ = true
 
-[node name="VPiano" type="Control" parent="MainPanel/VBox/MidiEditor/HBox"]
+[node name="VPiano" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox"]
+z_index = 1
 layout_mode = 2
 script = ExtResource("4_pgn5n")
 key_color_white = Color(0.69921875, 0.69921875, 0.69921875, 1)
@@ -122,12 +145,12 @@ key_color_border = Color(0.08235294, 0.08235294, 0.08235294, 1)
 border_width = 3.0
 border_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
 
-[node name="NoteArea" type="Control" parent="MainPanel/VBox/MidiEditor/HBox"]
+[node name="NoteArea" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox"]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 
-[node name="NoteLanes" type="Control" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="NoteLanes" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -141,7 +164,7 @@ note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
 
-[node name="GridRenderer" type="Control" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -154,7 +177,7 @@ bar_line_color = Color(0.25, 0.25, 0.25, 1)
 beat_line_color = Color(0.1875, 0.1875, 0.1875, 1)
 subdivision_line_color = Color(0.14453125, 0.14453125, 0.14453125, 1)
 
-[node name="HScroll" type="ScrollContainer" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -165,14 +188,14 @@ mouse_filter = 2
 horizontal_scroll_mode = 3
 vertical_scroll_mode = 0
 
-[node name="NoteEditor" type="Container" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea/HScroll"]
+[node name="NoteEditor" type="Container" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea/HScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 focus_mode = 1
 script = ExtResource("1_4hncn")
 
-[node name="Playhead" type="TextureRect" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 custom_minimum_size = Vector2(3, 0)
 layout_mode = 1
 anchors_preset = 9
@@ -182,7 +205,7 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("GradientTexture1D_ytm0k")
 
-[node name="Overlays" type="Control" parent="MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -191,3 +214,14 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("9_ytm0k")
+
+[node name="BottomPanel" type="PanelContainer" parent="."]
+layout_mode = 2
+theme_type_variation = &"PrimaryPanel"
+
+[node name="Toolbar" type="HBoxContainer" parent="BottomPanel"]
+layout_mode = 2
+
+[node name="Quantize" type="Button" parent="BottomPanel/Toolbar"]
+layout_mode = 2
+text = "Quantize"

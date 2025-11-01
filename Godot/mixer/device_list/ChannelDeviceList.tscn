@@ -1,7 +1,7 @@
 [gd_scene load_steps=4 format=3 uid="uid://csa4qoy44e5vn"]
 
 [ext_resource type="Script" uid="uid://1ll71lnbrlnm" path="res://mixer/device_list/ChannelDeviceList.gd" id="1_ekfn8"]
-[ext_resource type="PackedScene" uid="uid://dul180dx6ngl4" path="res://components/device/compact/CompactDevicePanel.tscn" id="2_npgpv"]
+[ext_resource type="PackedScene" uid="uid://dul180dx6ngl4" path="res://devices/compact/CompactDevicePanel.tscn" id="2_npgpv"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_npgpv"]
 content_margin_left = 0.0

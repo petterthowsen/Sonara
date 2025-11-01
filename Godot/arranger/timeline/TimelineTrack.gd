@@ -164,9 +164,12 @@ func _update_clips() -> void:
 
 	# Create new UI instances for each ClipInstance in the track
 	for clip_inst in track.clip_instances:
-		var clip_ui = TimelineClipScene.instantiate()
-		add_child(clip_ui)
+		var clip_ui : TimelineClip = TimelineClipScene.instantiate()
+		clip_ui.track_color = track.color
+
 		clip_ui.bind_to_clip_instance(clip_inst, timeline, track.color)
+
+		add_child(clip_ui)
 
 		# Connect signals
 		if timeline:

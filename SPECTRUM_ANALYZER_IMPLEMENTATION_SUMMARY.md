@@ -96,7 +96,7 @@ Successfully implemented a complete spectrum analyzer device with a generalized 
 The final integration step requires updating `DevicePanel.gd` and `DevicePanel.tscn`:
 
 **Status**: Comprehensive implementation guide created
-**File**: `Godot/device_lane/DEVICE_PANEL_VISUAL_INTEGRATION.md`
+**File**: `Godot/devices/device_lane/DEVICE_PANEL_VISUAL_INTEGRATION.md`
 
 **What's Needed**:
 1. Add Visual tab button and container to `.tscn` scene
@@ -260,13 +260,13 @@ func _on_data_received(ch_id: int, dev_pos: int, data_type: String, data: Packed
 - ✅ `devices/builtin/SpectrumAnalyzerVisual.gd` - **NEW** visual implementation
 - ✅ `devices/builtin/SpectrumAnalyzerVisual.tscn` - **NEW** scene
 - ✅ `browser/DeviceAssetProvider.gd` - Scene mapping
-- ⏳ `device_lane/DevicePanel.gd` - Tab system (guide provided)
-- ⏳ `device_lane/DevicePanel.tscn` - UI elements (guide provided)
+- ⏳ `devices/device_lane/DevicePanel.gd` - Tab system (guide provided)
+- ⏳ `devices/device_lane/DevicePanel.tscn` - UI elements (guide provided)
 
 ### Documentation
 - ✅ `OSC_PROTOCOL.md` - Protocol documentation
 - ✅ `SPECTRUM_ANALYZER_IMPLEMENTATION_SUMMARY.md` - This file
-- ✅ `Godot/device_lane/DEVICE_PANEL_VISUAL_INTEGRATION.md` - Integration guide
+- ✅ `Godot/devices/device_lane/DEVICE_PANEL_VISUAL_INTEGRATION.md` - Integration guide
 
 ## Conclusion
 
@@ -292,4 +292,3 @@ The architecture enables easy addition of new visualization types (oscilloscope,
 6. Document any edge cases discovered during testing
 
 **Status**: Ready for integration and testing! 🎉
-

@@ -1,4 +1,4 @@
-globs: Godot/device_lane/DevicePanel.gd, Godot/device_lane/DevicePanel.tscn, Godot/data/Device.gd, Godot/data/DeviceInstance.gd, Godot/components/device/**/*.gd
+globs: Godot/devices/device_lane/DevicePanel.gd, Godot/devices/device_lane/DevicePanel.tscn, Godot/data/Device.gd, Godot/data/DeviceInstance.gd, Godot/components/device/**/*.gd
 alwaysApply: false
 ---
 # Godot Device Views
@@ -15,6 +15,12 @@ alwaysApply: false
 ## DeviceInstance Factory
 - `DeviceInstance.create_view(type)` instantiates the registered PackedScene, asserts the node extends `DeviceView`, sets the `view_type`, and returns it; callers should treat `null` as "view unsupported".
 - Device views implement `_on_bind()` to wire signals and use `_on_view_shown()`/`_on_view_hidden()` for data subscriptions to keep OSC listeners scoped to visibility.
+
+## Parameter Typing
+- `DeviceParameter.param_type` is one of `"float"`, `"bool"`, or `"enum"`; `"enum"` parameters must populate `enum_values` with display strings where the index matches the engine payload.
+- Keep `default_value`, `min_value`, and `max_value` aligned with the declared type: booleans stay in `[0,1]`, enums use integer indices, floats can still mark `is_logarithmic`.
+- Skip OSC writes for UI-only fields by setting `syncable = false`; `DeviceInstance.sync_parameter_to_engine()` respects the flag.
+- UI controls (e.g., `CompactParameterControl`) branch on `param_type` to choose a checkbox, option button, or slider—make sure new views follow the same pattern when rendering device parameters.
 
 ## DevicePanel Orchestration
 - Binding a device loads the Panel view first; if no Panel view exists, the right pane hides entirely.

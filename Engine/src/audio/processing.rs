@@ -6,7 +6,7 @@ use super::types::*;
 /// Process audio for one buffer
 pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
     // Only process MIDI and advance playhead when playing
-    if !state.is_playing {
+    if !state.get_is_playing() {
         return;
     }
 
@@ -15,11 +15,11 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
         (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
 
     // Precompute tick boundaries within this buffer with frame offsets
-    let start_tick = state.current_tick;
+    let start_tick = state.get_current_tick();
     let mut tick_events: Vec<(Tick, usize)> = Vec::new();
     tick_events.push((start_tick, 0));
 
-    let mut acc = state.fractional_tick_accumulator;
+    let mut acc = state.get_fractional_tick_accumulator();
     let start_acc = acc;
     let mut tick_cursor = start_tick;
     for frame_idx in 0..frames {
@@ -32,8 +32,8 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
     }
 
     // Update global tick and carry fractional forward
-    state.current_tick = tick_cursor;
-    state.fractional_tick_accumulator = acc;
+    state.set_current_tick(tick_cursor);
+    state.set_fractional_tick_accumulator(acc);
 
     // Dispatch MIDI for each tick event at its exact frame offset
     for (current_tick, frame_offset) in tick_events.into_iter() {
@@ -58,9 +58,9 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
 
                         // Debug: log when we're processing an instance
                         if current_tick % 960 == 0 {
-                            // Log once per beat
-                            info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes", 
-                                instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
+                            // Log once per beat - disabled for real-time safety
+                            // info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes",
+                            //     instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
                         }
 
                         // Handle looping
@@ -294,18 +294,18 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
         }
     }
 
-    // Log playhead position every bar for debugging
-    let ticks_per_bar = state.settings.ppq as i64 * state.settings.time_numerator as i64;
-    let final_tick = state.current_tick;
-    let final_bar = final_tick / ticks_per_bar;
-
-    // Log every bar boundary
-    static mut LAST_LOGGED_BAR: i64 = -1;
-    unsafe {
-        if final_bar != LAST_LOGGED_BAR {
-            LAST_LOGGED_BAR = final_bar;
-            let position = state.settings.format_tick_position(final_tick);
-            info!("Playhead: {}", position);
-        }
-    }
+    // Log playhead position every bar for debugging - disabled for real-time safety
+    // let ticks_per_bar = state.settings.ppq as i64 * state.settings.time_numerator as i64;
+    // let final_tick = state.get_current_tick();
+    // let final_bar = final_tick / ticks_per_bar;
+    //
+    // // Log every bar boundary
+    // static mut LAST_LOGGED_BAR: i64 = -1;
+    // unsafe {
+    //     if final_bar != LAST_LOGGED_BAR {
+    //         LAST_LOGGED_BAR = final_bar;
+    //         let position = state.settings.format_tick_position(final_tick);
+    //         info!("Playhead: {}", position);
+    //     }
+    // }
 }

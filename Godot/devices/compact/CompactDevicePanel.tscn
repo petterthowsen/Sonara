@@ -1,7 +1,7 @@
 [gd_scene load_steps=9 format=3 uid="uid://dul180dx6ngl4"]
 
-[ext_resource type="Script" uid="uid://dnb0judqvs27u" path="res://components/device/compact/CompactDevicePanel.gd" id="1_6d71u"]
-[ext_resource type="PackedScene" uid="uid://q0m43fo1g33u" path="res://components/device/compact/CompactParameterControl.tscn" id="1_o5nab"]
+[ext_resource type="Script" uid="uid://dnb0judqvs27u" path="res://devices/compact/CompactDevicePanel.gd" id="1_6d71u"]
+[ext_resource type="PackedScene" uid="uid://q0m43fo1g33u" path="res://devices/compact/CompactParameterControl.tscn" id="1_o5nab"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_jx3fc"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6d71u"]

@@ -3,9 +3,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use crossbeam::channel::{Receiver, Sender};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::commands::process_command;
 pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
@@ -16,6 +18,7 @@ use super::types::*;
 /// Audio engine that manages the audio stream and processing
 pub struct AudioEngine {
     _stream: Stream,
+    _command_thread: thread::JoinHandle<()>,
     command_tx: Sender<AudioCommand>,
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
@@ -80,6 +83,12 @@ impl AudioEngine {
 
         // Create command channel for thread-safe communication
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
+        let command_rx_for_thread = command_rx.clone();
+
+        // Use a safe maximum buffer size for plugin allocation
+        // CPAL may request variable buffer sizes, so we allocate generously
+        // Most systems use 128-2048 frames, but we allow up to 8192 to be safe
+        let max_buffer_size = 8192;
 
         // Create shared state
         let state = Arc::new(Mutex::new(EngineState::default()));
@@ -91,6 +100,21 @@ impl AudioEngine {
             state_lock.output_devices = output_devices;
         }
 
+        // Create command processing thread
+        let command_thread_state = state.clone();
+        let command_thread_status_tx = status_tx.clone();
+        let command_thread_command_tx = command_tx.clone();
+        let command_thread_max_buffer_size = max_buffer_size;
+        let command_thread = thread::spawn(move || {
+            Self::command_processing_loop(
+                command_rx_for_thread,
+                command_thread_state,
+                command_thread_status_tx,
+                command_thread_command_tx,
+                command_thread_max_buffer_size,
+            );
+        });
+
         // Build the audio stream (pass a clone of status_tx, keep one for log forwarder)
         let stream = Self::build_stream(
             &default_device,
@@ -99,6 +123,7 @@ impl AudioEngine {
             command_tx.clone(),
             status_tx.clone(),
             state.clone(),
+            max_buffer_size,
         )?;
 
         // Start the stream
@@ -107,6 +132,7 @@ impl AudioEngine {
 
         Ok(Self {
             _stream: stream,
+            _command_thread: command_thread,
             command_tx,
             status_tx,
             state,
@@ -120,6 +146,43 @@ impl AudioEngine {
         Self::with_status_channel(status_tx, status_rx)
     }
 
+    /// Command processing loop that runs in a separate thread
+    fn command_processing_loop(
+        command_rx: Receiver<AudioCommand>,
+        state: Arc<Mutex<EngineState>>,
+        status_tx: Sender<EngineStatus>,
+        command_tx: Sender<AudioCommand>,
+        max_buffer_size: usize,
+    ) {
+        loop {
+            match command_rx.recv() {
+                Ok(cmd) => {
+                    let mut state = match state.lock() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("Failed to lock state in command thread: {}", e);
+                            continue;
+                        }
+                    };
+
+                    if let Some(status) = process_command(
+                        &mut state,
+                        cmd,
+                        max_buffer_size,
+                        &status_tx,
+                        &command_tx,
+                    ) {
+                        let _ = status_tx.send(status);
+                    }
+                }
+                Err(_) => {
+                    // Channel closed, exit thread
+                    break;
+                }
+            }
+        }
+    }
+
     /// Build the audio output stream
     fn build_stream(
         device: &Device,
@@ -128,14 +191,10 @@ impl AudioEngine {
         command_tx: Sender<AudioCommand>,
         status_tx: Sender<EngineStatus>,
         state: Arc<Mutex<EngineState>>,
+        max_buffer_size: usize,
     ) -> Result<Stream> {
         let sample_rate = config.sample_rate.0;
         let channels = config.channels as usize;
-
-        // Use a safe maximum buffer size for plugin allocation
-        // CPAL may request variable buffer sizes, so we allocate generously
-        // Most systems use 128-2048 frames, but we allow up to 8192 to be safe
-        let max_buffer_size = 8192;
 
         // Counter for periodic status updates
         let mut samples_since_update = 0;
@@ -156,22 +215,7 @@ impl AudioEngine {
                 // Start timing the audio processing
                 let processing_start = Instant::now();
 
-                // Process any pending commands (lock-free)
-                while let Ok(cmd) = command_rx.try_recv() {
-                    if let Ok(mut state) = state.lock() {
-                        if let Some(status) = process_command(
-                            &mut state,
-                            cmd,
-                            max_buffer_size,
-                            &status_tx,
-                            &command_tx,
-                        ) {
-                            let _ = status_tx.send(status);
-                        }
-                    }
-                }
-
-                // Lock state for audio processing
+                // Lock state for audio processing (commands are processed in separate thread)
                 let mut state = match state.lock() {
                     Ok(s) => s,
                     Err(_) => return, // Skip this buffer if lock fails
@@ -182,19 +226,8 @@ impl AudioEngine {
                 // Calculate block duration (time available for this buffer)
                 let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
 
-                // Resize channel buffers if needed
+                // Clear channel buffers (pre-allocated to max size, only process first 'frames' samples)
                 for channel in state.channels.values_mut() {
-                    if channel.buffer_left.len() != frames {
-                        if !logged_buffer_info {
-                            info!(
-                                "Resizing channel {} buffers from {} to {} frames",
-                                channel.id,
-                                channel.buffer_left.len(),
-                                frames
-                            );
-                        }
-                        channel.resize_buffers(frames);
-                    }
                     channel.clear_buffers();
                 }
 
@@ -211,12 +244,12 @@ impl AudioEngine {
                 }
 
                 // Process audio if playing
-                if state.is_playing {
+                if state.get_is_playing() {
                     process_audio(&mut state, frames, sample_rate as f32);
                 }
 
                 // Mix channels and output
-                mix_and_output(&mut state, data, channels, &status_tx);
+                mix_and_output(&mut state, data, channels, frames, &status_tx);
 
                 // Update peaks
                 for channel in state.channels.values_mut() {
@@ -258,8 +291,8 @@ impl AudioEngine {
                     samples_since_update = 0;
 
                     // Send playhead update
-                    if state.is_playing {
-                        let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.current_tick));
+                    if state.get_is_playing() {
+                        let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
                     }
 
                     // Send meter updates
@@ -308,11 +341,11 @@ impl AudioEngine {
 
     /// Check if audio is currently playing
     pub fn is_playing(&self) -> bool {
-        self.state.lock().unwrap().is_playing
+        self.state.lock().unwrap().get_is_playing()
     }
 
     /// Get current playhead position
     pub fn current_tick(&self) -> Tick {
-        self.state.lock().unwrap().current_tick
+        self.state.lock().unwrap().get_current_tick()
     }
 }
