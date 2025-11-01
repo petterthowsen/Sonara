@@ -1,6 +1,15 @@
 use super::devices::AudioDevice;
 use std::collections::HashMap;
 use tracing::info;
+/// Value kind for setting device parameters
+#[derive(Debug, Clone, Copy)]
+pub enum ParamSetValue {
+    /// Normalized value 0.0..1.0
+    Normalized(f32),
+    /// Discrete index for bool/enum (0/1 for bool, 0..N-1 for enum)
+    Index(i32),
+}
+
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;

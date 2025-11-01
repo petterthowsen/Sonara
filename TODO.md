@@ -24,8 +24,7 @@
 - [ ] DeviceInstance and their UIs should init with loading state and wait for Engine updates
 - [ ] Multi-in and multi-out for devices
 - [ ] Add support for enum parameter type for builtins
-- [ ] Refactor DevicePanel and DeviceView system:
-    - [ ]
+- [x] Refactor DevicePanel and DeviceView system
 
 ### Plugins
 - [ ] Crash / Error handling, send info to Godot for UI notifications

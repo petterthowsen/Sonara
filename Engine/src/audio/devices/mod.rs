@@ -21,6 +21,14 @@ pub type ParamId = u32;
 
 /// Parameter value (always 0.0-1.0, device interprets range)
 pub type ParamValue = f32;
+/// Parameter type for metadata/UI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamType {
+    Float,
+    Bool,
+    Enum,
+}
+
 
 /// Device variant: built-in or future plugin
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +95,9 @@ pub struct ParamInfo {
     pub max: f32,
     pub default: f32,
     pub is_automation_safe: bool,
+    pub param_type: ParamType,
+    pub syncable: bool,
+    pub enum_values: Vec<String>,
 }
 
 /// Base trait for all audio devices (instruments and effects)

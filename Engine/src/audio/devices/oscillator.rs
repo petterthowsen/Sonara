@@ -1,5 +1,5 @@
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
 };
 
 /// Oscillator instrument device
@@ -219,6 +219,9 @@ impl AudioDevice for OscillatorDevice {
                 max: 1.0,
                 default: 0.0,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 1,
@@ -228,6 +231,9 @@ impl AudioDevice for OscillatorDevice {
                 max: 1.0,
                 default: 0.3,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
         ]
     }

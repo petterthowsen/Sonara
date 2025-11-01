@@ -14,6 +14,9 @@ pub struct BuiltinParamInfo {
     pub min: f32,
     pub max: f32,
     pub default: f32,
+    pub param_type: super::devices::ParamType,
+    pub syncable: bool,
+    pub enum_values: Vec<String>,
 }
 
 /// Commands that can be sent to the audio engine
@@ -201,7 +204,7 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         device_position: usize,
         param_id: u32,
-        value: f32,
+        value: super::types::ParamSetValue,
     },
     SetDeviceActive {
         channel_id: ChannelId,
@@ -1297,18 +1300,63 @@ pub fn process_command(
             value,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if channel.set_device_parameter(device_position, param_id, value) {
-                    info!(
-                        "Device parameter set: channel={} device={} param={} value={}",
-                        channel_id, device_position, param_id, value
-                    );
-                    // Echo back to UI so Godot updates its single source of truth and emits parameter_changed
-                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                        channel_id,
-                        device_position,
-                        param_id,
-                        value,
-                    });
+                if device_position < channel.devices.len() {
+                    // Determine normalized value based on ParamInfo
+                    let device = &channel.devices[device_position];
+                    let params = device.parameters();
+                    let mut normalized: f32 = 0.0;
+                    if let Some(info) = params.iter().find(|p| p.id == param_id) {
+                        match value {
+                            super::types::ParamSetValue::Normalized(v) => {
+                                normalized = v.clamp(0.0, 1.0);
+                            }
+                            super::types::ParamSetValue::Index(idx) => {
+                                match info.param_type {
+                                    super::devices::ParamType::Bool => {
+                                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                                    }
+                                    super::devices::ParamType::Enum => {
+                                        let n = info.enum_values.len();
+                                        if n > 1 {
+                                            let i = idx.max(0) as usize;
+                                            let i = i.min(n - 1);
+                                            normalized = (i as f32) / ((n - 1) as f32);
+                                        } else {
+                                            normalized = 0.0;
+                                        }
+                                    }
+                                    super::devices::ParamType::Float => {
+                                        // Treat index as 0/1 for floats as a fallback
+                                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Unknown param: use float if provided
+                        if let super::types::ParamSetValue::Normalized(v) = value {
+                            normalized = v.clamp(0.0, 1.0);
+                        }
+                    }
+
+                    if channel.set_device_parameter(device_position, param_id, normalized) {
+                        info!(
+                            "Device parameter set: channel={} device={} param={} value={}",
+                            channel_id, device_position, param_id, normalized
+                        );
+                        // Echo back to UI so Godot updates its single source of truth and emits parameter_changed
+                        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                            channel_id,
+                            device_position,
+                            param_id,
+                            value: normalized,
+                        });
+                    } else {
+                        warn!(
+                            "Invalid device position {} for channel {}",
+                            device_position, channel_id
+                        );
+                    }
                 } else {
                     warn!(
                         "Invalid device position {} for channel {}",
@@ -1505,6 +1553,9 @@ pub fn process_command(
                             min: p.min,
                             max: p.max,
                             default: p.default,
+                            param_type: p.param_type,
+                            syncable: p.syncable,
+                            enum_values: p.enum_values,
                         })
                         .collect();
 
@@ -1545,22 +1596,12 @@ pub fn process_command(
 
             // Create temp instances of each builtin device and send their info
             let builtin_devices: Vec<EngineStatus> = vec![
-                create_device_info(Box::new(super::devices::OscillatorDevice::new(
-                    state.device_sample_rate,
-                ))),
                 create_device_info(Box::new(super::devices::PolySynthDevice::new(
                     state.device_sample_rate,
                 ))),
                 create_device_info(Box::new(super::devices::DelayDevice::new(
                     state.device_sample_rate,
                     5000.0,
-                ))),
-                create_device_info(Box::new(super::devices::SfizzDevice::new(
-                    state.device_sample_rate,
-                    buffer_size,
-                    0,
-                    0,
-                    None,
                 ))),
                 create_device_info(Box::new(super::devices::SpectrumAnalyzerDevice::new(
                     state.device_sample_rate,

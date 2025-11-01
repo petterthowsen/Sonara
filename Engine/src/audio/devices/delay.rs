@@ -1,4 +1,4 @@
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamType, ParamValue};
 use tracing::info;
 
 /// Delay effect device
@@ -195,6 +195,9 @@ impl AudioDevice for DelayDevice {
                 max: 5000.0,
                 default: 250.0,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 1,
@@ -204,6 +207,9 @@ impl AudioDevice for DelayDevice {
                 max: 1.0,
                 default: 0.5,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
         ]
     }

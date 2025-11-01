@@ -8,9 +8,6 @@ class_name DeviceAssetProvider extends AssetProvider
 ## Map builtin device IDs to Panel view PackedScenes
 const BUILTIN_PANEL_SCENES = {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerVisual.tscn"),
-	# Future devices:
-	# "sonara.builtin.oscilloscope": preload("res://devices/builtin/OscilloscopeVisual.tscn"),
-	# "sonara.builtin.phase_meter": preload("res://devices/builtin/PhaseMeterVisual.tscn"),
 }
 
 ## Map builtin device IDs to Large view PackedScenes
@@ -233,7 +230,8 @@ func _on_plugin_scan_complete(args: Array) -> void:
 ## [id:String, name:String, category:String, description:String, accepts_midi:Int(0|1),
 ##  audio_in:Int, audio_out:Int, supports_file_loading:Int(0|1), file_type_description:String,
 ##  extension_count:Int, each extension:String..., param_count:Int, then param tuples:
-##  (param_id:Int, name:String, unit:String, min:Float, max:Float, default:Float) ...]
+##  (param_id:Int, name:String, unit:String, type:String, syncable:Int(0|1),
+##   min:Float, max:Float, default:Float, enum_count:Int, enum_values:String...) ...]
 func _on_builtin_info_received(args: Array) -> void:
 	if args.size() < 10:
 		push_warning("[DeviceAssetProvider] Invalid /builtin/info message: %s" % str(args))
@@ -287,26 +285,42 @@ func _on_builtin_info_received(args: Array) -> void:
 	device.file_type_description = file_type_description
 	device.supported_file_extensions = extensions
 
-	# Parse parameters
+	# Parse typed parameters (id, name, unit, type, syncable, min, max, default, enum_count, enum_values...)
 	for i in range(param_count):
-		if idx + 5 >= args.size():
+		if idx + 8 >= args.size():
 			push_warning("[DeviceAssetProvider] Truncated parameter data for builtin device %s" % dev_id)
 			break
 		var p_id: int = int(args[idx + 0])
 		var p_name: String = String(args[idx + 1])
 		var p_unit: String = String(args[idx + 2])
-		var p_min: float = float(args[idx + 3])
-		var p_max: float = float(args[idx + 4])
-		var p_def: float = float(args[idx + 5])
-		idx += 6
+		var p_type: String = String(args[idx + 3])
+		var p_syncable: bool = int(args[idx + 4]) != 0
+		var p_min: float = float(args[idx + 5])
+		var p_max: float = float(args[idx + 6])
+		var p_def: float = float(args[idx + 7])
+		var enum_count: int = int(args[idx + 8])
+		idx += 9
+
+		var enum_vals: Array[String] = []
+		for _j in range(enum_count):
+			if idx >= args.size():
+				push_warning("[DeviceAssetProvider] Missing enum value for param %s on %s" % [p_name, dev_id])
+				break
+			enum_vals.append(String(args[idx]))
+			idx += 1
 
 		var param := DeviceParameter.new(p_id, p_name, p_unit)
+		param.param_type = p_type
+		param.syncable = p_syncable
+		param.enum_values = enum_vals
 		param.min_value = p_min
 		param.max_value = p_max
 		param.default_value = p_def
-		# Heuristic: mark common log parameters
-		if p_name.to_lower().findn("time") >= 0 or p_name.to_lower().findn("cutoff") >= 0 or p_name.to_lower().findn("frequency") >= 0:
-			param.is_logarithmic = true
+		# Heuristic: mark common log parameters for float types
+		if param.param_type == "float":
+			var lname := p_name.to_lower()
+			if lname.findn("time") >= 0 or lname.findn("cutoff") >= 0 or lname.findn("frequency") >= 0:
+				param.is_logarithmic = true
 		device.add_parameter(param)
 
 	# Register Panel view if available

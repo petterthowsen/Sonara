@@ -1,6 +1,6 @@
 use super::{
-    AudioDevice, AudioPort, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
-    PortFlow,
+    AudioDevice, AudioPort, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamType,
+    ParamValue, PortFlow,
 };
 use realfft::{RealFftPlanner, RealToComplex};
 use std::collections::HashMap;
@@ -353,26 +353,72 @@ impl AudioDevice for SpectrumAnalyzerDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        vec![
+        let mut v = vec![
             ParamInfo {
                 id: 0,
                 name: "FFT Size".to_string(),
-                unit: "".to_string(),
+                unit: String::new(),
                 min: 0.0,
                 max: 1.0,
-                default: 0.5, // 2048
+                default: 0.5, // index will be derived on UI side
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: true,
+                enum_values: vec![
+                    "Tiny".to_string(),   // 512
+                    "Small".to_string(),  // 1024
+                    "Medium".to_string(), // 2048
+                    "Large".to_string(),  // 4096
+                ],
             },
             ParamInfo {
                 id: 1,
                 name: "Speed".to_string(),
-                unit: "".to_string(),
+                unit: String::new(),
                 min: 0.0,
                 max: 1.0,
-                default: 0.7,
+                default: 0.75, // default to Medium/Fast-ish
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: false,
+                enum_values: vec![
+                    "Freeze".to_string(),
+                    "Slow".to_string(),
+                    "Medium".to_string(),
+                    "Fast".to_string(),
+                ],
             },
-        ]
+        ];
+
+        // UI-only parameters for visualization (not synced to engine)
+        // TODO: move these to array above?
+        v.push(ParamInfo {
+            id: 100,
+            name: "Scale".to_string(),
+            unit: String::new(),
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
+            is_automation_safe: false,
+            param_type: ParamType::Enum,
+            syncable: false,
+            enum_values: vec!["Log".to_string(), "Linear".to_string()],
+        });
+        v.push(ParamInfo {
+            id: 101,
+            name: "Style".to_string(),
+            unit: String::new(),
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
+            is_automation_safe: false,
+            param_type: ParamType::Enum,
+            syncable: false,
+            enum_values: vec!["Bars".to_string(), "Line".to_string()],
+        });
+        // Removed separate "Hold Peaks" boolean; use Speed enum with "Freeze" instead
+
+        v
     }
 
     fn reset(&mut self) {

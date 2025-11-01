@@ -87,9 +87,14 @@ func set_parameter_normalized(param_id: int, normalized_value: float) -> void:
 		if abs(old_value - new_value) > 0.0001:
 			# Update local cache (for immediate visual feedback)
 			parameter_values[param_id] = new_value
-			
-			# Sync to engine - it will echo back and we'll emit signal then
-			sync_parameter_to_engine(param_id)
+
+			var param = device.get_parameter(param_id)
+			if param and not param.syncable:
+				# UI-local parameter: emit immediately, do not send OSC
+				parameter_changed.emit(param_id, parameter_values[param_id])
+			else:
+				# Sync to engine - it will echo back and we'll emit signal then
+				sync_parameter_to_engine(param_id)
 
 
 ## Get a parameter value (normalized 0.0-1.0)
@@ -403,15 +408,40 @@ func _on_param_info_received(args: Array) -> void:
 ## TODO: Implement this
 func sync_to_engine() -> void:
 	for param_id in parameter_values:
+		var param = device.get_parameter(param_id)
+		if param and not param.syncable:
+			continue
 		var normalized_value = parameter_values[param_id]
-		AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
+		if param and param.param_type == "bool":
+			var idx: int = 1 if normalized_value >= 0.5 else 0
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+		elif param and param.param_type == "enum":
+			var n: int = max(1, param.enum_values.size())
+			var idx: int = int(round(normalized_value * float(n - 1)))
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+		else:
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
 
 
 ## Sync a single parameter to the audio engine
 func sync_parameter_to_engine(param_id: int) -> void:
 	if param_id in parameter_values:
+		var param = device.get_parameter(param_id)
+		if param and not param.syncable:
+			return
 		var normalized_value = parameter_values[param_id]
-		AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
+		if param and param.param_type == "bool":
+			var idx: int = 1 if normalized_value >= 0.5 else 0
+			print("[DeviceInstance] send BOOL param_id=", param_id, " idx=", idx)
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+		elif param and param.param_type == "enum":
+			var n: int = max(1, param.enum_values.size())
+			var idx: int = int(round(normalized_value * float(n - 1)))
+			print("[DeviceInstance] send ENUM param_id=", param_id, " idx=", idx, " n=", n, " normalized=", normalized_value)
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+		else:
+			print("[DeviceInstance] send FLOAT param_id=", param_id, " normalized=", normalized_value)
+			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
 
 
 ## Load a file into this device (e.g., SFZ file into sfizz sampler)

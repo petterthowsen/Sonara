@@ -34,6 +34,16 @@ var description: String = ""
 ## Whether this parameter is automation-safe
 var is_automation_safe: bool = true
 
+# Typed parameter support
+# "float" | "bool" | "enum"
+var param_type: String = "float"
+
+# Whether this parameter should sync to engine via OSC
+var syncable: bool = true
+
+# Enum labels for param_type == "enum"
+var enum_values: Array[String] = []
+
 
 ## ============================================================================
 ## INITIALIZATION
@@ -51,6 +61,17 @@ func _init(p_id: int, p_name: String, p_unit: String = "") -> void:
 
 ## Convert real value to normalized 0.0-1.0
 func value_to_normalized(value: float) -> float:
+	if param_type == "bool":
+		return 1.0 if value >= 0.5 else 0.0
+
+	if param_type == "enum":
+		var n := enum_values.size()
+		if n <= 1:
+			return 0.0
+		# value is treated as index for enums
+		var idx := int(round(clamp(value, 0.0, float(n - 1))))
+		return float(idx) / float(n - 1)
+
 	if is_logarithmic:
 		# Logarithmic scaling: log(value / min) / log(max / min)
 		if value <= min_value:
@@ -66,6 +87,16 @@ func value_to_normalized(value: float) -> float:
 ## Convert normalized 0.0-1.0 to real value
 func normalized_to_value(normalized: float) -> float:
 	var clamped = clamp(normalized, 0.0, 1.0)
+
+	if param_type == "bool":
+		return 1.0 if clamped >= 0.5 else 0.0
+
+	if param_type == "enum":
+		var n := enum_values.size()
+		if n <= 1:
+			return 0.0
+		# Return the enum index as a float (for display mapping)
+		return float(int(round(clamped * float(n - 1))))
 
 	if is_logarithmic:
 		# Inverse logarithmic scaling: min * (max/min)^normalized
@@ -83,6 +114,16 @@ func normalized_to_value(normalized: float) -> float:
 
 ## Get formatted display text for a value
 func format_value(value: float) -> String:
+	if param_type == "bool":
+		return "On" if value >= 0.5 else "Off"
+
+	if param_type == "enum":
+		var n := enum_values.size()
+		if n == 0:
+			return ""
+		var idx := int(clamp(round(value), 0.0, float(n - 1)))
+		return enum_values[idx]
+
 	if unit.is_empty():
 		return "%.2f" % value
 	else:

@@ -340,6 +340,9 @@ impl ClapDeviceAdapter {
                     is_automation_safe: clap_info
                         .flags
                         .contains(clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE),
+                    param_type: super::super::ParamType::Float,
+                    syncable: true,
+                    enum_values: Vec::new(),
                 };
 
                 tracing::debug!(

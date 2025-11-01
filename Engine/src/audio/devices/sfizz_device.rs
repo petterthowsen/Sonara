@@ -5,7 +5,7 @@
 
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, FileLoadingSupport, MidiPort, ParamId, ParamInfo,
-    ParamValue, PortFlow,
+    ParamType, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
 use crossbeam::channel::Sender;
@@ -528,6 +528,9 @@ impl AudioDevice for SfizzDevice {
                     max: 1.0,
                     default,
                     is_automation_safe: true, // CC automation is real-time safe
+                    param_type: ParamType::Float,
+                    syncable: true,
+                    enum_values: Vec::new(),
                 }
             })
             .collect()

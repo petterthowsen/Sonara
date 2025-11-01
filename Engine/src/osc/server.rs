@@ -1038,27 +1038,38 @@ impl OscServer {
                 }
             }
             ["channel", channel_id_str, "device", device_pos_str, "param", param_id_str] => {
-                if let (
-                    Ok(channel_id),
-                    Ok(device_position),
-                    Ok(param_id),
-                    Some(OscType::Float(value)),
-                ) = (
+                let parsed = (
                     channel_id_str.parse::<usize>(),
                     device_pos_str.parse::<usize>(),
                     param_id_str.parse::<u32>(),
                     args.first(),
-                ) {
-                    info!(
-                        "Set device parameter: channel={} device={} param={} value={}",
-                        channel_id, device_position, param_id, value
-                    );
-                    command_tx.send(AudioCommand::SetDeviceParameter {
-                        channel_id,
-                        device_position,
-                        param_id,
-                        value: *value,
-                    })?;
+                );
+                match parsed {
+                    (Ok(channel_id), Ok(device_position), Ok(param_id), Some(OscType::Float(v))) => {
+                        info!(
+                            "Set device parameter: channel={} device={} param={} value={}",
+                            channel_id, device_position, param_id, v
+                        );
+                        command_tx.send(AudioCommand::SetDeviceParameter {
+                            channel_id,
+                            device_position,
+                            param_id,
+                            value: crate::audio::types::ParamSetValue::Normalized(*v),
+                        })?;
+                    }
+                    (Ok(channel_id), Ok(device_position), Ok(param_id), Some(OscType::Int(i))) => {
+                        info!(
+                            "Set device parameter (index): channel={} device={} param={} index={}",
+                            channel_id, device_position, param_id, i
+                        );
+                        command_tx.send(AudioCommand::SetDeviceParameter {
+                            channel_id,
+                            device_position,
+                            param_id,
+                            value: crate::audio::types::ParamSetValue::Index(*i),
+                        })?;
+                    }
+                    _ => {}
                 }
             }
 
@@ -1300,14 +1311,25 @@ impl OscServer {
 
                 args.push(OscType::Int(parameters.len() as i32));
 
-                // Add all parameters inline (id, name, unit, min, max, default)
+                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, enum_count, enum_values...)
                 for param in parameters {
                     args.push(OscType::Int(param.id as i32));
                     args.push(OscType::String(param.name));
                     args.push(OscType::String(param.unit));
+                    let ty_str = match param.param_type {
+                        crate::audio::devices::ParamType::Float => "float",
+                        crate::audio::devices::ParamType::Bool => "bool",
+                        crate::audio::devices::ParamType::Enum => "enum",
+                    };
+                    args.push(OscType::String(ty_str.to_string()));
+                    args.push(OscType::Int(if param.syncable { 1 } else { 0 }));
                     args.push(OscType::Float(param.min));
                     args.push(OscType::Float(param.max));
                     args.push(OscType::Float(param.default));
+                    args.push(OscType::Int(param.enum_values.len() as i32));
+                    for ev in param.enum_values {
+                        args.push(OscType::String(ev));
+                    }
                 }
 
                 ("/builtin/info".to_string(), args)

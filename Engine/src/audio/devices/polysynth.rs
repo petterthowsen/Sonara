@@ -1,5 +1,5 @@
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
 };
 use crate::audio::dsp::{mix_blocks, AdsrEnvelope, Oscillator};
 use std::sync::atomic::{AtomicI8, AtomicU8, Ordering};
@@ -435,6 +435,14 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.0,
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: true,
+                enum_values: vec![
+                    "Sine".to_string(),
+                    "Square".to_string(),
+                    "Saw".to_string(),
+                    "Triangle".to_string(),
+                ],
             },
             ParamInfo {
                 id: 1,
@@ -444,6 +452,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.005,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 2,
@@ -453,6 +464,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.05,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 3,
@@ -462,6 +476,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.7,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 4,
@@ -471,6 +488,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.1,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 5,
@@ -480,6 +500,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.3,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 6,
@@ -489,6 +512,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.7,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 7,
@@ -498,6 +524,14 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.5,
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: true,
+                enum_values: vec![
+                    "Sine".to_string(),
+                    "Square".to_string(),
+                    "Saw".to_string(),
+                    "Triangle".to_string(),
+                ],
             },
             ParamInfo {
                 id: 8,
@@ -507,6 +541,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.3,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 9,
@@ -516,6 +553,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.5,
                 is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: 10,
@@ -525,6 +565,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.5,
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: true,
+                enum_values: vec!["-2".to_string(), "-1".to_string(), "0".to_string(), "+1".to_string(), "+2".to_string()],
             },
             ParamInfo {
                 id: 11,
@@ -534,6 +577,9 @@ impl AudioDevice for PolySynthDevice {
                 max: 1.0,
                 default: 0.5,
                 is_automation_safe: true,
+                param_type: ParamType::Enum,
+                syncable: true,
+                enum_values: vec!["-2".to_string(), "-1".to_string(), "0".to_string(), "+1".to_string(), "+2".to_string()],
             },
         ]
     }

@@ -1,0 +1,15 @@
+Window
+VBoxContainer
+SpectrumRenderer
+PanelContainer
+MarginContainer
+Control
+HBoxContainer
+SpectrumAnalyzerVisual
+MenuBar
+VSplitContainer
+RichTextLabel
+Button
+Label
+BoxContainer
+LineEdit

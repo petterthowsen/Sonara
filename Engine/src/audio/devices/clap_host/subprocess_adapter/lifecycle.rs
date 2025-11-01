@@ -5,6 +5,7 @@
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::ParamInfo;
 use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
+use crate::audio::devices::ParamType;
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -132,6 +133,9 @@ pub fn spawn_loading_thread(
                                             max: p.max,
                                             default: p.default,
                                             is_automation_safe: p.is_automation_safe,
+                                            param_type: ParamType::Float,
+                                            syncable: true,
+                                            enum_values: Vec::new(),
                                         })
                                         .collect()
                                 }

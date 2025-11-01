@@ -103,7 +103,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add device to channel (type: "builtin"/"clap"/"lv2"/"vst3", file: path for plugins, empty for built-ins) |
 | `/channel/{id}/remove_device` | `i:position` | Remove device from channel |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
-| `/channel/{id}/device/{position}/param/{param_id}` | `f:normalized_value` | Set device parameter (0.0-1.0) |
+| `/channel/{id}/device/{position}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter (floats for continuous; int index for enums/bools) |
 | `/channel/{id}/device/{position}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
 | `/channel/{id}/device/{position}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
 
@@ -130,17 +130,54 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 
 #### Built-In Devices
 
-**Oscillator (`sonara.builtin.oscillator`)**
-- **Type:** Instrument (receives MIDI) 
-- **Params:**
-  - `0`: Waveform (0.0-1.0: Sine, Square, Sawtooth, Triangle)
-  - `1`: Amplitude (0.0-1.0)
+**PolySynth (`sonara.builtin.polysynth`)**
+- **Type:** Instrument (receives MIDI)
+- **Params (typed):**
+  - `0`: Waveform A (enum: Sine, Square, Saw, Triangle)
+  - `1`: Attack (float 0.0-1.0)
+  - `2`: Decay (float 0.0-1.0)
+  - `3`: Sustain (float 0.0-1.0)
+  - `4`: Release (float 0.0-1.0)
+  - `5`: Master Volume (float 0.0-1.0)
+  - `6`: Osc A Level (float 0.0-1.0)
+  - `7`: Waveform B (enum: Sine, Square, Saw, Triangle)
+  - `8`: Osc B Level (float 0.0-1.0)
+  - `9`: Osc B Detune (float 0.0-1.0)
+  - `10`: Osc A Octave (enum: -2, -1, 0, +1, +2)
+  - `11`: Osc B Octave (enum: -2, -1, 0, +1, +2)
 
 **Delay (`sonara.builtin.delay`)**
 - **Type:** Effect
 - **Params:**
   - `0`: Delay Time (1-5000ms, normalized 0.0-1.0)
   - `1`: Wet Amount (0.0-1.0)
+
+**Spectrum Analyzer (`sonara.builtin.spectrum_analyzer`)**
+- **Type:** Utility (analyzer)
+- **Params (typed):**
+  - `0`: FFT Size (enum: Tiny=512, Small=1024, Medium=2048, Large=4096)
+  - `1`: Speed (enum: Freeze, Slow, Medium, Fast)
+  - UI-only (not synced): Scale (enum: Log, Linear), Style (enum: Bars, Line)
+
+##### Built-in Parameter Advertisement (Rust → Godot)
+`/builtin/info` sends device metadata and typed parameter descriptors:
+```
+/builtin/info [
+  s:id, s:name, s:category, s:description,
+  i:accepts_midi, i:audio_in, i:audio_out,
+  i:supports_file_loading, s:file_type_description,
+  i:extension_count, ...extensions,
+  i:param_count,
+  repeat param_count times: (
+    i:param_id, s:name, s:unit,
+    s:type, i:syncable,
+    f:min, f:max, f:default,
+    i:enum_count, ...enum_values
+  )
+]
+```
+- `type`: "float" | "bool" | "enum"
+- For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
 
 #### CLAP Plugins
 

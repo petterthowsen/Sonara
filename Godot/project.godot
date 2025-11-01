@@ -10,7 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Godot"
+config/name="Sonara"
+config/description="Digital Audio Workstation"
 run/main_scene="uid://ckggccuur2ds"
 config/features=PackedStringArray("4.5")
 boot_splash/show_image=false

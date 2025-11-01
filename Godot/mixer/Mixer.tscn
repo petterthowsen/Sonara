@@ -1,8 +1,7 @@
-[gd_scene load_steps=11 format=3 uid="uid://x0b4w4e0igbg"]
+[gd_scene load_steps=6 format=3 uid="uid://x0b4w4e0igbg"]
 
 [ext_resource type="Script" uid="uid://1gf5ybe13hnj" path="res://mixer/Mixer.gd" id="1_yu81n"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="2_64am7"]
-[ext_resource type="PackedScene" uid="uid://d2pk5lsj80cg4" path="res://mixer/MixerChannel.tscn" id="2_yu81n"]
 [ext_resource type="PackedScene" uid="uid://c07tx27b6f3o" path="res://mixer/ChannelContextMenu.tscn" id="4_wr7tj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_64am7"]
@@ -11,30 +10,6 @@ expand_margin_left = 2.0
 expand_margin_right = 2.0
 shadow_size = 1
 shadow_offset = Vector2(-2, 0)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_mn7va"]
-resource_local_to_scene = true
-bg_color = Color(0.15, 0.15, 0.15, 0.5019608)
-border_width_right = 4
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_a1ece"]
-resource_local_to_scene = true
-bg_color = Color(0.15, 0.15, 0.15, 0.5019608)
-border_width_right = 4
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_mhjkb"]
-resource_local_to_scene = true
-bg_color = Color(0.15, 0.15, 0.15, 0.5019608)
-border_width_right = 4
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ywjo5"]
-resource_local_to_scene = true
-bg_color = Color(0.15, 0.15, 0.15, 0.5019608)
-border_width_right = 4
-border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yu81n"]
 content_margin_left = 4.0
@@ -82,18 +57,6 @@ layout_mode = 2
 theme_override_constants/separation = 0
 script = ExtResource("2_64am7")
 
-[node name="MixerChannel" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
-layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_mn7va")
-
-[node name="MixerChannel2" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
-layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_a1ece")
-
-[node name="MixerChannel3" parent="HSplit/LeftPane/HBox/Channels" instance=ExtResource("2_yu81n")]
-layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_mhjkb")
-
 [node name="Options" type="CenterContainer" parent="HSplit/LeftPane/HBox"]
 layout_mode = 2
 
@@ -129,11 +92,6 @@ layout_mode = 2
 size_flags_horizontal = 8
 theme_override_constants/separation = 0
 script = ExtResource("2_64am7")
-
-[node name="MixerChannel" parent="HSplit/RightPane/HBox/Channels" instance=ExtResource("2_yu81n")]
-layout_mode = 2
-mouse_default_cursor_shape = 0
-theme_override_styles/panel = SubResource("StyleBoxFlat_ywjo5")
 
 [node name="Toolbar" type="PanelContainer" parent="."]
 layout_mode = 2
