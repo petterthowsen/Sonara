@@ -2,9 +2,11 @@
 
 # Bugs / Issues
 - [?] Moving a clip from one track to another causes playback of new clip to actually play on original track.
-    > I think this is solved.
+    ^ I think this is solved.
 - [ ] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
-
+- [ ] Timeline Clips
+    - [x] on project load/open, all TimelineClip nodes are all visually at tick 0 and have no name
+- [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
 
 ## Audio Engine (Rust Backend)
 

@@ -5,10 +5,13 @@ class_name MidiclipRenderer extends Control
 
 var clip_instance : ClipInstance:
 	set(c):
-		if clip_instance:
-			clip_instance.clip.clip_modified.disconnect(_on_clip_modified)
+		if clip_instance and clip_instance.clip:
+			if clip_instance.clip.clip_modified.is_connected(_on_clip_modified):
+				clip_instance.clip.clip_modified.disconnect(_on_clip_modified)
 		clip_instance = c
-		clip_instance.clip.clip_modified.connect(_on_clip_modified)
+		if clip_instance and clip_instance.clip:
+			if not clip_instance.clip.clip_modified.is_connected(_on_clip_modified):
+				clip_instance.clip.clip_modified.connect(_on_clip_modified)
 		queue_redraw()
 
 func _on_clip_modified():

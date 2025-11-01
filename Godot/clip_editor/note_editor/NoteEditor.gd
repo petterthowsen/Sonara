@@ -265,7 +265,12 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 	resize_start_durations.clear()
 	for sel_note in selection_manager.selected_notes:
 		if sel_note.midi_note_data:
-			var source_clip_instance = get_clip_instance_for_note(sel_note.midi_note_data.id)
+			var source_clip_instance: ClipInstance = null
+			# Prefer the visual note's attached clip instance to avoid id collisions in multi-clip mode
+			if sel_note.has_meta("clip_instance"):
+				source_clip_instance = sel_note.get_meta("clip_instance")
+			else:
+				source_clip_instance = get_clip_instance_for_note(sel_note.midi_note_data.id)
 			drag_start_positions[sel_note.midi_note_data.id] = {
 				"start_tick": sel_note.midi_note_data.start_tick,
 				"note": sel_note.midi_note_data.note,
@@ -376,15 +381,34 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			if grid_helper:
 				new_ticks = grid_helper.snap_ticks(new_ticks)
 
+			# Clamp within clip content in track-mode to avoid crossing instance boundaries
+			if multi_clip_mode:
+				var owner_ci_clamp: ClipInstance = null
+				if sel_note.has_meta("clip_instance"):
+					owner_ci_clamp = sel_note.get_meta("clip_instance")
+				else:
+					owner_ci_clamp = get_clip_instance_for_note(sel_note.midi_note_data.id)
+				if owner_ci_clamp and owner_ci_clamp.clip:
+					var clip_len = owner_ci_clamp.clip.get_content_length()
+					if clip_len > 0:
+						new_ticks = clamp(new_ticks, 0, max(0, clip_len - sel_note.midi_note_data.duration_ticks))
+
 			sel_note.midi_note_data.start_tick = new_ticks
 			sel_note.midi_note_data.note = new_midi_note
 
 			# Calculate visual position (accounting for clip offset in multi-clip mode)
 			var visual_offset_ticks = 0
 			if multi_clip_mode:
-				var clip_instance = get_clip_instance_for_note(sel_note.midi_note_data.id)
-				if clip_instance:
-					visual_offset_ticks = clip_instance.start_ticks
+				var owner_ci_vis: ClipInstance = null
+				if sel_note.has_meta("clip_instance"):
+					owner_ci_vis = sel_note.get_meta("clip_instance")
+				else:
+					owner_ci_vis = get_clip_instance_for_note(sel_note.midi_note_data.id)
+				if owner_ci_vis:
+					visual_offset_ticks = owner_ci_vis.start_ticks
+					print("[NoteEditor] Drag render note ", sel_note.midi_note_data.id, 
+						" ci=", owner_ci_vis.id, " ci_start=", owner_ci_vis.start_ticks, 
+						" clip_local=", new_ticks)
 
 			var note_x = ticks_to_pixels(new_ticks + visual_offset_ticks)
 			var note_y = note_to_y(new_midi_note)
@@ -437,8 +461,13 @@ func _on_drag_ended(note: VisualNote) -> void:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
-		# Get the clip this note belongs to
-		var note_clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		# Get the clip this visual note belongs to (prefer meta clip_instance)
+		var owner_ci: ClipInstance = null
+		if sel_note.has_meta("clip_instance"):
+			owner_ci = sel_note.get_meta("clip_instance")
+		else:
+			owner_ci = get_clip_instance_for_note(sel_note.midi_note_data.id)
+		var note_clip: Clip = owner_ci.clip if owner_ci else _get_clip_for_note(sel_note.midi_note_data.id)
 		if not note_clip:
 			continue
 
@@ -962,6 +991,11 @@ func _handle_cross_clip_transfers() -> void:
 
 		# Find which clip should contain this note at its new position
 		var dest_clip_instance = get_clip_at_position(song_position)
+
+		# If destination is within an instance of the SAME underlying clip, do not transfer;
+		# edits are clip-local and shared across instances. Just keep the updated clip-local position.
+		if dest_clip_instance and dest_clip_instance.clip and source_clip_instance and source_clip_instance.clip and dest_clip_instance.clip == source_clip_instance.clip:
+			continue
 
 		# If no clip at position, try to create one
 		if not dest_clip_instance:

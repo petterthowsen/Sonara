@@ -477,6 +477,9 @@ autowrap_mode = 0
 
 [node name="FileDialog" type="FileDialog" parent="."]
 oversampling_override = 1.0
+initial_position = 2
+access = 2
+use_native_dialog = true
 
 [node name="Window" type="Window" parent="."]
 handle_input_locally = false

@@ -285,6 +285,9 @@ impl AudioEngine {
                     *cumulative_block_duration.borrow_mut() = Duration::ZERO;
                 }
 
+                // Advance master sample counter by the number of frames just processed
+                state.advance_sample_position(frames as u64);
+
                 // Send periodic status updates
                 samples_since_update += frames;
                 if samples_since_update >= update_interval as usize {
@@ -293,6 +296,7 @@ impl AudioEngine {
                     // Send playhead update
                     if state.get_is_playing() {
                         let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
+                        let _ = status_tx.send(EngineStatus::SamplePositionUpdate(state.get_current_sample_position()));
                     }
 
                     // Send meter updates

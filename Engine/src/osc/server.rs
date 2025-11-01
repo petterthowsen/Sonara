@@ -1185,6 +1185,10 @@ impl OscServer {
                 "/status/playhead".to_string(),
                 vec![OscType::Int(ticks as i32)],
             ),
+            EngineStatus::SamplePositionUpdate(samples) => (
+                "/status/sample_position".to_string(),
+                vec![OscType::Long(samples as i64)],
+            ),
             EngineStatus::PlayingStateChanged(playing) => (
                 "/status/playing".to_string(),
                 vec![OscType::Int(if playing { 1 } else { 0 })],

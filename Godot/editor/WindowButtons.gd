@@ -25,4 +25,5 @@ func _on_maximize_pressed() -> void:
 
 
 func _on_quit_pressed() -> void:
-	get_tree().quit()
+	# Delegate shutdown to Editor for unified behavior
+	Sonara.editor.quit()

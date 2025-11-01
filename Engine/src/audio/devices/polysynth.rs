@@ -78,20 +78,29 @@ impl Voice {
         self.osc_b.phase = 0.0;
     }
 
-    fn process_block(&mut self, output: &mut [f32], frames: usize) {
+    fn process_block(
+        &mut self,
+        output: &mut [f32],
+        frames: usize,
+        osc_a_buf: &mut [f32],
+        osc_b_buf: &mut [f32],
+        env_buf: &mut [f32],
+    ) {
         if !self.is_active && !self.envelope.is_active() {
             return;
         }
 
-        // Temporary buffers
-        let mut osc_a_buf = vec![0.0f32; frames];
-        let mut osc_b_buf = vec![0.0f32; frames];
-        let mut env_buf = vec![0.0f32; frames];
+        // Clear provided buffers
+        osc_a_buf[..frames].fill(0.0);
+        osc_b_buf[..frames].fill(0.0);
+        env_buf[..frames].fill(0.0);
 
         // Process oscillators
-        self.osc_a.process_block(self.waveform_a, &mut osc_a_buf, frames);
-        self.osc_b.process_block(self.waveform_b, &mut osc_b_buf, frames);
-        self.envelope.process_block(&mut env_buf, frames);
+        self.osc_a
+            .process_block(self.waveform_a, &mut osc_a_buf[..frames], frames);
+        self.osc_b
+            .process_block(self.waveform_b, &mut osc_b_buf[..frames], frames);
+        self.envelope.process_block(&mut env_buf[..frames], frames);
 
         // Mix and apply envelope
         for i in 0..frames {
@@ -156,6 +165,10 @@ pub struct PolySynthDevice {
     // Pre-allocated buffers for processing (avoid allocations in audio thread)
     voice_buffer: Vec<f32>,
     temp_buffer: Vec<f32>,
+    // Shared scratch buffers for per-voice processing (reused across voices)
+    osc_a_scratch: Vec<f32>,
+    osc_b_scratch: Vec<f32>,
+    env_scratch: Vec<f32>,
 }
 
 impl PolySynthDevice {
@@ -182,6 +195,9 @@ impl PolySynthDevice {
             queued_midi: Vec::with_capacity(128),
             voice_buffer: Vec::with_capacity(4096),
             temp_buffer: Vec::with_capacity(4096),
+            osc_a_scratch: Vec::with_capacity(4096),
+            osc_b_scratch: Vec::with_capacity(4096),
+            env_scratch: Vec::with_capacity(4096),
         }
     }
 
@@ -252,7 +268,6 @@ impl AudioDevice for PolySynthDevice {
         // Sort queued MIDI by offset
         let mut events = core::mem::take(&mut self.queued_midi);
         events.sort_unstable_by_key(|e| e.0);
-        let mut next_event_idx = 0usize;
 
         // Ensure buffers are large enough
         if self.voice_buffer.len() < sample_count {
@@ -261,42 +276,81 @@ impl AudioDevice for PolySynthDevice {
         if self.temp_buffer.len() < sample_count {
             self.temp_buffer.resize(sample_count, 0.0);
         }
+        if self.osc_a_scratch.len() < sample_count {
+            self.osc_a_scratch.resize(sample_count, 0.0);
+        }
+        if self.osc_b_scratch.len() < sample_count {
+            self.osc_b_scratch.resize(sample_count, 0.0);
+        }
+        if self.env_scratch.len() < sample_count {
+            self.env_scratch.resize(sample_count, 0.0);
+        }
         
         // Clear voice buffer
         self.voice_buffer[..sample_count].fill(0.0);
 
-        // Process MIDI events at sample offsets
-        for i in 0..sample_count {
-            while next_event_idx < events.len() && events[next_event_idx].0 == i {
-                let (_ofs, note, velocity, is_on) = events[next_event_idx];
-                next_event_idx += 1;
-
-                if is_on && velocity > 0 {
-                    if let Some(idx) = self.find_voice_for_note(note) {
-                        self.voices[idx].note_on(note, velocity, self.time_counter);
-                    } else if let Some(idx) = self.find_free_voice().or_else(|| self.steal_voice())
-                    {
-                        self.voices[idx].note_on(note, velocity, self.time_counter);
+        // Render in spans between event offsets so note on/off are applied with sample accuracy
+        let mut cursor = 0usize;
+        let mut idx = 0usize;
+        while idx < events.len() {
+            let span_end = events[idx].0.min(sample_count);
+            if span_end > cursor {
+                // Render current voices for [cursor, span_end)
+                let len = span_end - cursor;
+                // Clear temp for this span
+                self.temp_buffer[..len].fill(0.0);
+                // Accumulate all active voices into temp, then mix into voice_buffer slice
+                for voice in self.voices.iter_mut() {
+                    if !voice.is_active && !voice.envelope.is_active() {
+                        continue;
                     }
-                } else {
-                    if let Some(idx) = self.find_voice_for_note(note) {
-                        self.voices[idx].note_off();
-                    }
+                    voice.process_block(
+                        &mut self.temp_buffer[..len],
+                        len,
+                        &mut self.osc_a_scratch[..len],
+                        &mut self.osc_b_scratch[..len],
+                        &mut self.env_scratch[..len],
+                    );
+                    // Mix into correct location of the voice buffer
+                    mix_blocks(&mut self.voice_buffer[cursor..span_end], &self.temp_buffer[..len]);
                 }
+                cursor = span_end;
+            }
+
+            // Apply all events at this exact offset
+            let this_ofs = events[idx].0;
+            while idx < events.len() && events[idx].0 == this_ofs {
+                let (_ofs, note, velocity, is_on) = events[idx];
+                if is_on && velocity > 0 {
+                    if let Some(v_idx) = self.find_voice_for_note(note) {
+                        self.voices[v_idx].note_on(note, velocity, self.time_counter);
+                    } else if let Some(v_idx) = self.find_free_voice().or_else(|| self.steal_voice()) {
+                        self.voices[v_idx].note_on(note, velocity, self.time_counter);
+                    }
+                } else if let Some(v_idx) = self.find_voice_for_note(note) {
+                    self.voices[v_idx].note_off();
+                }
+                idx += 1;
             }
         }
 
-        // Process all voices in blocks (much faster!)
-        for voice in self.voices.iter_mut() {
-            if !voice.is_active && !voice.envelope.is_active() {
-                continue;
+        // Render any remaining tail after the last event up to sample_count
+        if cursor < sample_count {
+            let len = sample_count - cursor;
+            self.temp_buffer[..len].fill(0.0);
+            for voice in self.voices.iter_mut() {
+                if !voice.is_active && !voice.envelope.is_active() {
+                    continue;
+                }
+                voice.process_block(
+                    &mut self.temp_buffer[..len],
+                    len,
+                    &mut self.osc_a_scratch[..len],
+                    &mut self.osc_b_scratch[..len],
+                    &mut self.env_scratch[..len],
+                );
+                mix_blocks(&mut self.voice_buffer[cursor..sample_count], &self.temp_buffer[..len]);
             }
-            
-            // Process voice into temp buffer
-            voice.process_block(&mut self.temp_buffer[..sample_count], sample_count);
-            
-            // Mix into voice buffer with SIMD optimization where possible
-            mix_blocks(&mut self.voice_buffer[..sample_count], &self.temp_buffer[..sample_count]);
         }
 
         // Write stereo output

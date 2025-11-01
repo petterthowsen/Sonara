@@ -180,10 +180,8 @@ func _on_quit() -> void:
 	if Sonara.editor.is_modified:
 		print("[MainMenu] Warning: Quitting without saving")
 
-	# Clear project from audio engine and disconnect.
-	AudioEngineOSC.send("/project/clear", [])
-	
-	get_tree().quit()
+	# Delegate shutdown to Editor for unified behavior
+	Sonara.editor.quit()
 
 
 # ============================================================================

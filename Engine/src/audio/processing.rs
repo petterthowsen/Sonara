@@ -163,14 +163,11 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                             // Initialize playback position for this clip instance if not yet started
                             // Apply clip_offset: start reading from the offset position in the clip
                             if !track.audio_playback_positions.contains_key(&instance.id) {
-                                // Convert clip_offset (in ticks) to sample position
-                                // Formula: samples = (ticks / PPQ) * (60 / tempo) * sample_rate
-                                let ticks_to_beats =
-                                    instance.clip_offset as f64 / state.settings.ppq as f64;
-                                let beats_to_seconds =
-                                    ticks_to_beats * 60.0 / state.settings.tempo as f64;
-                                let offset_samples =
-                                    beats_to_seconds * clip.audio_sample_rate as f64;
+                                // Convert clip_offset (ticks) to sample index in the clip's sample-rate domain
+                                let offset_samples = state
+                                    .settings
+                                    .ticks_to_samples(instance.clip_offset, clip.audio_sample_rate as f32)
+                                    as f64;
                                 track
                                     .audio_playback_positions
                                     .insert(instance.id.clone(), offset_samples);

@@ -199,6 +199,8 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 	var clip_type_str = "midi" if clip.type == Clip.ClipType.MIDI else "audio"
 	print("[Project] Creating %s clip in engine: %s" % [clip_type_str, clip.id])
 	AudioEngineOSC.send("/clip/create", [clip.id, clip_type_str, clip.name])
+	# Mark as synced locally so subsequent updates (move/resize) don't warn
+	clip._synced_to_engine = true
 
 	# Sync MIDI notes (if MIDI clip)
 	if clip.type == Clip.ClipType.MIDI:

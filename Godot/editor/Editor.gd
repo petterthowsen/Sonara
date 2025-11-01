@@ -679,3 +679,20 @@ func _on_playing_received(values) -> void:
 			playback_stopped.emit()
 			set_process(false)
 			print("[Editor] Playback stopped (from engine)")
+
+
+# ============================================================================
+# APP LIFECYCLE
+# ============================================================================
+
+func quit() -> void:
+	"""Stop playback, close project, then quit the application."""
+	# Ensure playback is stopped
+	if is_playing:
+		stop()
+
+	# Close any active project
+	close_project()
+
+	# Exit the application
+	get_tree().quit()

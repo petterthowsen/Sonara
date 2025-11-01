@@ -167,9 +167,10 @@ func _update_clips() -> void:
 		var clip_ui : TimelineClip = TimelineClipScene.instantiate()
 		clip_ui.track_color = track.color
 
+		# Bind first so children that depend on clip_instance are safe in _ready
 		clip_ui.bind_to_clip_instance(clip_inst, timeline, track.color)
-
 		add_child(clip_ui)
+		clip_ui._update_from_clip_instance()
 
 		# Connect signals
 		if timeline:
@@ -177,9 +178,10 @@ func _update_clips() -> void:
 
 		clip_instances.append(clip_ui)
 
-	# Update clip sizes after they're added to the tree
+	# Update clip sizes and positions after they're added to the tree
 	await get_tree().process_frame
 	_update_clip_sizes()
+	_update_clip_positions()
 
 
 func _update_clip_sizes(height: int = -1) -> void:
@@ -353,8 +355,9 @@ func _on_clip_instance_added(instance: ClipInstance) -> void:
 	"""Handle when a clip instance is added to the track (via data layer)."""
 	# Create UI for this specific clip instance
 	var clip_ui = TimelineClipScene.instantiate()
-	add_child(clip_ui)
 	clip_ui.bind_to_clip_instance(instance, timeline, track.color)
+	add_child(clip_ui)
+	clip_ui._update_from_clip_instance()
 
 	# Connect signals
 	if timeline:

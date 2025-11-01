@@ -980,6 +980,28 @@ impl ProjectSettings {
         (self.tempo as f64 * self.ppq as f64) / (60.0 * self.sample_rate as f64)
     }
 
+    /// Ticks per second at constant tempo
+    pub fn ticks_per_second(&self) -> f64 {
+        (self.tempo as f64 * self.ppq as f64) / 60.0
+    }
+
+    /// Seconds per tick at constant tempo
+    pub fn seconds_per_tick(&self) -> f64 {
+        1.0 / self.ticks_per_second()
+    }
+
+    /// Convert sample count to ticks using a given sample rate (constant tempo)
+    pub fn samples_to_ticks(&self, samples: u64, sample_rate: f32) -> i64 {
+        let seconds = samples as f64 / sample_rate as f64;
+        (seconds * self.ticks_per_second()).floor() as i64
+    }
+
+    /// Convert ticks to samples using a given sample rate (constant tempo)
+    pub fn ticks_to_samples(&self, ticks: Tick, sample_rate: f32) -> u64 {
+        let seconds = ticks as f64 * self.seconds_per_tick();
+        (seconds * sample_rate as f64).floor() as u64
+    }
+
     /// Convert tick position to bars.beats.sixteenths.ticks format
     /// Returns (bars, beats, sixteenths, ticks) - 1-indexed for bars/beats/sixteenths, 0-indexed for ticks
     pub fn tick_to_musical_time(&self, tick: Tick) -> (i64, i32, i32, i32) {
