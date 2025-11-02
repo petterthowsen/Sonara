@@ -38,6 +38,12 @@ The audio engine processes each callback in this order:
 
 Location: `Engine/src/audio/processing.rs`
 
+### Audio Clip Loading (Async)
+- Heavy lifting (decode, resample, waveform generation) runs in `AudioFileService`, a worker pool created in `main.rs`. Requests arrive via `/clip/{id}/load_audio_file` → `AudioCommand::BeginLoadAudioClip`.
+- `osc::server` forwards `AfsEvent::DecodeReady` as `AudioCommand::LoadAudioClip`, which only copies the already-decoded `Vec<f32>` plus metadata into `EngineState`—never invoke Symphonia or Rubato from the audio callback.
+- Waveform levels (`AfsEvent::WaveformLevel`) and progress/errors (`AfsEvent::Progress`/`Error`) stay on the main/OSC threads; the audio thread only needs the final PCM buffer and cache key.
+- Always guard against stale `req_id`s when handling `LoadAudioClip`; reject outdated events so retries do not clobber newer audio.
+
 ## Sample-Accurate MIDI Dispatch
 
 - `process_audio()` builds a `Vec<(Tick, frame_offset)>` so every note on/off from clip instances is tied to an exact sample index inside the upcoming block.
@@ -140,8 +146,9 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 3. **Blocking on locks**: Use `try_lock()` with skip-on-failure pattern
 4. **Not tracking processed channels**: Audio routed multiple times in hierarchical mixing
 5. **Allocating memory**: Pre-allocate all buffers at init time, never in callback
-6. **Allowing invalid routing**: INSTRUMENT→INSTRUMENT creates ambiguous audio source
-7. **Forgetting bus device pass**: Buses must process after ingesting routed audio; do not call `process_device_chain()` on them earlier.
+6. **Decoding audio on the callback**: All decode/resample work must happen in `AudioFileService`; the callback should only read ready-to-play PCM.
+7. **Allowing invalid routing**: INSTRUMENT→INSTRUMENT creates ambiguous audio source
+8. **Forgetting bus device pass**: Buses must process after ingesting routed audio; do not call `process_device_chain()` on them earlier.
 
 ## Related Files
 

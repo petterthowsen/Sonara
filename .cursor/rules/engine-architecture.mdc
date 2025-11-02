@@ -11,6 +11,7 @@ The Rust audio engine uses a **lock-free architecture** for real-time safety:
 - **Main Thread**: Owns `OscServer`, initializes systems, relays OSC commands to audio thread, and brokers GUI events.
 - **Audio Callback Thread**: Real-time audio generation (high priority, no allocations/locks allowed).
 - **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
+- **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and waveform generation off the real-time path.
 - **Communication**: Crossbeam unbounded MPMC channels between main ↔ audio threads, plus `std::sync::mpsc` channels from audio statuses → main loop → window thread.
 
 Commands flow: OSC → Main thread → Audio thread.  
@@ -34,11 +35,15 @@ Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful
 **Godot → Rust (port 7000)**:
 - Transport: `/transport/play`, `/transport/stop`, `/transport/seek [ticks]`
 - Channels: `/channel/{id}/create [name]`, `/channel/{id}/volume [db]`, `/channel/{id}/mute [0|1]`
-- Tracks: `/track/{id}/create [channel_id]`, `/track/{id}/add_note [note_id, note, start, dur, vel]`
+- Tracks & clips: `/clip/create`, `/clip/delete`, `/clip/{id}/add_note`, `/clip/{id}/load_audio_file`
+- Audio file jobs: `/audiofile/decode`, `/audiofile/waveform/start`, `/audiofile/waveform/cancel`
+- Clip instances: `/track/{id}/add_instance`, `/track/{id}/instance/{instance_id}/set_position`, etc.
 
 **Rust → Godot (port 7001)**:
 - Transport status: `/status/playhead [ticks]`, `/status/sample_position [samples]`, `/status/playing [0|1]`
 - Meter updates: `/channel/{id}/peak [peak_left, peak_right]`
+- Clip lifecycle: `/clip/{id}/load_state [state, req_id, source_path, cache_key, sample_rate, channels, message]`
+- Audio file service: `/audiofile/decode/ready`, `/audiofile/waveform/level`, `/audiofile/progress`, `/audiofile/error`
 
 See `OSC_PROTOCOL.md` for full documentation.
 
@@ -74,8 +79,10 @@ Engine/src/
       shared_memory.rs
       platform_shm.rs
     io/
-      mod.rs         # IO module declarations
-      wav.rs         # WAV file reading/writing
+      mod.rs                 # IO module declarations
+      audio_file_service.rs  # Async decode + waveform generation coordinator
+      decoder.rs             # Symphonia-based streaming decoder + resampler
+      waveform_cache.rs      # Progressive multi-resolution waveform cache
   osc/
     mod.rs           # Module declarations
     server.rs        # OSC server/client, path-based message routing

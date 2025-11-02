@@ -360,8 +360,6 @@ func _update_timeline_width() -> void:
 	
 	# Set minimum width on this container
 	custom_minimum_size.x = timeline_width
-	
-	print("[Timeline] Updated width to ", timeline_width, " pixels (", timeline_ticks, " ticks)")
 
 # ============================================================================
 # COORDINATE CONVERSION

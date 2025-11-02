@@ -134,6 +134,10 @@ var scroll_speed_notes = 2
 @export var zoom_sensitivity_v: int = 1      # Vertical zoom delta per scroll tick
 @export var pan_zoom_sensitivity: float = 0.5  # Zoom factor per pixel of mouse movement when shift+panning (percentage)
 
+# Horizontal zoom limits (pixels per beat)
+@export var zoom_min_pixels_per_beat: float = 8.0
+@export var zoom_max_pixels_per_beat: float = 1024
+
 # Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
 @export var scroll_smoothing: float = 0.2
 
@@ -316,7 +320,7 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	var old_pixels_per_beat = grid_helper.pixels_per_beat
 	
 	# Clamp new zoom
-	var clamped_ppb = clamp(new_pixels_per_beat, 8.0, 512.0)
+	var clamped_ppb = clamp(new_pixels_per_beat, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 	
 	# If we hit the limits or no change, don't adjust
 	if clamped_ppb == old_pixels_per_beat:

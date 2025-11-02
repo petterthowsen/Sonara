@@ -26,3 +26,10 @@ alwaysApply: false
 ### Engine Log Relay
 - The audio engine forwards WARN/ERROR records via `/log` with `[String level, String message]`; level is `"warn"` or `"error"`.
 - `AudioEngineOSC` emits `engine_log_message(level, message)` on receipt and mirrors WARN/ERROR into the Godot output log so designers see runtime issues without tailing files.
+
+### Audio Clip Loading & Waveforms
+- Audio clips are created via `/clip/create [clip_id, "audio", name]`; when a clip has `audio_file_path` set, `Project.gd::_sync_clip_to_engine()` sends `/clip/{id}/load_audio_file [abs_path, sample_rate_hint, channels_hint]`.
+- `/clip/{id}/load_state [state, req_id, source_path, cache_key, sample_rate, channels, message]` drives the Godot-side `Clip.LoadState` enum. `Project.gd` records `req_id` ↔ `clip_id` so follow-up messages can be routed.
+- Metadata arrives asynchronously through `/audiofile/decode/ready [req_id, cache_key, channels, frames, sample_rate, duration_seconds]`; clips apply it via `Clip.set_audio_metadata()` and recompute content length.
+- Progressive waveform levels stream through `/audiofile/waveform/level [req_id, level, block_size, num_blocks, cache_path, byte_offset, byte_len]`. `Clip.ingest_waveform_level_from_cache()` opens the cache via `WaveformCacheReader` and emits `waveform_level_updated`.
+- Partial progress and failures surface with `/audiofile/progress [req_id, progress_0_1]` and `/audiofile/error [req_id, code, message]`. Always clear the stored request mapping when a load finishes or fails so retries produce fresh IDs.

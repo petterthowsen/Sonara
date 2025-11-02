@@ -62,6 +62,10 @@ var pan_start_v_scroll: float = 0.0
 @export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
 @export var zoom_sensitivity_v: float = 1.1  # Vertical zoom multiplier per scroll tick (for track heights)
 
+# Horizontal zoom limits (pixels per beat)
+@export var zoom_min_pixels_per_beat: float = 8.0
+@export var zoom_max_pixels_per_beat: float = 512.0
+
 # Target scroll positions for smooth scrolling
 var target_scroll_vertical: float = 0.0
 var target_scroll_horizontal: float = 0.0
@@ -268,7 +272,7 @@ func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollConta
 
 				# Calculate target zoom using zoom_sensitivity_h
 				var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
-				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, 8.0, 512.0)
+				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 
 				# Adjust scroll position to keep content under cursor
 				# Note: scroll adjustment needs to account for the eventual zoom change

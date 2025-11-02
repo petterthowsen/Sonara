@@ -46,7 +46,6 @@ var midi_events: Array[MidiEvent] = []  # CC, program change, etc.
 var audio_file_path: String = ""
 var audio_sample_rate: int = 48000
 var audio_channels: int = 2
-var audio_samples: PackedFloat32Array = PackedFloat32Array()  # Raw PCM samples (interleaved)
 var audio_frames: int = 0  # Total frame count (per channel)
 var audio_duration_seconds: float = 0.0
 var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
@@ -89,7 +88,6 @@ func ensure_audio_waveform() -> MultiResWaveform:
 
 func reset_audio_state() -> void:
 	"""Clear audio content and cached waveform data."""
-	audio_samples = PackedFloat32Array()
 	audio_frames = 0
 	audio_duration_seconds = 0.0
 	waveform_cache_key = ""
@@ -457,22 +455,6 @@ func get_content_length() -> int:
 # AUDIO PROCESSING
 # ============================================================================
 
-func precompute_waveforms() -> void:
-	"""
-	Generate waveform peak data at multiple resolutions.
-	Call this after loading audio samples to cache waveforms for efficient rendering.
-	"""
-	if type != ClipType.AUDIO or audio_samples.is_empty():
-		return
-
-	if audio_frames <= 0:
-		audio_frames = audio_samples.size() / max(1, audio_channels)
-	ensure_audio_waveform().precompute_from_audio(audio_samples, audio_sample_rate, audio_channels)
-	_waveform_levels_ready.clear()
-	for i in range(audio_waveform.get_available_block_sizes().size()):
-		_waveform_levels_ready[i] = true
-	modified_date = Time.get_unix_time_from_system()
-	clip_modified.emit()
 
 
 # ============================================================================

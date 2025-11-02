@@ -9,6 +9,8 @@ Entry-point is editor/Editor.gd and tscn file and initializes together a series 
 
 ## Data model layer
 data/ contains self-synchronizing (via osc) data models (Project, Track, Channel, Clip, ClipInstance etc.)
+- `Project.gd` owns the OSC listeners for clip/audiofile events, maps `req_id` ↔ clip IDs, and coordinates retries when waveform cache reads fail.
+- `Clip.gd` tracks `LoadState`, load progress, waveform cache metadata, and uses `WaveformCacheReader` to ingest progressive waveform levels emitted by the engine.
 
 ## Components
 in ./components A set of small reusable custom UI controls such as Meters, Sliders, RotaryKnobs etc.

@@ -31,6 +31,38 @@ func _draw() -> void:
 			_draw_waveform()
 
 
+func _draw_waveform_placeholder() -> void:
+	"""Draw a placeholder while waveform is loading or unavailable."""
+	if not clip_instance or not clip_instance.clip:
+		return
+
+	var clip = clip_instance.clip
+
+	# Determine placeholder color based on load state
+	var bg_color: Color
+	var text: String
+
+	match clip.load_state:
+		Clip.LoadState.LOADING:
+			bg_color = Color(0.3, 0.5, 0.8, 0.3)
+			text = "Loading..."
+			# Draw progress bar
+			var progress = clamp(clip.load_progress, 0.0, 1.0)
+			draw_rect(Rect2(Vector2.ZERO, Vector2(size.x * progress, size.y)), Color(0.4, 0.6, 1.0, 0.6), true)
+		Clip.LoadState.READY:
+			bg_color = Color(0.4, 0.4, 0.4, 0.2)
+			text = "Waveform generating..."
+		Clip.LoadState.FAILED:
+			bg_color = Color(0.6, 0.1, 0.1, 0.4)
+			text = "Failed to load"
+		_:
+			bg_color = Color(0.2, 0.2, 0.2, 0.3)
+			text = "Unloaded"
+
+	# Draw background
+	draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
+
+
 func _draw_midi():
 	# get the lowest and highest notes
 	var clip = clip_instance.clip
@@ -90,11 +122,20 @@ func _draw_waveform() -> void:
 		return
 
 	var clip = clip_instance.clip
-	if clip.type != Clip.ClipType.AUDIO or not clip.audio_waveform:
-		if clip.type != Clip.ClipType.AUDIO:
-			print("clip is not audio type!")
-		elif not clip.audio_waveform:
-			print("missing audio_waveform!")
+	if clip.type != Clip.ClipType.AUDIO:
+		print("[MidiClipRenderer] clip is not audio type!")
+		return
+
+	if not clip.audio_waveform:
+		print("[MidiClipRenderer] audio_waveform not initialized for clip ", clip.id)
+		# Draw placeholder while waveform is loading
+		_draw_waveform_placeholder()
+		return
+
+	# Check if waveform has any levels loaded
+	if clip.audio_waveform.levels.is_empty():
+		print("[MidiClipRenderer] waveform has no levels for clip ", clip.id, " (load_state=", clip.load_state, ")")
+		_draw_waveform_placeholder()
 		return
 
 	if size.x <= 0:
@@ -118,79 +159,118 @@ func _draw_waveform() -> void:
 				draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
 		return
 
-	# Calculate the visible portion of the clip
-	var total_audio_samples = clip.audio_frames
-	if total_audio_samples <= 0:
-		return
-	var clip_duration_ticks = max(clip.content_length_ticks, 1)
-	var clip_offset = clip_instance.clip_offset
-	var instance_duration = clip_instance.duration_ticks
-	
-	# Convert tick offsets to sample positions
-	var offset_ratio = clamp(float(clip_offset) / float(clip_duration_ticks), 0.0, 1.0)
-	var duration_ratio = clamp(float(instance_duration) / float(clip_duration_ticks), 0.0, 1.0)
-	
-	var start_sample = int(offset_ratio * total_audio_samples)
-	var end_sample = int(min(offset_ratio + duration_ratio, 1.0) * total_audio_samples)
-	if end_sample <= start_sample:
-		end_sample = min(start_sample + 1, total_audio_samples)
-	var visible_samples = end_sample - start_sample
-
-	# Determine effective samples per pixel based on visible region
-	var target_resolution = int(float(visible_samples) / max(1.0, float(size.x)))
-	if target_resolution <= 0:
-		target_resolution = 1
-
-	# Get the best matching waveform resolution
-	var waveform = clip.audio_waveform.get_waveform_for_resolution(target_resolution)
-	if not waveform:
-		print("missing waveform for resolution: ", target_resolution)
-		return
-
-	# Apply gain as visual scale
+	# Simple waveform rendering: for each screen pixel, draw min/max amplitude
 	var gain_linear = db_to_linear(clip_instance.gain_offset)
 	var channel_count = max(clip.audio_channels, 1)
 	var height_per_channel = size.y / channel_count
 	var center_y_offset = height_per_channel / 2.0
 
-	# Calculate which waveform pixels correspond to the visible region
-	var samples_per_waveform_pixel = max(1, waveform.samples_per_pixel)
-	var start_waveform_pixel = int(float(start_sample) / float(samples_per_waveform_pixel))
-	var end_waveform_pixel = int(float(end_sample) / float(samples_per_waveform_pixel))
-	var visible_waveform_pixels = end_waveform_pixel - start_waveform_pixel
+	# Calculate target waveform resolution based on zoom
+	var waveform_pyramid = clip.audio_waveform
 
-	# Scale factor to map visible waveform pixels to screen width
+	print("[MidiClipRenderer] _draw_waveform start: waveform_pyramid=", waveform_pyramid, " levels=", waveform_pyramid.levels.size() if waveform_pyramid else "N/A")
+
+	if not waveform_pyramid or waveform_pyramid.levels.is_empty():
+		print("[MidiClipRenderer] No waveform_pyramid or levels empty, returning")
+		return
+
+	# Get the total audio duration in samples
+	var total_samples = waveform_pyramid.duration_samples
+	print("[MidiClipRenderer] total_samples=", total_samples)
+
+	if total_samples <= 0:
+		print("[MidiClipRenderer] total_samples <= 0, returning")
+		return
+
+	# Map clip offset and duration to waveform pixels FIRST
+	var clip_offset = clip_instance.clip_offset
+	var clip_duration = clip_instance.duration_ticks
+	var content_length = clip.content_length_ticks
+
+	var offset_ratio = clamp(float(clip_offset) / float(content_length), 0.0, 1.0)
+	var duration_ratio = clamp(float(clip_duration) / float(content_length), 0.0, 1.0)
+
+	# Calculate how many samples we're actually displaying (not the entire audio)
+	var visible_samples = int(duration_ratio * float(total_samples))
+	if visible_samples <= 0:
+		visible_samples = 1
+
+	# How many samples per screen pixel for the VISIBLE portion?
+	var target_spp = int(float(visible_samples) / max(1.0, float(size.x)))
+	if target_spp <= 0:
+		target_spp = 1
+
+	# Get best matching waveform level
+	var waveform = waveform_pyramid.get_waveform_for_resolution(target_spp)
+	if not waveform:
+		return
+
+	var waveform_size = waveform.peak_data_left.size() if waveform.peak_data_left else 0
+	if waveform_size <= 0:
+		return
+
+	var start_pixel = int(offset_ratio * float(waveform_size))
+	var end_pixel = int((offset_ratio + duration_ratio) * float(waveform_size))
+	start_pixel = clamp(start_pixel, 0, waveform_size - 1)
+	end_pixel = clamp(end_pixel, start_pixel + 1, waveform_size)
+
+	var visible_waveform_pixels = end_pixel - start_pixel
 	if visible_waveform_pixels <= 0:
-		visible_waveform_pixels = 1
-	var scale_x = float(size.x) / float(visible_waveform_pixels)
+		return
 
-	# Draw waveforms for each channel
+	# Draw waveform as polylines for each channel
+	print("[MidiClipRenderer] Drawing waveform: target_spp=", target_spp, " waveform_size=", waveform_size, " visible_pixels=", visible_waveform_pixels, " screen_width=", size.x)
+
 	for ch in range(channel_count):
 		var peak_data = waveform.peak_data_left if ch == 0 else waveform.peak_data_right
+		if not peak_data or peak_data.is_empty():
+			print("[MidiClipRenderer] No peak data for channel ", ch)
+			continue
 
-		# Only draw the visible portion
+		var ch_top = ch * height_per_channel
+		var ch_center = ch_top + center_y_offset
+		var ch_bottom = ch_top + height_per_channel
+
+		# Build polyline points
+		var top_points = PackedVector2Array()
+		var bottom_points = PackedVector2Array()
+
+		# Sample and map waveform pixels to screen
 		for i in range(visible_waveform_pixels):
-			var waveform_pixel = start_waveform_pixel + i
-			if waveform_pixel >= peak_data.size():
+			var waveform_idx = start_pixel + i
+			if waveform_idx >= peak_data.size():
 				break
-			
-			var peak_pair = peak_data[waveform_pixel]
-			var min_sample = peak_pair.x * gain_linear
-			var max_sample = peak_pair.y * gain_linear
 
-			# Map waveform pixel to screen position (relative to visible region)
-			var pixel_x = i * scale_x
+			var peak_pair = peak_data[waveform_idx]
+			var min_amp = clamp(peak_pair.x * gain_linear, -1.0, 1.0)
+			var max_amp = clamp(peak_pair.y * gain_linear, -1.0, 1.0)
 
-			# Remap from [-1, 1] to pixel space
-			var base_y = ch * height_per_channel + center_y_offset
-			var min_y = base_y - (min_sample * (center_y_offset - 1.0))
-			var max_y = base_y - (max_sample * (center_y_offset - 1.0))
+			# Map to screen coordinates
+			var t = float(i) / float(max(1, visible_waveform_pixels - 1))
+			var screen_x = t * float(size.x)
 
-			# Draw vertical line representing min/max for this pixel
-			var line_color = Color.WHITE if ch == 0 else Color.WHITE.darkened(0.2)
-			draw_line(Vector2(pixel_x, min_y), Vector2(pixel_x, max_y), line_color, 1.0)
+			var y_max = ch_center - (max_amp * center_y_offset)
+			var y_min = ch_center - (min_amp * center_y_offset)
 
-		# Draw center line for this channel
+			top_points.append(Vector2(screen_x, clamp(y_max, ch_top, ch_bottom)))
+			bottom_points.append(Vector2(screen_x, clamp(y_min, ch_top, ch_bottom)))
+
+		# Draw waveform as two polylines
+		if top_points.size() > 1:
+			var color = Color.WHITE if ch == 0 else Color.WHITE.darkened(0.2)
+			print("[MidiClipRenderer] Drawing polyline ch=", ch, " points=", top_points.size())
+			draw_polyline(top_points, color, 1.0)
+			draw_polyline(bottom_points, color, 1.0)
+
+			# Fill between envelopes
+			var fill_color = color * Color(1, 1, 1, 0.15)
+			for i in range(min(top_points.size(), bottom_points.size())):
+				draw_line(top_points[i], bottom_points[i], fill_color, 0.5)
+		else:
+			print("[MidiClipRenderer] Not enough points: ", top_points.size())
+
+	# Draw center line for each channel
+	for ch in range(channel_count):
 		draw_line(
 			Vector2(0, ch * height_per_channel + center_y_offset),
 			Vector2(size.x, ch * height_per_channel + center_y_offset),

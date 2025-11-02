@@ -37,7 +37,11 @@ func reset() -> void:
 
 
 func set_metadata(frames: int, sr: int, num_channels: int) -> void:
-	duration_samples = frames
+	# Only overwrite duration_samples if we're given valid frame data (frames > 0)
+	# This preserves duration_samples if it was already calculated from waveform levels
+	if frames > 0:
+		duration_samples = frames
+
 	sample_rate = sr
 	channels = max(1, num_channels)
 
@@ -73,6 +77,27 @@ func ingest_cache_level(level_index: int, block_size: int, num_blocks: int, chan
 	var waveform = Waveform.new(block_size, channels)
 	waveform.load_from_cache(block_size, channels, num_blocks, channel_peaks, channel_rms)
 	_store_level(level_index, block_size, waveform)
+
+	# Calculate duration_samples from the finest resolution level (smallest block_size)
+	# Each level has: duration = num_blocks * block_size
+	# The finest level gives the most accurate duration
+	if num_blocks > 0 and block_size > 0:
+		var calculated_duration = num_blocks * block_size
+		if duration_samples <= 0:
+			# First level to set it
+			duration_samples = calculated_duration
+		else:
+			# Update if this level is finer (smaller block_size) than what we calculated before
+			# Find the current finest block_size
+			var finest_block_size = int(1e9)  # Start with large number
+			for entry in levels:
+				var bs = entry.get("block_size", 0)
+				if bs > 0 and bs < finest_block_size:
+					finest_block_size = bs
+
+			# If this new level is the finest, recalculate duration
+			if block_size <= finest_block_size:
+				duration_samples = calculated_duration
 
 
 func has_level(level_index: int) -> bool:
