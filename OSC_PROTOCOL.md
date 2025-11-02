@@ -84,6 +84,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/clip/{id}/add_note` | `i:note_id, i:note, i:start_tick, i:duration, i:velocity` | Add MIDI note to clip (relative to clip start) |
 | `/clip/{id}/remove_note` | `i:note_id` | Remove MIDI note from clip |
 | `/clip/{id}/update_note` | `i:note_id, i:note, i:start_tick, i:duration, i:velocity` | Update MIDI note in clip |
+| `/clip/{id}/load_audio_file` | `s:abs_path, i:sample_rate_hint, i:channels_hint` | Request async audio decode + waveform generation via AudioFileService |
 
 ### ClipInstance Management (Godot -> Rust) - NEW
 
@@ -96,6 +97,14 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/track/{id}/instance/{id}/set_gain` | `f:db` | Set instance gain offset in dB |
 | `/track/{id}/instance/{id}/set_mute` | `i:0_or_1` | Set instance mute state |
 | `/track/{id}/instance/{id}/set_loop` | `i:enabled, i:start_tick, i:length` | Configure instance looping |
+
+### Clip Load Status (Rust -> Godot)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/clip/{id}/load_state` | `s:state, s:req_id, s:source_path, s:cache_key, i:sample_rate, i:channels, s:message` | Lifecycle updates for audio clips (`state`: `unloaded`, `loading`, `ready`, `failed`) |
+
+`req_id` echoes the async identifier supplied when Godot called `/clip/{id}/load_audio_file`. `source_path` is the absolute path provided by Godot, `cache_key` is the waveform cache handle (empty until the clip is ready), and `message` contains an error description when `state` is `failed`.
 
 **Clip Offset:** The `clip_offset` parameter (in ticks) allows a ClipInstance to play only a portion of its source Clip's content. A value of `0` plays from the beginning, while positive values skip the beginning of the clip (useful for trimming or resizing from the left edge). This allows multiple instances of the same Clip to play different portions.
 
@@ -393,3 +402,33 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
    - Godot: `/transport/stop`
    - Rust: `/status/playing 0`
    - Rust: `/status/playhead 0`
+
+## Audio File Service (Godot <-> Rust)
+
+The AudioFileService provides async audio decoding and multi-resolution waveform generation. Files are decoded to f32 planar format at project sample rate with optional resampling. Waveforms are cached on disk with progressive generation (coarse → fine levels).
+
+### Audio File Requests (Godot -> Rust)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/audiofile/decode` | `s:req_id, s:abs_path` | Request audio file decode (metadata only) |
+| `/audiofile/waveform/start` | `s:req_id, s:abs_path, i:min_block_size` | Request decode + waveform generation (min_block_size=64-128 recommended) |
+| `/audiofile/waveform/cancel` | `s:req_id` | Cancel ongoing decode/waveform request |
+
+### Audio File Responses (Rust -> Godot)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/audiofile/decode/ready` | `s:req_id, s:cache_key, i:channels, h:frames, i:sample_rate, f:duration_s` | Decode complete with file metadata |
+| `/audiofile/waveform/level` | `s:req_id, i:level, i:block_size, h:num_blocks, s:file_path, h:byte_offset, h:byte_len` | Waveform level ready - Godot reads min/max/rms data from cache file |
+| `/audiofile/progress` | `s:req_id, f:progress_0_1` | Decode/waveform progress (0.0-1.0) |
+| `/audiofile/error` | `s:req_id, i:code, s:message` | Error occurred during processing |
+
+### Waveform Cache Format
+
+Waveforms are cached as binary files (`$XDG_CACHE_HOME/sonara/waveforms/<hash>.swf`) containing:
+- Multi-resolution min/max/rms data (f32 triplets per block)
+- Progressive levels from coarse to fine
+- Little-endian binary format with header + directory + contiguous data
+
+Godot reads waveform data directly from cache files using the `byte_offset`/`byte_len` provided in `/audiofile/waveform/level` messages. Each block contains `[min, max, rms]` f32 values for each channel.

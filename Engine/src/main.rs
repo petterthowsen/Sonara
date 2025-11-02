@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 use tracing_subscriber;
 
+use audio::io::audio_file_service::AudioFileService;
 use audio::AudioEngine;
 use log_forwarder::LogForwarder;
 use osc::OscServer;
@@ -82,11 +83,11 @@ fn main() -> Result<()> {
     let (status_tx, status_rx) = crossbeam::channel::unbounded();
 
     // Set up logging with both file writer AND log forwarder to Godot
+    use tracing::Level;
     use tracing_subscriber::filter::{self, LevelFilter};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::Layer;
-    use tracing::Level;
 
     // info-only layer (exactly INFO)
     let info_layer = tracing_subscriber::fmt::layer()
@@ -129,8 +130,12 @@ fn main() -> Result<()> {
     let mut window_manager = WindowManager::new();
     info!("Window manager initialized");
 
+    // Create AudioFileService (4 worker threads, will use device sample rate once known)
+    let audio_file_service = Arc::new(Mutex::new(AudioFileService::new(4, 44100)?));
+    info!("AudioFileService initialized with 4 workers");
+
     // Create OSC server
-    let osc_server = OscServer::new(7000)?;
+    let osc_server = OscServer::new(7000, audio_file_service)?;
     info!("OSC server ready on port 7000 (receives from Godot)");
     info!("OSC client sends to port 7001 (Godot listens)");
 

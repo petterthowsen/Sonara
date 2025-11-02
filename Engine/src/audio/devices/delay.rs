@@ -1,4 +1,6 @@
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamType, ParamValue};
+use super::{
+    AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamType, ParamValue,
+};
 use tracing::info;
 
 /// Delay effect device

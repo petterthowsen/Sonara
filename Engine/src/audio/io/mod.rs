@@ -1,3 +1,6 @@
-mod wav;
+pub mod audio_file_service;
+mod decoder;
+mod waveform_cache;
 
-pub use wav::load_wav_file;
+pub use audio_file_service::{AfsEvent, AudioFileService};
+pub use decoder::load_audio_file;

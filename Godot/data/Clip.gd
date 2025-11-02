@@ -6,6 +6,7 @@
 class_name Clip extends RefCounted
 
 enum ClipType { AUDIO, MIDI }
+enum LoadState { UNLOADED, LOADING, READY, FAILED }
 
 # ============================================================================
 # SIGNALS
@@ -15,6 +16,11 @@ signal midi_note_added(note: MidiNoteData)
 signal midi_note_removed(note: MidiNoteData)
 signal midi_note_changed(note: MidiNoteData)
 signal clip_modified()  # Any change to clip data
+signal load_state_changed(state: LoadState, clip: Clip)
+signal waveform_level_updated(level: int, clip: Clip)
+signal load_progress_changed(progress_0_1: float, clip: Clip)
+
+const WaveformCacheReaderClass := preload("res://data/WaveformCacheReader.gd")
 
 # ============================================================================
 # PROPERTIES
@@ -41,8 +47,21 @@ var audio_file_path: String = ""
 var audio_sample_rate: int = 48000
 var audio_channels: int = 2
 var audio_samples: PackedFloat32Array = PackedFloat32Array()  # Raw PCM samples (interleaved)
+var audio_frames: int = 0  # Total frame count (per channel)
+var audio_duration_seconds: float = 0.0
 var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
 var audio_waveform: MultiResWaveform = null  # Cached multi-resolution waveforms
+var waveform_cache_key: String = ""
+var waveform_cache_path: String = ""
+
+# Async load tracking
+var load_state: LoadState = LoadState.UNLOADED
+var load_request_id: String = ""
+var load_error_message: String = ""
+var load_progress: float = 0.0
+
+var _waveform_levels_ready: Dictionary = {}
+var _waveform_reader = null
 
 # Metadata
 var created_date: float = 0  # Unix timestamp
@@ -50,6 +69,143 @@ var modified_date: float = 0
 
 # Engine sync tracking
 var _synced_to_engine: bool = false  # Whether this clip has been created on the engine
+
+
+# ============================================================================
+# AUDIO LOAD LIFECYCLE
+# ============================================================================
+
+func ensure_audio_waveform() -> MultiResWaveform:
+	"""Ensure audio_waveform exists and metadata is synced."""
+	if audio_waveform == null:
+		audio_waveform = MultiResWaveform.new()
+	if audio_sample_rate <= 0:
+		audio_sample_rate = 48000
+	if audio_channels <= 0:
+		audio_channels = 1
+	audio_waveform.set_metadata(audio_frames, audio_sample_rate, audio_channels)
+	return audio_waveform
+
+
+func reset_audio_state() -> void:
+	"""Clear audio content and cached waveform data."""
+	audio_samples = PackedFloat32Array()
+	audio_frames = 0
+	audio_duration_seconds = 0.0
+	waveform_cache_key = ""
+	waveform_cache_path = ""
+	_waveform_levels_ready.clear()
+	_waveform_reader = null
+	if audio_waveform:
+		audio_waveform.reset()
+	clip_modified.emit()
+
+
+func mark_load_started(req_id: String, source_path: String) -> void:
+	"""Prepare clip for asynchronous loading."""
+	audio_file_path = source_path
+	load_request_id = req_id
+	load_error_message = ""
+	load_progress = 0.0
+	reset_audio_state()
+	apply_load_state(LoadState.LOADING, req_id, "")
+
+
+func apply_load_state(new_state: LoadState, req_id: String = "", message: String = "") -> void:
+	if load_state == new_state and load_request_id == req_id and load_error_message == message:
+		return
+	load_state = new_state
+	if not req_id.is_empty():
+		load_request_id = req_id
+	load_error_message = message
+	load_state_changed.emit(load_state, self)
+	clip_modified.emit()
+
+
+func update_load_progress(value: float) -> void:
+	var clamped = clamp(value, 0.0, 1.0)
+	if abs(clamped - load_progress) < 0.0001:
+		return
+	load_progress = clamped
+	load_progress_changed.emit(load_progress, self)
+
+
+func set_waveform_cache(path: String, cache_key: String) -> void:
+	if waveform_cache_path == path and waveform_cache_key == cache_key:
+		return
+	waveform_cache_path = path
+	waveform_cache_key = cache_key
+	_waveform_reader = null
+
+
+func _ensure_waveform_reader(path: String) -> bool:
+	if path.is_empty():
+		return false
+	if _waveform_reader and _waveform_reader.is_loaded() and _waveform_reader.file_path == path:
+		return true
+	var reader = WaveformCacheReaderClass.new()
+	if not reader.load(path):
+		return false
+	_waveform_reader = reader
+	ensure_audio_waveform()
+	return true
+
+
+func ingest_waveform_level_from_cache(level_index: int, block_size: int, num_blocks: int) -> bool:
+	"""Load a waveform level from cache file. Returns true if successful."""
+	if waveform_cache_path.is_empty():
+		print("[Clip] Cannot ingest waveform level", level_index, "- cache path missing")
+		return false
+	if not _ensure_waveform_reader(waveform_cache_path):
+		print("[Clip] Failed to open waveform cache", waveform_cache_path)
+		return false
+	var data: Dictionary = _waveform_reader.read_level(level_index, audio_channels)
+	if data.is_empty():
+		print("[Clip] Waveform cache level", level_index, "returned empty data")
+		return false
+	var peaks: Array = data.get("peaks", [])
+	var rms: Array = data.get("rms", [])
+	var resolved_block_size: int = data.get("block_size", block_size)
+	var resolved_num_blocks: int = data.get("num_blocks", num_blocks)
+	if peaks.is_empty():
+		print("[Clip] No peak data for level", level_index, "from", waveform_cache_path)
+		return false
+	ensure_audio_waveform().ingest_cache_level(level_index, resolved_block_size, resolved_num_blocks, peaks, rms)
+	_waveform_levels_ready[level_index] = true
+	print("[Clip] Ingested waveform level", level_index, "blocks=", resolved_num_blocks, "block_size=", resolved_block_size)
+	waveform_level_updated.emit(level_index, self)
+	clip_modified.emit()
+	return true
+
+
+func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_seconds: float = -1.0) -> void:
+	audio_sample_rate = max(1, sample_rate)
+	audio_channels = max(1, channels)
+	audio_frames = max(0, frames)
+	if duration_seconds >= 0.0:
+		audio_duration_seconds = duration_seconds
+	elif audio_sample_rate > 0:
+		audio_duration_seconds = float(audio_frames) / float(audio_sample_rate)
+	else:
+		audio_duration_seconds = 0.0
+	ensure_audio_waveform()
+	clip_modified.emit()
+
+
+func update_content_length_from_metadata(project_tempo: float, project_ppq: int) -> void:
+	if audio_frames <= 0 or audio_sample_rate <= 0:
+		return
+	var tempo: float = max(1.0, project_tempo)
+	var ppq_value: int = max(1, project_ppq)
+	var duration_seconds := audio_duration_seconds
+	if duration_seconds <= 0.0:
+		duration_seconds = float(audio_frames) / float(audio_sample_rate)
+	var beats: float = duration_seconds * (tempo / 60.0)
+	content_length_ticks = int(beats * float(ppq_value))
+
+
+func get_waveform_level_ready(level_index: int) -> bool:
+	return _waveform_levels_ready.get(level_index, false)
 
 # ============================================================================
 # LIFECYCLE
@@ -309,10 +465,12 @@ func precompute_waveforms() -> void:
 	if type != ClipType.AUDIO or audio_samples.is_empty():
 		return
 
-	if audio_waveform == null:
-		audio_waveform = MultiResWaveform.new()
-
-	audio_waveform.precompute_from_audio(audio_samples, audio_sample_rate, audio_channels)
+	if audio_frames <= 0:
+		audio_frames = audio_samples.size() / max(1, audio_channels)
+	ensure_audio_waveform().precompute_from_audio(audio_samples, audio_sample_rate, audio_channels)
+	_waveform_levels_ready.clear()
+	for i in range(audio_waveform.get_available_block_sizes().size()):
+		_waveform_levels_ready[i] = true
 	modified_date = Time.get_unix_time_from_system()
 	clip_modified.emit()
 
@@ -362,6 +520,9 @@ func to_json() -> Dictionary:
 		"audio_file_path": audio_file_path,
 		"audio_sample_rate": audio_sample_rate,
 		"audio_channels": audio_channels,
+		"audio_frames": audio_frames,
+		"audio_duration_seconds": audio_duration_seconds,
+		"waveform_cache_key": waveform_cache_key,
 		"recorded_bpm": recorded_bpm,
 		"created_date": created_date,
 		"modified_date": modified_date
@@ -385,9 +546,14 @@ static func from_json(data: Dictionary) -> Clip:
 	clip.audio_file_path = data.get("audio_file_path", "")
 	clip.audio_sample_rate = data.get("audio_sample_rate", 48000)
 	clip.audio_channels = data.get("audio_channels", 2)
+	clip.audio_frames = data.get("audio_frames", 0)
+	clip.audio_duration_seconds = data.get("audio_duration_seconds", 0.0)
+	clip.waveform_cache_key = data.get("waveform_cache_key", "")
 	clip.recorded_bpm = data.get("recorded_bpm", 120.0)
 	clip.created_date = data.get("created_date", 0)
 	clip.modified_date = data.get("modified_date", 0)
+	clip.load_state = LoadState.UNLOADED
+	clip.load_progress = 0.0
 
 	return clip
 

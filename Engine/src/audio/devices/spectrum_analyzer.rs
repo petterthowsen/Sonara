@@ -9,7 +9,7 @@ use tracing::info;
 
 /// Spectrum Analyzer Device
 ///
-    /// Pass-through effect that performs FFT analysis on audio and streams
+/// Pass-through effect that performs FFT analysis on audio and streams
 /// frequency spectrum data via subscription-based OSC protocol.
 ///
 /// Features:
@@ -28,15 +28,15 @@ pub struct SpectrumAnalyzerDevice {
     fft_size: usize,
     fft_planner: Arc<dyn RealToComplex<f32>>,
     smoothing_factor: f32,
-    hop_size: usize,                // Hop size in samples (controls update cadence)
+    hop_size: usize, // Hop size in samples (controls update cadence)
 
     // Audio buffers (pre-allocated for real-time safety)
-    input_buffer: Vec<f32>,     // Circular buffer for incoming audio
-    write_pos: usize,           // Current write position in circular buffer
-    fft_input: Vec<f32>,        // Windowed FFT input
-    fft_output: Vec<f32>,       // FFT magnitude spectrum (dB)
-    smoothed_output: Vec<f32>,  // Exponentially smoothed spectrum
-    window: Vec<f32>,           // Hann window coefficients
+    input_buffer: Vec<f32>,    // Circular buffer for incoming audio
+    write_pos: usize,          // Current write position in circular buffer
+    fft_input: Vec<f32>,       // Windowed FFT input
+    fft_output: Vec<f32>,      // FFT magnitude spectrum (dB)
+    smoothed_output: Vec<f32>, // Exponentially smoothed spectrum
+    window: Vec<f32>,          // Hann window coefficients
 
     // Subscription state
     subscriptions: HashMap<String, bool>,
@@ -53,7 +53,10 @@ impl SpectrumAnalyzerDevice {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft_planner = planner.plan_fft_forward(fft_size);
 
-        info!("SpectrumAnalyzerDevice::new() - sample_rate={}", sample_rate);
+        info!(
+            "SpectrumAnalyzerDevice::new() - sample_rate={}",
+            sample_rate
+        );
 
         // Pre-allocate all buffers
         let bin_count = fft_size / 2 + 1;
@@ -130,7 +133,8 @@ impl SpectrumAnalyzerDevice {
 
         // Recompute hop size and update interval from hop size and sample rate
         self.hop_size = self.fft_size / 2; // keep 50% overlap by default on size change
-        self.fft_interval = std::time::Duration::from_secs_f32(self.hop_size as f32 / self.sample_rate);
+        self.fft_interval =
+            std::time::Duration::from_secs_f32(self.hop_size as f32 / self.sample_rate);
     }
 
     /// Compute FFT and return magnitude spectrum in dB
@@ -141,14 +145,13 @@ impl SpectrumAnalyzerDevice {
         // So that write_pos-1 (newest) appears first in the FFT window
         for i in 0..self.fft_size {
             // Read from newest to oldest: (write_pos - 1 - i) going backwards
-            let read_idx = (self.write_pos as i32 - 1 - i as i32).rem_euclid(self.input_buffer.len() as i32) as usize;
+            let read_idx = (self.write_pos as i32 - 1 - i as i32)
+                .rem_euclid(self.input_buffer.len() as i32) as usize;
             self.fft_input[i] = self.input_buffer[read_idx] * self.window[i];
         }
 
         // Perform FFT (in-place)
-        let mut spectrum = self
-            .fft_planner
-            .make_output_vec();
+        let mut spectrum = self.fft_planner.make_output_vec();
         self.fft_planner
             .process(&mut self.fft_input, &mut spectrum)
             .unwrap_or_else(|e| {
@@ -168,7 +171,7 @@ impl SpectrumAnalyzerDevice {
             let real = spectrum[i].re;
             let imag = spectrum[i].im;
             let magnitude = (real * real + imag * imag).sqrt();
-            
+
             // Normalize by window only (except DC and Nyquist which we'll silence)
             let normalized_magnitude = magnitude * norm_factor;
             raw_magnitudes.push(normalized_magnitude);
@@ -186,9 +189,10 @@ impl SpectrumAnalyzerDevice {
         // Apply BEFORE smoothing to prevent contamination
         let freq_per_bin = self.sample_rate / self.fft_size as f32;
         let cutoff_freq = 30.0; // Hz
-        // Calculate highest bin index where center frequency is <= cutoff
-        // Use ceil to include partial bins (bin 0 at 0Hz + any bins whose upper edge is <= cutoff)
-        let cutoff_bin_inclusive = ((cutoff_freq / freq_per_bin).ceil() as usize).min(bin_count.saturating_sub(1));
+                                // Calculate highest bin index where center frequency is <= cutoff
+                                // Use ceil to include partial bins (bin 0 at 0Hz + any bins whose upper edge is <= cutoff)
+        let cutoff_bin_inclusive =
+            ((cutoff_freq / freq_per_bin).ceil() as usize).min(bin_count.saturating_sub(1));
         for i in 0..=cutoff_bin_inclusive {
             self.fft_output[i] = -160.0;
         }
@@ -207,14 +211,17 @@ impl SpectrumAnalyzerDevice {
             DEBUG_LOG_COUNT += 1;
             if DEBUG_LOG_COUNT <= 20 || DEBUG_LOG_COUNT % 100 == 0 {
                 let freq_per_bin = self.sample_rate / self.fft_size as f32;
-                
+
                 // Log first 10 bins (should all be -160.0)
                 let mut low_bins_str = String::new();
                 for i in 0..10.min(bin_count) {
                     let freq = i as f32 * freq_per_bin;
-                    low_bins_str.push_str(&format!("[{}: {:.1}Hz = {:.1}dB] ", i, freq, self.smoothed_output[i]));
+                    low_bins_str.push_str(&format!(
+                        "[{}: {:.1}Hz = {:.1}dB] ",
+                        i, freq, self.smoothed_output[i]
+                    ));
                 }
-                
+
                 // Find peak bin
                 let mut peak_bin = cutoff_bin_inclusive + 1;
                 let mut peak_db = self.smoothed_output[peak_bin];
@@ -225,7 +232,7 @@ impl SpectrumAnalyzerDevice {
                     }
                 }
                 let peak_freq = peak_bin as f32 * freq_per_bin;
-                
+
                 info!(
                     "Spectrum | Cutoff bin: {} ({:.1}Hz) | Low bins (0-9): {} | Peak: bin {} @ {:.1}Hz = {:.1}dBFS",
                     cutoff_bin_inclusive, cutoff_bin_inclusive as f32 * freq_per_bin,
@@ -255,7 +262,7 @@ impl SpectrumAnalyzerDevice {
             let slice = std::slice::from_raw_parts(ptr, byte_count);
             bytes.extend_from_slice(slice);
         }
-        
+
         // DEBUG: Log first float's raw bytes
         static mut BYTE_DEBUG_COUNT: u32 = 0;
         unsafe {
@@ -466,4 +473,3 @@ impl AudioDevice for SpectrumAnalyzerDevice {
             .map(|bytes| ("spectrum".to_string(), bytes))
     }
 }
-

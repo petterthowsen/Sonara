@@ -4,8 +4,8 @@
 
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::ParamInfo;
-use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
 use crate::audio::devices::ParamType;
+use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

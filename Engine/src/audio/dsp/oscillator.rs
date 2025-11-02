@@ -122,4 +122,3 @@ impl Default for Oscillator {
         Self::new()
     }
 }
-

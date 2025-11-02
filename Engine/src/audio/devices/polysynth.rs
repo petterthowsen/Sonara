@@ -1,5 +1,6 @@
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
+    ParamValue, PortFlow,
 };
 use crate::audio::dsp::{mix_blocks, AdsrEnvelope, Oscillator};
 use std::sync::atomic::{AtomicI8, AtomicU8, Ordering};
@@ -54,15 +55,17 @@ impl Voice {
         self.frequency = midi_note_to_hz(note);
         self.is_active = true;
         self.note_on_time = time;
-        
+
         // Set oscillator frequencies
         let freq_a = self.frequency * 2.0_f32.powi(self.osc_a_octave as i32);
         let freq_b_mult = 2.0_f32.powf(self.osc_b_detune / 1200.0);
         let freq_b = self.frequency * 2.0_f32.powi(self.osc_b_octave as i32) * freq_b_mult;
-        
-        self.osc_a.set_frequency(freq_a as f64, self.envelope.sample_rate as f64);
-        self.osc_b.set_frequency(freq_b as f64, self.envelope.sample_rate as f64);
-        
+
+        self.osc_a
+            .set_frequency(freq_a as f64, self.envelope.sample_rate as f64);
+        self.osc_b
+            .set_frequency(freq_b as f64, self.envelope.sample_rate as f64);
+
         self.envelope.gate_on();
     }
 
@@ -133,22 +136,22 @@ pub struct PolySynthDevice {
     // Oscillator waveform parameters
     waveform_a: AtomicU8,
     waveform_b: AtomicU8,
-    
+
     // Oscillator octave parameters
     osc_a_octave: AtomicI8,
     osc_b_octave: AtomicI8,
-    
+
     // Envelope parameters
     attack: f32,
     decay: f32,
     sustain: f32,
     release: f32,
-    
+
     // Level parameters
     osc_a_level: f32,
     osc_b_level: f32,
     master_volume: f32,
-    
+
     // Detune parameter
     osc_b_detune: f32,
 
@@ -161,7 +164,7 @@ pub struct PolySynthDevice {
 
     // Queued MIDI for frame-accurate scheduling within next block
     queued_midi: Vec<(usize, u8, u8, bool)>,
-    
+
     // Pre-allocated buffers for processing (avoid allocations in audio thread)
     voice_buffer: Vec<f32>,
     temp_buffer: Vec<f32>,
@@ -177,10 +180,10 @@ impl PolySynthDevice {
             sample_rate,
             voices: (0..MAX_VOICES).map(|_| Voice::new(sample_rate)).collect(),
             time_counter: 0,
-            waveform_a: AtomicU8::new(0),       // Sine
-            waveform_b: AtomicU8::new(2),       // Saw
-            osc_a_octave: AtomicI8::new(0),     // 0 octaves
-            osc_b_octave: AtomicI8::new(0),     // 0 octaves
+            waveform_a: AtomicU8::new(0),   // Sine
+            waveform_b: AtomicU8::new(2),   // Saw
+            osc_a_octave: AtomicI8::new(0), // 0 octaves
+            osc_b_octave: AtomicI8::new(0), // 0 octaves
             attack: 0.01,
             decay: 0.1,
             sustain: 0.7,
@@ -235,7 +238,7 @@ impl PolySynthDevice {
             voice.osc_b_level = self.osc_b_level;
             voice.master_volume = self.master_volume;
             voice.osc_b_detune = self.osc_b_detune;
-            
+
             voice.envelope.set_attack(self.attack);
             voice.envelope.set_decay(self.decay);
             voice.envelope.set_sustain(self.sustain);
@@ -285,7 +288,7 @@ impl AudioDevice for PolySynthDevice {
         if self.env_scratch.len() < sample_count {
             self.env_scratch.resize(sample_count, 0.0);
         }
-        
+
         // Clear voice buffer
         self.voice_buffer[..sample_count].fill(0.0);
 
@@ -312,7 +315,10 @@ impl AudioDevice for PolySynthDevice {
                         &mut self.env_scratch[..len],
                     );
                     // Mix into correct location of the voice buffer
-                    mix_blocks(&mut self.voice_buffer[cursor..span_end], &self.temp_buffer[..len]);
+                    mix_blocks(
+                        &mut self.voice_buffer[cursor..span_end],
+                        &self.temp_buffer[..len],
+                    );
                 }
                 cursor = span_end;
             }
@@ -324,7 +330,9 @@ impl AudioDevice for PolySynthDevice {
                 if is_on && velocity > 0 {
                     if let Some(v_idx) = self.find_voice_for_note(note) {
                         self.voices[v_idx].note_on(note, velocity, self.time_counter);
-                    } else if let Some(v_idx) = self.find_free_voice().or_else(|| self.steal_voice()) {
+                    } else if let Some(v_idx) =
+                        self.find_free_voice().or_else(|| self.steal_voice())
+                    {
                         self.voices[v_idx].note_on(note, velocity, self.time_counter);
                     }
                 } else if let Some(v_idx) = self.find_voice_for_note(note) {
@@ -349,7 +357,10 @@ impl AudioDevice for PolySynthDevice {
                     &mut self.osc_b_scratch[..len],
                     &mut self.env_scratch[..len],
                 );
-                mix_blocks(&mut self.voice_buffer[cursor..sample_count], &self.temp_buffer[..len]);
+                mix_blocks(
+                    &mut self.voice_buffer[cursor..sample_count],
+                    &self.temp_buffer[..len],
+                );
             }
         }
 
@@ -621,7 +632,13 @@ impl AudioDevice for PolySynthDevice {
                 is_automation_safe: true,
                 param_type: ParamType::Enum,
                 syncable: true,
-                enum_values: vec!["-2".to_string(), "-1".to_string(), "0".to_string(), "+1".to_string(), "+2".to_string()],
+                enum_values: vec![
+                    "-2".to_string(),
+                    "-1".to_string(),
+                    "0".to_string(),
+                    "+1".to_string(),
+                    "+2".to_string(),
+                ],
             },
             ParamInfo {
                 id: 11,
@@ -633,7 +650,13 @@ impl AudioDevice for PolySynthDevice {
                 is_automation_safe: true,
                 param_type: ParamType::Enum,
                 syncable: true,
-                enum_values: vec!["-2".to_string(), "-1".to_string(), "0".to_string(), "+1".to_string(), "+2".to_string()],
+                enum_values: vec![
+                    "-2".to_string(),
+                    "-1".to_string(),
+                    "0".to_string(),
+                    "+1".to_string(),
+                    "+2".to_string(),
+                ],
             },
         ]
     }
@@ -677,4 +700,3 @@ impl AudioDevice for PolySynthDevice {
 fn midi_note_to_hz(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0)
 }
-

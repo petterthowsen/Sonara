@@ -1,92 +1,91 @@
 # Project Status
 
-## PolySynth Device - High-Performance Polyphonic Synthesizer ✅
+## AudioFileService (async decode + waveform) - ✅ COMPLETE
 
-### Implementation Complete
+**Overview:** Async multi-format audio decoding and progressive waveform generation service.
 
-**Phase 1: Foundation & Single Oscillator** ✅
-- Custom phase accumulator oscillators (sine, square, saw, triangle)
-- Sine wave uses 64k lookup table (~10x faster than `sin()`)
-- Branchless phase wrapping for optimal performance
-- ADSR envelope with pre-calculated rates
-- Voice allocation, deallocation, and stealing (16 voices)
-- MIDI note on/off handling with sample-accurate timing
+**✅ Completed:**
+- **Core Implementation:** Symphonia-based decoder supporting WAV/FLAC/OGG/MP3 with offline resampling
+- **Waveform Cache:** Binary cache format with progressive multi-resolution levels (min/max/rms)
+- **Worker Pool:** 4-thread async service with job queue and event system
+- **OSC Integration:** Complete control-plane API (`/audiofile/*` routes)
+- **Backward Compatibility:** Legacy WAV loading migrated to Symphonia while maintaining existing API
+- **Testing:** Unit tests for service creation, cache keys, error handling, and integration framework
 
-**Phase 2: Dual Oscillators** ✅
-- Dual oscillators per voice (A + B)
-- Independent octave control (-2 to +2 octaves)
-- Per-oscillator level control
-- Oscillator B detune (cents)
-- Independent waveform selection per oscillator
+**🛠️ Architecture:**
+- **Control Plane:** OSC messages for job submission and event streaming
+- **Data Plane:** File-based waveform consumption via byte offsets
+- **Worker Pool:** Non-blocking decode off main thread, never touches audio callback
+- **Caching:** Smart cache keys with file metadata validation
 
-**Performance Optimizations** ✅
-- **SIMD mixing** (AVX/SSE/NEON) for voice summing
-- **SIMD interleaving/deinterleaving** for stereo processing
-- **Sine lookup table** (64k entries, ~10x faster)
-- **Branchless phase wrapping** (eliminates conditionals)
-- **Pre-calculated envelope rates** (zero divisions per sample)
-- **Lazy parameter updates** (only when changed)
-- **Result: 0.7% CPU** (2 voices @ 48kHz, 1024 samples) - better than Bitwig!
+**📋 Remaining (Godot-side):**
+- Integrate Godot UI to request decode/waveform via OSC
+- Implement waveform rendering from cache files using provided byte offsets
+- Handle progressive level updates (coarse → fine) for smooth UX
 
-**Code Architecture** ✅
-- Refactored DSP components into reusable modules:
-  - `audio/dsp/oscillator.rs` - Phase accumulator oscillator
-  - `audio/dsp/envelope.rs` - ADSR envelope generator
-  - `audio/dsp/simd.rs` - SIMD mixing utilities
-- PolySynth simplified from 905 → 581 lines
-- DSP modules ready for reuse in future synth devices
+**🔧 Dependencies Added:**
+- `symphonia` (multi-format audio decoding)
+- `rubato` (high-quality offline resampling)
+- `bincode`, `byteorder`, `tempfile` (cache I/O)
+- `dirs` (cross-platform cache directory)
 
-**FunDSP Version Deprecated** ❌
-- Original FunDSP implementation: 75% CPU (unacceptable)
-- Kept as `polysynth_fundsp.rs` for reference
-- Custom implementation is 107x faster!
+**🧪 Testing:**
+```bash
+cargo test --lib audio_file_service  # Service and cache tests
+cargo check                          # Full compilation verification
+```
 
-### Next Steps
+**🔍 Recent Diagnostics:**
+- Added structured `tracing` spans in `audio_file_service.rs` and `osc/server.rs` to log cache hits, waveform-level emissions, and OSC relays. Enable with `RUST_LOG=info,engine=debug` while reproducing missing-waveform issues; Godot console should now mirror decode/waveform events.
 
-**Phase 3: Resonant Filter** (Pending)
-- Add multi-mode filter (lowpass, highpass, bandpass)
-- Cutoff frequency control (20Hz - 20kHz)
-- Resonance control
-- SIMD-optimized filter processing
+**📚 Documentation:**
+- OSC protocol updated with `/audiofile/*` routes
+- Cache format specification included
+- Complete API documentation in code
 
-**Phase 4: Filter Envelope** (Pending)
-- Dedicated filter ADSR envelope
-- Envelope amount control
-- Filter envelope modulation routing
+## Clip Audio Load Lifecycle & Playback (engine-side) - ✅ COMPLETE
 
-**Phase 5: Optimization & Polishing** (Pending)
-- Parameter smoothing for continuous controls
-- Voice management refinements
-- CPU usage monitoring and profiling
+**Overview:** Engine clips now perform asynchronous audio loading via AudioFileService, exposing deterministic load state updates to Godot. Audio playback correctly handles seek offsets and clip trimming.
 
-**Phase 6: Godot UI Integration** (Pending)
-- Design PolySynth UI scene
-- Knobs for all parameters
-- Waveform selectors
-- Visual feedback
+**✅ Completed:**
+- Added `ClipLoadState` metadata (`unloaded/loading/ready/failed`) plus `audio_source_path`/`waveform_cache_key` tracking
+- Refactored OSC server to submit decode jobs, map `req_id` → clip, and fan-out AudioFileService events
+- Engine dispatches `ClipLoadStateChanged` status messages which Godot receives as `/clip/{id}/load_state`
+- Updated `OSC_PROTOCOL.md` to document the new request/response contract
+- **Fixed seek offset calculation:** Playback position now correctly combines `clip_offset` (trim) + current playhead position when seeking into clips
 
----
+**🐛 Gotchas & Solutions:**
 
-## Build System
+1. **MP3 Resampling Artifacts (48kHz → 44.1kHz)**
+   - **Problem:** MP3 decoder naturally produces 1152-frame chunks but Rubato's FFT resampler requires fixed 4096-frame input chunks
+   - **Error:** `Insufficient buffer size 1152 for input channel 0, expected 4096`
+   - **Solution:** Added input buffering layer in `decoder.rs` that accumulates MP3 frames until 4096-frame chunks available, then processes through resampler with proper flushing
+   - **Key Changes:**
+     - Increased FFT chunk size from 1024 to 4096 for spectral quality
+     - Implemented `input_buffer` to batch decode chunks
+     - Multi-pass flushing with zero-padding for partial final chunks
+   - **Result:** Clean MP3 playback with proper time-stretching
 
-- **Debug builds:** `./Engine/run.sh` (fast compile, ~10x slower runtime)
-- **Release builds:** `./Engine/run_release.sh` (slower compile, optimal performance)
-- Always use release builds for CPU testing!
+2. **Clip Seek Offset Not Applied**
+   - **Problem:** Seeking into the middle of a clip and playing would restart from the beginning of the audio file
+   - **Root Cause:** Playback position initialization only applied `clip_offset` (trim from left edge) and ignored the current playhead position within the clip instance
+   - **Solution:** Changed offset calculation in `processing.rs:168` from:
+     ```rust
+     let offset_samples = ticks_to_samples(instance.clip_offset, ...)
+     ```
+     to:
+     ```rust
+     let total_offset_ticks = instance.clip_offset + current_pos_in_instance;
+     let offset_samples = ticks_to_samples(total_offset_ticks, ...)
+     ```
+   - **Result:** Seeking now plays from correct position while respecting clip trimming
 
----
+**📋 Remaining (Godot-side):**
+- Verify new data-model wiring for load states & waveform ingestion (waveforms still not visible)
+- Ensure progressive waveform levels update UI once cache pages land
+- Add explicit error/progress surfacing in arranger components if decode fails
 
-## Performance Benchmarks
+**🔮 Follow-up Ideas:**
+- Optionally migrate clips to stream PCM from cache files instead of storing full `Vec<f32>` in-engine (`migrate_to_cache_keys` todo)
+- Add load-progress relays if UI needs finer-grained feedback (`/audiofile/progress`)
 
-| Implementation | CPU Load (2 voices) | Notes |
-|----------------|---------------------|-------|
-| FunDSP-based | 75% | Deprecated - too slow |
-| Custom (Debug) | 11% | Development builds |
-| Custom (Release) | **0.7%** | ✅ Production ready! |
-| Bitwig PolySynth | ~1% | Reference comparison |
-
-**Optimization breakdown:**
-- Sine LUT: ~10x speedup on sine waves
-- SIMD mixing: ~4-8x speedup (AVX)
-- SIMD interleave: ~4-8x speedup (AVX)
-- Pre-calculated rates: Eliminates 3 divisions per sample
-- Release mode: ~10x speedup overall

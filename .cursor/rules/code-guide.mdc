@@ -16,5 +16,7 @@ You can get docs via context7:
 - `/websites/rs_dasp_0_11_0_dasp` for DASP library
 - `/websites/rs_signalsmith-dsp_0_0_2_signalsmith_dsp` for Signalsmith DSP library
 - `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2` for Godot Engine
+- `/henquist/rubato` for rubato audio resampler
+- `/pdeljanov/symphonia` for symphonia audio decoder
 
 Full Source code for clack is also available via ../clack

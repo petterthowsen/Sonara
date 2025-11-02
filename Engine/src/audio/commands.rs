@@ -135,11 +135,24 @@ pub enum AudioCommand {
         duration_ticks: Tick,
         velocity: MidiVelocity,
     },
+    BeginLoadAudioClip {
+        clip_id: ClipId,
+        req_id: String,
+        source_path: String,
+    },
     LoadAudioClip {
         clip_id: ClipId,
+        req_id: String,
+        source_path: String,
+        cache_key: Option<String>,
         samples: Vec<f32>,
         sample_rate: u32,
         channels: usize,
+    },
+    FailAudioClipLoad {
+        clip_id: ClipId,
+        req_id: String,
+        message: String,
     },
 
     // ClipInstance management
@@ -250,7 +263,7 @@ pub enum AudioCommand {
         device_position: usize,
         window_handle: Option<u64>,
     },
-    
+
     ClosePluginGui {
         channel_id: ChannelId,
         device_position: usize,
@@ -288,6 +301,14 @@ pub enum EngineStatus {
         peak_right: f32,
         rms_left: f32,
         rms_right: f32,
+    },
+    ClipLoadStateChanged {
+        clip_id: ClipId,
+        state: ClipLoadState,
+        source_path: Option<String>,
+        cache_key: Option<String>,
+        sample_rate: Option<u32>,
+        channels: Option<usize>,
     },
 
     // Device state changes
@@ -401,8 +422,8 @@ pub enum EngineStatus {
     DeviceData {
         channel_id: ChannelId,
         device_position: usize,
-        data_type: String,  // "spectrum", "oscilloscope", "phase", etc.
-        data: Vec<u8>,      // Binary payload (device-specific format)
+        data_type: String, // "spectrum", "oscilloscope", "phase", etc.
+        data: Vec<u8>,     // Binary payload (device-specific format)
     },
 }
 
@@ -449,7 +470,8 @@ impl EngineState {
 
     /// Set the fractional tick accumulator (lock-free)
     pub fn set_fractional_tick_accumulator(&self, value: f64) {
-        self.fractional_tick_accumulator.store((value * 1_000_000_000.0) as i64, Ordering::Release);
+        self.fractional_tick_accumulator
+            .store((value * 1_000_000_000.0) as i64, Ordering::Release);
     }
 
     /// Get the current sample position (lock-free)
@@ -513,15 +535,24 @@ pub fn process_command(
     command_tx: &Sender<AudioCommand>,
 ) -> Option<EngineStatus> {
     match cmd {
-        AudioCommand::InitProject(settings) => {
+        AudioCommand::InitProject(mut settings) => {
+            let device_sr = state.device_sample_rate.round() as i32;
+            if (settings.sample_rate - device_sr).abs() > 1 {
+                info!(
+                    "Project sample rate {} overridden to match device {}",
+                    settings.sample_rate,
+                    device_sr
+                );
+            }
+            settings.sample_rate = device_sr;
             state.settings = settings;
             info!(
-                "Project initialized: {}bpm, {}/{}, PPQ={}, SR={}",
+                "Project initialized: {}bpm, {}/{}, PPQ={}, SR={} (device)",
                 state.settings.tempo,
                 state.settings.time_numerator,
                 state.settings.time_denominator,
                 state.settings.ppq,
-                state.device_sample_rate
+                device_sr
             );
         }
         AudioCommand::ClearProject => {
@@ -533,13 +564,17 @@ pub fn process_command(
         }
         AudioCommand::Play => {
             state.set_is_playing(true);
-            let position = state.settings.format_tick_position(state.get_current_tick());
+            let position = state
+                .settings
+                .format_tick_position(state.get_current_tick());
             info!("Playback started at {}", position);
             return Some(EngineStatus::PlayingStateChanged(true));
         }
         AudioCommand::Pause => {
             state.set_is_playing(false);
-            let position = state.settings.format_tick_position(state.get_current_tick());
+            let position = state
+                .settings
+                .format_tick_position(state.get_current_tick());
             // Reset all devices to stop any playing notes/voices
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
@@ -551,7 +586,9 @@ pub fn process_command(
             return Some(EngineStatus::PlayingStateChanged(false));
         }
         AudioCommand::Stop => {
-            let position = state.settings.format_tick_position(state.get_current_tick());
+            let position = state
+                .settings
+                .format_tick_position(state.get_current_tick());
             state.set_is_playing(false);
             state.set_current_tick(0);
             // Reset all channels and tracks
@@ -957,37 +994,140 @@ pub fn process_command(
                 warn!("Clip not found for update note: {}", clip_id);
             }
         }
+        AudioCommand::BeginLoadAudioClip {
+            clip_id,
+            req_id,
+            source_path,
+        } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                info!(
+                    "Begin loading audio clip {} from {} (req_id={})",
+                    clip_id, source_path, req_id
+                );
+
+                clip.audio_source_path = Some(source_path.clone());
+                clip.waveform_cache_key = None;
+                clip.audio_samples.clear();
+                clip.content_length_ticks = 0;
+                clip.load_state = ClipLoadState::Loading {
+                    req_id: req_id.clone(),
+                };
+
+                return Some(EngineStatus::ClipLoadStateChanged {
+                    clip_id,
+                    state: clip.load_state.clone(),
+                    source_path: clip.audio_source_path.clone(),
+                    cache_key: clip.waveform_cache_key.clone(),
+                    sample_rate: None,
+                    channels: None,
+                });
+            } else {
+                warn!("Clip not found for begin load: {}", clip_id);
+            }
+        }
         AudioCommand::LoadAudioClip {
             clip_id,
+            req_id,
+            source_path,
+            cache_key,
             samples,
             sample_rate,
             channels,
         } => {
             if let Some(clip) = state.clips.get_mut(&clip_id) {
+                if let ClipLoadState::Loading {
+                    req_id: current_req,
+                } = &clip.load_state
+                {
+                    if current_req != &req_id {
+                        warn!(
+                            "Stale clip load event for {} (expected req_id {}, got {})",
+                            clip_id, current_req, req_id
+                        );
+                        return None;
+                    }
+                }
+
+                let first_samples_str = samples
+                    .iter()
+                    .take(20)
+                    .map(|s| format!("{:.6}", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
                 info!(
-                    "Storing audio clip: {} total values, {} channels (= {} frames)",
+                    "Audio clip {} ready ({} samples, {} Hz, {} channels) - First 20 samples: {}",
+                    clip_id,
                     samples.len(),
+                    sample_rate,
                     channels,
-                    samples.len() / channels
+                    first_samples_str
                 );
 
                 clip.audio_samples = samples.clone();
                 clip.audio_sample_rate = sample_rate;
                 clip.audio_channels = channels;
+                clip.audio_source_path = Some(source_path.clone());
+                clip.waveform_cache_key = cache_key.clone();
+                clip.load_state = ClipLoadState::Ready {
+                    req_id: req_id.clone(),
+                };
 
                 // Calculate content length in ticks
-                let sample_count = samples.len() / channels;
-                let duration_seconds = sample_count as f32 / sample_rate as f32;
-                // Assuming 120 BPM = 2 beats per second, PPQ = 960 ticks per beat
-                let beats = duration_seconds * 2.0;
-                clip.content_length_ticks = (beats * 960.0) as i64;
+                if channels > 0 && sample_rate > 0 {
+                    let sample_count = samples.len() / channels;
+                    let duration_seconds = sample_count as f32 / sample_rate as f32;
+                    // Assuming 120 BPM = 2 beats per second, PPQ = 960 ticks per beat
+                    let beats = duration_seconds * 2.0;
+                    clip.content_length_ticks = (beats * 960.0) as i64;
+                } else {
+                    clip.content_length_ticks = 0;
+                }
 
-                info!(
-                    "Audio clip {} loaded: {} samples, {} Hz, {} channels, {} ticks",
-                    clip_id, sample_count, sample_rate, channels, clip.content_length_ticks
-                );
+                return Some(EngineStatus::ClipLoadStateChanged {
+                    clip_id,
+                    state: clip.load_state.clone(),
+                    source_path: clip.audio_source_path.clone(),
+                    cache_key: clip.waveform_cache_key.clone(),
+                    sample_rate: Some(sample_rate),
+                    channels: Some(channels),
+                });
             } else {
                 warn!("Clip not found for load audio: {}", clip_id);
+            }
+        }
+        AudioCommand::FailAudioClipLoad {
+            clip_id,
+            req_id,
+            message,
+        } => {
+            if let Some(clip) = state.clips.get_mut(&clip_id) {
+                warn!(
+                    "Audio clip {} failed to load (req_id={}): {}",
+                    clip_id, req_id, message
+                );
+
+                clip.audio_samples.clear();
+                clip.content_length_ticks = 0;
+                clip.waveform_cache_key = None;
+                clip.load_state = ClipLoadState::Failed {
+                    req_id: Some(req_id.clone()),
+                    message: message.clone(),
+                };
+
+                return Some(EngineStatus::ClipLoadStateChanged {
+                    clip_id,
+                    state: clip.load_state.clone(),
+                    source_path: clip.audio_source_path.clone(),
+                    cache_key: clip.waveform_cache_key.clone(),
+                    sample_rate: None,
+                    channels: None,
+                });
+            } else {
+                warn!(
+                    "Clip not found for fail audio load: {} (req_id={}, msg={})",
+                    clip_id, req_id, message
+                );
             }
         }
 

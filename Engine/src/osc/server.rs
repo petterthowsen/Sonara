@@ -1,15 +1,17 @@
 use anyhow::{Context, Result};
 use crossbeam::channel::{Receiver, Sender};
 use rosc::{OscMessage, OscPacket, OscType};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use crate::audio::io::load_wav_file;
+use crate::audio::io::{AfsEvent, AudioFileService};
+use crate::audio::types::ClipLoadState;
 use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
 use crate::window_manager::WindowManager;
 
@@ -18,6 +20,14 @@ pub struct OscServer {
     socket: UdpSocket,
     client_addr: Option<SocketAddr>,
     client_port: u16,
+    audio_file_service: Arc<Mutex<AudioFileService>>,
+    pending_clip_loads: Arc<Mutex<HashMap<String, PendingClip>>>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingClip {
+    clip_id: String,
+    source_path: String,
 }
 
 /// Shared file handles for rotating log writers (info, warn, combined)
@@ -29,7 +39,7 @@ pub struct LogWriters {
 
 impl OscServer {
     /// Create a new OSC server listening on the specified port
-    pub fn new(port: u16) -> Result<Self> {
+    pub fn new(port: u16, audio_file_service: Arc<Mutex<AudioFileService>>) -> Result<Self> {
         let addr = format!("127.0.0.1:{}", port);
         let socket =
             UdpSocket::bind(&addr).context(format!("Failed to bind OSC server to {}", addr))?;
@@ -42,6 +52,8 @@ impl OscServer {
             socket,
             client_addr: None,
             client_port: 7001, // Godot listens on 7001
+            audio_file_service,
+            pending_clip_loads: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -159,6 +171,15 @@ impl OscServer {
                 }
             }
 
+            // Check for AudioFileService events
+            let events = {
+                let mut service = self.audio_file_service.lock().unwrap();
+                service.poll_events()
+            };
+            for event in events {
+                self.handle_afs_event(event, &command_tx);
+            }
+
             // Check for window close events (user clicked X)
             while let Ok(process_key) = window_manager.close_event_rx.try_recv() {
                 info!("🗑️  Window close requested by user: {}", process_key);
@@ -244,7 +265,11 @@ impl OscServer {
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
 
         // Helper to rotate a single writer from last_*.txt → session_*_*.log
-        fn rotate_one(current_path: &str, archived_path: &str, writer: &Arc<Mutex<File>>) -> Result<()> {
+        fn rotate_one(
+            current_path: &str,
+            archived_path: &str,
+            writer: &Arc<Mutex<File>>,
+        ) -> Result<()> {
             // Announce rotation before swapping handles so message goes to old file
             info!("Rotating log file to {}", archived_path);
 
@@ -279,7 +304,11 @@ impl OscServer {
         // Rotate each log
         rotate_one("logs/last_info.log", &info_archived, &log_writers.info)?;
         rotate_one("logs/last_warn.log", &warn_archived, &log_writers.warn)?;
-        rotate_one("logs/last_combined.log", &combined_archived, &log_writers.combined)?;
+        rotate_one(
+            "logs/last_combined.log",
+            &combined_archived,
+            &log_writers.combined,
+        )?;
 
         // Enforce retention: keep last N per type
         fn enforce_retention(prefix: &str, suffix: &str) -> Result<()> {
@@ -696,30 +725,65 @@ impl OscServer {
                     Some(OscType::Int(channels)),
                 ) = (args.get(0), args.get(1), args.get(2))
                 {
+                    let req_id = Self::generate_clip_request_id(id_str);
                     info!(
-                        "Load audio file into clip {}: {} at {} Hz, {} channels",
-                        id_str, file_path, sample_rate, channels
+                        "Requesting audio load for clip {} (req_id={}) from {}",
+                        id_str, req_id, file_path
                     );
 
-                    // Load WAV file
-                    match load_wav_file(file_path) {
-                        Ok(samples) => {
-                            info!("Loaded {} samples from {}", samples.len(), file_path);
-                            command_tx.send(AudioCommand::LoadAudioClip {
+                    {
+                        let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                        pending_guard.insert(
+                            req_id.clone(),
+                            PendingClip {
                                 clip_id: id_str.to_string(),
-                                samples,
-                                sample_rate: *sample_rate as u32,
-                                channels: *channels as usize,
-                            })?;
+                                source_path: file_path.clone(),
+                            },
+                        );
+                    }
+
+                    command_tx.send(AudioCommand::BeginLoadAudioClip {
+                        clip_id: id_str.to_string(),
+                        req_id: req_id.clone(),
+                        source_path: file_path.clone(),
+                    })?;
+
+                    match self.audio_file_service.lock() {
+                        Ok(service) => {
+                            if let Err(err) = service.submit_decode_and_waveform(
+                                req_id.clone(),
+                                file_path.clone(),
+                                128,
+                            ) {
+                                warn!(
+                                    "Failed to submit decode request for clip {} (req_id={}): {}",
+                                    id_str, req_id, err
+                                );
+                                {
+                                    let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                                    pending_guard.remove(&req_id);
+                                }
+                                let _ = command_tx.send(AudioCommand::FailAudioClipLoad {
+                                    clip_id: id_str.to_string(),
+                                    req_id: req_id.clone(),
+                                    message: err.to_string(),
+                                });
+                            }
                         }
-                        Err(e) => {
-                            warn!("Failed to load audio file {}: {}", file_path, e);
-                            command_tx.send(AudioCommand::LoadAudioClip {
+                        Err(err) => {
+                            warn!(
+                                "Failed to lock AudioFileService for clip {} (req_id={}): {}",
+                                id_str, req_id, err
+                            );
+                            {
+                                let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                                pending_guard.remove(&req_id);
+                            }
+                            let _ = command_tx.send(AudioCommand::FailAudioClipLoad {
                                 clip_id: id_str.to_string(),
-                                samples: Vec::new(),
-                                sample_rate: *sample_rate as u32,
-                                channels: *channels as usize,
-                            })?;
+                                req_id: req_id.clone(),
+                                message: "AudioFileService unavailable".to_string(),
+                            });
                         }
                     }
                 } else {
@@ -1045,7 +1109,12 @@ impl OscServer {
                     args.first(),
                 );
                 match parsed {
-                    (Ok(channel_id), Ok(device_position), Ok(param_id), Some(OscType::Float(v))) => {
+                    (
+                        Ok(channel_id),
+                        Ok(device_position),
+                        Ok(param_id),
+                        Some(OscType::Float(v)),
+                    ) => {
                         info!(
                             "Set device parameter: channel={} device={} param={} value={}",
                             channel_id, device_position, param_id, v
@@ -1169,6 +1238,47 @@ impl OscServer {
                 }
             }
 
+            // AudioFile service routes
+            ["audiofile", "decode"] => {
+                if let (Some(OscType::String(req_id)), Some(OscType::String(abs_path))) =
+                    (args.get(0), args.get(1))
+                {
+                    info!("AudioFile decode request: {} for {}", req_id, abs_path);
+                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                        let _ =
+                            afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone(), 128);
+                    }
+                }
+            }
+            ["audiofile", "waveform", "start"] => {
+                if let (
+                    Some(OscType::String(req_id)),
+                    Some(OscType::String(abs_path)),
+                    Some(OscType::Int(min_block_size)),
+                ) = (args.get(0), args.get(1), args.get(2))
+                {
+                    info!(
+                        "AudioFile waveform request: {} for {} (min_block={})",
+                        req_id, abs_path, min_block_size
+                    );
+                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                        let _ = afs.submit_decode_and_waveform(
+                            req_id.clone(),
+                            abs_path.clone(),
+                            *min_block_size as usize,
+                        );
+                    }
+                }
+            }
+            ["audiofile", "waveform", "cancel"] => {
+                if let Some(OscType::String(req_id)) = args.first() {
+                    info!("AudioFile cancel request: {}", req_id);
+                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                        let _ = afs.cancel_job(req_id.clone());
+                    }
+                }
+            }
+
             _ => {
                 warn!("Unknown OSC address: {}", addr);
             }
@@ -1208,6 +1318,40 @@ impl OscServer {
                         OscType::Float(peak_right),
                         OscType::Float(rms_left),
                         OscType::Float(rms_right),
+                    ],
+                )
+            }
+            EngineStatus::ClipLoadStateChanged {
+                clip_id,
+                state,
+                source_path,
+                cache_key,
+                sample_rate,
+                channels,
+            } => {
+                let (state_label, req_id, message) = match state {
+                    ClipLoadState::Unloaded => {
+                        ("unloaded".to_string(), String::new(), String::new())
+                    }
+                    ClipLoadState::Loading { req_id } => {
+                        ("loading".to_string(), req_id, String::new())
+                    }
+                    ClipLoadState::Ready { req_id } => ("ready".to_string(), req_id, String::new()),
+                    ClipLoadState::Failed { req_id, message } => {
+                        ("failed".to_string(), req_id.unwrap_or_default(), message)
+                    }
+                };
+
+                (
+                    format!("/clip/{}/load_state", clip_id),
+                    vec![
+                        OscType::String(state_label),
+                        OscType::String(req_id),
+                        OscType::String(source_path.unwrap_or_default()),
+                        OscType::String(cache_key.unwrap_or_default()),
+                        OscType::Int(sample_rate.unwrap_or(0) as i32),
+                        OscType::Int(channels.unwrap_or(0) as i32),
+                        OscType::String(message),
                     ],
                 )
             }
@@ -1435,6 +1579,244 @@ impl OscServer {
                 }
             }
         }
+    }
+
+    /// Send AudioFileService event to the client
+    fn send_afs_event(socket: &UdpSocket, client_port: u16, event: AfsEvent) {
+        let (addr, args) = match event {
+            AfsEvent::DecodeReady {
+                req_id,
+                cache_key,
+                channels,
+                frames,
+                sample_rate,
+                duration_s,
+                samples, // Don't send samples over OSC (too large), just metadata
+            } => (
+                "/audiofile/decode/ready".to_string(),
+                vec![
+                    OscType::String(req_id),
+                    OscType::String(cache_key),
+                    OscType::Int(channels as i32),
+                    OscType::Long(frames as i64),
+                    OscType::Int(sample_rate as i32),
+                    OscType::Float(duration_s),
+                    OscType::Int(samples.len() as i32), // Send sample count for verification
+                ],
+            ),
+            AfsEvent::WaveformLevel {
+                req_id,
+                level,
+                block_size,
+                num_blocks,
+                file_path,
+                byte_offset,
+                byte_len,
+            } => (
+                "/audiofile/waveform/level".to_string(),
+                vec![
+                    OscType::String(req_id),
+                    OscType::Int(level as i32),
+                    OscType::Int(block_size as i32),
+                    OscType::Long(num_blocks as i64),
+                    OscType::String(file_path),
+                    OscType::Long(byte_offset as i64),
+                    OscType::Long(byte_len as i64),
+                ],
+            ),
+            AfsEvent::Progress {
+                req_id,
+                progress_0_1,
+            } => (
+                "/audiofile/progress".to_string(),
+                vec![OscType::String(req_id), OscType::Float(progress_0_1)],
+            ),
+            AfsEvent::Error {
+                req_id,
+                code,
+                message,
+            } => (
+                "/audiofile/error".to_string(),
+                vec![
+                    OscType::String(req_id),
+                    OscType::Int(code as i32),
+                    OscType::String(message),
+                ],
+            ),
+        };
+
+        match &addr[..] {
+            "/audiofile/decode/ready" => {
+                if let [OscType::String(req_id), OscType::String(cache_key), OscType::Int(channels), OscType::Long(frames), OscType::Int(sample_rate), OscType::Float(duration_s), OscType::Int(sample_count)] =
+                    &args[..]
+                {
+                    info!(
+                        request_id = %req_id,
+                        cache_key = %cache_key,
+                        channels,
+                        frames,
+                        sample_rate,
+                        duration = duration_s,
+                        sample_count,
+                        "OSC → Godot decode ready"
+                    );
+                }
+            }
+            "/audiofile/waveform/level" => {
+                if let [OscType::String(req_id), OscType::Int(level), OscType::Int(block_size), OscType::Long(num_blocks), OscType::String(file_path), OscType::Long(byte_offset), OscType::Long(byte_len)] =
+                    &args[..]
+                {
+                    info!(
+                        request_id = %req_id,
+                        level,
+                        block_size,
+                        num_blocks,
+                        file_path = %file_path,
+                        byte_offset,
+                        byte_len,
+                        "OSC → Godot waveform level"
+                    );
+                }
+            }
+            "/audiofile/progress" => {
+                if let [OscType::String(req_id), OscType::Float(progress)] = &args[..] {
+                    debug!(
+                        request_id = %req_id,
+                        progress,
+                        "OSC → Godot progress"
+                    );
+                }
+            }
+            "/audiofile/error" => {
+                if let [OscType::String(req_id), OscType::Int(code), OscType::String(message)] =
+                    &args[..]
+                {
+                    warn!(
+                        request_id = %req_id,
+                        code,
+                        message = %message,
+                        "OSC → Godot error"
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        let msg = OscMessage { addr, args };
+        let packet = OscPacket::Message(msg);
+        if let Ok(buf) = rosc::encoder::encode(&packet) {
+            let client_addr = format!("127.0.0.1:{}", client_port);
+            if let Ok(addr) = client_addr.parse::<SocketAddr>() {
+                let _ = socket.send_to(&buf, addr);
+            }
+        }
+    }
+
+    fn generate_clip_request_id(clip_id: &str) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("clip:{}:{}", clip_id, now)
+    }
+
+    fn handle_afs_event(&mut self, event: AfsEvent, command_tx: &Sender<AudioCommand>) {
+        match event.clone() {
+            AfsEvent::DecodeReady {
+                req_id,
+                cache_key,
+                channels,
+                sample_rate,
+                samples,
+                ..
+            } => {
+                let pending = {
+                    let pending_guard = self.pending_clip_loads.lock().unwrap();
+                    pending_guard.get(&req_id).cloned()
+                };
+
+                if let Some(pending_clip) = pending {
+                    info!(
+                        clip = %pending_clip.clip_id,
+                        request_id = %req_id,
+                        sample_rate,
+                        channels,
+                        sample_count = samples.len(),
+                        "AudioFileService decode ready with samples"
+                    );
+
+                    // Samples already decoded by AFS worker thread - send directly to engine!
+                    let command = AudioCommand::LoadAudioClip {
+                        clip_id: pending_clip.clip_id.clone(),
+                        req_id: req_id.clone(),
+                        source_path: pending_clip.source_path.clone(),
+                        cache_key: Some(cache_key.clone()),
+                        samples,
+                        sample_rate,
+                        channels: channels as usize,
+                    };
+
+                    if let Err(err) = command_tx.send(command) {
+                        warn!(
+                            "Failed to forward LoadAudioClip command for {}: {}",
+                            pending_clip.clip_id, err
+                        );
+                    }
+
+                    let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                    pending_guard.remove(&req_id);
+                }
+            }
+            AfsEvent::WaveformLevel {
+                req_id,
+                level,
+                block_size,
+                num_blocks,
+                ..
+            } => {
+                debug!(
+                    request_id = %req_id,
+                    level,
+                    block_size,
+                    num_blocks,
+                    "AudioFileService waveform level ready"
+                );
+            }
+            AfsEvent::Progress {
+                req_id,
+                progress_0_1,
+            } => {
+                debug!(
+                    request_id = %req_id,
+                    progress = progress_0_1,
+                    "AudioFileService progress"
+                );
+            }
+            AfsEvent::Error {
+                req_id, message, ..
+            } => {
+                if let Some(pending_clip) = {
+                    let pending_guard = self.pending_clip_loads.lock().unwrap();
+                    pending_guard.get(&req_id).cloned()
+                } {
+                    warn!(
+                        "AudioFileService error for clip {} (req_id={}): {}",
+                        pending_clip.clip_id, req_id, message
+                    );
+                    let command = AudioCommand::FailAudioClipLoad {
+                        clip_id: pending_clip.clip_id.clone(),
+                        req_id: req_id.clone(),
+                        message: message.clone(),
+                    };
+                    let _ = command_tx.send(command);
+                    let mut pending_guard = self.pending_clip_loads.lock().unwrap();
+                    pending_guard.remove(&req_id);
+                }
+            }
+            _ => {}
+        }
+
+        Self::send_afs_event(&self.socket, self.client_port, event);
     }
 
     /// Send a message to the client

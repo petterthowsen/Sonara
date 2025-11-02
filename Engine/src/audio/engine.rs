@@ -165,13 +165,9 @@ impl AudioEngine {
                         }
                     };
 
-                    if let Some(status) = process_command(
-                        &mut state,
-                        cmd,
-                        max_buffer_size,
-                        &status_tx,
-                        &command_tx,
-                    ) {
+                    if let Some(status) =
+                        process_command(&mut state, cmd, max_buffer_size, &status_tx, &command_tx)
+                    {
                         let _ = status_tx.send(status);
                     }
                 }
@@ -222,7 +218,7 @@ impl AudioEngine {
                 };
 
                 let frames = data.len() / channels;
-                
+
                 // Calculate block duration (time available for this buffer)
                 let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
 
@@ -267,7 +263,7 @@ impl AudioEngine {
                 if perf_metrics_start.borrow().elapsed() >= perf_metrics_interval {
                     let cum_proc = *cumulative_processing_time.borrow();
                     let cum_block = *cumulative_block_duration.borrow();
-                    
+
                     // Calculate average load: processing_time / block_duration
                     // If cumulative_block_duration is zero, avoid division by zero
                     let avg_load = if cum_block.as_secs_f64() > 0.0 {
@@ -295,8 +291,11 @@ impl AudioEngine {
 
                     // Send playhead update
                     if state.get_is_playing() {
-                        let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
-                        let _ = status_tx.send(EngineStatus::SamplePositionUpdate(state.get_current_sample_position()));
+                        let _ =
+                            status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
+                        let _ = status_tx.send(EngineStatus::SamplePositionUpdate(
+                            state.get_current_sample_position(),
+                        ));
                     }
 
                     // Send meter updates

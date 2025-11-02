@@ -40,6 +40,12 @@ var channels: Array[Channel] = []
 var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 
+# Async clip load tracking
+var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
+var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
+var _osc_listener_registry: Array = []
+var _pending_waveform_retries: Dictionary = {}
+
 # Unique ID management
 # ID Allocation Scheme:
 # - 0: Null/no output (reserved, channels routing to 0 won't output anywhere)
@@ -109,6 +115,9 @@ func connect_to_engine() -> void:
 	if not AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
 		AudioEngineOSC.engine_disconnected.connect(_on_engine_disconnected)
 
+	# Register OSC listeners for clip/audiofile events
+	_register_clip_osc_listeners()
+
 	# Clear any previous project state in engine, then initialize
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
@@ -157,6 +166,237 @@ func _on_engine_disconnected() -> void:
 	connection_state_changed.emit(ConnectionState.DISCONNECTED)
 
 
+func _register_clip_osc_listeners() -> void:
+	_unregister_osc_listeners()
+	_register_osc_listener("/clip/*/load_state", _on_clip_load_state_received)
+	_register_osc_listener("/audiofile/decode/ready", _on_audiofile_decode_ready)
+	_register_osc_listener("/audiofile/waveform/level", _on_audiofile_waveform_level)
+	_register_osc_listener("/audiofile/progress", _on_audiofile_progress)
+	_register_osc_listener("/audiofile/error", _on_audiofile_error)
+
+
+func _register_osc_listener(address: String, callback: Callable) -> void:
+	AudioEngineOSC.listen(address, callback)
+	_osc_listener_registry.append({
+		"address": address,
+		"callback": callback
+	})
+
+
+func _unregister_osc_listeners() -> void:
+	for entry in _osc_listener_registry:
+		var address: String = entry.get("address", "")
+		var callback: Callable = entry.get("callback")
+		if not address.is_empty() and callback and callback.is_valid():
+			AudioEngineOSC.unlisten(address, callback)
+	_osc_listener_registry.clear()
+
+
+func _record_clip_request(clip_id: String, req_id: String) -> void:
+	if clip_id.is_empty() or req_id.is_empty():
+		return
+	_clip_request_lookup[clip_id] = req_id
+	_request_clip_lookup[req_id] = clip_id
+	print("[Project] Tracked clip request", clip_id, "->", req_id)
+
+
+func _clear_clip_request_by_req(req_id: String) -> void:
+	if req_id.is_empty():
+		return
+	if _request_clip_lookup.has(req_id):
+		var clip_id: String = _request_clip_lookup[req_id]
+		print("[Project] Clearing clip request", clip_id, "for", req_id)
+		_request_clip_lookup.erase(req_id)
+		_clip_request_lookup.erase(clip_id)
+
+
+func _get_clip_by_req_id(req_id: String) -> Clip:
+	if _request_clip_lookup.has(req_id):
+		return get_clip(_request_clip_lookup[req_id])
+	return null
+
+
+func _get_scene_tree() -> SceneTree:
+	var loop := Engine.get_main_loop()
+	return loop as SceneTree if loop is SceneTree else null
+
+
+func _on_clip_load_state_received(args: Array, address: String) -> void:
+	if address.is_empty():
+		return
+	var parts := address.split("/")
+	if parts.size() < 3:
+		return
+	var clip_id := parts[2]
+	print("[Project] load_state", args, "from", address)
+	var clip := get_clip(clip_id)
+	if clip == null:
+		print("[Project] Received load_state for unknown clip: ", clip_id)
+		return
+
+	var state_label: String = str(args[0]) if args.size() > 0 else ""
+	var req_id: String = str(args[1]) if args.size() > 1 else ""
+	var source_path: String = str(args[2]) if args.size() > 2 else clip.audio_file_path
+	var cache_key: String = str(args[3]) if args.size() > 3 else clip.waveform_cache_key
+	var clip_sample_rate: int = int(args[4]) if args.size() > 4 else clip.audio_sample_rate
+	var clip_channels: int = int(args[5]) if args.size() > 5 else clip.audio_channels
+	var message: String = str(args[6]) if args.size() > 6 else ""
+
+	clip.audio_file_path = source_path
+	if clip_sample_rate > 0 or clip_channels > 0:
+		clip.set_audio_metadata(clip_sample_rate, max(1, clip_channels), clip.audio_frames)
+	clip.waveform_cache_key = cache_key
+
+	var new_state: Clip.LoadState = Clip.LoadState.UNLOADED
+	match state_label:
+		"loading":
+			new_state = Clip.LoadState.LOADING
+		"ready":
+			new_state = Clip.LoadState.READY
+		"failed":
+			new_state = Clip.LoadState.FAILED
+		_:
+			new_state = Clip.LoadState.UNLOADED
+
+	if not req_id.is_empty():
+		_record_clip_request(clip_id, req_id)
+
+	match new_state:
+		Clip.LoadState.LOADING:
+			clip.mark_load_started(req_id, source_path)
+		Clip.LoadState.READY:
+			clip.apply_load_state(Clip.LoadState.READY, req_id, "")
+			clip.update_load_progress(1.0)
+			clip.update_content_length_from_metadata(tempo, ppq)
+		Clip.LoadState.FAILED:
+			clip.apply_load_state(Clip.LoadState.FAILED, req_id, message)
+			clip.update_load_progress(0.0)
+			_clear_clip_request_by_req(req_id)
+		Clip.LoadState.UNLOADED:
+			clip.apply_load_state(Clip.LoadState.UNLOADED, req_id, "")
+			clip.update_load_progress(0.0)
+			_clear_clip_request_by_req(req_id)
+
+
+func _on_audiofile_decode_ready(args: Array) -> void:
+	if args.size() < 6:
+		return
+	var req_id := str(args[0])
+	var clip := _get_clip_by_req_id(req_id)
+	if clip == null:
+		print("[Project] decode_ready for unknown req", req_id, "args", args)
+		return
+
+	var cache_key: String = str(args[1])
+	var decoded_channels: int = int(args[2])
+	var frames: int = int(args[3])
+	var decoded_sample_rate: int = int(args[4])
+	var duration_s: float = float(args[5])
+	print("[Project] decode_ready clip", clip.id, "frames", frames, "cache", cache_key)
+
+	clip.waveform_cache_key = cache_key
+	clip.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
+	clip.update_content_length_from_metadata(tempo, ppq)
+
+
+func _on_audiofile_waveform_level(args: Array) -> void:
+	if args.size() < 7:
+		return
+	var req_id := str(args[0])
+	var clip := _get_clip_by_req_id(req_id)
+	if clip == null:
+		print("[Project] Waveform level for unknown req", req_id, "(args", args, ")")
+		return
+
+	var level := int(args[1])
+	var block_size := int(args[2])
+	var num_blocks := int(args[3])
+	var file_path := str(args[4])
+	print("[Project] waveform level", level, "for clip", clip.id, "blocks", num_blocks, "block_size", block_size)
+
+	if clip.waveform_cache_key.is_empty():
+		clip.waveform_cache_key = file_path.get_file()
+	clip.set_waveform_cache(file_path, clip.waveform_cache_key)
+
+	if not clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
+		print("[Project] Ingest waveform level", level, "failed for", clip.id)
+		_schedule_waveform_retry(req_id, level, block_size, num_blocks, file_path)
+	else:
+		print("[Project] Ingested waveform level", level, "for clip", clip.id, "(req", req_id, ")")
+
+
+func _on_audiofile_progress(args: Array) -> void:
+	if args.size() < 2:
+		return
+	var req_id := str(args[0])
+	var clip := _get_clip_by_req_id(req_id)
+	if clip == null:
+		return
+	var progress := float(args[1])
+	clip.update_load_progress(progress)
+
+
+func _on_audiofile_error(args: Array) -> void:
+	if args.size() < 3:
+		return
+	var req_id := str(args[0])
+	var clip := _get_clip_by_req_id(req_id)
+	if clip == null:
+		return
+	var code := int(args[1])
+	var message := str(args[2])
+	clip.apply_load_state(Clip.LoadState.FAILED, req_id, "[%d] %s" % [code, message])
+	_clear_clip_request_by_req(req_id)
+
+
+func _schedule_waveform_retry(req_id: String, level: int, block_size: int, num_blocks: int, file_path: String, attempt: int = 1) -> void:
+	var key := "%s:%d" % [req_id, level]
+	var info: Dictionary = _pending_waveform_retries.get(key, {})
+	var current_attempt: int = int(info.get("attempt", 0))
+	if current_attempt >= 3:
+		return
+	var next_attempt: int = int(max(attempt, current_attempt + 1))
+	_pending_waveform_retries[key] = {
+		"attempt": next_attempt,
+		"block_size": block_size,
+		"num_blocks": num_blocks,
+		"file_path": file_path
+	}
+	var delay: float = 0.25 * float(next_attempt)
+	var scene_tree := _get_scene_tree()
+	if scene_tree == null:
+		return
+	var timer = scene_tree.create_timer(delay)
+	timer.timeout.connect(_on_waveform_retry_timeout.bind(req_id, level))
+
+
+func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
+	var key := "%s:%d" % [req_id, level]
+	if not _pending_waveform_retries.has(key):
+		return
+	var info: Dictionary = _pending_waveform_retries[key]
+	var clip := _get_clip_by_req_id(req_id)
+	if clip == null:
+		_pending_waveform_retries.erase(key)
+		return
+	var block_size := int(info.get("block_size", 0))
+	var num_blocks := int(info.get("num_blocks", 0))
+	var file_path := str(info.get("file_path", ""))
+	if file_path.is_empty():
+		_pending_waveform_retries.erase(key)
+		return
+
+	clip.set_waveform_cache(file_path, clip.waveform_cache_key if not clip.waveform_cache_key.is_empty() else file_path.get_file())
+	if clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
+		_pending_waveform_retries.erase(key)
+	else:
+		var attempt := int(info.get("attempt", 1))
+		if attempt >= 3:
+			_pending_waveform_retries.erase(key)
+		else:
+			_schedule_waveform_retry(req_id, level, block_size, num_blocks, file_path, attempt + 1)
+
+
 func disconnect_from_engine() -> void:
 	"""Disconnect project and all data from audio engine."""
 	if _connection_state == ConnectionState.DISCONNECTED:
@@ -169,6 +409,15 @@ func disconnect_from_engine() -> void:
 		AudioEngineOSC.engine_connected.disconnect(_on_engine_confirmed_connected)
 	if AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
 		AudioEngineOSC.engine_disconnected.disconnect(_on_engine_disconnected)
+
+	_unregister_osc_listeners()
+	_clip_request_lookup.clear()
+	_request_clip_lookup.clear()
+	_pending_waveform_retries.clear()
+	for clip in clips.values():
+		if clip and clip.type == Clip.ClipType.AUDIO:
+			clip.apply_load_state(Clip.LoadState.UNLOADED, "", "Disconnected")
+			clip.update_load_progress(0.0)
 
 	# Disconnect all tracks
 	for track in tracks:
@@ -217,15 +466,18 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 	else:
 		# Sync audio data (if audio clip)
 		if not clip.audio_file_path.is_empty():
-			# Send the audio file PATH instead of the massive blob
-			# Engine will load it directly using its own audio loader
-			print("[Project] Syncing audio clip %s to engine: %s (%s Hz, %d channels)" % [
-				clip.id, clip.audio_file_path, clip.audio_sample_rate, clip.audio_channels
-			])
+			var sample_rate_hint: int = clip.audio_sample_rate if clip.audio_sample_rate > 0 else 0
+			var channel_hint: int = clip.audio_channels if clip.audio_channels > 0 else 0
+			print("[Project] Requesting engine-side load for clip %s (%s)" % [clip.id, clip.audio_file_path])
+			clip.apply_load_state(Clip.LoadState.LOADING, "", "")
+			clip.load_progress = 0.0
+			var prev_req_id: String = _clip_request_lookup.get(clip.id, "")
+			if not prev_req_id.is_empty():
+				_clear_clip_request_by_req(prev_req_id)
 			AudioEngineOSC.send("/clip/%s/load_audio_file" % clip.id, [
 				clip.audio_file_path,
-				clip.audio_sample_rate,
-				clip.audio_channels
+				sample_rate_hint,
+				channel_hint
 			])
 		else:
 			print("[Project] WARNING: Audio clip %s has no audio_file_path!" % clip.id)
@@ -503,37 +755,21 @@ func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE) ->
 	clip.audio_file_path = asset.path
 
 	if clip_type == Clip.ClipType.AUDIO:
-		# Load audio file
-		var load_result = AudioFileLoader.load_audio_file(asset.path)
-		if load_result["success"]:
-			clip.audio_samples = load_result["samples"]
-			clip.audio_sample_rate = load_result["sample_rate"]
-			clip.audio_channels = load_result["channels"]
-
-			# Calculate content length from audio duration
-			var sample_count = clip.audio_samples.size() / clip.audio_channels
-			var duration_seconds = float(sample_count) / float(clip.audio_sample_rate)
-			var beats = duration_seconds * (tempo / 60.0)  # Use actual project tempo
-			clip.content_length_ticks = int(beats * ppq)
-
-			# Precompute waveforms for efficient rendering
-			clip.precompute_waveforms()
-
-			print("[Project] Audio clip loaded: %s (%d samples, %d Hz, %d channels, %d ticks)" % [
-				asset.get_display_name(),
-				sample_count,
-				clip.audio_sample_rate,
-				clip.audio_channels,
-				clip.content_length_ticks
-			])
-		else:
-			print("[Project] Failed to load audio: %s" % load_result.get("error", "Unknown error"))
-			clip.content_length_ticks = ppq * 4  # Fallback to 4 beats
+		clip.audio_file_path = asset.path
+		clip.audio_sample_rate = 0
+		clip.audio_channels = 0
+		clip.audio_frames = 0
+		clip.audio_duration_seconds = 0.0
+		clip.waveform_cache_key = ""
+		clip.waveform_cache_path = ""
+		clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
+		clip.load_progress = 0.0
+		clip.content_length_ticks = ppq * 4  # Placeholder until engine provides length
 	else:
 		# TODO: Load MIDI notes from asset.path when MIDI parser is available
 		clip.content_length_ticks = ppq * 4  # Default 4 beats
 
-	# Add clip to pool AFTER all data is loaded (so engine sync works correctly)
+	# Add clip to pool AFTER metadata is prepared
 	add_clip(clip)
 
 	return clip
@@ -546,6 +782,9 @@ func remove_clip(clip_id: String) -> bool:
 
 	# TODO: Check if any instances reference this clip and warn/prevent deletion
 	# For now, just remove it
+	var req_id: String = _clip_request_lookup.get(clip_id, "")
+	if not req_id.is_empty():
+		_clear_clip_request_by_req(req_id)
 
 	# Remove from engine if connected
 	if _connection_state == ConnectionState.CONNECTED:

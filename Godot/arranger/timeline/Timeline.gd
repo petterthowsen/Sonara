@@ -1050,9 +1050,14 @@ func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
 			new_clip.audio_file_path = original.audio_file_path
 			new_clip.audio_sample_rate = original.audio_sample_rate
 			new_clip.audio_channels = original.audio_channels
-			new_clip.audio_samples = original.audio_samples.duplicate()
+			new_clip.audio_frames = original.audio_frames
+			new_clip.audio_duration_seconds = original.audio_duration_seconds
 			new_clip.recorded_bpm = original.recorded_bpm
-			new_clip.audio_waveform = original.audio_waveform  # share cached waveform
+			new_clip.waveform_cache_key = original.waveform_cache_key
+			new_clip.waveform_cache_path = original.waveform_cache_path
+			new_clip.audio_waveform = original.audio_waveform  # share cached waveform instance for UI reuse
+			new_clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
+			new_clip.load_progress = 0.0
 
 		# Add to pool (sync to engine if connected)
 		proj.add_clip(new_clip)

@@ -389,10 +389,27 @@ pub fn mix_and_output(
                 }
 
                 if should_log_sends {
-                    let source_peak_l = channel.buffer_left.iter().take(buffer_len).map(|s| s.abs()).fold(0.0, f32::max);
-                    let source_peak_r = channel.buffer_right.iter().take(buffer_len).map(|s| s.abs()).fold(0.0, f32::max);
-                    info!("🔊 SEND: Ch{} → Ch{} (gain={:.2}dB={:.4}x, peak_L={:.6}, peak_R={:.6})",
-                        source_id, send.target_channel_id, send.amount_db, send_gain, source_peak_l, source_peak_r);
+                    let source_peak_l = channel
+                        .buffer_left
+                        .iter()
+                        .take(buffer_len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    let source_peak_r = channel
+                        .buffer_right
+                        .iter()
+                        .take(buffer_len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    info!(
+                        "🔊 SEND: Ch{} → Ch{} (gain={:.2}dB={:.4}x, peak_L={:.6}, peak_R={:.6})",
+                        source_id,
+                        send.target_channel_id,
+                        send.amount_db,
+                        send_gain,
+                        source_peak_l,
+                        source_peak_r
+                    );
                 }
 
                 if send.pre_fader {
@@ -433,26 +450,47 @@ pub fn mix_and_output(
             let dest_gain = target_ch.get_gain();
             let len = frames;
 
-            let (pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r) = if should_log_sends {
-                let pre_l = target_ch.buffer_left.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
-                let pre_r = target_ch.buffer_right.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
-                
-                for i in 0..len {
-                    target_ch.buffer_left[i] += send_left[i] * dest_gain;
-                    target_ch.buffer_right[i] += send_right[i] * dest_gain;
-                }
-                
-                let post_l = target_ch.buffer_left.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
-                let post_r = target_ch.buffer_right.iter().take(len).map(|s| s.abs()).fold(0.0, f32::max);
-                (pre_l, pre_r, post_l, post_r)
-            } else {
-                for i in 0..len {
-                    target_ch.buffer_left[i] += send_left[i] * dest_gain;
-                    target_ch.buffer_right[i] += send_right[i] * dest_gain;
-                }
-                (0.0, 0.0, 0.0, 0.0)
-            };
-            
+            let (pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r) =
+                if should_log_sends {
+                    let pre_l = target_ch
+                        .buffer_left
+                        .iter()
+                        .take(len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    let pre_r = target_ch
+                        .buffer_right
+                        .iter()
+                        .take(len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+
+                    for i in 0..len {
+                        target_ch.buffer_left[i] += send_left[i] * dest_gain;
+                        target_ch.buffer_right[i] += send_right[i] * dest_gain;
+                    }
+
+                    let post_l = target_ch
+                        .buffer_left
+                        .iter()
+                        .take(len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    let post_r = target_ch
+                        .buffer_right
+                        .iter()
+                        .take(len)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    (pre_l, pre_r, post_l, post_r)
+                } else {
+                    for i in 0..len {
+                        target_ch.buffer_left[i] += send_left[i] * dest_gain;
+                        target_ch.buffer_right[i] += send_right[i] * dest_gain;
+                    }
+                    (0.0, 0.0, 0.0, 0.0)
+                };
+
             if should_log_sends {
                 info!("📥 SEND mixed into Ch{}: dest_gain={:.4}, pre=({:.6},{:.6}), post=({:.6},{:.6}), routes_to={:?}",
                     target_id, dest_gain, pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r, target_ch.output_channel_id);
@@ -494,7 +532,10 @@ pub fn mix_and_output(
         let mut mix_operations: Vec<(ChannelId, ChannelId, Vec<f32>, Vec<f32>)> = Vec::new();
 
         if should_log_routing {
-            info!("🔄 Routing pass {}: processed_channels={:?}", routing_pass, processed_channels);
+            info!(
+                "🔄 Routing pass {}: processed_channels={:?}",
+                routing_pass, processed_channels
+            );
         }
 
         // First, mark buses that need device processing (from sends) - they shouldn't route PRE-device audio
@@ -513,7 +554,10 @@ pub fn mix_and_output(
             // Skip buses that need to process devices first (they'll route POST-device audio later)
             if buses_needing_processing.contains(&id) {
                 if should_log_routing {
-                    info!("⏸️  Skipping Ch{} in routing pass {} - needs device processing first", id, routing_pass);
+                    info!(
+                        "⏸️  Skipping Ch{} in routing pass {} - needs device processing first",
+                        id, routing_pass
+                    );
                 }
                 continue;
             }
@@ -543,7 +587,10 @@ pub fn mix_and_output(
                 // Only mix into other channels (ID < 1000), not devices (ID >= 1000)
                 if output_id != id && output_id < 1000 && state.channels.contains_key(&output_id) {
                     if should_log_routing {
-                        info!("📤 Routing pass {}: Ch{} → Ch{} (peak={:.6})", routing_pass, id, output_id, peak);
+                        info!(
+                            "📤 Routing pass {}: Ch{} → Ch{} (peak={:.6})",
+                            routing_pass, id, output_id, peak
+                        );
                     }
                     mix_operations.push((id, output_id, buf_left, buf_right));
                     processed_channels.insert(id); // Mark as processed
@@ -554,13 +601,21 @@ pub fn mix_and_output(
 
         for channel_id in pending_bus_processing.drain() {
             if should_log_routing {
-                info!("➕ Adding Ch{} to bus_destinations from pending_bus_processing", channel_id);
+                info!(
+                    "➕ Adding Ch{} to bus_destinations from pending_bus_processing",
+                    channel_id
+                );
             }
             bus_destinations.insert(channel_id);
         }
 
         if should_log_routing {
-            info!("🔄 Pass {}: {} mix ops, {} bus dests", routing_pass, mix_operations.len(), bus_destinations.len());
+            info!(
+                "🔄 Pass {}: {} mix ops, {} bus dests",
+                routing_pass,
+                mix_operations.len(),
+                bus_destinations.len()
+            );
         }
 
         if mix_operations.is_empty() && bus_destinations.is_empty() {
@@ -604,11 +659,15 @@ pub fn mix_and_output(
         // Bus pan is applied to the received routed audio (which already has source pan applied)
         // This allows buses to further pan the mixed signal before routing to their output
         let buses_to_process: Vec<ChannelId> = bus_destinations.iter().copied().collect();
-        
+
         if should_log_routing && !buses_to_process.is_empty() {
-            info!("🎛️  Processing {} buses: {:?}", buses_to_process.len(), buses_to_process);
+            info!(
+                "🎛️  Processing {} buses: {:?}",
+                buses_to_process.len(),
+                buses_to_process
+            );
         }
-        
+
         for bus_id in buses_to_process {
             if let Some(bus_ch) = state.channels.get_mut(&bus_id) {
                 // Skip if muted
@@ -620,10 +679,26 @@ pub fn mix_and_output(
                 }
 
                 if should_log_routing {
-                    let pre_l = bus_ch.buffer_left.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
-                    let pre_r = bus_ch.buffer_right.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
-                    info!("🎚️  Bus {} PRE-device: peak=({:.6},{:.6}), devices={}, routes_to={:?}",
-                        bus_id, pre_l, pre_r, bus_ch.devices.len(), bus_ch.output_channel_id);
+                    let pre_l = bus_ch
+                        .buffer_left
+                        .iter()
+                        .take(sample_count)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    let pre_r = bus_ch
+                        .buffer_right
+                        .iter()
+                        .take(sample_count)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    info!(
+                        "🎚️  Bus {} PRE-device: peak=({:.6},{:.6}), devices={}, routes_to={:?}",
+                        bus_id,
+                        pre_l,
+                        pre_r,
+                        bus_ch.devices.len(),
+                        bus_ch.output_channel_id
+                    );
                 }
 
                 // Process the bus's effect chain on the accumulated routed audio
@@ -631,10 +706,22 @@ pub fn mix_and_output(
                 bus_ch.process_device_chain(sample_count);
 
                 if should_log_routing {
-                    let post_device_peak_l = bus_ch.buffer_left.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
-                    let post_device_peak_r = bus_ch.buffer_right.iter().take(sample_count).map(|s| s.abs()).fold(0.0, f32::max);
-                    info!("🎛️  Bus {} POST-device: peak=({:.6},{:.6})",
-                        bus_id, post_device_peak_l, post_device_peak_r);
+                    let post_device_peak_l = bus_ch
+                        .buffer_left
+                        .iter()
+                        .take(sample_count)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    let post_device_peak_r = bus_ch
+                        .buffer_right
+                        .iter()
+                        .take(sample_count)
+                        .map(|s| s.abs())
+                        .fold(0.0, f32::max);
+                    info!(
+                        "🎛️  Bus {} POST-device: peak=({:.6},{:.6})",
+                        bus_id, post_device_peak_l, post_device_peak_r
+                    );
                 }
 
                 // Check for pending parameter changes from CLAP plugins on buses
@@ -703,9 +790,12 @@ pub fn mix_and_output(
                 // CRITICAL: Remove from processed_channels so the bus can route its POST-device audio in the next pass
                 // This allows buses to route their processed output (e.g., reverb) to master/other buses
                 processed_channels.remove(&bus_id);
-                
+
                 if should_log_routing {
-                    info!("🔄 Bus {} processed devices, will route POST-device audio in next pass", bus_id);
+                    info!(
+                        "🔄 Bus {} processed devices, will route POST-device audio in next pass",
+                        bus_id
+                    );
                 }
             }
         }

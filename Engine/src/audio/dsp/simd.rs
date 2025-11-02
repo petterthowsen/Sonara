@@ -114,4 +114,3 @@ unsafe fn mix_blocks_neon(output: &mut [f32], input: &[f32], len: usize) {
         i += 1;
     }
 }
-

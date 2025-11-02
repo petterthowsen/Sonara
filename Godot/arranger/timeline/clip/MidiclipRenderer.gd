@@ -100,22 +100,46 @@ func _draw_waveform() -> void:
 	if size.x <= 0:
 		return  # Can't render if width is zero
 
+	if clip.load_state != Clip.LoadState.READY:
+		var bg_color := Color(0.2, 0.2, 0.2, 0.4)
+		match clip.load_state:
+			Clip.LoadState.LOADING:
+				draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
+				draw_rect(
+					Rect2(Vector2.ZERO, Vector2(size.x * clamp(clip.load_progress, 0.0, 1.0), size.y)),
+					Color(0.3, 0.6, 1.0, 0.6),
+					true
+				)
+			Clip.LoadState.FAILED:
+				draw_rect(Rect2(Vector2.ZERO, size), Color(0.6, 0.1, 0.1, 0.5), true)
+				draw_line(Vector2(0, 0), Vector2(size.x, size.y), Color(1, 0.3, 0.3, 0.8), 2.0)
+				draw_line(Vector2(size.x, 0), Vector2(0, size.y), Color(1, 0.3, 0.3, 0.8), 2.0)
+			Clip.LoadState.UNLOADED:
+				draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
+		return
+
 	# Calculate the visible portion of the clip
-	var total_audio_samples = clip.audio_samples.size() / clip.audio_channels
-	var clip_duration_ticks = clip.content_length_ticks
+	var total_audio_samples = clip.audio_frames
+	if total_audio_samples <= 0:
+		return
+	var clip_duration_ticks = max(clip.content_length_ticks, 1)
 	var clip_offset = clip_instance.clip_offset
 	var instance_duration = clip_instance.duration_ticks
 	
 	# Convert tick offsets to sample positions
-	var offset_ratio = float(clip_offset) / float(clip_duration_ticks) if clip_duration_ticks > 0 else 0.0
-	var duration_ratio = float(instance_duration) / float(clip_duration_ticks) if clip_duration_ticks > 0 else 1.0
+	var offset_ratio = clamp(float(clip_offset) / float(clip_duration_ticks), 0.0, 1.0)
+	var duration_ratio = clamp(float(instance_duration) / float(clip_duration_ticks), 0.0, 1.0)
 	
 	var start_sample = int(offset_ratio * total_audio_samples)
-	var end_sample = int((offset_ratio + duration_ratio) * total_audio_samples)
+	var end_sample = int(min(offset_ratio + duration_ratio, 1.0) * total_audio_samples)
+	if end_sample <= start_sample:
+		end_sample = min(start_sample + 1, total_audio_samples)
 	var visible_samples = end_sample - start_sample
 
 	# Determine effective samples per pixel based on visible region
-	var target_resolution = int(float(visible_samples) / float(size.x))
+	var target_resolution = int(float(visible_samples) / max(1.0, float(size.x)))
+	if target_resolution <= 0:
+		target_resolution = 1
 
 	# Get the best matching waveform resolution
 	var waveform = clip.audio_waveform.get_waveform_for_resolution(target_resolution)
@@ -125,20 +149,23 @@ func _draw_waveform() -> void:
 
 	# Apply gain as visual scale
 	var gain_linear = db_to_linear(clip_instance.gain_offset)
-	var height_per_channel = size.y / clip.audio_channels
+	var channel_count = max(clip.audio_channels, 1)
+	var height_per_channel = size.y / channel_count
 	var center_y_offset = height_per_channel / 2.0
 
 	# Calculate which waveform pixels correspond to the visible region
-	var samples_per_waveform_pixel = waveform.samples_per_pixel
+	var samples_per_waveform_pixel = max(1, waveform.samples_per_pixel)
 	var start_waveform_pixel = int(float(start_sample) / float(samples_per_waveform_pixel))
 	var end_waveform_pixel = int(float(end_sample) / float(samples_per_waveform_pixel))
 	var visible_waveform_pixels = end_waveform_pixel - start_waveform_pixel
 
 	# Scale factor to map visible waveform pixels to screen width
-	var scale_x = float(size.x) / float(visible_waveform_pixels) if visible_waveform_pixels > 0 else 1.0
+	if visible_waveform_pixels <= 0:
+		visible_waveform_pixels = 1
+	var scale_x = float(size.x) / float(visible_waveform_pixels)
 
 	# Draw waveforms for each channel
-	for ch in range(clip.audio_channels):
+	for ch in range(channel_count):
 		var peak_data = waveform.peak_data_left if ch == 0 else waveform.peak_data_right
 
 		# Only draw the visible portion
@@ -146,7 +173,7 @@ func _draw_waveform() -> void:
 			var waveform_pixel = start_waveform_pixel + i
 			if waveform_pixel >= peak_data.size():
 				break
-				
+			
 			var peak_pair = peak_data[waveform_pixel]
 			var min_sample = peak_pair.x * gain_linear
 			var max_sample = peak_pair.y * gain_linear

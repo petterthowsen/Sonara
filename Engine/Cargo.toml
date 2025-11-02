@@ -16,7 +16,9 @@ path = "src/bin/plugin_host.rs"
 cpal = "0.15"
 
 # Audio file format support
-rustwav = "0.3.8"  # WAV file reading with advanced format support
+rustwav = "0.3.8"  # WAV file reading with advanced format support (legacy)
+symphonia = { version = "0.5", features = ["aac", "mp3", "ogg", "flac", "wav"] }  # Multi-format audio decoding
+rubato = "0.15"  # High-quality offline resampling
 
 # DSP library
 fundsp = "0.19.1"  # FunDSP for polyphonic synthesis (deprecated - slow performance)
@@ -37,6 +39,10 @@ tracing-appender = "0.2"
 crossbeam = "0.8"
 chrono = "0.4"
 once_cell = "1.19"  # For static initialization (sine lookup table)
+bincode = "1"       # Compact binary serialization for waveform cache
+byteorder = "1"     # Byte order conversions for cache files
+tempfile = "3"      # Temporary file management
+dirs = "5"          # Cross-platform user directory paths
 
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }

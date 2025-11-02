@@ -252,6 +252,9 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		# Single value - wrap in array
 		args = [values]
 
+	if address.begins_with("/audiofile"):
+		print("[AudioEngineOSC] recv ", address, " args=", args)
+
 	# Route to registered listeners (exact match first, then wildcards)
 	# Try exact match
 	if listeners.has(address):

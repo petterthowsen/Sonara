@@ -23,7 +23,6 @@ pub enum ParamType {
     Enum,
 }
 
-
 /// Device variant: built-in or future plugin
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceVariant {
@@ -248,7 +247,7 @@ pub trait AudioDevice: Send {
 
     /// Poll for device data (called periodically from audio thread if subscribed)
     /// Returns (data_type, binary_payload) if data is ready to send
-    /// 
+    ///
     /// **CRITICAL**: This must be real-time safe (no allocations in hot path)
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
         None // Default: no data to send

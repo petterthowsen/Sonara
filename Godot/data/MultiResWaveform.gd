@@ -8,11 +8,11 @@ class_name MultiResWaveform extends RefCounted
 # PROPERTIES
 # ============================================================================
 
-## Three resolution levels: detailed, medium, overview
-var waveforms: Array[Waveform] = [null, null, null]
+## Waveform levels ({"level": int, "block_size": int, "waveform": Waveform})
+var levels: Array = []
 
-## Resolution values (samples per pixel)
-var RESOLUTIONS: Array[int] = [256, 1024, 4096]
+## Lookup map level -> index within `levels`
+var _level_lookup: Dictionary = {}
 
 ## Metadata
 var duration_samples: int = 0
@@ -25,9 +25,21 @@ var sample_rate: int = 48000
 # ============================================================================
 
 func _init() -> void:
-	"""Initialize with three empty waveforms."""
-	for i in range(3):
-		waveforms[i] = Waveform.new(RESOLUTIONS[i], 1)
+	reset()
+
+
+func reset() -> void:
+	levels.clear()
+	_level_lookup.clear()
+	duration_samples = 0
+	channels = 1
+	sample_rate = 48000
+
+
+func set_metadata(frames: int, sr: int, num_channels: int) -> void:
+	duration_samples = frames
+	sample_rate = sr
+	channels = max(1, num_channels)
 
 
 # ============================================================================
@@ -41,14 +53,70 @@ func precompute_from_audio(audio_samples: PackedFloat32Array, sr: int, num_chann
 	sr: sample rate
 	num_channels: 1 or 2
 	"""
-	duration_samples = audio_samples.size() / num_channels
+	reset()
+	if num_channels <= 0:
+		num_channels = 1
+	duration_samples = int(float(audio_samples.size()) / max(1.0, float(num_channels)))
 	channels = num_channels
 	sample_rate = sr
 
-	# Compute each resolution level
-	for i in range(3):
-		waveforms[i].channels = num_channels
-		waveforms[i].compute_from_audio(audio_samples, sr, num_channels)
+	var default_resolutions = [256, 1024, 4096]
+	for i in range(default_resolutions.size()):
+		var resolution = default_resolutions[i]
+		var waveform = Waveform.new(resolution, num_channels)
+		waveform.compute_from_audio(audio_samples, sr, num_channels)
+		_store_level(i, resolution, waveform)
+
+
+func ingest_cache_level(level_index: int, block_size: int, num_blocks: int, channel_peaks: Array, channel_rms: Array = []) -> void:
+	"""Add or replace a waveform level generated from cache data."""
+	var waveform = Waveform.new(block_size, channels)
+	waveform.load_from_cache(block_size, channels, num_blocks, channel_peaks, channel_rms)
+	_store_level(level_index, block_size, waveform)
+
+
+func has_level(level_index: int) -> bool:
+	return _level_lookup.has(level_index)
+
+
+func get_level_info(level_index: int) -> Dictionary:
+	if not _level_lookup.has(level_index):
+		return {}
+	return levels[_level_lookup[level_index]]
+
+
+func get_available_block_sizes() -> PackedInt32Array:
+	var result := PackedInt32Array()
+	for entry in levels:
+		result.append(entry.get("block_size", 0))
+	return result
+
+
+func _store_level(level_index: int, block_size: int, waveform: Waveform) -> void:
+	var entry = {
+		"level": level_index,
+		"block_size": block_size,
+		"waveform": waveform
+	}
+
+	var replaced = false
+	for i in range(levels.size()):
+		if levels[i].get("level") == level_index:
+			levels[i] = entry
+			replaced = true
+			break
+
+	if not replaced:
+		levels.append(entry)
+
+	levels.sort_custom(func(a, b): return a.get("block_size", 0) < b.get("block_size", 0))
+	_rebuild_lookup()
+
+
+func _rebuild_lookup() -> void:
+	_level_lookup.clear()
+	for i in range(levels.size()):
+		_level_lookup[levels[i].get("level")] = i
 
 
 # ============================================================================
@@ -62,19 +130,23 @@ func get_waveform_for_resolution(target_resolution: int) -> Waveform:
 	target_resolution: samples per pixel desired
 	Returns: Waveform at appropriate resolution
 	"""
-	# Find the best resolution level
-	# Strategy: Use the closest resolution, but prefer lower resolution if target is between levels
-	# to avoid overshooting detail at high zoom
-	var best_idx = 0
-	var best_diff = absi(RESOLUTIONS[0] - target_resolution)
+	if levels.is_empty():
+		return null
 
-	for i in range(1, 3):
-		var diff = absi(RESOLUTIONS[i] - target_resolution)
+	if target_resolution <= 0:
+		return levels[0]["waveform"]
+
+	var best_entry = levels[0]
+	var best_diff = abs(best_entry.get("block_size", 0) - target_resolution)
+
+	for entry in levels:
+		var block_size = entry.get("block_size", 0)
+		var diff = abs(block_size - target_resolution)
 		if diff < best_diff:
+			best_entry = entry
 			best_diff = diff
-			best_idx = i
 
-	return waveforms[best_idx]
+	return best_entry.get("waveform")
 
 
 func get_waveform_for_zoom(timeline_zoom: float) -> Waveform:
@@ -96,12 +168,16 @@ func get_waveform_for_zoom(timeline_zoom: float) -> Waveform:
 
 func get_duration_pixels(resolution: int) -> int:
 	"""Get duration in pixels for a given resolution."""
-	for i in range(3):
-		if RESOLUTIONS[i] == resolution:
-			return waveforms[i].duration_pixels
+	for entry in levels:
+		if entry.get("block_size") == resolution:
+			var waveform: Waveform = entry.get("waveform")
+			return waveform.duration_pixels if waveform else 0
 	return 0
 
 
 func get_max_duration_pixels() -> int:
 	"""Get maximum duration in pixels (lowest resolution = least pixels)."""
-	return waveforms[2].duration_pixels if waveforms[2] else 0
+	if levels.is_empty():
+		return 0
+	var waveform: Waveform = levels.back().get("waveform")
+	return waveform.duration_pixels if waveform else 0

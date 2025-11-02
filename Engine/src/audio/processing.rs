@@ -162,12 +162,16 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
                         {
                             // Initialize playback position for this clip instance if not yet started
                             // Apply clip_offset: start reading from the offset position in the clip
+                            // PLUS account for seeking into the middle of the instance
                             if !track.audio_playback_positions.contains_key(&instance.id) {
-                                // Convert clip_offset (ticks) to sample index in the clip's sample-rate domain
-                                let offset_samples = state
-                                    .settings
-                                    .ticks_to_samples(instance.clip_offset, clip.audio_sample_rate as f32)
-                                    as f64;
+                                // Total offset = clip_offset (trim) + current position in instance (seek)
+                                let total_offset_ticks = instance.clip_offset + current_pos_in_instance;
+
+                                // Convert total offset (ticks) to sample index in the clip's sample-rate domain
+                                let offset_samples = state.settings.ticks_to_samples(
+                                    total_offset_ticks,
+                                    clip.audio_sample_rate as f32,
+                                ) as f64;
                                 track
                                     .audio_playback_positions
                                     .insert(instance.id.clone(), offset_samples);

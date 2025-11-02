@@ -139,4 +139,3 @@ impl AdsrEnvelope {
         self.current_value
     }
 }
-
