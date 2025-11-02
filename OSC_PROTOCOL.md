@@ -24,9 +24,12 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | Address | Args | Description |
 |---------|------|-------------|
 | `/status/playhead` | `i:ticks` | Current playhead position (sent periodically) |
+| `/status/sample_position` | `h:samples` | Current transport position in device sample frames (sent with `/status/playhead`) |
 | `/status/playing` | `i:0_or_1` | Playback state (0=stopped, 1=playing) |
 | `/status/connected` | `i:1` | Engine ready confirmation (sent after `/project/init`) |
 | `/status/heartbeat` | `i:1` | Periodic heartbeat (sent every 1 second to detect disconnection) |
+
+`/status/sample_position` exposes the monotonically increasing transport sample counter. For conversions, use the Rust helpers in `ProjectSettings::{ticks_to_samples,samples_to_ticks}` so Godot UI can align visuals or automation lanes with the device sample rate.
 
 ### Engine Logging (Rust -> Godot)
 

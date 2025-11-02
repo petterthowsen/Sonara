@@ -128,6 +128,8 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 
 - Audio callback is master clock (driven by audio hardware)
 - Playhead advanced tick-by-tick (960 PPQ) using `ticks_per_sample = tempo * ppq / (60 * device_sample_rate)`
+- `EngineState::advance_sample_position()` increments the transport sample counter every callback; `EngineStatus::SamplePositionUpdate` forwards it to Godot alongside tick updates.
+- Use `ProjectSettings::{ticks_to_samples,samples_to_ticks}` whenever you need explicit conversions (clip offsets, seeks) instead of recomputing math locally.
 - Playhead updates sent to Godot at 20Hz (interpolated for smooth UI)
 - Audio clips auto-stretch based on project BPM vs. recorded BPM
 

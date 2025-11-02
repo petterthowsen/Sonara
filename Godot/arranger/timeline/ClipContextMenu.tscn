@@ -1,9 +1,9 @@
-[gd_scene load_steps=5 format=3 uid="uid://c07tx27b6f3o"]
+[gd_scene load_steps=5 format=3 uid="uid://cmelbeop37p10"]
 
-[ext_resource type="Script" uid="uid://d2hhmluxnli62" path="res://mixer/ChannelContextMenu.gd" id="1_3cfc4"]
-[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_w3qfh"]
+[ext_resource type="Script" uid="uid://dyv088pq2uivb" path="res://arranger/timeline/ClipContextMenu.gd" id="1_0huoc"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="1_2fa2y"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_i42wi"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0huoc"]
 content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
@@ -16,7 +16,7 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[sub_resource type="StyleBoxLine" id="StyleBoxLine_f3rnv"]
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_aoahj"]
 content_margin_left = 4.0
 content_margin_top = 0.0
 content_margin_right = 4.0
@@ -25,12 +25,11 @@ color = Color(1, 1, 1, 0.1764706)
 grow_begin = -1.0
 grow_end = -1.0
 
-[node name="ChannelContextMenu" type="PopupPanel"]
+[node name="ClipContextMenu" type="PopupPanel"]
 oversampling_override = 1.0
-position = Vector2i(55, 0)
-size = Vector2i(158, 132)
+size = Vector2i(128, 155)
 visible = true
-script = ExtResource("1_3cfc4")
+script = ExtResource("1_0huoc")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="."]
 anchors_preset = 15
@@ -41,27 +40,24 @@ offset_right = -2.0
 offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 2
 
 [node name="Header" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_i42wi")
+theme_override_styles/panel = SubResource("StyleBoxFlat_0huoc")
 
 [node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
 layout_mode = 2
 
-[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header/HBox"]
-custom_minimum_size = Vector2(32, 32)
-layout_mode = 2
-color = Color(0.4191594, 0.734375, 0.3184204, 1)
-edit_alpha = false
-edit_intensity = false
-
-[node name="Label" parent="VBoxContainer/Header/HBox" instance=ExtResource("2_w3qfh")]
+[node name="Label" parent="VBoxContainer/Header/HBox" instance=ExtResource("1_2fa2y")]
+custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 size_flags_horizontal = 3
 value_type = 1
 display_format = "%s"
+
+[node name="Label" parent="VBoxContainer/Header/HBox/Label" index="0"]
+text = "Clip"
 
 [node name="LineEdit" parent="VBoxContainer/Header/HBox/Label" index="1"]
 max_length = 200
@@ -69,21 +65,23 @@ flat = false
 
 [node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
-theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
+theme_override_styles/separator = SubResource("StyleBoxLine_aoahj")
 
 [node name="ActiveCheckbox" type="CheckButton" parent="VBoxContainer"]
 layout_mode = 2
 tooltip_text = "Disable to save memory"
-disabled = true
-button_pressed = true
-text = "Active"
+text = "Muted"
 
 [node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
-theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
+theme_override_styles/separator = SubResource("StyleBoxLine_aoahj")
 
-[node name="DeleteButton" type="Button" parent="VBoxContainer"]
+[node name="MakeUnique" type="Button" parent="VBoxContainer"]
 layout_mode = 2
-text = "Delete Channel"
+text = "Make Unique"
+
+[node name="Delete" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Delete"
 
 [editable path="VBoxContainer/Header/HBox/Label"]

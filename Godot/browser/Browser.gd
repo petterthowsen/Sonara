@@ -221,15 +221,28 @@ func _filter_assets(assets: Array[Asset]) -> Array[Asset]:
 	"""Filter assets based on current search filter."""
 	if _search_filter.is_empty():
 		return assets
-	
+
 	var filtered: Array[Asset] = []
 	var search_lower = _search_filter.to_lower()
-	
+
 	for asset in assets:
 		var display_name = asset.get_display_name().to_lower()
-		if display_name.contains(search_lower):
+
+		# Always check display name
+		var matches = display_name.contains(search_lower)
+
+		# For device assets, also check category and vendor
+		if asset.type == Asset.TYPE.Device and not matches:
+			var device = AssetService.get_device(asset.path)
+			if device:
+				var category = device.get_category_string().to_lower()
+				var vendor = device.author.to_lower()
+				if category.contains(search_lower) or vendor.contains(search_lower):
+					matches = true
+
+		if matches:
 			filtered.append(asset)
-	
+
 	return filtered
 
 
@@ -317,7 +330,11 @@ func _populate_samples_tree() -> void:
 		_build_asset_tree(audio_parent, filtered_audio, tree)
 		_prune_empty_directories(audio_parent)
 		_sort_tree_items(audio_parent)
-	
+
+		# Expand all items when searching to show results immediately
+		if not _search_filter.is_empty():
+			_expand_all_tree_items(audio_parent)
+
 	# Build hierarchical structure for MIDI files
 	if not filtered_midi.is_empty():
 		var midi_parent = tree.create_item(root)
@@ -328,6 +345,10 @@ func _populate_samples_tree() -> void:
 		_build_asset_tree(midi_parent, filtered_midi, tree)
 		_prune_empty_directories(midi_parent)
 		_sort_tree_items(midi_parent)
+
+		# Expand all items when searching to show results immediately
+		if not _search_filter.is_empty():
+			_expand_all_tree_items(midi_parent)
 
 
 func _populate_sfz_tree() -> void:
@@ -348,24 +369,91 @@ func _populate_sfz_tree() -> void:
 	_prune_empty_directories(root)
 	_sort_tree_items(root)
 
+	# Expand all items when searching to show results immediately
+	if not _search_filter.is_empty():
+		_expand_all_tree_items(root)
+
 
 func _populate_devices_tree() -> void:
 	var tree = _trees[Asset.TYPE.Device]
 	var root = tree.create_item()
-	
+
 	# Filter assets based on search
 	var filtered_devices = _filter_assets(_device_assets)
-	
+
 	if filtered_devices.is_empty():
 		var item = tree.create_item(root)
 		var message = "(No matches)" if not _search_filter.is_empty() else "(No devices)"
 		item.set_text(0, message)
 		item.set_selectable(0, false)
 		return
-	
-	_build_asset_tree(root, filtered_devices, tree)
-	_prune_empty_directories(root)
+
+	_build_device_hierarchy_tree(root, filtered_devices, tree)
 	_sort_tree_items(root)
+
+	# Expand all items when searching to show results immediately
+	if not _search_filter.is_empty():
+		_expand_all_tree_items(root)
+
+
+func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: Tree) -> void:
+	"""Build a hierarchical tree structure for devices: Type / Vendor / Plugin"""
+
+	# Group devices by category -> vendor -> device
+	var hierarchy: Dictionary = {}
+
+	for asset in devices:
+		var device = AssetService.get_device(asset.path)
+		if not device:
+			continue
+
+		var category = device.get_category_string()  # "Instrument", "Effect", "Utility"
+		var vendor = device.author if device.author != "" else "Unknown"
+		var device_name = device.name
+
+		# Initialize nested dictionaries
+		if not hierarchy.has(category):
+			hierarchy[category] = {}
+		if not hierarchy[category].has(vendor):
+			hierarchy[category][vendor] = {}
+
+		# Store the asset under vendor -> device_name
+		hierarchy[category][vendor][device_name] = asset
+
+	# Build the tree structure
+	for category in hierarchy.keys():
+		var category_item = tree.create_item(root)
+		category_item.set_text(0, category)
+		category_item.set_selectable(0, false)
+		category_item.set_custom_color(0, Color.YELLOW)
+		category_item.set_collapsed(true)
+
+		for vendor in hierarchy[category].keys():
+			var vendor_item = tree.create_item(category_item)
+			vendor_item.set_text(0, vendor)
+			vendor_item.set_selectable(0, false)
+			vendor_item.set_custom_color(0, Color(0.7, 0.7, 0.7))
+			vendor_item.set_collapsed(true)
+
+			for device_name in hierarchy[category][vendor].keys():
+				var asset = hierarchy[category][vendor][device_name]
+				var device_item = tree.create_item(vendor_item)
+				device_item.set_text(0, device_name)
+				device_item.set_metadata(0, asset)
+
+
+func _expand_all_tree_items(item: TreeItem) -> void:
+	"""Recursively expand all tree items."""
+	if not item:
+		return
+
+	item.set_collapsed(false)
+
+	# Expand all children recursively
+	var child = item.get_first_child()
+	while child:
+		_expand_all_tree_items(child)
+		child = child.get_next()
 
 
 func _build_asset_tree(parent: TreeItem, assets: Array[Asset], tree: Tree) -> void:

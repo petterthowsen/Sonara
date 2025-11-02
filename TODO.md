@@ -3,7 +3,7 @@
 # Bugs / Issues
 - [?] Moving a clip from one track to another causes playback of new clip to actually play on original track.
     ^ I think this is solved.
-- [ ] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
+- [x] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
 - [ ] Timeline Clips
     - [x] on project load/open, all TimelineClip nodes are all visually at tick 0 and have no name
 - [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
@@ -15,6 +15,7 @@
 
 ### Core Audio
 - [ ] Keep audio engine running after playback so instruments (PolySynth) and reverb/delay effects can settle after stopping
+- [ ] Solo causes a sharp click
 - [x] RMS Metering
 - [ ] Plugin latency compensation
 - [ ] Improve logging of plugins
@@ -36,7 +37,7 @@
 
 ### Built-in Devices
 - [ ] Basic MVP Builins
-    - [ ] Remove old Oscilator and Delay
+    - [x] Remove old Oscilator
     - [x] PolySynth Device
     - [x] Spectrum Analyzer
         - [ ] Stereo Combined mode or layered L/R or M/S
@@ -45,10 +46,6 @@
     - [ ] Stereo Delay with time (ms) OR tempo control, feedback amount and wet/dry mix %
     - [ ] Simple Reverb plugin freeverb style
     - [ ] Compressor
-
-
-### Save/Load
-- [x] implementation for save/load projects
 
 ---
 
@@ -63,13 +60,15 @@
 
 ### Export
 - [ ] Export/rendering
-    - [ ] bouncing tracks to audio clip
+    - [ ] bouncing tracks or clips to audio clip on a new track
+    - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio) ?
 - [ ] Export MIDI
 - [ ] Export menu with separate track (stem) selection
 
 ### Arranger & Timeline
 - [ ] Arranger Timeline
     - [ ] Cut/Copy/Paste/Duplicate clips
+    
 - [ ] TimelineHeader
     - [x] TimelineHeader should be vertically resizable
     - [ ] Auxiliary Rulers/"Tracks" (real-time ruler, chord track, and marking tracks)
@@ -84,7 +83,7 @@
         - [ ] Change track color
         - [ ] Duplicate track
 - [ ] Duplicate Track
-- [ ] TimelineClip should inherit color of the track it's on?
+- [x] TimelineClip should inherit color of the track it's on?
 
 ### Clips
 - [x] ClipInstances can be dragged to other tracks
@@ -93,6 +92,14 @@
 - [x] Multi-select clips with Shift+click < change this to ctrl instead of shift
 - [x] Single-click deselects other tracks
 - [x] Click empty area deselects all
+- [/] implement TimelineClip context menu, add to Timeline scene, TLC can emit request_show_context_menu, or Timeline can simply listen for gui input on clip? depends on current architecture.
+    - [ ] SmartLineEdit for clip name
+    - [x] Make Unique: makes clip unique (if ClipInstance shares underlyying clip with any other ClipInstance)
+    - [ ] Select All Instances
+    - [ ] Cut
+    - [ ] Copy
+    - [x] Delete
+- [x] TimelineClip should include prefix or suffix in label if it's effectively unique.
 
 ### Clip Editor / Note Editor
 - [x] NoteEditor bug: erase-mode is sometimes stuck on even after releasing right-mouse

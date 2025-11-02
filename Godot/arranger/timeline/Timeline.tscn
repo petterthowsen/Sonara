@@ -1,9 +1,12 @@
-[gd_scene load_steps=2 format=3 uid="uid://cyvwigrev1rtt"]
+[gd_scene load_steps=3 format=3 uid="uid://cyvwigrev1rtt"]
 
 [ext_resource type="Script" uid="uid://cq71m8rwhg5gm" path="res://arranger/timeline/Timeline.gd" id="1_khs34"]
+[ext_resource type="PackedScene" uid="uid://cmelbeop37p10" path="res://arranger/timeline/ClipContextMenu.tscn" id="2_3iuqr"]
 
 [node name="TimelineVBox" type="VBoxContainer"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 1
 script = ExtResource("1_khs34")
+
+[node name="ClipContextMenu" parent="." instance=ExtResource("2_3iuqr")]

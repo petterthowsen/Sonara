@@ -8,6 +8,7 @@ signal clip_move_requested(clip_instance: TimelineClip, new_start_ticks: int)
 signal drag_started(clip_ui: TimelineClip, clip_instance: ClipInstance)  # Drag between tracks initiated
 signal drag_moved(clip_ui: TimelineClip, global_position: Vector2)  # Drag position update
 signal drag_ended(clip_ui: TimelineClip, global_position: Vector2)  # Drag ended
+signal context_menu_requested(clip_ui: TimelineClip, global_position: Vector2)
 
 @onready var header: PanelContainer = $VBoxContainer/Header
 @onready var label: Label = $VBoxContainer/Header/Label
@@ -21,7 +22,7 @@ var clip_instance: ClipInstance = null:  # The instance we're displaying
 		if is_inside_tree():
 			clip_renderer.clip_instance = clip_instance
 
-var timeline: Timeline = null
+var timeline = null
 var track_color: Color = Color.WHITE:
 	set(tc):
 		if track_color != tc:
@@ -70,7 +71,7 @@ func _ready() -> void:
 	clip_renderer.note_color.v = max(0.5, track_color.v)
 
 
-func bind_to_clip_instance(inst: ClipInstance, tl: Timeline, t_color: Color = Color.WHITE) -> void:
+func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE) -> void:
 	"""Bind this UI element to a ClipInstance data object."""
 	clip_instance = inst
 	timeline = tl
@@ -217,6 +218,10 @@ func _gui_input(event: InputEvent) -> void:
 		_update_cursor_for_position(local_pos)
 
 	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			context_menu_requested.emit(self, get_global_mouse_position())
+			accept_event()
+			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				var local_pos = get_local_mouse_position()

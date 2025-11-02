@@ -24,6 +24,7 @@ var grid_helper: GridHelper:
 var _grid_helper: GridHelper = null
 
 var clip_selection_manager: ClipSelectionManager = ClipSelectionManager.new()
+@onready var clip_ctx_menu = $ClipContextMenu
 
 # Signal emitted when clip selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
@@ -42,6 +43,13 @@ func _ready():
 	clip_selection_manager.set_context(self, grid_helper)
 	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
 	clip_selection_manager.box_selection_changed.connect(func(_rect): queue_redraw())
+
+	# Clip Context Menu
+	if not clip_ctx_menu.delete_requested.is_connected(_on_clip_delete_requested):
+		clip_ctx_menu.delete_requested.connect(_on_clip_delete_requested)
+
+	if not clip_ctx_menu.make_unique_requested.is_connected(_on_clip_make_unique_requested):
+		clip_ctx_menu.make_unique_requested.connect(_on_clip_make_unique_requested)
 
 
 # ============================================================================
@@ -395,6 +403,9 @@ func register_clip_ui(clip_ui: TimelineClip) -> void:
 	if not clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
 		clip_ui.drag_ended.connect(_on_clip_drag_ended)
 
+	if not clip_ui.context_menu_requested.is_connected(_on_clip_context_menu_requested):
+		clip_ui.context_menu_requested.connect(_on_clip_context_menu_requested)
+
 
 func unregister_clip_ui(clip_ui: TimelineClip) -> void:
 	if clip_selection_manager:
@@ -697,8 +708,8 @@ func _get_timeline_track_for_instance(instance: ClipInstance) -> TimelineTrack:
 	return null
 
 
-func _find_track_index_at_global_position(global_position: Vector2) -> int:
-	var local_pos = make_canvas_position_local(global_position)
+func _find_track_index_at_global_position(mouse_pos_global: Vector2) -> int:
+	var local_pos = make_canvas_position_local(mouse_pos_global)
 	var y = local_pos.y
 	for i in range(timeline_tracks.size()):
 		var track_node: TimelineTrack = timeline_tracks[i]
@@ -946,12 +957,12 @@ func _on_clip_drag_started(clip_ui: TimelineClip, _instance: ClipInstance) -> vo
 	_ensure_drag_initialized(clip_ui.clip_instance, true)
 
 
-func _on_clip_drag_moved(clip_ui: TimelineClip, global_position: Vector2) -> void:
+func _on_clip_drag_moved(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
 	if not clip_ui or not clip_ui.clip_instance:
 		return
 	_ensure_drag_initialized(clip_ui.clip_instance, true)
 	var anchor_index = _drag_initial_track_indices.get(clip_ui.clip_instance, _get_track_index_for_instance(clip_ui.clip_instance))
-	var target_index = _find_track_index_at_global_position(global_position)
+	var target_index = _find_track_index_at_global_position(mouse_pos_global)
 	if anchor_index == -1 or target_index == -1:
 		return
 	_drag_pending_track_delta = target_index - anchor_index
@@ -964,6 +975,104 @@ func _on_clip_drag_ended(clip_ui: TimelineClip, _global_position: Vector2) -> vo
 	if _drag_cross_track and _drag_pending_track_delta != 0:
 		_apply_vertical_drag(_drag_pending_track_delta)
 	_finish_drag()
+
+
+
+func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
+	if not clip_ui or not clip_ui.clip_instance or not clip_ctx_menu:
+		return
+	# Determine selection to bind: use current selection if it contains the clicked instance; otherwise just the clicked
+	var selection := get_selected_clip_instances()
+	if selection.is_empty() or not selection.has(clip_ui.clip_instance):
+		selection = [clip_ui.clip_instance]
+	clip_ctx_menu.bind_to_instances(selection)
+	var c_pos = mouse_pos_global
+	var c_size = clip_ctx_menu.get_contents_minimum_size()
+	clip_ctx_menu.popup(Rect2(c_pos, c_size))
+
+
+func _on_clip_delete_requested(instances: Array[ClipInstance]) -> void:
+	if not instances or instances.is_empty():
+		return
+	for inst in instances:
+		if inst and inst.track:
+			inst.track.remove_clip_instance(inst)
+
+
+func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
+	if not instances or instances.is_empty() or not Sonara or not Sonara.editor:
+		return
+	var proj: Project = Sonara.editor.project
+	if not proj:
+		return
+
+	for instance in instances:
+		if not instance or not instance.clip:
+			continue
+		var original: Clip = instance.clip
+		# Only make unique if referenced by multiple instances
+		if proj.get_clip_instance_count(original.id) <= 1:
+			continue
+
+		# Create a new clip and copy properties
+		var new_name = "%s (Unique)" % original.name
+		var new_clip: Clip = proj.create_clip(new_name, original.type)
+		new_clip.color = original.color
+		new_clip.content_length_ticks = original.content_length_ticks
+
+		if original.type == Clip.ClipType.MIDI:
+			# Copy MIDI notes with new IDs
+			for note in original.midi_notes:
+				var nn := MidiNoteData.new()
+				if proj:
+					nn.id = proj.next_note_id
+					proj.next_note_id += 1
+				nn.note = note.note
+				nn.velocity = note.velocity
+				nn.start_tick = note.start_tick
+				nn.duration_ticks = note.duration_ticks
+				new_clip.midi_notes.append(nn)
+			# Copy MIDI events
+			for ev in original.midi_events:
+				var nev := MidiEvent.new()
+				nev.type = ev.type
+				nev.tick = ev.tick
+				nev.note = ev.note
+				nev.velocity = ev.velocity
+				nev.cc_number = ev.cc_number
+				nev.cc_value = ev.cc_value
+				nev.program = ev.program
+				nev.pitch_bend = ev.pitch_bend
+				nev.aftertouch = ev.aftertouch
+				new_clip.midi_events.append(nev)
+		else:
+			# Copy audio references/metadata
+			new_clip.audio_file_path = original.audio_file_path
+			new_clip.audio_sample_rate = original.audio_sample_rate
+			new_clip.audio_channels = original.audio_channels
+			new_clip.audio_samples = original.audio_samples.duplicate()
+			new_clip.recorded_bpm = original.recorded_bpm
+			new_clip.audio_waveform = original.audio_waveform  # share cached waveform
+
+		# Add to pool (sync to engine if connected)
+		proj.add_clip(new_clip)
+
+		# Repoint the instance
+		instance.clip_id = new_clip.id
+		instance.clip = new_clip
+
+		# Resync instance on engine if needed
+		if instance.track and instance.track._is_connected:
+			instance.track._clear_clip_instance_from_engine(instance)
+			instance.track._sync_clip_instance_to_engine(instance)
+
+		# Refresh visuals for the instance's UI
+		var track_ui = _get_timeline_track_for_instance(instance)
+		if track_ui:
+			for clip_ui in track_ui.clip_instances:
+				if clip_ui and clip_ui.clip_instance == instance:
+					clip_ui._update_from_clip_instance()
+					break
 
 
 func _draw() -> void:

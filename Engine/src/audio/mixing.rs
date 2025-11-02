@@ -423,9 +423,9 @@ pub fn mix_and_output(
 
     for (target_id, (send_left, send_right)) in send_accum.into_iter() {
         if let Some(target_ch) = state.channels.get_mut(&target_id) {
-            if target_ch.mute || (has_solo && !target_ch.solo) {
+            if target_ch.mute {
                 if should_log_sends {
-                    info!("🔇 SEND target {} is muted or not soloed, skipping", target_id);
+                    info!("🔇 SEND target {} is muted, skipping", target_id);
                 }
                 continue;
             }
@@ -611,10 +611,10 @@ pub fn mix_and_output(
         
         for bus_id in buses_to_process {
             if let Some(bus_ch) = state.channels.get_mut(&bus_id) {
-                // Skip if muted or solo-excluded
-                if bus_ch.mute || (has_solo && !bus_ch.solo) {
+                // Skip if muted
+                if bus_ch.mute {
                     if should_log_routing {
-                        info!("⏭️  Skipping bus {} (muted or not soloed)", bus_id);
+                        info!("⏭️  Skipping bus {} (muted)", bus_id);
                     }
                     continue;
                 }

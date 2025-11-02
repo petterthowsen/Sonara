@@ -250,6 +250,7 @@ pub enum AudioCommand {
         device_position: usize,
         window_handle: Option<u64>,
     },
+    
     ClosePluginGui {
         channel_id: ChannelId,
         device_position: usize,
@@ -1194,15 +1195,6 @@ pub fn process_command(
                 {
                     // Built-in devices
                     "builtin" => match device_id.as_str() {
-                        "sonara.builtin.oscillator" => {
-                            info!(
-                                "Loading built-in oscillator [active={}, enabled={}]",
-                                active, enabled
-                            );
-                            Some(Box::new(super::devices::OscillatorDevice::new(
-                                state.device_sample_rate,
-                            )))
-                        }
                         "sonara.builtin.polysynth" => {
                             info!(
                                 "Loading built-in polysynth [active={}, enabled={}]",

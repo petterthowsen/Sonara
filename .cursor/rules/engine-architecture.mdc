@@ -26,7 +26,7 @@ The audio engine (`Engine/src/audio/engine.rs`) processes audio in this order:
 6. Mix channels: apply gain/pan, route to output channels
 7. Output master channel (ID 0) to audio hardware via CPAL
 8. Update peak meters for all channels
-9. Send periodic status updates (playhead, meters) at 20Hz
+9. Advance the transport sample counter (`EngineState::advance_sample_position`) and send periodic status updates (playhead, sample position, meters) at ~20 Hz
 
 ### OSC Protocol
 Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful style).
@@ -37,7 +37,7 @@ Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful
 - Tracks: `/track/{id}/create [channel_id]`, `/track/{id}/add_note [note_id, note, start, dur, vel]`
 
 **Rust → Godot (port 7001)**:
-- Transport status: `/status/playhead [ticks]`, `/status/playing [0|1]`
+- Transport status: `/status/playhead [ticks]`, `/status/sample_position [samples]`, `/status/playing [0|1]`
 - Meter updates: `/channel/{id}/peak [peak_left, peak_right]`
 
 See `OSC_PROTOCOL.md` for full documentation.
@@ -90,11 +90,14 @@ Godot/              # Godot 4.5 UI App
 - Tick-based sequencing with fractional accumulation for sub-sample accuracy
 - 960 PPQ (pulses per quarter note)
 - Playhead updates sent to Godot at 20Hz, interpolated in Godot UI smoothness
+- `EngineState` maintains both `current_tick` and `current_sample_position`; the latter is incremented per callback and exposed to Godot via `/status/sample_position`.
+- Use `ProjectSettings::{ticks_to_samples,samples_to_ticks}` for conversions instead of recomputing tick/sample math—pass the device sample rate explicitly when translating clip offsets or transport seeks.
 
 ### Sample-Accurate Scheduling
 - `processing.rs::process_audio()` precomputes `(tick, frame_offset)` pairs for the current buffer so note events line up with the physical device sample rate (never the project setting).
 - Each channel forwards MIDI to the first device in its chain via `Channel::send_midi_event_to_devices()`; instruments must respect the provided `frame_offset` inside their next `process_block`.
 - `AudioDevice::send_midi_event()` is the single contract point—builtins (Oscillator, PolySynth, Sfizz) and the CLAP adapter queue events and sort them before rendering so envelopes and plugin voices line up exactly with buffer boundaries.
+- `PolySynthDevice` renders spans between queued MIDI offsets, reprocessing active voices for each segment so note-on/note-off transitions land on the exact sample; keep `queued_midi` offsets relative to the upcoming block and sorted by insertion.
 
 ### Built-in Device Advertisement
 - Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz, Spectrum Analyzer) and emitting `/builtin/info` messages.

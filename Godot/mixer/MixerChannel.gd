@@ -195,6 +195,20 @@ func _update_from_channel() -> void:
 	# Update volume slider
 	bottom_volume_slider.set_value_no_signal(channel.volume)
 
+	# Update pan mode and values
+	if channel.pan_mode == Channel.PanMode.STEREO_COMBINED:
+		panning_dual_slider.visible = false
+		panning_combined_slider.visible = true
+		panning_combined_slider.set_value_no_signal(channel.pan * 100)
+		pan_mode_popup.set_item_checked(0, true)
+		pan_mode_popup.set_item_checked(1, false)
+	else:
+		panning_combined_slider.visible = false
+		panning_dual_slider.visible = true
+		panning_dual_slider.set_values_no_signal(channel.pan_left * 100, channel.pan_right * 100)
+		pan_mode_popup.set_item_checked(0, false)
+		pan_mode_popup.set_item_checked(1, true)
+
 	# Update meter (peak levels)
 	big_meter.set_peak_levels(channel.peak_left, channel.peak_right)
 	
