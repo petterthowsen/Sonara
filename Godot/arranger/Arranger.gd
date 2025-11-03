@@ -16,6 +16,8 @@
 #  Tracks can have independently varying heights, these must be synced to the height of visual track grid in the timeline (and midi/audio clips)
 class_name Arranger extends VBoxContainer
 
+var logger : Log = Log.make("Arranger")
+
 # ArrangerTop
 @onready var arrange_top: PanelContainer = $VSplitContainer/ArrangeTop
 @onready var tracklist_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TracklistHeader
@@ -42,7 +44,7 @@ var _syncing_split: bool = false
 
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
 @onready var playhead: ColorRect = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
-@onready var h_scroll_bar: HScrollBar = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/HScrollBar
+@onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/TimelineScrollBar
 
 # ArrangerBottom
 @onready var arranger_bottom: PanelContainer = $ArrangerBottom
@@ -110,12 +112,17 @@ func _ready():
 	# Connect horizontal scroll to update ruler and playhead
 	h_scroll.get_h_scroll_bar().value_changed.connect(_on_h_scroll_changed)
 
-	# Connect custom HScrollBar
-	if h_scroll_bar:
-		h_scroll_bar.step = 1.0
-		h_scroll_bar.allow_greater = true
-		h_scroll_bar.allow_lesser = false
-		h_scroll_bar.value_changed.connect(_on_h_scroll_bar_changed)
+	# Connect custom TimelineScrollBar
+	print("[Arranger] timeline_scroll_bar: ", timeline_scroll_bar)
+	if timeline_scroll_bar:
+		timeline_scroll_bar.step = 1.0
+		timeline_scroll_bar.allow_greater = true
+		timeline_scroll_bar.allow_lesser = false
+		timeline_scroll_bar.grid_helper = grid_helper
+		timeline_scroll_bar.scroll_changed.connect(_on_timeline_scroll_bar_changed)
+		print("[Arranger] TimelineScrollBar configured and connected")
+	else:
+		print("[Arranger] ERROR: timeline_scroll_bar is null!")
 
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
@@ -470,12 +477,10 @@ func _update_playhead_position() -> void:
 
 func _update_scrollbar() -> void:
 	"""Update custom scrollbar to match timeline state (Bitwig-style)."""
-	if not h_scroll_bar or not current_project or not timeline:
+	if not timeline_scroll_bar:
 		return
-
-	# Get viewport width and current scroll position
-	var viewport_width = h_scroll.size.x
-	var scroll_pos = h_scroll.scroll_horizontal
+	if not current_project:
+		return
 
 	# Calculate the end of the last clip (actual song content length)
 	var last_clip_end_ticks = 0
@@ -485,22 +490,15 @@ func _update_scrollbar() -> void:
 			if clip_end > last_clip_end_ticks:
 				last_clip_end_ticks = clip_end
 
-	# Convert to pixels (accounts for zoom)
-	var song_length_pixels = grid_helper.ticks_to_pixels(last_clip_end_ticks)
-
-	# Bitwig-style scrollbar:
-	# - max_value = song content length in pixels
-	# - page = viewport size
-	# - grabber size = viewport / song_length
-	# - allow_greater lets you scroll beyond content
-	h_scroll_bar.min_value = 0.0
-	h_scroll_bar.max_value = max(song_length_pixels, viewport_width)
-	h_scroll_bar.page = viewport_width
-	h_scroll_bar.set_value_no_signal(scroll_pos)
+	# Update scrollbar properties (it computes internal values automatically)
+	timeline_scroll_bar.song_length_ticks = last_clip_end_ticks
+	timeline_scroll_bar.viewport_width = h_scroll.size.x
+	timeline_scroll_bar.set_scroll_position_no_signal(grid_helper.scroll_position)
 
 
-func _on_h_scroll_bar_changed(value: float) -> void:
+func _on_timeline_scroll_bar_changed(value: float) -> void:
 	"""Handle scrollbar drag to update scroll position."""
+	
 	target_scroll_horizontal = value
 	# For immediate feedback, also set directly if not using smoothing
 	if scroll_smoothing == 0:
