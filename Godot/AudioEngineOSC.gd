@@ -24,6 +24,8 @@ const ENGINE_SEND_PORT = 7000  # Rust listens here
 const ENGINE_RECEIVE_PORT = 7001  # Godot listens here
 const HEARTBEAT_TIMEOUT_SEC = 3.0  # Disconnect if no heartbeat for 3 seconds
 
+var logger = Log.make("OSC")
+
 # ============================================================================
 # NODES
 # ============================================================================
@@ -67,7 +69,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 	_is_ready = true
-	print("[AudioEngineOSC] Ready - listening on port %d, sending to port %d" % [ENGINE_RECEIVE_PORT, ENGINE_SEND_PORT])
+	logger.info("Ready - listening on port %d, sending to port %d" % [ENGINE_RECEIVE_PORT, ENGINE_SEND_PORT])
 
 
 func _process(_delta: float) -> void:
@@ -75,7 +77,7 @@ func _process(_delta: float) -> void:
 	if _is_engine_connected:
 		var time_since_heartbeat = (Time.get_ticks_msec() - _last_heartbeat_time) / 1000.0
 		if time_since_heartbeat > HEARTBEAT_TIMEOUT_SEC:
-			print("[AudioEngineOSC] Heartbeat timeout (%.1fs) - engine disconnected" % time_since_heartbeat)
+			logger.warn("Heartbeat timeout (%.1fs) - engine disconnected" % time_since_heartbeat)
 			_is_engine_connected = false
 			engine_disconnected.emit()
 
@@ -87,13 +89,13 @@ func _process(_delta: float) -> void:
 func send(address: String, args: Array = []) -> void:
 	"""Send an OSC message to the audio engine."""
 	if not _is_ready:
-		push_warning("[AudioEngineOSC] Attempted to send before ready: %s" % address)
+		logger.warn("Attempted to send before ready: %s" % address)
 		return
 	if osc_client:
-		print("sending ", address, " args: ", args)
+		logger.info("sending ", address, " args: ", args)
 		osc_client.send_message(address, args)
 	else:
-		push_warning("[AudioEngineOSC] OSC client not initialized")
+		logger.warn("OSC client not initialized")
 
 
 func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_rate: int, channels: int) -> void:
@@ -102,7 +104,7 @@ func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_
 	Converts PackedFloat32Array to binary blob format for OSC transmission.
 	"""
 	if not osc_client:
-		push_warning("[AudioEngineOSC] OSC client not initialized")
+		logger.warn("OSC client not initialized")
 		return
 
 	# Convert float samples to bytes (little-endian)
@@ -116,7 +118,7 @@ func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_
 		if float_bytes.size() >= 8:
 			bytes.append_array(float_bytes.slice(4, 8))
 
-	print("[AudioEngineOSC] Sending audio data: %d samples, %d Hz, %d channels (blob size: %d bytes)" % [
+	logger.info("Sending audio data: %d samples, %d Hz, %d channels (blob size: %d bytes)" % [
 		audio_samples.size(), sample_rate, channels, bytes.size()
 	])
 
@@ -146,7 +148,7 @@ func listen(address: String, callback: Callable) -> void:
 
 	if not listeners[address].has(callback):
 		listeners[address].append(callback)
-		print("[AudioEngineOSC] Registered listener for ", address)
+		logger.info("Registered listener for ", address)
 
 
 func unlisten(address: String, callback: Callable) -> void:
@@ -155,7 +157,7 @@ func unlisten(address: String, callback: Callable) -> void:
 		listeners[address].erase(callback)
 		if listeners[address].is_empty():
 			listeners.erase(address)
-		print("[AudioEngineOSC] Unregistered listener for ", address)
+		logger.info("Unregistered listener for ", address)
 
 
 func reset_connection() -> void:
@@ -163,7 +165,7 @@ func reset_connection() -> void:
 	if _is_engine_connected:
 		_is_engine_connected = false
 		engine_disconnected.emit()
-		print("[AudioEngineOSC] Connection reset")
+		logger.info("Connection reset")
 
 
 # ============================================================================
@@ -190,14 +192,14 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 				_is_engine_connected = true
 				_last_heartbeat_time = Time.get_ticks_msec()
 				engine_connected.emit()
-				print("[AudioEngineOSC] Engine connected!")
+				logger.info("Engine connected!")
 		routed = true
 	elif address == "/status/playing":
 		if not _is_engine_connected:
 			_is_engine_connected = true
 			_last_heartbeat_time = Time.get_ticks_msec()
 			engine_connected.emit()
-			print("[AudioEngineOSC] Engine connected (via /status/playing)")
+			logger.info("Engine connected (via /status/playing)")
 		routed = true
 	elif address == "/status/heartbeat":
 		# Update last heartbeat time
@@ -237,11 +239,11 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			var level: String = values[0]
 			var message: String = values[1]
 			engine_log_message.emit(level, message)
-			# Also print to console for convenience
+			# Also log to console for convenience
 			if level == "error":
-				push_error("[Engine] " + message)
+				logger.error("[Engine] ", message)
 			elif level == "warn":
-				print("[Engine] warn: " + message)
+				logger.warn("[Engine] ", message)
 		return  # Don't route to other listeners
 
 	# Normalize values to always be an Array for consistent callback interface
@@ -252,8 +254,11 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		# Single value - wrap in array
 		args = [values]
 
+	if not address.contains("/peak") and not address.contains("/status") and not address.contains("/log"):
+		logger.info("received OSC message: ", address, " args=", args)
+
 	if address.begins_with("/audiofile"):
-		print("[AudioEngineOSC] recv ", address, " args=", args)
+		logger.info("recv ", address, " args=", args)
 
 	# Route to registered listeners (exact match first, then wildcards)
 	# Try exact match
@@ -274,11 +279,11 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		if address.contains("/param/") and address.ends_with("/value"):
 			# Parameter change with no listener
 			if randf() < 0.05:  # Only log 5% to reduce spam
-				print("[AudioEngineOSC] ⚠️  No listener for: " + address)
+				logger.warn("⚠️  No listener for: " + address)
 		else:
 			# Other unhandled messages (reduced frequency to avoid spam)
 			if randf() > 0.95:
-				print("[AudioEngineOSC] Unhandled message: ", address, " = ", args)
+				logger.warn("Unhandled message: ", address, " = ", args)
 
 
 ## Check if an address matches a wildcard pattern

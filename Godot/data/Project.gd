@@ -216,43 +216,8 @@ func _get_clip_by_req_id(req_id: String) -> Clip:
 	return null
 
 
-func _find_waveform_cache_file(cache_key: String) -> String:
-	"""Try to locate waveform cache file in standard locations."""
-	if cache_key.is_empty():
-		return ""
-
-	var cache_paths = []
-
-	# Linux: XDG_CACHE_HOME or ~/.cache
-	var xdg_cache = OS.get_environment("XDG_CACHE_HOME")
-	if not xdg_cache.is_empty():
-		cache_paths.append(xdg_cache + "/sonara/waveforms/" + cache_key)
-
-	var home = OS.get_environment("HOME")
-	if not home.is_empty():
-		cache_paths.append(home + "/.cache/sonara/waveforms/" + cache_key)
-		# macOS
-		cache_paths.append(home + "/Library/Caches/sonara/waveforms/" + cache_key)
-
-	# Godot config dir cache
-	cache_paths.append(OS.get_config_dir() + "/.cache/sonara/waveforms/" + cache_key)
-
-	# Windows
-	var appdata = OS.get_environment("APPDATA")
-	if not appdata.is_empty():
-		cache_paths.append(appdata + "/sonara/waveforms/" + cache_key)
-
-	for path in cache_paths:
-		if FileAccess.file_exists(path):
-			return path
-
-	return ""
-
-
 func _get_scene_tree() -> SceneTree:
-	var loop := Engine.get_main_loop()
-	return loop as SceneTree if loop is SceneTree else null
-
+	return Sonara.editor.get_tree()
 
 func _on_clip_load_state_received(args: Array, address: String) -> void:
 	if address.is_empty():
@@ -312,56 +277,62 @@ func _on_clip_load_state_received(args: Array, address: String) -> void:
 
 
 func _on_audiofile_decode_ready(args: Array) -> void:
+	"""Handle OSC /audiofile/decode/ready event from audio engine.
+
+	Called when audio file decoding completes. Updates clip with decoded audio metadata
+	(sample rate, channels, frame count, duration) and locates the waveform cache file.
+
+	Progressive flow:
+	  1. This handler fires when decoding completes
+	  2. Subsequent /audiofile/waveform/level events load each resolution level
+	  3. UI renders waveforms progressively as each level loads
+
+	OSC args: [req_id, cache_key, channels, frames, sample_rate, duration_s, sample_count?]
+	"""
 	if args.size() < 6:
-		print("[Project] decode_ready: Not enough args (need 6, got ", args.size(), ")")
+		push_error("[Project] decode_ready: Insufficient arguments (need 6, got %d)" % args.size())
 		return
+
 	var req_id := str(args[0])
 	var clip := _get_clip_by_req_id(req_id)
 	if clip == null:
-		print("[Project] decode_ready for unknown req", req_id, "args", args)
+		push_warning("[Project] decode_ready: Unknown request ID: %s" % req_id)
 		return
 
 	var cache_key: String = str(args[1])
 	var decoded_channels: int = int(args[2])
 	var frames: int = int(args[3])
-	# Engine sends: [req_id, cache_key, channels, frames, sample_rate (Int), duration_s (Float), sample_count (Int)]
 	var decoded_sample_rate: int = int(args[4])
 	var duration_s: float = float(args[5])
 	var sample_count: int = int(args[6]) if args.size() > 6 else 0
-	
+
 	# Calculate frames if not provided
 	if frames <= 0:
 		if sample_count > 0 and decoded_channels > 0:
 			# Calculate from sample count (total interleaved samples / channels)
 			@warning_ignore("integer_division")
 			frames = sample_count / decoded_channels
-			print("[Project] decode_ready: Calculated frames from sample_count: ", frames, " (samples=", sample_count, ", channels=", decoded_channels, ")")
 		elif duration_s > 0.0 and decoded_sample_rate > 0:
 			# Fallback: calculate from duration
 			frames = int(duration_s * float(decoded_sample_rate))
-			print("[Project] decode_ready: Calculated frames from duration: ", frames, " (duration=", duration_s, "s, sr=", decoded_sample_rate, ")")
-	
+
 	# If duration is 0 but we have frames and sample rate, calculate it
 	if duration_s <= 0.0 and frames > 0 and decoded_sample_rate > 0:
 		duration_s = float(frames) / float(decoded_sample_rate)
-		print("[Project] decode_ready: Calculated duration from frames: ", duration_s, " (frames=", frames, ", sr=", decoded_sample_rate, ")")
-	
-	print("[Project] decode_ready clip=", clip.id, " frames=", frames, " cache=", cache_key, " sr=", decoded_sample_rate, " dur=", duration_s, " channels=", decoded_channels, " sample_count=", sample_count)
 
 	clip.waveform_cache_key = cache_key
 
-	# Construct cache path from standard locations (Linux: ~/.cache/sonara/waveforms/)
-	var cache_path = _find_waveform_cache_file(cache_key)
+	# Locate waveform cache file from standard locations
+	var cache_path = Sonara.find_waveform_cache_file(cache_key)
 	if not cache_path.is_empty():
 		clip.set_waveform_cache(cache_path, cache_key)
-		print("[Project] Found waveform cache at: ", cache_path)
 	else:
-		print("[Project] WARNING: Could not locate waveform cache file: ", cache_key)
+		push_warning("[Project] Waveform cache not found: %s" % cache_key)
 
+	# Update clip with decoded audio metadata
 	clip.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
 
-	# If waveform already has levels but metadata was missing, update metadata now
-	# This handles the case where waveform levels arrived before decode_ready
+	# If waveform levels already arrived before metadata, update metadata now
 	if clip.audio_waveform and clip.audio_waveform.levels.size() > 0:
 		clip.audio_waveform.set_metadata(frames, decoded_sample_rate, decoded_channels)
 
@@ -369,16 +340,28 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 
 
 func _on_audiofile_waveform_level(args: Array) -> void:
-	# Handle variable argument count (engine may send 4, 5, or 7 arguments)
+	"""Handle OSC /audiofile/waveform/level event from audio engine.
+
+	Called progressively as each waveform resolution level becomes available during
+	processing. Ingests peak/RMS data into the clip's multi-resolution pyramid.
+
+	Supports variable argument count (engine may send 3-5+ arguments):
+	  [req_id, level, block_size, num_blocks?, file_path?]
+
+	If num_blocks or file_path are missing, reads them from the cache file.
+	Implements retry logic with exponential backoff if ingestion fails.
+
+	OSC args: [req_id, level, block_size, num_blocks?, file_path?]
+	"""
 	# Minimum required: req_id, level, block_size
 	if args.size() < 3:
-		print("[Project] Waveform level: insufficient arguments (got %d, need at least 3)" % args.size())
+		push_error("[Project] Waveform level: Insufficient arguments (got %d, need 3)" % args.size())
 		return
 
 	var req_id := str(args[0])
 	var clip := _get_clip_by_req_id(req_id)
 	if clip == null:
-		print("[Project] Waveform level for unknown req", req_id, "(args", args, ")")
+		push_warning("[Project] Waveform level: Unknown request ID: %s" % req_id)
 		return
 
 	var level := int(args[1])
@@ -386,56 +369,43 @@ func _on_audiofile_waveform_level(args: Array) -> void:
 	var num_blocks := 0
 	var file_path := ""
 
-	# Parse optional arguments based on what's available
+	# Parse remaining arguments: num_blocks, file_path, byte_offset, byte_len
+	# Engine sends: [req_id, level, block_size, num_blocks, file_path, byte_offset, byte_len]
 	if args.size() >= 4:
-		# Try to interpret args[3] as num_blocks (could be int or string)
-		var arg3 = args[3]
-		if arg3 is int or arg3 is float:
-			num_blocks = int(arg3)
-		elif arg3 is String and not arg3.is_empty():
-			# Could be a file path or a stringified number
-			if arg3.is_valid_int():
-				num_blocks = int(arg3)
-			else:
-				file_path = arg3
-
-	# If we have 5+ args, args[4] should be file_path
+		num_blocks = int(args[3])
 	if args.size() >= 5:
 		file_path = str(args[4])
+	# byte_offset and byte_len are in args[5] and args[6] if present, but not currently used
 
-	# If we still don't have file_path, try to get it from clip's cache
+	# Fallback to cached file path
 	if file_path.is_empty() and not clip.waveform_cache_path.is_empty():
 		file_path = clip.waveform_cache_path
 
-	print("[Project] waveform level", level, "for clip", clip.id, "block_size", block_size, "num_blocks", num_blocks, "path", file_path)
-
-	# Update cache metadata
+	# Update cache path if provided
 	if not file_path.is_empty():
 		if clip.waveform_cache_key.is_empty():
 			clip.waveform_cache_key = file_path.get_file()
 		clip.set_waveform_cache(file_path, clip.waveform_cache_key)
 
-	# Ensure waveform object exists even if metadata isn't set yet
-	# Metadata will be updated when decode_ready arrives
+	# Ensure waveform object exists
 	clip.ensure_audio_waveform()
 
-	# If num_blocks wasn't in the OSC message, try to read it from the cache file
-	if num_blocks <= 0 and not clip.waveform_cache_path.is_empty():
-		var reader = WaveformCacheReader.new()
-		if reader.load(clip.waveform_cache_path):
-			var level_info = reader.read_level(level, clip.audio_channels)
-			if not level_info.is_empty():
-				num_blocks = int(level_info.get("num_blocks", 0))
-				print("[Project] Read num_blocks from cache: ", num_blocks, " for level ", level)
-
+	# Try to ingest level data, retry if fails
 	if not clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
-		print("[Project] Ingest waveform level", level, "failed for", clip.id, "(num_blocks=", num_blocks, ")")
 		_schedule_waveform_retry(req_id, level, block_size, num_blocks, file_path)
 	else:
-		print("[Project] Ingested waveform level", level, "for clip", clip.id, "(req", req_id, ")")
+		# Successfully loaded - UI will render progressively
+		pass
 
 
 func _on_audiofile_progress(args: Array) -> void:
+	"""Handle OSC /audiofile/progress event from audio engine.
+
+	Updates loading progress (0.0 to 1.0) for long-running decode/waveform
+	generation tasks, enabling UI progress indication.
+
+	OSC args: [req_id, progress_0_1]
+	"""
 	if args.size() < 2:
 		return
 	var req_id := str(args[0])
@@ -447,6 +417,13 @@ func _on_audiofile_progress(args: Array) -> void:
 
 
 func _on_audiofile_error(args: Array) -> void:
+	"""Handle OSC /audiofile/error event from audio engine.
+
+	Called when audio decoding or waveform generation fails. Updates clip with
+	error state and message for UI feedback.
+
+	OSC args: [req_id, error_code, error_message]
+	"""
 	if args.size() < 3:
 		return
 	var req_id := str(args[0])
@@ -460,11 +437,28 @@ func _on_audiofile_error(args: Array) -> void:
 
 
 func _schedule_waveform_retry(req_id: String, level: int, block_size: int, num_blocks: int, file_path: String, attempt: int = 1) -> void:
+	"""Schedule a retry attempt for failed waveform level ingestion.
+
+	Implements exponential backoff: delay = 0.25s * attempt_number (capped at 3 attempts).
+	Useful for handling transient cache file access issues.
+
+	Args:
+		req_id: Audio file service request ID
+		level: Waveform resolution level
+		block_size: Samples per block
+		num_blocks: Number of blocks in this level
+		file_path: Optional cache file path
+		attempt: Current attempt number (1-based)
+	"""
 	var key := "%s:%d" % [req_id, level]
 	var info: Dictionary = _pending_waveform_retries.get(key, {})
 	var current_attempt: int = int(info.get("attempt", 0))
+
+	# Cap at 3 attempts
 	if current_attempt >= 3:
+		push_warning("[Project] Waveform retry: Max attempts reached for level %d" % level)
 		return
+
 	var next_attempt: int = int(max(attempt, current_attempt + 1))
 	_pending_waveform_retries[key] = {
 		"attempt": next_attempt,
@@ -472,20 +466,31 @@ func _schedule_waveform_retry(req_id: String, level: int, block_size: int, num_b
 		"num_blocks": num_blocks,
 		"file_path": file_path
 	}
+
+	# Exponential backoff: 0.25s * attempt number
 	var delay: float = 0.25 * float(next_attempt)
 	var scene_tree := _get_scene_tree()
 	if scene_tree == null:
 		return
+
 	var timer = scene_tree.create_timer(delay)
 	timer.timeout.connect(_on_waveform_retry_timeout.bind(req_id, level))
 
 
 func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
+	"""Timeout callback for waveform retry attempt.
+
+	Re-attempts waveform level ingestion after delay. Reads num_blocks from
+	cache if not available, and schedules another retry if still failing.
+	"""
 	var key := "%s:%d" % [req_id, level]
+
 	if not _pending_waveform_retries.has(key):
 		return
+
 	var info: Dictionary = _pending_waveform_retries[key]
 	var clip := _get_clip_by_req_id(req_id)
+
 	if clip == null:
 		_pending_waveform_retries.erase(key)
 		return
@@ -493,30 +498,29 @@ func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
 	var block_size := int(info.get("block_size", 0))
 	var num_blocks := int(info.get("num_blocks", 0))
 
-	# Try to read num_blocks from cache if it's still 0
+	# Try to read num_blocks from cache if still not available
 	if num_blocks <= 0 and not clip.waveform_cache_path.is_empty():
 		var reader = WaveformCacheReader.new()
 		if reader.load(clip.waveform_cache_path):
 			var level_info = reader.read_level(level, clip.audio_channels)
 			if not level_info.is_empty():
 				num_blocks = int(level_info.get("num_blocks", 0))
-				print("[Project] Retry: Read num_blocks from cache: ", num_blocks, " for level ", level)
 
-	# Ensure cache path is set
+	# Ensure cache path is available
 	if clip.waveform_cache_path.is_empty() and not clip.waveform_cache_key.is_empty():
-		var cache_path = _find_waveform_cache_file(clip.waveform_cache_key)
+		var cache_path = Sonara.find_waveform_cache_file(clip.waveform_cache_key)
 		if not cache_path.is_empty():
 			clip.set_waveform_cache(cache_path, clip.waveform_cache_key)
-			print("[Project] Retry: Set cache path to: ", cache_path)
 
+	# Retry ingestion
 	if clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
 		_pending_waveform_retries.erase(key)
-		print("[Project] Retry: Successfully ingested waveform level ", level, " for clip ", clip.id)
 	else:
+		# Check if we should retry again
 		var attempt := int(info.get("attempt", 1))
 		if attempt >= 3:
 			_pending_waveform_retries.erase(key)
-			print("[Project] Retry: Gave up after ", attempt, " attempts for level ", level)
+			push_error("[Project] Waveform retry: Failed after %d attempts for level %d" % [attempt, level])
 		else:
 			_schedule_waveform_retry(req_id, level, block_size, num_blocks, "", attempt + 1)
 

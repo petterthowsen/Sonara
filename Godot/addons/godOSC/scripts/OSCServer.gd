@@ -76,6 +76,29 @@ func parse_message(packet: PackedByteArray):
 				val.reverse()
 				vals.append(val.decode_s32(0))
 				args = args.slice(4, args.size())
+			104: #h: int64 (long)
+				# OSC Long is 8 bytes, big-endian
+				var val = args.slice(0, 8)
+				val.reverse()
+				# After reverse, bytes are little-endian
+				# Manually construct 64-bit value byte-by-byte to ensure correctness
+				# regardless of platform int size (works on both 32-bit and 64-bit platforms)
+				var result: int = 0
+				result |= int(val[0])
+				result |= int(val[1]) << 8
+				result |= int(val[2]) << 16
+				result |= int(val[3]) << 24
+				result |= int(val[4]) << 32
+				result |= int(val[5]) << 40
+				result |= int(val[6]) << 48
+				# For byte 7 (sign bit), handle as signed
+				var byte7 = int(val[7])
+				if byte7 >= 128:  # Negative (sign bit set)
+					result |= (byte7 - 256) << 56  # Sign extend
+				else:
+					result |= byte7 << 56
+				vals.append(result)
+				args = args.slice(8, args.size())
 			102: #f: float32
 				var val = args.slice(0, 4)
 				val.reverse()
@@ -165,6 +188,17 @@ func parse_bundle(packet: PackedByteArray):
 					val.reverse()
 					vals.append(val.decode_s32(0))
 					args = args.slice(4, args.size())
+				104: #h: int64 (long)
+					# OSC Long is 8 bytes, big-endian
+					var val = args.slice(0, 8)
+					val.reverse()
+					# Decode as signed 64-bit integer (combine high and low 32-bit parts)
+					var high = val.decode_s32(0)
+					var low = val.decode_u32(4)
+					# Handle sign extension for high part
+					var result: int = (high << 32) | low
+					vals.append(result)
+					args = args.slice(8, args.size())
 				102: #f: float32
 					var val = args.slice(0, 4)
 					val.reverse()

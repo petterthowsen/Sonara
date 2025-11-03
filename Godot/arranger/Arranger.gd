@@ -39,8 +39,10 @@ var _syncing_split: bool = false
 @onready var h_scroll: ScrollContainer = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll
 @onready var timeline: Timeline = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll/Timeline
 @onready var ruler: Ruler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler
+
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
 @onready var playhead: ColorRect = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
+@onready var h_scroll_bar: HScrollBar = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/HScrollBar
 
 # ArrangerBottom
 @onready var arranger_bottom: PanelContainer = $ArrangerBottom
@@ -107,6 +109,13 @@ func _ready():
 
 	# Connect horizontal scroll to update ruler and playhead
 	h_scroll.get_h_scroll_bar().value_changed.connect(_on_h_scroll_changed)
+
+	# Connect custom HScrollBar
+	if h_scroll_bar:
+		h_scroll_bar.step = 1.0
+		h_scroll_bar.allow_greater = true
+		h_scroll_bar.allow_lesser = false
+		h_scroll_bar.value_changed.connect(_on_h_scroll_bar_changed)
 
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
@@ -178,21 +187,21 @@ func _process(delta: float) -> void:
 	# Smooth scroll and zoom interpolation
 	if scroll_smoothing > 0:
 		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
-		
+
 		# Lerp vertical scroll
 		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
-		
+
 		# Lerp horizontal scroll
 		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
 		h_scroll.scroll_horizontal = int(new_h_scroll)
 		grid_helper.scroll_position = new_h_scroll
-		
+
 		# Lerp horizontal zoom (pixels per beat)
 		var current_ppb = grid_helper.pixels_per_beat
 		var new_ppb = lerp(current_ppb, target_pixels_per_beat, lerp_factor)
 		if abs(new_ppb - target_pixels_per_beat) > 0.01:  # Only update if difference is significant
 			timeline.set_zoom(new_ppb)
-		
+
 		# Lerp vertical zoom (track heights) - only if actively zooming
 		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
 			# Calculate current average height
@@ -200,10 +209,10 @@ func _process(delta: float) -> void:
 			for track in current_project.tracks:
 				total_height += track.height
 			var current_avg_height = total_height / current_project.tracks.size()
-			
+
 			# Lerp to target
 			var new_avg_height = lerp(current_avg_height, target_track_height, lerp_factor)
-			
+
 			# Only update if difference is significant
 			if abs(new_avg_height - target_track_height) > 0.5:
 				_apply_track_heights(int(new_avg_height))
@@ -215,11 +224,11 @@ func _process(delta: float) -> void:
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 		grid_helper.scroll_position = target_scroll_horizontal
-		
+
 		# Instant zoom
 		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:
 			timeline.set_zoom(target_pixels_per_beat)
-		
+
 		# Instant vertical zoom - only if actively zooming
 		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
 			var total_height = 0.0
@@ -230,9 +239,10 @@ func _process(delta: float) -> void:
 				_apply_track_heights(int(target_track_height))
 			else:
 				_is_zooming_vertically = false
-	
+
 	_update_ruler()
 	_update_playhead_position()
+	_update_scrollbar()
 
 # ============================================================================
 # INPUT HANDLING
@@ -450,12 +460,52 @@ func _update_playhead_position() -> void:
 	"""Update playhead visual position based on current playhead ticks."""
 	# Convert playhead ticks to pixel position
 	var playhead_pixels = grid_helper.ticks_to_pixels(Sonara.editor.playhead_ticks)
-	
+
 	# Account for horizontal scroll
 	var scroll_offset = h_scroll.scroll_horizontal
-	
+
 	# set playhead position
 	playhead.position.x = playhead_pixels - scroll_offset
+
+
+func _update_scrollbar() -> void:
+	"""Update custom scrollbar to match timeline state (Bitwig-style)."""
+	if not h_scroll_bar or not current_project or not timeline:
+		return
+
+	# Get viewport width and current scroll position
+	var viewport_width = h_scroll.size.x
+	var scroll_pos = h_scroll.scroll_horizontal
+
+	# Calculate the end of the last clip (actual song content length)
+	var last_clip_end_ticks = 0
+	for track in current_project.tracks:
+		for clip in track.clip_instances:
+			var clip_end = clip.start_ticks + clip.duration_ticks
+			if clip_end > last_clip_end_ticks:
+				last_clip_end_ticks = clip_end
+
+	# Convert to pixels (accounts for zoom)
+	var song_length_pixels = grid_helper.ticks_to_pixels(last_clip_end_ticks)
+
+	# Bitwig-style scrollbar:
+	# - max_value = song content length in pixels
+	# - page = viewport size
+	# - grabber size = viewport / song_length
+	# - allow_greater lets you scroll beyond content
+	h_scroll_bar.min_value = 0.0
+	h_scroll_bar.max_value = max(song_length_pixels, viewport_width)
+	h_scroll_bar.page = viewport_width
+	h_scroll_bar.set_value_no_signal(scroll_pos)
+
+
+func _on_h_scroll_bar_changed(value: float) -> void:
+	"""Handle scrollbar drag to update scroll position."""
+	target_scroll_horizontal = value
+	# For immediate feedback, also set directly if not using smoothing
+	if scroll_smoothing == 0:
+		h_scroll.scroll_horizontal = int(value)
+		grid_helper.scroll_position = value
 
 
 # ============================================================================

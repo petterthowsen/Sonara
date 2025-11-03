@@ -5,9 +5,10 @@ alwaysApply: true
 
 1. Files should never be more than 1000 lines and ideally less than 600 lines. If this occurs, refactor asap.
 2. DRY: Don't repeat yourself. Extract common logic into utility functions
-3. KISS: Prefer simple boring solutions over clever tricks - especially hacky workarounds.
-4. Confusing organization? Stop and re-think, ask the user (I.E "Should I move X to Y and reorganize this?")
-5. Fail fast. For debuggng, add extensive logs and ask the user to report back.
+3. Emphasize object-oriented design: encapsulate behavior inside classes/structs, expose intent via methods, and keep collaborators explicit.
+4. KISS: Prefer simple boring solutions over clever tricks - especially hacky workarounds.
+5. Confusing organization? Stop and re-think, ask the user (I.E "Should I move X to Y and reorganize this?")
+6. Fail fast. For debuggng, add extensive logs and ask the user to report back.
 
 ## Gathering Documentation
 

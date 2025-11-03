@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://dwx58rtumvnkj"]
+[gd_scene load_steps=11 format=3 uid="uid://dwx58rtumvnkj"]
 
 [ext_resource type="Script" uid="uid://3rv0d2u2oata" path="res://arranger/Arranger.gd" id="1_bh1i7"]
 [ext_resource type="PackedScene" uid="uid://cx5s8jbwq0dt2" path="res://arranger/tracklist/TrackList.tscn" id="1_hqaxx"]
@@ -58,6 +58,18 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_t0y6b"]
+content_margin_left = 0.0
+content_margin_top = 4.0
+content_margin_right = 0.0
+content_margin_bottom = 4.0
+bg_color = Color(0.06053035, 0.06053035, 0.060530342, 1)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+corner_detail = 6
+
 [node name="Arranger" type="VBoxContainer"]
 anchors_preset = 15
 anchor_right = 1.0
@@ -69,6 +81,7 @@ script = ExtResource("1_bh1i7")
 scroll_smoothing = 0.4
 zoom_sensitivity_h = 1.2
 zoom_sensitivity_v = 1.4
+zoom_max_pixels_per_beat = 4096.0
 
 [node name="VSplitContainer" type="VSplitContainer" parent="."]
 layout_mode = 2
@@ -150,7 +163,7 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_q3thm")
 [node name="HScroll" type="ScrollContainer" parent="VSplitContainer/VScroll/HSplit/TimelinePanel"]
 layout_mode = 2
 mouse_filter = 2
-horizontal_scroll_mode = 2
+horizontal_scroll_mode = 3
 vertical_scroll_mode = 0
 
 [node name="Timeline" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll" instance=ExtResource("4_dtx23")]
@@ -170,6 +183,23 @@ grow_vertical = 2
 size_flags_horizontal = 0
 mouse_filter = 2
 color = Color(1, 1, 1, 0.48235294)
+
+[node name="HScrollBar" type="HScrollBar" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay"]
+z_index = 1
+custom_minimum_size = Vector2(0, 14)
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/scroll = SubResource("StyleBoxFlat_t0y6b")
+max_value = 10.0
+step = 1.0
+page = 1.62
+value = 4.9
 
 [node name="ArrangerBottom" type="PanelContainer" parent="."]
 layout_mode = 2

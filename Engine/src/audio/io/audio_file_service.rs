@@ -482,20 +482,26 @@ impl AudioFileService {
 
         let min_block_size_u32 = min_block_size as u32;
         let mut levels = Vec::new();
-        let mut block_size = ((total_frames / 2048).max(min_block_size)).max(1) as u32;
-        if block_size < min_block_size_u32 {
-            block_size = min_block_size_u32;
-        }
+
+        // Start with a coarse block size for zoomed-out views
+        // For short audio, ensure we have at least 256-512 blocks in the coarsest level
+        let coarse_target_blocks = 512;
+        let coarse_block_size = (total_frames / coarse_target_blocks).max(min_block_size * 8).max(2048) as u32;
+
+        // Generate LOD pyramid by halving block_size until reaching min_block_size
+        // Example: 2048 -> 1024 -> 512 -> 256 -> 128 (if min_block_size=128)
+        let mut block_size = coarse_block_size;
 
         loop {
             levels.push(block_size);
-            if block_size == min_block_size_u32 {
+            if block_size <= min_block_size_u32 {
                 break;
             }
-            block_size = (block_size / 2).max(min_block_size_u32);
-            if levels.last().copied() == Some(block_size) {
+            let next_block_size = (block_size / 2).max(min_block_size_u32);
+            if next_block_size == block_size {
                 break;
             }
+            block_size = next_block_size;
         }
 
         tracing::debug!(
@@ -518,6 +524,31 @@ impl AudioFileService {
 
         const BYTES_PER_SAMPLE: u64 = 4;
 
+        // Pre-calculate num_blocks for all levels
+        let level_specs: Vec<(u16, u32, u64)> = levels
+            .iter()
+            .enumerate()
+            .map(|(level_idx, &block_sz)| {
+                let block_len = block_sz as usize;
+                let num_blocks = if total_frames > 0 {
+                    (total_frames + block_len - 1) / block_len
+                } else {
+                    0
+                };
+                (level_idx as u16, block_sz, num_blocks as u64)
+            })
+            .collect();
+
+        // Write metadata directory upfront with predicted offsets
+        writer.write_metadata_directory(&level_specs)?;
+
+        tracing::info!(
+            request_id = %req_id,
+            level_count = level_specs.len(),
+            "AFS wrote metadata directory, starting progressive data writes"
+        );
+
+        // Now write data progressively and send OSC events immediately
         for (level_idx, &block_sz) in levels.iter().enumerate() {
             let mut channel_data = vec![Vec::new(); channels];
 
@@ -551,12 +582,16 @@ impl AudioFileService {
                 }
             }
 
-            let metadata = writer.add_level(level_idx as u16, block_sz, &channel_data)?;
+            // Write level data (flushes automatically)
+            writer.write_level_data(level_idx, &channel_data)?;
 
+            // Get metadata for OSC message
+            let metadata = &writer.level_metadata[level_idx];
             let total_blocks = metadata.num_blocks;
             let byte_offset = metadata.channel_offsets.first().copied().unwrap_or(0);
             let byte_len = total_blocks * 3 * BYTES_PER_SAMPLE * channels as u64;
 
+            // Send OSC event immediately - data is flushed to disk
             event_tx.send(AfsEvent::WaveformLevel {
                 req_id: req_id.to_string(),
                 level: level_idx as u16,
@@ -574,11 +609,9 @@ impl AudioFileService {
                 num_blocks = total_blocks,
                 byte_offset,
                 byte_len,
-                "AFS emitted waveform level"
+                "AFS wrote and emitted waveform level (progressive)"
             );
         }
-
-        writer.finalize()?;
 
         tracing::info!(
             request_id = %req_id,

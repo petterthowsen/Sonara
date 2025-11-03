@@ -33,9 +33,15 @@ pub struct LevelMetadata {
 pub struct WaveformCacheWriter {
     file: File,
     header: CacheHeader,
-    level_metadata: Vec<LevelMetadata>,
+    pub(crate) level_metadata: Vec<LevelMetadata>,
     current_offset: u64,
 }
+
+/// Fixed metadata directory size: supports up to 16 levels
+/// Each level needs: 2 + 4 + 8 + 8 + (2 channels * 8) = 38 bytes minimum
+/// With 16 levels: 16 * 64 = 1024 bytes (allocate generously)
+const METADATA_DIRECTORY_SIZE: u64 = 1024;
+const METADATA_DIRECTORY_OFFSET: u64 = 34; // Right after 34-byte header
 
 impl WaveformCacheWriter {
     /// Create a new cache writer
@@ -58,7 +64,7 @@ impl WaveformCacheWriter {
             sample_rate,
             frames,
             levels,
-            dir_offset: 0, // Will be set later
+            dir_offset: METADATA_DIRECTORY_OFFSET, // Known upfront
         };
 
         let mut writer = Self {
@@ -68,25 +74,109 @@ impl WaveformCacheWriter {
             current_offset: 0,
         };
 
-        // Write placeholder header
-        writer.write_header()?;
+        // Write header and reserve space for metadata directory
+        writer.write_header_and_reserve_metadata()?;
 
         Ok(writer)
     }
 
-    /// Write header to file
+    /// Write header and reserve space for metadata directory
+    fn write_header_and_reserve_metadata(&mut self) -> Result<()> {
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(MAGIC)?;                                              // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.version)?;               // 2 bytes
+        self.file.write_u16::<LittleEndian>(self.header.channels)?;              // 2 bytes
+        self.file.write_u32::<LittleEndian>(self.header.sample_rate)?;           // 4 bytes
+        self.file.write_u64::<LittleEndian>(self.header.frames)?;                // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.levels)?;                // 2 bytes
+        self.file.write_u64::<LittleEndian>(self.header.dir_offset)?;            // 8 bytes
+        // Total: 8+2+2+4+8+2+8 = 34 bytes
+
+        // Reserve space for metadata directory (1024 bytes after header)
+        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
+        let zeros = vec![0u8; METADATA_DIRECTORY_SIZE as usize];
+        self.file.write_all(&zeros)?;
+
+        // Waveform data starts after the reserved metadata space
+        self.current_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
+        Ok(())
+    }
+
+    /// Write header to file (for updates only)
     fn write_header(&mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(MAGIC)?;
-        self.file.write_u16::<LittleEndian>(self.header.version)?;
-        self.file.write_u16::<LittleEndian>(self.header.channels)?;
-        self.file
-            .write_u32::<LittleEndian>(self.header.sample_rate)?;
-        self.file.write_u64::<LittleEndian>(self.header.frames)?;
-        self.file.write_u16::<LittleEndian>(self.header.levels)?;
-        self.file
-            .write_u64::<LittleEndian>(self.header.dir_offset)?;
-        self.current_offset = 40; // Size of header
+        self.file.write_all(MAGIC)?;                                              // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.version)?;               // 2 bytes
+        self.file.write_u16::<LittleEndian>(self.header.channels)?;              // 2 bytes
+        self.file.write_u32::<LittleEndian>(self.header.sample_rate)?;           // 4 bytes
+        self.file.write_u64::<LittleEndian>(self.header.frames)?;                // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.levels)?;                // 2 bytes
+        self.file.write_u64::<LittleEndian>(self.header.dir_offset)?;            // 8 bytes
+        Ok(())
+    }
+
+    /// Pre-calculate and write metadata directory with predicted offsets
+    /// Call this before writing any level data to enable progressive reading
+    pub fn write_metadata_directory(
+        &mut self,
+        level_specs: &[(u16, u32, u64)], // [(level, block_size, num_blocks), ...]
+    ) -> Result<()> {
+        // Calculate predicted offsets for each level
+        let mut predicted_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
+
+        self.level_metadata.clear();
+        self.level_metadata.reserve(level_specs.len());
+
+        for &(level, block_size, num_blocks) in level_specs {
+            let mut channel_offsets = Vec::with_capacity(self.header.channels as usize);
+
+            // Predict offsets for each channel
+            for _ch in 0..self.header.channels {
+                channel_offsets.push(predicted_offset);
+                // Each channel: num_blocks * 3 values * 4 bytes per f32
+                predicted_offset += num_blocks * 3 * 4;
+            }
+
+            self.level_metadata.push(LevelMetadata {
+                level,
+                block_size,
+                num_blocks,
+                channel_offsets,
+            });
+        }
+
+        // Write metadata directory
+        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
+        let mut metadata_pos = METADATA_DIRECTORY_OFFSET;
+
+        for metadata in &self.level_metadata {
+            self.file.write_u16::<LittleEndian>(metadata.level)?;
+            self.file.write_u32::<LittleEndian>(metadata.block_size)?;
+            self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
+            self.file.write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
+
+            for &offset in &metadata.channel_offsets {
+                self.file.write_u64::<LittleEndian>(offset)?;
+            }
+
+            metadata_pos += 2 + 4 + 8 + 8 + (metadata.channel_offsets.len() as u64 * 8);
+
+            if metadata_pos > METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE {
+                return Err(anyhow!(
+                    "Metadata directory exceeded reserved space ({} > {})",
+                    metadata_pos,
+                    METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE
+                ));
+            }
+        }
+
+        // Flush to ensure metadata is on disk before data writes
+        self.file.flush()?;
+
+        // Position file pointer at start of data region
+        self.current_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
+        self.file.seek(SeekFrom::Start(self.current_offset))?;
+
         Ok(())
     }
 
@@ -121,20 +211,83 @@ impl WaveformCacheWriter {
         Ok(metadata)
     }
 
-    /// Finalize the cache by writing the directory
-    pub fn finalize(&mut self) -> Result<()> {
-        // Set directory offset
-        self.header.dir_offset = self.current_offset;
-        let dir_offset = self.header.dir_offset;
-        self.write_header()?;
-        self.file.seek(SeekFrom::Start(dir_offset))?;
-        self.current_offset = dir_offset;
+    /// Write only the data for a level (metadata must already be written via write_metadata_directory)
+    pub fn write_level_data(
+        &mut self,
+        level_idx: usize,
+        channel_data: &[Vec<f32>], // [channel][min, max, rms, min, max, rms, ...]
+    ) -> Result<()> {
+        if level_idx >= self.level_metadata.len() {
+            return Err(anyhow!("Invalid level index: {}", level_idx));
+        }
 
-        // Write directory entries at the end of the data section
+        let metadata = &self.level_metadata[level_idx];
+        let expected_num_blocks = metadata.num_blocks;
+        let actual_num_blocks = channel_data[0].len() as u64 / 3;
+
+        if actual_num_blocks != expected_num_blocks {
+            return Err(anyhow!(
+                "Level {} block count mismatch: expected {}, got {}",
+                level_idx,
+                expected_num_blocks,
+                actual_num_blocks
+            ));
+        }
+
+        // Verify we're at the expected offset for first channel
+        let expected_offset = metadata.channel_offsets[0];
+        if self.current_offset != expected_offset {
+            return Err(anyhow!(
+                "Level {} offset mismatch: expected {}, at {}",
+                level_idx,
+                expected_offset,
+                self.current_offset
+            ));
+        }
+
+        // Write data for each channel
+        for ch_data in channel_data {
+            for &sample in ch_data {
+                self.file.write_f32::<LittleEndian>(sample)?;
+                self.current_offset += 4;
+            }
+        }
+
+        // Flush after each level for progressive availability
+        self.file.flush()?;
+
+        Ok(())
+    }
+
+    /// Finalize the cache by writing the metadata directory
+    pub fn finalize(&mut self) -> Result<()> {
+        // Metadata directory is at fixed METADATA_DIRECTORY_OFFSET (known upfront)
+        // dir_offset was already set in header during create()
+        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
+
+        // Write directory entries in simple binary format (NOT bincode)
+        // so that Godot can read it without a bincode library
+        let mut metadata_pos = METADATA_DIRECTORY_OFFSET;
         for metadata in &self.level_metadata {
-            let serialized = bincode::serialize(metadata)?;
-            self.file.write_all(&serialized)?;
-            self.current_offset += serialized.len() as u64;
+            self.file.write_u16::<LittleEndian>(metadata.level)?;
+            self.file.write_u32::<LittleEndian>(metadata.block_size)?;
+            self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
+            // Write number of channel offsets
+            self.file.write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
+            // Write each channel offset
+            for &offset in &metadata.channel_offsets {
+                self.file.write_u64::<LittleEndian>(offset)?;
+            }
+            metadata_pos += 2 + 4 + 8 + 8 + (metadata.channel_offsets.len() as u64 * 8);
+
+            // Safety check: don't overflow reserved metadata space
+            if metadata_pos > METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE {
+                return Err(anyhow!(
+                    "Metadata directory exceeded reserved space ({} > {})",
+                    metadata_pos,
+                    METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE
+                ));
+            }
         }
 
         self.file.flush()?;
@@ -160,7 +313,7 @@ impl WaveformCacheReader {
         let mut level_metadata = Vec::with_capacity(header.levels as usize);
 
         for _ in 0..header.levels {
-            let metadata: LevelMetadata = bincode::deserialize_from(&mut file)?;
+            let metadata = Self::read_level_metadata(&mut file)?;
             level_metadata.push(metadata);
         }
 
@@ -197,6 +350,30 @@ impl WaveformCacheReader {
             frames,
             levels,
             dir_offset,
+        })
+    }
+
+    /// Read level metadata from file (plain binary format, matching writer)
+    fn read_level_metadata(file: &mut File) -> Result<LevelMetadata> {
+        let level = file.read_u16::<LittleEndian>()?;
+        let block_size = file.read_u32::<LittleEndian>()?;
+        let num_blocks = file.read_u64::<LittleEndian>()?;
+        let vec_len = file.read_u64::<LittleEndian>()?;
+
+        if vec_len < 0 || vec_len > 100 {
+            return Err(anyhow!("Invalid channel offset count: {}", vec_len));
+        }
+
+        let mut channel_offsets = Vec::with_capacity(vec_len as usize);
+        for _ in 0..vec_len {
+            channel_offsets.push(file.read_u64::<LittleEndian>()?);
+        }
+
+        Ok(LevelMetadata {
+            level,
+            block_size,
+            num_blocks,
+            channel_offsets,
         })
     }
 

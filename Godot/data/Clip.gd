@@ -20,8 +20,6 @@ signal load_state_changed(state: LoadState, clip: Clip)
 signal waveform_level_updated(level: int, clip: Clip)
 signal load_progress_changed(progress_0_1: float, clip: Clip)
 
-const WaveformCacheReaderClass := preload("res://data/WaveformCacheReader.gd")
-
 # ============================================================================
 # PROPERTIES
 # ============================================================================
@@ -35,7 +33,7 @@ var type: ClipType = ClipType.MIDI
 var color: Color = Color.from_string("#4A90E2", Color.BLUE)
 
 # Content length (in ticks) - the "natural" length of the clip data
-# ClipInstances can play shorter/longer via loop_enabled and duration
+# ClipInstances can reference a subset/sub-region of this clip's length
 var content_length_ticks: int = 3840  # Default: 4 beats at PPQ=960
 
 # MIDI data (for MIDI clips)
@@ -44,23 +42,22 @@ var midi_events: Array[MidiEvent] = []  # CC, program change, etc.
 
 # Audio data (for audio clips)
 var audio_file_path: String = ""
-var audio_sample_rate: int = 48000
+var audio_sample_rate: int = 44100
 var audio_channels: int = 2
 var audio_frames: int = 0  # Total frame count (per channel)
 var audio_duration_seconds: float = 0.0
 var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
+var waveform_cache_key: String = ""  # Cache file identifier/key
+var waveform_cache_path: String = ""  # Full filesystem path to waveform cache file
+
 var audio_waveform: MultiResWaveform = null  # Cached multi-resolution waveforms
-var waveform_cache_key: String = ""
-var waveform_cache_path: String = ""
+var _waveform_cache_reader: WaveformCacheReader = null  # Cached reader for the waveform file
 
 # Async load tracking
 var load_state: LoadState = LoadState.UNLOADED
 var load_request_id: String = ""
 var load_error_message: String = ""
 var load_progress: float = 0.0
-
-var _waveform_levels_ready: Dictionary = {}
-var _waveform_reader = null
 
 # Metadata
 var created_date: float = 0  # Unix timestamp
@@ -74,50 +71,20 @@ var _synced_to_engine: bool = false  # Whether this clip has been created on the
 # AUDIO LOAD LIFECYCLE
 # ============================================================================
 
-func ensure_audio_waveform() -> MultiResWaveform:
-	"""Ensure audio_waveform exists and metadata is synced."""
-	if audio_waveform == null:
-		audio_waveform = MultiResWaveform.new()
-	if audio_sample_rate <= 0:
-		audio_sample_rate = 48000
-	if audio_channels <= 0:
-		audio_channels = 1
-	audio_waveform.set_metadata(audio_frames, audio_sample_rate, audio_channels)
-	return audio_waveform
-
-
-func reset_audio_state() -> void:
-	"""Clear audio content and cached waveform data."""
-	audio_frames = 0
-	audio_duration_seconds = 0.0
-	waveform_cache_key = ""
-	waveform_cache_path = ""
-	_waveform_levels_ready.clear()
-	_waveform_reader = null
-	if audio_waveform:
-		audio_waveform.reset()
-	clip_modified.emit()
-
-
 func mark_load_started(req_id: String, source_path: String) -> void:
 	"""Prepare clip for asynchronous loading."""
 	audio_file_path = source_path
 	load_request_id = req_id
 	load_error_message = ""
 	load_progress = 0.0
-	reset_audio_state()
 	apply_load_state(LoadState.LOADING, req_id, "")
 
 
 func apply_load_state(new_state: LoadState, req_id: String = "", message: String = "") -> void:
-	if load_state == new_state and load_request_id == req_id and load_error_message == message:
-		return
 	load_state = new_state
-	if not req_id.is_empty():
-		load_request_id = req_id
+	load_request_id = req_id
 	load_error_message = message
 	load_state_changed.emit(load_state, self)
-	clip_modified.emit()
 
 
 func update_load_progress(value: float) -> void:
@@ -129,51 +96,11 @@ func update_load_progress(value: float) -> void:
 
 
 func set_waveform_cache(path: String, cache_key: String) -> void:
-	if waveform_cache_path == path and waveform_cache_key == cache_key:
-		return
+	# Clear cached reader if switching to a different cache file
+	if path != waveform_cache_path:
+		_waveform_cache_reader = null
 	waveform_cache_path = path
 	waveform_cache_key = cache_key
-	_waveform_reader = null
-
-
-func _ensure_waveform_reader(path: String) -> bool:
-	if path.is_empty():
-		return false
-	if _waveform_reader and _waveform_reader.is_loaded() and _waveform_reader.file_path == path:
-		return true
-	var reader = WaveformCacheReaderClass.new()
-	if not reader.load(path):
-		return false
-	_waveform_reader = reader
-	ensure_audio_waveform()
-	return true
-
-
-func ingest_waveform_level_from_cache(level_index: int, block_size: int, num_blocks: int) -> bool:
-	"""Load a waveform level from cache file. Returns true if successful."""
-	if waveform_cache_path.is_empty():
-		print("[Clip] Cannot ingest waveform level", level_index, "- cache path missing")
-		return false
-	if not _ensure_waveform_reader(waveform_cache_path):
-		print("[Clip] Failed to open waveform cache", waveform_cache_path)
-		return false
-	var data: Dictionary = _waveform_reader.read_level(level_index, audio_channels)
-	if data.is_empty():
-		print("[Clip] Waveform cache level", level_index, "returned empty data")
-		return false
-	var peaks: Array = data.get("peaks", [])
-	var rms: Array = data.get("rms", [])
-	var resolved_block_size: int = data.get("block_size", block_size)
-	var resolved_num_blocks: int = data.get("num_blocks", num_blocks)
-	if peaks.is_empty():
-		print("[Clip] No peak data for level", level_index, "from", waveform_cache_path)
-		return false
-	ensure_audio_waveform().ingest_cache_level(level_index, resolved_block_size, resolved_num_blocks, peaks, rms)
-	_waveform_levels_ready[level_index] = true
-	print("[Clip] Ingested waveform level", level_index, "blocks=", resolved_num_blocks, "block_size=", resolved_block_size)
-	waveform_level_updated.emit(level_index, self)
-	clip_modified.emit()
-	return true
 
 
 func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_seconds: float = -1.0) -> void:
@@ -186,7 +113,6 @@ func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_s
 		audio_duration_seconds = float(audio_frames) / float(audio_sample_rate)
 	else:
 		audio_duration_seconds = 0.0
-	ensure_audio_waveform()
 	clip_modified.emit()
 
 
@@ -202,8 +128,84 @@ func update_content_length_from_metadata(project_tempo: float, project_ppq: int)
 	content_length_ticks = int(beats * float(ppq_value))
 
 
-func get_waveform_level_ready(level_index: int) -> bool:
-	return _waveform_levels_ready.get(level_index, false)
+func ensure_audio_waveform() -> void:
+	"""Initialize audio_waveform if not already created."""
+	if audio_waveform == null:
+		audio_waveform = MultiResWaveform.new()
+
+
+func ingest_waveform_level_from_cache(level: int, block_size: int, num_blocks: int) -> bool:
+	"""Load a waveform level from cache file and populate audio_waveform.
+
+	Reads peak/RMS data from the waveform cache file for the specified resolution level
+	and adds it to the multi-resolution pyramid. Called progressively as each level
+	becomes available from the audio engine.
+
+	Args:
+		level: Resolution level index (0 = highest resolution)
+		block_size: Number of audio frames per block at this resolution
+		num_blocks: Total number of blocks at this resolution
+
+	Returns:
+		true on success, false on failure (allows retry logic in Project.gd)
+	"""
+	# Ensure waveform container exists
+	ensure_audio_waveform()
+
+	# Validate cache file exists
+	if waveform_cache_path.is_empty() or not FileAccess.file_exists(waveform_cache_path):
+		push_error("[Clip] Waveform cache file not found: %s" % waveform_cache_path)
+		return false
+
+	# Load cache file once and reuse reader for all levels
+	if _waveform_cache_reader == null:
+		_waveform_cache_reader = WaveformCacheReader.new()
+		if not _waveform_cache_reader.load(waveform_cache_path):
+			push_error("[Clip] Failed to open waveform cache: %s" % waveform_cache_path)
+			_waveform_cache_reader = null
+			return false
+
+	# Read this specific resolution level from cache
+	var level_data = _waveform_cache_reader.read_level(level, audio_channels)
+	if level_data.is_empty():
+		push_error("[Clip] Failed to read level %d from cache" % level)
+		return false
+
+	# Create waveform object for this resolution level
+	var waveform = Waveform.new()
+	var channel_peaks = level_data.get("peaks", [])
+	var channel_rms = level_data.get("rms", [])
+
+	if level == 0:
+		print("[Clip] Level 0 peaks from cache: %d channels, ch0 has %d blocks" % [channel_peaks.size(), channel_peaks[0].size() if channel_peaks.size() > 0 else 0])
+
+	# Populate waveform with peak/RMS data
+	# Note: resolution is the samples per block (which is block_size in this context)
+	waveform.load_from_cache(block_size, audio_channels, num_blocks, channel_peaks, channel_rms)
+
+	if level == 0:
+		print("[Clip] After load_from_cache: waveform.num_blocks=%d, peak_data_left.size()=%d" % [waveform.num_blocks, waveform.peak_data_left.size()])
+
+	# Ensure levels array is large enough to hold this level
+	while audio_waveform.levels.size() <= level:
+		audio_waveform.levels.append(null)
+
+	# Add waveform to multi-resolution pyramid
+	audio_waveform.levels[level] = waveform
+	print_rich("[color=cyan][CLIP_INGEST][/color] Added level %d to pyramid. Peak data sizes: L=%d, R=%d. num_blocks=%d" % [
+		level,
+		waveform.peak_data_left.size(),
+		waveform.peak_data_right.size(),
+		waveform.num_blocks
+	])
+
+	# Notify listeners that a new level is ready (triggers UI redraw)
+	print_rich("[color=magenta][CLIP_INGEST][/color] EMITTING waveform_level_updated(level=%d)" % level)
+	waveform_level_updated.emit(level, self)
+	print_rich("[color=magenta][CLIP_INGEST][/color] Signal emitted, returning true")
+
+	return true
+
 
 # ============================================================================
 # LIFECYCLE
@@ -449,11 +451,6 @@ func get_content_length() -> int:
 		return max_end
 
 	return content_length_ticks
-
-
-# ============================================================================
-# AUDIO PROCESSING
-# ============================================================================
 
 
 

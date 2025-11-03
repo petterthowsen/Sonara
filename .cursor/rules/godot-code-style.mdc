@@ -9,10 +9,11 @@ alwaysApply: false
 When writing gdscript, follow these guidelines:
 
 1. Use two newlines between class functions.
-2. Most properties and functions should have a comment that briefly explains its purpose responsibility, unless positively self-evident.
-3. Things that control overall design or behavior of a node that could likely be subject to change/tweaking should probably have a configurable property.
-4. Never edit .uid, .tscn or other resource types manually—run the Godot MCP tooling (`scenes.*` helpers) to apply scene/resource changes safely.
-5. If you want a ternary operator, use `truthy_value if true_condition else falsy_value`.
+2. Lean into Godot's object-oriented model: ensure each script encapsulates a clear, single responsibility, use inheritance/composition instead of dumping free functions, and favor node-based collaborators over globals.
+3. Every class (`class_name` or implicit) and every function must have a short `##` comment directly above it that states its intent and key behavior.
+4. Things that control overall design or behavior of a node that could likely be subject to change/tweaking should probably have a configurable property.
+5. Never edit .uid, .tscn or other resource types manually—run the Godot MCP tooling (`scenes.*` helpers) to apply scene/resource changes safely.
+6. If you want a ternary operator, use `truthy_value if true_condition else falsy_value`.
 
 
 ## Working with Scenes

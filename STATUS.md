@@ -1,91 +1,137 @@
-# Project Status
+# Sonara DAW - Project Status
 
-## AudioFileService (async decode + waveform) - ✅ COMPLETE
+## Current Focus: Waveform Rendering - ✅ Complete + Optimized
 
-**Overview:** Async multi-format audio decoding and progressive waveform generation service.
+### Status: Waveform rendering fully operational with GPU-accelerated texture-based rendering
 
-**✅ Completed:**
-- **Core Implementation:** Symphonia-based decoder supporting WAV/FLAC/OGG/MP3 with offline resampling
-- **Waveform Cache:** Binary cache format with progressive multi-resolution levels (min/max/rms)
-- **Worker Pool:** 4-thread async service with job queue and event system
-- **OSC Integration:** Complete control-plane API (`/audiofile/*` routes)
-- **Backward Compatibility:** Legacy WAV loading migrated to Symphonia while maintaining existing API
-- **Testing:** Unit tests for service creation, cache keys, error handling, and integration framework
+**What Works:**
+- Audio clip waveforms render correctly with proper clip offset and duration
+- Multi-resolution LOD pyramid (5 levels) with progressive delivery
+- Stereo visualization (left/right channels split vertically)
+- Zoom-aware LOD selection for performance
+- GPU-accelerated texture rendering (no polygon triangulation overhead)
+- Texture-based approach handles arbitrarily wide clips without performance degradation
+- Write-ahead metadata enables true progressive waveform loading
 
-**🛠️ Architecture:**
-- **Control Plane:** OSC messages for job submission and event streaming
-- **Data Plane:** File-based waveform consumption via byte offsets
-- **Worker Pool:** Non-blocking decode off main thread, never touches audio callback
-- **Caching:** Smart cache keys with file metadata validation
+### ✅ Solved This Session
 
-**📋 Remaining (Godot-side):**
-- Integrate Godot UI to request decode/waveform via OSC
-- Implement waveform rendering from cache files using provided byte offsets
-- Handle progressive level updates (coarse → fine) for smooth UX
+**Texture-Based Waveform Rendering Optimization**
+- Replaced polygon triangulation approach with pre-rendered texture rendering
+- Implementation:
+  1. Each Waveform LOD level generates ImageTexture chunks (max 4096px wide × 100px height per chunk)
+  2. Chunking avoids GPU texture size limits (typically 8192-16384px max)
+  3. MidiclipRenderer uses `draw_texture_rect_region` to draw visible portions from relevant chunks
+  4. Textures are generated once after peak data loads, cached for all draws
+  5. Nearest-neighbor texture filtering ensures crisp, sharp waveforms (no blur from scaling)
+- Benefits:
+  - **Performance**: GPU texture blitting vs CPU polygon triangulation per frame
+  - **Viewport culling**: Only visible clip regions are drawn (respects clip_offset/duration)
+  - **Zoom-free**: Same textures work at any zoom level (just switch LOD levels)
+  - **Simplicity**: Reduced from ~300 lines of complex polygon code to ~80 lines of texture drawing
+  - **Scalable**: Handles arbitrarily long audio files via texture chunking (4096px chunks)
+  - **Visual quality**: Crisp waveforms at any clip height via nearest-neighbor filtering
+  - **Memory**: ~few MB per clip for all LOD textures (5 levels × 2 channels × ceil(num_blocks/4096) chunks × 4096×100×4 bytes)
+- Files changed:
+  - `Godot/support/waveform/Waveform.gd`: Added `generate_textures()`, `_generate_channel_texture_chunks()`, chunked texture storage, and `TEXTURE_CHUNK_WIDTH` constant
+  - `Godot/arranger/timeline/clip/MidiclipRenderer.gd`: Replaced polygon rendering with chunked texture rendering via `_draw_chunked_waveform()`, added `texture_filter = TEXTURE_FILTER_NEAREST` in `_ready()`
+- Removed: All polygon deduplication, collinearity checks, adaptive sampling, and triangulation workarounds (~300 lines)
 
-**🔧 Dependencies Added:**
-- `symphonia` (multi-format audio decoding)
-- `rubato` (high-quality offline resampling)
-- `bincode`, `byteorder`, `tempfile` (cache I/O)
-- `dirs` (cross-platform cache directory)
+**Write-Ahead Metadata for Progressive Waveform Delivery**
+- Implemented write-ahead metadata approach to enable race-condition-free progressive delivery
+- Architecture: Metadata directory written upfront with predicted offsets, then data written progressively
+  1. Pre-calculate all level specs (block_size, num_blocks) before writing
+  2. Predict file offsets for each level (deterministic sequential layout)
+  3. Write complete metadata directory and flush to disk
+  4. Progressively: generate peaks → write data → flush → send OSC → Godot can read immediately
+- Benefits: True progressive delivery, no race conditions, single metadata write, forward-only data writes
+- Files changed:
+  - `Engine/src/audio/io/waveform_cache.rs`: Added `write_metadata_directory()` and `write_level_data()`
+  - `Engine/src/audio/io/audio_file_service.rs::build_waveform_pyramid()`: Progressive flow with upfront metadata
 
-**🧪 Testing:**
-```bash
-cargo test --lib audio_file_service  # Service and cache tests
-cargo check                          # Full compilation verification
+### ✅ Previously Solved
+
+**Clip Offset & Duration Integration**
+- Fixed sample-to-tick conversion: properly uses `clip.recorded_bpm` to calculate samples_per_tick
+- Fixed `_draw_channel_peaks()` to respect visible sample range via start/end block indices
+- Added adaptive sampling to reduce vertex count when zoomed out (blocks_per_pixel > 3.0)
+- Waveform correctly shows only the portion specified by clip_offset and duration_ticks
+
+**Multi-Resolution LOD Pyramid Generation**
+- Fixed pyramid generation to create multiple levels (typically 5: 2048→1024→512→256→128)
+- Starts at coarse level to ensure good zoomed-out performance
+- LOD selection uses blocks_per_pixel ratio, targeting ~1.5 blocks per pixel
+
+**Triangulation Error Fix**
+- Root cause: Y coordinate quantization at small clip heights
+- Solution: Distance-based point deduplication (skip points closer than 3.0 pixels)
+- Stable at normal clip heights; rare edge cases may exist at <30px height
+
+**Critical Bug Fixes**
+- Fixed header size calculation: was 40 bytes, should be 34 bytes (caused 6-byte offset corruption)
+- Fixed Rust WaveformCacheReader: removed bincode dependency, uses plain binary format
+- Added OSC tag 104 (i64) support in Godot's OSCServer for u64 transmission
+
+**File Format & Pipeline**
+- Pre-allocated metadata directory at fixed offset (34 bytes after header)
+- Waveform data starts at offset 1058 (header + reserved metadata space)
+- Progressive OSC flow: `/audiofile/decode/ready` → `/audiofile/waveform/level` (per level)
+- Ready-state tracking prevents rendering incomplete data
+
+### ✅ Working Features
+
+**Waveform Rendering**
+- `MidiclipRenderer._draw_waveform()` - full implementation with:
+  - Stereo split (left channel top half, right channel bottom half)
+  - Filled polygon peaks between min/max envelope
+  - Loading placeholder while waveforms load
+  - Semi-transparent blue color scheme (#4D99E6 @ 60% opacity)
+- `_draw_channel_peaks()` helper for clean per-channel rendering
+- Supports mono/stereo audio seamlessly
+- Renders correctly after any interaction (zoom, pan, timeline scroll, etc.)
+
+**Data Model Layer**
+- `Clip.gd`: `ensure_audio_waveform()` and `ingest_waveform_level_from_cache()` methods working
+- Progressive waveform loading via `waveform_level_updated` signal
+- Cache file reading with `WaveformCacheReader` (binary .swf format) - verified correct offsets
+- `Waveform.load_from_cache()` correctly populates peak_data_left, peak_data_right, num_blocks
+
+**LOD Selection**
+- `MultiResWaveform.select_level_for_zoom()` - intelligent resolution level selection
+- `MultiResWaveform.get_ready_level_for_zoom()` - ready-state aware level selection
+- Zoom-aware (pixels_per_beat) for performance optimization
+
+## Architecture Summary
+
+```
+Engine (Rust)
+    → Write waveform cache file (header, metadata dir space, data)
+    → OSC /audiofile/decode/ready
+Project._on_audiofile_decode_ready()
+    → Clip.set_waveform_cache()
+    → OSC /audiofile/waveform/level (multiple, progressive)
+Project._on_audiofile_waveform_level()
+    → Clip.ensure_audio_waveform()
+    → Clip.ingest_waveform_level_from_cache()
+        → WaveformCacheReader.read_level()
+        → Waveform.load_from_cache()
+        → MultiResWaveform.levels[level] = waveform
+        → emit signal waveform_level_updated
+TimelineClip._on_clip_waveform_level_loaded()
+    → clip_renderer.queue_redraw()
+    → MidiclipRenderer._draw_waveform()
+        → audio_waveform.get_ready_level_for_zoom()
+        → _draw_channel_peaks() for each ready channel
+        → draw_colored_polygon()
 ```
 
-**🔍 Recent Diagnostics:**
-- Added structured `tracing` spans in `audio_file_service.rs` and `osc/server.rs` to log cache hits, waveform-level emissions, and OSC relays. Enable with `RUST_LOG=info,engine=debug` while reproducing missing-waveform issues; Godot console should now mirror decode/waveform events.
+## Key Files
 
-**📚 Documentation:**
-- OSC protocol updated with `/audiofile/*` routes
-- Cache format specification included
-- Complete API documentation in code
+**Engine (Rust)**
+- `Engine/src/audio/io/waveform_cache.rs` - Cache file format, writer with write-ahead metadata
+- `Engine/src/audio/io/audio_file_service.rs` - Progressive waveform generation pipeline
 
-## Clip Audio Load Lifecycle & Playback (engine-side) - ✅ COMPLETE
-
-**Overview:** Engine clips now perform asynchronous audio loading via AudioFileService, exposing deterministic load state updates to Godot. Audio playback correctly handles seek offsets and clip trimming.
-
-**✅ Completed:**
-- Added `ClipLoadState` metadata (`unloaded/loading/ready/failed`) plus `audio_source_path`/`waveform_cache_key` tracking
-- Refactored OSC server to submit decode jobs, map `req_id` → clip, and fan-out AudioFileService events
-- Engine dispatches `ClipLoadStateChanged` status messages which Godot receives as `/clip/{id}/load_state`
-- Updated `OSC_PROTOCOL.md` to document the new request/response contract
-- **Fixed seek offset calculation:** Playback position now correctly combines `clip_offset` (trim) + current playhead position when seeking into clips
-
-**🐛 Gotchas & Solutions:**
-
-1. **MP3 Resampling Artifacts (48kHz → 44.1kHz)**
-   - **Problem:** MP3 decoder naturally produces 1152-frame chunks but Rubato's FFT resampler requires fixed 4096-frame input chunks
-   - **Error:** `Insufficient buffer size 1152 for input channel 0, expected 4096`
-   - **Solution:** Added input buffering layer in `decoder.rs` that accumulates MP3 frames until 4096-frame chunks available, then processes through resampler with proper flushing
-   - **Key Changes:**
-     - Increased FFT chunk size from 1024 to 4096 for spectral quality
-     - Implemented `input_buffer` to batch decode chunks
-     - Multi-pass flushing with zero-padding for partial final chunks
-   - **Result:** Clean MP3 playback with proper time-stretching
-
-2. **Clip Seek Offset Not Applied**
-   - **Problem:** Seeking into the middle of a clip and playing would restart from the beginning of the audio file
-   - **Root Cause:** Playback position initialization only applied `clip_offset` (trim from left edge) and ignored the current playhead position within the clip instance
-   - **Solution:** Changed offset calculation in `processing.rs:168` from:
-     ```rust
-     let offset_samples = ticks_to_samples(instance.clip_offset, ...)
-     ```
-     to:
-     ```rust
-     let total_offset_ticks = instance.clip_offset + current_pos_in_instance;
-     let offset_samples = ticks_to_samples(total_offset_ticks, ...)
-     ```
-   - **Result:** Seeking now plays from correct position while respecting clip trimming
-
-**📋 Remaining (Godot-side):**
-- Verify new data-model wiring for load states & waveform ingestion (waveforms still not visible)
-- Ensure progressive waveform levels update UI once cache pages land
-- Add explicit error/progress surfacing in arranger components if decode fails
-
-**🔮 Follow-up Ideas:**
-- Optionally migrate clips to stream PCM from cache files instead of storing full `Vec<f32>` in-engine (`migrate_to_cache_keys` todo)
-- Add load-progress relays if UI needs finer-grained feedback (`/audiofile/progress`)
-
+**Godot**
+- `Godot/arranger/timeline/clip/MidiclipRenderer.gd` - Waveform rendering with LOD selection
+- `Godot/support/waveform/MultiResWaveform.gd` - LOD pyramid management
+- `Godot/support/waveform/WaveformCacheReader.gd` - Binary cache file reader
+- `Godot/data/Clip.gd` - Waveform data model and cache ingestion

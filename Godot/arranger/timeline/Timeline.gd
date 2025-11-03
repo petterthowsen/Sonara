@@ -18,7 +18,16 @@ var grid_helper: GridHelper:
 	get:
 		return _grid_helper
 	set(value):
+		# Disconnect from old grid_helper if any
+		if _grid_helper and _grid_helper.changed.is_connected(_on_grid_helper_changed):
+			_grid_helper.changed.disconnect(_on_grid_helper_changed)
+
 		_grid_helper = value
+
+		# Connect to new grid_helper for scroll position updates
+		if _grid_helper:
+			_grid_helper.changed.connect(_on_grid_helper_changed)
+
 		if clip_selection_manager:
 			clip_selection_manager.grid_helper = value
 var _grid_helper: GridHelper = null
@@ -50,6 +59,11 @@ func _ready():
 
 	if not clip_ctx_menu.make_unique_requested.is_connected(_on_clip_make_unique_requested):
 		clip_ctx_menu.make_unique_requested.connect(_on_clip_make_unique_requested)
+
+
+func _on_grid_helper_changed() -> void:
+	"""Update timeline width when grid_helper properties change (scroll, zoom, etc)."""
+	_update_timeline_width()
 
 
 # ============================================================================
@@ -332,10 +346,10 @@ func get_snap_interval() -> int:
 
 
 func _update_timeline_width() -> void:
-	"""Update the minimum width of the timeline based on content length."""
-	if not project:
+	"""Update the minimum width of the timeline based on content length and scroll position."""
+	if not project or not grid_helper:
 		return
-	
+
 	# Calculate the end position of the last clip across all tracks
 	var last_clip_end_ticks = 0
 	for track : Track in project.tracks:
@@ -343,21 +357,35 @@ func _update_timeline_width() -> void:
 			var clip_end = clip.start_ticks + clip.duration_ticks
 			if clip_end > last_clip_end_ticks:
 				last_clip_end_ticks = clip_end
-	
+
 	# Calculate minimum width based on content or default minimum
 	var ppq = project.ppq
 	var ticks_per_bar = ppq * project.time_numerator
 	var min_ticks = MIN_TIMELINE_BARS * ticks_per_bar
-	
-	# Use whichever is larger: content length or minimum
-	var timeline_ticks = max(last_clip_end_ticks, min_ticks)
-	
+
+	# Calculate the visible viewport extent in ticks to enable infinite scroll
+	# We need to ensure timeline extends beyond current scroll position + viewport
+	var scroll_ticks = grid_helper.pixels_to_ticks(grid_helper.scroll_position)
+	var parent_scroll = get_parent()
+	var viewport_width = 1000.0  # fallback
+	if parent_scroll is ScrollContainer:
+		viewport_width = parent_scroll.size.x
+	var viewport_ticks = grid_helper.pixels_to_ticks(viewport_width)
+	var scroll_end_ticks = scroll_ticks + viewport_ticks
+
+	# Add buffer beyond scroll (8 bars) to allow smooth scrolling ahead
+	var scroll_buffer_ticks = ticks_per_bar * 8
+	var scroll_extent_ticks = scroll_end_ticks + scroll_buffer_ticks
+
+	# Use whichever is larger: content length, minimum, or scroll extent
+	var timeline_ticks = max(last_clip_end_ticks, min_ticks, scroll_extent_ticks)
+
 	# Add some padding (2 bars)
 	timeline_ticks += ticks_per_bar * 2
-	
+
 	# Convert to pixels
 	var timeline_width = ticks_to_pixels(timeline_ticks)
-	
+
 	# Set minimum width on this container
 	custom_minimum_size.x = timeline_width
 

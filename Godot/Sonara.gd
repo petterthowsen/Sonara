@@ -146,3 +146,36 @@ func load_config():
 			push_error("[Sonara] Failed to open config file: " + config_path)
 	else:
 		print("[Sonara] No config file found, starting with empty config")
+
+
+## Try to locate waveform cache file in standard locations
+func find_waveform_cache_file(cache_key: String) -> String:
+	if cache_key.is_empty():
+		return ""
+
+	var cache_paths = []
+
+	# Linux: XDG_CACHE_HOME or ~/.cache
+	var xdg_cache = OS.get_environment("XDG_CACHE_HOME")
+	if not xdg_cache.is_empty():
+		cache_paths.append(xdg_cache + "/sonara/waveforms/" + cache_key)
+
+	var home = OS.get_environment("HOME")
+	if not home.is_empty():
+		cache_paths.append(home + "/.cache/sonara/waveforms/" + cache_key)
+		# macOS
+		cache_paths.append(home + "/Library/Caches/sonara/waveforms/" + cache_key)
+
+	# Godot config dir cache
+	cache_paths.append(OS.get_config_dir() + "/.cache/sonara/waveforms/" + cache_key)
+
+	# Windows
+	var appdata = OS.get_environment("APPDATA")
+	if not appdata.is_empty():
+		cache_paths.append(appdata + "/sonara/waveforms/" + cache_key)
+
+	for path in cache_paths:
+		if FileAccess.file_exists(path):
+			return path
+
+	return ""

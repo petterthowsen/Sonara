@@ -72,10 +72,24 @@ func _ready() -> void:
 
 
 func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE) -> void:
-	"""Bind this UI element to a ClipInstance data object."""
+	"""Bind this UI element to a ClipInstance data object.
+
+	Connects to clip signals for real-time updates, including progressive waveform
+	loading notifications.
+	"""
+	# Disconnect from previous clip if necessary
+	if clip_instance and clip_instance.clip:
+		if clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
+			clip_instance.clip.waveform_level_updated.disconnect(_on_clip_waveform_level_loaded)
+
 	clip_instance = inst
 	timeline = tl
 	track_color = t_color
+
+	# Connect to waveform loading events for progressive rendering
+	if clip_instance and clip_instance.clip:
+		if not clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
+			clip_instance.clip.waveform_level_updated.connect(_on_clip_waveform_level_loaded)
 
 	# Update UI from clip instance data
 	if is_inside_tree():
@@ -118,6 +132,20 @@ func _find_nearest_clip_right(reference_end: int = -1) -> int:
 			nearest_start = other_start
 	
 	return nearest_start
+
+
+func _on_clip_waveform_level_loaded(level: int, clip: Clip) -> void:
+	"""Handle progressive waveform level loaded event.
+
+	Called by Clip.waveform_level_updated signal when a new resolution level
+	becomes available. Triggers renderer redraw to progressively display waveforms.
+
+	Args:
+		level: Resolution level index that just loaded
+		clip: The Clip object that was updated
+	"""
+	print_rich("[color=green][TIMELINE_CLIP][/color] Waveform level %d loaded, queuing redraw" % level)
+	clip_renderer.queue_redraw()
 
 
 func set_selected(selected: bool) -> void:
