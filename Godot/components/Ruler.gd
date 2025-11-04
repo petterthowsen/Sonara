@@ -41,6 +41,14 @@ var start_position_ticks: int = 0
 # Signal when user clicks to set start position
 signal start_position_requested(ticks: int)
 
+enum VerticalAlignment { TOP, BOTTOM }
+
+@export var vertical_alignment = VerticalAlignment.BOTTOM:
+	set(value):
+		if vertical_alignment != value:
+			vertical_alignment = value
+			queue_redraw()
+
 func _ready() -> void:
 	if not grid_helper:
 		grid_helper = GridHelper.new()
@@ -109,12 +117,34 @@ func _draw_ruler() -> void:
 				GridHelper.GridLineType.BEAT:
 					# Draw beat line (half height)
 					var line_height = size.y * 0.5
-					draw_line(Vector2(x, size.y - line_height), Vector2(x, size.y), beat_line_color, 1.0, true)
+					var start_y: float
+					var end_y: float
+					
+					match vertical_alignment:
+						VerticalAlignment.TOP:
+							start_y = 0.0
+							end_y = line_height
+						VerticalAlignment.BOTTOM:
+							start_y = size.y - line_height
+							end_y = size.y
+					
+					draw_line(Vector2(x, start_y), Vector2(x, end_y), beat_line_color, 1.0, true)
 				
 				GridHelper.GridLineType.SUBDIVISION:
 					# Draw subdivision line (quarter height)
 					var line_height = size.y * 0.25
-					draw_line(Vector2(x, size.y - line_height), Vector2(x, size.y), subdivision_line_color, 1.0, true)
+					var start_y: float
+					var end_y: float
+					
+					match vertical_alignment:
+						VerticalAlignment.TOP:
+							start_y = 0.0
+							end_y = line_height
+						VerticalAlignment.BOTTOM:
+							start_y = size.y - line_height
+							end_y = size.y
+					
+					draw_line(Vector2(x, start_y), Vector2(x, end_y), subdivision_line_color, 1.0, true)
 
 func _draw_start_position_arrow() -> void:
 	"""Draw blue arrow indicating the start position."""
@@ -153,32 +183,20 @@ func _gui_input(event: InputEvent) -> void:
 		if not grid_helper:
 			return
 
-		# Get click position relative to ruler
+		# Get click position relative to ruler (includes offset_x area)
 		var click_x = event.position.x
 
+		# Adjust for offset_x to get position in timeline coordinates
+		var timeline_screen_x = click_x - offset_x
 
 		# Convert from screen coordinates to timeline pixels (accounting for scroll)
-		var timeline_pixel_x = grid_helper.scroll_position + click_x
+		var timeline_pixel_x = grid_helper.scroll_position + timeline_screen_x
 
-		# TODO: Doesn't grid_helper have a snap function?
-		# Get grid lines in a range around the click (±100 pixels for snapping)
-		var snap_range = 100.0
-		var start_x = timeline_pixel_x - snap_range
-		var end_x = timeline_pixel_x + snap_range
-		var grid_lines = grid_helper.get_visible_grid_lines(start_x, end_x)
+		# Convert timeline pixel position to ticks
+		var clicked_ticks = grid_helper.pixels_to_ticks(timeline_pixel_x)
 
-		# Find the nearest grid line
-		var nearest_grid_x = timeline_pixel_x
-		var min_distance = snap_range + 1.0
-
-		for grid_line in grid_lines:
-			var distance = abs(grid_line.x - timeline_pixel_x)
-			if distance < min_distance:
-				min_distance = distance
-				nearest_grid_x = grid_line.x
-
-		# Convert snapped position to ticks
-		var snapped_ticks = grid_helper.pixels_to_ticks(int(nearest_grid_x))
+		# Snap to nearest grid line (bar, beat, or subdivision)
+		var snapped_ticks = grid_helper.snap_ticks(clicked_ticks)
 
 		# Emit signal to request start position change
 		start_position_requested.emit(snapped_ticks)

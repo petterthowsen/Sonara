@@ -6,6 +6,8 @@ extends Node
 ## Default projects directory path
 const PROJECTS_DIR_NAME = "Sonara"
 
+var logger := Log.make("Sonara")
+
 var editor : Editor:
 	get:
 		if not editor:
@@ -86,18 +88,18 @@ func set_config(key: String, value):
 func _ensure_config_dir() -> void:
 	var dir = DirAccess.open(OS.get_environment("HOME"))
 	if not dir:
-		push_error("Failed to access HOME directory")
+		logger.error("Failed to access HOME directory")
 		return
 	
 	var config_dir = get_config_dir()
 	if not DirAccess.dir_exists_absolute(config_dir):
 		var err = DirAccess.make_dir_recursive_absolute(config_dir)
 		if err == OK:
-			print("[Sonara] Created config directory: ", config_dir)
+			logger.info("Created config directory: ", config_dir)
 		else:
-			push_error("[Sonara] Failed to create config directory: " + config_dir)
+			logger.error("Failed to create config directory: ", config_dir)
 	else:
-		print("[Sonara] Config directory verified: ", config_dir)
+		logger.debug("Config directory verified: ", config_dir)
 
 
 ## Ensure the projects directory exists
@@ -106,11 +108,11 @@ func _ensure_projects_dir() -> void:
 	if not DirAccess.dir_exists_absolute(projects_dir):
 		var err = DirAccess.make_dir_recursive_absolute(projects_dir)
 		if err == OK:
-			print("[Sonara] Created projects directory: ", projects_dir)
+			logger.info("Created projects directory: ", projects_dir)
 		else:
-			push_error("[Sonara] Failed to create projects directory: " + projects_dir)
+			logger.error("Failed to create projects directory: ", projects_dir)
 	else:
-		print("[Sonara] Projects directory verified: ", projects_dir)
+		logger.debug("Projects directory verified: ", projects_dir)
 
 
 ## Save the current configuration to disk
@@ -121,9 +123,9 @@ func save_config():
 		var json_string = JSON.stringify(config, "\t")
 		file.store_string(json_string)
 		file.close()
-		print("[Sonara] Config saved to: ", config_path)
+		logger.info("Config saved to: ", config_path)
 	else:
-		push_error("[Sonara] Failed to save config to: " + config_path)
+		logger.error("Failed to save config to: ", config_path)
 
 
 ## Load configuration from disk (called automatically on init)
@@ -139,13 +141,13 @@ func load_config():
 			var error = json.parse(json_string)
 			if error == OK:
 				config = json.data
-				print("[Sonara] Config loaded from: ", config_path)
+				logger.info("Config loaded from: ", config_path)
 			else:
-				push_error("[Sonara] Failed to parse config JSON: " + json.get_error_message())
+				logger.error("Failed to parse config JSON: ", json.get_error_message())
 		else:
-			push_error("[Sonara] Failed to open config file: " + config_path)
+			logger.error("Failed to open config file: ", config_path)
 	else:
-		print("[Sonara] No config file found, starting with empty config")
+		logger.debug("No config file found, starting with empty config")
 
 
 ## Try to locate waveform cache file in standard locations

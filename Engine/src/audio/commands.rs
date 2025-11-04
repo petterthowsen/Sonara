@@ -1776,6 +1776,7 @@ pub fn process_command(
                 };
 
             // Create temp instances of each builtin device and send their info
+            // TODO: Simplify this to avoid creating temporary instances
             let builtin_devices: Vec<EngineStatus> = vec![
                 create_device_info(Box::new(super::devices::PolySynthDevice::new(
                     state.device_sample_rate,
@@ -1785,6 +1786,9 @@ pub fn process_command(
                     5000.0,
                 ))),
                 create_device_info(Box::new(super::devices::SpectrumAnalyzerDevice::new(
+                    state.device_sample_rate,
+                ))),
+                create_device_info(Box::new(super::devices::SfizzDevice::new_for_metadata(
                     state.device_sample_rate,
                 ))),
             ];

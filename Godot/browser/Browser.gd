@@ -217,59 +217,72 @@ func _refresh_asset_list() -> void:
 	_populate_devices_tree()
 
 
-func _filter_assets(assets: Array[Asset]) -> Array[Asset]:
-	"""Filter assets based on current search filter."""
+func _filter_and_score_assets(assets: Array[Asset]) -> Array[Dictionary]:
+	"""Filter and score assets based on fuzzy search. Returns array of {asset, score} dicts."""
 	if _search_filter.is_empty():
-		return assets
+		# Return all assets with perfect score when no search filter
+		var result: Array[Dictionary] = []
+		for asset in assets:
+			result.append({"asset": asset, "score": 1.0})
+		return result
 
-	var filtered: Array[Asset] = []
+	var scored_results: Array[Dictionary] = []
 	var search_lower = _search_filter.to_lower()
 
 	for asset in assets:
-		var display_name = asset.get_display_name().to_lower()
+		var best_score = 0.0
 
 		# Always check display name
-		var matches = display_name.contains(search_lower)
+		var display_name = asset.get_display_name().to_lower()
+		var display_score = Utils.fuzzy_match(search_lower, display_name)
+		best_score = max(best_score, display_score)
 
 		# For device assets, also check category and vendor
-		if asset.type == Asset.TYPE.Device and not matches:
+		if asset.type == Asset.TYPE.Device:
 			var device = AssetService.get_device(asset.path)
 			if device:
 				var category = device.get_category_string().to_lower()
 				var vendor = device.author.to_lower()
-				if category.contains(search_lower) or vendor.contains(search_lower):
-					matches = true
+				var category_score = Utils.fuzzy_match(search_lower, category)
+				var vendor_score = Utils.fuzzy_match(search_lower, vendor)
+				best_score = max(best_score, category_score, vendor_score)
 
-		if matches:
-			filtered.append(asset)
+		# Only include assets that have some match (score > 0)
+		if best_score > 0.5:
+			scored_results.append({"asset": asset, "score": best_score})
 
-	return filtered
+	# Sort by score (highest first)
+	scored_results.sort_custom(func(a, b): return a.score > b.score)
+
+	return scored_results
 
 
 func _populate_samples_tab() -> void:
 	var item_list = _item_lists[Asset.TYPE.Audio]
 
-	# Filter assets based on search
-	var filtered_audio = _filter_assets(_audio_assets)
-	var filtered_midi = _filter_assets(_midi_assets)
+	# Filter and score assets based on fuzzy search
+	var scored_audio = _filter_and_score_assets(_audio_assets)
+	var scored_midi = _filter_and_score_assets(_midi_assets)
 
 	# Add Audio section
-	if not filtered_audio.is_empty():
+	if not scored_audio.is_empty():
 		var header_idx = item_list.add_item("Audio Files")
 		item_list.set_item_custom_fg_color(header_idx, Color.YELLOW)
 		item_list.set_item_disabled(header_idx, true)
 
-		for asset in filtered_audio:
+		for result in scored_audio:
+			var asset = result.asset
 			var idx = item_list.add_item(asset.get_display_name())
 			item_list.set_item_metadata(idx, asset)
 
 	# Add MIDI section
-	if not filtered_midi.is_empty():
+	if not scored_midi.is_empty():
 		var header_idx = item_list.add_item("MIDI Files")
 		item_list.set_item_custom_fg_color(header_idx, Color.YELLOW)
 		item_list.set_item_disabled(header_idx, true)
 
-		for asset in filtered_midi:
+		for result in scored_midi:
+			var asset = result.asset
 			var idx = item_list.add_item(asset.get_display_name())
 			item_list.set_item_metadata(idx, asset)
 
@@ -277,16 +290,17 @@ func _populate_samples_tab() -> void:
 func _populate_sfz_tab() -> void:
 	var item_list = _item_lists[Asset.TYPE.SFZ]
 
-	# Filter assets based on search
-	var filtered_sfz = _filter_assets(_sfz_assets)
+	# Filter and score assets based on fuzzy search
+	var scored_sfz = _filter_and_score_assets(_sfz_assets)
 
-	if filtered_sfz.is_empty():
+	if scored_sfz.is_empty():
 		var message = "(No matches)" if not _search_filter.is_empty() else "(No SFZ instruments)"
 		var idx = item_list.add_item(message)
 		item_list.set_item_disabled(idx, true)
 		return
 
-	for asset in filtered_sfz:
+	for result in scored_sfz:
+		var asset = result.asset
 		var idx = item_list.add_item(asset.get_display_name())
 		item_list.set_item_metadata(idx, asset)
 
@@ -294,16 +308,17 @@ func _populate_sfz_tab() -> void:
 func _populate_devices_tab() -> void:
 	var item_list = _item_lists[Asset.TYPE.Device]
 
-	# Filter assets based on search
-	var filtered_devices = _filter_assets(_device_assets)
+	# Filter and score assets based on fuzzy search
+	var scored_devices = _filter_and_score_assets(_device_assets)
 
-	if filtered_devices.is_empty():
+	if scored_devices.is_empty():
 		var message = "(No matches)" if not _search_filter.is_empty() else "(No devices)"
 		var idx = item_list.add_item(message)
 		item_list.set_item_disabled(idx, true)
 		return
 
-	for asset in filtered_devices:
+	for result in scored_devices:
+		var asset = result.asset
 		var idx = item_list.add_item(asset.get_display_name())
 		item_list.set_item_metadata(idx, asset)
 
@@ -315,10 +330,19 @@ func _populate_devices_tab() -> void:
 func _populate_samples_tree() -> void:
 	var tree = _trees[Asset.TYPE.Audio]
 	var root = tree.create_item()
-	
-	# Filter assets based on search
-	var filtered_audio = _filter_assets(_audio_assets)
-	var filtered_midi = _filter_assets(_midi_assets)
+
+	# Filter and score assets based on fuzzy search
+	var scored_audio = _filter_and_score_assets(_audio_assets)
+	var scored_midi = _filter_and_score_assets(_midi_assets)
+
+	# Extract assets from scored results for tree building
+	var filtered_audio: Array[Asset] = []
+	for result in scored_audio:
+		filtered_audio.append(result.asset)
+
+	var filtered_midi: Array[Asset] = []
+	for result in scored_midi:
+		filtered_midi.append(result.asset)
 	
 	# Build hierarchical structure for audio files
 	if not filtered_audio.is_empty():
@@ -354,9 +378,14 @@ func _populate_samples_tree() -> void:
 func _populate_sfz_tree() -> void:
 	var tree = _trees[Asset.TYPE.SFZ]
 	var root = tree.create_item()
-	
-	# Filter assets based on search
-	var filtered_sfz = _filter_assets(_sfz_assets)
+
+	# Filter and score assets based on fuzzy search
+	var scored_sfz = _filter_and_score_assets(_sfz_assets)
+
+	# Extract assets from scored results for tree building
+	var filtered_sfz: Array[Asset] = []
+	for result in scored_sfz:
+		filtered_sfz.append(result.asset)
 	
 	if filtered_sfz.is_empty():
 		var item = tree.create_item(root)
@@ -378,8 +407,13 @@ func _populate_devices_tree() -> void:
 	var tree = _trees[Asset.TYPE.Device]
 	var root = tree.create_item()
 
-	# Filter assets based on search
-	var filtered_devices = _filter_assets(_device_assets)
+	# Filter and score assets based on fuzzy search
+	var scored_devices = _filter_and_score_assets(_device_assets)
+
+	# Extract assets from scored results for tree building
+	var filtered_devices: Array[Asset] = []
+	for result in scored_devices:
+		filtered_devices.append(result.asset)
 
 	if filtered_devices.is_empty():
 		var item = tree.create_item(root)

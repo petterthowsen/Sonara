@@ -1014,6 +1014,7 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 	clip_ctx_menu.bind_to_instances(selection)
 	var c_pos = mouse_pos_global
 	var c_size = clip_ctx_menu.get_contents_minimum_size()
+	clip_ctx_menu.show()
 	clip_ctx_menu.popup(Rect2(c_pos, c_size))
 
 

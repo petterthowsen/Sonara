@@ -529,18 +529,18 @@ func _update_transport_ui() -> void:
 	
 	# Update position display
 	if transport_position_label and project:
-		var bbt = _ticks_to_bbt(playhead_ticks)
+		var bbt = ticks_to_bbt(playhead_ticks)
 		transport_position_label.text = "%d.%d.%d.%03d" % [bbt.bar, bbt.beat, bbt.sixteenth, bbt.tick]
 	
 	# Update time display
 	if transport_time_label and project:
-		var seconds = _ticks_to_seconds(playhead_ticks)
+		var seconds = ticks_to_seconds(playhead_ticks)
 		var minutes = int(seconds / 60)
 		var secs = int(seconds) % 60
 		var ms = int((seconds - int(seconds)) * 1000)
 		transport_time_label.text = "%02d:%02d.%03d" % [minutes, secs, ms]
 
-func _ticks_to_bbt(ticks: int) -> Dictionary:
+func ticks_to_bbt(ticks: int) -> Dictionary:
 	"""Convert ticks to bars/beats/sixteenths/ticks (4-number format like Bitwig)."""
 	if project == null:
 		return {"bar": 1, "beat": 1, "sixteenth": 1, "tick": 0}
@@ -565,7 +565,7 @@ func _ticks_to_bbt(ticks: int) -> Dictionary:
 	return {"bar": bar + 1, "beat": beat + 1, "sixteenth": sixteenth + 1, "tick": tick}
 
 
-func _ticks_to_seconds(ticks: int) -> float:
+func ticks_to_seconds(ticks: int) -> float:
 	"""Convert ticks to seconds."""
 	if project == null:
 		return 0.0

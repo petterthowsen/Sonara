@@ -1,0 +1,36 @@
+[Sonara] DEBUG: Config directory verified:  /home/pelatho/.config/sonara
+[Sonara] DEBUG: Projects directory verified:  /home/pelatho/Documents/Sonara
+[Sonara] INFO: Config loaded from:  /home/pelatho/.config/sonara/config.json
+[OSC] INFO: Registered listener for  /plugin/info
+[OSC] INFO: Registered listener for  /plugin/scan_complete
+[OSC] INFO: Registered listener for  /builtin/info
+[OSC] INFO: Registered listener for  /builtin/complete
+[OSC] WARN: Attempted to send before ready: /builtin/request
+[OSC] INFO: Registered listener for  /status/engine_load
+[MidiEditor] INFO: grid_helper changed:  <Resource#-9223371861734192197>
+[NoteContainer] INFO: update_container_width: multi=false rightmost_tick=0 min_px=2048.0 scroll=0.0 viewport=0.0 content_px=1024.0 required_px=2048.0
+[ClipEditor] INFO:   - UI mode: CLIP, left_panel=false, toggle_disabled=true
+[OSC] INFO: Registered listener for  /status/playhead
+[OSC] INFO: Registered listener for  /status/playing
+[OSC] INFO: Ready - listening on port 7001, sending to port 7000
+[OSC] INFO: Registered listener for  /clip/*/load_state
+[OSC] INFO: Registered listener for  /audiofile/decode/ready
+[OSC] INFO: Registered listener for  /audiofile/waveform/level
+[OSC] INFO: Registered listener for  /audiofile/progress
+[OSC] INFO: Registered listener for  /audiofile/error
+[OSC] INFO: sending  /project/clear  args:  []
+[OSC] INFO: sending  /project/init  args:  [120.0, 4, 4, 960, 48000]
+[OSC] INFO: sending  /builtin/request  args:  []
+[OSC] INFO: Registered listener for  /channel/1/peak
+[OSC] INFO: sending  /channel/1/create  args:  ["Master"]
+[OSC] INFO: sending  /channel/1/volume  args:  [0.0]
+[OSC] INFO: sending  /channel/1/pan  args:  [0.0]
+[OSC] INFO: sending  /channel/1/mute  args:  [0]
+[OSC] INFO: sending  /channel/1/solo  args:  [0]
+[OSC] INFO: sending  /channel/1/route  args:  [1000]
+[OSC] INFO: Engine connected!
+[OSC] INFO: received OSC message:  /builtin/info  args= ["sonara.builtin.polysynth", "PolySynth", "instrument", "PolySynth v1.0", 1, 2, 2, 0, "", 0, 12, 0, "Waveform A", "", "enum", 1, 0.0, 1.0, 0.0, 4, "Sine", "Square", "Saw", "Triangle", 1, "Attack", "s", "float", 1, 0.0, 1.0, 0.00499999988824, 0, 2, "Decay", "s", "float", 1, 0.0, 1.0, 0.05000000074506, 0, 3, "Sustain", "", "float", 1, 0.0, 1.0, 0.69999998807907, 0, 4, "Release", "s", "float", 1, 0.0, 1.0, 0.10000000149012, 0, 5, "Master Volume", "", "float", 1, 0.0, 1.0, 0.30000001192093, 0, 6, "Osc A Level", "", "float", 1, 0.0, 1.0, 0.69999998807907, 0, 7, "Waveform B", "", "enum", 1, 0.0, 1.0, 0.5, 4, "Sine", "Square", "Saw", "Triangle", 8, "Osc B Level", "", "float", 1, 0.0, 1.0, 0.30000001192093, 0, 9, "Osc B Detune", "cents", "float", 1, 0.0, 1.0, 0.5, 0, 10, "Osc A Octave", "", "enum", 1, 0.0, 1.0, 0.5, 5, "-2", "-1", "0", "+1", "+2", 11, "Osc B Octave", "", "enum", 1, 0.0, 1.0, 0.5, 5, "-2", "-1", "0", "+1", "+2"]
+[OSC] INFO: received OSC message:  /builtin/info  args= ["sonara.builtin.delay", "Delay", "effect", "Delay v1.0", 0, 2, 2, 0, "", 0, 2, 0, "Delay Time", "ms", "float", 1, 1.0, 5000.0, 250.0, 0, 1, "Wet Amount", "", "float", 1, 0.0, 1.0, 0.5, 0]
+[OSC] INFO: received OSC message:  /builtin/info  args= ["sonara.builtin.spectrum_analyzer", "Spectrum Analyzer", "utility", "Spectrum Analyzer v1.0", 0, 2, 2, 0, "", 0, 4, 0, "FFT Size", "", "enum", 1, 0.0, 1.0, 0.5, 4, "Tiny", "Small", "Medium", "Large", 1, "Speed", "", "enum", 0, 0.0, 1.0, 0.75, 4, "Freeze", "Slow", "Medium", "Fast", 100, "Scale", "", "enum", 0, 0.0, 0.0, 0.0, 2, "Log", "Linear", 101, "Style", "", "enum", 0, 0.0, 0.0, 0.0, 2, "Bars", "Line"]
+[OSC] INFO: received OSC message:  /builtin/info  args= ["sonara.builtin.sfizz", "Sfizz SFZ Sampler", "instrument", "Sfizz SFZ Sampler v1.0", 1, 2, 2, 1, "SFZ Sample Files", 2, ".sfz", ".SFZ", 0]
+[OSC] INFO: received OSC message:  /builtin/complete  args= [4]

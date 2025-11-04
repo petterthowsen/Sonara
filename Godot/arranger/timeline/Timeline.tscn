@@ -10,3 +10,4 @@ theme_override_constants/separation = 1
 script = ExtResource("1_khs34")
 
 [node name="ClipContextMenu" parent="." instance=ExtResource("2_3iuqr")]
+visible = false

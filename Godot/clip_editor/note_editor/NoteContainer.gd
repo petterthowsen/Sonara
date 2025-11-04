@@ -181,7 +181,7 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 		unbind()
 
 	multi_clip_mode = true
-	clip_instances = instances
+	clip_instances = instances.duplicate()  # Duplicate to avoid modifying the track's array
 	track = owner_track
 
 	# Connect to all clips' signals for reactive updates

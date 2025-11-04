@@ -66,6 +66,9 @@ pub struct SfizzDevice {
 
     // Queued MIDI events (frame-accurate within next block)
     queued_midi: Vec<(usize, u8, u8, bool)>,
+
+    // Pending parameter changes (queued when try_lock fails)
+    pending_param_changes: Vec<(u8, f32)>,
 }
 
 // Safety: sfizz::Synth contains raw pointers but is thread-safe when used properly
@@ -101,7 +104,14 @@ impl SfizzDevice {
             device_position,
             status_tx,
             queued_midi: Vec::with_capacity(256),
+            pending_param_changes: Vec::new(),
         }
+    }
+
+    /// Create a metadata-only instance for device advertisement purposes
+    /// This doesn't require runtime parameters like channel_id and status_tx
+    pub fn new_for_metadata(sample_rate: f32) -> Self {
+        Self::new(sample_rate, 1024, 0, 0, None)
     }
 
     /// Check if parameters have changed and clear the flag (poll-based notification)
@@ -110,6 +120,68 @@ impl SfizzDevice {
         let result = *changed;
         *changed = false;
         result
+    }
+
+    /// Queue a parameter change for later (when try_lock fails)
+    fn queue_parameter_change(&mut self, cc_number: u8, value: f32) {
+        // Remove any existing pending change for this CC
+        if let Some(existing) = self
+            .pending_param_changes
+            .iter()
+            .position(|(cc, _)| *cc == cc_number)
+        {
+            self.pending_param_changes.remove(existing);
+        }
+        // Add the new value
+        self.pending_param_changes.push((cc_number, value));
+    }
+
+    /// Flush pending parameter changes to sfizz (called from audio thread)
+    /// Returns true if any parameters were flushed
+    fn flush_pending_parameters(&mut self) -> bool {
+        if self.pending_param_changes.is_empty() {
+            return false;
+        }
+
+        // Try to get the synth
+        let loading_state_result = self.loading_state.try_lock();
+        let synth = match loading_state_result {
+            Ok(state) => match &*state {
+                LoadingState::Ready(synth) => Arc::clone(synth),
+                _ => return false, // Not ready, keep pending
+            },
+            Err(_) => return false, // Can't lock, keep pending
+        };
+
+        // Try to lock the synth
+        let synth_guard = match synth.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return false, // Can't lock, keep pending
+        };
+
+        // Successfully got both locks - flush all pending parameters
+        let pending = std::mem::take(&mut self.pending_param_changes);
+        let count = pending.len();
+
+        for (cc_number, value) in pending {
+            unsafe {
+                sfizz::sfizz_send_hdcc(
+                    synth_guard.0.as_raw(),
+                    0, // delay = 0 (immediate)
+                    cc_number as i32,
+                    value,
+                );
+            }
+        }
+
+        if count > 0 {
+            info!(
+                "  ✅ Flushed {} pending parameter(s) to sfizz",
+                count
+            );
+        }
+
+        true
     }
 
     /// Load an SFZ file asynchronously (non-blocking)
@@ -313,6 +385,10 @@ impl AudioDevice for SfizzDevice {
             return;
         }
 
+        // Try to flush pending parameters before rendering audio
+        // This ensures parameters get applied even if set_parameter couldn't get the lock
+        self.flush_pending_parameters();
+
         // CRITICAL: Check loading state with try_lock (non-blocking!)
         // If we can't get the lock, just output silence (better than blocking)
         let loading_state_result = self.loading_state.try_lock();
@@ -432,28 +508,52 @@ impl AudioDevice for SfizzDevice {
         // ParamId is the CC number
         let cc_number = param_id as u8;
 
+        info!(
+            "🎛️  SfizzDevice::set_parameter CC{} = {} (channel={}, pos={})",
+            cc_number, value, self.channel_id, self.device_position
+        );
+
         // Store the value
         {
             let mut cc_values = self.cc_values.lock().unwrap();
             cc_values.insert(cc_number, value);
         }
 
+        // Try to flush any previously pending parameters first
+        self.flush_pending_parameters();
+
         // Send to sfizz synth (non-blocking)
-        let loading_state_result = self.loading_state.try_lock();
-        let synth = match loading_state_result {
-            Ok(state) => {
-                match &*state {
-                    LoadingState::Ready(synth) => Arc::clone(synth),
-                    _ => return, // Not ready, value is stored for when it loads
-                }
+        // Check synth ready state and clone Arc if ready
+        let synth_option = {
+            match self.loading_state.try_lock() {
+                Ok(state) => match &*state {
+                    LoadingState::Ready(synth) => Some(Arc::clone(synth)),
+                    _ => None,
+                },
+                Err(_) => None,
             }
-            Err(_) => return, // Can't get lock, value is stored
+        };
+
+        let synth = match synth_option {
+            Some(s) => {
+                info!("  ✓ Synth is ready, proceeding to send HDCC");
+                s
+            }
+            None => {
+                info!("  ⚠ Synth not ready or locked, parameter queued");
+                self.queue_parameter_change(cc_number, value);
+                return;
+            }
         };
 
         // Try to lock the synth (non-blocking)
-        let mut synth_guard = match synth.try_lock() {
+        let synth_guard = match synth.try_lock() {
             Ok(guard) => guard,
-            Err(_) => return, // Can't get synth lock, value is stored
+            Err(_) => {
+                info!("  ⚠ Could not lock synth, parameter queued");
+                self.queue_parameter_change(cc_number, value);
+                return;
+            }
         };
 
         // Send HDCC (high-definition CC with normalized 0.0-1.0 value)
@@ -466,6 +566,7 @@ impl AudioDevice for SfizzDevice {
                 value,
             );
         }
+        info!("  ✅ HDCC sent to sfizz: CC{} = {}", cc_number, value);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {

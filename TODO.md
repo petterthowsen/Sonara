@@ -29,6 +29,7 @@
 - [ ] Multi-in and multi-out for devices
 - [ ] Add support for enum parameter type for builtins
 - [x] Refactor DevicePanel and DeviceView system
+- [ ] In Engine: Simplify device advertizementt to avoid creating temporary instances
 
 ### Plugins
 - [ ] Crash / Error handling, send info to Godot for UI notifications

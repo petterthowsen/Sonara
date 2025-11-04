@@ -16,7 +16,13 @@ class_name GridHelper extends Resource
 		if time_denominator != d:
 			time_denominator = d
 			changed.emit()
-		
+
+@export var tempo: float = 120.0:
+	set(t):
+		if tempo != t:
+			tempo = t
+			changed.emit()
+
 @export var pixels_per_beat: float = 64.0:
 	set(p):
 		if pixels_per_beat != p:
@@ -29,13 +35,14 @@ class_name GridHelper extends Resource
 			scroll_position = s
 			changed.emit()
 
-func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4):
+func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4, tempo_val : float = 120.0):
 	ppq = ppq_val
 	time_numerator = time_num
 	time_denominator = time_denom
+	tempo = tempo_val
 
 static func from_project(p : Project) -> GridHelper:
-	return new(p.ppq, p.time_numerator, p.time_denominator)
+	return new(p.ppq, p.time_numerator, p.time_denominator, p.tempo)
 
 # ============================================================================
 # GRID INTERVAL CALCULATION
@@ -95,6 +102,52 @@ func snap_pixels(pixels: float) -> float:
 	var snapped_ticks = snap_ticks(ticks)
 	return ticks_to_pixels(snapped_ticks)
 
+
+# ============================================================================
+# TIME CONVERSION
+# ============================================================================
+
+func ticks_to_seconds(ticks: int) -> float:
+	"""Convert ticks to seconds."""
+	var seconds_per_tick = 60.0 / (tempo * ppq)
+	return ticks * seconds_per_tick
+
+func seconds_to_ticks(seconds: float) -> int:
+	"""Convert seconds to ticks."""
+	var seconds_per_tick = 60.0 / (tempo * ppq)
+	return roundi(seconds / seconds_per_tick)
+
+func ticks_to_minutes(ticks: int) -> float:
+	"""Convert ticks to minutes."""
+	return ticks_to_seconds(ticks) / 60.0
+
+func minutes_to_ticks(minutes: float) -> int:
+	"""Convert minutes to ticks."""
+	return seconds_to_ticks(minutes * 60.0)
+
+func ticks_to_hours(ticks: int) -> float:
+	"""Convert ticks to hours."""
+	return ticks_to_minutes(ticks) / 60.0
+
+func hours_to_ticks(hours: float) -> int:
+	"""Convert hours to ticks."""
+	return minutes_to_ticks(hours * 60.0)
+
+func get_pixels_per_second() -> float:
+	"""Get pixels per second at current zoom level."""
+	var seconds_per_beat = 60.0 / tempo
+	var pixels_per_second = pixels_per_beat / seconds_per_beat
+	return pixels_per_second
+
+func get_pixels_per_minute() -> float:
+	"""Get pixels per minute at current zoom level."""
+	return get_pixels_per_second() * 60.0
+
+func get_pixels_per_hour() -> float:
+	"""Get pixels per hour at current zoom level."""
+	return get_pixels_per_minute() * 60.0
+
+
 # ============================================================================
 # COORDINATE CONVERSION
 # ============================================================================
@@ -108,6 +161,7 @@ func pixels_to_ticks(pixels: float) -> int:
 	"""Convert pixels to ticks."""
 	var beats = pixels / pixels_per_beat
 	return roundi(beats * ppq)
+
 
 # ============================================================================
 # GRID LINE GENERATION

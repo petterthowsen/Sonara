@@ -40,6 +40,8 @@ var _syncing_split: bool = false
 @onready var timeline_panel: PanelContainer = $VSplitContainer/VScroll/HSplit/TimelinePanel
 @onready var h_scroll: ScrollContainer = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll
 @onready var timeline: Timeline = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll/Timeline
+
+@onready var real_ruler: RealTimeRuler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/RealTimeRuler
 @onready var ruler: Ruler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler
 
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
@@ -55,7 +57,7 @@ var pan_start_pos: Vector2 = Vector2.ZERO
 var pan_start_h_scroll: float = 0.0
 var pan_start_v_scroll: float = 0.0
 
-# Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
+# Smooth scrolling: 0 = instant, higher = smoother
 @export var scroll_smoothing: float = 0.5
 
 # Scroll speeds
@@ -577,6 +579,7 @@ func _on_project_activated(project: Project) -> void:
 	
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper
+	real_ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
 	ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
 	
 	# Initialize target zoom values from project

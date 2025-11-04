@@ -30,9 +30,15 @@ in ./components A set of small reusable custom UI controls such as Meters, Slide
 
 ## Utilities
 
+- `Utils` class is general-purpose utility functions.
 - `Midi` class is a static class with midi, note and frequency conversion functions.
 - `Sonara` singleton provides access to the Editor instance via `Sonara.editor`.
 - Share `GridHelper` instances across views (ClipEditor, Ruler, Timeline) so zoom/scroll changes propagate via the `changed` signal without manual listeners per component.
+
+## CLI Automation
+
+- Run non-interactive maintenance tasks through the Godot CLI so they share the same project state as the editor; invoke commands from the repo root and pass `--path Godot` to target the UI workspace.
+- Prefer headless mode for CI, cache warmers, and project scripts: `godot --headless --path Godot -s path/to/script.gd`, where the script path is relative to the `Godot/` project root (no `res://` prefix needed when supplying `--path`).
 
 ## OSC
 

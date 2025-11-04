@@ -83,5 +83,185 @@ static func shorten_text(text: String, max_length: int = 15) -> String:
 	# Final fallback: just truncate
 	if result.is_empty():
 		result = text.substr(0, max_length - 1) + "."
-	
+
 	return result
+
+
+## Fuzzy search matching with scoring
+## Returns a score from 0.0 (no match) to 1.0 (perfect match)
+## Higher scores indicate better matches
+static func fuzzy_match(query: String, target: String) -> float:
+	if query.is_empty():
+		return 1.0  # Empty query matches everything perfectly
+	if target.is_empty():
+		return 0.0
+
+	var query_lower = query.to_lower()
+	var target_lower = target.to_lower()
+
+	# Exact match gets highest score
+	if query_lower == target_lower:
+		return 1.0
+
+	# Simple substring match
+	if target_lower.contains(query_lower):
+		var substring_score = 0.8
+		# Bonus for matches at word boundaries or start of string
+		if target_lower.begins_with(query_lower):
+			substring_score += 0.15
+		elif target_lower.find(" " + query_lower) >= 0:
+			substring_score += 0.1
+		return substring_score
+
+	# Multi-word query handling - split by spaces and match each word
+	var query_words = query_lower.split(" ", false)
+	if query_words.size() > 1:
+		var matched_words = 0
+
+		# Match each query word and collect scores
+		for i in range(query_words.size()):
+			var word = query_words[i]
+			if word.is_empty():
+				continue
+
+			var word_score = _match_single_word(word, target_lower)
+			if word_score > 0.0:
+				matched_words += 1
+
+		# Require at least one word to match
+		if matched_words == 0:
+			return 0.0
+
+		# Calculate base score - weight first word more heavily
+		var base_score = 0.0
+		var other_word_scores = []
+
+		for i in range(query_words.size()):
+			var word = query_words[i]
+			if word.is_empty():
+				continue
+
+			var word_score = _match_single_word(word, target_lower)
+			if word_score > 0.0:
+				if i == 0:  # First word gets special treatment
+					base_score += word_score * 0.6  # First word is 60% of the score
+				else:  # Other words share the remaining 40%
+					other_word_scores.append(word_score)
+
+		# Add other word scores
+		if other_word_scores.size() > 0:
+			var other_weight = 0.4 / other_word_scores.size()
+			for score in other_word_scores:
+				base_score += score * other_weight
+
+		# Coverage bonus: reward matching more words
+		var coverage_ratio = float(matched_words) / float(query_words.size())
+		var coverage_bonus = coverage_ratio * 0.2
+
+		# Full coverage bonus: extra points for matching ALL words
+		var full_coverage_bonus = 0.0
+		if matched_words == query_words.size():
+			full_coverage_bonus = 0.15
+
+		# Length penalty: MASSIVELY penalize long strings (shorter is MUCH better)
+		var target_length = target.length()
+		var length_penalty = 0.0
+		if target_length > 15:
+			length_penalty = (target_length - 15) * 0.05  # 5% penalty per character over 15
+		elif target_length < 8:
+			length_penalty = -0.05  # Small bonus for very short names
+
+		# First character bonus: significant bonus if target starts with first query word
+		var first_char_bonus = 0.0
+		if not target.is_empty() and not query_words[0].is_empty():
+			if target_lower.begins_with(query_words[0]):
+				first_char_bonus = 0.25  # Strong bonus for starting with first query word
+
+		var final_score = base_score + coverage_bonus + full_coverage_bonus + first_char_bonus - length_penalty
+		return clamp(final_score, 0.0, 0.98)
+
+	# Single word fuzzy matching
+	return _match_single_word(query_lower, target_lower)
+
+
+static func _match_single_word(query: String, target: String) -> float:
+	# Check for exact substring match with word boundaries
+	var substring_score = 0.0
+	if target.contains(query):
+		# Only give high score if it's a proper word match
+		if target.begins_with(query):
+			# Check if it's followed by a separator (word boundary)
+			var query_len = query.length()
+			if target.length() == query_len or target[query_len] in " -_":
+				substring_score = 0.9  # Starts with query as a complete word/part
+			else:
+				substring_score = 0.5  # Starts with query but continues (like "basson" starting with "bass")
+		elif target.find(" " + query) >= 0 or target.find("-" + query) >= 0 or target.find("_" + query) >= 0:
+			substring_score = 0.8  # Word boundary match
+		else:
+			# Loose substring match - much lower score
+			substring_score = 0.3
+		return substring_score
+
+	# Split target into words for better matching
+	var target_words = target.split(" ", false)
+	for i in range(target_words.size()):
+		target_words[i] = target_words[i].strip_edges()
+
+	# Also check hyphen and underscore separated parts
+	var hyphen_parts = target.split("-", false)
+	var underscore_parts = target.split("_", false)
+
+	# Check each word/part for substring matches
+	for word in target_words + hyphen_parts + underscore_parts:
+		if word.contains(query):
+			var word_score = 0.6
+			if word.begins_with(query):
+				word_score += 0.2
+			return word_score
+
+	# Fuzzy character matching - strict approach
+	var query_chars = query.split("")
+	var target_chars = target.split("")
+
+	if query_chars.size() > target_chars.size() + 2:  # Allow small length differences
+		return 0.0
+
+	var matches = 0
+	var query_idx = 0
+	var consecutive_matches = 0
+	var max_consecutive = 0
+
+	# Greedy matching with consecutive bonus - find each query char in target (in order)
+	for target_idx in range(target_chars.size()):
+		if query_idx < query_chars.size() and target_chars[target_idx] == query_chars[query_idx]:
+			matches += 1
+			consecutive_matches += 1
+			max_consecutive = max(max_consecutive, consecutive_matches)
+			query_idx += 1
+		else:
+			consecutive_matches = 0
+
+	# Require at least 70% of characters to match in order for fuzzy matching
+	var match_ratio = float(matches) / float(query_chars.size())
+	if match_ratio < 0.7:
+		return 0.0
+
+	# Bonus for consecutive matches (prefer "bass" over scattered b,a,s,s)
+	var consecutive_bonus = float(max_consecutive) / float(query_chars.size()) * 0.2
+
+	# Starting character bonus
+	var start_bonus = 0.0
+	if not target.is_empty() and not query.is_empty() and target[0] == query[0]:
+		start_bonus = 0.1
+
+	# Length penalty: MASSIVELY penalize long strings (shorter is MUCH better)
+	var target_length = target.length()
+	var length_penalty = 0.0
+	if target_length > 15:
+		length_penalty = (target_length - 15) * 0.05  # 5% penalty per character over 15
+	elif target_length < 8:
+		length_penalty = -0.05  # Small bonus for very short names
+
+	var final_score = match_ratio + consecutive_bonus + start_bonus - length_penalty
+	return clamp(final_score, 0.0, 0.85)

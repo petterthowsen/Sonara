@@ -107,9 +107,6 @@ func _update_internal_values() -> void:
 
 		var song_length_pixels = grid_helper.ticks_to_pixels(ticks_to_use)
 		_max_value = max(song_length_pixels, viewport_width)
-
-		if randf() < 0.1:
-			print("[TimelineScrollBar] Updated: ticks=", ticks_to_use, " (original=", song_length_ticks, ") pixels=", song_length_pixels, " max=", _max_value, " page=", _page)
 	else:
 		_max_value = viewport_width
 
@@ -123,8 +120,6 @@ func _get_effective_max() -> float:
 func _draw() -> void:
 	## Draw background and grabber
 	var rect_size = size
-	if randf() < 0.05:
-		print("[TimelineScrollBar] _draw called - size: ", rect_size, " range: ", _max_value - _min_value, " scroll: ", _scroll_position)
 
 	# Draw background
 	draw_rect(Rect2(Vector2.ZERO, rect_size), bg_color, true)
@@ -133,8 +128,6 @@ func _draw() -> void:
 	var effective_max = _get_effective_max()
 	var range = effective_max - _min_value
 	if range <= 0:
-		if randf() < 0.1:
-			print("[TimelineScrollBar] _draw skipped - range is 0")
 		return
 
 	var grabber_width = (_page / range) * rect_size.x

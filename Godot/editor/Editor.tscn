@@ -469,11 +469,21 @@ size_flags_horizontal = 3
 [node name="InfoText" type="RichTextLabel" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/InfoBox"]
 layout_mode = 2
 size_flags_horizontal = 3
+focus_mode = 0
+mouse_filter = 2
+theme_override_colors/default_color = Color(0.65423244, 0.65423197, 0.654232, 1)
+theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/bold_font_size = 16
+theme_override_font_sizes/bold_italics_font_size = 14
+theme_override_font_sizes/italics_font_size = 14
+theme_override_font_sizes/mono_font_size = 14
 bbcode_enabled = true
 text = "[color=\"gold\"]ctrl[/color] to zoom"
 fit_content = true
 scroll_active = false
 autowrap_mode = 0
+shortcut_keys_enabled = false
+vertical_alignment = 1
 
 [node name="FileDialog" type="FileDialog" parent="."]
 oversampling_override = 1.0

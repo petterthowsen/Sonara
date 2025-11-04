@@ -1,4 +1,5 @@
-globs: Godot/devices/device_lane/DevicePanel.gd, Godot/devices/device_lane/DevicePanel.tscn, Godot/data/Device.gd, Godot/data/DeviceInstance.gd, Godot/components/device/**/*.gd
+---
+globs: Godot/devices/**/*.gd
 alwaysApply: false
 ---
 # Godot Device Views
