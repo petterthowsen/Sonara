@@ -70,6 +70,9 @@ func _ready() -> void:
 
 ## This should not really happen.
 func _unbind_from_device(_dev : DeviceInstance):
+	# Disconnect signal
+	if _dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
+		_dev.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
 	_clear_parameter_controls()
 	_clear_panel_and_aux()
 
@@ -78,7 +81,7 @@ func bind_to_device(dev : DeviceInstance):
 	if device:
 		_unbind_from_device(device)
 	device = dev
-	
+
 	await ready
 	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
@@ -90,11 +93,14 @@ func bind_to_device(dev : DeviceInstance):
 	else:
 		_clear_panel_and_aux()
 		content_right.visible = false
-	
+
 	# Large toggle visibility (native GUI or LargeView scene)
 	large_button.visible = dev.device.has_gui() or dev.device.has_large_view()
 	large_button.button_pressed = false
-	
+
+	# Listen for GUI closed events from engine
+	dev.plugin_gui_closed.connect(_on_plugin_gui_closed)
+
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
 	
@@ -473,6 +479,14 @@ func _open_large() -> void:
 
 func _on_large_window_request_close() -> void:
 	_close_large()
+
+
+## Handle plugin GUI closed notification from engine
+func _on_plugin_gui_closed() -> void:
+	print("[DevicePanel] Plugin GUI closed notification received")
+	_large_open = false
+	large_button.button_pressed = false
+	_apply_large_state()
 
 
 func _close_large() -> void:

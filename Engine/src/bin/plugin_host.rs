@@ -22,6 +22,7 @@ use tracing::{error, info};
 
 // Import the modular plugin_host modules
 use engine::plugin_host::event_loop::run_plugin_host;
+use engine::plugin_host::install_x11_error_handler;
 
 fn main() {
     // Initialize logging
@@ -32,6 +33,11 @@ fn main() {
         .init();
 
     info!("🔌 Plugin Host Subprocess starting...");
+
+    // Install X11 error handler BEFORE any X11 operations
+    // This prevents the default X11 error handler from terminating the process
+    // when plugins trigger X11 errors (e.g., accessing destroyed windows)
+    install_x11_error_handler();
 
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();

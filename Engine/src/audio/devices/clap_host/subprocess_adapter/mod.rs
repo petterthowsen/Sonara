@@ -201,6 +201,39 @@ impl AudioDevice for SubprocessClapAdapter {
                 written,
                 input_slice.len()
             );
+
+            // Check if subprocess has crashed (buffer overflow is a symptom)
+            if let Some(process) = self.process_manager.get_process(&self.process_key) {
+                if let Ok(mut proc) = process.try_lock() {
+                    if !proc.is_alive() {
+                        error!(
+                            "Subprocess crashed for plugin {} (ch{}_dev{}), transitioning to failed state",
+                            self.device_id, self.channel_id, self.device_position
+                        );
+
+                        // Update loading state to Failed
+                        if let Ok(mut state) = self.loading_state.try_lock() {
+                            *state = LoadingState::Failed(format!(
+                                "Plugin subprocess crashed (process not alive)"
+                            ));
+
+                            // Notify UI of failure
+                            if let Some(ref tx) = self.status_tx {
+                                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                                    channel_id: self.channel_id as usize,
+                                    device_position: self.device_position,
+                                    state: "failed:subprocess crashed".to_string(),
+                                });
+                            }
+                        }
+
+                        // Pass through audio and return early
+                        let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
+                        outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+                        return;
+                    }
+                }
+            }
         }
 
         // TODO: Signal subprocess that audio is available (eventfd)

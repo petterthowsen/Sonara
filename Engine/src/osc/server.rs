@@ -1392,10 +1392,16 @@ impl OscServer {
                 // No need to send it to Godot
                 return;
             }
-            EngineStatus::PluginGuiClosed { .. } => {
+            EngineStatus::PluginGuiClosed {
+                channel_id,
+                device_position,
+            } => {
                 // GUI close is handled by the main loop with access to WindowManager
-                // No need to send it to Godot
-                return;
+                // But we also need to notify Godot so it can update UI state
+                (
+                    format!("/channel/{}/device/{}/gui/closed", channel_id, device_position),
+                    vec![],
+                )
             }
             EngineStatus::PluginScanComplete { count } => (
                 "/plugin/scan_complete".to_string(),

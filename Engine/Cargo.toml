@@ -61,3 +61,7 @@ libc = "0.2"
 # GUI window creation for embedded plugins
 winit = "0.30"
 raw-window-handle = "0.6"
+
+# X11 bindings for error handling (Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2.21", features = ["xlib"] }

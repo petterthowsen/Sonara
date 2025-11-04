@@ -13,6 +13,7 @@ signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}"
+signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
 
 
 ## ============================================================================
@@ -249,12 +250,14 @@ func connect_to_engine() -> void:
 	var param_count_addr = "/channel/%d/device/%d/param/count" % [channel_id, position]
 	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
 	var loading_state_addr = "/channel/%d/device/%d/loading_state" % [channel_id, position]
-	
+	var gui_closed_addr = "/channel/%d/device/%d/gui/closed" % [channel_id, position]
+
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
 	AudioEngineOSC.listen(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
+	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
 	
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
@@ -274,13 +277,15 @@ func disconnect_from_engine() -> void:
 	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
 	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
 	var loading_state_addr = "/channel/%d/device/%d/loading_state" % [channel_id, position]
-	
+	var gui_closed_addr = "/channel/%d/device/%d/gui/closed" % [channel_id, position]
+
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
 	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.unlisten(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
+	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 
 
 ## ============================================================================
@@ -312,12 +317,18 @@ func _on_loading_state_received(values: Array) -> void:
 		if loading_state != new_state:
 			loading_state = new_state
 			loading_state_changed.emit(loading_state)
-			
+
 			# Log state changes for debugging
 			if loading_state.begins_with("failed:"):
 				push_error("[DeviceInstance %s] Loading failed: %s" % [device.name, loading_state])
 			elif loading_state == "ready":
 				print("[DeviceInstance %s] Loading complete" % device.name)
+
+
+func _on_gui_closed_received(_values: Array) -> void:
+	"""Handle GUI closed notification from engine."""
+	print("[DeviceInstance %s] Plugin GUI closed by engine" % device.name)
+	plugin_gui_closed.emit()
 
 
 func _on_parameter_value_received_wildcard(values: Array, address: String) -> void:

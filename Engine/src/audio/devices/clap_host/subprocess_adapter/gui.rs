@@ -59,16 +59,34 @@ pub fn close_gui(
         .ok_or_else(|| "Plugin process not found".to_string())?;
 
     let mut process = process.lock().unwrap();
+
+    // Set a timeout for GUI close operations (plugins might take time to clean up)
+    process.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+
     process.send_command(PluginCommand::CloseGui)?;
 
-    match process.recv_response()? {
-        PluginResponse::GuiClosed => {
+    let result = match process.recv_response() {
+        Ok(PluginResponse::GuiClosed) => {
             info!("Closed GUI: {}", device_name);
             Ok(())
         }
-        PluginResponse::GuiError { error } => Err(error),
-        _ => Err("Unexpected response".to_string()),
-    }
+        Ok(PluginResponse::GuiError { error }) => Err(error),
+        Ok(_) => Err("Unexpected response".to_string()),
+        Err(e) => {
+            // If timeout or other error, still consider GUI closed to avoid blocking
+            // The subprocess will clean up the GUI when it processes the command
+            tracing::warn!(
+                "GUI close response timeout/error (non-fatal): {} - considering GUI closed",
+                e
+            );
+            Ok(())
+        }
+    };
+
+    // Reset timeout to default (no timeout)
+    let _ = process.set_read_timeout(None);
+
+    result
 }
 
 /// Check if plugin supports GUI
