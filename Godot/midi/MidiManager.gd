@@ -177,17 +177,35 @@ func refresh_devices():
 # INPUT HANDLING
 # ============================================================================
 
-func _unhandled_input(event: InputEvent):
+func _input(event: InputEvent):
 	## Handle virtual keyboard input actions and physical MIDI events.
+	## Use _input instead of _unhandled_input so keyboard events are processed
+	## even when UI buttons are focused (e.g., record arm button).
 
 	# Physical MIDI events
 	if event is InputEventMIDI:
 		handle_physical_midi_event(event)
 		return
 
-	if  virtual_keyboard_enabled:
+	if virtual_keyboard_enabled:
 		if event is InputEventKey and not event.is_echo():
-			handle_virtual_keyboard_action(event)
+			# Only process keyboard actions if they match our note actions
+			# This prevents interfering with other keyboard shortcuts
+			var is_keyboard_action = false
+			for action in ["keyboard_c3", "keyboard_c#3", "keyboard_d3", "keyboard_d#3", 
+					"keyboard_e3", "keyboard_f3", "keyboard_f#3", "keyboard_g3", 
+					"keyboard_g#3", "keyboard_a3", "keyboard_a#3", "keyboard_b3",
+					"keyboard_c4", "keyboard_c#4", "keyboard_d4", "keyboard_d#4",
+					"keyboard_transpose_up", "keyboard_transpose_down",
+					"keyboard_velocity_up", "keyboard_velocity_down"]:
+				if event.is_action(action):
+					is_keyboard_action = true
+					break
+			
+			if is_keyboard_action:
+				handle_virtual_keyboard_action(event)
+				# Don't accept the event - let UI handle it if needed
+				# But we've already processed it for MIDI
 
 
 func handle_physical_midi_event(event: InputEventMIDI):
@@ -207,7 +225,6 @@ func handle_physical_midi_event(event: InputEventMIDI):
 
 func handle_virtual_keyboard_action(event: InputEventKey):
 	## Process virtual keyboard input actions.
-	logger.info("Handling virtual keyboard action: %s" % event.as_text())
 
 	# Transpose controls
 	if event.is_action_pressed("keyboard_transpose_up"):
@@ -275,8 +292,6 @@ func handle_virtual_keyboard_action(event: InputEventKey):
 
 func handle_virtual_note(note_name: String, pressed: bool):
 	## Handle virtual keyboard note press/release.
-
-	logger.info("Handling virtual note: %s" % note_name)
 	
 	# Convert note name to MIDI number using Midi utility
 	var base_note = Midi.note_name_to_midi(note_name.to_upper())
@@ -313,8 +328,6 @@ func emit_virtual_midi_note(note: int, velocity: int, is_note_on: bool):
 		"velocity": velocity
 	}
 
-	logger.info("Emitting virtual MIDI note: %d %d %s" % [note, velocity, "on" if is_note_on else "off"])
-
 	# Route to armed channels (same as physical MIDI)
 	route_virtual_midi_event(midi_event)
 
@@ -325,9 +338,6 @@ func emit_virtual_midi_note(note: int, velocity: int, is_note_on: bool):
 
 func route_midi_event(device_id: int, event: InputEventMIDI):
 	## Route MIDI event to armed channels matching device routing.
-	
-	logger.info("Routing MIDI event: %d" % device_id)
-
 	# Get all armed channels
 	var project = Sonara.editor.project
 	if not project:
@@ -335,7 +345,6 @@ func route_midi_event(device_id: int, event: InputEventMIDI):
 
 	for channel in project.channels:
 		if not channel.record_armed:
-			logger.info("Channel %d is not armed, skipping" % channel.id)
 			continue
 
 		# Check device routing
@@ -346,17 +355,11 @@ func route_midi_event(device_id: int, event: InputEventMIDI):
 			accepts_device = true
 
 		if accepts_device:
-			logger.info("Sending MIDI event to channel %d" % channel.id)
 			send_midi_to_channel(channel.id, event)
-		else:
-			logger.info("Channel %d does not accept device %d, skipping" % [channel.id, device_id])
 
 
 func route_virtual_midi_event(event: Dictionary):
 	## Route virtual MIDI event to armed channels.
-
-	logger.info("Routing virtual MIDI event")
-
 	# Get all armed channels
 	var project = Sonara.editor.project
 	if not project:
@@ -380,9 +383,6 @@ func route_virtual_midi_event(event: Dictionary):
 func send_midi_to_channel(channel_id: int, event):
 	## Send MIDI event to engine via OSC.
 	## Accepts both InputEventMIDI (physical devices) and Dictionary (virtual keyboard).
-
-	logger.info("Sending MIDI event to channel %d" % channel_id)
-
 	# Get microsecond timestamp
 	var timestamp_us = int(Time.get_ticks_usec())
 

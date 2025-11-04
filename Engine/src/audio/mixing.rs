@@ -215,7 +215,21 @@ pub fn mix_and_output(
     for channel in state.channels.values_mut() {
         // Skip bus channels - they'll be processed in Phase 4 after receiving routed audio
         if bus_channel_ids.contains(&channel.id) {
+            static mut BUS_SKIP_LOG: u32 = 0;
+            unsafe {
+                BUS_SKIP_LOG += 1;
+                if BUS_SKIP_LOG <= 5 {
+                    info!("⏭️ Skipping channel {} (is a bus channel)", channel.id);
+                }
+            }
             continue;
+        }
+        static mut PROCESS_LOG: u32 = 0;
+        unsafe {
+            PROCESS_LOG += 1;
+            if PROCESS_LOG <= 5 {
+                info!("🔧 Processing device chain for channel {} (devices={})", channel.id, channel.devices.len());
+            }
         }
         let sleep_changes = channel.process_device_chain(sample_count);
 

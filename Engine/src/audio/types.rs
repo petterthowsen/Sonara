@@ -703,15 +703,29 @@ impl Channel {
         // Send scheduled MIDI events to all devices before processing audio
         // MIDI events wake devices immediately
         if !self.scheduled_midi_events.is_empty() {
+            static mut MIDI_LOG_COUNT: u32 = 0;
+            unsafe {
+                MIDI_LOG_COUNT += 1;
+                if MIDI_LOG_COUNT <= 10 {
+                    info!("🎹 Channel {} sending {} MIDI events to {} devices",
+                        self.id, self.scheduled_midi_events.len(), self.devices.len());
+                }
+            }
             for event in &self.scheduled_midi_events {
                 use super::midi_types::MidiMessageType;
 
                 match event.message_type {
                     MidiMessageType::NoteOn => {
                         let is_note_on = event.velocity > 0;
-                        for device in self.devices.iter_mut() {
+                        for (idx, device) in self.devices.iter_mut().enumerate() {
+                            let was_sleeping = device.is_sleeping();
                             device.mark_activity(); // Wake device on MIDI input
                             device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
+                            unsafe {
+                                if MIDI_LOG_COUNT <= 10 && was_sleeping {
+                                    info!("  🌅 Device {} was sleeping, now waking on MIDI", idx);
+                                }
+                            }
                         }
                     }
                     MidiMessageType::NoteOff => {
@@ -767,6 +781,14 @@ impl Channel {
         for (idx, device) in self.devices.iter_mut().enumerate() {
             // Check if device is sleeping - skip expensive processing if so
             if device.is_sleeping() {
+                static mut SLEEP_LOG_COUNT: u32 = 0;
+                unsafe {
+                    SLEEP_LOG_COUNT += 1;
+                    if SLEEP_LOG_COUNT <= 10 {
+                        info!("🛌 Device {} on channel {} is SLEEPING - skipping processing (midi_events={})",
+                            idx, self.id, self.scheduled_midi_events.len());
+                    }
+                }
                 // Sleeping device: pass audio through unchanged for effects, silence for instruments
                 if idx % 2 == 0 {
                     // Copy input to output (pass through)
@@ -775,7 +797,9 @@ impl Channel {
                     // Copy input to output (pass through)
                     self.device_input_buffer[..interleaved_count].copy_from_slice(&self.device_output_buffer[..interleaved_count]);
                 }
-                // Skip sleep state update for sleeping devices - they stay asleep until marked active
+                // BUG: Sleeping devices never update sleep state, so they can't detect if they should stay awake
+                // This is intentional - devices wake ONLY via mark_activity() from MIDI/params
+                // They don't wake from audio activity alone
                 continue;
             }
 
