@@ -42,6 +42,7 @@ var _aux_view: DeviceView = null
 var _large_view: DeviceView = null
 var _large_open: bool = false
 
+signal request_context_menu()
 
 func _ready() -> void:
 	# make parameters box wider
@@ -66,6 +67,13 @@ func _ready() -> void:
 	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			request_context_menu.emit()
 
 
 ## This should not really happen.
@@ -268,7 +276,9 @@ func _on_file_selected(path: String) -> void:
 # ============================================================================
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data (not used for this panel)."""
+	"""Return drag data for reordering - returns DeviceInstance."""
+	if device:
+		return device
 	return null
 
 

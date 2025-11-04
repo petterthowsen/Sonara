@@ -120,6 +120,10 @@ func _ready():
 	# Disable processing until playback starts
 	set_process(false)
 	
+	# ensure device lane is hidden
+	device_lane.hide()
+	seconday_panel.hide()
+
 	# Initialize a new, blank project and open it
 	var new_project = Project.new()
 	new_project.project_name = "Untitled"
@@ -454,7 +458,11 @@ func toggle_device_lane():
 		device_lane.hide()
 		seconday_panel.hide()
 	else:
-		# show
+		# show - fail if no channel is focused
+		if focused_channel == null:
+			print("[Editor] Cannot open device lane: no channel is focused")
+			return
+		
 		device_lane.show()
 		
 		device_lane.bind_to_channel(focused_channel)

@@ -1,4 +1,4 @@
-[gd_scene load_steps=20 format=3 uid="uid://ckggccuur2ds"]
+[gd_scene load_steps=18 format=3 uid="uid://ckggccuur2ds"]
 
 [ext_resource type="Theme" uid="uid://c77m063o570pp" path="res://assets/Sonara_Theme.tres" id="1_10umj"]
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="2_ribbq"]
@@ -8,9 +8,8 @@
 [ext_resource type="Script" uid="uid://bfx70o648n4b8" path="res://editor/WindowButtons.gd" id="7_30oug"]
 [ext_resource type="PackedScene" uid="uid://dwx58rtumvnkj" path="res://arranger/Arranger.tscn" id="8_lsr71"]
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="9_l57s6"]
+[ext_resource type="PackedScene" uid="uid://iq3vudg11v8b" path="res://devices/device_lane/DeviceLane.tscn" id="10_2m1gq"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="10_kc5d4"]
-[ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://devices/device_lane/DeviceLane.gd" id="11_56u47"]
-[ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="12_svtux"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
@@ -79,11 +78,6 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ktvss"]
-bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
-corner_radius_top_left = 3
-corner_radius_bottom_left = 3
 
 [node name="Editor" type="MarginContainer"]
 anchors_preset = 15
@@ -367,53 +361,14 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="Secondary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter"]
-visible = false
 layout_mode = 2
 size_flags_vertical = 3
 size_flags_stretch_ratio = 0.7
 theme_type_variation = &"PrimaryPanel"
 theme_override_styles/panel = SubResource("StyleBoxFlat_10umj")
 
-[node name="DeviceLane" type="HBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary"]
-custom_minimum_size = Vector2(0, 76.585)
+[node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" instance=ExtResource("10_2m1gq")]
 layout_mode = 2
-theme_override_constants/separation = 0
-script = ExtResource("11_56u47")
-
-[node name="Header" type="Panel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane"]
-custom_minimum_size = Vector2(42, 0)
-layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_ktvss")
-
-[node name="Label" type="Control" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane/Header"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-script = ExtResource("12_svtux")
-text = "LABEL"
-font_size = 20
-
-[node name="Content" type="MarginContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 8
-
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane/Content"]
-layout_mode = 2
-follow_focus = true
-horizontal_scroll_mode = 4
-vertical_scroll_mode = 0
-
-[node name="Devices" type="HBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane/Content/ScrollContainer"]
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 16
 
 [node name="BoxContainer" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit"]
 layout_mode = 2

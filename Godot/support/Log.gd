@@ -26,12 +26,11 @@ func _init(prefix : String, ptc: bool = true):
 	print_to_console = ptc
 
 static func make(prefix: String, ptc := true) -> Log:
-	if loggers.has(prefix):
-		push_error("[color=red][Log] cannot make log for ", prefix, ". Already exists![/color]")
+	if not loggers.has(prefix):
+		var logger = Log.new(prefix, ptc)
+		loggers[prefix] = logger
 	
-	var logger = Log.new(prefix, ptc)
-	Log.loggers[prefix] = logger
-	return logger
+	return loggers[prefix]
 
 func debug(...message: Array[Variant]):
 	debug_messages.append(" ".join(message))

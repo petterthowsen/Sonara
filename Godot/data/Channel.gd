@@ -37,6 +37,7 @@ signal send_changed(target_channel_id: int, send_config: SendConfig)
 # Device chain signals
 signal device_added(device_instance: DeviceInstance, position: int)
 signal device_removed(position: int, device_id: String)
+signal device_moved(from_position: int, to_position: int)
 signal device_parameter_changed(position: int, param_id: int, value: float)
 signal device_parameters_updated(position: int)  # Emitted when plugin parameters are loaded
 
@@ -612,6 +613,45 @@ func remove_device(position: int) -> void:
 
 	device_removed.emit(position, device_id)
 	print("[Channel %d] Device removed from position %d: %s" % [id, position, device_id])
+
+
+func move_device(from_position: int, to_position: int) -> void:
+	## Move a device from one position to another in the chain.
+	##
+	## Args:
+	##   from_position: Current position in device chain (0-based)
+	##   to_position: Target position in device chain (0-based)
+	if from_position < 0 or from_position >= devices.size():
+		print("[Channel %d] Invalid from_position: %d" % [id, from_position])
+		return
+
+	if to_position < 0 or to_position >= devices.size():
+		print("[Channel %d] Invalid to_position: %d" % [id, to_position])
+		return
+
+	if from_position == to_position:
+		print("[Channel %d] Device already at position %d, no move needed" % [id, from_position])
+		return
+
+	# Extract device from old position
+	var device_instance = devices[from_position]
+	devices.remove_at(from_position)
+
+	# Insert at new position
+	devices.insert(to_position, device_instance)
+
+	# Update position indices for affected devices
+	var min_pos = min(from_position, to_position)
+	var max_pos = max(from_position, to_position)
+	for i in range(min_pos, max_pos + 1):
+		devices[i].position = i
+
+	# Sync to engine
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/move_device" % id, [from_position, to_position])
+
+	device_moved.emit(from_position, to_position)
+	print("[Channel %d] Device moved from position %d to position %d: %s" % [id, from_position, to_position, device_instance.device.name])
 
 
 func get_device(position: int) -> DeviceInstance:

@@ -74,8 +74,7 @@ var accepts_data: Callable = func(_data): return true  # Override to filter data
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	_update_size()
-	if not always_show:
-		hide()  # Hidden by default unless always_show is true
+	visible = always_show
 
 
 func _update_size() -> void:

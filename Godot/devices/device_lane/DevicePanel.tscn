@@ -76,7 +76,7 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="Device" type="PanelContainer"]
-offset_right = 179.0
+offset_right = 310.0
 offset_bottom = 191.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
@@ -87,6 +87,7 @@ theme_override_constants/separation = 0
 
 [node name="Header" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
+mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_khhpn")
 
 [node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
@@ -146,6 +147,7 @@ text = "L"
 [node name="Content" type="PanelContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
+mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_v0u3q")
 
 [node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/Content"]
@@ -157,6 +159,8 @@ size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
 
 [node name="Parameters" type="ScrollContainer" parent="VBoxContainer/Content/HBoxContainer/ContentLeft"]
+visible = false
+custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 follow_focus = true
 horizontal_scroll_mode = 0

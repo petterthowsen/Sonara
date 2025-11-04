@@ -254,8 +254,8 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		# Single value - wrap in array
 		args = [values]
 
-	if not address.contains("/peak") and not address.contains("/status") and not address.contains("/log"):
-		logger.info("received OSC message: ", address, " args=", args)
+	#if not address.contains("/peak") and not address.contains("/status") and not address.contains("/log"):
+	#	logger.info("received OSC message: ", address, " args=", args)
 
 	if address.begins_with("/audiofile"):
 		logger.info("recv ", address, " args=", args)

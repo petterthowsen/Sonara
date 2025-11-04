@@ -1,0 +1,43 @@
+[gd_scene load_steps=4 format=3 uid="uid://boiwqcg0flbqw"]
+
+[ext_resource type="Script" uid="uid://cqft8o733hujw" path="res://devices/DeviceContextMenu.gd" id="1_81od0"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_j6e1k"]
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_j6e1k"]
+content_margin_left = 4.0
+content_margin_top = 0.0
+content_margin_right = 4.0
+content_margin_bottom = 0.0
+color = Color(0.5, 0.5, 0.5, 1)
+grow_end = -1.0
+
+[node name="DeviceContextMenu" type="PopupPanel"]
+oversampling_override = 1.0
+size = Vector2i(100, 106)
+visible = true
+script = ExtResource("1_81od0")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 4.0
+offset_right = -2.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 2
+
+[node name="Label" parent="VBoxContainer" instance=ExtResource("2_j6e1k")]
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+value_type = 1
+disabled = true
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_j6e1k")
+
+[node name="Remove" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Remove"

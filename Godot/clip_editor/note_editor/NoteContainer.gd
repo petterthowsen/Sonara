@@ -175,7 +175,18 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	"""Bind to multiple clip instances (track-mode)."""
 	logger.info("bind_to_clips called (multi-clip mode)")
 	logger.info("  - %d clip instances on track: %s" % [instances.size(), owner_track.name if owner_track else "null"])
-
+	
+	if clip_instances.size() == instances.size():
+		# already bound?
+		var bound = true
+		for i in range(clip_instances.size()):
+			if instances[i] != clip_instances[i]:
+				bound = false
+		
+		if bound:
+			logger.info("  - clip instances already bound!")
+			return
+	
 	# Unbind previous state
 	if clip_instance or multi_clip_mode:
 		unbind()

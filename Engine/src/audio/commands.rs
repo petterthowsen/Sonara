@@ -211,6 +211,11 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         position: usize,
     },
+    MoveDevice {
+        channel_id: ChannelId,
+        from_position: usize,
+        to_position: usize,
+    },
     ClearChannelDevices {
         channel_id: ChannelId,
     },
@@ -1464,6 +1469,32 @@ pub fn process_command(
                 }
             } else {
                 warn!("Channel {} not found for remove device", channel_id);
+            }
+        }
+        AudioCommand::MoveDevice {
+            channel_id,
+            from_position,
+            to_position,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                let device_count = channel.devices.len();
+                if from_position < device_count && to_position < device_count {
+                    // Remove device from old position
+                    let device = channel.devices.remove(from_position);
+                    // Insert at new position
+                    channel.devices.insert(to_position, device);
+                    info!(
+                        "Device moved in channel {} from position {} to position {}",
+                        channel_id, from_position, to_position
+                    );
+                } else {
+                    warn!(
+                        "Invalid device positions (from: {}, to: {}) for channel {} (device count: {})",
+                        from_position, to_position, channel_id, device_count
+                    );
+                }
+            } else {
+                warn!("Channel {} not found for move device", channel_id);
             }
         }
         AudioCommand::ClearChannelDevices { channel_id } => {

@@ -1,0 +1,63 @@
+[gd_scene load_steps=6 format=3 uid="uid://iq3vudg11v8b"]
+
+[ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://devices/device_lane/DeviceLane.gd" id="1_2f6nw"]
+[ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="2_oh1x1"]
+[ext_resource type="PackedScene" uid="uid://brth8uue4ow8b" path="res://devices/device_lane/DevicePanel.tscn" id="3_m4540"]
+[ext_resource type="PackedScene" uid="uid://boiwqcg0flbqw" path="res://devices/DeviceContextMenu.tscn" id="3_oh1x1"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ktvss"]
+bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
+corner_radius_top_left = 3
+corner_radius_bottom_left = 3
+
+[node name="DeviceLane" type="HBoxContainer"]
+custom_minimum_size = Vector2(0, 76.585)
+offset_right = 1280.0
+offset_bottom = 207.0
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+script = ExtResource("1_2f6nw")
+
+[node name="Header" type="Panel" parent="."]
+custom_minimum_size = Vector2(42, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ktvss")
+
+[node name="Label" type="Control" parent="Header"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_oh1x1")
+text = "LABEL"
+font_size = 20
+
+[node name="Content" type="MarginContainer" parent="."]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="ScrollContainer" type="ScrollContainer" parent="Content"]
+layout_mode = 2
+follow_focus = true
+horizontal_scroll_mode = 4
+vertical_scroll_mode = 0
+
+[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="Device" parent="Content/ScrollContainer/Devices" instance=ExtResource("3_m4540")]
+layout_mode = 2
+
+[node name="Device2" parent="Content/ScrollContainer/Devices" instance=ExtResource("3_m4540")]
+layout_mode = 2
+
+[node name="DeviceContextMenu" parent="." instance=ExtResource("3_oh1x1")]
+visible = false

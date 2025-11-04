@@ -114,6 +114,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 |---------|------|-------------|
 | `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add device to channel (type: "builtin"/"clap"/"lv2"/"vst3", file: path for plugins, empty for built-ins) |
 | `/channel/{id}/remove_device` | `i:position` | Remove device from channel |
+| `/channel/{id}/move_device` | `i:from_position, i:to_position` | Move device from one position to another (preserves all state) |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{position}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter (floats for continuous; int index for enums/bools) |
 | `/channel/{id}/device/{position}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |

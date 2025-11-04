@@ -35,6 +35,11 @@ const CompactParameterControlScene = preload("res://devices/compact/CompactParam
 var device_instance: DeviceInstance = null
 var parameter_controls: Array[CompactParameterControl] = []
 
+# ============================================================================
+# SIGNALS
+# ============================================================================
+signal request_context_menu()
+
 
 # ============================================================================
 # LIFECYCLE
@@ -57,6 +62,8 @@ func _gui_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.double_click:
 			_on_double_clicked()
 			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			request_context_menu.emit()
 
 
 # ============================================================================
@@ -214,7 +221,9 @@ func _on_double_clicked() -> void:
 # ============================================================================
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data (not used for this panel)."""
+	"""Return drag data for reordering - returns DeviceInstance."""
+	if device_instance:
+		return device_instance
 	return null
 
 

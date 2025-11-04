@@ -1095,6 +1095,21 @@ impl OscServer {
                     })?;
                 }
             }
+            ["channel", channel_id_str, "move_device"] => {
+                if let (Ok(channel_id), Some(OscType::Int(from_pos)), Some(OscType::Int(to_pos))) =
+                    (channel_id_str.parse::<usize>(), args.get(0), args.get(1))
+                {
+                    info!(
+                        "Move device in channel {} from position {} to position {}",
+                        channel_id, from_pos, to_pos
+                    );
+                    command_tx.send(AudioCommand::MoveDevice {
+                        channel_id,
+                        from_position: *from_pos as usize,
+                        to_position: *to_pos as usize,
+                    })?;
+                }
+            }
             ["channel", channel_id_str, "clear_devices"] => {
                 if let Ok(channel_id) = channel_id_str.parse::<usize>() {
                     info!("Clear all devices from channel {}", channel_id);
