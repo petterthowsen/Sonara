@@ -45,7 +45,7 @@ var _syncing_split: bool = false
 @onready var ruler: Ruler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler
 
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
-@onready var playhead: ColorRect = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
+@onready var playhead: PlayheadLine = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
 @onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/TimelineScrollBar
 
 # ArrangerBottom
@@ -138,6 +138,8 @@ func _ready():
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	Sonara.editor.playhead_moved.connect(_on_playhead_moved)
 	Sonara.editor.time_signature_changed.connect(_on_time_signature_changed)
+	Sonara.editor.playback_started.connect(_on_editor_playback_started)
+	Sonara.editor.playback_stopped.connect(_on_editor_playback_stopped)
 	
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
@@ -340,6 +342,13 @@ func _on_time_signature_changed(numerator: int, denominator: int) -> void:
 	
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
+
+
+func _on_editor_playback_started():
+	playhead.is_playing = true
+
+func _on_editor_playback_stopped():
+	playhead.is_playing = false
 
 
 func _gui_input(event: InputEvent) -> void:

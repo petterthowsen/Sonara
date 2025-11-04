@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://dwx58rtumvnkj"]
+[gd_scene load_steps=15 format=3 uid="uid://dwx58rtumvnkj"]
 
 [ext_resource type="Script" uid="uid://3rv0d2u2oata" path="res://arranger/Arranger.gd" id="1_bh1i7"]
 [ext_resource type="PackedScene" uid="uid://cx5s8jbwq0dt2" path="res://arranger/tracklist/TrackList.tscn" id="1_hqaxx"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" uid="uid://cm8eg3gptk2u1" path="res://components/RealTimeRuler.gd" id="3_t0y6b"]
 [ext_resource type="PackedScene" uid="uid://cyvwigrev1rtt" path="res://arranger/timeline/Timeline.tscn" id="4_dtx23"]
 [ext_resource type="Script" uid="uid://3yoesqgv0tuw" path="res://components/TimelineScrollBar.gd" id="5_nqsw4"]
+[ext_resource type="Script" uid="uid://c1ko1kpn7ixej" path="res://arranger/Playhead.gd" id="6_jotmv"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -59,6 +60,14 @@ corner_radius_top_right = 3
 corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
+
+[sub_resource type="Gradient" id="Gradient_jotmv"]
+offsets = PackedFloat32Array(0, 0.48630136, 0.92009133, 1)
+colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 0.07450981, 1, 1, 1, 0.2784314, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_6tuub"]
+gradient = SubResource("Gradient_jotmv")
+width = 16
 
 [node name="Arranger" type="VBoxContainer"]
 anchors_preset = 15
@@ -175,15 +184,18 @@ theme_override_constants/separation = 0
 layout_mode = 2
 mouse_filter = 2
 
-[node name="Playhead" type="ColorRect" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay"]
+[node name="Playhead" type="Control" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay"]
 custom_minimum_size = Vector2(1, 0)
 layout_mode = 1
 anchors_preset = 9
 anchor_bottom = 1.0
+offset_right = 2.0
 grow_vertical = 2
 size_flags_horizontal = 0
 mouse_filter = 2
-color = Color(1, 1, 1, 0.48235294)
+script = ExtResource("6_jotmv")
+color = Color(1, 1, 1, 0.5686275)
+playing_texture = SubResource("GradientTexture1D_6tuub")
 
 [node name="TimelineScrollBar" type="Control" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay"]
 z_index = 1
