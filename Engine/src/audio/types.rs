@@ -687,29 +687,42 @@ impl Channel {
 
     /// Process channel audio through device chain (instruments or effects)
     /// Devices process on interleaved stereo buffers with alternating input/output
-    pub fn process_device_chain(&mut self, sample_count: usize) {
+    /// Returns Vec of (device_position, is_sleeping) for devices whose sleep state changed
+    pub fn process_device_chain(&mut self, sample_count: usize) -> Vec<(usize, bool)> {
         if self.devices.is_empty() {
-            return;
+            return vec![];
         }
 
-        // Send scheduled MIDI events to all devices before processing audio
-        for event in &self.scheduled_midi_events {
-            use super::midi_types::MidiMessageType;
+        // Track sleep state changes
+        let mut sleep_state_changes: Vec<(usize, bool)> = Vec::new();
 
-            match event.message_type {
-                MidiMessageType::NoteOn => {
-                    let is_note_on = event.velocity > 0;
-                    for device in self.devices.iter_mut() {
-                        device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
+        // Check for audio activity in input buffer (for sleep detection)
+        let has_input_activity = super::devices::has_audio_signal(&self.buffer_left[..sample_count])
+            || super::devices::has_audio_signal(&self.buffer_right[..sample_count]);
+
+        // Send scheduled MIDI events to all devices before processing audio
+        // MIDI events wake devices immediately
+        if !self.scheduled_midi_events.is_empty() {
+            for event in &self.scheduled_midi_events {
+                use super::midi_types::MidiMessageType;
+
+                match event.message_type {
+                    MidiMessageType::NoteOn => {
+                        let is_note_on = event.velocity > 0;
+                        for device in self.devices.iter_mut() {
+                            device.mark_activity(); // Wake device on MIDI input
+                            device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
+                        }
                     }
-                }
-                MidiMessageType::NoteOff => {
-                    for device in self.devices.iter_mut() {
-                        device.send_midi_event(event.note, 0, false, event.frame_offset);
+                    MidiMessageType::NoteOff => {
+                        for device in self.devices.iter_mut() {
+                            device.mark_activity(); // Wake device on MIDI input
+                            device.send_midi_event(event.note, 0, false, event.frame_offset);
+                        }
                     }
-                }
-                _ => {
-                    // TODO: Handle other MIDI message types (CC, aftertouch, etc.)
+                    _ => {
+                        // TODO: Handle other MIDI message types (CC, aftertouch, etc.)
+                    }
                 }
             }
         }
@@ -752,6 +765,21 @@ impl Channel {
 
         // Process through device chain, alternating between buffers
         for (idx, device) in self.devices.iter_mut().enumerate() {
+            // Check if device is sleeping - skip expensive processing if so
+            if device.is_sleeping() {
+                // Sleeping device: pass audio through unchanged for effects, silence for instruments
+                if idx % 2 == 0 {
+                    // Copy input to output (pass through)
+                    self.device_output_buffer[..interleaved_count].copy_from_slice(&self.device_input_buffer[..interleaved_count]);
+                } else {
+                    // Copy input to output (pass through)
+                    self.device_input_buffer[..interleaved_count].copy_from_slice(&self.device_output_buffer[..interleaved_count]);
+                }
+                // Skip sleep state update for sleeping devices - they stay asleep until marked active
+                continue;
+            }
+
+            // Device is awake - process audio normally
             if idx % 2 == 0 {
                 // Input from device_input_buffer, output to device_output_buffer
                 device.process_block(
@@ -766,6 +794,21 @@ impl Channel {
                     &mut self.device_input_buffer,
                     sample_count,
                 );
+            }
+
+            // Check output for activity
+            let output_buffer = if idx % 2 == 0 {
+                &self.device_output_buffer[..interleaved_count]
+            } else {
+                &self.device_input_buffer[..interleaved_count]
+            };
+            let has_output_activity = super::devices::has_audio_signal(output_buffer);
+
+            // Update sleep state based on input + output activity
+            let has_activity = has_input_activity || has_output_activity;
+            if device.update_sleep_state(has_activity) {
+                // Sleep state changed - record it
+                sleep_state_changes.push((idx, device.is_sleeping()));
             }
         }
 
@@ -816,6 +859,9 @@ impl Channel {
                 }
             }
         }
+
+        // Return sleep state changes for status events
+        sleep_state_changes
     }
 
     /// Send MIDI event to the first device (instrument) only with a frame offset
@@ -828,6 +874,7 @@ impl Channel {
         frame_offset: usize,
     ) {
         if let Some(device) = self.devices.first_mut() {
+            device.mark_activity(); // Wake device on MIDI from clips
             device.send_midi_event(note, velocity, is_note_on, frame_offset);
         }
     }

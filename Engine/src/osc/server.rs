@@ -1661,6 +1661,14 @@ impl OscServer {
                 format!("/channel/{}/device/{}/data", channel_id, device_position),
                 vec![OscType::String(data_type), OscType::Blob(data)],
             ),
+            EngineStatus::DeviceSleepStatus {
+                channel_id,
+                device_position,
+                is_sleeping,
+            } => (
+                format!("/channel/{}/device/{}/sleep", channel_id, device_position),
+                vec![OscType::Int(if is_sleeping { 1 } else { 0 })],
+            ),
         };
 
         let msg = OscMessage { addr, args };

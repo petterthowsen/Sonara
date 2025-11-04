@@ -206,6 +206,27 @@ var height: int:
 		set_height(value)
 
 
+func set_mute(value: bool) -> void:
+	"""Set mute state. If linked to a channel, delegates to channel's set_mute."""
+	muted = value
+	if _linked_channel:
+		_linked_channel.set_mute(value)
+
+
+func set_solo(value: bool) -> void:
+	"""Set solo state. If linked to a channel, delegates to channel's set_solo."""
+	solo = value
+	if _linked_channel:
+		_linked_channel.set_solo(value)
+
+
+func set_armed(value: bool) -> void:
+	"""Set record arm state. If linked to a channel, delegates to channel's set_record_armed."""
+	armed = value
+	if _linked_channel:
+		_linked_channel.set_record_armed(value)
+
+
 # ============================================================================
 # CHANNEL LINKING
 # ============================================================================
@@ -243,6 +264,11 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 			if name_by_channel:
 				_name = new_channel.name
 				name_changed.emit(_name)
+			
+			# Sync mute/solo/armed state TO channel (track state is authoritative)
+			new_channel.set_mute(muted)
+			new_channel.set_solo(solo)
+			new_channel.set_record_armed(armed)
 		else:
 			_linked_channel = null
 	else:

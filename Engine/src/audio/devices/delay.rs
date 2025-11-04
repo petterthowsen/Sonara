@@ -18,7 +18,7 @@ pub struct DelayDevice {
     // Parameters
     delay_ms: f32,
     wet_amount: f32, // 0.0 = dry only, 1.0 = 100% wet
-    feedback: f32,   // 0.0-0.99 (internal, not exposed as parameter)
+    feedback: f32,   // 0.0-0.99
 
     // Lifecycle state
     is_active: bool,
@@ -55,6 +55,10 @@ impl DelayDevice {
 
     pub fn set_wet_amount(&mut self, wet: f32) {
         self.wet_amount = wet.clamp(0.0, 1.0);
+    }
+
+    pub fn set_feedback(&mut self, feedback: f32) {
+        self.feedback = feedback.clamp(0.0, 0.99);
     }
 }
 
@@ -154,6 +158,10 @@ impl AudioDevice for DelayDevice {
                 // Wet amount: 0-1 directly (linear)
                 self.set_wet_amount(value);
             }
+            2 => {
+                // Feedback: 0-0.99 directly (linear)
+                self.set_feedback(value);
+            }
             _ => {}
         }
     }
@@ -167,6 +175,7 @@ impl AudioDevice for DelayDevice {
                 Some(normalized.clamp(0.0, 1.0))
             }
             1 => Some(self.wet_amount),
+            2 => Some(self.feedback),
             _ => None,
         }
     }
@@ -208,6 +217,18 @@ impl AudioDevice for DelayDevice {
                 min: 0.0,
                 max: 1.0,
                 default: 0.5,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
+            },
+            ParamInfo {
+                id: 2,
+                name: "Feedback".to_string(),
+                unit: String::new(),
+                min: 0.0,
+                max: 0.99,
+                default: 0.6,
                 is_automation_safe: true,
                 param_type: ParamType::Float,
                 syncable: true,

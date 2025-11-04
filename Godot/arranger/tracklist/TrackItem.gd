@@ -312,15 +312,15 @@ func _update_nesting_indent() -> void:
 
 func _on_arm_toggled(pressed: bool) -> void:
 	if track:
-		track.armed = pressed
+		track.set_armed(pressed)
 
 func _on_solo_toggled(pressed: bool) -> void:
 	if track:
-		track.solo = pressed
+		track.set_solo(pressed)
 
 func _on_mute_toggled(pressed: bool) -> void:
 	if track:
-		track.muted = pressed
+		track.set_mute(pressed)
 
 
 func _on_label_value_changed(new_value: String) -> void:
@@ -353,7 +353,7 @@ func _on_channel_volume_changed(db_volume: float) -> void:
 	volumeter.set_volume_no_signal(db_volume)
 
 
-func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:
+func _on_channel_peak_updated(peak_left: float, peak_right: float, _rms_left: float, _rms_right: float) -> void:
 	"""Channel peak levels updated - update volumeter meter display."""
 	if volumeter == null:
 		return

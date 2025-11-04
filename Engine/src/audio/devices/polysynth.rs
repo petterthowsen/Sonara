@@ -162,6 +162,9 @@ pub struct PolySynthDevice {
     is_active: bool,
     is_enabled: bool,
 
+    // Sleep state (CPU optimization)
+    sleep_state: super::DeviceSleepState,
+
     // Queued MIDI for frame-accurate scheduling within next block
     queued_midi: Vec<(usize, u8, u8, bool)>,
 
@@ -195,6 +198,7 @@ impl PolySynthDevice {
             params_dirty: true,
             is_active: true,
             is_enabled: true,
+            sleep_state: super::DeviceSleepState::new(),
             queued_midi: Vec::with_capacity(128),
             voice_buffer: Vec::with_capacity(4096),
             temp_buffer: Vec::with_capacity(4096),
@@ -391,6 +395,7 @@ impl AudioDevice for PolySynthDevice {
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         self.params_dirty = true;
+        self.sleep_state.mark_activity(); // Wake on parameter change
         match param_id {
             0 => {
                 // Waveform A (0-1.0 mapped to 0-3)
@@ -689,6 +694,20 @@ impl AudioDevice for PolySynthDevice {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
+    }
+
+    // === Sleep/Wake System ===
+
+    fn is_sleeping(&self) -> bool {
+        self.sleep_state.is_sleeping()
+    }
+
+    fn mark_activity(&mut self) {
+        self.sleep_state.mark_activity();
+    }
+
+    fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
+        self.sleep_state.check_activity(has_audio_activity)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

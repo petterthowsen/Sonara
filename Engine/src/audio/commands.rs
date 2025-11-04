@@ -448,6 +448,13 @@ pub enum EngineStatus {
         data_type: String, // "spectrum", "oscilloscope", "phase", etc.
         data: Vec<u8>,     // Binary payload (device-specific format)
     },
+
+    // Device sleep/wake status (CPU optimization)
+    DeviceSleepStatus {
+        channel_id: ChannelId,
+        device_position: usize,
+        is_sleeping: bool, // true = device sleeping (saving CPU), false = device active
+    },
 }
 
 impl EngineStatus {
@@ -617,6 +624,7 @@ pub fn process_command(
             // Reset all channels and tracks
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
+                channel.scheduled_midi_events.clear();
                 for device in &mut channel.devices {
                     device.reset();
                 }

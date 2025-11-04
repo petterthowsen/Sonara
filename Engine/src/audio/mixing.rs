@@ -217,7 +217,16 @@ pub fn mix_and_output(
         if bus_channel_ids.contains(&channel.id) {
             continue;
         }
-        channel.process_device_chain(sample_count);
+        let sleep_changes = channel.process_device_chain(sample_count);
+
+        // Emit sleep state change events
+        for (device_pos, is_sleeping) in sleep_changes {
+            let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
+                channel_id: channel.id,
+                device_position: device_pos,
+                is_sleeping,
+            });
+        }
 
         // Check for pending parameter changes from CLAP plugins (GUI/modulation changes)
         // Note: Bus channels will have their parameters checked in Phase 4
@@ -703,7 +712,16 @@ pub fn mix_and_output(
 
                 // Process the bus's effect chain on the accumulated routed audio
                 // Effects (like delay) should process the mixed audio
-                bus_ch.process_device_chain(sample_count);
+                let sleep_changes = bus_ch.process_device_chain(sample_count);
+
+                // Emit sleep state change events
+                for (device_pos, is_sleeping) in sleep_changes {
+                    let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
+                        channel_id: bus_id,
+                        device_position: device_pos,
+                        is_sleeping,
+                    });
+                }
 
                 if should_log_routing {
                     let post_device_peak_l = bus_ch
