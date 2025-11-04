@@ -29,6 +29,10 @@ signal solo_changed(value: bool)
 signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
 
+# MIDI signals
+signal midi_input_device_changed(device_id: int)
+signal record_armed_changed(armed: bool)
+
 # Send signals
 signal send_added(target_channel_id: int, send_config: SendConfig)
 signal send_removed(target_channel_id: int)
@@ -71,6 +75,10 @@ var device_output_id: int = 1000  # Hardware output device (1000+ reserved)
 # Routing
 var output_channel_id: int = 1  # Channel to route to (1 = master by default)
 var send_channels: Array = []  # Array of SendConfig objects
+
+# MIDI input configuration
+var midi_input_device: int = -2  # -3=none, -2=all, -1=virtual keyboard, 0+=physical device
+var record_armed: bool = false
 
 # Device chain
 var devices: Array[DeviceInstance] = []  # Ordered list of devices on this channel
@@ -158,6 +166,10 @@ func sync_to_engine() -> void:
 	AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
 	AudioEngineOSC.send("/channel/%d/mute" % id, [1 if mute else 0])
 	AudioEngineOSC.send("/channel/%d/solo" % id, [1 if solo else 0])
+
+	# Sync MIDI routing config
+	AudioEngineOSC.send("/channel/%d/midi_input_device" % id, [midi_input_device])
+	AudioEngineOSC.send("/channel/%d/record_armed" % id, [1 if record_armed else 0])
 
 	# Master channel: routes to device output
 	if is_master:
@@ -307,6 +319,27 @@ func set_route(output_id: int) -> void:
 	if _is_connected:
 		AudioEngineOSC.send("/channel/%d/route" % id, [output_channel_id])
 	route_changed.emit(output_channel_id)
+
+
+func set_midi_input_device(device_id: int):
+	## Assign MIDI input device to this channel.
+	## -3 = no MIDI, -2 = all devices, -1 = virtual keyboard, 0+ = specific device ID.
+	if midi_input_device != device_id:
+		midi_input_device = device_id
+		if _is_connected:
+			AudioEngineOSC.send("/channel/%d/midi_input_device" % id, [midi_input_device])
+		midi_input_device_changed.emit(device_id)
+		print("[Channel %d] MIDI input device set to %d" % [id, device_id])
+
+
+func set_record_armed(armed: bool):
+	## Arm/disarm channel for MIDI recording.
+	if record_armed != armed:
+		record_armed = armed
+		if _is_connected:
+			AudioEngineOSC.send("/channel/%d/record_armed" % id, [1 if armed else 0])
+		record_armed_changed.emit(armed)
+		print("[Channel %d] Record armed: %s" % [id, armed])
 
 
 # ============================================================================
@@ -703,6 +736,8 @@ func to_json() -> Dictionary:
 		"solo": solo,
 		"phase_invert": phase_invert,
 		"output_channel_id": output_channel_id,
+		"midi_input_device": midi_input_device,
+		"record_armed": record_armed,
 		"send_channels": send_channels.map(func(s): return s.to_json()) if not send_channels.is_empty() else [],
 		"devices": devices.map(func(d): return d.to_json()) if not devices.is_empty() else []
 	}
@@ -735,6 +770,10 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.solo = data.get("solo", false)
 	channel.phase_invert = data.get("phase_invert", false)
 	channel.output_channel_id = data.get("output_channel_id", 1)
+
+	# Load MIDI settings
+	channel.midi_input_device = data.get("midi_input_device", -2)
+	channel.record_armed = data.get("record_armed", false)
 
 	# Load send_channels
 	for send_data in data.get("send_channels", []):

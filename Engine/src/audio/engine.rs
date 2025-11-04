@@ -239,10 +239,8 @@ impl AudioEngine {
                     logged_buffer_info = true;
                 }
 
-                // Process audio if playing
-                if state.get_is_playing() {
-                    process_audio(&mut state, frames, sample_rate as f32);
-                }
+                // Process audio (MIDI scheduling happens even when stopped, clip processing only when playing)
+                process_audio(&mut state, frames, sample_rate as f32);
 
                 // Mix channels and output
                 mix_and_output(&mut state, data, channels, frames, &status_tx);

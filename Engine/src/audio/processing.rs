@@ -1,18 +1,63 @@
-use tracing::info;
+use tracing::{info, warn};
 
 use super::commands::EngineState;
+use super::midi_types::MidiEvent;
 use super::types::*;
+
+/// Schedule MIDI events from queues into per-channel scheduled_midi_events
+/// This converts tick-based events to frame-offset events for sample-accurate playback
+fn schedule_midi_events(state: &mut EngineState, start_tick: i64, end_tick: i64, ticks_per_sample: f64, frame_count: usize) {
+    for channel in state.channels.values_mut() {
+        // Clear previous buffer's scheduled events
+        channel.scheduled_midi_events.clear();
+
+        // Drain MIDI queue and calculate frame offsets
+        while let Some(mut event) = channel.midi_queue.pop() {
+            let event_tick = event.tick as i64;
+
+            // Skip events that are too late (already passed)
+            if event_tick < start_tick {
+                warn!("Dropping late MIDI event: tick {} < {}", event_tick, start_tick);
+                continue;
+            }
+
+            // Calculate sample offset within this buffer
+            let tick_offset = (event_tick - start_tick).max(0);
+            let frame_offset = ((tick_offset as f64) / ticks_per_sample) as usize;
+
+            // If event is for future buffer, push back to queue
+            if frame_offset >= frame_count {
+                channel.midi_queue.push(event);
+                break;
+            }
+
+            event.frame_offset = frame_offset;
+
+            // Add to scheduled events for this channel's devices
+            channel.scheduled_midi_events.push(event);
+        }
+
+        // Sort by frame offset for sample-accurate processing
+        channel.scheduled_midi_events.sort_by_key(|e| e.frame_offset);
+    }
+}
 
 /// Process audio for one buffer
 pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
-    // Only process MIDI and advance playhead when playing
-    if !state.get_is_playing() {
-        return;
-    }
-
     // IMPORTANT: Use actual device sample rate for timing, not project setting
     let ticks_per_sample =
         (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
+
+    // Always schedule incoming MIDI events (even when not playing)
+    // This allows live MIDI input to play instruments without transport running
+    let start_tick = state.get_current_tick();
+    let end_tick = start_tick + (frames as f64 * ticks_per_sample) as i64;
+    schedule_midi_events(state, start_tick, end_tick, ticks_per_sample, frames);
+
+    // Only advance playhead and process clips when playing
+    if !state.get_is_playing() {
+        return;
+    }
 
     // Precompute tick boundaries within this buffer with frame offsets
     let start_tick = state.get_current_tick();

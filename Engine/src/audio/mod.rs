@@ -4,10 +4,12 @@ pub mod dsp;
 pub mod engine;
 pub mod io;
 pub mod ipc;
+pub mod midi_types;
 pub mod mixing;
 pub mod processing;
 pub mod types;
 
 pub use devices::{AudioDevice, DelayDevice, ParamId, ParamValue};
 pub use engine::{AudioCommand, AudioEngine, EngineStatus};
+pub use midi_types::*;
 pub use types::*;

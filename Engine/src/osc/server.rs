@@ -522,6 +522,86 @@ impl OscServer {
                 }
             }
 
+            // MIDI routing configuration
+            ["channel", id_str, "midi_input_device"] => {
+                if let (Ok(id), Some(OscType::Int(device_id))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetMidiInputDevice {
+                        channel_id: id,
+                        device_id: *device_id,
+                    })?;
+                }
+            }
+            ["channel", id_str, "record_armed"] => {
+                if let (Ok(id), Some(OscType::Int(armed))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetRecordArmed {
+                        channel_id: id,
+                        armed: *armed != 0,
+                    })?;
+                }
+            }
+
+            // MIDI events - path-based: /channel/{id}/midi_event
+            ["channel", id_str, "midi_event"] => {
+                if let Ok(channel_id) = id_str.parse::<usize>() {
+                    // Args: channel_id, message, midi_channel, pitch, velocity, timestamp_us
+                    if let (
+                        Some(OscType::Int(_)), // channel_id (redundant, already in path)
+                        Some(OscType::Int(message)),
+                        Some(OscType::Int(midi_channel)),
+                        Some(OscType::Int(pitch)),
+                        Some(OscType::Int(velocity)),
+                        Some(OscType::Int(timestamp_us)),
+                    ) = (
+                        args.get(0),
+                        args.get(1),
+                        args.get(2),
+                        args.get(3),
+                        args.get(4),
+                        args.get(5),
+                    ) {
+                        command_tx.send(AudioCommand::MidiEvent {
+                            channel_id,
+                            message_type: *message as u8,
+                            midi_channel: *midi_channel as u8,
+                            note: *pitch as u8,
+                            velocity: *velocity as u8,
+                            timestamp_us: *timestamp_us as u64,
+                        })?;
+                    }
+                }
+            }
+            ["channel", id_str, "midi_cc"] => {
+                if let Ok(channel_id) = id_str.parse::<usize>() {
+                    // Args: channel_id, midi_channel, cc_number, cc_value, timestamp_us
+                    if let (
+                        Some(OscType::Int(_)), // channel_id (redundant)
+                        Some(OscType::Int(midi_channel)),
+                        Some(OscType::Int(cc_number)),
+                        Some(OscType::Int(cc_value)),
+                        Some(OscType::Int(timestamp_us)),
+                    ) = (
+                        args.get(0),
+                        args.get(1),
+                        args.get(2),
+                        args.get(3),
+                        args.get(4),
+                    ) {
+                        command_tx.send(AudioCommand::MidiEvent {
+                            channel_id,
+                            message_type: 11, // MIDI_MESSAGE_CONTROL_CHANGE
+                            midi_channel: *midi_channel as u8,
+                            note: *cc_number as u8,
+                            velocity: *cc_value as u8,
+                            timestamp_us: *timestamp_us as u64,
+                        })?;
+                    }
+                }
+            }
+
             // Send management - path-based: /channel/{id}/send/{target_id}/{command}
             ["channel", id_str, "send", target_str, "add"] => {
                 if let (Ok(channel_id), Ok(target_channel_id)) =

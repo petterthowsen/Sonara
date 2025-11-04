@@ -99,6 +99,8 @@ func _ready():
 		solo_toggle.toggled.connect(_on_solo_toggled)
 	if mute_toggle:
 		mute_toggle.toggled.connect(_on_mute_toggled)
+	if arm_toggle:
+		arm_toggle.toggled.connect(_on_arm_toggled)
 	if bottom_volume_slider:
 		bottom_volume_slider.value_changed.connect(_on_volume_changed)
 	
@@ -143,6 +145,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.device_added.disconnect(_on_channel_device_added)
 		channel.device_removed.disconnect(_on_channel_device_removed)
 		channel.color_changed.disconnect(_on_channel_color_changed)
+		channel.record_armed_changed.disconnect(_on_channel_record_armed_changed)
 
 	channel = ch
 	project = proj
@@ -160,6 +163,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.device_added.connect(_on_channel_device_added)
 		channel.device_removed.connect(_on_channel_device_removed)
 		channel.color_changed.connect(_on_channel_color_changed)
+		channel.record_armed_changed.connect(_on_channel_record_armed_changed)
 
 		# Bind device list to channel
 		if device_list and device_list is ChannelDeviceList:
@@ -191,6 +195,9 @@ func _update_from_channel() -> void:
 	solo_toggle.set_pressed_no_signal(channel.solo)
 
 	mute_toggle.set_pressed_no_signal(channel.mute)
+
+	if arm_toggle:
+		arm_toggle.set_pressed_no_signal(channel.record_armed)
 
 	# Update volume slider
 	bottom_volume_slider.set_value_no_signal(channel.volume)
@@ -268,6 +275,11 @@ func _on_solo_toggled(pressed: bool) -> void:
 func _on_mute_toggled(pressed: bool) -> void:
 	if channel:
 		channel.set_mute(pressed)
+
+
+func _on_arm_toggled(pressed: bool) -> void:
+	if channel:
+		channel.set_record_armed(pressed)
 
 
 func _on_volume_changed(value: float) -> void:
@@ -449,6 +461,12 @@ func _on_channel_solo_changed(value: bool) -> void:
 	"""React to solo changes from Channel."""
 	if solo_toggle:
 		solo_toggle.set_pressed_no_signal(value)
+
+
+func _on_channel_record_armed_changed(armed: bool) -> void:
+	"""React to record armed changes from Channel."""
+	if arm_toggle:
+		arm_toggle.set_pressed_no_signal(armed)
 
 
 func _on_channel_color_changed(new_color : Color) -> void:

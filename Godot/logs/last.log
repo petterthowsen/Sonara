@@ -6,92 +6,33 @@
 [OSC] INFO: Registered listener for  /builtin/info
 [OSC] INFO: Registered listener for  /builtin/complete
 [OSC] WARN: Attempted to send before ready: /builtin/request
-[OSC] INFO: Registered listener for  /status/engine_load
-[MidiEditor] INFO: grid_helper changed:  <Resource#-9223371838581634108>
-[NoteContainer] INFO: update_container_width: multi=false rightmost_tick=0 min_px=2048.0 scroll=0.0 viewport=0.0 content_px=1024.0 required_px=2048.0
-[ClipEditor] INFO:   - UI mode: CLIP, left_panel=false, toggle_disabled=true
-[OSC] INFO: Registered listener for  /status/playhead
-[OSC] INFO: Registered listener for  /status/playing
+[MidiManager] INFO: Refreshing devices
+[MidiManager] INFO: Refreshed devices: 1 found
+[MidiManager] INFO: Initialized with 2 devices (1 enabled)
 [OSC] INFO: Ready - listening on port 7001, sending to port 7000
-[OSC] INFO: Registered listener for  /clip/*/load_state
-[OSC] INFO: Registered listener for  /audiofile/decode/ready
-[OSC] INFO: Registered listener for  /audiofile/waveform/level
-[OSC] INFO: Registered listener for  /audiofile/progress
-[OSC] INFO: Registered listener for  /audiofile/error
-[OSC] INFO: sending  /project/clear  args:  []
-[OSC] INFO: sending  /project/init  args:  [120.0, 4, 4, 960, 48000]
-[OSC] INFO: sending  /builtin/request  args:  []
-[OSC] INFO: Registered listener for  /channel/1/peak
-[OSC] INFO: sending  /channel/1/create  args:  ["Master"]
-[OSC] INFO: sending  /channel/1/volume  args:  [0.0]
-[OSC] INFO: sending  /channel/1/pan  args:  [0.0]
-[OSC] INFO: sending  /channel/1/mute  args:  [0]
-[OSC] INFO: sending  /channel/1/solo  args:  [0]
-[OSC] INFO: sending  /channel/1/route  args:  [1000]
-[OSC] INFO: Engine connected!
-[OSC] INFO: sending  /transport/seek  args:  [5520]
-[OSC] INFO: Registered listener for  /channel/2/peak
-[OSC] INFO: sending  /channel/2/create  args:  ["PolySynth"]
-[OSC] INFO: sending  /channel/2/volume  args:  [-6.0]
-[OSC] INFO: sending  /channel/2/pan  args:  [0.0]
-[OSC] INFO: sending  /channel/2/mute  args:  [0]
-[OSC] INFO: sending  /channel/2/solo  args:  [0]
-[OSC] INFO: sending  /channel/2/route  args:  [1]
-[OSC] INFO: sending  /track/0/create  args:  [2]
-[OSC] INFO: sending  /channel/2/add_device  args:  ["sonara.builtin.polysynth", 0, 1, 1, "builtin", ""]
-[OSC] INFO: sending  /channel/2/device/0/param/0  args:  [0]
-[OSC] INFO: sending  /channel/2/device/0/param/1  args:  [0.00499999988824]
-[OSC] INFO: sending  /channel/2/device/0/param/2  args:  [0.05000000074506]
-[OSC] INFO: sending  /channel/2/device/0/param/3  args:  [0.69999998807907]
-[OSC] INFO: sending  /channel/2/device/0/param/4  args:  [0.10000000149012]
-[OSC] INFO: sending  /channel/2/device/0/param/5  args:  [0.30000001192093]
-[OSC] INFO: sending  /channel/2/device/0/param/6  args:  [0.69999998807907]
-[OSC] INFO: sending  /channel/2/device/0/param/7  args:  [1]
-[OSC] INFO: sending  /channel/2/device/0/param/8  args:  [0.30000001192093]
-[OSC] INFO: sending  /channel/2/device/0/param/9  args:  [0.5]
-[OSC] INFO: sending  /channel/2/device/0/param/10  args:  [1]
-[OSC] INFO: sending  /channel/2/device/0/param/11  args:  [1]
-[OSC] INFO: Registered listener for  /channel/2/device/0/active
-[OSC] INFO: Registered listener for  /channel/2/device/0/enabled
-[OSC] INFO: Registered listener for  /channel/2/device/0/param/count
-[OSC] INFO: Registered listener for  /channel/2/device/0/param/info
-[OSC] INFO: Registered listener for  /channel/2/device/0/loading_state
-[OSC] INFO: Registered listener for  /channel/2/device/0/gui/closed
-[OSC] INFO: Registered listener for  /channel/2/device/0/param/*/value
-[OSC] INFO: sending  /track/0/route  args:  [1]
-[OSC] INFO: Unregistered listener for  /channel/2/peak
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/active
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/enabled
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/param/count
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/param/info
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/param/*/value
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/loading_state
-[OSC] INFO: Unregistered listener for  /channel/2/device/0/gui/closed
-[OSC] INFO: sending  /channel/2/remove  args:  []
-[DeviceLane] INFO: [DeviceLane] Bound channel removed, clearing device lane
-[OSC] INFO: sending  /transport/seek  args:  [480]
-[OSC] INFO: sending  /transport/seek  args:  [480]
-[OSC] INFO: sending  /transport/seek  args:  [240]
-[OSC] INFO: sending  /transport/seek  args:  [1200]
-[OSC] INFO: sending  /transport/seek  args:  [960]
-[OSC] INFO: sending  /transport/seek  args:  [0]
-[OSC] INFO: sending  /transport/seek  args:  [720]
-[OSC] INFO: sending  /transport/seek  args:  [960]
-[OSC] INFO: sending  /transport/seek  args:  [1920]
-[OSC] INFO: sending  /transport/seek  args:  [1200]
-[OSC] INFO: sending  /transport/seek  args:  [960]
-[OSC] INFO: sending  /transport/seek  args:  [240]
-[OSC] INFO: sending  /transport/seek  args:  [0]
-[OSC] INFO: sending  /transport/seek  args:  [960]
-[OSC] INFO: sending  /transport/seek  args:  [1680]
-[OSC] INFO: sending  /transport/seek  args:  [1440]
-[OSC] INFO: sending  /transport/seek  args:  [720]
-[OSC] INFO: sending  /transport/seek  args:  [0]
-[OSC] INFO: sending  /transport/play  args:  []
-[OSC] WARN: Unhandled message:  /status/sample_position  =  [70613363]
-[OSC] WARN: Unhandled message:  /status/sample_position  =  [70620890]
-[OSC] INFO: sending  /transport/pause  args:  []
-[OSC] INFO: sending  /transport/seek  args:  [0]
-[OSC] INFO: sending  /transport/play  args:  []
-[OSC] INFO: sending  /transport/pause  args:  []
-[OSC] INFO: sending  /transport/seek  args:  [0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /status/engine_load  =  [0.02695061266422]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /status/engine_load  =  [0.02453246153891]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /status/engine_load  =  [0.02593607269228]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /channel/1/peak  =  [0.0, 0.0, 0.0, 0.0]
+[OSC] WARN: Unhandled message:  /status/engine_load  =  [0.02594204992056]

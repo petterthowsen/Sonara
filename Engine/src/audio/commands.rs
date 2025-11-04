@@ -69,6 +69,24 @@ pub enum AudioCommand {
         output_id: Option<ChannelId>,
     },
 
+    // MIDI routing
+    SetMidiInputDevice {
+        channel_id: ChannelId,
+        device_id: i32,
+    },
+    SetRecordArmed {
+        channel_id: ChannelId,
+        armed: bool,
+    },
+    MidiEvent {
+        channel_id: ChannelId,
+        message_type: u8,
+        midi_channel: u8,
+        note: u8,
+        velocity: u8,
+        timestamp_us: u64,
+    },
+
     // Send management
     AddSend {
         channel_id: ChannelId,
@@ -699,6 +717,64 @@ pub fn process_command(
                 info!("Channel {} routed to {:?}", id, output_id);
             } else {
                 warn!("Cannot set route for channel {} (not found)", id);
+            }
+        }
+
+        // MIDI routing commands
+        AudioCommand::SetMidiInputDevice {
+            channel_id,
+            device_id,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                channel.midi_routing.device_id = device_id;
+                info!("Channel {} MIDI input device set to {}", channel_id, device_id);
+            } else {
+                warn!("Cannot set MIDI input device for channel {} (not found)", channel_id);
+            }
+        }
+
+        AudioCommand::SetRecordArmed { channel_id, armed } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                channel.midi_routing.record_armed = armed;
+                info!("Channel {} record armed: {}", channel_id, armed);
+            } else {
+                warn!("Cannot set record armed for channel {} (not found)", channel_id);
+            }
+        }
+
+        AudioCommand::MidiEvent {
+            channel_id,
+            message_type,
+            midi_channel,
+            note,
+            velocity,
+            timestamp_us,
+        } => {
+            use super::midi_types::{MidiEvent, MidiMessageType};
+
+            if let Some(channel) = state.channels.get(&channel_id) {
+                // Convert message type
+                if let Some(msg_type) = MidiMessageType::from_u8(message_type) {
+                    // Convert timestamp to tick (will be refined in audio thread for sample accuracy)
+                    // For now, we just use current tick
+                    let tick = state.get_current_tick().max(0) as u64;
+
+                    let event = MidiEvent {
+                        message_type: msg_type,
+                        midi_channel,
+                        note,
+                        velocity,
+                        tick,
+                        frame_offset: 0,
+                    };
+
+                    // Push to channel's MIDI queue (lock-free)
+                    channel.midi_queue.push(event);
+                } else {
+                    warn!("Unknown MIDI message type: {}", message_type);
+                }
+            } else {
+                warn!("Cannot send MIDI event to channel {} (not found)", channel_id);
             }
         }
 

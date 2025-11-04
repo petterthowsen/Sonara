@@ -1,4 +1,5 @@
 use super::devices::AudioDevice;
+use super::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use std::collections::HashMap;
 use tracing::info;
 /// Value kind for setting device parameters
@@ -496,6 +497,15 @@ pub struct Channel {
     // Active voices for INSTRUMENT channels only
     pub active_voices: HashMap<MidiNote, Voice>,
 
+    // MIDI routing configuration
+    pub midi_routing: MidiRouting,
+
+    // Incoming MIDI event queue (non-audio thread writes, audio thread reads)
+    pub midi_queue: MidiEventQueue,
+
+    // Scheduled MIDI events for current audio buffer (sorted by frame_offset)
+    pub scheduled_midi_events: Vec<MidiEvent>,
+
     // Temporary interleaved buffer for device processing
     device_input_buffer: Vec<f32>,
     device_output_buffer: Vec<f32>,
@@ -539,6 +549,9 @@ impl Channel {
             smoothing_alpha,
             devices: Vec::new(),
             active_voices: HashMap::new(),
+            midi_routing: MidiRouting::default(),
+            midi_queue: create_midi_queue(),
+            scheduled_midi_events: Vec::new(),
             device_input_buffer: vec![0.0; buffer_size * 2],
             device_output_buffer: vec![0.0; buffer_size * 2],
         }
@@ -677,6 +690,28 @@ impl Channel {
     pub fn process_device_chain(&mut self, sample_count: usize) {
         if self.devices.is_empty() {
             return;
+        }
+
+        // Send scheduled MIDI events to all devices before processing audio
+        for event in &self.scheduled_midi_events {
+            use super::midi_types::MidiMessageType;
+
+            match event.message_type {
+                MidiMessageType::NoteOn => {
+                    let is_note_on = event.velocity > 0;
+                    for device in self.devices.iter_mut() {
+                        device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
+                    }
+                }
+                MidiMessageType::NoteOff => {
+                    for device in self.devices.iter_mut() {
+                        device.send_midi_event(event.note, 0, false, event.frame_offset);
+                    }
+                }
+                _ => {
+                    // TODO: Handle other MIDI message types (CC, aftertouch, etc.)
+                }
+            }
         }
 
         static mut DEVICE_DEBUG_COUNT: u32 = 0;
