@@ -48,7 +48,7 @@ Location: `Engine/src/audio/processing.rs`
 
 - `process_audio()` builds a `Vec<(Tick, frame_offset)>` so every note on/off from clip instances is tied to an exact sample index inside the upcoming block.
 - `Channel::send_midi_event_to_devices()` forwards events to the first device only; instruments must queue and sort them before generating audio.
-- `AudioDevice::send_midi_event()` now receives the `frame_offset`; built-ins (`OscillatorDevice`, `PolySynthDevice`, `SfizzDevice`) and the CLAP adapter honour it to keep envelopes, voice gates, and plugin note-ons aligned with the hardware clock.
+- `AudioDevice::send_midi_event()` now receives the `frame_offset`; built-ins (`PolySynthDevice`, `SfizzDevice`) and the CLAP adapter honour it to keep envelopes, voice gates, and plugin note-ons aligned with the hardware clock.
 - Never translate offsets back to ticks inside devices—use the given `frame_offset` directly against the block you are rendering.
 
 ## Mixing Pipeline (`mixing.rs::mix_and_output`)
@@ -87,7 +87,7 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
 - `INSTRUMENT`: Generates MIDI synth audio, routes to Bus or Master
 - `AUDIO`: Plays samples via Clips, routes to Bus or Master
 - `BUS`: Groups/submixes, receives routed audio, routes to other BUS or Master
-- `MASTER`: Final mix, always routes to device outputs
+- Master (channel ID 1, not a separate type): Final mix, always routes to device outputs
 
 **ID allocation scheme**:
 - 0 = null/no output

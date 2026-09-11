@@ -41,5 +41,5 @@ alwaysApply: false
 - Background load failures populate `LoadingState::Failed`; future calls to `load_sfz_async` overwrite the state and retry.
 
 ## Dependency Notes
-- The build relies on `rust-sfizz` (git dependency) and dynamic `libsndfile`. `build.rs` adds the `sndfile` link directive; keep it in sync when updating the wrapper.
+- The build relies on `rust-sfizz` (git dependency) and dynamic `libsndfile` (`libsndfile1-dev`). The engine has no `build.rs`; the `sndfile` link directive lives in the rust-sfizz crate's `sfizz-sys/build.rs`, so linking changes belong in that repo.
 - Test coverage lives in `Engine/test_sfizz.sh` (manual OSC smoke) and `Engine/test_kick.sfz` (minimal patch). Treat these as fixtures when verifying changes.

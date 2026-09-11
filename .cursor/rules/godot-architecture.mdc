@@ -4,12 +4,27 @@ alwaysApply: false
 ---
 # Godot Architecture
 
+## Layers
+
+```
+Sonara (autoload)  ── Sonara.editor ──►  Editor (editor/Editor.gd)
+                                           │ owns `project`, open/save/load, transport, selection
+                     ┌─────────────────────┴─────────────────────┐
+              Data layer (data/)                          UI layer (arranger/, mixer/,
+   Project, Track, Channel, Clip, ClipInstance,           clip_editor/, devices/, components/)
+   DeviceInstance…: state + signals + OSC sync             binds to data objects, listens to their signals
+```
+
 ## Editor.gd
-Entry-point is editor/Editor.gd and tscn file and initializes together a series of major UI loosely-coupled self-contained systems: Arranger, Mixer, Clip Editor etc.
+- Entry point (`editor/Editor.gd` + `.tscn`); wires together loosely-coupled, self-contained systems: switchable primary panels (Arranger, Mixer, Clip Editor) and secondary panels (e.g. `DeviceLane`).
+- Owns the current `Project` and its lifecycle: `open_project()`, `save_project()`, `load_project()` (JSON via `Project.to_json()` / `Project.from_json()`).
+- Emits app-level signals only: project lifecycle (`project_opened`, `project_activated`, `project_closed`, `project_saved`, `project_modified`), tempo/time signature, transport (`playback_started`, `playback_stopped`, `playhead_moved`), selection (`clips_selected`; `clip_instance_selected` is deprecated) and focus (`channel_focused`, `track_focused`).
+- It does **not** relay per-object data changes; those come from the data objects themselves.
 
 ## Data model layer
-data/ contains self-synchronizing (via osc) data models (Project, Track, Channel, Clip, ClipInstance etc.)
-- `Project.gd` owns the OSC listeners for clip/audiofile events, maps `req_id` ↔ clip IDs, and coordinates retries when waveform cache reads fail.
+data/ contains self-synchronizing (via OSC) data models (Project, Track, Channel, Clip, ClipInstance, DeviceInstance etc.), each with its own signals and `to_json()`/`from_json()` serialization.
+- `Project.gd` emits structural signals (`track_added/removed`, `channel_added/removed`, `clip_added/removed`, `connection_state_changed`), owns the OSC listeners for clip/audiofile events, maps `req_id` ↔ clip IDs, and coordinates retries when waveform cache reads fail.
+- Objects emit property signals (e.g. `Track.name_changed`, `Channel.volume_changed`, `Track.clip_instance_added`).
 - `Clip.gd` tracks `LoadState`, load progress, waveform cache metadata, and uses `WaveformCacheReader` to ingest progressive waveform levels emitted by the engine.
 
 ## Components
@@ -46,8 +61,14 @@ AudioEngineOSC.gd is a Low-level OSC transport class with `send` and `listen` in
 
 ## Lifecycle and OSC syncing
 
-1. Editor.gd initializes a `Project`
+1. Editor.gd opens/creates a `Project` and emits `project_opened` / `project_activated`.
 2. Project establishes connection to audio engine via AudioEngineOSC.
-3. Project.create_track and similar methods call OSC and emit signals
-4. Engine > Godot: UI listens to project/track/channel/clip signals and update UI
-5. Godot > Engine: UI callbacks call set_[prop] setters on data objects to auto-sync to audio enine.
+3. Container views (e.g. `TrackList`) listen to `Sonara.editor.project_activated`/`project_closed`, then connect to the project's structural signals (`track_added`, …) and instantiate one item per object.
+4. Items bind to their object (`TrackItem.bind_to_track()`, `MixerChannel.bind_to_channel()`) and connect to its property signals to refresh UI.
+5. Godot > Engine: UI callbacks call `set_[prop]` setters on data objects, which update state, send OSC, and emit the signal — UI never mutates fields or sends OSC directly.
+
+## UI Binding Practices
+
+- When refreshing a control from a data signal, use `set_pressed_no_signal()`, `set_value_no_signal()` etc. so the update doesn't re-trigger the setter and loop.
+- Many UI controls are `@tool` scripts; guard runtime-only work (autoload access, data/editor signal connections) with `Engine.is_editor_hint()` so scenes still load in the Godot editor.
+- Disconnect from data objects when an item is rebound or freed, and handle objects removed from the project gracefully (check for `null`/freed instances before use).

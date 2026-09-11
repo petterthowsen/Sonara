@@ -18,14 +18,14 @@ Commands flow: OSC → Main thread → Audio thread.
 Status + GUI events flow: Audio thread → Main thread → (a) OSC client → Godot, (b) window manager for resize/close handling.
 
 ### Audio Processing Pipeline
-The audio engine (`Engine/src/audio/engine.rs`) processes audio in this order:
+The audio callback (`Engine/src/audio/processing.rs`, set up by `engine.rs`) processes audio in this order:
 1. Process pending commands from channel (non-blocking `try_recv`)
 2. Clear all channel audio buffers
 3. If playing: compute tick boundaries for this block using the device sample rate and update the fractional accumulator
 4. Dispatch clip note on/off events to the owning channel with sample-accurate `frame_offset` values so instruments queue MIDI before rendering
 5. Render per-frame audio for each track (audio clips + channel device chains) into channel buffers
 6. Mix channels: apply gain/pan, route to output channels
-7. Output master channel (ID 0) to audio hardware via CPAL
+7. Output master channel (ID 1) to audio hardware via CPAL
 8. Update peak meters for all channels
 9. Advance the transport sample counter (`EngineState::advance_sample_position`) and send periodic status updates (playhead, sample position, meters) at ~20 Hz
 
@@ -50,23 +50,27 @@ See `OSC_PROTOCOL.md` for full documentation.
 ### File Structure
 ```
 Engine/src/
-  main.rs              # Entry point, OSC server initialization
+  main.rs              # `engine` binary: logging setup, OSC server initialization
+  lib.rs               # Shared modules for `engine` and `plugin_host`
+  log_forwarder.rs     # Forwards WARN/ERROR tracing records to Godot via /log
+  window_manager.rs    # winit thread hosting plugin GUI windows
+  bin/plugin_host.rs   # `plugin_host` binary (CLAP subprocess entry point)
+  plugin_host/         # Subprocess host implementation (see engine-plugin-architecture)
   audio/
     mod.rs             # Module declarations
-    engine.rs          # Core audio engine initialization and main loop
-    commands.rs        # Command processing and OSC message handling
-    processing.rs      # Audio processing logic and callback management
+    engine.rs          # Core audio engine initialization (CPAL stream setup)
+    commands.rs        # AudioCommand/EngineStatus definitions and command handling
+    processing.rs      # Audio callback: MIDI scheduling, transport, rendering
     mixing.rs          # Audio mixing and routing logic
-    types.rs           # Type definitions: Channel, Track, Voice, etc.
+    types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
+    midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
     devices/
-      mod.rs             # Device registry/exports
-      oscillator.rs      # Simple builtin oscillator
+      mod.rs             # AudioDevice trait, parameter types, DeviceSleepState
       polysynth.rs       # SIMD-optimized block-based polysynth
-      polysynth_fundsp.rs# Legacy FunDSP variant kept for reference/benchmarks
       delay.rs           # Delay effect device
       sfizz_device.rs    # SFZ sampler backed by sfizz
       spectrum_analyzer.rs# Utility pass-through FFT analyzer
-      clap_host/         # CLAP in-process & subprocess adapters
+      clap_host/         # CLAP subprocess adapter (in-use) + legacy in-process adapter.rs (unused)
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
       envelope.rs
@@ -87,7 +91,7 @@ Engine/src/
     mod.rs           # Module declarations
     server.rs        # OSC server/client, path-based message routing
 
-Godot/              # Godot 4.5 UI App
+Godot/              # Godot 4.7 UI App
 ```
 
 ## Key Implementation Details
@@ -103,13 +107,23 @@ Godot/              # Godot 4.5 UI App
 ### Sample-Accurate Scheduling
 - `processing.rs::process_audio()` precomputes `(tick, frame_offset)` pairs for the current buffer so note events line up with the physical device sample rate (never the project setting).
 - Each channel forwards MIDI to the first device in its chain via `Channel::send_midi_event_to_devices()`; instruments must respect the provided `frame_offset` inside their next `process_block`.
-- `AudioDevice::send_midi_event()` is the single contract point—builtins (Oscillator, PolySynth, Sfizz) and the CLAP adapter queue events and sort them before rendering so envelopes and plugin voices line up exactly with buffer boundaries.
+- `AudioDevice::send_midi_event()` is the single contract point—builtins (PolySynth, Sfizz) and the CLAP adapter queue events and sort them before rendering so envelopes and plugin voices line up exactly with buffer boundaries.
 - `PolySynthDevice` renders spans between queued MIDI offsets, reprocessing active voices for each segment so note-on/note-off transitions land on the exact sample; keep `queued_midi` offsets relative to the upcoming block and sorted by insertion.
 
+### Live MIDI Input
+- Godot's `MidiManager` autoload routes physical `InputEventMIDI` and virtual-keyboard events to armed channels, sending `/channel/{id}/midi_event [channel_id, message, midi_channel, pitch, velocity, timestamp_us]` (channel setup via `/channel/{id}/midi_input_device` and `/channel/{id}/record_armed`).
+- `AudioCommand::MidiEvent` stamps the event with the current tick and pushes it onto the channel's lock-free `midi_queue` (`midi_types::MidiEventQueue`, a crossbeam `SegQueue`).
+- At the start of each callback `processing.rs::schedule_midi_events` drains every queue into `Channel::scheduled_midi_events` with a `frame_offset`: late events are dropped with a warning, events beyond this block are re-queued, and the result is sorted by offset before `process_device_chain` forwards them to devices.
+
+### Device Sleep
+- Each device carries a `DeviceSleepState` (`devices/mod.rs`): after `DEFAULT_SLEEP_TIMEOUT` (3 s) with no signal above `SLEEP_THRESHOLD` and no MIDI/parameter activity, the device sleeps and `Channel::process_device_chain` skips its processing.
+- MIDI input wakes a device immediately (`mark_activity`).
+- Sleep transitions become `EngineStatus::DeviceSleepStatus`, forwarded as `/channel/{id}/device/{pos}/sleep [0|1]`.
+
 ### Built-in Device Advertisement
-- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (Oscillator, PolySynth, Delay, Sfizz, Spectrum Analyzer) and emitting `/builtin/info` messages.
+- Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (`sonara.builtin.polysynth`, `.delay`, `.sfizz`, `.spectrum_analyzer`) and emitting `/builtin/info` messages.
 - Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
-- `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. The FunDSP prototype remains available as `PolySynthDeviceFundsp` for comparison but is no longer advertised to the UI.
+- `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. (The old FunDSP prototype has been removed; the `fundsp` dependency in `Cargo.toml` is legacy.)
 - `SpectrumAnalyzerDevice` is a stereo utility that mirrors its input to output while queueing FFT frames; it only performs analysis when Godot holds an active `"spectrum"` subscription to keep the audio callback light.
 
 ### Device Data Streams
@@ -174,7 +188,7 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
 - Sends ignore invalid targets (self, IDs ≥1000, muted/solo-blocked buses) to avoid denormals and feedback loops.
 
 ### Channel Routing and IO
-**Channel Types:** `INSTRUMENT`, `AUDIO`, `BUS`, `MASTER`
+**Channel Types:** `INSTRUMENT`, `AUDIO`, `BUS` (Godot `Channel.ChannelType`); the master is channel ID 1 rather than a separate type
 
 **Routing Hierarchy:**
 - Tracks target channels via `Track.default_channel_id`.
@@ -195,11 +209,6 @@ The audio callback **never blocks**:
 - Uses `Mutex` with immediate failure if lock is contested (skip buffer on failure)
 - No heap allocations in audio thread
 - Pre-allocated channel buffers (sized at initialization)
-
-## Common Development Patterns
-
-
-
 
 ## Finding Documentation
 

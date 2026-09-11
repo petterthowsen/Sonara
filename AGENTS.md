@@ -1,202 +1,130 @@
-# CLAUDE.md
+# AGENTS.md
 
-## Project Overview
-- Sonara is a Linux-first digital audio workstation driven by a Rust audio engine and a Godot 4.5 editor.
-- Core stack: Rust for real-time DSP, Godot for UI, OSC for engine<->UI messaging, CLAP plugins hosted out-of-process.
-- Global conventions: Middle C = C3 = MIDI note 60, sequencing runs at 960 PPQ.
+Sonara is a Linux-first DAW: a Rust real-time audio engine (`Engine/`) plus a Godot 4.7 UI (`Godot/`). They talk over OSC via UDP on localhost. Godot sends to port 7000 and the engine sends back to port 7001. CLAP plugins run out-of-process in a separate `plugin_host` binary.
 
-## Repository Layout
-```text
-daw/
-  Engine/                    # Rust audio engine crates and IPC helpers
-    src/
-      main.rs                # Engine entry point + OSC server bootstrap
-      audio/                 # Engine core, processing, mixing, devices, DSP helpers
-      osc/                   # OSC server/client and routing
-      io/                    # Audio file service, decoders, waveform cache
-      bin/plugin_host.rs     # Subprocess CLAP host entry point
-  Godot/                     # Godot 4.5 project (Editor, data models, components)
-```
-- `Engine/audio/` splits responsibilities across `engine.rs`, `processing.rs`, `mixing.rs`, `types.rs`, `devices/`, `ipc/`, `dsp/`, and `io/`.
-- Godot scripts live under `editor/`, `data/`, `components/`, `devices/`, and supporting folders; `Editor.gd` is the main entry point.
+Conventions: Middle C = C3 = MIDI note 60. Sequencing uses 960 PPQ.
 
-## Workflow & Tracking
-- Keep `STATUS.md` focused on the current complex investigation with "Working"/"Not Working" bullets; update when the focus changes.
-- Track actionable backlog items in `TODO.md` with `[ ]` or `[x]` checkboxes only after verifying behavior.
-- Leave both files concise enough that another engineer can skim them and know what to do next.
+## Commands
 
-## Global Engineering Principles
-- Keep files under 600 lines when possible (hard limit 1000) and refactor aggressively when hitting those limits.
-- DRY and KISS: extract shared logic, prefer clear boring solutions, and question confusing organization before proceeding.
-- Encapsulate behavior inside structs/classes; surface intent through explicit methods rather than free helpers.
-- Add defensive logging when diagnosing issues so failures are easy to trace; fail fast rather than masking errors.
+Engine (run from `Engine/`):
 
-### Language-Specific Style
-- **Rust**: Run `cargo fmt`, document public APIs and important private functions with `///`, log with `info!`/`warn!`/`error!`, and never allocate, block, or wait on contested locks inside the audio callback.
-- **GDScript**: Leave two blank lines between functions, add a short `##` intent comment for every class and function, model behavior with nodes/classes instead of globals, expose tunable properties, and use `truthy if condition else falsy`. Edit `.tscn`, `.uid`, and other resources via the provided Godot tooling rather than hand-editing text.
-
-## Rust Audio Engine
-
-### Architecture & Threads
-- Main thread owns `OscServer`, SDK integration, and marshals commands between Godot, the audio thread, and the window manager.
-- Audio callback thread renders audio at high priority with a strict no-allocation, no-blocking contract.
-- `WindowManager` runs in its own thread (winit) so plugin GUIs can manage X11/Wayland events.
-- `AudioFileService` is a four-thread worker pool handling decode, resample, and waveform generation outside the real-time path.
-- Communication uses Crossbeam unbounded MPMC channels for main<->audio traffic and std MPSC channels for audio statuses back to the main loop.
-
-### Audio Callback Pipeline
-1. Drain pending commands with non-blocking `try_recv`.
-2. Clear every channel buffer.
-3. Advance transport ticks based on the device sample rate and queue sample-accurate MIDI events.
-4. Render track audio and device chains into per-channel buffers.
-5. Run the mixing passes (faders, sends, routing).
-6. Update peak meters on post-fader buffers.
-7. Send throttled status updates (~20 Hz) back to the main thread.
-
-### Audio Thread Safety
-- Never block on channels, locks, I/O, or sleeps; skip work instead of waiting.
-- Avoid heap allocation (`Vec::new()`, `HashMap::insert`, `String::from`) inside the callback—preallocate during initialization.
-- Lock usage must follow a try-lock-and-skip pattern:
-
-```rust
-if let Ok(mut state) = loading_state.try_lock() {
-    if let LoadingState::Ready(ref synth) = *state {
-        let mut synth = synth.lock().ok();
-        if let Some(synth) = synth.as_mut() {
-            synth.render_block(output, frame_count);
-        }
-    }
-}
+```bash
+cargo build --release                         # default: debug builds are too slow for real-time audio
+./run_release.sh                              # build all binaries + run engine (./run.sh = debug; ../run_engine.sh = same)
+cargo test                                    # unit tests live in `mod tests` blocks inside source files
+cargo test <name_substring> -- --nocapture    # run a single test
+cargo fmt
 ```
 
-### Sample-Accurate Scheduling & Async Loading
-- `process_audio` computes `(tick, frame_offset)` pairs so MIDI lands exactly on the right sample; devices consume the provided `frame_offset` without converting back to ticks.
-- Heavy clip loading (`AudioFileService`) runs off-thread: `/clip/{id}/load_audio_file` triggers `BeginLoadAudioClip`, workers decode/resample, `LoadAudioClip` copies ready PCM into `EngineState`.
-- Maintain request IDs and ignore stale completions to avoid overwriting newer loads.
-- Waveform level updates and progress notifications stay off the audio thread; only final PCM buffers cross into real-time code.
+- Two binaries: `engine` (default, `src/main.rs`) and `plugin_host` (`src/bin/plugin_host.rs`). `src/lib.rs` shares the modules between them. The engine spawns `plugin_host` from its own executable directory, so both must be built with the same profile. The run scripts handle this. A bare `cargo run` builds only `engine`, and CLAP plugins will then fail with a "plugin_host binary not found" error.
+- Build prerequisites: CMake and `libsndfile1-dev` (needed by the `sfizz` git dependency).
+- OSC smoke tests make sound. They are `./test_osc.sh`, `./test_plugin_osc.sh` and `./test_sfizz.sh` (which uses `test_kick.sfz`). Send ad-hoc messages with `oscsend localhost 7000 /transport/play` from `liblo-tools`.
 
-### Mixing & Routing
-- `mixing.rs::mix_and_output` runs five passes:
-  1. Device pre-pass for non-bus channels (`process_device_chain`).
-  2. Fader and constant-power pan pass, clearing muted/solo-excluded buffers.
-  3. Send accumulation, cloning pre-pass audio for pre-fader sends and applying destination gain.
-  4. Iterative routing loop (max 10) that mixes into destinations, runs bus devices, and reapplies bus pan once per bus.
-  5. Master output copy into CPAL buffers plus meter reconciliation.
-- Never reapply pan during routing, never allocate in any pass, and treat invalid send targets as no-ops.
+Godot UI:
 
-### Channel & Send Model
-- Channel types: `INSTRUMENT`, `AUDIO`, `BUS`, `MASTER`.
-- ID scheme: 0 = null, 1 = master, 2-999 = user channels, >=1000 = hardware outputs.
-- `Channel::output_channel_id` drives hierarchical routing; master channels route to device outputs via `device_output_id`.
-- Sends live in `Channel.send_channels` with `{ target_channel_id, amount_db, pre_fader, muted }`, respect destination gain, reject invalid/self targets, and honor solo/mute rules.
+```bash
+godot --path Godot                               # run the app; the engine must already be running
+godot --headless --path Godot -s path/to/script.gd  # script path relative to Godot/
+```
 
-### Timing & Stretching
-- The audio callback is the master clock; 960 PPQ sequencing advances via `EngineState::advance_sample_position`.
-- Playhead, tick, and meter updates are throttled to ~20 Hz over OSC for UI smoothness.
-- Audio clips stretch automatically using `stretch = project_bpm / clip.recorded_bpm`; playback advances with fractional sample counters and linear interpolation.
-- Looping converts clip loop points into stretched sample positions; stop/seek clears per-instance playback cursors.
+Godot does not launch the engine itself. Start the engine first.
 
-### DSP Utilities
-- `Engine/src/audio/dsp` centralizes lock-free primitives (oscillators, envelopes, SIMD helpers) with scalar fallbacks and runtime feature detection.
-- Callers pre-size scratch buffers; DSP helpers must stay allocation-free inside the callback.
+## Architecture
 
-### Plugin Architecture (Subprocess CLAP)
-- `audio/ipc` provides shared-memory ring buffers, TCP command protocols, and `ProcessManager` for subprocess lifecycle.
-- `clap_host/subprocess_adapter` implements `AudioDevice`, manages `LoadingState`, parameter caches, and GUI bridging to the window thread.
-- `plugin_host` crate runs in a subprocess, handling command loops, CLAP host API, audio processing, and GUI callbacks.
-- Audio thread logic must `try_lock` `LoadingState`; on `Loading`/`Failed`, it passes audio through silently and zero-fills outputs if the subprocess under-produces.
-- Parameter messages use normalized 0.0-1.0 values; blocking IPC (e.g., `GetParameter`) lives off the audio thread.
-- GUI lifecycle is synchronized through `WindowManager`, OSC commands, and `PluginResponse::GuiClosed`; adapters must reset `gui_open` even on errors.
-- Failed subprocess or socket loss downgrades to pass-through audio and raises engine logs; shared-memory handles clean up when the last `Arc` drops.
+### Engine threads (`Engine/src/`)
+- **Main thread** (`main.rs`, `osc/server.rs`): runs the OSC server. It turns OSC messages into `AudioCommand`s (`audio/commands.rs`) and forwards `EngineStatus` back to Godot.
+- **Audio callback** (`audio/processing.rs`, `audio/mixing.rs`): real-time. It receives commands with `try_recv` and sends statuses and meters at about 20 Hz.
+- **WindowManager thread** (`window_manager.rs`, winit): owns the host windows for plugin GUIs.
+- **AudioFileService** (`audio/io/`): worker pool for decoding (symphonia), resampling (rubato) and waveform caches. The audio thread only ever receives finished PCM. Stale `req_id` completions must be ignored.
+- Main ↔ audio communication uses crossbeam channels.
 
-### Built-In SFZ Sampler
-- Device ID `sonara.builtin.sfizz` lives in `audio/devices/sfizz_device.rs` and loads via `/channel/{id}/device/{slot}/load_file`.
-- `load_sfz_async` spawns a worker thread; `LoadingState` (`Idle`, `Loading`, `Ready`, `Failed`) is guarded by nested `Mutex` locks accessed via `try_lock`.
-- Rendering interleaves planar sfizz output into stereo buffers sized during initialization; lock failures output silence instead of blocking.
-- `reset` issues `all_sound_off`, `deactivate` resets state to `Idle`, and background failures populate `Failed` until a new file request arrives.
-- Dependencies rely on `rust-sfizz` and `libsndfile`; keep `build.rs` link directives aligned when updating.
+### Audio thread contract (critical)
+Code on the audio callback must never allocate, block, do I/O, or wait on a lock. Use `try_lock()` and skip the work (output silence or pass-through) when the lock isn't available. Preallocate every buffer at init time. Log with `info!`/`warn!`/`error!`, never `println!`.
 
-### Building, Running, and Testing
-- Use debug workflows exclusively unless explicitly approved:
-  ```bash
-  cd Engine
-  cargo build
-  cargo test
-  cargo run
-  ```
-- `./run_engine.sh` is the quickest way to launch the engine in debug mode.
-- Never invoke `cargo build --release`; prefer custom profiles (e.g., `--profile profiling`) if optimization is required.
-- Smoke the OSC surface with `./test_osc.sh` or manual commands:
-  ```bash
-  oscsend localhost 7000 /transport/play
-  oscsend localhost 7000 /transport/seek ii 0 0
-  oscsend localhost 7000 /transport/stop
-  ```
+### Callback and mixing
+1. Drain commands.
+2. Clear buffers.
+3. Compute `(tick, frame_offset)` pairs so MIDI is sample-accurate. Devices must use `frame_offset` directly and never convert it back to ticks.
+4. Render tracks and device chains.
+5. `mix_and_output` runs five passes:
+   - Device pre-pass. Buses are skipped here.
+   - Fader and pan.
+   - Sends.
+   - Hierarchical routing, at most 10 iterations. Buses run their devices and reapply pan here.
+   - Master output and meters.
 
-### Debugging & Logging
-- Runtime logs live in `./logs/` alongside the engine binary: `last_info.log`, `last_warn.log`, `last_combined.log`.
-- On `/project/init`, logs rotate into timestamped `logs/session_<YYYYMMDD_HHMMSS>_{info|warn|combined}.log`, keeping the five newest archives per severity.
-- A tracing layer forwards WARN/ERROR records over OSC `/log` messages; Godot prints them via `AudioEngineOSC.engine_log_message`.
-- Tail `logs/last_warn.log` (and optionally `last_info.log`) while reproducing issues, and capture the freshest `session_*` files when sharing evidence.
+Pan is applied only in pass 2 and once per bus in pass 4, never while routing. The audio callback is the master clock.
 
-## Godot UI
+### Channels and devices
+- Channel types are `INSTRUMENT`, `AUDIO` and `BUS` (`Channel.ChannelType` in Godot). The master channel is identified by ID 1, not by a type.
+- Channel IDs: 0 = none, 1 = master, 2–999 = user channels, 1000 and up = hardware outputs.
+- Tracks (sequencing) are separate from channels (mixing) and point to one through `default_channel_id`.
+- Each channel has an ordered chain of `Box<dyn AudioDevice>` (`audio/devices/mod.rs`). MIDI goes only to the first device.
+- Built-in devices: `polysynth`, `delay`, `sfizz_device` (SFZ sampler), `spectrum_analyzer`. Godot discovers them at runtime through `/builtin/request` → `/builtin/info` → `/builtin/complete`.
+- Devices go to sleep after about 3 s of silence and no MIDI (`DeviceSleepState`) so their processing is skipped.
+- Parameters cross the OSC and IPC boundary as normalized 0.0–1.0 values.
 
-### Architecture & Systems
-- `editor/Editor.gd` is the entry point, wiring the Arranger, Mixer, Clip Editor, and other self-contained systems.
-- `data/` hosts OSC-synchronized models (`Project`, `Track`, `Channel`, `Clip`, `ClipInstance`) that mirror engine state.
-- `components/` contains reusable UI controls (meters, sliders, knobs) built around shared `GridHelper` instances for tempo, zoom, and snapping.
-- `Midi` provides static note/frequency helpers, and `Sonara` autoload exposes the global editor instance.
+### CLAP plugins
+- `audio/ipc/` holds `ProcessManager`, the shared-memory ring buffers and the command protocol.
+- `audio/devices/clap_host/subprocess_adapter/` implements `AudioDevice` for plugins.
+- `plugin_host/` is the code that runs inside the subprocess.
+- Plugins load on a background thread behind a `LoadingState`. While it is Loading or Failed, the audio thread passes audio through.
 
-### Clip & MIDI Editing
-- `ClipEditor.gd` toggles between clip-mode and track-mode by observing `Sonara.editor.clips_selected` and binds rulers, cursors, and MIDI editors accordingly.
-- `MidiEditor.gd` manages note input, draws overlays, and delegates to `NoteEditor` instances; in track mode it instantiates one editor per track, offsetting clips by `start_ticks`.
-- `note_editor/NoteContainer.gd` renders notes for a clip or track via `bind_to_clips`, keeping in sync with shared `GridHelper` data.
-- `note_editor/NoteSelectionManager.gd` owns multi-note selection, clipboard payloads, and box-select ranges; `MidiEditor` listens to its signals for interaction state.
+### Godot UI (`Godot/`)
+- Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `AssetService` (browser asset providers) and `MidiManager` (MIDI input and virtual keyboard, routed to armed channels).
+- `editor/Editor.gd` is the entry point. It wires up the self-contained systems: `arranger/`, `mixer/`, `clip_editor/`, `browser/` and `devices/`.
+- The `data/` models (`Project`, `Track`, `Channel`, `Clip`, `DeviceInstance`, …) sync themselves with the engine. The UI calls a setter such as `channel.set_volume()`. The model updates its state, sends OSC, and emits a signal, and the UI updates from that signal. To add a synced property, add the signal and setter and wire it into `sync_to_engine()`. UI code never sends OSC directly.
+- `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.
+- Device visuals extend `devices/DeviceView.gd`. Subscribe to device data streams in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
 
-### Scene & Script Practices
-- Organize scripts around single responsibilities and use inheritance/composition instead of sprawling free functions.
-- Add intent comments (`##`) above every class and function, and surface tweakable behavior as exported/configurable properties.
-- Use Godot MCP tooling to modify `.tscn`, `.uid`, and related resources; do not hand-edit scene files.
-- Node paths referenced in tooling should be relative to the scene being edited.
+The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_PROTOCOL.md`. When you add an OSC message, update the handler in `osc/server.rs`, the command in `audio/commands.rs`, and the doc.
 
-### Config System
-- `Sonara.gd` autoload stores config in `~/.config/sonara/config.json`, caching the dictionary in memory.
-- Read settings via `Sonara.get_config("section/key", default)` and write them with `Sonara.set_config("section/key", value)`; it auto-creates intermediate dictionaries.
-- Call `Sonara.save_config()` after mutating settings and avoid manual file I/O.
-- Path helpers (`get_config_dir`, `get_config_path`, `get_projects_dir`) are memoized; reuse them when writing additional caches.
+## Subsystem references
 
-### Asset System
-- `AssetService.gd` initializes providers, merges results, and emits `assets_changed(added, removed, modified)`; no automatic scan runs at startup.
-- Providers: `FileSystemAssetProvider` (audio/MIDI), `DeviceAssetProvider` (built-ins and plugins), `SfzAssetProvider` (SFZ instruments), each honoring config-defined scan paths and intervals.
-- Providers emit cached assets during `initialize(SceneTree)` and persist metadata under `~/.config/sonara/` (`assets.json`, `samples_cache.json`, `sfz_cache.json`, `plugins.json`).
-- `DeviceAssetProvider` requests built-in devices via `/builtin/request`, accumulates `/builtin/info` payloads (parameters, GUI flags, metadata), and flushes them when `/builtin/complete` arrives; plugin discovery runs through `/plugin/scan` and `/plugin/scan_complete`.
-- Asset identities use absolute paths or canonical device IDs; `AssetService` rehydrates favorites/tags/last_used from the metadata cache before broadcasting updates.
+`.cursor/rules/` has detailed, subsystem-specific notes. Read the matching file before working in that area. They may lag behind the code, so check claims against the source.
 
-### Device Views & Parameters
-- Device metadata registers up to four view types (Panel, Large, Auxiliary, Compact) via `Device.register_*_view(preload("res://..."))`; store PackedScenes, not file paths.
-- All device visuals extend `DeviceView`, gain their `DeviceInstance` binding before entering the scene tree, and implement `_on_view_shown`/`_on_view_hidden` for subscriptions.
-- `DeviceInstance.create_view(type)` instantiates a PackedScene, sets `view_type`, asserts it inherits `DeviceView`, and returns `null` when unsupported.
-- `DevicePanel` loads the Panel view first; the Large toggle opens either a plugin GUI (`device.has_gui()`) or a managed window containing the Large view. Auxiliary views replace the right pane while a Large window is active.
-- Device parameters define `param_type` (`float`, `bool`, `enum`), ranges, defaults, `is_logarithmic`, and `syncable`; enums enumerate display strings where indices match engine payloads. Respect `syncable=false` for UI-only controls.
+| Area | Rule file |
+|---|---|
+| Engine threads, pipeline, mixing, time-stretching | `engine-architecture.mdc`, `engine-audio-thread.mdc` |
+| CLAP subprocess hosting, IPC, plugin GUIs | `engine-plugin-architecture.mdc` |
+| SFZ sampler (sfizz) | `engine-sfz-sampler.mdc` |
+| Logs and debugging | `engine-debugging.mdc` |
+| Godot structure, clip/MIDI editor, GridHelper | `godot-architecture.mdc` |
+| OSC sync pattern, device data streams, clip loading | `godot-osc.mdc` |
+| Device views and parameter types | `godot-device-views.mdc` |
+| Asset browser and providers | `godot-asset-system.mdc` |
+| Config system | `godot-config-system.mdc` |
+| Drag and drop | `godot-drag-and-drop.mdc` |
 
-### OSC Synchronization & Device Data
-- Follow the self-synchronizing pattern: UI calls a setter, the data object updates local state, sends OSC, and emits a signal that the UI listens to.
-- Add new properties by extending the data class (signal + setter + `sync_to_engine` wiring) rather than having UI code emit OSC directly.
-- Subscribe to device data streams with `AudioEngineOSC.subscribe_device_data(channel_id, device_slot, data_type)` and unsubscribe when views hide; payloads arrive on `device_data_received` and specialized signals like `device_spectrum_received`.
-- WARN/ERROR logs arrive via `/log` and bubble through `AudioEngineOSC.engine_log_message(level, message)` into the editor console.
+## Debugging
 
-### Drag and Drop
-- Implement `_get_drag_data`, `_can_drop_data`, and `_drop_data` on participating `Control` nodes; return `null` when nothing is draggable.
-- Call `set_drag_preview(preview_control)` to attach a visual, and reuse the preview's `tree_exiting` signal to detect drag completion or cancellation.
-- Use `force_drag(data, preview)` (deferred when inside `_drop_data`) to bootstrap swaps or chained drags.
-- Global helpers: `Viewport.gui_is_dragging()`, `Viewport.gui_get_drag_data()`, `Viewport.gui_is_drag_successful()`, and `Control.is_drag_successful()` enable cross-control coordination via `_notification(Node.NOTIFICATION_DRAG_BEGIN/END)`.
+- Engine logs are written to `logs/` relative to the working directory, normally `Engine/logs/`. The files are `last_info.log`, `last_warn.log` (WARN and above) and `last_combined.log`. `/project/init` rotates them into `session_<timestamp>_*.log` files and keeps the 5 newest.
+- WARN and ERROR messages are also forwarded to Godot over `/log`. Godot writes its own log to `Godot/logs/last.log`.
+- When debugging, add plenty of logging and ask the user to reproduce the problem and report back.
 
-## Documentation Resources
-- CLAP / Clack: `/prokopyl/clack`
-- DASP DSP primitives: `/websites/rs_dasp_0_11_0_dasp`
+## Code style
+
+- Keep files under 600 lines, with a hard limit of 1000. Refactor when a file grows past that.
+- Prefer object-oriented designs where behavior lives in structs and classes. Keep solutions simple and fail fast. If the code organization is confusing, stop and ask the user before reorganizing it.
+- **Rust:** run `cargo fmt`. Put `///` doc comments on functions, methods and types.
+- **GDScript:**
+  - Leave two blank lines between functions.
+  - Put a short `##` comment above every class and every function.
+  - Expose behavior worth tweaking as configurable properties.
+  - Write ternaries as `a if cond else b`.
+- **Godot resources:** never hand-edit `.tscn`, `.tres` or `.uid` files. Use the godot-ai MCP tools (scene, node and resource tools) instead. Node paths are relative to the scene being edited.
+
+## Project tracking
+
+- `STATUS.md` is a scratchpad for the current complex investigation, with "Working" and "Not Working" sections.
+- `TODO.md` is the checkbox backlog. Mark an item `[x]` only after the behavior is verified.
+- Keep both files short.
+
+## Library docs (Context7 IDs)
+
+- clack (CLAP): `/prokopyl/clack`
+- dasp: `/websites/rs_dasp_0_11_0_dasp`
 - Signalsmith DSP: `/websites/rs_signalsmith-dsp_0_0_2_signalsmith_dsp`
-- Godot Engine docs: `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2`
-- Rubato resampler: `/henquist/rubato`
-- Symphonia audio decoder: `/pdeljanov/symphonia`
-- Full Clack source: `../clack`
-
+- rubato: `/henquist/rubato`
+- symphonia: `/pdeljanov/symphonia`
+- Godot: `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2`. This covers 4.2 while the project runs 4.7, so check newer APIs against it.

@@ -27,9 +27,10 @@ Create a lightweight, real-time audio workstation that combines:
 # Quick start
 ./run_engine.sh
 
-# Or manually
+# Or manually (build all binaries so plugin_host is available for CLAP plugins)
 cd Engine
-cargo run --release
+cargo build --release
+./target/release/engine
 ```
 
 The engine will:

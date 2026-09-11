@@ -1,7 +1,4 @@
 #!/bin/bash
-# Helper script to run the audio engine
+# Quick start: build and run the audio engine in release mode
 
-cd Engine
-echo "Building and running DAW Audio Engine..."
-echo ""
-cargo run --release
+exec "$(dirname "$0")/Engine/run_release.sh" "$@"

@@ -372,6 +372,28 @@ impl ProcessManager {
         }
     }
 
+    /// Locate the `plugin_host` binary, which must sit next to the running engine executable.
+    /// Fails with an actionable message when it is missing (e.g. only `engine` was built).
+    fn plugin_host_path() -> Result<PathBuf, String> {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+        let exe_dir = exe_path
+            .parent()
+            .ok_or_else(|| format!("Engine executable has no parent dir: {}", exe_path.display()))?;
+        let plugin_host_path = exe_dir.join("plugin_host");
+
+        if !plugin_host_path.is_file() {
+            return Err(format!(
+                "plugin_host binary not found at {}. Build all engine binaries with the same \
+                 profile as the engine (e.g. `cargo build --release` in Engine/), or launch via \
+                 Engine/run_release.sh",
+                plugin_host_path.display()
+            ));
+        }
+
+        Ok(plugin_host_path)
+    }
+
     /// Spawn a new plugin host subprocess
     pub fn spawn_plugin(
         &self,
@@ -382,6 +404,8 @@ impl ProcessManager {
         max_buffer_size: usize,
     ) -> Result<(), String> {
         info!("Spawning plugin subprocess: {} ({})", plugin_id, key);
+
+        let plugin_host_path = Self::plugin_host_path()?;
 
         // Allocate port for control socket
         let port = {
@@ -395,12 +419,6 @@ impl ProcessManager {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
             .map_err(|e| format!("Failed to bind control socket: {}", e))?;
 
-        // Get path to plugin_host executable
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("Failed to get current exe path: {}", e))?;
-        let exe_dir = exe_path.parent().unwrap();
-        let plugin_host_path = exe_dir.join("plugin_host");
-
         // Create a Unix socket pair BEFORE spawning for FD passing
         let (unix_sock_parent, unix_sock_child) =
             UnixStream::pair().map_err(|e| format!("Failed to create Unix socket pair: {}", e))?;
@@ -412,7 +430,7 @@ impl ProcessManager {
         let target_fd = 3; // Well-known FD for the Unix socket
 
         let child = unsafe {
-            Command::new(plugin_host_path)
+            Command::new(&plugin_host_path)
                 .arg(port.to_string())
                 .arg(target_fd.to_string()) // Pass FD 3 as arg
                 .stdout(std::process::Stdio::inherit()) // Show subprocess stdout
@@ -438,7 +456,13 @@ impl ProcessManager {
                     Ok(())
                 })
                 .spawn()
-                .map_err(|e| format!("Failed to spawn plugin_host: {}", e))?
+                .map_err(|e| {
+                    format!(
+                        "Failed to spawn plugin_host at {}: {}",
+                        plugin_host_path.display(),
+                        e
+                    )
+                })?
         };
 
         let pid = child.id();
