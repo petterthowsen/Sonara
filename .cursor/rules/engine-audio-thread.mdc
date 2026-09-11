@@ -66,18 +66,14 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
    - Muted channels, or channels excluded by solo, have their buffers cleared to silence to short-circuit later passes.  
    - This establishes the "post-fader" buffer used for metering and for post-fader sends.
 
-3. **Send Accumulation**  
-   - Iterates `Channel::send_channels` and sums sends into each target's preallocated `MixBuffers::send_*` buffers.  
-   - Pre-fader sends tap `MixBuffers::pre_fader_*`, copied at the start of the mix (before the device pre-pass), and reapply pan so stereo matches the source; post-fader sends read the pass-2 buffer.  
-   - Send returns are scaled by the destination channel gain (`get_gain()`), so moving a bus fader affects both routes and send returns.
+3. **Routing in Dependency Order (routes and sends)**
+   - `MixBuffers::pending_inputs` counts each channel's incoming routes and sends. A channel finishes when it reaches 0, so every channel processes exactly once, after all its inputs.
+   - Route targets (buses, master) run `process_device_chain()` on finishing, even with no input, so reverb/delay tails ring after playback stops; then they apply their own pan.
+   - The finished channel then mixes into its `output_channel_id` and send targets. Pre-fader sends tap `MixBuffers::pre_fader_*` (copied before the device pre-pass) and reapply pan; post-fader sends read the pass-2 buffer.
+   - Routes and send returns are scaled by the destination gain (`get_gain()`). Never reapply pan while routing.
+   - Solo/mute rules still apply; master never routes onward and is never silenced by solo. Routing cycles are broken at the first unfinished channel.
 
-4. **Hierarchical Routing with Bus Post-Processing**  
-   - Multi-pass loop (max 10) routes channels to their `output_channel_id`. Each routed source is snapshotted into `MixBuffers::route_*` before mixing, and `MixBuffers::routed` tracks which sources were already mixed.  
-   - Only apply gain—never reapply pan while routing.  
-   - After each routing pass, buses that received audio run `process_device_chain()` and reapply their own pan before re-entering the routing loop; this lets bus effects/CLAP plugins operate on the accumulated mix.  
-   - Solo/mute rules still apply, and master starts each buffer with `routed = true` so it never forwards audio further.
-
-5. **Master Output & Metering**  
+4. **Master Output & Metering**  
    - Channel buffers are mixed in place, so they already hold post-effect, post-pan audio for peak metering.  
    - Copies master (ID 1) to the interleaved CPAL buffer for its bound hardware output (ID ≥1000).  
    - Peak detection still scans both channels, and status updates are throttled to ~20 Hz outside the callback.

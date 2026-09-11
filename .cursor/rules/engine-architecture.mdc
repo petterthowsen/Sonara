@@ -158,38 +158,33 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
 - **Critical**: Position must be tracked continuously frame-by-frame, not recalculated from tick position (which causes aliasing at high stretch factors)
 
 ### Audio Mixing Implementation
-**`mixing.rs::mix_and_output` orchestrates five passes, keeping the audio thread real-time safe:**
+**`mixing.rs::mix_and_output` orchestrates four passes, keeping the audio thread real-time safe:**
 
-1. **Device Pre-Pass (non-bus channels)**  
-   - Instruments/effects render via `Channel::process_device_chain()` before any fader math so their output becomes the baseline for sends.  
-   - CLAP/Sfizz adapters flush pending parameter changes to the UI here.  
-   - Bus channels are skipped; they process after receiving routed audio in pass 4.
+0. **Route counting**
+   - `count_route_inputs` counts each channel's incoming routes and sends (`MixBuffers::pending_inputs`). Channels with inputs, and master, are route targets.
 
-2. **Fader & Pan Pass**  
-   - Applies smoothed gain and constant-power pan to every audible channel (skips muted or solo-excluded channels, clearing their buffers to silence).  
-   - Pan math runs per-sample to avoid clicks; this establishes the "post-fader" buffer used for metering and post-fader sends.
+1. **Device Pre-Pass (channels that are not route targets)**
+   - Instruments/effects render via `Channel::process_device_chain()` before any fader math.
+   - CLAP/Sfizz adapters flush pending parameter changes to the UI here.
+   - Route targets (buses, master) are skipped; they process in pass 3.
 
-3. **Send Accumulation**  
-   - Iterates `Channel::send_channels` and builds per-target buffers.  
-   - Post-fader sends read the post-pass buffer; pre-fader sends tap the cloned pre-pass audio (with pan reapplied so stereo imaging matches the source).  
-   - Destination faders apply again when sends are mixed in, ensuring bus gain still controls send returns.  
-   - Targets touched here are flagged for device processing in pass 4.
+2. **Fader & Pan Pass**
+   - Applies smoothed gain and pan to every audible channel (muted or solo-excluded channels are cleared).
+   - This establishes the "post-fader" buffer used for metering and post-fader sends.
 
-4. **Hierarchical Routing with Bus Processing**  
-   - Multi-pass loop (up to 10 iterations) routes channels to their `output_channel_id`, using the stored buffers so audio is not double-counted.  
-   - Only gain is applied; never reapply pan while routing.  
-   - After each routing pass, buses that received audio run their device chains and reapply bus pan. Once processed they re-enter the routing loop so their post-effect audio can flow further (bus → bus → master).  
-   - Solo/mute gating is honored throughout; the master channel is treated as already processed so it never routes onward.
+3. **Routing in Dependency Order**
+   - A channel finishes once `pending_inputs` reaches 0, so each channel processes exactly once per buffer, after everything routing into it (bus → bus → master).
+   - Finishing a route target runs its device chain **even with no input** (reverb/delay tails keep ringing), then applies its pan. Silenced targets are cleared.
+   - Finishing any channel routes it onward (`route_channel`): output and post-fader sends read the buffer; pre-fader sends tap the pre-pass copy with pan reapplied. Only the destination fader gain is applied, never pan.
+   - A routing cycle is broken at the first unfinished channel; already finished targets receive nothing.
 
-5. **Master Output & Metering**  
-   - Syncs `channel_buffers` back into `state.channels` for accurate post-pan peaks.  
-   - Master buffer (ID 1) is copied to the interleaved CPAL output for device IDs ≥1000.  
-   - Meter messages still piggyback on the status channel afterward (20 Hz cadence).
+4. **Master Output**
+   - Master buffer (ID 1) is copied to the interleaved CPAL output for device IDs ≥1000. Peaks are computed by the callback afterward.
 
-**Invariants:**  
-- Never allocate during any pass; all temporary buffers are pre-sized at initialization.  
-- Pan occurs exactly twice: once per audible channel in pass 2, once per bus after it receives mixed audio in pass 4.  
-- Sends ignore invalid targets (self, IDs ≥1000, muted/solo-blocked buses) to avoid denormals and feedback loops.
+**Invariants:**
+- Never allocate during any pass; all temporary buffers are pre-sized at initialization.
+- Pan occurs once per audible channel in pass 2 and once per route target in pass 3.
+- Routes and sends ignore invalid targets (none, self, IDs ≥1000, missing channels). Master never routes onward and is never silenced by another channel's solo.
 
 ### Channel Routing and IO
 **Channel Types:** `INSTRUMENT`, `AUDIO`, `BUS` (Godot `Channel.ChannelType`); the master is channel ID 1 rather than a separate type

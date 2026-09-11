@@ -47,14 +47,13 @@ Code on the audio callback must never allocate, block, do I/O, or wait on a lock
 2. Clear buffers.
 3. Compute `(tick, frame_offset)` pairs so MIDI is sample-accurate. Devices must use `frame_offset` directly and never convert it back to ticks.
 4. Render tracks and device chains.
-5. `mix_and_output` runs five passes:
-   - Device pre-pass. Buses are skipped here.
+5. `mix_and_output` runs four passes:
+   - Device pre-pass. Route targets (buses, master) are skipped here.
    - Fader and pan.
-   - Sends.
-   - Hierarchical routing, at most 10 iterations. Buses run their devices and reapply pan here.
-   - Master output and meters.
+   - Routing and sends in dependency order. Each channel finishes once, after every channel routing or sending into it. Route targets then run their devices (even with no input, so tails ring) and pan.
+   - Master output. The callback computes meters afterward.
 
-Pan is applied only in pass 2 and once per bus in pass 4, never while routing. The audio callback is the master clock.
+Pan is applied only in pass 2 and once per route target in pass 3, never while routing. The audio callback is the master clock.
 
 ### Channels and devices
 - Channel types are `INSTRUMENT`, `AUDIO` and `BUS` (`Channel.ChannelType` in Godot). The master channel is identified by ID 1, not by a type.

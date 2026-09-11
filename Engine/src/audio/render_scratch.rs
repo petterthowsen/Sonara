@@ -22,8 +22,6 @@ pub struct RenderScratch {
     pub note_events: Vec<NoteEvent>,
     /// Channel IDs for the current buffer, so mixing passes can look channels up by ID.
     pub channel_ids: Vec<ChannelId>,
-    /// (source, destination) routes collected in the current routing pass.
-    pub mix_ops: Vec<(ChannelId, ChannelId)>,
 }
 
 impl Default for RenderScratch {
@@ -32,7 +30,6 @@ impl Default for RenderScratch {
             tick_events: Vec::with_capacity(MAX_TICK_EVENTS),
             note_events: Vec::with_capacity(MAX_NOTE_EVENTS),
             channel_ids: Vec::with_capacity(MAX_CHANNELS),
-            mix_ops: Vec::with_capacity(MAX_CHANNELS),
         }
     }
 }
@@ -46,24 +43,13 @@ pub struct MixBuffers {
     pub pre_fader_right: Vec<f32>,
     /// `pre_fader_*` hold this buffer's audio.
     pub has_pre_fader_copy: bool,
-    /// Left channel sum of sends arriving at this channel.
-    pub send_left: Vec<f32>,
-    /// Right channel sum of sends arriving at this channel.
-    pub send_right: Vec<f32>,
-    /// `send_*` hold this buffer's sends.
-    pub has_send_input: bool,
-    /// Left channel snapshot taken when this channel is routed in a pass.
-    pub route_left: Vec<f32>,
-    /// Right channel snapshot taken when this channel is routed in a pass.
-    pub route_right: Vec<f32>,
-    /// Another channel routes or sends here, so this channel's devices run after routing.
+    /// Routes and sends into this channel that have not mixed in yet this buffer.
+    pub pending_inputs: usize,
+    /// Another channel routes or sends here (or this is master), so this channel's devices run
+    /// after its inputs have mixed in.
     pub is_route_target: bool,
-    /// Received sends and must run its devices before routing onward.
-    pub pending_bus: bool,
-    /// Received routed audio in the current routing pass.
-    pub bus_destination: bool,
-    /// Already routed onward (master is always marked).
-    pub routed: bool,
+    /// Processed and routed onward this buffer.
+    pub done: bool,
 }
 
 impl MixBuffers {
@@ -76,15 +62,7 @@ impl MixBuffers {
 
     /// Resize every buffer to `buffer_size` frames.
     pub fn resize(&mut self, buffer_size: usize) {
-        for buffer in [
-            &mut self.pre_fader_left,
-            &mut self.pre_fader_right,
-            &mut self.send_left,
-            &mut self.send_right,
-            &mut self.route_left,
-            &mut self.route_right,
-        ] {
-            buffer.resize(buffer_size, 0.0);
-        }
+        self.pre_fader_left.resize(buffer_size, 0.0);
+        self.pre_fader_right.resize(buffer_size, 0.0);
     }
 }

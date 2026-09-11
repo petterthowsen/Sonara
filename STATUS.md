@@ -22,9 +22,12 @@ Phase 2 (later): audio thread owns its state, lock-free command queue, removed o
 
 - Live: audio plays and routes through master after restarting engine + Godot
 - Live: Dragonfly Reverb (CLAP) on a bus, and importing a large audio clip into a new track during playback: stable, no dropouts
-- Live: mute and solo; reverb tail on a send-fed bus keeps ringing after pausing playback (routed-bus tails still untested, see TODO)
+- Live: mute and solo; reverb tails on send-fed and routed buses keep ringing after pausing playback
+- Live: nested buses (track → bus → bus → master)
+- Mixing routes in dependency order (fixes routed-bus tails and double bus processing): 3 new unit tests pass
 
 ### Not Working / Not verified
+- Live: mute on master now silences output (previously master mute only bypassed its devices)
 - Godot doesn't resend the project (init, master channel) when the engine restarts, so restart Godot too
 - Stress checks not done yet, while audio plays: remove a CLAP plugin, open/close its GUI, scan plugins. Listen for dropouts.
 - Doctest in `ipc/protocol.rs` fails (diagram in a doc comment parsed as Rust). Already broken, file untouched.

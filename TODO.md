@@ -3,15 +3,9 @@
 # Bugs / Issues
 - [?] Moving a clip from one track to another causes playback of new clip to actually play on original track.
     ^ I think this is solved.
-- [x] Soloing a channel causes the signal to get louder (skipping fader when soloed?)
-- [ ] Timeline Clips
-    - [x] on project load/open, all TimelineClip nodes are all visually at tick 0 and have no name
 - [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
 
 ## Audio Engine (Rust Backend)
-
-### Debugging
-- [x] Improve logging: split info/warn levels into separate files. Only keep last N session files. Name them last_info.txt, last_warn.txt and last_combined.txt
 
 ### Core Audio
 - [ ] Keep audio engine running after playback so instruments (PolySynth) and reverb/delay effects can settle after stopping
@@ -27,9 +21,9 @@
     - [ ] Phase 1, partly verified live (CLAP on a bus, large clip import during playback): slow commands (plugin scan, device create/drop, plugin GUI/activation IPC) run outside the lock in `CommandWorker`; the callback uses a bounded `try_lock` and outputs silence
 - [ ] Audio thread allocations still left: unbounded status channel sends, `process_device_chain` sleep-change Vec, `audio_playback_positions` insert (String clone) on clip start, `poll_parameter_changes` sets a socket read timeout every buffer per CLAP plugin
     - [ ] Removed, needs live verification: per-buffer Vecs/HashMaps and buffer clones in `process_audio`/`mix_and_output`, debug `info!` logging in the callback
-- [ ] Mixing: routing targets (buses, master) only run their devices in a pass where a routed source is above -80 dB (sends always trigger it), so reverb/delay tails on a routed bus cut off when playback pauses (confirmed live; send-fed buses are fine)
-- [ ] Mixing: a bus or master that receives audio in more than one routing pass runs its devices and pan more than once per buffer
-    - Fix for both: order the routing pass by dependency. A route target processes once per buffer, after every channel routing into it has mixed in: run devices (even with no input, so tails ring; device sleep keeps idle buses cheap), apply pan, then route onward, master last. Drops the `route_*` snapshots and `pending_bus`/`bus_destination`/`routed` flags in `MixBuffers`.
+- [x] Mixing: reverb/delay tails on a routed bus cut off when playback pauses (verified live after the fix below)
+- [x] Mixing: a bus or master that receives audio in more than one routing pass runs its devices and pan more than once per buffer (verified live with nested buses)
+    - Fix: routing and sends run in dependency order (`pending_inputs` in `MixBuffers`). Each channel finishes once, after all its inputs; route targets run devices even with no input, then pan, then route onward.
 - [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
@@ -138,6 +132,8 @@
 - [ ] Smooth meter components (lerp?)
 
 ### UI Components & General
+- [ ] Settings Menu: Nestable categories on the left as a tree, avaialble settings on the right.
+    - Categories: Audio, Behavior, Appearence, Shortcuts
 - [ ] **CRITICAL**: Undo/Redo using command pattern
 
 ### Hardware & MIDI
