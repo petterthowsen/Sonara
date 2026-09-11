@@ -238,7 +238,7 @@ func get_shortcut_list() -> Array[Dictionary]:
 	var groups: Array[Dictionary] = [
 		{ "name" = "Transport", "actions" = ["play", "pause", "pause_here", "stop_here", "toggle_computer_keyboard"] },
 		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_secondary_mixer", "toggle_device_lane"] },
-		{ "name" = "Edit", "actions" = ["ui_duplicate", "ui_delete"] },
+		{ "name" = "Edit", "actions" = ["ui_undo", "ui_redo", "ui_duplicate", "ui_delete"] },
 		{ "name" = "Keyboard", "actions" = ["keyboard_transpose_up", "keyboard_transpose_down", "keyboard_velocity_up", "keyboard_velocity_down"] },
 	]
 

@@ -93,6 +93,9 @@ var project_path: String = ""
 # Modified flag
 var is_modified: bool = false
 
+# Undo/redo history for document mutations
+var history: CommandHistory = CommandHistory.new()
+
 # Transport state
 var is_playing: bool = false
 var playhead_ticks: int = 0
@@ -181,6 +184,15 @@ func _connect_audio_engine_signals():
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Handle input actions."""
+	if event.is_action_pressed("ui_undo"):
+		undo()
+		accept_event()
+		return
+	if event.is_action_pressed("ui_redo"):
+		redo()
+		accept_event()
+		return
+
 	# Check for pause_here with shift modifier
 	if event.is_action_pressed("pause_here"):
 		if event is InputEventKey and event.shift_pressed:
@@ -232,6 +244,7 @@ func open_project(p: Project) -> void:
 
 	project = p
 	is_modified = false
+	history.clear()
 
 	# Update UI state
 	_update_transport_ui()
@@ -273,6 +286,7 @@ func close_project() -> void:
 	is_modified = false
 	playhead_ticks = 0
 	is_playing = false
+	history.clear()
 
 	project_closed.emit()
 	print("[Editor] Project closed")
@@ -308,7 +322,8 @@ func save_project(path: String = "") -> bool:
 	
 	project_path = save_path
 	is_modified = false
-	
+	history.mark_save_point()
+
 	project_saved.emit(save_path)
 	print("[Editor] Project saved: ", save_path)
 	return true
@@ -399,13 +414,33 @@ func set_tempo(new_tempo: float) -> void:
 	if project == null:
 		return
 
-	project.tempo = clamp(new_tempo, 20.0, 999.0)
+	var old_tempo := project.tempo
+	var clamped = clamp(new_tempo, 20.0, 999.0)
+	if is_equal_approx(old_tempo, clamped):
+		return
+
+	project.tempo = clamped
 
 	# Sync to audio engine if connected
 	if project.is_connected_to_engine():
 		AudioEngineOSC.send("/transport/tempo", [project.tempo])
 
-	_mark_modified()
+	# Record mergeable tempo edits (spinbox drag / typing)
+	var cmd := PropertyCommand.new("Set Tempo", self, "", old_tempo, clamped)
+	cmd.set_callable(func(v): _apply_tempo_silent(v)).set_mergeable(true)
+	record_command(cmd)
+
+	_update_transport_ui()
+	tempo_changed.emit(project.tempo)
+
+
+## Apply tempo without pushing history (used by undo/redo PropertyCommand).
+func _apply_tempo_silent(new_tempo: float) -> void:
+	if project == null:
+		return
+	project.tempo = clamp(new_tempo, 20.0, 999.0)
+	if project.is_connected_to_engine():
+		AudioEngineOSC.send("/transport/tempo", [project.tempo])
 	_update_transport_ui()
 	tempo_changed.emit(project.tempo)
 
@@ -523,6 +558,49 @@ func _mark_modified() -> void:
 	if not is_modified:
 		is_modified = true
 		project_modified.emit()
+
+
+## Run command.do() and push onto the undo stack; marks the project dirty.
+func execute_command(cmd: Command) -> void:
+	if cmd == null:
+		return
+	history.execute(cmd)
+	_sync_modified_from_history()
+
+
+## Push an already-applied gesture onto the undo stack; marks the project dirty.
+func record_command(cmd: Command) -> void:
+	if cmd == null:
+		return
+	history.record(cmd)
+	_sync_modified_from_history()
+
+
+## Undo the last document command.
+func undo() -> bool:
+	if not history.can_undo():
+		return false
+	var ok := history.undo()
+	_sync_modified_from_history()
+	return ok
+
+
+## Redo the last undone document command.
+func redo() -> bool:
+	if not history.can_redo():
+		return false
+	var ok := history.redo()
+	_sync_modified_from_history()
+	return ok
+
+
+## Keep is_modified in sync with the history save point.
+func _sync_modified_from_history() -> void:
+	if history.is_at_save_point():
+		is_modified = false
+	else:
+		_mark_modified()
+
 
 func _update_transport_ui() -> void:
 	"""Update transport UI elements."""

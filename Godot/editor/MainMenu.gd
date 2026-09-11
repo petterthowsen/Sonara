@@ -47,6 +47,8 @@ func _ready() -> void:
 	# connect to editor signals
 	Sonara.editor.project_opened.connect(_on_project_opened)
 	Sonara.editor.project_closed.connect(_on_project_closed)
+	Sonara.editor.history.history_changed.connect(_update_undo_redo_menu)
+	_update_undo_redo_menu()
 	
 	# get file dialog reference and connect to it
 	await Sonara.editor.ready
@@ -103,9 +105,27 @@ func _set_project_dependent_items_enabled(enabled: bool) -> void:
 	file.set_item_disabled(file.get_item_index(FILE.Save), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save_As), not enabled)
 	
-	# Edit menu items that require an open project
-	edit.set_item_disabled(edit.get_item_index(EDIT.Undo), not enabled)
-	edit.set_item_disabled(edit.get_item_index(EDIT.Redo), not enabled)
+	# Edit menu undo/redo depend on history, not just project open
+	_update_undo_redo_menu()
+
+
+## Refresh Undo/Redo labels and enabled state from CommandHistory.
+func _update_undo_redo_menu() -> void:
+	var hist: CommandHistory = Sonara.editor.history if Sonara.editor else null
+	var can_undo := hist != null and hist.can_undo()
+	var can_redo := hist != null and hist.can_redo()
+	var undo_idx := edit.get_item_index(EDIT.Undo)
+	var redo_idx := edit.get_item_index(EDIT.Redo)
+	edit.set_item_disabled(undo_idx, not can_undo)
+	edit.set_item_disabled(redo_idx, not can_redo)
+	if can_undo:
+		edit.set_item_text(undo_idx, "Undo %s" % hist.undo_name())
+	else:
+		edit.set_item_text(undo_idx, "Undo")
+	if can_redo:
+		edit.set_item_text(redo_idx, "Redo %s" % hist.redo_name())
+	else:
+		edit.set_item_text(redo_idx, "Redo")
 
 
 # ============================================================================
@@ -190,14 +210,14 @@ func _on_quit() -> void:
 
 func _on_undo() -> void:
 	"""Undo last action."""
-	# TODO: Implement undo system
-	print("[MainMenu] Undo not yet implemented")
+	if Sonara.editor:
+		Sonara.editor.undo()
 
 
 func _on_redo() -> void:
 	"""Redo last undone action."""
-	# TODO: Implement redo system
-	print("[MainMenu] Redo not yet implemented")
+	if Sonara.editor:
+		Sonara.editor.redo()
 
 
 func _on_scan_plugins() -> void:

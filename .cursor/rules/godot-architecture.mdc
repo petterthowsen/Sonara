@@ -67,6 +67,13 @@ AudioEngineOSC.gd is a Low-level OSC transport class with `send` and `listen` in
 4. Items bind to their object (`TrackItem.bind_to_track()`, `MixerChannel.bind_to_channel()`) and connect to its property signals to refresh UI.
 5. Godot > Engine: UI callbacks call `set_[prop]` setters on data objects, which update state, send OSC, and emit the signal — UI never mutates fields or sends OSC directly.
 
+## Undo / Redo
+
+- Document mutations that should be undoable go through `Sonara.editor.history` via `HistoryUtil.execute()` / `HistoryUtil.record()` (or `Editor.execute_command` / `record_command`).
+- Data-object setters (`Channel.set_volume`, `Clip.add_midi_note`, …) must **not** push history themselves — they stay “apply + OSC + signal” only.
+- Use `execute` when the command should call `do()`; use `record` when the UI already applied the change live (e.g. fader/clip/note drag) and commits one command on gesture end (or via mergeable `PropertyCommand`s during the drag).
+- Clear history on new/open/close project; call `history.mark_save_point()` on save so undo-to-save-point clears the dirty flag.
+
 ## UI Binding Practices
 
 - When refreshing a control from a data signal, use `set_pressed_no_signal()`, `set_value_no_signal()` etc. so the update doesn't re-trigger the setter and loop.
