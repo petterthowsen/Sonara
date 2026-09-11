@@ -1,11 +1,13 @@
 pub mod clap_host;
 mod delay;
+mod factory;
 mod polysynth;
 mod sfizz_device;
 mod spectrum_analyzer;
 
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use delay::DelayDevice;
+pub use factory::DeviceFactory;
 pub use polysynth::PolySynthDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;

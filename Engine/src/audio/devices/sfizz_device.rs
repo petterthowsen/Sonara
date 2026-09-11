@@ -115,11 +115,12 @@ impl SfizzDevice {
     }
 
     /// Check if parameters have changed and clear the flag (poll-based notification)
+    /// Called from the audio thread, so a contended lock reports no change and is retried next buffer.
     pub fn take_parameters_changed(&self) -> bool {
-        let mut changed = self.parameters_changed.lock().unwrap();
-        let result = *changed;
-        *changed = false;
-        result
+        let Ok(mut changed) = self.parameters_changed.try_lock() else {
+            return false;
+        };
+        std::mem::take(&mut *changed)
     }
 
     /// Queue a parameter change for later (when try_lock fails)

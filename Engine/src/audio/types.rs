@@ -1,7 +1,7 @@
 use super::devices::AudioDevice;
 use super::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
+use super::render_scratch::MixBuffers;
 use std::collections::HashMap;
-use tracing::info;
 /// Value kind for setting device parameters
 #[derive(Debug, Clone, Copy)]
 pub enum ParamSetValue {
@@ -509,6 +509,9 @@ pub struct Channel {
     // Temporary interleaved buffer for device processing
     device_input_buffer: Vec<f32>,
     device_output_buffer: Vec<f32>,
+
+    /// Scratch buffers and flags used by `mix_and_output`
+    pub mix: MixBuffers,
 }
 
 impl Channel {
@@ -555,6 +558,7 @@ impl Channel {
             scheduled_midi_events: Vec::with_capacity(256),
             device_input_buffer: vec![0.0; buffer_size * 2],
             device_output_buffer: vec![0.0; buffer_size * 2],
+            mix: MixBuffers::new(buffer_size),
         }
     }
 
@@ -640,6 +644,7 @@ impl Channel {
         // Device buffers are interleaved stereo (frames * 2)
         self.device_input_buffer.resize(new_size * 2, 0.0);
         self.device_output_buffer.resize(new_size * 2, 0.0);
+        self.mix.resize(new_size);
     }
 
     /// Update peak and RMS meters (post-fader)
@@ -704,29 +709,15 @@ impl Channel {
         // Send scheduled MIDI events to all devices before processing audio
         // MIDI events wake devices immediately
         if !self.scheduled_midi_events.is_empty() {
-            static mut MIDI_LOG_COUNT: u32 = 0;
-            unsafe {
-                MIDI_LOG_COUNT += 1;
-                if MIDI_LOG_COUNT <= 10 {
-                    info!("🎹 Channel {} sending {} MIDI events to {} devices",
-                        self.id, self.scheduled_midi_events.len(), self.devices.len());
-                }
-            }
             for event in &self.scheduled_midi_events {
                 use super::midi_types::MidiMessageType;
 
                 match event.message_type {
                     MidiMessageType::NoteOn => {
                         let is_note_on = event.velocity > 0;
-                        for (idx, device) in self.devices.iter_mut().enumerate() {
-                            let was_sleeping = device.is_sleeping();
+                        for device in self.devices.iter_mut() {
                             device.mark_activity(); // Wake device on MIDI input
                             device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
-                            unsafe {
-                                if MIDI_LOG_COUNT <= 10 && was_sleeping {
-                                    info!("  🌅 Device {} was sleeping, now waking on MIDI", idx);
-                                }
-                            }
                         }
                     }
                     MidiMessageType::NoteOff => {
@@ -739,29 +730,6 @@ impl Channel {
                         // TODO: Handle other MIDI message types (CC, aftertouch, etc.)
                     }
                 }
-            }
-        }
-
-        static mut DEVICE_DEBUG_COUNT: u32 = 0;
-        unsafe {
-            DEVICE_DEBUG_COUNT += 1;
-            if DEVICE_DEBUG_COUNT <= 10 || (DEVICE_DEBUG_COUNT > 100 && DEVICE_DEBUG_COUNT <= 110) {
-                info!("DEVICE CHAIN DEBUG: channel={} sample_count={} buffer_left_len={} device_input_buffer_len={} device_output_buffer_len={} devices={}",
-                    self.id, sample_count, self.buffer_left.len(), self.device_input_buffer.len(), self.device_output_buffer.len(), self.devices.len());
-                // Check for non-zero in input
-                let non_zero_left = self
-                    .buffer_left
-                    .iter()
-                    .take(sample_count)
-                    .filter(|&&s| s.abs() > 0.0001)
-                    .count();
-                let non_zero_left_full = self
-                    .buffer_left
-                    .iter()
-                    .filter(|&&s| s.abs() > 0.0001)
-                    .count();
-                info!("  buffer_left: {} non-zero in first {} samples, {} non-zero in FULL buffer of {} samples",
-                    non_zero_left, sample_count, non_zero_left_full, self.buffer_left.len());
             }
         }
 
@@ -782,14 +750,6 @@ impl Channel {
         for (idx, device) in self.devices.iter_mut().enumerate() {
             // Check if device is sleeping - skip expensive processing if so
             if device.is_sleeping() {
-                static mut SLEEP_LOG_COUNT: u32 = 0;
-                unsafe {
-                    SLEEP_LOG_COUNT += 1;
-                    if SLEEP_LOG_COUNT <= 10 {
-                        info!("🛌 Device {} on channel {} is SLEEPING - skipping processing (midi_events={})",
-                            idx, self.id, self.scheduled_midi_events.len());
-                    }
-                }
                 // Sleeping device: pass audio through unchanged for effects, silence for instruments
                 if idx % 2 == 0 {
                     // Copy input to output (pass through)
@@ -857,33 +817,6 @@ impl Channel {
             &mut self.buffer_left[..sample_count],
             &mut self.buffer_right[..sample_count],
         );
-
-        // Debug output
-        unsafe {
-            if DEVICE_DEBUG_COUNT <= 10 || (DEVICE_DEBUG_COUNT > 100 && DEVICE_DEBUG_COUNT <= 110) {
-                let non_zero_output = self
-                    .buffer_left
-                    .iter()
-                    .take(sample_count)
-                    .filter(|&&s| s.abs() > 0.0001)
-                    .count();
-                info!(
-                    "  AFTER processing: {} non-zero samples in output",
-                    non_zero_output
-                );
-                if non_zero_output > 0 {
-                    // Show first non-zero value
-                    if let Some(&val) = self
-                        .buffer_left
-                        .iter()
-                        .take(sample_count)
-                        .find(|&&s| s.abs() > 0.0001)
-                    {
-                        info!("    First non-zero value: {}", val);
-                    }
-                }
-            }
-        }
 
         // Return sleep state changes for status events
         sleep_state_changes

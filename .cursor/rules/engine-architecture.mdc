@@ -6,20 +6,21 @@ alwaysApply: false
 
 ### Thread Model
 
-The Rust audio engine uses a **lock-free architecture** for real-time safety:
+The Rust audio engine keeps slow work off the real-time path:
 
-- **Main Thread**: Owns `OscServer`, initializes systems, relays OSC commands to audio thread, and brokers GUI events.
-- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations/locks allowed).
+- **Main Thread**: Owns `OscServer`, initializes systems, relays OSC commands to the command thread, and brokers GUI events.
+- **Command Thread** (`command_worker.rs`): `CommandWorker` applies `AudioCommand`s to the `EngineState` it shares with the audio callback through `Arc<Mutex<_>>`. It holds the lock only to read or swap state: plugin scans, device construction and teardown, and plugin subprocess IPC (GUI open/close, activation) run with the lock released. It is the only thread that adds or removes channels and devices, which is what makes releasing the lock mid-command safe. Fast commands go through `commands.rs::process_command` under the lock.
+- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations). Takes the state with `lock_state_for_callback` (`engine.rs`): spins on `try_lock` for up to `STATE_LOCK_BUDGET` (1 ms), then outputs silence for that buffer.
 - **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
 - **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and waveform generation off the real-time path.
-- **Communication**: Crossbeam unbounded MPMC channels between main ↔ audio threads, plus `std::sync::mpsc` channels from audio statuses → main loop → window thread.
+- **Communication**: Crossbeam unbounded MPMC channels carry commands (main → command thread) and statuses (command/audio threads → main), plus `std::sync::mpsc` channels from statuses → main loop → window thread. The command thread and audio callback share `EngineState` through a mutex.
 
-Commands flow: OSC → Main thread → Audio thread.  
-Status + GUI events flow: Audio thread → Main thread → (a) OSC client → Godot, (b) window manager for resize/close handling.
+Commands flow: OSC → Main thread → Command thread → `EngineState` → Audio thread.
+Status + GUI events flow: Audio/command threads → Main thread → (a) OSC client → Godot, (b) window manager for resize/close handling.
 
 ### Audio Processing Pipeline
 The audio callback (`Engine/src/audio/processing.rs`, set up by `engine.rs`) processes audio in this order:
-1. Process pending commands from channel (non-blocking `try_recv`)
+1. Lock the engine state with a bounded `try_lock` (output silence if the command thread still holds it)
 2. Clear all channel audio buffers
 3. If playing: compute tick boundaries for this block using the device sample rate and update the fractional accumulator
 4. Dispatch clip note on/off events to the owning channel with sample-accurate `frame_offset` values so instruments queue MIDI before rendering
@@ -58,14 +59,17 @@ Engine/src/
   plugin_host/         # Subprocess host implementation (see engine-plugin-architecture)
   audio/
     mod.rs             # Module declarations
-    engine.rs          # Core audio engine initialization (CPAL stream setup)
-    commands.rs        # AudioCommand/EngineStatus definitions and command handling
+    engine.rs          # Core audio engine initialization (CPAL stream setup, audio callback, state locking)
+    command_worker.rs  # Command thread: applies commands, slow work outside the state lock
+    commands.rs        # AudioCommand/EngineStatus definitions and fast command handling
     processing.rs      # Audio callback: MIDI scheduling, transport, rendering
     mixing.rs          # Audio mixing and routing logic
+    render_scratch.rs  # Preallocated scratch lists and per-channel mix buffers for the callback
     types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
     devices/
       mod.rs             # AudioDevice trait, parameter types, DeviceSleepState
+      factory.rs         # DeviceFactory: builds devices by type/ID, built-in device metadata
       polysynth.rs       # SIMD-optimized block-based polysynth
       delay.rs           # Delay effect device
       sfizz_device.rs    # SFZ sampler backed by sfizz
@@ -112,8 +116,8 @@ Godot/              # Godot 4.7 UI App
 
 ### Live MIDI Input
 - Godot's `MidiManager` autoload routes physical `InputEventMIDI` and virtual-keyboard events to armed channels, sending `/channel/{id}/midi_event [channel_id, message, midi_channel, pitch, velocity, timestamp_us]` (channel setup via `/channel/{id}/midi_input_device` and `/channel/{id}/record_armed`).
-- `AudioCommand::MidiEvent` stamps the event with the current tick and pushes it onto the channel's lock-free `midi_queue` (`midi_types::MidiEventQueue`, a crossbeam `SegQueue`).
-- At the start of each callback `processing.rs::schedule_midi_events` drains every queue into `Channel::scheduled_midi_events` with a `frame_offset`: late events are dropped with a warning, events beyond this block are re-queued, and the result is sorted by offset before `process_device_chain` forwards them to devices.
+- The OSC server stamps each event with `received_at` (an `Instant`), and `AudioCommand::MidiEvent` pushes it onto the channel's lock-free `midi_queue` (`midi_types::MidiEventQueue`, a crossbeam `SegQueue`).
+- At the start of each callback `processing.rs::schedule_live_midi_events` drains every queue into `Channel::scheduled_midi_events`. Live input plays with a fixed latency of one buffer: an event that arrived `dt` before the callback lands `dt` before the end of the buffer, and events older than one buffer play at frame 0. Queue order is arrival order, so no sort is needed.
 
 ### Device Sleep
 - Each device carries a `DeviceSleepState` (`devices/mod.rs`): after `DEFAULT_SLEEP_TIMEOUT` (3 s) with no signal above `SLEEP_THRESHOLD` and no MIDI/parameter activity, the device sleeps and `Channel::process_device_chain` skips its processing.

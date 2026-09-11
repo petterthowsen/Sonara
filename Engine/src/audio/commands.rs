@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tracing::{info, warn};
 
-use super::devices::AudioDevice;
+use super::render_scratch::RenderScratch;
 use super::types::*;
 
 /// Parameter information for builtin devices
@@ -474,8 +474,8 @@ pub struct EngineState {
     pub tracks: HashMap<TrackId, Track>,
     pub clips: HashMap<ClipId, Clip>,      // Global clip pool
     pub output_devices: Vec<OutputDevice>, // Available hardware outputs (IDs 1000+)
-    pub plugin_scanner: super::devices::clap_host::PluginScanner, // CLAP plugin discovery
-    pub process_manager: std::sync::Arc<super::ipc::ProcessManager>, // Subprocess manager for CLAP plugins
+    /// Preallocated scratch lists so the audio callback doesn't allocate
+    pub render_scratch: RenderScratch,
     pub is_playing: AtomicBool,
     pub current_tick: AtomicI64,
     /// Fractional tick accumulator carried across buffers for sample-accurate scheduling (stored as fixed-point * 1e9)
@@ -538,9 +538,6 @@ impl Clone for EngineState {
 
 impl Default for EngineState {
     fn default() -> Self {
-        let process_manager = std::sync::Arc::new(super::ipc::ProcessManager::new());
-        process_manager.start_monitoring();
-
         Self {
             settings: ProjectSettings::default(),
             device_sample_rate: 48000.0, // Default, will be overridden
@@ -548,8 +545,7 @@ impl Default for EngineState {
             tracks: HashMap::new(),
             clips: HashMap::new(),
             output_devices: Vec::new(),
-            plugin_scanner: super::devices::clap_host::PluginScanner::new(),
-            process_manager,
+            render_scratch: RenderScratch::default(),
             is_playing: AtomicBool::new(false),
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
@@ -558,13 +554,13 @@ impl Default for EngineState {
     }
 }
 
-/// Process a command (called from audio thread)
+/// Apply a command to the engine state. Runs on the command thread with the state lock held, so
+/// it must stay fast; slow commands are handled by `CommandWorker` instead.
 pub fn process_command(
     state: &mut EngineState,
     cmd: AudioCommand,
     buffer_size: usize,
     status_tx: &Sender<EngineStatus>,
-    command_tx: &Sender<AudioCommand>,
 ) -> Option<EngineStatus> {
     match cmd {
         AudioCommand::InitProject(mut settings) => {
@@ -586,13 +582,6 @@ pub fn process_command(
                 state.settings.ppq,
                 device_sr
             );
-        }
-        AudioCommand::ClearProject => {
-            state.channels.clear();
-            state.tracks.clear();
-            state.clips.clear();
-            state.set_current_tick(0);
-            info!("Project cleared");
         }
         AudioCommand::Play => {
             state.set_is_playing(true);
@@ -673,17 +662,6 @@ pub fn process_command(
                 name,
                 state.channels.len()
             );
-        }
-        AudioCommand::RemoveChannel { id } => {
-            if let Some(_channel) = state.channels.remove(&id) {
-                info!(
-                    "Channel {} removed [total channels: {}]",
-                    id,
-                    state.channels.len()
-                );
-            } else {
-                warn!("Cannot remove channel {}: not found", id);
-            }
         }
         AudioCommand::SetChannelVolume { id, db } => {
             if let Some(channel) = state.channels.get_mut(&id) {
@@ -1136,23 +1114,18 @@ pub fn process_command(
                     }
                 }
 
-                let first_samples_str = samples
-                    .iter()
-                    .take(20)
-                    .map(|s| format!("{:.6}", s))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
                 info!(
-                    "Audio clip {} ready ({} samples, {} Hz, {} channels) - First 20 samples: {}",
+                    "Audio clip {} ready ({} samples, {} Hz, {} channels)",
                     clip_id,
                     samples.len(),
                     sample_rate,
-                    channels,
-                    first_samples_str
+                    channels
                 );
 
-                clip.audio_samples = samples.clone();
+                // Move rather than clone: decoded files can be hundreds of MB, and this runs
+                // with the state lock held
+                let total_samples = samples.len();
+                clip.audio_samples = samples;
                 clip.audio_sample_rate = sample_rate;
                 clip.audio_channels = channels;
                 clip.audio_source_path = Some(source_path.clone());
@@ -1163,7 +1136,7 @@ pub fn process_command(
 
                 // Calculate content length in ticks
                 if channels > 0 && sample_rate > 0 {
-                    let sample_count = samples.len() / channels;
+                    let sample_count = total_samples / channels;
                     let duration_seconds = sample_count as f32 / sample_rate as f32;
                     // Assuming 120 BPM = 2 beats per second, PPQ = 960 ticks per beat
                     let beats = duration_seconds * 2.0;
@@ -1407,153 +1380,6 @@ pub fn process_command(
         }
 
         // Device management commands
-        AudioCommand::AddDeviceToChannel {
-            channel_id,
-            device_id,
-            device_type,
-            device_file,
-            position,
-            active,
-            enabled,
-        } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                // Factory: create device by type
-                let device: Option<Box<dyn super::devices::AudioDevice>> = match device_type
-                    .as_str()
-                {
-                    // Built-in devices
-                    "builtin" => match device_id.as_str() {
-                        "sonara.builtin.polysynth" => {
-                            info!(
-                                "Loading built-in polysynth [active={}, enabled={}]",
-                                active, enabled
-                            );
-                            Some(Box::new(super::devices::PolySynthDevice::new(
-                                state.device_sample_rate,
-                            )))
-                        }
-                        "sonara.builtin.delay" => {
-                            info!(
-                                "Loading built-in delay [active={}, enabled={}]",
-                                active, enabled
-                            );
-                            Some(Box::new(super::devices::DelayDevice::new(
-                                state.device_sample_rate,
-                                5000.0,
-                            )))
-                        }
-                        "sonara.builtin.sfizz" => {
-                            info!(
-                                "Loading built-in sfizz [active={}, enabled={}]",
-                                active, enabled
-                            );
-                            Some(Box::new(super::devices::SfizzDevice::new(
-                                state.device_sample_rate,
-                                buffer_size,
-                                channel_id as usize,
-                                position as usize,
-                                Some(status_tx.clone()),
-                            )))
-                        }
-                        "sonara.builtin.spectrum_analyzer" => {
-                            info!(
-                                "Loading built-in spectrum analyzer [active={}, enabled={}]",
-                                active, enabled
-                            );
-                            Some(Box::new(super::devices::SpectrumAnalyzerDevice::new(
-                                state.device_sample_rate,
-                            )))
-                        }
-                        _ => {
-                            warn!("Unknown built-in device ID: {}", device_id);
-                            None
-                        }
-                    },
-                    // CLAP plugins
-                    "clap" => {
-                        if device_file.is_empty() {
-                            warn!("CLAP plugin {} missing file path", device_id);
-                            None
-                        } else {
-                            info!(
-                                "Loading CLAP plugin {} from {} [active={}, enabled={}]",
-                                device_id, device_file, active, enabled
-                            );
-
-                            // Use subprocess-based adapter for better crash isolation and GUI support
-                            match super::devices::clap_host::SubprocessClapAdapter::new(
-                                std::sync::Arc::clone(&state.process_manager),
-                                channel_id as u32,
-                                position as usize,
-                                std::path::PathBuf::from(&device_file),
-                                &device_id,
-                                state.device_sample_rate,
-                                buffer_size,
-                                Some(command_tx.clone()),
-                                Some(status_tx.clone()),
-                            ) {
-                                Ok(adapter) => {
-                                    // Note: Don't activate on audio thread! It will be activated later.
-                                    // Activation requires IPC which is too slow for real-time audio thread.
-                                    info!("CLAP plugin {} loaded successfully in subprocess (activation deferred)", device_id);
-                                    Some(Box::new(adapter))
-                                }
-                                Err(e) => {
-                                    warn!("Failed to load CLAP plugin {}: {}", device_id, e);
-                                    None
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        warn!(
-                            "Unknown device type: {} (supported: builtin, clap)",
-                            device_type
-                        );
-                        None
-                    }
-                };
-
-                if let Some(mut device) = device {
-                    // Set enabled state for all devices
-                    device.set_enabled(enabled);
-
-                    let insert_pos = if position < 0 {
-                        channel.devices.len() // Append to end
-                    } else {
-                        (position as usize).min(channel.devices.len()) // Insert at position or at end
-                    };
-                    channel.devices.insert(insert_pos, device);
-                    info!(
-                        "Device {} added to channel {} at position {} [active={}, enabled={}]",
-                        device_id, channel_id, insert_pos, active, enabled
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for add device", channel_id);
-            }
-        }
-        AudioCommand::RemoveDeviceFromChannel {
-            channel_id,
-            position,
-        } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if position < channel.devices.len() {
-                    channel.devices.remove(position);
-                    info!(
-                        "Device removed from channel {} at position {}",
-                        channel_id, position
-                    );
-                } else {
-                    warn!(
-                        "Invalid device position {} for channel {}",
-                        position, channel_id
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for remove device", channel_id);
-            }
-        }
         AudioCommand::MoveDevice {
             channel_id,
             from_position,
@@ -1578,14 +1404,6 @@ pub fn process_command(
                 }
             } else {
                 warn!("Channel {} not found for move device", channel_id);
-            }
-        }
-        AudioCommand::ClearChannelDevices { channel_id } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                channel.devices.clear();
-                info!("All devices cleared from channel {}", channel_id);
-            } else {
-                warn!("Channel {} not found for clear devices", channel_id);
             }
         }
         AudioCommand::SetDeviceParameter {
@@ -1790,132 +1608,6 @@ pub fn process_command(
         }
 
         // Plugin management commands
-        AudioCommand::ScanPlugins => {
-            info!("Starting plugin scan...");
-            match state.plugin_scanner.scan() {
-                Ok(count) => {
-                    info!("Plugin scan complete: {} plugins found", count);
-
-                    // Send info for each discovered plugin
-                    for plugin in state.plugin_scanner.all_plugins() {
-                        let category_str = match plugin.category {
-                            super::devices::DeviceCategory::Instrument => "instrument",
-                            super::devices::DeviceCategory::Effect => "effect",
-                            super::devices::DeviceCategory::Utility => "utility",
-                        }
-                        .to_string();
-
-                        let _ = status_tx.send(EngineStatus::PluginInfo {
-                            id: plugin.id.clone(),
-                            name: plugin.name.clone(),
-                            vendor: plugin.vendor.clone(),
-                            version: plugin.version.clone(),
-                            category: category_str,
-                            description: plugin.description.clone(),
-                            path: plugin.path.to_string_lossy().to_string(),
-                        });
-                    }
-
-                    // Send completion message last
-                    return Some(EngineStatus::PluginScanComplete { count });
-                }
-                Err(e) => {
-                    warn!("Plugin scan failed: {}", e);
-                }
-            }
-        }
-
-        AudioCommand::AdvertiseBuiltinDevices => {
-            info!("Advertising builtin devices...");
-
-            // Helper to create device info from a temporary device instance
-            let create_device_info =
-                |device: Box<dyn super::devices::AudioDevice>| -> EngineStatus {
-                    let category_str = match device.device_category() {
-                        super::devices::DeviceCategory::Instrument => "instrument",
-                        super::devices::DeviceCategory::Effect => "effect",
-                        super::devices::DeviceCategory::Utility => "utility",
-                    }
-                    .to_string();
-
-                    let parameters: Vec<BuiltinParamInfo> = device
-                        .parameters()
-                        .into_iter()
-                        .map(|p| BuiltinParamInfo {
-                            id: p.id,
-                            name: p.name,
-                            unit: p.unit,
-                            min: p.min,
-                            max: p.max,
-                            default: p.default,
-                            param_type: p.param_type,
-                            syncable: p.syncable,
-                            enum_values: p.enum_values,
-                        })
-                        .collect();
-
-                    let midi_ports = device.midi_ports();
-                    let audio_ports = device.audio_ports();
-
-                    let audio_in = audio_ports
-                        .iter()
-                        .find(|p| matches!(p.flow, super::devices::PortFlow::Input))
-                        .map(|p| p.channels)
-                        .unwrap_or(0);
-                    let audio_out = audio_ports
-                        .iter()
-                        .find(|p| matches!(p.flow, super::devices::PortFlow::Output))
-                        .map(|p| p.channels)
-                        .unwrap_or(0);
-
-                    let (supports_file_loading, file_extensions, file_type_description) =
-                        match device.file_loading_support() {
-                            Some(info) => (true, info.extensions, info.description),
-                            None => (false, Vec::new(), String::new()),
-                        };
-
-                    EngineStatus::BuiltinDeviceInfo {
-                        id: device.device_id().to_string(),
-                        name: device.device_name().to_string(),
-                        category: category_str,
-                        description: format!("{} v{}", device.device_name(), device.version()),
-                        accepts_midi: !midi_ports.is_empty(),
-                        audio_in_channels: audio_in,
-                        audio_out_channels: audio_out,
-                        supports_file_loading,
-                        file_extensions,
-                        file_type_description,
-                        parameters,
-                    }
-                };
-
-            // Create temp instances of each builtin device and send their info
-            // TODO: Simplify this to avoid creating temporary instances
-            let builtin_devices: Vec<EngineStatus> = vec![
-                create_device_info(Box::new(super::devices::PolySynthDevice::new(
-                    state.device_sample_rate,
-                ))),
-                create_device_info(Box::new(super::devices::DelayDevice::new(
-                    state.device_sample_rate,
-                    5000.0,
-                ))),
-                create_device_info(Box::new(super::devices::SpectrumAnalyzerDevice::new(
-                    state.device_sample_rate,
-                ))),
-                create_device_info(Box::new(super::devices::SfizzDevice::new_for_metadata(
-                    state.device_sample_rate,
-                ))),
-            ];
-
-            let count = builtin_devices.len();
-            for device_info in builtin_devices {
-                let _ = status_tx.send(device_info);
-            }
-
-            info!("Advertised {} builtin devices", count);
-            return Some(EngineStatus::BuiltinDevicesComplete { count });
-        }
-
         AudioCommand::GetPluginParameters {
             channel_id,
             device_position,
@@ -2060,38 +1752,17 @@ pub fn process_command(
             }
         }
 
-        // Plugin GUI commands (must be called on main thread when instance is available)
+        // Plugin GUI commands for in-process plugins. Subprocess plugins are handled by
+        // CommandWorker so their IPC round-trips don't hold the state lock.
         AudioCommand::OpenPluginGui {
             channel_id,
             device_position,
-            window_handle,
+            ..
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
-                    // Try subprocess adapter first (preferred)
-                    use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
-                    if let Some(subprocess_device) =
-                        (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>()
-                    {
-                        match subprocess_device.open_gui_with_handle(window_handle) {
-                            Ok((width, height, _is_resizable)) => {
-                                info!("Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{})",
-                                    channel_id, device_position, window_handle, width, height);
-
-                                // Send resize request so OSC server can resize the window
-                                let _ = status_tx.send(EngineStatus::PluginGuiResizeRequest {
-                                    channel_id,
-                                    device_position,
-                                    width,
-                                    height,
-                                });
-                            }
-                            Err(e) => {
-                                warn!("Failed to open subprocess plugin GUI at channel {} device {}: {}",
-                                    channel_id, device_position, e);
-                            }
-                        }
-                    } else if let Some(clap_device) =
+                    use super::devices::clap_host::ClapDeviceAdapter;
+                    if let Some(clap_device) =
                         (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
                     {
                         match clap_device.open_gui() {
@@ -2129,29 +1800,8 @@ pub fn process_command(
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.devices.get_mut(device_position) {
-                    // Try subprocess adapter first (preferred)
-                    use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
-                    if let Some(subprocess_device) =
-                        (device.as_any_mut()).downcast_mut::<SubprocessClapAdapter>()
-                    {
-                        match subprocess_device.close_gui() {
-                            Ok(()) => {
-                                info!(
-                                    "Closed GUI for subprocess plugin at channel {} device {}",
-                                    channel_id, device_position
-                                );
-                                // Notify OSC that plugin GUI is closed so it can destroy the window
-                                let _ = status_tx.send(EngineStatus::PluginGuiClosed {
-                                    channel_id,
-                                    device_position,
-                                });
-                            }
-                            Err(e) => {
-                                warn!("Failed to close subprocess plugin GUI at channel {} device {}: {}", 
-                                    channel_id, device_position, e);
-                            }
-                        }
-                    } else if let Some(clap_device) =
+                    use super::devices::clap_host::ClapDeviceAdapter;
+                    if let Some(clap_device) =
                         (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
                     {
                         match clap_device.close_gui() {
@@ -2167,7 +1817,7 @@ pub fn process_command(
                                 });
                             }
                             Err(e) => {
-                                warn!("Failed to close in-process plugin GUI at channel {} device {}: {}", 
+                                warn!("Failed to close in-process plugin GUI at channel {} device {}: {}",
                                     channel_id, device_position, e);
                             }
                         }
@@ -2244,6 +1894,17 @@ pub fn process_command(
                     channel_id
                 );
             }
+        }
+
+        // Slow commands that must run with the state lock released
+        other @ (AudioCommand::ClearProject
+        | AudioCommand::RemoveChannel { .. }
+        | AudioCommand::AddDeviceToChannel { .. }
+        | AudioCommand::RemoveDeviceFromChannel { .. }
+        | AudioCommand::ClearChannelDevices { .. }
+        | AudioCommand::ScanPlugins
+        | AudioCommand::AdvertiseBuiltinDevices) => {
+            warn!("{:?} must be handled by CommandWorker, ignoring", other);
         }
     }
 

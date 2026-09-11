@@ -1,3 +1,4 @@
+pub mod command_worker;
 pub mod commands;
 pub mod devices;
 pub mod dsp;
@@ -7,6 +8,7 @@ pub mod ipc;
 pub mod midi_types;
 pub mod mixing;
 pub mod processing;
+pub mod render_scratch;
 pub mod types;
 
 pub use devices::{AudioDevice, DelayDevice, ParamId, ParamValue};

@@ -23,8 +23,14 @@
 - [ ] CPU affinity for audio thread and plugin processing
 - [ ] Realtime thread priority configuration
 - [ ] CPU core assignment for plugin processing
-- [ ] Remove the shared `Arc<Mutex<EngineState>>`. The audio callback blocks on `state.lock()` while the command thread holds it during `process_command`. The audio thread should own its state and drain a lock-free command queue, with heavy work (device creation, SFZ loading) done off-thread.
-- [ ] Audio thread still allocates and logs: `tick_events`/`note_events` Vecs in `process_audio`, `info!` in `mixing.rs`, unbounded status channel sends
+- [ ] Remove the shared `Arc<Mutex<EngineState>>` (phase 2): the audio thread should own its state and drain a lock-free command queue, with removed objects sent back to be dropped off-thread
+    - [ ] Phase 1, partly verified live (CLAP on a bus, large clip import during playback): slow commands (plugin scan, device create/drop, plugin GUI/activation IPC) run outside the lock in `CommandWorker`; the callback uses a bounded `try_lock` and outputs silence
+- [ ] Audio thread allocations still left: unbounded status channel sends, `process_device_chain` sleep-change Vec, `audio_playback_positions` insert (String clone) on clip start, `poll_parameter_changes` sets a socket read timeout every buffer per CLAP plugin
+    - [ ] Removed, needs live verification: per-buffer Vecs/HashMaps and buffer clones in `process_audio`/`mix_and_output`, debug `info!` logging in the callback
+- [ ] Mixing: routing targets (buses, master) only run their devices in a pass where a routed source is above -80 dB (sends always trigger it), so reverb/delay tails on a routed bus cut off when playback pauses (confirmed live; send-fed buses are fine)
+- [ ] Mixing: a bus or master that receives audio in more than one routing pass runs its devices and pan more than once per buffer
+    - Fix for both: order the routing pass by dependency. A route target processes once per buffer, after every channel routing into it has mixed in: run devices (even with no input, so tails ring; device sleep keeps idle buses cheap), apply pan, then route onward, master last. Drops the `route_*` snapshots and `pending_bus`/`bus_destination`/`routed` flags in `MixBuffers`.
+- [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
 
@@ -33,6 +39,7 @@
 - [ ] Multi-in and multi-out for devices
 - [ ] Add support for enum parameter type for builtins
 - [x] Refactor DevicePanel and DeviceView system
+- [ ] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
 - [ ] In Engine: Simplify device advertizementt to avoid creating temporary instances
 
 ### Plugins
@@ -126,7 +133,7 @@
 - [ ] Modifier+right-click to open context menu in NoteEditor
 
 ### Mixer
-- [ ] Connect TrackItem ui controls to target channel (fader, solo, mute)
+- [x] Connect TrackItem ui controls to target channel (fader, solo, mute)
 - [ ] Delete, Duplicate Channels
 - [ ] Smooth meter components (lerp?)
 
@@ -134,8 +141,9 @@
 - [ ] **CRITICAL**: Undo/Redo using command pattern
 
 ### Hardware & MIDI
-- [ ] Implement MIDI support
-- [ ] Live MIDI input for armed tracks outputs to target track
-- [ ] Caps lock toggles computer keyboard as a virtual midi device, mapping q,2,w,3,e,r,5,t,6,y,7,u,i,9,o,0,p,+ to midi keys, default octave 3, Z transposes down, X transposes up, C lowers vel, V increases velocity
+- [x] Implement MIDI support
+- [x] Live MIDI input for armed tracks outputs to target track
+- [x] Computer keyboard as a virtual midi device (note keys, transpose, velocity) in `MidiManager`
+    - [ ] Caps lock toggles it on/off (currently always on via `midi/virtual_keyboard/enabled` config)
 - [ ] Modulation
     - [ ] Basic modulation, similar to bitwig, allow any channel and device parameter to be modulatable

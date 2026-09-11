@@ -5,7 +5,7 @@
 
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::commands::{AudioCommand, EngineStatus};
-use crate::audio::ipc::{MidiEvent, PluginCommand, PluginResponse, ProcessManager, SharedMemory};
+use crate::audio::ipc::{MidiEvent, PluginCommand, ProcessManager, SharedMemory};
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,8 +14,10 @@ use tracing::{error, info, warn};
 mod gui;
 mod lifecycle;
 mod parameter;
+mod plugin_ipc;
 
 pub use lifecycle::LoadingState;
+pub use plugin_ipc::PluginIpcHandle;
 
 /// CLAP device adapter using subprocess isolation
 pub struct SubprocessClapAdapter {
@@ -126,21 +128,24 @@ impl SubprocessClapAdapter {
         Ok(adapter)
     }
 
-    /// Send command to subprocess and wait for response
-    fn send_command(&mut self, cmd: PluginCommand) -> Result<PluginResponse, String> {
-        // Get process handle
-        let process = self
-            .process_manager
-            .get_process(&self.process_key)
-            .ok_or_else(|| "Plugin process not found".to_string())?;
+    /// Handle for blocking round-trips to this plugin's subprocess (GUI, activation) that doesn't
+    /// borrow the adapter, so callers can release the engine state lock before waiting.
+    pub fn ipc_handle(&self) -> PluginIpcHandle {
+        PluginIpcHandle::new(
+            Arc::clone(&self.process_manager),
+            self.process_key.clone(),
+            self.device_name.clone(),
+        )
+    }
 
-        let mut process = process.lock().unwrap();
+    /// Record the result of activating or deactivating through an `ipc_handle`.
+    pub fn set_active_state(&mut self, active: bool) {
+        self.is_active = active;
+    }
 
-        // Send command
-        process.send_command(cmd)?;
-
-        // Receive response
-        process.recv_response()
+    /// Record the result of opening or closing the GUI through an `ipc_handle`.
+    pub fn set_gui_open(&mut self, open: bool) {
+        self.gui_open = open;
     }
 }
 
@@ -367,41 +372,18 @@ impl AudioDevice for SubprocessClapAdapter {
         if self.is_active {
             return Ok(());
         }
-
-        match self.send_command(PluginCommand::Activate)? {
-            PluginResponse::ActivateResult { success, error } => {
-                if success {
-                    self.is_active = true;
-                    // Start processing
-                    self.send_command(PluginCommand::StartProcessing)?;
-                    Ok(())
-                } else {
-                    Err(error.unwrap_or_else(|| "Activation failed".to_string()))
-                }
-            }
-            _ => Err("Unexpected response".to_string()),
-        }
+        self.ipc_handle().activate()?;
+        self.is_active = true;
+        Ok(())
     }
 
     fn deactivate(&mut self) -> Result<(), String> {
         if !self.is_active {
             return Ok(());
         }
-
-        // Stop processing first
-        self.send_command(PluginCommand::StopProcessing)?;
-
-        match self.send_command(PluginCommand::Deactivate)? {
-            PluginResponse::DeactivateResult { success, error } => {
-                if success {
-                    self.is_active = false;
-                    Ok(())
-                } else {
-                    Err(error.unwrap_or_else(|| "Deactivation failed".to_string()))
-                }
-            }
-            _ => Err("Unexpected response".to_string()),
-        }
+        self.ipc_handle().deactivate()?;
+        self.is_active = false;
+        Ok(())
     }
 
     fn is_enabled(&self) -> bool {
@@ -464,46 +446,13 @@ impl SubprocessClapAdapter {
         self.flush_pending_parameters();
     }
 
-    /// Open plugin GUI (subprocess will handle event loop)
-    pub fn open_gui(&mut self) -> Result<(), String> {
-        self.open_gui_with_handle(None).map(|_| ())
-    }
-
-    /// Open plugin GUI with provided window handle for embedded mode
-    /// Returns (width, height, is_resizable) if successful
-    pub fn open_gui_with_handle(
-        &mut self,
-        window_handle: Option<u64>,
-    ) -> Result<(u32, u32, bool), String> {
-        if self.gui_open {
-            // Already open - query current size
-            // For now, return a default since we can't easily query after opening
-            return Ok((800, 600, true));
-        }
-
-        let (width, height, is_resizable) = gui::open_gui(
-            &self.process_manager,
-            &self.process_key,
-            &self.device_name,
-            window_handle,
-        )?;
-        self.gui_open = true;
-
-        info!(
-            "Plugin GUI opened with size: {}x{} (resizable: {})",
-            width, height, is_resizable
-        );
-
-        Ok((width, height, is_resizable))
-    }
-
     /// Close plugin GUI
     pub fn close_gui(&mut self) -> Result<(), String> {
         if !self.gui_open {
             return Ok(());
         }
 
-        let result = gui::close_gui(&self.process_manager, &self.process_key, &self.device_name);
+        let result = self.ipc_handle().close_gui();
 
         // Always mark GUI as closed, even if IPC fails
         // The window is being destroyed regardless, and keeping gui_open=true
@@ -529,7 +478,9 @@ impl SubprocessClapAdapter {
         use crate::audio::ipc::protocol::PluginResponse;
 
         let process = self.process_manager.get_process(&self.process_key)?;
-        let mut process_guard = process.lock().ok()?;
+        // try_lock: this runs on the audio thread, and GUI/activation round-trips can hold
+        // this lock for seconds
+        let mut process_guard = process.try_lock().ok()?;
 
         // Try non-blocking read with very short timeout (don't block audio thread!)
         let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_micros(100)));

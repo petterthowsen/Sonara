@@ -33,16 +33,17 @@ Godot does not launch the engine itself. Start the engine first.
 
 ### Engine threads (`Engine/src/`)
 - **Main thread** (`main.rs`, `osc/server.rs`): runs the OSC server. It turns OSC messages into `AudioCommand`s (`audio/commands.rs`) and forwards `EngineStatus` back to Godot.
-- **Audio callback** (`audio/processing.rs`, `audio/mixing.rs`): real-time. It receives commands with `try_recv` and sends statuses and meters at about 20 Hz.
+- **Command thread** (`audio/command_worker.rs`): applies commands to the `EngineState` it shares with the audio callback. It holds the state lock only briefly. Slow work (plugin scans, creating and dropping devices, plugin IPC) runs with the lock released.
+- **Audio callback** (`audio/engine.rs`, `audio/processing.rs`, `audio/mixing.rs`): real-time. It takes the state lock with a bounded `try_lock` and outputs silence if the lock is still busy. It sends statuses and meters at about 20 Hz.
 - **WindowManager thread** (`window_manager.rs`, winit): owns the host windows for plugin GUIs.
 - **AudioFileService** (`audio/io/`): worker pool for decoding (symphonia), resampling (rubato) and waveform caches. The audio thread only ever receives finished PCM. Stale `req_id` completions must be ignored.
-- Main ↔ audio communication uses crossbeam channels.
+- Commands (main → command thread) and statuses (back to main) travel over crossbeam channels.
 
 ### Audio thread contract (critical)
-Code on the audio callback must never allocate, block, do I/O, or wait on a lock. Use `try_lock()` and skip the work (output silence or pass-through) when the lock isn't available. Preallocate every buffer at init time. Log with `info!`/`warn!`/`error!`, never `println!`.
+Code on the audio callback must never allocate, block, do I/O, or wait on a lock. Use `try_lock()` and skip the work (output silence or pass-through) when the lock isn't available. Preallocate every buffer at init time (`audio/render_scratch.rs`). Log with `info!`/`warn!`/`error!`, never `println!`. Anything the command thread does while holding the state lock must also be fast.
 
 ### Callback and mixing
-1. Drain commands.
+1. Lock the engine state.
 2. Clear buffers.
 3. Compute `(tick, frame_offset)` pairs so MIDI is sample-accurate. Devices must use `frame_offset` directly and never convert it back to ticks.
 4. Render tracks and device chains.

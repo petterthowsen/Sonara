@@ -7,28 +7,29 @@ alwaysApply: false
 ## Audio Thread Safety (Critical)
 
 The audio callback thread is real-time and must **NEVER**:
-- Block on locks (use `try_lock()` or skip the frame)
-- Allocate heap memory (`Vec::new()`, `HashMap::new()`, etc.)
+- Block on locks (use `try_lock()` and skip the work: output silence or pass audio through)
+- Allocate heap memory (`Vec::new()`, `HashMap::new()`, cloning buffers, etc.). Reuse preallocated storage instead: `RenderScratch` on `EngineState` and `MixBuffers` on each `Channel` (`render_scratch.rs`). `std::mem::take` a buffer out and put it back when you need two mutable borrows.
 - Call blocking operations (I/O, sleep, channel `recv()`)
 - Hold locks across multiple audio operations
 
 **Pattern: Skip on lock failure**
 ```rust
-// Correct: Non-blocking with skip-on-failure
-if let Ok(guard) = command_rx.try_recv() {
-    process_command(guard);
-}
-// If channel empty, skip - audio continues playing
+// Correct: non-blocking, skip the work and retry next buffer
+let Ok(mut changed) = self.parameters_changed.try_lock() else {
+    return false;
+};
 
-// Wrong: Blocking = audio dropout
-let guard = command_rx.recv().unwrap();  // BLOCKS!
+// Wrong: blocks the audio thread until the other thread releases the lock
+let changed = self.parameters_changed.lock().unwrap();
 ```
+
+`EngineState` is shared with the command thread (`command_worker.rs`). Anything that thread does with the state lock held must be fast, because the callback gives up after `STATE_LOCK_BUDGET` and outputs silence. Put slow commands (IPC, file or plugin loading, dropping CLAP devices) in `CommandWorker` with the lock released.
 
 ## Audio Processing Pipeline
 
 The audio engine processes each callback in this order:
 
-1. **Read pending commands** (non-blocking `try_recv()`)
+1. **Lock engine state** (`lock_state_for_callback` in `engine.rs`: bounded `try_lock`, silence if the command thread still holds it)
 2. **Clear channel buffers** (zero L/R arrays for every channel)
 3. **Advance transport & schedule MIDI** (compute tick → `frame_offset` pairs using the real device sample rate, enqueue MIDI on channels)
 4. **Render audio** (tracks add clip audio per frame; channel devices consume queued MIDI when their `process_block` runs)
@@ -66,18 +67,18 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
    - This establishes the "post-fader" buffer used for metering and for post-fader sends.
 
 3. **Send Accumulation**  
-   - Iterates `Channel::send_channels` and builds one temporary buffer per target.  
-   - Pre-fader sends tap the cloned pre-pass audio and reapply pan so stereo matches the source; post-fader sends read the pass-2 buffer.  
+   - Iterates `Channel::send_channels` and sums sends into each target's preallocated `MixBuffers::send_*` buffers.  
+   - Pre-fader sends tap `MixBuffers::pre_fader_*`, copied at the start of the mix (before the device pre-pass), and reapply pan so stereo matches the source; post-fader sends read the pass-2 buffer.  
    - Send returns are scaled by the destination channel gain (`get_gain()`), so moving a bus fader affects both routes and send returns.
 
 4. **Hierarchical Routing with Bus Post-Processing**  
-   - Multi-pass loop (max 10) routes channels to their `output_channel_id` while tracking which sources were already mixed.  
+   - Multi-pass loop (max 10) routes channels to their `output_channel_id`. Each routed source is snapshotted into `MixBuffers::route_*` before mixing, and `MixBuffers::routed` tracks which sources were already mixed.  
    - Only apply gain—never reapply pan while routing.  
    - After each routing pass, buses that received audio run `process_device_chain()` and reapply their own pan before re-entering the routing loop; this lets bus effects/CLAP plugins operate on the accumulated mix.  
-   - Solo/mute rules still apply, and the master channel is seeded in the processed set so it never forwards audio further.
+   - Solo/mute rules still apply, and master starts each buffer with `routed = true` so it never forwards audio further.
 
 5. **Master Output & Metering**  
-   - Syncs the working buffers back into `state.channels` for accurate post-pan peaks.  
+   - Channel buffers are mixed in place, so they already hold post-effect, post-pan audio for peak metering.  
    - Copies master (ID 1) to the interleaved CPAL buffer for its bound hardware output (ID ≥1000).  
    - Peak detection still scans both channels, and status updates are throttled to ~20 Hz outside the callback.
 

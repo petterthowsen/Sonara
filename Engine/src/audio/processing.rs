@@ -55,8 +55,11 @@ pub fn process_audio(
     }
 
     // Precompute tick boundaries within this buffer with frame offsets
+    // Reuse preallocated scratch lists so the audio thread doesn't allocate
     let start_tick = state.get_current_tick();
-    let mut tick_events: Vec<(Tick, usize)> = Vec::new();
+    let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
+    let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
+    tick_events.clear();
     tick_events.push((start_tick, 0));
 
     let mut acc = state.get_fractional_tick_accumulator();
@@ -76,9 +79,9 @@ pub fn process_audio(
     state.set_fractional_tick_accumulator(acc);
 
     // Dispatch MIDI for each tick event at its exact frame offset
-    for (current_tick, frame_offset) in tick_events.into_iter() {
+    for &(current_tick, frame_offset) in &tick_events {
         // Collect note on/off events from clip instances
-        let mut note_events: Vec<(TrackId, MidiNote, MidiVelocity, bool)> = Vec::new();
+        note_events.clear();
 
         for (track_id, track) in &state.tracks {
             for instance in &track.clip_instances {
@@ -153,7 +156,7 @@ pub fn process_audio(
             }
         }
 
-        for (track_id, note, velocity, is_on) in note_events {
+        for &(track_id, note, velocity, is_on) in &note_events {
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if let Some(channel) = state.channels.get_mut(&track.channel_id) {
                     channel.send_midi_event_to_devices(note, velocity, is_on, frame_offset);
@@ -161,6 +164,8 @@ pub fn process_audio(
             }
         }
     }
+    state.render_scratch.tick_events = tick_events;
+    state.render_scratch.note_events = note_events;
 
     // Generate audio clip content per frame while advancing a local tick cursor
     let mut render_tick = start_tick;

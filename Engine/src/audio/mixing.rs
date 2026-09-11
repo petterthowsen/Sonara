@@ -1,10 +1,19 @@
 use crossbeam::channel::Sender;
-use std::collections::{HashMap, HashSet};
-use tracing::info;
+use std::collections::HashMap;
 
 use super::commands::{EngineState, EngineStatus};
+use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
+use super::devices::SfizzDevice;
+use super::render_scratch::RenderScratch;
 use super::types::*;
 
+/// Peak level below which a channel is treated as silent and not routed.
+const ROUTING_SILENCE_THRESHOLD: f32 = 0.0001;
+
+/// Most routing passes per buffer, which bounds bus nesting depth.
+const MAX_ROUTING_PASSES: usize = 10;
+
+/// Convert a fader or send level in dB to linear gain (-60 dB and below is silence).
 fn db_to_gain(db: f32) -> f32 {
     if db <= -60.0 {
         0.0
@@ -20,8 +29,12 @@ mod tests {
     use crate::audio::types::{Channel, PanMode, Send};
     use crossbeam::channel::unbounded;
 
-    fn warm_gain(channel: &mut Channel, iterations: usize) {
-        for _ in 0..iterations {
+    /// Samples of gain smoothing that settle a fader to its target (the 5 ms smoothing constant
+    /// is 240 samples at 48 kHz, so this leaves well under 1e-6 of the step).
+    const GAIN_SETTLE_SAMPLES: usize = 4096;
+
+    fn warm_gain(channel: &mut Channel) {
+        for _ in 0..GAIN_SETTLE_SAMPLES {
             let _ = channel.get_smoothed_gain();
         }
     }
@@ -37,19 +50,19 @@ mod tests {
         master.output_channel_id = Some(1000);
         master.volume_db = 0.0;
         master.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut master, 256);
+        warm_gain(&mut master);
 
         let mut bus = Channel::new(2, "Bus".to_string(), buffer_size, sample_rate);
         bus.output_channel_id = Some(1);
         bus.volume_db = 0.0;
         bus.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut bus, 256);
+        warm_gain(&mut bus);
 
         let mut source = Channel::new(3, "Source".to_string(), buffer_size, sample_rate);
         source.output_channel_id = None;
         source.volume_db = 0.0;
         source.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut source, 256);
+        warm_gain(&mut source);
         source.buffer_left.fill(0.5);
         source.buffer_right.fill(0.5);
         source.send_channels.push(Send {
@@ -90,19 +103,19 @@ mod tests {
         master.output_channel_id = Some(1000);
         master.volume_db = 0.0;
         master.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut master, 256);
+        warm_gain(&mut master);
 
         let mut bus = Channel::new(2, "Bus".to_string(), buffer_size, sample_rate);
         bus.output_channel_id = Some(1);
         bus.volume_db = 0.0;
         bus.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut bus, 256);
+        warm_gain(&mut bus);
 
         let mut source = Channel::new(3, "Source".to_string(), buffer_size, sample_rate);
         source.output_channel_id = None;
         source.volume_db = -60.0;
         source.pan_mode = PanMode::StereoBalance;
-        warm_gain(&mut source, 512);
+        warm_gain(&mut source);
         source.buffer_left.fill(0.5);
         source.buffer_right.fill(0.5);
         source.send_channels.push(Send {
@@ -135,9 +148,171 @@ mod tests {
         assert!((output[0] - 0.5).abs() < 1e-4);
         assert!((output[1] - 0.5).abs() < 1e-4);
     }
+
+    /// Build master (0 dB) → bus (-6 dB) ← track (-6 dB, 0.5 input). Faders stay at their
+    /// initial values, so gain smoothing has nothing to converge.
+    fn track_bus_master_state(buffer_size: usize) -> EngineState {
+        let sample_rate = 48_000.0;
+        let mut state = EngineState::default();
+        state.device_sample_rate = sample_rate;
+
+        let mut master = Channel::new(1, "Master".to_string(), buffer_size, sample_rate);
+        master.output_channel_id = Some(1000);
+        master.pan_mode = PanMode::StereoBalance;
+
+        let mut bus = Channel::new(2, "Bus".to_string(), buffer_size, sample_rate);
+        bus.output_channel_id = Some(1);
+        bus.pan_mode = PanMode::StereoBalance;
+
+        let mut track = Channel::new(3, "Track".to_string(), buffer_size, sample_rate);
+        track.output_channel_id = Some(2);
+        track.pan_mode = PanMode::StereoBalance;
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.5);
+
+        state.channels.insert(1, master);
+        state.channels.insert(2, bus);
+        state.channels.insert(3, track);
+        state
+    }
+
+    #[test]
+    fn track_routes_through_bus_to_master() {
+        let buffer_size = 4;
+        let mut state = track_bus_master_state(buffer_size);
+
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![0.0f32; buffer_size * 2];
+        mix_and_output(&mut state, &mut output, 2, buffer_size, &status_tx);
+
+        // Track fader in pass 2, then the bus fader while routing into the bus
+        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        assert!((state.channels[&2].buffer_left[0] - expected).abs() < 1e-5);
+        assert!((state.channels[&1].buffer_left[0] - expected).abs() < 1e-5);
+        assert!((output[0] - expected).abs() < 1e-5);
+        assert!((output[1] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn muted_track_is_not_routed() {
+        let buffer_size = 4;
+        let mut state = track_bus_master_state(buffer_size);
+        state.channels.get_mut(&3).unwrap().mute = true;
+
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![1.0f32; buffer_size * 2];
+        mix_and_output(&mut state, &mut output, 2, buffer_size, &status_tx);
+
+        assert!(output.iter().all(|sample| sample.abs() < 1e-6));
+    }
 }
 
-/// Mix channels and output to audio device
+/// True if the channel is silenced by its own mute or by another channel's solo.
+fn is_silenced(channel: &Channel, has_solo: bool) -> bool {
+    channel.mute || (has_solo && !channel.solo)
+}
+
+/// True if any channel routes its output or a send to `id`.
+fn is_route_target(channels: &HashMap<ChannelId, Channel>, id: ChannelId) -> bool {
+    channels.values().any(|channel| {
+        channel.output_channel_id == Some(id)
+            || channel
+                .send_channels
+                .iter()
+                .any(|send| send.target_channel_id == id)
+    })
+}
+
+/// Largest absolute sample value in a buffer.
+fn peak_level(buffer: &[f32]) -> f32 {
+    buffer
+        .iter()
+        .fold(0.0, |peak, sample| peak.max(sample.abs()))
+}
+
+/// Send a channel's device events to Godot: sleep changes, plugin parameter changes, new SFZ
+/// parameter lists and device data streams.
+fn forward_device_events(
+    channel: &mut Channel,
+    sleep_changes: Vec<(usize, bool)>,
+    status_tx: &Sender<EngineStatus>,
+) {
+    let channel_id = channel.id;
+
+    for (device_position, is_sleeping) in sleep_changes {
+        let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
+            channel_id,
+            device_position,
+            is_sleeping,
+        });
+    }
+
+    for (device_position, device) in channel.devices.iter_mut().enumerate() {
+        if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<ClapDeviceAdapter>() {
+            // In-process plugin: parameter changes from its GUI or modulation
+            for (param_id, value) in clap_adapter.take_pending_param_changes() {
+                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                    channel_id,
+                    device_position,
+                    param_id,
+                    value,
+                });
+            }
+        } else if let Some(subprocess_adapter) =
+            device.as_any_mut().downcast_mut::<SubprocessClapAdapter>()
+        {
+            // Subprocess plugin: unsolicited ParameterValueChanged messages
+            if let Some(changes) = subprocess_adapter.poll_parameter_changes() {
+                for (param_id, value) in changes {
+                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                        channel_id,
+                        device_position,
+                        param_id,
+                        value,
+                    });
+                }
+            }
+        } else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<SfizzDevice>() {
+            // A new SFZ was loaded, so its parameter list changed
+            if sfizz_device.take_parameters_changed() {
+                let params = device.parameters();
+                if !params.is_empty() {
+                    let _ = status_tx.send(EngineStatus::PluginParameterCount {
+                        channel_id,
+                        device_position,
+                        count: params.len(),
+                    });
+                    for param in params.iter() {
+                        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+                            channel_id,
+                            device_position,
+                            param_id: param.id,
+                            name: param.name.clone(),
+                            min: param.min,
+                            max: param.max,
+                            default: param.default,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Device data streams (spectrum, oscilloscope, etc.)
+        if let Some((data_type, data)) = device.poll_device_data() {
+            let _ = status_tx.try_send(EngineStatus::DeviceData {
+                channel_id,
+                device_position,
+                data_type,
+                data,
+            });
+        }
+    }
+}
+
+/// Mix channels and output to the audio device.
+///
+/// Passes: device pre-pass (non-bus channels), fader and pan, sends, hierarchical routing (buses
+/// run their devices and pan there), master output. Uses only preallocated buffers.
 pub fn mix_and_output(
     state: &mut EngineState,
     data: &mut [f32],
@@ -145,214 +320,64 @@ pub fn mix_and_output(
     frames: usize,
     status_tx: &Sender<EngineStatus>,
 ) {
-    // Check if any channel has solo
-    let has_solo = state.channels.values().any(|c| c.solo);
+    let EngineState {
+        channels: channel_map,
+        render_scratch,
+        ..
+    } = state;
+    let RenderScratch {
+        channel_ids,
+        mix_ops,
+        ..
+    } = render_scratch;
 
-    static mut DEBUG_FRAME_COUNT: u32 = 0;
-    unsafe {
-        DEBUG_FRAME_COUNT += 1;
-        if DEBUG_FRAME_COUNT == 10 || DEBUG_FRAME_COUNT % 100 == 0 {
-            // Log frame 10 and every 100 frames
-            let mut ids: Vec<_> = state.channels.keys().copied().collect();
-            ids.sort();
-            info!(
-                "Channels in mix_and_output (frame {}): {} channels = {:?}",
-                DEBUG_FRAME_COUNT,
-                state.channels.len(),
-                ids
-            );
+    let has_solo = channel_map.values().any(|c| c.solo);
+    channel_ids.clear();
+    channel_ids.extend(channel_map.keys().copied());
 
-            // Log channel details
-            for (&id, ch) in &state.channels {
-                let peak_left = ch.buffer_left.iter().map(|s| s.abs()).fold(0.0, f32::max);
-                let peak_right = ch.buffer_right.iter().map(|s| s.abs()).fold(0.0, f32::max);
-                info!(
-                    "  Channel {}: vol={:.2}dB pan={:.2} route_to={:?} peak_L={:.6} peak_R={:.6}",
-                    id, ch.volume_db, ch.pan, ch.output_channel_id, peak_left, peak_right
-                );
-            }
-        }
-    }
-
-    // First pass: Process device chains (instruments and effects)
-    // Process effects BEFORE applying fader so fader is applied to final output
-    // IMPORTANT: Skip bus channels here - they'll be processed in Phase 4 after receiving routed audio
-    let sample_count = frames;
-
-    // Cache pre-fader audio for channels that have pre-fader sends so we can tap the signal before fader
-    let mut pre_fader_sources: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
-    if sample_count > 0 {
-        for (&id, channel) in state.channels.iter() {
-            if channel
+    // Reset per-buffer mix state, find buses, and copy pre-fader audio for pre-fader sends.
+    // NOTE: the copy is taken before device processing, as it always has been.
+    for &id in channel_ids.iter() {
+        let is_target = is_route_target(channel_map, id);
+        let Some(channel) = channel_map.get_mut(&id) else {
+            continue;
+        };
+        let mix = &mut channel.mix;
+        mix.is_route_target = is_target;
+        mix.pending_bus = false;
+        mix.bus_destination = false;
+        mix.has_send_input = false;
+        mix.routed = id == 1; // Master never routes further
+        mix.has_pre_fader_copy = frames > 0
+            && channel
                 .send_channels
                 .iter()
-                .any(|send| send.pre_fader && !send.muted)
-            {
-                pre_fader_sources.insert(
-                    id,
-                    (channel.buffer_left.clone(), channel.buffer_right.clone()),
-                );
-            }
+                .any(|send| send.pre_fader && !send.muted);
+        if mix.has_pre_fader_copy {
+            mix.pre_fader_left[..frames].copy_from_slice(&channel.buffer_left[..frames]);
+            mix.pre_fader_right[..frames].copy_from_slice(&channel.buffer_right[..frames]);
         }
     }
 
-    // Identify bus channels (channels that other channels route TO or receive sends)
-    let mut bus_channel_ids: HashSet<ChannelId> = HashSet::new();
-    for channel in state.channels.values() {
-        if let Some(output_id) = channel.output_channel_id {
-            if output_id < 1000 {
-                // Only channels, not devices
-                bus_channel_ids.insert(output_id);
-            }
-        }
-        for send in &channel.send_channels {
-            if send.target_channel_id < 1000 {
-                bus_channel_ids.insert(send.target_channel_id);
-            }
-        }
-    }
-
-    for channel in state.channels.values_mut() {
-        // Skip bus channels - they'll be processed in Phase 4 after receiving routed audio
-        if bus_channel_ids.contains(&channel.id) {
-            static mut BUS_SKIP_LOG: u32 = 0;
-            unsafe {
-                BUS_SKIP_LOG += 1;
-                if BUS_SKIP_LOG <= 5 {
-                    info!("⏭️ Skipping channel {} (is a bus channel)", channel.id);
-                }
-            }
+    // First pass: process device chains (instruments and effects) before the fader.
+    // Buses are skipped here; they run in the routing pass after receiving audio.
+    for channel in channel_map.values_mut() {
+        if channel.mix.is_route_target {
             continue;
         }
-        static mut PROCESS_LOG: u32 = 0;
-        unsafe {
-            PROCESS_LOG += 1;
-            if PROCESS_LOG <= 5 {
-                info!("🔧 Processing device chain for channel {} (devices={})", channel.id, channel.devices.len());
-            }
-        }
-        let sleep_changes = channel.process_device_chain(sample_count);
-
-        // Emit sleep state change events
-        for (device_pos, is_sleeping) in sleep_changes {
-            let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
-                channel_id: channel.id,
-                device_position: device_pos,
-                is_sleeping,
-            });
-        }
-
-        // Check for pending parameter changes from CLAP plugins (GUI/modulation changes)
-        // Note: Bus channels will have their parameters checked in Phase 4
-        for (device_pos, device) in channel.devices.iter_mut().enumerate() {
-            // Try to downcast to ClapDeviceAdapter (in-process)
-            if let Some(clap_adapter) = device
-                .as_any_mut()
-                .downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>(
-            ) {
-                let pending_changes = clap_adapter.take_pending_param_changes();
-                for (param_id, value) in pending_changes {
-                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                        channel_id: channel.id,
-                        device_position: device_pos,
-                        param_id,
-                        value,
-                    });
-                }
-            }
-            // Also check SubprocessClapAdapter (subprocess-based plugins)
-            else if let Some(subprocess_adapter) =
-                device
-                    .as_any_mut()
-                    .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
-            {
-                // Poll for unsolicited ParameterValueChanged messages from subprocess
-                if let Some(pending_changes) = subprocess_adapter.poll_parameter_changes() {
-                    for (param_id, value) in pending_changes {
-                        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                            channel_id: channel.id,
-                            device_position: device_pos,
-                            param_id,
-                            value,
-                        });
-                    }
-                }
-            }
-            // Also check SfizzDevice for parameter list changes (after loading new SFZ)
-            else if let Some(sfizz_device) = device
-                .as_any_mut()
-                .downcast_mut::<super::devices::SfizzDevice>()
-            {
-                if sfizz_device.take_parameters_changed() {
-                    info!("🎹 SFZ parameters changed! Sending parameter list for channel {} device {}",
-                        channel.id, device_pos);
-
-                    // Parameters changed (new SFZ loaded), send updated parameter list to Godot
-                    let params = device.parameters();
-
-                    info!("📋 Sending {} parameters to Godot", params.len());
-
-                    if !params.is_empty() {
-                        // Send parameter count
-                        let _ = status_tx.send(EngineStatus::PluginParameterCount {
-                            channel_id: channel.id,
-                            device_position: device_pos,
-                            count: params.len(),
-                        });
-
-                        // Send parameter info for each parameter
-                        for param in params.iter() {
-                            info!(
-                                "  Param {}: {} (range {:.2}-{:.2}, default {:.2})",
-                                param.id, param.name, param.min, param.max, param.default
-                            );
-                            let _ = status_tx.send(EngineStatus::PluginParameterInfo {
-                                channel_id: channel.id,
-                                device_position: device_pos,
-                                param_id: param.id,
-                                name: param.name.clone(),
-                                min: param.min,
-                                max: param.max,
-                                default: param.default,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Poll for device data (spectrum, oscilloscope, etc.)
-            if let Some((data_type, data)) = device.poll_device_data() {
-                let _ = status_tx.try_send(EngineStatus::DeviceData {
-                    channel_id: channel.id,
-                    device_position: device_pos,
-                    data_type,
-                    data,
-                });
-            }
-        }
+        let sleep_changes = channel.process_device_chain(frames);
+        forward_device_events(channel, sleep_changes, status_tx);
     }
 
-    // Second pass: Apply each channel's fader (gain/pan) to its own buffer
-    // This makes the buffer content "post-fader" for accurate peak metering
-    // Use per-sample smoothing to prevent clicks when changing volume
-    // NOTE: Buses don't have local audio, so pan applied here does nothing.
-    // Buses will apply pan in pass 4 after they receive routed audio.
-    for channel in state.channels.values_mut() {
-        // Skip if muted or (solo exists and this channel isn't soloed)
-        if channel.mute || (has_solo && !channel.solo) {
-            if channel.id >= 2 && channel.id < 1000 {
-                info!(
-                    "Skipping channel {} (mute={}, solo={}, has_solo={})",
-                    channel.id, channel.mute, channel.solo, has_solo
-                );
-            }
+    // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
+    // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
+    for channel in channel_map.values_mut() {
+        if is_silenced(channel, has_solo) {
             channel.clear_buffers();
             continue;
         }
 
         let pan = channel.get_pan_coefficients();
-
-        // Apply smoothed gain and pan per-sample to prevent clicks/pops
         for i in 0..frames {
             let smoothed_gain = channel.get_smoothed_gain();
             let left_in = channel.buffer_left[i] * smoothed_gain;
@@ -364,487 +389,202 @@ pub fn mix_and_output(
         }
     }
 
-    // Collect send contributions before hierarchical routing so they are processed like regular bus inputs
-    let mut send_accum: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
-    let mut pending_bus_processing: HashSet<ChannelId> = HashSet::new();
-
-    static mut SEND_DEBUG_COUNT: u32 = 0;
-    let should_log_sends = unsafe {
-        SEND_DEBUG_COUNT += 1;
-        SEND_DEBUG_COUNT <= 5 || SEND_DEBUG_COUNT % 100 == 0
-    };
-
-    if sample_count > 0 {
-        for (&source_id, channel) in state.channels.iter() {
-            if channel.send_channels.is_empty() {
+    // Third pass: accumulate sends into each target's send buffer, then mix them in so they are
+    // processed like regular bus inputs
+    if frames > 0 {
+        for &source_id in channel_ids.iter() {
+            let Some(source) = channel_map.get_mut(&source_id) else {
                 continue;
-            }
-            if channel.mute || (has_solo && !channel.solo) {
+            };
+            if source.send_channels.is_empty() || is_silenced(source, has_solo) {
                 continue;
             }
 
-            for send in &channel.send_channels {
-                if send.muted {
-                    continue;
-                }
-                if send.target_channel_id == 0
-                    || send.target_channel_id == source_id
-                    || send.target_channel_id >= 1000
-                {
-                    continue;
-                }
-                if !state.channels.contains_key(&send.target_channel_id) {
-                    continue;
-                }
+            // Move the source's buffers out (no allocation) so targets can be borrowed mutably
+            let sends = std::mem::take(&mut source.send_channels);
+            let left = std::mem::take(&mut source.buffer_left);
+            let right = std::mem::take(&mut source.buffer_right);
+            let pre_left = std::mem::take(&mut source.mix.pre_fader_left);
+            let pre_right = std::mem::take(&mut source.mix.pre_fader_right);
+            let has_pre_fader_copy = source.mix.has_pre_fader_copy;
+            let pan = source.get_pan_coefficients();
 
+            for send in &sends {
+                let target_id = send.target_channel_id;
+                if send.muted || target_id == 0 || target_id == source_id || target_id >= 1000 {
+                    continue;
+                }
                 let send_gain = db_to_gain(send.amount_db);
                 if send_gain <= 0.0 {
                     continue;
                 }
-
-                let entry = send_accum
-                    .entry(send.target_channel_id)
-                    .or_insert_with(|| (vec![0.0; sample_count], vec![0.0; sample_count]));
-
-                let buffer_len = frames;
-                if buffer_len == 0 {
+                let Some(target) = channel_map.get_mut(&target_id) else {
                     continue;
-                }
+                };
 
-                if should_log_sends {
-                    let source_peak_l = channel
-                        .buffer_left
-                        .iter()
-                        .take(buffer_len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    let source_peak_r = channel
-                        .buffer_right
-                        .iter()
-                        .take(buffer_len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    info!(
-                        "🔊 SEND: Ch{} → Ch{} (gain={:.2}dB={:.4}x, peak_L={:.6}, peak_R={:.6})",
-                        source_id,
-                        send.target_channel_id,
-                        send.amount_db,
-                        send_gain,
-                        source_peak_l,
-                        source_peak_r
-                    );
+                let mix = &mut target.mix;
+                if !mix.has_send_input {
+                    mix.send_left[..frames].fill(0.0);
+                    mix.send_right[..frames].fill(0.0);
+                    mix.has_send_input = true;
                 }
 
                 if send.pre_fader {
-                    if let Some((pre_left, pre_right)) = pre_fader_sources.get(&source_id) {
-                        let pan = channel.get_pan_coefficients();
-                        for i in 0..buffer_len {
+                    // Pre-fader sends reapply the source's pan so stereo matches the source
+                    if has_pre_fader_copy {
+                        for i in 0..frames {
                             let left_in = pre_left[i];
                             let right_in = pre_right[i];
                             let panned_left =
                                 left_in * pan.left_to_left + right_in * pan.right_to_left;
                             let panned_right =
                                 left_in * pan.left_to_right + right_in * pan.right_to_right;
-                            entry.0[i] += panned_left * send_gain;
-                            entry.1[i] += panned_right * send_gain;
+                            mix.send_left[i] += panned_left * send_gain;
+                            mix.send_right[i] += panned_right * send_gain;
                         }
                     }
                 } else {
-                    for i in 0..buffer_len {
-                        entry.0[i] += channel.buffer_left[i] * send_gain;
-                        entry.1[i] += channel.buffer_right[i] * send_gain;
+                    for i in 0..frames {
+                        mix.send_left[i] += left[i] * send_gain;
+                        mix.send_right[i] += right[i] * send_gain;
                     }
                 }
 
-                pending_bus_processing.insert(send.target_channel_id);
+                mix.pending_bus = true;
+            }
+
+            if let Some(source) = channel_map.get_mut(&source_id) {
+                source.send_channels = sends;
+                source.buffer_left = left;
+                source.buffer_right = right;
+                source.mix.pre_fader_left = pre_left;
+                source.mix.pre_fader_right = pre_right;
+            }
+        }
+
+        // Send returns are scaled by the destination channel's fader
+        for channel in channel_map.values_mut() {
+            if !channel.mix.has_send_input || channel.mute {
+                continue;
+            }
+            let dest_gain = channel.get_gain();
+            for i in 0..frames {
+                channel.buffer_left[i] += channel.mix.send_left[i] * dest_gain;
+                channel.buffer_right[i] += channel.mix.send_right[i] * dest_gain;
             }
         }
     }
 
-    for (target_id, (send_left, send_right)) in send_accum.into_iter() {
-        if let Some(target_ch) = state.channels.get_mut(&target_id) {
-            if target_ch.mute {
-                if should_log_sends {
-                    info!("🔇 SEND target {} is muted, skipping", target_id);
-                }
-                continue;
-            }
+    // Fourth pass: hierarchical routing (Track → Bus → Master). Each pass routes channels into
+    // their outputs; buses that received audio then run their devices and pan and route their
+    // processed audio in the next pass.
+    for routing_pass in 0..MAX_ROUTING_PASSES {
+        mix_ops.clear();
 
-            let dest_gain = target_ch.get_gain();
-            let len = frames;
-
-            let (pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r) =
-                if should_log_sends {
-                    let pre_l = target_ch
-                        .buffer_left
-                        .iter()
-                        .take(len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    let pre_r = target_ch
-                        .buffer_right
-                        .iter()
-                        .take(len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-
-                    for i in 0..len {
-                        target_ch.buffer_left[i] += send_left[i] * dest_gain;
-                        target_ch.buffer_right[i] += send_right[i] * dest_gain;
-                    }
-
-                    let post_l = target_ch
-                        .buffer_left
-                        .iter()
-                        .take(len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    let post_r = target_ch
-                        .buffer_right
-                        .iter()
-                        .take(len)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    (pre_l, pre_r, post_l, post_r)
-                } else {
-                    for i in 0..len {
-                        target_ch.buffer_left[i] += send_left[i] * dest_gain;
-                        target_ch.buffer_right[i] += send_right[i] * dest_gain;
-                    }
-                    (0.0, 0.0, 0.0, 0.0)
-                };
-
-            if should_log_sends {
-                info!("📥 SEND mixed into Ch{}: dest_gain={:.4}, pre=({:.6},{:.6}), post=({:.6},{:.6}), routes_to={:?}",
-                    target_id, dest_gain, pre_mix_peak_l, pre_mix_peak_r, post_mix_peak_l, post_mix_peak_r, target_ch.output_channel_id);
-            }
-        }
-    }
-
-    // Third pass: Mix channels into their destinations with hierarchical routing support
-    // We need multiple passes to handle: Track → Bus → Master
-    // Use a buffer copy strategy to track which channels have been processed
-    let mut channel_buffers: HashMap<ChannelId, (Vec<f32>, Vec<f32>)> = HashMap::new();
-
-    // Collect initial channel buffers
-    for (&id, channel) in &state.channels {
-        if id < 1000 {
-            channel_buffers.insert(
-                id,
-                (channel.buffer_left.clone(), channel.buffer_right.clone()),
-            );
-        }
-    }
-
-    // Track which channels are buses (received routed audio in current pass)
-    let mut bus_destinations: HashSet<ChannelId> = HashSet::new();
-
-    // Single pass routing: collect operations in dependency order
-    // Track which channels have been processed to avoid re-routing the same audio
-    let mut processed_channels: HashSet<ChannelId> = HashSet::new();
-    processed_channels.insert(1); // Master never routes further
-
-    // Multi-pass routing: up to 10 passes to handle arbitrary nesting
-    static mut ROUTING_DEBUG_COUNT: u32 = 0;
-    let should_log_routing = unsafe {
-        ROUTING_DEBUG_COUNT += 1;
-        ROUTING_DEBUG_COUNT <= 5 || ROUTING_DEBUG_COUNT % 100 == 0
-    };
-
-    for routing_pass in 0..10 {
-        let mut mix_operations: Vec<(ChannelId, ChannelId, Vec<f32>, Vec<f32>)> = Vec::new();
-
-        if should_log_routing {
-            info!(
-                "🔄 Routing pass {}: processed_channels={:?}",
-                routing_pass, processed_channels
-            );
-        }
-
-        // First, mark buses that need device processing (from sends) - they shouldn't route PRE-device audio
-        let buses_needing_processing: HashSet<ChannelId> = if routing_pass == 0 {
-            pending_bus_processing.iter().copied().collect()
-        } else {
-            HashSet::new()
-        };
-
-        for (&id, channel) in &state.channels {
-            // Skip if already processed (routed to another channel)
-            if processed_channels.contains(&id) {
-                continue;
-            }
-
-            // Skip buses that need to process devices first (they'll route POST-device audio later)
-            if buses_needing_processing.contains(&id) {
-                if should_log_routing {
-                    info!(
-                        "⏸️  Skipping Ch{} in routing pass {} - needs device processing first",
-                        id, routing_pass
-                    );
-                }
-                continue;
-            }
-
-            // Skip muted/non-soloed channels (already cleared above)
-            if channel.mute || (has_solo && !channel.solo) {
-                continue;
-            }
-
-            // Get current buffer state from our tracking
-            let (buf_left, buf_right) = if let Some((bl, br)) = channel_buffers.get(&id) {
-                (bl.clone(), br.clone())
-            } else {
+        for &id in channel_ids.iter() {
+            let Some(channel) = channel_map.get(&id) else {
                 continue;
             };
-
-            // Check if this buffer has any audio to route (check BOTH channels)
-            let peak_left = buf_left.iter().map(|s| s.abs()).fold(0.0, f32::max);
-            let peak_right = buf_right.iter().map(|s| s.abs()).fold(0.0, f32::max);
-            let peak = peak_left.max(peak_right);
-            if peak < 0.0001 {
-                continue; // No audio to route
+            if channel.mix.routed {
+                continue;
+            }
+            // Buses fed by sends must process their devices before routing onward
+            if routing_pass == 0 && channel.mix.pending_bus {
+                continue;
+            }
+            if is_silenced(channel, has_solo) {
+                continue;
             }
 
-            // If this channel routes to another channel (not a device), prepare mix operation
+            let peak = peak_level(&channel.buffer_left[..frames])
+                .max(peak_level(&channel.buffer_right[..frames]));
+            if peak < ROUTING_SILENCE_THRESHOLD {
+                continue;
+            }
+
+            // Only mix into other channels (ID < 1000), not hardware outputs (ID >= 1000)
             if let Some(output_id) = channel.output_channel_id {
-                // Only mix into other channels (ID < 1000), not devices (ID >= 1000)
-                if output_id != id && output_id < 1000 && state.channels.contains_key(&output_id) {
-                    if should_log_routing {
-                        info!(
-                            "📤 Routing pass {}: Ch{} → Ch{} (peak={:.6})",
-                            routing_pass, id, output_id, peak
-                        );
-                    }
-                    mix_operations.push((id, output_id, buf_left, buf_right));
-                    processed_channels.insert(id); // Mark as processed
-                    bus_destinations.insert(output_id); // Track that this channel received routed audio
+                if output_id != id && output_id < 1000 && channel_map.contains_key(&output_id) {
+                    mix_ops.push((id, output_id));
                 }
             }
         }
 
-        for channel_id in pending_bus_processing.drain() {
-            if should_log_routing {
-                info!(
-                    "➕ Adding Ch{} to bus_destinations from pending_bus_processing",
-                    channel_id
-                );
+        // Snapshot each routed source before mixing, so a channel that is both a source and a
+        // destination in this pass routes the audio it had when the pass started
+        for &(source_id, output_id) in mix_ops.iter() {
+            if let Some(source) = channel_map.get_mut(&source_id) {
+                source.mix.routed = true;
+                source.mix.route_left[..frames].copy_from_slice(&source.buffer_left[..frames]);
+                source.mix.route_right[..frames].copy_from_slice(&source.buffer_right[..frames]);
             }
-            bus_destinations.insert(channel_id);
+            if let Some(destination) = channel_map.get_mut(&output_id) {
+                destination.mix.bus_destination = true;
+            }
         }
 
-        if should_log_routing {
-            info!(
-                "🔄 Pass {}: {} mix ops, {} bus dests",
-                routing_pass,
-                mix_operations.len(),
-                bus_destinations.len()
-            );
+        // Buses that received sends are processed in the first pass
+        if routing_pass == 0 {
+            for channel in channel_map.values_mut() {
+                if channel.mix.pending_bus {
+                    channel.mix.pending_bus = false;
+                    channel.mix.bus_destination = true;
+                }
+            }
         }
 
-        if mix_operations.is_empty() && bus_destinations.is_empty() {
-            if should_log_routing {
-                info!("✅ Routing complete after {} passes", routing_pass);
-            }
+        let has_bus_destinations = channel_map.values().any(|c| c.mix.bus_destination);
+        if mix_ops.is_empty() && !has_bus_destinations {
             break;
         }
 
-        // Apply mix operations
-        for (src_id, output_id, buffer_left, buffer_right) in mix_operations {
-            // The routed audio already has the source channel's gain applied (from pass 2)
-            // We only apply the destination channel's GAIN during mixing into it
-            // Do NOT apply pan during routing - pan was already applied in pass 2 for source channels
-            // and buses don't have local audio so their pan in pass 2 was meaningless (will redo in pass 4)
-
-            let dest_gain = if let Some(output_ch) = state.channels.get(&output_id) {
-                output_ch.get_gain()
-            } else {
+        // Mix routed audio into destinations with only the destination's fader gain; the
+        // source's pan was applied in pass 2 and buses pan below
+        for &(source_id, output_id) in mix_ops.iter() {
+            let Some(source) = channel_map.get_mut(&source_id) else {
                 continue;
             };
+            let route_left = std::mem::take(&mut source.mix.route_left);
+            let route_right = std::mem::take(&mut source.mix.route_right);
 
-            // Mix into the channel's buffer, applying destination's fader (gain)
-            if let Some((dest_left, dest_right)) = channel_buffers.get_mut(&output_id) {
+            if let Some(destination) = channel_map.get_mut(&output_id) {
+                let dest_gain = destination.get_gain();
                 for i in 0..frames {
-                    dest_left[i] += buffer_left[i] * dest_gain;
-                    dest_right[i] += buffer_right[i] * dest_gain;
+                    destination.buffer_left[i] += route_left[i] * dest_gain;
+                    destination.buffer_right[i] += route_right[i] * dest_gain;
                 }
             }
 
-            // Also update the actual channel state so peak meters and output are correct
-            if let Some(output_ch) = state.channels.get_mut(&output_id) {
-                for i in 0..frames {
-                    output_ch.buffer_left[i] += buffer_left[i] * dest_gain;
-                    output_ch.buffer_right[i] += buffer_right[i] * dest_gain;
-                }
+            if let Some(source) = channel_map.get_mut(&source_id) {
+                source.mix.route_left = route_left;
+                source.mix.route_right = route_right;
             }
         }
 
-        // Fourth pass: After mixing audio INTO buses, apply bus pan and effects
-        // Bus pan is applied to the received routed audio (which already has source pan applied)
-        // This allows buses to further pan the mixed signal before routing to their output
-        let buses_to_process: Vec<ChannelId> = bus_destinations.iter().copied().collect();
-
-        if should_log_routing && !buses_to_process.is_empty() {
-            info!(
-                "🎛️  Processing {} buses: {:?}",
-                buses_to_process.len(),
-                buses_to_process
-            );
-        }
-
-        for bus_id in buses_to_process {
-            if let Some(bus_ch) = state.channels.get_mut(&bus_id) {
-                // Skip if muted
-                if bus_ch.mute {
-                    if should_log_routing {
-                        info!("⏭️  Skipping bus {} (muted)", bus_id);
-                    }
-                    continue;
-                }
-
-                if should_log_routing {
-                    let pre_l = bus_ch
-                        .buffer_left
-                        .iter()
-                        .take(sample_count)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    let pre_r = bus_ch
-                        .buffer_right
-                        .iter()
-                        .take(sample_count)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    info!(
-                        "🎚️  Bus {} PRE-device: peak=({:.6},{:.6}), devices={}, routes_to={:?}",
-                        bus_id,
-                        pre_l,
-                        pre_r,
-                        bus_ch.devices.len(),
-                        bus_ch.output_channel_id
-                    );
-                }
-
-                // Process the bus's effect chain on the accumulated routed audio
-                // Effects (like delay) should process the mixed audio
-                let sleep_changes = bus_ch.process_device_chain(sample_count);
-
-                // Emit sleep state change events
-                for (device_pos, is_sleeping) in sleep_changes {
-                    let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
-                        channel_id: bus_id,
-                        device_position: device_pos,
-                        is_sleeping,
-                    });
-                }
-
-                if should_log_routing {
-                    let post_device_peak_l = bus_ch
-                        .buffer_left
-                        .iter()
-                        .take(sample_count)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    let post_device_peak_r = bus_ch
-                        .buffer_right
-                        .iter()
-                        .take(sample_count)
-                        .map(|s| s.abs())
-                        .fold(0.0, f32::max);
-                    info!(
-                        "🎛️  Bus {} POST-device: peak=({:.6},{:.6})",
-                        bus_id, post_device_peak_l, post_device_peak_r
-                    );
-                }
-
-                // Check for pending parameter changes from CLAP plugins on buses
-                for (device_pos, device) in bus_ch.devices.iter_mut().enumerate() {
-                    if let Some(clap_adapter) = device
-                        .as_any_mut()
-                        .downcast_mut::<super::devices::clap_host::ClapDeviceAdapter>(
-                    ) {
-                        let pending_changes = clap_adapter.take_pending_param_changes();
-                        for (param_id, value) in pending_changes {
-                            let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                                channel_id: bus_id,
-                                device_position: device_pos,
-                                param_id,
-                                value,
-                            });
-                        }
-                    } else if let Some(subprocess_adapter) =
-                        device
-                            .as_any_mut()
-                            .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
-                    {
-                        if let Some(pending_changes) = subprocess_adapter.poll_parameter_changes() {
-                            for (param_id, value) in pending_changes {
-                                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                                    channel_id: bus_id,
-                                    device_position: device_pos,
-                                    param_id,
-                                    value,
-                                });
-                            }
-                        }
-                    }
-
-                    // Poll for device data (spectrum, oscilloscope, etc.)
-                    if let Some((data_type, data)) = device.poll_device_data() {
-                        let _ = status_tx.try_send(EngineStatus::DeviceData {
-                            channel_id: bus_id,
-                            device_position: device_pos,
-                            data_type,
-                            data,
-                        });
-                    }
-                }
-
-                // Apply the bus's pan to the received audio
-                // This is separate from source panning - it pans the entire bus mix
-                let pan = bus_ch.get_pan_coefficients();
-                for i in 0..frames {
-                    let left_in = bus_ch.buffer_left[i];
-                    let right_in = bus_ch.buffer_right[i];
-
-                    // Apply 4-coefficient pan matrix to bus's mixed audio
-                    bus_ch.buffer_left[i] =
-                        left_in * pan.left_to_left + right_in * pan.right_to_left;
-                    bus_ch.buffer_right[i] =
-                        left_in * pan.left_to_right + right_in * pan.right_to_right;
-                }
-
-                // Update channel_buffers with the post-effect, post-pan audio so it routes correctly next pass
-                channel_buffers.insert(
-                    bus_id,
-                    (bus_ch.buffer_left.clone(), bus_ch.buffer_right.clone()),
-                );
-
-                // CRITICAL: Remove from processed_channels so the bus can route its POST-device audio in the next pass
-                // This allows buses to route their processed output (e.g., reverb) to master/other buses
-                processed_channels.remove(&bus_id);
-
-                if should_log_routing {
-                    info!(
-                        "🔄 Bus {} processed devices, will route POST-device audio in next pass",
-                        bus_id
-                    );
-                }
+        // Buses that received audio run their effect chain and pan the accumulated mix
+        for channel in channel_map.values_mut() {
+            if !channel.mix.bus_destination {
+                continue;
             }
-        }
-
-        // Clear bus_destinations for next iteration
-        bus_destinations.clear();
-    }
-
-    // After all routing passes, sync channel_buffers back to state.channels for accurate peak metering
-    // This ensures peaks reflect post-effect, post-pan levels
-    for (&id, channel) in state.channels.iter_mut() {
-        if id < 1000 {
-            // Skip device outputs
-            if let Some((buf_left, buf_right)) = channel_buffers.get(&id) {
-                channel.buffer_left.copy_from_slice(buf_left);
-                channel.buffer_right.copy_from_slice(buf_right);
+            channel.mix.bus_destination = false;
+            if channel.mute {
+                continue;
             }
+
+            let sleep_changes = channel.process_device_chain(frames);
+            forward_device_events(channel, sleep_changes, status_tx);
+
+            let pan = channel.get_pan_coefficients();
+            for i in 0..frames {
+                let left_in = channel.buffer_left[i];
+                let right_in = channel.buffer_right[i];
+                channel.buffer_left[i] = left_in * pan.left_to_left + right_in * pan.right_to_left;
+                channel.buffer_right[i] =
+                    left_in * pan.left_to_right + right_in * pan.right_to_right;
+            }
+
+            // Let the bus route its processed audio in the next pass
+            channel.mix.routed = false;
         }
     }
 
@@ -852,7 +592,7 @@ pub fn mix_and_output(
     // Master should route to an output device (ID >= 1000)
     // NOTE: Currently we only support outputting to the default device (ID 1000, the one running this stream)
     // In the future, we can support routing to other devices (ID 1001+) by managing multiple streams
-    if let Some(master) = state.channels.get(&1) {
+    if let Some(master) = channel_map.get(&1) {
         // Check if master routes to a device (ID >= 1000)
         if let Some(output_device_id) = master.output_channel_id {
             if output_device_id >= 1000 {

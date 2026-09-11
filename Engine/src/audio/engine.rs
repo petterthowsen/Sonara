@@ -5,13 +5,12 @@ use cpal::{
 };
 use crossbeam::channel::{Receiver, Sender};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-use super::commands::process_command;
+use super::command_worker::CommandWorker;
 pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
 use super::mixing::mix_and_output;
 use super::processing::process_audio;
@@ -23,6 +22,10 @@ const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 /// Preferred ALSA buffer size in frames (~21 ms at 48 kHz); cpal uses a quarter of it as the
 /// period size. Keep it at or above PipeWire's graph quantum or the stream will underrun.
 const PREFERRED_BUFFER_FRAMES: u32 = 1024;
+
+/// How long the audio callback keeps retrying the state lock before outputting silence for the
+/// buffer. The command thread only holds the lock briefly, so this should rarely be reached.
+const STATE_LOCK_BUDGET: Duration = Duration::from_millis(1);
 
 /// Audio engine that manages the audio stream and processing
 pub struct AudioEngine {
@@ -92,7 +95,6 @@ impl AudioEngine {
 
         // Create command channel for thread-safe communication
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
-        let command_rx_for_thread = command_rx.clone();
 
         // Use a safe maximum buffer size for plugin allocation
         // CPAL may request variable buffer sizes, so we allocate generously
@@ -109,27 +111,23 @@ impl AudioEngine {
             state_lock.output_devices = output_devices;
         }
 
-        // Create command processing thread
-        let command_thread_state = state.clone();
-        let command_thread_status_tx = status_tx.clone();
-        let command_thread_command_tx = command_tx.clone();
-        let command_thread_max_buffer_size = max_buffer_size;
-        let command_thread = thread::spawn(move || {
-            Self::command_processing_loop(
-                command_rx_for_thread,
-                command_thread_state,
-                command_thread_status_tx,
-                command_thread_command_tx,
-                command_thread_max_buffer_size,
-            );
-        });
+        // Command thread: applies commands, doing slow work outside the state lock
+        let worker = CommandWorker::new(
+            state.clone(),
+            status_tx.clone(),
+            command_tx.clone(),
+            sample_rate as f32,
+            max_buffer_size,
+        );
+        let command_thread = thread::Builder::new()
+            .name("engine-commands".to_string())
+            .spawn(move || worker.run(command_rx))
+            .context("Failed to spawn command thread")?;
 
         // Build the audio stream (pass a clone of status_tx, keep one for log forwarder)
         let stream = match Self::build_stream(
             &default_device,
             &config,
-            command_rx.clone(),
-            command_tx.clone(),
             status_tx.clone(),
             state.clone(),
             max_buffer_size,
@@ -144,8 +142,6 @@ impl AudioEngine {
                 Self::build_stream(
                     &default_device,
                     &config,
-                    command_rx,
-                    command_tx.clone(),
                     status_tx.clone(),
                     state.clone(),
                     max_buffer_size,
@@ -204,45 +200,10 @@ impl AudioEngine {
         Ok(config)
     }
 
-    /// Command processing loop that runs in a separate thread
-    fn command_processing_loop(
-        command_rx: Receiver<AudioCommand>,
-        state: Arc<Mutex<EngineState>>,
-        status_tx: Sender<EngineStatus>,
-        command_tx: Sender<AudioCommand>,
-        max_buffer_size: usize,
-    ) {
-        loop {
-            match command_rx.recv() {
-                Ok(cmd) => {
-                    let mut state = match state.lock() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            warn!("Failed to lock state in command thread: {}", e);
-                            continue;
-                        }
-                    };
-
-                    if let Some(status) =
-                        process_command(&mut state, cmd, max_buffer_size, &status_tx, &command_tx)
-                    {
-                        let _ = status_tx.send(status);
-                    }
-                }
-                Err(_) => {
-                    // Channel closed, exit thread
-                    break;
-                }
-            }
-        }
-    }
-
     /// Build the audio output stream
     fn build_stream(
         device: &Device,
         config: &StreamConfig,
-        command_rx: Receiver<AudioCommand>,
-        command_tx: Sender<AudioCommand>,
         status_tx: Sender<EngineStatus>,
         state: Arc<Mutex<EngineState>>,
         max_buffer_size: usize,
@@ -269,10 +230,11 @@ impl AudioEngine {
                 // Start timing the audio processing
                 let processing_start = Instant::now();
 
-                // Lock state for audio processing (commands are processed in separate thread)
-                let mut state = match state.lock() {
-                    Ok(s) => s,
-                    Err(_) => return, // Skip this buffer if lock fails
+                // If the command thread still holds the state after the budget, output silence
+                // rather than miss the deadline
+                let Some(mut state) = lock_state_for_callback(&state, processing_start) else {
+                    data.fill(0.0);
+                    return;
                 };
 
                 let frames = data.len() / channels;
@@ -406,5 +368,26 @@ impl AudioEngine {
     /// Get current playhead position
     pub fn current_tick(&self) -> Tick {
         self.state.lock().unwrap().get_current_tick()
+    }
+}
+
+/// Lock the engine state from the audio callback without sleeping in the OS.
+///
+/// Spins on `try_lock` until `STATE_LOCK_BUDGET` has passed since `callback_start` and returns
+/// None if the command thread still holds the lock. A poisoned lock is recovered so audio keeps
+/// running after a command panicked.
+fn lock_state_for_callback(
+    state: &Mutex<EngineState>,
+    callback_start: Instant,
+) -> Option<MutexGuard<'_, EngineState>> {
+    loop {
+        match state.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) if callback_start.elapsed() < STATE_LOCK_BUDGET => {
+                std::hint::spin_loop()
+            }
+            Err(TryLockError::WouldBlock) => return None,
+        }
     }
 }

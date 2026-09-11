@@ -1,18 +1,30 @@
 # Sonara DAW - Project Status
 
-## Device Reordering Implementation
+## Audio thread stalls (shared `Arc<Mutex<EngineState>>`)
+
+The audio callback blocked on `state.lock()` while the command thread held the lock for the whole of `process_command`, so anything slow in a command froze audio.
+
+Phase 1 (done, needs live testing): shared state kept, slow work moved outside the lock in `CommandWorker`, bounded `try_lock` (1 ms, then silence) in the callback, per-buffer allocations and debug logging removed from the callback.
+Phase 2 (later): audio thread owns its state, lock-free command queue, removed objects dropped off-thread.
+
+### Stalls that were under the lock
+- `ScanPlugins`: dlopens every `.clap` bundle
+- `OpenPluginGui` / `ClosePluginGui`: IPC round-trip, 5 s / 2 s timeouts
+- `SetDeviceActive`: two IPC round-trips with no timeout
+- Dropping a `SubprocessClapAdapter` (remove device, clear devices, remove channel, clear project): GUI close + subprocess shutdown
+- `LoadAudioClip`: `samples.clone()` of the whole file plus log formatting
+- `AdvertiseBuiltinDevices`: builds temporary devices
+- On the audio thread itself: blocking `process.lock()` in `poll_parameter_changes`, which GUI IPC holds for seconds
 
 ### Working
-- ✓ Engine-side device reordering via `MoveDevice` command (Engine/src/audio/commands.rs:214-218, 1474-1499)
-- ✓ OSC protocol handler for `/channel/{id}/move_device` (Engine/src/osc/server.rs:1098-1112)
-- ✓ OSC protocol documentation updated (OSC_PROTOCOL.md:117)
-- ✓ Godot `Channel.move_device()` method with position validation (Godot/data/Channel.gd:618-654)
-- ✓ `device_moved` signal for UI updates (Godot/data/Channel.gd:40)
-- ✓ Device state preservation (parameters, loading state, file paths, active/enabled status)
-- ✓ Engine builds successfully with no errors
+- `cargo build --release` passes with no new warnings
+- `cargo test --release`: all unit tests pass, including 2 new routing tests. The 2 send tests already failed at HEAD (gain warm-up too short) and are fixed.
 
-### Not Working / Next Steps
-- UI integration for device reordering (drag-and-drop in device lanes)
-- Testing device reordering with various device types (built-in, CLAP plugins, SFZ)
-- Undo/redo support for device reordering
+- Live: audio plays and routes through master after restarting engine + Godot
+- Live: Dragonfly Reverb (CLAP) on a bus, and importing a large audio clip into a new track during playback: stable, no dropouts
+- Live: mute and solo; reverb tail on a send-fed bus keeps ringing after pausing playback (routed-bus tails still untested, see TODO)
 
+### Not Working / Not verified
+- Godot doesn't resend the project (init, master channel) when the engine restarts, so restart Godot too
+- Stress checks not done yet, while audio plays: remove a CLAP plugin, open/close its GUI, scan plugins. Listen for dropouts.
+- Doctest in `ipc/protocol.rs` fails (diagram in a doc comment parsed as Rust). Already broken, file untouched.
