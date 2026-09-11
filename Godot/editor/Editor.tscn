@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://ckggccuur2ds"]
+[gd_scene format=3 uid="uid://ckggccuur2ds"]
 
 [ext_resource type="Theme" uid="uid://c77m063o570pp" path="res://assets/Sonara_Theme.tres" id="1_10umj"]
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="2_ribbq"]
@@ -79,7 +79,7 @@ corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 corner_detail = 5
 
-[node name="Editor" type="MarginContainer"]
+[node name="Editor" type="MarginContainer" unique_id=930057261]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -92,77 +92,77 @@ theme_override_constants/margin_right = 4
 theme_override_constants/margin_bottom = 4
 script = ExtResource("2_ribbq")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1388963633]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Top" type="HBoxContainer" parent="VBoxContainer"]
+[node name="Top" type="HBoxContainer" parent="VBoxContainer" unique_id=2065853292]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="MainMenu" type="MenuBar" parent="VBoxContainer/Top"]
+[node name="MainMenu" type="MenuBar" parent="VBoxContainer/Top" unique_id=339831624]
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleBoxFlat_cnodj")
 script = ExtResource("4_wmsa6")
 
-[node name="File" type="PopupMenu" parent="VBoxContainer/Top/MainMenu"]
+[node name="File" type="PopupMenu" parent="VBoxContainer/Top/MainMenu" unique_id=1581791474]
 oversampling_override = 1.0
 
-[node name="Edit" type="PopupMenu" parent="VBoxContainer/Top/MainMenu"]
+[node name="Edit" type="PopupMenu" parent="VBoxContainer/Top/MainMenu" unique_id=1613545575]
 oversampling_override = 1.0
 
-[node name="Transport" type="HBoxContainer" parent="VBoxContainer/Top"]
+[node name="Transport" type="HBoxContainer" parent="VBoxContainer/Top" unique_id=1075672108]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 2
 alignment = 1
 
-[node name="TransportControls" type="PanelContainer" parent="VBoxContainer/Top/Transport"]
+[node name="TransportControls" type="PanelContainer" parent="VBoxContainer/Top/Transport" unique_id=1619249833]
 layout_mode = 2
 
-[node name="Buttons" type="HBoxContainer" parent="VBoxContainer/Top/Transport/TransportControls"]
+[node name="Buttons" type="HBoxContainer" parent="VBoxContainer/Top/Transport/TransportControls" unique_id=1534882923]
 layout_mode = 2
 
-[node name="PlayButton" type="Button" parent="VBoxContainer/Top/Transport/TransportControls/Buttons"]
+[node name="PlayButton" type="Button" parent="VBoxContainer/Top/Transport/TransportControls/Buttons" unique_id=1423360931]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 toggle_mode = true
 text = "Play"
 
-[node name="StopButton" type="Button" parent="VBoxContainer/Top/Transport/TransportControls/Buttons"]
+[node name="StopButton" type="Button" parent="VBoxContainer/Top/Transport/TransportControls/Buttons" unique_id=1569763539]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 text = "Stop"
 
-[node name="TransportStatus" type="PanelContainer" parent="VBoxContainer/Top/Transport"]
+[node name="TransportStatus" type="PanelContainer" parent="VBoxContainer/Top/Transport" unique_id=893402596]
 layout_mode = 2
 theme_type_variation = &"PrimaryPanel"
 
-[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus"]
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus" unique_id=1426208508]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="Status" type="VBoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus/HBox"]
+[node name="Status" type="VBoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus/HBox" unique_id=1906345307]
 layout_mode = 2
 theme_override_constants/separation = 1
 
-[node name="Position" type="Label" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Status"]
+[node name="Position" type="Label" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Status" unique_id=1553419851]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleBoxFlat_darnh")
 text = "1.1.1.00"
 horizontal_alignment = 2
 
-[node name="Time" type="Label" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Status"]
+[node name="Time" type="Label" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Status" unique_id=444097542]
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleBoxFlat_lca7j")
 text = "00:00:000"
 horizontal_alignment = 2
 
-[node name="Options" type="BoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus/HBox"]
+[node name="Options" type="BoxContainer" parent="VBoxContainer/Top/Transport/TransportStatus/HBox" unique_id=918816056]
 layout_mode = 2
 
-[node name="Tempo" type="SpinBox" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Options"]
+[node name="Tempo" type="SpinBox" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Options" unique_id=409046273]
 custom_minimum_size = Vector2(110, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -174,7 +174,7 @@ alignment = 1
 suffix = "bpm"
 custom_arrow_step = 1.0
 
-[node name="TimeSignature" type="LineEdit" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Options"]
+[node name="TimeSignature" type="LineEdit" parent="VBoxContainer/Top/Transport/TransportStatus/HBox/Options" unique_id=576719053]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 12
@@ -184,14 +184,14 @@ expand_to_text_length = true
 context_menu_enabled = false
 select_all_on_focus = true
 
-[node name="EnginePanel" type="PanelContainer" parent="VBoxContainer/Top"]
+[node name="EnginePanel" type="PanelContainer" parent="VBoxContainer/Top" unique_id=1235519996]
 layout_mode = 2
 script = ExtResource("5_yh6b6")
 
-[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Top/EnginePanel"]
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Top/EnginePanel" unique_id=694543686]
 layout_mode = 2
 
-[node name="StatusLabel" type="Label" parent="VBoxContainer/Top/EnginePanel/HBox"]
+[node name="StatusLabel" type="Label" parent="VBoxContainer/Top/EnginePanel/HBox" unique_id=596975121]
 modulate = Color(0.7578125, 0.33746338, 0.33746338, 1)
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
@@ -200,12 +200,12 @@ label_settings = SubResource("LabelSettings_darnh")
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="ConnectButton" type="Button" parent="VBoxContainer/Top/EnginePanel/HBox"]
+[node name="ConnectButton" type="Button" parent="VBoxContainer/Top/EnginePanel/HBox" unique_id=1159673598]
 layout_mode = 2
 toggle_mode = true
 text = "Connect"
 
-[node name="EngineLoadGraph" type="Control" parent="VBoxContainer/Top/EnginePanel/HBox"]
+[node name="EngineLoadGraph" type="Control" parent="VBoxContainer/Top/EnginePanel/HBox" unique_id=1318737213]
 custom_minimum_size = Vector2(120, 32)
 layout_mode = 2
 size_flags_horizontal = 0
@@ -214,7 +214,7 @@ max_data_points = 120
 auto_scale = false
 value_max = 1.5
 
-[node name="PerformanceText" type="RichTextLabel" parent="VBoxContainer/Top/EnginePanel/HBox"]
+[node name="PerformanceText" type="RichTextLabel" parent="VBoxContainer/Top/EnginePanel/HBox" unique_id=789078649]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_font_sizes/normal_font_size = 16
@@ -225,203 +225,205 @@ scroll_active = false
 autowrap_mode = 0
 vertical_alignment = 1
 
-[node name="WindowButtons" type="HBoxContainer" parent="VBoxContainer/Top"]
+[node name="WindowButtons" type="HBoxContainer" parent="VBoxContainer/Top" unique_id=1013391728]
 layout_mode = 2
 size_flags_horizontal = 8
 size_flags_vertical = 0
 script = ExtResource("7_30oug")
 
-[node name="Minimize" type="Button" parent="VBoxContainer/Top/WindowButtons"]
+[node name="Minimize" type="Button" parent="VBoxContainer/Top/WindowButtons" unique_id=1229703618]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "_"
 
-[node name="Maximize" type="Button" parent="VBoxContainer/Top/WindowButtons"]
+[node name="Maximize" type="Button" parent="VBoxContainer/Top/WindowButtons" unique_id=1368621904]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "+"
 
-[node name="Quit" type="Button" parent="VBoxContainer/Top/WindowButtons"]
+[node name="Quit" type="Button" parent="VBoxContainer/Top/WindowButtons" unique_id=1298956965]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 text = "X"
 
-[node name="Middle" type="BoxContainer" parent="VBoxContainer"]
+[node name="Middle" type="BoxContainer" parent="VBoxContainer" unique_id=509370854]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 4
 vertical = true
 
-[node name="LeftRightSplit" type="HSplitContainer" parent="VBoxContainer/Middle"]
+[node name="LeftRightSplit" type="HSplitContainer" parent="VBoxContainer/Middle" unique_id=529350888]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 8
+split_offsets = PackedInt32Array(240)
 split_offset = 240
 
-[node name="LeftCenterSplit" type="HSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit"]
+[node name="LeftCenterSplit" type="HSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1302338210]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 2.0
 theme_override_constants/separation = 8
+split_offsets = PackedInt32Array(-235)
 split_offset = -235
 
-[node name="MiddleLeft" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit"]
+[node name="MiddleLeft" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit" unique_id=2028239190]
 layout_mode = 2
 
-[node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft"]
+[node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft" unique_id=938710415]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_type_variation = &"PrimaryPanel"
 
-[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector"]
+[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector" unique_id=1709571549]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer"]
+[node name="Label" type="Label" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=1803303598]
 layout_mode = 2
 text = "Inspector"
 
-[node name="LineEdit" type="LineEdit" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer"]
+[node name="LineEdit" type="LineEdit" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=60769332]
 layout_mode = 2
 placeholder_text = "Search..."
 
-[node name="Items" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer"]
+[node name="Items" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=1722195554]
 layout_mode = 2
 
-[node name="Button" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button2" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
+[node name="Button" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=523419353]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button3" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
+[node name="Button2" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=1171722823]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button4" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
+[node name="Button3" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=109519789]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button5" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
+[node name="Button4" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=151093574]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button6" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items"]
+[node name="Button5" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=157300881]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="PanelContainer2" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer"]
+[node name="Button6" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=820704345]
+layout_mode = 2
+text = "Test"
+flat = true
+alignment = 0
+
+[node name="PanelContainer2" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=150366578]
 layout_mode = 2
 theme_type_variation = &"DarkPanel"
 
-[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/PanelContainer2"]
+[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/PanelContainer2" unique_id=190795155]
 layout_mode = 2
 text = "Dark Panel"
 fit_content = true
 autowrap_mode = 0
 
-[node name="MiddleCenter" type="VSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit"]
+[node name="MiddleCenter" type="VSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit" unique_id=1061258867]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 2.0
 
-[node name="Primary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter"]
+[node name="Primary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter" unique_id=1543961896]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_type_variation = &"PrimaryPanel"
 theme_override_styles/panel = SubResource("StyleBoxFlat_b4msu")
 
-[node name="Arranger" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" instance=ExtResource("8_lsr71")]
+[node name="Arranger" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" unique_id=712511150 instance=ExtResource("8_lsr71")]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Mixer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" instance=ExtResource("9_l57s6")]
+[node name="Mixer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" unique_id=1280351233 instance=ExtResource("9_l57s6")]
 visible = false
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="ClipEditor" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" instance=ExtResource("10_kc5d4")]
+[node name="ClipEditor" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Primary" unique_id=326839714 instance=ExtResource("10_kc5d4")]
 visible = false
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Secondary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter"]
+[node name="Secondary" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter" unique_id=1593592873]
 layout_mode = 2
 size_flags_vertical = 3
 size_flags_stretch_ratio = 0.7
 theme_type_variation = &"PrimaryPanel"
 theme_override_styles/panel = SubResource("StyleBoxFlat_10umj")
 
-[node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" instance=ExtResource("10_2m1gq")]
+[node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" unique_id=1241292927 instance=ExtResource("10_2m1gq")]
 layout_mode = 2
 
-[node name="BoxContainer" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit"]
+[node name="BoxContainer" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1952637563]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="BrowserPanel" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer"]
+[node name="BrowserPanel" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer" unique_id=1455843373]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_type_variation = &"PrimaryPanel"
 
-[node name="Browser" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel" instance=ExtResource("13_p3vu2")]
+[node name="Browser" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel" unique_id=131584552 instance=ExtResource("13_p3vu2")]
 layout_mode = 2
 
-[node name="Bottom" type="VBoxContainer" parent="VBoxContainer"]
+[node name="Bottom" type="VBoxContainer" parent="VBoxContainer" unique_id=365378792]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="InfoPanel" type="PanelContainer" parent="VBoxContainer/Bottom"]
+[node name="InfoPanel" type="PanelContainer" parent="VBoxContainer/Bottom" unique_id=1181943148]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_type_variation = &"PrimaryPanel"
 
-[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel"]
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel" unique_id=965370051]
 layout_mode = 2
 theme_override_constants/separation = 32
 
-[node name="ViewButtons" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer"]
+[node name="ViewButtons" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer" unique_id=1982812116]
 layout_mode = 2
 
-[node name="Arrange" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons"]
+[node name="Arrange" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons" unique_id=1169333155]
 layout_mode = 2
 toggle_mode = true
 button_pressed = true
 text = "Arrange"
 flat = true
 
-[node name="Mix" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons"]
+[node name="Mix" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons" unique_id=561030752]
 layout_mode = 2
 toggle_mode = true
 text = "Mix"
 flat = true
 
-[node name="Edit" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons"]
+[node name="Edit" type="Button" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons" unique_id=2015753777]
 layout_mode = 2
 toggle_mode = true
 text = "Edit"
 flat = true
 
-[node name="InfoBox" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer"]
+[node name="InfoBox" type="HBoxContainer" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer" unique_id=1914509441]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="InfoText" type="RichTextLabel" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/InfoBox"]
+[node name="InfoText" type="RichTextLabel" parent="VBoxContainer/Bottom/InfoPanel/HBoxContainer/InfoBox" unique_id=373091810]
 layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0
@@ -440,13 +442,13 @@ autowrap_mode = 0
 shortcut_keys_enabled = false
 vertical_alignment = 1
 
-[node name="FileDialog" type="FileDialog" parent="."]
+[node name="FileDialog" type="FileDialog" parent="." unique_id=1515852452]
 oversampling_override = 1.0
 initial_position = 2
 access = 2
 use_native_dialog = true
 
-[node name="Window" type="Window" parent="."]
+[node name="Window" type="Window" parent="." unique_id=755712027]
 handle_input_locally = false
 oversampling_override = 1.0
 initial_position = 1
