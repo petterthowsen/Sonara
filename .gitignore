@@ -21,3 +21,6 @@ Godot/*.translation
 Godot/.mono/
 Godot/data_*/
 Godot/mono_crash.*.json
+
+# Machine-specific MCP config (local paths, API keys)
+.mcp.json

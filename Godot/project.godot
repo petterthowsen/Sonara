@@ -8,12 +8,16 @@
 
 config_version=5
 
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
 [application]
 
 config/name="Sonara"
 config/description="Digital Audio Workstation"
 run/main_scene="uid://ckggccuur2ds"
-config/features=PackedStringArray("4.5")
+config/features=PackedStringArray("4.7")
 boot_splash/show_image=false
 config/icon="res://icon.svg"
 
@@ -23,6 +27,7 @@ Sonara="*res://Sonara.gd"
 AudioEngineOSC="*res://AudioEngineOSC.gd"
 AssetService="*res://browser/AssetService.gd"
 MidiManager="*res://midi/MidiManager.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]
 
@@ -32,7 +37,7 @@ window/size/borderless=true
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/godOSC/plugin.cfg", "res://addons/godot_mcp/plugin.cfg")
+enabled=PackedStringArray("res://addons/godOSC/plugin.cfg", "res://addons/godot_ai/plugin.cfg")
 
 [global_group]
 

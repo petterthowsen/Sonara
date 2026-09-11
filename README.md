@@ -14,6 +14,8 @@ Create a lightweight, real-time audio workstation that combines:
 **System Requirements:**
 - Linux (Ubuntu/Debian/Arch/Fedora)
 - Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- CMake (required to build native dependencies): `sudo apt install cmake`
+- libsndfile development headers (required by the built-in sfizz sampler): `sudo apt install libsndfile1-dev`
 - PipeWire or ALSA audio system
 
 **Optional:**
