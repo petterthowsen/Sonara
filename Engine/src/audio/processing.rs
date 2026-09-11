@@ -1,58 +1,53 @@
-use tracing::{info, warn};
+use std::time::Instant;
 
 use super::commands::EngineState;
-use super::midi_types::MidiEvent;
 use super::types::*;
 
-/// Schedule MIDI events from queues into per-channel scheduled_midi_events
-/// This converts tick-based events to frame-offset events for sample-accurate playback
-fn schedule_midi_events(state: &mut EngineState, start_tick: i64, end_tick: i64, ticks_per_sample: f64, frame_count: usize) {
+/// Drain each channel's live MIDI queue into `scheduled_midi_events` with frame offsets.
+///
+/// Live input plays with a fixed latency of one buffer: an event that arrived `dt` before
+/// this callback fired lands `dt` before the end of this buffer. This keeps the spacing
+/// between events instead of snapping them all to frame 0. Events older than one buffer
+/// (held up on the way in) play at frame 0.
+fn schedule_live_midi_events(
+    state: &mut EngineState,
+    callback_start: Instant,
+    frame_count: usize,
+    sample_rate: f32,
+) {
+    let last_frame = frame_count.saturating_sub(1);
+
     for channel in state.channels.values_mut() {
-        // Clear previous buffer's scheduled events
         channel.scheduled_midi_events.clear();
 
-        // Drain MIDI queue and calculate frame offsets
+        // Queue order is arrival order, so offsets come out ascending and need no sort
         while let Some(mut event) = channel.midi_queue.pop() {
-            let event_tick = event.tick as i64;
-
-            // Skip events that are too late (already passed)
-            if event_tick < start_tick {
-                warn!("Dropping late MIDI event: tick {} < {}", event_tick, start_tick);
-                continue;
-            }
-
-            // Calculate sample offset within this buffer
-            let tick_offset = (event_tick - start_tick).max(0);
-            let frame_offset = ((tick_offset as f64) / ticks_per_sample) as usize;
-
-            // If event is for future buffer, push back to queue
-            if frame_offset >= frame_count {
-                channel.midi_queue.push(event);
-                break;
-            }
-
-            event.frame_offset = frame_offset;
-
-            // Add to scheduled events for this channel's devices
+            let age_frames = callback_start
+                .saturating_duration_since(event.received_at)
+                .as_secs_f64()
+                * sample_rate as f64;
+            let frame_offset = (frame_count as f64 - age_frames).round().max(0.0) as usize;
+            event.frame_offset = frame_offset.min(last_frame);
             channel.scheduled_midi_events.push(event);
         }
-
-        // Sort by frame offset for sample-accurate processing
-        channel.scheduled_midi_events.sort_by_key(|e| e.frame_offset);
     }
 }
 
-/// Process audio for one buffer
-pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
+/// Process audio for one buffer. `callback_start` is when the audio callback fired and is
+/// used to place live MIDI within the buffer.
+pub fn process_audio(
+    state: &mut EngineState,
+    frames: usize,
+    sample_rate: f32,
+    callback_start: Instant,
+) {
     // IMPORTANT: Use actual device sample rate for timing, not project setting
     let ticks_per_sample =
         (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
 
     // Always schedule incoming MIDI events (even when not playing)
     // This allows live MIDI input to play instruments without transport running
-    let start_tick = state.get_current_tick();
-    let end_tick = start_tick + (frames as f64 * ticks_per_sample) as i64;
-    schedule_midi_events(state, start_tick, end_tick, ticks_per_sample, frames);
+    schedule_live_midi_events(state, callback_start, frames, sample_rate);
 
     // Only advance playhead and process clips when playing
     if !state.get_is_playing() {
@@ -354,4 +349,51 @@ pub fn process_audio(state: &mut EngineState, frames: usize, sample_rate: f32) {
     //         info!("Playhead: {}", position);
     //     }
     // }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::midi_types::MidiEvent;
+    use std::time::Duration;
+
+    /// Build a state with one channel holding note-ons that arrived `ages_ms` before `now`.
+    fn state_with_events(now: Instant, ages_ms: &[u64]) -> EngineState {
+        let mut state = EngineState::default();
+        let channel = Channel::new(2, "Synth".to_string(), 1024, 48_000.0);
+        for &age in ages_ms {
+            let received_at = now - Duration::from_millis(age);
+            channel
+                .midi_queue
+                .push(MidiEvent::note_on(0, 60, 100, received_at));
+        }
+        state.channels.insert(2, channel);
+        state
+    }
+
+    /// Offsets of the events scheduled on the test channel.
+    fn scheduled_offsets(state: &EngineState) -> Vec<usize> {
+        state.channels[&2]
+            .scheduled_midi_events
+            .iter()
+            .map(|e| e.frame_offset)
+            .collect()
+    }
+
+    #[test]
+    fn live_midi_keeps_spacing_within_buffer() {
+        let now = Instant::now();
+        // 480 frames = 10 ms at 48 kHz
+        let mut state = state_with_events(now, &[10, 5, 1]);
+        schedule_live_midi_events(&mut state, now, 480, 48_000.0);
+        assert_eq!(scheduled_offsets(&state), vec![0, 240, 432]);
+    }
+
+    #[test]
+    fn stale_and_just_arrived_live_midi_are_clamped() {
+        let now = Instant::now();
+        let mut state = state_with_events(now, &[50, 0]);
+        schedule_live_midi_events(&mut state, now, 480, 48_000.0);
+        assert_eq!(scheduled_offsets(&state), vec![0, 479]);
+    }
 }

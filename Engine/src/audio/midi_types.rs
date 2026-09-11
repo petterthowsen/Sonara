@@ -2,6 +2,7 @@
 
 use crossbeam::queue::SegQueue;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// MIDI message type constants (match Godot)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,50 +33,50 @@ impl MidiMessageType {
     }
 }
 
-/// Sample-accurate MIDI event with tick timing
+/// Live MIDI event, placed within an audio buffer by its arrival time
 #[derive(Debug, Clone)]
 pub struct MidiEvent {
     pub message_type: MidiMessageType,
     pub midi_channel: u8,  // 0-15
     pub note: u8,          // 0-127 (or data1)
     pub velocity: u8,      // 0-127 (or data2)
-    pub tick: u64,         // Scheduled tick (converted from timestamp)
+    pub received_at: Instant, // When the engine received the event
     pub frame_offset: usize, // Sample offset within current buffer
 }
 
 impl MidiEvent {
     /// Create a note-on event
-    pub fn note_on(midi_channel: u8, note: u8, velocity: u8, tick: u64) -> Self {
+    pub fn note_on(midi_channel: u8, note: u8, velocity: u8, received_at: Instant) -> Self {
         Self {
             message_type: MidiMessageType::NoteOn,
             midi_channel,
             note,
             velocity,
-            tick,
+            received_at,
             frame_offset: 0,
         }
     }
 
     /// Create a note-off event
-    pub fn note_off(midi_channel: u8, note: u8, tick: u64) -> Self {
+    pub fn note_off(midi_channel: u8, note: u8, received_at: Instant) -> Self {
         Self {
             message_type: MidiMessageType::NoteOff,
             midi_channel,
             note,
             velocity: 0,
-            tick,
+            received_at,
             frame_offset: 0,
         }
     }
 
     /// Create a control change event
-    pub fn control_change(midi_channel: u8, controller: u8, value: u8, tick: u64) -> Self {
+    pub fn control_change(midi_channel: u8, controller: u8, value: u8, received_at: Instant) -> Self {
         Self {
             message_type: MidiMessageType::ControlChange,
             midi_channel,
             note: controller,  // CC number stored in note field
             velocity: value,   // CC value stored in velocity field
-            tick,
+            received_at,
             frame_offset: 0,
         }
     }

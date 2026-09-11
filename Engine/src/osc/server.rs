@@ -7,7 +7,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::audio::io::{AfsEvent, AudioFileService};
@@ -548,20 +548,20 @@ impl OscServer {
             ["channel", id_str, "midi_event"] => {
                 if let Ok(channel_id) = id_str.parse::<usize>() {
                     // Args: channel_id, message, midi_channel, pitch, velocity, timestamp_us
+                    // Godot's timestamp is on a different clock, so the engine stamps arrival instead
+                    let received_at = Instant::now();
                     if let (
                         Some(OscType::Int(_)), // channel_id (redundant, already in path)
                         Some(OscType::Int(message)),
                         Some(OscType::Int(midi_channel)),
                         Some(OscType::Int(pitch)),
                         Some(OscType::Int(velocity)),
-                        Some(OscType::Int(timestamp_us)),
                     ) = (
                         args.get(0),
                         args.get(1),
                         args.get(2),
                         args.get(3),
                         args.get(4),
-                        args.get(5),
                     ) {
                         command_tx.send(AudioCommand::MidiEvent {
                             channel_id,
@@ -569,7 +569,7 @@ impl OscServer {
                             midi_channel: *midi_channel as u8,
                             note: *pitch as u8,
                             velocity: *velocity as u8,
-                            timestamp_us: *timestamp_us as u64,
+                            received_at,
                         })?;
                     }
                 }
@@ -577,26 +577,22 @@ impl OscServer {
             ["channel", id_str, "midi_cc"] => {
                 if let Ok(channel_id) = id_str.parse::<usize>() {
                     // Args: channel_id, midi_channel, cc_number, cc_value, timestamp_us
+                    // Godot's timestamp is on a different clock, so the engine stamps arrival instead
+                    let received_at = Instant::now();
                     if let (
                         Some(OscType::Int(_)), // channel_id (redundant)
                         Some(OscType::Int(midi_channel)),
                         Some(OscType::Int(cc_number)),
                         Some(OscType::Int(cc_value)),
-                        Some(OscType::Int(timestamp_us)),
-                    ) = (
-                        args.get(0),
-                        args.get(1),
-                        args.get(2),
-                        args.get(3),
-                        args.get(4),
-                    ) {
+                    ) = (args.get(0), args.get(1), args.get(2), args.get(3))
+                    {
                         command_tx.send(AudioCommand::MidiEvent {
                             channel_id,
                             message_type: 11, // MIDI_MESSAGE_CONTROL_CHANGE
                             midi_channel: *midi_channel as u8,
                             note: *cc_number as u8,
                             velocity: *cc_value as u8,
-                            timestamp_us: *timestamp_us as u64,
+                            received_at,
                         })?;
                     }
                 }

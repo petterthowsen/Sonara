@@ -1,6 +1,7 @@
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::time::Instant;
 use tracing::{info, warn};
 
 use super::devices::AudioDevice;
@@ -84,7 +85,8 @@ pub enum AudioCommand {
         midi_channel: u8,
         note: u8,
         velocity: u8,
-        timestamp_us: u64,
+        /// When the OSC server received the event; used to place it within the audio buffer
+        received_at: Instant,
     },
 
     // Send management
@@ -756,23 +758,20 @@ pub fn process_command(
             midi_channel,
             note,
             velocity,
-            timestamp_us,
+            received_at,
         } => {
             use super::midi_types::{MidiEvent, MidiMessageType};
 
             if let Some(channel) = state.channels.get(&channel_id) {
                 // Convert message type
                 if let Some(msg_type) = MidiMessageType::from_u8(message_type) {
-                    // Convert timestamp to tick (will be refined in audio thread for sample accuracy)
-                    // For now, we just use current tick
-                    let tick = state.get_current_tick().max(0) as u64;
-
+                    // The audio thread turns received_at into a frame offset
                     let event = MidiEvent {
                         message_type: msg_type,
                         midi_channel,
                         note,
                         velocity,
-                        tick,
+                        received_at,
                         frame_offset: 0,
                     };
 

@@ -551,7 +551,8 @@ impl Channel {
             active_voices: HashMap::new(),
             midi_routing: MidiRouting::default(),
             midi_queue: create_midi_queue(),
-            scheduled_midi_events: Vec::new(),
+            // Preallocated so the audio thread doesn't allocate while scheduling
+            scheduled_midi_events: Vec::with_capacity(256),
             device_input_buffer: vec![0.0; buffer_size * 2],
             device_output_buffer: vec![0.0; buffer_size * 2],
         }

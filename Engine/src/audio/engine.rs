@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig};
+use cpal::{
+    BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize,
+};
 use crossbeam::channel::{Receiver, Sender};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -14,6 +16,13 @@ pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStat
 use super::mixing::mix_and_output;
 use super::processing::process_audio;
 use super::types::*;
+
+/// Preferred device sample rate in Hz.
+const PREFERRED_SAMPLE_RATE: u32 = 48_000;
+
+/// Preferred ALSA buffer size in frames (~21 ms at 48 kHz); cpal uses a quarter of it as the
+/// period size. Keep it at or above PipeWire's graph quantum or the stream will underrun.
+const PREFERRED_BUFFER_FRAMES: u32 = 1024;
 
 /// Audio engine that manages the audio stream and processing
 pub struct AudioEngine {
@@ -75,11 +84,11 @@ impl AudioEngine {
 
         info!("Using output device: {}", default_device_name);
 
-        // Get the default output config
-        let config = default_device.default_output_config()?;
-        let sample_rate = config.sample_rate().0;
+        let mut config = Self::select_stream_config(&default_device)?;
+        let sample_rate = config.sample_rate.0;
         info!("Sample rate: {} Hz", sample_rate);
-        info!("Channels: {}", config.channels());
+        info!("Channels: {}", config.channels);
+        info!("Buffer size: {:?}", config.buffer_size);
 
         // Create command channel for thread-safe communication
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
@@ -116,15 +125,34 @@ impl AudioEngine {
         });
 
         // Build the audio stream (pass a clone of status_tx, keep one for log forwarder)
-        let stream = Self::build_stream(
+        let stream = match Self::build_stream(
             &default_device,
-            &config.into(),
-            command_rx,
+            &config,
+            command_rx.clone(),
             command_tx.clone(),
             status_tx.clone(),
             state.clone(),
             max_buffer_size,
-        )?;
+        ) {
+            Ok(stream) => stream,
+            Err(e) if matches!(config.buffer_size, BufferSize::Fixed(_)) => {
+                warn!(
+                    "Failed to open stream with {:?} ({}), retrying with device default buffer",
+                    config.buffer_size, e
+                );
+                config.buffer_size = BufferSize::Default;
+                Self::build_stream(
+                    &default_device,
+                    &config,
+                    command_rx,
+                    command_tx.clone(),
+                    status_tx.clone(),
+                    state.clone(),
+                    max_buffer_size,
+                )?
+            }
+            Err(e) => return Err(e),
+        };
 
         // Start the stream
         stream.play()?;
@@ -144,6 +172,36 @@ impl AudioEngine {
     pub fn new() -> Result<Self> {
         let (status_tx, status_rx) = crossbeam::channel::unbounded();
         Self::with_status_channel(status_tx, status_rx)
+    }
+
+    /// Choose an f32 output config at `PREFERRED_SAMPLE_RATE` with a fixed buffer size,
+    /// falling back to the device default config when that rate isn't supported.
+    fn select_stream_config(device: &Device) -> Result<StreamConfig> {
+        let default_config = device.default_output_config()?;
+        let preferred_rate = SampleRate(PREFERRED_SAMPLE_RATE);
+
+        let range = device.supported_output_configs()?.find(|range| {
+            range.sample_format() == SampleFormat::F32
+                && range.channels() == default_config.channels()
+                && range.min_sample_rate() <= preferred_rate
+                && preferred_rate <= range.max_sample_rate()
+        });
+
+        let Some(range) = range else {
+            warn!(
+                "Device has no {} Hz f32 output config, using default {:?}",
+                PREFERRED_SAMPLE_RATE, default_config
+            );
+            return Ok(default_config.config());
+        };
+
+        let buffer_frames = match *range.buffer_size() {
+            SupportedBufferSize::Range { min, max } => PREFERRED_BUFFER_FRAMES.clamp(min, max),
+            SupportedBufferSize::Unknown => PREFERRED_BUFFER_FRAMES,
+        };
+        let mut config = range.with_sample_rate(preferred_rate).config();
+        config.buffer_size = BufferSize::Fixed(buffer_frames);
+        Ok(config)
     }
 
     /// Command processing loop that runs in a separate thread
@@ -240,7 +298,7 @@ impl AudioEngine {
                 }
 
                 // Process audio (MIDI scheduling happens even when stopped, clip processing only when playing)
-                process_audio(&mut state, frames, sample_rate as f32);
+                process_audio(&mut state, frames, sample_rate as f32, processing_start);
 
                 // Mix channels and output
                 mix_and_output(&mut state, data, channels, frames, &status_tx);

@@ -23,6 +23,10 @@
 - [ ] CPU affinity for audio thread and plugin processing
 - [ ] Realtime thread priority configuration
 - [ ] CPU core assignment for plugin processing
+- [ ] Remove the shared `Arc<Mutex<EngineState>>`. The audio callback blocks on `state.lock()` while the command thread holds it during `process_command`. The audio thread should own its state and drain a lock-free command queue, with heavy work (device creation, SFZ loading) done off-thread.
+- [ ] Audio thread still allocates and logs: `tick_events`/`note_events` Vecs in `process_audio`, `info!` in `mixing.rs`, unbounded status channel sends
+- [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
+- [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
 
 ### Devices & Plugins
 - [ ] DeviceInstance and their UIs should init with loading state and wait for Engine updates
