@@ -483,7 +483,7 @@ func _create_instrument_channel_with_device(device: Device) -> void:
 	
 	# Create device instance and add to channel
 	var device_instance = DeviceInstance.new(device, channel.id, 0)
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 
 
 func _create_sfz_instrument_channel(sfz_path: String, sfz_name: String) -> void:
@@ -514,7 +514,7 @@ func _create_sfz_instrument_channel(sfz_path: String, sfz_name: String) -> void:
 	
 	# Create sfizz device instance and add to channel
 	var device_instance = DeviceInstance.new(sfizz_device, channel.id, 0)
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	
 	# Load the SFZ file into the device
 	# Give the engine a moment to create the device before loading the file

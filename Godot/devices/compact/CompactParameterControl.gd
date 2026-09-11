@@ -156,7 +156,17 @@ func _on_slider_changed(value: float) -> void:
 
 	# Update device parameter (sends to engine, doesn't emit signal)
 	print("[ParamControl] slider param_id=", parameter_id, " normalized=", value)
+	var old_value = current_value
 	device_instance.set_parameter_normalized(parameter_id, value)
+	var cmd := PropertyCommand.new(
+		"Set Parameter",
+		device_instance,
+		"",
+		[parameter_id, old_value],
+		[parameter_id, value]
+	)
+	cmd.set_callable(func(args): device_instance.set_parameter_normalized(args[0], args[1])).set_unpack_array(true).set_mergeable(true)
+	HistoryUtil.record(cmd)
 
 	# Update value display immediately for responsive feedback
 	if value_label_node and show_value:

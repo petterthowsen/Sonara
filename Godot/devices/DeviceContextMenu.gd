@@ -27,5 +27,5 @@ func _on_remove_pressed() -> void:
 		var project = Sonara.editor.project
 		var channel = project.get_channel_by_id(device.channel_id)
 		if channel:
-			channel.remove_device(device.position)
+			HistoryUtil.execute(DeviceRemoveCommand.new(channel, device, device.position))
 	hide()

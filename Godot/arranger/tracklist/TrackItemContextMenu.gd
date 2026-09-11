@@ -67,5 +67,5 @@ func _on_delete_pressed() -> void:
 	"""Delete the track."""
 	if current_track and current_project:
 		print("[TrackItemContextMenu] Deleting track: ", current_track.name)
-		current_project.remove_track(current_track.id)
+		HistoryUtil.execute(TrackDeleteCommand.new(current_project, current_track))
 		hide()

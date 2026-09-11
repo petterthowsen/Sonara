@@ -357,7 +357,7 @@ func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position : i
 			to_position -= 1
 		
 		if from_position != to_position:
-			channel.move_device(from_position, to_position)
+			HistoryUtil.execute(DeviceMoveCommand.new(channel, from_position, to_position))
 		return
 	
 	# Handle Asset (adding new device)
@@ -383,7 +383,7 @@ func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position : i
 		
 		# Create device instance and add to channel at specified position
 		var device_instance = DeviceInstance.new(device, channel.id, d_position)
-		channel.add_device(device_instance, d_position)
+		HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, d_position))
 		logger.info("Device added to channel at position %d: %s" % [d_position, device.device_id])
 
 
@@ -399,7 +399,7 @@ func _handle_sfz_drop_at_position(asset: Asset, position: int) -> void:
 	
 	# Create sfizz device instance and add to channel at specified position
 	var device_instance = DeviceInstance.new(sfizz_device, channel.id, position)
-	channel.add_device(device_instance, position)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position))
 	
 	# Load the SFZ file into the device
 	# Give the engine a moment to create the device before loading the file
@@ -477,7 +477,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 
 	# Create device instance and add to channel at end (-1 means append)
 	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	logger.info("Device added to channel: %s" % device.device_id)
 
 
@@ -493,7 +493,7 @@ func _handle_sfz_drop(asset: Asset) -> void:
 	
 	# Create sfizz device instance and add to channel at end (-1 means append)
 	var device_instance = DeviceInstance.new(sfizz_device, channel.id, channel.get_device_count())
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	
 	# Load the SFZ file into the device
 	# Give the engine a moment to create the device before loading the file

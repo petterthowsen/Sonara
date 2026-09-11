@@ -135,7 +135,9 @@
 - [~] Settings Menu: Nestable categories on the left as a tree, avaialble settings on the right.
     - Categories: Audio, Behavior, Appearence, Shortcuts
     - In progress: Settings.gd registry + SettingsDialog popup + SettingRow editor component
-- [ ] **CRITICAL**: Undo/Redo using command pattern
+- [x] **CRITICAL**: Undo/Redo using command pattern
+  - Godot `history/` CommandHistory + domain commands; wired for notes, clips, tracks, mixer, devices
+  - Ctrl+Z / Ctrl+Shift+Z + Edit menu; headless tests in `history/test_command_history.gd`
 
 ### Hardware & MIDI
 - [x] Implement MIDI support

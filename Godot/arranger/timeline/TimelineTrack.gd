@@ -292,12 +292,11 @@ func _on_double_click(pos: Vector2) -> void:
 	new_clip.content_length_ticks = project.ppq * 4  # Default: 4 beats
 	
 	# Add clip to project pool (required for serialization!)
-	project.add_clip(new_clip)
-
-	# Create a ClipInstance on this track
-	# UI will be updated automatically via clip_instance_added signal
+	# Create via undoable command (adds clip to pool + instance)
 	var ppq = project.ppq
-	track.create_clip_instance(new_clip, snapped_ticks, ppq * 4)
+	HistoryUtil.execute(ClipInstanceCreateCommand.new(
+		track, new_clip, snapped_ticks, ppq * 4, project, true
+	))
 
 
 
@@ -335,11 +334,11 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 	# Create clip from asset
 	var clip = project.create_clip_from_asset(asset, track.color)
 
-	# Create instance on this track
-	# Use the clip's actual content length for audio clips, or default for MIDI
-	# UI will be updated automatically via clip_instance_added signal
+	# create_clip_from_asset already adds to the pool; only the instance is undoable here
 	var instance_duration = clip.content_length_ticks
-	track.create_clip_instance(clip, drop_ticks, instance_duration)
+	HistoryUtil.execute(ClipInstanceCreateCommand.new(
+		track, clip, drop_ticks, instance_duration, project, false
+	))
 
 	print("[TimelineTrack] Created %s clip from: %s" % [
 		"audio" if asset.is_audio() else "MIDI",

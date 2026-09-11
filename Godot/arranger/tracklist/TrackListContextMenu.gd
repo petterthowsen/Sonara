@@ -41,10 +41,10 @@ func _on_item_pressed(id: int) -> void:
 
 	match id:
 		Item.INSTRUMENT_TRACK:
-			project.create_instrument_track()
+			HistoryUtil.execute(TrackCreateCommand.new(project, "instrument"))
 		Item.AUDIO_TRACK:
-			project.create_audio_track()
+			HistoryUtil.execute(TrackCreateCommand.new(project, "audio"))
 		Item.FOLDER_TRACK:
-			project.create_folder_track()
+			HistoryUtil.execute(TrackCreateCommand.new(project, "folder"))
 		Item.GROUP_TRACK:
 			project.create_group_track()

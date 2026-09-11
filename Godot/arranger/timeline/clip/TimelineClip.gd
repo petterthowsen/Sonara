@@ -286,6 +286,18 @@ func _gui_input(event: InputEvent) -> void:
 				if is_resizing:
 					is_resizing = false
 					resize_edge = ""
+					# Record resize as one undo step
+					if clip_instance and (
+						clip_instance.start_ticks != resize_start_ticks
+						or clip_instance.duration_ticks != resize_start_duration
+						or clip_instance.clip_offset != resize_start_offset
+					):
+						HistoryUtil.record(ClipInstanceTransformCommand.new(
+							"Resize Clip",
+							clip_instance,
+							resize_start_ticks, resize_start_duration, resize_start_offset,
+							clip_instance.start_ticks, clip_instance.duration_ticks, clip_instance.clip_offset
+						))
 					accept_event()
 				elif is_dragging:
 					if drag_activated and clip_instance:

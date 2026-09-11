@@ -672,6 +672,32 @@ func _apply_vertical_drag(delta_tracks: int) -> void:
 func _finish_drag() -> void:
 	if not _drag_active:
 		return
+
+	# Record undo for move / cross-track move before clearing drag state
+	var cmds: Array[Command] = []
+	for inst in _drag_selected_instances:
+		if not inst:
+			continue
+		var old_start: int = _drag_initial_positions.get(inst, inst.start_ticks)
+		var old_track_idx: int = _drag_initial_track_indices.get(inst, -1)
+		var old_track: Track = null
+		if old_track_idx >= 0 and old_track_idx < timeline_tracks.size():
+			old_track = timeline_tracks[old_track_idx].track
+		var new_track: Track = inst.track
+		var new_start: int = inst.start_ticks
+		if old_track != null and new_track != null and old_track != new_track:
+			cmds.append(ClipInstanceMoveTrackCommand.new(inst, old_track, new_track, old_start, new_start))
+		elif old_start != new_start:
+			cmds.append(ClipInstanceTransformCommand.new(
+				"Move Clip", inst,
+				old_start, inst.duration_ticks, inst.clip_offset,
+				new_start, inst.duration_ticks, inst.clip_offset
+			))
+	if cmds.size() == 1:
+		HistoryUtil.record(cmds[0])
+	elif cmds.size() > 1:
+		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
+
 	_drag_active = false
 	_drag_cross_track = false
 	_drag_anchor_instance = null
@@ -762,9 +788,14 @@ func cut_selection_to_clipboard() -> void:
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
 	var selected = clip_selection_manager.get_selected_instances()
+	var cmds: Array[Command] = []
 	for inst in selected:
 		if inst and inst.track:
-			inst.track.remove_clip_instance(inst)
+			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
+	if cmds.size() == 1:
+		HistoryUtil.execute(cmds[0])
+	elif cmds.size() > 1:
+		HistoryUtil.execute(MacroCommand.new("Cut Clips", cmds))
 	clip_selection_manager.clear_selection()
 	print("[Timeline] Cut %d clips to clipboard" % selected.size())
 
@@ -1021,9 +1052,16 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 func _on_clip_delete_requested(instances: Array[ClipInstance]) -> void:
 	if not instances or instances.is_empty():
 		return
+	var cmds: Array[Command] = []
 	for inst in instances:
 		if inst and inst.track:
-			inst.track.remove_clip_instance(inst)
+			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
+	if cmds.is_empty():
+		return
+	if cmds.size() == 1:
+		HistoryUtil.execute(cmds[0])
+	else:
+		HistoryUtil.execute(MacroCommand.new("Delete Clips", cmds))
 
 
 func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
@@ -1033,78 +1071,20 @@ func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
 	if not proj:
 		return
 
+	var cmds: Array[Command] = []
 	for instance in instances:
 		if not instance or not instance.clip:
 			continue
-		var original: Clip = instance.clip
-		# Only make unique if referenced by multiple instances
-		if proj.get_clip_instance_count(original.id) <= 1:
+		if proj.get_clip_instance_count(instance.clip.id) <= 1:
 			continue
+		cmds.append(MakeClipUniqueCommand.new(proj, instance))
+	if cmds.is_empty():
+		return
+	if cmds.size() == 1:
+		HistoryUtil.execute(cmds[0])
+	else:
+		HistoryUtil.execute(MacroCommand.new("Make Clips Unique", cmds))
 
-		# Create a new clip and copy properties
-		var new_name = "%s (Unique)" % original.name
-		var new_clip: Clip = proj.create_clip(new_name, original.type)
-		new_clip.color = original.color
-		new_clip.content_length_ticks = original.content_length_ticks
-
-		if original.type == Clip.ClipType.MIDI:
-			# Copy MIDI notes with new IDs
-			for note in original.midi_notes:
-				var nn := MidiNoteData.new()
-				if proj:
-					nn.id = proj.next_note_id
-					proj.next_note_id += 1
-				nn.note = note.note
-				nn.velocity = note.velocity
-				nn.start_tick = note.start_tick
-				nn.duration_ticks = note.duration_ticks
-				new_clip.midi_notes.append(nn)
-			# Copy MIDI events
-			for ev in original.midi_events:
-				var nev := MidiEvent.new()
-				nev.type = ev.type
-				nev.tick = ev.tick
-				nev.note = ev.note
-				nev.velocity = ev.velocity
-				nev.cc_number = ev.cc_number
-				nev.cc_value = ev.cc_value
-				nev.program = ev.program
-				nev.pitch_bend = ev.pitch_bend
-				nev.aftertouch = ev.aftertouch
-				new_clip.midi_events.append(nev)
-		else:
-			# Copy audio references/metadata
-			new_clip.audio_file_path = original.audio_file_path
-			new_clip.audio_sample_rate = original.audio_sample_rate
-			new_clip.audio_channels = original.audio_channels
-			new_clip.audio_frames = original.audio_frames
-			new_clip.audio_duration_seconds = original.audio_duration_seconds
-			new_clip.recorded_bpm = original.recorded_bpm
-			new_clip.waveform_cache_key = original.waveform_cache_key
-			new_clip.waveform_cache_path = original.waveform_cache_path
-			new_clip.audio_waveform = original.audio_waveform  # share cached waveform instance for UI reuse
-			new_clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
-			new_clip.load_progress = 0.0
-
-		# Add to pool (sync to engine if connected)
-		proj.add_clip(new_clip)
-
-		# Repoint the instance
-		instance.clip_id = new_clip.id
-		instance.clip = new_clip
-
-		# Resync instance on engine if needed
-		if instance.track and instance.track._is_connected:
-			instance.track._clear_clip_instance_from_engine(instance)
-			instance.track._sync_clip_instance_to_engine(instance)
-
-		# Refresh visuals for the instance's UI
-		var track_ui = _get_timeline_track_for_instance(instance)
-		if track_ui:
-			for clip_ui in track_ui.clip_instances:
-				if clip_ui and clip_ui.clip_instance == instance:
-					clip_ui._update_from_clip_instance()
-					break
 
 
 func _draw() -> void:

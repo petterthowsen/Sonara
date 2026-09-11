@@ -531,16 +531,13 @@ func _on_add_track_pressed() -> void:
 	var track_num = current_project.tracks.size() + 1
 	var track_name = "Track %d" % track_num
 
-	# Use Project's create_instrument_track convenience method
-	# This creates both track and channel with proper linking (including random colors)
-	var result = current_project.create_instrument_track(track_name)
-	var new_track = result["track"] as Track
-	var new_channel = result["channel"] as Channel
-
-	# Set visual properties (channel color already set by project.create_channel())
-	new_track.color = new_channel.color
-
-	print("[Arranger] Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
+	var cmd := TrackCreateCommand.new(current_project, "instrument", track_name)
+	HistoryUtil.execute(cmd)
+	var new_track: Track = cmd.track
+	var new_channel: Channel = cmd.channel
+	if new_track and new_channel:
+		new_track.color = new_channel.color
+		print("[Arranger] Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
 
 
 func _on_add_folder_pressed() -> void:
@@ -557,17 +554,14 @@ func _on_add_folder_pressed() -> void:
 	
 	var folder_name = "Folder %d" % (folder_count + 1)
 
-	# Use Project's create_folder_track method
-	# This creates both folder track and bus channel with proper linking
-	var result = current_project.create_folder_track(folder_name, true)
-	var new_folder = result["track"] as Track
-	var new_channel = result["channel"] as Channel
-
-	# Set visual properties
-	new_folder.color = new_channel.color
-	new_folder.height = 60
-
-	print("[Arranger] Added folder '%s' (ID %d) with bus channel (ID %d)" % [folder_name, new_folder.id, new_channel.id])
+	var cmd := TrackCreateCommand.new(current_project, "folder", folder_name, null, null, true)
+	HistoryUtil.execute(cmd)
+	var new_folder: Track = cmd.track
+	var new_channel: Channel = cmd.channel
+	if new_folder and new_channel:
+		new_folder.color = new_channel.color
+		new_folder.height = 60
+		print("[Arranger] Added folder '%s' (ID %d) with bus channel (ID %d)" % [folder_name, new_folder.id, new_channel.id])
 
 # ============================================================================
 # PROJECT LIFECYCLE

@@ -269,12 +269,12 @@ func _toggle_details_pane() -> void:
 # ============================================================================
 func _on_solo_toggled(pressed: bool) -> void:
 	if channel:
-		channel.set_solo(pressed)
+		HistoryUtil.execute_property("Solo", channel, "set_solo", channel.solo, pressed)
 
 
 func _on_mute_toggled(pressed: bool) -> void:
 	if channel:
-		channel.set_mute(pressed)
+		HistoryUtil.execute_property("Mute", channel, "set_mute", channel.mute, pressed)
 
 
 func _on_arm_toggled(pressed: bool) -> void:
@@ -284,13 +284,21 @@ func _on_arm_toggled(pressed: bool) -> void:
 
 func _on_volume_changed(value: float) -> void:
 	if channel:
+		var old_volume := channel.volume
 		channel.set_volume(value)
+		HistoryUtil.record_property("Set Volume", channel, "set_volume", old_volume, channel.volume, true)
 
 func _on_pan_changed(left : float, right: float = 0.0) -> void:
 	left /= 100
 	right /= 100
 	print("pan changed, setting channel.pan to ", left, ", ", right)
-	channel.set_pan(left, right)
+	if channel:
+		var old_l := channel.pan
+		var old_r := channel.pan_right if "pan_right" in channel else 0.0
+		channel.set_pan(left, right)
+		var cmd := PropertyCommand.new("Set Pan", channel, "set_pan", [old_l, old_r], [left, right])
+		cmd.set_unpack_array(true).set_mergeable(true)
+		HistoryUtil.record(cmd)
 
 func _on_panning_gui_input(event : InputEvent):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
@@ -728,7 +736,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 	# Create device instance and add to channel
 	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	print("[MixerChannel] Device added to channel: %s" % device.device_id)
 
 
@@ -744,7 +752,7 @@ func _handle_sfz_drop(asset: Asset) -> void:
 	
 	# Create sfizz device instance and add to channel
 	var device_instance = DeviceInstance.new(sfizz_device, channel.id, channel.get_device_count())
-	channel.add_device(device_instance, -1)
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	
 	# Load the SFZ file into the device
 	# Give the engine a moment to create the device before loading the file

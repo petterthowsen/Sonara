@@ -23,6 +23,9 @@ var resize_start_duration: int = 0
 var resize_start_mouse_pos: Vector2 = Vector2.ZERO
 var resize_start_durations: Dictionary = {}  # note_id -> duration_ticks
 
+# Undo snapshots keyed by Clip (captured at gesture start)
+var _history_clip_snapshots: Dictionary = {}  # Clip -> Array snapshot
+
 
 # Drag mode tracking
 enum DragMode { POSITION, RESIZE, VELOCITY }
@@ -90,6 +93,69 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	# Initialize default note length from snap interval if not already set
 	if grid_helper and default_note_length_ticks == 960:
 		default_note_length_ticks = grid_helper.get_snap_interval()
+
+
+
+# ============================================================================
+# UNDO HISTORY HELPERS
+# ============================================================================
+
+## Begin capturing note-list snapshots for the given clips (call before mutating).
+func _history_begin_clips(clips: Array) -> void:
+	_history_clip_snapshots.clear()
+	for c in clips:
+		if c is Clip and not _history_clip_snapshots.has(c):
+			_history_clip_snapshots[c] = ClipNotesStateCommand.capture_clip_notes(c)
+
+
+## Capture snapshots for every clip owning the selected notes.
+func _history_begin_selection() -> void:
+	var clips: Array = []
+	for sel_note in selection_manager.selected_notes:
+		if not sel_note or not sel_note.midi_note_data:
+			continue
+		var note_clip: Clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		if note_clip and note_clip not in clips:
+			clips.append(note_clip)
+	_history_begin_clips(clips)
+
+
+## Record ClipNotesStateCommand(s) for all clips snapshotted since _history_begin_*.
+func _history_commit(action_name: String) -> void:
+	if _history_clip_snapshots.is_empty():
+		return
+	var cmds: Array[Command] = []
+	for clip in _history_clip_snapshots.keys():
+		var before: Array = _history_clip_snapshots[clip]
+		var after: Array = ClipNotesStateCommand.capture_clip_notes(clip)
+		if _history_snapshots_equal(before, after):
+			continue
+		cmds.append(ClipNotesStateCommand.new(action_name, clip, before, after))
+	_history_clip_snapshots.clear()
+	if cmds.is_empty():
+		return
+	if cmds.size() == 1:
+		HistoryUtil.record(cmds[0])
+	else:
+		HistoryUtil.record(MacroCommand.new(action_name, cmds))
+
+
+## Compare two note snapshots for equality (id + fields).
+func _history_snapshots_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	var by_id: Dictionary = {}
+	for snap in b:
+		by_id[snap["id"]] = snap
+	for snap in a:
+		if not by_id.has(snap["id"]):
+			return false
+		var other = by_id[snap["id"]]
+		if snap["note"] != other["note"] or snap["velocity"] != other["velocity"]:
+			return false
+		if snap["start_tick"] != other["start_tick"] or snap["duration_ticks"] != other["duration_ticks"]:
+			return false
+	return true
 
 
 # ============================================================================
@@ -203,6 +269,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 			return null
 		target_clip = clip
 
+	_history_begin_clips([target_clip])
 	# Cut overlapping notes
 	var affected_notes = target_clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick)
 
@@ -219,6 +286,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var note_data = target_clip.add_midi_note(note_id, midi_note_num, 100, tick_position, default_note_length_ticks)
 	if note_data == null:
 		push_error("[NoteEditor] Failed to add note after cutting overlaps")
+		_history_clip_snapshots.clear()
 		return null
 
 	print("[NoteEditor] Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, default_note_length_ticks])
@@ -232,6 +300,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	print("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_note_length_ticks])
 
 	# Select the newly placed note (uses coordinate conversion callback)
+	_history_commit("Place Note")
 	selection_manager.select_note(note_instance)
 	queue_redraw()
 
@@ -278,6 +347,8 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 				"clip_instance": source_clip_instance
 			}
 			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+	_history_begin_selection()
 
 
 func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
@@ -445,6 +516,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 		dragging_note = null
 		drag_start_positions.clear()
 		resize_start_durations.clear()
+		_history_clip_snapshots.clear()
 		update_container_width()
 		return
 
@@ -486,6 +558,8 @@ func _on_drag_ended(note: VisualNote) -> void:
 
 	print("[NoteEditor] Updated %d note(s) position/duration" % selection_manager.selected_notes.size())
 
+	_history_commit("Move Notes")
+
 	# Don't update selection range - keep grid-snapped box selection boundaries
 	# This preserves the user's original box selection for duplicate/paste operations
 	queue_redraw()
@@ -494,6 +568,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 	dragging_note = null
 	drag_start_positions.clear()
 	resize_start_durations.clear()
+
 
 
 func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
@@ -513,6 +588,8 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 	for sel_note in selection_manager.selected_notes:
 		if sel_note.midi_note_data:
 			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+
+	_history_begin_selection()
 
 
 func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
@@ -602,6 +679,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 	queue_redraw()
 	update_container_width()
 
+	_history_commit("Resize Notes")
 	resizing_note = null
 	resize_start_durations.clear()
 
@@ -648,7 +726,9 @@ func _erase_note(note: VisualNote) -> void:
 
 	var note_clip = _get_clip_for_note(note.midi_note_data.id)
 	if note_clip:
+		_history_begin_clips([note_clip])
 		note_clip.remove_midi_note(note.midi_note_data)
+		_history_commit("Erase Note")
 		print("[NoteEditor] Erased note %d" % note.midi_note_data.id)
 
 
@@ -733,6 +813,7 @@ func _paste_at_position(tick_position: int) -> void:
 	# Get notes positioned at paste location
 	var notes_to_paste = selection_manager.clipboard.get_notes_at_position(clip_local_position)
 
+	_history_begin_clips([target_clip])
 	# Cut overlapping notes
 	var total_affected = 0
 	for note_data in notes_to_paste:
@@ -782,10 +863,12 @@ func _paste_at_position(tick_position: int) -> void:
 	print("[NoteEditor] Pasted %d notes at tick %d (range: %d-%d)" % [
 		pasted_note_ids.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
 	])
+	_history_commit("Paste Notes")
 
 
 func _duplicate_selection() -> void:
 	"""Duplicate selected notes immediately after the selection."""
+	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
 		print("[NoteEditor] No notes selected to duplicate")
 		return
@@ -814,10 +897,12 @@ func _duplicate_selection() -> void:
 	selection_manager.clipboard = old_clipboard
 
 	print("[NoteEditor] Duplicated %d notes (duration: %d ticks)" % [selection.notes.size(), selection.duration_ticks])
+	_history_commit("Duplicate Notes")
 
 
 func _delete_selection() -> void:
 	"""Delete all selected notes."""
+	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
 		print("[NoteEditor] No notes selected to delete")
 		return
@@ -844,9 +929,11 @@ func _delete_selection() -> void:
 
 # ============================================================================
 # KEYBOARD NOTE MOVEMENT (orchestrates between selection manager and container)
-# ============================================================================
+# ============================================================================	_history_commit("Delete Notes")
+
 func _move_selection_vertical(semitones: int) -> void:
 	"""Move all selected notes up or down by semitones."""
+	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
 		return
 
@@ -891,10 +978,12 @@ func _move_selection_vertical(semitones: int) -> void:
 
 	print("[NoteEditor] Moved %d note(s) %+d semitones" % [selection_manager.selected_notes.size(), semitones])
 	update_container_width()
+	_history_commit("Transpose Notes")
 
 
 func _move_selection_horizontal(delta_ticks: int) -> void:
 	"""Move all selected notes left or right by ticks."""
+	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
 		return
 
@@ -943,7 +1032,8 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 	update_container_width()
 
 
-# Override _on_clip_note_removed to handle selection cleanup
+# Override _on_clip_note_removed to handle selection cleanup	_history_commit("Nudge Notes")
+
 func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 	"""Handle when a note is removed from the clip."""
 	# Remove from selection if selected

@@ -279,7 +279,9 @@ func _create_instrument_track_with_device(device: Device) -> void:
 	print("[TrackList] Creating instrument track with device: ", device.name)
 
 	# Create new instrument track + channel pair
-	var result = current_project.create_instrument_track(device.name)
+	var _track_cmd := TrackCreateCommand.new(current_project, "instrument", device.name)
+	HistoryUtil.execute(_track_cmd)
+	var result = {"track": _track_cmd.track, "channel": _track_cmd.channel}
 	if not result:
 		push_error("[TrackList] Failed to create instrument track")
 		return
@@ -339,7 +341,9 @@ func _create_sfz_instrument_track(sfz_path: String, sfz_name: String) -> void:
 		return
 	
 	# Create new instrument track + channel pair
-	var result = current_project.create_instrument_track(sfz_name)
+	var _track_cmd := TrackCreateCommand.new(current_project, "instrument", sfz_name)
+	HistoryUtil.execute(_track_cmd)
+	var result = {"track": _track_cmd.track, "channel": _track_cmd.channel}
 	if not result:
 		push_error("[TrackList] Failed to create instrument track")
 		return
@@ -377,6 +381,7 @@ func insert_track_after(track_to_move: Track, target_track: Track) -> void:
 	if track_to_move == target_track:
 		return
 	
+	var before_layout := TrackReorderCommand.capture_layout(current_project)
 	print("[TrackList] Reordering: '%s' after '%s'" % [track_to_move.name, target_track.name])
 	
 	# Track becomes a sibling of target (same parent)
@@ -433,6 +438,8 @@ func insert_track_after(track_to_move: Track, target_track: Track) -> void:
 		current_project._renumber_siblings(old_parent_id)
 	
 	# Update UI to reflect new visual order
+	var after_layout := TrackReorderCommand.capture_layout(current_project)
+	HistoryUtil.record(TrackReorderCommand.new(current_project, before_layout, after_layout))
 	_update_visual_order()
 	
 	print("[TrackList] Reordered: '%s' now has parent %d and order %d" % [track_to_move.name, track_to_move.parent_track_id, track_to_move.order])
