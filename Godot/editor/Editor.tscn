@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="9_l57s6"]
 [ext_resource type="PackedScene" uid="uid://iq3vudg11v8b" path="res://devices/device_lane/DeviceLane.tscn" id="10_2m1gq"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="10_kc5d4"]
+[ext_resource type="PackedScene" uid="uid://clpf2lap035t1" path="res://settings/SettingsDialog.tscn" id="12_10umj"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
@@ -457,3 +458,5 @@ wrap_controls = true
 always_on_top = true
 minimize_disabled = true
 maximize_disabled = true
+
+[node name="SettingsDialog" parent="." unique_id=2100000000 instance=ExtResource("12_10umj")]

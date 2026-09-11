@@ -132,8 +132,9 @@
 - [ ] Smooth meter components (lerp?)
 
 ### UI Components & General
-- [ ] Settings Menu: Nestable categories on the left as a tree, avaialble settings on the right.
+- [~] Settings Menu: Nestable categories on the left as a tree, avaialble settings on the right.
     - Categories: Audio, Behavior, Appearence, Shortcuts
+    - In progress: Settings.gd registry + SettingsDialog popup + SettingRow editor component
 - [ ] **CRITICAL**: Undo/Redo using command pattern
 
 ### Hardware & MIDI

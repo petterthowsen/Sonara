@@ -1,0 +1,94 @@
+[gd_scene format=3 uid="uid://clpf2lap035t1"]
+
+[ext_resource type="Script" uid="uid://bw7vrcik6n7to" path="res://settings/SettingsDialog.gd" id="1_sd"]
+
+[node name="SettingsDialog" type="Window" unique_id=2100000000]
+oversampling_override = 1.0
+title = "Settings"
+size = Vector2i(800, 500)
+visible = false
+transient = true
+force_native = true
+min_size = Vector2i(600, 400)
+script = ExtResource("1_sd")
+
+[node name="Background" type="PanelContainer" parent="." unique_id=2100000016]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_type_variation = &"PrimaryPanel"
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=2100000001]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 4.0
+offset_right = -6.0
+offset_bottom = -4.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=2100000002]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HSplitContainer" type="HSplitContainer" parent="MarginContainer/VBoxContainer" unique_id=2100000003]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LeftPanel" type="PanelContainer" parent="MarginContainer/VBoxContainer/HSplitContainer" unique_id=2100000004]
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+theme_type_variation = &"DarkPanel"
+
+[node name="Tree" type="Tree" parent="MarginContainer/VBoxContainer/HSplitContainer/LeftPanel" unique_id=2100000005]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+hide_root = true
+
+[node name="RightPanel" type="PanelContainer" parent="MarginContainer/VBoxContainer/HSplitContainer" unique_id=2100000006]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"DarkPanel"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel" unique_id=2100000007]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="Content" type="VBoxContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel/ScrollContainer" unique_id=2100000008]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="BottomBar" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=2100000009]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="DefaultsButton" type="Button" parent="MarginContainer/VBoxContainer/BottomBar" unique_id=2100000010]
+layout_mode = 2
+text = "Restore Defaults"
+
+[node name="Spacer" type="Control" parent="MarginContainer/VBoxContainer/BottomBar" unique_id=2100000011]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="CancelButton" type="Button" parent="MarginContainer/VBoxContainer/BottomBar" unique_id=2100000012]
+layout_mode = 2
+text = "Cancel"
+
+[node name="ApplyButton" type="Button" parent="MarginContainer/VBoxContainer/BottomBar" unique_id=2100000013]
+layout_mode = 2
+text = "Apply"
+
+[node name="OkButton" type="Button" parent="MarginContainer/VBoxContainer/BottomBar" unique_id=2100000014]
+layout_mode = 2
+text = "OK"
+
+[node name="FileDialog" type="FileDialog" parent="." unique_id=2100000015]
+title = "Select Path"
+file_mode = 0
+access = 2

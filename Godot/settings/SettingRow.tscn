@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://dqel2hiqi6kkt"]
+
+[ext_resource type="Script" uid="uid://b7lx7h0woekkx" path="res://settings/SettingRow.gd" id="1_sr1"]
+
+[node name="SettingRow" type="HBoxContainer" unique_id=1436807021]
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+script = ExtResource("1_sr1")
+
+[node name="NameLabel" type="Label" parent="." unique_id=1645828936]
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+
+[node name="EditorContainer" type="HBoxContainer" parent="." unique_id=1627341075]
+layout_mode = 2
+size_flags_horizontal = 3

@@ -1,0 +1,322 @@
+# SettingRow.gd
+# Reusable editor row for a single setting.
+# Dynamically creates the appropriate editor widget based on Setting.type.
+# Emits value_changed when the user edits the value.
+# Emits request_browse when a path editor needs a FileDialog.
+class_name SettingRow extends HBoxContainer
+
+
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY }
+
+signal value_changed(key: String, value)
+## Emitted when a Path / PATH_ARRAY browse button is pressed.
+signal request_browse(path: String, is_directory: bool)
+
+var setting
+
+
+@onready var name_label: Label = $NameLabel
+@onready var editor_container: HBoxContainer = $EditorContainer
+
+var _settings = null
+var _editor_widget: Control = null
+var _ignore_signals := false
+
+
+func _ready() -> void:
+	_settings = get_node_or_null("/root/Settings")
+
+
+func bind(p_setting) -> void:
+	"""Bind this row to a Setting definition and build the editor."""
+	setting = p_setting
+	_refresh_ui()
+
+
+func set_value_no_signal(value) -> void:
+	"""Set the editor's value without emitting value_changed."""
+	if not _editor_widget:
+		return
+	_ignore_signals = true
+	_apply_value_to_widget(value)
+	_ignore_signals = false
+
+
+func get_current_value():
+	match setting.type:
+		Type.BOOL:
+			return (_editor_widget as CheckBox).button_pressed
+		Type.INT:
+			return int((_editor_widget as SpinBox).value)
+		Type.FLOAT:
+			return float((_editor_widget as SpinBox).value)
+		Type.STRING:
+			return (_editor_widget as LineEdit).text
+		Type.CHOICE:
+			var ob = _editor_widget as OptionButton
+			return ob.get_item_text(ob.selected)
+		Type.CHOICE_MULTI:
+			return _read_choice_multi()
+		Type.PATH:
+			return (_editor_widget as LineEdit).text
+		Type.PATH_ARRAY:
+			return _read_path_array()
+	return null
+
+
+func _refresh_ui() -> void:
+	assert(setting != null, "SettingRow: setting is null")
+
+	name_label.text = setting.label
+	name_label.tooltip_text = setting.description
+
+	for child in editor_container.get_children():
+		editor_container.remove_child(child)
+		child.queue_free()
+	_editor_widget = null
+
+	var start_value = setting.default
+	if _settings:
+		start_value = _settings.call("get_value", setting.key)
+	elif Sonara:
+		start_value = Sonara.get_config(setting.key, setting.default)
+
+	match setting.type:
+		Type.BOOL:
+			var cb = CheckBox.new()
+			cb.toggled.connect(_on_edited)
+			editor_container.add_child(cb)
+			_editor_widget = cb
+			cb.button_pressed = bool(start_value)
+
+		Type.INT, Type.FLOAT:
+			var sb = SpinBox.new()
+			sb.min_value = setting.min_val
+			sb.max_value = setting.max_val
+			if setting.step > 0:
+				sb.step = setting.step
+			if setting.type == Type.INT:
+				sb.rounded = true
+			sb.value_changed.connect(_on_edited)
+			editor_container.add_child(sb)
+			_editor_widget = sb
+			sb.set_value_no_signal(float(start_value))
+
+		Type.STRING:
+			var le = LineEdit.new()
+			le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			le.text_changed.connect(_on_edited)
+			editor_container.add_child(le)
+			_editor_widget = le
+			le.text = str(start_value)
+
+		Type.CHOICE:
+			var ob = OptionButton.new()
+			for i in range(setting.options.size()):
+				ob.add_item(str(setting.options[i]), i)
+			ob.item_selected.connect(_on_edited)
+			editor_container.add_child(ob)
+			_editor_widget = ob
+			_apply_choice_value(start_value)
+
+		Type.CHOICE_MULTI:
+			var vbox = VBoxContainer.new()
+			for i in range(setting.options.size()):
+				var cb = CheckBox.new()
+				cb.text = str(setting.options[i])
+				cb.toggled.connect(_on_choice_multi_toggled.bind(i))
+				vbox.add_child(cb)
+			editor_container.add_child(vbox)
+			_editor_widget = vbox
+			_apply_choice_multi_value(start_value)
+
+		Type.PATH:
+			var hbox = HBoxContainer.new()
+			hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var le = LineEdit.new()
+			le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			le.text_changed.connect(_on_edited)
+			hbox.add_child(le)
+
+			var btn = Button.new()
+			btn.text = "Browse"
+			btn.pressed.connect(_on_path_browse)
+			hbox.add_child(btn)
+
+			editor_container.add_child(hbox)
+			_editor_widget = le
+			le.text = str(start_value)
+
+		Type.PATH_ARRAY:
+			var vbox = VBoxContainer.new()
+			vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_path_array_rows = []
+			var arr = start_value if start_value is Array else []
+			for p in arr:
+				_add_path_row(str(p), vbox)
+			var add_btn = Button.new()
+			add_btn.text = "Add Path"
+			add_btn.pressed.connect(_on_path_array_add.bind(vbox))
+			vbox.add_child(add_btn)
+			editor_container.add_child(vbox)
+			_editor_widget = vbox
+
+
+var _path_array_rows: Array = []
+
+
+func _add_path_row(initial_text: String, parent_vbox: VBoxContainer) -> void:
+	var hbox = HBoxContainer.new()
+
+	var le = LineEdit.new()
+	le.text = initial_text
+	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(le)
+
+	var browse_btn = Button.new()
+	browse_btn.text = "Browse"
+	browse_btn.pressed.connect(_on_path_array_browse.bind(le))
+	hbox.add_child(browse_btn)
+
+	var remove_btn = Button.new()
+	remove_btn.text = "-"
+	remove_btn.custom_minimum_size = Vector2(24, 0)
+	remove_btn.pressed.connect(_on_path_array_remove.bind(hbox, parent_vbox))
+	hbox.add_child(remove_btn)
+
+	parent_vbox.add_child(hbox, true)
+	parent_vbox.move_child(hbox, parent_vbox.get_child_count() - 2)
+	_path_array_rows.append(hbox)
+
+
+func _apply_value_to_widget(value) -> void:
+	match setting.type:
+		Type.BOOL:
+			(_editor_widget as CheckBox).button_pressed = bool(value)
+		Type.INT:
+			(_editor_widget as SpinBox).value = int(value)
+		Type.FLOAT:
+			(_editor_widget as SpinBox).value = float(value)
+		Type.STRING:
+			(_editor_widget as LineEdit).text = str(value)
+		Type.PATH:
+			(_editor_widget as LineEdit).text = str(value)
+		Type.PATH_ARRAY:
+			_apply_path_array_value(value)
+		Type.CHOICE:
+			_apply_choice_value(value)
+		Type.CHOICE_MULTI:
+			_apply_choice_multi_value(value)
+
+
+func _read_choice_multi() -> Array:
+	var result: Array = []
+	if not _editor_widget is VBoxContainer:
+		return result
+	var vbox = _editor_widget as VBoxContainer
+	for i in range(vbox.get_child_count()):
+		var cb = vbox.get_child(i) as CheckBox
+		if cb and cb.button_pressed:
+			result.append(setting.options[i])
+	return result
+
+
+func _apply_choice_multi_value(value) -> void:
+	if not _editor_widget is VBoxContainer:
+		return
+	var vbox = _editor_widget as VBoxContainer
+	for i in range(vbox.get_child_count()):
+		var cb = vbox.get_child(i) as CheckBox
+		if cb and i < setting.options.size():
+			cb.button_pressed = (value as Array).has(setting.options[i])
+
+
+func _apply_choice_value(value) -> void:
+	if not _editor_widget is OptionButton:
+		return
+	var ob = _editor_widget as OptionButton
+	for i in range(setting.options.size()):
+		if str(setting.options[i]) == str(value):
+			ob.selected = i
+			return
+
+
+func _read_path_array() -> Array[String]:
+	var result: Array[String] = []
+	if not _editor_widget is VBoxContainer:
+		return result
+	for row in _path_array_rows:
+		var le = row.get_child(0) as LineEdit
+		if le:
+			var t = le.text.strip_edges()
+			if not t.is_empty():
+				result.append(t)
+	return result
+
+
+func _apply_path_array_value(value) -> void:
+	if not _editor_widget is VBoxContainer:
+		return
+	var vbox = _editor_widget as VBoxContainer
+	for row in _path_array_rows:
+		vbox.remove_child(row)
+		row.queue_free()
+	_path_array_rows.clear()
+
+	var arr = value if value is Array else []
+	for p in arr:
+		_add_path_row(str(p), vbox)
+
+
+func _on_edited(_value = null) -> void:
+	if _ignore_signals:
+		return
+	var v = get_current_value()
+	Sonara.set_config(setting.key, v)
+	value_changed.emit(setting.key, v)
+
+
+func _on_choice_multi_toggled(_toggled: bool, _index: int) -> void:
+	if _ignore_signals:
+		return
+	var v = _read_choice_multi()
+	Sonara.set_config(setting.key, v)
+	value_changed.emit(setting.key, v)
+
+
+func _on_path_browse() -> void:
+	var current = setting.default
+	if _settings:
+		current = _settings.call("get_value", setting.key)
+	elif Sonara:
+		current = Sonara.get_config(setting.key, setting.default)
+	request_browse.emit(str(current), false)
+
+
+func _on_path_array_browse(line_edit: LineEdit) -> void:
+	request_browse.emit(line_edit.text, false)
+
+
+func _on_path_array_add(parent_vbox: VBoxContainer) -> void:
+	_add_path_row("", parent_vbox)
+	_emit_path_array_changed()
+
+
+func _on_path_array_remove(row: Control, parent_vbox: VBoxContainer) -> void:
+	parent_vbox.remove_child(row)
+	_path_array_rows.erase(row)
+	row.queue_free()
+	_emit_path_array_changed()
+
+
+func _emit_path_array_changed() -> void:
+	var v = _read_path_array()
+	Sonara.set_config(setting.key, v)
+	value_changed.emit(setting.key, v)
+
+
+func set_pending_path(path: String) -> void:
+	if setting.type == Type.PATH:
+		(_editor_widget as LineEdit).text = path
+		Sonara.set_config(setting.key, path)
+		value_changed.emit(setting.key, path)

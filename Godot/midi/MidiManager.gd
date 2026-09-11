@@ -79,6 +79,11 @@ func initialize():
 	keyboard_transpose = Sonara.get_config("midi/virtual_keyboard/transpose", 0)
 	keyboard_velocity = Sonara.get_config("midi/virtual_keyboard/velocity", 100)
 
+	# Connect to Settings autoload for runtime updates
+	var settings = get_node_or_null("/root/Settings")
+	if settings:
+		settings.connect("setting_changed", _on_setting_changed)
+
 	devices_changed.emit()
 	logger.info("Initialized with %d devices (%d enabled)" % [devices.size(), enabled_devices.size()])
 
@@ -452,5 +457,35 @@ func set_virtual_keyboard_enabled(enabled: bool):
 		# Persist to config
 		Sonara.set_config("midi/virtual_keyboard/enabled", enabled)
 		Sonara.save_config()
+		devices_changed.emit()
+		print("[MidiManager] Virtual keyboard %s" % ("enabled" if enabled else "disabled"))
+
+
+# ---------------------------------------------------------------------------
+# Settings synchronization (called when SettingsDialog changes a value)
+# ---------------------------------------------------------------------------
+
+func _on_setting_changed(key: String, value) -> void:
+	"""React to live setting changes from the Settings dialog."""
+	match key:
+		"midi/virtual_keyboard/enabled":
+			_apply_virtual_keyboard_enabled(value)
+		"midi/virtual_keyboard/transpose":
+			keyboard_transpose = clampi(int(value), -24, 24)
+			logger.info("Keyboard transpose updated: %d" % keyboard_transpose)
+		"midi/virtual_keyboard/velocity":
+			keyboard_velocity = clampi(int(value), 1, 127)
+			logger.info("Keyboard velocity updated: %d" % keyboard_velocity)
+
+
+func _apply_virtual_keyboard_enabled(enabled: bool) -> void:
+	"""Update virtual keyboard state without persisting (Settings dialog handles save)."""
+	if virtual_keyboard_enabled != enabled:
+		virtual_keyboard_enabled = enabled
+		if not enabled:
+			for note_name in active_keyboard_notes.keys():
+				var note = active_keyboard_notes[note_name]
+				emit_virtual_midi_note(note, 0, false)
+			active_keyboard_notes.clear()
 		devices_changed.emit()
 		print("[MidiManager] Virtual keyboard %s" % ("enabled" if enabled else "disabled"))

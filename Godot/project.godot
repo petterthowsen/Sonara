@@ -27,6 +27,7 @@ Sonara="*res://Sonara.gd"
 AudioEngineOSC="*res://AudioEngineOSC.gd"
 AssetService="*res://browser/AssetService.gd"
 MidiManager="*res://midi/MidiManager.gd"
+Settings="*res://settings/Settings.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]

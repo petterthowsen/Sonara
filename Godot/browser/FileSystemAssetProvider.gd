@@ -36,7 +36,7 @@ func _init() -> void:
 func initialize(tree: SceneTree) -> void:
 	print("[FileSystemAssetProvider] Initializing...")
 	_tree = tree
-	_scan_interval = Sonara.get_config("assets/scan_interval_seconds", 5.0)
+	_scan_interval = Sonara.get_config("assets/scan_interval_seconds", 30.0)
 	_load_cache()
 	_setup_hot_reload()
 	print("[FileSystemAssetProvider] Initialized with %.1f second scan interval" % _scan_interval)

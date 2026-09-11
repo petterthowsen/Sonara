@@ -213,9 +213,11 @@ func _on_scan_assets() -> void:
 
 
 func _on_preferences() -> void:
-	"""Show preferences dialog."""
-	# TODO: Implement preferences dialog
-	print("[MainMenu] Preferences not yet implemented")
+	"""Show settings dialog."""
+	if Sonara.editor.settings_dialog:
+		Sonara.editor.settings_dialog.popup_centered_size(Vector2(800, 500))
+	else:
+		push_error("[MainMenu] SettingsDialog not found on Editor")
 
 
 # ============================================================================

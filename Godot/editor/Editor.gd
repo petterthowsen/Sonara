@@ -60,6 +60,8 @@ signal track_focused(track : Track)
 @onready var tempo_spinbox: SpinBox = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/Tempo
 @onready var time_signature_edit: LineEdit = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/TimeSignature
 
+@onready var settings_dialog: SettingsDialog = $SettingsDialog
+
 @onready var transport_position_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Position
 @onready var transport_time_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Time
 

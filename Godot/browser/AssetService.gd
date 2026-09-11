@@ -43,6 +43,12 @@ func _ready() -> void:
 	_load_asset_cache()
 	_setup_default_config()
 	_initialize_providers()
+	
+	# Connect to Settings autoload for runtime updates
+	var settings = get_node_or_null("/root/Settings")
+	if settings:
+		settings.connect("setting_changed", _on_setting_changed)
+	
 	print("[AssetService] Ready")
 
 
@@ -386,3 +392,17 @@ func _save_asset_cache() -> void:
 		# Cache saved silently (too verbose to log every time)
 	else:
 		push_error("[AssetService] Failed to save asset cache to: " + cache_path)
+
+
+# ---------------------------------------------------------------------------
+# Settings synchronization
+# ---------------------------------------------------------------------------
+
+func _on_setting_changed(key: String, value) -> void:
+	"""React to live setting changes from the Settings dialog."""
+	if key == "assets/scan_interval_seconds":
+		for provider in _providers:
+			if provider is FileSystemAssetProvider:
+				provider._scan_interval = float(value)
+			elif provider is SfzAssetProvider:
+				provider._scan_interval = float(value)
