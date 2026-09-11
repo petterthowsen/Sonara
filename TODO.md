@@ -118,7 +118,7 @@
 - [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere", which will:
     1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"
     2. while "duplicate-dragging", continually move the duplicates relative to mouse note position
-- [x] Visualize current NoteSelection start and end range
+- [x] Visualize current NoteSelection start anda end range
 - [ ] Track vs clip context mode:
     - [ ] In clip mode: ruler is relative to ClipInstance, draw clip start and end in ruler
     - [ ] In track mode: show all clips as they appear in entire track, ruler relative to entire track
