@@ -6,7 +6,7 @@
 class_name SettingRow extends HBoxContainer
 
 
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET }
 
 signal value_changed(key: String, value)
 ## Emitted when a Path / PATH_ARRAY browse button is pressed.
@@ -63,7 +63,7 @@ func get_current_value():
 			return int((_editor_widget as SpinBox).value)
 		Type.FLOAT:
 			return float((_editor_widget as SpinBox).value)
-		Type.STRING:
+		Type.STRING, Type.SECRET:
 			return (_editor_widget as LineEdit).text
 		Type.CHOICE:
 			var ob = _editor_widget as OptionButton
@@ -115,9 +115,12 @@ func _refresh_ui() -> void:
 			_editor_widget = sb
 			sb.set_value_no_signal(float(start_value))
 
-		Type.STRING:
+		Type.STRING, Type.SECRET:
 			var le = LineEdit.new()
 			le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			le.secret = setting.type == Type.SECRET
+			if setting.type == Type.SECRET:
+				le.placeholder_text = "sk-or-..."
 			le.text_changed.connect(_on_edited)
 			editor_container.add_child(le)
 			_editor_widget = le
@@ -210,7 +213,7 @@ func _apply_value_to_widget(value) -> void:
 			(_editor_widget as SpinBox).value = int(value)
 		Type.FLOAT:
 			(_editor_widget as SpinBox).value = float(value)
-		Type.STRING:
+		Type.STRING, Type.SECRET:
 			(_editor_widget as LineEdit).text = str(value)
 		Type.PATH:
 			(_editor_widget as LineEdit).text = str(value)

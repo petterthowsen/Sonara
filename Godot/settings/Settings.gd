@@ -16,7 +16,7 @@ extends Node
 
 
 ## Setting type enum — drives which editor widget the dialog uses.
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET }
 
 
 ## Data class describing one registered setting.
@@ -52,6 +52,7 @@ const CATEGORY_AUDIO = "Audio"
 const CATEGORY_BEHAVIOR = "Behavior"
 const CATEGORY_APPEARANCE = "Appearance"
 const CATEGORY_SHORTCUTS = "Shortcuts"
+const CATEGORY_AI = "AI"
 
 var _settings: Dictionary = {}
 var _settings_loaded := false
@@ -161,6 +162,88 @@ func _register_all_settings() -> void:
 
 	# --- Audio (placeholder — engine does not expose OSC config yet) ---
 
+	# --- AI / OpenRouter ---
+	_register(Setting.new(
+		"ai/openrouter/api_key",
+		"OpenRouter API Key",
+		Type.SECRET,
+		"",
+		CATEGORY_AI,
+		"API key from openrouter.ai. Stored in ~/.config/sonara/config.json (plaintext, same as other Sonara settings)."
+	))
+	_register(Setting.new(
+		"ai/openrouter/base_url",
+		"OpenRouter Base URL",
+		Type.STRING,
+		"https://openrouter.ai/api/v1",
+		CATEGORY_AI,
+		"Override for proxies. Default is the official OpenRouter Chat Completions API."
+	))
+	_register(Setting.new(
+		"ai/openrouter/model",
+		"Model",
+		Type.STRING,
+		"anthropic/claude-sonnet-4.5",
+		CATEGORY_AI,
+		"OpenRouter model id, e.g. anthropic/claude-sonnet-4.5"
+	))
+	_register(Setting.new(
+		"ai/chat/temperature",
+		"Temperature",
+		Type.FLOAT,
+		0.7,
+		CATEGORY_AI,
+		"Sampling temperature for chat completions."
+	))
+	_settings["ai/chat/temperature"].min_val = 0.0
+	_settings["ai/chat/temperature"].max_val = 2.0
+	_settings["ai/chat/temperature"].step = 0.1
+	_register(Setting.new(
+		"ai/chat/max_tokens",
+		"Max Tokens",
+		Type.INT,
+		4096,
+		CATEGORY_AI,
+		"Maximum tokens in a chat completion response."
+	))
+	_settings["ai/chat/max_tokens"].min_val = 256
+	_settings["ai/chat/max_tokens"].max_val = 32000
+	_settings["ai/chat/max_tokens"].step = 256
+	_register(Setting.new(
+		"ai/chat/reasoning",
+		"Show Thinking",
+		Type.BOOL,
+		false,
+		CATEGORY_AI,
+		"Request model reasoning tokens and show them as a collapsible block in chat."
+	))
+	_register(Setting.new(
+		"ai/chat/reasoning_effort",
+		"Thinking Effort",
+		Type.CHOICE,
+		"medium",
+		CATEGORY_AI,
+		"How much reasoning the model should do when Show Thinking is on."
+	))
+	_settings["ai/chat/reasoning_effort"].options = ["low", "medium", "high"]
+	_register(Setting.new(
+		"ai/audio/voice",
+		"Audio Voice",
+		Type.STRING,
+		"alloy",
+		CATEGORY_AI,
+		"Voice id for chat audio output (and later TTS)."
+	))
+	_register(Setting.new(
+		"ai/audio/format",
+		"Audio Format",
+		Type.CHOICE,
+		"wav",
+		CATEGORY_AI,
+		"Audio format for chat audio output. wav plays natively in Godot."
+	))
+	_settings["ai/audio/format"].options = ["wav", "mp3"]
+
 
 func _register(s: Setting) -> void:
 	_settings[s.key] = s
@@ -172,7 +255,7 @@ func _register(s: Setting) -> void:
 
 func get_categories() -> Array[String]:
 	"""Return the ordered list of category names."""
-	return [CATEGORY_AUDIO, CATEGORY_BEHAVIOR, CATEGORY_APPEARANCE, CATEGORY_SHORTCUTS]
+	return [CATEGORY_AUDIO, CATEGORY_BEHAVIOR, CATEGORY_APPEARANCE, CATEGORY_AI, CATEGORY_SHORTCUTS]
 
 
 func get_settings_for_category(category: String) -> Array[Setting]:
@@ -249,7 +332,7 @@ func get_shortcut_list() -> Array[Dictionary]:
 	"""
 	var groups: Array[Dictionary] = [
 		{ "name" = "Transport", "actions" = ["play", "pause", "pause_here", "stop_here", "toggle_computer_keyboard"] },
-		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_secondary_mixer", "toggle_device_lane"] },
+		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_secondary_mixer", "toggle_device_lane", "toggle_assistant"] },
 		{ "name" = "Edit", "actions" = ["ui_undo", "ui_redo", "ui_duplicate", "ui_delete"] },
 		{ "name" = "Keyboard", "actions" = ["keyboard_transpose_up", "keyboard_transpose_down", "keyboard_velocity_up", "keyboard_velocity_down"] },
 	]

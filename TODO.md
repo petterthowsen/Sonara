@@ -169,3 +169,16 @@
 
 - [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders.
 - [ ] Assets: when discovering assets, generate a "essential name" for an asset, "Cello-Sec-PERF" becomes "Cello"
+
+### AI Assistant
+
+Plan: `docs/ai-assistant-plan.md` (design note: `docs/ai-integration.md`)
+
+- [x] Phase 1: OpenRouter client + Settings → AI (API key, model, multimodal chat completions)
+- [x] Phase 2: Per-project conversations, `~/.config/sonara/aichat/system_prompt.md` variables, tool loop, track / asset / mixer / device tools, assistant dock
+- [ ] Phase 3: MIDI tools via compact DSL (later)
+
+Some ideas:
+
+- when chat history is not empty, track the user's changes/edits and feed that summary along with the next user message.
+- add playhead location and the currently focused musical element (clip, note) as prompt variable.

@@ -2,10 +2,11 @@
 # It handles signals and actions by itself and calls various Editor.gd methods (open project, undo etc.) 
 class_name MainMenu extends MenuBar
 
-enum  MENU { File, Edit }
+enum  MENU { File, Edit, AI }
 
 enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
+enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
 enum DialogMode { OPEN, SAVE, SAVE_AS }
 
@@ -16,6 +17,8 @@ signal item_pressed(menu_id : int, id : int)
 
 var _current_dialog_mode: DialogMode
 var _file_dialog: FileDialog
+var _ai_menu: PopupMenu
+var _ai_client: OpenRouterClient
 
 func _ready() -> void:
 	# add file menu items
@@ -36,6 +39,13 @@ func _ready() -> void:
 	edit.add_item("Scan Assets", EDIT.Scan_Assets)
 	edit.add_separator("", EDIT.Sep2)
 	edit.add_item("Preferences", EDIT.Preferences)
+
+	_ai_menu = PopupMenu.new()
+	_ai_menu.name = "AI"
+	add_child(_ai_menu)
+	_ai_menu.add_item("Toggle Assistant", AI_ITEMS.Toggle_Assistant)
+	_ai_menu.add_item("New Conversation", AI_ITEMS.New_Conversation)
+	_ai_menu.add_item("Test Connection", AI_ITEMS.Test_Connection)
 	
 	# disable project-dependent items initially (no project open yet)
 	_set_project_dependent_items_enabled(false)
@@ -43,6 +53,7 @@ func _ready() -> void:
 	# setup listeners
 	file.id_pressed.connect(_on_item_pressed.bind(MENU.File))
 	edit.id_pressed.connect(_on_item_pressed.bind(MENU.Edit))
+	_ai_menu.id_pressed.connect(_on_item_pressed.bind(MENU.AI))
 	
 	# connect to editor signals
 	Sonara.editor.project_opened.connect(_on_project_opened)
@@ -89,6 +100,21 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_scan_assets()
 			EDIT.Preferences:
 				_on_preferences()
+	elif menu_id == MENU.AI:
+		match item_id:
+			AI_ITEMS.Toggle_Assistant:
+				if Sonara.editor:
+					Sonara.editor.toggle_assistant()
+			AI_ITEMS.New_Conversation:
+				var assistant := get_node_or_null("/root/Assistant")
+				if assistant:
+					assistant.new_conversation()
+					if Sonara.editor and Sonara.editor.assistant_panel:
+						Sonara.editor.assistant_panel.visible = true
+						if Sonara.editor.browser_panel:
+							Sonara.editor.browser_panel.visible = false
+			AI_ITEMS.Test_Connection:
+				_on_test_connection()
 
 
 func _on_project_opened(_project: Project) -> void:
@@ -238,6 +264,44 @@ func _on_preferences() -> void:
 		Sonara.editor.settings_dialog.popup_centered_size(Vector2(800, 500))
 	else:
 		push_error("[MainMenu] SettingsDialog not found on Editor")
+
+
+## Send a one-shot "pong" chat to verify the OpenRouter key and model.
+func _on_test_connection() -> void:
+	_ensure_ai_client()
+	_ai_client.configure_from_settings()
+	if not _ai_client.has_api_key():
+		print("[AI] Test Connection failed: OpenRouter API key is not set. Add it in Settings → AI.")
+		return
+	print("[AI] Test Connection: sending ping…")
+	_ai_client.test_connection()
+
+
+## Create the debug OpenRouter client once and wire result logs.
+func _ensure_ai_client() -> void:
+	if _ai_client != null:
+		return
+	_ai_client = OpenRouterClient.new()
+	add_child(_ai_client)
+	_ai_client.text_delta.connect(_on_ai_test_delta)
+	_ai_client.message_finished.connect(_on_ai_test_finished)
+	_ai_client.request_failed.connect(_on_ai_test_failed)
+	_ai_client.request_cancelled.connect(func(): print("[AI] Test Connection cancelled"))
+
+
+## Streamed assistant text for the connection smoke test.
+func _on_ai_test_delta(text: String) -> void:
+	print("[AI] Test Connection delta: ", text)
+
+
+## Completed assistant message from Test Connection.
+func _on_ai_test_finished(message: ChatTypes.ChatMessage) -> void:
+	print("[AI] Test Connection: ", message.get_text())
+
+
+## Failed Test Connection (401, network, missing key).
+func _on_ai_test_failed(error: ChatTypes.ChatError) -> void:
+	print("[AI] Test Connection failed: ", error.message)
 
 
 # ============================================================================

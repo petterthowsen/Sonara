@@ -11,6 +11,7 @@
 [ext_resource type="PackedScene" uid="uid://iq3vudg11v8b" path="res://devices/device_lane/DeviceLane.tscn" id="10_2m1gq"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="10_kc5d4"]
 [ext_resource type="PackedScene" uid="uid://clpf2lap035t1" path="res://settings/SettingsDialog.tscn" id="12_10umj"]
+[ext_resource type="PackedScene" uid="uid://b7xa8h62aocl5" path="res://ai/ui/AssistantPanel.tscn" id="12_cnodj"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
@@ -384,6 +385,13 @@ theme_type_variation = &"PrimaryPanel"
 
 [node name="Browser" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel" unique_id=131584552 instance=ExtResource("13_p3vu2")]
 layout_mode = 2
+
+[node name="AssistantPanel" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer" unique_id=1299192409 instance=ExtResource("12_cnodj")]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_type_variation = &"PrimaryPanel"
 
 [node name="Bottom" type="VBoxContainer" parent="VBoxContainer" unique_id=365378792]
 layout_mode = 2

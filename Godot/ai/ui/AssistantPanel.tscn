@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://b7xa8h62aocl5"]
+
+[ext_resource type="Script" uid="uid://bso2f8eab26af" path="res://ai/ui/AssistantPanel.gd" id="1_m4ute"]
+
+[node name="AssistantPanel" type="PanelContainer" unique_id=1299192409]
+visible = false
+script = ExtResource("1_m4ute")

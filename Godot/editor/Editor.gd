@@ -81,6 +81,9 @@ signal tracks_selected(tracks: Array[Track])
 # secondary panels
 @onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane
 
+@onready var browser_panel: PanelContainer = $VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel
+@onready var assistant_panel: Control = $VBoxContainer/Middle/LeftRightSplit/BoxContainer/AssistantPanel
+
 # ============================================================================
 # STATE
 # ============================================================================
@@ -287,6 +290,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if kevent.get_modifiers_mask() == 0:
 				toggle_device_lane()
 				accept_event()
+	elif event.is_action_pressed("toggle_assistant"):
+		toggle_assistant()
+		accept_event()
 
 
 # ============================================================================
@@ -543,6 +549,16 @@ func switch_extra_view() -> void:
 	
 	_update_view_visibility()
 	print("[Editor] Switched to ", View.keys()[current_view], " view")
+
+
+## Show or hide the right-dock assistant in place of the Browser.
+func toggle_assistant() -> void:
+	if assistant_panel == null:
+		return
+	assistant_panel.visible = not assistant_panel.visible
+	if browser_panel:
+		browser_panel.visible = not assistant_panel.visible
+	print("[Editor] Assistant %s" % ("shown" if assistant_panel.visible else "hidden"))
 
 
 func toggle_device_lane():

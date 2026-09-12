@@ -206,6 +206,11 @@ var height: int:
 		set_height(value)
 
 
+## Set display name (used by undoable property commands).
+func set_name(new_name: String) -> void:
+	name = new_name
+
+
 func set_mute(value: bool) -> void:
 	"""Set mute state. If linked to a channel, delegates to channel's set_mute."""
 	muted = value

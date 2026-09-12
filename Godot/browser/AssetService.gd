@@ -155,6 +155,61 @@ func find_asset(path: String) -> Asset:
 	return _assets_by_path.get(path)
 
 
+## Case-insensitive name/path/tag search. Favorites, then last_used, then name.
+func search_assets(query: String, type_filter: String = "", limit: int = 25) -> Array[Asset]:
+	var cap := clampi(limit, 1, 100)
+	var needle := query.strip_edges().to_lower()
+	var want := _type_from_filter(type_filter)
+	var hits: Array[Asset] = []
+	for asset in _assets_by_path.values():
+		if want >= 0 and asset.type != want:
+			continue
+		if needle.is_empty() or _asset_matches(asset, needle):
+			hits.append(asset)
+	hits.sort_custom(func(a: Asset, b: Asset) -> bool:
+		if a.favorite != b.favorite:
+			return a.favorite
+		if a.last_used != b.last_used:
+			return a.last_used > b.last_used
+		return a.get_display_name().to_lower() < b.get_display_name().to_lower()
+	)
+	if hits.size() > cap:
+		var trimmed: Array[Asset] = []
+		for i in range(cap):
+			trimmed.append(hits[i])
+		return trimmed
+	return hits
+
+
+func _asset_matches(asset: Asset, needle: String) -> bool:
+	if asset.name.to_lower().contains(needle):
+		return true
+	if asset.path.to_lower().contains(needle):
+		return true
+	if asset.get_display_name().to_lower().contains(needle):
+		return true
+	for tag in asset.tags:
+		if str(tag).to_lower().contains(needle):
+			return true
+	return false
+
+
+func _type_from_filter(type_filter: String) -> int:
+	match type_filter.strip_edges().to_lower():
+		"audio":
+			return Asset.TYPE.Audio
+		"midi":
+			return Asset.TYPE.Midi
+		"device":
+			return Asset.TYPE.Device
+		"sfz":
+			return Asset.TYPE.SFZ
+		"soundfont":
+			return Asset.TYPE.SoundFont
+		_:
+			return -1
+
+
 ## Get all audio assets
 func get_audio_assets() -> Array[Asset]:
 	return get_assets_by_type(Asset.TYPE.Audio)
@@ -182,13 +237,11 @@ func get_soundfont_assets() -> Array[Asset]:
 
 ## Get device by ID (for built-in or plugin devices)
 func get_device(device_id: String) -> Device:
-	# Try to find in asset registry first
-	var asset = find_asset(device_id)
-	if asset and asset.type == Asset.TYPE.Device:
-		# Get the actual Device object from the provider
-		for provider in _providers:
-			if provider is DeviceAssetProvider:
-				return (provider as DeviceAssetProvider).get_builtin_device(device_id)
+	for provider in _providers:
+		if provider is DeviceAssetProvider:
+			var device: Device = (provider as DeviceAssetProvider).get_builtin_device(device_id)
+			if device:
+				return device
 	return null
 
 
