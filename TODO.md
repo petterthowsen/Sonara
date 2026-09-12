@@ -30,9 +30,10 @@
 - [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
-- [ ] Solo behavior: Bus channels should still sound when instrument/audio channels are soloed
-  - Engine: route targets (buses/master) are no longer silenced by another channel's solo; needs live verification
-
+- [x] Solo behavior: Bus channels should still sound when instrument/audio channels are soloed
+- [x] Solo behavior: Bus solo is a group solo (route feeders stay fully audible; send-only feeders keep the send and mute dry)
+  - Engine implemented; needs live verification
+- [x] Mixer channel sends do not sync bus names until send knob is touched
 
 ### Devices & Plugins
 
@@ -140,7 +141,6 @@
 - [x] TimelineClip should include prefix or suffix in label if it's effectively unique.
 
 
-
 ### Clip Editor / Note Editor
 
 - [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere", which will:
@@ -154,20 +154,17 @@
 - [ ] Modifier+right-click to open context menu in NoteEditor
 
 
-
 ### Mixer
 
 - [ ] Delete, Duplicate Channels
 - [ ] Smooth meter components (lerp?)
 - [ ] Sync selection of tracks and linked channels bidirectionally
   - [ ] Might make this behavior adjustable in settings
-- [ ] Improve channel drag-to-reorder UX
-  - [ ] Bug: sometimes the channel can only be dragged one step at a time
-
+- [X] Improve channel drag-to-reorder UX
+  - [X] Bug: sometimes the channel can only be dragged one step at a time
 
 
 ### UI Components & General
-
 
 
 ### Hardware & MIDI

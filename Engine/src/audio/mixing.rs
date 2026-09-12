@@ -4,11 +4,14 @@ use std::collections::HashMap;
 use super::commands::{EngineState, EngineStatus};
 use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
 use super::devices::{AudioDevice, SfizzDevice};
-use super::render_scratch::RenderScratch;
+use super::render_scratch::{RenderScratch, SoloRole};
 use super::types::*;
 
 /// Master channel ID. Master never routes to another channel and is never silenced by solo.
 const MASTER_CHANNEL_ID: ChannelId = 1;
+
+/// Max hops when walking output chains so a routing cycle cannot spin forever.
+const SOLO_WALK_LIMIT: usize = 64;
 
 /// Convert a fader or send level in dB to linear gain (-60 dB and below is silence).
 fn db_to_gain(db: f32) -> f32 {
@@ -19,12 +22,141 @@ fn db_to_gain(db: f32) -> f32 {
     }
 }
 
-/// True if the channel is silenced by its own mute or by another channel's solo.
+/// True if this channel contributes no audio this buffer (muted or excluded by solo).
+fn is_silenced(channel: &Channel) -> bool {
+    channel.mix.solo_role == SoloRole::Silent
+}
+
+/// Walk `start_id`'s output chain and return true if `target_id` is on it (including itself).
+fn output_reaches(
+    channel_map: &HashMap<ChannelId, Channel>,
+    mut id: ChannelId,
+    target_id: ChannelId,
+) -> bool {
+    for _ in 0..SOLO_WALK_LIMIT {
+        if id == target_id {
+            return true;
+        }
+        let Some(channel) = channel_map.get(&id) else {
+            return false;
+        };
+        let Some(next) = output_target(channel) else {
+            return false;
+        };
+        if next == id {
+            return false;
+        }
+        id = next;
+    }
+    false
+}
+
+/// True if this channel or anything it routes into is soloed.
+fn output_reaches_soloed(channel_map: &HashMap<ChannelId, Channel>, mut id: ChannelId) -> bool {
+    for _ in 0..SOLO_WALK_LIMIT {
+        let Some(channel) = channel_map.get(&id) else {
+            return false;
+        };
+        if channel.solo {
+            return true;
+        }
+        let Some(next) = output_target(channel) else {
+            return false;
+        };
+        if next == id {
+            return false;
+        }
+        id = next;
+    }
+    false
+}
+
+/// True if an unmuted send from `source` reaches `target_id` (the send target or its output chain).
+fn send_reaches(
+    channel_map: &HashMap<ChannelId, Channel>,
+    source: &Channel,
+    target_id: ChannelId,
+) -> bool {
+    source.send_channels.iter().any(|send| {
+        !send.muted
+            && is_valid_route(channel_map, source.id, send.target_channel_id)
+            && output_reaches(channel_map, send.target_channel_id, target_id)
+    })
+}
+
+/// True if `source` has an unmuted send whose target is soloed or routes into a soloed bus.
+fn send_reaches_soloed(channel_map: &HashMap<ChannelId, Channel>, source: &Channel) -> bool {
+    source.send_channels.iter().any(|send| {
+        !send.muted
+            && is_valid_route(channel_map, source.id, send.target_channel_id)
+            && output_reaches_soloed(channel_map, send.target_channel_id)
+    })
+}
+
+/// True if a fully-audible (group or self-solo) source routes its output through `target_id`.
+fn group_output_reaches(channel_map: &HashMap<ChannelId, Channel>, target_id: ChannelId) -> bool {
+    channel_map.values().any(|source| {
+        !source.mute
+            && output_reaches_soloed(channel_map, source.id)
+            && output_reaches(channel_map, source.id, target_id)
+    })
+}
+
+/// True if a fully-audible source sends into `target_id` or a bus that routes there.
+fn group_send_reaches(channel_map: &HashMap<ChannelId, Channel>, target_id: ChannelId) -> bool {
+    channel_map.values().any(|source| {
+        !source.mute
+            && output_reaches_soloed(channel_map, source.id)
+            && send_reaches(channel_map, source, target_id)
+    })
+}
+
+/// Decide how this channel participates when solo is active.
 ///
-/// Route targets (buses and master) stay audible when something else is soloed so
-/// instrument/audio sources still reach the mix through their output and sends.
-fn is_silenced(channel: &Channel, has_solo: bool) -> bool {
-    channel.mute || (has_solo && !channel.solo && !channel.mix.is_route_target)
+/// Sources that route into a soloed bus stay fully audible (group solo). Sources that only send
+/// to a soloed bus keep those sends and mute their dry output. Buses stay open when a soloed
+/// source reaches them by route or send, so nested buses and FX returns still reach master.
+fn solo_role(
+    channel_map: &HashMap<ChannelId, Channel>,
+    id: ChannelId,
+    has_solo: bool,
+) -> SoloRole {
+    let Some(channel) = channel_map.get(&id) else {
+        return SoloRole::Silent;
+    };
+    if channel.mute {
+        return SoloRole::Silent;
+    }
+    if !has_solo {
+        return SoloRole::Full;
+    }
+    if channel.mix.is_route_target {
+        if group_output_reaches(channel_map, id) || group_send_reaches(channel_map, id) {
+            SoloRole::Full
+        } else {
+            SoloRole::Silent
+        }
+    } else if output_reaches_soloed(channel_map, id) {
+        SoloRole::Full
+    } else if send_reaches_soloed(channel_map, channel) {
+        SoloRole::SendOnly
+    } else {
+        SoloRole::Silent
+    }
+}
+
+/// Store each channel's solo role for this buffer. Must run after `count_route_inputs`.
+fn assign_solo_roles(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    channel_ids: &[ChannelId],
+    has_solo: bool,
+) {
+    for &id in channel_ids {
+        let role = solo_role(channel_map, id, has_solo);
+        if let Some(channel) = channel_map.get_mut(&id) {
+            channel.mix.solo_role = role;
+        }
+    }
 }
 
 /// The channel this channel routes its output into, if any (master never routes onward).
@@ -115,12 +247,14 @@ fn route_channel(
     channel_map: &mut HashMap<ChannelId, Channel>,
     source_id: ChannelId,
     frames: usize,
-    has_solo: bool,
 ) {
     let Some(source) = channel_map.get_mut(&source_id) else {
         return;
     };
-    let audible = frames > 0 && !is_silenced(source, has_solo);
+    let role = source.mix.solo_role;
+    let route_output = frames > 0 && role == SoloRole::Full;
+    let allow_sends = frames > 0 && role != SoloRole::Silent;
+    let send_only = role == SoloRole::SendOnly;
     let output = output_target(source);
     let has_pre_fader_copy = source.mix.has_pre_fader_copy;
     let pan = source.get_pan_coefficients();
@@ -135,7 +269,7 @@ fn route_channel(
     if let Some(target_id) = output.filter(|&id| is_valid_route(channel_map, source_id, id)) {
         if let Some(target) = channel_map.get_mut(&target_id) {
             target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
-            if audible && !target.mix.done {
+            if route_output && !target.mix.done {
                 let gain = target.get_gain();
                 add_scaled(target, &left, &right, frames, gain);
             }
@@ -146,11 +280,14 @@ fn route_channel(
         if !is_valid_route(channel_map, source_id, send.target_channel_id) {
             continue;
         }
+        let send_allowed = allow_sends
+            && !send.muted
+            && (!send_only || output_reaches_soloed(channel_map, send.target_channel_id));
         let Some(target) = channel_map.get_mut(&send.target_channel_id) else {
             continue;
         };
         target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
-        if !audible || send.muted || target.mix.done {
+        if !send_allowed || target.mix.done {
             continue;
         }
         let gain = db_to_gain(send.amount_db) * target.get_gain();
@@ -189,7 +326,6 @@ fn finish_channel(
     channel_map: &mut HashMap<ChannelId, Channel>,
     id: ChannelId,
     frames: usize,
-    has_solo: bool,
     status_tx: &Sender<EngineStatus>,
 ) {
     let Some(channel) = channel_map.get_mut(&id) else {
@@ -203,12 +339,12 @@ fn finish_channel(
             forward_device_events(channel, sleep_changes, status_tx);
             apply_pan(channel, frames);
         }
-        if is_silenced(channel, has_solo) {
+        if is_silenced(channel) {
             channel.clear_buffers();
         }
     }
 
-    route_channel(channel_map, id, frames, has_solo);
+    route_channel(channel_map, id, frames);
 }
 
 /// Send a channel's device events to Godot: sleep changes, plugin parameter changes, new SFZ
@@ -315,6 +451,7 @@ pub fn mix_and_output(
     channel_ids.extend(channel_map.keys().copied());
 
     count_route_inputs(channel_map, channel_ids);
+    assign_solo_roles(channel_map, channel_ids, has_solo);
 
     // Copy pre-fader audio for pre-fader sends.
     // NOTE: the copy is taken before device processing, as it always has been.
@@ -343,9 +480,9 @@ pub fn mix_and_output(
 
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
-    // Solo only silences source channels; buses stay open so routed audio still reaches master.
+    // Silent channels are cleared. Send-only sources keep their buffer for sends to a soloed bus.
     for channel in channel_map.values_mut() {
-        if is_silenced(channel, has_solo) {
+        if is_silenced(channel) {
             channel.clear_buffers();
             continue;
         }
@@ -372,7 +509,7 @@ pub fn mix_and_output(
                 .get(&id)
                 .is_some_and(|c| !c.mix.done && c.mix.pending_inputs == 0);
             if ready {
-                finish_channel(channel_map, id, frames, has_solo, status_tx);
+                finish_channel(channel_map, id, frames, status_tx);
                 remaining -= 1;
                 progressed = true;
             }
@@ -387,7 +524,7 @@ pub fn mix_and_output(
             let Some(id) = unfinished else {
                 break;
             };
-            finish_channel(channel_map, id, frames, has_solo, status_tx);
+            finish_channel(channel_map, id, frames, status_tx);
             remaining -= 1;
         }
     }
@@ -613,6 +750,117 @@ mod tests {
         let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
         assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
         assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_group_bus_keeps_feeders_and_mutes_others() {
+        let mut other = test_channel(4, Some(1), 0.0);
+        other.buffer_left.fill(0.9);
+        other.buffer_right.fill(0.9);
+        let mut state = track_bus_master_state();
+        state.channels.insert(4, other);
+        state.channels.get_mut(&2).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
+        assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_group_bus_includes_nested_feeders() {
+        let mut track = test_channel(3, Some(4), -6.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.5);
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(2, Some(1), -6.0),
+            test_channel(4, Some(2), -6.0),
+            track,
+        ]);
+        state.channels.get_mut(&2).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0) * db_to_gain(-6.0);
+        assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_send_bus_mutes_dry_and_keeps_send() {
+        let mut source = test_channel(3, Some(1), 0.0);
+        source.buffer_left.fill(0.5);
+        source.buffer_right.fill(0.5);
+        source.send_channels.push(Send {
+            target_channel_id: 2,
+            amount_db: 0.0,
+            pre_fader: false,
+            muted: false,
+        });
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(2, Some(1), 0.0),
+            source,
+        ]);
+        state.channels.get_mut(&2).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        assert!((state.channels[&2].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((output[0] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn soloed_send_bus_drops_unrelated_sends() {
+        let mut source = test_channel(3, Some(1), 0.0);
+        source.buffer_left.fill(0.5);
+        source.buffer_right.fill(0.5);
+        source.send_channels.push(Send {
+            target_channel_id: 2,
+            amount_db: 0.0,
+            pre_fader: false,
+            muted: false,
+        });
+        source.send_channels.push(Send {
+            target_channel_id: 4,
+            amount_db: 0.0,
+            pre_fader: false,
+            muted: false,
+        });
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(2, Some(1), 0.0),
+            source,
+            test_channel(4, Some(1), 0.0),
+        ]);
+        state.channels.get_mut(&2).unwrap().solo = true;
+        mix(&mut state);
+
+        assert!((state.channels[&2].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
+    }
+
+    #[test]
+    fn soloed_group_bus_keeps_member_sends() {
+        let mut track = test_channel(3, Some(2), 0.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.5);
+        track.send_channels.push(Send {
+            target_channel_id: 4,
+            amount_db: 0.0,
+            pre_fader: false,
+            muted: false,
+        });
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(2, Some(1), 0.0),
+            track,
+            test_channel(4, Some(1), 0.0),
+        ]);
+        state.channels.get_mut(&2).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        assert!((state.channels[&2].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((state.channels[&4].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((output[0] - 1.0).abs() < 1e-4);
     }
 
     #[test]

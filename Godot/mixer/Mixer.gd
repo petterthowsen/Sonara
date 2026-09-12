@@ -97,6 +97,10 @@ func _on_project_opened(project: Project) -> void:
 
 func _on_project_closed() -> void:
 	"""Clear all channel items when project closes."""
+	if current_project:
+		for ch in current_project.channels:
+			if ch.name_changed.is_connected(_on_any_channel_renamed):
+				ch.name_changed.disconnect(_on_any_channel_renamed)
 	current_project = null
 	_clear_all_channels()
 
@@ -124,6 +128,9 @@ func _on_channel_added(channel: Channel) -> void:
 	# Now bind to channel data after _ready() has fired, with project reference
 	channel_item.bind_to_channel(channel, current_project)
 
+	if not channel.name_changed.is_connected(_on_any_channel_renamed):
+		channel.name_changed.connect(_on_any_channel_renamed)
+
 	# Apply current toggle states to the new channel
 	_apply_toggle_states_to_channel(channel_item)
 
@@ -145,6 +152,9 @@ func _on_channel_added(channel: Channel) -> void:
 
 func _on_channel_removed(channel: Channel) -> void:
 	"""Remove the MixerChannel UI element when a channel is removed."""
+	if channel.name_changed.is_connected(_on_any_channel_renamed):
+		channel.name_changed.disconnect(_on_any_channel_renamed)
+
 	var mixer_channel = find_mixer_channel_ui_for_channel(channel)
 	if mixer_channel:
 		# Remove from selection if selected
@@ -339,6 +349,11 @@ func _apply_toggle_states_to_channel(channel_item: MixerChannel) -> void:
 # ============================================================================
 # ROUTING MENU HELPERS
 # ============================================================================
+
+## Refresh routing dropdowns when any channel (usually a bus) is renamed.
+func _on_any_channel_renamed(_new_name: String) -> void:
+	_rebuild_all_routing_menus()
+
 
 func _rebuild_all_routing_menus() -> void:
 	"""Rebuild routing menus for all mixer channels."""

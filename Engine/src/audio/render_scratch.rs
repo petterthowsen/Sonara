@@ -34,6 +34,18 @@ impl Default for RenderScratch {
     }
 }
 
+/// How this channel participates in the mix when any channel is soloed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SoloRole {
+    /// Main output and every send stay in the mix.
+    #[default]
+    Full,
+    /// Only sends that reach a soloed bus stay in the mix; the dry output is muted.
+    SendOnly,
+    /// This channel contributes no audio this buffer.
+    Silent,
+}
+
 /// Per-channel mixing buffers and flags, reset by `mix_and_output` every buffer.
 #[derive(Debug, Default)]
 pub struct MixBuffers {
@@ -50,6 +62,8 @@ pub struct MixBuffers {
     pub is_route_target: bool,
     /// Processed and routed onward this buffer.
     pub done: bool,
+    /// Solo participation for this buffer (`Full` when nothing is soloed).
+    pub solo_role: SoloRole,
 }
 
 impl MixBuffers {
