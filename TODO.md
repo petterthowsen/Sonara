@@ -55,16 +55,17 @@
 
 ### Built-in Devices
 
-- [ ] Basic MVP Builins
-  - [x] Remove old Oscilator
-  - [x] PolySynth Device
-  - [x] Spectrum Analyzer
-    - [ ] Stereo Combined mode or layered L/R or M/S
-  - [ ] Filter Device: Resonant Filter with LP/BP/HP modes
-  - [ ] EQ: 10-band parametic equalizer with adjustable type, freq, gain and Q. Built-in spectrum analyzer
-  - [ ] Stereo Delay with time (ms) OR tempo control, feedback amount and wet/dry mix %
-  - [ ] Simple Reverb plugin freeverb style
-  - [ ] Compressor
+- [x] PolySynth Device
+    - [ ] 
+- [x] Spectrum Analyzer
+- [ ] L/R and M/S modes
+- [ ] Sampler and Drum Machine devices
+- [ ] Reverb
+- [ ] EQ: Parametric, built-in spectrum
+- [ ] Limiter
+- [ ] Compressor
+- [ ] Saturator
+
 
 ---
 
@@ -150,3 +151,9 @@
 
 - [ ] Modulation
   - [ ] Basic modulation, similar to bitwig, allow any channel and device parameter to be modulatable
+
+
+### Quality of Life / Polish
+
+- [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders.
+- [ ] Assets: when discovering assets, generate a "essential name" for an asset, "Cello-Sec-PERF" becomes "Cello"
