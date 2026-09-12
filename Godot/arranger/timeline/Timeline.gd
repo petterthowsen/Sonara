@@ -49,6 +49,8 @@ var _drag_current_tick_delta: int = 0
 var _drag_pending_track_delta: int = 0
 var clip_clipboard: ClipSelection = null
 
+@export var selection_boundary_color: Color = Color(0.4, 0.8, 1.0, 0.6)
+
 func _ready():
 	clip_selection_manager.set_context(self, grid_helper)
 	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
@@ -269,33 +271,56 @@ func _clear_all_tracks() -> void:
 	print("[Timeline] All timeline tracks cleared")
 
 
+## Left-click empty space: Ctrl/Cmd starts a time-range gesture; otherwise set the playhead.
+## Right-click empty space clears clip selection and hides the time-range lines.
 func _gui_input(event: InputEvent) -> void:
-	""" handle left-click empty area to set playhead position """
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		var local_pos = get_local_mouse_position()
-		if event.pressed:
-			var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
-			if additive and clip_selection_manager:
-				clip_selection_manager.start_box_selection(local_pos)
-				accept_event()
-				return
+	if not event is InputEventMouseButton:
+		return
 
-			if clip_selection_manager:
-				clip_selection_manager.clear_selection()
+	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if clip_selection_manager:
+			clip_selection_manager.clear_selection()
+		accept_event()
+		return
 
-			var click_ticks = pixels_to_ticks(local_pos.x)
-			var snapped_ticks = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
-			Sonara.editor.set_playhead(snapped_ticks)
-			accept_event()
-		else:
-			if clip_selection_manager and clip_selection_manager.is_box_selecting:
-				var instances = _get_clip_instances_in_rect(clip_selection_manager.box_rect)
-				clip_selection_manager.end_box_selection(instances)
-				accept_event()
-	elif event is InputEventMouseMotion:
-		if clip_selection_manager and clip_selection_manager.is_box_selecting:
-			clip_selection_manager.update_box_selection(get_local_mouse_position())
-			accept_event()
+	if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
+		return
+
+	var local_pos = get_local_mouse_position()
+	var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
+	if additive and clip_selection_manager:
+		clip_selection_manager.begin_additive_gesture(local_pos)
+		accept_event()
+		return
+
+	if clip_selection_manager:
+		clip_selection_manager.clear_selection()
+
+	var click_ticks = pixels_to_ticks(local_pos.x)
+	var snapped_ticks = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
+	Sonara.editor.set_playhead(snapped_ticks)
+	accept_event()
+
+
+## Keep Ctrl/Cmd click-or-drag tracking the mouse even when it travels over clips.
+func _input(event: InputEvent) -> void:
+	if not clip_selection_manager:
+		return
+	if not clip_selection_manager.is_box_selecting and not clip_selection_manager.is_additive_pending:
+		return
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		clip_selection_manager.finish_additive_gesture(get_local_mouse_position())
+		accept_event()
+		return
+
+	if not is_visible_in_tree():
+		return
+
+	if event is InputEventMouseMotion:
+		clip_selection_manager.update_additive_gesture(get_local_mouse_position())
+		accept_event()
+
 
 # ============================================================================
 # ZOOM AND SCROLL
@@ -465,7 +490,8 @@ func get_selected_clip_instances() -> Array[ClipInstance]:
 	return []
 
 
-func _get_clip_instances_in_rect(rect: Rect2) -> Array[ClipInstance]:
+## Return clip instances whose on-timeline rect intersects `rect`.
+func get_clip_instances_in_rect(rect: Rect2) -> Array[ClipInstance]:
 	var hits: Array[ClipInstance] = []
 	if rect.size.length() == 0:
 		return hits
@@ -779,6 +805,7 @@ func copy_selection_to_clipboard() -> void:
 		print("[Timeline] Copy skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
+	_apply_time_range_to_clipboard(clip_clipboard)
 	print("[Timeline] Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
 
 
@@ -788,6 +815,7 @@ func cut_selection_to_clipboard() -> void:
 		print("[Timeline] Cut skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
+	_apply_time_range_to_clipboard(clip_clipboard)
 	var selected = clip_selection_manager.get_selected_instances()
 	var cmds: Array[Command] = []
 	for inst in selected:
@@ -801,16 +829,25 @@ func cut_selection_to_clipboard() -> void:
 	print("[Timeline] Cut %d clips to clipboard" % selected.size())
 
 
+## Paste clipboard clips at the selection start (or playhead). Refuses if they would overlap.
 func paste_clipboard() -> void:
 	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
-	var new_instances = paste_clipboard_at(playhead_ticks)
+	var target_tick := clip_selection_manager.get_paste_tick(playhead_ticks) if clip_selection_manager else playhead_ticks
+	if clip_clipboard == null or clip_clipboard.is_empty():
+		print("[Timeline] Paste skipped - clipboard empty")
+		return
+	if _clipboard_placement_blocked(clip_clipboard, target_tick):
+		print("[Timeline] Paste skipped - no adequate space")
+		return
+	var new_instances = paste_clipboard_at(target_tick)
 	if new_instances.is_empty():
 		print("[Timeline] Paste skipped - clipboard empty")
 	else:
-		print("[Timeline] Pasted %d clips at playhead %d" % [new_instances.size(), playhead_ticks])
+		print("[Timeline] Pasted %d clips at tick %d" % [new_instances.size(), target_tick])
 
 
-func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true) -> Array[ClipInstance]:
+## Insert `source` (or the clipboard) at `target_tick`. Returns [] when blocked or empty.
+func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste") -> Array[ClipInstance]:
 	if not Sonara.editor or not Sonara.editor.project:
 		push_warning("[Timeline] Cannot paste clips - no active project")
 		return []
@@ -822,40 +859,12 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	if source == null or source.is_empty():
 		return []
 
+	if _clipboard_placement_blocked(source, target_tick):
+		return []
+
 	var delta_ticks := target_tick - source.start_tick
-	
-	# First, create temporary instances to check for collisions and clamp if needed
-	var temp_instances: Array[ClipInstance] = []
-	for original_inst in source.get_sorted_by_start():
-		if not original_inst:
-			continue
-		var target_track: Track = original_inst.track
-		if not target_track or target_track.type == Track.TrackType.FOLDER:
-			continue
-		var clip_ref: Clip = original_inst.clip
-		if not clip_ref:
-			continue
-
-		var new_start = max(0, original_inst.start_ticks + delta_ticks)
-		
-		# Create a temporary instance for collision checking
-		var temp_inst = ClipInstance.new()
-		temp_inst.clip = clip_ref
-		temp_inst.track = target_track
-		temp_inst.start_ticks = new_start
-		temp_inst.duration_ticks = original_inst.duration_ticks
-		temp_instances.append(temp_inst)
-	
-	# Clamp the delta to avoid collisions
-	var clamped_delta = _clamp_instances_tick_delta(temp_instances, 0)
-	if clamped_delta != 0:
-		# Need to adjust positions
-		for temp_inst in temp_instances:
-			temp_inst.start_ticks += clamped_delta
-		delta_ticks += clamped_delta
-	
-	# Proceed with actual paste using the clamped delta
 	var new_instances: Array[ClipInstance] = []
+	var cmds: Array[Command] = []
 	for original_inst in source.get_sorted_by_start():
 		if not original_inst:
 			continue
@@ -867,21 +876,27 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 			continue
 
 		var new_start = max(0, original_inst.start_ticks + delta_ticks)
-		var new_instance = target_track.create_clip_instance(clip_ref, new_start, original_inst.duration_ticks)
-		new_instance.set_clip_offset(original_inst.clip_offset)
-		new_instance.set_loop_enabled(original_inst.loop_enabled)
-		new_instance.loop_start_ticks = original_inst.loop_start_ticks
-		new_instance.loop_length_ticks = original_inst.loop_length_ticks
-		new_instance.transpose = original_inst.transpose
-		new_instance.gain_offset = original_inst.gain_offset
-		new_instance.muted = original_inst.muted
-		new_instance.fade_in_ticks = original_inst.fade_in_ticks
-		new_instance.fade_out_ticks = original_inst.fade_out_ticks
-		new_instance.color_override = original_inst.color_override
+		var new_instance := ClipInstance.new("", clip_ref.id)
+		new_instance.clip = clip_ref
+		new_instance.start_ticks = new_start
+		new_instance.duration_ticks = original_inst.duration_ticks
+		new_instance.copy_overrides_from(original_inst)
 		new_instances.append(new_instance)
+
+		var cmd := ClipInstanceCreateCommand.new(
+			target_track, clip_ref, new_start, original_inst.duration_ticks,
+			null, false, new_instance
+		)
+		cmd.name = "%s Clip" % action_name
+		cmds.append(cmd)
 
 	if new_instances.is_empty():
 		return []
+
+	if cmds.size() == 1:
+		HistoryUtil.execute(cmds[0])
+	else:
+		HistoryUtil.execute(MacroCommand.new("%s Clips" % action_name, cmds))
 
 	if update_selection and clip_selection_manager:
 		clip_selection_manager.select_instances(new_instances)
@@ -891,6 +906,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	return new_instances
 
 
+## Duplicate selected clips at the selection end. Refuses if they would overlap.
 func duplicate_selection() -> void:
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		return
@@ -898,14 +914,37 @@ func duplicate_selection() -> void:
 	var selection_clone = clip_selection_manager.selection.clone()
 	if selection_clone.is_empty():
 		return
+	_apply_time_range_to_clipboard(selection_clone)
 
 	var previous_clipboard = clip_clipboard
 	clip_clipboard = selection_clone
-	var new_instances = paste_clipboard_at(selection_clone.end_tick, selection_clone, true)
+	var target_tick := clip_selection_manager.get_duplicate_tick(selection_clone.end_tick)
+	if _clipboard_placement_blocked(selection_clone, target_tick):
+		clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
+		print("[Timeline] Duplicate skipped - no adequate space")
+		return
+	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate")
 	clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
 
 	if not new_instances.is_empty():
-		print("[Timeline] Duplicated %d clips starting at %d" % [new_instances.size(), selection_clone.end_tick])
+		print("[Timeline] Duplicated %d clips starting at %d" % [new_instances.size(), target_tick])
+
+
+## True when placing `source` at `target_tick` would overlap an existing clip.
+func _clipboard_placement_blocked(source: ClipSelection, target_tick: int) -> bool:
+	if source == null or source.is_empty():
+		return false
+	var delta_ticks := target_tick - source.start_tick
+	for original_inst in source.get_sorted_by_start():
+		if not original_inst or not original_inst.clip:
+			continue
+		var target_track: Track = original_inst.track
+		if not target_track or target_track.type == Track.TrackType.FOLDER:
+			continue
+		var new_start := maxi(0, original_inst.start_ticks + delta_ticks)
+		if target_track.has_clip_overlap(new_start, original_inst.duration_ticks):
+			return true
+	return false
 
 
 func move_selection_by_ticks(delta_ticks: int) -> void:
@@ -984,6 +1023,15 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 	_refresh_tracks_for_instances(selected)
 	queue_redraw()
 	print("[Timeline] Moved selection by %d track(s)" % allowed_delta)
+
+
+## Stamp the visible time-range onto a clipboard so paste/duplicate keep empty lead-in.
+func _apply_time_range_to_clipboard(clipboard: ClipSelection) -> void:
+	if not clipboard or not clip_selection_manager or not clip_selection_manager.range_visible:
+		return
+	clipboard.start_tick = clip_selection_manager.range_start_tick
+	if clip_selection_manager.range_has_end:
+		clipboard.end_tick = clip_selection_manager.range_end_tick
 
 
 func _refresh_tracks_for_instances(instances: Array[ClipInstance]) -> void:
@@ -1099,13 +1147,6 @@ func _draw() -> void:
 		var rect := clip_selection_manager.box_rect.abs()
 		draw_rect(rect, theme_fill, true)
 		draw_rect(rect, theme_stroke, false, 2.0)
-
-	var bounds = clip_selection_manager.get_selection_bounds()
-	if bounds.x != bounds.y:
-		var start_x = ticks_to_pixels(bounds.x)
-		var end_x = ticks_to_pixels(bounds.y)
-		draw_line(Vector2(start_x, 0), Vector2(start_x, size.y), theme_stroke, 2.0)
-		draw_line(Vector2(end_x, 0), Vector2(end_x, size.y), theme_stroke, 2.0)
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:

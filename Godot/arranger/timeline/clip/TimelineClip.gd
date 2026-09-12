@@ -4,6 +4,7 @@ class_name TimelineClip extends Control
 
 # Signals
 signal select_requested(clip_ui: TimelineClip, add_to_selection: bool)  # Request to select this clip; add_to_selection = shift held
+signal exclusive_click_requested(clip_ui: TimelineClip)  # Plain click finished without a drag
 signal clip_move_requested(clip_instance: TimelineClip, new_start_ticks: int)
 signal drag_started(clip_ui: TimelineClip, clip_instance: ClipInstance)  # Drag between tracks initiated
 signal drag_moved(clip_ui: TimelineClip, global_position: Vector2)  # Drag position update
@@ -35,6 +36,7 @@ var is_hovered: bool = false
 
 # Drag state
 var is_dragging: bool = false
+var _press_was_additive: bool = false
 var drag_start_pos: Vector2 = Vector2.ZERO
 var drag_start_ticks: int = 0
 var drag_threshold: float = 10.0  # pixels before drag activates
@@ -242,8 +244,16 @@ func _update_cursor_for_position(local_pos: Vector2) -> void:
 # ============================================================================
 # INPUT HANDLING
 # ============================================================================
+## Start a Ctrl/Cmd click-or-drag: this clip is already selected; a move starts a box-select.
+func _begin_additive_gesture() -> void:
+	if not timeline or not timeline.clip_selection_manager:
+		return
+	timeline.clip_selection_manager.begin_additive_gesture(
+		timeline.get_local_mouse_position(), clip_instance)
+
+
+## Handle mouse input for selection, dragging, and resizing.
 func _gui_input(event: InputEvent) -> void:
-	"""Handle mouse input for selection, dragging, and resizing."""
 	# Update cursor based on mouse position
 	if event is InputEventMouseMotion:
 		var local_pos = get_local_mouse_position()
@@ -272,10 +282,15 @@ func _gui_input(event: InputEvent) -> void:
 					accept_event()
 				else:
 					grab_focus()
-					# Request selection with modifier awareness
-					var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
-					if event.shift_pressed and not additive:
-						additive = true
+					# Ctrl/Cmd: toggle immediately; a drag starts a box-select instead of moving the clip.
+					if event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select"):
+						_press_was_additive = true
+						select_requested.emit(self, true)
+						_begin_additive_gesture()
+						accept_event()
+						return
+					var additive = event.shift_pressed
+					_press_was_additive = additive
 					select_requested.emit(self, additive)
 					# Prepare for drag (don't start yet - wait for threshold)
 					is_dragging = true
@@ -307,6 +322,8 @@ func _gui_input(event: InputEvent) -> void:
 					if drag_activated and clip_instance:
 						# Emit drag ended for both horizontal and cross-track drags
 						drag_ended.emit(self, get_global_mouse_position())
+					elif not drag_activated and not _press_was_additive:
+						exclusive_click_requested.emit(self)
 					is_dragging = false
 					drag_activated = false
 					is_cross_track_drag = false

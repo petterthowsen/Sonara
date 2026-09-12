@@ -77,29 +77,21 @@ func _gui_input(event: InputEvent) -> void:
 	
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			# Check if we clicked on a clip
-			var clicked_on_clip = false
-			for clip_instance in clip_instances:
-				if clip_instance and clip_instance.get_rect().has_point(event.position):
-					clicked_on_clip = true
-					break
-
-			if not clicked_on_clip:
-				# Clicked on empty area - deselect all (in this track and others)
-				#deselect other tracks
-
-				if timeline:
+			if not _is_position_on_clip(event.position):
+				var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
+				# Ctrl/Cmd empty-click is a time-range gesture on Timeline; don't also move the playhead.
+				if timeline and not additive:
 					var click_ticks = timeline.pixels_to_ticks(event.position.x)
-
-					# Snap to grid (use timeline's grid_helper)
 					if timeline.grid_helper:
 						click_ticks = timeline.grid_helper.snap_ticks(click_ticks)
-
 					empty_area_clicked.emit(click_ticks, event.position.x)
 
-				# Double-click creates a clip
 				if event.double_click:
 					_on_double_click(event.position)
+		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			if not _is_position_on_clip(event.position) and timeline and timeline.clip_selection_manager:
+				timeline.clip_selection_manager.clear_selection()
+				accept_event()
 
 
 # ============================================================================
@@ -311,6 +303,14 @@ func _draw_grid() -> void:
 # ============================================================================
 # INPUT HANDLING
 # ============================================================================
+## True when `local_pos` hits a clip UI on this lane.
+func _is_position_on_clip(local_pos: Vector2) -> bool:
+	for clip_ui in clip_instances:
+		if clip_ui and clip_ui.get_rect().has_point(local_pos):
+			return true
+	return false
+
+
 func _on_double_click(pos: Vector2) -> void:
 	"""Handle double-click to create a clip instance."""
 	if not timeline or not Sonara or not Sonara.editor or not Sonara.editor.project:

@@ -121,6 +121,22 @@ func set_loop_enabled(enabled: bool) -> void:
 		instance_modified.emit()
 
 
+## Copy instance-specific playback overrides from `other` (not identity or position).
+func copy_overrides_from(other: ClipInstance) -> void:
+	if other == null:
+		return
+	clip_offset = other.clip_offset
+	loop_enabled = other.loop_enabled
+	loop_start_ticks = other.loop_start_ticks
+	loop_length_ticks = other.loop_length_ticks
+	transpose = other.transpose
+	gain_offset = other.gain_offset
+	muted = other.muted
+	fade_in_ticks = other.fade_in_ticks
+	fade_out_ticks = other.fade_out_ticks
+	color_override = other.color_override
+
+
 func get_end_ticks() -> int:
 	"""Get the end position on the timeline."""
 	return start_ticks + duration_ticks

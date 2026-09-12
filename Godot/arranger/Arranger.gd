@@ -16,6 +16,8 @@
 #  Tracks can have independently varying heights, these must be synced to the height of visual track grid in the timeline (and midi/audio clips)
 class_name Arranger extends VBoxContainer
 
+const SelectionBoundsOverlayScript := preload("res://arranger/timeline/SelectionBoundsOverlay.gd")
+
 var logger : Log = Log.make("Arranger")
 
 # ArrangerTop
@@ -132,6 +134,15 @@ func _ready():
 
 	# Connect to Timeline signals
 	timeline.clips_selected.connect(_on_timeline_clips_selected)
+	if timeline_panel:
+		timeline_panel.gui_input.connect(_on_timeline_panel_gui_input)
+
+	if ruler:
+		ruler.enable_time_range_gestures = true
+		ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
+		ruler.box_select_started.connect(_on_ruler_box_select_started)
+
+	_ensure_selection_bounds_overlay()
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
@@ -653,6 +664,20 @@ func _unbind_from_project() -> void:
 # HELPERS
 # ============================================================================
 
+## Draw time-range boundaries on the timeline overlay so they sit with the playhead.
+func _ensure_selection_bounds_overlay() -> void:
+	if not overlay or not timeline:
+		return
+	if overlay.get_node_or_null("SelectionBounds"):
+		return
+	var bounds := SelectionBoundsOverlayScript.new()
+	bounds.name = "SelectionBounds"
+	overlay.add_child(bounds)
+	overlay.move_child(bounds, 0)
+	bounds.line_color = timeline.selection_boundary_color
+	bounds.bind(timeline.clip_selection_manager, grid_helper)
+
+
 ## Keep the scroll child at least as tall as the viewport and as the stacked tracks.
 func _sync_arranger_content_height() -> void:
 	if not v_scroll or not h_split:
@@ -770,14 +795,38 @@ func _on_start_position_changed(ticks: int) -> void:
 		ruler.set_start_position(ticks)
 
 
+## Handle ruler click/drag: move start position and seek the playhead together.
 func _on_ruler_start_position_requested(ticks: int) -> void:
-	"""Handle ruler click to set start position and seek to it."""
 	if current_project:
 		current_project.set_start_position(ticks)
-		# Also seek playhead to the new start position
 		if Sonara and Sonara.editor:
 			Sonara.editor.set_playhead(ticks)
 		print("[Arranger] Set start position to tick %d and seeked playhead" % ticks)
+
+
+## Ctrl/Cmd click on the ruler sets the arranger time-range start (no playhead move).
+func _on_ruler_selection_start_requested(ticks: int) -> void:
+	if timeline and timeline.clip_selection_manager:
+		timeline.clip_selection_manager.set_range_start(ticks)
+		print("[Arranger] Ruler set selection start to tick %d" % ticks)
+
+
+## Ctrl/Cmd drag on the ruler starts a box select that spans every track lane.
+func _on_ruler_box_select_started(content_x: float) -> void:
+	if not timeline or not timeline.clip_selection_manager:
+		return
+	timeline.clip_selection_manager.start_box_selection(Vector2(content_x, 0.0), true)
+	var current_x := timeline.get_local_mouse_position().x
+	timeline.clip_selection_manager.update_box_selection(Vector2(current_x, 0.0))
+	print("[Arranger] Ruler box-select started at x=%.1f" % content_x)
+
+
+## Right-click empty timeline chrome (outside track lanes) hides the time range.
+func _on_timeline_panel_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if timeline and timeline.clip_selection_manager:
+			timeline.clip_selection_manager.clear_selection()
+		accept_event()
 
 
 func _on_timeline_clips_selected(clips: Array[ClipInstance], multi_track: bool) -> void:

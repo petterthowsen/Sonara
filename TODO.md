@@ -97,38 +97,17 @@
 
 ### Arranger & Timeline
 
-- [ ] Arranger Timeline
-  - [ ] Cut/Copy/Paste/Duplicate clips
-  - [ ] Box select should snap to grid
-  - [ ] When box selecting over clips, select and un-select clips during the drag instead of at the end of the drag
-
-- [ ] TimelineHeader
-  - [x] TimelineHeader should be vertically resizable
-  - [ ] Auxiliary Rulers/"Tracks" (real-time ruler, chord track, and marking tracks)
-  - [ ] Ruler
-    - [ ] Click-and-drag enters multidimension zoom mode (moving vertically zooms, horizontally scrolls), or simply emit a signal and let Arranger/Timeline handle it
+- Arranger Timeline
+- TimelineHeader
+  - Ruler
+    - [ ] Auxiliary Rulers/"Tracks" (real-time ruler, chord track, and marking tracks)
 - [ ] Arranger: Tracks
-  - [x] TrackItem color should inherit from bound channel
-  - [x] Reorderable tracks
-  - [x] Folder tracks
-  - [x] Improve drag-and-drop reordering UX by placing the dragged TrackItem as you move it
-    - [x] ESC cancels and reverts
-    - [x] Timeline track/clips stay in sync while dragging
-  - [x] Bug: when all tracks are taller than the container (need to scroll), resizing tracks by dragging the separator is unstable
-  - [ ] Right-click popup menu with:
-    - [ ] Rename track
-    - [ ] Change track color
+  - Trackitem context menu
+    - [x] Change track color
     - [ ] Duplicate track
 - [ ] Duplicate Track
-- [X] Group / Folder Tracks
-    - [X] Folder tracks group tracks in the arranger/tracklist but do not create a dedicated channel; group tracks do
-    - [X] Group tracks (folders with a channel) should automatically route children to its bus
-    - [X] TrackItem context menu: Link track to a bus (dropdown; first item " - None - "; second item is "New Bus" which creates and assigns a bus). Automatically updates all children to route to that bus and links the track to the bus and syncs color and name.
-- [ ] Allow dragging multiple tracks at the same time (drag all selected tracks).
 
 ### Clips
-
-- [ ] Multi-select clips with Shift+click < change this to ctrl instead of shift
 
 - [/] implement TimelineClip context menu, add to Timeline scene, TLC can emit request_show_context_menu, or Timeline can simply listen for gui input on clip? depends on current architecture.
   - [ ] SmartLineEdit for clip name

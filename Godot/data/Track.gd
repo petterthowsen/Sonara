@@ -555,6 +555,17 @@ func create_clip_instance(clip: Clip, start_ticks: int, duration_ticks: int = -1
 	return instance
 
 
+## True when `[start_ticks, start_ticks + duration_ticks)` overlaps any instance on this track.
+func has_clip_overlap(start_ticks: int, duration_ticks: int, exclude: Array[ClipInstance] = []) -> bool:
+	var end_ticks := start_ticks + duration_ticks
+	for other in clip_instances:
+		if other == null or exclude.has(other):
+			continue
+		if start_ticks < other.start_ticks + other.duration_ticks and other.start_ticks < end_ticks:
+			return true
+	return false
+
+
 func remove_clip_instance(instance: ClipInstance) -> void:
 	"""Remove a clip instance from this track."""
 	var idx = clip_instances.find(instance)

@@ -38,8 +38,20 @@ class_name Ruler extends Control
 var grid_helper: GridHelper = GridHelper.new()
 var start_position_ticks: int = 0
 
-# Signal when user clicks to set start position
+## Click or drag on the ruler to move start position (and playhead, via listeners).
 signal start_position_requested(ticks: int)
+## Ctrl/Cmd click without drag: set the arranger time-range start.
+signal selection_start_requested(ticks: int)
+## Ctrl/Cmd drag: begin a full-height box select at timeline content X.
+signal box_select_started(content_x: float)
+
+const ADDITIVE_DRAG_THRESHOLD := 6.0
+## When true, Ctrl/Cmd click-drag on this ruler drives arranger time-range selection.
+@export var enable_time_range_gestures: bool = false
+var _additive_pending: bool = false
+var _additive_press_pos: Vector2 = Vector2.ZERO
+var _scrubbing: bool = false
+var _last_scrub_ticks: int = -1
 
 enum VerticalAlignment { TOP, BOTTOM }
 
@@ -177,27 +189,93 @@ func _draw_start_position_arrow() -> void:
 		var line_height = maxf(10.0, size.y * 0.5)
 		draw_line(Vector2(start_pixel_x, size.y - arrow_height), Vector2(start_pixel_x, size.y - line_height), start_position_color, 1.0, true)
 
+## Handle ruler clicks to set start position, or Ctrl/Cmd for time-range gestures.
 func _gui_input(event: InputEvent) -> void:
-	"""Handle ruler clicks to set start position (snapped to grid)."""
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not grid_helper:
 			return
 
-		# Get click position relative to ruler (includes offset_x area)
-		var click_x = event.position.x
+		if enable_time_range_gestures and (event.ctrl_pressed or event.meta_pressed):
+			_additive_pending = true
+			_additive_press_pos = event.position
+			get_tree().root.set_input_as_handled()
+			return
 
-		# Adjust for offset_x to get position in timeline coordinates
-		var timeline_screen_x = click_x - offset_x
-
-		# Convert from screen coordinates to timeline pixels (accounting for scroll)
-		var timeline_pixel_x = grid_helper.scroll_position + timeline_screen_x
-
-		# Convert timeline pixel position to ticks
-		var clicked_ticks = grid_helper.pixels_to_ticks(timeline_pixel_x)
-
-		# Snap to nearest grid line (bar, beat, or subdivision)
-		var snapped_ticks = grid_helper.snap_ticks(clicked_ticks)
-
-		# Emit signal to request start position change
-		start_position_requested.emit(snapped_ticks)
+		_begin_scrub(event.position.x)
 		get_tree().root.set_input_as_handled()
+
+
+## Finish a pending Ctrl/Cmd click, hand a drag to box-select, or scrub playhead/start.
+func _input(event: InputEvent) -> void:
+	if _additive_pending:
+		_handle_additive_input(event)
+		return
+
+	if _scrubbing:
+		_handle_scrub_input(event)
+
+
+## Resolve a pending Ctrl/Cmd click or start a full-height box select after a drag.
+func _handle_additive_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		selection_start_requested.emit(_snapped_ticks_from_local(_additive_press_pos.x))
+		_additive_pending = false
+		get_tree().root.set_input_as_handled()
+		return
+
+	if not is_visible_in_tree():
+		_additive_pending = false
+		return
+
+	if event is InputEventMouseMotion:
+		var local_pos := get_local_mouse_position()
+		if local_pos.distance_to(_additive_press_pos) > ADDITIVE_DRAG_THRESHOLD:
+			box_select_started.emit(_content_x_from_local(_additive_press_pos.x))
+			_additive_pending = false
+			get_tree().root.set_input_as_handled()
+
+
+## Update start/playhead while the mouse is held, then end the scrub on release.
+func _handle_scrub_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_scrubbing = false
+		_last_scrub_ticks = -1
+		get_tree().root.set_input_as_handled()
+		return
+
+	if not is_visible_in_tree():
+		_scrubbing = false
+		_last_scrub_ticks = -1
+		return
+
+	if event is InputEventMouseMotion:
+		_emit_scrub_ticks(get_local_mouse_position().x)
+		get_tree().root.set_input_as_handled()
+
+
+## Start a click-drag that moves start position and playhead together.
+func _begin_scrub(local_x: float) -> void:
+	_scrubbing = true
+	_last_scrub_ticks = -1
+	_emit_scrub_ticks(local_x)
+
+
+## Emit start_position_requested only when snapped ticks change.
+func _emit_scrub_ticks(local_x: float) -> void:
+	var ticks := _snapped_ticks_from_local(local_x)
+	if ticks == _last_scrub_ticks:
+		return
+	_last_scrub_ticks = ticks
+	start_position_requested.emit(ticks)
+
+
+## Convert a ruler-local X into timeline content pixels (scroll + offset accounted for).
+func _content_x_from_local(local_x: float) -> float:
+	return grid_helper.scroll_position + local_x - offset_x
+
+
+## Snap a ruler-local X to the nearest grid tick, never before 0.
+func _snapped_ticks_from_local(local_x: float) -> int:
+	if not grid_helper:
+		return 0
+	return maxi(grid_helper.snap_ticks(grid_helper.pixels_to_ticks(_content_x_from_local(local_x))), 0)
