@@ -1,0 +1,45 @@
+[gd_scene format=3 uid="uid://cmpxxp0i58kwh"]
+
+[ext_resource type="Script" uid="uid://difiv46detiig" path="res://devices/container/NestedDeviceList.gd" id="1_5o2fh"]
+[ext_resource type="PackedScene" uid="uid://boiwqcg0flbqw" path="res://devices/DeviceContextMenu.tscn" id="2_qnniy"]
+
+[node name="NestedDeviceList" type="Control" unique_id=1677752877]
+custom_minimum_size = Vector2(200, 120)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_5o2fh")
+
+[node name="ScrollContainer" type="ScrollContainer" parent="." unique_id=78814694]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+horizontal_scroll_mode = 2
+vertical_scroll_mode = 0
+
+[node name="Devices" type="HBoxContainer" parent="ScrollContainer" unique_id=807593262]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="EmptyHint" type="Label" parent="." unique_id=815281041]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Drop devices here"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="DeviceContextMenu" parent="." unique_id=93891821 instance=ExtResource("2_qnniy")]
+visible = false

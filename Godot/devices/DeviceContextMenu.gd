@@ -7,6 +7,11 @@ class_name DeviceContextMenu extends PopupPanel
 
 var device : DeviceInstance = null
 
+func _enter_tree() -> void:
+	# Packed scene is visible for editor authoring; instances must start hidden.
+	hide()
+
+
 func _ready() -> void:
 	remove.pressed.connect(_on_remove_pressed)
 

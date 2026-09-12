@@ -8,6 +8,7 @@ class_name DeviceAssetProvider extends AssetProvider
 ## Map builtin device IDs to Panel view PackedScenes
 const BUILTIN_PANEL_SCENES = {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
+	"sonara.builtin.layer": preload("res://devices/builtin/LayerDefaultView.tscn"),
 }
 
 ## Map builtin device IDs to Large view PackedScenes
@@ -316,6 +317,10 @@ func _on_builtin_info_received(args: Array) -> void:
 				param.is_logarithmic = true
 		device.add_parameter(param)
 
+	if idx < args.size():
+		device.is_container = int(args[idx]) != 0
+		idx += 1
+
 	# Register Panel view if available
 	if BUILTIN_PANEL_SCENES.has(dev_id):
 		device.register_panel_view(BUILTIN_PANEL_SCENES[dev_id])
@@ -491,8 +496,8 @@ func _device_from_cache_data(data: Dictionary) -> Device:
 	device.version = data.get("version", "1.0")
 	device.description = data.get("description", "")
 	device.author = data.get("author", "")
-	device.accepts_midi = data.get("accepts_midi", false)
-	device.audio_in_channels = data.get("audio_in_channels", 2)
-	device.audio_out_channels = data.get("audio_out_channels", 2)
+	device.accepts_midi = bool(data.get("accepts_midi", false))
+	device.audio_in_channels = int(data.get("audio_in_channels", 2))
+	device.audio_out_channels = int(data.get("audio_out_channels", 2))
 	
 	return device

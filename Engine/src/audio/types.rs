@@ -691,23 +691,20 @@ impl Channel {
         }
     }
 
-    /// Process channel audio through device chain (instruments or effects)
-    /// Devices process on interleaved stereo buffers with alternating input/output
-    /// Returns Vec of (device_position, is_sleeping) for devices whose sleep state changed
-    pub fn process_device_chain(&mut self, sample_count: usize) -> Vec<(usize, bool)> {
+    /// Process channel audio through the top-level device chain.
+    /// Returns `(device_path, is_sleeping)` for devices whose sleep state changed.
+    pub fn process_device_chain(
+        &mut self,
+        sample_count: usize,
+    ) -> Vec<(super::devices::DevicePath, bool)> {
         if self.devices.is_empty() {
             return vec![];
         }
 
-        // Track sleep state changes
-        let mut sleep_state_changes: Vec<(usize, bool)> = Vec::new();
+        let has_input_activity =
+            super::devices::has_audio_signal(&self.buffer_left[..sample_count])
+                || super::devices::has_audio_signal(&self.buffer_right[..sample_count]);
 
-        // Check for audio activity in input buffer (for sleep detection)
-        let has_input_activity = super::devices::has_audio_signal(&self.buffer_left[..sample_count])
-            || super::devices::has_audio_signal(&self.buffer_right[..sample_count]);
-
-        // Send scheduled MIDI events to all devices before processing audio
-        // MIDI events wake devices immediately
         if !self.scheduled_midi_events.is_empty() {
             for event in &self.scheduled_midi_events {
                 use super::midi_types::MidiMessageType;
@@ -716,114 +713,64 @@ impl Channel {
                     MidiMessageType::NoteOn => {
                         let is_note_on = event.velocity > 0;
                         for device in self.devices.iter_mut() {
-                            device.mark_activity(); // Wake device on MIDI input
-                            device.send_midi_event(event.note, event.velocity, is_note_on, event.frame_offset);
+                            device.mark_activity();
+                            device.send_midi_event(
+                                event.note,
+                                event.velocity,
+                                is_note_on,
+                                event.frame_offset,
+                            );
                         }
                     }
                     MidiMessageType::NoteOff => {
                         for device in self.devices.iter_mut() {
-                            device.mark_activity(); // Wake device on MIDI input
+                            device.mark_activity();
                             device.send_midi_event(event.note, 0, false, event.frame_offset);
                         }
                     }
-                    _ => {
-                        // TODO: Handle other MIDI message types (CC, aftertouch, etc.)
-                    }
+                    _ => {}
                 }
             }
         }
 
-        // CRITICAL: Clear device buffers to prevent stale data from previous frames
-        // These buffers are allocated for max_buffer_size but only sample_count is active
         let interleaved_count = sample_count * 2;
         self.device_input_buffer[..interleaved_count].fill(0.0);
         self.device_output_buffer[..interleaved_count].fill(0.0);
 
-        // Prepare input buffer (convert L/R to interleaved) with SIMD optimization
         interleave_stereo(
             &self.buffer_left[..sample_count],
             &self.buffer_right[..sample_count],
             &mut self.device_input_buffer[..sample_count * 2],
         );
 
-        // Process through device chain, alternating between buffers
-        for (idx, device) in self.devices.iter_mut().enumerate() {
-            // Check if device is sleeping - skip expensive processing if so
-            if device.is_sleeping() {
-                // Sleeping device: pass audio through unchanged for effects, silence for instruments
-                if idx % 2 == 0 {
-                    // Copy input to output (pass through)
-                    self.device_output_buffer[..interleaved_count].copy_from_slice(&self.device_input_buffer[..interleaved_count]);
-                } else {
-                    // Copy input to output (pass through)
-                    self.device_input_buffer[..interleaved_count].copy_from_slice(&self.device_output_buffer[..interleaved_count]);
-                }
-                // BUG: Sleeping devices never update sleep state, so they can't detect if they should stay awake
-                // This is intentional - devices wake ONLY via mark_activity() from MIDI/params
-                // They don't wake from audio activity alone
-                continue;
-            }
+        let (result_in_output, sleep_changes) = super::devices::container::process_serial_chain(
+            &mut self.devices,
+            &mut self.device_input_buffer,
+            &mut self.device_output_buffer,
+            sample_count,
+            has_input_activity,
+        );
 
-            // Device is awake - process audio normally
-            if idx % 2 == 0 {
-                // Input from device_input_buffer, output to device_output_buffer
-                device.process_block(
-                    &self.device_input_buffer[..],
-                    &mut self.device_output_buffer,
-                    sample_count,
-                );
-            } else {
-                // Input from device_output_buffer, output to device_input_buffer
-                device.process_block(
-                    &self.device_output_buffer[..],
-                    &mut self.device_input_buffer,
-                    sample_count,
-                );
-            }
-
-            // Check output for activity
-            let output_buffer = if idx % 2 == 0 {
-                &self.device_output_buffer[..interleaved_count]
-            } else {
-                &self.device_input_buffer[..interleaved_count]
-            };
-            let has_output_activity = super::devices::has_audio_signal(output_buffer);
-
-            // Update sleep state based on input + output activity
-            let has_activity = has_input_activity || has_output_activity;
-            if device.update_sleep_state(has_activity) {
-                // Sleep state changed - record it
-                sleep_state_changes.push((idx, device.is_sleeping()));
-            }
-        }
-
-        // Copy final output back to L/R buffers
-        // Device 0 (first device) writes to device_output_buffer
-        // Device 1 writes to device_input_buffer
-        // Device 2 writes to device_output_buffer, etc.
-        // So: even index → writes to output_buffer, odd index → writes to input_buffer
-        // Final output location depends on the last device's index
-        let final_output = if (self.devices.len() - 1) % 2 == 0 {
-            // Last device has even index, wrote to device_output_buffer
+        let final_output = if result_in_output {
             &self.device_output_buffer
         } else {
-            // Last device has odd index, wrote to device_input_buffer
             &self.device_input_buffer
         };
 
-        // De-interleave with SIMD optimization
         deinterleave_stereo(
             &final_output[..sample_count * 2],
             &mut self.buffer_left[..sample_count],
             &mut self.buffer_right[..sample_count],
         );
 
-        // Return sleep state changes for status events
-        sleep_state_changes
+        sleep_changes
+            .into_iter()
+            .map(|(idx, sleeping)| (super::devices::DevicePath::root(idx), sleeping))
+            .collect()
     }
 
-    /// Send MIDI event to the first device (instrument) only with a frame offset
-    /// Effects in the chain don't receive MIDI
+    /// Send MIDI event to the first device (instrument) only with a frame offset.
+    /// Effects in the chain don't receive MIDI.
     pub fn send_midi_event_to_devices(
         &mut self,
         note: u8,
@@ -832,28 +779,52 @@ impl Channel {
         frame_offset: usize,
     ) {
         if let Some(device) = self.devices.first_mut() {
-            device.mark_activity(); // Wake device on MIDI from clips
+            device.mark_activity();
             device.send_midi_event(note, velocity, is_note_on, frame_offset);
         }
     }
 
-    /// Set a device parameter
-    pub fn set_device_parameter(&mut self, device_index: usize, param_id: u32, value: f32) -> bool {
-        if device_index < self.devices.len() {
-            self.devices[device_index].set_parameter(param_id, value);
+    /// Set a device parameter by path.
+    pub fn set_device_parameter(
+        &mut self,
+        path: &super::devices::DevicePath,
+        param_id: u32,
+        value: f32,
+    ) -> bool {
+        if let Some(device) =
+            super::devices::container::device_at_path_mut(&mut self.devices, path)
+        {
+            device.set_parameter(param_id, value);
             true
         } else {
             false
         }
     }
 
-    /// Get a device parameter
-    pub fn get_device_parameter(&self, device_index: usize, param_id: u32) -> Option<f32> {
-        if device_index < self.devices.len() {
-            self.devices[device_index].get_parameter(param_id)
-        } else {
-            None
-        }
+    /// Get a device parameter by path.
+    pub fn get_device_parameter(
+        &self,
+        path: &super::devices::DevicePath,
+        param_id: u32,
+    ) -> Option<f32> {
+        super::devices::container::device_at_path(&self.devices, path)
+            .and_then(|device| device.get_parameter(param_id))
+    }
+
+    /// Mutable device at `path`, including nested container children.
+    pub fn device_at_path_mut(
+        &mut self,
+        path: &super::devices::DevicePath,
+    ) -> Option<&mut dyn super::devices::AudioDevice> {
+        super::devices::container::device_at_path_mut(&mut self.devices, path)
+    }
+
+    /// Immutable device at `path`, including nested container children.
+    pub fn device_at_path(
+        &self,
+        path: &super::devices::DevicePath,
+    ) -> Option<&dyn super::devices::AudioDevice> {
+        super::devices::container::device_at_path(&self.devices, path)
     }
 }
 

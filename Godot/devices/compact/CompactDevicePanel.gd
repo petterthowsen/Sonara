@@ -1,12 +1,9 @@
 # CompactDevicePanel.gd
 #
-# Foldable panel showing all parameters of a device instance.
-# Creates CompactParameterControl for each parameter.
+# Foldable panel showing a device instance via the universal ParameterList.
 # For use in ChannelDeviceList.
 
 class_name CompactDevicePanel extends VBoxContainer
-
-const CompactParameterControlScene = preload("res://devices/compact/CompactParameterControl.tscn")
 
 # ============================================================================
 # NODE REFS
@@ -33,7 +30,7 @@ const CompactParameterControlScene = preload("res://devices/compact/CompactParam
 				parameters.visible = false
 
 var device_instance: DeviceInstance = null
-var parameter_controls: Array[CompactParameterControl] = []
+var _param_list: ParameterList = null
 
 # ============================================================================
 # SIGNALS
@@ -91,66 +88,19 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 	
 	tooltip_text = device_instance.device.name
 	
-	# Clear existing parameter controls
-	_clear_parameter_controls()
-
-	_create_parameter_controls()
+	_ensure_param_list()
+	_param_list.bind_to_device(device_instance, "param")
 
 
-## Create all parameter control UI elements (called after _ready)
-func _create_parameter_controls() -> void:
-	"""Create parameter controls for all device parameters."""
-	if not device_instance:
+## Create the shared ParameterList once and host it in the compact panel.
+func _ensure_param_list() -> void:
+	if _param_list:
 		return
-
-	var parameters = device_instance.device.get_parameters()
-	print("[CompactDevicePanel] Creating %d parameter controls for device: %s" % [parameters.size(), device_instance.device.name])
-	for param in parameters:
-		if param.group == "cc":
-			continue
-		_create_parameter_control_for_param(param)
-
-
-## Clear all parameter controls
-func _clear_parameter_controls() -> void:
-	"""Remove all parameter control UI elements."""
-	# Clear tracked controls
-	for control in parameter_controls:
-		if control and is_instance_valid(control):
-			control.queue_free()
-	parameter_controls.clear()
-
-	# Also clear any existing children from parameters_box (in case scene had pre-made controls)
 	if parameters_box:
 		for child in parameters_box.get_children():
 			child.queue_free()
-
-
-## Create and add a parameter control UI for a specific parameter
-func _create_parameter_control_for_param(param: DeviceParameter) -> void:
-	"""Create and add a parameter control UI for a device parameter.
-
-	Args:
-		param: The DeviceParameter to create a control for
-	"""
-	print("[CompactDevicePanel] Creating parameter control for param ID %d: %s" % [param.id, param.name])
-
-	# Instantiate parameter control
-	var control: CompactParameterControl
-	if CompactParameterControlScene:
-		control = CompactParameterControlScene.instantiate()
-	else:
-		# Fallback: create control dynamically
-		control = CompactParameterControl.new()
-
-	# Setup the control with device instance and parameter ID
-	control.setup(device_instance, param.id)
-
-	# Fallback: add directly to root
-	parameters_box.add_child(control)
-	print("[CompactDevicePanel] Added parameter control to parameters_box. Total controls now: %d" % parameters_box.get_child_count())
-
-	parameter_controls.append(control)
+	_param_list = ParameterList.new()
+	parameters_box.add_child(_param_list)
 
 
 ## Update UI visibility based on collapsed and hide_parameters states
@@ -230,30 +180,38 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can drop an SFZ file on this device."""
-	if not device_instance or not data is Asset:
+	"""Accept SFZ files, or devices dropped onto a container."""
+	if not device_instance:
 		return false
-	
-	# Only accept SFZ files
+	var channel := _channel_for_device()
+	if device_instance.is_container() and DeviceDropUtil.can_drop_on_container(channel, device_instance, data):
+		return true
+	if not data is Asset:
+		return false
 	if data.type != Asset.TYPE.SFZ:
 		return false
-	
-	# Only allow drops on devices that support file loading (sfizz)
 	return device_instance.device.supports_file_loading
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping an SFZ file on this device."""
-	if not data is Asset or not device_instance:
+	"""Handle dropping a device onto a container, or an SFZ file onto this device."""
+	if not device_instance:
 		return
-	
+	var channel := _channel_for_device()
+	if device_instance.is_container() and DeviceDropUtil.can_drop_on_container(channel, device_instance, data):
+		await DeviceDropUtil.drop_on_container(channel, device_instance, data, get_tree())
+		return
+	if not data is Asset:
+		return
 	var asset = data as Asset
 	if asset.type != Asset.TYPE.SFZ:
 		return
-	
 	print("[CompactDevicePanel] SFZ dropped on device: %s" % asset.name)
-	
-	# Load the SFZ file into the device
 	device_instance.load_file(asset.path)
-	
 	print("[CompactDevicePanel] SFZ loaded: %s" % asset.name)
+
+
+func _channel_for_device() -> Channel:
+	if device_instance == null or Sonara.editor == null or Sonara.editor.project == null:
+		return null
+	return Sonara.editor.project.get_channel_by_id(device_instance.channel_id)

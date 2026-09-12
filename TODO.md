@@ -58,8 +58,10 @@
 - [x] PolySynth Device
     - [ ] 
 - [x] Spectrum Analyzer
+- [x] Chain container (serial children + volume)
+- [x] Layer container (parallel mix, per-slot mute/solo)
 - [ ] L/R and M/S modes
-- [ ] Sampler and Drum Machine devices
+- [ ] Sampler and Drum Machine devices (depend on Chain)
 - [ ] Reverb
 - [ ] EQ: Parametric, built-in spectrum
 - [ ] Limiter
@@ -77,6 +79,8 @@
 - [x] For text/labels on any elements with a track/channel-colored background, use Dynamic black or white text depending on track color (luminance/lightness check?)
 - [x] Changing track color of folder/group tracks in trackitem should sync to mixer view's bus channel and vice-versa.
 - [ ] soloing a channel from mixer should sync to the linked track
+
+- [ ] BUG: inline edit of channel names often has unreadable text color
 
 ### Save/Load
 
@@ -122,6 +126,9 @@
 
 
 ### Clip Editor / Note Editor
+
+
+- [ ] In track mode, notes from all clips should be visible 
 
 - [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere", which will:
   1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"

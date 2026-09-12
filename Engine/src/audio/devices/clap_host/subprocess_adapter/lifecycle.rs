@@ -3,6 +3,7 @@
 //! Handles async plugin loading, initialization, and state management.
 
 use crate::audio::commands::{AudioCommand, EngineStatus};
+use crate::audio::devices::DevicePath;
 use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
 use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
@@ -33,7 +34,7 @@ pub fn spawn_loading_thread(
     loading_state: Arc<Mutex<LoadingState>>,
     param_cache: Arc<Mutex<Vec<ParamInfo>>>,
     channel_id: usize,
-    device_position: usize,
+    device_path: DevicePath,
     command_tx: Option<Sender<AudioCommand>>,
     status_tx: Option<Sender<EngineStatus>>,
 ) {
@@ -44,7 +45,7 @@ pub fn spawn_loading_thread(
         if let Some(ref tx) = status_tx {
             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                 channel_id,
-                device_position,
+                device_path: device_path.clone(),
                 state: "loading".to_string(),
             });
         }
@@ -187,7 +188,7 @@ pub fn spawn_loading_thread(
                     if let Some(ref tx) = status_tx {
                         let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             state: "ready".to_string(),
                         });
                     }
@@ -196,11 +197,11 @@ pub fn spawn_loading_thread(
                     if let Some(ref cmd_tx) = command_tx {
                         let _ = cmd_tx.send(AudioCommand::DeviceReady {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                         });
                         info!(
                             "📤 Sent DeviceReady notification for channel {} position {}",
-                            channel_id, device_position
+                            channel_id, device_path
                         );
                     }
                 } else {
@@ -213,7 +214,7 @@ pub fn spawn_loading_thread(
                     if let Some(ref tx) = status_tx {
                         let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             state: format!("failed:{}", error_msg),
                         });
                     }
@@ -228,7 +229,7 @@ pub fn spawn_loading_thread(
                 if let Some(ref tx) = status_tx {
                     let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                         channel_id,
-                        device_position,
+                        device_path: device_path.clone(),
                         state: format!("failed:{}", e),
                     });
                 }

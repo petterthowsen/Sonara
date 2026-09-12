@@ -5,6 +5,9 @@
 
 @abstract class_name DeviceView extends Control
 
+## Layer (and similar) custom UIs emit this to open the parent DevicePanel folder on one child.
+signal container_child_requested(child: DeviceInstance)
+
 var device : DeviceInstance
 var channel_id: int
 var device_position: int

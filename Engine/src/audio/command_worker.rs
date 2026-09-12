@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
-use super::devices::{AudioDevice, DeviceCategory, DeviceFactory};
+use super::devices::{AudioDevice, DeviceCategory, DeviceFactory, DevicePath};
 use super::ipc::ProcessManager;
 use super::types::ChannelId;
 
@@ -80,6 +80,7 @@ impl CommandWorker {
             AudioCommand::AdvertiseBuiltinDevices => self.advertise_builtin_devices(),
             AudioCommand::AddDeviceToChannel {
                 channel_id,
+                parent_path,
                 device_id,
                 device_type,
                 device_file,
@@ -88,6 +89,7 @@ impl CommandWorker {
                 enabled,
             } => self.add_device(
                 channel_id,
+                parent_path,
                 &device_id,
                 &device_type,
                 &device_file,
@@ -97,45 +99,46 @@ impl CommandWorker {
             ),
             AudioCommand::RemoveDeviceFromChannel {
                 channel_id,
+                parent_path,
                 position,
-            } => self.remove_device(channel_id, position),
+            } => self.remove_device(channel_id, parent_path, position),
             AudioCommand::ClearChannelDevices { channel_id } => self.clear_devices(channel_id),
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),
             AudioCommand::SetDeviceActive {
                 channel_id,
-                device_position,
+                device_path,
                 active,
-            } => match self.plugin_handle(channel_id, device_position) {
-                Some(handle) => self.set_plugin_active(handle, channel_id, device_position, active),
+            } => match self.plugin_handle(channel_id, &device_path) {
+                Some(handle) => self.set_plugin_active(handle, channel_id, device_path, active),
                 None => self.apply_locked(AudioCommand::SetDeviceActive {
                     channel_id,
-                    device_position,
+                    device_path,
                     active,
                 }),
             },
             AudioCommand::OpenPluginGui {
                 channel_id,
-                device_position,
+                device_path,
                 window_handle,
-            } => match self.plugin_handle(channel_id, device_position) {
+            } => match self.plugin_handle(channel_id, &device_path) {
                 Some(handle) => {
-                    self.open_plugin_gui(handle, channel_id, device_position, window_handle)
+                    self.open_plugin_gui(handle, channel_id, device_path, window_handle)
                 }
                 None => self.apply_locked(AudioCommand::OpenPluginGui {
                     channel_id,
-                    device_position,
+                    device_path,
                     window_handle,
                 }),
             },
             AudioCommand::ClosePluginGui {
                 channel_id,
-                device_position,
-            } => match self.plugin_handle(channel_id, device_position) {
-                Some(handle) => self.close_plugin_gui(handle, channel_id, device_position),
+                device_path,
+            } => match self.plugin_handle(channel_id, &device_path) {
+                Some(handle) => self.close_plugin_gui(handle, channel_id, device_path),
                 None => self.apply_locked(AudioCommand::ClosePluginGui {
                     channel_id,
-                    device_position,
+                    device_path,
                 }),
             },
             other => self.apply_locked(other),
@@ -201,11 +204,12 @@ impl CommandWorker {
         self.send_status(EngineStatus::BuiltinDevicesComplete { count });
     }
 
-    /// Build a device with the lock released, then insert it into the channel's chain.
+    /// Build a device with the lock released, then insert it into the parent list.
     #[allow(clippy::too_many_arguments)]
     fn add_device(
         &self,
         channel_id: ChannelId,
+        parent_path: DevicePath,
         device_id: &str,
         device_type: &str,
         device_file: &str,
@@ -213,15 +217,42 @@ impl CommandWorker {
         active: bool,
         enabled: bool,
     ) {
-        if !self.lock_state().channels.contains_key(&channel_id) {
-            warn!("Channel {} not found for add device", channel_id);
-            return;
-        }
+        let child_count = {
+            let state = self.lock_state();
+            let Some(channel) = state.channels.get(&channel_id) else {
+                warn!("Channel {} not found for add device", channel_id);
+                return;
+            };
+            if parent_path.is_empty() {
+                channel.devices.len()
+            } else {
+                match channel.device_at_path(&parent_path).and_then(|d| d.as_container()) {
+                    Some(container) => container.child_count(),
+                    None => {
+                        warn!(
+                            "No container at channel {} path {} for add device",
+                            channel_id, parent_path
+                        );
+                        return;
+                    }
+                }
+            }
+        };
 
-        let Some(mut device) =
-            self.device_factory
-                .create(device_type, device_id, device_file, channel_id, position)
-        else {
+        let insert_pos = if position < 0 {
+            child_count
+        } else {
+            (position as usize).min(child_count)
+        };
+        let device_path = parent_path.join(insert_pos);
+
+        let Some(mut device) = self.device_factory.create(
+            device_type,
+            device_id,
+            device_file,
+            channel_id,
+            &device_path,
+        ) else {
             return;
         };
         device.set_enabled(enabled);
@@ -234,41 +265,41 @@ impl CommandWorker {
             );
             return;
         };
-        let insert_pos = if position < 0 {
-            channel.devices.len()
-        } else {
-            (position as usize).min(channel.devices.len())
-        };
-        channel.devices.insert(insert_pos, device);
-        info!(
-            "Device {} added to channel {} at position {} [active={}, enabled={}]",
-            device_id, channel_id, insert_pos, active, enabled
-        );
+        match super::devices::container::insert_device(
+            &mut channel.devices,
+            &parent_path,
+            insert_pos,
+            device,
+        ) {
+            Ok(path) => info!(
+                "Device {} added to channel {} at {} [active={}, enabled={}]",
+                device_id, channel_id, path, active, enabled
+            ),
+            Err(e) => warn!("{}", e),
+        }
     }
 
     /// Detach a device under the lock and drop it afterwards: dropping a CLAP plugin closes its
     /// GUI and shuts down its subprocess.
-    fn remove_device(&self, channel_id: ChannelId, position: usize) {
+    fn remove_device(&self, channel_id: ChannelId, parent_path: DevicePath, position: usize) {
+        let path = parent_path.join(position);
         let removed = {
             let mut state = self.lock_state();
             let Some(channel) = state.channels.get_mut(&channel_id) else {
                 warn!("Channel {} not found for remove device", channel_id);
                 return;
             };
-            if position >= channel.devices.len() {
-                warn!(
-                    "Invalid device position {} for channel {}",
-                    position, channel_id
-                );
-                return;
-            }
-            channel.devices.remove(position)
+            super::devices::container::remove_device(&mut channel.devices, &path)
         };
+        if removed.is_none() {
+            warn!(
+                "Invalid device path {} for channel {}",
+                path, channel_id
+            );
+            return;
+        }
         drop(removed);
-        info!(
-            "Device removed from channel {} at position {}",
-            channel_id, position
-        );
+        info!("Device removed from channel {} at {}", channel_id, path);
     }
 
     /// Detach a channel's whole device chain under the lock and drop it afterwards.
@@ -318,34 +349,32 @@ impl CommandWorker {
         info!("Project cleared");
     }
 
-    /// Get an IPC handle for the subprocess CLAP plugin at a position, or None if the device
+    /// Get an IPC handle for the subprocess CLAP plugin at a path, or None if the device
     /// doesn't exist or isn't one.
     fn plugin_handle(
         &self,
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: &DevicePath,
     ) -> Option<PluginIpcHandle> {
-        self.with_plugin(channel_id, device_position, |plugin| plugin.ipc_handle())
+        self.with_plugin(channel_id, device_path, |plugin| plugin.ipc_handle())
     }
 
-    /// Run `f` under the lock on the subprocess CLAP plugin at a position, if there is one.
+    /// Run `f` under the lock on the subprocess CLAP plugin at a path, if there is one.
     fn with_plugin<R>(
         &self,
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: &DevicePath,
         f: impl FnOnce(&mut SubprocessClapAdapter) -> R,
     ) -> Option<R> {
         let mut state = self.lock_state();
         let device = state
             .channels
             .get_mut(&channel_id)?
-            .devices
-            .get_mut(device_position)?;
-        let result = device
+            .device_at_path_mut(device_path)?;
+        device
             .as_any_mut()
             .downcast_mut::<SubprocessClapAdapter>()
-            .map(f);
-        result
+            .map(f)
     }
 
     /// Activate or deactivate a subprocess plugin with the lock released.
@@ -353,12 +382,11 @@ impl CommandWorker {
         &self,
         handle: PluginIpcHandle,
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         active: bool,
     ) {
-        let is_active = self.with_plugin(channel_id, device_position, |plugin| plugin.is_active());
+        let is_active = self.with_plugin(channel_id, &device_path, |plugin| plugin.is_active());
         if is_active != Some(!active) {
-            // Already in the requested state
             return;
         }
 
@@ -369,24 +397,24 @@ impl CommandWorker {
         };
         if let Err(e) = result {
             warn!(
-                "Failed to {} device at channel {} position {}: {}",
-                action, channel_id, device_position, e
+                "Failed to {} device at channel {} path {}: {}",
+                action, channel_id, device_path, e
             );
             return;
         }
 
-        self.with_plugin(channel_id, device_position, |plugin| {
+        self.with_plugin(channel_id, &device_path, |plugin| {
             plugin.set_active_state(active)
         });
         info!(
             "Device {}: channel={} device={}",
             if active { "activated" } else { "deactivated" },
             channel_id,
-            device_position
+            device_path
         );
         self.send_status(EngineStatus::DeviceActiveChanged {
             channel_id,
-            device_position,
+            device_path,
             active,
         });
     }
@@ -396,32 +424,31 @@ impl CommandWorker {
         &self,
         handle: PluginIpcHandle,
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         window_handle: Option<u64>,
     ) {
         let already_open = self
-            .with_plugin(channel_id, device_position, |plugin| plugin.is_gui_open())
+            .with_plugin(channel_id, &device_path, |plugin| plugin.is_gui_open())
             .unwrap_or(false);
 
         let (width, height) = if already_open {
-            // The size can't be queried once the GUI is open, so fall back to a default
             (800, 600)
         } else {
             match handle.open_gui(window_handle) {
                 Ok((width, height, is_resizable)) => {
-                    self.with_plugin(channel_id, device_position, |plugin| {
+                    self.with_plugin(channel_id, &device_path, |plugin| {
                         plugin.set_gui_open(true)
                     });
                     info!(
                         "Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{}, resizable: {})",
-                        channel_id, device_position, window_handle, width, height, is_resizable
+                        channel_id, device_path, window_handle, width, height, is_resizable
                     );
                     (width, height)
                 }
                 Err(e) => {
                     warn!(
                         "Failed to open subprocess plugin GUI at channel {} device {}: {}",
-                        channel_id, device_position, e
+                        channel_id, device_path, e
                     );
                     return;
                 }
@@ -430,7 +457,7 @@ impl CommandWorker {
 
         self.send_status(EngineStatus::PluginGuiResizeRequest {
             channel_id,
-            device_position,
+            device_path,
             width,
             height,
         });
@@ -442,22 +469,21 @@ impl CommandWorker {
         &self,
         handle: PluginIpcHandle,
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     ) {
         let was_open = self
-            .with_plugin(channel_id, device_position, |plugin| plugin.is_gui_open())
+            .with_plugin(channel_id, &device_path, |plugin| plugin.is_gui_open())
             .unwrap_or(false);
 
         if was_open {
             let result = handle.close_gui();
-            // Mark closed even if IPC failed: the window is being destroyed regardless
-            self.with_plugin(channel_id, device_position, |plugin| {
+            self.with_plugin(channel_id, &device_path, |plugin| {
                 plugin.set_gui_open(false)
             });
             if let Err(e) = result {
                 warn!(
                     "Failed to close subprocess plugin GUI at channel {} device {}: {}",
-                    channel_id, device_position, e
+                    channel_id, device_path, e
                 );
                 return;
             }
@@ -465,11 +491,12 @@ impl CommandWorker {
 
         info!(
             "Closed GUI for subprocess plugin at channel {} device {}",
-            channel_id, device_position
+            channel_id, device_path
         );
         self.send_status(EngineStatus::PluginGuiClosed {
             channel_id,
-            device_position,
+            device_path,
         });
     }
 }
+

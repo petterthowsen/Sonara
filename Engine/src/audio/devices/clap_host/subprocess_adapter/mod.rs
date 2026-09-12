@@ -5,6 +5,7 @@
 
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::commands::{AudioCommand, EngineStatus};
+use crate::audio::devices::DevicePath;
 use crate::audio::ipc::{MidiEvent, PluginCommand, ProcessManager, SharedMemory};
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
@@ -42,7 +43,7 @@ pub struct SubprocessClapAdapter {
 
     // Plugin position (for sending GUI close notifications)
     channel_id: u32,
-    device_position: usize,
+    device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
 
     // State
@@ -58,7 +59,7 @@ impl SubprocessClapAdapter {
     pub fn new(
         process_manager: Arc<ProcessManager>,
         channel_id: u32,
-        device_position: usize,
+        device_path: DevicePath,
         plugin_path: PathBuf,
         plugin_id: &str,
         sample_rate: f32,
@@ -72,7 +73,7 @@ impl SubprocessClapAdapter {
         );
 
         // Generate unique key for this plugin instance
-        let process_key = format!("ch{}_dev{}", channel_id, device_position);
+        let process_key = device_path.to_process_key(channel_id);
 
         // Get plugin metadata (immediately available)
         let device_name = plugin_id.to_string();
@@ -95,7 +96,7 @@ impl SubprocessClapAdapter {
             Arc::clone(&loading_state),
             Arc::clone(&param_info_cache),
             channel_id as usize,
-            device_position,
+            device_path.clone(),
             command_tx,
             status_tx.clone(),
         );
@@ -113,7 +114,7 @@ impl SubprocessClapAdapter {
             sample_rate,
             max_buffer_size,
             channel_id,
-            device_position,
+            device_path,
             status_tx,
             is_active: false,
             is_enabled: true,
@@ -213,7 +214,7 @@ impl AudioDevice for SubprocessClapAdapter {
                     if !proc.is_alive() {
                         error!(
                             "Subprocess crashed for plugin {} (ch{}_dev{}), transitioning to failed state",
-                            self.device_id, self.channel_id, self.device_position
+                            self.device_id, self.channel_id, self.device_path
                         );
 
                         // Update loading state to Failed
@@ -226,7 +227,7 @@ impl AudioDevice for SubprocessClapAdapter {
                             if let Some(ref tx) = self.status_tx {
                                 let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                                     channel_id: self.channel_id as usize,
-                                    device_position: self.device_position,
+                                    device_path: self.device_path.clone(),
                                     state: "failed:subprocess crashed".to_string(),
                                 });
                             }
@@ -522,11 +523,11 @@ impl Drop for SubprocessClapAdapter {
             if let Some(ref status_tx) = self.status_tx {
                 let _ = status_tx.send(EngineStatus::PluginGuiClosed {
                     channel_id: self.channel_id as usize,
-                    device_position: self.device_position,
+                    device_path: self.device_path.clone(),
                 });
                 info!(
                     "Sent PluginGuiClosed notification during drop: channel={} device={}",
-                    self.channel_id, self.device_position
+                    self.channel_id, self.device_path
                 );
             }
         }

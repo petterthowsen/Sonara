@@ -110,23 +110,34 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 
 ### Device Management (Godot -> Rust)
 
+Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) insert `/child/{index}` segments after `/device/{n}` so action names never collide with child indices.
+
 | Address | Args | Description |
 |---------|------|-------------|
-| `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add device to channel (type: "builtin"/"clap"/"lv2"/"vst3", file: path for plugins, empty for built-ins) |
-| `/channel/{id}/remove_device` | `i:position` | Remove device from channel |
-| `/channel/{id}/move_device` | `i:from_position, i:to_position` | Move device from one position to another (preserves all state) |
+| `/channel/{id}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add device to the channel root list |
+| `/channel/{id}/remove_device` | `i:position` | Remove a top-level device |
+| `/channel/{id}/move_device` | `i:from_position, i:to_position` | Reorder top-level devices |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
-| `/channel/{id}/device/{position}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter (floats for continuous; int index for enums/bools) |
-| `/channel/{id}/device/{position}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
-| `/channel/{id}/device/{position}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
+| `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
+| `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
+| `/channel/{id}/device/{path}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
+| `/channel/{id}/device/{path}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add a child into a container device |
+| `/channel/{id}/device/{path}/remove_device` | `i:position` | Remove a child from a container |
+| `/channel/{id}/device/{path}/move_device` | `i:from_position, i:to_position` | Reorder children inside a container |
+| `/channel/{id}/device/{path}/slot/{n}/volume` | `f:normalized` | Layer slot volume (0–1, 0.5 = unity) |
+| `/channel/{id}/device/{path}/slot/{n}/mute` | `i:0_or_1` | Layer slot mute |
+| `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
+
+`{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
+
+Examples:
+- Top-level param: `/channel/2/device/0/param/1`
+- Nested param: `/channel/2/device/0/child/1/param/1`
+- Add into container: `/channel/2/device/0/add_device` `[id, position, ...]`
 
 ### Device State Updates (Rust -> Godot)
 
-| Address | Args | Description |
-|---------|------|-------------|
-| `/channel/{id}/device/{position}/active` | `i:0_or_1` | Device activated/deactivated (engine confirms state) |
-| `/channel/{id}/device/{position}/enabled` | `i:0_or_1` | Device enabled/disabled (engine confirms state) |
-| `/channel/{id}/device/{position}/loading_state` | `s:state` | Device loading state: "idle", "loading", "ready", "failed:{error}" |
+Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`, `/param/{id}/value`, `/data`).
 
 **Loading States:**
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
@@ -172,6 +183,19 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
   - `1`: Speed (enum: Freeze, Slow, Medium, Fast)
   - UI-only (not synced): Scale (enum: Log, Linear), Style (enum: Bars, Line)
 
+**Chain (`sonara.builtin.chain`)**
+- **Type:** Utility container (`is_container: true`, accepts MIDI)
+- Serial child processing, then a single Volume. Empty chain is audio pass-through. Bypass skips children.
+- MIDI is forwarded to every child.
+- **Params:**
+  - `0`: Volume (float 0.0–2.0 linear gain, default 1.0 / normalized 0.5 = unity)
+
+**Layer (`sonara.builtin.layer`)**
+- **Type:** Utility container (`is_container: true`, accepts MIDI)
+- Parallel children mixed together. Empty layer is silence. Bypass is pass-through.
+- MIDI is forwarded to every child, including muted slots.
+- No device-level params. Per-child mix via `/slot/{n}/volume|mute|solo`.
+
 ##### Built-in Parameter Advertisement (Rust → Godot)
 `/builtin/info` sends device metadata and typed parameter descriptors:
 ```
@@ -186,11 +210,13 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
     s:type, i:syncable,
     f:min, f:max, f:default,
     i:enum_count, ...enum_values
-  )
+  ),
+  i:is_container
 ]
 ```
 - `type`: "float" | "bool" | "enum"
 - For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
+- `is_container`: 1 when the device can own nested children (Chain, Layer).
 
 #### CLAP Plugins
 
@@ -270,12 +296,12 @@ Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase m
 
 **Subscribe to Data Stream (Godot → Rust):**
 ```
-/channel/{id}/device/{position}/data/subscribe [s:data_type]
+/channel/{id}/device/{path}/data/subscribe [s:data_type]
 ```
 
 **Unsubscribe from Data Stream (Godot → Rust):**
 ```
-/channel/{id}/device/{position}/data/unsubscribe [s:data_type]
+/channel/{id}/device/{path}/data/unsubscribe [s:data_type]
 ```
 
 **Data Types:**
@@ -286,7 +312,7 @@ Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase m
 
 **Device Data Stream (Rust → Godot):**
 ```
-/channel/{id}/device/{position}/data [s:data_type, blob:binary_data]
+/channel/{id}/device/{path}/data [s:data_type, blob:binary_data]
 ```
 
 **Data Formats:**
@@ -298,17 +324,17 @@ Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase m
 **Example Usage:**
 ```gdscript
 # Subscribe to spectrum data
-AudioEngineOSC.subscribe_device_data(channel_id, device_position, "spectrum")
+AudioEngineOSC.subscribe_device_data(device.osc_path(), "spectrum")
 
 # Listen for spectrum updates
-AudioEngineOSC.device_spectrum_received.connect(func(ch_id, dev_pos, spectrum):
-    if ch_id == channel_id and dev_pos == device_position:
+AudioEngineOSC.device_spectrum_received.connect(func(osc_path, spectrum):
+    if osc_path == device.osc_path():
         # spectrum is PackedFloat32Array of dB values
         update_visualization(spectrum)
 )
 
 # Unsubscribe when done
-AudioEngineOSC.unsubscribe_device_data(channel_id, device_position, "spectrum")
+AudioEngineOSC.unsubscribe_device_data(device.osc_path(), "spectrum")
 ```
 
 **Benefits:**

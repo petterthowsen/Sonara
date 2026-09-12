@@ -14,6 +14,10 @@ signal active_changed(active: bool)
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}"
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
+signal child_added(device_instance: DeviceInstance, position: int)
+signal child_removed(position: int, device_id: String)
+signal child_moved(from_position: int, to_position: int)
+signal slot_changed()
 
 
 ## ============================================================================
@@ -35,8 +39,19 @@ var active : bool = true
 ## Whether this device is enabled (effectively processing audio vs bypassed)
 var enabled : bool = true
 
-## Position in the device chain (0 = first)
+## Position in the parent device list (0 = first)
 var position: int = 0
+
+## Nested child devices when this instance is a container (Chain/Layer).
+var children: Array[DeviceInstance] = []
+
+## Weak parent container; unset at the channel root.
+var _parent_ref: WeakRef = null
+
+## Layer slot mix controls (used when the parent is a Layer).
+var slot_volume: float = 0.5
+var slot_mute: bool = false
+var slot_solo: bool = false
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
@@ -157,6 +172,74 @@ func set_parameter_real(param_id: int, real_value: float) -> void:
 		set_parameter_normalized(param_id, normalized)
 
 
+## True when this instance can own nested devices.
+func is_container() -> bool:
+	return device != null and device.is_container
+
+
+## True when `other` is this instance or a nested descendant.
+func contains_device(other: DeviceInstance) -> bool:
+	if other == null:
+		return false
+	if other == self:
+		return true
+	for child in children:
+		if child.contains_device(other):
+			return true
+	return false
+
+
+## Parent container, or null at the channel root.
+func get_parent_device() -> DeviceInstance:
+	if _parent_ref == null:
+		return null
+	return _parent_ref.get_ref() as DeviceInstance
+
+
+## Record the parent container (weak, to avoid RefCounted cycles).
+func set_parent_device(parent: DeviceInstance) -> void:
+	_parent_ref = weakref(parent) if parent else null
+
+
+## OSC prefix `/channel/{id}/device/{i0}/child/{i1}` with no trailing action.
+func osc_path() -> String:
+	var indices: Array[int] = []
+	var current: DeviceInstance = self
+	while current:
+		indices.insert(0, current.position)
+		current = current.get_parent_device()
+	if indices.is_empty():
+		return "/channel/%d/device/%d" % [channel_id, position]
+	var path := "/channel/%d/device/%d" % [channel_id, indices[0]]
+	for i in range(1, indices.size()):
+		path += "/child/%d" % indices[i]
+	return path
+
+
+## Full OSC address for an action on this device (`enable`, `param/0`, ...).
+func osc_addr(action: String) -> String:
+	if action.is_empty():
+		return osc_path()
+	return "%s/%s" % [osc_path(), action]
+
+
+## Index path from the channel root, e.g. `"0/1"`.
+func path_string() -> String:
+	var indices: Array[int] = []
+	var current: DeviceInstance = self
+	while current:
+		indices.insert(0, current.position)
+		current = current.get_parent_device()
+	return "/".join(indices.map(func(i): return str(i)))
+
+
+## Rebind OSC listeners after this instance's path changes.
+func reconnect_to_engine() -> void:
+	disconnect_from_engine()
+	if channel_id >= 0:
+		connect_to_engine()
+
+
 ## Get a parameter value (real range)
 func get_parameter_real(param_id: int) -> float:
 	var param = device.get_parameter(param_id)
@@ -180,14 +263,14 @@ func set_enabled(p_enabled : bool) -> void:
 	if enabled == p_enabled:
 		return
 	# we only send to engine, we don't update our own state - we do this on engine callback
-	AudioEngineOSC.send("/channel/%d/device/%d/enable" % [channel_id, position], [1 if p_enabled else 0])
+	AudioEngineOSC.send(osc_addr("enable"), [1 if p_enabled else 0])
 
 ## Set the active state of this device instance (sends to engine)
 func set_active(p_active : bool) -> void:
 	if active == p_active:
 		return
 	
-	AudioEngineOSC.send("/channel/%d/device/%d/activate" % [channel_id, position], [1 if p_active else 0])
+	AudioEngineOSC.send(osc_addr("activate"), [1 if p_active else 0])
 
 
 ## Open the native GUI for this device (if supported)
@@ -197,7 +280,7 @@ func open_gui() -> void:
 		return
 	
 	if active:
-		AudioEngineOSC.send("/channel/%d/device/%d/gui/open" % [channel_id, position], [])
+		AudioEngineOSC.send(osc_addr("gui/open"), [])
 
 
 ## Close the native GUI for this device (if supported)
@@ -205,7 +288,7 @@ func close_gui() -> void:
 	if not device.has_gui():
 		return
 	
-	AudioEngineOSC.send("/channel/%d/device/%d/gui/close" % [channel_id, position], [])
+	AudioEngineOSC.send(osc_addr("gui/close"), [])
 
 
 ## =========================================================================
@@ -247,14 +330,14 @@ func create_view(view_type: Device.ViewType) -> DeviceView:
 	return inst
 
 
-## Connect to audio engine: listen for state updates
+## Connect to audio engine and listen for state updates
 func connect_to_engine() -> void:
-	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]
-	var enabled_addr = "/channel/%d/device/%d/enabled" % [channel_id, position]
-	var param_count_addr = "/channel/%d/device/%d/param/count" % [channel_id, position]
-	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
-	var loading_state_addr = "/channel/%d/device/%d/loading_state" % [channel_id, position]
-	var gui_closed_addr = "/channel/%d/device/%d/gui/closed" % [channel_id, position]
+	var active_addr = osc_addr("active")
+	var enabled_addr = osc_addr("enabled")
+	var param_count_addr = osc_addr("param/count")
+	var param_info_addr = osc_addr("param/info")
+	var loading_state_addr = osc_addr("loading_state")
+	var gui_closed_addr = osc_addr("gui/closed")
 
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
@@ -264,24 +347,28 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
 	
 	# Use wildcard pattern to listen for ALL parameter changes for this device
-	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
+	var param_pattern = osc_addr("param/*/value")
 	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
 	
 	# If this device had a file loaded, reload it after engine connection
 	if loaded_file_path != "":
 		print("[DeviceInstance] Reloading file after engine connection: %s" % loaded_file_path)
-		AudioEngineOSC.send("/channel/%d/device/%d/load_file" % [channel_id, position], [loaded_file_path])
+		AudioEngineOSC.send(osc_addr("load_file"), [loaded_file_path])
+
+	sync_slot_to_engine()
+	for child in children:
+		child.connect_to_engine()
 
 
 ## Disconnect from audio engine: stop listening
 func disconnect_from_engine() -> void:
-	var active_addr = "/channel/%d/device/%d/active" % [channel_id, position]
-	var enabled_addr = "/channel/%d/device/%d/enabled" % [channel_id, position]
-	var param_count_addr = "/channel/%d/device/%d/param/count" % [channel_id, position]
-	var param_info_addr = "/channel/%d/device/%d/param/info" % [channel_id, position]
-	var param_pattern = "/channel/%d/device/%d/param/*/value" % [channel_id, position]
-	var loading_state_addr = "/channel/%d/device/%d/loading_state" % [channel_id, position]
-	var gui_closed_addr = "/channel/%d/device/%d/gui/closed" % [channel_id, position]
+	var active_addr = osc_addr("active")
+	var enabled_addr = osc_addr("enabled")
+	var param_count_addr = osc_addr("param/count")
+	var param_info_addr = osc_addr("param/info")
+	var param_pattern = osc_addr("param/*/value")
+	var loading_state_addr = osc_addr("loading_state")
+	var gui_closed_addr = osc_addr("gui/closed")
 
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
@@ -290,6 +377,8 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
+	for child in children:
+		child.disconnect_from_engine()
 
 
 ## ============================================================================
@@ -338,13 +427,13 @@ func _on_gui_closed_received(_values: Array) -> void:
 func _on_parameter_value_received_wildcard(values: Array, address: String) -> void:
 	"""Handle parameter value changes via wildcard pattern.
 	Parse param_id from the OSC address: /channel/X/device/Y/param/ID/value"""
-	# Parse parameter ID from address: /channel/2/device/1/param/5/value -> 5
+	# Parse parameter ID from address: .../param/ID/value
 	var parts = address.split("/")
-	if parts.size() < 7:
+	var param_idx := parts.find("param")
+	if param_idx < 0 or param_idx + 1 >= parts.size():
 		push_warning("[DeviceInstance] Invalid parameter address format: %s" % address)
 		return
-	
-	var param_id = int(parts[6])  # parts[6] is the parameter ID
+	var param_id = int(parts[param_idx + 1])
 	_on_parameter_value_received(values, param_id)
 
 
@@ -446,13 +535,13 @@ func sync_to_engine() -> void:
 		var normalized_value = parameter_values[param_id]
 		if param and param.param_type == "bool":
 			var idx: int = 1 if normalized_value >= 0.5 else 0
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		elif param and param.param_type == "enum":
 			var n: int = max(1, param.enum_values.size())
 			var idx: int = int(round(normalized_value * float(n - 1)))
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		else:
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
 
 
 ## Sync a single parameter to the audio engine
@@ -465,15 +554,15 @@ func sync_parameter_to_engine(param_id: int) -> void:
 		if param and param.param_type == "bool":
 			var idx: int = 1 if normalized_value >= 0.5 else 0
 			print("[DeviceInstance] send BOOL param_id=", param_id, " idx=", idx)
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		elif param and param.param_type == "enum":
 			var n: int = max(1, param.enum_values.size())
 			var idx: int = int(round(normalized_value * float(n - 1)))
 			print("[DeviceInstance] send ENUM param_id=", param_id, " idx=", idx, " n=", n, " normalized=", normalized_value)
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [idx])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		else:
 			print("[DeviceInstance] send FLOAT param_id=", param_id, " normalized=", normalized_value)
-			AudioEngineOSC.send("/channel/%d/device/%d/param/%d" % [channel_id, position, param_id], [normalized_value])
+			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
 
 
 ## Load a file into this device (e.g., SFZ file into sfizz sampler)
@@ -484,7 +573,38 @@ func load_file(file_path: String) -> void:
 	
 	print("[DeviceInstance] Loading file into %s: %s" % [device.name, file_path])
 	loaded_file_path = file_path
-	AudioEngineOSC.send("/channel/%d/device/%d/load_file" % [channel_id, position], [file_path])
+	AudioEngineOSC.send(osc_addr("load_file"), [file_path])
+
+
+## Send Layer slot mix controls to the engine (no-op if this is not a Layer child).
+func sync_slot_to_engine() -> void:
+	var parent := get_parent_device()
+	if parent == null or parent.device == null or parent.device.device_id != "sonara.builtin.layer":
+		return
+	AudioEngineOSC.send(parent.osc_addr("slot/%d/volume" % position), [slot_volume])
+	AudioEngineOSC.send(parent.osc_addr("slot/%d/mute" % position), [1 if slot_mute else 0])
+	AudioEngineOSC.send(parent.osc_addr("slot/%d/solo" % position), [1 if slot_solo else 0])
+
+
+## Set this child's Layer slot volume (normalized 0–1, 0.5 = unity).
+func set_slot_volume(normalized: float) -> void:
+	slot_volume = clampf(normalized, 0.0, 1.0)
+	sync_slot_to_engine()
+	slot_changed.emit()
+
+
+## Mute this Layer slot.
+func set_slot_mute(muted: bool) -> void:
+	slot_mute = muted
+	sync_slot_to_engine()
+	slot_changed.emit()
+
+
+## Solo this Layer slot.
+func set_slot_solo(soloed: bool) -> void:
+	slot_solo = soloed
+	sync_slot_to_engine()
+	slot_changed.emit()
 
 
 ## ============================================================================
@@ -501,7 +621,11 @@ func to_json() -> Dictionary:
 		"active": active,
 		"enabled": enabled,
 		"parameter_values": _parameter_values_to_json(),
-		"loaded_file_path": loaded_file_path
+		"loaded_file_path": loaded_file_path,
+		"children": children.map(func(c): return c.to_json()),
+		"slot_volume": slot_volume,
+		"slot_mute": slot_mute,
+		"slot_solo": slot_solo,
 	}
 
 
@@ -540,7 +664,17 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	
 	# Restore loaded file path (will be reloaded after engine connection)
 	instance.loaded_file_path = data.get("loaded_file_path", "")
-	
+	instance.slot_volume = float(data.get("slot_volume", 0.5))
+	instance.slot_mute = bool(data.get("slot_mute", false))
+	instance.slot_solo = bool(data.get("slot_solo", false))
+
+	for child_data in data.get("children", []):
+		if child_data is Dictionary:
+			var child := DeviceInstance.from_json(child_data)
+			if child:
+				child.set_parent_device(instance)
+				instance.children.append(child)
+
 	return instance
 
 

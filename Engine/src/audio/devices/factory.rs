@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use super::clap_host::SubprocessClapAdapter;
 use super::{
-    AudioDevice, DelayDevice, DeviceCategory, PolySynthDevice, PortFlow, SfizzDevice,
-    SpectrumAnalyzerDevice,
+    AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, LayerDevice, PolySynthDevice,
+    PortFlow, SfizzDevice, SpectrumAnalyzerDevice,
 };
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
 use crate::audio::ipc::ProcessManager;
@@ -50,11 +50,11 @@ impl DeviceFactory {
         device_id: &str,
         device_file: &str,
         channel_id: ChannelId,
-        position: i32,
+        device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
         match device_type {
-            "builtin" => self.create_builtin(device_id, channel_id, position),
-            "clap" => self.create_clap(device_id, device_file, channel_id, position),
+            "builtin" => self.create_builtin(device_id, channel_id, device_path),
+            "clap" => self.create_clap(device_id, device_file, channel_id, device_path),
             _ => {
                 warn!(
                     "Unknown device type: {} (supported: builtin, clap)",
@@ -70,7 +70,7 @@ impl DeviceFactory {
         &self,
         device_id: &str,
         channel_id: ChannelId,
-        position: i32,
+        device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
         let device: Box<dyn AudioDevice> = match device_id {
             "sonara.builtin.polysynth" => Box::new(PolySynthDevice::new(self.sample_rate)),
@@ -79,12 +79,14 @@ impl DeviceFactory {
                 self.sample_rate,
                 self.max_buffer_size,
                 channel_id as usize,
-                position as usize,
+                device_path.clone(),
                 Some(self.status_tx.clone()),
             )),
             "sonara.builtin.spectrum_analyzer" => {
                 Box::new(SpectrumAnalyzerDevice::new(self.sample_rate))
             }
+            "sonara.builtin.chain" => Box::new(ChainDevice::new(self.max_buffer_size)),
+            "sonara.builtin.layer" => Box::new(LayerDevice::new(self.max_buffer_size)),
             _ => {
                 warn!("Unknown built-in device ID: {}", device_id);
                 return None;
@@ -101,7 +103,7 @@ impl DeviceFactory {
         device_id: &str,
         device_file: &str,
         channel_id: ChannelId,
-        position: i32,
+        device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
         if device_file.is_empty() {
             warn!("CLAP plugin {} missing file path", device_id);
@@ -112,7 +114,7 @@ impl DeviceFactory {
         match SubprocessClapAdapter::new(
             Arc::clone(&self.process_manager),
             channel_id as u32,
-            position as usize,
+            device_path.clone(),
             PathBuf::from(device_file),
             device_id,
             self.sample_rate,
@@ -137,11 +139,13 @@ impl DeviceFactory {
     /// Describe every built-in device (ports, parameters, file support) for Godot's browser.
     pub fn builtin_device_infos(&self) -> Vec<EngineStatus> {
         // TODO: Simplify this to avoid creating temporary instances
-        let devices: [Box<dyn AudioDevice>; 4] = [
+        let devices: [Box<dyn AudioDevice>; 6] = [
             Box::new(PolySynthDevice::new(self.sample_rate)),
             Box::new(DelayDevice::new(self.sample_rate, 5000.0)),
             Box::new(SpectrumAnalyzerDevice::new(self.sample_rate)),
             Box::new(SfizzDevice::new_for_metadata(self.sample_rate)),
+            Box::new(ChainDevice::new(self.max_buffer_size)),
+            Box::new(LayerDevice::new(self.max_buffer_size)),
         ];
         devices
             .iter()
@@ -203,6 +207,7 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
         supports_file_loading,
         file_extensions,
         file_type_description,
+        is_container: device.is_container(),
         parameters,
     }
 }

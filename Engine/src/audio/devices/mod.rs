@@ -1,13 +1,19 @@
 pub mod clap_host;
+mod chain;
+pub mod container;
 mod delay;
 mod factory;
+mod layer;
 mod polysynth;
 mod sfizz_device;
 mod spectrum_analyzer;
 
+pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
+pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
 pub use factory::DeviceFactory;
+pub use layer::LayerDevice;
 pub use polysynth::PolySynthDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
@@ -355,5 +361,20 @@ pub trait AudioDevice: Send {
     /// **CRITICAL**: This must be real-time safe (no allocations in hot path)
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
         None // Default: no data to send
+    }
+
+    /// Immutable view of this device as a nested container, if it owns children.
+    fn as_container(&self) -> Option<&dyn DeviceContainer> {
+        None
+    }
+
+    /// Mutable view of this device as a nested container, if it owns children.
+    fn as_container_mut(&mut self) -> Option<&mut dyn DeviceContainer> {
+        None
+    }
+
+    /// True when this device can own child devices (Chain, Layer).
+    fn is_container(&self) -> bool {
+        false
     }
 }

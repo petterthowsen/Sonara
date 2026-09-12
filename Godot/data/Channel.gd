@@ -186,27 +186,8 @@ func sync_to_engine() -> void:
 	
 	# Sync all devices to engine (for project loading)
 	for device_inst in devices:
-		# Send device ID, position, active, enabled, type, and file path
-		var active = 1 if device_inst.active else 0
-		var enabled = 1 if device_inst.enabled else 0
-		var device_type = _get_device_type_string(device_inst.device.device_type)
-		AudioEngineOSC.send("/channel/%d/add_device" % id, [
-			device_inst.device.device_id, 
-			device_inst.position,
-			active,
-			enabled,
-			device_type,  # "builtin", "clap", "lv2", "vst3"
-			device_inst.device.plugin_path  # File path (empty for built-ins)
-		])
-		device_inst.sync_to_engine()
-		
-		# Connect to device's parameters_updated signal
-		device_inst.parameters_updated.connect(_on_device_parameters_updated.bind(device_inst.position))
-		
-		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
-		if device_inst.device.device_type != Device.DeviceType.BuiltIn:
-			AudioEngineOSC.send("/plugin/get_parameters", [id, device_inst.position])
-			print("[Channel %d] Querying parameters for device at position %d" % [id, device_inst.position])
+		_send_add_device_osc(device_inst, null)
+		_sync_device_tree_to_engine(device_inst)
 
 
 # ============================================================================
@@ -592,131 +573,148 @@ func _get_device_type_string(device_type: Device.DeviceType) -> String:
 # DEVICE CHAIN MANAGEMENT
 # ============================================================================
 
-func add_device(device_instance: DeviceInstance, position: int = -1) -> void:
-	"""Add a device to the channel at the specified position.
-
-	Args:
-		device_instance: The DeviceInstance to add
-		position: Position in chain (0 = first, -1 = append at end)
-	"""
-	if position < 0 or position >= devices.size():
-		devices.append(device_instance)
-		position = devices.size() - 1
+func add_device(device_instance: DeviceInstance, position: int = -1, parent: DeviceInstance = null) -> void:
+	## Add a device to the channel root list or into a container parent.
+	var host: Array[DeviceInstance] = parent.children if parent else devices
+	if position < 0 or position >= host.size():
+		host.append(device_instance)
+		position = host.size() - 1
 	else:
-		devices.insert(position, device_instance)
+		host.insert(position, device_instance)
 
-	# Update position indices for all devices after this one
-	for i in range(position, devices.size()):
-		devices[i].position = i
+	device_instance.channel_id = id
+	device_instance.set_parent_device(parent)
+	_reindex_host(host)
 
-	# Sync to engine
 	if _is_connected:
-		# Send device ID, position, active, enabled, type, and file path
-		var active = 1 if device_instance.active else 0
-		var enabled = 1 if device_instance.enabled else 0
-		var device_type = _get_device_type_string(device_instance.device.device_type)
-		AudioEngineOSC.send("/channel/%d/add_device" % id, [
-			device_instance.device.device_id, 
-			position,
-			active,
-			enabled,
-			device_type,  # "builtin", "clap", "lv2", "vst3"
-			device_instance.device.plugin_path  # File path (empty for built-ins)
-		])
-		# Also sync the device's parameters
-		device_instance.sync_to_engine()
-		
-		# Connect to device's parameters_updated signal
-		device_instance.parameters_updated.connect(_on_device_parameters_updated.bind(position))
-		
-		# For plugin devices (CLAP/LV2/VST3), query parameters from engine
-		if device_instance.device.device_type != Device.DeviceType.BuiltIn:
-			AudioEngineOSC.send("/plugin/get_parameters", [id, position])
-			print("[Channel %d] Querying parameters for device at position %d" % [id, position])
-
-	# Connect to device parameter changes
-	device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
-	
-	# Connect device instance to engine (for state sync)
-	if _is_connected:
+		_send_add_device_osc(device_instance, parent)
+		_sync_device_tree_to_engine(device_instance)
+		if not device_instance.parameter_changed.is_connected(_on_device_parameter_changed):
+			device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
 		device_instance.connect_to_engine()
+	elif not device_instance.parameter_changed.is_connected(_on_device_parameter_changed):
+		device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
 
-	device_added.emit(device_instance, position)
-	print("[Channel %d] Device added at position %d: %s" % [id, position, device_instance.device.name])
+	if parent:
+		parent.child_added.emit(device_instance, position)
+	else:
+		device_added.emit(device_instance, position)
+	print("[Channel %d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
 
 
-func remove_device(position: int) -> void:
-	"""Remove a device from the channel.
-
-	Args:
-		position: Position in device chain to remove
-	"""
-	if position < 0 or position >= devices.size():
+func remove_device(position: int, parent: DeviceInstance = null) -> void:
+	## Remove a device from the channel root list or from a container parent.
+	var host: Array[DeviceInstance] = parent.children if parent else devices
+	if position < 0 or position >= host.size():
 		print("[Channel %d] Invalid device position: %d" % [id, position])
 		return
 
-	var removed_device = devices[position]
+	var removed_device = host[position]
 	var device_id = removed_device.device.device_id
 
-	# Disconnect device instance from engine
 	if _is_connected:
 		removed_device.disconnect_from_engine()
+		if parent:
+			AudioEngineOSC.send(parent.osc_addr("remove_device"), [position])
+		else:
+			AudioEngineOSC.send("/channel/%d/remove_device" % id, [position])
 
-	# Disconnect from device signals
-	removed_device.parameter_changed.disconnect(_on_device_parameter_changed)
+	if removed_device.parameter_changed.is_connected(_on_device_parameter_changed):
+		removed_device.parameter_changed.disconnect(_on_device_parameter_changed)
 
-	# Remove from array
-	devices.remove_at(position)
+	host.remove_at(position)
+	removed_device.set_parent_device(null)
+	_reindex_host(host)
 
-	# Update position indices for all devices after this one
-	for i in range(position, devices.size()):
-		devices[i].position = i
-
-	# Sync to engine
-	if _is_connected:
-		AudioEngineOSC.send("/channel/%d/remove_device" % id, [position])
-
-	device_removed.emit(position, device_id)
-	print("[Channel %d] Device removed from position %d: %s" % [id, position, device_id])
+	if parent:
+		parent.child_removed.emit(position, device_id)
+	else:
+		device_removed.emit(position, device_id)
+	print("[Channel %d] Device removed: %s" % [id, device_id])
 
 
-func move_device(from_position: int, to_position: int) -> void:
-	## Move a device from one position to another in the chain.
-	##
-	## Args:
-	##   from_position: Current position in device chain (0-based)
-	##   to_position: Target position in device chain (0-based)
-	if from_position < 0 or from_position >= devices.size():
+## Remove a nested or root device by instance.
+func remove_device_instance(device_instance: DeviceInstance) -> void:
+	var parent: DeviceInstance = device_instance.get_parent_device()
+	var host: Array[DeviceInstance] = parent.children if parent else devices
+	var idx := host.find(device_instance)
+	if idx >= 0:
+		remove_device(idx, parent)
+
+
+func move_device(from_position: int, to_position: int, parent: DeviceInstance = null) -> void:
+	## Move a device within the channel root list or a container parent.
+	var host: Array[DeviceInstance] = parent.children if parent else devices
+	if from_position < 0 or from_position >= host.size():
 		print("[Channel %d] Invalid from_position: %d" % [id, from_position])
 		return
-
-	if to_position < 0 or to_position >= devices.size():
+	if to_position < 0 or to_position >= host.size():
 		print("[Channel %d] Invalid to_position: %d" % [id, to_position])
 		return
-
 	if from_position == to_position:
-		print("[Channel %d] Device already at position %d, no move needed" % [id, from_position])
 		return
 
-	# Extract device from old position
-	var device_instance = devices[from_position]
-	devices.remove_at(from_position)
+	for device_inst in host:
+		device_inst.disconnect_from_engine()
 
-	# Insert at new position
-	devices.insert(to_position, device_instance)
+	var device_instance = host[from_position]
+	host.remove_at(from_position)
+	host.insert(to_position, device_instance)
+	_reindex_host(host)
 
-	# Update position indices for affected devices
-	var min_pos = min(from_position, to_position)
-	var max_pos = max(from_position, to_position)
-	for i in range(min_pos, max_pos + 1):
-		devices[i].position = i
-
-	# Sync to engine
 	if _is_connected:
-		AudioEngineOSC.send("/channel/%d/move_device" % id, [from_position, to_position])
+		if parent:
+			AudioEngineOSC.send(parent.osc_addr("move_device"), [from_position, to_position])
+		else:
+			AudioEngineOSC.send("/channel/%d/move_device" % id, [from_position, to_position])
+		for device_inst in host:
+			device_inst.connect_to_engine()
 
-	device_moved.emit(from_position, to_position)
-	print("[Channel %d] Device moved from position %d to position %d: %s" % [id, from_position, to_position, device_instance.device.name])
+	if parent:
+		parent.child_moved.emit(from_position, to_position)
+	else:
+		device_moved.emit(from_position, to_position)
+	print("[Channel %d] Device moved from %d to %d: %s" % [id, from_position, to_position, device_instance.device.name])
+
+
+func _reindex_host(host: Array[DeviceInstance]) -> void:
+	## Keep child `position` in sync with array order.
+	for i in range(host.size()):
+		host[i].position = i
+
+
+func _send_add_device_osc(device_instance: DeviceInstance, parent: DeviceInstance) -> void:
+	## Tell the engine to create this device at its current parent/position.
+	var active = 1 if device_instance.active else 0
+	var enabled = 1 if device_instance.enabled else 0
+	var device_type = _get_device_type_string(device_instance.device.device_type)
+	var args = [
+		device_instance.device.device_id,
+		device_instance.position,
+		active,
+		enabled,
+		device_type,
+		device_instance.device.plugin_path
+	]
+	if parent:
+		AudioEngineOSC.send(parent.osc_addr("add_device"), args)
+	else:
+		AudioEngineOSC.send("/channel/%d/add_device" % id, args)
+
+
+func _sync_device_tree_to_engine(device_instance: DeviceInstance) -> void:
+	## Sync parameters, file, slots, and nested children after the engine has the device.
+	device_instance.sync_to_engine()
+	if not device_instance.parameters_updated.is_connected(_on_device_parameters_updated):
+		device_instance.parameters_updated.connect(_on_device_parameters_updated.bind(device_instance.position))
+	if device_instance.device.device_type != Device.DeviceType.BuiltIn:
+		AudioEngineOSC.send(device_instance.osc_addr("get_parameters"), [])
+	if device_instance.loaded_file_path != "":
+		device_instance.load_file(device_instance.loaded_file_path)
+	device_instance.sync_slot_to_engine()
+	for child in device_instance.children:
+		_send_add_device_osc(child, device_instance)
+		_sync_device_tree_to_engine(child)
 
 
 func get_device(position: int) -> DeviceInstance:
@@ -729,6 +727,18 @@ func get_device(position: int) -> DeviceInstance:
 func get_device_count() -> int:
 	"""Get number of devices on this channel."""
 	return devices.size()
+
+
+func _wire_loaded_device(device_instance: DeviceInstance, parent: DeviceInstance) -> void:
+	## Restore parent links, positions, and channel ids after project load.
+	device_instance.channel_id = id
+	device_instance.set_parent_device(parent)
+	var host: Array[DeviceInstance] = parent.children if parent else devices
+	var idx := host.find(device_instance)
+	if idx >= 0:
+		device_instance.position = idx
+	for child in device_instance.children:
+		_wire_loaded_device(child, device_instance)
 
 
 # ============================================================================
@@ -819,11 +829,11 @@ static func from_json(data: Dictionary) -> Channel:
 		if device_data is Dictionary:
 			var device_instance = DeviceInstance.from_json(device_data)
 			if device_instance:
-				var pos = device_instance.position
 				channel.devices.append(device_instance)
-				
-				# Connect to device parameter changes (same as add_device does)
-				device_instance.parameter_changed.connect(channel._on_device_parameter_changed.bindv([pos]))
+				channel._wire_loaded_device(device_instance, null)
+				device_instance.parameter_changed.connect(
+					channel._on_device_parameter_changed.bindv([device_instance.position])
+				)
 			else:
 				# Device not found - skip it but log
 				var device_id = device_data.get("device_id", "unknown")

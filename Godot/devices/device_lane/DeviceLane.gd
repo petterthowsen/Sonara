@@ -298,42 +298,14 @@ func _can_drop_data_at_position(_at_position: Vector2, data: Variant, d_position
 	"""Check if we can drop data at the specified position."""
 	if not channel:
 		return false
-	
-	# Allow DeviceInstance for reordering
 	if data is DeviceInstance:
-		var device_inst = data as DeviceInstance
-		# Check if this device belongs to this channel
-		if device_inst.channel_id != channel.id:
+		if not DeviceDropUtil.can_drop_instance_on_host(channel, data, null):
 			return false
-		# Don't allow dropping at the same position
-		if device_inst.position == d_position:
+		if data.get_parent_device() == null and data.position == d_position:
 			return false
 		return true
-	
-	# Allow Asset for adding new devices
-	elif data is Asset:
-		var asset = data as Asset
-		
-		# Handle SFZ file drops (can only be dropped on INSTRUMENT channels)
-		if asset.type == Asset.TYPE.SFZ:
-			return channel.channel_type == Channel.ChannelType.INSTRUMENT
-		
-		# Handle device drops
-		if asset.type != Asset.TYPE.Device:
-			return false
-		
-		# Get the device metadata to check its category
-		var device = AssetService.get_device(asset.path)
-		if not device:
-			return false
-		
-		# INSTRUMENT devices can only be dropped on INSTRUMENT channels
-		if device.category == Device.DeviceCategory.Instrument:
-			return channel.channel_type == Channel.ChannelType.INSTRUMENT
-		
-		# EFFECT devices can be dropped on any channel (not Master if we want to restrict)
-		return not channel.is_master
-	
+	if data is Asset:
+		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
 	return false
 
 
@@ -341,72 +313,12 @@ func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position : i
 	"""Handle dropping data at the specified position."""
 	if not channel:
 		return
-	
-	# Handle DeviceInstance (reordering)
 	if data is DeviceInstance:
-		var device_inst = data as DeviceInstance
-		if device_inst.channel_id != channel.id:
-			logger.error("Not Yet Implemented: Dropping device from another channel")
-			return
-		
-		var from_position = device_inst.position
-		
-		# Adjust target position if moving forward (we're removing before inserting)
-		var to_position = d_position
-		if from_position < to_position:
-			to_position -= 1
-		
-		if from_position != to_position:
-			HistoryUtil.execute(DeviceMoveCommand.new(channel, from_position, to_position))
+		DeviceDropUtil.drop_instance(channel, data, null, d_position)
 		return
-	
-	# Handle Asset (adding new device)
 	if data is Asset:
-		var asset = data as Asset
-		
-		# Handle SFZ file drops
-		if asset.type == Asset.TYPE.SFZ:
-			_handle_sfz_drop_at_position(asset, d_position)
-			return
-		
-		# Handle device drops
-		if asset.type != Asset.TYPE.Device:
-			return
-		
-		logger.info("Device dropped on channel %d at position %d: %s" % [channel.id, d_position, asset.name])
-		
-		# Get the device metadata
-		var device = AssetService.get_device(asset.path)
-		if not device:
-			logger.error("Failed to get device: %s" % asset.path)
-			return
-		
-		# Create device instance and add to channel at specified position
-		var device_instance = DeviceInstance.new(device, channel.id, d_position)
-		HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, d_position))
-		logger.info("Device added to channel at position %d: %s" % [d_position, device.device_id])
+		await DeviceDropUtil.drop_asset(channel, data, d_position, null, get_tree())
 
-
-func _handle_sfz_drop_at_position(asset: Asset, position: int) -> void:
-	"""Handle dropping an SFZ file at a specific position."""
-	logger.info("SFZ dropped on channel %d at position %d: %s" % [channel.id, position, asset.name])
-	
-	# Get the sfizz device from AssetService
-	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
-	if not sfizz_device:
-		logger.error("Failed to get sfizz device")
-		return
-	
-	# Create sfizz device instance and add to channel at specified position
-	var device_instance = DeviceInstance.new(sfizz_device, channel.id, position)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position))
-	
-	# Load the SFZ file into the device
-	# Give the engine a moment to create the device before loading the file
-	await get_tree().create_timer(0.1).timeout
-	device_instance.load_file(asset.path)
-	
-	logger.info("SFZ loaded into channel at position %d: %s" % [position, asset.name])
 
 # ============================================================================
 # SIGNAL HANDLERS
@@ -426,78 +338,21 @@ func _on_device_panel_request_context_menu(device_instance : DeviceInstance) -> 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	"""Check if we can drop a device or SFZ file on this device lane."""
-	if not channel or not data is Asset:
+	if not channel:
 		return false
-
-	# Handle SFZ file drops (can only be dropped on INSTRUMENT channels)
-	if data.type == Asset.TYPE.SFZ:
-		return channel.channel_type == Channel.ChannelType.INSTRUMENT
-
-	# Handle device drops
-	if data.type != Asset.TYPE.Device:
-		return false
-
-	# Get the device metadata to check its category
-	var device = AssetService.get_device(data.path)
-	if not device:
-		return false
-
-	# INSTRUMENT devices can only be dropped on INSTRUMENT channels
-	if device.category == Device.DeviceCategory.Instrument:
-		return channel.channel_type == Channel.ChannelType.INSTRUMENT
-
-	# EFFECT devices can be dropped on any channel (not Master if we want to restrict)
-	# Allow effects on regular channels and bus channels
-	return not channel.is_master
+	if data is DeviceInstance:
+		return DeviceDropUtil.can_drop_instance_on_host(channel, data, null)
+	if data is Asset:
+		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
+	return false
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	"""Handle dropping a device or SFZ file on this device lane (fallback for non-position drops)."""
-	if not data is Asset or not channel:
+	if not channel:
 		return
-
-	var asset = data as Asset
-	
-	# Handle SFZ file drops
-	if asset.type == Asset.TYPE.SFZ:
-		_handle_sfz_drop(asset)
+	if data is DeviceInstance:
+		DeviceDropUtil.drop_instance(channel, data, null, -1)
 		return
-	
-	# Handle device drops
-	if asset.type != Asset.TYPE.Device:
-		return
-
-	logger.info("Device dropped on channel %d: %s" % [channel.id, asset.name])
-
-	# Get the device metadata
-	var device = AssetService.get_device(asset.path)
-	if not device:
-		logger.error("Failed to get device: %s" % asset.path)
-		return
-
-	# Create device instance and add to channel at end (-1 means append)
-	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	logger.info("Device added to channel: %s" % device.device_id)
-
-
-func _handle_sfz_drop(asset: Asset) -> void:
-	"""Handle dropping an SFZ file on this device lane (fallback for non-position drops)."""
-	logger.info("SFZ dropped on channel %d: %s" % [channel.id, asset.name])
-	
-	# Get the sfizz device from AssetService
-	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
-	if not sfizz_device:
-		logger.error("Failed to get sfizz device")
-		return
-	
-	# Create sfizz device instance and add to channel at end (-1 means append)
-	var device_instance = DeviceInstance.new(sfizz_device, channel.id, channel.get_device_count())
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	
-	# Load the SFZ file into the device
-	# Give the engine a moment to create the device before loading the file
-	await get_tree().create_timer(0.1).timeout
-	device_instance.load_file(asset.path)
-	
-	logger.info("SFZ loaded into channel: %s" % asset.name)
+	if data is Asset:
+		await DeviceDropUtil.drop_asset(channel, data, -1, null, get_tree())

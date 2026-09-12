@@ -61,7 +61,7 @@ func _on_view_shown() -> void:
 	print("[SpectrumVisualizer] _on_view_shown subscribe; renderer_ready=", renderer != null, " ch=", (device.channel_id if device else -1), " pos=", (device.position if device else -1))
 	# Subscribe to spectrum data
 	if device:
-		AudioEngineOSC.subscribe_device_data(device.channel_id, device.position, "spectrum")
+		AudioEngineOSC.subscribe_device_data(device.osc_path(), "spectrum")
 	
 	if not AudioEngineOSC.device_spectrum_received.is_connected(_on_spectrum_received):
 		AudioEngineOSC.device_spectrum_received.connect(_on_spectrum_received)
@@ -87,7 +87,7 @@ func _on_view_hidden() -> void:
 	print("[SpectrumVisualizer] _on_view_hidden unsubscribe")
 	# Unsubscribe
 	if device:
-		AudioEngineOSC.unsubscribe_device_data(device.channel_id, device.position, "spectrum")
+		AudioEngineOSC.unsubscribe_device_data(device.osc_path(), "spectrum")
 	
 	if AudioEngineOSC.device_spectrum_received.is_connected(_on_spectrum_received):
 		AudioEngineOSC.device_spectrum_received.disconnect(_on_spectrum_received)
@@ -171,8 +171,8 @@ func _apply_style_from_param(normalized: float) -> void:
 ## Hold/Freeze behavior is now part of the Speed enum (index 0)
 
 
-func _on_spectrum_received(ch_id: int, dev_pos: int, spectrum: PackedFloat32Array) -> void:
-	if device and ch_id == device.channel_id and dev_pos == device.position:
+func _on_spectrum_received(osc_path: String, spectrum: PackedFloat32Array) -> void:
+	if device and osc_path == device.osc_path():
 		if renderer:
 			renderer.update_spectrum(spectrum)
 			_spectrum_count += 1

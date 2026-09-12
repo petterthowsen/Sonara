@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use super::commands::{EngineState, EngineStatus};
 use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
-use super::devices::{AudioDevice, SfizzDevice};
+use super::devices::{container, AudioDevice, DevicePath, SfizzDevice};
 use super::render_scratch::{RenderScratch, SoloRole};
 use super::types::*;
 
@@ -351,26 +351,25 @@ fn finish_channel(
 /// parameter lists and device data streams.
 fn forward_device_events(
     channel: &mut Channel,
-    sleep_changes: Vec<(usize, bool)>,
+    sleep_changes: Vec<(DevicePath, bool)>,
     status_tx: &Sender<EngineStatus>,
 ) {
     let channel_id = channel.id;
 
-    for (device_position, is_sleeping) in sleep_changes {
+    for (device_path, is_sleeping) in sleep_changes {
         let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
             channel_id,
-            device_position,
+            device_path,
             is_sleeping,
         });
     }
 
-    for (device_position, device) in channel.devices.iter_mut().enumerate() {
+    container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
         if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<ClapDeviceAdapter>() {
-            // In-process plugin: parameter changes from its GUI or modulation
             for (param_id, value) in clap_adapter.take_pending_param_changes() {
                 let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
                     channel_id,
-                    device_position,
+                    device_path: device_path.clone(),
                     param_id,
                     value,
                 });
@@ -378,31 +377,29 @@ fn forward_device_events(
         } else if let Some(subprocess_adapter) =
             device.as_any_mut().downcast_mut::<SubprocessClapAdapter>()
         {
-            // Subprocess plugin: unsolicited ParameterValueChanged messages
             if let Some(changes) = subprocess_adapter.poll_parameter_changes() {
                 for (param_id, value) in changes {
                     let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
                         channel_id,
-                        device_position,
+                        device_path: device_path.clone(),
                         param_id,
                         value,
                     });
                 }
             }
         } else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<SfizzDevice>() {
-            // A new SFZ was loaded, so its parameter list changed
             if sfizz_device.take_parameters_changed() {
                 let params = sfizz_device.parameters();
                 if !params.is_empty() {
                     let _ = status_tx.send(EngineStatus::PluginParameterCount {
                         channel_id,
-                        device_position,
+                        device_path: device_path.clone(),
                         count: params.len(),
                     });
                     for param in params.iter() {
                         let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             param_id: param.id,
                             name: param.name.clone(),
                             min: param.min,
@@ -415,16 +412,15 @@ fn forward_device_events(
             }
         }
 
-        // Device data streams (spectrum, oscilloscope, etc.)
         if let Some((data_type, data)) = device.poll_device_data() {
             let _ = status_tx.try_send(EngineStatus::DeviceData {
                 channel_id,
-                device_position,
+                device_path: device_path.clone(),
                 data_type,
                 data,
             });
         }
-    }
+    });
 }
 
 /// Mix channels and output to the audio device.

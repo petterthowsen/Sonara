@@ -469,11 +469,11 @@ func _handle_single_asset_drop(asset: Asset) -> void:
 			push_error("[Mixer] Failed to get device: ", asset.path)
 			return
 		
-		# Only create instrument channels for instrument devices
-		if device.category == Device.DeviceCategory.Instrument:
+		# Instruments and MIDI containers (Layer/Chain) get their own channel.
+		if device.creates_instrument_track():
 			_create_instrument_channel_with_device(device)
 		else:
-			push_warning("[Mixer] Cannot drop effect device on empty area. Drop on existing channel instead.")
+			push_warning("[Mixer] Cannot drop %s on empty area. Drop on an existing channel instead." % device.get_category_string())
 
 
 func _create_instrument_channel_with_device(device: Device) -> void:

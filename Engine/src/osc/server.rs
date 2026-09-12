@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
 use crate::audio::types::ClipLoadState;
 use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
@@ -71,13 +72,13 @@ impl OscServer {
         enum GuiEvent {
             Resize {
                 channel_id: usize,
-                device_position: usize,
+                device_path: DevicePath,
                 width: u32,
                 height: u32,
             },
             Closed {
                 channel_id: usize,
-                device_position: usize,
+                device_path: DevicePath,
             },
         }
 
@@ -98,24 +99,24 @@ impl OscServer {
                     match &status {
                         EngineStatus::PluginGuiResizeRequest {
                             channel_id,
-                            device_position,
+                            device_path,
                             width,
                             height,
                         } => {
                             let _ = gui_event_tx.send(GuiEvent::Resize {
                                 channel_id: *channel_id,
-                                device_position: *device_position,
+                                device_path: device_path.clone(),
                                 width: *width,
                                 height: *height,
                             });
                         }
                         EngineStatus::PluginGuiClosed {
                             channel_id,
-                            device_position,
+                            device_path,
                         } => {
                             let _ = gui_event_tx.send(GuiEvent::Closed {
                                 channel_id: *channel_id,
-                                device_position: *device_position,
+                                device_path: device_path.clone(),
                             });
                         }
                         _ => {}
@@ -147,21 +148,20 @@ impl OscServer {
                 match event {
                     GuiEvent::Resize {
                         channel_id,
-                        device_position,
+                        device_path,
                         width,
                         height,
                     } => {
-                        let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                        let process_key = device_path.to_window_key(channel_id);
                         info!("🔄 Resizing window {} to {}x{}", process_key, width, height);
                         window_manager.resize_window(&process_key, width, height);
-                        // Show the window now that it's the right size
                         window_manager.show_window(&process_key);
                     }
                     GuiEvent::Closed {
                         channel_id,
-                        device_position,
+                        device_path,
                     } => {
-                        let process_key = format!("plugin_{}_{}", channel_id, device_position);
+                        let process_key = device_path.to_window_key(channel_id);
                         info!(
                             "🗑️  Plugin confirmed GUI closed, destroying window: {}",
                             process_key
@@ -183,21 +183,12 @@ impl OscServer {
             // Check for window close events (user clicked X)
             while let Ok(process_key) = window_manager.close_event_rx.try_recv() {
                 info!("🗑️  Window close requested by user: {}", process_key);
-                // Parse channel_id and device_position from process_key (format: "plugin_3_0")
-                if let Some(parts) = process_key.strip_prefix("plugin_") {
-                    let parts: Vec<&str> = parts.split('_').collect();
-                    if parts.len() == 2 {
-                        if let (Ok(channel_id), Ok(device_position)) =
-                            (parts[0].parse::<usize>(), parts[1].parse::<usize>())
-                        {
-                            // Send CloseGui command to cleanup plugin state
-                            // Window will be destroyed when we receive PluginGuiClosed status
-                            let _ = command_tx.send(AudioCommand::ClosePluginGui {
-                                channel_id,
-                                device_position,
-                            });
-                        }
-                    }
+                if let Some((channel_id, device_path)) = DevicePath::from_window_key(&process_key)
+                {
+                    let _ = command_tx.send(AudioCommand::ClosePluginGui {
+                        channel_id,
+                        device_path,
+                    });
                 }
             }
 
@@ -344,6 +335,181 @@ impl OscServer {
         Ok(())
     }
 
+    /// Dispatch `/channel/{id}/device/{path}/...` commands (nested `child` segments allowed).
+    fn handle_device_message(
+        &self,
+        channel_id: usize,
+        device_path: DevicePath,
+        action: &[String],
+        args: &[OscType],
+        command_tx: &Sender<AudioCommand>,
+        window_manager: &mut WindowManager,
+    ) -> Result<()> {
+        let action_refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+        match action_refs.as_slice() {
+            ["activate"] => {
+                if let Some(OscType::Int(active)) = args.first() {
+                    command_tx.send(AudioCommand::SetDeviceActive {
+                        channel_id,
+                        device_path,
+                        active: *active != 0,
+                    })?;
+                }
+            }
+            ["enable"] => {
+                if let Some(OscType::Int(enabled)) = args.first() {
+                    command_tx.send(AudioCommand::SetDeviceEnabled {
+                        channel_id,
+                        device_path,
+                        enabled: *enabled != 0,
+                    })?;
+                }
+            }
+            ["load_file"] => {
+                if let Some(OscType::String(file_path)) = args.first() {
+                    command_tx.send(AudioCommand::LoadDeviceFile {
+                        channel_id,
+                        device_path,
+                        file_path: file_path.clone(),
+                    })?;
+                }
+            }
+            ["gui", "open"] => {
+                let process_key = device_path.to_window_key(channel_id);
+                let window_handle = window_manager.create_window(process_key, 800, 600);
+                command_tx.send(AudioCommand::OpenPluginGui {
+                    channel_id,
+                    device_path,
+                    window_handle,
+                })?;
+            }
+            ["gui", "close"] => {
+                let process_key = device_path.to_window_key(channel_id);
+                window_manager.destroy_window(&process_key);
+                command_tx.send(AudioCommand::ClosePluginGui {
+                    channel_id,
+                    device_path,
+                })?;
+            }
+            ["param", param_id_str] => {
+                if let Ok(param_id) = param_id_str.parse::<u32>() {
+                    match args.first() {
+                        Some(OscType::Float(v)) => {
+                            command_tx.send(AudioCommand::SetDeviceParameter {
+                                channel_id,
+                                device_path,
+                                param_id,
+                                value: crate::audio::types::ParamSetValue::Normalized(*v),
+                            })?;
+                        }
+                        Some(OscType::Int(i)) => {
+                            command_tx.send(AudioCommand::SetDeviceParameter {
+                                channel_id,
+                                device_path,
+                                param_id,
+                                value: crate::audio::types::ParamSetValue::Index(*i),
+                            })?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            ["data", "subscribe"] => {
+                if let Some(OscType::String(data_type)) = args.first() {
+                    command_tx.send(AudioCommand::SubscribeDeviceData {
+                        channel_id,
+                        device_path,
+                        data_type: data_type.clone(),
+                    })?;
+                }
+            }
+            ["data", "unsubscribe"] => {
+                if let Some(OscType::String(data_type)) = args.first() {
+                    command_tx.send(AudioCommand::UnsubscribeDeviceData {
+                        channel_id,
+                        device_path,
+                        data_type: data_type.clone(),
+                    })?;
+                }
+            }
+            ["add_device"] => {
+                if let Some(cmd) = parse_add_device_command(channel_id, device_path, args) {
+                    command_tx.send(cmd)?;
+                }
+            }
+            ["remove_device"] => {
+                if let Some(OscType::Int(position)) = args.first() {
+                    command_tx.send(AudioCommand::RemoveDeviceFromChannel {
+                        channel_id,
+                        parent_path: device_path,
+                        position: *position as usize,
+                    })?;
+                }
+            }
+            ["move_device"] => {
+                if let (Some(OscType::Int(from_pos)), Some(OscType::Int(to_pos))) =
+                    (args.get(0), args.get(1))
+                {
+                    command_tx.send(AudioCommand::MoveDevice {
+                        channel_id,
+                        parent_path: device_path,
+                        from_position: *from_pos as usize,
+                        to_position: *to_pos as usize,
+                    })?;
+                }
+            }
+            ["get_parameters"] => {
+                command_tx.send(AudioCommand::GetPluginParameters {
+                    channel_id,
+                    device_path,
+                })?;
+            }
+            ["slot", slot_str, "volume"] => {
+                if let (Ok(slot), Some(OscType::Float(volume))) =
+                    (slot_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetLayerSlotVolume {
+                        channel_id,
+                        device_path,
+                        slot,
+                        volume: *volume,
+                    })?;
+                }
+            }
+            ["slot", slot_str, "mute"] => {
+                if let (Ok(slot), Some(OscType::Int(mute))) =
+                    (slot_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetLayerSlotMute {
+                        channel_id,
+                        device_path,
+                        slot,
+                        mute: *mute != 0,
+                    })?;
+                }
+            }
+            ["slot", slot_str, "solo"] => {
+                if let (Ok(slot), Some(OscType::Int(solo))) =
+                    (slot_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetLayerSlotSolo {
+                        channel_id,
+                        device_path,
+                        slot,
+                        solo: *solo != 0,
+                    })?;
+                }
+            }
+            _ => {
+                warn!(
+                    "Unhandled device OSC action {:?} on channel {} path {}",
+                    action, channel_id, device_path
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Handle an individual OSC message
     fn handle_message(
         &self,
@@ -357,6 +523,17 @@ impl OscServer {
 
         // Split address into parts for path-based routing
         let parts: Vec<&str> = addr.split('/').filter(|s| !s.is_empty()).collect();
+
+        if let Some((channel_id, device_path, action)) = parse_osc_device_addr(&parts) {
+            return self.handle_device_message(
+                channel_id,
+                device_path,
+                &action,
+                args,
+                command_tx,
+                window_manager,
+            );
+        }
 
         // Route based on address pattern
         match parts.as_slice() {
@@ -1048,112 +1225,13 @@ impl OscServer {
                         device_id, device_type, channel_id, position, active, enabled);
                     command_tx.send(AudioCommand::AddDeviceToChannel {
                         channel_id,
+                        parent_path: DevicePath::default(),
                         device_id: device_id.clone(),
                         device_type,
                         device_file,
                         position: *position,
                         active,
                         enabled,
-                    })?;
-                }
-            }
-            ["channel", channel_id_str, "device", device_pos_str, "activate"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(active))) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    args.first(),
-                ) {
-                    info!(
-                        "Set device active state: channel={} device={} active={}",
-                        channel_id,
-                        device_position,
-                        *active != 0
-                    );
-                    command_tx.send(AudioCommand::SetDeviceActive {
-                        channel_id,
-                        device_position,
-                        active: *active != 0,
-                    })?;
-                }
-            }
-            ["channel", channel_id_str, "device", device_pos_str, "enable"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::Int(enabled))) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    args.first(),
-                ) {
-                    info!(
-                        "Set device enabled state: channel={} device={} enabled={}",
-                        channel_id,
-                        device_position,
-                        *enabled != 0
-                    );
-                    command_tx.send(AudioCommand::SetDeviceEnabled {
-                        channel_id,
-                        device_position,
-                        enabled: *enabled != 0,
-                    })?;
-                }
-            }
-            ["channel", channel_id_str, "device", device_pos_str, "load_file"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(file_path))) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    args.first(),
-                ) {
-                    info!(
-                        "Load file into device: channel={} device={} path={}",
-                        channel_id, device_position, file_path
-                    );
-                    command_tx.send(AudioCommand::LoadDeviceFile {
-                        channel_id,
-                        device_position,
-                        file_path: file_path.clone(),
-                    })?;
-                }
-            }
-            ["channel", channel_id_str, "device", device_pos_str, "gui", "open"] => {
-                if let (Ok(channel_id), Ok(device_position)) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                ) {
-                    info!(
-                        "Open plugin GUI: channel={} device={}",
-                        channel_id, device_position
-                    );
-
-                    // Create window for embedded plugin GUI (blocks until created)
-                    let process_key = format!("plugin_{}_{}", channel_id, device_position);
-                    let window_handle = window_manager.create_window(process_key.clone(), 800, 600);
-
-                    if window_handle.is_none() {
-                        warn!("⚠️  Failed to create window for plugin GUI, falling back to floating mode");
-                    }
-
-                    command_tx.send(AudioCommand::OpenPluginGui {
-                        channel_id,
-                        device_position,
-                        window_handle,
-                    })?;
-                }
-            }
-            ["channel", channel_id_str, "device", device_pos_str, "gui", "close"] => {
-                if let (Ok(channel_id), Ok(device_position)) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                ) {
-                    info!(
-                        "Close plugin GUI: channel={} device={}",
-                        channel_id, device_position
-                    );
-
-                    // Destroy window
-                    let process_key = format!("plugin_{}_{}", channel_id, device_position);
-                    window_manager.destroy_window(&process_key);
-
-                    command_tx.send(AudioCommand::ClosePluginGui {
-                        channel_id,
-                        device_position,
                     })?;
                 }
             }
@@ -1167,6 +1245,7 @@ impl OscServer {
                     );
                     command_tx.send(AudioCommand::RemoveDeviceFromChannel {
                         channel_id,
+                        parent_path: DevicePath::default(),
                         position: *position as usize,
                     })?;
                 }
@@ -1181,6 +1260,7 @@ impl OscServer {
                     );
                     command_tx.send(AudioCommand::MoveDevice {
                         channel_id,
+                        parent_path: DevicePath::default(),
                         from_position: *from_pos as usize,
                         to_position: *to_pos as usize,
                     })?;
@@ -1192,47 +1272,6 @@ impl OscServer {
                     command_tx.send(AudioCommand::ClearChannelDevices { channel_id })?;
                 }
             }
-            ["channel", channel_id_str, "device", device_pos_str, "param", param_id_str] => {
-                let parsed = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    param_id_str.parse::<u32>(),
-                    args.first(),
-                );
-                match parsed {
-                    (
-                        Ok(channel_id),
-                        Ok(device_position),
-                        Ok(param_id),
-                        Some(OscType::Float(v)),
-                    ) => {
-                        info!(
-                            "Set device parameter: channel={} device={} param={} value={}",
-                            channel_id, device_position, param_id, v
-                        );
-                        command_tx.send(AudioCommand::SetDeviceParameter {
-                            channel_id,
-                            device_position,
-                            param_id,
-                            value: crate::audio::types::ParamSetValue::Normalized(*v),
-                        })?;
-                    }
-                    (Ok(channel_id), Ok(device_position), Ok(param_id), Some(OscType::Int(i))) => {
-                        info!(
-                            "Set device parameter (index): channel={} device={} param={} index={}",
-                            channel_id, device_position, param_id, i
-                        );
-                        command_tx.send(AudioCommand::SetDeviceParameter {
-                            channel_id,
-                            device_position,
-                            param_id,
-                            value: crate::audio::types::ParamSetValue::Index(*i),
-                        })?;
-                    }
-                    _ => {}
-                }
-            }
-
             // Plugin management - path-based: /plugin/{command}
             ["plugin", "scan"] => {
                 info!("Scan plugins");
@@ -1252,7 +1291,7 @@ impl OscServer {
                     );
                     command_tx.send(AudioCommand::GetPluginParameters {
                         channel_id: *channel_id as usize,
-                        device_position: *device_position as usize,
+                        device_path: DevicePath::root(*device_position as usize),
                     })?;
                 }
             }
@@ -1266,7 +1305,7 @@ impl OscServer {
                     );
                     command_tx.send(AudioCommand::SavePluginState {
                         channel_id: *channel_id as usize,
-                        device_position: *device_position as usize,
+                        device_path: DevicePath::root(*device_position as usize),
                     })?;
                 }
             }
@@ -1285,46 +1324,8 @@ impl OscServer {
                     );
                     command_tx.send(AudioCommand::LoadPluginState {
                         channel_id: *channel_id as usize,
-                        device_position: *device_position as usize,
+                        device_path: DevicePath::root(*device_position as usize),
                         state_base64: state_base64.clone(),
-                    })?;
-                }
-            }
-
-            // Device data subscriptions: /channel/{id}/device/{pos}/data/subscribe
-            ["channel", channel_id_str, "device", device_pos_str, "data", "subscribe"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(data_type))) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    args.first(),
-                ) {
-                    info!(
-                        "Subscribe to '{}' data on channel {} device {}",
-                        data_type, channel_id, device_position
-                    );
-                    command_tx.send(AudioCommand::SubscribeDeviceData {
-                        channel_id,
-                        device_position,
-                        data_type: data_type.clone(),
-                    })?;
-                }
-            }
-
-            // Device data unsubscriptions: /channel/{id}/device/{pos}/data/unsubscribe
-            ["channel", channel_id_str, "device", device_pos_str, "data", "unsubscribe"] => {
-                if let (Ok(channel_id), Ok(device_position), Some(OscType::String(data_type))) = (
-                    channel_id_str.parse::<usize>(),
-                    device_pos_str.parse::<usize>(),
-                    args.first(),
-                ) {
-                    info!(
-                        "Unsubscribe from '{}' data on channel {} device {}",
-                        data_type, channel_id, device_position
-                    );
-                    command_tx.send(AudioCommand::UnsubscribeDeviceData {
-                        channel_id,
-                        device_position,
-                        data_type: data_type.clone(),
                     })?;
                 }
             }
@@ -1448,18 +1449,18 @@ impl OscServer {
             }
             EngineStatus::DeviceActiveChanged {
                 channel_id,
-                device_position,
+                device_path,
                 active,
             } => (
-                format!("/channel/{}/device/{}/active", channel_id, device_position),
+                device_path.to_osc_addr(channel_id, "active"),
                 vec![OscType::Int(if active { 1 } else { 0 })],
             ),
             EngineStatus::DeviceEnabledChanged {
                 channel_id,
-                device_position,
+                device_path,
                 enabled,
             } => (
-                format!("/channel/{}/device/{}/enabled", channel_id, device_position),
+                device_path.to_osc_addr(channel_id, "enabled"),
                 vec![OscType::Int(if enabled { 1 } else { 0 })],
             ),
             EngineStatus::DeviceReady { .. } => {
@@ -1469,13 +1470,10 @@ impl OscServer {
             }
             EngineStatus::DeviceLoadingStateChanged {
                 channel_id,
-                device_position,
+                device_path,
                 state,
             } => (
-                format!(
-                    "/channel/{}/device/{}/loading_state",
-                    channel_id, device_position
-                ),
+                device_path.to_osc_addr(channel_id, "loading_state"),
                 vec![OscType::String(state)],
             ),
             EngineStatus::PluginGuiResizeRequest { .. } => {
@@ -1485,15 +1483,11 @@ impl OscServer {
             }
             EngineStatus::PluginGuiClosed {
                 channel_id,
-                device_position,
-            } => {
-                // GUI close is handled by the main loop with access to WindowManager
-                // But we also need to notify Godot so it can update UI state
-                (
-                    format!("/channel/{}/device/{}/gui/closed", channel_id, device_position),
-                    vec![],
-                )
-            }
+                device_path,
+            } => (
+                device_path.to_osc_addr(channel_id, "gui/closed"),
+                vec![],
+            ),
             EngineStatus::PluginScanComplete { count } => (
                 "/plugin/scan_complete".to_string(),
                 vec![OscType::Int(count as i32)],
@@ -1532,6 +1526,7 @@ impl OscServer {
                 supports_file_loading,
                 file_extensions,
                 file_type_description,
+                is_container,
                 parameters,
             } => {
                 tracing::info!("📨 Sending builtin device info: {} ({})", name, id);
@@ -1577,6 +1572,8 @@ impl OscServer {
                     }
                 }
 
+                args.push(OscType::Int(if is_container { 1 } else { 0 }));
+
                 ("/builtin/info".to_string(), args)
             }
             EngineStatus::BuiltinDevicesComplete { count } => (
@@ -1585,7 +1582,7 @@ impl OscServer {
             ),
             EngineStatus::PluginParameterInfo {
                 channel_id,
-                device_position,
+                device_path,
                 param_id,
                 name,
                 min,
@@ -1593,10 +1590,7 @@ impl OscServer {
                 default,
                 group,
             } => (
-                format!(
-                    "/channel/{}/device/{}/param/info",
-                    channel_id, device_position
-                ),
+                device_path.to_osc_addr(channel_id, "param/info"),
                 vec![
                     OscType::Int(param_id as i32),
                     OscType::String(name),
@@ -1608,40 +1602,34 @@ impl OscServer {
             ),
             EngineStatus::PluginParameterCount {
                 channel_id,
-                device_position,
+                device_path,
                 count,
             } => (
-                format!(
-                    "/channel/{}/device/{}/param/count",
-                    channel_id, device_position
-                ),
+                device_path.to_osc_addr(channel_id, "param/count"),
                 vec![OscType::Int(count as i32)],
             ),
             EngineStatus::PluginStateSaved {
                 channel_id,
-                device_position,
+                device_path,
                 state_base64,
             } => (
                 "/plugin/state/saved".to_string(),
                 vec![
                     OscType::Int(channel_id as i32),
-                    OscType::Int(device_position as i32),
+                    OscType::String(device_path.to_string()),
                     OscType::String(state_base64),
                 ],
             ),
             EngineStatus::PluginParameterValueChanged {
                 channel_id,
-                device_position,
+                device_path,
                 param_id,
                 value,
             } => {
-                let addr = format!(
-                    "/channel/{}/device/{}/param/{}/value",
-                    channel_id, device_position, param_id
-                );
+                let addr = device_path.to_osc_addr(channel_id, &format!("param/{}/value", param_id));
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
-            }
+            },
             EngineStatus::LogMessage { level, message } => (
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
@@ -1652,19 +1640,19 @@ impl OscServer {
             ),
             EngineStatus::DeviceData {
                 channel_id,
-                device_position,
+                device_path,
                 data_type,
                 data,
             } => (
-                format!("/channel/{}/device/{}/data", channel_id, device_position),
+                device_path.to_osc_addr(channel_id, "data"),
                 vec![OscType::String(data_type), OscType::Blob(data)],
             ),
             EngineStatus::DeviceSleepStatus {
                 channel_id,
-                device_position,
+                device_path,
                 is_sleeping,
             } => (
-                format!("/channel/{}/device/{}/sleep", channel_id, device_position),
+                device_path.to_osc_addr(channel_id, "sleep"),
                 vec![OscType::Int(if is_sleeping { 1 } else { 0 })],
             ),
         };
@@ -1942,4 +1930,70 @@ impl OscServer {
 
         Ok(())
     }
+}
+
+/// Parse `/add_device` arguments shared by channel-root and nested container paths.
+fn parse_add_device_command(
+    channel_id: usize,
+    parent_path: DevicePath,
+    args: &[OscType],
+) -> Option<AudioCommand> {
+    let device_id = match args.first() {
+        Some(OscType::String(s)) => s.clone(),
+        _ => return None,
+    };
+    let position = match args.get(1) {
+        Some(OscType::Int(p)) => *p,
+        _ => return None,
+    };
+    let active = args
+        .get(2)
+        .and_then(|arg| {
+            if let OscType::Int(v) = arg {
+                Some(*v != 0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(true);
+    let enabled = args
+        .get(3)
+        .and_then(|arg| {
+            if let OscType::Int(v) = arg {
+                Some(*v != 0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(true);
+    let device_type = args
+        .get(4)
+        .and_then(|arg| {
+            if let OscType::String(t) = arg {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "builtin".to_string());
+    let device_file = args
+        .get(5)
+        .and_then(|arg| {
+            if let OscType::String(f) = arg {
+                Some(f.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    Some(AudioCommand::AddDeviceToChannel {
+        channel_id,
+        parent_path,
+        device_id,
+        device_type,
+        device_file,
+        position,
+        active,
+        enabled,
+    })
 }

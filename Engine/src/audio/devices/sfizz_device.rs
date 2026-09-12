@@ -4,8 +4,8 @@
 //! Supports background loading of SFZ files for real-time safety.
 
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, FileLoadingSupport, MidiPort, ParamId, ParamInfo,
-    ParamType, ParamValue, PortFlow,
+    AudioDevice, DeviceCategory, DevicePath, DeviceVariant, FileLoadingSupport, MidiPort, ParamId,
+    ParamInfo, ParamType, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
 use crossbeam::channel::Sender;
@@ -91,7 +91,7 @@ pub struct SfizzDevice {
 
     // Plugin position (for sending loading state notifications)
     channel_id: usize,
-    device_position: usize,
+    device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
 
     // Queued MIDI events (frame-accurate within next block)
@@ -176,7 +176,7 @@ impl SfizzDevice {
         sample_rate: f32,
         max_buffer_size: usize,
         channel_id: usize,
-        device_position: usize,
+        device_path: DevicePath,
         status_tx: Option<Sender<EngineStatus>>,
     ) -> Self {
         info!(
@@ -197,7 +197,7 @@ impl SfizzDevice {
             is_active: true,
             is_enabled: true,
             channel_id,
-            device_position,
+            device_path,
             status_tx,
             queued_midi: Vec::with_capacity(256),
             pending_param_changes: Vec::new(),
@@ -207,7 +207,7 @@ impl SfizzDevice {
     /// Create a metadata-only instance for device advertisement purposes
     /// This doesn't require runtime parameters like channel_id and status_tx
     pub fn new_for_metadata(sample_rate: f32) -> Self {
-        Self::new(sample_rate, 1024, 0, 0, None)
+        Self::new(sample_rate, 1024, 0, DevicePath::root(0), None)
     }
 
     /// Check if parameters have changed and clear the flag (poll-based notification)
@@ -288,7 +288,7 @@ impl SfizzDevice {
         if let Some(ref tx) = self.status_tx {
             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                 channel_id: self.channel_id,
-                device_position: self.device_position,
+                device_path: self.device_path.clone(),
                 state: "loading".to_string(),
             });
         }
@@ -308,7 +308,7 @@ impl SfizzDevice {
         let max_buffer_size = self.max_buffer_size;
         let status_tx = self.status_tx.clone();
         let channel_id = self.channel_id;
-        let device_position = self.device_position;
+        let device_path = self.device_path.clone();
 
         // Spawn background loading thread
         std::thread::spawn(move || {
@@ -332,7 +332,7 @@ impl SfizzDevice {
                         if let Some(ref tx) = status_tx {
                             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                                 channel_id,
-                                device_position,
+                                device_path: device_path.clone(),
                                 state: format!("failed:{}", error_msg),
                             });
                         }
@@ -391,7 +391,7 @@ impl SfizzDevice {
                             if let Some(ref tx) = status_tx {
                                 let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                                     channel_id,
-                                    device_position,
+                                    device_path: device_path.clone(),
                                     state: "ready".to_string(),
                                 });
                             }
@@ -406,7 +406,7 @@ impl SfizzDevice {
                             if let Some(ref tx) = status_tx {
                                 let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                                     channel_id,
-                                    device_position,
+                                    device_path: device_path.clone(),
                                     state: format!("failed:{}", error_msg),
                                 });
                             }
@@ -423,7 +423,7 @@ impl SfizzDevice {
                     if let Some(ref tx) = status_tx {
                         let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             state: format!("failed:{}", error_msg),
                         });
                     }
@@ -597,7 +597,7 @@ impl AudioDevice for SfizzDevice {
 
         info!(
             "🎛️  SfizzDevice::set_parameter CC{} = {} (channel={}, pos={})",
-            cc_number, value, self.channel_id, self.device_position
+            cc_number, value, self.channel_id, self.device_path
         );
 
         // Store the value

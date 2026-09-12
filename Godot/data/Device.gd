@@ -6,6 +6,8 @@ class_name Device extends RefCounted
 
 enum DeviceType { BuiltIn, LV2, CLAP }
 enum DeviceCategory { Instrument, Effect, Utility }
+## Panel = device custom UI (not the parameter list). Large/Auxiliary are extra views.
+## Immediate UI (plugin-drawn in-device controls) is a planned right-pane view, separate from ParameterList.
 enum ViewType { Panel, Large, Auxiliary, Compact }
 
 ## ============================================================================
@@ -56,6 +58,9 @@ var audio_in_channels: int = 2
 
 ## Number of audio output channels
 var audio_out_channels: int = 2
+
+## Whether this device can own nested child devices (Chain, Layer).
+var is_container: bool = false
 
 ## Whether this device supports loading files (e.g., SFZ, samples)
 var supports_file_loading: bool = false
@@ -198,6 +203,16 @@ func has_custom_controls() -> bool:
 ## Returns false for built-in devices (which use DeviceLane UI)
 func has_gui() -> bool:
 	return device_type == DeviceType.CLAP
+
+
+## True when dropping this device on an empty tracklist/mixer should create an instrument track.
+func creates_instrument_track() -> bool:
+	return category == DeviceCategory.Instrument or is_container
+
+
+## True when expanding this container should show one focused child at a time (Layer).
+func container_focuses_one_child() -> bool:
+	return is_container and device_id == "sonara.builtin.layer"
 
 ## Get a human-readable device type string
 func get_device_type_string() -> String:

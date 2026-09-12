@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tracing::{info, warn};
 
+use super::devices::DevicePath;
 use super::render_scratch::RenderScratch;
 use super::types::*;
 
@@ -220,6 +221,7 @@ pub enum AudioCommand {
     // Device management
     AddDeviceToChannel {
         channel_id: ChannelId,
+        parent_path: DevicePath,
         device_id: String,
         device_type: String, // "builtin", "clap", "lv2", "vst3"
         device_file: String, // Path to plugin file (empty for built-ins)
@@ -229,10 +231,12 @@ pub enum AudioCommand {
     },
     RemoveDeviceFromChannel {
         channel_id: ChannelId,
+        parent_path: DevicePath,
         position: usize,
     },
     MoveDevice {
         channel_id: ChannelId,
+        parent_path: DevicePath,
         from_position: usize,
         to_position: usize,
     },
@@ -241,28 +245,28 @@ pub enum AudioCommand {
     },
     SetDeviceParameter {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         param_id: u32,
         value: super::types::ParamSetValue,
     },
     SetDeviceActive {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         active: bool,
     },
     SetDeviceEnabled {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         enabled: bool,
     },
     LoadDeviceFile {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         file_path: String,
     },
     DeviceReady {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
 
     // Plugin management
@@ -270,40 +274,58 @@ pub enum AudioCommand {
     AdvertiseBuiltinDevices,
     GetPluginParameters {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
     SavePluginState {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
     LoadPluginState {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         state_base64: String,
     },
 
     // Plugin GUI
     OpenPluginGui {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         window_handle: Option<u64>,
     },
 
     ClosePluginGui {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
 
     // Device data subscriptions
     SubscribeDeviceData {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         data_type: String, // "spectrum", "oscilloscope", "phase", etc.
     },
     UnsubscribeDeviceData {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         data_type: String,
+    },
+    SetLayerSlotVolume {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        volume: f32,
+    },
+    SetLayerSlotMute {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        mute: bool,
+    },
+    SetLayerSlotSolo {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        solo: bool,
     },
 }
 
@@ -339,34 +361,34 @@ pub enum EngineStatus {
     // Device state changes
     DeviceActiveChanged {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         active: bool,
     },
     DeviceEnabledChanged {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         enabled: bool,
     },
     DeviceReady {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
     DeviceLoadingStateChanged {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         state: String, // "idle", "loading", "ready", "failed:{error}"
     },
 
     // Plugin GUI events
     PluginGuiResizeRequest {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         width: u32,
         height: u32,
     },
     PluginGuiClosed {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
     },
 
     // Plugin discovery responses
@@ -395,6 +417,7 @@ pub enum EngineStatus {
         supports_file_loading: bool,
         file_extensions: Vec<String>,
         file_type_description: String,
+        is_container: bool,
         parameters: Vec<BuiltinParamInfo>,
     },
     BuiltinDevicesComplete {
@@ -404,7 +427,7 @@ pub enum EngineStatus {
     // Plugin parameter responses
     PluginParameterInfo {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         param_id: u32,
         name: String,
         min: f32,
@@ -415,21 +438,21 @@ pub enum EngineStatus {
     },
     PluginParameterCount {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         count: usize,
     },
 
     // Plugin state responses
     PluginStateSaved {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         state_base64: String,
     },
 
     // Plugin parameter value changes (from plugin GUI or internal modulation)
     PluginParameterValueChanged {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         param_id: u32,
         value: f32, // Normalized 0.0-1.0
     },
@@ -448,7 +471,7 @@ pub enum EngineStatus {
     // Device data subscriptions
     DeviceData {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         data_type: String, // "spectrum", "oscilloscope", "phase", etc.
         data: Vec<u8>,     // Binary payload (device-specific format)
     },
@@ -456,7 +479,7 @@ pub enum EngineStatus {
     // Device sleep/wake status (CPU optimization)
     DeviceSleepStatus {
         channel_id: ChannelId,
-        device_position: usize,
+        device_path: DevicePath,
         is_sleeping: bool, // true = device sleeping (saving CPU), false = device active
     },
 }
@@ -1402,25 +1425,22 @@ pub fn process_command(
         // Device management commands
         AudioCommand::MoveDevice {
             channel_id,
+            parent_path,
             from_position,
             to_position,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                let device_count = channel.devices.len();
-                if from_position < device_count && to_position < device_count {
-                    // Remove device from old position
-                    let device = channel.devices.remove(from_position);
-                    // Insert at new position
-                    channel.devices.insert(to_position, device);
-                    info!(
-                        "Device moved in channel {} from position {} to position {}",
-                        channel_id, from_position, to_position
-                    );
-                } else {
-                    warn!(
-                        "Invalid device positions (from: {}, to: {}) for channel {} (device count: {})",
-                        from_position, to_position, channel_id, device_count
-                    );
+                match super::devices::container::move_device(
+                    &mut channel.devices,
+                    &parent_path,
+                    from_position,
+                    to_position,
+                ) {
+                    Ok(()) => info!(
+                        "Device moved in channel {} parent {} from {} to {}",
+                        channel_id, parent_path, from_position, to_position
+                    ),
+                    Err(e) => warn!("{}", e),
                 }
             } else {
                 warn!("Channel {} not found for move device", channel_id);
@@ -1428,134 +1448,117 @@ pub fn process_command(
         }
         AudioCommand::SetDeviceParameter {
             channel_id,
-            device_position,
+            device_path,
             param_id,
             value,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if device_position < channel.devices.len() {
-                    // Determine normalized value based on ParamInfo
-                    let device = &channel.devices[device_position];
-                    let params = device.parameters();
-                    let mut normalized: f32 = 0.0;
-                    if let Some(info) = params.iter().find(|p| p.id == param_id) {
-                        match value {
-                            super::types::ParamSetValue::Normalized(v) => {
-                                normalized = v.clamp(0.0, 1.0);
-                            }
-                            super::types::ParamSetValue::Index(idx) => {
-                                match info.param_type {
-                                    super::devices::ParamType::Bool => {
-                                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                let Some(device) = channel.device_at_path_mut(&device_path) else {
+                    warn!(
+                        "Invalid device path {} for channel {}",
+                        device_path, channel_id
+                    );
+                    return None;
+                };
+                let params = device.parameters();
+                let mut normalized: f32 = 0.0;
+                if let Some(info) = params.iter().find(|p| p.id == param_id) {
+                    match value {
+                        super::types::ParamSetValue::Normalized(v) => {
+                            normalized = v.clamp(0.0, 1.0);
+                        }
+                        super::types::ParamSetValue::Index(idx) => {
+                            match info.param_type {
+                                super::devices::ParamType::Bool => {
+                                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                                }
+                                super::devices::ParamType::Enum => {
+                                    let n = info.enum_values.len();
+                                    if n > 1 {
+                                        let i = idx.max(0) as usize;
+                                        let i = i.min(n - 1);
+                                        normalized = (i as f32) / ((n - 1) as f32);
+                                    } else {
+                                        normalized = 0.0;
                                     }
-                                    super::devices::ParamType::Enum => {
-                                        let n = info.enum_values.len();
-                                        if n > 1 {
-                                            let i = idx.max(0) as usize;
-                                            let i = i.min(n - 1);
-                                            normalized = (i as f32) / ((n - 1) as f32);
-                                        } else {
-                                            normalized = 0.0;
-                                        }
-                                    }
-                                    super::devices::ParamType::Float => {
-                                        // Treat index as 0/1 for floats as a fallback
-                                        normalized = if idx <= 0 { 0.0 } else { 1.0 };
-                                    }
+                                }
+                                super::devices::ParamType::Float => {
+                                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
                                 }
                             }
                         }
-                    } else {
-                        // Unknown param: use float if provided
-                        if let super::types::ParamSetValue::Normalized(v) = value {
-                            normalized = v.clamp(0.0, 1.0);
-                        }
                     }
-
-                    if channel.set_device_parameter(device_position, param_id, normalized) {
-                        info!(
-                            "Device parameter set: channel={} device={} param={} value={}",
-                            channel_id, device_position, param_id, normalized
-                        );
-                        // Echo back to UI so Godot updates its single source of truth and emits parameter_changed
-                        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                            channel_id,
-                            device_position,
-                            param_id,
-                            value: normalized,
-                        });
-                    } else {
-                        warn!(
-                            "Invalid device position {} for channel {}",
-                            device_position, channel_id
-                        );
-                    }
-                } else {
-                    warn!(
-                        "Invalid device position {} for channel {}",
-                        device_position, channel_id
-                    );
+                } else if let super::types::ParamSetValue::Normalized(v) = value {
+                    normalized = v.clamp(0.0, 1.0);
                 }
+
+                device.set_parameter(param_id, normalized);
+                info!(
+                    "Device parameter set: channel={} device={} param={} value={}",
+                    channel_id, device_path, param_id, normalized
+                );
+                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                    channel_id,
+                    device_path,
+                    param_id,
+                    value: normalized,
+                });
             } else {
                 warn!("Channel {} not found for set device parameter", channel_id);
             }
         }
         AudioCommand::SetDeviceActive {
             channel_id,
-            device_position,
+            device_path,
             active,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     if active && !device.is_active() {
-                        // Activate
                         match device.activate() {
                             Ok(_) => {
                                 info!(
                                     "Device activated: channel={} device={}",
-                                    channel_id, device_position
+                                    channel_id, device_path
                                 );
-                                // Send status update back to UI
                                 let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
                                     channel_id,
-                                    device_position,
+                                    device_path,
                                     active: true,
                                 });
                             }
                             Err(e) => {
                                 warn!(
-                                    "Failed to activate device at channel {} position {}: {}",
-                                    channel_id, device_position, e
+                                    "Failed to activate device at channel {} path {}: {}",
+                                    channel_id, device_path, e
                                 );
                             }
                         }
                     } else if !active && device.is_active() {
-                        // Deactivate
                         match device.deactivate() {
                             Ok(_) => {
                                 info!(
                                     "Device deactivated: channel={} device={}",
-                                    channel_id, device_position
+                                    channel_id, device_path
                                 );
-                                // Send status update back to UI
                                 let _ = status_tx.send(EngineStatus::DeviceActiveChanged {
                                     channel_id,
-                                    device_position,
+                                    device_path,
                                     active: false,
                                 });
                             }
                             Err(e) => {
                                 warn!(
-                                    "Failed to deactivate device at channel {} position {}: {}",
-                                    channel_id, device_position, e
+                                    "Failed to deactivate device at channel {} path {}: {}",
+                                    channel_id, device_path, e
                                 );
                             }
                         }
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
@@ -1564,29 +1567,27 @@ pub fn process_command(
         }
         AudioCommand::SetDeviceEnabled {
             channel_id,
-            device_position,
+            device_path,
             enabled,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     device.set_enabled(enabled);
                     info!(
-                        "Device {} set to {}: channel={} device={}",
-                        if enabled { "enabled" } else { "disabled" },
+                        "Device set to {}: channel={} device={}",
                         if enabled { "enabled" } else { "bypassed" },
                         channel_id,
-                        device_position
+                        device_path
                     );
-                    // Send status update back to UI
                     let _ = status_tx.send(EngineStatus::DeviceEnabledChanged {
                         channel_id,
-                        device_position,
+                        device_path,
                         enabled,
                     });
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
@@ -1595,65 +1596,58 @@ pub fn process_command(
         }
         AudioCommand::LoadDeviceFile {
             channel_id,
-            device_position,
+            device_path,
             file_path,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
-                    // Try to downcast to SfizzDevice
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     if let Some(sfizz_device) = device
                         .as_any_mut()
                         .downcast_mut::<super::devices::SfizzDevice>()
                     {
                         info!(
                             "Loading SFZ file into device: channel={} device={} path={}",
-                            channel_id, device_position, file_path
+                            channel_id, device_path, file_path
                         );
                         sfizz_device.load_sfz_async(std::path::PathBuf::from(file_path));
                     } else {
                         warn!(
-                            "Device at channel {} position {} does not support file loading",
-                            channel_id, device_position
+                            "Device at channel {} path {} does not support file loading",
+                            channel_id, device_path
                         );
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for load device file", channel_id);
             }
         }
-
-        // Plugin management commands
         AudioCommand::GetPluginParameters {
             channel_id,
-            device_position,
+            device_path,
         } => {
             if let Some(channel) = state.channels.get(&channel_id) {
-                if let Some(device) = channel.devices.get(device_position) {
+                if let Some(device) = channel.device_at_path(&device_path) {
                     let params = device.parameters();
                     info!(
-                        "Querying {} parameters for device at channel {} position {}",
+                        "Querying {} parameters for device at channel {} path {}",
                         params.len(),
                         channel_id,
-                        device_position
+                        device_path
                     );
-
-                    // Send parameter count
                     let _ = status_tx.send(EngineStatus::PluginParameterCount {
                         channel_id,
-                        device_position,
+                        device_path: device_path.clone(),
                         count: params.len(),
                     });
-
-                    // Send parameter info for each parameter
                     for param in params.iter() {
                         let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             param_id: param.id,
                             name: param.name.clone(),
                             min: param.min,
@@ -1664,50 +1658,41 @@ pub fn process_command(
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for get plugin parameters", channel_id);
             }
         }
-
         AudioCommand::DeviceReady {
             channel_id,
-            device_position,
+            device_path,
         } => {
             info!(
-                "Device ready notification for channel {} position {}, re-sending parameters",
-                channel_id, device_position
+                "Device ready notification for channel {} path {}, re-sending parameters",
+                channel_id, device_path
             );
-
-            // Re-send parameter info now that device is ready
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
-                    if let Some(subprocess_device) =
-                        device
-                            .as_any_mut()
-                            .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(subprocess_device) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
                     {
                         subprocess_device.on_device_ready();
                     }
-
                     let params = device.parameters();
-
                     if !params.is_empty() {
-                        // Send parameter count
                         let _ = status_tx.send(EngineStatus::PluginParameterCount {
                             channel_id,
-                            device_position,
+                            device_path: device_path.clone(),
                             count: params.len(),
                         });
-
-                        // Send parameter info for each parameter
                         for param in params.iter() {
                             let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                                 channel_id,
-                                device_position,
+                                device_path: device_path.clone(),
                                 param_id: param.id,
                                 name: param.name.clone(),
                                 min: param.min,
@@ -1720,69 +1705,61 @@ pub fn process_command(
                 }
             }
         }
-
         AudioCommand::SavePluginState {
             channel_id,
-            device_position,
+            device_path,
         } => {
             if let Some(channel) = state.channels.get(&channel_id) {
-                if let Some(_device) = channel.devices.get(device_position) {
-                    // Try to get state from device (if it's a CLAP plugin)
-                    // For now, return empty state - will implement state extension later
+                if channel.device_at_path(&device_path).is_some() {
                     info!(
                         "Save plugin state requested for channel {} device {}",
-                        channel_id, device_position
+                        channel_id, device_path
                     );
                     let _ = status_tx.send(EngineStatus::PluginStateSaved {
                         channel_id,
-                        device_position,
-                        state_base64: String::new(), // TODO: Implement state save
+                        device_path,
+                        state_base64: String::new(),
                     });
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for save plugin state", channel_id);
             }
         }
-
         AudioCommand::LoadPluginState {
             channel_id,
-            device_position,
+            device_path,
             state_base64,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(_device) = channel.devices.get_mut(device_position) {
-                    // TODO: Implement state load via CLAP state extension
+                if channel.device_at_path_mut(&device_path).is_some() {
                     info!(
                         "Load plugin state requested for channel {} device {} ({} bytes)",
                         channel_id,
-                        device_position,
+                        device_path,
                         state_base64.len()
                     );
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for load plugin state", channel_id);
             }
         }
-
-        // Plugin GUI commands for in-process plugins. Subprocess plugins are handled by
-        // CommandWorker so their IPC round-trips don't hold the state lock.
         AudioCommand::OpenPluginGui {
             channel_id,
-            device_position,
+            device_path,
             ..
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     use super::devices::clap_host::ClapDeviceAdapter;
                     if let Some(clap_device) =
                         (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
@@ -1791,37 +1768,38 @@ pub fn process_command(
                             Ok(()) => {
                                 info!(
                                     "Opened GUI for in-process plugin at channel {} device {}",
-                                    channel_id, device_position
+                                    channel_id, device_path
                                 );
                             }
                             Err(e) => {
-                                warn!("Failed to open in-process plugin GUI at channel {} device {}: {}",
-                                    channel_id, device_position, e);
+                                warn!(
+                                    "Failed to open in-process plugin GUI at channel {} device {}: {}",
+                                    channel_id, device_path, e
+                                );
                             }
                         }
                     } else {
                         warn!(
-                            "Device at channel {} position {} is not a CLAP plugin",
-                            channel_id, device_position
+                            "Device at channel {} path {} is not a CLAP plugin",
+                            channel_id, device_path
                         );
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for open plugin GUI", channel_id);
             }
         }
-
         AudioCommand::ClosePluginGui {
             channel_id,
-            device_position,
+            device_path,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     use super::devices::clap_host::ClapDeviceAdapter;
                     if let Some(clap_device) =
                         (device.as_any_mut()).downcast_mut::<ClapDeviceAdapter>()
@@ -1830,84 +1808,83 @@ pub fn process_command(
                             Ok(()) => {
                                 info!(
                                     "Closed GUI for in-process plugin at channel {} device {}",
-                                    channel_id, device_position
+                                    channel_id, device_path
                                 );
-                                // Notify OSC that plugin GUI is closed so it can destroy the window
                                 let _ = status_tx.send(EngineStatus::PluginGuiClosed {
                                     channel_id,
-                                    device_position,
+                                    device_path,
                                 });
                             }
                             Err(e) => {
-                                warn!("Failed to close in-process plugin GUI at channel {} device {}: {}",
-                                    channel_id, device_position, e);
+                                warn!(
+                                    "Failed to close in-process plugin GUI at channel {} device {}: {}",
+                                    channel_id, device_path, e
+                                );
                             }
                         }
                     } else {
                         warn!(
-                            "Device at channel {} position {} is not a CLAP plugin",
-                            channel_id, device_position
+                            "Device at channel {} path {} is not a CLAP plugin",
+                            channel_id, device_path
                         );
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for close plugin GUI", channel_id);
             }
         }
-
         AudioCommand::SubscribeDeviceData {
             channel_id,
-            device_position,
+            device_path,
             data_type,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     match device.subscribe_data(&data_type) {
                         Ok(()) => {
                             info!(
                                 "Subscribed to '{}' data on channel {} device {}",
-                                data_type, channel_id, device_position
+                                data_type, channel_id, device_path
                             );
                         }
                         Err(e) => {
                             warn!(
                                 "Failed to subscribe to '{}' on channel {} device {}: {}",
-                                data_type, channel_id, device_position, e
+                                data_type, channel_id, device_path, e
                             );
                         }
                     }
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
                 warn!("Channel {} not found for subscribe device data", channel_id);
             }
         }
-
         AudioCommand::UnsubscribeDeviceData {
             channel_id,
-            device_position,
+            device_path,
             data_type,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.devices.get_mut(device_position) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
                     device.unsubscribe_data(&data_type);
                     info!(
                         "Unsubscribed from '{}' data on channel {} device {}",
-                        data_type, channel_id, device_position
+                        data_type, channel_id, device_path
                     );
                 } else {
                     warn!(
-                        "Device not found at channel {} position {}",
-                        channel_id, device_position
+                        "Device not found at channel {} path {}",
+                        channel_id, device_path
                     );
                 }
             } else {
@@ -1915,6 +1892,77 @@ pub fn process_command(
                     "Channel {} not found for unsubscribe device data",
                     channel_id
                 );
+            }
+        }
+        AudioCommand::SetLayerSlotVolume {
+            channel_id,
+            device_path,
+            slot,
+            volume,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(layer) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::LayerDevice>()
+                    {
+                        if !layer.set_slot_volume_normalized(slot, volume) {
+                            warn!(
+                                "Layer slot {} not found at channel {} path {}",
+                                slot, channel_id, device_path
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "Device at channel {} path {} is not a Layer",
+                            channel_id, device_path
+                        );
+                    }
+                }
+            }
+        }
+        AudioCommand::SetLayerSlotMute {
+            channel_id,
+            device_path,
+            slot,
+            mute,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(layer) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::LayerDevice>()
+                    {
+                        if !layer.set_slot_mute(slot, mute) {
+                            warn!(
+                                "Layer slot {} not found at channel {} path {}",
+                                slot, channel_id, device_path
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        AudioCommand::SetLayerSlotSolo {
+            channel_id,
+            device_path,
+            slot,
+            solo,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(layer) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::LayerDevice>()
+                    {
+                        if !layer.set_slot_solo(slot, solo) {
+                            warn!(
+                                "Layer slot {} not found at channel {} path {}",
+                                slot, channel_id, device_path
+                            );
+                        }
+                    }
+                }
             }
         }
 

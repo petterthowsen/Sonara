@@ -467,12 +467,13 @@ func _handle_single_asset_drop(asset: Asset) -> void:
 			push_error("[TrackList] Failed to get device: ", asset.path)
 			return
 		
-		# Create instrument track + channel pair
-		if device.category == Device.DeviceCategory.Instrument:
+		# Instruments and MIDI containers (Layer/Chain) get their own track.
+		if device.creates_instrument_track():
 			_create_instrument_track_with_device(device)
-		elif device.category == Device.DeviceCategory.Effect:
-			# For effects, add to existing selected track or create new track
+		elif device.category == Device.DeviceCategory.Effect or device.category == Device.DeviceCategory.Utility:
 			_add_effect_to_track(device)
+		else:
+			push_warning("[TrackList] No drop handler for %s (%s)" % [device.name, device.get_category_string()])
 
 
 func _create_instrument_track_with_device(device: Device) -> void:

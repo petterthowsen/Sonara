@@ -12,9 +12,9 @@ signal engine_connected()
 signal engine_disconnected()
 signal engine_log_message(level: String, message: String)  # Emitted for warn/error logs from engine
 
-# Device data subscriptions
-signal device_data_received(channel_id: int, device_position: int, data_type: String, data: PackedByteArray)
-signal device_spectrum_received(channel_id: int, device_position: int, spectrum: PackedFloat32Array)
+# Device data subscriptions (`osc_path` is `/channel/{id}/device/{n}` or nested `/child/{n}`)
+signal device_data_received(osc_path: String, data_type: String, data: PackedByteArray)
+signal device_spectrum_received(osc_path: String, spectrum: PackedFloat32Array)
 
 # ============================================================================
 # CONSTANTS
@@ -125,14 +125,15 @@ func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_
 	osc_client.send_message(address, [bytes, sample_rate, channels])
 
 
-## Subscribe to device visualization data (spectrum, oscilloscope, etc.)
-func subscribe_device_data(channel_id: int, device_position: int, data_type: String) -> void:
-	send("/channel/%d/device/%d/data/subscribe" % [channel_id, device_position], [data_type])
+## Subscribe to device visualization data (spectrum, oscilloscope, etc.).
+## `osc_path` is `DeviceInstance.osc_path()`, e.g. `/channel/2/device/0` or `/channel/2/device/0/child/1`.
+func subscribe_device_data(osc_path: String, data_type: String) -> void:
+	send("%s/data/subscribe" % osc_path, [data_type])
 
 
-## Unsubscribe from device visualization data
-func unsubscribe_device_data(channel_id: int, device_position: int, data_type: String) -> void:
-	send("/channel/%d/device/%d/data/unsubscribe" % [channel_id, device_position], [data_type])
+## Unsubscribe from device visualization data.
+func unsubscribe_device_data(osc_path: String, data_type: String) -> void:
+	send("%s/data/unsubscribe" % osc_path, [data_type])
 
 
 func listen(address: String, callback: Callable) -> void:
@@ -206,30 +207,19 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		_last_heartbeat_time = Time.get_ticks_msec()
 		routed = true
 	
-	# Special handling for device data messages
+	# Special handling for device data messages (top-level or nested child paths)
 	elif address.begins_with("/channel/") and address.ends_with("/data"):
-		# Parse: /channel/{id}/device/{pos}/data
-		var parts = address.split("/")
-		if parts.size() == 5:  # ["", "channel", "{id}", "device", "{pos}", "data"] but only 5 visible?
-			pass  # Actually parts will be: ["", "channel", id, "device", pos, "data"] = 6 parts
-		
-		# Extract channel_id and device_position from address
 		var regex = RegEx.new()
-		regex.compile("/channel/(\\d+)/device/(\\d+)/data")
+		regex.compile("^(/channel/\\d+/device/\\d+(?:/child/\\d+)*)/data$")
 		var result = regex.search(address)
 		if result and values is Array and values.size() >= 2:
-			var channel_id = int(result.get_string(1))
-			var device_position = int(result.get_string(2))
+			var osc_path: String = result.get_string(1)
 			var data_type: String = values[0]
 			var blob: PackedByteArray = values[1]
-			
-			# Emit general device data signal
-			device_data_received.emit(channel_id, device_position, data_type, blob)
-			
-			# Decode and emit type-specific signals
+			device_data_received.emit(osc_path, data_type, blob)
 			if data_type == "spectrum":
 				var spectrum = _decode_f32_array(blob)
-				device_spectrum_received.emit(channel_id, device_position, spectrum)
+				device_spectrum_received.emit(osc_path, spectrum)
 		
 		routed = true
 	
