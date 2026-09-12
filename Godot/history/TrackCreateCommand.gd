@@ -11,14 +11,14 @@ var track: Track = null
 ## Created channel (may be null for folder without channel).
 var channel: Channel = null
 
-## Creation kind: "instrument", "audio", or "folder".
+## Creation kind: "instrument", "audio", "folder", or "group".
 var kind: String = "instrument"
 
 ## Display name used when (re)creating.
 var track_name: String = "Track"
 
 ## Whether folder creation includes a bus channel.
-var folder_with_channel: bool = true
+var folder_with_channel: bool = false
 
 
 ## Create a track-create command. If track/channel already exist, use record().
@@ -28,7 +28,7 @@ func _init(
 	p_name: String = "Track",
 	p_track: Track = null,
 	p_channel: Channel = null,
-	p_folder_with_channel: bool = true
+	p_folder_with_channel: bool = false
 ) -> void:
 	project = p_project
 	kind = p_kind
@@ -41,6 +41,9 @@ func _init(
 			name = "Create Audio Track"
 		"folder":
 			name = "Create Folder"
+		"group":
+			name = "Create Group Track"
+			folder_with_channel = true
 		_:
 			name = "Create Instrument Track"
 
@@ -63,6 +66,8 @@ func do() -> void:
 			result = project.create_audio_track(track_name)
 		"folder":
 			result = project.create_folder_track(track_name, folder_with_channel)
+		"group":
+			result = project.create_folder_track(track_name, true)
 		_:
 			result = project.create_instrument_track(track_name)
 	track = result.get("track")

@@ -28,4 +28,13 @@ func _on_channel_request_move(new_index: int, channel_item: MixerChannel) -> voi
 
 	# Move the child to the new position
 	move_child(channel_item, clamped_index)
+	_sync_channel_order()
 	print("[ChannelsBox] Moved channel from position ", current_child_index, " to ", clamped_index)
+
+
+## Persist mixer display order after a live reorder.
+func _sync_channel_order() -> void:
+	for i in get_child_count():
+		var child := get_child(i)
+		if child is MixerChannel and child.channel:
+			child.channel.order = i

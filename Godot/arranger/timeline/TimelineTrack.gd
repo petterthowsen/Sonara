@@ -23,7 +23,7 @@ class_name TimelineTrack extends Control
 @export var bg_color: Color = "#555":
 	set(value):
 		bg_color = value
-		queue_redraw()
+		_refresh_lane_color()
 
 @export_group("Border")
 @export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3):
@@ -48,6 +48,7 @@ var timeline: Timeline = null
 # Clip UI instances
 const TimelineClipScene = preload("res://arranger/timeline/clip/TimelineClip.tscn")
 var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
+var _lane_bg: ColorRect = null
 
 # ============================================================================
 # SIGNALS
@@ -55,8 +56,19 @@ var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
 signal empty_area_clicked(ticks: int, pixels: float)
 
 
+## Set up hit-testing, fill width, and the live-updating lane tint.
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_ensure_lane_bg()
+	_refresh_lane_color()
+
+
+## Redraw grid/border when layout changes; Control `_draw` does not do this on its own.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		queue_redraw()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -89,6 +101,7 @@ func _gui_input(event: InputEvent) -> void:
 				if event.double_click:
 					_on_double_click(event.position)
 
+
 # ============================================================================
 # BINDING
 # ============================================================================
@@ -118,6 +131,7 @@ func bind_to_track(t: Track, idx: int) -> void:
 	# Update UI from track data
 	_update_from_track()
 
+
 func _update_from_track() -> void:
 	"""Update all UI elements from track data."""
 	if track == null:
@@ -128,8 +142,7 @@ func _update_from_track() -> void:
 
 	# Create clip instances for all clips in track
 	_update_clips()
-
-	queue_redraw()
+	_refresh_lane_color()
 
 
 func _on_track_height_changed(new_height: int) -> void:
@@ -139,14 +152,9 @@ func _on_track_height_changed(new_height: int) -> void:
 
 
 func _on_track_color_changed(_new_color: Color) -> void:
-	"""React to track color changes."""
-	# Redraw background with new color
-	queue_redraw()
-	
-	# Update all clip UI colors
-	for clip_ui in clip_instances:
-		if clip_ui:
-			clip_ui.track_color = track.color
+	"""Apply the new track color to the lane background and clip UIs immediately."""
+	_refresh_lane_color()
+	_update_clip_track_colors()
 
 
 func _update_clips() -> void:
@@ -211,16 +219,55 @@ func _update_clip_positions() -> void:
 # ============================================================================
 # DRAWING
 # ============================================================================
-func _draw():
-	# Draw background
-	var col = bg_color
-	if Sonara.get_config("appearence/color_timeline_by_track", true):
-		col = Color.from_hsv(track.color.h, track.color.s, bg_color.v)
-		col.a = 0.5
+func _ensure_lane_bg() -> void:
+	"""Create a full-rect color layer so lane tint updates without waiting on `_draw`."""
+	if _lane_bg != null:
+		return
+	_lane_bg = ColorRect.new()
+	_lane_bg.name = "LaneBackground"
+	_lane_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lane_bg.show_behind_parent = true
+	add_child(_lane_bg)
+	_lane_bg.owner = null
+	_lane_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	move_child(_lane_bg, 0)
 
-	draw_rect(Rect2(Vector2(0, 0), size), col, true, -1.0, false)
-	
-	# Draw grid lines
+
+func _get_lane_color() -> Color:
+	"""Resolve the lane fill from track color, falling back to `bg_color`."""
+	if track == null:
+		return bg_color
+	var tint_by_track := true
+	if not Engine.is_editor_hint() and Sonara:
+		tint_by_track = Sonara.get_config("appearence/color_timeline_by_track", true)
+	if tint_by_track:
+		var col := Color.from_hsv(track.color.h, track.color.s, bg_color.v)
+		col.a = 0.5
+		return col
+	return bg_color
+
+
+func _refresh_lane_color() -> void:
+	"""Push the current lane color to the ColorRect and redraw grid/border."""
+	if _lane_bg == null and is_inside_tree():
+		_ensure_lane_bg()
+	if _lane_bg:
+		_lane_bg.color = _get_lane_color()
+	queue_redraw()
+
+
+func _update_clip_track_colors() -> void:
+	"""Keep clip note colors in sync with the bound track."""
+	if track == null:
+		return
+	for clip_ui in clip_instances:
+		if clip_ui:
+			clip_ui.track_color = track.color
+
+
+func _draw():
+	if _lane_bg == null:
+		draw_rect(Rect2(Vector2.ZERO, size), _get_lane_color(), true, -1.0, false)
 	if timeline and Sonara and Sonara.editor and Sonara.editor.project:
 		_draw_grid()
 	

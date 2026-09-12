@@ -306,6 +306,8 @@ impl CommandWorker {
         let removed = {
             let mut state = self.lock_state();
             state.set_current_tick(0);
+            state.set_fractional_tick_accumulator(0.0);
+            let _ = state.take_playhead_midi_dispatch();
             (
                 std::mem::take(&mut state.channels),
                 std::mem::take(&mut state.tracks),

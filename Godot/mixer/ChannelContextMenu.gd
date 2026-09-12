@@ -17,10 +17,23 @@ var channel : Channel = null
 
 
 func _ready() -> void:
+	# ColorPickerButton opens a nested Window; keep this menu alive so color_changed fires.
+	exclusive = false
+	transient = false
+	color_picker.edit_alpha = false
+	color_picker.edit_intensity = false
 	color_picker.color_changed.connect(_on_color_changed)
+	color_picker.pressed.connect(_on_color_picker_pressed)
 	label.value_changed.connect(_on_label_changed)
 	active_checkbox.toggled.connect(_on_active_toggled)
 	delete_button.pressed.connect(_on_delete_pressed)
+
+
+## Connect the nested ColorPicker once it exists.
+func _on_color_picker_pressed() -> void:
+	var picker := color_picker.get_picker()
+	if picker and not picker.color_changed.is_connected(_on_color_changed):
+		picker.color_changed.connect(_on_color_changed)
 
 func bind_to_channel(ch : Channel):
 	channel = ch
@@ -34,7 +47,12 @@ func bind_to_channel(ch : Channel):
 	delete_button.disabled = channel.is_master
 
 func _on_color_changed(color : Color):
-	if not channel: return
+	if not channel:
+		push_warning("[ChannelContextMenu] color_changed with no channel")
+		return
+	print("[ChannelContextMenu] color → channel %d '%s' routed_tracks=%d" % [
+		channel.id, channel.name, channel.routed_tracks.size()
+	])
 	channel.set_color(color)
 
 func _on_label_changed(new_name : String):

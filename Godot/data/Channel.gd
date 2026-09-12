@@ -224,14 +224,13 @@ func set_name(new_name : String):
 
 
 func set_color(new_color : Color):
+	"""Store the color as-is and push it to paired tracks (routed strips and folder/group buses)."""
+	if color == new_color:
+		return
 	color = new_color
+	print("[Channel %d] set_color %s routed_tracks=%d" % [id, color, routed_tracks.size()])
 	color_changed.emit(color)
-	
-	# Update all routed tracks that sync color from channel
-	for track in routed_tracks:
-		if track.color_by_channel:
-			track._color = new_color
-			track.color_changed.emit(new_color)
+	_sync_color_to_paired_tracks(new_color)
 
 
 func set_volume(value: float) -> void:
@@ -543,6 +542,39 @@ func unregister_track(track: Track) -> void:
 		print("[Channel %d] Track '%s' unregistered" % [id, track.name])
 
 
+## Push this channel's color onto every track that syncs from it.
+func _sync_color_to_paired_tracks(new_color: Color) -> void:
+	var notified: Dictionary = {}
+	for track in routed_tracks:
+		_apply_color_to_track(track, new_color, notified)
+	var project := _fallback_project()
+	if project == null:
+		return
+	for track in project.tracks:
+		if track and track.color_by_channel and track.default_channel_id == id:
+			_apply_color_to_track(track, new_color, notified)
+
+
+## Apply a color to one track if it hasn't already been notified this change.
+func _apply_color_to_track(track: Track, new_color: Color, notified: Dictionary) -> void:
+	if track == null or notified.has(track):
+		return
+	if not track.color_by_channel:
+		return
+	notified[track] = true
+	track._color = new_color
+	track.color_changed.emit(new_color)
+
+
+## Active editor project when this channel has no other project handle.
+func _fallback_project() -> Project:
+	if Engine.is_editor_hint():
+		return null
+	if Sonara and Sonara.editor:
+		return Sonara.editor.project
+	return null
+
+
 ## Convert Device.DeviceType enum to string for OSC
 func _get_device_type_string(device_type: Device.DeviceType) -> String:
 	match device_type:
@@ -723,7 +755,7 @@ func to_json() -> Dictionary:
 	return {
 		"id": id,
 		"name": name,
-		"color": color.to_html(),
+		"color": Utils.color_to_json(color),
 		"order": order,
 		"channel_type": ChannelType.keys()[channel_type],
 		"device_output_id": device_output_id,
@@ -749,7 +781,7 @@ static func from_json(data: Dictionary) -> Channel:
 	var channel = Channel.new(channel_id)
 
 	channel.name = data.get("name", "Channel")
-	channel.color = Color.from_string(data.get("color", "#FFFFFF"), Color.WHITE)
+	channel.color = Utils.color_from_json(data.get("color", "#FFFFFF"), Color.WHITE)
 	channel.order = data.get("order", 0)
 
 	# Parse channel type

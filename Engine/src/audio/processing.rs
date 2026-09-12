@@ -59,20 +59,17 @@ pub fn process_audio(
     let start_tick = state.get_current_tick();
     let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
     let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
-    tick_events.clear();
-    tick_events.push((start_tick, 0));
-
-    let mut acc = state.get_fractional_tick_accumulator();
+    let acc = state.get_fractional_tick_accumulator();
     let start_acc = acc;
-    let mut tick_cursor = start_tick;
-    for frame_idx in 0..frames {
-        acc += ticks_per_sample;
-        while acc >= 1.0 {
-            acc -= 1.0;
-            tick_cursor += 1;
-            tick_events.push((tick_cursor, frame_idx));
-        }
-    }
+    let emit_playhead = state.take_playhead_midi_dispatch();
+    let (tick_cursor, acc) = collect_tick_events(
+        start_tick,
+        acc,
+        frames,
+        ticks_per_sample,
+        emit_playhead,
+        &mut tick_events,
+    );
 
     // Update global tick and carry fractional forward
     state.set_current_tick(tick_cursor);
@@ -141,8 +138,14 @@ pub fn process_audio(
                                 ));
                             }
 
-                            // Note Off (allow at instance end)
-                            if note_end_in_instance == offset_in_instance {
+                            // Note Off at the written end, or clipped to the instance right edge
+                            // so notes longer than the clip don't hang forever.
+                            let note_off_at_written_end =
+                                note_end_in_instance == offset_in_instance;
+                            let note_off_clipped_to_instance = is_at_instance_end
+                                && note_start_in_instance < offset_in_instance
+                                && note_end_in_instance > offset_in_instance;
+                            if note_off_at_written_end || note_off_clipped_to_instance {
                                 note_events.push((
                                     *track_id,
                                     transposed_note,
@@ -343,17 +346,35 @@ pub fn process_audio(
     // Log playhead position every bar for debugging - disabled for real-time safety
     // let ticks_per_bar = state.settings.ppq as i64 * state.settings.time_numerator as i64;
     // let final_tick = state.get_current_tick();
-    // let final_bar = final_tick / ticks_per_bar;
-    //
-    // // Log every bar boundary
-    // static mut LAST_LOGGED_BAR: i64 = -1;
-    // unsafe {
-    //     if final_bar != LAST_LOGGED_BAR {
-    //         LAST_LOGGED_BAR = final_bar;
-    //         let position = state.settings.format_tick_position(final_tick);
-    //         info!("Playhead: {}", position);
-    //     }
-    // }
+}
+
+/// Record each newly crossed tick and its sample offset inside this buffer.
+///
+/// The playhead tick is only emitted after play/seek (`emit_start_tick`). Later buffers must
+/// not emit it again: it was already the last tick of the previous buffer, and re-firing it
+/// double-triggers note on/off at buffer boundaries.
+fn collect_tick_events(
+    start_tick: Tick,
+    mut acc: f64,
+    frame_count: usize,
+    ticks_per_sample: f64,
+    emit_start_tick: bool,
+    tick_events: &mut Vec<(Tick, usize)>,
+) -> (Tick, f64) {
+    tick_events.clear();
+    if emit_start_tick {
+        tick_events.push((start_tick, 0));
+    }
+    let mut tick_cursor = start_tick;
+    for frame_idx in 0..frame_count {
+        acc += ticks_per_sample;
+        while acc >= 1.0 {
+            acc -= 1.0;
+            tick_cursor += 1;
+            tick_events.push((tick_cursor, frame_idx));
+        }
+    }
+    (tick_cursor, acc)
 }
 
 #[cfg(test)]
@@ -400,5 +421,35 @@ mod tests {
         let mut state = state_with_events(now, &[50, 0]);
         schedule_live_midi_events(&mut state, now, 480, 48_000.0);
         assert_eq!(scheduled_offsets(&state), vec![0, 479]);
+    }
+
+    #[test]
+    fn consecutive_buffers_do_not_redispatch_the_boundary_tick() {
+        // 0.04 ticks/sample × 256 frames = 10.24 ticks, matching 120 BPM / 960 PPQ / 48 kHz.
+        let ticks_per_sample = 0.04;
+        let frames = 256;
+        let mut events = Vec::new();
+
+        let (tick1, acc1) = collect_tick_events(0, 0.0, frames, ticks_per_sample, true, &mut events);
+        let first: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
+        assert_eq!(first.first().copied(), Some(0));
+        assert_eq!(*first.last().unwrap(), tick1);
+
+        let (tick2, _acc2) =
+            collect_tick_events(tick1, acc1, frames, ticks_per_sample, false, &mut events);
+        let second: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
+        assert!(!second.contains(&tick1), "boundary tick {tick1} was dispatched again");
+        assert!(tick2 > tick1);
+        assert_eq!(second.first().copied(), Some(tick1 + 1));
+    }
+
+    #[test]
+    fn playhead_tick_is_only_emitted_when_requested() {
+        let mut events = Vec::new();
+        collect_tick_events(7680, 0.0, 1, 0.04, false, &mut events);
+        assert!(events.is_empty());
+
+        collect_tick_events(7680, 0.0, 1, 0.04, true, &mut events);
+        assert_eq!(events[0], (7680, 0));
     }
 }

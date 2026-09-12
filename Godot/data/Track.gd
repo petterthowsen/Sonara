@@ -30,11 +30,10 @@ var name: String:
 		return _name
 	set(value):
 		if _name != value:
+			var ch := get_linked_channel()
 			_name = value
-			
-			# If syncing to channel, update channel name too
-			if name_by_channel and _linked_channel:
-				_linked_channel.set_name(value)
+			if name_by_channel and ch:
+				ch.set_name(value)
 			else:
 				name_changed.emit(_name)
 
@@ -155,21 +154,24 @@ func get_nesting_level(project: Project = null) -> int:
 
 
 func get_color() -> Color:
-	"""Get track color, either from channel or own color."""
-	if color_by_channel and _linked_channel:
-		return _linked_channel.color
+	"""Get track color, either from the paired mixer channel or this track's own color."""
+	if color_by_channel:
+		var ch := get_linked_channel()
+		if ch:
+			return ch.color
 	return _color
 
 
 func set_color(new_color: Color) -> void:
-	"""Set track's color and emit signal."""
+	"""Set track color; push to the paired mixer channel when one exists."""
 	_color = new_color
-	
-	# If syncing to channel, update channel color too
-	if color_by_channel and _linked_channel:
-		_linked_channel.set_color(new_color)
-	else:
-		color_changed.emit(_color)
+	var ch := get_linked_channel()
+	if ch:
+		print("[Track %d] set_color → channel %d (%s) type=%s" % [
+			id, ch.id, ch.name, TrackType.keys()[type]
+		])
+		ch.set_color(new_color)
+	color_changed.emit(_color)
 
 
 # Shorthand property for compatibility
@@ -180,20 +182,18 @@ var color: Color:
 		set_color(value)
 
 
-# Color for the track in the tracklist
-# It depends on user config and can be muted or saturated.
-var track_color : Color:
+## Alias for `color`. Kept so UI code can keep using track_color.
+var track_color: Color:
 	get:
-		var c = color
-		c.v = clamp(c.v, 0.3, 0.7)
-		c.s = clamp(c.s, 0.1, 0.8)
-		return c
+		return get_color()
 	set(value):
-		track_color = color
+		set_color(value)
 
 
 func set_height(new_height: int) -> void:
 	"""Set track height and emit signal."""
+	if _height == new_height:
+		return
 	_height = new_height
 	height_changed.emit(_height)
 
@@ -209,22 +209,25 @@ var height: int:
 func set_mute(value: bool) -> void:
 	"""Set mute state. If linked to a channel, delegates to channel's set_mute."""
 	muted = value
-	if _linked_channel:
-		_linked_channel.set_mute(value)
+	var ch := get_linked_channel()
+	if ch:
+		ch.set_mute(value)
 
 
 func set_solo(value: bool) -> void:
 	"""Set solo state. If linked to a channel, delegates to channel's set_solo."""
 	solo = value
-	if _linked_channel:
-		_linked_channel.set_solo(value)
+	var ch := get_linked_channel()
+	if ch:
+		ch.set_solo(value)
 
 
 func set_armed(value: bool) -> void:
 	"""Set record arm state. If linked to a channel, delegates to channel's set_record_armed."""
 	armed = value
-	if _linked_channel:
-		_linked_channel.set_record_armed(value)
+	var ch := get_linked_channel()
+	if ch:
+		ch.set_record_armed(value)
 
 
 # ============================================================================
@@ -233,10 +236,9 @@ func set_armed(value: bool) -> void:
 
 func set_project_ref(project: Project) -> void:
 	"""Set project reference for channel lookup."""
-	_project_ref = project
-	# Update channel link immediately if we have a routing
-	if _default_channel_id >= 0:
-		_update_channel_link()
+	if project:
+		_project_ref = project
+	get_linked_channel()
 
 
 func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> void:
@@ -270,18 +272,117 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 			new_channel.set_solo(solo)
 			new_channel.set_record_armed(armed)
 		else:
-			_linked_channel = null
+			push_warning("[Track %d] _update_channel_registration: channel %d not in project.channels" % [
+				id, new_channel_id
+			])
 	else:
 		_linked_channel = null
 
 
 func _update_channel_link() -> void:
-	"""Update the linked channel reference."""
-	if not _project_ref or _default_channel_id < 0:
-		_linked_channel = null
+	"""Update the linked channel reference and register for color/name sync."""
+	get_linked_channel()
+
+
+## True when this folder is paired with a mixer bus (a group track).
+func is_group() -> bool:
+	return type == TrackType.FOLDER and _default_channel_id >= 0
+
+
+## Pair this track with a mixer strip (instrument channel or group bus).
+func pair_mixer_channel(ch: Channel) -> void:
+	if ch == null:
 		return
-	
-	_linked_channel = _project_ref.get_channel_by_id(_default_channel_id)
+	if _project_ref == null:
+		_project_ref = _fallback_project()
+	color_by_channel = true
+	name_by_channel = true
+	if _default_channel_id == ch.id:
+		_linked_channel = ch
+		ch.register_track(self)
+		return
+	default_channel_id = ch.id
+	print("[Track %d] pair_mixer_channel: channel %d (%s)" % [id, ch.id, ch.name])
+
+
+## Mixer channel paired for color/name/mute: routed strip or this group's bus.
+func get_linked_channel() -> Channel:
+	return _ensure_linked_channel()
+
+
+## Resolve the mixer channel from default_channel_id only (folders have no implicit bus).
+func _ensure_linked_channel() -> Channel:
+	if _default_channel_id < 0:
+		_linked_channel = null
+		return null
+
+	if _linked_channel and _linked_channel.id == _default_channel_id:
+		_linked_channel.register_track(self)
+		return _linked_channel
+
+	if _project_ref == null:
+		_project_ref = _fallback_project()
+
+	var ch: Channel = _lookup_channel_in_project(_project_ref)
+	if ch == null:
+		var editor_project := _fallback_project()
+		if editor_project != _project_ref:
+			ch = _lookup_channel_in_project(editor_project)
+			if ch:
+				_project_ref = editor_project
+	if ch == null:
+		ch = _find_channel_in_mixer_ui()
+
+	if ch:
+		_linked_channel = ch
+		ch.register_track(self)
+		_adopt_channel_into_project(ch)
+	return ch
+
+
+## Look up this track's mixer channel on one project instance.
+func _lookup_channel_in_project(project: Project) -> Channel:
+	if project == null or _default_channel_id < 0:
+		return null
+	return project.get_channel_by_id(_default_channel_id)
+
+
+## MixerChannel nodes keep the Channel object even if project.channels dropped it.
+func _find_channel_in_mixer_ui() -> Channel:
+	if Engine.is_editor_hint():
+		return null
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null or _default_channel_id < 0:
+		return null
+	for node in tree.get_nodes_in_group("mixer_channel"):
+		if not (node is MixerChannel):
+			continue
+		var mixer_ch: Channel = (node as MixerChannel).channel
+		if mixer_ch == null:
+			continue
+		if mixer_ch.id == _default_channel_id:
+			print("[Track %d] recovered channel %d from mixer UI" % [id, mixer_ch.id])
+			return mixer_ch
+	return null
+
+
+## Put a recovered Channel back on the project list without spawning a second mixer strip.
+func _adopt_channel_into_project(ch: Channel) -> void:
+	if ch == null or _project_ref == null:
+		return
+	if _project_ref.get_channel_by_id(ch.id) != null:
+		return
+	_project_ref.channels.append(ch)
+	print("[Track %d] adopted channel %d (%s) into project.channels" % [id, ch.id, ch.name])
+
+
+## Editor project when this track was never given a project ref.
+func _fallback_project() -> Project:
+	if Engine.is_editor_hint():
+		return null
+	if Sonara and Sonara.editor:
+		return Sonara.editor.project
+	return null
 
 
 # ============================================================================
@@ -291,6 +392,11 @@ func _update_channel_link() -> void:
 func connect_to_engine() -> void:
 	"""Connect to audio engine: sync initial state and all clip instances."""
 	if _is_connected:
+		return
+
+	# Folder/group tracks have no engine timeline; groups only pair a mixer bus.
+	if type == TrackType.FOLDER:
+		print("[Track %d] Folder not connected to engine (bus pairing only)" % id)
 		return
 
 	# Create track in audio engine if routed to a channel
@@ -485,7 +591,7 @@ func to_json() -> Dictionary:
 		"id": id,
 		"name": name,
 		"type": TrackType.keys()[type],
-		"color": _color.to_html(),
+		"color": Utils.color_to_json(_color),
 		"color_by_channel": color_by_channel,
 		"name_by_channel": name_by_channel,
 		"order": _order,
@@ -514,7 +620,7 @@ static func from_json(data: Dictionary) -> Track:
 	var type_str = data.get("type", "INSTRUMENT")
 	track.type = TrackType.get(type_str) if TrackType.has(type_str) else TrackType.INSTRUMENT
 
-	track._color = Color.from_string(data.get("color", "#FFFFFF"), Color.WHITE)
+	track._color = Utils.color_from_json(data.get("color", "#FFFFFF"), Color.WHITE)
 	track.color_by_channel = data.get("color_by_channel", true)
 	track.name_by_channel = data.get("name_by_channel", true)
 	track.order = data.get("order", 0)

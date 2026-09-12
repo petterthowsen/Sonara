@@ -106,6 +106,8 @@ func _create_parameter_controls() -> void:
 	var parameters = device_instance.device.get_parameters()
 	print("[CompactDevicePanel] Creating %d parameter controls for device: %s" % [parameters.size(), device_instance.device.name])
 	for param in parameters:
+		if param.group == "cc":
+			continue
 		_create_parameter_control_for_param(param)
 
 

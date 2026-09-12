@@ -30,6 +30,7 @@ signal clips_selected(clips: Array[ClipInstance], multi_track: bool)  # Emitted 
 
 signal channel_focused(channel : Channel)
 signal track_focused(track : Track)
+signal tracks_selected(tracks: Array[Track])
 
 # ============================================================================
 # NODE REFERENCES
@@ -103,6 +104,8 @@ var audio_engine_playhead: int = 0  # Authoritative playhead from audio engine
 
 # Selection State (Channels and tracks)
 var focused_channel : Channel
+var focused_track: Track
+var selected_tracks: Array[Track] = []
 
 # View state
 enum View { ARRANGER, MIXER, EDITOR }
@@ -160,6 +163,9 @@ func _connect_ui_signals():
 	
 	# Mixer
 	mixer.channel_focused.connect(_on_mixer_channel_focused)
+
+	if Settings:
+		Settings.setting_changed.connect(_on_setting_changed)
 	
 
 func _on_mixer_channel_focused(channel : Channel):
@@ -171,6 +177,55 @@ func focus_channel(channel: Channel) -> void:
 	if focused_channel != channel:
 		focused_channel = channel
 		channel_focused.emit(channel)
+
+
+## Set arranger track selection. The last selected track is active and drives DeviceLane.
+func set_track_selection(tracks: Array[Track], active: Track, apply_record_arm: bool = true) -> void:
+	selected_tracks.clear()
+	for t in tracks:
+		if t and not selected_tracks.has(t):
+			selected_tracks.append(t)
+	tracks_selected.emit(selected_tracks)
+	focus_track(active, apply_record_arm)
+
+
+## Focus the active track, bind DeviceLane to its channel, and optionally follow record-arm.
+func focus_track(track: Track, apply_record_arm: bool = true) -> void:
+	var changed := focused_track != track
+	if changed:
+		focused_track = track
+		track_focused.emit(track)
+	if apply_record_arm:
+		_apply_record_arm_follows_active()
+	if track == null or project == null:
+		return
+	if track.default_channel_id < 0:
+		return
+	var ch := project.get_channel_by_id(track.default_channel_id)
+	if ch:
+		focus_channel(ch)
+
+
+## Record-arm only the active track when the follow-active setting is on.
+func _apply_record_arm_follows_active() -> void:
+	if Settings == null:
+		return
+	if not Settings.get_value("arranger/record_arm_follows_active_track"):
+		return
+	if project == null or focused_track == null:
+		return
+	if focused_track.type == Track.TrackType.FOLDER:
+		return
+	for t in project.tracks:
+		if t.type == Track.TrackType.FOLDER:
+			continue
+		t.set_armed(t == focused_track)
+
+
+## React to live setting changes, applying record-arm follow immediately when enabled.
+func _on_setting_changed(key: String, _value) -> void:
+	if key == "arranger/record_arm_follows_active_track":
+		_apply_record_arm_follows_active()
 
 
 func _connect_audio_engine_signals():
@@ -287,6 +342,8 @@ func close_project() -> void:
 	playhead_ticks = 0
 	is_playing = false
 	history.clear()
+	focused_track = null
+	selected_tracks.clear()
 
 	project_closed.emit()
 	print("[Editor] Project closed")

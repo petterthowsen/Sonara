@@ -45,6 +45,6 @@ func _on_item_pressed(id: int) -> void:
 		Item.AUDIO_TRACK:
 			HistoryUtil.execute(TrackCreateCommand.new(project, "audio"))
 		Item.FOLDER_TRACK:
-			HistoryUtil.execute(TrackCreateCommand.new(project, "folder"))
+			HistoryUtil.execute(TrackCreateCommand.new(project, "folder", "Folder"))
 		Item.GROUP_TRACK:
-			project.create_group_track()
+			HistoryUtil.execute(TrackCreateCommand.new(project, "group", "Group"))

@@ -43,6 +43,10 @@ var _double_click_threshold := 0.3
 var validation_callback: Callable = Callable()
 
 signal value_changed(value)
+## Emitted after a Tab/Shift+Tab commit so the owner can continue editing the next control.
+signal tab_requested(reverse: bool)
+
+var _owns_label_settings := false
 
 
 func _ready() -> void:
@@ -52,6 +56,39 @@ func _ready() -> void:
 	line_edit.gui_input.connect(_on_line_edit_gui_input)
 	line_edit.focus_exited.connect(_on_line_edit_focus_exited)
 	label.gui_input.connect(_on_label_gui_input)
+
+
+## Steal Tab/Shift+Tab while editing so they commit instead of switching views.
+func _input(event: InputEvent) -> void:
+	if Engine.is_editor_hint() or not is_editing:
+		return
+	if not event is InputEventKey or not event.pressed or event.echo:
+		return
+	var key_event := event as InputEventKey
+	if key_event.keycode != KEY_TAB and key_event.physical_keycode != KEY_TAB:
+		return
+	get_viewport().set_input_as_handled()
+	stop_editing()
+	tab_requested.emit(key_event.shift_pressed)
+
+
+## Set label and line-edit font color (used for contrast on colored headers).
+func set_font_color(color: Color) -> void:
+	if label:
+		if label.label_settings:
+			if not _owns_label_settings:
+				label.label_settings = label.label_settings.duplicate()
+				label.label_settings.resource_local_to_scene = true
+				_owns_label_settings = true
+			label.label_settings.font_color = color
+			label.label_settings.shadow_color = Utils.contrasting_shadow_color(color)
+		else:
+			label.add_theme_color_override("font_color", color)
+			label.add_theme_color_override("font_shadow_color", Utils.contrasting_shadow_color(color))
+	if line_edit:
+		line_edit.add_theme_color_override("font_color", color)
+		line_edit.add_theme_color_override("caret_color", color)
+		line_edit.add_theme_color_override("font_shadow_color", Utils.contrasting_shadow_color(color))
 
 
 ## Set the value (as string internally, but accepts float/int for NUMERIC type)
@@ -119,11 +156,11 @@ func start_editing() -> void:
 
 ## Cancel editing: revert to label display without applying changes
 func cancel_editing() -> void:
+	is_editing = false
 	line_edit.release_focus()
 	release_focus()
 	line_edit.visible = false
 	label.visible = true
-	is_editing = false
 
 
 ## Stop editing: apply the entered value

@@ -21,14 +21,22 @@ const RESIZE_HANDLE_WIDTH: float = 8.0
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	focus_mode = Control.FOCUS_NONE
-	
-	# Allow resizing below default minimum (important for vertical zoom)
-	custom_minimum_size = Vector2.ZERO
-
+	prepare_piano_roll_layout()
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	
-	# Update visual state
 	_update_visual()
+
+
+## Keep the note in absolute piano-roll coordinates. Fill-parent layout stretches
+## notes with the editor, which hides horizontal zoom on the focused (expanded) editor.
+func prepare_piano_roll_layout() -> void:
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
+	anchor_right = 0.0
+	anchor_bottom = 0.0
+	grow_horizontal = Control.GROW_DIRECTION_END
+	grow_vertical = Control.GROW_DIRECTION_END
+	size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	custom_minimum_size = Vector2.ZERO
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -61,8 +69,8 @@ func _update_visual() -> void:
 	if not is_node_ready():
 		return
 	
-	# Start with base track color
-	var display_color = note_color
+	# Start with base track color (clamp only for drawing)
+	var display_color = Utils.display_color(note_color)
 	
 	# Always apply velocity-based brightness if we have note data
 	if midi_note_data:
@@ -80,17 +88,17 @@ func _update_visual() -> void:
 	# Override with full brightness if selected
 	if is_selected:
 		display_color.v = clamp(display_color.v + selection_brightness_boost, 0.0, 1.0)
-	
+
 	# Update color
 	var style: StyleBoxFlat = get_theme_stylebox("panel")
 	if style:
-		style.bg_color = display_color
-	
+		style.bg_color = Utils.display_color(display_color)
+
 	# Update label
 	if label and midi_note_data:
 		var note_name = Midi.midi_to_note_name(midi_note_data.note)
 		label.text = note_name
-		label.add_theme_color_override("font_color", Color.WHITE)
+		Utils.apply_label_font_color(label, Utils.contrasting_text_color(display_color))
 
 func update_label_visibility(target_height: float) -> void:
 	"""Update label visibility based on target note height from MidiEditor."""

@@ -140,6 +140,15 @@ func _register_all_settings() -> void:
 		"Directories to scan for SFZ instrument files.",
 	))
 
+	_register(Setting.new(
+		"arranger/record_arm_follows_active_track",
+		"Record Arm Follows Active Track",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, changing the active track record-arms that track and disarms the others.",
+	))
+
 	# --- Appearance ---
 	_register(Setting.new(
 		"appearence/color_timeline_by_track",

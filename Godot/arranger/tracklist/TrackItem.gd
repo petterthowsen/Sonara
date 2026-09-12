@@ -1,13 +1,27 @@
 @tool
 class_name TrackItem extends PanelContainer
 
+## Header row for a single arranger track. Emits selection and context-menu requests.
+
 # Emitted when the track item is right-clicked
 signal right_clicked(track: Track, mouse_position: Vector2)
+## Request that TrackList update selection. additive = Ctrl/Cmd, range_select = Shift.
+signal select_requested(track: Track, additive: bool, range_select: bool)
+## Tab/Shift+Tab while renaming: apply the name and continue on the adjacent track.
+signal rename_tab_requested(track: Track, reverse: bool)
 
 @export var bg_color := Color.CORNFLOWER_BLUE:
 	set(c):
 		bg_color = c
 		queue_redraw()
+
+@export_group("Selection Style")
+@export var unselected_brightness := 0.55
+@export var unselected_saturation := 0.65
+@export var selected_brightness := 1.05
+@export var active_brightness := 1.25
+@export var selected_outline_color := Color(1, 1, 1, 0.35)
+@export var active_outline_color := Color(1, 1, 1, 0.9)
 
 # UI References
 @export var volumeter: Volumeter
@@ -24,15 +38,24 @@ var track: Track = null
 var track_index: int = -1
 var channel: Channel = null  # Channel that this track routes to
 var current_project: Project = null  # Reference to project for channel lookup
+var _parent_color_track: Track = null
+
+# Selection visuals (owned by TrackList; this node only renders them)
+var is_selected: bool = false
+var is_active: bool = false
 
 # Resizing
 var is_resizing: bool = false
 var resize_start_y: float = 0.0
 var resize_start_height: int = 0
+var resize_min_height: int = 30
 
 func _ready():
 	# Enable focus so TrackItem can receive input events properly
 	focus_mode = Control.FOCUS_CLICK
+	# Keep height at custom_minimum_size so extra space in the list does not
+	# stretch tracks (that stretch fights separator-drag when the list scrolls).
+	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	
 	# Connect UI signals
 	if not Engine.is_editor_hint():
@@ -51,27 +74,47 @@ func _ready():
 		# Connect label (SmartLineEdit) for track name changes
 		if label:
 			label.value_changed.connect(_on_label_value_changed)
+			label.tab_requested.connect(_on_label_tab_requested)
 		
-		# Set up drop zone
+		# Set up drop zone (visual separator only; live reorder uses TrackItem/TrackList drops)
 		if drop_zone:
-			# Filter to only accept TrackDrag data
-			drop_zone.accepts_data = func(data): return data is TrackDrag
-			drop_zone.drop_accepted.connect(_on_drop_zone_drop)
+			drop_zone.visible = false
+			drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+		# Buttons/label/meter sit on top of the header; Godot asks them about
+		# drops, so they must forward TrackDrag or a release over Mute cancels.
+		_forward_track_drops_from(self)
 
 	queue_redraw()
 
 
+## Redraw on resize. Live reorder no longer uses the empty spacer as a drop target.
 func _notification(what: int) -> void:
-	"""Handle drag notifications to show/hide and update state."""
-	if what == NOTIFICATION_DRAG_BEGIN:
-		$VBoxContainer/empty.show()
-	elif what == NOTIFICATION_DRAG_END:
-		$VBoxContainer/empty.hide()
-		
+	if what == NOTIFICATION_RESIZED:
+		queue_redraw()
 
 
 func _enter_tree() -> void:
 	queue_redraw()
+
+
+## Draw selected/active outlines on top of the panel stylebox.
+func _draw() -> void:
+	if Engine.is_editor_hint():
+		return
+	if not is_selected and not is_active:
+		return
+	var inset_left := 1.0
+	var stylebox: StyleBoxFlat = get_theme_stylebox("panel") as StyleBoxFlat
+	if stylebox:
+		inset_left = float(stylebox.border_width_left) + 1.0
+	var r := Rect2(inset_left, 1.0, size.x - inset_left - 1.0, size.y - 2.0)
+	if r.size.x <= 0.0 or r.size.y <= 0.0:
+		return
+	if is_active:
+		draw_rect(r, active_outline_color, false, 2.0)
+	else:
+		draw_rect(r, selected_outline_color, false, 1.0)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -84,16 +127,15 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 			return
 
-	# TEMP: Until track selection is unified with channel focus, clicking a TrackItem
-	# will focus its routed Channel so DeviceLane updates immediately.
-	# TODO: Revisit when a proper selection model exists across Arranger/Mixer.
-	# Handle left-click: focus routed channel so DeviceLane reacts
+	# Left-click selects this header (Ctrl/Cmd = toggle, Shift = range).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		# Ignore if we're clicking the resize gutter (handled below)
 		if mouse.y < size.y - 4:
-			if channel and Sonara and Sonara.editor:
-				# Use Editor's public API so channel_focused is emitted
-				Sonara.editor.focus_channel(channel)
+			if track and not Engine.is_editor_hint():
+				var mouse_event := event as InputEventMouseButton
+				var additive := mouse_event.ctrl_pressed or mouse_event.meta_pressed
+				var range_select := mouse_event.shift_pressed
+				select_requested.emit(track, additive, range_select)
 				accept_event()
 				return
 
@@ -107,10 +149,10 @@ func _gui_input(event: InputEvent) -> void:
 				is_resizing = true
 				resize_start_y = get_global_mouse_position().y
 				resize_start_height = track.height if track else int(custom_minimum_size.y)
+				resize_min_height = _content_min_height()
 				accept_event()
 			elif event.is_released() and is_resizing:
 				is_resizing = false
-				grab_focus()
 				accept_event()
 	else:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
@@ -121,9 +163,7 @@ func _input(event: InputEvent) -> void:
 	if is_resizing and event is InputEventMouseMotion:
 		var current_y = get_global_mouse_position().y
 		var delta_y = current_y - resize_start_y
-		# Respect the TrackItem's minimum size based on its UI components
-		var min_height = max(30, get_minimum_size().y)
-		var new_height = max(min_height, resize_start_height + int(delta_y))
+		var new_height = max(resize_min_height, resize_start_height + int(delta_y))
 
 		if track:
 			track.height = new_height
@@ -136,8 +176,19 @@ func _input(event: InputEvent) -> void:
 	if is_resizing and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.is_released():
 			is_resizing = false
-			grab_focus()
 			accept_event()
+
+
+## Minimum height from inner controls, ignoring the current custom_minimum_size (which would ratchet).
+func _content_min_height() -> int:
+	var inner := get_node_or_null("VBoxContainer") as Control
+	var content_min := 30
+	if inner:
+		content_min = max(content_min, int(inner.get_combined_minimum_size().y))
+	var stylebox := get_theme_stylebox("panel") as StyleBox
+	if stylebox:
+		content_min += int(stylebox.get_minimum_size().y)
+	return content_min
 
 
 func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
@@ -150,6 +201,9 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 	track = t
 	track_index = idx
 	current_project = project
+
+	if track and current_project:
+		track.set_project_ref(current_project)
 
 	# Connect to track signals
 	if track:
@@ -164,6 +218,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 
 	# Update UI from track data
 	_update_from_track()
+
 
 func _update_from_track() -> void:
 	"""Update all UI elements from track data."""
@@ -186,10 +241,8 @@ func _update_from_track() -> void:
 	if mute_toggle:
 		mute_toggle.set_pressed_no_signal(track.muted)
 
-	# Apply track color to background
-	_update_track_bg_color()
-	
-	# Apply nesting level indentation
+	# Apply track color, selection styling, and nesting indent
+	_update_header_style()
 	_update_nesting_indent()
 
 # ============================================================================
@@ -197,32 +250,30 @@ func _update_from_track() -> void:
 # ============================================================================
 
 func _bind_to_track_channel() -> void:
-	"""Look up and bind to the channel associated with this track."""
+	"""Look up and bind to the channel associated with this track (including folder buses)."""
 	if track == null or current_project == null:
 		print("[TrackItem] Cannot bind to channel: track=", track, " project=", current_project)
 		return
 
-	print("[TrackItem] _bind_to_track_channel: track=", track.name, " default_channel_id=", track.default_channel_id)
-	print("[TrackItem] Available channels: ", current_project.channels.size())
-	for ch in current_project.channels:
-		print("  - Channel ID: ", ch.id, " Name: ", ch.name)
+	channel = track.get_linked_channel()
+	if channel:
+		print("[TrackItem] Bound to channel ", channel.id, " (", channel.name, ")")
+		channel.volume_changed.connect(_on_channel_volume_changed)
+		channel.peak_updated.connect(_on_channel_peak_updated)
+		channel.record_armed_changed.connect(_on_channel_record_armed_changed)
+		if not channel.color_changed.is_connected(_on_channel_color_changed):
+			channel.color_changed.connect(_on_channel_color_changed)
+		_update_volumeter_from_channel()
+		if arm_toggle:
+			arm_toggle.set_pressed_no_signal(channel.record_armed)
+		if volumeter:
+			volumeter.visible = true
+		return
 
-	# Look up channel by track's default_channel_id
-	if track.default_channel_id >= 0:
-		for ch in current_project.channels:
-			if ch.id == track.default_channel_id:
-				channel = ch
-				print("[TrackItem] Bound to channel ", channel.id, " (", channel.name, ")")
-				# Connect to channel signals
-				channel.volume_changed.connect(_on_channel_volume_changed)
-				channel.peak_updated.connect(_on_channel_peak_updated)
-				# Sync UI from channel data
-				_update_volumeter_from_channel()
-				return
-
-	# No valid channel found
 	print("[TrackItem] No valid channel found for track ", track.name, " (default_channel_id=", track.default_channel_id, ")")
 	channel = null
+	if volumeter:
+		volumeter.visible = false
 
 
 func _unbind_from_channel() -> void:
@@ -234,6 +285,10 @@ func _unbind_from_channel() -> void:
 		channel.volume_changed.disconnect(_on_channel_volume_changed)
 	if channel.peak_updated.is_connected(_on_channel_peak_updated):
 		channel.peak_updated.disconnect(_on_channel_peak_updated)
+	if channel.record_armed_changed.is_connected(_on_channel_record_armed_changed):
+		channel.record_armed_changed.disconnect(_on_channel_record_armed_changed)
+	if channel.color_changed.is_connected(_on_channel_color_changed):
+		channel.color_changed.disconnect(_on_channel_color_changed)
 
 	channel = null
 
@@ -252,15 +307,49 @@ func _update_volumeter_from_channel() -> void:
 # TRACK SIGNAL CALLBACKS
 # ============================================================================
 
+## Update selected/active flags and refresh header styling.
+func set_selection_state(selected: bool, active: bool) -> void:
+	if is_selected == selected and is_active == active:
+		return
+	is_selected = selected
+	is_active = active
+	_update_header_style()
+	queue_redraw()
+
+
 func _update_track_bg_color() -> void:
 	"""Update the background color of the track item to the track's track_color."""
-	var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
-	stylebox.bg_color = track.track_color
+	_update_header_style()
+
+
+## Tint the header for unselected, selected, or active.
+func _update_header_style() -> void:
+	if track == null:
+		return
+	var stylebox: StyleBoxFlat = get_theme_stylebox("panel") as StyleBoxFlat
+	if stylebox == null:
+		return
+
+	var c := Utils.display_color(track.color)
+	if is_active:
+		c.v = clampf(c.v * active_brightness, 0.0, 1.0)
+		c.s = clampf(c.s * 1.05, 0.0, 1.0)
+	elif is_selected:
+		c.v = clampf(c.v * selected_brightness, 0.0, 1.0)
+	else:
+		c.v = clampf(c.v * unselected_brightness, 0.0, 1.0)
+		c.s = clampf(c.s * unselected_saturation, 0.0, 1.0)
+	stylebox.bg_color = c
+
+	if label:
+		label.modulate.a = 1.0 if (is_selected or is_active) else 0.78
+		label.set_font_color(Utils.contrasting_text_color(c))
 
 
 func _on_track_height_changed(new_height: int) -> void:
 	"""React to track height changes (synced from other sources like TimelineTrack resize)."""
 	custom_minimum_size.y = new_height
+	size.y = new_height
 
 
 func _on_track_channel_id_changed(new_channel_id: int) -> void:
@@ -286,9 +375,16 @@ func _on_track_color_changed(_c : Color) -> void:
 	_update_track_bg_color()
 
 
+## Mixer channel color (folder bus or routed strip) keeps this header in sync.
+func _on_channel_color_changed(_c: Color) -> void:
+	_update_track_bg_color()
+
+
 func _update_nesting_indent() -> void:
 	"""Apply left margin based on track's nesting level by modifying StyleBox."""
-	
+	if track == null or current_project == null:
+		return
+
 	var nesting_level = track.get_nesting_level(current_project)
 	var indent_pixels = nesting_level * 12
 	
@@ -300,10 +396,27 @@ func _update_nesting_indent() -> void:
 	
 	# color the border = to parent track color
 	var parent_track = current_project.get_track_by_id(track.parent_track_id)
+	_bind_parent_color(parent_track)
 	if parent_track:
-		stylebox.border_color = parent_track.track_color
+		stylebox.border_color = Utils.display_color(parent_track.color)
 	
 	print("[TrackItem] Track '", track.name, "' nesting level: ", nesting_level, " indent: ", indent_pixels, "px")
+
+
+## Keep the folder indent border in sync when the parent track color changes.
+func _bind_parent_color(parent_track: Track) -> void:
+	if _parent_color_track == parent_track:
+		return
+	if _parent_color_track and _parent_color_track.color_changed.is_connected(_on_parent_color_changed):
+		_parent_color_track.color_changed.disconnect(_on_parent_color_changed)
+	_parent_color_track = parent_track
+	if _parent_color_track and not _parent_color_track.color_changed.is_connected(_on_parent_color_changed):
+		_parent_color_track.color_changed.connect(_on_parent_color_changed)
+
+
+## Redraw indent when the parent folder/group color changes.
+func _on_parent_color_changed(_c: Color) -> void:
+	_update_nesting_indent()
 
 
 # ============================================================================
@@ -328,6 +441,18 @@ func _on_label_value_changed(new_value: String) -> void:
 	if track:
 		track.name = new_value
 		print("[TrackItem] Track name changed to: ", new_value)
+
+
+## Forward Tab/Shift+Tab from the name field so TrackList can rename the next track.
+func _on_label_tab_requested(reverse: bool) -> void:
+	if track:
+		rename_tab_requested.emit(track, reverse)
+
+
+## Open the track name field for in-place editing.
+func begin_rename() -> void:
+	if label:
+		label.start_editing()
 
 
 # ============================================================================
@@ -361,121 +486,95 @@ func _on_channel_peak_updated(peak_left: float, peak_right: float, _rms_left: fl
 	volumeter.peak = max(peak_left, peak_right)
 
 
+## Keep the header arm button in sync when record-arm is changed elsewhere.
+func _on_channel_record_armed_changed(armed: bool) -> void:
+	if track:
+		track.armed = armed
+	if arm_toggle:
+		arm_toggle.set_pressed_no_signal(armed)
+
+
 # ============================================================================
 # DRAG AND DROP
 # ============================================================================
 
+## Start dragging this track (or the current multi-selection) and begin live placement.
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Start dragging this track."""
-	if not track or Engine.is_editor_hint():
+	if not track or Engine.is_editor_hint() or is_resizing:
 		return null
-	
-	# Create drag preview
-	var preview = _create_drag_preview()
-	
-	# Create drag data
-	var drag_data = TrackDrag.new(self, track, preview)
+	if get_local_mouse_position().y >= size.y - 4:
+		return null
+
+	var track_list := _get_track_list()
+	var drag_tracks: Array[Track] = [track]
+	if track_list:
+		drag_tracks = track_list.get_tracks_for_drag(track)
+
+	var preview = _create_drag_preview(drag_tracks)
+	var drag_data = TrackDrag.new(self, track, preview, drag_tracks)
 	set_drag_preview(preview)
-	
-	print("[TrackItem] Started dragging track: ", track.name)
+
+	if track_list:
+		track_list.begin_track_reorder(drag_data)
+
+	print("[TrackItem] Started dragging %d track(s) from: %s" % [drag_tracks.size(), track.name])
 	return drag_data
 
 
+## Let descendant controls accept the same live reorder drop as this header.
+func _forward_track_drops_from(node: Node) -> void:
+	for child in node.get_children():
+		if child is Control:
+			(child as Control).set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+		_forward_track_drops_from(child)
+
+
+## Forward track reordering to TrackList so the header moves with the pointer.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can accept a track drop for foldering."""
 	if not data is TrackDrag or not track:
 		return false
-	
-	var drag_data = data as TrackDrag
-	
-	# Can't drop on self
-	if drag_data.track == track:
-		return false
-	
-	# Can only drop on FOLDER tracks for foldering
-	if track.type != Track.TrackType.FOLDER:
-		return false
-	
-	# Can't make a folder a child of itself (circular reference check)
-	if drag_data.track.type == Track.TrackType.FOLDER:
-		if _would_create_circular_reference(drag_data.track):
-			return false
-	
+	var track_list := _get_track_list()
+	if track_list:
+		track_list.preview_track_drop(get_global_mouse_position())
 	return true
 
 
+## Commit a live track reorder through TrackList.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Accept a track drop - add to folder."""
-	if not data is TrackDrag or not current_project or not track:
+	if not data is TrackDrag:
 		return
-	
-	var drag_data = data as TrackDrag
-	drag_data.destination = self
-	
-	# Add dragged track to this folder
-	current_project.add_track_to_folder(drag_data.track.id, track.id)
-	
-	print("[TrackItem] Added track '%s' to folder '%s'" % [drag_data.track.name, track.name])
-
-
-func _on_drop_zone_drop(data: Variant) -> void:
-	"""Handle drop on the drop zone - insert after this track."""
-	if not data is TrackDrag or not current_project or not track:
-		return
-	
-	var drag_data = data as TrackDrag
-	
-	# Get TrackList to handle reordering
-	var track_list = _get_track_list()
+	var track_list := _get_track_list()
 	if track_list:
-		track_list.insert_track_after(drag_data.track, track)
-		print("[TrackItem] Requested insert '%s' after '%s'" % [drag_data.track.name, track.name])
+		track_list.commit_track_drop()
 
 
-func _create_drag_preview() -> Control:
-	"""Create a visual preview for dragging."""
+## Create a compact ghost that follows the cursor while the real header slides in the list.
+func _create_drag_preview(drag_tracks: Array[Track] = []) -> Control:
 	var preview = PanelContainer.new()
 	var label_node = Label.new()
-	label_node.text = track.name
-	label_node.add_theme_color_override("font_color", Color.WHITE)
+	var preview_bg := Utils.display_color(track.color)
+	preview_bg.a = 0.85
+	if drag_tracks.size() > 1:
+		label_node.text = "%s + %d" % [track.name, drag_tracks.size() - 1]
+	else:
+		label_node.text = track.name
+	Utils.apply_label_font_color(label_node, Utils.contrasting_text_color(preview_bg))
 	preview.add_child(label_node)
 	
 	# Style the preview
 	var style = StyleBoxFlat.new()
-	style.bg_color = track.color
-	style.bg_color.a = 0.8
-	style.bg_color.v = 0.5
+	style.bg_color = preview_bg
 	style.corner_radius_bottom_left = 4
 	style.corner_radius_bottom_right = 4
 	style.corner_radius_top_left = 4
 	style.corner_radius_top_right = 4
 	preview.add_theme_stylebox_override("panel", style)
 	
-	# Set minimum size
-	preview.custom_minimum_size = Vector2(size.x, 30)
+	preview.custom_minimum_size = Vector2(minf(size.x, 160.0), 24)
 
 	preview.z_index = 1000
 	
 	return preview
-
-
-func _would_create_circular_reference(dragged_folder: Track) -> bool:
-	"""Check if making this track a child of dragged_folder would create circular reference."""
-	if not current_project or not track:
-		return false
-	
-	# Walk up the parent chain from this track
-	var current_parent_id = track.parent_track_id
-	while current_parent_id >= 0:
-		if current_parent_id == dragged_folder.id:
-			return true  # Dragged folder is already an ancestor
-		
-		var parent = current_project.get_track_by_id(current_parent_id)
-		if not parent:
-			break
-		current_parent_id = parent.parent_track_id
-	
-	return false
 
 
 func _get_track_list() -> TrackList:

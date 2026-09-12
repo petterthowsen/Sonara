@@ -75,6 +75,7 @@ signal request_show_context_menu
 # Data binding
 var channel: Channel = null
 var project: Project = null  # Reference to project for accessing other channels
+var _header_fill: StyleBoxFlat = null
 
 # Pinning - when true, this channel stays on the right side of the mixer
 @export var pinned: bool = false:
@@ -188,8 +189,7 @@ func _update_from_channel() -> void:
 		title.set_value(channel.name)
 
 	# Update header color from channel color
-	var stylebox : StyleBoxFlat = header.get_theme_stylebox("panel")
-	stylebox.bg_color = channel.color
+	_apply_header_color(channel.color)
 
 	# Update toggles
 	solo_toggle.set_pressed_no_signal(channel.solo)
@@ -199,8 +199,8 @@ func _update_from_channel() -> void:
 	if arm_toggle:
 		arm_toggle.set_pressed_no_signal(channel.record_armed)
 
-	# Update volume slider
-	bottom_volume_slider.set_value_no_signal(channel.volume)
+	# Update volume slider and meter faders (scene default is -6 dB for regular channels)
+	_apply_volume_to_ui(channel.volume)
 
 	# Update pan mode and values
 	if channel.pan_mode == Channel.PanMode.STEREO_COMBINED:
@@ -348,6 +348,10 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
 			_stop_resize()
 			accept_event()
+	if is_moving and event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
+			_stop_move()
+			accept_event()
 
 func _start_resize():
 	if is_moving:
@@ -413,32 +417,44 @@ func _start_move():
 	move_mouse_start = get_global_mouse_position()
 	move_index_start = get_index()
 
+
 func _move_completed() -> void:
 	move_index_start = get_index()
 	move_mouse_start = get_global_mouse_position()
 	move_awaiting = false
 
+
+## Reorder by the mouse's position among sibling midpoints so a fast drag can skip multiple channels.
 func _update_move():
-	# Don't process moves if we're already waiting for a reorder
-	if move_awaiting:
+	var parent := get_parent()
+	if parent == null:
 		return
-	
-	var global_rect = get_global_rect()
-	var global_mouse = get_global_mouse_position()
-	var mouse_delta =  global_mouse - move_mouse_start
-	
-	if global_mouse.x > global_rect.end.x:
-		# request move to the right
-		move_awaiting = true
-		request_move.emit(get_index() + 1)
-		await get_parent().child_order_changed
+
+	var mouse_x := get_global_mouse_position().x
+	var current_index := get_index()
+	var target_index := current_index
+
+	for i in range(current_index):
+		var sibling := parent.get_child(i) as Control
+		if sibling == null:
+			continue
+		if mouse_x < sibling.get_global_rect().get_center().x:
+			target_index = i
+			break
+
+	for i in range(current_index + 1, parent.get_child_count()):
+		var sibling := parent.get_child(i) as Control
+		if sibling == null:
+			continue
+		if mouse_x > sibling.get_global_rect().get_center().x:
+			target_index = i
+		else:
+			break
+
+	if target_index != current_index:
+		request_move.emit(target_index)
 		_move_completed()
-	elif global_mouse.x < global_rect.position.x:
-		# request move to left
-		move_awaiting = true
-		request_move.emit(get_index() - 1)
-		await get_parent().child_order_changed
-		_move_completed()
+
 
 func _stop_move():
 	is_moving = false
@@ -454,9 +470,17 @@ func _on_channel_name_changed(new_name : String) -> void:
 
 func _on_channel_volume_changed(db: float) -> void:
 	"""React to volume changes from Channel."""
+	_apply_volume_to_ui(db)
+
+
+func _apply_volume_to_ui(db: float) -> void:
+	"""Copy volume onto the hidden slider and both meter faders without re-emitting."""
 	if bottom_volume_slider:
 		bottom_volume_slider.set_value_no_signal(db)
+	if bottom_small_meter:
 		bottom_small_meter.volume_db = db
+	if big_meter:
+		big_meter.volume_db = db
 
 
 func _on_channel_mute_changed(value: bool) -> void:
@@ -477,9 +501,24 @@ func _on_channel_record_armed_changed(armed: bool) -> void:
 		arm_toggle.set_pressed_no_signal(armed)
 
 
+## Keep the header fill and title contrast in sync with the channel color.
 func _on_channel_color_changed(new_color : Color) -> void:
-	var stylebox : StyleBoxFlat = header.get_theme_stylebox("panel")
-	stylebox.bg_color = new_color
+	_apply_header_color(new_color)
+
+
+## Tint the mixer header with the stored channel color; clamp only for drawing.
+func _apply_header_color(new_color: Color) -> void:
+	if header == null:
+		return
+	var drawn := Utils.display_color(new_color)
+	if _header_fill == null:
+		var base := header.get_theme_stylebox("panel")
+		_header_fill = base.duplicate() as StyleBoxFlat if base is StyleBoxFlat else StyleBoxFlat.new()
+		header.add_theme_stylebox_override("panel", _header_fill)
+	_header_fill.bg_color = drawn
+	header.queue_redraw()
+	if title:
+		title.set_font_color(Utils.contrasting_text_color(drawn))
 
 
 func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:

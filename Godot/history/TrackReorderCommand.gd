@@ -38,24 +38,31 @@ static func capture_layout(p_project: Project) -> Dictionary:
 	return layout
 
 
+## True if two layout snapshots describe the same parent/order/children.
+static func layouts_equal(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for id in a:
+		if not b.has(id):
+			return false
+		var ae: Dictionary = a[id]
+		var be: Dictionary = b[id]
+		if ae["parent_track_id"] != be["parent_track_id"]:
+			return false
+		if ae["order"] != be["order"]:
+			return false
+		if ae["child_track_ids"] != be["child_track_ids"]:
+			return false
+	return true
+
+
 ## Apply the after layout.
 func do() -> void:
-	_apply(after_layout)
+	if project:
+		project.apply_track_layout(after_layout)
 
 
 ## Apply the before layout.
 func undo() -> void:
-	_apply(before_layout)
-
-
-## Write parent/order/children from a layout snapshot (order setter refreshes UI listeners).
-func _apply(layout: Dictionary) -> void:
-	if project == null:
-		return
-	for track in project.tracks:
-		if not layout.has(track.id):
-			continue
-		var entry: Dictionary = layout[track.id]
-		track.parent_track_id = entry["parent_track_id"]
-		track.child_track_ids = entry["child_track_ids"].duplicate()
-		track.order = entry["order"]  # emits order_changed for UI
+	if project:
+		project.apply_track_layout(before_layout)

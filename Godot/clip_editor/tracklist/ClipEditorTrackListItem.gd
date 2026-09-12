@@ -51,19 +51,29 @@ func _update_label():
 	if track:
 		label.text = track.name
 		label.modulate.a = 1.0 if _selected else 0.7
+		_update_label_color()
 
 
 func _draw():
 	"""Draw track color background with opacity based on selection."""
 	if not track:
 		return
-	
+
 	var rect = Rect2(Vector2.ZERO, size)
 	var opacity = 1.0 if _selected else 0.7
-	var color = track.track_color
+	var color = Utils.display_color(track.color)
 	color.a = opacity
-	
+
 	draw_rect(rect, color, true, -1.0, true)
+	_update_label_color()
+
+
+## Black/white label based on the drawn track color.
+func _update_label_color() -> void:
+	if not track or not label:
+		return
+	var bg := Utils.display_color(track.color)
+	Utils.apply_label_font_color(label, Utils.contrasting_text_color(bg))
 
 
 func _on_track_name_changed(_new_name: String):

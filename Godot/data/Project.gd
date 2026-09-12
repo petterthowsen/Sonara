@@ -22,6 +22,8 @@ signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
 signal connection_state_changed(state: ConnectionState)
+## Fired once after a batched parent/order change so TrackList and Timeline can rebuild together.
+signal tracks_layout_changed
 
 # ============================================================================
 # PROPERTIES
@@ -66,6 +68,9 @@ var modified_date: int = 0
 
 # Connection state
 var _connection_state: ConnectionState = ConnectionState.DISCONNECTED
+
+## Depth of nested place_track / apply_track_layout batches (UI skips per-track rebuilds).
+var _track_layout_batch: int = 0
 
 
 ## Get current connection state
@@ -788,13 +793,12 @@ func remove_track(track_id: int) -> bool:
 func get_track_children(track: Track) -> Array[Track]:
 	"""Get direct children of a track (not recursive)."""
 	var children: Array[Track] = []
-	if track.type == Track.TrackType.FOLDER:
-		for child_id in track.child_track_ids:
-			var child = get_track_by_id(child_id)
-			if child:
-				children.append(child)
-		# Sort by order
-		children.sort_custom(func(a, b): return a.order < b.order)
+	if track == null or track.type != Track.TrackType.FOLDER:
+		return children
+	for t in tracks:
+		if t.parent_track_id == track.id:
+			children.append(t)
+	children.sort_custom(func(a, b): return a.order < b.order)
 	return children
 
 
@@ -977,63 +981,278 @@ func create_bus_channel(bus_name: String = "Bus") -> Channel:
 	return create_channel(bus_name, Channel.ChannelType.BUS)
 
 
-# Create folder track with its own bus channel
-func create_group_track(group_name: String = "Group") -> Dictionary[Track, Channel]:
-	"""Create a group track with a bus channel."""
+## Create a group track: a folder paired with a dedicated mixer bus.
+func create_group_track(group_name: String = "Group") -> Dictionary:
 	return create_folder_track(group_name, true)
 
-# Create folder track with optional channel
+
+## Create a folder track. `with_channel` true makes it a group (dedicated bus).
 func create_folder_track(folder_name: String = "Folder", with_channel: bool = false) -> Dictionary:
-	"""Create a folder track with optional channel."""
-	var track = create_track(folder_name)
+	var track = Track.new(next_track_id)
+	next_track_id += 1
 	track.type = Track.TrackType.FOLDER
+	track.height = 60
+	track.set_project_ref(self)
 
 	var channel = null
 	if with_channel:
 		channel = create_channel(folder_name, Channel.ChannelType.BUS)
-		track.default_channel_id = channel.id
+		track.pair_mixer_channel(channel)
+	else:
+		track.color_by_channel = false
+		track.name_by_channel = false
 
-		# Reconnect track to update routing (if project is connected)
-		if _connection_state == ConnectionState.CONNECTED and track._is_connected:
-			track.disconnect_from_engine()
-			track.connect_to_engine()
-
+	track.name = folder_name
+	add_track(track)
+	print("[Project] %s '%s' (track %d) bus=%s" % [
+		"Group" if with_channel else "Folder",
+		track.name,
+		track.id,
+		("%d" % channel.id) if channel else "none"
+	])
 	return {"track": track, "channel": channel}
 
 
-# Add track to folder
+## Mixer bus of the nearest ancestor group, or null if none.
+func get_enclosing_group_bus(track: Track) -> Channel:
+	if track == null:
+		return null
+	var parent_id := track.parent_track_id
+	while parent_id >= 0:
+		var parent := get_track_by_id(parent_id)
+		if parent == null:
+			break
+		if parent.is_group():
+			return parent.get_linked_channel()
+		parent_id = parent.parent_track_id
+	return null
+
+
+## Mixer channel this track owns (instrument/audio strip or group bus).
+func get_track_mixer_channel(track: Track) -> Channel:
+	if track == null or track.default_channel_id < 0:
+		return null
+	return get_channel_by_id(track.default_channel_id)
+
+
+## Route this track's mixer channel to the enclosing group bus, or Master.
+func sync_track_hierarchy_routing(track: Track) -> void:
+	var ch := get_track_mixer_channel(track)
+	if ch == null or ch.is_master:
+		return
+	var bus := get_enclosing_group_bus(track)
+	var target_id := bus.id if bus else 1
+	if ch.id == target_id:
+		return
+	if ch.output_channel_id != target_id:
+		ch.set_route(target_id)
+
+
+## Route a folder and every descendant according to group ancestry.
+func sync_subtree_hierarchy_routing(track: Track) -> void:
+	if track == null:
+		return
+	sync_track_hierarchy_routing(track)
+	if track.type != Track.TrackType.FOLDER:
+		return
+	for child in get_track_children(track):
+		sync_subtree_hierarchy_routing(child)
+
+
+## Pair a folder with a bus (making it a group) and route descendants to that bus.
+func link_folder_to_bus(track: Track, bus: Channel) -> void:
+	if track == null or bus == null or track.type != Track.TrackType.FOLDER:
+		return
+	track.color_by_channel = true
+	track.name_by_channel = true
+	track.pair_mixer_channel(bus)
+	sync_subtree_hierarchy_routing(track)
+
+
+## Turn a group back into a channel-less folder and re-route descendants.
+func unlink_folder_from_bus(track: Track) -> void:
+	if track == null or track.type != Track.TrackType.FOLDER:
+		return
+	track.color_by_channel = false
+	track.name_by_channel = false
+	track.default_channel_id = -1
+	sync_subtree_hierarchy_routing(track)
+
+
+## Create a bus named and colored like the folder, pair it, and route children.
+func create_and_link_folder_bus(track: Track) -> Channel:
+	if track == null or track.type != Track.TrackType.FOLDER:
+		return null
+	var bus := create_bus_channel(track.name)
+	bus.set_color(track.get_color())
+	bus.set_name(track.name)
+	link_folder_to_bus(track, bus)
+	return bus
+
+
+## Add a track as the last child of a folder.
 func add_track_to_folder(track_id: int, folder_id: int) -> bool:
-	"""Add a track to a folder track."""
 	var track = get_track_by_id(track_id)
 	var folder = get_track_by_id(folder_id)
-
-	if not track or not folder:
+	if not track or not folder or folder.type != Track.TrackType.FOLDER:
 		return false
-	if folder.type != Track.TrackType.FOLDER:
+	var after_sibling: Track = null
+	for child in get_track_children(folder):
+		if child != track:
+			after_sibling = child
+	return place_track(track, folder_id, after_sibling)
+
+
+## True while place_track / apply_track_layout is mutating multiple tracks.
+func is_track_layout_batching() -> bool:
+	return _track_layout_batch > 0
+
+
+## Suppress per-track UI rebuilds until end_track_layout_batch().
+func begin_track_layout_batch() -> void:
+	_track_layout_batch += 1
+
+
+## End a layout batch and notify TrackList/Timeline once.
+func end_track_layout_batch() -> void:
+	_track_layout_batch -= 1
+	if _track_layout_batch > 0:
+		return
+	_track_layout_batch = 0
+	tracks_layout_changed.emit()
+
+
+## Move `track` under `new_parent_id`, sitting after `after_sibling` (null = first child / first root).
+func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) -> bool:
+	if track == null:
+		return false
+	if after_sibling == track:
+		return false
+	if new_parent_id == track.id:
+		return false
+	if track_is_in_subtree(new_parent_id, track):
 		return false
 
-	# Remove from old parent if any
-	var old_parent_id = track.parent_track_id
+	if new_parent_id >= 0:
+		var new_parent := get_track_by_id(new_parent_id)
+		if new_parent == null or new_parent.type != Track.TrackType.FOLDER:
+			return false
+
+	if after_sibling != null and after_sibling.parent_track_id != new_parent_id:
+		return false
+
+	if _track_already_placed(track, new_parent_id, after_sibling):
+		return false
+
+	begin_track_layout_batch()
+
+	var old_parent_id := track.parent_track_id
 	if old_parent_id >= 0:
-		var old_parent = get_track_by_id(old_parent_id)
+		var old_parent := get_track_by_id(old_parent_id)
 		if old_parent:
-			old_parent.child_track_ids.erase(track_id)
-			# Renumber old siblings to fill the gap
-			_renumber_siblings(old_parent_id)
-	elif old_parent_id < 0:
-		# Was a root track, renumber root siblings
-		_renumber_siblings(-1)
+			old_parent.child_track_ids.erase(track.id)
 
-	# Add to new parent
-	track.parent_track_id = folder_id
-	if not folder.child_track_ids.has(track_id):
-		folder.child_track_ids.append(track_id)
-	
-	# Set order to be last child of the folder
-	var children = get_track_children(folder)
-	track.order = children.size() - 1  # Already added, so size - 1
+	track.parent_track_id = new_parent_id
 
+	var siblings: Array[Track] = []
+	for t in tracks:
+		if t != track and t.parent_track_id == new_parent_id:
+			siblings.append(t)
+	siblings.sort_custom(func(a, b): return a.order < b.order)
+
+	var new_order: Array[Track] = []
+	if after_sibling == null:
+		new_order.append(track)
+		new_order.append_array(siblings)
+	else:
+		var inserted := false
+		for sibling in siblings:
+			new_order.append(sibling)
+			if sibling == after_sibling:
+				new_order.append(track)
+				inserted = true
+		if not inserted:
+			new_order.append(track)
+
+	for i in range(new_order.size()):
+		new_order[i].order = i
+
+	_sync_folder_child_ids(new_parent_id)
+	if old_parent_id != new_parent_id:
+		_renumber_siblings(old_parent_id)
+		_sync_folder_child_ids(old_parent_id)
+		sync_subtree_hierarchy_routing(track)
+
+	end_track_layout_batch()
 	return true
+
+
+## Restore parent/order/children from a TrackReorderCommand snapshot.
+func apply_track_layout(layout: Dictionary) -> void:
+	if layout.is_empty():
+		return
+	begin_track_layout_batch()
+	for track in tracks:
+		if not layout.has(track.id):
+			continue
+		var entry: Dictionary = layout[track.id]
+		var child_ids: Array[int] = []
+		child_ids.assign(entry["child_track_ids"])
+		track.child_track_ids = child_ids
+		track.parent_track_id = entry["parent_track_id"]
+		track.order = entry["order"]
+	for track in tracks:
+		sync_track_hierarchy_routing(track)
+	end_track_layout_batch()
+
+
+## True if `maybe_descendant_id` is `root` or nested under it.
+func track_is_in_subtree(maybe_descendant_id: int, root: Track) -> bool:
+	if maybe_descendant_id < 0 or root == null:
+		return false
+	var walk_id := maybe_descendant_id
+	var visited: Dictionary = {}
+	while walk_id >= 0:
+		if walk_id == root.id:
+			return true
+		if visited.has(walk_id):
+			break
+		visited[walk_id] = true
+		var node := get_track_by_id(walk_id)
+		if node == null:
+			break
+		walk_id = node.parent_track_id
+	return false
+
+
+## True if `track` already sits after `after_sibling` under `new_parent_id`.
+func _track_already_placed(track: Track, new_parent_id: int, after_sibling: Track) -> bool:
+	if track.parent_track_id != new_parent_id:
+		return false
+	var previous: Track = null
+	var siblings: Array[Track] = []
+	for t in tracks:
+		if t.parent_track_id == new_parent_id:
+			siblings.append(t)
+	siblings.sort_custom(func(a, b): return a.order < b.order)
+	for sibling in siblings:
+		if sibling == track:
+			return previous == after_sibling
+		previous = sibling
+	return false
+
+
+## Keep a folder's child_track_ids in sibling order.
+func _sync_folder_child_ids(parent_id: int) -> void:
+	if parent_id < 0:
+		return
+	var folder := get_track_by_id(parent_id)
+	if folder == null or folder.type != Track.TrackType.FOLDER:
+		return
+	var ids: Array[int] = []
+	for child in get_track_children(folder):
+		ids.append(child.id)
+	folder.child_track_ids = ids
 
 
 func _renumber_siblings(parent_id: int) -> void:
@@ -1126,7 +1345,20 @@ static func from_json(data: Dictionary) -> Project:
 		# (signals will be connected when project is activated in Editor)
 		project.tracks.append(track)
 
+	_relink_folder_buses(project)
 	return project
+
+
+## Re-bind folder/group tracks to their mixer buses after load.
+static func _relink_folder_buses(project: Project) -> void:
+	for track in project.tracks:
+		if track == null or track.type != Track.TrackType.FOLDER:
+			continue
+		track.set_project_ref(project)
+		var ch := track.get_linked_channel()
+		print("[Project] Loaded folder '%s' (id %d) bus=%s default_channel_id=%d" % [
+			track.name, track.id, ("%d" % ch.id) if ch else "none", track.default_channel_id
+		])
 
 
 # ============================================================================

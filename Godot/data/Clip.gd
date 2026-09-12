@@ -255,6 +255,7 @@ func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, dura
 	midi_note.start_tick = start_tick
 	midi_note.duration_ticks = duration
 	midi_notes.append(midi_note)
+	_extend_content_length(end_tick)
 
 	# Ensure clip exists on engine (create if needed)
 	_ensure_synced_to_engine()
@@ -305,6 +306,8 @@ func update_midi_note(midi_note: MidiNoteData) -> void:
 	Note: If the note is currently playing, the active voice won't change until
 	playback is stopped and restarted. Updates only affect future Note On events.
 	"""
+	_extend_content_length(midi_note.start_tick + midi_note.duration_ticks)
+
 	# Sync to audio engine if clip exists on engine
 	if _synced_to_engine:
 		var osc_path = "/clip/%s/update_note" % id
@@ -451,6 +454,12 @@ func get_content_length() -> int:
 		return max_end
 
 	return content_length_ticks
+
+
+## Grow stored clip length when a note extends past it. Does not shrink on delete.
+func _extend_content_length(end_tick: int) -> void:
+	if end_tick > content_length_ticks:
+		content_length_ticks = end_tick
 
 
 

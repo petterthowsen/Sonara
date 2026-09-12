@@ -1591,6 +1591,7 @@ impl OscServer {
                 min,
                 max,
                 default,
+                group,
             } => (
                 format!(
                     "/channel/{}/device/{}/param/info",
@@ -1602,6 +1603,7 @@ impl OscServer {
                     OscType::Float(min),
                     OscType::Float(max),
                     OscType::Float(default),
+                    OscType::String(group),
                 ],
             ),
             EngineStatus::PluginParameterCount {

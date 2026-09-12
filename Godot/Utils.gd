@@ -1,5 +1,53 @@
 class_name Utils extends RefCounted
 
+## Clamp color components to 0–1 for drawing. Does not mutate the source.
+static func display_color(color: Color) -> Color:
+	return color.clamp()
+
+
+## Black or white depending on background luminance, for readable labels.
+static func contrasting_text_color(bg: Color) -> Color:
+	var drawn := display_color(bg)
+	return Color.BLACK if drawn.get_luminance() > 0.179 else Color.WHITE
+
+
+## Dark halo for light text; fully transparent when the text is black.
+static func contrasting_shadow_color(text_color: Color) -> Color:
+	if text_color.get_luminance() > 0.5:
+		return Color(0, 0, 0, 0.55)
+	return Color(0, 0, 0, 0)
+
+
+## Apply a font color to a Label, including those that use LabelSettings.
+static func apply_label_font_color(label: Label, color: Color) -> void:
+	if label == null:
+		return
+	if label.label_settings:
+		if not label.label_settings.resource_local_to_scene:
+			label.label_settings = label.label_settings.duplicate()
+			label.label_settings.resource_local_to_scene = true
+		label.label_settings.font_color = color
+		label.label_settings.shadow_color = contrasting_shadow_color(color)
+	else:
+		label.add_theme_color_override("font_color", color)
+		label.add_theme_color_override("font_shadow_color", contrasting_shadow_color(color))
+
+
+## Serialize a Color without clamping HDR components (unlike Color.to_html).
+static func color_to_json(color: Color) -> Array:
+	return [color.r, color.g, color.b, color.a]
+
+
+## Load a Color from float RGBA arrays or legacy HTML hex strings.
+static func color_from_json(data: Variant, fallback: Color = Color.WHITE) -> Color:
+	if data is Array and data.size() >= 3:
+		var a: float = data[3] if data.size() > 3 else 1.0
+		return Color(float(data[0]), float(data[1]), float(data[2]), a)
+	if data is String:
+		return Color.from_string(data, fallback)
+	return fallback
+
+
 ## Convert linear amplitude (0.0 to 1.0+) to decibels
 ## Returns db_floor for values <= 0.000001 (default: -60.0 dB)
 static func lin_to_db(linear: float, db_floor: float = -60.0) -> float:

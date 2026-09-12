@@ -104,11 +104,16 @@ var multi_clip_mode: bool = false
 # MULTI-CLIP MODE: note_id -> {visual_note: VisualNote, clip_instance: ClipInstance}
 var visual_notes_by_id: Dictionary = {}
 
+## Unique key per (clip_instance, note_id) to avoid collisions when instances share a Clip.
 func _make_note_key(ci: ClipInstance, nd: MidiNoteData) -> String:
-	# Unique key per (clip_instance, note_id) to avoid collisions when multiple instances share the same Clip
+	return _note_dict_key(ci, nd.id if nd else -1)
+
+
+## Dictionary key for a visual note: clip-instance id plus note id, or single-clip fallback.
+func _note_dict_key(ci: ClipInstance, note_id: int) -> String:
 	if ci:
-		return "%s:%d" % [str(ci.id), nd.id]
-	return "single:%d" % nd.id
+		return "%s:%d" % [str(ci.id), note_id]
+	return "single:%d" % note_id
 
 
 func unbind():
@@ -132,9 +137,8 @@ func unbind():
 			if c.midi_note_changed.is_connected(_on_clip_note_changed):
 				c.midi_note_changed.disconnect(_on_clip_note_changed)
 
-	# Disconnect from grid_helper if connected
-	if grid_helper and grid_helper.changed.is_connected(_on_grid_helper_changed):
-		grid_helper.changed.disconnect(_on_grid_helper_changed)
+	# Keep grid_helper connected. Unbind only clears clip data; zoom/scroll
+	# still need to relayout this editor when it is reused (the scene editor).
 
 	# Clear all visual notes
 	for node in get_children():
@@ -256,8 +260,9 @@ func _update_single_note_position(note: VisualNote) -> void:
 	var note_y = note_to_y(note_data.note)
 	var note_width = ticks_to_pixels(note_data.duration_ticks)
 
+	note.prepare_piano_roll_layout()
 	note.position = Vector2(note_x, note_y)
-	note.set_deferred("size", Vector2(note_width, note_height))
+	note.size = Vector2(maxf(1.0, note_width), note_height)
 	note.update_label_visibility(note_height)
 
 
@@ -332,7 +337,7 @@ func update_container_width() -> void:
 	var width_from_content = rightmost_pixels + extra_pixels
 	var required_width = max(min_width_pixels, width_from_scroll, width_from_content)
 
-	logger.info("update_container_width: multi=%s rightmost_tick=%d min_px=%.1f scroll=%.1f viewport=%.1f content_px=%.1f required_px=%.1f" % [str(multi_clip_mode), rightmost_tick, min_width_pixels, scroll_pos, viewport_width, width_from_content, required_width])
+	logger.debug("update_container_width: multi=%s rightmost_tick=%d min_px=%.1f scroll=%.1f viewport=%.1f content_px=%.1f required_px=%.1f" % [str(multi_clip_mode), rightmost_tick, min_width_pixels, scroll_pos, viewport_width, width_from_content, required_width])
 
 	custom_minimum_size.x = required_width
 
@@ -376,8 +381,7 @@ func _load_notes_from_single_clip() -> void:
 		# Set color from track
 		note_instance.set_color(note_color)
 
-		# Track in dictionary (single-clip mode: just the VisualNote)
-		visual_notes_by_id[_make_note_key(null, note_data)] = note_instance
+		visual_notes_by_id[_make_note_key(clip_instance, note_data)] = note_instance
 
 	logger.info("Loaded %d notes from clip '%s'" % [clip.midi_notes.size(), clip.name])
 
@@ -452,14 +456,15 @@ func _on_clip_note_added(note_data: MidiNoteData) -> void:
 			_update_single_note_position(vn)
 	else:
 		# Single-clip mode
-		if note_data.id in visual_notes_by_id:
+		var single_key = _note_dict_key(clip_instance, note_data.id)
+		if visual_notes_by_id.has(single_key):
 			push_warning("[NoteContainer] Note %d already has a visual representation" % note_data.id)
 			return
 		var vn_single = visual_note_scene.instantiate()
 		add_child(vn_single)
 		vn_single.bind_to_note(note_data)
 		vn_single.set_color(note_color)
-		visual_notes_by_id[note_data.id] = vn_single
+		visual_notes_by_id[single_key] = vn_single
 		_update_single_note_position(vn_single)
 
 	update_container_width()
@@ -481,11 +486,12 @@ func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 		for vn in to_free:
 			vn.queue_free()
 	else:
-		if note_data.id not in visual_notes_by_id:
+		var single_key = _note_dict_key(clip_instance, note_data.id)
+		if not visual_notes_by_id.has(single_key):
 			push_warning("[NoteContainer] Cannot remove visual note %d - not found" % note_data.id)
 			return
-		var vn_single: VisualNote = visual_notes_by_id[note_data.id]
-		visual_notes_by_id.erase(note_data.id)
+		var vn_single: VisualNote = visual_notes_by_id[single_key]
+		visual_notes_by_id.erase(single_key)
 		if vn_single:
 			vn_single.queue_free()
 	update_container_width()
@@ -502,10 +508,11 @@ func _on_clip_note_changed(note_data: MidiNoteData) -> void:
 				child._update_visual()
 				_update_single_note_position(child)
 	else:
-		if note_data.id not in visual_notes_by_id:
+		var single_key = _note_dict_key(clip_instance, note_data.id)
+		if not visual_notes_by_id.has(single_key):
 			push_warning("[NoteContainer] Cannot update visual note %d - not found" % note_data.id)
 			return
-		var vn_single: VisualNote = visual_notes_by_id[note_data.id]
+		var vn_single: VisualNote = visual_notes_by_id[single_key]
 		if vn_single:
 			vn_single._update_visual()
 			_update_single_note_position(vn_single)
@@ -563,7 +570,14 @@ func _get_note_at_position(pos: Vector2) -> VisualNote:
 func get_visual_note(note_id: int) -> VisualNote:
 	"""Get visual note by id. In multi-clip mode, scan children for matching note_id."""
 	if not multi_clip_mode:
-		return visual_notes_by_id.get(note_id, null)
+		var keyed = visual_notes_by_id.get(_note_dict_key(clip_instance, note_id), null)
+		if keyed is VisualNote:
+			return keyed
+		# Legacy integer keys from earlier in-progress code
+		var legacy = visual_notes_by_id.get(note_id, null)
+		if legacy is VisualNote:
+			return legacy
+		return null
 	for child in get_children():
 		if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_id:
 			return child
@@ -695,4 +709,4 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 	# Refresh container width to account for new clip
 	update_container_width()
 
-	return clip_instance
+	return new_clip_instance

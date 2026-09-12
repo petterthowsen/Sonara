@@ -192,25 +192,55 @@ func _input(event: InputEvent):
 		handle_physical_midi_event(event)
 		return
 
-	if virtual_keyboard_enabled:
-		if event is InputEventKey and not event.is_echo():
-			# Only process keyboard actions if they match our note actions
-			# This prevents interfering with other keyboard shortcuts
-			var is_keyboard_action = false
-			for action in ["keyboard_c3", "keyboard_c#3", "keyboard_d3", "keyboard_d#3", 
-					"keyboard_e3", "keyboard_f3", "keyboard_f#3", "keyboard_g3", 
-					"keyboard_g#3", "keyboard_a3", "keyboard_a#3", "keyboard_b3",
-					"keyboard_c4", "keyboard_c#4", "keyboard_d4", "keyboard_d#4",
-					"keyboard_transpose_up", "keyboard_transpose_down",
-					"keyboard_velocity_up", "keyboard_velocity_down"]:
-				if event.is_action(action):
-					is_keyboard_action = true
-					break
-			
-			if is_keyboard_action:
-				handle_virtual_keyboard_action(event)
-				# Don't accept the event - let UI handle it if needed
-				# But we've already processed it for MIDI
+	if not virtual_keyboard_enabled:
+		return
+
+	# Typing in LineEdit/TextEdit should never trigger computer-keyboard MIDI.
+	if _is_gui_text_editing():
+		_release_active_keyboard_notes()
+		return
+
+	if event is InputEventKey and not event.is_echo():
+		# Only process keyboard actions if they match our note actions
+		# This prevents interfering with other keyboard shortcuts
+		var is_keyboard_action = false
+		for action in ["keyboard_c3", "keyboard_c#3", "keyboard_d3", "keyboard_d#3",
+				"keyboard_e3", "keyboard_f3", "keyboard_f#3", "keyboard_g3",
+				"keyboard_g#3", "keyboard_a3", "keyboard_a#3", "keyboard_b3",
+				"keyboard_c4", "keyboard_c#4", "keyboard_d4", "keyboard_d#4",
+				"keyboard_transpose_up", "keyboard_transpose_down",
+				"keyboard_velocity_up", "keyboard_velocity_down"]:
+			if event.is_action(action):
+				is_keyboard_action = true
+				break
+
+		if is_keyboard_action:
+			handle_virtual_keyboard_action(event)
+			# Don't accept the event - let UI handle it if needed
+			# But we've already processed it for MIDI
+
+
+## True when a text input currently owns GUI focus (names, search, tempo, etc.).
+func _is_gui_text_editing() -> bool:
+	var viewport := get_viewport()
+	if viewport == null:
+		return false
+	var focus := viewport.gui_get_focus_owner()
+	if focus is LineEdit:
+		return (focus as LineEdit).editable
+	if focus is TextEdit:
+		return (focus as TextEdit).editable
+	return false
+
+
+## Send note-off for any computer-keyboard notes that are still held.
+func _release_active_keyboard_notes() -> void:
+	if active_keyboard_notes.is_empty():
+		return
+	for note_name in active_keyboard_notes.keys():
+		var note = active_keyboard_notes[note_name]
+		emit_virtual_midi_note(note, 0, false)
+	active_keyboard_notes.clear()
 
 
 func handle_physical_midi_event(event: InputEventMIDI):
@@ -449,10 +479,7 @@ func set_virtual_keyboard_enabled(enabled: bool):
 
 		# Release all active notes when disabling
 		if not enabled:
-			for note_name in active_keyboard_notes.keys():
-				var note = active_keyboard_notes[note_name]
-				emit_virtual_midi_note(note, 0, false)
-			active_keyboard_notes.clear()
+			_release_active_keyboard_notes()
 
 		# Persist to config
 		Sonara.set_config("midi/virtual_keyboard/enabled", enabled)
@@ -483,9 +510,6 @@ func _apply_virtual_keyboard_enabled(enabled: bool) -> void:
 	if virtual_keyboard_enabled != enabled:
 		virtual_keyboard_enabled = enabled
 		if not enabled:
-			for note_name in active_keyboard_notes.keys():
-				var note = active_keyboard_notes[note_name]
-				emit_virtual_midi_note(note, 0, false)
-			active_keyboard_notes.clear()
+			_release_active_keyboard_notes()
 		devices_changed.emit()
 		print("[MidiManager] Virtual keyboard %s" % ("enabled" if enabled else "disabled"))

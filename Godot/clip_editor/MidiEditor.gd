@@ -174,9 +174,7 @@ func _ready():
 	var scene_note_editor = h_scroll.get_node_or_null("NoteEditor")
 	if scene_note_editor:
 		note_editors.append(scene_note_editor)
-		scene_note_editor.note_height = note_height
-		if grid_helper:
-			scene_note_editor.grid_helper = grid_helper
+		_configure_note_editor(scene_note_editor)
 
 func _process(delta: float):
 	# Smooth scroll interpolation
@@ -234,6 +232,7 @@ func bind_to_clip_instance(ci : ClipInstance):
 	
 	# Bind to the first (and only) note editor
 	if note_editor:
+		_configure_note_editor(note_editor)
 		note_editor.bind(clip_instance)
 		# Clip-mode: no position offset (notes show at clip-local positions)
 		note_editor.position_offset_ticks = 0
@@ -270,15 +269,11 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 		if i < note_editors.size():
 			editor = note_editors[i]
 		else:
-			# Create new NoteEditor instance
 			editor = NoteEditor.new()
 			h_scroll.add_child(editor)
 			note_editors.append(editor)
 
-			# Configure editor
-			editor.note_height = note_height
-			editor.grid_helper = grid_helper
-			editor.cursor_position_ticks = cursor_position_ticks
+		_configure_note_editor(editor)
 
 		# Bind to ALL clips on this track (multi-clip mode)
 		editor.bind_to_clips(all_track_clips, track)
@@ -784,7 +779,6 @@ func _update_note_editor_states() -> void:
 		return
 
 	# In track-mode, activate editor matching current_track
-	# an sort it last
 	for editor in note_editors:
 		if not editor:
 			continue
@@ -807,6 +801,21 @@ func _update_note_editor_states() -> void:
 		# Inactive editors: behind (z=0), half opacity for context
 		editor.z_index = 1 if is_active else 0
 		editor.modulate.a = 1.0 if is_active else 0.5
-		editor.move_to_front()
+		if is_active:
+			editor.move_to_front()
 	
 	logger.info("[MidiEditor] Updated editor states for track: %s" % current_track.name)
+
+
+## Keep a note editor sized to content and wired to this MidiEditor's grid.
+## The scene editor is reused across binds; re-assigning grid_helper reconnects
+## zoom/scroll so its notes keep following the piano roll.
+func _configure_note_editor(editor: NoteEditor) -> void:
+	if editor == null:
+		return
+	editor.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	editor.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	editor.note_height = note_height
+	editor.cursor_position_ticks = cursor_position_ticks
+	if grid_helper:
+		editor.grid_helper = grid_helper

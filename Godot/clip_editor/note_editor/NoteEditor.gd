@@ -729,7 +729,6 @@ func _erase_note(note: VisualNote) -> void:
 		_history_begin_clips([note_clip])
 		note_clip.remove_midi_note(note.midi_note_data)
 		_history_commit("Erase Note")
-		print("[NoteEditor] Erased note %d" % note.midi_note_data.id)
 
 
 # ============================================================================
@@ -925,11 +924,8 @@ func _delete_selection() -> void:
 	update_container_width()
 
 	print("[NoteEditor] Deleted %d notes" % count)
+	_history_commit("Delete Notes")
 
-
-# ============================================================================
-# KEYBOARD NOTE MOVEMENT (orchestrates between selection manager and container)
-# ============================================================================	_history_commit("Delete Notes")
 
 func _move_selection_vertical(semitones: int) -> void:
 	"""Move all selected notes up or down by semitones."""
@@ -1030,9 +1026,8 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 	# Don't update selection range - keep grid-snapped box selection boundaries
 	queue_redraw()
 	update_container_width()
+	_history_commit("Nudge Notes")
 
-
-# Override _on_clip_note_removed to handle selection cleanup	_history_commit("Nudge Notes")
 
 func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 	"""Handle when a note is removed from the clip."""

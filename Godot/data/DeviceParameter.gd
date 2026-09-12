@@ -34,6 +34,9 @@ var description: String = ""
 ## Whether this parameter is automation-safe
 var is_automation_safe: bool = true
 
+## UI grouping: `"param"` (P tab) or `"cc"` (C tab). Empty is treated as `"param"`.
+var group: String = "param"
+
 # Typed parameter support
 # "float" | "bool" | "enum"
 var param_type: String = "float"

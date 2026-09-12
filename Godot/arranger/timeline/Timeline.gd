@@ -9,6 +9,7 @@ var timeline_tracks: Array[TimelineTrack] = []
 
 # Current project reference (set by Arranger)
 var project: Project = null
+var _is_rebuilding: bool = false
 
 # Minimum timeline length (in bars) when empty
 const MIN_TIMELINE_BARS: int = 32  # Show at least 32 bars
@@ -81,10 +82,14 @@ func set_project(new_project: Project) -> void:
 		# Connect to project's track signals
 		project.track_added.connect(_on_track_added)
 		project.track_removed.connect(_on_track_removed)
+		project.tracks_layout_changed.connect(_on_tracks_layout_changed)
 		
-		# Sync UI with existing tracks
+		# Sync UI with existing tracks, then apply folder hierarchy order
+		_is_rebuilding = true
 		for i in range(project.tracks.size()):
 			_on_track_added(project.tracks[i])
+		_is_rebuilding = false
+		_update_visual_order()
 		
 		# Update grid and timeline
 		_update_timeline_width()
@@ -100,6 +105,8 @@ func _unbind_from_project() -> void:
 			project.track_added.disconnect(_on_track_added)
 		if project.track_removed.is_connected(_on_track_removed):
 			project.track_removed.disconnect(_on_track_removed)
+		if project.tracks_layout_changed.is_connected(_on_tracks_layout_changed):
+			project.tracks_layout_changed.disconnect(_on_tracks_layout_changed)
 	
 	_clear_all_tracks()
 	project = null
@@ -116,12 +123,8 @@ func _on_track_added(track: Track) -> void:
 	# Instantiate TimelineTrack
 	var timeline_track := TimelineTrack.new()
 
-	# Find correct position based on order property
-	var insert_position = _find_insert_position(track.order)
-
-	# Add to container at correct position
+	# Append; visual order is applied from the folder hierarchy after add/rebuild.
 	add_child(timeline_track)
-	move_child(timeline_track, insert_position)
 
 	# Set timeline reference for grid drawing (MUST be set before bind_to_track)
 	timeline_track.timeline = self
@@ -129,8 +132,9 @@ func _on_track_added(track: Track) -> void:
 	# Bind to track data
 	timeline_track.bind_to_track(track, index)
 
-	# Connect to track signals for reordering
-	track.order_changed.connect(_on_track_order_changed)
+	# Connect to track signals for reordering / folder reparent
+	track.order_changed.connect(_on_track_layout_changed)
+	track.parent_changed.connect(_on_track_layout_changed)
 
 	# Store reference
 	if index >= timeline_tracks.size():
@@ -139,6 +143,9 @@ func _on_track_added(track: Track) -> void:
 
 	# Update timeline width in case this track has clips
 	_update_timeline_width()
+
+	if not _is_rebuilding:
+		_update_visual_order()
 
 	print("[Timeline] Timeline track added for: ", track.name, " at index ", index, " with order ", track.order)
 
@@ -151,8 +158,10 @@ func _on_track_removed(track: Track) -> void:
 		return
 	
 	# Disconnect from track signals
-	if track.order_changed.is_connected(_on_track_order_changed):
-		track.order_changed.disconnect(_on_track_order_changed)
+	if track.order_changed.is_connected(_on_track_layout_changed):
+		track.order_changed.disconnect(_on_track_layout_changed)
+	if track.parent_changed.is_connected(_on_track_layout_changed):
+		track.parent_changed.disconnect(_on_track_layout_changed)
 	
 	# Remove from timeline_tracks array
 	var index = timeline_tracks.find(timeline_track)
@@ -176,17 +185,22 @@ func _on_track_removed(track: Track) -> void:
 	print("[Timeline] Timeline track removed for: ", track.name)
 
 
-func _on_track_order_changed(_new_order: int) -> void:
-	"""Handle track order changes to update visual order."""
-	if not project:
+## Rebuild UI order when a track's sibling order or folder parent changes.
+func _on_track_layout_changed(_unused: int) -> void:
+	if not project or project.is_track_layout_batching():
 		return
-	
-	print("[Timeline] Track order changed, updating visual order")
 	_update_visual_order()
 
 
+## Rebuild after a batched reorder so clips stay aligned with TrackList during live drag.
+func _on_tracks_layout_changed() -> void:
+	if not project:
+		return
+	_update_visual_order()
+
+
+## Update UI to match hierarchical track order.
 func _update_visual_order() -> void:
-	"""Update UI to match hierarchical track order."""
 	if not project:
 		return
 	
@@ -253,19 +267,6 @@ func _clear_all_tracks() -> void:
 		clip_selection_manager.clear_selection()
 	
 	print("[Timeline] All timeline tracks cleared")
-
-
-func _find_insert_position(order: int) -> int:
-	"""Find the correct position to insert a timeline track based on its order value."""
-	var insert_pos = 0
-	for child in get_children():
-		if child is TimelineTrack:
-			var child_track = child as TimelineTrack
-			if child_track.track and child_track.track.order <= order:
-				insert_pos += 1
-			else:
-				break
-	return insert_pos
 
 
 func _gui_input(event: InputEvent) -> void:

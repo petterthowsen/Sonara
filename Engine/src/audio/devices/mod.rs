@@ -254,6 +254,11 @@ pub trait AudioDevice: Send {
     /// Get list of parameters
     fn parameters(&self) -> Vec<ParamInfo>;
 
+    /// UI group for a parameter: `"param"` (P tab) or `"cc"` (C tab).
+    fn parameter_group(&self, _param_id: ParamId) -> &'static str {
+        "param"
+    }
+
     /// Describe file loading capabilities, if any
     fn file_loading_support(&self) -> Option<FileLoadingSupport> {
         None

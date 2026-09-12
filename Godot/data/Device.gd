@@ -121,6 +121,21 @@ func get_parameters() -> Array[DeviceParameter]:
 	return parameters
 
 
+## Parameters belonging to a UI group (`"param"` or `"cc"`). Empty group counts as `"param"`.
+func get_parameters_in_group(group: String) -> Array[DeviceParameter]:
+	var result: Array[DeviceParameter] = []
+	for param in parameters:
+		var param_group = param.group if param.group != "" else "param"
+		if param_group == group:
+			result.append(param)
+	return result
+
+
+## True when this device advertises at least one CC-tab parameter.
+func has_cc_parameters() -> bool:
+	return not get_parameters_in_group("cc").is_empty()
+
+
 ## ============================================================================
 ## VISUAL & CONTROLS SCENE REGISTRATION
 ## ============================================================================

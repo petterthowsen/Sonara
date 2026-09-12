@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://ca1ed008xlb1o"]
+[gd_scene format=3 uid="uid://ca1ed008xlb1o"]
 
 [ext_resource type="Script" uid="uid://cjjiuujvntxw0" path="res://arranger/tracklist/TrackItem.gd" id="1_q68hb"]
 [ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="2_shsim"]
@@ -49,10 +49,12 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[node name="TrackItem" type="PanelContainer" node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "drop_zone")]
+[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "drop_zone")]
 custom_minimum_size = Vector2(123, 38)
 offset_right = 224.0
 offset_bottom = 38.0
+size_flags_vertical = 0
+focus_mode = 1
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_vc4i6")
 script = ExtResource("1_q68hb")
@@ -63,15 +65,15 @@ solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloM
 mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute/MuteToggle")
 drop_zone = NodePath("DropZone")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=883583283]
 layout_mode = 2
 theme_override_constants/separation = 0
 
-[node name="HBox" type="BoxContainer" parent="VBoxContainer"]
+[node name="HBox" type="BoxContainer" parent="VBoxContainer" unique_id=1845322153]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Volumeter" type="Control" parent="VBoxContainer/HBox"]
+[node name="Volumeter" type="Control" parent="VBoxContainer/HBox" unique_id=1189907986]
 custom_minimum_size = Vector2(12, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -82,7 +84,7 @@ bar_color = Color(0.83, 0.83, 0.83, 0.49411765)
 peak = 0.655
 volume_db = -60.0
 
-[node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/HBox"]
+[node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/HBox" unique_id=1601519965]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_left = 2
@@ -90,18 +92,18 @@ theme_override_constants/margin_top = 3
 theme_override_constants/margin_right = 3
 theme_override_constants/margin_bottom = 0
 
-[node name="Box" type="BoxContainer" parent="VBoxContainer/HBox/MarginContainer"]
+[node name="Box" type="BoxContainer" parent="VBoxContainer/HBox/MarginContainer" unique_id=690933534]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 20.0
 theme_override_constants/separation = 2
 vertical = true
 
-[node name="Top" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box"]
+[node name="Top" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=896232702]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top" instance=ExtResource("3_vc4i6")]
+[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=79821339 instance=ExtResource("3_vc4i6")]
 custom_minimum_size = Vector2(24.015, 17.445)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -119,7 +121,7 @@ offset_bottom = 6.7775
 alignment = 0
 max_length = 200
 
-[node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top"]
+[node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=1090121590]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_constants/h_separation = 4
@@ -127,7 +129,7 @@ theme_override_constants/v_separation = 4
 alignment = 2
 last_wrap_alignment = 2
 
-[node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles"]
+[node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles" unique_id=843832981]
 custom_minimum_size = Vector2(30, 18)
 layout_mode = 2
 size_flags_stretch_ratio = 0.33
@@ -137,7 +139,7 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
 toggle_mode = true
 text = "R"
 
-[node name="SoloMute" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles"]
+[node name="SoloMute" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles" unique_id=1905271235]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 4
@@ -145,7 +147,7 @@ theme_override_constants/v_separation = 4
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute"]
+[node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute" unique_id=837592276]
 custom_minimum_size = Vector2(28, 18)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -155,7 +157,7 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
 toggle_mode = true
 text = "S"
 
-[node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute"]
+[node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute" unique_id=1093482891]
 custom_minimum_size = Vector2(28, 18)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -165,17 +167,16 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
 toggle_mode = true
 text = "M"
 
-[node name="Bottom" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box"]
-visible = false
+[node name="Bottom" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=1010182208]
 layout_mode = 2
 size_flags_vertical = 6
 alignment = 2
 
-[node name="empty" type="Control" parent="VBoxContainer"]
+[node name="empty" type="Control" parent="VBoxContainer" unique_id=1616882018]
 custom_minimum_size = Vector2(0, 2)
 layout_mode = 2
 
-[node name="DropZone" type="Control" parent="."]
+[node name="DropZone" type="Control" parent="." unique_id=1142263522]
 z_index = 1
 custom_minimum_size = Vector2(0, 8)
 layout_mode = 2

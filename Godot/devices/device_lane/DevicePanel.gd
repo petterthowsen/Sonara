@@ -13,6 +13,11 @@ const CompactParameterControlScene = preload("res://devices/compact/CompactParam
 @onready var file_button: Button = $VBoxContainer/Header/HBox/TabButtons/File
 @onready var large_button: Button = $VBoxContainer/Header/HBox/TabButtons/Large
 
+## MIDI CC tab (created at runtime so it shares P-tab styles until we have icons)
+var cc_button: Button
+var ccs_scroll: ScrollContainer
+var ccs_box: VBoxContainer
+
 # Left side: scollcontainer of parameters and file selection
 @onready var content_left : Control = $VBoxContainer/Content/HBoxContainer/ContentLeft
 
@@ -47,26 +52,52 @@ signal request_context_menu()
 func _ready() -> void:
 	# make parameters box wider
 	parameters_box.custom_minimum_size.x = 100
-	
+
+	_create_cc_tab()
+
 	# Connect tab buttons
 	params_button.toggled.connect(_on_params_tab_toggled)
+	cc_button.toggled.connect(_on_ccs_tab_toggled)
 	file_button.toggled.connect(_on_file_tab_toggled)
 	large_button.toggled.connect(_on_large_toggled)
-	
+
 	# Connect file loading
 	file_load_button.pressed.connect(_on_load_file_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
-	
+
 	# Initial tab state: show Parameters on the left
 	params_button.button_pressed = true
+	cc_button.button_pressed = false
 	file_button.button_pressed = false
 	_show_parameters_tab()
 	# Right pane visibility will be managed when binding to a device
-	
+
 	# Enable drag and drop for SFZ files on the panel and key child nodes
 	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	ccs_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+
+
+## Duplicate the P tab button and parameter scroller to make a C tab for MIDI CCs.
+func _create_cc_tab() -> void:
+	cc_button = params_button.duplicate()
+	cc_button.name = "CCs"
+	cc_button.text = "C"
+	cc_button.button_pressed = false
+	cc_button.visible = false
+	tab_buttons.add_child(cc_button)
+	tab_buttons.move_child(cc_button, file_button.get_index())
+
+	ccs_scroll = parameters_scroll.duplicate()
+	ccs_scroll.name = "CCs"
+	ccs_scroll.visible = false
+	content_left.add_child(ccs_scroll)
+	content_left.move_child(ccs_scroll, file_box.get_index())
+	ccs_box = ccs_scroll.get_node("VBox")
+	ccs_box.custom_minimum_size.x = 100
+	for child in ccs_box.get_children():
+		child.queue_free()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -94,6 +125,7 @@ func bind_to_device(dev : DeviceInstance):
 	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
 	_create_parameter_controls()
+	_update_cc_tab_visibility()
 	# PanelView (right pane default)
 	if dev.device.has_panel_view():
 		_load_panel_view(dev)
@@ -120,12 +152,17 @@ func bind_to_device(dev : DeviceInstance):
 			channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 
+## Build P-tab and C-tab parameter controls for the bound device.
 func _create_parameter_controls() -> void:
 	if not device:
 		return
 
-	for param in device.device.get_parameters():
-		_create_parameter_control_for_param(param)
+	for param in device.device.get_parameters_in_group("param"):
+		_create_parameter_control_for_param(param, parameters_box)
+
+	if ccs_box:
+		for param in device.device.get_parameters_in_group("cc"):
+			_create_parameter_control_for_param(param, ccs_box)
 
 
 ## Clear all parameter controls
@@ -133,21 +170,21 @@ func _clear_parameter_controls() -> void:
 	if parameters_box:
 		for child in parameters_box.get_children():
 			child.queue_free()
+	if ccs_box:
+		for child in ccs_box.get_children():
+			child.queue_free()
 
 
 ## Create and add a parameter control UI for a specific parameter
-func _create_parameter_control_for_param(param: DeviceParameter) -> void:
-	# Instantiate parameter control
+func _create_parameter_control_for_param(param: DeviceParameter, parent: VBoxContainer) -> void:
 	var control: CompactParameterControl
 	if CompactParameterControlScene:
 		control = CompactParameterControlScene.instantiate()
 	else:
-		# Fallback: create control dynamically
 		control = CompactParameterControl.new()
 
-	# Setup the control with device instance and parameter ID
 	control.setup(device, param.id)
-	parameters_box.add_child(control)
+	parent.add_child(control)
 
 
 ## Handle device parameters updated (for plugins that load parameters asynchronously)
@@ -159,6 +196,7 @@ func _on_device_parameters_updated(device_pos: int) -> void:
 	if device.position == device_pos:
 		_clear_parameter_controls()
 		_create_parameter_controls()
+		_update_cc_tab_visibility()
 
 
 ## ============================================================================
@@ -167,24 +205,30 @@ func _on_device_parameters_updated(device_pos: int) -> void:
 
 func _on_params_tab_toggled(pressed: bool) -> void:
 	if pressed:
-		# Left pane: Parameters/File are mutually exclusive
+		cc_button.button_pressed = false
 		file_button.button_pressed = false
 		_show_parameters_tab()
 	else:
-		# Ensure one left tab stays active
-		if not file_button.button_pressed:
-			params_button.button_pressed = true
+		_ensure_left_tab_active()
+
+
+## Left-pane C tab (MIDI CCs the SFZ did not label as parameters).
+func _on_ccs_tab_toggled(pressed: bool) -> void:
+	if pressed:
+		params_button.button_pressed = false
+		file_button.button_pressed = false
+		_show_ccs_tab()
+	else:
+		_ensure_left_tab_active()
 
 
 func _on_file_tab_toggled(pressed: bool) -> void:
 	if pressed:
-		# Left pane: Parameters/File are mutually exclusive
 		params_button.button_pressed = false
+		cc_button.button_pressed = false
 		_show_file_tab()
 	else:
-		# Ensure one left tab stays active
-		if not params_button.button_pressed:
-			file_button.button_pressed = true
+		_ensure_left_tab_active()
 
 
 func _on_large_toggled(pressed: bool) -> void:
@@ -196,12 +240,45 @@ func _on_large_toggled(pressed: bool) -> void:
 
 func _show_parameters_tab() -> void:
 	parameters_scroll.visible = true
+	if ccs_scroll:
+		ccs_scroll.visible = false
+	file_box.visible = false
+
+
+## Show the C tab's MIDI CC list in the left pane.
+func _show_ccs_tab() -> void:
+	parameters_scroll.visible = false
+	if ccs_scroll:
+		ccs_scroll.visible = true
 	file_box.visible = false
 
 
 func _show_file_tab() -> void:
 	parameters_scroll.visible = false
+	if ccs_scroll:
+		ccs_scroll.visible = false
 	file_box.visible = true
+
+
+## Keep one left-pane tab pressed (P, C, or F).
+func _ensure_left_tab_active() -> void:
+	if params_button.button_pressed:
+		return
+	if cc_button and cc_button.visible and cc_button.button_pressed:
+		return
+	if file_button.visible and file_button.button_pressed:
+		return
+	params_button.button_pressed = true
+
+
+## Show the C tab only when this device has unlabeled MIDI CCs.
+func _update_cc_tab_visibility() -> void:
+	if not cc_button:
+		return
+	var show_cc = device != null and device.device.has_cc_parameters()
+	cc_button.visible = show_cc
+	if not show_cc and cc_button.button_pressed:
+		params_button.button_pressed = true
 
 
 ## Right-pane visibility is managed via Panel/Aux switching

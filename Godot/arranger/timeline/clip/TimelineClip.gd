@@ -27,10 +27,7 @@ var track_color: Color = Color.WHITE:
 	set(tc):
 		if track_color != tc:
 			track_color = tc
-			if clip_renderer:
-				clip_renderer.note_color = track_color
-				clip_renderer.note_color.v = max(0.5, track_color.v)
-				clip_renderer.queue_redraw()
+			_apply_note_color()
 
 # Selection and hover state
 var is_selected: bool = false
@@ -67,8 +64,15 @@ func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	
 	clip_renderer.clip_instance = clip_instance
-	clip_renderer.note_color = track_color
-	clip_renderer.note_color.v = max(0.5, track_color.v)
+	_apply_note_color()
+
+
+## Paint MIDI notes with the stored track color; only clamp for drawing.
+func _apply_note_color() -> void:
+	if clip_renderer == null:
+		return
+	clip_renderer.note_color = Utils.display_color(track_color)
+	clip_renderer.queue_redraw()
 
 
 func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE) -> void:

@@ -50,6 +50,10 @@ var loading_state: String = "idle"
 ## Track expected parameter count when receiving parameter info
 var _expected_param_count: int = 0
 
+## Parameter values restored from a project file, reapplied after the engine advertises params.
+## SFZ/CLAP devices wipe and rebuild their parameter list on load; this keeps saved CC/param values.
+var _restored_parameter_values: Dictionary[int, float] = {}
+
 
 ## ============================================================================
 ## INITIALIZATION
@@ -400,10 +404,11 @@ func _on_param_info_received(args: Array) -> void:
 	param.min_value = min_val
 	param.max_value = max_val
 	param.default_value = default_val
+	if args.size() >= 6 and args[5] is String:
+		param.group = args[5]
 	device.add_parameter(param)
 	
-	# Initialize parameter value
-	parameter_values[param_id] = param.value_to_normalized(default_val)
+	parameter_values[param_id] = _value_for_advertised_param(param_id, param)
 	
 	print("[DeviceInstance %s] Param %d: %s [%.2f - %.2f, default %.2f]" % 
 		[device.name, param_id, param_name, min_val, max_val, default_val])
@@ -412,7 +417,23 @@ func _on_param_info_received(args: Array) -> void:
 	if device.parameters.size() >= _expected_param_count and _expected_param_count > 0:
 		print("[DeviceInstance %s] All %d parameters loaded" % [device.name, _expected_param_count])
 		_expected_param_count = 0  # Reset
+		_push_restored_parameters_to_engine()
 		parameters_updated.emit()
+
+
+## Prefer a project-restored value over the engine default when a param list is advertised.
+func _value_for_advertised_param(param_id: int, param: DeviceParameter) -> float:
+	if param_id in _restored_parameter_values:
+		return clamp(_restored_parameter_values[param_id], 0.0, 1.0)
+	return param.value_to_normalized(param.default_value)
+
+
+## After SFZ/plugin param advertisement, send restored values so the engine matches the project.
+func _push_restored_parameters_to_engine() -> void:
+	if _restored_parameter_values.is_empty():
+		return
+	sync_to_engine()
+	_restored_parameter_values.clear()
 
 
 ## Sync this device instance's parameters to the audio engine (bulk sync)
@@ -479,9 +500,17 @@ func to_json() -> Dictionary:
 		"position": position,
 		"active": active,
 		"enabled": enabled,
-		"parameter_values": parameter_values,
+		"parameter_values": _parameter_values_to_json(),
 		"loaded_file_path": loaded_file_path
 	}
+
+
+## JSON object keys must be strings; keep parameter IDs stable across save/load.
+func _parameter_values_to_json() -> Dictionary:
+	var out := {}
+	for param_id in parameter_values:
+		out[str(param_id)] = parameter_values[param_id]
+	return out
 
 
 ## Deserialize from JSON
@@ -501,11 +530,13 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	var instance = DeviceInstance.new(loaded_device, chan_id, pos, is_active, is_enabled)
 	instance.id = data.get("id", instance.id)  # Restore original ID
 	
-	# Restore parameter values
+	# Restore parameter values (kept aside so SFZ/plugin advertisement does not wipe them)
 	var param_values = data.get("parameter_values", {})
 	for param_id_str in param_values.keys():
 		var param_id = int(param_id_str) if param_id_str is String else param_id_str
-		instance.parameter_values[param_id] = param_values[param_id_str]
+		var value = float(param_values[param_id_str])
+		instance.parameter_values[param_id] = value
+		instance._restored_parameter_values[param_id] = value
 	
 	# Restore loaded file path (will be reloaded after engine connection)
 	instance.loaded_file_path = data.get("loaded_file_path", "")

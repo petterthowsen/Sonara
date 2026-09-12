@@ -410,6 +410,8 @@ pub enum EngineStatus {
         min: f32,
         max: f32,
         default: f32,
+        /// `"param"` for the P tab, `"cc"` for the C tab.
+        group: String,
     },
     PluginParameterCount {
         channel_id: ChannelId,
@@ -482,6 +484,8 @@ pub struct EngineState {
     pub fractional_tick_accumulator: AtomicI64,
     /// Master sample-accurate transport position (increments by frames per callback)
     pub current_sample_position: AtomicU64,
+    /// When true, the next playing callback dispatches MIDI at the playhead tick (play/seek).
+    pub dispatch_playhead_tick: AtomicBool,
 }
 
 impl EngineState {
@@ -526,6 +530,16 @@ impl EngineState {
     pub fn set_is_playing(&self, playing: bool) {
         self.is_playing.store(playing, Ordering::Release);
     }
+
+    /// Ask the next playing callback to fire clip MIDI at the current playhead tick.
+    pub fn request_playhead_midi_dispatch(&self) {
+        self.dispatch_playhead_tick.store(true, Ordering::Release);
+    }
+
+    /// Consume the playhead MIDI dispatch flag. True only for the first buffer after play/seek.
+    pub fn take_playhead_midi_dispatch(&self) -> bool {
+        self.dispatch_playhead_tick.swap(false, Ordering::AcqRel)
+    }
 }
 
 impl Clone for EngineState {
@@ -550,6 +564,7 @@ impl Default for EngineState {
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
             current_sample_position: AtomicU64::new(0),
+            dispatch_playhead_tick: AtomicBool::new(false),
         }
     }
 }
@@ -585,6 +600,7 @@ pub fn process_command(
         }
         AudioCommand::Play => {
             state.set_is_playing(true);
+            state.request_playhead_midi_dispatch();
             let position = state
                 .settings
                 .format_tick_position(state.get_current_tick());
@@ -612,6 +628,8 @@ pub fn process_command(
                 .format_tick_position(state.get_current_tick());
             state.set_is_playing(false);
             state.set_current_tick(0);
+            state.set_fractional_tick_accumulator(0.0);
+            state.dispatch_playhead_tick.store(false, Ordering::Release);
             // Reset all channels and tracks
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
@@ -632,6 +650,8 @@ pub fn process_command(
         }
         AudioCommand::Seek(tick) => {
             state.set_current_tick(tick);
+            state.set_fractional_tick_accumulator(0.0);
+            state.request_playhead_midi_dispatch();
             // Reset all channels and tracks on seek
             for channel in state.channels.values_mut() {
                 channel.active_voices.clear();
@@ -1630,15 +1650,16 @@ pub fn process_command(
                     });
 
                     // Send parameter info for each parameter
-                    for (idx, param) in params.iter().enumerate() {
+                    for param in params.iter() {
                         let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                             channel_id,
                             device_position,
-                            param_id: idx as u32,
+                            param_id: param.id,
                             name: param.name.clone(),
                             min: param.min,
                             max: param.max,
                             default: param.default,
+                            group: device.parameter_group(param.id).to_string(),
                         });
                     }
                 } else {
@@ -1683,15 +1704,16 @@ pub fn process_command(
                         });
 
                         // Send parameter info for each parameter
-                        for (idx, param) in params.iter().enumerate() {
+                        for param in params.iter() {
                             let _ = status_tx.send(EngineStatus::PluginParameterInfo {
                                 channel_id,
                                 device_position,
-                                param_id: idx as u32,
+                                param_id: param.id,
                                 name: param.name.clone(),
                                 min: param.min,
                                 max: param.max,
                                 default: param.default,
+                                group: device.parameter_group(param.id).to_string(),
                             });
                         }
                     }

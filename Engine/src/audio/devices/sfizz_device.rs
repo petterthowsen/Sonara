@@ -9,10 +9,40 @@ use super::{
 };
 use crate::audio::commands::EngineStatus;
 use crossbeam::channel::Sender;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
+
+/// MIDI CCs a host should always expose. Sfizz's `cc_labels()` only returns
+/// *named* CCs, which for most SFZs is just the GM Volume/Pan/Expression trio
+/// sfizz injects itself. Orchestral libraries (VPO, VSCO, etc.) drive level
+/// from unlabeled CC1 (`gain_cc1` / `volume_oncc1`) and would otherwise sit at
+/// their padded `volume=` floor with no way to turn them up.
+const STANDARD_CC_CONTROLS: &[(u8, &str)] = &[
+    (1, "Mod Wheel"),
+    (7, "Volume"),
+    (10, "Pan"),
+    (11, "Expression"),
+    (64, "Sustain"),
+];
+
+/// Unity gain for the sfizz synth output. Sfizz defaults to -7.35 dB; in a DAW
+/// the channel fader is the right place for level.
+const SFIZZ_OUTPUT_GAIN_DB: f32 = 0.0;
+
+/// Device-panel P tab: labeled SFZ parameters (including sfizz's GM Volume/Pan/Expression).
+const GROUP_PARAM: &str = "param";
+/// Device-panel C tab: host-exposed MIDI CCs that the SFZ did not label.
+const GROUP_CC: &str = "cc";
+
+/// A MIDI CC exposed as a device parameter, with the UI tab it belongs on.
+#[derive(Clone, Debug)]
+struct ExposedCc {
+    cc_number: u8,
+    name: String,
+    group: &'static str,
+}
 
 /// Wrapper around sfizz::Synth that implements Send
 /// Safety: sfizz is thread-safe when properly synchronized via Mutex
@@ -44,8 +74,8 @@ pub struct SfizzDevice {
     // Current SFZ file path (for reporting)
     sfz_path: Arc<Mutex<Option<PathBuf>>>,
 
-    // CC parameters (discovered from loaded SFZ)
-    cc_labels: Arc<Mutex<Vec<sfizz::CcLabel>>>,
+    // CC parameters (labeled SFZ params + host-exposed MIDI CCs)
+    cc_params: Arc<Mutex<Vec<ExposedCc>>>,
     cc_values: Arc<Mutex<HashMap<u8, f32>>>, // CC number -> normalized value (0.0-1.0)
 
     // Flag to indicate parameters changed (polled by command handler)
@@ -75,6 +105,72 @@ pub struct SfizzDevice {
 // We ensure thread safety by only accessing it from the audio thread via Mutex
 unsafe impl Send for SfizzDevice {}
 
+/// Normalized 0–1 default for a CC after an SFZ load.
+///
+/// CC7 is forced to 1.0 (sfizz's own default is MIDI 100, which the built-in
+/// square-law volume curve turns into ~-4 dB). CC1 is 0.5 to match the common
+/// `set_cc1=64` orchestral default so dynamics can still go both ways.
+fn default_cc_value(cc_number: u8) -> f32 {
+    match cc_number {
+        1 => 0.5,
+        7 => 1.0,
+        10 => 0.5,
+        11 => 1.0,
+        64 => 0.0,
+        _ => 0.5,
+    }
+}
+
+/// Merge sfizz-reported labels with the standard host CC set.
+///
+/// Labeled CCs stay on the params tab (`GROUP_PARAM`). Standard CCs the SFZ
+/// did not name (typically CC1 / CC64) go on the CC tab (`GROUP_CC`). File
+/// names win when both define the same CC.
+fn merge_exposed_ccs(sfz_labels: Vec<sfizz::CcLabel>) -> Vec<ExposedCc> {
+    let labeled: HashMap<u8, String> = sfz_labels
+        .into_iter()
+        .map(|label| (label.cc_number, label.name))
+        .collect();
+
+    let mut by_cc: BTreeMap<u8, ExposedCc> = BTreeMap::new();
+    for &(cc, fallback_name) in STANDARD_CC_CONTROLS {
+        let (name, group) = match labeled.get(&cc) {
+            Some(file_name) => (file_name.clone(), GROUP_PARAM),
+            None => (fallback_name.to_string(), GROUP_CC),
+        };
+        by_cc.insert(
+            cc,
+            ExposedCc {
+                cc_number: cc,
+                name,
+                group,
+            },
+        );
+    }
+    for (cc, name) in labeled {
+        by_cc.entry(cc).or_insert(ExposedCc {
+            cc_number: cc,
+            name,
+            group: GROUP_PARAM,
+        });
+    }
+    by_cc.into_values().collect()
+}
+
+/// Send a normalized CC to sfizz. Must not run concurrently with `render_block`.
+fn send_normalized_cc(synth: &sfizz::Synth, cc_number: u8, value: f32) {
+    unsafe {
+        sfizz::sfizz_send_hdcc(synth.as_raw(), 0, cc_number as i32, value);
+    }
+}
+
+/// Set the synth's output gain in dB. Must not run concurrently with `render_block`.
+fn set_synth_output_gain_db(synth: &sfizz::Synth, gain_db: f32) {
+    unsafe {
+        sfizz::sfizz_set_volume(synth.as_raw(), gain_db);
+    }
+}
+
 impl SfizzDevice {
     pub fn new(
         sample_rate: f32,
@@ -93,7 +189,7 @@ impl SfizzDevice {
             max_buffer_size,
             loading_state: Arc::new(Mutex::new(LoadingState::Idle)),
             sfz_path: Arc::new(Mutex::new(None)),
-            cc_labels: Arc::new(Mutex::new(Vec::new())),
+            cc_params: Arc::new(Mutex::new(Vec::new())),
             cc_values: Arc::new(Mutex::new(HashMap::new())),
             parameters_changed: Arc::new(Mutex::new(false)),
             left_buffer: vec![0.0; max_buffer_size],
@@ -165,14 +261,7 @@ impl SfizzDevice {
         let count = pending.len();
 
         for (cc_number, value) in pending {
-            unsafe {
-                sfizz::sfizz_send_hdcc(
-                    synth_guard.0.as_raw(),
-                    0, // delay = 0 (immediate)
-                    cc_number as i32,
-                    value,
-                );
-            }
+            send_normalized_cc(&synth_guard.0, cc_number, value);
         }
 
         if count > 0 {
@@ -212,7 +301,7 @@ impl SfizzDevice {
 
         // Clone Arc references for background thread
         let loading_state = Arc::clone(&self.loading_state);
-        let cc_labels = Arc::clone(&self.cc_labels);
+        let cc_params = Arc::clone(&self.cc_params);
         let cc_values = Arc::clone(&self.cc_values);
         let parameters_changed = Arc::clone(&self.parameters_changed);
         let sample_rate = self.sample_rate;
@@ -255,40 +344,36 @@ impl SfizzDevice {
                         Ok(_) => {
                             info!("✅ SFZ file loaded successfully: {:?}", path);
 
-                            // Fetch CC labels from the loaded SFZ
-                            let labels = synth.cc_labels();
-                            info!("📋 Discovered {} labeled CC parameters", labels.len());
+                            // Unity gain: sfizz's own default is -7.35 dB, which
+                            // stacks on top of already-padded orchestral SFZs.
+                            set_synth_output_gain_db(&synth, SFIZZ_OUTPUT_GAIN_DB);
+
+                            // Merge file labels with the standard host CC set so
+                            // unlabeled dynamics (CC1) are actually controllable.
+                            let labels = merge_exposed_ccs(synth.cc_labels());
+                            info!(
+                                "📋 Exposing {} CC parameters ({} labeled, rest on C tab)",
+                                labels.len(),
+                                labels.iter().filter(|cc| cc.group == GROUP_PARAM).count()
+                            );
                             for label in &labels {
-                                info!("  CC{}: {}", label.cc_number, label.name);
+                                info!(
+                                    "  CC{} [{}]: {}",
+                                    label.cc_number, label.group, label.name
+                                );
                             }
 
-                            // Store CC labels and initialize values with sensible defaults
                             {
-                                let mut cc_labels_guard = cc_labels.lock().unwrap();
-                                *cc_labels_guard = labels.clone();
+                                let mut cc_params_guard = cc_params.lock().unwrap();
+                                *cc_params_guard = labels.clone();
                             }
                             {
                                 let mut cc_values_guard = cc_values.lock().unwrap();
                                 cc_values_guard.clear();
                                 for label in &labels {
-                                    // Set sensible defaults for common CCs
-                                    let default_value = match label.cc_number {
-                                        7 => 1.0,  // Volume: full
-                                        10 => 0.5, // Pan: center
-                                        11 => 1.0, // Expression: full
-                                        _ => 0.5,  // Others: middle
-                                    };
+                                    let default_value = default_cc_value(label.cc_number);
                                     cc_values_guard.insert(label.cc_number, default_value);
-
-                                    // Send initial CC value to synth
-                                    unsafe {
-                                        sfizz::sfizz_send_hdcc(
-                                            synth.as_raw(),
-                                            0, // delay = 0 (immediate)
-                                            label.cc_number as i32,
-                                            default_value,
-                                        );
-                                    }
+                                    send_normalized_cc(&synth, label.cc_number, default_value);
                                 }
                             }
 
@@ -450,7 +535,8 @@ impl AudioDevice for SfizzDevice {
         self.right_buffer[..sample_count].fill(0.0);
 
         let mut events = std::mem::take(&mut self.queued_midi);
-        events.sort_unstable_by_key(|e| e.0);
+        // Same-frame events: note-off before note-on so a retrigger isn't killed by a later off.
+        events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.3.cmp(&b.3)));
 
         let mut cursor = 0usize;
         for (offset, note, velocity, is_on) in events.into_iter() {
@@ -557,16 +643,7 @@ impl AudioDevice for SfizzDevice {
             }
         };
 
-        // Send HDCC (high-definition CC with normalized 0.0-1.0 value)
-        // Use raw bindings since send_hdcc is not wrapped yet
-        unsafe {
-            sfizz::sfizz_send_hdcc(
-                synth_guard.0.as_raw(),
-                0, // delay = 0 (immediate)
-                cc_number as i32,
-                value,
-            );
-        }
+        send_normalized_cc(&synth_guard.0, cc_number, value);
         info!("  ✅ HDCC sent to sfizz: CC{} = {}", cc_number, value);
     }
 
@@ -608,34 +685,37 @@ impl AudioDevice for SfizzDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        // Return CC labels as parameters
-        let cc_labels = self.cc_labels.lock().unwrap();
+        let cc_params = self.cc_params.lock().unwrap();
 
-        cc_labels
+        cc_params
             .iter()
             .map(|label| {
-                // Match defaults to initialization values
-                let default = match label.cc_number {
-                    7 => 1.0,  // Volume: full
-                    10 => 0.5, // Pan: center
-                    11 => 1.0, // Expression: full
-                    _ => 0.5,  // Others: middle
-                };
+                let default = default_cc_value(label.cc_number);
 
                 ParamInfo {
                     id: label.cc_number as ParamId,
                     name: label.name.clone(),
-                    unit: String::new(), // MIDI CC has no unit
+                    unit: String::new(),
                     min: 0.0,
                     max: 1.0,
                     default,
-                    is_automation_safe: true, // CC automation is real-time safe
+                    is_automation_safe: true,
                     param_type: ParamType::Float,
                     syncable: true,
                     enum_values: Vec::new(),
                 }
             })
             .collect()
+    }
+
+    /// Look up whether this CC belongs on the params tab or the CC tab.
+    fn parameter_group(&self, param_id: ParamId) -> &'static str {
+        let cc_params = self.cc_params.lock().unwrap();
+        cc_params
+            .iter()
+            .find(|cc| cc.cc_number as ParamId == param_id)
+            .map(|cc| cc.group)
+            .unwrap_or(GROUP_PARAM)
     }
 
     fn reset(&mut self) {
@@ -684,8 +764,8 @@ impl AudioDevice for SfizzDevice {
 
         // Clear CC parameters
         {
-            let mut cc_labels = self.cc_labels.lock().unwrap();
-            cc_labels.clear();
+            let mut cc_params = self.cc_params.lock().unwrap();
+            cc_params.clear();
         }
         {
             let mut cc_values = self.cc_values.lock().unwrap();
@@ -711,5 +791,54 @@ impl AudioDevice for SfizzDevice {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labeled_ccs_stay_on_param_tab_unlabeled_standards_go_to_cc_tab() {
+        // Typical sfizz output: GM Volume/Pan/Expression are always labeled.
+        let merged = merge_exposed_ccs(vec![
+            sfizz::CcLabel {
+                cc_number: 7,
+                name: "Volume".to_string(),
+            },
+            sfizz::CcLabel {
+                cc_number: 10,
+                name: "Pan".to_string(),
+            },
+            sfizz::CcLabel {
+                cc_number: 11,
+                name: "Expression".to_string(),
+            },
+            sfizz::CcLabel {
+                cc_number: 74,
+                name: "Brightness".to_string(),
+            },
+        ]);
+        let by_cc: HashMap<u8, &ExposedCc> =
+            merged.iter().map(|cc| (cc.cc_number, cc)).collect();
+
+        assert_eq!(by_cc[&1].name, "Mod Wheel");
+        assert_eq!(by_cc[&1].group, GROUP_CC);
+        assert_eq!(by_cc[&7].name, "Volume");
+        assert_eq!(by_cc[&7].group, GROUP_PARAM);
+        assert_eq!(by_cc[&10].group, GROUP_PARAM);
+        assert_eq!(by_cc[&11].group, GROUP_PARAM);
+        assert_eq!(by_cc[&64].name, "Sustain");
+        assert_eq!(by_cc[&64].group, GROUP_CC);
+        assert_eq!(by_cc[&74].name, "Brightness");
+        assert_eq!(by_cc[&74].group, GROUP_PARAM);
+    }
+
+    #[test]
+    fn volume_and_expression_default_to_full_scale() {
+        assert_eq!(default_cc_value(1), 0.5);
+        assert_eq!(default_cc_value(7), 1.0);
+        assert_eq!(default_cc_value(11), 1.0);
+        assert_eq!(default_cc_value(64), 0.0);
     }
 }

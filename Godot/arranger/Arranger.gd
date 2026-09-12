@@ -144,6 +144,7 @@ func _ready():
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	visibility_changed.connect(_on_visibility_changed)
+	v_scroll.resized.connect(_sync_arranger_content_height)
 
 	# Initial ruler and playhead update
 	_update_ruler()
@@ -200,6 +201,10 @@ func _process(delta: float) -> void:
 		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
 
 		# Lerp vertical scroll
+		var vbar := v_scroll.get_v_scroll_bar()
+		var max_v_scroll := maxf(0.0, vbar.max_value - vbar.page)
+		if target_scroll_vertical > max_v_scroll:
+			target_scroll_vertical = max_v_scroll
 		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
 
 		# Lerp horizontal scroll
@@ -465,6 +470,7 @@ func _apply_track_heights(new_height: int) -> void:
 		for child in track_list.get_children():
 			if child is TrackItem and child.track:
 				child.custom_minimum_size.y = child.track.height
+	_sync_arranger_content_height()
 
 
 func _update_ruler() -> void:
@@ -541,7 +547,7 @@ func _on_add_track_pressed() -> void:
 
 
 func _on_add_folder_pressed() -> void:
-	"""Create and add a new folder track with corresponding bus channel to the project."""
+	"""Create a folder track (no mixer bus). Use Link to Bus / New Group for a group."""
 	if not current_project:
 		push_warning("[Arranger] Cannot add folder: No project active")
 		return
@@ -554,14 +560,11 @@ func _on_add_folder_pressed() -> void:
 	
 	var folder_name = "Folder %d" % (folder_count + 1)
 
-	var cmd := TrackCreateCommand.new(current_project, "folder", folder_name, null, null, true)
+	var cmd := TrackCreateCommand.new(current_project, "folder", folder_name)
 	HistoryUtil.execute(cmd)
 	var new_folder: Track = cmd.track
-	var new_channel: Channel = cmd.channel
-	if new_folder and new_channel:
-		new_folder.color = new_channel.color
-		new_folder.height = 60
-		print("[Arranger] Added folder '%s' (ID %d) with bus channel (ID %d)" % [folder_name, new_folder.id, new_channel.id])
+	if new_folder:
+		print("[Arranger] Added folder '%s' (ID %d)" % [folder_name, new_folder.id])
 
 # ============================================================================
 # PROJECT LIFECYCLE
@@ -636,6 +639,11 @@ func _unbind_from_project() -> void:
 	# Clear timeline
 	timeline.set_project(null)
 
+	if current_project:
+		for track in current_project.tracks:
+			if track.height_changed.is_connected(_on_track_height_changed_for_layout):
+				track.height_changed.disconnect(_on_track_height_changed_for_layout)
+
 	_timeline_tracks.clear()
 
 	current_project = null
@@ -644,6 +652,23 @@ func _unbind_from_project() -> void:
 # ============================================================================
 # HELPERS
 # ============================================================================
+
+## Keep the scroll child at least as tall as the viewport and as the stacked tracks.
+func _sync_arranger_content_height() -> void:
+	if not v_scroll or not h_split:
+		return
+	var tracks_h := 0
+	if current_project:
+		for t in current_project.tracks:
+			if t:
+				tracks_h += t.height
+	h_split.custom_minimum_size.y = maxi(tracks_h, int(v_scroll.size.y))
+
+
+## Track height changes must grow the scroll content or separator-drag fights the layout.
+func _on_track_height_changed_for_layout(_new_height: int) -> void:
+	_sync_arranger_content_height()
+
 
 func _on_track_added(track: Track) -> void:
 	"""Connect to new TimelineTrack when added."""
@@ -660,17 +685,24 @@ func _on_track_added(track: Track) -> void:
 	
 	# Store reference for later lookup
 	_timeline_tracks[timeline_track] = track
+	if not track.height_changed.is_connected(_on_track_height_changed_for_layout):
+		track.height_changed.connect(_on_track_height_changed_for_layout)
+	_sync_arranger_content_height()
 
 
 func _on_track_removed(track: Track) -> void:
 	"""Clean up selection tracking when a track is removed."""
+	if track and track.height_changed.is_connected(_on_track_height_changed_for_layout):
+		track.height_changed.disconnect(_on_track_height_changed_for_layout)
+
 	# Remove from timeline_tracks mapping
 	for timeline_track in _timeline_tracks.keys():
 		if _timeline_tracks[timeline_track] == track:
 			_timeline_tracks.erase(timeline_track)
 			break
-	
+
 	print("[Arranger] Cleaned up tracking for removed track: ", track.name)
+	_sync_arranger_content_height()
 
 
 func _on_timeline_track_clicked(ticks: int, _pixels: float) -> void:

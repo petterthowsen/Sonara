@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use super::commands::{EngineState, EngineStatus};
 use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
-use super::devices::SfizzDevice;
+use super::devices::{AudioDevice, SfizzDevice};
 use super::render_scratch::RenderScratch;
 use super::types::*;
 
@@ -20,8 +20,11 @@ fn db_to_gain(db: f32) -> f32 {
 }
 
 /// True if the channel is silenced by its own mute or by another channel's solo.
+///
+/// Route targets (buses and master) stay audible when something else is soloed so
+/// instrument/audio sources still reach the mix through their output and sends.
 fn is_silenced(channel: &Channel, has_solo: bool) -> bool {
-    channel.mute || (has_solo && !channel.solo && channel.id != MASTER_CHANNEL_ID)
+    channel.mute || (has_solo && !channel.solo && !channel.mix.is_route_target)
 }
 
 /// The channel this channel routes its output into, if any (master never routes onward).
@@ -253,7 +256,7 @@ fn forward_device_events(
         } else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<SfizzDevice>() {
             // A new SFZ was loaded, so its parameter list changed
             if sfizz_device.take_parameters_changed() {
-                let params = device.parameters();
+                let params = sfizz_device.parameters();
                 if !params.is_empty() {
                     let _ = status_tx.send(EngineStatus::PluginParameterCount {
                         channel_id,
@@ -269,6 +272,7 @@ fn forward_device_events(
                             min: param.min,
                             max: param.max,
                             default: param.default,
+                            group: sfizz_device.parameter_group(param.id).to_string(),
                         });
                     }
                 }
@@ -339,6 +343,7 @@ pub fn mix_and_output(
 
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
+    // Solo only silences source channels; buses stay open so routed audio still reaches master.
     for channel in channel_map.values_mut() {
         if is_silenced(channel, has_solo) {
             channel.clear_buffers();
@@ -580,6 +585,34 @@ mod tests {
         assert!((state.channels[&1].buffer_left[0] - expected).abs() < 1e-5);
         assert!((output[0] - expected).abs() < 1e-5);
         assert!((output[1] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_track_still_routes_through_unsoloed_bus() {
+        let mut state = track_bus_master_state();
+        state.channels.get_mut(&3).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        assert!((state.channels[&2].buffer_left[0] - expected).abs() < 1e-5);
+        assert!((state.channels[&1].buffer_left[0] - expected).abs() < 1e-5);
+        assert!((output[0] - expected).abs() < 1e-5);
+        assert!((output[1] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn soloed_track_silences_other_sources_not_buses() {
+        let mut other = test_channel(4, Some(1), 0.0);
+        other.buffer_left.fill(0.9);
+        other.buffer_right.fill(0.9);
+        let mut state = track_bus_master_state();
+        state.channels.insert(4, other);
+        state.channels.get_mut(&3).unwrap().solo = true;
+        let output = mix(&mut state);
+
+        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
+        assert!((output[0] - expected).abs() < 1e-5);
     }
 
     #[test]
