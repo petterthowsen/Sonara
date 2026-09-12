@@ -264,6 +264,25 @@ pub enum AudioCommand {
         device_path: DevicePath,
         file_path: String,
     },
+    BeginLoadDeviceSample {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        req_id: String,
+    },
+    LoadDeviceSample {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        req_id: String,
+        samples: Vec<f32>,
+        sample_rate: u32,
+        channels: usize,
+    },
+    FailDeviceSampleLoad {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        req_id: String,
+        message: String,
+    },
     DeviceReady {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -326,6 +345,12 @@ pub enum AudioCommand {
         device_path: DevicePath,
         slot: usize,
         solo: bool,
+    },
+    SetDrumSlotNote {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        note: u8,
     },
 }
 
@@ -606,8 +631,7 @@ pub fn process_command(
             if (settings.sample_rate - device_sr).abs() > 1 {
                 info!(
                     "Project sample rate {} overridden to match device {}",
-                    settings.sample_rate,
-                    device_sr
+                    settings.sample_rate, device_sr
                 );
             }
             settings.sample_rate = device_sr;
@@ -758,9 +782,15 @@ pub fn process_command(
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 channel.midi_routing.device_id = device_id;
-                info!("Channel {} MIDI input device set to {}", channel_id, device_id);
+                info!(
+                    "Channel {} MIDI input device set to {}",
+                    channel_id, device_id
+                );
             } else {
-                warn!("Cannot set MIDI input device for channel {} (not found)", channel_id);
+                warn!(
+                    "Cannot set MIDI input device for channel {} (not found)",
+                    channel_id
+                );
             }
         }
 
@@ -769,7 +799,10 @@ pub fn process_command(
                 channel.midi_routing.record_armed = armed;
                 info!("Channel {} record armed: {}", channel_id, armed);
             } else {
-                warn!("Cannot set record armed for channel {} (not found)", channel_id);
+                warn!(
+                    "Cannot set record armed for channel {} (not found)",
+                    channel_id
+                );
             }
         }
 
@@ -802,7 +835,10 @@ pub fn process_command(
                     warn!("Unknown MIDI message type: {}", message_type);
                 }
             } else {
-                warn!("Cannot send MIDI event to channel {} (not found)", channel_id);
+                warn!(
+                    "Cannot send MIDI event to channel {} (not found)",
+                    channel_id
+                );
             }
         }
 
@@ -1467,26 +1503,24 @@ pub fn process_command(
                         super::types::ParamSetValue::Normalized(v) => {
                             normalized = v.clamp(0.0, 1.0);
                         }
-                        super::types::ParamSetValue::Index(idx) => {
-                            match info.param_type {
-                                super::devices::ParamType::Bool => {
-                                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
-                                }
-                                super::devices::ParamType::Enum => {
-                                    let n = info.enum_values.len();
-                                    if n > 1 {
-                                        let i = idx.max(0) as usize;
-                                        let i = i.min(n - 1);
-                                        normalized = (i as f32) / ((n - 1) as f32);
-                                    } else {
-                                        normalized = 0.0;
-                                    }
-                                }
-                                super::devices::ParamType::Float => {
-                                    normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                        super::types::ParamSetValue::Index(idx) => match info.param_type {
+                            super::devices::ParamType::Bool => {
+                                normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                            }
+                            super::devices::ParamType::Enum => {
+                                let n = info.enum_values.len();
+                                if n > 1 {
+                                    let i = idx.max(0) as usize;
+                                    let i = i.min(n - 1);
+                                    normalized = (i as f32) / ((n - 1) as f32);
+                                } else {
+                                    normalized = 0.0;
                                 }
                             }
-                        }
+                            super::devices::ParamType::Float => {
+                                normalized = if idx <= 0 { 0.0 } else { 1.0 };
+                            }
+                        },
                     }
                 } else if let super::types::ParamSetValue::Normalized(v) = value {
                     normalized = v.clamp(0.0, 1.0);
@@ -1626,6 +1660,68 @@ pub fn process_command(
                 warn!("Channel {} not found for load device file", channel_id);
             }
         }
+        AudioCommand::BeginLoadDeviceSample {
+            channel_id,
+            device_path,
+            req_id,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(sampler) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::SamplerDevice>()
+                    {
+                        sampler.begin_sample_load(req_id);
+                    } else {
+                        warn!(
+                            "Device at channel {} path {} is not a Sampler",
+                            channel_id, device_path
+                        );
+                    }
+                }
+            }
+        }
+        AudioCommand::LoadDeviceSample {
+            channel_id,
+            device_path,
+            req_id,
+            samples,
+            sample_rate,
+            channels,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(sampler) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::SamplerDevice>()
+                    {
+                        sampler.set_sample(&req_id, samples, channels, sample_rate);
+                    } else {
+                        warn!(
+                            "Device at channel {} path {} is not a Sampler",
+                            channel_id, device_path
+                        );
+                    }
+                }
+            }
+        }
+        AudioCommand::FailDeviceSampleLoad {
+            channel_id,
+            device_path,
+            req_id,
+            message,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(sampler) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::SamplerDevice>()
+                    {
+                        sampler.fail_sample_load(&req_id, &message);
+                    }
+                }
+            }
+        }
         AudioCommand::GetPluginParameters {
             channel_id,
             device_path,
@@ -1676,9 +1772,10 @@ pub fn process_command(
             );
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    if let Some(subprocess_device) = device
-                        .as_any_mut()
-                        .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
+                    if let Some(subprocess_device) =
+                        device
+                            .as_any_mut()
+                            .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
                     {
                         subprocess_device.on_device_ready();
                     }
@@ -1961,6 +2058,33 @@ pub fn process_command(
                                 slot, channel_id, device_path
                             );
                         }
+                    }
+                }
+            }
+        }
+        AudioCommand::SetDrumSlotNote {
+            channel_id,
+            device_path,
+            slot,
+            note,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&channel_id) {
+                if let Some(device) = channel.device_at_path_mut(&device_path) {
+                    if let Some(drum) = device
+                        .as_any_mut()
+                        .downcast_mut::<super::devices::DrumMachineDevice>()
+                    {
+                        if !drum.set_slot_note(slot, note) {
+                            warn!(
+                                "Drum slot {} note {} rejected at channel {} path {}",
+                                slot, note, channel_id, device_path
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "Device at channel {} path {} is not a Drum Machine",
+                            channel_id, device_path
+                        );
                     }
                 }
             }

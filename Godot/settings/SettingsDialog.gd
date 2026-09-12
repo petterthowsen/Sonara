@@ -75,19 +75,39 @@ func _connect_signals() -> void:
 
 
 func popup_centered_size(size: Vector2 = Vector2(800, 500)) -> void:
+	_begin_session()
 	popup_centered(size)
 
 
+## Snapshot current config and rebuild rows so each open starts from disk/memory state.
+func _begin_session() -> void:
+	_snapshot = _capture_snapshot()
+	_dirty = false
+	_enable_save_buttons(false)
+	_refresh_rows()
+
+
+## Copy setting values so Cancel can restore without sharing live array references.
 func _capture_snapshot() -> Dictionary:
 	var snap: Dictionary = {}
 	for key in _settings.call("get_all_keys"):
-		snap[key] = _settings.call("get_value", key)
+		var val = _settings.call("get_value", key)
+		if val is Array:
+			snap[key] = (val as Array).duplicate()
+		elif val is Dictionary:
+			snap[key] = (val as Dictionary).duplicate(true)
+		else:
+			snap[key] = val
 	return snap
 
 
 func _restore_snapshot() -> void:
 	for key in _snapshot.keys():
 		var old_val = _snapshot[key]
+		if old_val is Array:
+			old_val = (old_val as Array).duplicate()
+		elif old_val is Dictionary:
+			old_val = (old_val as Dictionary).duplicate(true)
 		Sonara.set_config(key, old_val)
 		_settings.call("emit_signal", "setting_changed", key, old_val)
 	_refresh_rows()
@@ -95,6 +115,7 @@ func _restore_snapshot() -> void:
 
 func _populate_rows(category: String) -> void:
 	for row in _setting_rows:
+		row.detach()
 		content_container.remove_child(row)
 		row.queue_free()
 	_setting_rows.clear()
@@ -126,8 +147,8 @@ func _on_tree_item_selected() -> void:
 	var item = tree.get_selected()
 	if item == null:
 		return
-	var category = item.get_text(0)
-	_populate_rows(category)
+	_flush_visible_rows()
+	_populate_rows(item.get_text(0))
 
 
 func _on_row_value_changed(key: String, _value) -> void:
@@ -137,9 +158,14 @@ func _on_row_value_changed(key: String, _value) -> void:
 
 func _on_row_request_browse(path: String, is_directory: bool, row: SettingRow) -> void:
 	_active_browse_row = row
-	file_dialog.current_path = path if not path.is_empty() else ""
-	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	if is_directory:
+		file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+		if not path.is_empty():
+			file_dialog.current_dir = path
+	else:
+		file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		file_dialog.current_path = path if not path.is_empty() else ""
 	file_dialog.show()
 
 
@@ -154,25 +180,42 @@ func _on_dir_selected(path: String) -> void:
 
 
 func _on_file_dialog_canceled() -> void:
+	if _active_browse_row:
+		_active_browse_row.clear_pending_browse()
 	_active_browse_row = null
 
 
+## Commit every visible editor into Settings before save or category switch.
+func _flush_visible_rows() -> void:
+	if not _settings:
+		return
+	for row in _setting_rows:
+		if row == null or row.setting == null:
+			continue
+		_settings.call("set_value", row.setting.key, row.get_current_value())
+
+
 func _on_ok_pressed() -> void:
+	_flush_visible_rows()
 	_settings.call("save")
+	_snapshot = _capture_snapshot()
 	_dirty = false
 	_enable_save_buttons(false)
 	hide()
 
 
 func _on_cancel_pressed() -> void:
-	_restore_snapshot()
+	if _dirty:
+		_restore_snapshot()
 	_dirty = false
 	_enable_save_buttons(false)
 	hide()
 
 
 func _on_apply_pressed() -> void:
+	_flush_visible_rows()
 	_settings.call("save")
+	_snapshot = _capture_snapshot()
 	_dirty = false
 	_enable_save_buttons(false)
 

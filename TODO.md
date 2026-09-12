@@ -61,7 +61,7 @@
 - [x] Chain container (serial children + volume)
 - [x] Layer container (parallel mix, per-slot mute/solo)
 - [ ] L/R and M/S modes
-- [ ] Sampler and Drum Machine devices (depend on Chain)
+- [x] Sampler and Drum Machine devices
 - [ ] Reverb
 - [ ] EQ: Parametric, built-in spectrum
 - [ ] Limiter
@@ -152,6 +152,11 @@
 
 
 ### UI Components & General
+
+
+### Devices
+
+- [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code.
 
 
 ### Hardware & MIDI

@@ -116,11 +116,7 @@ fn group_send_reaches(channel_map: &HashMap<ChannelId, Channel>, target_id: Chan
 /// Sources that route into a soloed bus stay fully audible (group solo). Sources that only send
 /// to a soloed bus keep those sends and mute their dry output. Buses stay open when a soloed
 /// source reaches them by route or send, so nested buses and FX returns still reach master.
-fn solo_role(
-    channel_map: &HashMap<ChannelId, Channel>,
-    id: ChannelId,
-    has_solo: bool,
-) -> SoloRole {
+fn solo_role(channel_map: &HashMap<ChannelId, Channel>, id: ChannelId, has_solo: bool) -> SoloRole {
     let Some(channel) = channel_map.get(&id) else {
         return SoloRole::Silent;
     };

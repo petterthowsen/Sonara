@@ -82,7 +82,12 @@ impl AudioDecoder for SymphoniaDecoder {
             .ok_or_else(|| anyhow!("Unknown channel layout"))?
             .count() as u16;
 
-        tracing::info!("Symphonia decoder: original sample_rate={}, target_sr={}, channels={}", sample_rate, target_sr, channels);
+        tracing::info!(
+            "Symphonia decoder: original sample_rate={}, target_sr={}, channels={}",
+            sample_rate,
+            target_sr,
+            channels
+        );
 
         // Create decoder using the default registry
         let registry = symphonia::default::get_codecs();
@@ -99,7 +104,7 @@ impl AudioDecoder for SymphoniaDecoder {
                 sample_rate as usize,
                 target_sr as usize,
                 resampler_chunk_size, // chunk size for processing (larger for FFT quality)
-                2,    // sub_chunks (quality)
+                2,                    // sub_chunks (quality)
                 channels as usize,
             )?);
             // Pre-allocate buffer for accumulating input chunks
@@ -139,7 +144,11 @@ impl AudioDecoder for SymphoniaDecoder {
             };
 
             if available_frames == 0 {
-                tracing::warn!("MP3 decode: available_frames is 0, frame_count={}, sample_buf.len()={}", frame_count, sample_buf.len());
+                tracing::warn!(
+                    "MP3 decode: available_frames is 0, frame_count={}, sample_buf.len()={}",
+                    frame_count,
+                    sample_buf.len()
+                );
                 continue;
             }
 
@@ -167,19 +176,23 @@ impl AudioDecoder for SymphoniaDecoder {
                 // Process all complete chunks in the buffer
                 while input_buffer[0].len() >= resampler_chunk_size {
                     // Extract one chunk from the buffer
-                    let mut chunk_data = vec![Vec::with_capacity(resampler_chunk_size); channels as usize];
+                    let mut chunk_data =
+                        vec![Vec::with_capacity(resampler_chunk_size); channels as usize];
                     for ch in 0..channels as usize {
-                        chunk_data[ch].extend_from_slice(&input_buffer[ch][0..resampler_chunk_size]);
+                        chunk_data[ch]
+                            .extend_from_slice(&input_buffer[ch][0..resampler_chunk_size]);
                         input_buffer[ch].drain(0..resampler_chunk_size);
                     }
 
                     // Allocate output buffer based on resampling ratio
                     let resample_ratio = target_sr as f32 / sample_rate as f32;
-                    let estimated_output = (resampler_chunk_size as f32 * resample_ratio * 1.2) as usize + 512;
+                    let estimated_output =
+                        (resampler_chunk_size as f32 * resample_ratio * 1.2) as usize + 512;
                     let mut output_data = vec![vec![0.0f32; estimated_output]; channels as usize];
 
                     // Process the resampler
-                    let (_input_consumed, output_frames) = resamp.process_into_buffer(&chunk_data, &mut output_data, None)?;
+                    let (_input_consumed, output_frames) =
+                        resamp.process_into_buffer(&chunk_data, &mut output_data, None)?;
 
                     // Truncate and append to result
                     for ch in 0..channels as usize {
@@ -187,8 +200,12 @@ impl AudioDecoder for SymphoniaDecoder {
                         output_data_all[ch].extend_from_slice(&output_data[ch]);
                     }
 
-                    tracing::debug!("MP3 resample: chunk_size={}, output_frames={}, buffer_remaining={}",
-                        resampler_chunk_size, output_frames, input_buffer[0].len());
+                    tracing::debug!(
+                        "MP3 resample: chunk_size={}, output_frames={}, buffer_remaining={}",
+                        resampler_chunk_size,
+                        output_frames,
+                        input_buffer[0].len()
+                    );
 
                     total_frames += output_frames as u64;
                 }
@@ -216,7 +233,10 @@ impl AudioDecoder for SymphoniaDecoder {
             // First, process any remaining partial chunk in input_buffer by padding with zeros
             if !input_buffer.is_empty() && !input_buffer[0].is_empty() {
                 let remaining_frames = input_buffer[0].len();
-                tracing::debug!("MP3 resample: flushing remaining buffer with {} frames", remaining_frames);
+                tracing::debug!(
+                    "MP3 resample: flushing remaining buffer with {} frames",
+                    remaining_frames
+                );
 
                 // Pad the partial chunk with zeros to reach resampler_chunk_size
                 let mut padded_chunk = input_buffer.clone();
@@ -226,15 +246,21 @@ impl AudioDecoder for SymphoniaDecoder {
 
                 // Process the padded chunk
                 let resample_ratio = target_sr as f32 / sample_rate as f32;
-                let estimated_output = (resampler_chunk_size as f32 * resample_ratio * 1.2) as usize + 512;
+                let estimated_output =
+                    (resampler_chunk_size as f32 * resample_ratio * 1.2) as usize + 512;
                 let mut output_data = vec![vec![0.0f32; estimated_output]; channels as usize];
 
-                if let Ok((_consumed, output_frames)) = resamp.process_into_buffer(&padded_chunk, &mut output_data, None) {
+                if let Ok((_consumed, output_frames)) =
+                    resamp.process_into_buffer(&padded_chunk, &mut output_data, None)
+                {
                     if output_frames > 0 {
                         for ch in 0..channels as usize {
                             output_data[ch].truncate(output_frames);
                         }
-                        tracing::debug!("MP3 resample: padded flush output_frames={}", output_frames);
+                        tracing::debug!(
+                            "MP3 resample: padded flush output_frames={}",
+                            output_frames
+                        );
                         total_frames += output_frames as u64;
                         on_chunk(&output_data)?;
                     }
@@ -261,7 +287,11 @@ impl AudioDecoder for SymphoniaDecoder {
                                 output_data[ch].truncate(output_frames);
                             }
 
-                            tracing::debug!("MP3 resample flush: output_frames={}, flush_count={}", output_frames, flush_count);
+                            tracing::debug!(
+                                "MP3 resample flush: output_frames={}, flush_count={}",
+                                output_frames,
+                                flush_count
+                            );
                             total_frames += output_frames as u64;
                             on_chunk(&output_data)?;
                         } else {
@@ -270,7 +300,11 @@ impl AudioDecoder for SymphoniaDecoder {
                     }
                     Err(e) => {
                         // If flush fails, log warning but don't fail the entire decode
-                        tracing::warn!("MP3 resample flush failed at iteration {}: {}", flush_count, e);
+                        tracing::warn!(
+                            "MP3 resample flush failed at iteration {}: {}",
+                            flush_count,
+                            e
+                        );
                         all_flushed = true;
                     }
                 }

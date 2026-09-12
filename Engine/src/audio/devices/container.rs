@@ -1,6 +1,6 @@
 //! Nested device containers: path addressing, child lists, and serial chain processing.
 
-use super::{AudioDevice, has_audio_signal};
+use super::{has_audio_signal, AudioDevice};
 use std::fmt;
 
 /// Ordered indices from a channel's top-level device list down to a nested child.
@@ -205,7 +205,9 @@ pub fn device_at_path_mut<'a>(
         return None;
     }
     if indices.len() == 1 {
-        return devices.get_mut(indices[0]).map(|d| d.as_mut() as &mut dyn AudioDevice);
+        return devices
+            .get_mut(indices[0])
+            .map(|d| d.as_mut() as &mut dyn AudioDevice);
     }
     let parent = container_at_path_mut(devices, &path.parent())?;
     parent.child_mut(indices[indices.len() - 1])
@@ -593,7 +595,10 @@ mod tests {
     #[test]
     fn top_level_osc_stays_flat() {
         let path = DevicePath::root(3);
-        assert_eq!(path.to_osc_addr(2, "param/1"), "/channel/2/device/3/param/1");
+        assert_eq!(
+            path.to_osc_addr(2, "param/1"),
+            "/channel/2/device/3/param/1"
+        );
         let parts = ["channel", "2", "device", "3", "param", "1"];
         let (channel, parsed, action) = parse_osc_device_addr(&parts).unwrap();
         assert_eq!(channel, 2);

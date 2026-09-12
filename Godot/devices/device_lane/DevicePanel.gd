@@ -403,7 +403,7 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept SFZ files, or devices dropped onto a container."""
+	"""Accept sample files, or devices dropped onto a container."""
 	if not device:
 		return false
 	var channel := _channel_for_device()
@@ -411,13 +411,11 @@ func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 		return true
 	if not data is Asset:
 		return false
-	if data.type != Asset.TYPE.SFZ:
-		return false
-	return device.device.supports_file_loading
+	return DeviceDropUtil.can_drop_file_on_device(device, data)
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device onto a container, or an SFZ file onto this device."""
+	"""Handle dropping a device onto a container, or a sample file onto this device."""
 	if not device:
 		return
 	var channel := _channel_for_device()
@@ -428,14 +426,14 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if not data is Asset:
 		return
 	var asset = data as Asset
-	if asset.type != Asset.TYPE.SFZ:
+	if not DeviceDropUtil.can_drop_file_on_device(device, asset):
 		return
-	print("[DevicePanel] SFZ dropped on device: %s" % asset.name)
+	print("[DevicePanel] File dropped on device: %s" % asset.name)
 	device.load_file(asset.path)
 	loaded_file_path = asset.path
 	var filename = asset.path.get_file()
 	file_status_label.text = filename
-	print("[DevicePanel] ✓ SFZ loaded: %s" % filename)
+	print("[DevicePanel] ✓ File loaded: %s" % filename)
 
 
 func _channel_for_device() -> Channel:

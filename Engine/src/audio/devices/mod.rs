@@ -1,10 +1,12 @@
-pub mod clap_host;
 mod chain;
+pub mod clap_host;
 pub mod container;
 mod delay;
+mod drum_machine;
 mod factory;
 mod layer;
 mod polysynth;
+mod sampler;
 mod sfizz_device;
 mod spectrum_analyzer;
 
@@ -12,9 +14,11 @@ pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
+pub use drum_machine::DrumMachineDevice;
 pub use factory::DeviceFactory;
 pub use layer::LayerDevice;
 pub use polysynth::PolySynthDevice;
+pub use sampler::SamplerDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 

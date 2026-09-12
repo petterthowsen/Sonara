@@ -1,5 +1,4 @@
 /// MIDI event types and structures for sample-accurate MIDI processing.
-
 use crossbeam::queue::SegQueue;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,11 +36,11 @@ impl MidiMessageType {
 #[derive(Debug, Clone)]
 pub struct MidiEvent {
     pub message_type: MidiMessageType,
-    pub midi_channel: u8,  // 0-15
-    pub note: u8,          // 0-127 (or data1)
-    pub velocity: u8,      // 0-127 (or data2)
+    pub midi_channel: u8,     // 0-15
+    pub note: u8,             // 0-127 (or data1)
+    pub velocity: u8,         // 0-127 (or data2)
     pub received_at: Instant, // When the engine received the event
-    pub frame_offset: usize, // Sample offset within current buffer
+    pub frame_offset: usize,  // Sample offset within current buffer
 }
 
 impl MidiEvent {
@@ -70,12 +69,17 @@ impl MidiEvent {
     }
 
     /// Create a control change event
-    pub fn control_change(midi_channel: u8, controller: u8, value: u8, received_at: Instant) -> Self {
+    pub fn control_change(
+        midi_channel: u8,
+        controller: u8,
+        value: u8,
+        received_at: Instant,
+    ) -> Self {
         Self {
             message_type: MidiMessageType::ControlChange,
             midi_channel,
-            note: controller,  // CC number stored in note field
-            velocity: value,   // CC value stored in velocity field
+            note: controller, // CC number stored in note field
+            velocity: value,  // CC value stored in velocity field
             received_at,
             frame_offset: 0,
         }
@@ -107,7 +111,7 @@ pub struct MidiRouting {
 impl Default for MidiRouting {
     fn default() -> Self {
         Self {
-            device_id: -2,  // All devices by default
+            device_id: -2, // All devices by default
             record_armed: false,
         }
     }
@@ -121,9 +125,9 @@ impl MidiRouting {
         }
 
         match self.device_id {
-            -3 => false,  // No MIDI
-            -2 => true,   // All devices
-            id => id == device_id,  // Specific device
+            -3 => false,           // No MIDI
+            -2 => true,            // All devices
+            id => id == device_id, // Specific device
         }
     }
 }
@@ -178,7 +182,10 @@ mod tests {
     fn test_message_type_conversion() {
         assert_eq!(MidiMessageType::from_u8(8), Some(MidiMessageType::NoteOff));
         assert_eq!(MidiMessageType::from_u8(9), Some(MidiMessageType::NoteOn));
-        assert_eq!(MidiMessageType::from_u8(11), Some(MidiMessageType::ControlChange));
+        assert_eq!(
+            MidiMessageType::from_u8(11),
+            Some(MidiMessageType::ControlChange)
+        );
         assert_eq!(MidiMessageType::from_u8(255), None);
     }
 }

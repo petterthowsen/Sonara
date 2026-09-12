@@ -21,6 +21,8 @@ var setting
 var _settings = null
 var _editor_widget: Control = null
 var _ignore_signals := false
+var _path_array_rows: Array = []
+var _pending_browse_line_edit: LineEdit = null
 
 
 func _ready() -> void:
@@ -31,6 +33,17 @@ func bind(p_setting) -> void:
 	"""Bind this row to a Setting definition and build the editor."""
 	setting = p_setting
 	_refresh_ui()
+
+
+## Stop emitting so teardown (focus_exited, etc.) cannot write stale values.
+func detach() -> void:
+	_ignore_signals = true
+	clear_pending_browse()
+
+
+## Drop a canceled FileDialog target without changing the row's current text.
+func clear_pending_browse() -> void:
+	_pending_browse_line_edit = null
 
 
 func set_value_no_signal(value) -> void:
@@ -162,15 +175,15 @@ func _refresh_ui() -> void:
 			_editor_widget = vbox
 
 
-var _path_array_rows: Array = []
-
-
+## Create one editable path row and keep it above the Add Path button.
 func _add_path_row(initial_text: String, parent_vbox: VBoxContainer) -> void:
 	var hbox = HBoxContainer.new()
 
 	var le = LineEdit.new()
 	le.text = initial_text
 	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	le.text_submitted.connect(_on_path_array_text_committed)
+	le.focus_exited.connect(_on_path_array_text_committed)
 	hbox.add_child(le)
 
 	var browse_btn = Button.new()
@@ -241,8 +254,8 @@ func _apply_choice_value(value) -> void:
 			return
 
 
-func _read_path_array() -> Array[String]:
-	var result: Array[String] = []
+func _read_path_array() -> Array:
+	var result: Array = []
 	if not _editor_widget is VBoxContainer:
 		return result
 	for row in _path_array_rows:
@@ -257,6 +270,7 @@ func _read_path_array() -> Array[String]:
 func _apply_path_array_value(value) -> void:
 	if not _editor_widget is VBoxContainer:
 		return
+	_ignore_signals = true
 	var vbox = _editor_widget as VBoxContainer
 	for row in _path_array_rows:
 		vbox.remove_child(row)
@@ -266,22 +280,28 @@ func _apply_path_array_value(value) -> void:
 	var arr = value if value is Array else []
 	for p in arr:
 		_add_path_row(str(p), vbox)
+	_ignore_signals = false
+
+
+## Write the current editor value through Settings so listeners see the change.
+func _write_value(value) -> void:
+	if _settings:
+		_settings.call("set_value", setting.key, value)
+	else:
+		Sonara.set_config(setting.key, value)
+	value_changed.emit(setting.key, value)
 
 
 func _on_edited(_value = null) -> void:
 	if _ignore_signals:
 		return
-	var v = get_current_value()
-	Sonara.set_config(setting.key, v)
-	value_changed.emit(setting.key, v)
+	_write_value(get_current_value())
 
 
 func _on_choice_multi_toggled(_toggled: bool, _index: int) -> void:
 	if _ignore_signals:
 		return
-	var v = _read_choice_multi()
-	Sonara.set_config(setting.key, v)
-	value_changed.emit(setting.key, v)
+	_write_value(_read_choice_multi())
 
 
 func _on_path_browse() -> void:
@@ -293,8 +313,10 @@ func _on_path_browse() -> void:
 	request_browse.emit(str(current), false)
 
 
+## Open a directory picker for the given path-array row.
 func _on_path_array_browse(line_edit: LineEdit) -> void:
-	request_browse.emit(line_edit.text, false)
+	_pending_browse_line_edit = line_edit
+	request_browse.emit(line_edit.text, true)
 
 
 func _on_path_array_add(parent_vbox: VBoxContainer) -> void:
@@ -309,14 +331,24 @@ func _on_path_array_remove(row: Control, parent_vbox: VBoxContainer) -> void:
 	_emit_path_array_changed()
 
 
+## Commit typed path-array text when the field is submitted or loses focus.
+func _on_path_array_text_committed(_unused = null) -> void:
+	if _ignore_signals:
+		return
+	_emit_path_array_changed()
+
+
 func _emit_path_array_changed() -> void:
-	var v = _read_path_array()
-	Sonara.set_config(setting.key, v)
-	value_changed.emit(setting.key, v)
+	_write_value(_read_path_array())
 
 
+## Apply a FileDialog result to the active Path or PATH_ARRAY editor.
 func set_pending_path(path: String) -> void:
 	if setting.type == Type.PATH:
 		(_editor_widget as LineEdit).text = path
-		Sonara.set_config(setting.key, path)
-		value_changed.emit(setting.key, path)
+		_write_value(path)
+	elif setting.type == Type.PATH_ARRAY:
+		if _pending_browse_line_edit:
+			_pending_browse_line_edit.text = path
+		_pending_browse_line_edit = null
+		_emit_path_array_changed()

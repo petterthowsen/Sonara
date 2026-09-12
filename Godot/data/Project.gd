@@ -45,6 +45,7 @@ var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global cl
 # Async clip load tracking
 var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
 var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
+var _request_device_lookup: Dictionary = {}  # req_id -> DeviceInstance
 var _osc_listener_registry: Array = []
 var _pending_waveform_retries: Dictionary = {}
 
@@ -221,6 +222,19 @@ func _get_clip_by_req_id(req_id: String) -> Clip:
 	return null
 
 
+## Remember which DeviceInstance owns an AudioFileService request (sampler waveforms).
+func track_device_request(device: DeviceInstance, req_id: String) -> void:
+	if device == null or req_id.is_empty():
+		return
+	_request_device_lookup[req_id] = device
+
+
+func _get_device_by_req_id(req_id: String) -> DeviceInstance:
+	if _request_device_lookup.has(req_id):
+		return _request_device_lookup[req_id] as DeviceInstance
+	return null
+
+
 func _get_scene_tree() -> SceneTree:
 	return Sonara.editor.get_tree()
 
@@ -301,7 +315,7 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 	var req_id := str(args[0])
 	var clip := _get_clip_by_req_id(req_id)
 	if clip == null:
-		push_warning("[Project] decode_ready: Unknown request ID: %s" % req_id)
+		_apply_device_decode_ready(req_id, args)
 		return
 
 	var cache_key: String = str(args[1])
@@ -344,6 +358,45 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 	clip.update_content_length_from_metadata(tempo, ppq)
 
 
+## Apply AFS decode metadata to a sampler DeviceInstance.
+func _apply_device_decode_ready(req_id: String, args: Array) -> void:
+	var inst := _get_device_by_req_id(req_id)
+	if inst == null:
+		return
+	if inst.sample_waveform == null:
+		inst.sample_waveform = DeviceWaveform.new()
+	var cache_key: String = str(args[1])
+	var decoded_channels: int = int(args[2])
+	var frames: int = int(args[3])
+	var decoded_sample_rate: int = int(args[4])
+	var duration_s: float = float(args[5])
+	var cache_path := Sonara.find_waveform_cache_file(cache_key)
+	if not cache_path.is_empty():
+		inst.sample_waveform.set_waveform_cache(cache_path, cache_key)
+	inst.sample_waveform.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
+
+
+## Ingest one waveform pyramid level into a sampler DeviceInstance.
+func _apply_device_waveform_level(req_id: String, args: Array) -> void:
+	var inst := _get_device_by_req_id(req_id)
+	if inst == null:
+		return
+	if inst.sample_waveform == null:
+		inst.sample_waveform = DeviceWaveform.new()
+	var level := int(args[1])
+	var block_size := int(args[2])
+	var num_blocks := int(args[3]) if args.size() >= 4 else 0
+	var file_path := str(args[4]) if args.size() >= 5 else ""
+	if file_path.is_empty() and not inst.sample_waveform.waveform_cache_path.is_empty():
+		file_path = inst.sample_waveform.waveform_cache_path
+	if not file_path.is_empty():
+		if inst.sample_waveform.waveform_cache_key.is_empty():
+			inst.sample_waveform.waveform_cache_key = file_path.get_file()
+		inst.sample_waveform.set_waveform_cache(file_path, inst.sample_waveform.waveform_cache_key)
+	inst.sample_waveform.ensure_audio_waveform()
+	inst.sample_waveform.ingest_waveform_level_from_cache(level, block_size, num_blocks)
+
+
 func _on_audiofile_waveform_level(args: Array) -> void:
 	"""Handle OSC /audiofile/waveform/level event from audio engine.
 
@@ -366,7 +419,7 @@ func _on_audiofile_waveform_level(args: Array) -> void:
 	var req_id := str(args[0])
 	var clip := _get_clip_by_req_id(req_id)
 	if clip == null:
-		push_warning("[Project] Waveform level: Unknown request ID: %s" % req_id)
+		_apply_device_waveform_level(req_id, args)
 		return
 
 	var level := int(args[1])
@@ -434,6 +487,7 @@ func _on_audiofile_error(args: Array) -> void:
 	var req_id := str(args[0])
 	var clip := _get_clip_by_req_id(req_id)
 	if clip == null:
+		_request_device_lookup.erase(req_id)
 		return
 	var code := int(args[1])
 	var message := str(args[2])

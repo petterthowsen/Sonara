@@ -1,47 +1,40 @@
-//! Parallel device container: children share input, outputs mix with per-slot volume/mute/solo.
+//! Note-routed parallel container: each child is assigned a MIDI note.
 
 use super::container::{
-    apply_gain, copy_interleaved, insert_into_vec, move_in_vec, normalized_to_gain,
-    remove_from_vec, DeviceContainer,
+    copy_interleaved, insert_into_vec, move_in_vec, remove_from_vec, DeviceContainer,
 };
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
 
-/// One Layer child plus its mix controls.
-pub struct LayerSlot {
-    /// Nested device processed in parallel with sibling slots.
+/// Default first pad note (C1).
+const FIRST_PAD_NOTE: u8 = 36;
+
+/// One drum-machine child plus the MIDI note that triggers it.
+pub struct DrumSlot {
+    /// Nested device mixed in parallel with sibling pads.
     pub device: Box<dyn AudioDevice>,
-    /// Linear gain in `[0, 2]` (1.0 = unity).
-    pub volume: f32,
-    /// When true this slot contributes no audio (MIDI is still forwarded).
-    pub mute: bool,
-    /// When any slot is soloed, only soloed slots contribute audio.
-    pub solo: bool,
+    /// MIDI note that routes to this child. Unique within the drum machine.
+    pub note: u8,
 }
 
-impl LayerSlot {
-    /// Create a slot wrapping `device` at unity gain, unmuted and unsoloed.
-    pub fn new(device: Box<dyn AudioDevice>) -> Self {
-        Self {
-            device,
-            volume: 1.0,
-            mute: false,
-            solo: false,
-        }
+impl DrumSlot {
+    /// Wrap `device` and assign `note`.
+    pub fn new(device: Box<dyn AudioDevice>, note: u8) -> Self {
+        Self { device, note }
     }
 }
 
-/// Built-in Layer: each child renders the same input, then outputs are mixed.
-pub struct LayerDevice {
-    slots: Vec<LayerSlot>,
+/// Built-in Drum Machine: Layer-like mix with per-child MIDI note routing.
+pub struct DrumMachineDevice {
+    slots: Vec<DrumSlot>,
     enabled: bool,
     mix_buffer: Vec<f32>,
     child_buffer: Vec<f32>,
 }
 
-impl LayerDevice {
-    /// Create an empty layer whose mix buffers hold `max_buffer_size` stereo frames.
+impl DrumMachineDevice {
+    /// Create an empty drum machine whose mix buffers hold `max_buffer_size` stereo frames.
     pub fn new(max_buffer_size: usize) -> Self {
         let interleaved = max_buffer_size.saturating_mul(2);
         Self {
@@ -53,52 +46,46 @@ impl LayerDevice {
     }
 
     /// Immutable slot at `index`.
-    pub fn slot(&self, index: usize) -> Option<&LayerSlot> {
+    pub fn slot(&self, index: usize) -> Option<&DrumSlot> {
         self.slots.get(index)
     }
 
-    /// Mutable slot at `index`.
-    pub fn slot_mut(&mut self, index: usize) -> Option<&mut LayerSlot> {
-        self.slots.get_mut(index)
-    }
-
-    /// Set a slot's linear gain from a normalized 0–1 value (0.5 = unity).
-    pub fn set_slot_volume_normalized(&mut self, index: usize, normalized: f32) -> bool {
+    /// Assign `note` to `index` if no other slot already uses it.
+    pub fn set_slot_note(&mut self, index: usize, note: u8) -> bool {
+        if self
+            .slots
+            .iter()
+            .enumerate()
+            .any(|(i, s)| i != index && s.note == note)
+        {
+            return false;
+        }
         if let Some(slot) = self.slots.get_mut(index) {
-            slot.volume = normalized_to_gain(normalized);
+            slot.note = note;
             true
         } else {
             false
         }
     }
 
-    /// Mute or unmute a slot.
-    pub fn set_slot_mute(&mut self, index: usize, mute: bool) -> bool {
-        if let Some(slot) = self.slots.get_mut(index) {
-            slot.mute = mute;
-            true
-        } else {
-            false
+    /// Next unused MIDI note, searching upward from C1 then wrapping.
+    fn next_free_note(&self) -> u8 {
+        let is_free = |n: u8| self.slots.iter().all(|s| s.note != n);
+        for n in FIRST_PAD_NOTE..=127 {
+            if is_free(n) {
+                return n;
+            }
         }
-    }
-
-    /// Solo or unsolo a slot.
-    pub fn set_slot_solo(&mut self, index: usize, solo: bool) -> bool {
-        if let Some(slot) = self.slots.get_mut(index) {
-            slot.solo = solo;
-            true
-        } else {
-            false
+        for n in 0..FIRST_PAD_NOTE {
+            if is_free(n) {
+                return n;
+            }
         }
-    }
-
-    /// True when at least one slot is soloed.
-    fn any_solo(&self) -> bool {
-        self.slots.iter().any(|s| s.solo)
+        FIRST_PAD_NOTE
     }
 }
 
-impl DeviceContainer for LayerDevice {
+impl DeviceContainer for DrumMachineDevice {
     fn child_count(&self) -> usize {
         self.slots.len()
     }
@@ -114,7 +101,8 @@ impl DeviceContainer for LayerDevice {
     }
 
     fn insert_child(&mut self, index: usize, device: Box<dyn AudioDevice>) {
-        insert_into_vec(&mut self.slots, index, LayerSlot::new(device));
+        let note = self.next_free_note();
+        insert_into_vec(&mut self.slots, index, DrumSlot::new(device, note));
     }
 
     fn remove_child(&mut self, index: usize) -> Option<Box<dyn AudioDevice>> {
@@ -126,7 +114,7 @@ impl DeviceContainer for LayerDevice {
     }
 }
 
-impl AudioDevice for LayerDevice {
+impl AudioDevice for DrumMachineDevice {
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
         let interleaved = (sample_count * 2)
             .min(inputs.len())
@@ -145,26 +133,18 @@ impl AudioDevice for LayerDevice {
         }
 
         self.mix_buffer[..interleaved].fill(0.0);
-        let any_solo = self.any_solo();
-
         for slot in &mut self.slots {
-            let audible = !slot.mute && (!any_solo || slot.solo);
             slot.device
                 .process_block(inputs, &mut self.child_buffer, sample_count);
-            if !audible {
-                continue;
-            }
-            apply_gain(&mut self.child_buffer, sample_count, slot.volume);
             for i in 0..interleaved {
                 self.mix_buffer[i] += self.child_buffer[i];
             }
         }
-
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        for slot in &mut self.slots {
+        if let Some(slot) = self.slots.iter_mut().find(|s| s.note == note) {
             slot.device.mark_activity();
             slot.device
                 .send_midi_event(note, velocity, is_note_on, frame_offset);
@@ -178,15 +158,15 @@ impl AudioDevice for LayerDevice {
     }
 
     fn device_id(&self) -> &str {
-        "sonara.builtin.layer"
+        "sonara.builtin.drum_machine"
     }
 
     fn device_name(&self) -> &str {
-        "Layer"
+        "Drum Machine"
     }
 
     fn device_category(&self) -> DeviceCategory {
-        DeviceCategory::Utility
+        DeviceCategory::Instrument
     }
 
     fn device_variant(&self) -> DeviceVariant {
@@ -249,21 +229,25 @@ mod tests {
     use super::*;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 
-    struct GainDevice {
-        gain: f32,
+    struct NoteCapture {
+        hits: Vec<u8>,
     }
 
-    impl GainDevice {
-        fn new(gain: f32) -> Self {
-            Self { gain }
+    impl NoteCapture {
+        fn new() -> Self {
+            Self { hits: Vec::new() }
         }
     }
 
-    impl AudioDevice for GainDevice {
-        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-            let count = (sample_count * 2).min(inputs.len()).min(outputs.len());
-            for i in 0..count {
-                outputs[i] = inputs[i] * self.gain;
+    impl AudioDevice for NoteCapture {
+        fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            let count = (sample_count * 2).min(outputs.len());
+            outputs[..count].fill(0.1);
+        }
+
+        fn send_midi_event(&mut self, note: u8, _v: u8, is_on: bool, _f: usize) {
+            if is_on {
+                self.hits.push(note);
             }
         }
 
@@ -274,15 +258,15 @@ mod tests {
         }
 
         fn device_id(&self) -> &str {
-            "test.gain"
+            "test.capture"
         }
 
         fn device_name(&self) -> &str {
-            "Gain"
+            "Capture"
         }
 
         fn device_category(&self) -> DeviceCategory {
-            DeviceCategory::Effect
+            DeviceCategory::Instrument
         }
 
         fn device_variant(&self) -> DeviceVariant {
@@ -300,50 +284,45 @@ mod tests {
         }
     }
 
-    fn render(layer: &mut LayerDevice, input: f32) -> f32 {
-        let inputs = vec![input; 4];
-        let mut outputs = vec![0.0f32; 4];
-        layer.process_block(&inputs, &mut outputs, 2);
-        outputs[0]
+    #[test]
+    fn routes_midi_to_matching_child_only() {
+        let mut dm = DrumMachineDevice::new(8);
+        dm.insert_child(0, Box::new(NoteCapture::new()));
+        dm.insert_child(1, Box::new(NoteCapture::new()));
+        assert!(dm.set_slot_note(0, 36));
+        assert!(dm.set_slot_note(1, 38));
+        dm.send_midi_event(38, 100, true, 0);
+        let child = dm
+            .child_mut(1)
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<NoteCapture>()
+            .unwrap();
+        assert_eq!(child.hits, vec![38]);
+        let child0 = dm
+            .child_mut(0)
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<NoteCapture>()
+            .unwrap();
+        assert!(child0.hits.is_empty());
     }
 
     #[test]
-    fn empty_layer_is_silence() {
-        let mut layer = LayerDevice::new(8);
-        assert_eq!(render(&mut layer, 1.0), 0.0);
+    fn rejects_duplicate_notes() {
+        let mut dm = DrumMachineDevice::new(8);
+        dm.insert_child(0, Box::new(NoteCapture::new()));
+        dm.insert_child(1, Box::new(NoteCapture::new()));
+        assert!(dm.set_slot_note(0, 40));
+        assert!(!dm.set_slot_note(1, 40));
     }
 
     #[test]
-    fn mixes_parallel_children() {
-        let mut layer = LayerDevice::new(8);
-        layer.insert_child(0, Box::new(GainDevice::new(0.5)));
-        layer.insert_child(1, Box::new(GainDevice::new(0.25)));
-        assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
-    }
-
-    #[test]
-    fn mute_excludes_slot() {
-        let mut layer = LayerDevice::new(8);
-        layer.insert_child(0, Box::new(GainDevice::new(1.0)));
-        layer.insert_child(1, Box::new(GainDevice::new(1.0)));
-        layer.set_slot_mute(0, true);
-        assert!((render(&mut layer, 1.0) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn solo_plays_only_soloed_slots() {
-        let mut layer = LayerDevice::new(8);
-        layer.insert_child(0, Box::new(GainDevice::new(1.0)));
-        layer.insert_child(1, Box::new(GainDevice::new(0.5)));
-        layer.set_slot_solo(1, true);
-        assert!((render(&mut layer, 1.0) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn bypass_passes_input() {
-        let mut layer = LayerDevice::new(8);
-        layer.insert_child(0, Box::new(GainDevice::new(0.0)));
-        layer.set_enabled(false);
-        assert!((render(&mut layer, 0.8) - 0.8).abs() < 1e-6);
+    fn empty_is_silence() {
+        let mut dm = DrumMachineDevice::new(8);
+        let inputs = vec![1.0f32; 4];
+        let mut outputs = vec![9.0f32; 4];
+        dm.process_block(&inputs, &mut outputs, 2);
+        assert_eq!(outputs[0], 0.0);
     }
 }

@@ -245,38 +245,45 @@ impl AudioFileService {
             let mut decoder = SymphoniaDecoder::new(path);
             let mut interleaved_samples = Vec::new();
 
-            let decoded_info = decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<f32>]| {
-                // Convert planar to interleaved
-                let num_frames = chunk[0].len();
-                let num_channels = chunk.len();
+            let decoded_info =
+                decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<
+                    f32,
+                >]| {
+                    // Convert planar to interleaved
+                    let num_frames = chunk[0].len();
+                    let num_channels = chunk.len();
 
-                // Debug: Log chunk info and first few samples
-                if interleaved_samples.is_empty() {
-                    tracing::info!(
-                        request_id = %req_id,
-                        num_channels = num_channels,
-                        num_frames = num_frames,
-                        "AFS cached path: chunk structure"
-                    );
-                    if num_channels > 0 && num_frames > 0 {
-                        let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
-                        let first_right = chunk.get(1).and_then(|ch| ch.get(0)).copied().unwrap_or(0.0);
+                    // Debug: Log chunk info and first few samples
+                    if interleaved_samples.is_empty() {
                         tracing::info!(
                             request_id = %req_id,
-                            first_left = first_left,
-                            first_right = first_right,
-                            "AFS cached path: first planar samples"
+                            num_channels = num_channels,
+                            num_frames = num_frames,
+                            "AFS cached path: chunk structure"
                         );
+                        if num_channels > 0 && num_frames > 0 {
+                            let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
+                            let first_right = chunk
+                                .get(1)
+                                .and_then(|ch| ch.get(0))
+                                .copied()
+                                .unwrap_or(0.0);
+                            tracing::info!(
+                                request_id = %req_id,
+                                first_left = first_left,
+                                first_right = first_right,
+                                "AFS cached path: first planar samples"
+                            );
+                        }
                     }
-                }
 
-                for frame_idx in 0..num_frames {
-                    for ch in 0..num_channels {
-                        interleaved_samples.push(chunk[ch][frame_idx]);
+                    for frame_idx in 0..num_frames {
+                        for ch in 0..num_channels {
+                            interleaved_samples.push(chunk[ch][frame_idx]);
+                        }
                     }
-                }
-                Ok(())
-            })?;
+                    Ok(())
+                })?;
 
             tracing::info!(
                 request_id = %req_id,
@@ -363,51 +370,56 @@ impl AudioFileService {
         let mut total_frames = 0u64;
 
         // Decode in chunks to build pyramid progressively
-        let decoded_info = decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<f32>]| {
-            // Store planar chunks for waveform generation
-            let planar_chunk: Vec<Vec<f32>> = chunk.to_vec();
+        let decoded_info =
+            decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<f32>]| {
+                // Store planar chunks for waveform generation
+                let planar_chunk: Vec<Vec<f32>> = chunk.to_vec();
 
-            // Convert to interleaved for engine playback
-            let num_frames = chunk[0].len();
-            let num_channels = chunk.len();
+                // Convert to interleaved for engine playback
+                let num_frames = chunk[0].len();
+                let num_channels = chunk.len();
 
-            // Debug: Log chunk info and first few samples
-            if interleaved_samples.is_empty() {
-                tracing::info!(
-                    request_id = %req_id,
-                    num_channels = num_channels,
-                    num_frames = num_frames,
-                    "AFS new decode path: chunk structure"
-                );
-                if num_channels > 0 && num_frames > 0 {
-                    let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
-                    let first_right = chunk.get(1).and_then(|ch| ch.get(0)).copied().unwrap_or(0.0);
+                // Debug: Log chunk info and first few samples
+                if interleaved_samples.is_empty() {
                     tracing::info!(
                         request_id = %req_id,
-                        first_left = first_left,
-                        first_right = first_right,
-                        "AFS new decode path: first planar samples"
+                        num_channels = num_channels,
+                        num_frames = num_frames,
+                        "AFS new decode path: chunk structure"
                     );
+                    if num_channels > 0 && num_frames > 0 {
+                        let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
+                        let first_right = chunk
+                            .get(1)
+                            .and_then(|ch| ch.get(0))
+                            .copied()
+                            .unwrap_or(0.0);
+                        tracing::info!(
+                            request_id = %req_id,
+                            first_left = first_left,
+                            first_right = first_right,
+                            "AFS new decode path: first planar samples"
+                        );
+                    }
                 }
-            }
 
-            for frame_idx in 0..num_frames {
-                for ch in 0..num_channels {
-                    interleaved_samples.push(chunk[ch][frame_idx]);
+                for frame_idx in 0..num_frames {
+                    for ch in 0..num_channels {
+                        interleaved_samples.push(chunk[ch][frame_idx]);
+                    }
                 }
-            }
-            
-            all_chunks.push(planar_chunk);
-            total_frames += chunk[0].len() as u64;
 
-            // Emit progress (rough estimate)
-            let _ = event_tx.send(AfsEvent::Progress {
-                req_id: req_id.to_string(),
-                progress_0_1: 0.5, // Placeholder progress
-            });
+                all_chunks.push(planar_chunk);
+                total_frames += chunk[0].len() as u64;
 
-            Ok(())
-        })?;
+                // Emit progress (rough estimate)
+                let _ = event_tx.send(AfsEvent::Progress {
+                    req_id: req_id.to_string(),
+                    progress_0_1: 0.5, // Placeholder progress
+                });
+
+                Ok(())
+            })?;
 
         tracing::info!(
             request_id = %req_id,
@@ -486,7 +498,9 @@ impl AudioFileService {
         // Start with a coarse block size for zoomed-out views
         // For short audio, ensure we have at least 256-512 blocks in the coarsest level
         let coarse_target_blocks = 512;
-        let coarse_block_size = (total_frames / coarse_target_blocks).max(min_block_size * 8).max(2048) as u32;
+        let coarse_block_size = (total_frames / coarse_target_blocks)
+            .max(min_block_size * 8)
+            .max(2048) as u32;
 
         // Generate LOD pyramid by halving block_size until reaching min_block_size
         // Example: 2048 -> 1024 -> 512 -> 256 -> 128 (if min_block_size=128)

@@ -575,6 +575,9 @@ func _get_device_type_string(device_type: Device.DeviceType) -> String:
 
 func add_device(device_instance: DeviceInstance, position: int = -1, parent: DeviceInstance = null) -> void:
 	## Add a device to the channel root list or into a container parent.
+	if parent and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
+		if device_instance.slot_note < 0:
+			device_instance.slot_note = parent.next_free_drum_note()
 	var host: Array[DeviceInstance] = parent.children if parent else devices
 	if position < 0 or position >= host.size():
 		host.append(device_instance)

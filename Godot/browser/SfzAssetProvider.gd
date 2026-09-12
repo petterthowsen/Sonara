@@ -165,15 +165,17 @@ func _detect_changes(new_assets: Array[Asset]) -> void:
 	var removed: Array[Asset] = []
 	var modified: Array[Asset] = []
 
-	# Find added/modified assets
-	for asset in new_assets:
-		var old_mod_time = _file_mod_times.get(asset.path, 0)
+	# Compare against the previous asset list. Do not use _file_mod_times here:
+	# _try_create_asset already wrote the current mtime, so a new file would
+	# look unchanged and never be reported to AssetService.
+	var old_by_path: Dictionary = {}
+	for old_asset in _assets:
+		old_by_path[old_asset.path] = old_asset
 
-		if old_mod_time == 0:
-			# New asset
+	for asset in new_assets:
+		if not old_by_path.has(asset.path):
 			added.append(asset)
-		elif asset.file_modified_time != old_mod_time:
-			# Modified asset
+		elif asset.file_modified_time != old_by_path[asset.path].file_modified_time:
 			modified.append(asset)
 
 	# Find removed assets (in old list but not in new list)

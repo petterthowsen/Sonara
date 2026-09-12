@@ -83,14 +83,16 @@ impl WaveformCacheWriter {
     /// Write header and reserve space for metadata directory
     fn write_header_and_reserve_metadata(&mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(MAGIC)?;                                              // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.version)?;               // 2 bytes
-        self.file.write_u16::<LittleEndian>(self.header.channels)?;              // 2 bytes
-        self.file.write_u32::<LittleEndian>(self.header.sample_rate)?;           // 4 bytes
-        self.file.write_u64::<LittleEndian>(self.header.frames)?;                // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.levels)?;                // 2 bytes
-        self.file.write_u64::<LittleEndian>(self.header.dir_offset)?;            // 8 bytes
-        // Total: 8+2+2+4+8+2+8 = 34 bytes
+        self.file.write_all(MAGIC)?; // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.version)?; // 2 bytes
+        self.file.write_u16::<LittleEndian>(self.header.channels)?; // 2 bytes
+        self.file
+            .write_u32::<LittleEndian>(self.header.sample_rate)?; // 4 bytes
+        self.file.write_u64::<LittleEndian>(self.header.frames)?; // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.levels)?; // 2 bytes
+        self.file
+            .write_u64::<LittleEndian>(self.header.dir_offset)?; // 8 bytes
+                                                                 // Total: 8+2+2+4+8+2+8 = 34 bytes
 
         // Reserve space for metadata directory (1024 bytes after header)
         self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
@@ -105,13 +107,15 @@ impl WaveformCacheWriter {
     /// Write header to file (for updates only)
     fn write_header(&mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(MAGIC)?;                                              // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.version)?;               // 2 bytes
-        self.file.write_u16::<LittleEndian>(self.header.channels)?;              // 2 bytes
-        self.file.write_u32::<LittleEndian>(self.header.sample_rate)?;           // 4 bytes
-        self.file.write_u64::<LittleEndian>(self.header.frames)?;                // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.levels)?;                // 2 bytes
-        self.file.write_u64::<LittleEndian>(self.header.dir_offset)?;            // 8 bytes
+        self.file.write_all(MAGIC)?; // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.version)?; // 2 bytes
+        self.file.write_u16::<LittleEndian>(self.header.channels)?; // 2 bytes
+        self.file
+            .write_u32::<LittleEndian>(self.header.sample_rate)?; // 4 bytes
+        self.file.write_u64::<LittleEndian>(self.header.frames)?; // 8 bytes
+        self.file.write_u16::<LittleEndian>(self.header.levels)?; // 2 bytes
+        self.file
+            .write_u64::<LittleEndian>(self.header.dir_offset)?; // 8 bytes
         Ok(())
     }
 
@@ -153,7 +157,8 @@ impl WaveformCacheWriter {
             self.file.write_u16::<LittleEndian>(metadata.level)?;
             self.file.write_u32::<LittleEndian>(metadata.block_size)?;
             self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
-            self.file.write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
+            self.file
+                .write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
 
             for &offset in &metadata.channel_offsets {
                 self.file.write_u64::<LittleEndian>(offset)?;
@@ -273,7 +278,8 @@ impl WaveformCacheWriter {
             self.file.write_u32::<LittleEndian>(metadata.block_size)?;
             self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
             // Write number of channel offsets
-            self.file.write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
+            self.file
+                .write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
             // Write each channel offset
             for &offset in &metadata.channel_offsets {
                 self.file.write_u64::<LittleEndian>(offset)?;

@@ -127,6 +127,8 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/volume` | `f:normalized` | Layer slot volume (0–1, 0.5 = unity) |
 | `/channel/{id}/device/{path}/slot/{n}/mute` | `i:0_or_1` | Layer slot mute |
 | `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
+| `/channel/{id}/device/{path}/slot/{n}/note` | `i:midi` | Drum Machine: MIDI note that triggers child `n` |
+| `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 
 `{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
 
@@ -147,7 +149,8 @@ Status echoes use the same path as the command (`/active`, `/enabled`, `/loading
 
 Loading state updates are sent automatically during:
 - CLAP plugin subprocess initialization (typically 100-500ms for complex plugins)
-- SFZ file loading via `/channel/{id}/device/{position}/load_file` (can take several seconds for large sample libraries)
+- SFZ file loading via `/channel/{id}/device/{path}/load_file` (can take several seconds for large sample libraries)
+- Sampler audio loading via the same `load_file` address (optional `req_id` second arg). The engine decodes through AudioFileService; Godot maps `/audiofile/*` events by `req_id` to a `DeviceInstance` the same way it maps clip loads.
 - Device activation/deactivation that requires loading/unloading resources
 
 Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinners or error messages in the UI.
@@ -196,6 +199,27 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 - MIDI is forwarded to every child, including muted slots.
 - No device-level params. Per-child mix via `/slot/{n}/volume|mute|solo`.
 
+**Sampler (`sonara.builtin.sampler`)**
+- **Type:** Instrument (receives MIDI), file loading (`wav`/`mp3`/`ogg`)
+- One-shot or gated playback of a single decoded sample. PCM stays in the engine; Godot draws the waveform from the AudioFileService cache.
+- Playback rate: `speed * 2^((tune + keytrack*(note-root))/12)` (no timestretch).
+- **Params:**
+  - `0`: Volume (float 0.0–2.0 linear gain, default 1.0 / normalized 0.5 = unity)
+  - `1`: Tune (float ±24 semitones)
+  - `2`: Speed (float 0.25–4x, logarithmic, default 1.0)
+  - `3`: Root (float MIDI 0–127, default 60 = C3)
+  - `4`: Key Track (bool, default on)
+  - `5`: Play Mode (enum: One-shot, Gated)
+  - `6`: Velocity (float 0–1 amount)
+  - `7`: Start (float 0–1 region)
+  - `8`: End (float 0–1 region)
+
+**Drum Machine (`sonara.builtin.drum_machine`)**
+- **Type:** Instrument container (`is_container: true`, accepts MIDI)
+- Parallel mix like Layer. MIDI is routed to the child whose `/slot/{n}/note` matches (unique notes; default C1 / 36 upward).
+- Empty drum machine is silence. A pad may hold any device (Sampler, Chain, CLAP, …).
+- No device-level params. Per-child note via `/slot/{n}/note`.
+
 ##### Built-in Parameter Advertisement (Rust → Godot)
 `/builtin/info` sends device metadata and typed parameter descriptors:
 ```
@@ -216,7 +240,7 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 ```
 - `type`: "float" | "bool" | "enum"
 - For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
-- `is_container`: 1 when the device can own nested children (Chain, Layer).
+- `is_container`: 1 when the device can own nested children (Chain, Layer, Drum Machine).
 
 #### CLAP Plugins
 

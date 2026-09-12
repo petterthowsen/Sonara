@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use super::clap_host::SubprocessClapAdapter;
 use super::{
-    AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, LayerDevice, PolySynthDevice,
-    PortFlow, SfizzDevice, SpectrumAnalyzerDevice,
+    AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, DrumMachineDevice,
+    LayerDevice, PolySynthDevice, PortFlow, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
 };
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
 use crate::audio::ipc::ProcessManager;
@@ -87,6 +87,13 @@ impl DeviceFactory {
             }
             "sonara.builtin.chain" => Box::new(ChainDevice::new(self.max_buffer_size)),
             "sonara.builtin.layer" => Box::new(LayerDevice::new(self.max_buffer_size)),
+            "sonara.builtin.sampler" => Box::new(SamplerDevice::new(
+                self.sample_rate,
+                channel_id as usize,
+                device_path.clone(),
+                Some(self.status_tx.clone()),
+            )),
+            "sonara.builtin.drum_machine" => Box::new(DrumMachineDevice::new(self.max_buffer_size)),
             _ => {
                 warn!("Unknown built-in device ID: {}", device_id);
                 return None;
@@ -139,13 +146,15 @@ impl DeviceFactory {
     /// Describe every built-in device (ports, parameters, file support) for Godot's browser.
     pub fn builtin_device_infos(&self) -> Vec<EngineStatus> {
         // TODO: Simplify this to avoid creating temporary instances
-        let devices: [Box<dyn AudioDevice>; 6] = [
+        let devices: [Box<dyn AudioDevice>; 8] = [
             Box::new(PolySynthDevice::new(self.sample_rate)),
             Box::new(DelayDevice::new(self.sample_rate, 5000.0)),
             Box::new(SpectrumAnalyzerDevice::new(self.sample_rate)),
             Box::new(SfizzDevice::new_for_metadata(self.sample_rate)),
             Box::new(ChainDevice::new(self.max_buffer_size)),
             Box::new(LayerDevice::new(self.max_buffer_size)),
+            Box::new(SamplerDevice::new_for_metadata()),
+            Box::new(DrumMachineDevice::new(self.max_buffer_size)),
         ];
         devices
             .iter()

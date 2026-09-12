@@ -791,8 +791,7 @@ impl Channel {
         param_id: u32,
         value: f32,
     ) -> bool {
-        if let Some(device) =
-            super::devices::container::device_at_path_mut(&mut self.devices, path)
+        if let Some(device) = super::devices::container::device_at_path_mut(&mut self.devices, path)
         {
             device.set_parameter(param_id, value);
             true

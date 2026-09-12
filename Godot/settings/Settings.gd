@@ -216,6 +216,9 @@ func set_value(key: String, value) -> void:
 	if not _settings.has(key):
 		push_warning("Settings: no registration for key '%s'" % key)
 		return
+	var current = Sonara.get_config(key, _settings[key].default)
+	if current == value:
+		return
 	Sonara.set_config(key, value)
 	setting_changed.emit(key, value)
 

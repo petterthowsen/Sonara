@@ -226,7 +226,10 @@ impl CommandWorker {
             if parent_path.is_empty() {
                 channel.devices.len()
             } else {
-                match channel.device_at_path(&parent_path).and_then(|d| d.as_container()) {
+                match channel
+                    .device_at_path(&parent_path)
+                    .and_then(|d| d.as_container())
+                {
                     Some(container) => container.child_count(),
                     None => {
                         warn!(
@@ -292,10 +295,7 @@ impl CommandWorker {
             super::devices::container::remove_device(&mut channel.devices, &path)
         };
         if removed.is_none() {
-            warn!(
-                "Invalid device path {} for channel {}",
-                path, channel_id
-            );
+            warn!("Invalid device path {} for channel {}", path, channel_id);
             return;
         }
         drop(removed);
@@ -436,9 +436,7 @@ impl CommandWorker {
         } else {
             match handle.open_gui(window_handle) {
                 Ok((width, height, is_resizable)) => {
-                    self.with_plugin(channel_id, &device_path, |plugin| {
-                        plugin.set_gui_open(true)
-                    });
+                    self.with_plugin(channel_id, &device_path, |plugin| plugin.set_gui_open(true));
                     info!(
                         "Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{}, resizable: {})",
                         channel_id, device_path, window_handle, width, height, is_resizable
@@ -499,4 +497,3 @@ impl CommandWorker {
         });
     }
 }
-

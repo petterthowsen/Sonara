@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://dng4r8gabxvct"]
+
+[ext_resource type="Script" uid="uid://c23bc0u6um45i" path="res://devices/builtin/DrumMachineDefaultView.gd" id="1_x40xj"]
+
+[node name="DrumMachineDefaultView" type="Control" unique_id=1131407070]
+custom_minimum_size = Vector2(240, 220)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_x40xj")

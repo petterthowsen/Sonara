@@ -377,9 +377,12 @@ impl ProcessManager {
     fn plugin_host_path() -> Result<PathBuf, String> {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to get current exe path: {}", e))?;
-        let exe_dir = exe_path
-            .parent()
-            .ok_or_else(|| format!("Engine executable has no parent dir: {}", exe_path.display()))?;
+        let exe_dir = exe_path.parent().ok_or_else(|| {
+            format!(
+                "Engine executable has no parent dir: {}",
+                exe_path.display()
+            )
+        })?;
         let plugin_host_path = exe_dir.join("plugin_host");
 
         if !plugin_host_path.is_file() {

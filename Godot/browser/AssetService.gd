@@ -406,3 +406,16 @@ func _on_setting_changed(key: String, value) -> void:
 				provider._scan_interval = float(value)
 			elif provider is SfzAssetProvider:
 				provider._scan_interval = float(value)
+	elif key == "assets/samples/paths":
+		_rescan_provider(FileSystemAssetProvider)
+	elif key == "assets/sfz/paths":
+		_rescan_provider(SfzAssetProvider)
+
+
+## Re-scan one provider so newly added search paths show up immediately.
+func _rescan_provider(provider_type) -> void:
+	for provider in _providers:
+		if is_instance_of(provider, provider_type):
+			print("[AssetService] Rescanning %s after search path change" % provider.provider_name)
+			provider.scan()
+			return

@@ -23,11 +23,19 @@ pub struct OscServer {
     client_port: u16,
     audio_file_service: Arc<Mutex<AudioFileService>>,
     pending_clip_loads: Arc<Mutex<HashMap<String, PendingClip>>>,
+    pending_device_loads: Arc<Mutex<HashMap<String, PendingDevice>>>,
 }
 
 #[derive(Clone, Debug)]
 struct PendingClip {
     clip_id: String,
+    source_path: String,
+}
+
+#[derive(Clone, Debug)]
+struct PendingDevice {
+    channel_id: usize,
+    device_path: DevicePath,
     source_path: String,
 }
 
@@ -55,6 +63,7 @@ impl OscServer {
             client_port: 7001, // Godot listens on 7001
             audio_file_service,
             pending_clip_loads: Arc::new(Mutex::new(HashMap::new())),
+            pending_device_loads: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -183,8 +192,7 @@ impl OscServer {
             // Check for window close events (user clicked X)
             while let Ok(process_key) = window_manager.close_event_rx.try_recv() {
                 info!("🗑️  Window close requested by user: {}", process_key);
-                if let Some((channel_id, device_path)) = DevicePath::from_window_key(&process_key)
-                {
+                if let Some((channel_id, device_path)) = DevicePath::from_window_key(&process_key) {
                     let _ = command_tx.send(AudioCommand::ClosePluginGui {
                         channel_id,
                         device_path,
@@ -367,11 +375,25 @@ impl OscServer {
             }
             ["load_file"] => {
                 if let Some(OscType::String(file_path)) = args.first() {
-                    command_tx.send(AudioCommand::LoadDeviceFile {
-                        channel_id,
-                        device_path,
-                        file_path: file_path.clone(),
-                    })?;
+                    if is_audio_sample_path(file_path) {
+                        let req_id = match args.get(1) {
+                            Some(OscType::String(id)) if !id.is_empty() => id.clone(),
+                            _ => generate_device_request_id(channel_id, &device_path),
+                        };
+                        self.begin_device_sample_load(
+                            channel_id,
+                            device_path,
+                            file_path.clone(),
+                            req_id,
+                            command_tx,
+                        )?;
+                    } else {
+                        command_tx.send(AudioCommand::LoadDeviceFile {
+                            channel_id,
+                            device_path,
+                            file_path: file_path.clone(),
+                        })?;
+                    }
                 }
             }
             ["gui", "open"] => {
@@ -498,6 +520,23 @@ impl OscServer {
                         slot,
                         solo: *solo != 0,
                     })?;
+                }
+            }
+            ["slot", slot_str, "note"] => {
+                if let Ok(slot) = slot_str.parse::<usize>() {
+                    let note = match args.first() {
+                        Some(OscType::Int(n)) => Some(*n as u8),
+                        Some(OscType::Float(n)) => Some(*n as u8),
+                        _ => None,
+                    };
+                    if let Some(note) = note {
+                        command_tx.send(AudioCommand::SetDrumSlotNote {
+                            channel_id,
+                            device_path,
+                            slot,
+                            note,
+                        })?;
+                    }
                 }
             }
             _ => {
@@ -711,8 +750,7 @@ impl OscServer {
                 }
             }
             ["channel", id_str, "record_armed"] => {
-                if let (Ok(id), Some(OscType::Int(armed))) =
-                    (id_str.parse::<usize>(), args.first())
+                if let (Ok(id), Some(OscType::Int(armed))) = (id_str.parse::<usize>(), args.first())
                 {
                     command_tx.send(AudioCommand::SetRecordArmed {
                         channel_id: id,
@@ -1484,10 +1522,7 @@ impl OscServer {
             EngineStatus::PluginGuiClosed {
                 channel_id,
                 device_path,
-            } => (
-                device_path.to_osc_addr(channel_id, "gui/closed"),
-                vec![],
-            ),
+            } => (device_path.to_osc_addr(channel_id, "gui/closed"), vec![]),
             EngineStatus::PluginScanComplete { count } => (
                 "/plugin/scan_complete".to_string(),
                 vec![OscType::Int(count as i32)],
@@ -1626,10 +1661,11 @@ impl OscServer {
                 param_id,
                 value,
             } => {
-                let addr = device_path.to_osc_addr(channel_id, &format!("param/{}/value", param_id));
+                let addr =
+                    device_path.to_osc_addr(channel_id, &format!("param/{}/value", param_id));
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
-            },
+            }
             EngineStatus::LogMessage { level, message } => (
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
@@ -1815,6 +1851,67 @@ impl OscServer {
         format!("clip:{}:{}", clip_id, now)
     }
 
+    /// Submit an AudioFileService decode for a sampler device and track the request.
+    fn begin_device_sample_load(
+        &self,
+        channel_id: usize,
+        device_path: DevicePath,
+        file_path: String,
+        req_id: String,
+        command_tx: &Sender<AudioCommand>,
+    ) -> Result<()> {
+        info!(
+            "Requesting sample load for channel {} device {} (req_id={}) from {}",
+            channel_id, device_path, req_id, file_path
+        );
+        {
+            let mut pending = self.pending_device_loads.lock().unwrap();
+            pending.insert(
+                req_id.clone(),
+                PendingDevice {
+                    channel_id,
+                    device_path: device_path.clone(),
+                    source_path: file_path.clone(),
+                },
+            );
+        }
+        command_tx.send(AudioCommand::BeginLoadDeviceSample {
+            channel_id,
+            device_path: device_path.clone(),
+            req_id: req_id.clone(),
+        })?;
+        match self.audio_file_service.lock() {
+            Ok(service) => {
+                if let Err(err) =
+                    service.submit_decode_and_waveform(req_id.clone(), file_path.clone(), 128)
+                {
+                    warn!(
+                        "Failed to submit sample decode (req_id={}): {}",
+                        req_id, err
+                    );
+                    self.pending_device_loads.lock().unwrap().remove(&req_id);
+                    let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
+                        channel_id,
+                        device_path,
+                        req_id,
+                        message: err.to_string(),
+                    });
+                }
+            }
+            Err(err) => {
+                warn!("Failed to lock AudioFileService: {}", err);
+                self.pending_device_loads.lock().unwrap().remove(&req_id);
+                let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
+                    channel_id,
+                    device_path,
+                    req_id,
+                    message: "AudioFileService unavailable".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn handle_afs_event(&mut self, event: AfsEvent, command_tx: &Sender<AudioCommand>) {
         match event.clone() {
             AfsEvent::DecodeReady {
@@ -1860,6 +1957,30 @@ impl OscServer {
 
                     let mut pending_guard = self.pending_clip_loads.lock().unwrap();
                     pending_guard.remove(&req_id);
+                } else if let Some(pending_device) = {
+                    let pending_guard = self.pending_device_loads.lock().unwrap();
+                    pending_guard.get(&req_id).cloned()
+                } {
+                    info!(
+                        channel = pending_device.channel_id,
+                        device = %pending_device.device_path,
+                        path = %pending_device.source_path,
+                        request_id = %req_id,
+                        sample_count = samples.len(),
+                        "AudioFileService decode ready for sampler"
+                    );
+                    let command = AudioCommand::LoadDeviceSample {
+                        channel_id: pending_device.channel_id,
+                        device_path: pending_device.device_path,
+                        req_id: req_id.clone(),
+                        samples,
+                        sample_rate,
+                        channels: channels as usize,
+                    };
+                    if let Err(err) = command_tx.send(command) {
+                        warn!("Failed to forward LoadDeviceSample: {}", err);
+                    }
+                    self.pending_device_loads.lock().unwrap().remove(&req_id);
                 }
             }
             AfsEvent::WaveformLevel {
@@ -1906,6 +2027,21 @@ impl OscServer {
                     let _ = command_tx.send(command);
                     let mut pending_guard = self.pending_clip_loads.lock().unwrap();
                     pending_guard.remove(&req_id);
+                } else if let Some(pending_device) = {
+                    let pending_guard = self.pending_device_loads.lock().unwrap();
+                    pending_guard.get(&req_id).cloned()
+                } {
+                    warn!(
+                        "AudioFileService error for sampler channel {} path {} (req_id={}): {}",
+                        pending_device.channel_id, pending_device.device_path, req_id, message
+                    );
+                    let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
+                        channel_id: pending_device.channel_id,
+                        device_path: pending_device.device_path,
+                        req_id: req_id.clone(),
+                        message: message.clone(),
+                    });
+                    self.pending_device_loads.lock().unwrap().remove(&req_id);
                 }
             }
             _ => {}
@@ -1996,4 +2132,19 @@ fn parse_add_device_command(
         active,
         enabled,
     })
+}
+
+/// True when `path` is a PCM sample the Sampler can load (not an SFZ).
+fn is_audio_sample_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".wav") || lower.ends_with(".mp3") || lower.ends_with(".ogg")
+}
+
+/// Stable-enough request id when Godot does not supply one.
+fn generate_device_request_id(channel_id: usize, device_path: &DevicePath) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("device:{}:{}:{}", channel_id, device_path, now)
 }

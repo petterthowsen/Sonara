@@ -208,10 +208,7 @@ mod tests {
 
     impl GainDevice {
         fn new(gain: f32) -> Self {
-            Self {
-                gain,
-                midi_hits: 0,
-            }
+            Self { gain, midi_hits: 0 }
         }
     }
 

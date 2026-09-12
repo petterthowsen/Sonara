@@ -265,10 +265,7 @@ impl SfizzDevice {
         }
 
         if count > 0 {
-            info!(
-                "  ✅ Flushed {} pending parameter(s) to sfizz",
-                count
-            );
+            info!("  ✅ Flushed {} pending parameter(s) to sfizz", count);
         }
 
         true
@@ -357,10 +354,7 @@ impl SfizzDevice {
                                 labels.iter().filter(|cc| cc.group == GROUP_PARAM).count()
                             );
                             for label in &labels {
-                                info!(
-                                    "  CC{} [{}]: {}",
-                                    label.cc_number, label.group, label.name
-                                );
+                                info!("  CC{} [{}]: {}", label.cc_number, label.group, label.name);
                             }
 
                             {
@@ -819,8 +813,7 @@ mod tests {
                 name: "Brightness".to_string(),
             },
         ]);
-        let by_cc: HashMap<u8, &ExposedCc> =
-            merged.iter().map(|cc| (cc.cc_number, cc)).collect();
+        let by_cc: HashMap<u8, &ExposedCc> = merged.iter().map(|cc| (cc.cc_number, cc)).collect();
 
         assert_eq!(by_cc[&1].name, "Mod Wheel");
         assert_eq!(by_cc[&1].group, GROUP_CC);

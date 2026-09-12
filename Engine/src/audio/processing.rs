@@ -213,7 +213,8 @@ pub fn process_audio(
                             // PLUS account for seeking into the middle of the instance
                             if !track.audio_playback_positions.contains_key(&instance.id) {
                                 // Total offset = clip_offset (trim) + current position in instance (seek)
-                                let total_offset_ticks = instance.clip_offset + current_pos_in_instance;
+                                let total_offset_ticks =
+                                    instance.clip_offset + current_pos_in_instance;
 
                                 // Convert total offset (ticks) to sample index in the clip's sample-rate domain
                                 let offset_samples = state.settings.ticks_to_samples(
@@ -430,7 +431,8 @@ mod tests {
         let frames = 256;
         let mut events = Vec::new();
 
-        let (tick1, acc1) = collect_tick_events(0, 0.0, frames, ticks_per_sample, true, &mut events);
+        let (tick1, acc1) =
+            collect_tick_events(0, 0.0, frames, ticks_per_sample, true, &mut events);
         let first: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
         assert_eq!(first.first().copied(), Some(0));
         assert_eq!(*first.last().unwrap(), tick1);
@@ -438,7 +440,10 @@ mod tests {
         let (tick2, _acc2) =
             collect_tick_events(tick1, acc1, frames, ticks_per_sample, false, &mut events);
         let second: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
-        assert!(!second.contains(&tick1), "boundary tick {tick1} was dispatched again");
+        assert!(
+            !second.contains(&tick1),
+            "boundary tick {tick1} was dispatched again"
+        );
         assert!(tick2 > tick1);
         assert_eq!(second.first().copied(), Some(tick1 + 1));
     }

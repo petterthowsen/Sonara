@@ -53,6 +53,12 @@ var slot_volume: float = 0.5
 var slot_mute: bool = false
 var slot_solo: bool = false
 
+## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
+var slot_note: int = -1
+
+## Waveform pyramid when this instance is a Sampler (or other sample-loading device).
+var sample_waveform: DeviceWaveform = null
+
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
 
@@ -565,25 +571,35 @@ func sync_parameter_to_engine(param_id: int) -> void:
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
 
 
-## Load a file into this device (e.g., SFZ file into sfizz sampler)
+## Load a file into this device (SFZ or audio sample).
 func load_file(file_path: String) -> void:
 	if not device.supports_file_loading:
 		push_error("[DeviceInstance] Device %s does not support file loading" % device.name)
 		return
-	
+
 	print("[DeviceInstance] Loading file into %s: %s" % [device.name, file_path])
 	loaded_file_path = file_path
-	AudioEngineOSC.send(osc_addr("load_file"), [file_path])
+	if sample_waveform == null:
+		sample_waveform = DeviceWaveform.new()
+	else:
+		sample_waveform.reset()
+	var req_id := "device:%s:%d" % [id, Time.get_ticks_usec()]
+	if Sonara.editor and Sonara.editor.project:
+		Sonara.editor.project.track_device_request(self, req_id)
+	AudioEngineOSC.send(osc_addr("load_file"), [file_path, req_id])
 
 
-## Send Layer slot mix controls to the engine (no-op if this is not a Layer child).
+## Send Layer/Drum slot controls to the engine (no-op for other parents).
 func sync_slot_to_engine() -> void:
 	var parent := get_parent_device()
-	if parent == null or parent.device == null or parent.device.device_id != "sonara.builtin.layer":
+	if parent == null or parent.device == null:
 		return
-	AudioEngineOSC.send(parent.osc_addr("slot/%d/volume" % position), [slot_volume])
-	AudioEngineOSC.send(parent.osc_addr("slot/%d/mute" % position), [1 if slot_mute else 0])
-	AudioEngineOSC.send(parent.osc_addr("slot/%d/solo" % position), [1 if slot_solo else 0])
+	if parent.device.device_id == "sonara.builtin.layer":
+		AudioEngineOSC.send(parent.osc_addr("slot/%d/volume" % position), [slot_volume])
+		AudioEngineOSC.send(parent.osc_addr("slot/%d/mute" % position), [1 if slot_mute else 0])
+		AudioEngineOSC.send(parent.osc_addr("slot/%d/solo" % position), [1 if slot_solo else 0])
+	elif parent.device.device_id == "sonara.builtin.drum_machine" and slot_note >= 0:
+		AudioEngineOSC.send(parent.osc_addr("slot/%d/note" % position), [slot_note])
 
 
 ## Set this child's Layer slot volume (normalized 0–1, 0.5 = unity).
@@ -607,6 +623,28 @@ func set_slot_solo(soloed: bool) -> void:
 	slot_changed.emit()
 
 
+## Assign the MIDI note this Drum Machine child responds to.
+func set_slot_note(note: int) -> void:
+	slot_note = clampi(note, 0, 127)
+	sync_slot_to_engine()
+	slot_changed.emit()
+
+
+## Next unused pad note from C1 upward (Drum Machine containers only).
+func next_free_drum_note() -> int:
+	var used := {}
+	for child in children:
+		if child.slot_note >= 0:
+			used[child.slot_note] = true
+	for n in range(36, 128):
+		if not used.has(n):
+			return n
+	for n in range(0, 36):
+		if not used.has(n):
+			return n
+	return 36
+
+
 ## ============================================================================
 ## SERIALIZATION
 ## ============================================================================
@@ -626,6 +664,7 @@ func to_json() -> Dictionary:
 		"slot_volume": slot_volume,
 		"slot_mute": slot_mute,
 		"slot_solo": slot_solo,
+		"slot_note": slot_note,
 	}
 
 
@@ -667,6 +706,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_volume = float(data.get("slot_volume", 0.5))
 	instance.slot_mute = bool(data.get("slot_mute", false))
 	instance.slot_solo = bool(data.get("slot_solo", false))
+	instance.slot_note = int(data.get("slot_note", -1))
 
 	for child_data in data.get("children", []):
 		if child_data is Dictionary:
