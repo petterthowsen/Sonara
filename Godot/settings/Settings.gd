@@ -210,6 +210,17 @@ func _register_all_settings() -> void:
 	_settings["ai/chat/max_tokens"].max_val = 32000
 	_settings["ai/chat/max_tokens"].step = 256
 	_register(Setting.new(
+		"ai/chat/max_tool_rounds",
+		"Max Tool Rounds",
+		Type.INT,
+		64,
+		CATEGORY_AI,
+		"How many tool-call rounds the assistant may run in one turn before it must stop and reply."
+	))
+	_settings["ai/chat/max_tool_rounds"].min_val = 8
+	_settings["ai/chat/max_tool_rounds"].max_val = 256
+	_settings["ai/chat/max_tool_rounds"].step = 8
+	_register(Setting.new(
 		"ai/chat/reasoning",
 		"Show Thinking",
 		Type.BOOL,

@@ -75,14 +75,17 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 		p_device_instance: The DeviceInstance to display
 		position: Position in device chain (for display)
 	"""
-	print("[CompactDevicePanel] setup() called for device: %s at position %d" % [p_device_instance.device.name, position])
+	print("[CompactDevicePanel] setup() called for device: %s at position %d" % [p_device_instance.get_display_name(), position])
+	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
+		device_instance.name_changed.disconnect(_on_device_name_changed)
 	device_instance = p_device_instance
 	
 	await ready
 
-	# Set panel title to device name and position
-	name_label.text = device_instance.device.get_short_name()
-	name_label.tooltip_text = device_instance.device.name
+	# Set panel title to instance name
+	_refresh_name_label()
+	if not device_instance.name_changed.is_connected(_on_device_name_changed):
+		device_instance.name_changed.connect(_on_device_name_changed)
 	
 	device_light.bind_to_device_instance(device_instance)
 	
@@ -90,6 +93,21 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 	
 	_ensure_param_list()
 	_param_list.bind_to_device(device_instance, "param")
+
+
+## Show the instance name in the compact header.
+func _refresh_name_label() -> void:
+	if device_instance == null or name_label == null:
+		return
+	name_label.text = device_instance.get_display_name()
+	var type_name := device_instance.device.name if device_instance.device else ""
+	name_label.tooltip_text = type_name
+	tooltip_text = type_name
+
+
+## Keep the compact header in sync with instance renames.
+func _on_device_name_changed(_new_name: String) -> void:
+	_refresh_name_label()
 
 
 ## Create the shared ParameterList once and host it in the compact panel.

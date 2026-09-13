@@ -49,13 +49,14 @@ class_name EnvelopeControl extends Control
 
 @export var envelope: Envelope:
 	set(value):
-		if envelope != value:
-			if envelope != null:
-				envelope.changed.disconnect(queue_redraw)
-			if envelope != null:
-				envelope.changed.connect(queue_redraw)
-			envelope = value
-			queue_redraw()
+		if envelope == value:
+			return
+		if envelope != null and envelope.changed.is_connected(queue_redraw):
+			envelope.changed.disconnect(queue_redraw)
+		envelope = value
+		if envelope != null and not envelope.changed.is_connected(queue_redraw):
+			envelope.changed.connect(queue_redraw)
+		queue_redraw()
 
 @export var attack_enabled := true
 @export var decay_enabled := true

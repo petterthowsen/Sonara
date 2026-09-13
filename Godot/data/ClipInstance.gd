@@ -13,6 +13,7 @@ signal position_changed(new_start_ticks: int)
 signal duration_changed(new_duration_ticks: int)
 signal loop_changed(enabled: bool)
 signal instance_modified()  # Any change to instance properties
+signal clip_changed(new_clip: Clip)  # Source clip retargeted (Make Unique)
 
 # ============================================================================
 # PROPERTIES
@@ -74,6 +75,16 @@ func _generate_uuid() -> String:
 # ============================================================================
 # POSITION AND PLAYBACK
 # ============================================================================
+
+## Point this instance at a different source clip and notify timeline UI.
+func set_clip(new_clip: Clip) -> void:
+	if new_clip == clip:
+		return
+	clip = new_clip
+	clip_id = new_clip.id if new_clip else ""
+	clip_changed.emit(clip)
+	instance_modified.emit()
+
 
 func set_position(ticks: int) -> void:
 	"""Set the start position on the timeline."""

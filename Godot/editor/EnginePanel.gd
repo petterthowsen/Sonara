@@ -7,8 +7,14 @@ class_name EnginePanel extends PanelContainer
 @onready var connect_button: Button = $HBox/ConnectButton
 @onready var engine_load_graph: Graph = $HBox/EngineLoadGraph
 
+## Last Time.get_ticks_msec() that received /status/engine_load (0 = never).
+var _last_engine_load_msec: int = 0
+var _show_connected: bool = false
+const AUDIO_STALL_MSEC := 2000
+
 
 func _ready() -> void:
+	set_process(true)
 	# Connect to button signal
 	connect_button.pressed.connect(_on_connect_button_pressed)
 	
@@ -63,6 +69,8 @@ func _update_ui_no_project() -> void:
 	connect_button.text = "Connect"
 	connect_button.disabled = true
 	performance_text.text = ""
+	_show_connected = false
+	_last_engine_load_msec = 0
 
 
 func _update_ui_from_state(state: Project.ConnectionState) -> void:
@@ -72,25 +80,41 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 			status_label.text = "Disconnected"
 			connect_button.text = "Connect"
 			connect_button.disabled = false
-			# Clear graph when disconnected
+			_show_connected = false
+			_last_engine_load_msec = 0
+			performance_text.text = ""
 			if engine_load_graph:
 				engine_load_graph.clear()
 		Project.ConnectionState.CONNECTING:
 			status_label.text = "Connecting..."
 			connect_button.text = "Cancel"
 			connect_button.disabled = false
+			_show_connected = false
 		Project.ConnectionState.CONNECTED:
 			status_label.text = "Connected"
 			connect_button.text = "Disconnect"
 			connect_button.disabled = false
+			_show_connected = true
+			_last_engine_load_msec = Time.get_ticks_msec()
 
 func _connect_osc_signals() -> void:
 	"""Connect to audio engine OSC signals for performance metrics."""
 	if AudioEngineOSC:
 		AudioEngineOSC.listen("/status/engine_load", _on_engine_load_received)
 
+## Show a stall warning when OSC is up but the audio callback has gone quiet.
+func _process(_delta: float) -> void:
+	if not _show_connected:
+		return
+	if _last_engine_load_msec == 0:
+		return
+	if Time.get_ticks_msec() - _last_engine_load_msec > AUDIO_STALL_MSEC:
+		performance_text.text = "Audio stalled (no callback)"
+
+
 func _on_engine_load_received(values: Array) -> void:
 	"""Handle engine load metric from audio engine."""
+	_last_engine_load_msec = Time.get_ticks_msec()
 	if engine_load_graph and values.size() > 0:
 		var load_value = float(values[0])
 		engine_load_graph.add_point(load_value)

@@ -13,7 +13,9 @@ signal turn_finished()
 signal turn_failed(error: ChatTypes.ChatError)
 
 
-const MAX_TOOL_ROUNDS := 8
+const DEFAULT_MAX_TOOL_ROUNDS := 64
+const MIN_TOOL_ROUNDS := 8
+const MAX_TOOL_ROUNDS_CAP := 256
 
 var client: OpenRouterClient
 var store: ConversationStore = ConversationStore.new()
@@ -216,11 +218,13 @@ func _run_turn() -> void:
 	turn_started.emit()
 	var conv := store.get_current()
 	var hist = HistoryUtil.history()
+	var limit := _max_tool_rounds()
 	var rounds := 0
-	while rounds < MAX_TOOL_ROUNDS:
+	var hit_limit := false
+	while rounds < limit:
 		if _cancel:
 			break
-		var assistant_msg := await _chat_once(conv)
+		var assistant_msg := await _chat_once(conv, true)
 		if assistant_msg == null:
 			break
 		conv.messages.append(assistant_msg)
@@ -229,7 +233,7 @@ func _run_turn() -> void:
 		conversation_changed.emit()
 		if _cancel:
 			break
-		if assistant_msg.tool_calls.is_empty() or assistant_msg.finish_reason == "stop":
+		if assistant_msg.tool_calls.is_empty():
 			break
 		if hist:
 			hist.begin_macro("Assistant")
@@ -250,6 +254,11 @@ func _run_turn() -> void:
 		rounds += 1
 		if _cancel:
 			break
+		if rounds >= limit:
+			hit_limit = true
+			break
+	if hit_limit and not _cancel:
+		await _finish_after_tool_limit(conv, limit)
 	conv.ensure_title_from_first_user()
 	store.autosave_current()
 	_busy = false
@@ -258,15 +267,42 @@ func _run_turn() -> void:
 	conversation_changed.emit()
 
 
-func _chat_once(conv: Conversation) -> ChatTypes.ChatMessage:
+## Tool-round cap from Settings, clamped to a safe range.
+func _max_tool_rounds() -> int:
+	var settings := get_node_or_null("/root/Settings")
+	var n := DEFAULT_MAX_TOOL_ROUNDS
+	if settings:
+		n = int(settings.call("get_value", "ai/chat/max_tool_rounds"))
+	return clampi(n, MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS_CAP)
+
+
+## One last un-tooled reply, then a visible notice that the round cap was hit.
+func _finish_after_tool_limit(conv: Conversation, limit: int) -> void:
+	var closing := await _chat_once(conv, false, false)
+	if closing:
+		conv.messages.append(closing)
+		conv.touch(get_model_label())
+		store.schedule_save()
+		conversation_changed.emit()
+	var notice := ChatTypes.ChatMessage.assistant_text(
+		"Stopped after %d tool rounds. Raise Settings → AI → Max Tool Rounds to continue longer tasks." % limit
+	)
+	notice.finish_reason = "max_tool_rounds"
+	conv.messages.append(notice)
+	store.schedule_save()
+	conversation_changed.emit()
+
+
+func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = true) -> ChatTypes.ChatMessage:
 	_wait_msg = null
 	_wait_err = null
 	_wait_cancelled = false
 	var req := ChatTypes.ChatRequest.new()
 	req.stream = true
 	req.modalities = PackedStringArray(["text"])
-	req.tools = registry.get_openrouter_tools()
-	req.tool_choice = "auto"
+	if with_tools:
+		req.tools = registry.get_openrouter_tools()
+		req.tool_choice = "auto"
 	req.model = get_model_label()
 	var system := ChatTypes.ChatMessage.new()
 	system.role = "system"
@@ -279,7 +315,8 @@ func _chat_once(conv: Conversation) -> ChatTypes.ChatMessage:
 	while _wait_msg == null and _wait_err == null and not _wait_cancelled:
 		await get_tree().process_frame
 	if _wait_err:
-		turn_failed.emit(_wait_err)
+		if emit_fail:
+			turn_failed.emit(_wait_err)
 		return null
 	if _wait_cancelled or _wait_msg == null:
 		return null

@@ -285,6 +285,8 @@ func _finish_body() -> void:
 		return
 	if _response_code < 200 or _response_code >= 300:
 		var body_text := _error_body.get_string_from_utf8()
+		if not body_text.is_empty():
+			print("[OpenRouter] error body: %s" % body_text.substr(0, 1500))
 		_fail(ChatTypes.ChatError.from_http(_response_code, body_text))
 		return
 	if not _streaming:

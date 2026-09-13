@@ -31,17 +31,14 @@ func get_tool(name: String) -> AiTool:
 	return _tools.get(name)
 
 
-## Execute by name. Unknown → `{ok:false}`. Awaits async tools.
+## Execute by name. Unknown → `{ok:false}`. Always awaited so async tools are legal.
 func execute(name: String, args: Dictionary) -> Dictionary:
 	var tool: AiTool = _tools.get(name)
 	if tool == null:
 		return AiTool.fail("Unknown tool: %s" % name)
 	if args == null:
 		args = {}
-	var result = tool.execute(args)
-	if result is Dictionary:
-		return result
-	result = await result
+	var result = await tool.execute(args)
 	if result is Dictionary:
 		return result
 	return AiTool.fail("Tool %s returned a non-dict result" % name)
@@ -64,6 +61,12 @@ static func create_default() -> ToolRegistry:
 	reg.register(AddSendTool.new())
 	reg.register(CreateBusTool.new())
 	reg.register(AddDeviceTool.new())
+	reg.register(RemoveDeviceTool.new())
+	reg.register(SetDeviceTool.new())
+	reg.register(GetDeviceTool.new())
+	reg.register(SetDeviceParamsTool.new())
+	reg.register(LoadDeviceFileTool.new())
+	reg.register(MoveDeviceTool.new())
 	reg.register(ListClipsTool.new())
 	reg.register(ReadClipTool.new())
 	reg.register(WriteClipTool.new())

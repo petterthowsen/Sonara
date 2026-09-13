@@ -120,7 +120,7 @@ static func compact_channel(c: Channel) -> Dictionary:
 	var device_names: PackedStringArray = []
 	for d in c.devices:
 		if d is DeviceInstance and d.device:
-			device_names.append(d.device.name)
+			device_names.append(d.get_display_name())
 	return {
 		"id": c.id,
 		"name": c.name,
@@ -301,7 +301,7 @@ static func drum_names_for_track(project: Project, track: Track) -> Dictionary:
 		for child in d.children:
 			if child == null or child.slot_note < 0:
 				continue
-			var label := child.device.name if child.device else ""
+			var label := child.get_display_name() if child else ""
 			if _generic_drum_label(label) or used.has(label.to_upper()):
 				label = ClipTextKey.drum_label(child.slot_note)
 			if used.has(label.to_upper()):
@@ -314,3 +314,90 @@ static func drum_names_for_track(project: Project, track: Track) -> Dictionary:
 static func _generic_drum_label(label: String) -> bool:
 	var s := label.strip_edges().to_lower()
 	return s.is_empty() or s in ["sampler", "sfz", "audio", "device", "plugin"]
+
+
+## Resolve a device by `instance_id` or `path` (`Channel/Device/Child`).
+static func resolve_device(project: Project, args: Dictionary) -> Variant:
+	var iid := str(args.get("instance_id", "")).strip_edges()
+	if not iid.is_empty():
+		var found := project.find_device_instance(iid)
+		if found:
+			return found
+		return fail("Device not found: %s" % iid)
+	var path := str(args.get("path", "")).strip_edges()
+	if path.is_empty():
+		return fail("path or instance_id is required")
+	var segs := DeviceNaming.split_path(path)
+	if segs.is_empty():
+		return fail("path or instance_id is required")
+	var channel: Channel = null
+	var rest: PackedStringArray = segs
+	if args.has("channel_id"):
+		var ch_v = resolve_channel(project, args)
+		if ch_v is Dictionary:
+			return ch_v
+		channel = ch_v
+		if DeviceNaming.names_equal(segs[0], channel.name):
+			rest = DeviceNaming.skip_first(segs)
+	else:
+		var hits: Array = []
+		for c in project.channels:
+			if DeviceNaming.names_equal(c.name, segs[0]):
+				hits.append(c)
+		if hits.is_empty():
+			return fail("No channel named '%s'" % segs[0])
+		if hits.size() > 1:
+			return fail("Multiple channels named '%s'; use channel_id" % segs[0])
+		channel = hits[0]
+		rest = DeviceNaming.skip_first(segs)
+	var walked = DeviceNaming.walk_named(channel.devices, rest)
+	if walked is Dictionary:
+		return fail(str(walked.get("error", "Device not found")))
+	return walked
+
+
+## Container parent from `parent` path or `parent_instance_id`; null means channel root.
+static func resolve_optional_parent(project: Project, args: Dictionary) -> Variant:
+	var parent_id := str(args.get("parent_instance_id", "")).strip_edges()
+	var parent_path := str(args.get("parent", "")).strip_edges()
+	if parent_id.is_empty() and parent_path.is_empty():
+		return null
+	var nested := {}
+	if not parent_id.is_empty():
+		nested["instance_id"] = parent_id
+	if not parent_path.is_empty():
+		nested["path"] = parent_path
+	if args.has("channel_id"):
+		nested["channel_id"] = args.channel_id
+	var parent_v = resolve_device(project, nested)
+	if parent_v is Dictionary:
+		return parent_v
+	var parent: DeviceInstance = parent_v
+	if not parent.is_container():
+		return fail("Parent is not a container device")
+	return parent
+
+
+## Compact device row for tool results (nested children, no parameters).
+static func compact_device(project: Project, inst: DeviceInstance) -> Dictionary:
+	var kids: Array = []
+	for child in inst.children:
+		if child is DeviceInstance:
+			kids.append(compact_device(project, child))
+	var category := ""
+	if inst.device:
+		category = Device.DeviceCategory.keys()[inst.device.category]
+	var row := {
+		"path": inst.address_path(project),
+		"instance_id": inst.id,
+		"name": inst.get_display_name(),
+		"device_id": inst.device.device_id if inst.device else "",
+		"category": category,
+		"bypass": not inst.enabled,
+		"loaded_file": inst.loaded_file_path,
+		"position": inst.position,
+		"children": kids,
+	}
+	if inst.slot_note >= 0:
+		row["slot_note"] = inst.slot_note
+	return row

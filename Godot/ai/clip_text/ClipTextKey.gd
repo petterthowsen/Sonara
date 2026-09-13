@@ -141,6 +141,40 @@ static func default_drum_pitches() -> Array[int]:
 	return [36, 38, 42]
 
 
+## Infer a GM drum MIDI note from a pad or sample name. -1 if unknown.
+static func guess_drum_note(text: String) -> int:
+	var s := _normalize_drum_text(text)
+	if s.is_empty():
+		return -1
+	var padded := " %s " % s
+	# Longer / more specific phrases first so "open hat" is not just HAT.
+	var phrases: Array = [
+		["HI HAT CLOSED", 42], ["CLOSED HI HAT", 42], ["CLOSED HIHAT", 42],
+		["HIHAT CLOSED", 42], ["CLOSED HAT", 42], ["CHH", 42],
+		["HI HAT OPEN", 46], ["OPEN HI HAT", 46], ["OPEN HIHAT", 46],
+		["HIHAT OPEN", 46], ["OPEN HAT", 46], ["OHAT", 46], ["PHAT", 44],
+		["SIDE STICK", 37], ["RIMSHOT", 37], ["RIM", 37],
+		["KICK 2", 35], ["KICK2", 35], ["SNARE 2", 40], ["SNARE2", 40],
+		["FLOOR TOM", 41], ["SPLASH", 55], ["CRASH", 49], ["RIDE", 51],
+		["CLAP", 39], ["SNARE", 38], ["BASS DRUM", 36], ["KICK", 36], ["BD", 36],
+		["HI HAT", 42], ["HIHAT", 42], ["HAT", 42], ["TOM", 45],
+	]
+	for pair in phrases:
+		if padded.contains(" %s " % str(pair[0])):
+			return int(pair[1])
+	var compact := s.replace(" ", "")
+	return int(_DRUM_PITCH.get(compact, -1))
+
+
+## Uppercase, treat `_` / `-` as spaces, collapse repeats.
+static func _normalize_drum_text(text: String) -> String:
+	var s := text.strip_edges().to_upper()
+	s = s.replace("_", " ").replace("-", " ").replace(".", " ")
+	while s.contains("  "):
+		s = s.replace("  ", " ")
+	return s.strip_edges()
+
+
 static func _is_degree_token(token: String) -> bool:
 	var s := token.strip_edges().to_lower()
 	return s in [

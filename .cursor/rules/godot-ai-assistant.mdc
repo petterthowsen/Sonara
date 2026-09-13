@@ -1,0 +1,37 @@
+---
+description: Apply when working on the in-app AI assistant (Assistant autoload, OpenRouter, tools, clip text, chat UI). Not the Godot MCP addon.
+globs: Godot/ai/**/*.gd
+alwaysApply: false
+---
+# Godot AI Assistant
+
+In-project chat lives under `Godot/ai/`. Do **not** confuse it with `Godot/addons/godot_ai` (editor MCP). The `Assistant` autoload (`res://ai/Assistant.gd`) owns the tool loop; UI only listens to its signals.
+
+```
+Composer → Assistant.send_user() → OpenRouterClient (SSE)
+                ↓ tool_calls
+         ToolRegistry.execute() → AiTool (data layer + HistoryUtil)
+                ↓ JSON tool results
+         next chat round (capped by Settings `ai/chat/max_tool_rounds`)
+```
+
+## Orchestration
+- `Assistant` binds chats to the open project, streams one turn at a time, cancels leftover tools, and wraps each tool-call batch in `HistoryUtil.history().begin_macro("Assistant")` / `end_macro()`.
+- Wire OpenRouter through `ChatTypes` (`ChatRequest`, `ChatMessage`, `ToolCall`, `ContentPart`, `ChatError`). Never assemble raw request dicts.
+- Config: Settings keys `ai/openrouter/*` (api_key, base_url, model) and `ai/chat/*` (temperature, max_tokens, max_tool_rounds, reasoning). Client reads them on each request.
+
+## Persistence & prompt
+- `ConversationStore`: sidecar `project.aichat/` next to the project file, or `~/.config/sonara/aichat/scratch` when untitled. Debounced JSON writes.
+- `PromptTemplate` copies shipped `@Godot/ai/prompt/system_prompt.md` once to `~/.config/sonara/aichat/system_prompt.md`, then expands `{variables}` from `PromptContext` (project tables, playhead, selection). Edit the shipped file for default copy; do not hardcode the prompt in GDScript.
+
+## Tools
+- Subclass `AiTool`: stable snake_case `get_name()`, one-line `get_description()`, JSON Schema `get_parameters()`, `is_read_only()`, `execute()` → `{ok:true, data:{}}` or `{ok:false, error:"..."}`. Never throw to the model.
+- Register new tools in `ToolRegistry.create_default()`. Reuse `AiTool.require_project()`, `resolve_track` / `resolve_channel` / `resolve_clip` / `resolve_device`, and compact helpers. Device paths use `DeviceNaming` (`Channel/Device/Child`; sibling names unique, `Delay 2`).
+- Mutating tools go through data-object APIs + `HistoryUtil.execute` / `record` (same as the rest of the editor). Device param paging lives in `DeviceToolUtil`. Asset lookup is `SearchAssetsTool` → `AssetService`.
+
+## Clip text
+- MIDI in/out for the model is `ClipText` (`ClipTextGrid`, `ClipTextEvents`, `ClipTextTime`, `ClipTextKey`). Audio clips have no text format.
+- Grids: hits `1`–`9` or `x`, rests `.`; cell-diff preserves velocity/microtiming. Event writes are ops only (`add` / `del` / `move` / `vel` / `len`). Clip-local time; refer to clips by **name**. Tests: `Godot/ai/tests/test_clip_text.gd`.
+
+## UI
+- Right dock `AssistantPanel` → `ConversationList` / `ChatTranscript` / `ChatComposer`. Bind only to Assistant signals (`conversation_changed`, `text_delta`, `tool_started` / `tool_finished`, `turn_*`). Do not call OpenRouter from the panel.

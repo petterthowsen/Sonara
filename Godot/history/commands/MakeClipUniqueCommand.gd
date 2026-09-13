@@ -33,8 +33,7 @@ func do() -> void:
 		project.add_clip(unique_clip)
 	elif not project.clips.has(unique_clip.id):
 		project.add_clip(unique_clip)
-	instance.clip_id = unique_clip.id
-	instance.clip = unique_clip
+	instance.set_clip(unique_clip)
 	_resync_instance()
 
 
@@ -42,8 +41,7 @@ func do() -> void:
 func undo() -> void:
 	if project == null or instance == null or original_clip == null:
 		return
-	instance.clip_id = original_clip.id
-	instance.clip = original_clip
+	instance.set_clip(original_clip)
 	_resync_instance()
 	if unique_clip != null and project.get_clip_instance_count(unique_clip.id) == 0:
 		project.remove_clip(unique_clip.id)
@@ -51,7 +49,7 @@ func undo() -> void:
 
 ## Deep-copy clip content into a new Clip with fresh note IDs.
 func _duplicate_clip(source: Clip) -> Clip:
-	var new_name := "%s (Unique)" % source.name
+	var new_name := project.unique_clip_name(source.name)
 	var new_clip: Clip = project.create_clip(new_name, source.type)
 	new_clip.color = source.color
 	new_clip.content_length_ticks = source.content_length_ticks

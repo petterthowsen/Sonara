@@ -17,13 +17,31 @@ var clip_instance: ClipInstance = null
 var selected_instances: Array[ClipInstance] = []
 
 
+## Wire buttons, size the title so the name is readable, and listen for renames.
 func _ready() -> void:
 	if is_instance_valid(make_unique):
 		make_unique.pressed.connect(_on_make_unique_pressed)
 	if is_instance_valid(delete):
 		delete.pressed.connect(_on_delete_pressed)
+	if is_instance_valid(label):
+		label.custom_minimum_size = Vector2(148, 32)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.size_flags_vertical = Control.SIZE_FILL
+		if label.label:
+			label.label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+			label.label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			if label.label.label_settings:
+				label.label.label_settings = label.label.label_settings.duplicate()
+				label.label.label_settings.font_size = 16
+		if not label.value_changed.is_connected(_on_name_changed):
+			label.value_changed.connect(_on_name_changed)
+	if is_instance_valid(header):
+		header.custom_minimum_size.y = 32
+	if is_instance_valid(v_box):
+		v_box.custom_minimum_size.x = 160
 
 
+## Bind the menu to a single clip instance.
 func bind_to_clip_instance(inst: ClipInstance) -> void:
 	var arr: Array[ClipInstance] = []
 	if inst:
@@ -31,6 +49,7 @@ func bind_to_clip_instance(inst: ClipInstance) -> void:
 	bind_to_instances(arr)
 
 
+## Bind the menu to the current selection (title only for a single instance).
 func bind_to_instances(instances: Array[ClipInstance]) -> void:
 	selected_instances.clear()
 	for i in instances:
@@ -60,6 +79,17 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 		make_unique.disabled = not can_make_unique
 
 
+## Commit a clip rename from the menu title.
+func _on_name_changed(new_value) -> void:
+	if clip_instance == null or clip_instance.clip == null:
+		return
+	var new_name := str(new_value).strip_edges()
+	if new_name.is_empty() or new_name == clip_instance.clip.name:
+		return
+	HistoryUtil.execute_property("Rename Clip", clip_instance.clip, "set_name", clip_instance.clip.name, new_name)
+
+
+## Delete the bound instances.
 func _on_delete_pressed() -> void:
 	if selected_instances.is_empty():
 		return
@@ -67,6 +97,7 @@ func _on_delete_pressed() -> void:
 	hide()
 
 
+## Request Make Unique for the bound instances.
 func _on_make_unique_pressed() -> void:
 	if selected_instances.is_empty():
 		return

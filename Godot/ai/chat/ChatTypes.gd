@@ -465,7 +465,7 @@ class ChatDelta:
 	static func from_openrouter_chunk(data: Dictionary) -> ChatDelta:
 		var delta := ChatDelta.new()
 		if data.has("error") and data.error is Dictionary:
-			delta.error_message = str(data.error.get("message", "OpenRouter error"))
+			delta.error_message = ChatError.format_openrouter_error(data.error, 0)
 			delta.error_code = str(data.error.get("code", ""))
 			return delta
 		var choices = data.get("choices", [])
@@ -529,7 +529,7 @@ class ChatError:
 		return err
 
 
-	## HTTP error body (`error.message` / `error.code` when present).
+	## HTTP error body (`error.message`, plus OpenRouter `metadata` provider detail).
 	static func from_http(status: int, body: String) -> ChatError:
 		var err := ChatError.new()
 		err.http_status = status
@@ -544,9 +544,11 @@ class ChatError:
 		if parsed is Dictionary:
 			var api_err = parsed.get("error", {})
 			if api_err is Dictionary:
-				var api_msg := str(api_err.get("message", ""))
-				if not api_msg.is_empty():
-					err.message = "HTTP %d: %s" % [status, api_msg] if status > 0 else api_msg
+				var formatted := format_openrouter_error(api_err, status)
+				var has_msg := not str(api_err.get("message", "")).strip_edges().is_empty()
+				var has_meta := not _metadata_detail(api_err.get("metadata", null)).is_empty()
+				if has_msg or has_meta:
+					err.message = formatted
 				err.code = str(api_err.get("code", err.code))
 			elif parsed.has("message"):
 				err.message = "HTTP %d: %s" % [status, parsed.message]
@@ -555,6 +557,68 @@ class ChatError:
 		if err.code.is_empty() and status > 0:
 			err.code = str(status)
 		return err
+
+
+	## `error.message` plus provider name / raw from OpenRouter metadata.
+	static func format_openrouter_error(api_err: Dictionary, status: int = 0) -> String:
+		var api_msg := str(api_err.get("message", "")).strip_edges()
+		var detail := _metadata_detail(api_err.get("metadata", null))
+		var head := api_msg
+		if status > 0:
+			head = "HTTP %d: %s" % [status, api_msg] if not api_msg.is_empty() else "HTTP %d" % status
+		elif head.is_empty():
+			head = "OpenRouter error"
+		if detail.is_empty() or head.contains(detail):
+			return head
+		return "%s — %s" % [head, detail]
+
+
+	## Provider name and unwrapped `metadata.raw` (Google/Anthropic payload).
+	static func _metadata_detail(meta: Variant) -> String:
+		if meta == null:
+			return ""
+		if not meta is Dictionary:
+			return _clip_error_text(str(meta))
+		var provider := str(meta.get("provider_name", meta.get("provider", ""))).strip_edges()
+		var raw_text := _unwrap_provider_raw(meta.get("raw", meta.get("message", "")))
+		if provider.is_empty():
+			return raw_text
+		if raw_text.is_empty():
+			return provider
+		return "%s: %s" % [provider, raw_text]
+
+
+	## Pull a readable message out of metadata.raw (string, JSON, or nested error).
+	static func _unwrap_provider_raw(raw: Variant) -> String:
+		if raw == null:
+			return ""
+		if raw is Dictionary:
+			var nested = raw.get("error", null)
+			if nested is Dictionary:
+				var inner := str(nested.get("message", "")).strip_edges()
+				if not inner.is_empty():
+					return _clip_error_text(inner)
+			var msg := str(raw.get("message", "")).strip_edges()
+			if not msg.is_empty():
+				return _clip_error_text(msg)
+			return _clip_error_text(JSON.stringify(raw))
+		var s := str(raw).strip_edges()
+		if s.is_empty():
+			return ""
+		var parsed = JSON.parse_string(s)
+		if parsed != null:
+			return _unwrap_provider_raw(parsed)
+		return _clip_error_text(s)
+
+
+	## Collapse whitespace and cap length for logs / UI.
+	static func _clip_error_text(text: String) -> String:
+		var s := text.strip_edges().replace("\n", " ").replace("\r", " ")
+		while s.contains("  "):
+			s = s.replace("  ", " ")
+		if s.length() > 800:
+			return s.substr(0, 800) + "…"
+		return s
 
 
 	## Model rejected a requested modality.

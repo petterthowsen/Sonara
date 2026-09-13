@@ -25,7 +25,7 @@ func is_type(t: int) -> bool:
 
 ## Optional window title for Large views
 func get_window_title() -> String:
-	return device.device.name if device and device.device else "Device"
+	return device.get_display_name() if device else "Device"
 
 
 ## Bind this view to a device instance

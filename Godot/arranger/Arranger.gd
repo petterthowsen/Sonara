@@ -824,6 +824,8 @@ func _on_ruler_box_select_started(content_x: float) -> void:
 ## Right-click empty timeline chrome (outside track lanes) hides the time range.
 func _on_timeline_panel_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if timeline and timeline.is_local_position_on_clip(timeline.get_local_mouse_position()):
+			return
 		if timeline and timeline.clip_selection_manager:
 			timeline.clip_selection_manager.clear_selection()
 		accept_event()

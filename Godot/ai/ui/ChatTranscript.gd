@@ -37,6 +37,9 @@ func rebuild(conversation: Conversation) -> void:
 			"user":
 				_add_bubble("You", msg.get_text(), Color(0.35, 0.45, 0.62, 0.35), msg)
 			"assistant":
+				if msg.finish_reason == "max_tool_rounds":
+					_add_bubble("Limit", msg.get_text(), Color(0.45, 0.32, 0.18, 0.5), msg)
+					continue
 				if show_thinking and not msg.reasoning.is_empty():
 					_list.add_child(CollapsibleBlock.new("thinking", "Thinking", msg.reasoning))
 				var text: String = msg.get_text()

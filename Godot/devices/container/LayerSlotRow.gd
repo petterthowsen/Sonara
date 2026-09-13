@@ -30,11 +30,19 @@ func setup(inst: DeviceInstance) -> void:
 		await ready
 	_light.bind_to_device_instance(inst)
 	_name.text = inst.get_display_name()
+	if not inst.name_changed.is_connected(_on_instance_name_changed):
+		inst.name_changed.connect(_on_instance_name_changed)
 	_knob.set_block_signals(true)
 	_knob.value = inst.slot_volume
 	_knob.set_block_signals(false)
 	if not inst.slot_changed.is_connected(_on_slot_changed):
 		inst.slot_changed.connect(_on_slot_changed)
+
+
+## Keep the slot label in sync with instance renames.
+func _on_instance_name_changed(new_name: String) -> void:
+	if _name:
+		_name.text = new_name
 
 
 ## Highlight this row when its child is shown in the folder.

@@ -476,6 +476,19 @@ func set_name(new_name: String) -> void:
 	clip_modified.emit()
 
 
+## Strip trailing ` 2` / `(Unique)` so a copy can take the next free number.
+static func uniqueness_base(clip_name: String) -> String:
+	var s := clip_name.strip_edges()
+	if s.to_lower().ends_with("(unique)"):
+		s = s.substr(0, s.length() - 8).strip_edges()
+	var idx := s.rfind(" ")
+	if idx >= 0:
+		var tail := s.substr(idx + 1)
+		if tail.is_valid_int():
+			s = s.substr(0, idx).strip_edges()
+	return s if not s.is_empty() else "Clip"
+
+
 ## Set stored content length in ticks.
 func set_content_length(ticks: int) -> void:
 	content_length_ticks = maxi(1, ticks)

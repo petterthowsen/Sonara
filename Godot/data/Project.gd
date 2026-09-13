@@ -721,6 +721,17 @@ func get_channel_by_id(channel_id: int) -> Channel:
 	return null
 
 
+## Find a device instance by id across all mixer channels.
+func find_device_instance(instance_id: String) -> DeviceInstance:
+	if instance_id.is_empty():
+		return null
+	for channel in channels:
+		var found := channel.find_device_by_id(instance_id)
+		if found:
+			return found
+	return null
+
+
 func remove_channel(channel_id: int) -> bool:
 	"""Remove a channel from the project. Returns true if successful."""
 	var channel = get_channel_by_id(channel_id)
@@ -918,6 +929,15 @@ func create_clip(clip_name: String = "Clip", clip_type: Clip.ClipType = Clip.Cli
 	clip.name = clip_name
 	clip.type = clip_type
 	return clip
+
+
+## Next unused display name among pooled clips (`Bass`, `Bass 2`, `Bass 3`, …).
+func unique_clip_name(desired: String) -> String:
+	var existing: PackedStringArray = PackedStringArray()
+	for c in clips.values():
+		if c is Clip:
+			existing.append(c.name)
+	return DeviceNaming.unique_in(existing, Clip.uniqueness_base(desired), "Clip")
 
 
 func add_clip(clip: Clip) -> void:

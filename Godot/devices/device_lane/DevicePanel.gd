@@ -150,6 +150,8 @@ func _unbind_from_device(_dev : DeviceInstance):
 	# Disconnect signal
 	if _dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
 		_dev.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
+	if _dev.name_changed.is_connected(_on_device_name_changed):
+		_dev.name_changed.disconnect(_on_device_name_changed)
 	_clear_parameter_controls()
 	_clear_panel_and_aux()
 	_folder_focus = null
@@ -161,6 +163,14 @@ func _unbind_from_device(_dev : DeviceInstance):
 		folder_button.set_pressed_no_signal(false)
 
 
+## Refresh the header when the instance is renamed.
+func _on_device_name_changed(new_name: String) -> void:
+	if name_label:
+		name_label.text = new_name
+	if _large_popup:
+		_large_popup.title = new_name
+
+
 func bind_to_device(dev : DeviceInstance):
 	if device:
 		_unbind_from_device(device)
@@ -170,6 +180,8 @@ func bind_to_device(dev : DeviceInstance):
 		await ready
 	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
+	if not dev.name_changed.is_connected(_on_device_name_changed):
+		dev.name_changed.connect(_on_device_name_changed)
 	_create_parameter_controls()
 	_update_cc_tab_visibility()
 	# PanelView = custom UI only (not ParameterList, not container children)
@@ -558,12 +570,12 @@ func _get_large_window() -> Window:
 	# create large window if not already created
 	if not _large_popup:
 		var popup := Window.new()
-		popup.name = "DeviceWindowLarge_%s" % device.device.name
+		popup.name = "DeviceWindowLarge_%s" % device.get_display_name()
 		popup.unresizable = false
 		popup.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
 		popup.handle_input_locally = false # we want to still accept input events the window doesn't handle.
 		popup.size = Vector2i(300, 200) # initial size
-		popup.title = device.device.name
+		popup.title = device.get_display_name()
 		popup.always_on_top = true # always on top of other windows
 		popup.wrap_controls = true # sized by content
 		popup.force_native = false # not native

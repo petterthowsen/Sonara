@@ -53,6 +53,9 @@ static func drop_asset(
 	if asset.type == Asset.TYPE.SFZ:
 		await _drop_sfz(channel, asset, position, parent, tree)
 		return
+	if asset.type == Asset.TYPE.Audio and parent and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
+		await drop_on_drum_pad(channel, parent, parent.next_free_drum_note(), asset, tree)
+		return
 	if asset.type != Asset.TYPE.Device:
 		return
 	var device := AssetService.get_device(asset.path)

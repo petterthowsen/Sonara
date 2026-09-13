@@ -145,11 +145,11 @@ func _set_value(v: float, emit_change: bool) -> void:
 	if is_equal_approx(_value, clamped):
 		return
 	_value = clamped
-	if emit_change:
-		value_changed.emit(_value)
 	if is_inside_tree():
 		queue_redraw()
 	_refresh_tooltip()
+	if emit_change:
+		value_changed.emit(_value)
 
 
 func _draw() -> void:

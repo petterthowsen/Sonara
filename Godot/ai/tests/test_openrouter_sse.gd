@@ -131,6 +131,20 @@ func _test_chat_error_401() -> void:
 	var missing := ChatTypes.ChatError.missing_key()
 	_assert(missing.code == "missing_api_key", "missing key code")
 	_assert(missing.message.contains("Settings"), "missing key points at Settings")
+	var provider_body := JSON.stringify({
+		"error": {
+			"message": "Provider returned error",
+			"code": 400,
+			"metadata": {
+				"provider_name": "Google",
+				"raw": JSON.stringify({"error": {"message": "items is required"}}),
+			},
+		},
+	})
+	var provider := ChatTypes.ChatError.from_http(400, provider_body)
+	_assert(provider.message.contains("Google"), "provider name in message")
+	_assert(provider.message.contains("items is required"), "unwrapped provider raw")
+	_assert(provider.message.contains("400"), "status in message")
 
 
 ## Audio output modalities force stream true and include voice/format.

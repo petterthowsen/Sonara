@@ -245,16 +245,30 @@ func _devices() -> String:
 	var ch: Channel = ed.focused_channel
 	if ch.devices.is_empty():
 		return "_No devices on channel %d._" % ch.id
-	var lines: PackedStringArray = ["| pos | name | id | category | bypass |", "|---|---|---|---|---|"]
-	for d in ch.devices:
+	var p := _project()
+	var lines: PackedStringArray = ["Use `path` (e.g. `%s/Delay`) or `instance_id`. `get_device` is paged; `set_device_params` takes a `{name: value}` map. Audio samples go on a Drum Machine via `add_device` (`parent` + `asset_path`)." % ch.name]
+	lines.append("| path | name | id | bypass | note |")
+	lines.append("|---|---|---|---|---|")
+	_append_device_rows(lines, p, ch.devices)
+	return "\n".join(lines)
+
+
+## Nested markdown rows for a host list of device instances.
+func _append_device_rows(lines: PackedStringArray, project: Project, host: Array) -> void:
+	for d in host:
 		if not d is DeviceInstance or d.device == null:
 			continue
-		lines.append("| %d | %s | `%s` | %s | %s |" % [
-			d.position, _md_cell(d.device.name), d.device.device_id,
-			Device.DeviceCategory.keys()[d.device.category],
-			"Y" if not d.enabled else ""
+		var inst: DeviceInstance = d
+		var note := str(inst.slot_note) if inst.slot_note >= 0 else "—"
+		lines.append("| `%s` | %s | `%s` | %s | %s |" % [
+			inst.address_path(project),
+			_md_cell(inst.get_display_name()),
+			inst.device.device_id,
+			"Y" if not inst.enabled else "",
+			note,
 		])
-	return "\n".join(lines)
+		if not inst.children.is_empty():
+			_append_device_rows(lines, project, inst.children)
 
 
 func _date() -> String:

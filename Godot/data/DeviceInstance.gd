@@ -18,6 +18,7 @@ signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
 signal child_moved(from_position: int, to_position: int)
 signal slot_changed()
+signal name_changed(new_name: String)
 
 
 ## ============================================================================
@@ -26,6 +27,9 @@ signal slot_changed()
 
 ## Unique instance identifier (UUID)
 var id: String = ""
+
+## Display name for this instance (sibling-unique on a host). Empty until assigned.
+var name: String = ""
 
 ## The device type (metadata)
 var device: Device
@@ -47,6 +51,9 @@ var children: Array[DeviceInstance] = []
 
 ## Weak parent container; unset at the channel root.
 var _parent_ref: WeakRef = null
+
+## Weak channel this instance is attached to (for sibling names and paths).
+var _channel_ref: WeakRef = null
 
 ## Layer slot mix controls (used when the parent is a Layer).
 var slot_volume: float = 0.5
@@ -94,6 +101,48 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 		return
 	for param in device.get_parameters():
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
+
+
+## Assign a path-safe, sibling-unique display name. Emits `name_changed` when it differs.
+func set_name(new_name: String) -> void:
+	var fallback := device.name if device and not device.name.is_empty() else "Device"
+	var unique := DeviceNaming.unique_in(_sibling_names(), new_name, fallback)
+	if unique == name:
+		return
+	name = unique
+	name_changed.emit(name)
+
+
+## Names of siblings on the same host, excluding this instance.
+func _sibling_names() -> PackedStringArray:
+	var out: PackedStringArray = []
+	for d in _sibling_host():
+		if d != self and d is DeviceInstance:
+			out.append(d.name)
+	return out
+
+
+## Parent children, or the channel root device list when this instance is at the root.
+func _sibling_host() -> Array[DeviceInstance]:
+	var parent := get_parent_device()
+	if parent:
+		return parent.children
+	var ch := get_channel()
+	if ch:
+		return ch.devices
+	return []
+
+
+## Mixer channel this instance is on, if still alive.
+func get_channel() -> Channel:
+	if _channel_ref == null:
+		return null
+	return _channel_ref.get_ref() as Channel
+
+
+## Record the owning channel (weak, to avoid RefCounted cycles).
+func set_channel(channel: Channel) -> void:
+	_channel_ref = weakref(channel) if channel else null
 
 
 ## ============================================================================
@@ -653,6 +702,7 @@ func next_free_drum_note() -> int:
 func to_json() -> Dictionary:
 	return {
 		"id": id,
+		"name": name,
 		"device_id": device.id,
 		"channel_id": channel_id,
 		"position": position,
@@ -692,6 +742,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	
 	var instance = DeviceInstance.new(loaded_device, chan_id, pos, is_active, is_enabled)
 	instance.id = data.get("id", instance.id)  # Restore original ID
+	instance.name = str(data.get("name", ""))
 	
 	# Restore parameter values (kept aside so SFZ/plugin advertisement does not wipe them)
 	var param_values = data.get("parameter_values", {})
@@ -722,7 +773,26 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 ## DISPLAY HELPERS
 ## ============================================================================
 
-## Get display name (device name + position)
-## DEPRECATED: just use device.name instead
+## Instance name if assigned, otherwise the device type name.
 func get_display_name() -> String:
-	return device.name
+	if not name.is_empty():
+		return name
+	return device.name if device else "Device"
+
+
+## Channel/device/child path for the assistant, e.g. `Kick/Chain/Delay 2`.
+func address_path(project: Project = null) -> String:
+	var ch := get_channel()
+	if ch == null and project:
+		ch = project.get_channel_by_id(channel_id)
+	var parts: PackedStringArray = []
+	if ch:
+		parts.append(ch.name)
+	var names: PackedStringArray = []
+	var current: DeviceInstance = self
+	while current:
+		names.insert(0, current.get_display_name())
+		current = current.get_parent_device()
+	for n in names:
+		parts.append(n)
+	return "/".join(parts)

@@ -111,6 +111,53 @@ func normalized_to_value(normalized: float) -> float:
 		return min_value + clamped * (max_value - min_value)
 
 
+## Convert a tool value to normalized 0–1. `{ok:true, normalized}` or `{ok:false, error}`.
+func parse_tool_value(value: Variant) -> Dictionary:
+	if param_type == "bool":
+		var on := false
+		if value is bool:
+			on = value
+		elif value is float or value is int:
+			on = float(value) >= 0.5
+		else:
+			var s := str(value).strip_edges().to_lower()
+			if s in ["1", "true", "on", "yes"]:
+				on = true
+			elif s in ["0", "false", "off", "no"]:
+				on = false
+			else:
+				return {"ok": false, "error": "Parameter '%s' expects a boolean" % name}
+		return {"ok": true, "normalized": 1.0 if on else 0.0}
+	if param_type == "enum":
+		var n: int = enum_values.size()
+		if n <= 0:
+			return {"ok": false, "error": "Parameter '%s' has no enum values" % name}
+		var idx := -1
+		if value is float or value is int:
+			idx = int(round(float(value)))
+		else:
+			var label := str(value).strip_edges().to_lower()
+			for i in range(n):
+				if str(enum_values[i]).strip_edges().to_lower() == label:
+					idx = i
+					break
+			if idx < 0 and label.is_valid_int():
+				idx = label.to_int()
+		if idx < 0 or idx >= n:
+			return {"ok": false, "error": "Parameter '%s' expected one of: %s" % [name, ", ".join(enum_values)]}
+		var normalized := 0.0 if n <= 1 else float(idx) / float(n - 1)
+		return {"ok": true, "normalized": normalized}
+	var num := 0.0
+	if value is float or value is int:
+		num = float(value)
+	else:
+		var s2 := str(value).strip_edges()
+		if not s2.is_valid_float():
+			return {"ok": false, "error": "Parameter '%s' expects a number" % name}
+		num = s2.to_float()
+	return {"ok": true, "normalized": value_to_normalized(num)}
+
+
 ## ============================================================================
 ## DISPLAY HELPERS
 ## ============================================================================

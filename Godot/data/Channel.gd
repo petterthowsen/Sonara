@@ -579,6 +579,7 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		if device_instance.slot_note < 0:
 			device_instance.slot_note = parent.next_free_drum_note()
 	var host: Array[DeviceInstance] = parent.children if parent else devices
+	_ensure_device_name(device_instance, host)
 	if position < 0 or position >= host.size():
 		host.append(device_instance)
 		position = host.size() - 1
@@ -586,6 +587,7 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		host.insert(position, device_instance)
 
 	device_instance.channel_id = id
+	device_instance.set_channel(self)
 	device_instance.set_parent_device(parent)
 	_reindex_host(host)
 
@@ -627,6 +629,7 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 
 	host.remove_at(position)
 	removed_device.set_parent_device(null)
+	removed_device.set_channel(null)
 	_reindex_host(host)
 
 	if parent:
@@ -686,6 +689,19 @@ func _reindex_host(host: Array[DeviceInstance]) -> void:
 		host[i].position = i
 
 
+## Give `inst` a sibling-unique name on `host` (type name by default).
+func _ensure_device_name(inst: DeviceInstance, host: Array[DeviceInstance]) -> void:
+	if inst == null:
+		return
+	var fallback := inst.device.name if inst.device and not inst.device.name.is_empty() else "Device"
+	var existing: PackedStringArray = []
+	for d in host:
+		if d != inst:
+			existing.append(d.name)
+	var desired := inst.name if not inst.name.is_empty() else fallback
+	inst.name = DeviceNaming.unique_in(existing, desired, fallback)
+
+
 func _send_add_device_osc(device_instance: DeviceInstance, parent: DeviceInstance) -> void:
 	## Tell the engine to create this device at its current parent/position.
 	var active = 1 if device_instance.active else 0
@@ -732,14 +748,34 @@ func get_device_count() -> int:
 	return devices.size()
 
 
+## Depth-first search for a device instance by id on this channel.
+func find_device_by_id(instance_id: String) -> DeviceInstance:
+	if instance_id.is_empty():
+		return null
+	return _find_device_by_id_in(devices, instance_id)
+
+
+## Walk `host` and nested children for `instance_id`.
+func _find_device_by_id_in(host: Array[DeviceInstance], instance_id: String) -> DeviceInstance:
+	for d in host:
+		if d and d.id == instance_id:
+			return d
+		var nested := _find_device_by_id_in(d.children, instance_id)
+		if nested:
+			return nested
+	return null
+
+
 func _wire_loaded_device(device_instance: DeviceInstance, parent: DeviceInstance) -> void:
 	## Restore parent links, positions, and channel ids after project load.
 	device_instance.channel_id = id
+	device_instance.set_channel(self)
 	device_instance.set_parent_device(parent)
 	var host: Array[DeviceInstance] = parent.children if parent else devices
 	var idx := host.find(device_instance)
 	if idx >= 0:
 		device_instance.position = idx
+	_ensure_device_name(device_instance, host)
 	for child in device_instance.children:
 		_wire_loaded_device(child, device_instance)
 

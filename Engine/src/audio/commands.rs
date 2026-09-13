@@ -598,7 +598,12 @@ impl EngineState {
         if self.channels.contains_key(&1) {
             return;
         }
-        let mut master = Channel::new(1, "Master".to_string(), buffer_size, self.device_sample_rate);
+        let mut master = Channel::new(
+            1,
+            "Master".to_string(),
+            buffer_size,
+            self.device_sample_rate,
+        );
         master.output_channel_id = Some(1000);
         self.channels.insert(1, master);
         info!("Master channel created (hardware output 1000)");

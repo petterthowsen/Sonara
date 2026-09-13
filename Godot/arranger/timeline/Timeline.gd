@@ -260,10 +260,6 @@ func _clear_all_tracks() -> void:
 	_drag_selected_instances.clear()
 	_drag_current_tick_delta = 0
 	_drag_pending_track_delta = 0
-	
-	# Also clear any remaining children
-	for child in get_children():
-		child.queue_free()
 
 	if clip_selection_manager:
 		clip_selection_manager.clear_selection()
@@ -278,6 +274,8 @@ func _gui_input(event: InputEvent) -> void:
 		return
 
 	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if is_local_position_on_clip(get_local_mouse_position()):
+			return
 		if clip_selection_manager:
 			clip_selection_manager.clear_selection()
 		accept_event()
@@ -477,6 +475,9 @@ func unregister_clip_ui(clip_ui: TimelineClip) -> void:
 	
 	if clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
 		clip_ui.drag_ended.disconnect(_on_clip_drag_ended)
+
+	if clip_ui.context_menu_requested.is_connected(_on_clip_context_menu_requested):
+		clip_ui.context_menu_requested.disconnect(_on_clip_context_menu_requested)
 
 
 func notify_clip_instance_removed(instance: ClipInstance) -> void:
@@ -1084,17 +1085,30 @@ func _on_clip_drag_ended(clip_ui: TimelineClip, _global_position: Vector2) -> vo
 
 
 
+## True when `local_pos` (Timeline space) hits a clip UI.
+func is_local_position_on_clip(local_pos: Vector2) -> bool:
+	for track in timeline_tracks:
+		if not track:
+			continue
+		var pos_in_track := local_pos - track.position
+		for clip_ui in track.clip_instances:
+			if clip_ui and clip_ui.get_rect().has_point(pos_in_track):
+				return true
+	return false
+
+
+## Bind the clip menu to the clicked instance (or current selection) and popup at the cursor.
 func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
-	if not clip_ui or not clip_ui.clip_instance or not clip_ctx_menu:
+	if not clip_ui or not clip_ui.clip_instance or not is_instance_valid(clip_ctx_menu):
 		return
 	# Determine selection to bind: use current selection if it contains the clicked instance; otherwise just the clicked
 	var selection := get_selected_clip_instances()
 	if selection.is_empty() or not selection.has(clip_ui.clip_instance):
 		selection = [clip_ui.clip_instance]
 	clip_ctx_menu.bind_to_instances(selection)
-	var c_pos = mouse_pos_global
+	# Nudge so the cursor sits inside the panel; a corner popup closes on mouse-up.
+	var c_pos = mouse_pos_global - Vector2(8, 8)
 	var c_size = clip_ctx_menu.get_contents_minimum_size()
-	clip_ctx_menu.show()
 	clip_ctx_menu.popup(Rect2(c_pos, c_size))
 
 

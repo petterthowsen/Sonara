@@ -109,13 +109,21 @@ func bind_to_channel(ch: Channel, proj: Project) -> void:
 		_rebuild_sends_ui()
 
 
-## React to send added to channel.
-func _on_channel_send_added(_target_channel_id: int, _send_config: SendConfig) -> void:
+## React to send added to channel. Keep the existing knob so a live drag is not freed.
+func _on_channel_send_added(target_channel_id: int, send_config: SendConfig) -> void:
+	var control := _find_send_control(target_channel_id)
+	if control:
+		control.set_amount_display(_db_to_normalized(send_config.amount), send_config.amount <= -60.0)
+		return
 	_rebuild_sends_ui()
 
 
-## React to send removed from channel.
-func _on_channel_send_removed(_target_channel_id: int) -> void:
+## React to send removed from channel. Dim the existing knob instead of rebuilding.
+func _on_channel_send_removed(target_channel_id: int) -> void:
+	var control := _find_send_control(target_channel_id)
+	if control:
+		control.set_amount_display(_db_to_normalized(-60.0), true)
+		return
 	_rebuild_sends_ui()
 
 

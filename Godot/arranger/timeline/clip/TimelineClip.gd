@@ -24,6 +24,7 @@ var clip_instance: ClipInstance = null:  # The instance we're displaying
 			clip_renderer.clip_instance = clip_instance
 
 var timeline = null
+var _bound_source_clip: Clip = null
 var track_color: Color = Color.WHITE:
 	set(tc):
 		if track_color != tc:
@@ -58,9 +59,21 @@ var resize_padding_added: int = 0  # Track total padding added during this resiz
 @export var style_hovered: StyleBoxFlat = null
 @export var style_selected: StyleBoxFlat = null
 
+## Own hover, cursor, and mouse-filter so child visuals don't steal clip clicks.
 func _ready() -> void:
-	"""Connect to built-in hover signals."""
 	focus_mode = Control.FOCUS_CLICK
+	# Children are visual-only; this Control owns all clip mouse input.
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	$VBoxContainer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if header:
+		header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		header.custom_minimum_size.y = 24
+	if label:
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.custom_minimum_size.y = 20
+		if label.label_settings:
+			label.label_settings = label.label_settings.duplicate()
+			label.label_settings.font_size = 14
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -83,27 +96,53 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 	Connects to clip signals for real-time updates, including progressive waveform
 	loading notifications.
 	"""
-	# Disconnect from previous clip if necessary
-	if clip_instance and clip_instance.clip:
-		if clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
-			clip_instance.clip.waveform_level_updated.disconnect(_on_clip_waveform_level_loaded)
-		if clip_instance.clip.clip_modified.is_connected(_on_source_clip_modified):
-			clip_instance.clip.clip_modified.disconnect(_on_source_clip_modified)
+	if clip_instance and clip_instance.clip_changed.is_connected(_on_instance_clip_changed):
+		clip_instance.clip_changed.disconnect(_on_instance_clip_changed)
+	_unbind_source_clip()
 
 	clip_instance = inst
 	timeline = tl
 	track_color = t_color
 
-	# Connect to waveform loading events for progressive rendering
-	if clip_instance and clip_instance.clip:
-		if not clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
-			clip_instance.clip.waveform_level_updated.connect(_on_clip_waveform_level_loaded)
-		if not clip_instance.clip.clip_modified.is_connected(_on_source_clip_modified):
-			clip_instance.clip.clip_modified.connect(_on_source_clip_modified)
+	if clip_instance and not clip_instance.clip_changed.is_connected(_on_instance_clip_changed):
+		clip_instance.clip_changed.connect(_on_instance_clip_changed)
+	_bind_source_clip(clip_instance.clip if clip_instance else null)
 
 	# Update UI from clip instance data
 	if is_inside_tree():
 		_update_from_clip_instance()
+
+
+## Follow Make Unique / retarget so the header shows the new clip name.
+func _on_instance_clip_changed(new_clip: Clip) -> void:
+	_bind_source_clip(new_clip)
+	if is_inside_tree():
+		_update_from_clip_instance()
+
+
+## Listen to the current source clip for rename and content updates.
+func _bind_source_clip(c: Clip) -> void:
+	if _bound_source_clip == c:
+		return
+	_unbind_source_clip()
+	_bound_source_clip = c
+	if _bound_source_clip == null:
+		return
+	if not _bound_source_clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
+		_bound_source_clip.waveform_level_updated.connect(_on_clip_waveform_level_loaded)
+	if not _bound_source_clip.clip_modified.is_connected(_on_source_clip_modified):
+		_bound_source_clip.clip_modified.connect(_on_source_clip_modified)
+
+
+## Drop source-clip listeners before rebinding or freeing.
+func _unbind_source_clip() -> void:
+	if _bound_source_clip == null:
+		return
+	if _bound_source_clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
+		_bound_source_clip.waveform_level_updated.disconnect(_on_clip_waveform_level_loaded)
+	if _bound_source_clip.clip_modified.is_connected(_on_source_clip_modified):
+		_bound_source_clip.clip_modified.disconnect(_on_source_clip_modified)
+	_bound_source_clip = null
 
 
 func _find_nearest_clip_left(reference_start: int = -1) -> int:
@@ -270,8 +309,11 @@ func _gui_input(event: InputEvent) -> void:
 		_update_cursor_for_position(local_pos)
 
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			context_menu_requested.emit(self, get_global_mouse_position())
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			# Consume press so parent lanes don't treat this as empty space.
+			# Open on release so the popup is not dismissed by the same click.
+			if not event.pressed:
+				context_menu_requested.emit(self, get_global_mouse_position())
 			accept_event()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:

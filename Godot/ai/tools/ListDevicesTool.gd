@@ -7,16 +7,15 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List devices on a mixer channel: position, name, device_id, category, bypass."
+	return "List devices as nested rows: path, name, instance_id, bypass, loaded_file, slot_note. Optional channel_id; otherwise the focused channel, or all channels."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Mixer channel id"},
+			"channel_id": {"type": "integer", "description": "Mixer channel id (omit for focused or all)"},
 		},
-		"required": ["channel_id"],
 	}
 
 
@@ -24,18 +23,26 @@ func execute(args: Dictionary) -> Dictionary:
 	var project = require_project()
 	if project is Dictionary:
 		return project
-	var channel = resolve_channel(project, args)
-	if channel is Dictionary:
-		return channel
+	if args.has("channel_id"):
+		var channel = resolve_channel(project, args)
+		if channel is Dictionary:
+			return channel
+		return ok(_channel_payload(project, channel))
+	var focused: Channel = null
+	if Sonara and Sonara.editor:
+		focused = Sonara.editor.focused_channel
+	if focused:
+		return ok(_channel_payload(project, focused))
+	var channels: Array = []
+	for c in project.channels:
+		channels.append(_channel_payload(project, c))
+	return ok({"channels": channels})
+
+
+## Nested device list for one mixer channel.
+func _channel_payload(project: Project, channel: Channel) -> Dictionary:
 	var devices: Array = []
 	for d in channel.devices:
-		if not d is DeviceInstance or d.device == null:
-			continue
-		devices.append({
-			"position": d.position,
-			"name": d.device.name,
-			"device_id": d.device.device_id,
-			"category": Device.DeviceCategory.keys()[d.device.category],
-			"bypass": not d.enabled,
-		})
-	return ok({"channel_id": channel.id, "devices": devices})
+		if d is DeviceInstance and d.device:
+			devices.append(compact_device(project, d))
+	return {"channel_id": channel.id, "channel": channel.name, "devices": devices}
