@@ -4,6 +4,10 @@ class_name MidiclipRenderer extends Control
 @export var note_color := Color("#eee")
 @export var waveform_color := Color(0.3, 0.6, 0.9, 0.6)  # Semi-transparent blue
 @export var waveform_bg_color := Color(0.1, 0.1, 0.1, 0.3)  # Subtle background
+## Minimum vertical span in semitones so single-pitch loops still fill the clip.
+@export var min_pitch_range: int = 12
+## Extra semitones above/below when notes already span more than min_pitch_range.
+@export var pitch_padding: int = 1
 
 # LOD caching for zoom-aware rendering
 var _last_pixels_per_beat: float = -1.0
@@ -103,58 +107,63 @@ func _draw() -> void:
 		else:
 			_draw_waveform()
 
+
+## Draw MIDI notes in a window of at least one octave around their actual pitches.
 func _draw_midi():
-	# get the lowest and highest notes
 	var clip = clip_instance.clip
-	
-	var lowest = clip.find_lowest_note()
-	var highest = clip.find_highest_note()
-	var note_range = highest - lowest
-	
-	# If all notes are the same, we need to avoid division by zero
-	# and ensure the note is visible
-	if note_range == 0:
-		note_range = 1
-		lowest = highest - 1  # Extend range by 1 to make the note visible
-	
-	# Calculate note height to fit all notes within the control height
-	var note_height = size.y / (note_range + 2)
-	
+	if clip.midi_notes.is_empty() or size.y <= 0.0:
+		return
+
+	var display := _display_pitch_range(clip.find_lowest_note(), clip.find_highest_note())
+	var lowest: int = display.x
+	var highest: int = display.y
+	var pitch_count := highest - lowest + 1
+	var note_height := size.y / float(pitch_count)
+
 	var clip_length_ticks = clip_instance.duration_ticks
 	var clip_offset = clip_instance.clip_offset
-	
-	# Calculate the visible range of the clip (in clip-local ticks)
 	var visible_start = clip_offset
 	var visible_end = clip_offset + clip_length_ticks
 
-	for note:MidiNoteData in clip.midi_notes:
+	for note: MidiNoteData in clip.midi_notes:
 		var note_end = note.start_tick + note.duration_ticks
-		
-		# Skip notes that are completely outside the visible range
 		if note_end <= visible_start or note.start_tick >= visible_end:
 			continue
-		
-		# Calculate note position relative to the visible window
+
 		var note_local_start = note.start_tick - clip_offset
 		var note_local_end = note_end - clip_offset
-		
-		# Clip the note to the visible range (handle partial visibility)
 		var draw_start = max(note_local_start, 0)
 		var draw_end = min(note_local_end, clip_length_ticks)
 		var draw_duration = draw_end - draw_start
-		
-		# Map to screen coordinates
+
 		var x = remap(draw_start, 0, clip_length_ticks, 0, size.x)
 		var w = remap(draw_duration, 0, clip_length_ticks, 0, size.x)
-		
-		# Remap note number to Y position, ensuring it stays within bounds
-		# Note: We subtract note_height because we're drawing from the top down
-		var y = remap(note.note, lowest, highest, size.y - note_height, 0)
-		
-		# Ensure the note stays within vertical bounds
-		y = clamp(y, 0, size.y - note_height)
-		
-		draw_rect(Rect2(x, y, w, note_height), note_color, true, -1.0, true) 
+		var y = (highest - note.note) * note_height
+		y = clampf(y, 0.0, size.y - note_height)
+
+		draw_rect(Rect2(x, y, w, note_height), note_color, true, -1.0, true)
+
+
+## Expand [lowest, highest] to at least one octave, centered, clamped to 0–127.
+func _display_pitch_range(lowest: int, highest: int) -> Vector2i:
+	var lo := mini(lowest, highest)
+	var hi := maxi(lowest, highest)
+	var span := hi - lo
+	if span < min_pitch_range:
+		var extra: int = min_pitch_range - span
+		var down: int = int(extra / 2)
+		lo -= down
+		hi += extra - down
+	else:
+		lo -= pitch_padding
+		hi += pitch_padding
+	if lo < Midi.MIDI_MIN:
+		hi = mini(Midi.MIDI_MAX, hi - lo)
+		lo = Midi.MIDI_MIN
+	if hi > Midi.MIDI_MAX:
+		lo = maxi(Midi.MIDI_MIN, lo - (hi - Midi.MIDI_MAX))
+		hi = Midi.MIDI_MAX
+	return Vector2i(lo, hi) 
 
 
 func _draw_waveform() -> void:

@@ -210,9 +210,10 @@ func creates_instrument_track() -> bool:
 	return category == DeviceCategory.Instrument or is_container
 
 
-## True when expanding this container should show one focused child at a time (Layer).
+## True when expanding this container should show one focused child at a time (Layer, Drum Machine).
 func container_focuses_one_child() -> bool:
 	return is_container and device_id in ["sonara.builtin.layer", "sonara.builtin.drum_machine"]
+
 
 ## Get a human-readable device type string
 func get_device_type_string() -> String:

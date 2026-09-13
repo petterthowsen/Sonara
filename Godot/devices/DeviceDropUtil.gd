@@ -176,10 +176,20 @@ static func _drop_sfz(
 		device_instance.load_file(asset.path)
 
 
-## Whether `data` can land on a drum pad (empty or occupied).
-static func can_drop_on_drum_pad(data: Variant, occupied: DeviceInstance) -> bool:
+## Whether `data` can land on a drum pad (empty, occupied file-load, or pad-to-pad move/swap).
+static func can_drop_on_drum_pad(
+	data: Variant,
+	occupied: DeviceInstance,
+	channel: Channel = null,
+	container: DeviceInstance = null
+) -> bool:
 	if data is DeviceInstance:
-		return occupied == null
+		var inst := data as DeviceInstance
+		if inst == occupied:
+			return false
+		if channel != null and container != null:
+			return can_drop_instance_on_host(channel, inst, container)
+		return true
 	if not data is Asset:
 		return false
 	var asset := data as Asset
@@ -203,14 +213,7 @@ static func drop_on_drum_pad(
 		return
 	var occupied := _child_for_note(container, note)
 	if data is DeviceInstance:
-		if occupied:
-			return
-		var inst := data as DeviceInstance
-		if not can_drop_instance_on_host(channel, inst, container):
-			return
-		inst.slot_note = note
-		drop_instance(channel, inst, container, -1)
-		inst.set_slot_note(note)
+		_drop_instance_on_drum_pad(channel, container, note, data, occupied)
 		return
 	if not data is Asset:
 		return
@@ -231,6 +234,49 @@ static func drop_on_drum_pad(
 		added.set_slot_note(note)
 
 
+## Move `inst` onto `note`, swapping with `occupied` when that pad already has a child.
+static func _drop_instance_on_drum_pad(
+	channel: Channel,
+	container: DeviceInstance,
+	note: int,
+	inst: DeviceInstance,
+	occupied: DeviceInstance
+) -> void:
+	if inst == null or inst == occupied:
+		return
+	if not can_drop_instance_on_host(channel, inst, container):
+		return
+	var from_parent := inst.get_parent_device()
+	if from_parent == container:
+		if occupied:
+			_swap_drum_notes(container, inst, occupied)
+		else:
+			HistoryUtil.execute_property("Move Drum Pad", inst, "set_slot_note", inst.slot_note, note)
+		return
+	if occupied:
+		return
+	inst.slot_note = note
+	drop_instance(channel, inst, container, -1)
+	inst.set_slot_note(note)
+
+
+## Swap two drum-machine children's notes via a free temp note (engine notes are unique).
+static func _swap_drum_notes(container: DeviceInstance, a: DeviceInstance, b: DeviceInstance) -> void:
+	if a == null or b == null or a == b:
+		return
+	var a_note := a.slot_note
+	var b_note := b.slot_note
+	if a_note == b_note:
+		return
+	var temp := container.next_free_drum_note()
+	var cmds: Array[Command] = []
+	cmds.append(PropertyCommand.new("Move Drum Pad", a, "set_slot_note", a_note, temp))
+	cmds.append(PropertyCommand.new("Move Drum Pad", b, "set_slot_note", b_note, a_note))
+	cmds.append(PropertyCommand.new("Move Drum Pad", a, "set_slot_note", temp, b_note))
+	HistoryUtil.execute(MacroCommand.new("Swap Drum Pads", cmds))
+
+
+## Find the child assigned to MIDI `note`, or null if the pad is empty.
 static func _child_for_note(container: DeviceInstance, note: int) -> DeviceInstance:
 	if container == null:
 		return null
@@ -240,6 +286,7 @@ static func _child_for_note(container: DeviceInstance, note: int) -> DeviceInsta
 	return null
 
 
+## Add a sampler on `note` and load `asset` into it.
 static func _drop_sampler_on_pad(
 	channel: Channel,
 	container: DeviceInstance,

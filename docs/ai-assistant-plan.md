@@ -648,19 +648,18 @@ Keep it short. Include the variable tokens you want on every turn (`{project_nam
 
 ---
 
-## Phase 3 — MIDI tools (later)
+## Phase 3 — MIDI tools
 
-Not in scope to implement now. When it is, follow [`docs/ai-integration.md`](ai-integration.md):
+Follow [`docs/clip-text-format.md`](clip-text-format.md) and [`docs/ai-integration.md`](ai-integration.md):
 
-- Symbolic only. No raw `.mid` bytes, no MusicXML.
-- Prefer a **compact DSL** (or JSON note lists) scoped to **one clip per call**.
-- Musical time: `bar:beat:ticks` at project PPQ (960). Middle C = C3 = 60.
-- Split intent from realization: `set_progression`, `generate_pattern`, `apply_groove` as parameterized tools; deterministic code expands them.
-- Read tools for the active clip (compact note dump, density, pitch histogram) so the model writes into context.
-- New `{active_clip}` / `{markers}` prompt variables.
-- Same `AiTool` + `HistoryUtil` path (`ClipNotesStateCommand` already exists).
-
-Do not start Phase 3 until Phase 2 tools are boringly reliable.
+- Symbolic only. No raw `.mid` bytes, no MusicXML, no harmonic clips.
+- Compact DSL scoped to **one clip per call**: drums grid, pitched grid, or event-list ops.
+- Musical time: clip-local `bar.beat.tick` at project PPQ (960). Middle C = C3 = 60.
+- Clips are referred to by **unique name**. Duplicates are extra `ClipInstance`s of the same named clip (`place_clip`). `create_clip` takes a name.
+- Grids round-trip by character; event lists are `add` / `del` / `move` / `vel` / `len` only.
+- Swing, push, and articulation lanes are out of scope.
+- `{clips}` / `{active_clip}` prompt variables.
+- Writes go through `ClipNotesStateCommand` / `ClipInstanceCreateCommand`.
 
 ---
 

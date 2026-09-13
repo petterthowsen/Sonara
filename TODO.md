@@ -62,6 +62,7 @@
 - [x] Layer container (parallel mix, per-slot mute/solo)
 - [ ] L/R and M/S modes
 - [x] Sampler and Drum Machine devices
+- [x] Sampler ADSR (high prio — samples click without an envelope)
 - [ ] Reverb
 - [ ] EQ: Parametric, built-in spectrum
 - [ ] Limiter
@@ -70,7 +71,6 @@
 
 
 ---
-
 
 
 ## Godot (UI/Frontend)
@@ -153,11 +153,18 @@
 
 ### UI Components & General
 
+- [ ] Dock system: Inspector, Browser, and AI Chat freely placeable
+  - Two side docks (left / right)
+  - Each dock can stack panels vertically; split is draggable when two panels share a dock
+  - Enough for wide and small screens
+
 
 ### Devices
 
+- [x] Drag a device between drum-machine slots (e.g. kick C1 → E1). Occupied target: swap.
 - [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code.
-
+- [ ] Dragging devices around on the device lane, or within containers has these drop targets that show up when dragging begins. Let's instead have them occupy space at all times but invisible. Let them serve as spacers and drop targets simultaneously.
+- [ ] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
 
 ### Hardware & MIDI
 
@@ -176,9 +183,11 @@ Plan: `docs/ai-assistant-plan.md` (design note: `docs/ai-integration.md`)
 
 - [x] Phase 1: OpenRouter client + Settings → AI (API key, model, multimodal chat completions)
 - [x] Phase 2: Per-project conversations, `~/.config/sonara/aichat/system_prompt.md` variables, tool loop, track / asset / mixer / device tools, assistant dock
-- [ ] Phase 3: MIDI tools via compact DSL (later)
+- [x] Phase 3: MIDI tools via compact DSL (drums / pitched grid / event ops; named clips + placements)
 
 Some ideas:
 
 - when chat history is not empty, track the user's changes/edits and feed that summary along with the next user message.
 - add playhead location and the currently focused musical element (clip, note) as prompt variable.
+- leverage the new google gemini models to reason over audio
+    - can for example bounce a section of the track, include that in the next user prompt (when toggled) and ask questions about it. This enables ai looping around make changes > listen > reason > adjustments > etc.

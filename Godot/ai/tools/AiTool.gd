@@ -155,3 +155,162 @@ static func _channel_kind(c: Channel) -> String:
 			return "bus"
 		_:
 			return "instrument"
+
+
+## Resolve a clip by `clip_id` or unique `name` / `clip`.
+static func resolve_clip(project: Project, args: Dictionary) -> Variant:
+	var cid := str(args.get("clip_id", "")).strip_edges()
+	if not cid.is_empty() and project.clips.has(cid):
+		return project.clips[cid]
+	var name := str(args.get("clip", args.get("name", ""))).strip_edges()
+	if name.is_empty():
+		return fail("clip name or clip_id is required")
+	if project.clips.has(name):
+		return project.clips[name]
+	var hits: Array = []
+	for clip in project.clips.values():
+		if clip is Clip and clip.name.to_lower() == name.to_lower():
+			hits.append(clip)
+	if hits.size() == 1:
+		return hits[0]
+	if hits.is_empty():
+		return fail("No clip named '%s'" % name)
+	return fail("Multiple clips named '%s'; use clip_id" % name)
+
+
+## Every instance of a clip, in track order.
+static func find_clip_instances(project: Project, clip_id: String) -> Array:
+	var out: Array = []
+	for t in project.tracks:
+		for inst in t.clip_instances:
+			if inst and inst.clip_id == clip_id:
+				out.append(inst)
+	return out
+
+
+## Compact clip + placements. Name is the handle; instances are copies of the same clip.
+static func compact_clip(project: Project, clip: Clip) -> Dictionary:
+	var placements: Array = []
+	for inst in find_clip_instances(project, clip.id):
+		placements.append(compact_instance(project, inst))
+	return {
+		"name": clip.name,
+		"clip_id": clip.id,
+		"type": "audio" if clip.type == Clip.ClipType.AUDIO else "midi",
+		"note_count": clip.midi_notes.size(),
+		"length_ticks": clip.content_length_ticks,
+		"instance_count": placements.size(),
+		"placements": placements,
+	}
+
+
+## One timeline placement of a clip.
+static func compact_instance(project: Project, inst: ClipInstance) -> Dictionary:
+	var track_id := inst.track.id if inst.track else -1
+	var track_name := inst.track.name if inst.track else ""
+	return {
+		"instance_id": inst.id,
+		"track_id": track_id,
+		"track": track_name,
+		"start": ClipTextTime.format_bbt(inst.start_ticks, project.ppq, project.time_numerator),
+		"start_ticks": inst.start_ticks,
+		"duration_ticks": inst.duration_ticks,
+	}
+
+
+## Parse `start` as bar.beat.tick, a bar number, or ticks. Defaults to the playhead.
+static func resolve_start_ticks(project: Project, args: Dictionary, key: String = "start") -> int:
+	if not args.has(key):
+		if Sonara and Sonara.editor:
+			return Sonara.editor.playhead_ticks
+		return 0
+	var v = args[key]
+	if v is float or v is int:
+		var n := int(v)
+		if n >= 1 and n <= 512:
+			return ClipTextTime.bbt_to_ticks(n, 1, 0, project.ppq, project.time_numerator)
+		return maxi(0, n)
+	var s := str(v).strip_edges()
+	if s.is_valid_int():
+		var n2 := s.to_int()
+		if n2 >= 1 and n2 <= 512:
+			return ClipTextTime.bbt_to_ticks(n2, 1, 0, project.ppq, project.time_numerator)
+		return maxi(0, n2)
+	var ticks := ClipTextTime.parse_bbt(s, project.ppq, project.time_numerator)
+	return ticks if ticks >= 0 else 0
+
+
+## Shared serialize/apply options from a project + optional tool args.
+static func clip_text_opts(project: Project, args: Dictionary = {}, track: Track = null) -> Dictionary:
+	var o := {
+		"ppq": project.ppq,
+		"numerator": project.time_numerator,
+		"tempo": project.tempo,
+	}
+	var key := str(args.get("key", "")).strip_edges()
+	if not key.is_empty():
+		o["key"] = key
+	var res := str(args.get("res", "")).strip_edges()
+	if not res.is_empty():
+		o["res"] = res
+	var kind := str(args.get("format", args.get("kind", ""))).strip_edges().to_lower()
+	if not kind.is_empty() and kind != "auto":
+		o["kind"] = kind
+	if track:
+		o["prefer_drums"] = track_prefers_drums(project, track)
+		o["drum_names"] = drum_names_for_track(project, track)
+	return o
+
+
+## True when the track looks percussive (drum machine or name).
+static func track_prefers_drums(project: Project, track: Track) -> bool:
+	if track == null:
+		return false
+	var n := track.name.to_lower()
+	if n.contains("drum") or n.contains("kit") or n.contains("perc"):
+		return true
+	if project == null:
+		return false
+	var ch := track.get_linked_channel()
+	if ch == null and track.default_channel_id >= 0:
+		ch = project.get_channel_by_id(track.default_channel_id)
+	if ch == null:
+		return false
+	for d in ch.devices:
+		if d and d.device and d.device.device_id == "sonara.builtin.drum_machine":
+			return true
+	return false
+
+
+## Drum machine pad names for a track, if any.
+static func drum_names_for_track(project: Project, track: Track) -> Dictionary:
+	var names := {}
+	if project == null or track == null:
+		return names
+	var ch := track.get_linked_channel()
+	if ch == null and track.default_channel_id >= 0:
+		ch = project.get_channel_by_id(track.default_channel_id)
+	if ch == null:
+		return names
+	for d in ch.devices:
+		if d == null or d.device == null:
+			continue
+		if d.device.device_id != "sonara.builtin.drum_machine":
+			continue
+		var used: Dictionary = {}
+		for child in d.children:
+			if child == null or child.slot_note < 0:
+				continue
+			var label := child.device.name if child.device else ""
+			if _generic_drum_label(label) or used.has(label.to_upper()):
+				label = ClipTextKey.drum_label(child.slot_note)
+			if used.has(label.to_upper()):
+				label = "%s %s" % [label, ClipTextKey.pitch_name(child.slot_note)]
+			used[label.to_upper()] = true
+			names[child.slot_note] = label
+	return names
+
+
+static func _generic_drum_label(label: String) -> bool:
+	var s := label.strip_edges().to_lower()
+	return s.is_empty() or s in ["sampler", "sfz", "audio", "device", "plugin"]

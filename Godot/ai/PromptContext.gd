@@ -22,6 +22,8 @@ func _init() -> void:
 	register("mixer", _channels)
 	register("selection", _selection)
 	register("devices", _devices)
+	register("clips", _clips)
+	register("active_clip", _active_clip)
 	register("date", _date)
 
 
@@ -154,11 +156,86 @@ func _selection() -> String:
 			var clip_bits: PackedStringArray = []
 			for inst in clips:
 				if inst is ClipInstance:
-					clip_bits.append("%s@%d" % [inst.clip_id, inst.start_ticks])
+					var ci: ClipInstance = inst
+					var cname: String = ci.clip.name if ci.clip else ci.clip_id
+					clip_bits.append("%s@%s" % [cname, ClipTextTime.format_bbt(ci.start_ticks, ed.project.ppq, ed.project.time_numerator) if ed.project else str(ci.start_ticks)])
 				if clip_bits.size() >= 8:
 					break
 			bits.append("clips: " + ", ".join(clip_bits))
 	return "; ".join(bits) if not bits.is_empty() else "_Nothing focused._"
+
+
+func _clips() -> String:
+	var p := _project()
+	if p == null or p.clips.is_empty():
+		return "_No clips._"
+	var lines: PackedStringArray = [
+		"| name | type | notes | bars | placements |",
+		"|---|---|---|---|---|",
+	]
+	var extra := 0
+	var i := 0
+	for clip_v in p.clips.values():
+		if not clip_v is Clip:
+			continue
+		var clip: Clip = clip_v
+		if i >= TABLE_CAP:
+			extra += 1
+			continue
+		i += 1
+		var insts: Array = AiTool.find_clip_instances(p, clip.id)
+		var places: PackedStringArray = []
+		for inst in insts:
+			var ci: ClipInstance = inst
+			var track_name: String = ci.track.name if ci.track else "?"
+			places.append("%s %s" % [
+				track_name,
+				ClipTextTime.format_bbt(ci.start_ticks, p.ppq, p.time_numerator),
+			])
+			if places.size() >= 4:
+				break
+		var bars := ClipTextTime.bars_from_ticks(clip.content_length_ticks, p.ppq, p.time_numerator)
+		var more := insts.size() - places.size()
+		var place_s := ", ".join(places) if not places.is_empty() else "—"
+		if more > 0:
+			place_s += " +%d" % more
+		lines.append("| %s | %s | %d | %d | %s |" % [
+			_md_cell(clip.name),
+			"audio" if clip.type == Clip.ClipType.AUDIO else "midi",
+			clip.midi_notes.size(),
+			bars,
+			_md_cell(place_s),
+		])
+	if extra > 0:
+		lines.append("_%d more clips omitted._" % extra)
+	return "\n".join(lines)
+
+
+func _active_clip() -> String:
+	var ed := _editor()
+	if ed == null or ed.arranger == null or ed.arranger.timeline == null:
+		return "_None selected._"
+	var insts: Array = ed.arranger.timeline.get_selected_clip_instances()
+	if insts.is_empty():
+		return "_None selected._"
+	var p := _project()
+	var bits: PackedStringArray = []
+	for inst_v in insts:
+		if not inst_v is ClipInstance or inst_v.clip == null:
+			continue
+		var inst: ClipInstance = inst_v
+		var clip: Clip = inst.clip
+		var at: String = ClipTextTime.format_bbt(inst.start_ticks, p.ppq, p.time_numerator) if p else str(inst.start_ticks)
+		bits.append("`%s` (%s) on %s @ %s, %d notes" % [
+			clip.name,
+			"audio" if clip.type == Clip.ClipType.AUDIO else "midi",
+			inst.track.name if inst.track else "?",
+			at,
+			clip.midi_notes.size(),
+		])
+		if bits.size() >= 4:
+			break
+	return "; ".join(bits) if not bits.is_empty() else "_None selected._"
 
 
 func _devices() -> String:

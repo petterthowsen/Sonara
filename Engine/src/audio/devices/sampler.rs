@@ -1,4 +1,4 @@
-//! Single-sample MIDI instrument: pitch, speed, key-track, and a playback region.
+//! Single-sample MIDI instrument: pitch, speed, key-track, region, and ADSR.
 
 use super::container::{gain_to_normalized, normalized_to_gain};
 use super::{
@@ -6,16 +6,22 @@ use super::{
     FileLoadingSupport, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
+use crate::audio::dsp::{AdsrEnvelope, AdsrState};
 use crossbeam::channel::Sender;
 use tracing::{info, warn};
 
 const VOICE_COUNT: usize = 16;
-const FADE_SAMPLES: f32 = 64.0;
 const MIDI_EVENT_CAP: usize = 64;
 const DEFAULT_ROOT: u8 = 60;
 const TUNE_RANGE: f32 = 24.0;
 const SPEED_MIN: f32 = 0.25;
 const SPEED_MAX: f32 = 4.0;
+const TIME_MIN: f32 = 0.001;
+const TIME_MAX: f32 = 2.0;
+const DEFAULT_ATTACK: f32 = 0.001;
+const DEFAULT_DECAY: f32 = 0.001;
+const DEFAULT_SUSTAIN: f32 = 1.0;
+const DEFAULT_RELEASE: f32 = 0.01;
 const PARAM_VOLUME: ParamId = 0;
 const PARAM_TUNE: ParamId = 1;
 const PARAM_SPEED: ParamId = 2;
@@ -25,6 +31,10 @@ const PARAM_PLAY_MODE: ParamId = 5;
 const PARAM_VELOCITY: ParamId = 6;
 const PARAM_START: ParamId = 7;
 const PARAM_END: ParamId = 8;
+const PARAM_ATTACK: ParamId = 9;
+const PARAM_DECAY: ParamId = 10;
+const PARAM_SUSTAIN: ParamId = 11;
+const PARAM_RELEASE: ParamId = 12;
 
 /// Playback mode: one-shot ignores note-off; gated fades out on note-off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,45 +50,35 @@ struct SampleBuffer {
     frames: usize,
 }
 
-/// One voice reading the loaded sample.
+/// One voice reading the loaded sample through an ADSR amplitude envelope.
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
-    fading: bool,
     note: u8,
     position: f64,
     increment: f64,
     gain: f32,
-    fade: f32,
-    fade_step: f32,
+    envelope: AdsrEnvelope,
     age: u64,
 }
 
 impl Voice {
-    /// Idle voice with no playback.
-    fn idle() -> Self {
+    /// Idle voice with no playback, sized for `sample_rate`.
+    fn idle(sample_rate: f32) -> Self {
         Self {
             active: false,
-            fading: false,
             note: 0,
             position: 0.0,
             increment: 1.0,
             gain: 0.0,
-            fade: 1.0,
-            fade_step: 1.0 / FADE_SAMPLES,
+            envelope: AdsrEnvelope::new(sample_rate),
             age: 0,
         }
     }
 
-    /// Begin a short gain ramp so note-off and voice-steal do not click.
-    fn start_fade(&mut self) {
-        if !self.active {
-            return;
-        }
-        self.fading = true;
-        if self.fade_step <= 0.0 {
-            self.fade_step = 1.0 / FADE_SAMPLES;
-        }
+    /// True while the voice is sounding and not yet in release.
+    fn is_held(&self) -> bool {
+        self.active && !matches!(self.envelope.state(), AdsrState::Idle | AdsrState::Release)
     }
 }
 
@@ -88,6 +88,7 @@ pub struct SamplerDevice {
     voices: [Voice; VOICE_COUNT],
     queued_midi: Vec<(usize, u8, u8, bool)>,
     midi_scratch: Vec<(usize, u8, u8, bool)>,
+    sample_rate: f32,
     volume: f32,
     tune: f32,
     speed: f32,
@@ -97,6 +98,10 @@ pub struct SamplerDevice {
     velocity_amount: f32,
     start: f32,
     end: f32,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
     enabled: bool,
     sleep_state: DeviceSleepState,
     channel_id: usize,
@@ -127,6 +132,16 @@ fn speed_from_normalized(value: f32) -> f32 {
 fn speed_to_normalized(speed: f32) -> f32 {
     let clamped = speed.clamp(SPEED_MIN, SPEED_MAX);
     (clamped / SPEED_MIN).log(SPEED_MAX / SPEED_MIN)
+}
+
+/// Map a normalized 0–1 value onto the ADSR time range in seconds.
+fn time_from_normalized(value: f32) -> f32 {
+    TIME_MIN + value.clamp(0.0, 1.0) * (TIME_MAX - TIME_MIN)
+}
+
+/// Inverse of [`time_from_normalized`].
+fn time_to_normalized(seconds: f32) -> f32 {
+    ((seconds - TIME_MIN) / (TIME_MAX - TIME_MIN)).clamp(0.0, 1.0)
 }
 
 /// Inclusive start frame and exclusive end frame for the playback region.
@@ -163,22 +178,20 @@ fn render_active_voices(
             if !voice.active {
                 break;
             }
+            let env = voice.envelope.process_sample();
             let (l, r) = interpolate_frame(sample, voice.position);
-            let g = voice.gain * voice.fade;
+            let g = voice.gain * env;
             let idx = (start + i) * 2;
             if idx + 1 < outputs.len() {
                 outputs[idx] += l * g;
                 outputs[idx + 1] += r * g;
             }
             voice.position += voice.increment;
-            if voice.fading {
-                voice.fade -= voice.fade_step;
-                if voice.fade <= 0.0 {
-                    voice.active = false;
-                    voice.fade = 0.0;
-                }
-            } else if voice.position >= region_end {
-                voice.start_fade();
+            if voice.position >= region_end {
+                voice.envelope.gate_off();
+            }
+            if !voice.envelope.is_active() {
+                voice.active = false;
             }
         }
     }
@@ -216,16 +229,18 @@ fn interpolate_frame(sample: &SampleBuffer, position: f64) -> (f32, f32) {
 impl SamplerDevice {
     /// Create a sampler that reports loading state for `channel_id` / `device_path`.
     pub fn new(
-        _sample_rate: f32,
+        sample_rate: f32,
         channel_id: usize,
         device_path: DevicePath,
         status_tx: Option<Sender<EngineStatus>>,
     ) -> Self {
+        let sample_rate = sample_rate.max(1.0);
         Self {
             sample: None,
-            voices: [Voice::idle(); VOICE_COUNT],
+            voices: [Voice::idle(sample_rate); VOICE_COUNT],
             queued_midi: Vec::with_capacity(MIDI_EVENT_CAP),
             midi_scratch: Vec::with_capacity(MIDI_EVENT_CAP),
+            sample_rate,
             volume: 1.0,
             tune: 0.0,
             speed: 1.0,
@@ -235,6 +250,10 @@ impl SamplerDevice {
             velocity_amount: 1.0,
             start: 0.0,
             end: 1.0,
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
             enabled: true,
             sleep_state: DeviceSleepState::new(),
             channel_id,
@@ -315,28 +334,41 @@ impl SamplerDevice {
     }
 
     fn reset_voices(&mut self) {
-        self.voices = [Voice::idle(); VOICE_COUNT];
+        self.voices = [Voice::idle(self.sample_rate); VOICE_COUNT];
     }
 
     fn any_voice_active(&self) -> bool {
         self.voices.iter().any(|v| v.active)
     }
 
+    /// Apply the device ADSR settings to every voice, including notes already sounding.
+    fn apply_envelope_params(&mut self) {
+        for voice in &mut self.voices {
+            voice
+                .envelope
+                .set_adsr(self.attack, self.decay, self.sustain, self.release);
+        }
+    }
+
     fn find_voice_for_note(&self, note: u8) -> Option<usize> {
         self.voices
             .iter()
-            .position(|v| v.active && !v.fading && v.note == note)
+            .position(|v| v.is_held() && v.note == note)
     }
 
     fn find_free_voice(&self) -> Option<usize> {
         self.voices.iter().position(|v| !v.active)
     }
 
+    /// Prefer a releasing voice, then the oldest sounding voice.
     fn steal_voice(&self) -> Option<usize> {
         self.voices
             .iter()
             .enumerate()
-            .min_by_key(|(_, v)| v.age)
+            .min_by_key(|(_, v)| {
+                let releasing = matches!(v.envelope.state(), AdsrState::Release);
+                (if releasing { 0u8 } else { 1u8 }, v.age)
+            })
             .map(|(i, _)| i)
     }
 
@@ -358,16 +390,16 @@ impl SamplerDevice {
         if increment <= 0.0 {
             return;
         }
-        let voice = &mut self.voices[idx];
-        *voice = Voice {
+        let mut envelope = AdsrEnvelope::new(self.sample_rate);
+        envelope.set_adsr(self.attack, self.decay, self.sustain, self.release);
+        envelope.gate_on();
+        self.voices[idx] = Voice {
             active: true,
-            fading: false,
             note,
             position: region_start,
             increment,
             gain: self.volume * vel_gain,
-            fade: 1.0,
-            fade_step: 1.0 / FADE_SAMPLES,
+            envelope,
             age: self.time_counter,
         };
         self.sleep_state.mark_activity();
@@ -378,7 +410,7 @@ impl SamplerDevice {
             return;
         }
         if let Some(idx) = self.find_voice_for_note(note) {
-            self.voices[idx].start_fade();
+            self.voices[idx].envelope.gate_off();
         }
     }
 
@@ -475,6 +507,22 @@ impl AudioDevice for SamplerDevice {
                     self.end = (self.start + 0.001).min(1.0);
                 }
             }
+            PARAM_ATTACK => {
+                self.attack = time_from_normalized(value);
+                self.apply_envelope_params();
+            }
+            PARAM_DECAY => {
+                self.decay = time_from_normalized(value);
+                self.apply_envelope_params();
+            }
+            PARAM_SUSTAIN => {
+                self.sustain = value.clamp(0.0, 1.0);
+                self.apply_envelope_params();
+            }
+            PARAM_RELEASE => {
+                self.release = time_from_normalized(value);
+                self.apply_envelope_params();
+            }
             _ => {}
         }
     }
@@ -493,6 +541,10 @@ impl AudioDevice for SamplerDevice {
             PARAM_VELOCITY => Some(self.velocity_amount),
             PARAM_START => Some(self.start),
             PARAM_END => Some(self.end),
+            PARAM_ATTACK => Some(time_to_normalized(self.attack)),
+            PARAM_DECAY => Some(time_to_normalized(self.decay)),
+            PARAM_SUSTAIN => Some(self.sustain),
+            PARAM_RELEASE => Some(time_to_normalized(self.release)),
             _ => None,
         }
     }
@@ -645,6 +697,54 @@ impl AudioDevice for SamplerDevice {
                 syncable: true,
                 enum_values: Vec::new(),
             },
+            ParamInfo {
+                id: PARAM_ATTACK,
+                name: "Attack".to_string(),
+                unit: "s".to_string(),
+                min: TIME_MIN,
+                max: TIME_MAX,
+                default: DEFAULT_ATTACK,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
+            },
+            ParamInfo {
+                id: PARAM_DECAY,
+                name: "Decay".to_string(),
+                unit: "s".to_string(),
+                min: TIME_MIN,
+                max: TIME_MAX,
+                default: DEFAULT_DECAY,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
+            },
+            ParamInfo {
+                id: PARAM_SUSTAIN,
+                name: "Sustain".to_string(),
+                unit: String::new(),
+                min: 0.0,
+                max: 1.0,
+                default: DEFAULT_SUSTAIN,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
+            },
+            ParamInfo {
+                id: PARAM_RELEASE,
+                name: "Release".to_string(),
+                unit: "s".to_string(),
+                min: TIME_MIN,
+                max: TIME_MAX,
+                default: DEFAULT_RELEASE,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
+            },
         ]
     }
 
@@ -714,22 +814,66 @@ mod tests {
         sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
         sampler.note_on(60, 127);
         sampler.note_off(60);
-        assert!(sampler.voices.iter().any(|v| v.active && !v.fading));
+        assert!(sampler.voices.iter().any(|v| v.is_held()));
     }
 
     #[test]
-    fn gated_fades_on_note_off() {
+    fn gated_releases_on_note_off() {
         let mut sampler = SamplerDevice::new_for_metadata();
         sampler.set_parameter(PARAM_PLAY_MODE, 1.0);
         sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
         sampler.note_on(60, 127);
         sampler.note_off(60);
-        assert!(sampler.voices.iter().any(|v| v.active && v.fading));
+        assert!(sampler
+            .voices
+            .iter()
+            .any(|v| v.active && v.envelope.state() == AdsrState::Release));
     }
 
     #[test]
     fn region_rejects_inverted_start_end() {
         let (a, b) = region_frames(100, 0.8, 0.2);
         assert!(b > a);
+    }
+
+    #[test]
+    fn attack_fades_in_from_silence() {
+        let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+        sampler.set_sample("r", vec![1.0; 256], 2, 48_000);
+        sampler.note_on(60, 127);
+        let mut out = vec![0.0; 16];
+        sampler.process_block(&[], &mut out, 8);
+        assert!(out[0].abs() < 0.1, "first sample should be near silence");
+        assert!(
+            out[0].abs() < out[14].abs(),
+            "attack should rise across the block"
+        );
+    }
+
+    #[test]
+    fn sample_end_triggers_release() {
+        let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+        sampler.set_parameter(PARAM_RELEASE, 1.0);
+        sampler.set_sample("r", vec![0.5, 0.5], 2, 48_000);
+        sampler.note_on(60, 127);
+        let mut out = vec![0.0; 8];
+        sampler.process_block(&[], &mut out, 4);
+        assert!(sampler
+            .voices
+            .iter()
+            .any(|v| v.active && v.envelope.state() == AdsrState::Release));
+    }
+
+    #[test]
+    fn adsr_params_roundtrip() {
+        let mut sampler = SamplerDevice::new_for_metadata();
+        sampler.set_parameter(PARAM_ATTACK, 0.5);
+        sampler.set_parameter(PARAM_DECAY, 0.25);
+        sampler.set_parameter(PARAM_SUSTAIN, 0.8);
+        sampler.set_parameter(PARAM_RELEASE, 0.1);
+        assert!((sampler.get_parameter(PARAM_ATTACK).unwrap() - 0.5).abs() < 1e-5);
+        assert!((sampler.get_parameter(PARAM_DECAY).unwrap() - 0.25).abs() < 1e-5);
+        assert!((sampler.get_parameter(PARAM_SUSTAIN).unwrap() - 0.8).abs() < 1e-5);
+        assert!((sampler.get_parameter(PARAM_RELEASE).unwrap() - 0.1).abs() < 1e-5);
     }
 }

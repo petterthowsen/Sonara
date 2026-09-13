@@ -99,7 +99,7 @@ func _rebuild() -> void:
 			child.slot_changed.connect(_on_children_changed)
 		if child and not child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.connect(_on_children_changed)
-		_pads[i].setup(note, child)
+		_pads[i].setup(note, child, device)
 		_pads[i].set_selected(child != null and child == _selected)
 
 

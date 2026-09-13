@@ -64,4 +64,10 @@ static func create_default() -> ToolRegistry:
 	reg.register(AddSendTool.new())
 	reg.register(CreateBusTool.new())
 	reg.register(AddDeviceTool.new())
+	reg.register(ListClipsTool.new())
+	reg.register(ReadClipTool.new())
+	reg.register(WriteClipTool.new())
+	reg.register(CreateClipTool.new())
+	reg.register(PlaceClipTool.new())
+	reg.register(RenameClipTool.new())
 	return reg

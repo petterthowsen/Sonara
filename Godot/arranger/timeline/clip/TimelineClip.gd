@@ -87,6 +87,8 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 	if clip_instance and clip_instance.clip:
 		if clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
 			clip_instance.clip.waveform_level_updated.disconnect(_on_clip_waveform_level_loaded)
+		if clip_instance.clip.clip_modified.is_connected(_on_source_clip_modified):
+			clip_instance.clip.clip_modified.disconnect(_on_source_clip_modified)
 
 	clip_instance = inst
 	timeline = tl
@@ -96,6 +98,8 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 	if clip_instance and clip_instance.clip:
 		if not clip_instance.clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
 			clip_instance.clip.waveform_level_updated.connect(_on_clip_waveform_level_loaded)
+		if not clip_instance.clip.clip_modified.is_connected(_on_source_clip_modified):
+			clip_instance.clip.clip_modified.connect(_on_source_clip_modified)
 
 	# Update UI from clip instance data
 	if is_inside_tree():
@@ -138,6 +142,12 @@ func _find_nearest_clip_right(reference_end: int = -1) -> int:
 			nearest_start = other_start
 	
 	return nearest_start
+
+
+## Refresh label when the source clip is renamed or its notes change.
+func _on_source_clip_modified() -> void:
+	if is_inside_tree():
+		_update_from_clip_instance()
 
 
 func _on_clip_waveform_level_loaded(level: int, clip: Clip) -> void:

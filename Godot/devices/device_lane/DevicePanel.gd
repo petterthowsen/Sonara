@@ -166,14 +166,15 @@ func bind_to_device(dev : DeviceInstance):
 		_unbind_from_device(device)
 	device = dev
 
-	await ready
+	if not is_node_ready():
+		await ready
 	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
 	_create_parameter_controls()
 	_update_cc_tab_visibility()
 	# PanelView = custom UI only (not ParameterList, not container children)
 	if dev.device.has_panel_view():
-		_load_panel_view(dev)
+		await _load_panel_view(dev)
 		_show_right_pane_current()
 	else:
 		_clear_panel_and_aux()
@@ -674,15 +675,15 @@ func _configure_container_folder(dev: DeviceInstance) -> void:
 		folder_button.text = "▸"
 	if folder:
 		if dev.is_container():
-			folder.bind_to_container(dev)
-			folder.set_focus_child(null)
+			await folder.bind_to_container(dev)
+			await folder.set_focus_child(null)
 			folder.set_open(false, false)
 		else:
-			folder.bind_to_container(null)
+			await folder.bind_to_container(null)
 			folder.set_open(false, false)
 
 
-## Open the children pane, optionally focused on one Layer slot.
+## Open the children pane, optionally focused on one Layer/Drum slot.
 func open_container_folder(child: DeviceInstance = null) -> void:
 	if device == null or not device.is_container() or folder == null:
 		return
@@ -690,7 +691,7 @@ func open_container_folder(child: DeviceInstance = null) -> void:
 	var single := device.device.container_focuses_one_child()
 	if single and _folder_focus == null and not device.children.is_empty():
 		_folder_focus = device.children[0]
-	folder.set_focus_child(_folder_focus if single else null)
+	await folder.set_focus_child(_folder_focus if single else null)
 	folder.set_open(true)
 	if folder_button:
 		folder_button.set_pressed_no_signal(true)
@@ -699,6 +700,7 @@ func open_container_folder(child: DeviceInstance = null) -> void:
 		_panel_view.set_focused_child(_folder_focus)
 
 
+## Toggle the children pane from the folder header button.
 func _on_folder_toggled(pressed: bool) -> void:
 	if folder == null or device == null or not device.is_container():
 		return

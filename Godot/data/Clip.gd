@@ -466,16 +466,39 @@ func _extend_content_length(end_tick: int) -> void:
 # ============================================================================
 # CONVENIENCE
 # ============================================================================
+
+## Set display name (used by undoable property commands). Emits clip_modified.
+func set_name(new_name: String) -> void:
+	if name == new_name:
+		return
+	name = new_name
+	modified_date = Time.get_unix_time_from_system()
+	clip_modified.emit()
+
+
+## Set stored content length in ticks.
+func set_content_length(ticks: int) -> void:
+	content_length_ticks = maxi(1, ticks)
+	modified_date = Time.get_unix_time_from_system()
+	clip_modified.emit()
+
+
+## Highest MIDI pitch in this clip, or middle C if empty.
 func find_highest_note() -> int:
-	var highest = 60
+	if midi_notes.is_empty():
+		return Midi.MIDDLE_C
+	var highest: int = midi_notes[0].note
 	for note in midi_notes:
 		if note.note > highest:
 			highest = note.note
 	return highest
 
 
+## Lowest MIDI pitch in this clip, or middle C if empty.
 func find_lowest_note() -> int:
-	var lowest = 60
+	if midi_notes.is_empty():
+		return Midi.MIDDLE_C
+	var lowest: int = midi_notes[0].note
 	for note in midi_notes:
 		if note.note < lowest:
 			lowest = note.note
