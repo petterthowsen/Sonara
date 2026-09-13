@@ -1,6 +1,6 @@
 # test_openrouter_sse.gd
 # Headless tests for OpenRouterSse, ChatTypes wire format, and ChatError.
-# Run: godot --headless --path Godot -s ai/test_openrouter_sse.gd
+# Run: godot --headless --path Godot -s ai/tests/test_openrouter_sse.gd
 extends SceneTree
 
 

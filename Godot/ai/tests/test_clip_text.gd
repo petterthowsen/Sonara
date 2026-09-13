@@ -1,6 +1,6 @@
 # test_clip_text.gd
 # Headless tests for clip text time, grids, events, and round-trip apply.
-# Run: godot --headless --path Godot -s ai/test_clip_text.gd
+# Run: godot --headless --path Godot -s ai/tests/test_clip_text.gd
 extends SceneTree
 
 

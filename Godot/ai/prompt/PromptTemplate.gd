@@ -4,7 +4,7 @@ class_name PromptTemplate extends RefCounted
 
 
 const USER_RELATIVE := "aichat/system_prompt.md"
-const SHIPPED_PATH := "res://ai/system_prompt.md"
+const SHIPPED_PATH := "res://ai/prompt/system_prompt.md"
 
 
 ## User-editable prompt path under the Sonara config dir.
