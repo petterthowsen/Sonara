@@ -31,8 +31,13 @@ signal asset_requested_drag(asset: Asset)  # When user starts dragging an asset
 # PROPERTIES
 # ============================================================================
 
+const CONFIG_KEY := "ui/browser"
+
 # Display mode
 var _display_mode: DisplayMode = DisplayMode.FLAT_LIST
+var _applying_tree_state: bool = false
+# Asset.TYPE key ("Audio", "Device", "SFZ") -> Dictionary of expanded folder paths.
+var _expanded_folders: Dictionary = {}
 
 # Tab management
 var _current_tab: Asset.TYPE = Asset.TYPE.Audio
@@ -57,6 +62,7 @@ var _search_filter: String = ""
 
 func _ready() -> void:
 	print("[Browser] Initializing...")
+	_load_ui_state()
 	_setup_ui()
 	_connect_to_asset_service()
 	_refresh_asset_list()
@@ -65,6 +71,7 @@ func _ready() -> void:
 func _setup_ui() -> void:
 	# Connect mode toggle button
 	mode_toggle_button.pressed.connect(_on_mode_toggle_pressed)
+	_sync_mode_toggle_text()
 	
 	# Setup tab buttons
 	_create_tab_button("S", "Samples", Asset.TYPE.Audio)
@@ -149,6 +156,7 @@ func _create_tree(asset_type: Asset.TYPE) -> void:
 	
 	# Connect signals
 	tree.item_selected.connect(func(): _on_tree_item_selected(asset_type))
+	tree.item_collapsed.connect(func(item: TreeItem): _on_tree_item_collapsed(item, asset_type))
 	tree.set_drag_forwarding(
 		Callable(self, "_get_drag_data_tree"),
 		Callable(self, "_can_drop_data"),
@@ -176,6 +184,7 @@ func _refresh_asset_list() -> void:
 		print("[Browser] AssetService not available")
 		return
 
+	_applying_tree_state = true
 	# Clear all ItemLists and Trees
 	for item_list in _item_lists.values():
 		item_list.clear()
@@ -215,6 +224,7 @@ func _refresh_asset_list() -> void:
 	# Populate Devices tab
 	_populate_devices_tab()
 	_populate_devices_tree()
+	_applying_tree_state = false
 
 
 func _filter_and_score_assets(assets: Array[Asset]) -> Array[Dictionary]:
@@ -355,10 +365,6 @@ func _populate_samples_tree() -> void:
 		_prune_empty_directories(audio_parent)
 		_sort_tree_items(audio_parent)
 
-		# Expand all items when searching to show results immediately
-		if not _search_filter.is_empty():
-			_expand_all_tree_items(audio_parent)
-
 	# Build hierarchical structure for MIDI files
 	if not filtered_midi.is_empty():
 		var midi_parent = tree.create_item(root)
@@ -370,9 +376,7 @@ func _populate_samples_tree() -> void:
 		_prune_empty_directories(midi_parent)
 		_sort_tree_items(midi_parent)
 
-		# Expand all items when searching to show results immediately
-		if not _search_filter.is_empty():
-			_expand_all_tree_items(midi_parent)
+	_restore_or_expand_tree(tree, Asset.TYPE.Audio)
 
 
 func _populate_sfz_tree() -> void:
@@ -397,10 +401,7 @@ func _populate_sfz_tree() -> void:
 	_build_asset_tree(root, filtered_sfz, tree)
 	_prune_empty_directories(root)
 	_sort_tree_items(root)
-
-	# Expand all items when searching to show results immediately
-	if not _search_filter.is_empty():
-		_expand_all_tree_items(root)
+	_restore_or_expand_tree(tree, Asset.TYPE.SFZ)
 
 
 func _populate_devices_tree() -> void:
@@ -424,10 +425,7 @@ func _populate_devices_tree() -> void:
 
 	_build_device_hierarchy_tree(root, filtered_devices, tree)
 	_sort_tree_items(root)
-
-	# Expand all items when searching to show results immediately
-	if not _search_filter.is_empty():
-		_expand_all_tree_items(root)
+	_restore_or_expand_tree(tree, Asset.TYPE.Device)
 
 
 func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: Tree) -> void:
@@ -679,6 +677,117 @@ func _sort_tree_items(parent: TreeItem) -> void:
 
 
 # ============================================================================
+# UI STATE PERSISTENCE
+# ============================================================================
+
+## Load list/tree mode and expanded folder paths from Sonara config.
+func _load_ui_state() -> void:
+	var saved: Variant = Sonara.get_config(CONFIG_KEY, {})
+	if not saved is Dictionary:
+		return
+	var data: Dictionary = saved
+	if str(data.get("display_mode", "list")) == "tree":
+		_display_mode = DisplayMode.TREE_VIEW
+	else:
+		_display_mode = DisplayMode.FLAT_LIST
+	var expanded: Variant = data.get("expanded", {})
+	if not expanded is Dictionary:
+		return
+	for type_key in expanded:
+		var paths: Dictionary = {}
+		var list: Variant = expanded[type_key]
+		if list is Array:
+			for path in list:
+				paths[str(path)] = true
+		_expanded_folders[str(type_key)] = paths
+
+
+## Write display mode and expanded folders to config.json.
+func _save_ui_state() -> void:
+	var expanded_out := {}
+	for type_key in _expanded_folders:
+		expanded_out[type_key] = _expanded_folders[type_key].keys()
+	Sonara.set_config(CONFIG_KEY, {
+		"display_mode": "tree" if _display_mode == DisplayMode.TREE_VIEW else "list",
+		"expanded": expanded_out,
+	})
+	Sonara.save_config()
+
+
+## Keep the mode button label in sync with `_display_mode`.
+func _sync_mode_toggle_text() -> void:
+	mode_toggle_button.text = "Tree" if _display_mode == DisplayMode.TREE_VIEW else "List"
+
+
+## Config key for an asset tab's expanded-folder map.
+func _type_key(asset_type: Asset.TYPE) -> String:
+	return Asset.TYPE.keys()[asset_type]
+
+
+## Expanded-path set for `asset_type`, creating it if missing.
+func _expanded_for(asset_type: Asset.TYPE) -> Dictionary:
+	var key := _type_key(asset_type)
+	if not _expanded_folders.has(key):
+		_expanded_folders[key] = {}
+	return _expanded_folders[key]
+
+
+## Slash path from the hidden root down to `item` (folder labels only).
+func _tree_item_path(item: TreeItem) -> String:
+	var parts: Array[String] = []
+	var current := item
+	while current:
+		var parent := current.get_parent()
+		if parent == null:
+			break
+		parts.append(current.get_text(0))
+		current = parent
+	parts.reverse()
+	return "/".join(PackedStringArray(parts))
+
+
+## Expand everything while searching; otherwise restore persisted folder folds.
+func _restore_or_expand_tree(tree: Tree, asset_type: Asset.TYPE) -> void:
+	var was_applying := _applying_tree_state
+	_applying_tree_state = true
+	var root := tree.get_root()
+	if root:
+		if _search_filter.is_empty():
+			_apply_expanded_folders(root, "", _expanded_for(asset_type))
+		else:
+			_expand_all_tree_items(root)
+	_applying_tree_state = was_applying
+
+
+## Recursively collapse folders unless their path is in the saved expanded set.
+func _apply_expanded_folders(item: TreeItem, parent_path: String, expanded: Dictionary) -> void:
+	var child := item.get_first_child()
+	while child:
+		var path := child.get_text(0) if parent_path.is_empty() else parent_path + "/" + child.get_text(0)
+		if child.get_metadata(0) == null and child.get_child_count() > 0:
+			child.set_collapsed(not expanded.has(path))
+			_apply_expanded_folders(child, path, expanded)
+		child = child.get_next()
+
+
+## Record a user fold/unfold; ignored during rebuild and while a search is active.
+func _on_tree_item_collapsed(item: TreeItem, asset_type: Asset.TYPE) -> void:
+	if _applying_tree_state or not _search_filter.is_empty():
+		return
+	if item.get_metadata(0) != null:
+		return
+	var path := _tree_item_path(item)
+	if path.is_empty():
+		return
+	var expanded := _expanded_for(asset_type)
+	if item.is_collapsed():
+		expanded.erase(path)
+	else:
+		expanded[path] = true
+	_save_ui_state()
+
+
+# ============================================================================
 # TAB SWITCHING
 # ============================================================================
 
@@ -710,10 +819,10 @@ func _on_mode_toggle_pressed() -> void:
 	# Toggle between modes
 	if _display_mode == DisplayMode.FLAT_LIST:
 		_display_mode = DisplayMode.TREE_VIEW
-		mode_toggle_button.text = "Tree"
 	else:
 		_display_mode = DisplayMode.FLAT_LIST
-		mode_toggle_button.text = "List"
+	_sync_mode_toggle_text()
+	_save_ui_state()
 	
 	# Update visibility for current tab
 	_switch_tab(_current_tab)
@@ -821,7 +930,8 @@ func _on_asset_removed(asset: Asset) -> void:
 
 func _on_search_text_changed(new_text: String) -> void:
 	_search_filter = new_text.strip_edges()
-	
+	_applying_tree_state = true
+
 	# Only repopulate the currently visible tab for efficiency
 	match _current_tab:
 		Asset.TYPE.Audio:
@@ -839,3 +949,4 @@ func _on_search_text_changed(new_text: String) -> void:
 			_trees[Asset.TYPE.SFZ].clear()
 			_populate_sfz_tab()
 			_populate_sfz_tree()
+	_applying_tree_state = false

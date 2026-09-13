@@ -139,8 +139,15 @@ func connect_to_engine() -> void:
 func _on_engine_confirmed_connected() -> void:
 	"""Called when engine confirms it's ready (after receiving /status/connected)."""
 	if _connection_state == ConnectionState.CONNECTED:
-		return  # Already connected
-	
+		# Heartbeats keep flowing across a fast engine restart, so Godot never disconnects
+		# and skips recreating master — mix then has nowhere to go.
+		print("[Project] Engine session restarted, resyncing project...")
+		_mark_engine_data_unsynced()
+		_connection_state = ConnectionState.DISCONNECTED
+		connection_state_changed.emit(ConnectionState.DISCONNECTED)
+		connect_to_engine()
+		return
+
 	print("[Project] Engine confirmed connection, syncing project data...")
 	
 	# Mark as connected so sync methods work
@@ -168,8 +175,17 @@ func _on_engine_disconnected() -> void:
 		return  # Already disconnected
 	
 	print("[Project] Engine connection lost!")
+	_mark_engine_data_unsynced()
 	_connection_state = ConnectionState.DISCONNECTED
 	connection_state_changed.emit(ConnectionState.DISCONNECTED)
+
+
+## Drop local engine-sync flags so the next handshake recreates channels (including master).
+func _mark_engine_data_unsynced() -> void:
+	for channel in channels:
+		channel.disconnect_from_engine()
+	for track in tracks:
+		track.disconnect_from_engine()
 
 
 func _register_clip_osc_listeners() -> void:
@@ -350,11 +366,6 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 
 	# Update clip with decoded audio metadata
 	clip.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
-
-	# If waveform levels already arrived before metadata, update metadata now
-	if clip.audio_waveform and clip.audio_waveform.levels.size() > 0:
-		clip.audio_waveform.set_metadata(frames, decoded_sample_rate, decoded_channels)
-
 	clip.update_content_length_from_metadata(tempo, ppq)
 
 

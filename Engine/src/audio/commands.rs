@@ -588,6 +588,21 @@ impl EngineState {
     pub fn take_playhead_midi_dispatch(&self) -> bool {
         self.dispatch_playhead_tick.swap(false, Ordering::AcqRel)
     }
+
+    /// Create master (ID 1) routed to the default hardware output if it is missing.
+    ///
+    /// Without this, a Godot session that outlives an engine restart still routes tracks to
+    /// channel 1, but that channel does not exist: meters stay at zero and the CPAL buffer
+    /// stays silent.
+    pub fn ensure_master_channel(&mut self, buffer_size: usize) {
+        if self.channels.contains_key(&1) {
+            return;
+        }
+        let mut master = Channel::new(1, "Master".to_string(), buffer_size, self.device_sample_rate);
+        master.output_channel_id = Some(1000);
+        self.channels.insert(1, master);
+        info!("Master channel created (hardware output 1000)");
+    }
 }
 
 impl Clone for EngineState {
@@ -636,6 +651,7 @@ pub fn process_command(
             }
             settings.sample_rate = device_sr;
             state.settings = settings;
+            state.ensure_master_channel(buffer_size);
             info!(
                 "Project initialized: {}bpm, {}/{}, PPQ={}, SR={} (device)",
                 state.settings.tempo,

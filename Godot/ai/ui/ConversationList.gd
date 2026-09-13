@@ -12,7 +12,15 @@ var _guard: bool = false
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fit_to_longest_item = false
+	clip_text = true
+	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	item_selected.connect(_on_item_selected)
+
+
+## Do not size the dropdown to conversation titles; those can be very long.
+func _get_minimum_size() -> Vector2:
+	return Vector2(0.0, ShrinkWidthButton.theme_min_height(self))
 
 
 ## Refresh entries and select `active_id`.

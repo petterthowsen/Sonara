@@ -80,11 +80,6 @@ Done:
 
 Done:
 
-- [x] Track and Channel color should be stored as-is. Only clamp color components when rendering/drawing.
-- [x] For text/labels on any elements with a track/channel-colored background, use dynamic black or white text depending on track color (luminance/lightness check)
-- [x] Changing track color of folder/group tracks in trackitem should sync to mixer view's bus channel and vice-versa
-- [x] Change track color (trackitem context menu)
-- [x] Improve channel drag-to-reorder UX
   - [x] Bug: sometimes the channel can only be dragged one step at a time
 
 ### Arranger & Timeline
@@ -150,11 +145,11 @@ Done:
 
 ### UI / Quality of Life
 
-- [ ] Dock system: Inspector, Browser, and AI Chat freely placeable
+- [x] Dock system: Inspector, Browser, and AI Chat freely placeable
   - Two side docks (left / right)
   - Each dock can stack panels vertically; split is draggable when two panels share a dock
-  - Enough for wide and small screens
-- [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders
+  - Ensure drop targets never change size (show/hide visually only)
+- [x] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders
 
 ### AI Assistant
 

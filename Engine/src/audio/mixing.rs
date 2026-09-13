@@ -680,6 +680,25 @@ mod tests {
     }
 
     #[test]
+    fn missing_master_is_created_and_receives_routed_audio() {
+        let mut source = test_channel(2, Some(1), 0.0);
+        source.buffer_left.fill(0.5);
+        source.buffer_right.fill(0.5);
+        let mut state = state_with(vec![source]);
+        state.ensure_master_channel(BUFFER_SIZE);
+        let output = mix(&mut state);
+
+        assert!(state.channels.contains_key(&1));
+        assert_eq!(state.channels[&1].output_channel_id, Some(1000));
+        assert!(
+            state.channels[&1].buffer_left[0].abs() > 0.2,
+            "master should receive routed audio, got {}",
+            state.channels[&1].buffer_left[0]
+        );
+        assert!(output[0].abs() > 0.2);
+    }
+
+    #[test]
     fn post_fader_send_routes_signal_to_bus() {
         let mut state = send_state(0.0, false);
         let output = mix(&mut state);

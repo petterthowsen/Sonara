@@ -109,10 +109,8 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				var assistant := get_node_or_null("/root/Assistant")
 				if assistant:
 					assistant.new_conversation()
-					if Sonara.editor and Sonara.editor.assistant_panel:
-						Sonara.editor.assistant_panel.visible = true
-						if Sonara.editor.browser_panel:
-							Sonara.editor.browser_panel.visible = false
+					if Sonara.editor:
+						Sonara.editor.show_assistant()
 			AI_ITEMS.Test_Connection:
 				_on_test_connection()
 

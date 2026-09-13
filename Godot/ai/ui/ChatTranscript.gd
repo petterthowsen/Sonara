@@ -11,7 +11,9 @@ var _pending_tools: Dictionary = {}
 
 
 func _ready() -> void:
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
+	clip_contents = true
 	horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_list = VBoxContainer.new()
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -109,17 +111,16 @@ func _add_bubble(who: String, text: String, bg: Color, msg: ChatTypes.ChatMessag
 	style.content_margin_top = 8
 	style.content_margin_bottom = 8
 	wrap.add_theme_stylebox_override("panel", style)
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var col := VBoxContainer.new()
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var who_lbl := Label.new()
 	who_lbl.text = who
+	who_lbl.clip_text = true
 	who_lbl.add_theme_font_size_override("font_size", 11)
 	who_lbl.add_theme_color_override("font_color", Color(0.7, 0.72, 0.78, 0.8))
 	col.add_child(who_lbl)
-	var body := RichTextLabel.new()
-	body.bbcode_enabled = false
-	body.fit_content = true
-	body.scroll_active = false
-	body.selection_enabled = true
+	var body := WrappingRichText.new()
 	body.text = text
 	col.add_child(body)
 	if msg:
@@ -140,8 +141,9 @@ func _add_media(col: VBoxContainer, msg: ChatTypes.ChatMessage) -> void:
 			if tex:
 				var rect := TextureRect.new()
 				rect.texture = tex
-				rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+				rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 				rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				rect.custom_minimum_size = Vector2(0, 80)
 				col.add_child(rect)
 		elif part.kind == "input_audio" or part.kind == "output_audio":

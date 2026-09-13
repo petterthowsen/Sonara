@@ -109,6 +109,7 @@ impl AudioEngine {
             let mut state_lock = state.lock().unwrap();
             state_lock.device_sample_rate = sample_rate as f32;
             state_lock.output_devices = output_devices;
+            state_lock.ensure_master_channel(max_buffer_size);
         }
 
         // Command thread: applies commands, doing slow work outside the state lock

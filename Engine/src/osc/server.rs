@@ -77,6 +77,13 @@ impl OscServer {
     ) -> Result<()> {
         let mut buf = [0u8; 2048];
 
+        // Tell Godot this is a new engine process so it can resync even if heartbeats never
+        // timed out (a restart is often faster than HEARTBEAT_TIMEOUT_SEC).
+        match self.send_message("/status/connected", vec![OscType::Int(1)]) {
+            Ok(_) => info!("Sent /status/connected (engine ready)"),
+            Err(e) => warn!("Failed to send /status/connected: {}", e),
+        }
+
         // GUI events from audio thread that need window manager access
         enum GuiEvent {
             Resize {
@@ -648,6 +655,11 @@ impl OscServer {
                         Ok(_) => info!("Sent /status/connected to Godot"),
                         Err(e) => warn!("Failed to send /status/connected: {}", e),
                     }
+                } else {
+                    warn!(
+                        "/project/init ignored (expected f,i,i,i,i); args={:?}",
+                        args
+                    );
                 }
             }
             ["project", "clear"] => {

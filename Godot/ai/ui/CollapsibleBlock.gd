@@ -16,17 +16,17 @@ func _init(kind: String = "block", title: String = "", body_text: String = "") -
 	_kind = kind
 	_title = title
 	add_theme_constant_override("separation", 2)
-	_toggle = Button.new()
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_toggle = ShrinkWidthButton.new()
 	_toggle.flat = true
 	_toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_toggle.focus_mode = Control.FOCUS_NONE
+	_toggle.clip_text = true
+	_toggle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_toggle.pressed.connect(_on_toggle)
 	add_child(_toggle)
-	_body = RichTextLabel.new()
-	_body.bbcode_enabled = false
-	_body.fit_content = true
-	_body.scroll_active = false
-	_body.selection_enabled = true
+	_body = WrappingRichText.new()
 	_body.add_theme_font_size_override("normal_font_size", 12)
 	_body.add_theme_color_override("default_color", Color(0.75, 0.75, 0.78, 0.9))
 	_body.visible = false

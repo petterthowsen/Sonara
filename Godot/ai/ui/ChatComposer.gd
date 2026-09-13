@@ -17,11 +17,13 @@ var _busy: bool = false
 
 
 func _ready() -> void:
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 6)
 	_chips = HBoxContainer.new()
 	_chips.add_theme_constant_override("separation", 6)
 	add_child(_chips)
 	_edit = TextEdit.new()
+	_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_edit.custom_minimum_size = Vector2(0, 72)
 	_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_edit.placeholder_text = "Ask Sonara…"

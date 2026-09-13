@@ -18,7 +18,8 @@ func _ready() -> void:
 	theme_type_variation = "PrimaryPanel"
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	custom_minimum_size = Vector2(280, 0)
+	clip_contents = true
+	custom_minimum_size = Vector2.ZERO
 	_build()
 	var assistant := _assistant()
 	if assistant:
@@ -48,6 +49,8 @@ func _assistant() -> Node:
 
 func _build() -> void:
 	var root := VBoxContainer.new()
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_theme_constant_override("separation", 8)
 	add_child(root)
 	var header := HBoxContainer.new()
@@ -68,6 +71,7 @@ func _build() -> void:
 	_model_lbl = Label.new()
 	_model_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_model_lbl.clip_text = true
+	_model_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_model_lbl.add_theme_font_size_override("font_size", 11)
 	meta.add_child(_model_lbl)
 	_cancel_btn = Button.new()
@@ -77,6 +81,7 @@ func _build() -> void:
 	meta.add_child(_cancel_btn)
 	root.add_child(meta)
 	_empty = Label.new()
+	_empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_empty.text = "Set an OpenRouter API key in Settings → AI"
 	_empty.visible = false

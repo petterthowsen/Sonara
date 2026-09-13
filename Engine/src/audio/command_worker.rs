@@ -346,6 +346,10 @@ impl CommandWorker {
             )
         };
         drop(removed);
+        {
+            let mut state = self.lock_state();
+            state.ensure_master_channel(self.max_buffer_size);
+        }
         info!("Project cleared");
     }
 

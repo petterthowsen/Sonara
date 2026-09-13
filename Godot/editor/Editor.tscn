@@ -6,6 +6,8 @@
 [ext_resource type="Script" uid="uid://cyscqn1lg7s3g" path="res://editor/EnginePanel.gd" id="5_yh6b6"]
 [ext_resource type="Script" uid="uid://cgprg67xmvidv" path="res://components/visualization/Graph.gd" id="6_js5sm"]
 [ext_resource type="Script" uid="uid://bfx70o648n4b8" path="res://editor/WindowButtons.gd" id="7_30oug"]
+[ext_resource type="Script" uid="uid://do0k1h7swfip3" path="res://editor/docks/DockHost.gd" id="7_dwy35"]
+[ext_resource type="Script" uid="uid://cpty2g4rcjjk0" path="res://editor/docks/SideDock.gd" id="8_hi76l"]
 [ext_resource type="PackedScene" uid="uid://dwx58rtumvnkj" path="res://arranger/Arranger.tscn" id="8_lsr71"]
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="9_l57s6"]
 [ext_resource type="PackedScene" uid="uid://iq3vudg11v8b" path="res://devices/device_lane/DeviceLane.tscn" id="10_2m1gq"]
@@ -258,81 +260,87 @@ vertical = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-theme_override_constants/separation = 8
+theme_override_constants/separation = 12
 split_offsets = PackedInt32Array(240)
 split_offset = 240
+script = ExtResource("7_dwy35")
 
 [node name="LeftCenterSplit" type="HSplitContainer" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1302338210]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 2.0
-theme_override_constants/separation = 8
+theme_override_constants/separation = 12
 split_offsets = PackedInt32Array(-235)
 split_offset = -235
 
-[node name="MiddleLeft" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit" unique_id=2028239190]
+[node name="LeftDock" type="Control" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit" unique_id=1992768693]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("8_hi76l")
 
-[node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft" unique_id=938710415]
-layout_mode = 2
+[node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock" unique_id=938710415]
+layout_mode = 0
+offset_right = 103.0
+offset_bottom = 890.0
 size_flags_horizontal = 3
 theme_type_variation = &"PrimaryPanel"
 
-[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector" unique_id=1709571549]
+[node name="VBoxContainer" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector" unique_id=1709571549]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=1803303598]
+[node name="Label" type="Label" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=1803303598]
 layout_mode = 2
 text = "Inspector"
 
-[node name="LineEdit" type="LineEdit" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=60769332]
+[node name="LineEdit" type="LineEdit" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=60769332]
 layout_mode = 2
 placeholder_text = "Search..."
 
-[node name="Items" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=1722195554]
+[node name="Items" type="VBoxContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=1722195554]
 layout_mode = 2
 
-[node name="Button" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=523419353]
-layout_mode = 2
-text = "Test"
-flat = true
-alignment = 0
-
-[node name="Button2" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=1171722823]
+[node name="Button" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=523419353]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button3" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=109519789]
+[node name="Button2" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=1171722823]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button4" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=151093574]
+[node name="Button3" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=109519789]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button5" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=157300881]
+[node name="Button4" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=151093574]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="Button6" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/Items" unique_id=820704345]
+[node name="Button5" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=157300881]
 layout_mode = 2
 text = "Test"
 flat = true
 alignment = 0
 
-[node name="PanelContainer2" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer" unique_id=150366578]
+[node name="Button6" type="Button" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/Items" unique_id=820704345]
+layout_mode = 2
+text = "Test"
+flat = true
+alignment = 0
+
+[node name="PanelContainer2" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer" unique_id=150366578]
 layout_mode = 2
 theme_type_variation = &"DarkPanel"
 
-[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleLeft/Inspector/VBoxContainer/PanelContainer2" unique_id=190795155]
+[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock/Inspector/VBoxContainer/PanelContainer2" unique_id=190795155]
 layout_mode = 2
 text = "Dark Panel"
 fit_content = true
@@ -374,21 +382,28 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_10umj")
 [node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" unique_id=1241292927 instance=ExtResource("10_2m1gq")]
 layout_mode = 2
 
-[node name="BoxContainer" type="BoxContainer" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1952637563]
+[node name="RightDock" type="Control" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1248627906]
+custom_minimum_size = Vector2(240, 0)
 layout_mode = 2
 size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("8_hi76l")
+occupied_min_width = 240.0
 
-[node name="BrowserPanel" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer" unique_id=1455843373]
-layout_mode = 2
+[node name="BrowserPanel" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/RightDock" unique_id=1455843373]
+layout_mode = 0
+offset_right = 264.0
+offset_bottom = 890.0
 size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_type_variation = &"PrimaryPanel"
 
-[node name="Browser" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel" unique_id=131584552 instance=ExtResource("13_p3vu2")]
+[node name="Browser" parent="VBoxContainer/Middle/LeftRightSplit/RightDock/BrowserPanel" unique_id=508717887 instance=ExtResource("13_p3vu2")]
 layout_mode = 2
 
-[node name="AssistantPanel" parent="VBoxContainer/Middle/LeftRightSplit/BoxContainer" unique_id=1299192409 instance=ExtResource("12_cnodj")]
-custom_minimum_size = Vector2(280, 0)
-layout_mode = 2
+[node name="AssistantPanel" parent="VBoxContainer/Middle/LeftRightSplit/RightDock" unique_id=1299192409 instance=ExtResource("12_cnodj")]
+visible = true
+layout_mode = 0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_type_variation = &"PrimaryPanel"

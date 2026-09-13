@@ -191,21 +191,21 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 	# Track if message was handled
 	var routed = false
 
-	# Special handling for connection status messages
+	# Special handling for connection status messages.
+	# Always emit on /status/connected so a new engine process can force a project resync
+	# even if heartbeats never timed out (restart is often faster than HEARTBEAT_TIMEOUT_SEC).
 	if address == "/status/connected":
-		if not _is_engine_connected:
-			# Check if value is 1 (can be single value or array)
-			var connection_confirmed = false
-			if values is Array and values.size() > 0:
-				connection_confirmed = (values[0] == 1)
-			elif values == 1:
-				connection_confirmed = true
-			
-			if connection_confirmed:
-				_is_engine_connected = true
-				_last_heartbeat_time = Time.get_ticks_msec()
-				engine_connected.emit()
-				logger.info("Engine connected!")
+		var connection_confirmed = false
+		if values is Array and values.size() > 0:
+			connection_confirmed = (values[0] == 1)
+		elif values == 1:
+			connection_confirmed = true
+
+		if connection_confirmed:
+			_is_engine_connected = true
+			_last_heartbeat_time = Time.get_ticks_msec()
+			engine_connected.emit()
+			logger.info("Engine connected!")
 		routed = true
 	elif address == "/status/playing":
 		if not _is_engine_connected:

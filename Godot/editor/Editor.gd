@@ -41,8 +41,9 @@ signal tracks_selected(tracks: Array[Track])
 # main_bar houses main menu, audio engine status, transport controls and window buttons
 @onready var main_bar: HBoxContainer = $VBoxContainer/Top
 
-# main area has arraner/mixer/editor, and various side panels
+# main area has arranger/mixer/editor, and left/right side docks
 @onready var main: BoxContainer = $VBoxContainer/Middle
+@onready var dock_host: DockHost = $VBoxContainer/Middle/LeftRightSplit
 
 # bottom has status bar: TODO: implement useful hotkey info of hovered element
 @onready var bottom: VBoxContainer = $VBoxContainer/Bottom
@@ -81,8 +82,8 @@ signal tracks_selected(tracks: Array[Track])
 # secondary panels
 @onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane
 
-@onready var browser_panel: PanelContainer = $VBoxContainer/Middle/LeftRightSplit/BoxContainer/BrowserPanel
-@onready var assistant_panel: Control = $VBoxContainer/Middle/LeftRightSplit/BoxContainer/AssistantPanel
+@onready var browser_panel: PanelContainer = find_child("BrowserPanel", true, false) as PanelContainer
+@onready var assistant_panel: Control = find_child("AssistantPanel", true, false)
 
 # ============================================================================
 # STATE
@@ -551,14 +552,18 @@ func switch_extra_view() -> void:
 	print("[Editor] Switched to ", View.keys()[current_view], " view")
 
 
-## Show or hide the right-dock assistant in place of the Browser.
+## Show or hide the AI Chat dock panel without affecting other docked panels.
 func toggle_assistant() -> void:
-	if assistant_panel == null:
+	if dock_host == null:
 		return
-	assistant_panel.visible = not assistant_panel.visible
-	if browser_panel:
-		browser_panel.visible = not assistant_panel.visible
-	print("[Editor] Assistant %s" % ("shown" if assistant_panel.visible else "hidden"))
+	dock_host.toggle_panel_visible("assistant")
+	print("[Editor] Assistant %s" % ("shown" if dock_host.is_panel_visible("assistant") else "hidden"))
+
+
+## Ensure the AI Chat panel is visible in a side dock.
+func show_assistant() -> void:
+	if dock_host:
+		dock_host.set_panel_visible("assistant", true)
 
 
 func toggle_device_lane():
