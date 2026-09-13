@@ -1,3 +1,8 @@
+---
+description: When adding or changing OSC messages between Godot and the Rust audio engine
+globs: Engine/src/osc/**/*.rs, Godot/**/AudioEngineOSC.gd, Godot/data/**/*.gd
+alwaysApply: false
+---
 # OSC Protocol Specification
 
 Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
@@ -67,6 +72,17 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 |---------|------|-------------|
 | `/channel/{id}/peak` | `f:peak_left, f:peak_right, f:rms_left, f:rms_right` | Peak and RMS levels (linear 0.0-1.0+) |
 
+### Live MIDI (Godot -> Rust)
+
+Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/channel/{id}/midi_input_device` | `i:device_id` | Which MIDI source this channel accepts |
+| `/channel/{id}/record_armed` | `i:0_or_1` | Arm channel to receive live MIDI |
+| `/channel/{id}/midi_event` | `i:channel_id, i:message, i:midi_channel, i:pitch, i:velocity, i:timestamp_us` | Note / generic MIDI event. Engine stamps arrival; Godot timestamp is ignored |
+| `/channel/{id}/midi_cc` | `i:channel_id, i:midi_channel, i:cc_number, i:cc_value, i:timestamp_us` | Control change (message type 11) |
+
 ### Track Management (Godot -> Rust)
 
 | Address | Args | Description |
@@ -75,7 +91,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/track/{id}/route` | `i:channel_id` | Update track output routing to channel (-1 for none) |
 | `/track/{id}/clear_midi` | - | Clear all MIDI notes for track |
 
-### Clip Management (Godot -> Rust) - NEW
+### Clip Management (Godot -> Rust)
 
 | Address | Args | Description |
 |---------|------|-------------|
@@ -86,7 +102,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/clip/{id}/update_note` | `i:note_id, i:note, i:start_tick, i:duration, i:velocity` | Update MIDI note in clip |
 | `/clip/{id}/load_audio_file` | `s:abs_path, i:sample_rate_hint, i:channels_hint` | Request async audio decode + waveform generation via AudioFileService |
 
-### ClipInstance Management (Godot -> Rust) - NEW
+### ClipInstance Management (Godot -> Rust)
 
 | Address | Args | Description |
 |---------|------|-------------|
@@ -261,7 +277,7 @@ Each discovered plugin sends a `/plugin/info` message with its metadata and file
 ```
 /channel/{id}/add_device [s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?]
 ```
-- **device_id**: Unique identifier (e.g., "sonara.builtin.oscillator", "michaelwillis.dragonfly.hall")
+- **device_id**: Unique identifier (e.g., "sonara.builtin.polysynth", "michaelwillis.dragonfly.hall")
 - **position**: Position in device chain (-1 = append)
 - **active**: 1=load device (default), 0=don't load (save RAM)
 - **enabled**: 1=process audio (default), 0=bypass
@@ -271,7 +287,7 @@ Each discovered plugin sends a `/plugin/info` message with its metadata and file
 Examples:
 ```bash
 # Built-in device (type and file optional)
-/channel/2/add_device ["sonara.builtin.oscillator", -1, 1, 1, "builtin", ""]
+/channel/2/add_device ["sonara.builtin.polysynth", -1, 1, 1, "builtin", ""]
 
 # CLAP plugin with explicit type and file
 /channel/2/add_device ["michaelwillis.dragonfly.room", -1, 1, 1, "clap", "/home/user/.clap/dragonfly-reverb.clap"]
@@ -285,9 +301,10 @@ Examples:
 
 **Plugin State Management**
 ```
-/plugin/state/save [i:channel_id, i:device_position]
-/plugin/state/load [i:channel_id, i:device_position, s:state_base64]
+/plugin/save_state [i:channel_id, i:device_position]
+/plugin/load_state [i:channel_id, i:device_position, s:state_base64]
 ```
+Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
 
 **Device Lifecycle Control**
 ```
@@ -307,12 +324,16 @@ Examples:
 - Can be called while plugin is activated and processing audio
 - GUI state is managed by the plugin, not the host
 
-**Query Parameters (works for both built-in and plugins)**
+**Query Parameters** (built-in and plugins)
 ```
+/channel/{id}/device/{path}/get_parameters
 /plugin/get_parameters [i:channel_id, i:device_position]
 ```
-
-See `PLUGIN_OSC_PROTOCOL.md` for detailed plugin documentation.
+Responses:
+- `/channel/{id}/device/{path}/param/count [i:count]`
+- `/channel/{id}/device/{path}/param/info [i:param_id, s:name, f:min, f:max, f:default, s:group]` (`group` is `"param"` or `"cc"`)
+- `/channel/{id}/device/{path}/param/{param_id}/value [f:normalized]` when the plugin or SFZ CC changes
+- `/channel/{id}/device/{path}/sleep [i:0_or_1]` when the device sleeps or wakes
 
 ### Device Data Subscriptions
 
@@ -361,30 +382,15 @@ AudioEngineOSC.device_spectrum_received.connect(func(osc_path, spectrum):
 AudioEngineOSC.unsubscribe_device_data(device.osc_path(), "spectrum")
 ```
 
-**Benefits:**
-- **On-demand streaming**: Only compute/send data when subscribed
-- **Real-time safe**: Non-blocking subscription management
-- **Extensible**: Easy to add new data types (oscilloscope, phase, LUFS)
-- **Per-device**: Multiple devices can stream independently
-
-**Benefits of Active/Enabled System**
-- **Film scoring templates**: Load 200 plugins, keep 150 inactive (~2GB RAM vs ~10GB)
-- **A/B testing**: Toggle bypass instantly without reloading
-- **CPU management**: Deactivate unused plugins during playback
-
 #### Example Usage
 ```gdscript
-# Add oscillator + delay to channel 2
-AudioEngineOSC.send("/channel/2/add_device", ["sonara.builtin.oscillator", -1])
+# Add polysynth + delay to channel 2
+AudioEngineOSC.send("/channel/2/add_device", ["sonara.builtin.polysynth", -1])
 AudioEngineOSC.send("/channel/2/add_device", ["sonara.builtin.delay", -1])
 
-# Configure oscillator (sine wave, 60% volume)
-AudioEngineOSC.send("/channel/2/device/0/param/0", [0.0])  # Sine
-AudioEngineOSC.send("/channel/2/device/0/param/1", [0.6])  # Amplitude
-
-# Configure delay (250ms, 50% wet)
-AudioEngineOSC.send("/channel/2/device/1/param/0", [0.05])  # 250ms
-AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
+# Delay: 250ms, 50% wet
+AudioEngineOSC.send("/channel/2/device/1/param/0", [0.05])
+AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])
 ```
 
 ## Timing and Synchronization
@@ -418,10 +424,10 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
 
 1. **Setup:**
    - Godot: `/project/init 120.0 4 4 960 48000`
-   - Godot: `/channel/0/create "Master"`
-   - Godot: `/channel/1/create "Synth"`
-   - Godot: `/channel/1/route 0` (route Synth -> Master)
-   - Godot: `/track/0/create 1` (track 0 -> channel 1)
+   - Godot: `/channel/1/create "Master"` (master is always ID 1)
+   - Godot: `/channel/2/create "Synth"`
+   - Godot: `/channel/2/route 1` (route Synth -> Master)
+   - Godot: `/track/0/create 2` (track 0 -> channel 2)
 
 2. **Create Clip and Add MIDI Notes:**
    - Godot: `/clip/create "clip_001" "midi" "Bass Pattern"`
@@ -438,12 +444,7 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])   # Wet mix
    - Godot: `/transport/play`
    - Rust: Resolves clip instances → notes from clip pool
    - Rust: Applies transpose to instance_002
-   - Rust: Generates sine waves at specified MIDI notes
-   - Rust: `/status/playhead 0` (tick 0)
-   - Rust: `/status/playhead 240` (tick 240)
-   - Rust: `/channel/1/peak 0.5 0.5 0.3 0.3` (channel 1 meters: peak_L, peak_R, rms_L, rms_R)
-   - Rust: `/channel/0/peak 0.4 0.4 0.25 0.25` (master meters: peak_L, peak_R, rms_L, rms_R)
-   - ... continues ...
+   - Rust: `/status/playhead 0` then periodic playhead + `/channel/{id}/peak` updates
 
 5. **Edit Clip (affects all instances):**
    - Godot: `/clip/clip_001/update_note 1 60 0 240 100` (shorten first note)

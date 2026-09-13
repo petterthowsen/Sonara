@@ -35,6 +35,12 @@ alwaysApply: false
 - On bypass (`set_enabled(false)`) or inactive state the device outputs silence because it has no audio input to pass through.
 - `reset()` calls `sfizz::Synth::all_sound_off()` when the synth is ready to guarantee note kills on transport stop/seek.
 
+## SFZ CC Parameters
+- After an SFZ loads, the device merges `synth.cc_labels()` with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.
+- Labeled CCs go on the `"param"` group (P tab); unlabeled host CCs go on `"cc"` (C tab). `param_id` is the CC number (0–127), range 0.0–1.0.
+- `set_parameter` sends MIDI HDCC via `try_lock()`; contended locks queue the change for the next block.
+- `take_parameters_changed()` is polled from `mixing.rs`. When true, the engine emits `PluginParameterCount` + `PluginParameterInfo` so Godot rebuilds the device panel. No Godot-side special case — same path as CLAP parameter lists.
+
 ## Lifecycle Expectations
 - `deactivate()` clears the loading state back to `Idle`; callers should re-send a file path when reactivating.
 - The sampler survives device restarts because the sfizz synth lives inside `SendSynth` (wrapper providing `unsafe impl Send`); never access the raw synth outside the guarded Mutex.

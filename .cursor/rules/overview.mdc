@@ -19,3 +19,9 @@ OSC is used for communication between backend audio and godot front end.
 - `STATUS.md` Used as a medium/long-term notepad for complex problems.
 - `TODO.md` holds the backlog with checkbox items. Mark tasks `[x]` only after the feature is verified working, and add new `[ ]` entries as fresh tasks emerge.
 - Keep both files concise and actionable so engineers can glance them to understand what to tackle next.
+
+## Documentation
+
+- Implemented systems live in `.cursor/rules/` and must stay current with the code.
+- Research, design notes, and open checklists live in `docs/`.
+- Do not add new markdown at the repo root except `README.md`, `TODO.md`, and `STATUS.md`.

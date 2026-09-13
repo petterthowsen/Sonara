@@ -1,11 +1,5 @@
 # TODO
 
-# Bugs / Issues
-
-- [?] Moving a clip from one track to another causes playback of new clip to actually play on original track.
-  ^ I think this is solved.
-
-- [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
 
 ## Audio Engine (Rust Backend)
 
@@ -50,6 +44,7 @@
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
 - [ ] Plugin GUI windows should be forced to stay above Godot App
+- [ ] Sforzando CLAP GUI embeds but renders black (may need an OpenGL context on the host window)
 
 
 
@@ -81,6 +76,8 @@
 - [ ] soloing a channel from mixer should sync to the linked track
 
 - [ ] BUG: inline edit of channel names often has unreadable text color
+
+- [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
 
 ### Save/Load
 
@@ -178,7 +175,7 @@
 
 ### AI Assistant
 
-Plan: `docs/ai-assistant-plan.md` (design note: `docs/ai-integration.md`)
+Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
 - [x] Phase 1: OpenRouter client + Settings → AI (API key, model, multimodal chat completions)
 - [x] Phase 2: Per-project conversations, `~/.config/sonara/aichat/system_prompt.md` variables, tool loop, track / asset / mixer / device tools, assistant dock
