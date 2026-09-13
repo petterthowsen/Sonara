@@ -37,11 +37,10 @@ var drop_zones: Array[DropZone] = []  # Track drop zones for cleanup
 # LIFECYCLE
 # ============================================================================
 
+## Keep the list empty; compact panels are spawned in `_add_device_panel()`.
 func _ready() -> void:
-	"""Setup UI after scene loads."""
 	if vbox:
 		vbox.add_theme_constant_override("separation", 0)
-	# clear devices (in case of testing in editor)
 	for node in vbox.get_children():
 		vbox.remove_child(node)
 		node.free()

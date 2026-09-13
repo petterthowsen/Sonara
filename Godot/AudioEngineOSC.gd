@@ -40,6 +40,8 @@ var osc_server: OSCServer
 var _is_engine_connected: bool = false
 var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
 var _is_ready: bool = false  # Whether OSC server/client are fully initialized
+## Messages sent before the UDP client is bound; flushed from `_ready()`.
+var _pending_sends: Array[Dictionary] = []
 
 # OSC message listeners: Dictionary[String, Array[Callable]]
 # Maps OSC address pattern to array of callbacks
@@ -70,6 +72,7 @@ func _ready() -> void:
 
 	_is_ready = true
 	logger.info("Ready - listening on port %d, sending to port %d" % [ENGINE_RECEIVE_PORT, ENGINE_SEND_PORT])
+	_flush_pending_sends()
 
 
 func _process(_delta: float) -> void:
@@ -86,16 +89,25 @@ func _process(_delta: float) -> void:
 # PUBLIC API - Low-level send/listen interface
 # ============================================================================
 
+## Send an OSC message to the audio engine, queueing until sockets are bound.
 func send(address: String, args: Array = []) -> void:
-	"""Send an OSC message to the audio engine."""
 	if not _is_ready:
-		logger.warn("Attempted to send before ready: %s" % address)
+		_pending_sends.append({"address": address, "args": args})
+		logger.debug("Queued send until OSC ready: %s" % address)
 		return
 	if osc_client:
 		logger.info("sending ", address, " args: ", args)
 		osc_client.send_message(address, args)
 	else:
 		logger.warn("OSC client not initialized")
+
+
+## Deliver messages that arrived before the OSC client finished binding.
+func _flush_pending_sends() -> void:
+	var queued := _pending_sends.duplicate()
+	_pending_sends.clear()
+	for item in queued:
+		send(item["address"], item["args"])
 
 
 func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_rate: int, channels: int) -> void:

@@ -31,6 +31,12 @@ Settings="*res://settings/Settings.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 Assistant="*res://ai/Assistant.gd"
 
+[debug]
+
+gdscript/warnings/unassigned_variable=0
+gdscript/warnings/unused_variable=0
+gdscript/warnings/unused_parameter=0
+
 [display]
 
 window/size/viewport_width=1536
