@@ -10,6 +10,7 @@ var _page_label: Label = null
 var _pads: Array[DrumPad] = []
 var _base_note: int = FIRST_NOTE
 var _selected: DeviceInstance = null
+var _sounding_notes: Dictionary = {}
 
 
 func _get_minimum_size() -> Vector2:
@@ -47,10 +48,13 @@ func _ready() -> void:
 		var pad := DrumPad.new()
 		_grid.add_child(pad)
 		pad.activated.connect(_on_pad_activated)
+		pad.triggered.connect(_on_pad_triggered)
+		pad.released.connect(_on_pad_released)
 		pad.drop_requested.connect(_on_pad_drop)
 		_pads.append(pad)
 
 
+## Wire child-list signals and rebuild the current page of pads.
 func _on_bind() -> void:
 	if not is_node_ready():
 		await ready
@@ -62,6 +66,13 @@ func _on_bind() -> void:
 		if not device.child_moved.is_connected(_on_children_changed):
 			device.child_moved.connect(_on_children_changed)
 	_rebuild()
+
+
+## Release any pads still held when the view is hidden.
+func _on_view_hidden() -> void:
+	for pad in _pads:
+		pad.cancel_preview()
+	_release_all_sounding()
 
 
 ## Highlight the pad whose child is shown in the folder.
@@ -103,6 +114,7 @@ func _rebuild() -> void:
 		_pads[i].set_selected(child != null and child == _selected)
 
 
+## Focus the occupied pad and open its child in the device folder.
 func _on_pad_activated(note: int) -> void:
 	var child := _child_for_note(note)
 	if child == null:
@@ -110,6 +122,29 @@ func _on_pad_activated(note: int) -> void:
 	_selected = child
 	set_focused_child(child)
 	container_child_requested.emit(child)
+
+
+## Send a note-on to this drum machine's channel at the pad's click velocity.
+func _on_pad_triggered(note: int, velocity: int) -> void:
+	if _child_for_note(note) == null:
+		return
+	_sounding_notes[note] = true
+	MidiManager.send_note_to_channel(channel_id, note, velocity, true)
+
+
+## Send a note-off for a pad that was previewed.
+func _on_pad_released(note: int) -> void:
+	if not _sounding_notes.has(note):
+		return
+	_sounding_notes.erase(note)
+	MidiManager.send_note_to_channel(channel_id, note, 0, false)
+
+
+## Note-off every pad still held from this view.
+func _release_all_sounding() -> void:
+	for note in _sounding_notes.keys():
+		MidiManager.send_note_to_channel(channel_id, note, 0, false)
+	_sounding_notes.clear()
 
 
 func _on_pad_drop(note: int, data: Variant) -> void:

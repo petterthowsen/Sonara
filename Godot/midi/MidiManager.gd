@@ -415,6 +415,16 @@ func route_virtual_midi_event(event: Dictionary):
 			send_midi_to_channel(channel.id, event)
 
 
+## Send a note-on or note-off straight to `channel_id`, skipping record-arm routing.
+func send_note_to_channel(channel_id: int, note: int, velocity: int, is_note_on: bool) -> void:
+	send_midi_to_channel(channel_id, {
+		"message": MIDI_MESSAGE_NOTE_ON if is_note_on else MIDI_MESSAGE_NOTE_OFF,
+		"channel": 0,
+		"pitch": note,
+		"velocity": velocity if is_note_on else 0,
+	})
+
+
 func send_midi_to_channel(channel_id: int, event):
 	## Send MIDI event to engine via OSC.
 	## Accepts both InputEventMIDI (physical devices) and Dictionary (virtual keyboard).

@@ -22,6 +22,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	if devices:
 		devices.size_flags_horizontal = Control.SIZE_FILL
+		devices.add_theme_constant_override("separation", 0)
 	if empty_hint:
 		empty_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if device_context_menu:
@@ -35,14 +36,6 @@ func _get_minimum_size() -> Vector2:
 	if devices:
 		return devices.get_combined_minimum_size()
 	return Vector2(200, 120)
-
-
-## Show drop zones for the duration of a device/asset drag.
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_DRAG_BEGIN:
-		_create_drop_zones()
-	elif what == NOTIFICATION_DRAG_END:
-		_cleanup_drop_zones()
 
 
 ## Bind this list to a container's children.
@@ -84,6 +77,7 @@ func refresh() -> void:
 			await _add_child_panel(child)
 	_apply_scroll_policy()
 	_update_empty_hint()
+	_create_drop_zones()
 	_notify_content_size()
 
 
@@ -172,6 +166,7 @@ func _focuses_one_child() -> bool:
 func _apply_scroll_policy() -> void:
 	if devices:
 		devices.size_flags_horizontal = Control.SIZE_FILL
+		devices.add_theme_constant_override("separation", 0)
 	if scroll == null:
 		return
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -184,19 +179,9 @@ func _notify_content_size() -> void:
 	update_minimum_size()
 
 
-## Insert-point drop zone between child panels.
+## Insert-point spacer between child panels (invisible until a drag starts).
 func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.new()
-	drop_zone.orientation = DropZone.Orientation.VERTICAL
-	drop_zone.dropzone_size = 12.0
-	drop_zone.always_show = true
-	drop_zone.line_position = DropZone.LinePosition.START
-	drop_zone.idle_thickness = 12.0
-	drop_zone.available_thickness = 12.0
-	drop_zone.hover_thickness = 12.0
-	drop_zone.idle_color = Color(0.4, 0.4, 0.4, 0.5)
-	drop_zone.available_color = Color(0.7, 0.7, 0.7, 0.5)
-	drop_zone.hover_color = Color(0.7, 0.7, 0.7, 0.7)
+	var drop_zone = DropZone.create_insert_spacer(true, 12.0)
 	drop_zone.set_drag_forwarding(
 		_get_drag_data.bind(),
 		_can_drop_data_at_position.bind(d_position),
@@ -205,26 +190,20 @@ func _create_drop_zone(d_position: int) -> DropZone:
 	return drop_zone
 
 
-## Interleave drop zones with the current child panels.
+## Keep invisible spacer drop zones interleaved with the current child panels.
 func _create_drop_zones() -> void:
 	if container == null or devices == null:
 		return
-	_cleanup_drop_zones()
 	var panel_list: Array[Control] = []
 	for child in devices.get_children():
 		if child is DropZone:
 			continue
 		panel_list.append(child)
-		devices.remove_child(child)
-	var num_panels = panel_list.size()
-	for i in range(num_panels):
-		var drop_zone = _create_drop_zone(_drop_index_for_panel(i))
-		devices.add_child(drop_zone)
-		drop_zones.append(drop_zone)
-		devices.add_child(panel_list[i])
-	var end_zone = _create_drop_zone(_drop_index_for_panel(num_panels))
-	devices.add_child(end_zone)
-	drop_zones.append(end_zone)
+	drop_zones = DropZone.rebuild_insert_layout(
+		devices,
+		panel_list,
+		func(i: int) -> DropZone: return _create_drop_zone(_drop_index_for_panel(i))
+	)
 
 
 ## Map a visible-panel index to the container child index (focus mode uses the real position).
@@ -234,7 +213,7 @@ func _drop_index_for_panel(visible_index: int) -> int:
 	return visible_index
 
 
-## Remove drag-only drop zones.
+## Remove spacer drop zones from the child row.
 func _cleanup_drop_zones() -> void:
 	for drop_zone in drop_zones:
 		if is_instance_valid(drop_zone):

@@ -163,8 +163,8 @@
 
 - [x] Drag a device between drum-machine slots (e.g. kick C1 → E1). Occupied target: swap.
 - [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code.
-- [ ] Dragging devices around on the device lane, or within containers has these drop targets that show up when dragging begins. Let's instead have them occupy space at all times but invisible. Let them serve as spacers and drop targets simultaneously.
-- [ ] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
+- [x] Dragging devices around on the device lane, or within containers has these drop targets that show up when dragging begins. Let's instead have them occupy space at all times but invisible. Let them serve as spacers and drop targets simultaneously.
+- [x] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
 
 ### Hardware & MIDI
 
@@ -175,7 +175,6 @@
 ### Quality of Life / Polish
 
 - [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders.
-- [ ] Assets: when discovering assets, generate a "essential name" for an asset, "Cello-Sec-PERF" becomes "Cello"
 
 ### AI Assistant
 

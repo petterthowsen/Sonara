@@ -39,22 +39,13 @@ var drop_zones: Array[DropZone] = []  # Track drop zones for cleanup
 
 func _ready() -> void:
 	"""Setup UI after scene loads."""
+	if vbox:
+		vbox.add_theme_constant_override("separation", 0)
 	# clear devices (in case of testing in editor)
 	for node in vbox.get_children():
+		vbox.remove_child(node)
 		node.free()
 
-
-func _notification(what: int) -> void:
-	"""Handle drag notifications to show/hide drop zones."""
-	if what == NOTIFICATION_DRAG_BEGIN:
-		_create_drop_zones()
-	elif what == NOTIFICATION_DRAG_END:
-		_cleanup_drop_zones()
-
-
-# ============================================================================
-# PUBLIC METHODS
-# ============================================================================
 
 ## Bind this list to a channel
 func bind_to_channel(p_channel: Channel) -> void:
@@ -91,9 +82,14 @@ func _populate_devices() -> void:
 	# Clear existing panels
 	for device_id in device_panels:
 		if device_panels[device_id]:
-			device_panels[device_id].queue_free()
+			var panel := device_panels[device_id]
+			var parent := panel.get_parent()
+			if parent:
+				parent.remove_child(panel)
+			panel.queue_free()
 	device_panels.clear()
 	for n in vbox.get_children():
+		vbox.remove_child(n)
 		n.queue_free() 
 
 	# Add panel for each device
@@ -104,6 +100,7 @@ func _populate_devices() -> void:
 		var device_instance = channel.get_device(i)
 		if device_instance:
 			_add_device_panel(device_instance, i)
+	_create_drop_zones()
 
 
 ## Add a panel for a device
@@ -137,6 +134,7 @@ func _add_device_panel(device_instance: DeviceInstance, position: int) -> void:
 	
 	# Track the panel
 	device_panels[device_instance.id] = panel
+	_create_drop_zones()
 
 
 ## Remove a panel for a device
@@ -149,7 +147,11 @@ func _remove_device_panel_at(position: int) -> void:
 	for panel:CompactDevicePanel in device_panels.values():
 		if panel.device_instance.position == position:
 			device_panels.erase(panel.device_instance.id)
+			var parent := panel.get_parent()
+			if parent:
+				parent.remove_child(panel)
 			panel.queue_free()
+			_create_drop_zones()
 			return
 	
 	logger.error("[ChannelDeviceList] Device panel not found at position %d" % position)
@@ -174,26 +176,7 @@ func _on_device_removed(position: int, _device_id: String) -> void:
 
 func _on_device_moved(from_position: int, to_position: int):
 	"""Handle device moved signal - reorder CompactDevicePanel nodes."""
-	if not channel:
-		return
-	
-	# Get all CompactDevicePanel children and sort by device position
-	var device_panel_list: Array[CompactDevicePanel] = []
-	for child in vbox.get_children():
-		if child is CompactDevicePanel:
-			device_panel_list.append(child)
-	
-	# Sort panels by their device positions to determine correct order
-	device_panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
-	
-	# Remove all CompactDevicePanels temporarily (keep DropZones if any)
-	for panel in device_panel_list:
-		vbox.remove_child(panel)
-	
-	# Re-add panels in correct order
-	for panel in device_panel_list:
-		vbox.add_child(panel)
-	
+	_create_drop_zones()
 	logger.info("[ChannelDeviceList] DevicePanel reordered from position %d to %d" % [from_position, to_position])
 
 
@@ -209,72 +192,36 @@ func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> v
 # DRAG AND DROP ZONES
 # ============================================================================
 
+## Insert-point spacer between compact device panels (invisible until a drag starts).
 func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.new()
-	drop_zone.orientation = DropZone.Orientation.HORIZONTAL
-	drop_zone.dropzone_size = 16.0
-	drop_zone.always_show = true
-	drop_zone.line_position = DropZone.LinePosition.START
-	drop_zone.idle_thickness = 16.0
-	drop_zone.available_thickness = 16.0
-	drop_zone.hover_thickness = 16.0
-	drop_zone.idle_color = Color(0.4, 0.4, 0.4, 0.5)
-	drop_zone.available_color = Color(0.7, 0.7, 0.7, 0.5)
-	drop_zone.hover_color = Color(0.7, 0.7, 0.7, 0.7)
-	
+	var drop_zone = DropZone.create_insert_spacer(false, 8.0)
 	drop_zone.set_drag_forwarding(
 		_get_drag_data.bind(),
 		_can_drop_data_at_position.bind(d_position),
 		_drop_data_at_position.bind(d_position)
 	)
-
 	return drop_zone
 
 
+## Keep invisible spacer drop zones interleaved with the current compact panels.
 func _create_drop_zones() -> void:
-	"""Create DropZone instances between each CompactDevicePanel for reordering."""
-	if not channel:
+	if not channel or vbox == null:
 		return
-	
-	_cleanup_drop_zones()
-	
-	# Get all CompactDevicePanel children
 	var panel_list: Array[CompactDevicePanel] = []
-	
 	for child in vbox.get_children():
 		if child is CompactDevicePanel:
 			panel_list.append(child)
-			vbox.remove_child(child)
-	
-	# Now rebuild: insert drop zone, then panel, then drop zone, etc.
-	var num_panels = panel_list.size()
-	for i in range(num_panels):
-		# Drop zone before this panel
-		var drop_zone = _create_drop_zone(i)
-		
-		vbox.add_child(drop_zone)
-		drop_zones.append(drop_zone)
-		
-		# Add the panel back
-		vbox.add_child(panel_list[i])
-	
-	# Add final drop zone after last panel (or as the only drop zone if no panels)
-	if num_panels == 0:
-		# No panels - create a single drop zone at position 0
-		var drop_zone = _create_drop_zone(0)
-		vbox.add_child(drop_zone)
-		drop_zones.append(drop_zone)
-	else:
-		# Add drop zone after last panel
-		var drop_zone = _create_drop_zone(num_panels)
-		vbox.add_child(drop_zone)
-		drop_zones.append(drop_zone)
+	panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
+	drop_zones = DropZone.rebuild_insert_layout(vbox, panel_list, _create_drop_zone)
 
 
+## Remove spacer drop zones from the compact list.
 func _cleanup_drop_zones() -> void:
-	"""Remove all drop zones."""
 	for drop_zone in drop_zones:
 		if is_instance_valid(drop_zone):
+			var parent := drop_zone.get_parent()
+			if parent:
+				parent.remove_child(drop_zone)
 			drop_zone.queue_free()
 	drop_zones.clear()
 

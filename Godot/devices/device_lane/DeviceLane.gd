@@ -16,6 +16,8 @@ var drop_zones: Array[DropZone] = []  # Track drop zones for cleanup
 var current_project: Project = null  # Track which project we're listening to
 
 func _ready():
+	if devices:
+		devices.add_theme_constant_override("separation", 0)
 	clear()
 	
 	# Connect to the Mixer's channel_focused signal via Sonara.editor
@@ -30,14 +32,6 @@ func _ready():
 	# If project already exists, connect to it
 	if Sonara.editor.project:
 		_connect_to_project(Sonara.editor.project)
-
-
-func _notification(what: int) -> void:
-	"""Handle drag notifications to show/hide drop zones."""
-	if what == NOTIFICATION_DRAG_BEGIN:
-		_create_drop_zones()
-	elif what == NOTIFICATION_DRAG_END:
-		_cleanup_drop_zones()
 
 
 func _on_channel_focused(focused_channel: Channel):
@@ -104,11 +98,9 @@ func unbind():
 
 func clear():
 	header_label.text = "N/A"
-	
-	# Clean up drop zones
 	_cleanup_drop_zones()
-	
 	for node in devices.get_children():
+		devices.remove_child(node)
 		node.queue_free()
 
 
@@ -151,6 +143,7 @@ func _add_device(device_instance : DeviceInstance, _position : int):
 	dp.request_context_menu.connect(_on_device_panel_request_context_menu.bind(device_instance))
 	
 	devices.add_child(dp)
+	_create_drop_zones()
 
 
 func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
@@ -163,51 +156,22 @@ func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
 
 
 func _on_channel_device_remmoved(d_position : int, device_id : String):
-	var dp : DevicePanel = devices.get_child(d_position)
-	if dp is DevicePanel:
-		if dp.device.position != d_position:
-			logger.error("[DeviceLane] Device panel at position %d is not the same as the device instance %s" % [d_position, device_id])
-			return
-
-		devices.remove_child(dp)
-		dp.queue_free()
-	else:
+	var dp: DevicePanel = null
+	for child in devices.get_children():
+		if child is DevicePanel and child.device and child.device.id == device_id:
+			dp = child
+			break
+	if dp == null:
 		logger.error("[DeviceLane] Device panel not found for device instance %s at position %d" % [device_id, d_position])
+		return
+	devices.remove_child(dp)
+	dp.queue_free()
+	_create_drop_zones()
 
 
 func _on_channel_device_moved(from_position: int, to_position: int):
 	"""Handle device moved signal - reorder DevicePanel nodes."""
-	if not channel:
-		return
-	
-	# Find the DevicePanel that was moved by finding the device at the new position
-	var moved_device = channel.get_device(to_position)
-	if not moved_device:
-		logger.error("[DeviceLane] Device not found at position %d after move" % to_position)
-		return
-	
-	var moved_panel = find_device_panel(moved_device)
-	if not moved_panel:
-		logger.error("[DeviceLane] DevicePanel not found for device at position %d" % to_position)
-		return
-	
-	# Get all DevicePanel children and their positions
-	var device_panels: Array[DevicePanel] = []
-	for child in devices.get_children():
-		if child is DevicePanel:
-			device_panels.append(child)
-	
-	# Sort panels by their device positions to determine correct order
-	device_panels.sort_custom(func(a: DevicePanel, b: DevicePanel): return a.device.position < b.device.position)
-	
-	# Remove all DevicePanels temporarily (keep DropZones if any)
-	for panel in device_panels:
-		devices.remove_child(panel)
-	
-	# Re-add panels in correct order
-	for panel in device_panels:
-		devices.add_child(panel)
-	
+	_create_drop_zones()
 	logger.info("[DeviceLane] DevicePanel reordered from position %d to %d" % [from_position, to_position])
 
 
@@ -224,67 +188,36 @@ func _on_channel_color_changed(c : Color):
 # DRAG AND DROP ZONES
 # ============================================================================
 
+## Insert-point spacer between DevicePanels (invisible until a drag starts).
 func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.new()
-	drop_zone.orientation = DropZone.Orientation.VERTICAL
-	drop_zone.dropzone_size = 16.0
-	drop_zone.always_show = true
-	drop_zone.line_position = DropZone.LinePosition.START
-	drop_zone.idle_thickness = 16.0
-	drop_zone.available_thickness = 16.0
-	drop_zone.hover_thickness = 16.0
-	drop_zone.idle_color = Color(0.4, 0.4, 0.4, 0.5)
-	drop_zone.available_color = Color(0.7, 0.7, 0.7, 0.5)
-	drop_zone.hover_color = Color(0.7, 0.7, 0.7, 0.7)
-	
+	var drop_zone = DropZone.create_insert_spacer(true, 16.0)
 	drop_zone.set_drag_forwarding(
 		_get_drag_data.bind(),
 		_can_drop_data_at_position.bind(d_position),
 		_drop_data_at_position.bind(d_position)
 	)
-
 	return drop_zone
 
 
+## Keep invisible spacer drop zones interleaved with the current DevicePanels.
 func _create_drop_zones() -> void:
-	"""Create DropZone instances between each DevicePanel for reordering."""
-	if not channel:
+	if not channel or devices == null:
 		return
-	
-	_cleanup_drop_zones()
-	
-	# Get all DevicePanel children and store them temporarily
 	var device_panels: Array[DevicePanel] = []
-	
 	for child in devices.get_children():
 		if child is DevicePanel:
 			device_panels.append(child)
-			devices.remove_child(child)
-	
-	# Now rebuild: insert drop zone, then panel, then drop zone, etc.
-	var num_panels = device_panels.size()
-	for i in range(num_panels):
-		# Drop zone before this panel
-		var drop_zone = _create_drop_zone(i)
-		
-		devices.add_child(drop_zone)
-		drop_zones.append(drop_zone)
-		
-		# Add the panel back
-		devices.add_child(device_panels[i])
-	
-	# Add final drop zone after last panel (or as the only drop zone if no panels)
-	if num_panels > 0:
-		# Add drop zone after last panel
-		var drop_zone = _create_drop_zone(num_panels)
-		devices.add_child(drop_zone)
-		drop_zones.append(drop_zone)
+	device_panels.sort_custom(func(a: DevicePanel, b: DevicePanel): return a.device.position < b.device.position)
+	drop_zones = DropZone.rebuild_insert_layout(devices, device_panels, _create_drop_zone, false)
 
 
+## Remove spacer drop zones from the device row.
 func _cleanup_drop_zones() -> void:
-	"""Remove all drop zones."""
 	for drop_zone in drop_zones:
 		if is_instance_valid(drop_zone):
+			var parent := drop_zone.get_parent()
+			if parent:
+				parent.remove_child(drop_zone)
 			drop_zone.queue_free()
 	drop_zones.clear()
 

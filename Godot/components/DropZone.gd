@@ -63,7 +63,8 @@ signal drag_exited()
 
 @export_group("")
 
-@export var always_show: bool = false  # If true, always visible; if false, only during drag
+## If true, occupy layout space even when idle. If false, hide until a drag begins.
+@export var always_show: bool = false
 
 # State
 var is_dragging: bool = false  # True during any drag operation
@@ -100,6 +101,9 @@ func _draw() -> void:
 	else:
 		line_color = idle_color
 		line_thickness = idle_thickness
+
+	if line_thickness <= 0.0 or line_color.a <= 0.0:
+		return
 	
 	# Calculate line position based on orientation and line_position
 	var line_rect: Rect2
@@ -168,3 +172,56 @@ func _notification(what: int) -> void:
 		
 		if not always_show:
 			hide()
+
+
+## Invisible layout spacer. `vertical` true is a column gap in an HBox; false is a row gap in a VBox.
+static func create_insert_spacer(vertical: bool, gap: float) -> DropZone:
+	var zone := DropZone.new()
+	zone.orientation = Orientation.VERTICAL if vertical else Orientation.HORIZONTAL
+	zone.dropzone_size = gap
+	zone.always_show = true
+	zone.line_position = LinePosition.CENTER
+	zone.idle_thickness = 0.0
+	zone.idle_color = Color(0, 0, 0, 0)
+	zone.available_thickness = gap
+	zone.hover_thickness = gap
+	zone.available_color = Color(0.7, 0.7, 0.7, 0.5)
+	zone.hover_color = Color(0.7, 0.7, 0.7, 0.7)
+	if vertical:
+		zone.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		zone.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	else:
+		zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		zone.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	return zone
+
+
+## Rebuild `parent` as [zone][panel][zone]...[panel][zone]. `make_zone` receives the insert index.
+static func rebuild_insert_layout(
+	parent: Node,
+	panels: Array,
+	make_zone: Callable,
+	empty_zone: bool = true
+) -> Array[DropZone]:
+	var existing_zones: Array[Node] = []
+	for child in parent.get_children():
+		if child is DropZone:
+			existing_zones.append(child)
+	for zone_node in existing_zones:
+		parent.remove_child(zone_node)
+		zone_node.queue_free()
+	for panel in panels:
+		if panel.get_parent() == parent:
+			parent.remove_child(panel)
+	var zones: Array[DropZone] = []
+	if panels.is_empty() and not empty_zone:
+		return zones
+	for i in range(panels.size()):
+		var zone := make_zone.call(i) as DropZone
+		parent.add_child(zone)
+		zones.append(zone)
+		parent.add_child(panels[i])
+	var end_zone := make_zone.call(panels.size()) as DropZone
+	parent.add_child(end_zone)
+	zones.append(end_zone)
+	return zones
