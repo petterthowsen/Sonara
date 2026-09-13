@@ -130,9 +130,12 @@ fn main() -> Result<()> {
     let mut window_manager = WindowManager::new();
     info!("Window manager initialized");
 
-    // Create AudioFileService (4 worker threads, will use device sample rate once known)
-    let audio_file_service = Arc::new(Mutex::new(AudioFileService::new(4, 44100)?));
-    info!("AudioFileService initialized with 4 workers");
+    let device_sample_rate = engine.device_sample_rate().max(1);
+    let audio_file_service = Arc::new(Mutex::new(AudioFileService::new(4, device_sample_rate)?));
+    info!(
+        "AudioFileService initialized with 4 workers at {} Hz",
+        device_sample_rate
+    );
 
     // Create OSC server
     let osc_server = OscServer::new(7000, audio_file_service)?;

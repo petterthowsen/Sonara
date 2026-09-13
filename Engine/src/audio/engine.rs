@@ -200,6 +200,11 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// Hardware callback rate the mixer and devices are running at.
+    pub fn device_sample_rate(&self) -> u32 {
+        self.state.lock().unwrap().device_sample_rate.round() as u32
+    }
+
     /// Get a clone of the command sender for external use
     pub fn command_sender(&self) -> Sender<AudioCommand> {
         self.command_tx.clone()

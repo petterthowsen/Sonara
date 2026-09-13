@@ -43,11 +43,12 @@ enum PlayMode {
     Gated,
 }
 
-/// Decoded interleaved PCM owned by the sampler (device sample rate).
+/// Decoded interleaved PCM. `sample_rate` is the buffer rate, which may differ from the device.
 struct SampleBuffer {
     samples: Vec<f32>,
     channels: usize,
     frames: usize,
+    sample_rate: f32,
 }
 
 /// One voice reading the loaded sample through an ADSR amplitude envelope.
@@ -111,7 +112,7 @@ pub struct SamplerDevice {
     time_counter: u64,
 }
 
-/// Playback rate: `speed * 2^((tune + keytrack*(note-root))/12)`.
+/// Pitch/speed ratio: `speed * 2^((tune + keytrack*(note-root))/12)`.
 pub fn playback_increment(speed: f32, tune: f32, key_track: bool, note: u8, root: u8) -> f64 {
     let key_delta = if key_track {
         note as f32 - root as f32
@@ -120,6 +121,11 @@ pub fn playback_increment(speed: f32, tune: f32, key_track: bool, note: u8, root
     };
     let semitones = tune + key_delta;
     (speed as f64) * 2.0_f64.powf(semitones as f64 / 12.0)
+}
+
+/// Frames of sample PCM to advance per device output frame so pitch stays native.
+pub fn sample_rate_ratio(sample_rate: f32, device_sample_rate: f32) -> f64 {
+    sample_rate.max(1.0) as f64 / device_sample_rate.max(1.0) as f64
 }
 
 /// Map a normalized 0–1 value onto a logarithmic speed range.
@@ -308,6 +314,7 @@ impl SamplerDevice {
             samples,
             channels: ch,
             frames,
+            sample_rate: (sample_rate as f32).max(1.0),
         });
         self.sleep_state.mark_activity();
         self.emit_loading("ready", req_id);
@@ -384,9 +391,10 @@ impl SamplerDevice {
             return;
         };
         let (region_start, _) = region_frames(sample.frames, self.start, self.end);
+        let increment = playback_increment(self.speed, self.tune, self.key_track, note, self.root)
+            * sample_rate_ratio(sample.sample_rate, self.sample_rate);
         let vel = (velocity as f32) / 127.0;
         let vel_gain = (1.0 - self.velocity_amount) + self.velocity_amount * vel;
-        let increment = playback_increment(self.speed, self.tune, self.key_track, note, self.root);
         if increment <= 0.0 {
             return;
         }
@@ -806,6 +814,22 @@ mod tests {
     fn speed_compounds_with_tune() {
         let rate = playback_increment(2.0, 12.0, false, 60, 60);
         assert!((rate - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sample_rate_ratio_compensates_44k_on_48k_device() {
+        let ratio = sample_rate_ratio(44_100.0, 48_000.0);
+        assert!((ratio - 44_100.0 / 48_000.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mismatched_sample_rate_slows_or_speeds_root_playback() {
+        let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+        sampler.set_sample("r", vec![0.5; 8], 2, 44_100);
+        sampler.note_on(60, 127);
+        let voice = sampler.voices.iter().find(|v| v.active).unwrap();
+        let expected = 44_100.0 / 48_000.0;
+        assert!((voice.increment - expected).abs() < 1e-9);
     }
 
     #[test]
