@@ -1,5 +1,4 @@
-# ConversationList.gd
-# Compact dropdown of per-project conversations.
+## Compact dropdown of per-project conversations.
 class_name ConversationList extends OptionButton
 
 
@@ -8,14 +7,6 @@ signal conversation_chosen(id: String)
 
 var _ids: PackedStringArray = []
 var _guard: bool = false
-
-
-func _ready() -> void:
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fit_to_longest_item = false
-	clip_text = true
-	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	item_selected.connect(_on_item_selected)
 
 
 ## Do not size the dropdown to conversation titles; those can be very long.
@@ -49,6 +40,7 @@ func rebuild(entries: Array, active_id: String) -> void:
 	_guard = false
 
 
+## Emit `conversation_chosen` unless the selection came from `rebuild()`.
 func _on_item_selected(index: int) -> void:
 	if _guard or index < 0 or index >= _ids.size():
 		return

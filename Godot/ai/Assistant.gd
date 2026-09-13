@@ -10,7 +10,7 @@ signal reasoning_delta(text: String)
 signal tool_started(tool_name: String, args: Dictionary)
 signal tool_finished(tool_name: String, result: Dictionary)
 signal turn_finished()
-signal turn_failed(error: ChatTypes.ChatError)
+signal turn_failed(error: ChatTypes.ORChatError)
 
 
 const DEFAULT_MAX_TOOL_ROUNDS := 64
@@ -24,8 +24,8 @@ var prompt_context: PromptContext = PromptContext.new()
 
 var _busy: bool = false
 var _cancel: bool = false
-var _wait_msg: ChatTypes.ChatMessage = null
-var _wait_err: ChatTypes.ChatError = null
+var _wait_msg: ChatTypes.ORChatMessage = null
+var _wait_err: ChatTypes.ORChatError = null
 var _wait_cancelled: bool = false
 var _editor_wired: bool = false
 
@@ -122,24 +122,24 @@ func send_user(text: String, parts: Array = []) -> void:
 	if _busy:
 		return
 	if client == null or not client.has_api_key():
-		turn_failed.emit(ChatTypes.ChatError.missing_key())
+		turn_failed.emit(ChatTypes.ORChatError.missing_key())
 		return
 	var conv := store.get_current()
 	if conv == null:
 		conv = store.create()
 	var trimmed := text.strip_edges()
-	var msg: ChatTypes.ChatMessage
+	var msg: ChatTypes.ORChatMessage
 	if parts.is_empty():
 		if trimmed.is_empty():
 			return
-		msg = ChatTypes.ChatMessage.user_text(trimmed)
+		msg = ChatTypes.ORChatMessage.user_text(trimmed)
 	else:
 		var all_parts: Array = []
 		if not trimmed.is_empty():
-			all_parts.append(ChatTypes.ContentPart.text_part(trimmed))
+			all_parts.append(ChatTypes.ORContentPart.text_part(trimmed))
 		for p in parts:
 			all_parts.append(p)
-		msg = ChatTypes.ChatMessage.user_parts(all_parts)
+		msg = ChatTypes.ORChatMessage.user_parts(all_parts)
 	conv.messages.append(msg)
 	conv.ensure_title_from_first_user()
 	store.schedule_save()
@@ -200,11 +200,11 @@ func _on_client_reasoning(text: String) -> void:
 	reasoning_delta.emit(text)
 
 
-func _on_client_finished(message: ChatTypes.ChatMessage) -> void:
+func _on_client_finished(message: ChatTypes.ORChatMessage) -> void:
 	_wait_msg = message
 
 
-func _on_client_failed(error: ChatTypes.ChatError) -> void:
+func _on_client_failed(error: ChatTypes.ORChatError) -> void:
 	_wait_err = error
 
 
@@ -240,12 +240,12 @@ func _run_turn() -> void:
 		for tc in assistant_msg.tool_calls:
 			if _cancel:
 				break
-			if not tc is ChatTypes.ToolCall:
+			if not tc is ChatTypes.ORToolCall:
 				continue
 			tool_started.emit(tc.name, tc.arguments)
 			var result: Dictionary = await registry.execute(tc.name, tc.arguments)
 			tool_finished.emit(tc.name, result)
-			var tool_msg := ChatTypes.ChatMessage.tool_result(tc.id, JSON.stringify(result))
+			var tool_msg := ChatTypes.ORChatMessage.tool_result(tc.id, JSON.stringify(result))
 			conv.messages.append(tool_msg)
 		if hist:
 			hist.end_macro()
@@ -284,7 +284,7 @@ func _finish_after_tool_limit(conv: Conversation, limit: int) -> void:
 		conv.touch(get_model_label())
 		store.schedule_save()
 		conversation_changed.emit()
-	var notice := ChatTypes.ChatMessage.assistant_text(
+	var notice := ChatTypes.ORChatMessage.assistant_text(
 		"Stopped after %d tool rounds. Raise Settings → AI → Max Tool Rounds to continue longer tasks." % limit
 	)
 	notice.finish_reason = "max_tool_rounds"
@@ -293,18 +293,18 @@ func _finish_after_tool_limit(conv: Conversation, limit: int) -> void:
 	conversation_changed.emit()
 
 
-func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = true) -> ChatTypes.ChatMessage:
+func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = true) -> ChatTypes.ORChatMessage:
 	_wait_msg = null
 	_wait_err = null
 	_wait_cancelled = false
-	var req := ChatTypes.ChatRequest.new()
+	var req := ChatTypes.ORChatRequest.new()
 	req.stream = true
 	req.modalities = PackedStringArray(["text"])
 	if with_tools:
 		req.tools = registry.get_openrouter_tools()
 		req.tool_choice = "auto"
 	req.model = get_model_label()
-	var system := ChatTypes.ChatMessage.new()
+	var system := ChatTypes.ORChatMessage.new()
 	system.role = "system"
 	system.content = PromptTemplate.render(prompt_context)
 	var msgs: Array = [system]

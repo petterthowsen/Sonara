@@ -293,12 +293,12 @@ func _on_ai_test_delta(text: String) -> void:
 
 
 ## Completed assistant message from Test Connection.
-func _on_ai_test_finished(message: ChatTypes.ChatMessage) -> void:
+func _on_ai_test_finished(message: ChatTypes.ORChatMessage) -> void:
 	print("[AI] Test Connection: ", message.get_text())
 
 
 ## Failed Test Connection (401, network, missing key).
-func _on_ai_test_failed(error: ChatTypes.ChatError) -> void:
+func _on_ai_test_failed(error: ChatTypes.ORChatError) -> void:
 	print("[AI] Test Connection failed: ", error.message)
 
 

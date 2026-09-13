@@ -1,52 +1,42 @@
-# ChatTranscript.gd
-# Scrollable transcript: user/assistant text plus collapsed thinking and tools.
+## Scrollable transcript: user/assistant text plus collapsed thinking and tools.
 class_name ChatTranscript extends ScrollContainer
 
 
-var _list: VBoxContainer
-var _stream_text: RichTextLabel = null
-var _stream_wrap: Node = null
+const MESSAGE_SCENE := preload("res://ai/ui/ChatMessage.tscn")
+
+@onready var _list: VBoxContainer = $List
+
+var _stream_message: ChatMessage = null
 var _stream_thinking: CollapsibleBlock = null
 var _pending_tools: Dictionary = {}
-
-
-func _ready() -> void:
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	clip_contents = true
-	horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_list = VBoxContainer.new()
-	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_list.add_theme_constant_override("separation", 10)
-	add_child(_list)
 
 
 ## Rebuild from the active conversation (no system messages).
 func rebuild(conversation: Conversation) -> void:
 	_clear_children()
-	_stream_text = null
+	_stream_message = null
 	_stream_thinking = null
 	_pending_tools.clear()
 	if conversation == null:
 		return
 	var show_thinking := _thinking_enabled()
 	for msg in conversation.messages:
-		if not msg is ChatTypes.ChatMessage:
+		if not msg is ChatTypes.ORChatMessage:
 			continue
 		match msg.role:
 			"user":
-				_add_bubble("You", msg.get_text(), Color(0.35, 0.45, 0.62, 0.35), msg)
+				_add_message(ChatMessage.Kind.USER, msg.get_text(), msg)
 			"assistant":
 				if msg.finish_reason == "max_tool_rounds":
-					_add_bubble("Limit", msg.get_text(), Color(0.45, 0.32, 0.18, 0.5), msg)
+					_add_message(ChatMessage.Kind.LIMIT, msg.get_text(), msg)
 					continue
 				if show_thinking and not msg.reasoning.is_empty():
 					_list.add_child(CollapsibleBlock.new("thinking", "Thinking", msg.reasoning))
 				var text: String = msg.get_text()
 				if not text.is_empty() or msg.tool_calls.is_empty():
-					_add_bubble("Assistant", text if not text.is_empty() else "…", Color(0.22, 0.22, 0.26, 0.55), msg)
+					_add_message(ChatMessage.Kind.ASSISTANT, text if not text.is_empty() else "…", msg)
 				for tc in msg.tool_calls:
-					if tc is ChatTypes.ToolCall:
+					if tc is ChatTypes.ORToolCall:
 						var args_text: String = JSON.stringify(tc.arguments, "\t") if not tc.arguments.is_empty() else tc.arguments_raw
 						_list.add_child(CollapsibleBlock.new("tool", "Tool · %s" % tc.name, args_text))
 			"tool":
@@ -61,32 +51,34 @@ func rebuild(conversation: Conversation) -> void:
 ## Prepare streaming widgets for a new assistant turn.
 func begin_assistant_turn() -> void:
 	_stream_thinking = null
-	_stream_text = _add_bubble("Assistant", "", Color(0.22, 0.22, 0.26, 0.55), null)
-	_stream_wrap = _stream_text.get_parent().get_parent() if _stream_text else null
+	_stream_message = _add_message(ChatMessage.Kind.ASSISTANT, "", null)
 	_pending_tools.clear()
 	_scroll_to_end()
 
 
+## Append streamed reasoning into a collapsible thinking block.
 func append_reasoning(text: String) -> void:
 	if not _thinking_enabled() or text.is_empty():
 		return
 	if _stream_thinking == null:
 		_stream_thinking = CollapsibleBlock.new("thinking", "Thinking", "")
-		var idx := _stream_wrap.get_index() if _stream_wrap else _list.get_child_count()
+		var idx := _stream_message.get_index() if _stream_message else _list.get_child_count()
 		_list.add_child(_stream_thinking)
 		_list.move_child(_stream_thinking, idx)
 	_stream_thinking.append_body(text)
 	_scroll_to_end()
 
 
+## Append streamed assistant text to the current bubble.
 func append_text(text: String) -> void:
-	if _stream_text == null:
-		_stream_text = _add_bubble("Assistant", text, Color(0.22, 0.22, 0.26, 0.55), null)
+	if _stream_message == null:
+		_stream_message = _add_message(ChatMessage.Kind.ASSISTANT, text, null)
 	else:
-		_stream_text.text += text
+		_stream_message.append_text(text)
 	_scroll_to_end()
 
 
+## Show a collapsed block for an in-flight tool call.
 func add_tool_call(tool_name: String, args: Dictionary) -> void:
 	var args_text := JSON.stringify(args, "\t")
 	var block := CollapsibleBlock.new("tool", "Tool · %s" % tool_name, args_text)
@@ -95,77 +87,33 @@ func add_tool_call(tool_name: String, args: Dictionary) -> void:
 	_scroll_to_end()
 
 
+## Show a collapsed block for a tool result or error.
 func add_tool_result(tool_name: String, result: Dictionary) -> void:
 	var body := JSON.stringify(result, "\t")
 	_list.add_child(CollapsibleBlock.new("result", "Result · %s" % tool_name, body))
 	_scroll_to_end()
 
 
-func _add_bubble(who: String, text: String, bg: Color, msg: ChatTypes.ChatMessage) -> RichTextLabel:
-	var wrap := PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = bg
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
-	wrap.add_theme_stylebox_override("panel", style)
-	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var col := VBoxContainer.new()
-	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var who_lbl := Label.new()
-	who_lbl.text = who
-	who_lbl.clip_text = true
-	who_lbl.add_theme_font_size_override("font_size", 11)
-	who_lbl.add_theme_color_override("font_color", Color(0.7, 0.72, 0.78, 0.8))
-	col.add_child(who_lbl)
-	var body := WrappingRichText.new()
-	body.text = text
-	col.add_child(body)
-	if msg:
-		_add_media(col, msg)
-	wrap.add_child(col)
-	_list.add_child(wrap)
-	return body
+## Instance a message prefab, add it to the list, and return it.
+func _add_message(kind: ChatMessage.Kind, text: String, msg: ChatTypes.ORChatMessage) -> ChatMessage:
+	var bubble := MESSAGE_SCENE.instantiate() as ChatMessage
+	_list.add_child(bubble)
+	bubble.configure(kind, text, msg)
+	return bubble
 
 
-func _add_media(col: VBoxContainer, msg: ChatTypes.ChatMessage) -> void:
-	if not msg.content is Array:
-		return
-	for part in msg.content:
-		if not part is ChatTypes.ContentPart:
-			continue
-		if part.kind == "image_url" or part.kind == "output_image":
-			var tex := MediaEncode.image_from_data_uri(part.url)
-			if tex:
-				var rect := TextureRect.new()
-				rect.texture = tex
-				rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-				rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				rect.custom_minimum_size = Vector2(0, 80)
-				col.add_child(rect)
-		elif part.kind == "input_audio" or part.kind == "output_audio":
-			var hint := Label.new()
-			hint.text = "Audio (%s)" % part.audio_format
-			hint.add_theme_font_size_override("font_size", 11)
-			col.add_child(hint)
-
-
+## Resolve a tool-call id to the tool name in this conversation.
 func _tool_name_for(conversation: Conversation, call_id: String) -> String:
 	for msg in conversation.messages:
-		if not msg is ChatTypes.ChatMessage:
+		if not msg is ChatTypes.ORChatMessage:
 			continue
 		for tc in msg.tool_calls:
-			if tc is ChatTypes.ToolCall and tc.id == call_id:
+			if tc is ChatTypes.ORToolCall and tc.id == call_id:
 				return tc.name
 	return call_id
 
 
+## Whether Settings asks the transcript to show model reasoning.
 func _thinking_enabled() -> bool:
 	var settings := get_node_or_null("/root/Settings")
 	if settings == null:
@@ -173,6 +121,7 @@ func _thinking_enabled() -> bool:
 	return bool(settings.call("get_value", "ai/chat/reasoning"))
 
 
+## Free every message node in the list.
 func _clear_children() -> void:
 	if _list == null:
 		return
@@ -180,6 +129,7 @@ func _clear_children() -> void:
 		child.queue_free()
 
 
+## Scroll to the latest message after the next layout pass.
 func _scroll_to_end() -> void:
 	await get_tree().process_frame
 	set_deferred("scroll_vertical", int(get_v_scroll_bar().max_value))

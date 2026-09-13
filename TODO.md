@@ -119,7 +119,7 @@ Done:
 
 ### Devices
 
-- [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code
+- [x] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code
 
 Done:
 

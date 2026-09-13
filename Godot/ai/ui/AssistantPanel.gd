@@ -1,26 +1,21 @@
-# AssistantPanel.gd
-# Right-dock chat: conversation header, transcript, composer.
+## Right-dock chat: conversation header, transcript, composer.
 class_name AssistantPanel extends PanelContainer
 
 
-var _header_list: ConversationList
-var _new_btn: Button
-var _delete_btn: Button
-var _model_lbl: Label
-var _cancel_btn: Button
-var _empty: Label
-var _transcript: ChatTranscript
-var _composer: ChatComposer
+@onready var _header_list: ConversationList = $Content/Header/ConversationList
+@onready var _new_btn: Button = $Content/Header/New
+@onready var _delete_btn: Button = $Content/Header/Delete
+@onready var _model_lbl: Label = $Content/Meta/ModelLabel
+@onready var _cancel_btn: Button = $Content/Meta/Cancel
+@onready var _empty: Label = $Content/Empty
+@onready var _transcript: ChatTranscript = $Content/Transcript
+@onready var _composer: ChatComposer = $Content/Composer
+
 var _rebuilding: bool = false
 
 
+## Bind to the Assistant autoload and paint the current conversation.
 func _ready() -> void:
-	theme_type_variation = "PrimaryPanel"
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	clip_contents = true
-	custom_minimum_size = Vector2.ZERO
-	_build()
 	var assistant := _assistant()
 	if assistant:
 		if not assistant.conversation_changed.is_connected(_on_conversation_changed):
@@ -47,52 +42,7 @@ func _assistant() -> Node:
 	return get_node_or_null("/root/Assistant")
 
 
-func _build() -> void:
-	var root := VBoxContainer.new()
-	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_theme_constant_override("separation", 8)
-	add_child(root)
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 6)
-	_header_list = ConversationList.new()
-	_header_list.conversation_chosen.connect(_on_conversation_chosen)
-	header.add_child(_header_list)
-	_new_btn = Button.new()
-	_new_btn.text = "New"
-	_new_btn.pressed.connect(_on_new)
-	header.add_child(_new_btn)
-	_delete_btn = Button.new()
-	_delete_btn.text = "Delete"
-	_delete_btn.pressed.connect(_on_delete)
-	header.add_child(_delete_btn)
-	root.add_child(header)
-	var meta := HBoxContainer.new()
-	_model_lbl = Label.new()
-	_model_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_model_lbl.clip_text = true
-	_model_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_model_lbl.add_theme_font_size_override("font_size", 11)
-	meta.add_child(_model_lbl)
-	_cancel_btn = Button.new()
-	_cancel_btn.text = "Cancel"
-	_cancel_btn.visible = false
-	_cancel_btn.pressed.connect(_on_cancel)
-	meta.add_child(_cancel_btn)
-	root.add_child(meta)
-	_empty = Label.new()
-	_empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_empty.text = "Set an OpenRouter API key in Settings → AI"
-	_empty.visible = false
-	root.add_child(_empty)
-	_transcript = ChatTranscript.new()
-	root.add_child(_transcript)
-	_composer = ChatComposer.new()
-	_composer.send_requested.connect(_on_send)
-	root.add_child(_composer)
-
-
+## Refresh header, transcript, and composer from the current Assistant state.
 func _refresh() -> void:
 	var assistant := _assistant()
 	if assistant == null:
@@ -112,6 +62,7 @@ func _refresh() -> void:
 	_rebuilding = false
 
 
+## Lightweight header update while a turn is in flight.
 func _on_conversation_changed() -> void:
 	if _rebuilding:
 		return
@@ -123,18 +74,21 @@ func _on_conversation_changed() -> void:
 	_refresh()
 
 
+## Switch the active conversation from the header dropdown.
 func _on_conversation_chosen(id: String) -> void:
 	var assistant := _assistant()
 	if assistant:
 		assistant.open_conversation(id)
 
 
+## Start a new empty conversation.
 func _on_new() -> void:
 	var assistant := _assistant()
 	if assistant:
 		assistant.new_conversation()
 
 
+## Delete the conversation currently shown in the header.
 func _on_delete() -> void:
 	var assistant := _assistant()
 	if assistant == null:
@@ -144,50 +98,60 @@ func _on_delete() -> void:
 		assistant.delete_conversation(conv.id)
 
 
+## Abort the in-flight Assistant turn.
 func _on_cancel() -> void:
 	var assistant := _assistant()
 	if assistant:
 		assistant.cancel()
 
 
+## Forward composer text and attachments to Assistant.
 func _on_send(text: String, parts: Array) -> void:
 	var assistant := _assistant()
 	if assistant:
 		assistant.send_user(text, parts)
 
 
+## Lock the composer and start a streaming assistant bubble.
 func _on_turn_started() -> void:
 	_set_busy(true)
 	_transcript.begin_assistant_turn()
 
 
+## Append streamed assistant text to the current bubble.
 func _on_text_delta(text: String) -> void:
 	_transcript.append_text(text)
 
 
+## Append streamed reasoning into the thinking block.
 func _on_reasoning_delta(text: String) -> void:
 	_transcript.append_reasoning(text)
 
 
+## Show a tool-call block as soon as the model requests it.
 func _on_tool_started(tool_name: String, args: Dictionary) -> void:
 	_transcript.add_tool_call(tool_name, args)
 
 
+## Show the tool result under the matching call.
 func _on_tool_finished(tool_name: String, result: Dictionary) -> void:
 	_transcript.add_tool_result(tool_name, result)
 
 
+## Unlock the UI after a successful turn and reload persisted messages.
 func _on_turn_finished() -> void:
 	_set_busy(false)
 	_refresh()
 
 
-func _on_turn_failed(error: ChatTypes.ChatError) -> void:
+## Surface a turn error in the transcript, then reload.
+func _on_turn_failed(error: ChatTypes.ORChatError) -> void:
 	_set_busy(false)
 	_transcript.add_tool_result("error", {"ok": false, "error": error.message})
 	_refresh()
 
 
+## Disable conversation switching and the composer while a turn is running.
 func _set_busy(busy: bool) -> void:
 	_cancel_btn.visible = busy
 	_composer.set_busy(busy)

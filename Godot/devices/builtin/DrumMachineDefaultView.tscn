@@ -1,15 +1,84 @@
 [gd_scene format=3 uid="uid://dng4r8gabxvct"]
 
 [ext_resource type="Script" uid="uid://c23bc0u6um45i" path="res://devices/builtin/DrumMachineDefaultView.gd" id="1_x40xj"]
+[ext_resource type="PackedScene" uid="uid://cxchtbdlah0hs" path="res://devices/container/DrumPad.tscn" id="2_gq2xs"]
 
-[node name="DrumMachineDefaultView" type="Control" unique_id=1131407070]
+[node name="DrumMachineDefaultView" type="VBoxContainer" unique_id=2116787668]
 custom_minimum_size = Vector2(240, 220)
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme_override_constants/separation = 6
 script = ExtResource("1_x40xj")
+
+[node name="Pager" type="HBoxContainer" parent="." unique_id=1812284684]
+layout_mode = 2
+alignment = 1
+
+[node name="Prev" type="Button" parent="Pager" unique_id=2120320]
+layout_mode = 2
+text = "◀"
+
+[node name="PageLabel" type="Label" parent="Pager" unique_id=1417452148]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+
+[node name="Next" type="Button" parent="Pager" unique_id=104802152]
+layout_mode = 2
+text = "▶"
+
+[node name="Grid" type="GridContainer" parent="." unique_id=1089480034]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+columns = 4
+
+[node name="Pad0" parent="Grid" unique_id=1147851778 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad1" parent="Grid" unique_id=932311127 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad2" parent="Grid" unique_id=684892916 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad3" parent="Grid" unique_id=1297539738 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad4" parent="Grid" unique_id=454193314 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad5" parent="Grid" unique_id=1878515347 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad6" parent="Grid" unique_id=2146105678 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad7" parent="Grid" unique_id=584978366 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad8" parent="Grid" unique_id=1177490980 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad9" parent="Grid" unique_id=1198497811 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad10" parent="Grid" unique_id=1500276197 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad11" parent="Grid" unique_id=1623328835 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad12" parent="Grid" unique_id=1636605030 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad13" parent="Grid" unique_id=1316454393 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad14" parent="Grid" unique_id=640416573 instance=ExtResource("2_gq2xs")]
+layout_mode = 2
+
+[node name="Pad15" parent="Grid" unique_id=384394577 instance=ExtResource("2_gq2xs")]
+layout_mode = 2

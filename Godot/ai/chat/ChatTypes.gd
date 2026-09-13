@@ -4,7 +4,7 @@ class_name ChatTypes extends RefCounted
 
 
 ## One content part: text, image, or audio (in or out).
-class ContentPart:
+class ORContentPart:
 	var kind: String = "text"
 	var text: String = ""
 	var url: String = ""
@@ -15,16 +15,16 @@ class ContentPart:
 
 
 	## Plain text part.
-	static func text_part(p_text: String) -> ContentPart:
-		var part := ContentPart.new()
+	static func text_part(p_text: String) -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = "text"
 		part.text = p_text
 		return part
 
 
 	## Image as HTTPS URL or data URI.
-	static func image_url(p_url: String, p_detail: String = "auto") -> ContentPart:
-		var part := ContentPart.new()
+	static func image_url(p_url: String, p_detail: String = "auto") -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = "image_url"
 		part.url = p_url
 		part.detail = p_detail
@@ -32,8 +32,8 @@ class ContentPart:
 
 
 	## Input audio: raw base64 bytes, not a data URI.
-	static func input_audio(p_b64: String, p_format: String = "wav") -> ContentPart:
-		var part := ContentPart.new()
+	static func input_audio(p_b64: String, p_format: String = "wav") -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = "input_audio"
 		part.audio_b64 = p_b64
 		part.audio_format = p_format
@@ -41,8 +41,8 @@ class ContentPart:
 
 
 	## Assistant audio output (assembled after the stream ends).
-	static func output_audio(p_b64: String, p_format: String = "wav") -> ContentPart:
-		var part := ContentPart.new()
+	static func output_audio(p_b64: String, p_format: String = "wav") -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = "output_audio"
 		part.audio_b64 = p_b64
 		part.audio_format = p_format
@@ -50,8 +50,8 @@ class ContentPart:
 
 
 	## Assistant image output.
-	static func output_image(p_url: String) -> ContentPart:
-		var part := ContentPart.new()
+	static func output_image(p_url: String) -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = "output_image"
 		part.url = p_url
 		return part
@@ -82,8 +82,8 @@ class ContentPart:
 
 
 	## Restore a content part saved by to_storage().
-	static func from_storage(data: Dictionary) -> ContentPart:
-		var part := ContentPart.new()
+	static func from_storage(data: Dictionary) -> ORContentPart:
+		var part := ORContentPart.new()
 		part.kind = str(data.get("kind", "text"))
 		part.text = str(data.get("text", ""))
 		part.url = str(data.get("url", ""))
@@ -95,7 +95,7 @@ class ContentPart:
 
 
 	## Parse one OpenRouter content-part object.
-	static func from_openrouter(data: Dictionary) -> ContentPart:
+	static func from_openrouter(data: Dictionary) -> ORContentPart:
 		var type_name := str(data.get("type", "text"))
 		match type_name:
 			"image_url":
@@ -120,7 +120,7 @@ class ContentPart:
 
 
 ## One streamed or completed tool call.
-class ToolCall:
+class ORToolCall:
 	var id: String = ""
 	var name: String = ""
 	var arguments: Dictionary = {}
@@ -141,8 +141,8 @@ class ToolCall:
 
 
 	## Parse a completed tool_calls[] item.
-	static func from_openrouter(data: Dictionary) -> ToolCall:
-		var tc := ToolCall.new()
+	static func from_openrouter(data: Dictionary) -> ORToolCall:
+		var tc := ORToolCall.new()
 		tc.id = str(data.get("id", ""))
 		tc.index = int(data.get("index", 0))
 		var fn = data.get("function", {})
@@ -179,8 +179,8 @@ class ToolCall:
 
 
 	## Restore a tool call saved by to_storage().
-	static func from_storage(data: Dictionary) -> ToolCall:
-		var tc := ToolCall.new()
+	static func from_storage(data: Dictionary) -> ORToolCall:
+		var tc := ORToolCall.new()
 		tc.id = str(data.get("id", ""))
 		tc.name = str(data.get("name", ""))
 		tc.arguments_raw = str(data.get("arguments_raw", ""))
@@ -203,7 +203,7 @@ class ToolCall:
 
 
 ## One chat message (system / user / assistant / tool).
-class ChatMessage:
+class ORChatMessage:
 	var role: String = "user"
 	var content = ""
 	var name: String = ""
@@ -216,32 +216,32 @@ class ChatMessage:
 
 
 	## User message with plain text.
-	static func user_text(text: String) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func user_text(text: String) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = "user"
 		msg.content = text
 		return msg
 
 
 	## User message with multimodal parts.
-	static func user_parts(parts: Array) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func user_parts(parts: Array) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = "user"
 		msg.content = parts
 		return msg
 
 
 	## Assistant text (and optional tool calls).
-	static func assistant_text(text: String) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func assistant_text(text: String) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = "assistant"
 		msg.content = text
 		return msg
 
 
 	## Tool result for tool_call_id.
-	static func tool_result(p_call_id: String, p_content: String) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func tool_result(p_call_id: String, p_content: String) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = "tool"
 		msg.tool_call_id = p_call_id
 		msg.content = p_content
@@ -255,7 +255,7 @@ class ChatMessage:
 		if content is Array:
 			var bits: PackedStringArray = []
 			for part in content:
-				if part is ContentPart and part.kind == "text":
+				if part is ORContentPart and part.kind == "text":
 					bits.append(part.text)
 			return "".join(bits)
 		return ""
@@ -271,13 +271,13 @@ class ChatMessage:
 		if not tool_calls.is_empty():
 			var calls: Array = []
 			for tc in tool_calls:
-				if tc is ToolCall:
+				if tc is ORToolCall:
 					calls.append(tc.to_openrouter())
 			d["tool_calls"] = calls
 		if content is Array:
 			var parts: Array = []
 			for part in content:
-				if part is ContentPart:
+				if part is ORContentPart:
 					parts.append(part.to_openrouter())
 			d["content"] = parts
 		elif content is String:
@@ -289,8 +289,8 @@ class ChatMessage:
 
 
 	## Parse a completed OpenRouter message object.
-	static func from_openrouter(data: Dictionary) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func from_openrouter(data: Dictionary) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = str(data.get("role", "assistant"))
 		msg.name = str(data.get("name", ""))
 		msg.tool_call_id = str(data.get("tool_call_id", ""))
@@ -299,9 +299,9 @@ class ChatMessage:
 			var parts: Array = []
 			for item in raw_content:
 				if item is Dictionary:
-					parts.append(ContentPart.from_openrouter(item))
+					parts.append(ORContentPart.from_openrouter(item))
 				elif item is String:
-					parts.append(ContentPart.text_part(item))
+					parts.append(ORContentPart.text_part(item))
 			msg.content = parts
 		elif raw_content == null:
 			msg.content = ""
@@ -309,7 +309,7 @@ class ChatMessage:
 			msg.content = str(raw_content)
 		for tc_data in data.get("tool_calls", []):
 			if tc_data is Dictionary:
-				msg.tool_calls.append(ToolCall.from_openrouter(tc_data))
+				msg.tool_calls.append(ORToolCall.from_openrouter(tc_data))
 		var audio = data.get("audio", {})
 		if audio is Dictionary:
 			msg.audio_b64 = str(audio.get("data", ""))
@@ -333,7 +333,7 @@ class ChatMessage:
 		if content is Array:
 			var parts: Array = []
 			for part in content:
-				if part is ContentPart:
+				if part is ORContentPart:
 					parts.append(part.to_storage())
 			d["content_parts"] = parts
 		else:
@@ -341,15 +341,15 @@ class ChatMessage:
 		if not tool_calls.is_empty():
 			var calls: Array = []
 			for tc in tool_calls:
-				if tc is ToolCall:
+				if tc is ORToolCall:
 					calls.append(tc.to_storage())
 			d["tool_calls"] = calls
 		return d
 
 
 	## Restore a message saved by to_storage().
-	static func from_storage(data: Dictionary) -> ChatMessage:
-		var msg := ChatMessage.new()
+	static func from_storage(data: Dictionary) -> ORChatMessage:
+		var msg := ORChatMessage.new()
 		msg.role = str(data.get("role", "user"))
 		msg.name = str(data.get("name", ""))
 		msg.tool_call_id = str(data.get("tool_call_id", ""))
@@ -361,13 +361,13 @@ class ChatMessage:
 			var parts: Array = []
 			for item in data.content_parts:
 				if item is Dictionary:
-					parts.append(ContentPart.from_storage(item))
+					parts.append(ORContentPart.from_storage(item))
 			msg.content = parts
 		else:
 			msg.content = str(data.get("content", ""))
 		for tc_data in data.get("tool_calls", []):
 			if tc_data is Dictionary:
-				msg.tool_calls.append(ToolCall.from_storage(tc_data))
+				msg.tool_calls.append(ORToolCall.from_storage(tc_data))
 		return msg
 
 
@@ -382,7 +382,7 @@ class ChatMessage:
 
 
 ## Outgoing chat/completions body.
-class ChatRequest:
+class ORChatRequest:
 	var model: String = ""
 	var messages: Array = []
 	var tools: Array = []
@@ -405,7 +405,7 @@ class ChatRequest:
 		}
 		var msgs: Array = []
 		for msg in messages:
-			if msg is ChatMessage:
+			if msg is ORChatMessage:
 				msgs.append(msg.to_openrouter())
 			elif msg is Dictionary:
 				msgs.append(msg)
@@ -439,33 +439,33 @@ class ChatRequest:
 
 	func _has_part_kind(kind: String) -> bool:
 		for msg in messages:
-			if not msg is ChatMessage:
+			if not msg is ORChatMessage:
 				continue
 			if msg.content is Array:
 				for part in msg.content:
-					if part is ContentPart and part.kind == kind:
+					if part is ORContentPart and part.kind == kind:
 						return true
 		return false
 
 
 ## Incremental SSE chunk.
-class ChatDelta:
+class ORChatDelta:
 	var text: String = ""
 	var tool_call_fragments: Array = []
 	var audio_b64: String = ""
 	var audio_transcript: String = ""
 	var finish_reason: String = ""
 	var reasoning: String = ""
-	var image_part: ContentPart = null
+	var image_part: ORContentPart = null
 	var error_message: String = ""
 	var error_code: String = ""
 
 
 	## Parse one `data:` JSON object from the SSE stream.
-	static func from_openrouter_chunk(data: Dictionary) -> ChatDelta:
-		var delta := ChatDelta.new()
+	static func from_openrouter_chunk(data: Dictionary) -> ORChatDelta:
+		var delta := ORChatDelta.new()
 		if data.has("error") and data.error is Dictionary:
-			delta.error_message = ChatError.format_openrouter_error(data.error, 0)
+			delta.error_message = ORChatError.format_openrouter_error(data.error, 0)
 			delta.error_code = str(data.error.get("code", ""))
 			return delta
 		var choices = data.get("choices", [])
@@ -485,7 +485,7 @@ class ChatDelta:
 			for item in content:
 				if not item is Dictionary:
 					continue
-				var part := ContentPart.from_openrouter(item)
+				var part := ORContentPart.from_openrouter(item)
 				if part.kind == "text":
 					delta.text += part.text
 				elif part.kind == "image_url" or part.kind == "output_image":
@@ -496,42 +496,42 @@ class ChatDelta:
 			delta.audio_transcript = str(audio.get("transcript", ""))
 		var images = raw.get("images", [])
 		if images is Array and not images.is_empty() and images[0] is Dictionary:
-			delta.image_part = ContentPart.from_openrouter(images[0])
+			delta.image_part = ORContentPart.from_openrouter(images[0])
 		for frag in raw.get("tool_calls", []):
 			if frag is Dictionary:
 				delta.tool_call_fragments.append(frag)
-		delta.reasoning = ChatMessage._reasoning_from(raw)
+		delta.reasoning = ORChatMessage._reasoning_from(raw)
 		if delta.reasoning.is_empty():
-			delta.reasoning = ChatMessage._reasoning_from(data)
+			delta.reasoning = ORChatMessage._reasoning_from(data)
 		return delta
 
 
 ## Transport or API failure. Never includes the API key.
-class ChatError:
+class ORChatError:
 	var http_status: int = 0
 	var message: String = ""
 	var code: String = ""
 
 
 	## Missing API key before any request is sent.
-	static func missing_key() -> ChatError:
-		var err := ChatError.new()
+	static func missing_key() -> ORChatError:
+		var err := ORChatError.new()
 		err.message = "OpenRouter API key is not set. Add it in Settings → AI."
 		err.code = "missing_api_key"
 		return err
 
 
 	## Connect / TLS / DNS failure.
-	static func from_connect(status: int, detail: String) -> ChatError:
-		var err := ChatError.new()
+	static func from_connect(status: int, detail: String) -> ORChatError:
+		var err := ORChatError.new()
 		err.code = "connect"
 		err.message = detail if not detail.is_empty() else "Could not connect to OpenRouter (status %d)." % status
 		return err
 
 
 	## HTTP error body (`error.message`, plus OpenRouter `metadata` provider detail).
-	static func from_http(status: int, body: String) -> ChatError:
-		var err := ChatError.new()
+	static func from_http(status: int, body: String) -> ORChatError:
+		var err := ORChatError.new()
 		err.http_status = status
 		err.message = "HTTP %d" % status
 		if status == 401:
@@ -622,16 +622,16 @@ class ChatError:
 
 
 	## Model rejected a requested modality.
-	static func unsupported_modality(detail: String) -> ChatError:
-		var err := ChatError.new()
+	static func unsupported_modality(detail: String) -> ORChatError:
+		var err := ORChatError.new()
 		err.code = "unsupported_modality"
 		err.message = detail
 		return err
 
 
 	## Truncated or invalid SSE payload.
-	static func parse_failure(detail: String) -> ChatError:
-		var err := ChatError.new()
+	static func parse_failure(detail: String) -> ORChatError:
+		var err := ORChatError.new()
 		err.code = "parse"
 		err.message = detail
 		return err

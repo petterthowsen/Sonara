@@ -14,8 +14,8 @@ var note: int = 36
 var child: DeviceInstance = null
 var container: DeviceInstance = null
 
-var _note_label: Label = null
-var _name_label: Label = null
+@onready var _note_label: Label = $VBox/Note
+@onready var _name_label: Label = $VBox/Name
 var _idle_style: StyleBoxFlat = null
 var _filled_style: StyleBoxFlat = null
 var _selected_style: StyleBoxFlat = null
@@ -26,33 +26,13 @@ var _sounding: bool = false
 var _drag_started: bool = false
 
 
-## Build labels and pad chrome.
+## Apply pad chrome once the scene labels are ready.
 func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_STOP
-	custom_minimum_size = Vector2(56, 48)
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_idle_style = _make_style(Color(0.14, 0.14, 0.16, 0.95))
 	_filled_style = _make_style(Color(0.2, 0.24, 0.3, 0.98))
 	_selected_style = _make_style(Color(0.32, 0.42, 0.55, 1.0))
 	_hit_style = _make_style(Color(0.45, 0.58, 0.72, 1.0))
 	add_theme_stylebox_override("panel", _idle_style)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 2)
-	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(col)
-	_note_label = Label.new()
-	_note_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_note_label.add_theme_font_size_override("font_size", 11)
-	_note_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(_note_label)
-	_name_label = Label.new()
-	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_name_label.add_theme_font_size_override("font_size", 10)
-	_name_label.modulate = Color(0.85, 0.85, 0.9, 0.9)
-	_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(_name_label)
 	_refresh()
 
 

@@ -3,8 +3,13 @@ class_name SamplerDefaultView extends DeviceView
 
 const ENVELOPE_HEIGHT := 56.0
 const KNOB_ROW_HEIGHT := 52.0
-const KNOB_SIZE := 32.0
-const EnvelopeControlScene := preload("res://components/EnvelopeControl.tscn")
+
+@onready var _waveform_area: Control = $Waveform
+@onready var _envelope_control: EnvelopeControl = $EnvelopeControl
+@onready var _knob_attack: RotaryKnob = $KnobRow/Attack/Knob
+@onready var _knob_decay: RotaryKnob = $KnobRow/Decay/Knob
+@onready var _knob_sustain: RotaryKnob = $KnobRow/Sustain/Knob
+@onready var _knob_release: RotaryKnob = $KnobRow/Release/Knob
 
 var _start_id: int = -1
 var _end_id: int = -1
@@ -12,20 +17,16 @@ var _attack_id: int = -1
 var _decay_id: int = -1
 var _sustain_id: int = -1
 var _release_id: int = -1
-var _envelope_control: EnvelopeControl = null
 var _envelope: Envelope = null
 var _syncing_envelope := false
-var _knob_row: HBoxContainer = null
-var _knob_attack: RotaryKnob = null
-var _knob_decay: RotaryKnob = null
-var _knob_sustain: RotaryKnob = null
-var _knob_release: RotaryKnob = null
 
 
-## Create the envelope editor and ADSR knobs as soon as the view enters the tree.
+## Wire the scene envelope and knobs as soon as the view enters the tree.
 func _ready() -> void:
-	_ensure_envelope_control()
-	_ensure_knob_row()
+	_setup_envelope()
+	_setup_knobs()
+	if _waveform_area and not _waveform_area.resized.is_connected(queue_redraw):
+		_waveform_area.resized.connect(queue_redraw)
 
 
 ## Leave room below the waveform for the ADSR graph and knobs.
@@ -35,6 +36,8 @@ func _get_minimum_size() -> Vector2:
 
 ## Bind start/end and ADSR parameters, then refresh waveform and envelope.
 func _on_bind() -> void:
+	if not is_node_ready():
+		await ready
 	if device == null:
 		return
 	_start_id = device.get_parameter_id_by_name("Start")
@@ -45,8 +48,6 @@ func _on_bind() -> void:
 	_release_id = device.get_parameter_id_by_name("Release")
 	_ensure_waveform()
 	_connect_waveform()
-	_ensure_envelope_control()
-	_ensure_knob_row()
 	_sync_envelope_from_device()
 	queue_redraw()
 
@@ -87,17 +88,15 @@ func _on_waveform_changed(_level: int = 0) -> void:
 	queue_redraw()
 
 
-## Instance the envelope editor along the bottom edge if the scene has none.
-func _ensure_envelope_control() -> void:
-	if _envelope_control != null and is_instance_valid(_envelope_control):
-		_layout_envelope_control()
-		return
-	_envelope_control = get_node_or_null("EnvelopeControl") as EnvelopeControl
+## Configure the scene envelope resource and listen for handle edits.
+func _setup_envelope() -> void:
 	if _envelope_control == null:
-		_envelope_control = EnvelopeControlScene.instantiate() as EnvelopeControl
-		_envelope_control.name = "EnvelopeControl"
-		add_child(_envelope_control)
-	_envelope = Envelope.new()
+		push_error("SamplerDefaultView missing EnvelopeControl")
+		return
+	_envelope = _envelope_control.envelope
+	if _envelope == null:
+		_envelope = Envelope.new()
+		_envelope_control.envelope = _envelope
 	_envelope.min_attack = 0.001
 	_envelope.max_attack = 2.0
 	_envelope.min_decay = 0.001
@@ -105,22 +104,10 @@ func _ensure_envelope_control() -> void:
 	_envelope.min_release = 0.001
 	_envelope.max_release = 2.0
 	_envelope.set_adsr(0.001, 0.001, 1.0, 0.01)
-	_envelope_control.envelope = _envelope
 	_envelope.attack_changed.connect(_on_envelope_attack_changed)
 	_envelope.decay_changed.connect(_on_envelope_decay_changed)
 	_envelope.sustain_changed.connect(_on_envelope_sustain_changed)
 	_envelope.release_changed.connect(_on_envelope_release_changed)
-	_layout_envelope_control()
-
-
-## Pin the envelope graph above the knob row at the bottom of the panel.
-func _layout_envelope_control() -> void:
-	if _envelope_control == null:
-		return
-	_envelope_control.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	_envelope_control.offset_top = -_adsr_stack_height()
-	_envelope_control.offset_bottom = -KNOB_ROW_HEIGHT
-	_envelope_control.custom_minimum_size = Vector2(0, ENVELOPE_HEIGHT)
 
 
 ## Height of the envelope graph plus the knob row.
@@ -128,69 +115,19 @@ func _adsr_stack_height() -> float:
 	return ENVELOPE_HEIGHT + KNOB_ROW_HEIGHT
 
 
-## Build four A/D/S/R knobs under the envelope graph.
-func _ensure_knob_row() -> void:
-	if _knob_row != null and is_instance_valid(_knob_row):
-		_layout_knob_row()
+## Attach formatters and value listeners to the scene ADSR knobs.
+func _setup_knobs() -> void:
+	if _knob_attack == null:
+		push_error("SamplerDefaultView missing ADSR knobs")
 		return
-	_knob_row = get_node_or_null("KnobRow") as HBoxContainer
-	if _knob_row == null:
-		_knob_row = HBoxContainer.new()
-		_knob_row.name = "KnobRow"
-		add_child(_knob_row)
-	_knob_row.add_theme_constant_override("separation", 4)
-	_knob_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_knob_attack = _make_adsr_knob("A", true, 0.001, 2.0, 0.001, _format_envelope_time)
-	_knob_decay = _make_adsr_knob("D", true, 0.001, 2.0, 0.001, _format_envelope_time)
-	_knob_sustain = _make_adsr_knob("S", false, 0.0, 1.0, 1.0, _format_envelope_sustain)
-	_knob_release = _make_adsr_knob("R", true, 0.001, 2.0, 0.01, _format_envelope_time)
+	_knob_attack.value_text_callback = _format_envelope_time
+	_knob_decay.value_text_callback = _format_envelope_time
+	_knob_sustain.value_text_callback = _format_envelope_sustain
+	_knob_release.value_text_callback = _format_envelope_time
 	_knob_attack.value_changed.connect(_on_attack_knob_changed)
 	_knob_decay.value_changed.connect(_on_decay_knob_changed)
 	_knob_sustain.value_changed.connect(_on_sustain_knob_changed)
 	_knob_release.value_changed.connect(_on_release_knob_changed)
-	_layout_knob_row()
-
-
-## Pin the knob row to the bottom edge of the panel.
-func _layout_knob_row() -> void:
-	if _knob_row == null:
-		return
-	_knob_row.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	_knob_row.offset_top = -KNOB_ROW_HEIGHT
-	_knob_row.offset_bottom = 0.0
-	_knob_row.custom_minimum_size = Vector2(0, KNOB_ROW_HEIGHT)
-
-
-## Create one labeled ADSR knob packed into the row.
-func _make_adsr_knob(
-	caption: String,
-	logarithmic: bool,
-	min_v: float,
-	max_v: float,
-	default_v: float,
-	formatter: Callable
-) -> RotaryKnob:
-	var box := VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 0)
-	var knob := RotaryKnob.new()
-	knob.custom_minimum_size = Vector2(KNOB_SIZE, KNOB_SIZE)
-	knob.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	knob.logarithmic = logarithmic
-	knob.min_value = min_v
-	knob.max_value = max_v
-	knob.value_default = default_v
-	knob.set_value_no_signal(default_v)
-	knob.value_text_callback = formatter
-	var label := Label.new()
-	label.text = caption
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 11)
-	box.add_child(knob)
-	box.add_child(label)
-	_knob_row.add_child(box)
-	return knob
 
 
 ## Format attack/decay/release as milliseconds or seconds.
@@ -306,9 +243,9 @@ func _on_release_knob_changed(value: float) -> void:
 		_envelope.release = value
 
 
-## Draw the waveform and start/end region above the envelope editor.
+## Draw the waveform and start/end region in the waveform slot.
 func _draw() -> void:
-	var rect := Rect2(Vector2.ZERO, Vector2(size.x, maxf(size.y - _adsr_stack_height(), 1.0)))
+	var rect := _waveform_rect()
 	draw_rect(rect, Color(0.08, 0.08, 0.1, 1.0), true)
 	var waveform := _ready_waveform()
 	if waveform == null:
@@ -334,6 +271,13 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2(x1, rect.position.y), Vector2(rect.end.x - x1, rect.size.y)), Color(0, 0, 0, 0.45), true)
 	draw_line(Vector2(x0, rect.position.y), Vector2(x0, rect.end.y), Color(0.95, 0.85, 0.4, 0.9), 1.0)
 	draw_line(Vector2(x1, rect.position.y), Vector2(x1, rect.end.y), Color(0.95, 0.85, 0.4, 0.9), 1.0)
+
+
+## Local rect of the scene waveform slot, falling back to the area above ADSR.
+func _waveform_rect() -> Rect2:
+	if _waveform_area:
+		return Rect2(_waveform_area.position, _waveform_area.size)
+	return Rect2(Vector2.ZERO, Vector2(size.x, maxf(size.y - _adsr_stack_height(), 1.0)))
 
 
 ## Return the highest ready waveform level, or null while loading/empty.

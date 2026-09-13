@@ -1,5 +1,5 @@
 # test_openrouter_sse.gd
-# Headless tests for OpenRouterSse, ChatTypes wire format, and ChatError.
+# Headless tests for OpenRouterSse, ChatTypes wire format, and ORChatError.
 # Run: godot --headless --path Godot -s ai/tests/test_openrouter_sse.gd
 extends SceneTree
 
@@ -81,11 +81,11 @@ func _test_crlf_and_ignore_after_done() -> void:
 ## User message can carry text + image_url + input_audio in OpenRouter shape.
 func _test_multimodal_user_message() -> void:
 	var parts: Array = [
-		ChatTypes.ContentPart.text_part("What's on this clip?"),
-		ChatTypes.ContentPart.image_url("data:image/png;base64,aaa", "auto"),
-		ChatTypes.ContentPart.input_audio("YmFzZTY0", "wav"),
+		ChatTypes.ORContentPart.text_part("What's on this clip?"),
+		ChatTypes.ORContentPart.image_url("data:image/png;base64,aaa", "auto"),
+		ChatTypes.ORContentPart.input_audio("YmFzZTY0", "wav"),
 	]
-	var msg := ChatTypes.ChatMessage.user_parts(parts)
+	var msg := ChatTypes.ORChatMessage.user_parts(parts)
 	var wire: Dictionary = msg.to_openrouter()
 	_assert(wire.role == "user", "role is user")
 	_assert(wire.content is Array and wire.content.size() == 3, "three content parts")
@@ -99,7 +99,7 @@ func _test_multimodal_user_message() -> void:
 
 ## Streaming tool-call fragments merge by index and parse JSON arguments.
 func _test_tool_call_merge() -> void:
-	var tc := ChatTypes.ToolCall.new()
+	var tc := ChatTypes.ORToolCall.new()
 	tc.merge_delta({"index": 0, "id": "call_1", "function": {"name": "list_project", "arguments": "{"}})
 	tc.merge_delta({"index": 0, "function": {"arguments": "}"}})
 	tc.parse_arguments()
@@ -117,18 +117,18 @@ func _test_tool_call_merge() -> void:
 			"finish_reason": "tool_calls",
 		}]
 	}
-	var delta := ChatTypes.ChatDelta.from_openrouter_chunk(chunk)
+	var delta := ChatTypes.ORChatDelta.from_openrouter_chunk(chunk)
 	_assert(delta.tool_call_fragments.size() == 1, "delta carries tool_calls")
 	_assert(delta.finish_reason == "tool_calls", "finish_reason from choice")
 
 
 ## 401 surfaces a readable message, never the request body key.
 func _test_chat_error_401() -> void:
-	var err := ChatTypes.ChatError.from_http(401, '{"error":{"message":"User not found.","code":401}}')
+	var err := ChatTypes.ORChatError.from_http(401, '{"error":{"message":"User not found.","code":401}}')
 	_assert(err.http_status == 401, "status stored")
 	_assert(err.message.contains("401"), "message mentions 401")
 	_assert(err.message.contains("User not found") or err.message.contains("invalid"), "API or fallback message")
-	var missing := ChatTypes.ChatError.missing_key()
+	var missing := ChatTypes.ORChatError.missing_key()
 	_assert(missing.code == "missing_api_key", "missing key code")
 	_assert(missing.message.contains("Settings"), "missing key points at Settings")
 	var provider_body := JSON.stringify({
@@ -141,7 +141,7 @@ func _test_chat_error_401() -> void:
 			},
 		},
 	})
-	var provider := ChatTypes.ChatError.from_http(400, provider_body)
+	var provider := ChatTypes.ORChatError.from_http(400, provider_body)
 	_assert(provider.message.contains("Google"), "provider name in message")
 	_assert(provider.message.contains("items is required"), "unwrapped provider raw")
 	_assert(provider.message.contains("400"), "status in message")
@@ -149,9 +149,9 @@ func _test_chat_error_401() -> void:
 
 ## Audio output modalities force stream true and include voice/format.
 func _test_audio_modalities_force_stream() -> void:
-	var req := ChatTypes.ChatRequest.new()
+	var req := ChatTypes.ORChatRequest.new()
 	req.model = "openai/gpt-4o-audio-preview"
-	req.messages = [ChatTypes.ChatMessage.user_text("Say hi")]
+	req.messages = [ChatTypes.ORChatMessage.user_text("Say hi")]
 	req.stream = false
 	req.modalities = PackedStringArray(["text", "audio"])
 	req.audio = {"voice": "alloy", "format": "wav"}
@@ -161,9 +161,9 @@ func _test_audio_modalities_force_stream() -> void:
 	_assert(body.stream == true, "audio out requires stream")
 	_assert(body.audio.voice == "alloy", "audio voice passed through")
 	_assert(body.modalities.has("audio"), "modalities include audio")
-	var img_req := ChatTypes.ChatRequest.new()
+	var img_req := ChatTypes.ORChatRequest.new()
 	img_req.model = "google/gemini-2.5-flash-image"
-	img_req.messages = [ChatTypes.ChatMessage.user_text("a red square")]
+	img_req.messages = [ChatTypes.ORChatMessage.user_text("a red square")]
 	img_req.modalities = PackedStringArray(["text", "image"])
 	img_req.temperature = 0.5
 	img_req.max_tokens = 256

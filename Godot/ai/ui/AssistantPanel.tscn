@@ -1,7 +1,131 @@
 [gd_scene format=3 uid="uid://b7xa8h62aocl5"]
 
 [ext_resource type="Script" uid="uid://bso2f8eab26af" path="res://ai/ui/AssistantPanel.gd" id="1_m4ute"]
+[ext_resource type="Script" uid="uid://cu0oe12pdqlw1" path="res://ai/ui/ConversationList.gd" id="2_67lvk"]
+[ext_resource type="Script" uid="uid://bpcccudb04tp6" path="res://ai/ui/ChatTranscript.gd" id="3_y6hv6"]
+[ext_resource type="Script" uid="uid://cbkgfmgonc50f" path="res://ai/ui/ChatComposer.gd" id="4_75tev"]
 
 [node name="AssistantPanel" type="PanelContainer" unique_id=1299192409]
-visible = false
+clip_contents = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_type_variation = &"PrimaryPanel"
 script = ExtResource("1_m4ute")
+
+[node name="Content" type="VBoxContainer" parent="." unique_id=1138733423]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="Header" type="HBoxContainer" parent="Content" unique_id=1628005160]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ConversationList" type="OptionButton" parent="Content/Header" unique_id=1111641215]
+layout_mode = 2
+size_flags_horizontal = 3
+text_overrun_behavior = 3
+clip_text = true
+fit_to_longest_item = false
+script = ExtResource("2_67lvk")
+
+[node name="New" type="Button" parent="Content/Header" unique_id=460780292]
+layout_mode = 2
+text = "New"
+
+[node name="Delete" type="Button" parent="Content/Header" unique_id=829782144]
+layout_mode = 2
+text = "Delete"
+
+[node name="Meta" type="HBoxContainer" parent="Content" unique_id=1130353600]
+layout_mode = 2
+
+[node name="ModelLabel" type="Label" parent="Content/Meta" unique_id=47255842]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 11
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="Cancel" type="Button" parent="Content/Meta" unique_id=169836308]
+visible = false
+layout_mode = 2
+text = "Cancel"
+
+[node name="Empty" type="Label" parent="Content" unique_id=1828471745]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Set an OpenRouter API key in Settings → AI"
+autowrap_mode = 3
+
+[node name="Transcript" type="ScrollContainer" parent="Content" unique_id=1947525049]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+script = ExtResource("3_y6hv6")
+
+[node name="List" type="VBoxContainer" parent="Content/Transcript" unique_id=2052762980]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="Composer" type="VBoxContainer" parent="Content" unique_id=160153209]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+script = ExtResource("4_75tev")
+
+[node name="Chips" type="HBoxContainer" parent="Content/Composer" unique_id=317373109]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Edit" type="TextEdit" parent="Content/Composer" unique_id=784428136]
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Ask Sonara…"
+wrap_mode = 1
+
+[node name="Row" type="HBoxContainer" parent="Content/Composer" unique_id=368334500]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AttachImage" type="Button" parent="Content/Composer/Row" unique_id=52442922]
+layout_mode = 2
+text = "Image"
+
+[node name="AttachAudio" type="Button" parent="Content/Composer/Row" unique_id=1444314994]
+layout_mode = 2
+text = "Audio"
+
+[node name="Send" type="Button" parent="Content/Composer/Row" unique_id=1188046407]
+layout_mode = 2
+size_flags_horizontal = 10
+text = "Send"
+
+[node name="FileDialog" type="FileDialog" parent="Content/Composer" unique_id=861403633]
+oversampling_override = 1.0
+title = "Open a File"
+file_mode = 0
+access = 2
+use_native_dialog = true
+
+[connection signal="conversation_chosen" from="Content/Header/ConversationList" to="." method="_on_conversation_chosen"]
+[connection signal="item_selected" from="Content/Header/ConversationList" to="Content/Header/ConversationList" method="_on_item_selected"]
+[connection signal="pressed" from="Content/Header/New" to="." method="_on_new"]
+[connection signal="pressed" from="Content/Header/Delete" to="." method="_on_delete"]
+[connection signal="pressed" from="Content/Meta/Cancel" to="." method="_on_cancel"]
+[connection signal="send_requested" from="Content/Composer" to="." method="_on_send"]
+[connection signal="gui_input" from="Content/Composer/Edit" to="Content/Composer" method="_on_edit_input"]
+[connection signal="pressed" from="Content/Composer/Row/AttachImage" to="Content/Composer" method="_pick_image"]
+[connection signal="pressed" from="Content/Composer/Row/AttachAudio" to="Content/Composer" method="_pick_audio"]
+[connection signal="pressed" from="Content/Composer/Row/Send" to="Content/Composer" method="_emit_send"]
+[connection signal="file_selected" from="Content/Composer/FileDialog" to="Content/Composer" method="_on_file_selected"]

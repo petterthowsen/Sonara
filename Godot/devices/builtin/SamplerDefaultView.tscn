@@ -1,15 +1,126 @@
 [gd_scene format=3 uid="uid://17un123jilyn"]
 
 [ext_resource type="Script" uid="uid://qb4ghav5fn1h" path="res://devices/builtin/SamplerDefaultView.gd" id="1_pimo6"]
+[ext_resource type="PackedScene" uid="uid://cj6bkxh40g8w4" path="res://components/EnvelopeControl.tscn" id="2_xw6mb"]
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_pcbfh"]
 
-[node name="SamplerDefaultView" type="Control" unique_id=208954495]
-custom_minimum_size = Vector2(220, 72)
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+[node name="SamplerDefaultView" type="VBoxContainer" unique_id=1044416401]
+custom_minimum_size = Vector2(220, 180)
+offset_right = 220.0
+offset_bottom = 180.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme_override_constants/separation = 0
 script = ExtResource("1_pimo6")
+
+[node name="Waveform" type="Control" parent="." unique_id=1297213988]
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="EnvelopeControl" parent="." unique_id=209855624 instance=ExtResource("2_xw6mb")]
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+
+[node name="KnobRow" type="HBoxContainer" parent="." unique_id=2010540869]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="Attack" type="VBoxContainer" parent="KnobRow" unique_id=643085449]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Knob" type="Control" parent="KnobRow/Attack" unique_id=1202794630]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+size_flags_horizontal = 4
+script = ExtResource("3_pcbfh")
+min_value = 0.001
+max_value = 2.0
+value = 0.001
+value_default = 0.001
+logarithmic = true
+
+[node name="Label" type="Label" parent="KnobRow/Attack" unique_id=1275126642]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "A"
+horizontal_alignment = 1
+
+[node name="Decay" type="VBoxContainer" parent="KnobRow" unique_id=1370014570]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Knob" type="Control" parent="KnobRow/Decay" unique_id=642024798]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_pcbfh")
+min_value = 0.001
+max_value = 2.0
+value = 0.001
+value_default = 0.001
+logarithmic = true
+
+[node name="Label" type="Label" parent="KnobRow/Decay" unique_id=566732780]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "D"
+horizontal_alignment = 1
+
+[node name="Sustain" type="VBoxContainer" parent="KnobRow" unique_id=260105147]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Knob" type="Control" parent="KnobRow/Sustain" unique_id=1457046821]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_pcbfh")
+value = 1.0
+value_default = 1.0
+
+[node name="Label" type="Label" parent="KnobRow/Sustain" unique_id=860822999]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "S"
+horizontal_alignment = 1
+
+[node name="Release" type="VBoxContainer" parent="KnobRow" unique_id=2034976555]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Knob" type="Control" parent="KnobRow/Release" unique_id=1277856818]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("3_pcbfh")
+min_value = 0.001
+max_value = 2.0
+value = 0.01
+value_default = 0.01
+logarithmic = true
+
+[node name="Label" type="Label" parent="KnobRow/Release" unique_id=1602069384]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "R"
+horizontal_alignment = 1

@@ -5,48 +5,30 @@ const PAGE_SIZE := 16
 const COLS := 4
 const FIRST_NOTE := 36
 
-var _grid: GridContainer = null
-var _page_label: Label = null
+@onready var _page_label: Label = $Pager/PageLabel
+@onready var _grid: GridContainer = $Grid
+@onready var _prev_button: Button = $Pager/Prev
+@onready var _next_button: Button = $Pager/Next
+
 var _pads: Array[DrumPad] = []
 var _base_note: int = FIRST_NOTE
 var _selected: DeviceInstance = null
 var _sounding_notes: Dictionary = {}
 
 
+## Keep the pad grid usable beside the parameter list.
 func _get_minimum_size() -> Vector2:
 	return Vector2(240, 220)
 
 
+## Wire pager buttons and collect the scene pads.
 func _ready() -> void:
-	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 6)
-	add_child(root)
-	var pager := HBoxContainer.new()
-	pager.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_child(pager)
-	var prev := Button.new()
-	prev.text = "◀"
-	prev.pressed.connect(_on_page.bind(-PAGE_SIZE))
-	pager.add_child(prev)
-	_page_label = Label.new()
-	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_page_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	pager.add_child(_page_label)
-	var next := Button.new()
-	next.text = "▶"
-	next.pressed.connect(_on_page.bind(PAGE_SIZE))
-	pager.add_child(next)
-	_grid = GridContainer.new()
-	_grid.columns = COLS
-	_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_grid.add_theme_constant_override("h_separation", 4)
-	_grid.add_theme_constant_override("v_separation", 4)
-	root.add_child(_grid)
-	for i in range(PAGE_SIZE):
-		var pad := DrumPad.new()
-		_grid.add_child(pad)
+	_prev_button.pressed.connect(_on_page.bind(-PAGE_SIZE))
+	_next_button.pressed.connect(_on_page.bind(PAGE_SIZE))
+	for child in _grid.get_children():
+		var pad := child as DrumPad
+		if pad == null:
+			continue
 		pad.activated.connect(_on_pad_activated)
 		pad.triggered.connect(_on_pad_triggered)
 		pad.released.connect(_on_pad_released)
@@ -81,15 +63,18 @@ func set_focused_child(child: DeviceInstance) -> void:
 	_rebuild()
 
 
+## Rebuild pads when children are added, removed, or reordered.
 func _on_children_changed(_a = null, _b = null) -> void:
 	_rebuild()
 
 
+## Page the 4x4 grid by 16 notes.
 func _on_page(delta: int) -> void:
 	_base_note = clampi(_base_note + delta, 0, 127 - PAGE_SIZE + 1)
 	_rebuild()
 
 
+## Bind each scene pad to the MIDI note and child for the current page.
 func _rebuild() -> void:
 	if _pads.is_empty():
 		return
@@ -147,6 +132,7 @@ func _release_all_sounding() -> void:
 	_sounding_notes.clear()
 
 
+## Load a dropped sample or device onto the pad's MIDI note.
 func _on_pad_drop(note: int, data: Variant) -> void:
 	if device == null:
 		return
@@ -159,6 +145,7 @@ func _on_pad_drop(note: int, data: Variant) -> void:
 	_rebuild()
 
 
+## Find the drum-machine child occupying `note`, if any.
 func _child_for_note(note: int) -> DeviceInstance:
 	if device == null:
 		return null
@@ -168,6 +155,7 @@ func _child_for_note(note: int) -> DeviceInstance:
 	return null
 
 
+## Channel that owns this drum machine.
 func _channel() -> Channel:
 	if device == null or Sonara.editor == null or Sonara.editor.project == null:
 		return null

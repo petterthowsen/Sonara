@@ -1,0 +1,47 @@
+[gd_scene format=3 uid="uid://dv7mcg6ebq0d"]
+
+[ext_resource type="Script" uid="uid://c1ss7fpbgyb38" path="res://ai/ui/ChatMessage.gd" id="1_w04u6"]
+[ext_resource type="Script" uid="uid://cn562q6srvww0" path="res://ai/ui/WrappingRichText.gd" id="2_oeddg"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ytma7"]
+content_margin_left = 10.0
+content_margin_top = 8.0
+content_margin_right = 10.0
+content_margin_bottom = 8.0
+bg_color = Color(0.22, 0.22, 0.26, 0.55)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="ChatMessage" type="PanelContainer" unique_id=315973674]
+offset_right = 69.0
+offset_bottom = 36.0
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_ytma7")
+script = ExtResource("1_w04u6")
+
+[node name="Column" type="VBoxContainer" parent="." unique_id=138861188]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Who" type="Label" parent="Column" unique_id=863971091]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.72, 0.78, 0.8)
+theme_override_font_sizes/font_size = 11
+text = "Assistant"
+
+[node name="Body" type="RichTextLabel" parent="Column" unique_id=2099370590]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 2
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+selection_enabled = true
+script = ExtResource("2_oeddg")
+
+[node name="Media" type="VBoxContainer" parent="Column" unique_id=37423067]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3

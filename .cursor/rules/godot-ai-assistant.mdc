@@ -17,7 +17,7 @@ Composer → Assistant.send_user() → OpenRouterClient (SSE)
 
 ## Orchestration
 - `Assistant` binds chats to the open project, streams one turn at a time, cancels leftover tools, and wraps each tool-call batch in `HistoryUtil.history().begin_macro("Assistant")` / `end_macro()`.
-- Wire OpenRouter through `ChatTypes` (`ChatRequest`, `ChatMessage`, `ToolCall`, `ContentPart`, `ChatError`). Never assemble raw request dicts.
+- Wire OpenRouter through `ChatTypes` (`ORChatRequest`, `ORChatMessage`, `ORToolCall`, `ORContentPart`, `ORChatError`). Never assemble raw request dicts.
 - Config: Settings keys `ai/openrouter/*` (api_key, base_url, model) and `ai/chat/*` (temperature, max_tokens, max_tool_rounds, reasoning). Client reads them on each request.
 
 ## Persistence & prompt

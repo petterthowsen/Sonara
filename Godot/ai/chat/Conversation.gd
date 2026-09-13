@@ -29,7 +29,7 @@ func to_index_entry() -> Dictionary:
 func to_storage() -> Dictionary:
 	var msgs: Array = []
 	for msg in messages:
-		if msg is ChatTypes.ChatMessage:
+		if msg is ChatTypes.ORChatMessage:
 			msgs.append(msg.to_storage())
 	return {
 		"id": id,
@@ -51,7 +51,7 @@ static func from_storage(data: Dictionary) -> Conversation:
 	c.model = str(data.get("model", ""))
 	for item in data.get("messages", []):
 		if item is Dictionary:
-			c.messages.append(ChatTypes.ChatMessage.from_storage(item))
+			c.messages.append(ChatTypes.ORChatMessage.from_storage(item))
 	return c
 
 
@@ -67,7 +67,7 @@ func ensure_title_from_first_user() -> void:
 	if not title.is_empty():
 		return
 	for msg in messages:
-		if msg is ChatTypes.ChatMessage and msg.role == "user":
+		if msg is ChatTypes.ORChatMessage and msg.role == "user":
 			var bits: PackedStringArray = msg.get_text().strip_edges().split("\n")
 			var line: String = bits[0] if bits.size() > 0 else ""
 			if line.length() > 40:
