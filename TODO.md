@@ -1,33 +1,37 @@
 # TODO
 
+## Audio Engine
 
-## Audio Engine (Rust Backend)
+### Mixing & Playback
 
-### Core Audio
+- [ ] Plugin latency compensation
+- [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
+- [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
+- [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
+
+Done:
 
 - [x] Keep audio engine running after playback so instruments (PolySynth) and reverb/delay effects can settle after stopping
 - [x] Solo causes a sharp click
 - [x] RMS Metering
-- [ ] Plugin latency compensation
-- [ ] Improve logging of plugins
 - [x] Performance profiling: emit engine load metrics via OSC for UI display
-- [ ] CPU affinity for audio thread and plugin processing
-- [ ] Realtime thread priority configuration
-- [ ] CPU core assignment for plugin processing
-- [ ] Remove the shared `Arc<Mutex<EngineState>>` (phase 2): the audio thread should own its state and drain a lock-free command queue, with removed objects sent back to be dropped off-thread
-  - [ ] Phase 1, partly verified live (CLAP on a bus, large clip import during playback): slow commands (plugin scan, device create/drop, plugin GUI/activation IPC) run outside the lock in `CommandWorker`; the callback uses a bounded `try_lock` and outputs silence
-- [ ] Audio thread allocations still left: unbounded status channel sends, `process_device_chain` sleep-change Vec, `audio_playback_positions` insert (String clone) on clip start, `poll_parameter_changes` sets a socket read timeout every buffer per CLAP plugin
-  - [ ] Removed, needs live verification: per-buffer Vecs/HashMaps and buffer clones in `process_audio`/`mix_and_output`, debug `info!` logging in the callback
-- [x] Mixing: reverb/delay tails on a routed bus cut off when playback pauses (verified live after the fix below)
+- [x] Mixing: reverb/delay tails on a routed bus cut off when playback pauses (verified live)
 - [x] Mixing: a bus or master that receives audio in more than one routing pass runs its devices and pan more than once per buffer (verified live with nested buses)
   - Fix: routing and sends run in dependency order (`pending_inputs` in `MixBuffers`). Each channel finishes once, after all its inputs; route targets run devices even with no input, then pan, then route onward.
-- [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
-- [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
-- [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
 - [x] Solo behavior: Bus channels should still sound when instrument/audio channels are soloed
 - [x] Solo behavior: Bus solo is a group solo (route feeders stay fully audible; send-only feeders keep the send and mute dry)
   - Engine implemented; needs live verification
 - [x] Mixer channel sends do not sync bus names until send knob is touched
+
+### Audio Thread
+
+- [ ] Remove the shared `Arc<Mutex<EngineState>>` (phase 2): the audio thread should own its state and drain a lock-free command queue, with removed objects sent back to be dropped off-thread
+  - [ ] Phase 1, partly verified live (CLAP on a bus, large clip import during playback): slow commands (plugin scan, device create/drop, plugin GUI/activation IPC) run outside the lock in `CommandWorker`; the callback uses a bounded `try_lock` and outputs silence
+- [ ] Audio thread allocations still left: unbounded status channel sends, `process_device_chain` sleep-change Vec, `audio_playback_positions` insert (String clone) on clip start, `poll_parameter_changes` sets a socket read timeout every buffer per CLAP plugin
+  - [ ] Removed, needs live verification: per-buffer Vecs/HashMaps and buffer clones in `process_audio`/`mix_and_output`, debug `info!` logging in the callback
+- [ ] CPU affinity for audio thread and plugin processing
+- [ ] Realtime thread priority configuration
+- [ ] CPU core assignment for plugin processing
 
 ### Devices & Plugins
 
@@ -36,98 +40,76 @@
 - [ ] Add support for enum parameter type for builtins
 - [ ] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
 - [ ] In Engine: Simplify device advertisement to avoid creating temporary instances
-
-
-
-### Plugins
-
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
 - [ ] Plugin GUI windows should be forced to stay above Godot App
 - [ ] Sforzando CLAP GUI embeds but renders black (may need an OpenGL context on the host window)
-
-
+- [ ] Improve logging of plugins
 
 ### Built-in Devices
 
+- [ ] Reverb
+- [ ] EQ: Parametric, built-in spectrum
+- [ ] Limiter
+- [ ] Compressor
+- [ ] Saturator
+- [ ] L/R and M/S modes
+
+Done:
+
 - [x] PolySynth Device
-    - [ ] 
 - [x] Spectrum Analyzer
 - [x] Chain container (serial children + volume)
 - [x] Layer container (parallel mix, per-slot mute/solo)
-- [ ] L/R and M/S modes
 - [x] Sampler and Drum Machine devices
 - [x] Sampler ADSR (high prio — samples click without an envelope)
-- [ ] Reverb
-- [ ] EQ: Parametric, built-in spectrum
-- [ ] Limiter
-- [ ] Compressor
-- [ ] Saturator
-
 
 ---
 
+## Godot
 
-## Godot (UI/Frontend)
+### Mixer & Tracks
 
-- [x] Track and Channel color should be stored as-is. Only clamp color components When rendering/drawing.
-- [x] For text/labels on any elements with a track/channel-colored background, use Dynamic black or white text depending on track color (luminance/lightness check?)
-- [x] Changing track color of folder/group tracks in trackitem should sync to mixer view's bus channel and vice-versa.
-- [ ] soloing a channel from mixer should sync to the linked track
-
+- [ ] Soloing a channel from mixer should sync to the linked track
+- [ ] Sync selection of tracks and linked channels bidirectionally
+  - [ ] Might make this behavior adjustable in settings
+- [ ] Delete, Duplicate Channels
+- [ ] Duplicate track
+- [ ] Smooth meter components (lerp?)
 - [ ] BUG: inline edit of channel names often has unreadable text color
 
-- [ ] NoteContainer seems to assign IDs to midi notes. This responsibilitty should be moved elsewhere (Clip probably?)
+Done:
 
-### Save/Load
-
-- [ ] Welcome Screen with recent projects, templates
-- [x] bug: device CC values do not persist
-- [x] bug: tracks in a folder initialize in the wrong correct position in the arranger
-
-
-
-### Export
-
-- [ ] Export/rendering
-  - [ ] bouncing tracks or clips to audio clip on a new track
-  - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio) ?
-- [ ] Export MIDI
-- [ ] Export menu with separate track (stem) selection
-
-
+- [x] Track and Channel color should be stored as-is. Only clamp color components when rendering/drawing.
+- [x] For text/labels on any elements with a track/channel-colored background, use dynamic black or white text depending on track color (luminance/lightness check)
+- [x] Changing track color of folder/group tracks in trackitem should sync to mixer view's bus channel and vice-versa
+- [x] Change track color (trackitem context menu)
+- [x] Improve channel drag-to-reorder UX
+  - [x] Bug: sometimes the channel can only be dragged one step at a time
 
 ### Arranger & Timeline
 
-- Arranger Timeline
-- TimelineHeader
-  - Ruler
-    - [ ] Auxiliary Rulers/"Tracks" (real-time ruler, chord track, and marking tracks)
-- [ ] Arranger: Tracks
-  - Trackitem context menu
-    - [x] Change track color
-    - [ ] Duplicate track
-- [ ] Duplicate Track
+- [ ] Auxiliary rulers / tracks (real-time ruler, chord track, and marking tracks)
 
 ### Clips
 
-- [/] implement TimelineClip context menu, add to Timeline scene, TLC can emit request_show_context_menu, or Timeline can simply listen for gui input on clip? depends on current architecture.
+- [/] TimelineClip context menu
   - [ ] SmartLineEdit for clip name
-  - [x] Make Unique: makes clip unique (if ClipInstance shares underlyying clip with any other ClipInstance)
   - [ ] Select All Instances
   - [ ] Cut
   - [ ] Copy
+  - [x] Make Unique: makes clip unique (if ClipInstance shares underlying clip with any other ClipInstance)
   - [x] Delete
 
-- [x] TimelineClip should include prefix or suffix in label if it's effectively unique.
+Done:
 
+- [x] TimelineClip should include prefix or suffix in label if it's effectively unique
 
 ### Clip Editor / Note Editor
 
-
-- [ ] In track mode, notes from all clips should be visible 
-
-- [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere", which will:
+- [ ] NoteContainer seems to assign IDs to midi notes. This responsibility should be moved elsewhere (Clip probably?)
+- [ ] In track mode, notes from all clips should be visible
+- [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere"
   1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"
   2. while "duplicate-dragging", continually move the duplicates relative to mouse note position
 - [ ] Track vs clip context mode:
@@ -137,53 +119,54 @@
   - [ ] In track mode, draw a track-colored overlay on the ruler for clip start/end. Unfocused clips as gray/white below; clips of the active/focused tracks above
 - [ ] Modifier+right-click to open context menu in NoteEditor
 
+### Devices
 
-### Mixer
+- [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code
 
-- [ ] Delete, Duplicate Channels
-- [ ] Smooth meter components (lerp?)
-- [ ] Sync selection of tracks and linked channels bidirectionally
-  - [ ] Might make this behavior adjustable in settings
-- [X] Improve channel drag-to-reorder UX
-  - [X] Bug: sometimes the channel can only be dragged one step at a time
+Done:
 
+- [x] Drag a device between drum-machine slots (e.g. kick C1 → E1). Occupied target: swap.
+- [x] Dragging devices around on the device lane, or within containers: drop targets occupy space at all times but are invisible, serving as spacers and drop targets simultaneously
+- [x] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
 
-### UI Components & General
+### Save / Load / Export
+
+- [ ] Welcome Screen with recent projects, templates
+- [ ] Export/rendering
+  - [ ] bouncing tracks or clips to audio clip on a new track
+  - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio)?
+- [ ] Export MIDI
+- [ ] Export menu with separate track (stem) selection
+
+Done:
+
+- [x] bug: device CC values do not persist
+- [x] bug: tracks in a folder initialize in the wrong position in the arranger
+
+### Hardware & MIDI
+
+- [ ] Modulation
+  - [ ] Basic modulation, similar to Bitwig: allow any channel and device parameter to be modulatable
+
+### UI / Quality of Life
 
 - [ ] Dock system: Inspector, Browser, and AI Chat freely placeable
   - Two side docks (left / right)
   - Each dock can stack panels vertically; split is draggable when two panels share a dock
   - Enough for wide and small screens
-
-
-### Devices
-
-- [x] Drag a device between drum-machine slots (e.g. kick C1 → E1). Occupied target: swap.
-- [ ] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code.
-- [x] Dragging devices around on the device lane, or within containers has these drop targets that show up when dragging begins. Let's instead have them occupy space at all times but invisible. Let them serve as spacers and drop targets simultaneously.
-- [x] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
-
-### Hardware & MIDI
-
-- [ ] Modulation
-  - [ ] Basic modulation, similar to bitwig, allow any channel and device parameter to be modulatable
-
-
-### Quality of Life / Polish
-
-- [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders.
+- [ ] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders
 
 ### AI Assistant
 
 Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
+- [ ] When chat history is not empty, track the user's changes/edits and feed that summary along with the next user message
+- [ ] Add playhead location and the currently focused musical element (clip, note) as a prompt variable
+- [ ] Leverage Gemini models to reason over audio
+  - Bounce a section of the track, include that in the next user prompt (when toggled), and ask questions about it. Enables an AI loop: make changes → listen → reason → adjust
+
+Done:
+
 - [x] Phase 1: OpenRouter client + Settings → AI (API key, model, multimodal chat completions)
 - [x] Phase 2: Per-project conversations, `~/.config/sonara/aichat/system_prompt.md` variables, tool loop, track / asset / mixer / device tools, assistant dock
 - [x] Phase 3: MIDI tools via compact DSL (drums / pitched grid / event ops; named clips + placements)
-
-Some ideas:
-
-- when chat history is not empty, track the user's changes/edits and feed that summary along with the next user message.
-- add playhead location and the currently focused musical element (clip, note) as prompt variable.
-- leverage the new google gemini models to reason over audio
-    - can for example bounce a section of the track, include that in the next user prompt (when toggled) and ask questions about it. This enables ai looping around make changes > listen > reason > adjustments > etc.
