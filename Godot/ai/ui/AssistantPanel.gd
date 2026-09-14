@@ -6,12 +6,16 @@ class_name AssistantPanel extends PanelContainer
 @onready var _new_btn: Button = $Content/Header/New
 @onready var _delete_btn: Button = $Content/Header/Delete
 @onready var _model_lbl: Label = $Content/Meta/ModelLabel
+@onready var _meta: HBoxContainer = $Content/Meta
 @onready var _cancel_btn: Button = $Content/Meta/Cancel
 @onready var _empty: Label = $Content/Empty
 @onready var _transcript: ChatTranscript = $Content/Transcript
 @onready var _composer: ChatComposer = $Content/Composer
 
 var _rebuilding: bool = false
+var _prompt_btn: Button = null
+var _prompt_window: Window = null
+var _prompt_edit: TextEdit = null
 
 
 ## Bind to the Assistant autoload and paint the current conversation.
@@ -34,6 +38,7 @@ func _ready() -> void:
 			assistant.turn_finished.connect(_on_turn_finished)
 		if not assistant.turn_failed.is_connected(_on_turn_failed):
 			assistant.turn_failed.connect(_on_turn_failed)
+	_setup_prompt_button()
 	_refresh()
 
 
@@ -53,6 +58,8 @@ func _refresh() -> void:
 	_empty.visible = not has_key
 	_composer.visible = has_key
 	_transcript.visible = has_key
+	if _prompt_btn:
+		_prompt_btn.visible = has_key
 	var conv: Conversation = assistant.get_conversation()
 	var active: String = conv.id if conv else ""
 	_header_list.rebuild(assistant.list_conversations(), active)
@@ -96,6 +103,62 @@ func _on_delete() -> void:
 	var conv: Conversation = assistant.get_conversation()
 	if conv:
 		assistant.delete_conversation(conv.id)
+
+
+## Header control: show the last system prompt sent to the model.
+func _setup_prompt_button() -> void:
+	_prompt_btn = Button.new()
+	_prompt_btn.text = "Prompt"
+	_prompt_btn.tooltip_text = "View the last rendered system prompt"
+	_prompt_btn.pressed.connect(_on_show_system_prompt)
+	_meta.add_child(_prompt_btn)
+	_meta.move_child(_prompt_btn, _cancel_btn.get_index())
+
+
+func _ensure_prompt_window() -> void:
+	if _prompt_window:
+		return
+	_prompt_window = Window.new()
+	_prompt_window.title = "System prompt"
+	_prompt_window.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
+	_prompt_window.size = Vector2i(640, 480)
+	_prompt_window.min_size = Vector2i(320, 200)
+	_prompt_window.close_requested.connect(_prompt_window.hide)
+	_prompt_window.wrap_controls = true
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 8)
+	margin.add_theme_constant_override("margin_right", 8)
+	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_bottom", 8)
+	_prompt_window.add_child(margin)
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(vbox)
+	_prompt_edit = TextEdit.new()
+	_prompt_edit.editable = false
+	_prompt_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_prompt_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_prompt_edit)
+	var close := Button.new()
+	close.text = "Close"
+	close.pressed.connect(_prompt_window.hide)
+	vbox.add_child(close)
+	add_child(_prompt_window)
+
+
+func _on_show_system_prompt() -> void:
+	_ensure_prompt_window()
+	var text := ""
+	var assistant := _assistant()
+	if assistant:
+		text = assistant.get_last_rendered_system_prompt()
+	if text.is_empty():
+		text = "No message sent yet. The expanded system prompt is shown here after your first request."
+	_prompt_edit.text = text
+	_prompt_window.popup_centered()
 
 
 ## Abort the in-flight Assistant turn.

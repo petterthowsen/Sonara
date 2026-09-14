@@ -12,20 +12,31 @@ enum Kind { USER, ASSISTANT, LIMIT }
 @onready var _media: VBoxContainer = $Column/Media
 
 var _kind: Kind = Kind.ASSISTANT
+var _plain_text: String = ""
 
 
 ## Fill speaker, body, panel color, and optional attachments.
 func configure(kind: Kind, text: String, msg: ChatTypes.ORChatMessage = null) -> void:
 	_kind = kind
 	_who.text = _speaker_name()
-	_body.text = text
+	_plain_text = text
+	_apply_body_text()
 	_apply_color()
 	_fill_media(msg)
 
 
 ## Append streamed assistant text to the body.
 func append_text(text: String) -> void:
-	_body.text += text
+	_plain_text += text
+	_apply_body_text()
+
+
+func _apply_body_text() -> void:
+	if _body is WrappingRichText:
+		(_body as WrappingRichText).set_bbcode_text(ChatTextFormat.message_to_bbcode(_plain_text))
+	else:
+		_body.bbcode_enabled = true
+		_body.text = ChatTextFormat.message_to_bbcode(_plain_text)
 
 
 ## Speaker label for the current kind.

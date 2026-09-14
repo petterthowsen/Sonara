@@ -9,6 +9,7 @@ var _kind: String = "block"
 var _title: String = ""
 var _preview: String = ""
 var _collapsed: bool = true
+var _body_plain: String = ""
 
 
 ## Build a collapsed block. `kind` is thinking, tool, or result.
@@ -48,21 +49,23 @@ func set_preview(preview: String) -> void:
 
 
 func set_body(text: String) -> void:
-	_body.text = text
+	_body_plain = text
+	_apply_body()
 	if _preview.is_empty():
-		_preview = _short(text)
+		_preview = _short(_body_plain)
 	_refresh_header()
 
 
 func append_body(text: String) -> void:
-	_body.text += text
+	_body_plain += text
+	_apply_body()
 	if _preview.is_empty():
-		_preview = _short(_body.text)
+		_preview = _short(_body_plain)
 	_refresh_header()
 
 
 func get_body() -> String:
-	return _body.text
+	return _body_plain
 
 
 func _on_toggle() -> void:
@@ -84,3 +87,10 @@ func _short(text: String) -> String:
 	if line.length() > 48:
 		return line.substr(0, 48) + "…"
 	return line
+
+
+func _apply_body() -> void:
+	if _kind == "tool" or _kind == "result":
+		_body.set_bbcode_text(ChatTextFormat.json_to_bbcode(_body_plain))
+	else:
+		_body.set_plain_text(_body_plain)

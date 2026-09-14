@@ -2,10 +2,6 @@
 
 [ ] is open, [x?] implemented but not verified, [x] is verified, [/] is mixed status.
 
-## Bugs
-
-- [x] Timeline clip intercepts middle-click, preventing panning
-
 ## Audio Engine
 
 ### Mixing & Playback
@@ -86,10 +82,6 @@ Done:
 - [ ] Investigate metering in mixer and track UI: improvements, whether the current approach is sound, and any bugs. Lerp/smooth the peak? also should probably add text showing the peak value along with the line
 - [ ] BUG: inline edit of channel names often has unreadable text color
 
-Done:
-
-  - [x] Bug: sometimes the channel can only be dragged one step at a time
-
 ### Arranger & Timeline
 
 - [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
@@ -108,14 +100,14 @@ Done:
   - [x] Delete
 - [ ] some way to visually say if a clip is instanced more than once
   - [ ] context menu > select all instances (grey if none)
-  
+
 ### Clip Editor / Note Editor
 
 - [ ] NoteContainer seems to assign IDs to midi notes. This responsibility should be moved elsewhere (Clip probably?)
 - [ ] In track mode, notes from all clips should be visible
 - [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere"
-  1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"
-  2. while "duplicate-dragging", continually move the duplicates relative to mouse note position
+    1. create VisualNotes of the selection (or the clicked visual if empty) and add them but tag them as "pending"
+    2. while "duplicate-dragging", continually move the duplicates relative to mouse note position
 - [ ] Track vs clip context mode:
   - [ ] In clip mode: ruler is relative to ClipInstance, draw clip start and end in ruler
   - [ ] In track mode: show all clips as they appear in entire track, ruler relative to entire track
@@ -155,7 +147,7 @@ Done:
 ### UI / Quality of Life
 
 - [ ] Investigate overall frontend architecture: deviations from code style / best practices, and organization improvements — prioritize low-risk, high-ROI
-- [ ] Add [Lucide](https://lucide.dev) icons throughout the UI; curate a subset as selectable track/channel icons
+- [x] Add [Lucide](https://lucide.dev) icons throughout the UI; curate a subset as selectable track/channel icons
 - [x] Dock system: Inspector, Browser, and AI Chat freely placeable
   - Two side docks (left / right)
   - Each dock can stack panels vertically; split is draggable when two panels share a dock
@@ -166,23 +158,31 @@ Done:
 
 Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
-- [ ] Add playhead location and the currently focused musical element (clip, note) as a prompt variable
-- [ ] Button in chat UI: on click, open a popup showing the last rendered system prompt
-- [ ] Attach selection as prompt context (timeline range, selected clip(s), selected track, selected mixer channel); show a glowing badge in the chat composer for each active context
-- [ ] Format code and JSON in chat messages (especially tool call / tool result bubbles) for readability
-- [ ] Leverage Gemini models to reason over audio
-  - Bounce a section of the track, include that in the next user prompt (when toggled), and ask questions about it. Enables an AI loop: make changes → listen → reason → adjust
+- [ ] Store request/response JSON for debugging, with a reference on messages. Messages in UI can show a small link to open a popup showing a syntax-highligthed the request and response cycle.
+- [ ] scope chat conversation dropdown to project
+- [x] Button in chat UI: on click, open a popup showing the last rendered system prompt
+- [x] Format code and JSON in chat messages (especially tool call / tool result bubbles) for readability and easy dev UX
+- [ ] Attach selection as prompt context (timeline range, selected clip(s), selected track, selected mixer channel); show a glowing badge in the chat composer for each active context that will be sent on the next message depending on selected element. Make a badge component that is a rounded colored pin with optional icon and label.
+- [ ] Investigate if tool results can be presented in a simpler way to assistant?
+- [ ] Add to AI settings personality presets for assistant. Default (helpful, concise, friendly), and Teacher is an interesting idea (less dumping info, more back-and-forth)
+- [ ] Allow the AI to ask questions via a tool with multiple choice answers (but always with a custom answer option), optionally tagging a clip, track, channel. The question will then be presented to the user and the element highlighted and scrolled towards in mixerchannel or timeline (and switch arranger/mic view if needed).
 
 ## Track and pass along user changes to assistant
 
 When chat history is not empty, track the user's changes/edits and feed that summary along with the next user message.
 
 For example, a changelist could look like this:
-"The user has made several changes:
+```
+The user has made several changes:
+
 - added instrument track: "Strings"
 - modified clip "Bass Part 1"
 - placed clip "Bass Part 1" to x:y:z
 
+---
+
+{user_message-here}
+```
 However, we should ensure they are concise and not full of detail that might not be needed at the time. Also, if there are large amounts of changes - probably just say "The user has made significant changes to X, Y, Z" (xyz = categories like tracks, clips etc).
 
 We can check how many clip modifications, if it's a lot, we can collapse to "modified 4 clips" or such.

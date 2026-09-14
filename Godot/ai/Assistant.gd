@@ -28,6 +28,7 @@ var _wait_msg: ChatTypes.ORChatMessage = null
 var _wait_err: ChatTypes.ORChatError = null
 var _wait_cancelled: bool = false
 var _editor_wired: bool = false
+var _last_rendered_system_prompt: String = ""
 
 
 ## Create the OpenRouter client and bind the current editor project.
@@ -71,15 +72,22 @@ func get_model_label() -> String:
 	return ""
 
 
+## System prompt text from the most recent OpenRouter request (expanded template).
+func get_last_rendered_system_prompt() -> String:
+	return _last_rendered_system_prompt
+
+
 ## Bind store to a project file path (empty = scratch).
 func bind_project(project_path: String) -> void:
 	store.bind_project(project_path)
+	_sync_system_prompt_from_current_conversation()
 	conversation_changed.emit()
 
 
 ## Flush and unbind on project close.
 func unbind_project() -> void:
 	store.unbind()
+	_last_rendered_system_prompt = ""
 	conversation_changed.emit()
 
 
@@ -95,6 +103,7 @@ func new_conversation() -> Conversation:
 	if _busy:
 		cancel()
 	var c := store.create()
+	_sync_system_prompt_from_current_conversation()
 	conversation_changed.emit()
 	return c
 
@@ -106,6 +115,7 @@ func open_conversation(id: String) -> void:
 	var c := store.load_conversation(id)
 	if c:
 		store.set_current(c)
+		_sync_system_prompt_from_current_conversation()
 		conversation_changed.emit()
 
 
@@ -114,6 +124,7 @@ func delete_conversation(id: String) -> void:
 	if _busy:
 		cancel()
 	store.delete_conversation(id)
+	_sync_system_prompt_from_current_conversation()
 	conversation_changed.emit()
 
 
@@ -293,6 +304,15 @@ func _finish_after_tool_limit(conv: Conversation, limit: int) -> void:
 	conversation_changed.emit()
 
 
+## Restore in-memory prompt snapshot from the active conversation file.
+func _sync_system_prompt_from_current_conversation() -> void:
+	var conv := store.get_current()
+	if conv == null:
+		_last_rendered_system_prompt = ""
+		return
+	_last_rendered_system_prompt = conv.last_rendered_system_prompt
+
+
 func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = true) -> ChatTypes.ORChatMessage:
 	_wait_msg = null
 	_wait_err = null
@@ -306,7 +326,9 @@ func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = t
 	req.model = get_model_label()
 	var system := ChatTypes.ORChatMessage.new()
 	system.role = "system"
-	system.content = PromptTemplate.render(prompt_context)
+	_last_rendered_system_prompt = PromptTemplate.render(prompt_context)
+	conv.last_rendered_system_prompt = _last_rendered_system_prompt
+	system.content = _last_rendered_system_prompt
 	var msgs: Array = [system]
 	for m in conv.messages:
 		msgs.append(m)

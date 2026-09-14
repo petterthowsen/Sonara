@@ -9,6 +9,8 @@ var created_unix: int = 0
 var updated_unix: int = 0
 var model: String = ""
 var messages: Array = []
+## Expanded system prompt from the last OpenRouter request in this thread.
+var last_rendered_system_prompt: String = ""
 
 
 ## New empty conversation with a `conv_` hex id.
@@ -38,6 +40,7 @@ func to_storage() -> Dictionary:
 		"updated_unix": updated_unix,
 		"model": model,
 		"messages": msgs,
+		"last_rendered_system_prompt": last_rendered_system_prompt,
 	}
 
 
@@ -49,6 +52,7 @@ static func from_storage(data: Dictionary) -> Conversation:
 	c.created_unix = int(data.get("created_unix", 0))
 	c.updated_unix = int(data.get("updated_unix", 0))
 	c.model = str(data.get("model", ""))
+	c.last_rendered_system_prompt = str(data.get("last_rendered_system_prompt", ""))
 	for item in data.get("messages", []):
 		if item is Dictionary:
 			c.messages.append(ChatTypes.ORChatMessage.from_storage(item))
