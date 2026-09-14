@@ -3,8 +3,11 @@
 [ext_resource type="PackedScene" uid="uid://de6qmyspkqaw7" path="res://components/meter/Meter.tscn" id="1_nssln"]
 [ext_resource type="Script" uid="uid://cb0xf0d0kij7f" path="res://mixer/MixerChannel.gd" id="1_o7qmb"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_xa46q"]
+[ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="3_ea3ft"]
 [ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_m2250"]
 [ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_cybrc"]
+[ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="4_ghf7e"]
+[ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="5_ghf7e"]
 [ext_resource type="PackedScene" uid="uid://fiuy6u5sed1r" path="res://mixer/sends_panel/SendsPanel.tscn" id="5_xa46q"]
 [ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_1hr2l"]
 [ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
@@ -118,6 +121,14 @@ font_size = 12
 shadow_size = 2
 shadow_color = Color(0, 0, 0, 0.6745098)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ghf7e"]
+content_margin_left = 3.0
+content_margin_top = 0.0
+content_margin_right = 3.0
+content_margin_bottom = 2.0
+bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
+corner_detail = 5
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ea3ft"]
 resource_local_to_scene = true
 content_margin_left = 6.0
@@ -130,17 +141,17 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
-custom_minimum_size = Vector2(100, 0)
+custom_minimum_size = Vector2(136, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
-offset_right = 56.0
+offset_right = 136.0
 grow_vertical = 2
 size_flags_horizontal = 0
 focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
 resizable = false
-selected_min_width = 150
+selected_min_width = 156
 mode = 1
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=1923224323]
@@ -148,6 +159,7 @@ layout_mode = 2
 theme_override_constants/separation = 0
 
 [node name="VBox" type="VBoxContainer" parent="HBox" unique_id=1118467946]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 4
@@ -159,7 +171,7 @@ size_flags_vertical = 0
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_yexk5")
 
-[node name="VBox" type="VBoxContainer" parent="HBox/VBox/Header" unique_id=52905609]
+[node name="VBox" type="Control" parent="HBox/VBox/Header" unique_id=1230355716]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -168,18 +180,25 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="SmartLineEdit" parent="HBox/VBox/Header/VBox" unique_id=1058095684 instance=ExtResource("2_xa46q")]
-layout_mode = 2
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -50.0
+offset_top = -17.0
+offset_right = 50.0
+offset_bottom = 17.0
 size_flags_vertical = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
-[node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0"]
+[node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 text_overrun_behavior = 4
 
-[node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1"]
+[node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1" unique_id=1087718571]
 anchors_preset = 14
 anchor_top = 0.5
 anchor_bottom = 0.5
@@ -191,13 +210,23 @@ expand_to_text_length = true
 flat = false
 
 [node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox" unique_id=630004199]
-visible = false
-layout_mode = 2
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -32.0
+offset_bottom = 32.0
+grow_horizontal = 0
 theme_override_constants/h_separation = 0
 theme_override_font_sizes/font_size = 24
 toggle_mode = true
-text = ">"
+icon = ExtResource("3_ea3ft")
 flat = true
+icon_alignment = 2
+vertical_icon_alignment = 0
+script = ExtResource("4_ghf7e")
+icon_default = ExtResource("3_ea3ft")
+icon_pressed = ExtResource("5_ghf7e")
 
 [node name="BigMeter" parent="HBox/VBox" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
 visible = false
@@ -364,20 +393,22 @@ mouse_filter = 1
 suffix = "dB"
 edit_via_click = false
 
-[node name="Label" parent="HBox/VBox/Volume/HBox/Fader/SmartLineEdit" index="0"]
+[node name="Label" parent="HBox/VBox/Volume/HBox/Fader/SmartLineEdit" index="0" unique_id=448001948]
 text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
 [node name="Children" type="PanelContainer" parent="HBox" unique_id=470089133]
+visible = false
 custom_minimum_size = Vector2(30, 0)
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ghf7e")
 script = ExtResource("9_an1hh")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="HBox/Children" unique_id=1771647144]
 layout_mode = 2
 
 [node name="ParentHeader" type="Panel" parent="HBox/Children/VBoxContainer" unique_id=1082830830]
-custom_minimum_size = Vector2(30, 76)
+custom_minimum_size = Vector2(30, 78)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ea3ft")
 

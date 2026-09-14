@@ -62,8 +62,9 @@ var resize_padding_added: int = 0  # Track total padding added during this resiz
 ## Own hover, cursor, and mouse-filter so child visuals don't steal clip clicks.
 func _ready() -> void:
 	focus_mode = Control.FOCUS_CLICK
-	# Children are visual-only; this Control owns all clip mouse input.
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	# Children are visual-only; this Control owns clip mouse input. PASS so
+	# unused events (middle-click pan) are not auto-handled by the Viewport.
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBoxContainer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if header:
 		header.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -74,6 +75,8 @@ func _ready() -> void:
 		if label.label_settings:
 			label.label_settings = label.label_settings.duplicate()
 			label.label_settings.font_size = 14
+	if clip_renderer:
+		clip_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -309,6 +312,8 @@ func _gui_input(event: InputEvent) -> void:
 		_update_cursor_for_position(local_pos)
 
 	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			return
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			# Consume press so parent lanes don't treat this as empty space.
 			# Open on release so the popup is not dismissed by the same click.

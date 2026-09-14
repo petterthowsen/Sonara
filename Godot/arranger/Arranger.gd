@@ -25,8 +25,8 @@ var logger : Log = Log.make("Arranger")
 @onready var tracklist_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TracklistHeader
 @onready var timeline_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TimelineHeader
 
-@onready var add_track_button: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/Buttons/AddTrackButton
-@onready var add_folder_button: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/Buttons/AddFolderButton
+@onready var add_track_button: Button = $VSplitContainer/VScroll/HSplit/TracksPanel/VBox/TracksPanelFooter/Buttons/AddTrackButton
+@onready var add_folder_button: Button = $VSplitContainer/VScroll/HSplit/TracksPanel/VBox/TracksPanelFooter/Buttons/AddFolderButton
 
 @onready var v_split : VSplitContainer = $VSplitContainer
 
@@ -45,6 +45,9 @@ var _syncing_split: bool = false
 
 @onready var real_ruler: RealTimeRuler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/RealTimeRuler
 @onready var ruler: Ruler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler
+
+@onready var beats_ruler_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/BeatsToggle
+@onready var time_ruler_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/TimeToggle
 
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
 @onready var playhead: PlayheadLine = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
@@ -108,6 +111,10 @@ func _ready():
 	# Connect add track button
 	add_track_button.pressed.connect(_on_add_track_pressed)
 	add_folder_button.pressed.connect(_on_add_folder_pressed)
+
+	beats_ruler_toggle.toggled.connect(_on_beats_ruler_toggled)
+	time_ruler_toggle.toggled.connect(_on_time_ruler_toggled)
+	_apply_ruler_row_visibility()
 
 	# Set up custom scroll handling by intercepting gui_input on scroll containers
 	v_scroll.gui_input.connect(_on_scroll_container_input.bind(v_scroll))
@@ -383,8 +390,39 @@ func _unhandled_input(event: InputEvent) -> void:
 	_handle_input(event)
 
 
+## Pan the timeline on middle-click before clips/tracks can mark the event handled.
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
+		if event.pressed:
+			if not is_visible_in_tree():
+				return
+			if not timeline.get_global_rect().has_point(get_global_mouse_position()):
+				return
+			is_panning = true
+			pan_start_pos = event.global_position
+			pan_start_h_scroll = h_scroll.scroll_horizontal
+			pan_start_v_scroll = v_scroll.scroll_vertical
+			accept_event()
+		elif is_panning:
+			is_panning = false
+			accept_event()
+	elif event is InputEventMouseMotion and is_panning:
+		var current_pos: Vector2 = event.global_position
+		var delta: Vector2 = current_pos - pan_start_pos
+		# Direct scroll for panning (bypass smoothing for responsive feel)
+		var new_h_scroll := int(pan_start_h_scroll - delta.x)
+		h_scroll.scroll_horizontal = new_h_scroll
+		target_scroll_horizontal = new_h_scroll
+		grid_helper.scroll_position = new_h_scroll
+
+		var new_v_scroll := int(pan_start_v_scroll - delta.y)
+		v_scroll.scroll_vertical = new_v_scroll
+		target_scroll_vertical = new_v_scroll
+		accept_event()
+
+
 func _handle_input(event: InputEvent) -> void:
-	"""Handle middle mouse button panning (only if not handled by child controls)."""
+	"""Handle timeline keyboard shortcuts when the arranger has focus."""
 	if event is InputEventKey and event.pressed:
 		if event.is_action_pressed("ui_copy"):
 			timeline.copy_selection_to_clipboard()
@@ -411,30 +449,6 @@ func _handle_input(event: InputEvent) -> void:
 			elif (event.keycode == KEY_DOWN or event.is_action_pressed("ui_down")):
 				timeline.move_selection_by_tracks(1)
 				accept_event()
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
-		if event.pressed:
-			is_panning = true
-			pan_start_pos = event.global_position
-			pan_start_h_scroll = h_scroll.scroll_horizontal
-			pan_start_v_scroll = v_scroll.scroll_vertical
-			accept_event()
-		else:
-			is_panning = false
-			accept_event()
-		
-	elif event is InputEventMouseMotion and is_panning:
-		var current_pos = event.global_position
-		var delta = current_pos - pan_start_pos
-		# Direct scroll for panning (bypass smoothing for responsive feel)
-		var new_h_scroll = int(pan_start_h_scroll - delta.x)
-		h_scroll.scroll_horizontal = new_h_scroll
-		target_scroll_horizontal = new_h_scroll
-		grid_helper.scroll_position = new_h_scroll
-		
-		var new_v_scroll = int(pan_start_v_scroll - delta.y)
-		v_scroll.scroll_vertical = new_v_scroll
-		target_scroll_vertical = new_v_scroll
-		accept_event()
 
 
 func _zoom_tracks_vertically(zoom_in: bool) -> void:
@@ -576,6 +590,24 @@ func _on_add_folder_pressed() -> void:
 	var new_folder: Track = cmd.track
 	if new_folder:
 		print("[Arranger] Added folder '%s' (ID %d)" % [folder_name, new_folder.id])
+
+
+## Show or hide the bar/beat ruler row from the metronome toggle.
+func _on_beats_ruler_toggled(_pressed: bool) -> void:
+	_apply_ruler_row_visibility()
+
+
+## Show or hide the real-time (clock) ruler row from the timer toggle.
+func _on_time_ruler_toggled(_pressed: bool) -> void:
+	_apply_ruler_row_visibility()
+
+
+## Keep timeline header ruler rows in sync with the tracklist header toggles.
+func _apply_ruler_row_visibility() -> void:
+	if ruler:
+		ruler.visible = beats_ruler_toggle.button_pressed
+	if real_ruler:
+		real_ruler.visible = time_ruler_toggle.button_pressed
 
 # ============================================================================
 # PROJECT LIFECYCLE

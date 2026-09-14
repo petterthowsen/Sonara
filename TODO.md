@@ -2,7 +2,7 @@
 
 ## Bugs
 
-- [ ] Timeline clip intercepts middle-click, preventing panning
+- [x] Timeline clip intercepts middle-click, preventing panning
 
 ## Audio Engine
 

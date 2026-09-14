@@ -295,7 +295,8 @@ func select_channel(ch : Channel, multi := false, emit_select := true, emit_chan
 		# select it
 		selection.append(ch)
 		var mc := find_mixer_channel_ui_for_channel(ch)
-		mc.is_selected = true
+		if mc:
+			mc.is_selected = true
 		if emit_select:
 			channel_selected.emit(ch)
 	

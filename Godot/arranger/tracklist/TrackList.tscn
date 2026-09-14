@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3 uid="uid://cx5s8jbwq0dt2"]
+[gd_scene format=3 uid="uid://cx5s8jbwq0dt2"]
 
 [ext_resource type="Script" uid="uid://dogqvoq0bijcg" path="res://arranger/tracklist/TrackList.gd" id="1_0le0t"]
 [ext_resource type="PackedScene" uid="uid://ca1ed008xlb1o" path="res://arranger/tracklist/TrackItem.tscn" id="2_0le0t"]
@@ -6,13 +6,13 @@
 [ext_resource type="Script" uid="uid://d07easneqblka" path="res://arranger/tracklist/TrackItemContextMenu.gd" id="4_q580v"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="5_1meqt"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0le0t"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1meqt"]
 resource_local_to_scene = true
 bg_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
 border_color = Color(0, 0, 0, 0)
 corner_detail = 5
 
-[node name="TrackList" type="VBoxContainer"]
+[node name="TrackList" type="VBoxContainer" unique_id=773808723]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -21,42 +21,40 @@ grow_vertical = 2
 theme_override_constants/separation = 2
 script = ExtResource("1_0le0t")
 
-[node name="Track" parent="." instance=ExtResource("2_0le0t")]
+[node name="Track" parent="." unique_id=240971037 instance=ExtResource("2_0le0t")]
 layout_mode = 2
-focus_mode = 1
-theme_override_styles/panel = SubResource("StyleBoxFlat_0le0t")
+theme_override_styles/panel = SubResource("StyleBoxFlat_1meqt")
 
-[node name="TrackListContextMenu" type="PopupMenu" parent="."]
+[node name="TrackListContextMenu" type="PopupMenu" parent="." unique_id=314695138]
 oversampling_override = 1.0
 script = ExtResource("3_hwtjl")
 
-[node name="TrackItemContextMenu" type="PopupPanel" parent="."]
+[node name="TrackItemContextMenu" type="PopupPanel" parent="." unique_id=176310667]
 oversampling_override = 1.0
 size = Vector2i(158, 114)
 script = ExtResource("4_q580v")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="TrackItemContextMenu"]
+[node name="VBoxContainer" type="VBoxContainer" parent="TrackItemContextMenu" unique_id=1761057882]
 custom_minimum_size = Vector2(150, 0)
-offset_left = 4.0
 offset_top = 4.0
-offset_right = 154.0
+offset_right = 158.0
 offset_bottom = 110.0
 
-[node name="ColorAndName" type="HBoxContainer" parent="TrackItemContextMenu/VBoxContainer"]
+[node name="ColorAndName" type="HBoxContainer" parent="TrackItemContextMenu/VBoxContainer" unique_id=1546427736]
 layout_mode = 2
 
-[node name="ColorPickerButton" type="ColorPickerButton" parent="TrackItemContextMenu/VBoxContainer/ColorAndName"]
+[node name="ColorPickerButton" type="ColorPickerButton" parent="TrackItemContextMenu/VBoxContainer/ColorAndName" unique_id=2125238034]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 
-[node name="Name" parent="TrackItemContextMenu/VBoxContainer/ColorAndName" instance=ExtResource("5_1meqt")]
+[node name="Name" parent="TrackItemContextMenu/VBoxContainer/ColorAndName" unique_id=747568294 instance=ExtResource("5_1meqt")]
 layout_mode = 2
 size_flags_horizontal = 3
 value_type = 1
 
-[node name="Buttons" type="VBoxContainer" parent="TrackItemContextMenu/VBoxContainer"]
+[node name="Buttons" type="VBoxContainer" parent="TrackItemContextMenu/VBoxContainer" unique_id=328425127]
 layout_mode = 2
 
-[node name="Delete" type="Button" parent="TrackItemContextMenu/VBoxContainer/Buttons"]
+[node name="Delete" type="Button" parent="TrackItemContextMenu/VBoxContainer/Buttons" unique_id=845652732]
 layout_mode = 2
 text = "Delete"

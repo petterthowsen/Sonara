@@ -129,6 +129,10 @@ func _ready():
 
 	if header:
 		header.gui_input.connect(_on_header_gui_input)
+		# Full-rect layout control must not eat clicks meant for the header panel (move / select).
+		var header_layout := header.get_node_or_null("VBox") as Control
+		if header_layout:
+			header_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	if foldout_toggle:
 		foldout_toggle.toggled.connect(_on_foldout_toggled)
@@ -424,10 +428,13 @@ func _on_header_gui_input(event : InputEvent) -> void:
 		if foldout_toggle and foldout_toggle.visible and foldout_toggle.get_global_rect().has_point(get_global_mouse_position()):
 			return
 		var mouse_event = event as InputEventMouseButton
-		
+
+		if mouse_event.pressed:
+			_request_mixer_selection(mouse_event.ctrl_pressed)
+
 		if mouse_event.shift_pressed or mouse_event.ctrl_pressed:
 			return
-		
+
 		if not is_moving and event.is_pressed():
 			if get_local_mouse_position().x >= size.x - 8:
 				return
@@ -486,6 +493,25 @@ func _update_move():
 func _stop_move():
 	is_moving = false
 	move_awaiting = false
+
+
+## Forward header clicks to the owning Mixer selection logic (strip body uses Mixer.gui_input).
+func _request_mixer_selection(multi: bool) -> void:
+	if channel == null or Engine.is_editor_hint():
+		return
+	var mixer := _find_mixer()
+	if mixer:
+		mixer.select_channel(channel, multi)
+
+
+## Walk ancestors to the Mixer that owns this strip (root or nested).
+func _find_mixer() -> Mixer:
+	var n: Node = self
+	while n:
+		if n is Mixer:
+			return n as Mixer
+		n = n.get_parent()
+	return null
 
 
 # ============================================================================
@@ -809,7 +835,6 @@ func _sync_children_slide() -> void:
 	if foldout_toggle:
 		foldout_toggle.visible = show_fold
 		foldout_toggle.set_pressed_no_signal(expanded)
-		foldout_toggle.text = "v" if expanded else ">"
 
 	if children_slide:
 		children_slide.visible = expanded
@@ -837,7 +862,7 @@ func _on_channel_device_removed(position: int, device_id: String) -> void:
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	"""Start a mixer reparent drag from the header; sibling slide stays a separate header gesture."""
-	if Engine.is_editor_hint() or is_resizing:
+	if Engine.is_editor_hint() or is_resizing or is_moving:
 		return null
 	if not MixerChannelDrag.can_drag(channel):
 		return null
