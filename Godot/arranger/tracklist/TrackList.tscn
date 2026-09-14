@@ -5,6 +5,7 @@
 [ext_resource type="Script" uid="uid://car1nicfbtoru" path="res://arranger/tracklist/TrackListContextMenu.gd" id="3_hwtjl"]
 [ext_resource type="Script" uid="uid://d07easneqblka" path="res://arranger/tracklist/TrackItemContextMenu.gd" id="4_q580v"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="5_1meqt"]
+[ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="6_55lbl"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1meqt"]
 resource_local_to_scene = true
@@ -58,3 +59,4 @@ layout_mode = 2
 [node name="Delete" type="Button" parent="TrackItemContextMenu/VBoxContainer/Buttons" unique_id=845652732]
 layout_mode = 2
 text = "Delete"
+icon = ExtResource("6_55lbl")

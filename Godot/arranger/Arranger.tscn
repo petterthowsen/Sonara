@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://3yoesqgv0tuw" path="res://components/TimelineScrollBar.gd" id="5_nqsw4"]
 [ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="6_27qta"]
 [ext_resource type="Script" uid="uid://c1ko1kpn7ixej" path="res://arranger/Playhead.gd" id="6_jotmv"]
+[ext_resource type="Script" uid="uid://b1ka208d2k8vm" path="res://arranger/ruler/MarkerTrack.gd" id="8_8wvub"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -37,18 +38,6 @@ corner_detail = 5
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dtx23"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
 draw_center = false
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rl012"]
-content_margin_left = 3.0
-content_margin_top = 2.0
-content_margin_right = 3.0
-content_margin_bottom = 2.0
-bg_color = Color(0, 0, 1, 0.49803922)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -135,6 +124,7 @@ icon = ExtResource("2_rl012")
 layout_mode = 2
 tooltip_text = "Marker Track"
 toggle_mode = true
+button_pressed = true
 icon = ExtResource("3_8wvub")
 
 [node name="MarkersToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons" unique_id=20795109]
@@ -159,7 +149,6 @@ layout_mode = 2
 theme_override_constants/separation = 0
 
 [node name="RealTimeRuler" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=624331780]
-visible = false
 custom_minimum_size = Vector2(0, 28)
 layout_mode = 2
 size_flags_vertical = 3
@@ -168,33 +157,21 @@ bg_color = Color(0.14901961, 0.14901961, 0.14901961, 1)
 text_color = Color(0.6748151, 0.6748145, 0.67481405, 1)
 vertical_alignment = 0
 
+[node name="MarkerTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=1044856114]
+visible = false
+custom_minimum_size = Vector2(0, 24)
+clip_contents = true
+layout_mode = 2
+script = ExtResource("8_8wvub")
+default_marker_beats = 1
+bg_color = Color(0.10747979, 0.107479714, 0.10747973, 1)
+
 [node name="Ruler" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=148705140]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_vertical = 3
 script = ExtResource("2_dtx23")
-
-[node name="MarkerTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler" unique_id=1044856114]
-custom_minimum_size = Vector2(0, 24)
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="PanelContainer" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler/MarkerTrack" unique_id=1409957420]
-custom_minimum_size = Vector2(32, 22)
-layout_mode = 1
-offset_right = 64.0
-offset_bottom = 27.0
-theme_override_styles/panel = SubResource("StyleBoxFlat_rl012")
-
-[node name="Label" type="Label" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler/MarkerTrack/PanelContainer" unique_id=76360179]
-layout_mode = 2
-text = "Start"
-vertical_alignment = 1
-clip_text = true
+enable_time_range_gestures = true
 
 [node name="VScroll" type="ScrollContainer" parent="VSplitContainer" unique_id=267143354]
 layout_mode = 2

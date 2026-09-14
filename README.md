@@ -36,6 +36,32 @@ TODO.md     Backlog
 STATUS.md   Notes on in-flight hard problems
 ```
 
+## Dependencies
+Third-party libraries the project relies on. Pin versions live in `Engine/Cargo.toml` and each addon’s `plugin.cfg`.
+### Engine (Rust)
+| Library | Role |
+|--------|------|
+| [cpal](https://github.com/RustAudio/cpal) | Audio I/O (PipeWire / JACK / ALSA) |
+| [symphonia](https://github.com/pdeljanov/symphonia) | Decode import formats (AAC, MP3, OGG, FLAC, WAV, …) |
+| [rubato](https://github.com/henquist/rubato) | Offline resampling during decode |
+| [realfft](https://github.com/ejmahler/realfft) | Spectrum analyzer FFT |
+| [sfizz](https://github.com/petterthowsen/rust-sfizz) (git) | Built-in SFZ sampler |
+| [clack](https://github.com/prokopyl/clack) (`clack-host`, `clack-extensions`, git) | CLAP plugin hosting |
+| [rosc](https://github.com/klingtnet/rosc) | OSC to/from Godot |
+| [winit](https://github.com/rust-windowing/winit) + [raw-window-handle](https://github.com/rust-windowing/raw-window-handle) | Out-of-process CLAP plugin windows (Linux: `x11`) |
+| [libloading](https://github.com/nagisa/rust_libloading) | Dynamic CLAP library load |
+| [nix](https://github.com/nix-rust/nix) / `libc` | Shared-memory IPC for plugin subprocess |
+Also declared in `Cargo.toml` but not referenced in engine source today: `fundsp`, `dasp`, `rustwav` (legacy / unused—safe cleanup candidates).
+Supporting crates (logging, serde, crossbeam, bincode for waveform cache, etc.) are standard plumbing; see `Engine/Cargo.toml` for the full list.
+### Godot UI
+Vendored editor/runtime addons under `Godot/addons/`:
+| Addon | Version | Role |
+|-------|---------|------|
+| **GodOSC** (`godOSC`) | 0.1 | OSC client/server in GDScript (engine comms) |
+| **Godot AI** (`godot_ai`) | 4.0.4 | MCP server and editor AI tooling |
+No other third-party Godot addons are checked into this repo; the rest of the UI is project code under `Godot/`.
+
+
 ## Development
 
 ```bash

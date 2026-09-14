@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://1gf5ybe13hnj" path="res://mixer/Mixer.gd" id="1_yu81n"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="2_64am7"]
+[ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="3_wr7tj"]
 [ext_resource type="PackedScene" uid="uid://c07tx27b6f3o" path="res://mixer/ChannelContextMenu.tscn" id="4_wr7tj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_64am7"]
@@ -63,7 +64,7 @@ layout_mode = 2
 [node name="AddButton" type="MenuButton" parent="HSplit/LeftPane/HBox/Options" unique_id=862016798]
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
-text = " + "
+icon = ExtResource("3_wr7tj")
 
 [node name="RightPane" type="ScrollContainer" parent="HSplit" unique_id=2015465869]
 custom_minimum_size = Vector2(125, 0)
@@ -85,7 +86,7 @@ size_flags_horizontal = 2
 [node name="AddButton" type="Button" parent="HSplit/RightPane/HBox/Options" unique_id=738460808]
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
-text = " + "
+icon = ExtResource("3_wr7tj")
 
 [node name="Channels" type="HBoxContainer" parent="HSplit/RightPane/HBox" unique_id=990222757]
 layout_mode = 2

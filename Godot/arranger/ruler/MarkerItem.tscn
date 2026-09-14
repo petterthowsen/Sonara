@@ -1,0 +1,46 @@
+[gd_scene load_steps=3 format=3 uid="uid://bmarkeritem01"]
+
+[ext_resource type="Script" path="res://arranger/ruler/MarkerItem.gd" id="1_marker_item"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_smartline"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_marker"]
+content_margin_left = 4.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.2, 0.5, 0.9, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[node name="MarkerItem" type="Control"]
+custom_minimum_size = Vector2(32, 22)
+layout_mode = 0
+mouse_filter = 0
+script = ExtResource("1_marker_item")
+
+[node name="Panel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_marker")
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 2
+theme_override_constants/margin_top = 0
+theme_override_constants/margin_right = 2
+theme_override_constants/margin_bottom = 0
+
+[node name="NameEdit" parent="Panel/MarginContainer" instance=ExtResource("2_smartline")]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+value_type = 1
+edit_via_click = false

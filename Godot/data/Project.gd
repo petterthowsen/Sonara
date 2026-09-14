@@ -21,6 +21,8 @@ signal channel_removed(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
+signal marker_added(marker: SongMarker)
+signal marker_removed(marker: SongMarker)
 signal connection_state_changed(state: ConnectionState)
 ## Fired once after a batched parent/order change so TrackList and Timeline can rebuild together.
 signal tracks_layout_changed
@@ -41,6 +43,9 @@ var start_position_ticks: int = 0  # Playback start position
 var channels: Array[Channel] = []
 var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
+var markers: Array[SongMarker] = []
+
+var next_marker_id: int = 1
 
 # Async clip load tracking
 var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
@@ -1647,6 +1652,8 @@ func to_json() -> Dictionary:
 		"next_track_id": next_track_id,
 		"next_clip_id": next_clip_id,
 		"next_note_id": next_note_id,
+		"next_marker_id": next_marker_id,
+		"markers": markers.map(func(m): return m.to_json()),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
 		"tracks": tracks.map(func(t): return t.to_json())
@@ -1670,6 +1677,11 @@ static func from_json(data: Dictionary) -> Project:
 	project.next_track_id = data.get("next_track_id", 0)
 	project.next_clip_id = data.get("next_clip_id", 1)
 	project.next_note_id = data.get("next_note_id", 1)
+	project.next_marker_id = data.get("next_marker_id", 1)
+
+	project.markers.clear()
+	for marker_data in data.get("markers", []):
+		project.markers.append(SongMarker.from_json(marker_data))
 
 	# Load clip pool (must load before tracks, since tracks reference clips)
 	project.clips.clear()
@@ -1728,6 +1740,45 @@ func set_start_position(ticks: int) -> void:
 	"""Set the playback start position in ticks."""
 	start_position_ticks = ticks
 	start_position_changed.emit(ticks)
+
+
+# ============================================================================
+# MARKERS
+# ============================================================================
+
+## Add a marker to the project and emit marker_added.
+func add_marker(marker: SongMarker) -> void:
+	if marker == null or markers.has(marker):
+		return
+	markers.append(marker)
+	marker_added.emit(marker)
+
+
+## Remove a marker from the project and emit marker_removed.
+func remove_marker(marker: SongMarker) -> void:
+	if marker == null:
+		return
+	var idx := markers.find(marker)
+	if idx < 0:
+		return
+	markers.remove_at(idx)
+	marker_removed.emit(marker)
+
+
+## Create a new marker at the given tick range with a random color.
+func create_marker(start_ticks: int, duration_ticks: int, marker_name: String = "Marker") -> SongMarker:
+	var marker := SongMarker.new()
+	marker.id = next_marker_id
+	next_marker_id += 1
+	marker.name = marker_name
+	marker.start_ticks = maxi(0, start_ticks)
+	marker.duration_ticks = maxi(get_ticks_per_beat(), duration_ticks)
+	marker.color = _generate_random_color()
+	return marker
+
+
+func get_ticks_per_beat() -> int:
+	return ppq
 
 # ============================================================================
 # HELPERS

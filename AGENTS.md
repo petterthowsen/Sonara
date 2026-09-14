@@ -26,9 +26,6 @@ Godot UI:
 godot --path Godot                               # run the app; the engine must already be running
 godot --headless --path Godot -s path/to/script.gd  # script path relative to Godot/
 ```
-
-Godot does not launch the engine itself. Start the engine first.
-
 ## Architecture
 
 ### Engine threads (`Engine/src/`)
@@ -102,23 +99,10 @@ The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_
 - WARN and ERROR messages are also forwarded to Godot over `/log`. Godot writes its own log to `Godot/logs/last.log`.
 - When debugging, add plenty of logging and ask the user to reproduce the problem and report back.
 
-## Code style
-
-- Keep files under 600 lines, with a hard limit of 1000. Refactor when a file grows past that.
-- Prefer object-oriented designs where behavior lives in structs and classes. Keep solutions simple and fail fast. If the code organization is confusing, stop and ask the user before reorganizing it.
-- **Rust:** run `cargo fmt`. Put `///` doc comments on functions, methods and types.
-- **GDScript:**
-  - Leave two blank lines between functions.
-  - Put a short `##` comment above every class and every function.
-  - Expose behavior worth tweaking as configurable properties.
-  - Write ternaries as `a if cond else b`.
-- **Godot resources:** never hand-edit `.tscn`, `.tres` or `.uid` files. Use the godot-ai MCP tools (scene, node and resource tools) instead. Node paths are relative to the scene being edited.
-
 ## Project tracking
 
 - `STATUS.md` is a scratchpad for the current complex investigation, with "Working" and "Not Working" sections.
-- `TODO.md` is the checkbox backlog. Mark an item `[x]` only after the behavior is verified.
-- Keep both files short.
+- `TODO.md` is the checkbox backlog. Mark an item `[x?]` after implementing a fix, and ´[x]` when verified.
 
 ## Library docs (Context7 IDs)
 
@@ -127,4 +111,3 @@ The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_
 - Signalsmith DSP: `/websites/rs_signalsmith-dsp_0_0_2_signalsmith_dsp`
 - rubato: `/henquist/rubato`
 - symphonia: `/pdeljanov/symphonia`
-- Godot: `/websites/llm-docs_ams3_cdn_digitaloceanspaces_godot_4_2_2`. This covers 4.2 while the project runs 4.7, so check newer APIs against it.

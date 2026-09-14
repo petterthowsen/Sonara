@@ -1,5 +1,7 @@
 # TODO
 
+[ ] is open, [x?] implemented but not verified, [x] is verified, [/] is mixed status.
+
 ## Bugs
 
 - [x] Timeline clip intercepts middle-click, preventing panning
@@ -81,7 +83,7 @@ Done:
   - [ ] Might make this behavior adjustable in settings
 - [ ] Delete, Duplicate Channels
 - [ ] Duplicate track
-- [ ] Smooth meter components (lerp?)
+- [ ] Investigate metering in mixer and track UI: improvements, whether the current approach is sound, and any bugs. Lerp/smooth the peak? also should probably add text showing the peak value along with the line
 - [ ] BUG: inline edit of channel names often has unreadable text color
 
 Done:
@@ -90,22 +92,23 @@ Done:
 
 ### Arranger & Timeline
 
-- [ ] Auxiliary rulers / tracks (real-time ruler, chord track, and marking tracks)
+- [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
+- [ ] Chord track: Implement chord track with visual notations
+- [x] Marking track: Add marking/marker tracks (section labels, etc.)
 
 ### Clips
 
+- [ ] Look at ways to improve waveform generation and display
 - [/] TimelineClip context menu
-  - [ ] SmartLineEdit for clip name
-  - [ ] Select All Instances
+  - [x?] SmartLineEdit for clip name
   - [ ] Cut
   - [ ] Copy
-  - [x] Make Unique: makes clip unique (if ClipInstance shares underlying clip with any other ClipInstance)
+  - [x] Make Unique: makes clip instance unique (if ClipInstance shares underlying clip with any other ClipInstance)
+    - [ ] gray the button if there's only one instance of it
   - [x] Delete
-
-Done:
-
-- [x] TimelineClip should include prefix or suffix in label if it's effectively unique
-
+- [ ] some way to visually say if a clip is instanced more than once
+  - [ ] context menu > select all instances (grey if none)
+  
 ### Clip Editor / Note Editor
 
 - [ ] NoteContainer seems to assign IDs to midi notes. This responsibility should be moved elsewhere (Clip probably?)
@@ -151,6 +154,7 @@ Done:
 
 ### UI / Quality of Life
 
+- [ ] Investigate overall frontend architecture: deviations from code style / best practices, and organization improvements — prioritize low-risk, high-ROI
 - [ ] Add [Lucide](https://lucide.dev) icons throughout the UI; curate a subset as selectable track/channel icons
 - [x] Dock system: Inspector, Browser, and AI Chat freely placeable
   - Two side docks (left / right)

@@ -48,6 +48,9 @@ var _syncing_split: bool = false
 
 @onready var beats_ruler_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/BeatsToggle
 @onready var time_ruler_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/TimeToggle
+@onready var markers_toggle: Button = $VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons/MarkersToggle
+
+@onready var marker_track: MarkerTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/MarkerTrack
 
 @onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
 @onready var playhead: PlayheadLine = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
@@ -114,6 +117,7 @@ func _ready():
 
 	beats_ruler_toggle.toggled.connect(_on_beats_ruler_toggled)
 	time_ruler_toggle.toggled.connect(_on_time_ruler_toggled)
+	markers_toggle.toggled.connect(_on_markers_track_toggled)
 	_apply_ruler_row_visibility()
 
 	# Set up custom scroll handling by intercepting gui_input on scroll containers
@@ -148,6 +152,10 @@ func _ready():
 		ruler.enable_time_range_gestures = true
 		ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
 		ruler.box_select_started.connect(_on_ruler_box_select_started)
+
+	if marker_track:
+		marker_track.selection_start_requested.connect(_on_ruler_selection_start_requested)
+		marker_track.box_select_started.connect(_on_ruler_box_select_started)
 
 	_ensure_selection_bounds_overlay()
 
@@ -608,6 +616,13 @@ func _apply_ruler_row_visibility() -> void:
 		ruler.visible = beats_ruler_toggle.button_pressed
 	if real_ruler:
 		real_ruler.visible = time_ruler_toggle.button_pressed
+	if marker_track:
+		marker_track.visible = markers_toggle.button_pressed
+
+
+## Show or hide the marker lane from the markers toggle.
+func _on_markers_track_toggled(_pressed: bool) -> void:
+	_apply_ruler_row_visibility()
 
 # ============================================================================
 # PROJECT LIFECYCLE
@@ -630,6 +645,9 @@ func _on_project_activated(project: Project) -> void:
 	timeline.grid_helper = grid_helper
 	real_ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
 	ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
+	if marker_track:
+		marker_track.set_grid_helper(grid_helper)
+		marker_track.bind_project(project)
 	
 	# Initialize target zoom values from project
 	target_pixels_per_beat = grid_helper.pixels_per_beat
@@ -678,6 +696,9 @@ func _unbind_from_project() -> void:
 
 	if ruler and ruler.start_position_requested.is_connected(_on_ruler_start_position_requested):
 		ruler.start_position_requested.disconnect(_on_ruler_start_position_requested)
+
+	if marker_track:
+		marker_track.bind_project(null)
 	
 	# Clear timeline
 	timeline.set_project(null)
