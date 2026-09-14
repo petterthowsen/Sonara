@@ -42,6 +42,7 @@ func _ready() -> void:
 		slider_node.min_value = 0.0
 		slider_node.max_value = 1.0
 		slider_node.value_changed.connect(_on_slider_changed)
+		_apply_slider_defaults()
 
 	# If already set up with device, update UI now that nodes are ready
 	if device_instance and parameter:
@@ -69,6 +70,7 @@ func setup(p_device_instance: DeviceInstance, p_parameter_id: int) -> void:
 		push_error("Parameter %d not found in device" % parameter_id)
 		return
 
+	_apply_slider_defaults()
 	# Prepare control for this parameter type once nodes become ready
 
 	# Connect to device parameter changes
@@ -133,6 +135,13 @@ func _update_ui() -> void:
 		if value_label_node and show_value:
 			var real_value = device_instance.get_parameter_real(parameter_id)
 			value_label_node.text = parameter.format_value(real_value)
+
+
+## Copy the parameter's default onto the slider (normalized 0–1).
+func _apply_slider_defaults() -> void:
+	if slider_node == null or parameter == null:
+		return
+	slider_node.default_value = parameter.value_to_normalized(parameter.default_value)
 
 
 # ============================================================================

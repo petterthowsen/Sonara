@@ -24,10 +24,7 @@ class_name CompactDevicePanel extends VBoxContainer
 	set(hp):
 		hide_parameters = hp
 		if is_inside_tree():
-			collapse_button.visible = not hp
-			
-			if hide_parameters and parameters.visible:
-				parameters.visible = false
+			_update_ui_visibility()
 
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null

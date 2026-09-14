@@ -62,11 +62,14 @@ var move_awaiting := false
 
 var is_selected := false:
 	set(selected):
-		if is_selected != selected:
-			is_selected = selected
+		if is_selected == selected:
+			return
+		is_selected = selected
+		if is_inside_tree():
 			var bc = border_color_selected if is_selected else border_color
-			var stylebox : StyleBoxFlat = get_theme_stylebox("panel")
+			var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
 			stylebox.border_color = bc
+			_apply_selection_layout()
 
 
 signal request_move(new_index : int)
@@ -88,11 +91,15 @@ enum Mode {COMPACT, LARGE}
 const compact_min_width = 50
 const large_min_width = 100
 
+## Extra width for the focused/selected strip so compact device parameters are usable.
+@export var selected_min_width := 120
+
 @export var mode = Mode.COMPACT:
 	set = set_mode
 
 func _ready():
 	_update_container_sizing()
+	_apply_selection_layout()
 	_init_details_pane()
 
 	# Connect UI signals
@@ -371,10 +378,7 @@ func _process(_delta : float):
 
 		var new_width = resize_width_start - mouse_delta
 
-		if mode == Mode.COMPACT:
-			new_width = max(new_width, compact_min_width)
-		else:
-			new_width = max(new_width, large_min_width)
+		new_width = max(new_width, _mode_min_width())
 
 		custom_minimum_size.x = new_width
 	elif is_moving:
@@ -552,29 +556,42 @@ func _on_channel_pan_changed(pan_left : float, pan_right : float = 0.0):
 # ============================================================================
 # HELPERS, SIZING
 # ============================================================================
+## Report the current layout floor so containers don't shrink a selected strip.
 func _get_minimum_size() -> Vector2:
-	if mode == Mode.COMPACT:
-		return Vector2(compact_min_width, 0)
-	else:
-		return Vector2(large_min_width, 0)
+	return Vector2(_mode_min_width(), 0)
 
 
-func set_mode(m : Mode):
-	mode = m
-	if is_inside_tree():
-		device_list.hide_parameters = true
+## Compact or large floor, raised when this channel is selected.
+func _mode_min_width() -> int:
+	var w := compact_min_width if mode == Mode.COMPACT else large_min_width
+	if is_selected:
+		w = maxi(w, selected_min_width)
+	return w
+
+
+## Widen the selected strip and expose compact device parameters on it.
+func _apply_selection_layout() -> void:
+	if device_list:
+		device_list.hide_parameters = not is_selected
 	_update_size_for_mode()
 
 
+## Switch compact/large layout and refresh width plus device-parameter visibility.
+func set_mode(m : Mode):
+	mode = m
+	if is_inside_tree():
+		_apply_selection_layout()
+	else:
+		_update_size_for_mode()
+
+
 func _update_size_for_mode() -> void:
-	"""Update custom_minimum_size based on current mode and details pane visibility."""
-	var base_width = compact_min_width if mode == Mode.COMPACT else large_min_width
+	"""Update custom_minimum_size based on current mode, selection, and details pane."""
+	var base_width := _mode_min_width()
 
 	if details_visible and details_pane_width > 0:
-		# If details pane is visible, add its width to the base
 		custom_minimum_size.x = base_width + details_pane_width
 	else:
-		# Otherwise, just use the base width for this mode
 		custom_minimum_size.x = base_width
 
 
