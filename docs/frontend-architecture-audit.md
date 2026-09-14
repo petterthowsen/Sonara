@@ -82,6 +82,8 @@ Each item below is S-sized and independent, so they can go in as small commits.
 | B19 | **Autoload order.** `MidiManager._ready` runs before `Settings` is in the tree, so `get_node_or_null("/root/Settings")` returns null and it never hears setting changes. | `midi/MidiManager.gd` ~83, `project.godot` | Use the `Settings` global directly, or reorder the autoloads. | ❓ |
 | B20 | **Caps-lock `toggle_computer_keyboard` action is declared but never handled.** | `project.godot`, `MidiManager.gd` | Handle it in `_input`. | 👁 |
 
+DONE
+
 ### 3.2 Performance quick wins
 
 - **`MixerChannel._process`** polls the cursor every frame per strip. Use `_gui_input` and enable processing only while resizing or moving. `DeviceLightButton._process` has the same problem.
@@ -90,6 +92,8 @@ Each item below is S-sized and independent, so they can go in as small commits.
 - **`AudioEngineOSC`** compiles a new `RegEx` for every `/data` message and walks all listener patterns per message. Cache the regex and keep wildcard listeners in a separate list.
 - **`SpectrumRenderer`** calls `log()` per bin per redraw and allocates a `PackedVector2Array` each frame. Cache bin x positions and reuse the buffer.
 - **`TimelineTrack._draw_grid`** draws the full content width on every track during zoom. Clip it to the visible range.
+
+DONE
 
 ### 3.3 Dead code and leftovers to delete
 

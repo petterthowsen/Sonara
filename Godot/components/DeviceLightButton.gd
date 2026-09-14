@@ -136,6 +136,7 @@ func _on_device_active_changed(_active : bool):
 func _on_device_loading_state_changed(_state : String):
 	queue_redraw()
 	_update_tooltip()
+	set_process(_state == "loading")
 
 
 func _update_tooltip() -> void:
@@ -164,15 +165,19 @@ func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	_update_tooltip()
+	set_process(loading_state == "loading")
 
 
 func _process(delta: float) -> void:
-	# Animate loading state
+	# Animate loading state. Only ticks while actually loading (see
+	# _on_device_loading_state_changed), so this never polls at rest.
 	if loading_state == "loading":
 		_loading_rotation += delta * 3.0  # 3 radians per second
 		if _loading_rotation > TAU:
 			_loading_rotation -= TAU
 		queue_redraw()
+	else:
+		set_process(false)
 
 func _on_mouse_entered():
 	_hovering = true

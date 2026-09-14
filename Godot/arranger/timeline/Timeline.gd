@@ -67,6 +67,20 @@ func _ready():
 func _on_grid_helper_changed() -> void:
 	"""Update timeline width when grid_helper properties change (scroll, zoom, etc)."""
 	_update_timeline_width()
+	# Scroll/zoom changes shift which part of the grid is visible; tracks only
+	# clip-draw the visible range, so they must redraw explicitly here (a pure
+	# scroll doesn't resize anything, so NOTIFICATION_RESIZED won't fire).
+	for timeline_track in timeline_tracks:
+		if timeline_track:
+			timeline_track.queue_redraw()
+
+
+func get_viewport_width() -> float:
+	"""Return the width of the enclosing ScrollContainer's viewport, if any."""
+	var parent_scroll = get_parent()
+	if parent_scroll is ScrollContainer:
+		return parent_scroll.size.x
+	return size.x
 
 
 # ============================================================================

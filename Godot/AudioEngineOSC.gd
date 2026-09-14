@@ -46,6 +46,9 @@ var _pending_sends: Array[Dictionary] = []
 # OSC message listeners: Dictionary[String, Array[Callable]]
 # Maps OSC address pattern to array of callbacks
 var listeners: Dictionary = {}
+var _wildcard_patterns: Array[String] = []  # subset of listeners.keys() that contain "*"
+
+var _device_data_regex: RegEx = null  # lazily compiled, cached across /data messages
 
 # ============================================================================
 # LIFECYCLE
@@ -158,6 +161,8 @@ func listen(address: String, callback: Callable) -> void:
 	"""
 	if not listeners.has(address):
 		listeners[address] = []
+		if address.contains("*") and not _wildcard_patterns.has(address):
+			_wildcard_patterns.append(address)
 
 	if not listeners[address].has(callback):
 		listeners[address].append(callback)
@@ -170,6 +175,7 @@ func unlisten(address: String, callback: Callable) -> void:
 		listeners[address].erase(callback)
 		if listeners[address].is_empty():
 			listeners.erase(address)
+			_wildcard_patterns.erase(address)
 		logger.info("Unregistered listener for ", address)
 
 
@@ -221,9 +227,10 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 	
 	# Special handling for device data messages (top-level or nested child paths)
 	elif address.begins_with("/channel/") and address.ends_with("/data"):
-		var regex = RegEx.new()
-		regex.compile("^(/channel/\\d+/device/\\d+(?:/child/\\d+)*)/data$")
-		var result = regex.search(address)
+		if _device_data_regex == null:
+			_device_data_regex = RegEx.new()
+			_device_data_regex.compile("^(/channel/\\d+/device/\\d+(?:/child/\\d+)*)/data$")
+		var result = _device_data_regex.search(address)
 		if result and values is Array and values.size() >= 2:
 			var osc_path: String = result.get_string(1)
 			var data_type: String = values[0]
@@ -270,8 +277,8 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		routed = true
 	
 	# Try wildcard patterns
-	for pattern in listeners.keys():
-		if pattern.contains("*") and _matches_wildcard(address, pattern):
+	for pattern in _wildcard_patterns:
+		if _matches_wildcard(address, pattern):
 			for callback in listeners[pattern]:
 				callback.call(args, address)  # Pass address so callback can parse it
 			routed = true

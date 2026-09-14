@@ -100,6 +100,7 @@ enum FrequencyScale {
 @export var freq_scale: FrequencyScale = FrequencyScale.Log:
 	set(val):
 		freq_scale = val
+		_mark_x_cache_dirty()
 		queue_redraw()
 
 
@@ -137,6 +138,19 @@ var _lin_span_inv: float
 var _log_min: float
 var _log_span_inv: float
 
+# Cache of per-bin x positions (index -> pixel x), rebuilt only when size,
+# bin count, frequency range, or freq_scale change. Index n (bin count) is
+# also cached since _draw_bars looks one bin ahead.
+var _x_cache: PackedFloat32Array = PackedFloat32Array()
+var _x_cache_dirty: bool = true
+
+# Reused point buffers to avoid per-frame allocation in _draw_line / _draw_fill.
+var _line_points: PackedVector2Array = PackedVector2Array()
+var _fill_points: PackedVector2Array = PackedVector2Array()
+
+func _mark_x_cache_dirty() -> void:
+	_x_cache_dirty = true
+
 # Called whenever sample_rate, frequency_range, frequency_range_min/max, or freq_scale change.
 func _rebuild_axis_cache() -> void:
 	# View bounds (zoom window)
@@ -149,6 +163,25 @@ func _rebuild_axis_cache() -> void:
 	# Log
 	_log_min = log(_view_fmin)
 	_log_span_inv = 1.0 / max(1e-12, log(_view_fmax) - _log_min)
+
+	_mark_x_cache_dirty()
+
+# Recomputes _x_cache (index -> pixel x) for every bin plus one extra slot
+# (bin count), lazily on next access if dirty or wrongly sized.
+func _rebuild_x_cache() -> void:
+	var n := _spectrum.size()
+	if _x_cache.size() != n + 1:
+		_x_cache.resize(n + 1)
+	for i in range(n + 1):
+		_x_cache[i] = _index_to_x(float(i))
+	_x_cache_dirty = false
+
+## Cached equivalent of _index_to_x(float(index)) for integer bin indices
+## (0..spectrum.size() inclusive). Rebuilds the cache lazily when needed.
+func _cached_index_to_x(index: int) -> float:
+	if _x_cache_dirty or _x_cache.size() != _spectrum.size() + 1:
+		_rebuild_x_cache()
+	return _x_cache[index]
 
 # View window for rendering (y-axis)
 @export var db_range_min: float = -100.0:
@@ -198,6 +231,7 @@ func _ensure_spectrum_capacity() -> void:
 		_spectrum.resize(expected_bins)
 		for i in range(expected_bins):
 			_spectrum[i] = input_db_floor
+		_mark_x_cache_dirty()
 
 # Smoothing factor for the spectrum
 # Controls lerp between current and new spectrum values
@@ -228,6 +262,7 @@ var _generate_noise_flag: bool = false
 func _ready():
 	_rebuild_axis_cache()
 	_ensure_spectrum_capacity()
+	resized.connect(_mark_x_cache_dirty)
 
 
 ## Update the visualizer with fresh data and queues a redraw.
@@ -242,6 +277,7 @@ func update_spectrum(spectrum: PackedFloat32Array) -> void:
 		_spectrum.resize(spectrum.size())
 		for i in range(spectrum.size()):
 			_spectrum[i] = spectrum[i]
+		_mark_x_cache_dirty()
 
 	if smoothing >= 1.0:
 		# freeze mode: only update upwards
@@ -400,8 +436,8 @@ func _draw_bars(color: Color, spacing: float = 1.0) -> void:
 	var min_width := 1.0 + spacing
 
 	for i in range(_spectrum.size()):
-		var x := _index_to_x(i)
-		var next_x := _index_to_x(i + 1)
+		var x := _cached_index_to_x(i)
+		var next_x := _cached_index_to_x(i + 1)
 		var f := _index_to_frequency(i)
 
 		if is_nan(group_start_x):
@@ -424,30 +460,30 @@ func _draw_bar(x: float, w: float, val : float, spacing: float = 1.0, color: Col
 
 func _draw_bins(color : Color, thickness: float = 1.0) -> void:
 	for i in range(_spectrum.size()):
-		var x = _index_to_x(i)
+		var x = _cached_index_to_x(i)
 		var y = _db_to_y(_spectrum[i])
 		draw_line(Vector2(x, y), Vector2(x, size.y), color, thickness, true)
 
 
 func _draw_line(color: Color, width: float) -> void:
-	var points: PackedVector2Array = PackedVector2Array()
-	for i in range(_spectrum.size()):
-		var x = _index_to_x(i)
-		var y = _db_to_y(_spectrum[i])
-		points.append(Vector2(x, y))
+	var n := _spectrum.size()
+	if _line_points.size() != n:
+		_line_points.resize(n)
+	for i in range(n):
+		_line_points[i] = Vector2(_cached_index_to_x(i), _db_to_y(_spectrum[i]))
 
-	draw_polyline(points, color, width, true)
+	draw_polyline(_line_points, color, width, true)
 
 
 func _draw_fill(fill_color: Color) -> void:
-	var points: PackedVector2Array = PackedVector2Array()
-	
-	for i in range(_spectrum.size()):
-		var x = _index_to_x(i)
-		var y = _db_to_y(_spectrum[i])
-		points.append(Vector2(x, y))
-	
+	var n := _spectrum.size()
+	if _fill_points.size() != n + 2:
+		_fill_points.resize(n + 2)
+
+	for i in range(n):
+		_fill_points[i] = Vector2(_cached_index_to_x(i), _db_to_y(_spectrum[i]))
+
 	# Close the polygon to the bottom
-	points.append(Vector2(size.x, size.y))
-	points.append(Vector2(0.0, size.y))
-	draw_colored_polygon(points, fill_color)
+	_fill_points[n] = Vector2(size.x, size.y)
+	_fill_points[n + 1] = Vector2(0.0, size.y)
+	draw_colored_polygon(_fill_points, fill_color)

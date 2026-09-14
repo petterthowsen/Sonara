@@ -270,18 +270,26 @@ func _draw():
 	
 
 func _draw_grid() -> void:
-	"""Draw vertical grid lines using GridHelper."""
+	"""Draw vertical grid lines using GridHelper, clipped to the visible scroll range."""
 	if not timeline or not timeline.grid_helper:
 		return
-	
-	# Calculate visible range (in local coordinates)
-	var start_x = 0.0
-	var end_x = size.x
-	
+
+	var helper := timeline.grid_helper
+
+	# TimelineTrack is sized to the full (scrollable) content width, not just
+	# the visible viewport, so drawing start_x=0..size.x draws the whole grid
+	# on every track on every redraw (e.g. on every zoom change). Clip to the
+	# currently visible scroll range instead.
+	var viewport_width = timeline.get_viewport_width()
+	var start_x = clampf(helper.scroll_position, 0.0, size.x)
+	var end_x = clampf(helper.scroll_position + viewport_width, 0.0, size.x)
+	if end_x <= start_x:
+		return
+
 	# Get grid lines from shared grid_helper
 	# use_scroll = false because TimelineTrack is inside a ScrollContainer
 	# which automatically handles the viewport translation
-	var grid_lines = timeline.grid_helper.get_visible_grid_lines(start_x, end_x, 0.0, false)
+	var grid_lines = helper.get_visible_grid_lines(start_x, end_x, 0.0, false)
 	
 	# Draw each grid line
 	for line in grid_lines:

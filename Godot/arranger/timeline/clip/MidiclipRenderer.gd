@@ -10,20 +10,44 @@ class_name MidiclipRenderer extends Control
 @export var pitch_padding: int = 1
 
 # LOD caching for zoom-aware rendering
-var _last_pixels_per_beat: float = -1.0
-var _last_selected_waveform: Waveform = null
-var _last_selected_lod_level: int = -1
 var current_level: int = -1  # Track which LOD level we're currently using
 
 
 func _ready() -> void:
 	## Use nearest-neighbor filtering for crisp waveform textures
 	texture_filter = TEXTURE_FILTER_NEAREST
+	_connect_grid_helper()
 
-# Debouncing for LOD level changes
-var _pending_level: int = -1  # Target level we want to switch to
-var _debounce_time: float = 0.0  # Accumulated time at current pending level
-const LOD_DEBOUNCE_DELAY: float = 0.15  # Wait 150ms before switching LOD level
+
+func _exit_tree() -> void:
+	_disconnect_grid_helper()
+
+
+var _connected_grid_helper: GridHelper = null
+
+func _connect_grid_helper() -> void:
+	if not Sonara.editor or not Sonara.editor.arranger or not Sonara.editor.arranger.timeline:
+		return
+	var grid_helper: GridHelper = Sonara.editor.arranger.timeline.grid_helper
+	if not grid_helper:
+		return
+	if _connected_grid_helper == grid_helper:
+		return
+	_disconnect_grid_helper()
+	_connected_grid_helper = grid_helper
+	_connected_grid_helper.changed.connect(_on_grid_helper_changed)
+
+
+func _disconnect_grid_helper() -> void:
+	if _connected_grid_helper and _connected_grid_helper.changed.is_connected(_on_grid_helper_changed):
+		_connected_grid_helper.changed.disconnect(_on_grid_helper_changed)
+	_connected_grid_helper = null
+
+
+func _on_grid_helper_changed() -> void:
+	## Zoom/scroll/tempo changed - recompute LOD selection and redraw.
+	_update_lod_for_zoom()
+	queue_redraw()
 
 var clip_instance : ClipInstance:
 	set(c):
@@ -31,18 +55,15 @@ var clip_instance : ClipInstance:
 			if clip_instance.clip.clip_modified.is_connected(_on_clip_modified):
 				clip_instance.clip.clip_modified.disconnect(_on_clip_modified)
 		clip_instance = c
-		# Reset debounce state when clip changes
-		_pending_level = -1
-		_debounce_time = 0.0
 		current_level = -1
 		if clip_instance and clip_instance.clip:
 			if not clip_instance.clip.clip_modified.is_connected(_on_clip_modified):
 				clip_instance.clip.clip_modified.connect(_on_clip_modified)
+		_update_lod_for_zoom()
 		queue_redraw()
 
 
 func _on_clip_modified():
-	print("clip modified")
 	# TODO: for notes:
 	# - We should check speifically for midi note changes.
 	#
@@ -51,8 +72,8 @@ func _on_clip_modified():
 	queue_redraw()
 
 
-func _process(delta: float) -> void:
-	## Poll zoom level changes and update current_level indicator with debouncing
+func _update_lod_for_zoom() -> void:
+	## Update current_level indicator when zoom/scroll/tempo changes (via GridHelper.changed).
 	if not clip_instance or not clip_instance.clip:
 		return
 
@@ -60,13 +81,11 @@ func _process(delta: float) -> void:
 	if clip.type != Clip.ClipType.AUDIO or clip.audio_waveform == null:
 		return
 
-	# Get current zoom
-	var timeline = Sonara.editor.arranger.timeline
-	if not timeline:
+	if not _connected_grid_helper:
 		return
 
-	var pixels_per_beat = timeline.grid_helper.pixels_per_beat
-	var ppq = timeline.grid_helper.ppq
+	var pixels_per_beat = _connected_grid_helper.pixels_per_beat
+	var ppq = _connected_grid_helper.ppq
 
 	# Select which level we would use at current zoom
 	var selected_waveform = clip.audio_waveform.get_ready_level_for_zoom(
@@ -78,26 +97,8 @@ func _process(delta: float) -> void:
 
 	if selected_waveform:
 		var new_level = clip.audio_waveform.levels.find(selected_waveform)
-		
-		# Debounce logic: track pending level and accumulate time
-		if new_level != _pending_level:
-			# Level changed, reset debounce timer
-			_pending_level = new_level
-			_debounce_time = 0.0
-		else:
-			# Level is stable, accumulate time
-			_debounce_time += delta
-			
-			# If we've waited long enough and it's different from current, apply the change
-			if _debounce_time >= LOD_DEBOUNCE_DELAY and _pending_level != current_level:
-				print_rich("[color=blue][LOD_CHANGE][/color] Zoom: %.1f px/beat → Level %d (block_size=%d, num_blocks=%d)" % [
-					pixels_per_beat,
-					_pending_level,
-					selected_waveform.resolution,
-					selected_waveform.num_blocks
-				])
-				current_level = _pending_level
-				queue_redraw()  # Redraw when level actually changes
+		if new_level != current_level:
+			current_level = new_level
 
 
 func _draw() -> void:
@@ -201,13 +202,6 @@ func _draw_waveform() -> void:
 		_draw_loading_placeholder()
 		return
 
-	# ZOOM CHANGE DETECTION: Check if zoom level changed since last draw
-	var zoom_changed = not is_equal_approx(_last_pixels_per_beat, pixels_per_beat)
-	if zoom_changed:
-		_last_pixels_per_beat = pixels_per_beat
-		_last_selected_waveform = null  # Force re-selection
-		_last_selected_lod_level = -1
-
 	# Select appropriate waveform level based on zoom
 	# Use get_ready_level_for_zoom to ensure the waveform is fully loaded and ready
 	var waveform: Waveform = clip.audio_waveform.get_ready_level_for_zoom(
@@ -252,31 +246,6 @@ func _draw_waveform() -> void:
 
 	var waveform_start_sample = int(clip_instance.clip_offset * samples_per_tick)
 	var waveform_end_sample = waveform_start_sample + int(clip_instance.duration_ticks * samples_per_tick)
-
-	# Log zoom and LOD info (concise single line)
-	var current_lod_level = clip.audio_waveform.levels.find(waveform)
-	if zoom_changed:
-		print_rich("[color=magenta][WAVEFORM][/color] Zoom: %.1f px/beat | LOD: level %d (%d blocks, %d ch) | Clip: offset=%d ticks, duration=%d ticks" % [
-			pixels_per_beat, current_lod_level, waveform.num_blocks, waveform.channels, clip_instance.clip_offset, clip_instance.duration_ticks
-		])
-		print_rich("[color=cyan][WAVEFORM][/color] Sample range: %d to %d (%.2f samples/tick)" % [
-			waveform_start_sample, waveform_end_sample, samples_per_tick
-		])
-
-		# Debug: show all available levels
-		print_rich("[color=green][LOD_LEVELS][/color] Available levels: %d" % clip.audio_waveform.levels.size())
-		for i in range(clip.audio_waveform.levels.size()):
-			var lvl = clip.audio_waveform.levels[i]
-			if lvl:
-				var blocks_per_px = float(lvl.num_blocks) / size.x if size.x > 0 else 0.0
-				print_rich("  Level %d: %d blocks (res=%d) = %.2f blocks/px %s" % [
-					i, lvl.num_blocks, lvl.resolution, blocks_per_px,
-					"[SELECTED]" if i == current_lod_level else ""
-				])
-			else:
-				print_rich("  Level %d: null" % i)
-		# Uncomment to see detailed waveform info:
-		# print(waveform)
 
 	# Draw using pre-rendered chunked textures for performance
 	# Calculate which portion of the waveform to draw (based on clip_offset and duration)

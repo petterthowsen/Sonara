@@ -104,6 +104,7 @@ func _ready():
 	_update_container_sizing()
 	_apply_selection_layout()
 	_init_details_pane()
+	set_process(false)
 
 	# Connect UI signals
 	if solo_toggle:
@@ -348,19 +349,26 @@ func _on_pan_mode_selected(pan_mode_id):
 
 
 func _on_mouse_entered() -> void:
-	var mouse = get_local_mouse_position()
-	if is_resizing or (resizable and mouse.x >= size.x - 8):
-		# right edge, can resize (only if resizable is true)
-		mouse_default_cursor_shape = Control.CURSOR_HSIZE
-	else:
-		mouse_default_cursor_shape = Control.CURSOR_ARROW
+	_update_hover_cursor(get_local_mouse_position())
 
 func _on_mouse_exited() -> void:
 	if not is_resizing:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 
+## Update the resize-cursor hint from a known local mouse position, without polling every frame.
+func _update_hover_cursor(local_mouse: Vector2) -> void:
+	if is_resizing:
+		mouse_default_cursor_shape = Control.CURSOR_HSIZE
+	elif resizable and local_mouse.x >= size.x - 8:
+		mouse_default_cursor_shape = Control.CURSOR_HSIZE
+	else:
+		mouse_default_cursor_shape = Control.CURSOR_ARROW
+
 func _gui_input(event: InputEvent):
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseMotion:
+		if not is_resizing and not is_moving:
+			_update_hover_cursor(event.position)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and not is_resizing:
 			# start resize only if resizable is true and mouse is on the right edge
 			var mouse = get_local_mouse_position()
@@ -394,6 +402,7 @@ func _start_resize():
 	resize_width_start = int(size.x)
 	mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	is_resizing = true
+	set_process(true)
 
 
 func _process(_delta : float):
@@ -409,16 +418,14 @@ func _process(_delta : float):
 	elif is_moving:
 		_update_move()
 	else:
-		# show resize cursor when hovering on right edge (only if resizable)
-		var local_mouse = get_local_mouse_position()
-		if resizable and local_mouse.x >= size.x - 8:
-			mouse_default_cursor_shape = Control.CURSOR_HSIZE
-		else:
-			mouse_default_cursor_shape = Control.CURSOR_ARROW
+		# Neither resizing nor moving: nothing to poll, stop ticking.
+		set_process(false)
 
 func _stop_resize():
 	is_resizing = false
 	mouse_default_cursor_shape = Control.CURSOR_ARROW
+	if not is_moving:
+		set_process(false)
 
 func _on_title_value_changed(new_name : String) -> void:
 	channel.set_name(new_name)
@@ -450,6 +457,7 @@ func _start_move():
 	is_moving = true
 	move_mouse_start = get_global_mouse_position()
 	move_index_start = get_index()
+	set_process(true)
 
 
 func _move_completed() -> void:
@@ -493,6 +501,8 @@ func _update_move():
 func _stop_move():
 	is_moving = false
 	move_awaiting = false
+	if not is_resizing:
+		set_process(false)
 
 
 ## Forward header clicks to the owning Mixer selection logic (strip body uses Mixer.gui_input).

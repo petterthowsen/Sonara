@@ -19,6 +19,10 @@ enum DisplayMode {
 @onready var mode_toggle_button: Button = $Content/VBox/Options/ModeToggle
 @onready var search_text: LineEdit = $Content/VBox/Options/SearchText
 
+# Debounce timer for search input, created in _setup_ui()
+var _search_debounce_timer: Timer = null
+const SEARCH_DEBOUNCE_SECONDS := 0.2
+
 # ============================================================================
 # SIGNALS
 # ============================================================================
@@ -55,6 +59,14 @@ var _soundfont_assets: Array[Asset] = []
 # Search/filter
 var _search_filter: String = ""
 
+# Refresh coalescing: multiple assets_updated signals in one frame/batch collapse
+# into a single deferred rebuild.
+var _refresh_pending: bool = false
+
+# Tabs whose ItemList/Tree contents are stale relative to `_audio_assets` etc.
+# (or the current `_search_filter`). Populated lazily when a tab becomes visible.
+var _dirty_tabs: Dictionary = {}
+
 
 # ============================================================================
 # LIFECYCLE
@@ -88,8 +100,13 @@ func _setup_ui() -> void:
 	_create_tree(Asset.TYPE.Device)
 	_create_tree(Asset.TYPE.SFZ)
 
-	# Connect search input
+	# Connect search input, debounced so fast typing doesn't rebuild tabs per keystroke
 	search_text.text_changed.connect(_on_search_text_changed)
+	_search_debounce_timer = Timer.new()
+	_search_debounce_timer.one_shot = true
+	_search_debounce_timer.wait_time = SEARCH_DEBOUNCE_SECONDS
+	_search_debounce_timer.timeout.connect(_on_search_debounce_timeout)
+	add_child(_search_debounce_timer)
 
 	# Show first tab by default
 	_switch_tab(Asset.TYPE.Audio)
@@ -169,9 +186,11 @@ func _create_tree(asset_type: Asset.TYPE) -> void:
 
 func _connect_to_asset_service() -> void:
 	if AssetService:
+		# AssetService always emits assets_updated after any batch of
+		# additions/removals/modifications (see AssetService._on_provider_assets_changed),
+		# so listening to it alone is sufficient and avoids one full rebuild per
+		# individual asset_added signal when N files are discovered at once.
 		AssetService.assets_updated.connect(_on_assets_updated)
-		AssetService.asset_added.connect(_on_asset_added)
-		AssetService.asset_removed.connect(_on_asset_removed)
 		print("[Browser] Connected to AssetService")
 
 
@@ -179,26 +198,28 @@ func _connect_to_asset_service() -> void:
 # ASSET DISPLAY
 # ============================================================================
 
-func _refresh_asset_list() -> void:
-	if not AssetService:
-		print("[Browser] AssetService not available")
+## Coalesce multiple assets_updated signals (e.g. N files added in one scan)
+## into a single deferred rebuild instead of rebuilding per signal.
+func _request_refresh() -> void:
+	if _refresh_pending:
 		return
+	_refresh_pending = true
+	call_deferred("_perform_pending_refresh")
 
-	_applying_tree_state = true
-	# Clear all ItemLists and Trees
-	for item_list in _item_lists.values():
-		item_list.clear()
-	for tree in _trees.values():
-		tree.clear()
 
-	# Reset asset tracking
+func _perform_pending_refresh() -> void:
+	_refresh_pending = false
+	_refresh_asset_list()
+
+
+## Recompute the per-type asset partitions from AssetService. Cheap: no UI rebuild.
+func _rebuild_asset_partitions() -> void:
 	_audio_assets.clear()
 	_midi_assets.clear()
 	_device_assets.clear()
 	_sfz_assets.clear()
 	_soundfont_assets.clear()
 
-	# Get all assets and sort by type
 	var all_assets = AssetService.get_all_assets()
 	for asset in all_assets:
 		match asset.type:
@@ -213,18 +234,45 @@ func _refresh_asset_list() -> void:
 			Asset.TYPE.SoundFont:
 				_soundfont_assets.append(asset)
 
-	# Populate Samples tab (Audio + MIDI combined)
-	_populate_samples_tab()
-	_populate_samples_tree()
 
-	# Populate SFZ tab
-	_populate_sfz_tab()
-	_populate_sfz_tree()
+## Called when the underlying asset data changed. Rebuilds the cheap partitions,
+## marks every tab dirty, and only rebuilds the ItemList/Tree UI for the tab
+## that's actually visible right now. Other tabs get rebuilt lazily on switch
+## (see `_switch_tab`), avoiding wasted work on hidden tabs.
+func _refresh_asset_list() -> void:
+	if not AssetService:
+		print("[Browser] AssetService not available")
+		return
 
-	# Populate Devices tab
-	_populate_devices_tab()
-	_populate_devices_tree()
+	_rebuild_asset_partitions()
+
+	for asset_type in _item_lists.keys():
+		_dirty_tabs[asset_type] = true
+
+	_populate_tab_for(_current_tab)
+
+
+## Rebuild the ItemList and Tree contents for a single tab and clear its dirty flag.
+func _populate_tab_for(asset_type: Asset.TYPE) -> void:
+	_applying_tree_state = true
+	match asset_type:
+		Asset.TYPE.Audio:
+			_item_lists[Asset.TYPE.Audio].clear()
+			_trees[Asset.TYPE.Audio].clear()
+			_populate_samples_tab()
+			_populate_samples_tree()
+		Asset.TYPE.Device:
+			_item_lists[Asset.TYPE.Device].clear()
+			_trees[Asset.TYPE.Device].clear()
+			_populate_devices_tab()
+			_populate_devices_tree()
+		Asset.TYPE.SFZ:
+			_item_lists[Asset.TYPE.SFZ].clear()
+			_trees[Asset.TYPE.SFZ].clear()
+			_populate_sfz_tab()
+			_populate_sfz_tree()
 	_applying_tree_state = false
+	_dirty_tabs[asset_type] = false
 
 
 func _filter_and_score_assets(assets: Array[Asset]) -> Array[Dictionary]:
@@ -798,6 +846,11 @@ func _switch_tab(asset_type: Asset.TYPE) -> void:
 	for tree in _trees.values():
 		tree.visible = false
 
+	# Tabs are only rebuilt lazily: asset/search changes mark tabs dirty but
+	# only rebuild the currently visible one, so catch this tab up now if needed.
+	if _dirty_tabs.get(asset_type, false):
+		_populate_tab_for(asset_type)
+
 	# Show selected tab based on current display mode
 	if _display_mode == DisplayMode.FLAT_LIST:
 		_item_lists[asset_type].visible = true
@@ -916,37 +969,23 @@ func _on_asset_selected(index: int, asset_type: Asset.TYPE) -> void:
 
 
 func _on_assets_updated() -> void:
-	_refresh_asset_list()
+	# Coalesce: a batch of N added/removed/modified assets fires this once per
+	# batch already (see AssetService), and _request_refresh further coalesces
+	# any signals that still land in the same frame into one deferred rebuild.
+	_request_refresh()
 
 
-func _on_asset_added(_asset: Asset) -> void:
-	_refresh_asset_list()
+func _on_search_text_changed(_new_text: String) -> void:
+	# Debounce: restart the timer on every keystroke so filtering only runs
+	# once typing pauses, instead of rebuilding tabs per character.
+	_search_debounce_timer.start()
 
 
-func _on_asset_removed(asset: Asset) -> void:
-	print("[Browser] Asset removed: %s" % asset.get_display_name())
-	_refresh_asset_list()
+func _on_search_debounce_timeout() -> void:
+	_search_filter = search_text.text.strip_edges()
 
-
-func _on_search_text_changed(new_text: String) -> void:
-	_search_filter = new_text.strip_edges()
-	_applying_tree_state = true
-
-	# Only repopulate the currently visible tab for efficiency
-	match _current_tab:
-		Asset.TYPE.Audio:
-			_item_lists[Asset.TYPE.Audio].clear()
-			_trees[Asset.TYPE.Audio].clear()
-			_populate_samples_tab()
-			_populate_samples_tree()
-		Asset.TYPE.Device:
-			_item_lists[Asset.TYPE.Device].clear()
-			_trees[Asset.TYPE.Device].clear()
-			_populate_devices_tab()
-			_populate_devices_tree()
-		Asset.TYPE.SFZ:
-			_item_lists[Asset.TYPE.SFZ].clear()
-			_trees[Asset.TYPE.SFZ].clear()
-			_populate_sfz_tab()
-			_populate_sfz_tree()
-	_applying_tree_state = false
+	# The filter affects every tab; mark them all dirty but only rebuild the
+	# one that's currently visible. Others catch up lazily on switch.
+	for asset_type in _item_lists.keys():
+		_dirty_tabs[asset_type] = true
+	_populate_tab_for(_current_tab)
