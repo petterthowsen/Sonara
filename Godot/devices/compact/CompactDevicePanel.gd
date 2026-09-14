@@ -51,7 +51,11 @@ func _ready() -> void:
 
 ## Release engine subscriptions when the panel leaves the tree (e.g. the
 ## channel's device list rebuilding), matching DevicePanel's cleanup.
+## Skipped on plain reparenting (DockHost moves docks around), which would
+## otherwise wipe the parameter list with nothing to rebuild it.
 func _exit_tree() -> void:
+	if not is_queued_for_deletion():
+		return
 	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
 		device_instance.name_changed.disconnect(_on_device_name_changed)
 	if _param_list:

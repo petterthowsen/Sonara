@@ -84,7 +84,6 @@ Each item below is S-sized and independent, so they can go in as small commits.
 
 ### 3.2 Performance quick wins
 
-- **Meters** (`components/meter/Meter.gd`): `queue_redraw()` runs every frame, even when hidden or settled, with a big and a compact meter per strip, and the lerp isn't delta-scaled. Return early when `not is_visible_in_tree()` and stop processing when settled, as `Volumeter.gd` already does.
 - **`MixerChannel._process`** polls the cursor every frame per strip. Use `_gui_input` and enable processing only while resizing or moving. `DeviceLightButton._process` has the same problem.
 - **`MidiclipRenderer._process`** polls per clip per frame through `Sonara.editor.arranger.timeline` and uses `print_rich` inside `_draw`. Listen to `grid_helper.changed` instead.
 - **Browser rebuilds:** `asset_added` and `assets_updated` both trigger a full `_refresh_asset_list()`, so adding N files causes N+1 full rebuilds. Listen only to `assets_updated` and coalesce the refresh with `call_deferred`. Also debounce search and mark other tabs dirty (they currently show stale results after switching).

@@ -149,7 +149,11 @@ func _gui_input(event: InputEvent) -> void:
 ## (e.g. DeviceLane.clear()/_on_channel_device_remmoved() freeing it).
 ## Without this, custom views (like the spectrum analyzer) never get
 ## _on_view_hidden() and the Large popup outlives the panel.
+## Skipped on plain reparenting (DockHost moves docks around), which would
+## otherwise wipe the parameter controls with nothing to rebuild them.
 func _exit_tree() -> void:
+	if not is_queued_for_deletion():
+		return
 	_close_large()
 	if device:
 		_unbind_from_device(device)
@@ -192,6 +196,17 @@ func bind_to_device(dev : DeviceInstance):
 	name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)
+	# Listen for parameter list updates (when plugins load params asynchronously)
+	# Individual CompactParameterControls already listen to parameter value changes.
+	# Connected before any `await` below: the engine can advertise params
+	# (param/count + param/info) while a panel view scene is still loading,
+	# and a listener connected only after that await would miss the signal,
+	# leaving the parameters pane stuck hidden.
+	var channel = Sonara.editor.project.get_channel_by_id(dev.channel_id)
+	if channel:
+		if not channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
+			channel.device_parameters_updated.connect(_on_device_parameters_updated)
+
 	_create_parameter_controls()
 	_update_cc_tab_visibility()
 	# PanelView = custom UI only (not ParameterList, not container children)
@@ -214,13 +229,6 @@ func bind_to_device(dev : DeviceInstance):
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
 	_update_left_pane_visibility()
-	
-	# Listen for parameter list updates (when plugins load params asynchronously)
-	# Individual CompactParameterControls already listen to parameter value changes
-	var channel = Sonara.editor.project.get_channel_by_id(dev.channel_id)
-	if channel:
-		if not channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
-			channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 
 ## Bind the universal parameter lists (same API for builtins and plugins).

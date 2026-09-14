@@ -5,6 +5,8 @@ class_name ParameterList extends VBoxContainer
 
 const CompactParameterControlScene = preload("res://devices/compact/CompactParameterControl.tscn")
 
+var _logger := Log.make("ParameterList")
+
 ## Parameter group to render (`"param"` or `"cc"`).
 @export var group: String = "param"
 
@@ -23,6 +25,7 @@ func bind_to_device(p_device: DeviceInstance, p_group: String = "param") -> void
 	unbind()
 	device = p_device
 	group = p_group
+	_logger.debug("bind_to_device group=%s device=%s" % [p_group, p_device.get_display_name() if p_device else "null"])
 	_listen_for_parameter_updates()
 	refresh()
 
@@ -40,8 +43,14 @@ func unbind() -> void:
 func refresh() -> void:
 	clear()
 	if device == null or device.device == null:
+		_logger.debug("refresh() bailing early: device_null=%s device.device_null=%s" % [device == null, device.device == null if device else true])
 		return
-	for param in device.get_parameters_in_group(group):
+	var found := device.get_parameters_in_group(group)
+	var registry_count := device.device.parameters.size()
+	_logger.debug("refresh() group=%s instance_params=%d registry_params=%d found=%d device=%s" % [
+		group, device.parameters.size(), registry_count, found.size(), device.device.name
+	])
+	for param in found:
 		var control: CompactParameterControl = CompactParameterControlScene.instantiate()
 		control.setup(device, param.id)
 		add_child(control)

@@ -80,6 +80,7 @@ Done:
 - [ ] Delete, Duplicate Channels
 - [ ] Duplicate track
 - [ ] Investigate metering in mixer and track UI: improvements, whether the current approach is sound, and any bugs. Lerp/smooth the peak? also should probably add text showing the peak value along with the line
+  - also: (`components/meter/Meter.gd`): `queue_redraw()` runs every frame, even when hidden or settled, with a big and a compact meter per strip, and the lerp isn't delta-scaled. Return early when `not is_visible_in_tree()` and stop processing when settled, as `Volumeter.gd` already does.
 - [ ] BUG: inline edit of channel names often has unreadable text color
 
 ### Arranger & Timeline
