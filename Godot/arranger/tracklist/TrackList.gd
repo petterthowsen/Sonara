@@ -598,7 +598,7 @@ func get_tracks_for_drag(source: Track) -> Array[Track]:
 	return result
 
 
-## True if an ancestor of `track` is also in the drag set (it will travel with that folder).
+## True if an ancestor of `track` is also in the drag set (it will travel with that parent).
 func _has_selected_ancestor(track: Track, selected_ids: Dictionary) -> bool:
 	if track == null or current_project == null:
 		return false
@@ -705,7 +705,7 @@ func _set_dragged_items_dimmed(dimmed: bool) -> void:
 				item.modulate.a = alpha
 
 
-## Movable roots for the current drag (folder children travel with their folder).
+## Movable roots for the current drag (folder/group children travel with their parent).
 func _dragged_roots() -> Array[Track]:
 	if _reorder_drag == null:
 		return []
@@ -750,21 +750,21 @@ func _compute_drop_placement(mouse_global: Vector2) -> Dictionary:
 	var local_x := mouse_global.x - get_global_rect().position.x
 	if insert_before:
 		return _placement_before(hovered.track, _desired_level_before(hovered.track, local_x), skip)
-	var nest_into_folder := (
-		hovered.track.type == Track.TrackType.FOLDER
+	var nest_into_parent := (
+		hovered.track.can_contain_tracks()
 		and mouse_global.x >= hovered.get_global_rect().get_center().x
 	)
 	return _placement_after(
 		hovered.track,
-		_desired_level_after(hovered.track, local_x, nest_into_folder),
+		_desired_level_after(hovered.track, local_x, nest_into_parent),
 		skip
 	)
 
 
-## Nesting level when inserting after `item`. Right half of a folder nests; a left gutter un-nests.
-func _desired_level_after(item: Track, local_x: float, nest_into_folder: bool) -> int:
+## Nesting level when inserting after `item`. Right half of a folder/group nests; a left gutter un-nests.
+func _desired_level_after(item: Track, local_x: float, nest_into_parent: bool) -> int:
 	var item_level := item.get_nesting_level(current_project)
-	if nest_into_folder and item.type == Track.TrackType.FOLDER:
+	if nest_into_parent and item.can_contain_tracks():
 		return item_level + 1
 	return _desired_level_from_x(item_level, local_x)
 
@@ -805,12 +805,12 @@ func _placement_before(item: Track, desired_level: int, skip: Dictionary) -> Dic
 	}
 
 
-## Insert after `item`; indenting into a folder makes the dragged tracks its first children.
+## Insert after `item`; indenting into a folder/group makes the dragged tracks its first children.
 func _placement_after(item: Track, desired_level: int, skip: Dictionary) -> Dictionary:
 	var item_level := item.get_nesting_level(current_project)
-	var max_level := item_level + (1 if item.type == Track.TrackType.FOLDER else 0)
+	var max_level := item_level + (1 if item.can_contain_tracks() else 0)
 	var level := clampi(desired_level, 0, max_level)
-	if item.type == Track.TrackType.FOLDER and level > item_level:
+	if item.can_contain_tracks() and level > item_level:
 		var nest_blocked := false
 		for root in _dragged_roots():
 			if current_project.track_is_in_subtree(item.id, root):
@@ -860,7 +860,7 @@ func _dragged_root_ids() -> Dictionary:
 	return ids
 
 
-## Every track that moves with the current drag, including folder descendants.
+## Every track that moves with the current drag, including nested descendants.
 func _all_dragged_subtree_ids() -> Dictionary:
 	var ids: Dictionary = {}
 	for root in _dragged_roots():
@@ -868,12 +868,12 @@ func _all_dragged_subtree_ids() -> Dictionary:
 	return ids
 
 
-## Recursively record `track` and its folder children into `ids`.
+## Recursively record `track` and its descendants into `ids`.
 func _collect_subtree_ids(track: Track, ids: Dictionary) -> void:
 	if track == null:
 		return
 	ids[track.id] = true
-	if track.type != Track.TrackType.FOLDER:
+	if current_project == null or not track.can_contain_tracks():
 		return
 	for child in current_project.get_track_children(track):
 		_collect_subtree_ids(child, ids)

@@ -2,7 +2,7 @@
 # - + instrument track
 # - + audio track
 # - + folder track
-# - + group track (folder with a bus)
+# - + group track (TrackType.GROUP + ChannelType.GROUP)
 class_name TrackListContextMenu extends PopupMenu
 
 enum Item {

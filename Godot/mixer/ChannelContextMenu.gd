@@ -4,6 +4,7 @@
 class_name ChannelContextMenu extends PopupPanel
 
 signal delete_requested(channel: Channel)
+signal unnest_requested(channel: Channel)
 
 var channel : Channel = null
 
@@ -13,6 +14,7 @@ var channel : Channel = null
 @onready var color_picker: ColorPickerButton = $VBoxContainer/Header/HBox/ColorPicker
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
+@onready var unnest_button: Button = $VBoxContainer/UnnestButton
 @onready var delete_button: Button = $VBoxContainer/DeleteButton
 
 
@@ -26,6 +28,8 @@ func _ready() -> void:
 	color_picker.pressed.connect(_on_color_picker_pressed)
 	label.value_changed.connect(_on_label_changed)
 	active_checkbox.toggled.connect(_on_active_toggled)
+	if unnest_button:
+		unnest_button.pressed.connect(_on_unnest_pressed)
 	delete_button.pressed.connect(_on_delete_pressed)
 
 
@@ -45,6 +49,8 @@ func bind_to_channel(ch : Channel):
 	
 	# Disable delete button for master channel
 	delete_button.disabled = channel.is_master
+	if unnest_button:
+		unnest_button.visible = MixerChannelDrag.can_unnest(channel)
 
 func _on_color_changed(color : Color):
 	if not channel:
@@ -63,6 +69,14 @@ func _on_active_toggled(_active : bool):
 	if not channel: return
 	# TODO: channels don't have active/inactive state yet.
 	#channel.set_active(_active)
+
+
+## Un-nest this mixer child from its Group parent.
+func _on_unnest_pressed() -> void:
+	if not channel:
+		return
+	unnest_requested.emit(channel)
+	hide()
 
 
 func _on_delete_pressed():

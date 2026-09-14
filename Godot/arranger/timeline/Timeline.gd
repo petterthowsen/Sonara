@@ -683,7 +683,7 @@ func _apply_vertical_drag(delta_tracks: int) -> void:
 		var target_track_node: TimelineTrack = timeline_tracks[target_index]
 		if not target_track_node or not target_track_node.track:
 			continue
-		if target_track_node.track.type == Track.TrackType.FOLDER:
+		if not target_track_node.track.has_clips():
 			continue
 		var current_track: Track = inst.track
 		if current_track == target_track_node.track:
@@ -763,7 +763,7 @@ func _compute_allowed_track_delta(instances: Array[ClipInstance], initial_indice
 			if not target_track_node or not target_track_node.track:
 				valid = false
 				break
-			if target_track_node.track.type == Track.TrackType.FOLDER:
+			if not target_track_node.track.has_clips():
 				valid = false
 				break
 		if valid:
@@ -870,7 +870,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		if not original_inst:
 			continue
 		var target_track: Track = original_inst.track
-		if not target_track or target_track.type == Track.TrackType.FOLDER:
+		if not target_track or not target_track.has_clips():
 			continue
 		var clip_ref: Clip = original_inst.clip
 		if not clip_ref:
@@ -940,7 +940,7 @@ func _clipboard_placement_blocked(source: ClipSelection, target_tick: int) -> bo
 		if not original_inst or not original_inst.clip:
 			continue
 		var target_track: Track = original_inst.track
-		if not target_track or target_track.type == Track.TrackType.FOLDER:
+		if not target_track or not target_track.has_clips():
 			continue
 		var new_start := maxi(0, original_inst.start_ticks + delta_ticks)
 		if target_track.has_clip_overlap(new_start, original_inst.duration_ticks):

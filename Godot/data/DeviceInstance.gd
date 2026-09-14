@@ -63,6 +63,12 @@ var slot_solo: bool = false
 ## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
 var slot_note: int = -1
 
+## Mixer channel that receives this pad's extra-out bus (-1 = none).
+var return_channel_id: int = -1
+
+## Extra-out return channels for a multi-out plugin (index = extra stereo bus).
+var return_channel_ids: Array[int] = []
+
 ## Waveform pyramid when this instance is a Sampler (or other sample-loading device).
 var sample_waveform: DeviceWaveform = null
 
@@ -715,6 +721,8 @@ func to_json() -> Dictionary:
 		"slot_mute": slot_mute,
 		"slot_solo": slot_solo,
 		"slot_note": slot_note,
+		"return_channel_id": return_channel_id,
+		"return_channel_ids": return_channel_ids.duplicate(),
 	}
 
 
@@ -758,6 +766,9 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_mute = bool(data.get("slot_mute", false))
 	instance.slot_solo = bool(data.get("slot_solo", false))
 	instance.slot_note = int(data.get("slot_note", -1))
+	instance.return_channel_id = int(data.get("return_channel_id", -1))
+	var extra_ids = data.get("return_channel_ids", [])
+	instance.return_channel_ids.assign(extra_ids)
 
 	for child_data in data.get("children", []):
 		if child_data is Dictionary:

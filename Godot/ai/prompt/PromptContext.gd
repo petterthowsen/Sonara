@@ -276,9 +276,12 @@ func _date() -> String:
 	return "%04d-%02d-%02d" % [dt.year, dt.month, dt.day]
 
 
+## Compact type string for prompt tables: group, folder_bus, folder, audio, or instrument.
 func _track_kind(t: Track) -> String:
 	if t.is_group():
 		return "group"
+	if t.is_folder_bus():
+		return "folder_bus"
 	match t.type:
 		Track.TrackType.AUDIO:
 			return "audio"
@@ -288,6 +291,7 @@ func _track_kind(t: Track) -> String:
 			return "instrument"
 
 
+## Compact mixer type string: master, group, bus, audio, or instrument.
 func _channel_kind(c: Channel) -> String:
 	if c.is_master:
 		return "master"
@@ -296,6 +300,8 @@ func _channel_kind(c: Channel) -> String:
 			return "audio"
 		Channel.ChannelType.BUS:
 			return "bus"
+		Channel.ChannelType.GROUP:
+			return "group"
 		_:
 			return "instrument"
 

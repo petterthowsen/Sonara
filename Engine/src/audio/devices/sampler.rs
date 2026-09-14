@@ -1,4 +1,4 @@
-//! Single-sample MIDI instrument: pitch, speed, key-track, region, and ADSR.
+//! Single-sample MIDI instrument: pitch, speed, polyphony, region, and ADSR.
 
 use super::container::{gain_to_normalized, normalized_to_gain};
 use super::{
@@ -10,7 +10,9 @@ use crate::audio::dsp::{AdsrEnvelope, AdsrState};
 use crossbeam::channel::Sender;
 use tracing::{info, warn};
 
-const VOICE_COUNT: usize = 16;
+const MAX_VOICES: usize = 64;
+const VOICES_MIN: usize = 1;
+const DEFAULT_VOICES: usize = 16;
 const MIDI_EVENT_CAP: usize = 64;
 const DEFAULT_ROOT: u8 = 60;
 const TUNE_RANGE: f32 = 24.0;
@@ -35,6 +37,7 @@ const PARAM_ATTACK: ParamId = 9;
 const PARAM_DECAY: ParamId = 10;
 const PARAM_SUSTAIN: ParamId = 11;
 const PARAM_RELEASE: ParamId = 12;
+const PARAM_VOICES: ParamId = 13;
 
 /// Playback mode: one-shot ignores note-off; gated fades out on note-off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +89,8 @@ impl Voice {
 /// Built-in Sampler: MIDI-triggered playback of one loaded audio file.
 pub struct SamplerDevice {
     sample: Option<SampleBuffer>,
-    voices: [Voice; VOICE_COUNT],
+    voices: [Voice; MAX_VOICES],
+    voice_count: usize,
     queued_midi: Vec<(usize, u8, u8, bool)>,
     midi_scratch: Vec<(usize, u8, u8, bool)>,
     sample_rate: f32,
@@ -148,6 +152,19 @@ fn time_from_normalized(value: f32) -> f32 {
 /// Inverse of [`time_from_normalized`].
 fn time_to_normalized(seconds: f32) -> f32 {
     ((seconds - TIME_MIN) / (TIME_MAX - TIME_MIN)).clamp(0.0, 1.0)
+}
+
+/// Map a normalized 0–1 value onto the integer Voices range.
+fn voices_from_normalized(value: f32) -> usize {
+    let span = (MAX_VOICES - VOICES_MIN) as f32;
+    let n = (value.clamp(0.0, 1.0) * span).round() as usize + VOICES_MIN;
+    n.clamp(VOICES_MIN, MAX_VOICES)
+}
+
+/// Inverse of [`voices_from_normalized`].
+fn voices_to_normalized(count: usize) -> f32 {
+    let c = count.clamp(VOICES_MIN, MAX_VOICES);
+    (c - VOICES_MIN) as f32 / (MAX_VOICES - VOICES_MIN) as f32
 }
 
 /// Inclusive start frame and exclusive end frame for the playback region.
@@ -243,7 +260,8 @@ impl SamplerDevice {
         let sample_rate = sample_rate.max(1.0);
         Self {
             sample: None,
-            voices: [Voice::idle(sample_rate); VOICE_COUNT],
+            voices: [Voice::idle(sample_rate); MAX_VOICES],
+            voice_count: DEFAULT_VOICES,
             queued_midi: Vec::with_capacity(MIDI_EVENT_CAP),
             midi_scratch: Vec::with_capacity(MIDI_EVENT_CAP),
             sample_rate,
@@ -341,11 +359,11 @@ impl SamplerDevice {
     }
 
     fn reset_voices(&mut self) {
-        self.voices = [Voice::idle(self.sample_rate); VOICE_COUNT];
+        self.voices = [Voice::idle(self.sample_rate); MAX_VOICES];
     }
 
     fn any_voice_active(&self) -> bool {
-        self.voices.iter().any(|v| v.active)
+        self.voices[..self.voice_count].iter().any(|v| v.active)
     }
 
     /// Apply the device ADSR settings to every voice, including notes already sounding.
@@ -357,34 +375,43 @@ impl SamplerDevice {
         }
     }
 
-    fn find_voice_for_note(&self, note: u8) -> Option<usize> {
-        self.voices
-            .iter()
-            .position(|v| v.is_held() && v.note == note)
+    /// Limit polyphony and silence slots that fall outside the new count.
+    fn set_voice_count(&mut self, count: usize) {
+        let count = count.clamp(VOICES_MIN, MAX_VOICES);
+        if count < self.voice_count {
+            for voice in &mut self.voices[count..self.voice_count] {
+                *voice = Voice::idle(self.sample_rate);
+            }
+        }
+        self.voice_count = count;
     }
 
-    fn find_free_voice(&self) -> Option<usize> {
-        self.voices.iter().position(|v| !v.active)
-    }
-
-    /// Prefer a releasing voice, then the oldest sounding voice.
-    fn steal_voice(&self) -> Option<usize> {
-        self.voices
+    /// Oldest held voice playing `note`, so gated note-off pairs with note-on.
+    fn find_held_voice_for_note(&self, note: u8) -> Option<usize> {
+        self.voices[..self.voice_count]
             .iter()
             .enumerate()
-            .min_by_key(|(_, v)| {
-                let releasing = matches!(v.envelope.state(), AdsrState::Release);
-                (if releasing { 0u8 } else { 1u8 }, v.age)
-            })
+            .filter(|(_, v)| v.is_held() && v.note == note)
+            .min_by_key(|(_, v)| v.age)
             .map(|(i, _)| i)
     }
 
+    /// Free slot in the polyphony pool, or steal a releasing then oldest voice.
+    fn allocate_voice(&self) -> Option<usize> {
+        let pool = &self.voices[..self.voice_count];
+        pool.iter().position(|v| !v.active).or_else(|| {
+            pool.iter()
+                .enumerate()
+                .min_by_key(|(_, v)| {
+                    let releasing = matches!(v.envelope.state(), AdsrState::Release);
+                    (if releasing { 0u8 } else { 1u8 }, v.age)
+                })
+                .map(|(i, _)| i)
+        })
+    }
+
     fn note_on(&mut self, note: u8, velocity: u8) {
-        let idx = self
-            .find_voice_for_note(note)
-            .or_else(|| self.find_free_voice())
-            .or_else(|| self.steal_voice());
-        let Some(idx) = idx else {
+        let Some(idx) = self.allocate_voice() else {
             return;
         };
         let Some(sample) = self.sample.as_ref() else {
@@ -401,6 +428,7 @@ impl SamplerDevice {
         let mut envelope = AdsrEnvelope::new(self.sample_rate);
         envelope.set_adsr(self.attack, self.decay, self.sustain, self.release);
         envelope.gate_on();
+        self.time_counter = self.time_counter.wrapping_add(1);
         self.voices[idx] = Voice {
             active: true,
             note,
@@ -417,7 +445,7 @@ impl SamplerDevice {
         if self.play_mode != PlayMode::Gated {
             return;
         }
-        if let Some(idx) = self.find_voice_for_note(note) {
+        if let Some(idx) = self.find_held_voice_for_note(note) {
             self.voices[idx].envelope.gate_off();
         }
     }
@@ -427,7 +455,15 @@ impl SamplerDevice {
             return;
         };
         let region_end = region_frames(sample.frames, self.start, self.end).1;
-        render_active_voices(sample, &mut self.voices, region_end, outputs, start, len);
+        let limit = self.voice_count;
+        render_active_voices(
+            sample,
+            &mut self.voices[..limit],
+            region_end,
+            outputs,
+            start,
+            len,
+        );
     }
 
     fn apply_midi(&mut self, note: u8, velocity: u8, is_on: bool) {
@@ -492,6 +528,7 @@ impl AudioDevice for SamplerDevice {
         match param_id {
             PARAM_VOLUME => self.volume = normalized_to_gain(value),
             PARAM_TUNE => self.tune = value.clamp(0.0, 1.0) * (TUNE_RANGE * 2.0) - TUNE_RANGE,
+            // Speed: logarithmic 0.25–4x. Matches DeviceParameter.gd when is_logarithmic.
             PARAM_SPEED => self.speed = speed_from_normalized(value),
             PARAM_ROOT => self.root = (value.clamp(0.0, 1.0) * 127.0).round() as u8,
             PARAM_KEY_TRACK => self.key_track = value >= 0.5,
@@ -502,6 +539,7 @@ impl AudioDevice for SamplerDevice {
                     PlayMode::OneShot
                 };
             }
+            PARAM_VOICES => self.set_voice_count(voices_from_normalized(value)),
             PARAM_VELOCITY => self.velocity_amount = value.clamp(0.0, 1.0),
             PARAM_START => {
                 self.start = value.clamp(0.0, 1.0);
@@ -546,6 +584,7 @@ impl AudioDevice for SamplerDevice {
                 PlayMode::OneShot => 0.0,
                 PlayMode::Gated => 1.0,
             }),
+            PARAM_VOICES => Some(voices_to_normalized(self.voice_count)),
             PARAM_VELOCITY => Some(self.velocity_amount),
             PARAM_START => Some(self.start),
             PARAM_END => Some(self.end),
@@ -668,6 +707,18 @@ impl AudioDevice for SamplerDevice {
                 param_type: ParamType::Enum,
                 syncable: true,
                 enum_values: vec!["One-shot".to_string(), "Gated".to_string()],
+            },
+            ParamInfo {
+                id: PARAM_VOICES,
+                name: "Voices".to_string(),
+                unit: String::new(),
+                min: VOICES_MIN as f32,
+                max: MAX_VOICES as f32,
+                default: DEFAULT_VOICES as f32,
+                is_automation_safe: true,
+                param_type: ParamType::Float,
+                syncable: true,
+                enum_values: Vec::new(),
             },
             ParamInfo {
                 id: PARAM_VELOCITY,
@@ -817,6 +868,19 @@ mod tests {
     }
 
     #[test]
+    fn default_speed_normalized_is_log_midpoint() {
+        let sampler = SamplerDevice::new_for_metadata();
+        let normalized = sampler.get_parameter(PARAM_SPEED).unwrap();
+        assert!(
+            (normalized - 0.5).abs() < 1e-5,
+            "unity speed must be OSC 0.5 (log), not linear (1.0-0.25)/(4-0.25)=0.2"
+        );
+        assert!((speed_from_normalized(0.5) - 1.0).abs() < 1e-5);
+        let linear_of_default = (1.0 - SPEED_MIN) / (SPEED_MAX - SPEED_MIN);
+        assert!((speed_from_normalized(linear_of_default) - 1.0).abs() > 0.4);
+    }
+
+    #[test]
     fn sample_rate_ratio_compensates_44k_on_48k_device() {
         let ratio = sample_rate_ratio(44_100.0, 48_000.0);
         assert!((ratio - 44_100.0 / 48_000.0).abs() < 1e-12);
@@ -899,5 +963,31 @@ mod tests {
         assert!((sampler.get_parameter(PARAM_DECAY).unwrap() - 0.25).abs() < 1e-5);
         assert!((sampler.get_parameter(PARAM_SUSTAIN).unwrap() - 0.8).abs() < 1e-5);
         assert!((sampler.get_parameter(PARAM_RELEASE).unwrap() - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn voices_roundtrip_and_default() {
+        let mut sampler = SamplerDevice::new_for_metadata();
+        assert_eq!(sampler.voice_count, DEFAULT_VOICES);
+        sampler.set_parameter(PARAM_VOICES, voices_to_normalized(1));
+        assert_eq!(sampler.voice_count, 1);
+        sampler.set_parameter(PARAM_VOICES, 1.0);
+        assert_eq!(sampler.voice_count, MAX_VOICES);
+        assert!((sampler.get_parameter(PARAM_VOICES).unwrap() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn retrigger_overlaps_until_voice_limit() {
+        let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+        sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
+        sampler.note_on(60, 127);
+        sampler.note_on(60, 127);
+        assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 2);
+
+        sampler.set_parameter(PARAM_VOICES, voices_to_normalized(1));
+        assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
+
+        sampler.note_on(60, 127);
+        assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
     }
 }

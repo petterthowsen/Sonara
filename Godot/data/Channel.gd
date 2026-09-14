@@ -4,7 +4,8 @@ class_name Channel extends RefCounted
 enum ChannelType {
 	INSTRUMENT,  # MIDI instrument track
 	AUDIO,       # Audio track
-	BUS          # Bus/group channel (routing only)
+	BUS,         # Bus channel (right pane, send/route target)
+	GROUP        # Group mix parent (left pane, nested children)
 }
 
 # Pan modes (Cubase-style)
@@ -28,6 +29,7 @@ signal mute_changed(value: bool)
 signal solo_changed(value: bool)
 signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
+signal hierarchy_changed
 
 # MIDI signals
 signal midi_input_device_changed(device_id: int)
@@ -76,6 +78,13 @@ var device_output_id: int = 1000  # Hardware output device (1000+ reserved)
 var output_channel_id: int = 1  # Channel to route to (1 = master by default)
 var send_channels: Array = []  # Array of SendConfig objects
 
+# Mixer nesting (independent of output_channel_id; Folder Bus routing does not nest)
+var parent_channel_id: int = -1
+var child_channel_ids: Array[int] = []
+var is_children_expanded: bool = true
+## Extra device bus this nested strip receives (-1 = not an aux return).
+var aux_bus_index: int = -1
+
 # MIDI input configuration
 var midi_input_device: int = -2  # -3=none, -2=all, -1=virtual keyboard, 0+=physical device
 var record_armed: bool = false
@@ -103,6 +112,26 @@ var is_bus : bool:
 var is_master : bool:
 	get:
 		return id == 1
+
+var is_group_channel : bool:
+	get:
+		return channel_type == ChannelType.GROUP
+
+
+## True when output is forced to the mixer parent (group children).
+func route_locked() -> bool:
+	return parent_channel_id >= 0
+
+
+## True when this strip is a drum-pad or plugin extra-out return.
+func is_aux_return() -> bool:
+	return aux_bus_index >= 0
+
+
+## Notify UI that parent/children membership changed.
+func notify_hierarchy_changed() -> void:
+	hierarchy_changed.emit()
+
 
 # ============================================================================
 # LIFECYCLE
@@ -138,6 +167,8 @@ func connect_to_engine() -> void:
 		device_inst.connect_to_engine()
 
 	_is_connected = true
+	# Drum pad / plugin extra-out maps require _is_connected (see AuxReturnSync).
+	AuxReturnSync.sync_aux_map_to_engine(self)
 	print("[Channel %d] Connected to audio engine" % id)
 
 
@@ -205,7 +236,7 @@ func set_name(new_name : String):
 
 
 func set_color(new_color : Color):
-	"""Store the color as-is and push it to paired tracks (routed strips and folder/group buses)."""
+	"""Store the color as-is and push it to paired tracks (routed strips, folder buses, and groups)."""
 	if color == new_color:
 		return
 	color = new_color
@@ -290,10 +321,6 @@ func set_route(output_id: int) -> void:
 	if output_id == id:
 		print("[Channel %d] Cannot route to self, ignoring route to %d" % [id, output_id])
 		return
-
-	# Allow all other routing combinations (UI already filters options)
-	# - Master always accepts incoming routes (ID 1)
-	# - BUS and INSTRUMENT/AUDIO channels only receive filtered options
 
 	output_channel_id = output_id
 	if _is_connected:
@@ -605,6 +632,7 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 	else:
 		device_added.emit(device_instance, position)
 	print("[Channel %d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
+	AuxReturnSync.on_device_added(_fallback_project(), self, device_instance, parent)
 
 
 func remove_device(position: int, parent: DeviceInstance = null) -> void:
@@ -637,6 +665,7 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 	else:
 		device_removed.emit(position, device_id)
 	print("[Channel %d] Device removed: %s" % [id, device_id])
+	AuxReturnSync.on_device_removed(_fallback_project(), self, removed_device, parent)
 
 
 ## Remove a nested or root device by instance.
@@ -681,6 +710,7 @@ func move_device(from_position: int, to_position: int, parent: DeviceInstance = 
 	else:
 		device_moved.emit(from_position, to_position)
 	print("[Channel %d] Device moved from %d to %d: %s" % [id, from_position, to_position, device_instance.device.name])
+	AuxReturnSync.on_device_moved(_fallback_project(), self, parent)
 
 
 func _reindex_host(host: Array[DeviceInstance]) -> void:
@@ -817,6 +847,10 @@ func to_json() -> Dictionary:
 		"solo": solo,
 		"phase_invert": phase_invert,
 		"output_channel_id": output_channel_id,
+		"parent_channel_id": parent_channel_id,
+		"child_channel_ids": child_channel_ids.duplicate(),
+		"is_children_expanded": is_children_expanded,
+		"aux_bus_index": aux_bus_index,
 		"midi_input_device": midi_input_device,
 		"record_armed": record_armed,
 		"send_channels": send_channels.map(func(s): return s.to_json()) if not send_channels.is_empty() else [],
@@ -851,6 +885,11 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.solo = data.get("solo", false)
 	channel.phase_invert = data.get("phase_invert", false)
 	channel.output_channel_id = data.get("output_channel_id", 1)
+	channel.parent_channel_id = data.get("parent_channel_id", -1)
+	var child_ids = data.get("child_channel_ids", [])
+	channel.child_channel_ids.assign(child_ids)
+	channel.is_children_expanded = data.get("is_children_expanded", true)
+	channel.aux_bus_index = data.get("aux_bus_index", -1)
 
 	# Load MIDI settings
 	channel.midi_input_device = data.get("midi_input_device", -2)

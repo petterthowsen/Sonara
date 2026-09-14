@@ -1,4 +1,4 @@
-# Undoable folder↔bus pairing (group tracks) plus descendant mixer routing.
+# Undoable folder↔bus pairing (Folder Bus) plus descendant mixer routing.
 class_name TrackLinkBusCommand extends Command
 
 const CREATE_NEW := -2
@@ -7,7 +7,7 @@ const UNLINK := -1
 ## Project that owns the folder and buses.
 var project: Project = null
 
-## Folder/group track being linked.
+## Folder track being linked to a bus.
 var track: Track = null
 
 ## Target bus, or null when unlinking. Created on first do() when create_new is true.
@@ -89,13 +89,11 @@ func _snapshot() -> void:
 	_old_name_by_channel = track.name_by_channel
 	_old_output_routes.clear()
 	_snapshot_track_route(track)
-	if track.type == Track.TrackType.FOLDER:
-		var stack: Array[Track] = project.get_track_children(track)
-		while not stack.is_empty():
-			var child: Track = stack.pop_back()
-			_snapshot_track_route(child)
-			if child.type == Track.TrackType.FOLDER:
-				stack.append_array(project.get_track_children(child))
+	var stack: Array[Track] = project.get_track_children(track)
+	while not stack.is_empty():
+		var child: Track = stack.pop_back()
+		_snapshot_track_route(child)
+		stack.append_array(project.get_track_children(child))
 
 
 ## Record one track's mixer output if it has a channel.

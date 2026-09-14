@@ -9,7 +9,7 @@ signal drag_completed(data: TrackDrag)
 var source: TrackItem = null
 var destination: TrackItem = null
 var track: Track = null
-## Movable roots in visual order (selected tracks, minus descendants of other selected folders).
+## Movable roots in visual order (selected tracks, minus descendants of other selected parents).
 var tracks: Array[Track] = []
 var preview: Control = null
 

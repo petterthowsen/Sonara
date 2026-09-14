@@ -1,4 +1,4 @@
-[gd_scene load_steps=4 format=3 uid="uid://cpgs8hy6ujmxj"]
+[gd_scene format=3 uid="uid://cpgs8hy6ujmxj"]
 
 [ext_resource type="Script" uid="uid://b8wqrhhe6o2m3" path="res://components/SmartLineEdit.gd" id="1_gmlna"]
 
@@ -20,7 +20,7 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[node name="SmartLineEdit" type="Control"]
+[node name="SmartLineEdit" type="Control" unique_id=301351815]
 layout_mode = 3
 anchors_preset = 14
 anchor_top = 0.5
@@ -30,7 +30,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_gmlna")
 
-[node name="Label" type="Label" parent="."]
+[node name="Label" type="Label" parent="." unique_id=448001948]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -44,7 +44,7 @@ label_settings = SubResource("LabelSettings_1hr2l")
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="LineEdit" type="LineEdit" parent="."]
+[node name="LineEdit" type="LineEdit" parent="." unique_id=1087718571]
 visible = false
 layout_mode = 1
 anchors_preset = 15

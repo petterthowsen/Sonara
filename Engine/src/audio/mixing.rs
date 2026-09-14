@@ -331,7 +331,11 @@ fn finish_channel(
 
     if channel.mix.is_route_target {
         if !channel.mute {
-            let sleep_changes = channel.process_device_chain(frames);
+            let sleep_changes = if channel.mix.has_aux_source {
+                channel.process_device_chain_from(1, frames)
+            } else {
+                channel.process_device_chain(frames)
+            };
             forward_device_events(channel, sleep_changes, status_tx);
             apply_pan(channel, frames);
         }
@@ -341,6 +345,89 @@ fn finish_channel(
     }
 
     route_channel(channel_map, id, frames);
+}
+
+/// Mark channels whose first device writes extra buses into nested child channels.
+fn mark_aux_sources(channel_map: &mut HashMap<ChannelId, Channel>, channel_ids: &[ChannelId]) {
+    for &id in channel_ids {
+        if let Some(channel) = channel_map.get_mut(&id) {
+            channel.mix.has_aux_source = channel.extra_out_targets.iter().any(|&t| t > 0);
+        }
+    }
+}
+
+/// Process aux-source devices and copy extra stereo buses into mapped child channels.
+fn process_aux_sources(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    channel_ids: &[ChannelId],
+    frames: usize,
+    status_tx: &Sender<EngineStatus>,
+) {
+    for &id in channel_ids {
+        let mut did_process = false;
+        {
+            let Some(channel) = channel_map.get_mut(&id) else {
+                continue;
+            };
+            if !channel.mix.has_aux_source {
+                continue;
+            }
+            let sleep_changes = channel.process_aux_source(frames);
+            forward_device_events(channel, sleep_changes, status_tx);
+            did_process = true;
+        }
+        if did_process {
+            copy_extra_outs_to_targets(channel_map, id, frames);
+        }
+    }
+}
+
+/// Deinterleave extra-out buses from `source_id` into mapped child channel buffers.
+fn copy_extra_outs_to_targets(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    source_id: ChannelId,
+    frames: usize,
+) {
+    let Some(source) = channel_map.get_mut(&source_id) else {
+        return;
+    };
+    let targets = std::mem::take(&mut source.extra_out_targets);
+    let extras = std::mem::take(&mut source.extra_out_buffers);
+    let interleaved = frames.saturating_mul(2);
+
+    for (i, &target_id) in targets.iter().enumerate() {
+        if target_id == 0 || target_id == source_id {
+            continue;
+        }
+        let Some(extra) = extras.get(i) else {
+            continue;
+        };
+        let Some(target) = channel_map.get_mut(&target_id) else {
+            continue;
+        };
+        let n = interleaved.min(extra.len());
+        deinterleave_extra(extra, target, n / 2);
+    }
+
+    if let Some(source) = channel_map.get_mut(&source_id) {
+        source.extra_out_targets = targets;
+        source.extra_out_buffers = extras;
+    }
+}
+
+/// Copy interleaved stereo `extra` into `target`'s L/R buffers (overwriting, not mixing).
+fn deinterleave_extra(extra: &[f32], target: &mut Channel, frames: usize) {
+    let frames = frames
+        .min(target.buffer_left.len())
+        .min(target.buffer_right.len());
+    for i in 0..frames {
+        let idx = i * 2;
+        if idx + 1 >= extra.len() {
+            break;
+        }
+        target.buffer_left[i] = extra[idx];
+        target.buffer_right[i] = extra[idx + 1];
+    }
 }
 
 /// Send a channel's device events to Godot: sleep changes, plugin parameter changes, new SFZ
@@ -444,6 +531,7 @@ pub fn mix_and_output(
 
     count_route_inputs(channel_map, channel_ids);
     assign_solo_roles(channel_map, channel_ids, has_solo);
+    mark_aux_sources(channel_map, channel_ids);
 
     // Copy pre-fader audio for pre-fader sends.
     // NOTE: the copy is taken before device processing, as it always has been.
@@ -459,6 +547,11 @@ pub fn mix_and_output(
             mix.pre_fader_right[..frames].copy_from_slice(&channel.buffer_right[..frames]);
         }
     }
+
+    // Aux source pass: generate extra device buses into child channel buffers before
+    // those children run their own device chains. Route-target parents skip the
+    // normal pre-pass so remaining FX wait until children mix back in.
+    process_aux_sources(channel_map, channel_ids, frames, status_tx);
 
     // First pass: process device chains (instruments and effects) before the fader.
     // Route targets are skipped; they run in the routing pass after their inputs mix in.
@@ -935,5 +1028,74 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert!(state.channels.values().all(|c| c.mix.done));
+    }
+
+    /// Device that writes 0.4 to the main out and 0.8 to extra bus 0.
+    struct TestAuxDevice;
+
+    impl AudioDevice for TestAuxDevice {
+        fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            let n = (sample_count * 2).min(outputs.len());
+            outputs[..n].fill(0.4);
+        }
+        fn extra_output_bus_count(&self) -> usize {
+            1
+        }
+        fn process_block_with_extra(
+            &mut self,
+            inputs: &[f32],
+            outputs: &mut [f32],
+            extra_outs: &mut [Vec<f32>],
+            sample_count: usize,
+        ) {
+            self.process_block(inputs, outputs, sample_count);
+            if let Some(extra) = extra_outs.first_mut() {
+                let n = (sample_count * 2).min(extra.len());
+                extra[..n].fill(0.8);
+            }
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.aux"
+        }
+        fn device_name(&self) -> &str {
+            "Aux"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn extra_out_feeds_child_before_child_devices() {
+        let mut parent = test_channel(2, Some(1), 0.0);
+        parent.devices.push(Box::new(TestAuxDevice));
+        parent.set_aux_out(0, 3);
+        let mut child = test_channel(3, Some(2), 0.0);
+        let child_fx = add_test_device(&mut child, 0.1);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), parent, child]);
+        mix(&mut state);
+
+        assert_eq!(child_fx.load(Ordering::Relaxed), 1);
+        // Child fader 0 dB: aux 0.8 + fx 0.1, then routes into parent (0 dB).
+        assert!((state.channels[&3].buffer_left[0] - 0.9).abs() < 1e-4);
+        assert!(
+            state.channels[&2].buffer_left[0] > 0.8,
+            "parent should mix child extra-out, got {}",
+            state.channels[&2].buffer_left[0]
+        );
     }
 }

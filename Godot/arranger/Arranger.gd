@@ -558,7 +558,7 @@ func _on_add_track_pressed() -> void:
 
 
 func _on_add_folder_pressed() -> void:
-	"""Create a folder track (no mixer bus). Use Link to Bus / New Group for a group."""
+	"""Create a folder track (no mixer bus). Use Link to Bus to make a Folder Bus."""
 	if not current_project:
 		push_warning("[Arranger] Cannot add folder: No project active")
 		return

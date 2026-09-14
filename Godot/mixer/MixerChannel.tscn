@@ -8,6 +8,8 @@
 [ext_resource type="PackedScene" uid="uid://fiuy6u5sed1r" path="res://mixer/sends_panel/SendsPanel.tscn" id="5_xa46q"]
 [ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_1hr2l"]
 [ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
+[ext_resource type="Script" uid="uid://c5hc8g1r5wo5i" path="res://mixer/MixerChannelChildren.gd" id="9_an1hh"]
+[ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -116,6 +118,17 @@ font_size = 12
 shadow_size = 2
 shadow_color = Color(0, 0, 0, 0.6745098)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ea3ft"]
+resource_local_to_scene = true
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0, 0.71894944, 0.35271025, 1)
+expand_margin_left = 3.0
+expand_margin_right = 3.0
+expand_margin_bottom = 2.0
+
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
 custom_minimum_size = Vector2(100, 0)
 anchors_preset = 9
@@ -146,21 +159,27 @@ size_flags_vertical = 0
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_yexk5")
 
-[node name="SmartLineEdit" parent="HBox/VBox/Header" unique_id=1058095684 instance=ExtResource("2_xa46q")]
+[node name="VBox" type="VBoxContainer" parent="HBox/VBox/Header" unique_id=52905609]
 layout_mode = 1
 anchors_preset = 15
-anchor_top = 0.0
+anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SmartLineEdit" parent="HBox/VBox/Header/VBox" unique_id=1058095684 instance=ExtResource("2_xa46q")]
+layout_mode = 2
+size_flags_vertical = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
-[node name="Label" parent="HBox/VBox/Header/SmartLineEdit" index="0"]
+[node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0"]
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 text_overrun_behavior = 4
 
-[node name="LineEdit" parent="HBox/VBox/Header/SmartLineEdit" index="1"]
+[node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1"]
 anchors_preset = 14
 anchor_top = 0.5
 anchor_bottom = 0.5
@@ -170,6 +189,15 @@ text = "Layer"
 max_length = 0
 expand_to_text_length = true
 flat = false
+
+[node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox" unique_id=630004199]
+visible = false
+layout_mode = 2
+theme_override_constants/h_separation = 0
+theme_override_font_sizes/font_size = 24
+toggle_mode = true
+text = ">"
+flat = true
 
 [node name="BigMeter" parent="HBox/VBox" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
 visible = false
@@ -340,6 +368,25 @@ edit_via_click = false
 text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
+[node name="Children" type="PanelContainer" parent="HBox" unique_id=470089133]
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+script = ExtResource("9_an1hh")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="HBox/Children" unique_id=1771647144]
+layout_mode = 2
+
+[node name="ParentHeader" type="Panel" parent="HBox/Children/VBoxContainer" unique_id=1082830830]
+custom_minimum_size = Vector2(30, 76)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ea3ft")
+
+[node name="ChildBox" type="HBoxContainer" parent="HBox/Children/VBoxContainer" unique_id=165950930]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+script = ExtResource("10_8wi2u")
+
 [node name="Details" type="VBoxContainer" parent="HBox" unique_id=1745792697]
 visible = false
 layout_mode = 2
@@ -362,7 +409,7 @@ item_1/text = "Stereo Dual"
 item_1/checkable = 1
 item_1/id = 1
 
-[editable path="HBox/VBox/Header/SmartLineEdit"]
+[editable path="HBox/VBox/Header/VBox/SmartLineEdit"]
 [editable path="HBox/VBox/BigMeter"]
 [editable path="HBox/VBox/Volume/HBox/CompactMeter"]
 [editable path="HBox/VBox/Volume/HBox/Fader/SmartLineEdit"]

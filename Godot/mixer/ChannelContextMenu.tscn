@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3 uid="uid://c07tx27b6f3o"]
+[gd_scene format=3 uid="uid://c07tx27b6f3o"]
 
 [ext_resource type="Script" uid="uid://d2hhmluxnli62" path="res://mixer/ChannelContextMenu.gd" id="1_3cfc4"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_w3qfh"]
@@ -25,14 +25,14 @@ color = Color(1, 1, 1, 0.1764706)
 grow_begin = -1.0
 grow_end = -1.0
 
-[node name="ChannelContextMenu" type="PopupPanel"]
+[node name="ChannelContextMenu" type="PopupPanel" unique_id=428470510]
 oversampling_override = 1.0
 position = Vector2i(55, 0)
-size = Vector2i(158, 132)
+size = Vector2i(167, 143)
 visible = true
 script = ExtResource("1_3cfc4")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1901110300]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -43,46 +43,54 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 0
 
-[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+[node name="Header" type="PanelContainer" parent="VBoxContainer" unique_id=2019508167]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_i42wi")
 
-[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header" unique_id=110308169]
 layout_mode = 2
 
-[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header/HBox"]
+[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header/HBox" unique_id=1638867954]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 color = Color(0.4191594, 0.734375, 0.3184204, 1)
 edit_alpha = false
 edit_intensity = false
 
-[node name="Label" parent="VBoxContainer/Header/HBox" instance=ExtResource("2_w3qfh")]
+[node name="Label" parent="VBoxContainer/Header/HBox" unique_id=990657447 instance=ExtResource("2_w3qfh")]
 layout_mode = 2
 size_flags_horizontal = 3
 value_type = 1
 display_format = "%s"
 
+[node name="Label" parent="VBoxContainer/Header/HBox/Label" index="0"]
+text = "Cellos"
+
 [node name="LineEdit" parent="VBoxContainer/Header/HBox/Label" index="1"]
 max_length = 200
 flat = false
 
-[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer" unique_id=777861466]
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
 
-[node name="ActiveCheckbox" type="CheckButton" parent="VBoxContainer"]
+[node name="ActiveCheckbox" type="CheckButton" parent="VBoxContainer" unique_id=821438595]
 layout_mode = 2
 tooltip_text = "Disable to save memory"
 disabled = true
 button_pressed = true
 text = "Active"
 
-[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
+[node name="HSeparator2" type="HSeparator" parent="VBoxContainer" unique_id=1220694933]
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_f3rnv")
 
-[node name="DeleteButton" type="Button" parent="VBoxContainer"]
+[node name="UnnestButton" type="Button" parent="VBoxContainer" unique_id=1043765741]
+visible = false
+layout_mode = 2
+text = "Remove from Group"
+
+[node name="DeleteButton" type="Button" parent="VBoxContainer" unique_id=2145210337]
 layout_mode = 2
 text = "Delete Channel"
 

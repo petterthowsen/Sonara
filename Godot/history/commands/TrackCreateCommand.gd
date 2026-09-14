@@ -1,5 +1,5 @@
 # TrackCreateCommand.gd
-# Undoable instrument/audio/folder track creation (keeps Track + Channel identity).
+# Undoable instrument/audio/folder/group track creation (keeps Track + Channel identity).
 class_name TrackCreateCommand extends Command
 
 ## Project that owns the track/channel.
@@ -43,7 +43,6 @@ func _init(
 			name = "Create Folder"
 		"group":
 			name = "Create Group Track"
-			folder_with_channel = true
 		_:
 			name = "Create Instrument Track"
 
@@ -67,7 +66,7 @@ func do() -> void:
 		"folder":
 			result = project.create_folder_track(track_name, folder_with_channel)
 		"group":
-			result = project.create_folder_track(track_name, true)
+			result = project.create_group_track(track_name)
 		_:
 			result = project.create_instrument_track(track_name)
 	track = result.get("track")

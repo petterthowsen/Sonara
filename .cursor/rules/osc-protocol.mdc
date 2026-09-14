@@ -60,6 +60,7 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/channel/{id}/mute` | `i:0_or_1` | Set mute state |
 | `/channel/{id}/solo` | `i:0_or_1` | Set solo state |
 | `/channel/{id}/route` | `i:output_channel_id` | Set output routing (-1 for none) |
+| `/channel/{id}/aux_out` | `i:bus_index, i:target_channel_id` | Map extra device bus `bus_index` to a child channel (0 clears) |
 | `/channel/{id}/send/{target_id}/add` | `f:amount_db, i:pre_fader` | Add send to BUS channel (default: -12 dB, post-fader) |
 | `/channel/{id}/send/{target_id}/remove` | - | Remove send to target channel |
 | `/channel/{id}/send/{target_id}/amount` | `f:amount_db` | Set send level in dB (-60 to +12) |
@@ -219,6 +220,7 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 - **Type:** Instrument (receives MIDI), file loading (`wav`/`mp3`/`ogg`)
 - One-shot or gated playback of a single decoded sample. PCM stays in the engine; Godot draws the waveform from the AudioFileService cache.
 - Playback rate: `speed * 2^((tune + keytrack*(note-root))/12)` (no timestretch).
+- Retriggers overlap up to the Voices count; lowering Voices immediately silences extra slots.
 - **Params:**
   - `0`: Volume (float 0.0–2.0 linear gain, default 1.0 / normalized 0.5 = unity)
   - `1`: Tune (float ±24 semitones)
@@ -229,6 +231,11 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
   - `6`: Velocity (float 0–1 amount)
   - `7`: Start (float 0–1 region)
   - `8`: End (float 0–1 region)
+  - `9`: Attack (float 0.001–2s)
+  - `10`: Decay (float 0.001–2s)
+  - `11`: Sustain (float 0–1)
+  - `12`: Release (float 0.001–2s)
+  - `13`: Voices (float 1–64, default 16)
 
 **Drum Machine (`sonara.builtin.drum_machine`)**
 - **Type:** Instrument container (`is_container: true`, accepts MIDI)

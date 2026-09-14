@@ -312,10 +312,12 @@ func _on_builtin_info_received(args: Array) -> void:
 		param.min_value = p_min
 		param.max_value = p_max
 		param.default_value = p_def
-		# Heuristic: mark common log parameters for float types
+		# Heuristic: mark common log parameters for float types.
+		# Sampler Speed is log 0.25–4x on the engine; a linear UI maps default 1.0
+		# to normalized 0.2 (~0.44x) and unity to a displayed ~2.13x.
 		if param.param_type == "float":
 			var lname := p_name.to_lower()
-			if lname.findn("time") >= 0 or lname.findn("cutoff") >= 0 or lname.findn("frequency") >= 0:
+			if lname.findn("time") >= 0 or lname.findn("cutoff") >= 0 or lname.findn("frequency") >= 0 or lname.findn("speed") >= 0:
 				param.is_logarithmic = true
 		device.add_parameter(param)
 

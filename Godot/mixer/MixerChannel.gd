@@ -3,7 +3,10 @@ class_name MixerChannel extends PanelContainer
 
 # UI References
 @onready var header: Panel = $HBox/VBox/Header
-@onready var title: SmartLineEdit = $HBox/VBox/Header/SmartLineEdit
+@onready var title: SmartLineEdit = $HBox/VBox/Header/VBox/SmartLineEdit
+@onready var foldout_toggle: Button = $HBox/VBox/Header/VBox/FoldoutToggle
+
+@onready var children_slide = $HBox/Children # fold-out pane
 
 @onready var big_meter: Meter = $HBox/VBox/BigMeter
 
@@ -121,9 +124,21 @@ func _ready():
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 
-	title.value_changed.connect(_on_title_value_changed)
+	if title:
+		title.value_changed.connect(_on_title_value_changed)
 
-	header.gui_input.connect(_on_header_gui_input)
+	if header:
+		header.gui_input.connect(_on_header_gui_input)
+
+	if foldout_toggle:
+		foldout_toggle.toggled.connect(_on_foldout_toggled)
+		if not Engine.is_editor_hint():
+			foldout_toggle.visible = false
+	if children_slide:
+		if children_slide.contents_changed.is_connected(_update_size_for_mode) == false:
+			children_slide.contents_changed.connect(_update_size_for_mode)
+		if not Engine.is_editor_hint():
+			children_slide.visible = false
 
 	# panning mode control
 	panning.gui_input.connect(_on_panning_gui_input)
@@ -154,6 +169,8 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.device_removed.disconnect(_on_channel_device_removed)
 		channel.color_changed.disconnect(_on_channel_color_changed)
 		channel.record_armed_changed.disconnect(_on_channel_record_armed_changed)
+		if channel.hierarchy_changed.is_connected(_on_channel_hierarchy_changed):
+			channel.hierarchy_changed.disconnect(_on_channel_hierarchy_changed)
 
 	channel = ch
 	project = proj
@@ -172,6 +189,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.device_removed.connect(_on_channel_device_removed)
 		channel.color_changed.connect(_on_channel_color_changed)
 		channel.record_armed_changed.connect(_on_channel_record_armed_changed)
+		channel.hierarchy_changed.connect(_on_channel_hierarchy_changed)
 
 		# Bind device list to channel
 		if device_list and device_list is ChannelDeviceList:
@@ -184,6 +202,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 	# Update UI from channel data
 	_update_from_channel()
 	_rebuild_output_menu()
+	_sync_children_slide()
 
 
 func _update_from_channel() -> void:
@@ -197,6 +216,8 @@ func _update_from_channel() -> void:
 
 	# Update header color from channel color
 	_apply_header_color(channel.color)
+	if children_slide:
+		children_slide.apply_header_color(channel.color)
 
 	# Update toggles
 	solo_toggle.set_pressed_no_signal(channel.solo)
@@ -378,7 +399,7 @@ func _process(_delta : float):
 
 		var new_width = resize_width_start - mouse_delta
 
-		new_width = max(new_width, _mode_min_width())
+		new_width = max(new_width, _total_min_width())
 
 		custom_minimum_size.x = new_width
 	elif is_moving:
@@ -400,6 +421,8 @@ func _on_title_value_changed(new_name : String) -> void:
 
 func _on_header_gui_input(event : InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if foldout_toggle and foldout_toggle.visible and foldout_toggle.get_global_rect().has_point(get_global_mouse_position()):
+			return
 		var mouse_event = event as InputEventMouseButton
 		
 		if mouse_event.shift_pressed or mouse_event.ctrl_pressed:
@@ -508,6 +531,8 @@ func _on_channel_record_armed_changed(armed: bool) -> void:
 ## Keep the header fill and title contrast in sync with the channel color.
 func _on_channel_color_changed(new_color : Color) -> void:
 	_apply_header_color(new_color)
+	if children_slide:
+		children_slide.apply_header_color(new_color)
 
 
 ## Tint the mixer header with the stored channel color; clamp only for drawing.
@@ -558,7 +583,7 @@ func _on_channel_pan_changed(pan_left : float, pan_right : float = 0.0):
 # ============================================================================
 ## Report the current layout floor so containers don't shrink a selected strip.
 func _get_minimum_size() -> Vector2:
-	return Vector2(_mode_min_width(), 0)
+	return Vector2(_total_min_width(), 0)
 
 
 ## Compact or large floor, raised when this channel is selected.
@@ -586,13 +611,33 @@ func set_mode(m : Mode):
 
 
 func _update_size_for_mode() -> void:
-	"""Update custom_minimum_size based on current mode, selection, and details pane."""
-	var base_width := _mode_min_width()
+	"""Update custom_minimum_size based on current mode, selection, details, and children."""
+	custom_minimum_size.x = _total_min_width()
+	var strip := get_node_or_null("HBox/VBox") as Control
+	if strip:
+		strip.custom_minimum_size.x = _mode_min_width()
+	update_minimum_size()
+	_notify_parent_mixer_channel_size()
 
+
+## Nested fold-outs grow this strip; tell the enclosing MixerChannel to include the new width.
+func _notify_parent_mixer_channel_size() -> void:
+	var n := get_parent()
+	while n:
+		if n is MixerChannel and n != self:
+			n._update_size_for_mode()
+			return
+		n = n.get_parent()
+
+
+## Strip floor plus open details pane and expanded nested children.
+func _total_min_width() -> int:
+	var w := _mode_min_width()
 	if details_visible and details_pane_width > 0:
-		custom_minimum_size.x = base_width + details_pane_width
-	else:
-		custom_minimum_size.x = base_width
+		w += details_pane_width
+	if children_slide and children_slide.visible:
+		w += maxi(int(children_slide.get_combined_minimum_size().x), 0)
+	return w
 
 
 func set_resizable(value: bool) -> void:
@@ -624,6 +669,7 @@ func _rebuild_output_menu() -> void:
 
 	var popup = output_menu_buttton.get_popup()
 	popup.clear()
+	output_menu_buttton.disabled = false
 
 	# Master channel: show only device outputs
 	if channel.is_master:
@@ -641,16 +687,28 @@ func _rebuild_output_menu() -> void:
 	# Add separator
 	popup.add_separator()
 
-	# Add buses (channels that can be routed to)
-	# Only allow routing to BUS channels, not INSTRUMENT or AUDIO channels
+	# Route to BUS and GROUP (not instrument/audio, not self, not a descendant)
 	for ch in project.channels:
-		# Exclude: self, master, and non-BUS channels
-		if ch.id != channel.id and ch.id != 1 and ch.channel_type == Channel.ChannelType.BUS:
+		if _is_valid_route_target(ch):
 			popup.add_item(ch.name, ch.id)
 			if channel.output_channel_id == ch.id:
 				popup.set_item_checked(popup.item_count - 1, true)
 
+	output_menu_buttton.disabled = channel.route_locked()
 	_update_output_button_text()
+
+
+## True when this strip may route to `target` (BUS or GROUP, no cycles).
+func _is_valid_route_target(target: Channel) -> bool:
+	if target == null or channel == null or project == null:
+		return false
+	if target.id == channel.id or target.is_master:
+		return false
+	if target.channel_type != Channel.ChannelType.BUS and target.channel_type != Channel.ChannelType.GROUP:
+		return false
+	if project.channel_is_in_subtree(target.id, channel):
+		return false
+	return true
 
 
 func _populate_device_outputs(popup: PopupMenu) -> void:
@@ -668,6 +726,8 @@ func _populate_device_outputs(popup: PopupMenu) -> void:
 func _on_output_menu_selected(item_id: int) -> void:
 	"""Handle output menu selection."""
 	if not channel or not project:
+		return
+	if channel.route_locked():
 		return
 
 	# Master channel: set device output
@@ -718,6 +778,47 @@ func _on_channel_route_changed(output_id: int) -> void:
 	_rebuild_output_menu()
 
 
+## Rebuild the output menu and nested fold-out when mixer parent/children change.
+func _on_channel_hierarchy_changed() -> void:
+	if is_queued_for_deletion():
+		return
+	_rebuild_output_menu()
+	_sync_children_slide()
+
+
+## Toggle nested children visibility and persist `is_children_expanded`.
+func _on_foldout_toggled(pressed: bool) -> void:
+	if channel == null:
+		return
+	channel.is_children_expanded = pressed
+	_sync_children_slide()
+
+
+## Show the fold-out for GROUP channels or any channel that already has children.
+func _shows_children_foldout() -> bool:
+	if channel == null:
+		return false
+	return channel.is_group_channel or not channel.child_channel_ids.is_empty()
+
+
+## Update fold-out chrome, spawn nested strips, and refresh this strip's width.
+func _sync_children_slide() -> void:
+	var show_fold := _shows_children_foldout()
+	var expanded := show_fold and channel != null and channel.is_children_expanded
+
+	if foldout_toggle:
+		foldout_toggle.visible = show_fold
+		foldout_toggle.set_pressed_no_signal(expanded)
+		foldout_toggle.text = "v" if expanded else ">"
+
+	if children_slide:
+		children_slide.visible = expanded
+		if show_fold and channel:
+			children_slide.bind_to_parent(channel, project, self)
+
+	_update_size_for_mode()
+
+
 func _on_channel_device_added(device_instance: DeviceInstance, position: int) -> void:
 	"""React to device added to channel."""
 	# ChannelDeviceList handles UI updates via bind_to_channel
@@ -734,13 +835,31 @@ func _on_channel_device_removed(position: int, device_id: String) -> void:
 # DRAG AND DROP
 # ============================================================================
 
-func _get_drag_data(at_position: Vector2) -> Variant:
-	"""Return drag data from this node (not used for mixer, but required by set_drag_forwarding)."""
-	return null
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	"""Start a mixer reparent drag from the header; sibling slide stays a separate header gesture."""
+	if Engine.is_editor_hint() or is_resizing:
+		return null
+	if not MixerChannelDrag.can_drag(channel):
+		return null
+	if header == null or not header.get_global_rect().has_point(get_global_mouse_position()):
+		return null
+	if foldout_toggle and foldout_toggle.visible and foldout_toggle.get_global_rect().has_point(get_global_mouse_position()):
+		return null
+
+	var preview := MixerChannelDrag.make_preview(channel)
+	var drag_data := MixerChannelDrag.new(self, channel, preview)
+	set_drag_preview(preview)
+	print("[MixerChannel] Started nest drag: ", channel.name)
+	return drag_data
 
 
 func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can drop a device or SFZ file on this channel."""
+	"""Accept a mixer nest onto this GROUP strip, a sibling insert in a fold-out, or a device/SFZ asset."""
+	if data is MixerChannelDrag:
+		if _can_drop_channel_nest(data as MixerChannelDrag):
+			return true
+		var kids := _enclosing_children_pane()
+		return kids != null and kids._can_drop_data(at_position, data)
 	if not channel or not data is Asset:
 		return false
 
@@ -767,7 +886,15 @@ func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device or SFZ file on this channel."""
+	"""Handle dropping a nested mixer channel, device, or SFZ file on this strip."""
+	if data is MixerChannelDrag:
+		if _can_drop_channel_nest(data as MixerChannelDrag):
+			_drop_channel_nest(data as MixerChannelDrag)
+			return
+		var kids := _enclosing_children_pane()
+		if kids:
+			kids._drop_data(at_position, data)
+		return
 	if not data is Asset or not channel:
 		return
 
@@ -794,6 +921,38 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
 	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
 	print("[MixerChannel] Device added to channel: %s" % device.device_id)
+
+
+## True when this GROUP or instrument strip can take `data.channel` as a nested child.
+func _can_drop_channel_nest(data: MixerChannelDrag) -> bool:
+	if data == null or data.channel == null or channel == null or project == null:
+		return false
+	if data.channel == channel:
+		return false
+	# Already a child: sibling header-slide owns reorder inside this group.
+	if data.channel.parent_channel_id == channel.id:
+		return false
+	return project.can_nest_channel(data.channel, channel)
+
+
+## Nest the dragged strip under this GROUP, appending after the current last child.
+func _drop_channel_nest(data: MixerChannelDrag) -> void:
+	if not _can_drop_channel_nest(data):
+		return
+	data.destination = self
+	var after := MixerChannelDrag.last_child(project, channel)
+	if MixerChannelDrag.commit(project, data.channel, channel, after):
+		data.did_commit = true
+
+
+## Fold-out pane that owns this strip when nested under a Group.
+func _enclosing_children_pane() -> MixerChannelChildren:
+	var n := get_parent()
+	while n:
+		if n is MixerChannelChildren:
+			return n as MixerChannelChildren
+		n = n.get_parent()
+	return null
 
 
 func _handle_sfz_drop(asset: Asset) -> void:

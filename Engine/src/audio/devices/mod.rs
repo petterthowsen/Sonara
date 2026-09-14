@@ -207,6 +207,30 @@ pub trait AudioDevice: Send {
     /// For stereo devices: inputs/outputs are interleaved [L, R, L, R, ...]
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize);
 
+    /// Extra stereo output buses beyond the main stereo pair (drum pads, plugin extra outs).
+    fn extra_output_bus_count(&self) -> usize {
+        0
+    }
+
+    /// Process the main stereo pair and write extra stereo buses into `extra_outs`.
+    ///
+    /// Each `extra_outs[i]` is a preallocated interleaved stereo buffer. The audio thread
+    /// must not grow these vectors. Unmapped extra buses should stay silent.
+    fn process_block_with_extra(
+        &mut self,
+        inputs: &[f32],
+        outputs: &mut [f32],
+        extra_outs: &mut [Vec<f32>],
+        sample_count: usize,
+    ) {
+        self.process_block(inputs, outputs, sample_count);
+        let n = sample_count.saturating_mul(2);
+        for buf in extra_outs.iter_mut() {
+            let count = n.min(buf.len());
+            buf[..count].fill(0.0);
+        }
+    }
+
     /// Send a MIDI event to this device with a frame offset within the upcoming block
     ///
     /// The `frame_offset` is the sample index in the current processing block at which the

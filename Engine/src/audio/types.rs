@@ -510,6 +510,11 @@ pub struct Channel {
     device_input_buffer: Vec<f32>,
     device_output_buffer: Vec<f32>,
 
+    /// Child channel IDs that receive extra device buses (index = bus). 0 = unmapped.
+    pub extra_out_targets: Vec<ChannelId>,
+    /// Preallocated interleaved stereo extra-out buses (audio thread must not grow these).
+    pub extra_out_buffers: Vec<Vec<f32>>,
+
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
 }
@@ -558,6 +563,8 @@ impl Channel {
             scheduled_midi_events: Vec::with_capacity(256),
             device_input_buffer: vec![0.0; buffer_size * 2],
             device_output_buffer: vec![0.0; buffer_size * 2],
+            extra_out_targets: Vec::new(),
+            extra_out_buffers: Vec::new(),
             mix: MixBuffers::new(buffer_size),
         }
     }
@@ -644,7 +651,20 @@ impl Channel {
         // Device buffers are interleaved stereo (frames * 2)
         self.device_input_buffer.resize(new_size * 2, 0.0);
         self.device_output_buffer.resize(new_size * 2, 0.0);
+        for buf in &mut self.extra_out_buffers {
+            buf.resize(new_size * 2, 0.0);
+        }
         self.mix.resize(new_size);
+    }
+
+    /// Map extra device bus `bus_index` to `target_id` (0 clears). Allocates on the command thread.
+    pub fn set_aux_out(&mut self, bus_index: usize, target_id: ChannelId) {
+        let interleaved = self.buffer_left.len().saturating_mul(2);
+        while self.extra_out_targets.len() <= bus_index {
+            self.extra_out_targets.push(0);
+            self.extra_out_buffers.push(vec![0.0; interleaved]);
+        }
+        self.extra_out_targets[bus_index] = target_id;
     }
 
     /// Update peak and RMS meters (post-fader)
@@ -691,12 +711,54 @@ impl Channel {
         }
     }
 
+    /// Forward scheduled MIDI for this buffer to every device on the channel.
+    fn dispatch_scheduled_midi(&mut self) {
+        if self.scheduled_midi_events.is_empty() {
+            return;
+        }
+        for event in &self.scheduled_midi_events {
+            use super::midi_types::MidiMessageType;
+
+            match event.message_type {
+                MidiMessageType::NoteOn => {
+                    let is_note_on = event.velocity > 0;
+                    for device in self.devices.iter_mut() {
+                        device.mark_activity();
+                        device.send_midi_event(
+                            event.note,
+                            event.velocity,
+                            is_note_on,
+                            event.frame_offset,
+                        );
+                    }
+                }
+                MidiMessageType::NoteOff => {
+                    for device in self.devices.iter_mut() {
+                        device.mark_activity();
+                        device.send_midi_event(event.note, 0, false, event.frame_offset);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Process channel audio through the top-level device chain.
     /// Returns `(device_path, is_sleeping)` for devices whose sleep state changed.
     pub fn process_device_chain(
         &mut self,
         sample_count: usize,
     ) -> Vec<(super::devices::DevicePath, bool)> {
+        self.dispatch_scheduled_midi();
+        self.process_device_chain_from(0, sample_count)
+    }
+
+    /// Process the first device into this channel plus extra-out buses (no remaining FX).
+    pub fn process_aux_source(
+        &mut self,
+        sample_count: usize,
+    ) -> Vec<(super::devices::DevicePath, bool)> {
+        self.dispatch_scheduled_midi();
         if self.devices.is_empty() {
             return vec![];
         }
@@ -705,33 +767,58 @@ impl Channel {
             super::devices::has_audio_signal(&self.buffer_left[..sample_count])
                 || super::devices::has_audio_signal(&self.buffer_right[..sample_count]);
 
-        if !self.scheduled_midi_events.is_empty() {
-            for event in &self.scheduled_midi_events {
-                use super::midi_types::MidiMessageType;
+        let interleaved_count = sample_count * 2;
+        self.device_input_buffer[..interleaved_count].fill(0.0);
+        self.device_output_buffer[..interleaved_count].fill(0.0);
 
-                match event.message_type {
-                    MidiMessageType::NoteOn => {
-                        let is_note_on = event.velocity > 0;
-                        for device in self.devices.iter_mut() {
-                            device.mark_activity();
-                            device.send_midi_event(
-                                event.note,
-                                event.velocity,
-                                is_note_on,
-                                event.frame_offset,
-                            );
-                        }
-                    }
-                    MidiMessageType::NoteOff => {
-                        for device in self.devices.iter_mut() {
-                            device.mark_activity();
-                            device.send_midi_event(event.note, 0, false, event.frame_offset);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        interleave_stereo(
+            &self.buffer_left[..sample_count],
+            &self.buffer_right[..sample_count],
+            &mut self.device_input_buffer[..sample_count * 2],
+        );
+
+        let mut extras = std::mem::take(&mut self.extra_out_buffers);
+        let extra_count = self.devices[0].extra_output_bus_count().min(extras.len());
+        self.devices[0].process_block_with_extra(
+            &self.device_input_buffer,
+            &mut self.device_output_buffer,
+            &mut extras[..extra_count],
+            sample_count,
+        );
+        self.extra_out_buffers = extras;
+
+        deinterleave_stereo(
+            &self.device_output_buffer[..sample_count * 2],
+            &mut self.buffer_left[..sample_count],
+            &mut self.buffer_right[..sample_count],
+        );
+
+        let mut sleep_changes = Vec::new();
+        let has_output_activity = super::devices::has_audio_signal(
+            &self.device_output_buffer[..interleaved_count.min(self.device_output_buffer.len())],
+        );
+        if self.devices[0].update_sleep_state(has_input_activity || has_output_activity) {
+            sleep_changes.push((
+                super::devices::DevicePath::root(0),
+                self.devices[0].is_sleeping(),
+            ));
         }
+        sleep_changes
+    }
+
+    /// Process devices starting at `start` (no MIDI dispatch). Used after aux children mix in.
+    pub fn process_device_chain_from(
+        &mut self,
+        start: usize,
+        sample_count: usize,
+    ) -> Vec<(super::devices::DevicePath, bool)> {
+        if start >= self.devices.len() {
+            return vec![];
+        }
+
+        let has_input_activity =
+            super::devices::has_audio_signal(&self.buffer_left[..sample_count])
+                || super::devices::has_audio_signal(&self.buffer_right[..sample_count]);
 
         let interleaved_count = sample_count * 2;
         self.device_input_buffer[..interleaved_count].fill(0.0);
@@ -744,7 +831,7 @@ impl Channel {
         );
 
         let (result_in_output, sleep_changes) = super::devices::container::process_serial_chain(
-            &mut self.devices,
+            &mut self.devices[start..],
             &mut self.device_input_buffer,
             &mut self.device_output_buffer,
             sample_count,
@@ -765,7 +852,7 @@ impl Channel {
 
         sleep_changes
             .into_iter()
-            .map(|(idx, sleeping)| (super::devices::DevicePath::root(idx), sleeping))
+            .map(|(idx, sleeping)| (super::devices::DevicePath::root(start + idx), sleeping))
             .collect()
     }
 

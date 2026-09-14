@@ -1,0 +1,149 @@
+## Fold-out pane beside a mixer strip: parent-colored header plus nested MixerChannels.
+class_name MixerChannelChildren extends PanelContainer
+
+signal contents_changed
+
+@onready var parent_header: Panel = $VBoxContainer/ParentHeader
+@onready var channels_box: ChannelsBox = $VBoxContainer/ChildBox
+
+var channel: Channel = null
+var project: Project = null
+var _host: MixerChannel = null
+var _header_fill: StyleBoxFlat = null
+
+
+## Forward nest drops onto the fold-out and keep nest_parent in sync.
+func _ready() -> void:
+	set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+	if parent_header:
+		parent_header.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+	if channels_box:
+		channels_box.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+		if channel:
+			channels_box.nest_parent = channel
+
+
+## Bind to the parent mix channel and rebuild nested strips.
+func bind_to_parent(ch: Channel, proj: Project, host: MixerChannel) -> void:
+	channel = ch
+	project = proj
+	_host = host
+	if channels_box:
+		channels_box.nest_parent = ch
+	if ch:
+		apply_header_color(ch.color)
+	sync_children()
+
+
+## Tint the fold-out header with the parent channel color.
+func apply_header_color(new_color: Color) -> void:
+	if parent_header == null:
+		return
+	var drawn := Utils.display_color(new_color)
+	if _header_fill == null:
+		var base := parent_header.get_theme_stylebox("panel")
+		_header_fill = base.duplicate() as StyleBoxFlat if base is StyleBoxFlat else StyleBoxFlat.new()
+		_header_fill.expand_margin_left = 3.0
+		_header_fill.expand_margin_right = 3.0
+		_header_fill.expand_margin_bottom = 2.0
+		parent_header.add_theme_stylebox_override("panel", _header_fill)
+	_header_fill.bg_color = drawn
+	parent_header.queue_redraw()
+
+
+## Spawn, reorder, or free nested MixerChannels to match `child_channel_ids`.
+func sync_children() -> void:
+	if channels_box == null:
+		return
+
+	var desired: Array[int] = []
+	if channel:
+		desired = channel.child_channel_ids.duplicate()
+
+	var existing: Dictionary = {}
+	var stale: Array[Node] = []
+	for child in channels_box.get_children():
+		if child is MixerChannel and child.channel and desired.has(child.channel.id):
+			existing[child.channel.id] = child
+		else:
+			stale.append(child)
+	for node in stale:
+		channels_box.remove_child(node)
+		node.queue_free()
+
+	for i in desired.size():
+		var child_id: int = desired[i]
+		var ui: MixerChannel = existing.get(child_id) as MixerChannel
+		if ui == null:
+			ui = _spawn_child(child_id)
+			if ui == null:
+				continue
+			existing[child_id] = ui
+		if ui.get_parent() == channels_box and ui.get_index() != i:
+			channels_box.move_child(ui, i)
+
+	contents_changed.emit()
+
+
+## Instantiate a nested MixerChannel for `child_id` and bind it to the project.
+func _spawn_child(child_id: int) -> MixerChannel:
+	if project == null:
+		return null
+	var child_ch := project.get_channel_by_id(child_id)
+	if child_ch == null:
+		return null
+
+	var scene := load("res://mixer/MixerChannel.tscn") as PackedScene
+	if scene == null:
+		push_error("[MixerChannelChildren] Failed to load MixerChannel.tscn")
+		return null
+
+	var ui := scene.instantiate() as MixerChannel
+	if ui == null:
+		return null
+
+	channels_box.add(ui)
+	ui.bind_to_channel(child_ch, project)
+
+	var mixer := _find_mixer()
+	if mixer and mixer.has_method("wire_channel_item"):
+		mixer.wire_channel_item(ui)
+
+	return ui
+
+
+## Accept a mixer nest into this group's fold-out (empty box or header).
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	if not data is MixerChannelDrag or channel == null or project == null:
+		return false
+	var drag := data as MixerChannelDrag
+	if drag.channel == null or drag.channel == channel:
+		return false
+	# Already a child: sibling header-slide owns reorder inside this box.
+	if drag.channel.parent_channel_id == channel.id:
+		return false
+	return project.can_nest_channel(drag.channel, channel)
+
+
+## Nest the dragged strip under this parent, inserting from the pointer's X.
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	if not _can_drop_data(_at_position, data):
+		return
+	var drag := data as MixerChannelDrag
+	drag.destination = self
+	var after := MixerChannelDrag.after_sibling_at(
+		channels_box, get_global_mouse_position().x, drag.channel
+	)
+	if MixerChannelDrag.commit(project, drag.channel, channel, after):
+		drag.did_commit = true
+
+
+## Walk ancestors to the Mixer that owns this fold-out.
+func _find_mixer() -> Node:
+	var n: Node = self
+	while n:
+		if n.has_method("wire_channel_item"):
+			return n
+		n = n.get_parent()
+	return null
+

@@ -205,6 +205,11 @@ func has_gui() -> bool:
 	return device_type == DeviceType.CLAP
 
 
+## Extra stereo output buses beyond the main pair (plugin multi-out). Drum pads use slot count instead.
+func extra_stereo_bus_count() -> int:
+	return maxi(0, audio_out_channels / 2 - 1)
+
+
 ## True when dropping this device on an empty tracklist/mixer should create an instrument track.
 func creates_instrument_track() -> bool:
 	return category == DeviceCategory.Instrument or is_container

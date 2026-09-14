@@ -143,6 +143,46 @@ impl AudioDevice for DrumMachineDevice {
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
+    fn extra_output_bus_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    fn process_block_with_extra(
+        &mut self,
+        inputs: &[f32],
+        outputs: &mut [f32],
+        extra_outs: &mut [Vec<f32>],
+        sample_count: usize,
+    ) {
+        let interleaved = (sample_count * 2)
+            .min(inputs.len())
+            .min(outputs.len())
+            .min(self.child_buffer.len());
+
+        if !self.enabled {
+            copy_interleaved(inputs, outputs, sample_count);
+            for buf in extra_outs.iter_mut() {
+                let n = interleaved.min(buf.len());
+                buf[..n].fill(0.0);
+            }
+            return;
+        }
+
+        outputs[..interleaved].fill(0.0);
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            slot.device
+                .process_block(inputs, &mut self.child_buffer, sample_count);
+            if i < extra_outs.len() {
+                let n = interleaved.min(extra_outs[i].len());
+                extra_outs[i][..n].copy_from_slice(&self.child_buffer[..n]);
+            } else {
+                for j in 0..interleaved {
+                    outputs[j] += self.child_buffer[j];
+                }
+            }
+        }
+    }
+
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
         if let Some(slot) = self.slots.iter_mut().find(|s| s.note == note) {
             slot.device.mark_activity();
@@ -324,5 +364,19 @@ mod tests {
         let mut outputs = vec![9.0f32; 4];
         dm.process_block(&inputs, &mut outputs, 2);
         assert_eq!(outputs[0], 0.0);
+    }
+
+    #[test]
+    fn extra_outs_write_each_pad_and_silence_main() {
+        let mut dm = DrumMachineDevice::new(8);
+        dm.insert_child(0, Box::new(NoteCapture::new()));
+        dm.insert_child(1, Box::new(NoteCapture::new()));
+        let inputs = vec![0.0f32; 4];
+        let mut outputs = vec![9.0f32; 4];
+        let mut extras = [vec![0.0f32; 4], vec![0.0f32; 4]];
+        dm.process_block_with_extra(&inputs, &mut outputs, &mut extras, 2);
+        assert_eq!(outputs[0], 0.0);
+        assert!((extras[0][0] - 0.1).abs() < 1e-6);
+        assert!((extras[1][0] - 0.1).abs() < 1e-6);
     }
 }

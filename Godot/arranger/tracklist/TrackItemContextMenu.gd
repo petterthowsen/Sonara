@@ -26,7 +26,7 @@ func _ready() -> void:
 	hide()
 
 
-## Add the bus-link dropdown above Delete (folders/groups only).
+## Add the bus-link dropdown above Delete (folders only).
 func _ensure_bus_link_control() -> void:
 	if bus_link_option:
 		return
@@ -38,7 +38,7 @@ func _ensure_bus_link_control() -> void:
 	bus_link_option.fit_to_longest_item = false
 	bus_link_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bus_link_option.item_selected.connect(_on_bus_link_selected)
-	bus_link_option.tooltip_text = "Link this folder to a mixer bus (makes it a group)"
+	bus_link_option.tooltip_text = "Link this folder to a mixer bus (Folder Bus)"
 	var popup := bus_link_option.get_popup()
 	popup.exclusive = false
 	popup.transient = false

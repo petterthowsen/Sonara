@@ -70,6 +70,12 @@ pub enum AudioCommand {
         id: ChannelId,
         output_id: Option<ChannelId>,
     },
+    /// Map extra device bus `bus_index` on `id` to `target_id` (0 clears the mapping).
+    SetAuxOut {
+        id: ChannelId,
+        bus_index: usize,
+        target_id: ChannelId,
+    },
 
     // MIDI routing
     SetMidiInputDevice {
@@ -793,6 +799,18 @@ pub fn process_command(
                 info!("Channel {} routed to {:?}", id, output_id);
             } else {
                 warn!("Cannot set route for channel {} (not found)", id);
+            }
+        }
+        AudioCommand::SetAuxOut {
+            id,
+            bus_index,
+            target_id,
+        } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.set_aux_out(bus_index, target_id);
+                info!("Channel {} extra out {} -> {}", id, bus_index, target_id);
+            } else {
+                warn!("Cannot set aux out for channel {} (not found)", id);
             }
         }
 

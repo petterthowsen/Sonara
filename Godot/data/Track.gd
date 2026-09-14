@@ -1,6 +1,6 @@
 class_name Track extends RefCounted
 
-enum TrackType { AUDIO, INSTRUMENT, FOLDER }
+enum TrackType { AUDIO, INSTRUMENT, FOLDER, GROUP }
 
 # ============================================================================
 # SIGNALS
@@ -93,8 +93,8 @@ var parent_track_id: int:
 			_parent_track_id = value
 			parent_changed.emit(_parent_track_id)
 
-var child_track_ids: Array[int] = []  # For FOLDER tracks, IDs of child tracks
-var is_folder_expanded: bool = true  # UI state for folder tracks
+var child_track_ids: Array[int] = []  # Child tracks of a folder or group
+var is_folder_expanded: bool = true  # UI state for folder/group tracks
 
 # UI state
 var _height: int = 48  # Track height in pixels
@@ -289,12 +289,30 @@ func _update_channel_link() -> void:
 	get_linked_channel()
 
 
-## True when this folder is paired with a mixer bus (a group track).
-func is_group() -> bool:
+## True when this folder is paired with a mixer bus (Folder Bus).
+func is_folder_bus() -> bool:
 	return type == TrackType.FOLDER and _default_channel_id >= 0
 
 
-## Pair this track with a mixer strip (instrument channel or group bus).
+## True when this is a Group track (nested mix parent on the timeline).
+func is_group() -> bool:
+	return type == TrackType.GROUP
+
+
+## True when this track can own child tracks (folder, group, or a channel that already has children).
+func can_contain_tracks() -> bool:
+	if type == TrackType.FOLDER or type == TrackType.GROUP:
+		return true
+	var ch := get_linked_channel()
+	return ch != null and not ch.child_channel_ids.is_empty()
+
+
+## True when this track can hold clips (not a folder or group header).
+func has_clips() -> bool:
+	return type != TrackType.FOLDER and type != TrackType.GROUP
+
+
+## Pair this track with a mixer strip (instrument, group, or folder bus).
 func pair_mixer_channel(ch: Channel) -> void:
 	if ch == null:
 		return
@@ -310,7 +328,7 @@ func pair_mixer_channel(ch: Channel) -> void:
 	print("[Track %d] pair_mixer_channel: channel %d (%s)" % [id, ch.id, ch.name])
 
 
-## Mixer channel paired for color/name/mute: routed strip or this group's bus.
+## Mixer channel paired for color/name/mute: routed strip, group, or folder bus.
 func get_linked_channel() -> Channel:
 	return _ensure_linked_channel()
 
@@ -399,9 +417,11 @@ func connect_to_engine() -> void:
 	if _is_connected:
 		return
 
-	# Folder/group tracks have no engine timeline; groups only pair a mixer bus.
-	if type == TrackType.FOLDER:
-		print("[Track %d] Folder not connected to engine (bus pairing only)" % id)
+	# Folder and group tracks have no engine timeline (mixer pairing only).
+	if type == TrackType.FOLDER or type == TrackType.GROUP:
+		print("[Track %d] %s not connected to engine (mixer pairing only)" % [
+			id, "Group" if type == TrackType.GROUP else "Folder"
+		])
 		return
 
 	# Create track in audio engine if routed to a channel

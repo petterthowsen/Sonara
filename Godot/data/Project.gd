@@ -73,6 +73,12 @@ var _connection_state: ConnectionState = ConnectionState.DISCONNECTED
 ## Depth of nested place_track / apply_track_layout batches (UI skips per-track rebuilds).
 var _track_layout_batch: int = 0
 
+## True while nest_channel/unnest_channel is syncing the paired track (skip re-entrant nest).
+var _channel_nest_syncing: bool = false
+
+## True while place_track is syncing the paired channel (skip re-entrant place).
+var _track_nest_syncing: bool = false
+
 
 ## Get current connection state
 func get_connection_state() -> ConnectionState:
@@ -764,6 +770,17 @@ func remove_channel(channel_id: int) -> bool:
 		if ch.output_channel_id == channel_id:
 			ch.set_route(1)  # Route to master (ID 1)
 			print("[Project] Channel '%s' rerouted to Master (was routing to removed channel %d)" % [ch.name, channel_id])
+		if ch.parent_channel_id == channel_id:
+			ch.parent_channel_id = -1
+			ch.notify_hierarchy_changed()
+
+	# Drop this channel from its mixer's child list so the parent fold-out updates.
+	if channel.parent_channel_id >= 0:
+		var parent := get_channel_by_id(channel.parent_channel_id)
+		if parent:
+			parent.child_channel_ids.erase(channel_id)
+			parent.notify_hierarchy_changed()
+		channel.parent_channel_id = -1
 	
 	# Disconnect from engine if connected
 	if _connection_state == ConnectionState.CONNECTED and channel._is_connected:
@@ -832,12 +849,13 @@ func remove_track(track_id: int) -> bool:
 	if not track:
 		return false
 	
-	# If it's a folder, recursively remove children first
-	if track.type == Track.TrackType.FOLDER:
-		# Make a copy of child_track_ids since we'll be modifying it
-		var children_to_remove = track.child_track_ids.duplicate()
-		for child_id in children_to_remove:
-			remove_track(child_id)
+	# Recursively remove children first (folders, groups, or any parent with kids)
+	var children_to_remove: Array[int] = track.child_track_ids.duplicate()
+	if children_to_remove.is_empty():
+		for child in get_track_children(track):
+			children_to_remove.append(child.id)
+	for child_id in children_to_remove:
+		remove_track(child_id)
 	
 	# Remove from parent's child list if applicable
 	if track.parent_track_id >= 0:
@@ -869,7 +887,7 @@ func remove_track(track_id: int) -> bool:
 func get_track_children(track: Track) -> Array[Track]:
 	"""Get direct children of a track (not recursive)."""
 	var children: Array[Track] = []
-	if track == null or track.type != Track.TrackType.FOLDER:
+	if track == null:
 		return children
 	for t in tracks:
 		if t.parent_track_id == track.id:
@@ -912,11 +930,8 @@ func get_visual_track_list() -> Array[Track]:
 func _add_track_and_descendants_to_list(track: Track, result: Array[Track]) -> void:
 	"""Recursively add a track and all its descendants to a list."""
 	result.append(track)
-	
-	if track.type == Track.TrackType.FOLDER:
-		var children = get_track_children(track)
-		for child in children:
-			_add_track_and_descendants_to_list(child, result)
+	for child in get_track_children(track):
+		_add_track_and_descendants_to_list(child, result)
 
 
 # ============================================================================
@@ -1066,12 +1081,23 @@ func create_bus_channel(bus_name: String = "Bus") -> Channel:
 	return create_channel(bus_name, Channel.ChannelType.BUS)
 
 
-## Create a group track: a folder paired with a dedicated mixer bus.
+## Create a Group track: timeline parent paired with a left-pane GROUP mix channel.
 func create_group_track(group_name: String = "Group") -> Dictionary:
-	return create_folder_track(group_name, true)
+	var track = Track.new(next_track_id)
+	next_track_id += 1
+	track.type = Track.TrackType.GROUP
+	track.height = 60
+	track.set_project_ref(self)
+
+	var channel := create_channel(group_name, Channel.ChannelType.GROUP)
+	track.pair_mixer_channel(channel)
+	track.name = group_name
+	add_track(track)
+	print("[Project] Group '%s' (track %d) channel=%d" % [track.name, track.id, channel.id])
+	return {"track": track, "channel": channel}
 
 
-## Create a folder track. `with_channel` true makes it a group (dedicated bus).
+## Create a folder track. `with_channel` true makes it a Folder Bus (dedicated right-pane bus).
 func create_folder_track(folder_name: String = "Folder", with_channel: bool = false) -> Dictionary:
 	var track = Track.new(next_track_id)
 	next_track_id += 1
@@ -1090,7 +1116,7 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = fa
 	track.name = folder_name
 	add_track(track)
 	print("[Project] %s '%s' (track %d) bus=%s" % [
-		"Group" if with_channel else "Folder",
+		"Folder Bus" if with_channel else "Folder",
 		track.name,
 		track.id,
 		("%d" % channel.id) if channel else "none"
@@ -1098,8 +1124,23 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = fa
 	return {"track": track, "channel": channel}
 
 
-## Mixer bus of the nearest ancestor group, or null if none.
-func get_enclosing_group_bus(track: Track) -> Channel:
+## Mixer bus of the nearest ancestor Folder Bus, or null if none.
+func get_enclosing_folder_bus(track: Track) -> Channel:
+	if track == null:
+		return null
+	var parent_id := track.parent_track_id
+	while parent_id >= 0:
+		var parent := get_track_by_id(parent_id)
+		if parent == null:
+			break
+		if parent.is_folder_bus():
+			return parent.get_linked_channel()
+		parent_id = parent.parent_track_id
+	return null
+
+
+## Mixer channel of the nearest ancestor Group, or null if none.
+func get_enclosing_group_channel(track: Track) -> Channel:
 	if track == null:
 		return null
 	var parent_id := track.parent_track_id
@@ -1113,19 +1154,38 @@ func get_enclosing_group_bus(track: Track) -> Channel:
 	return null
 
 
-## Mixer channel this track owns (instrument/audio strip or group bus).
+## Mixer channel this track owns (instrument/audio strip, group, or folder bus).
 func get_track_mixer_channel(track: Track) -> Channel:
 	if track == null or track.default_channel_id < 0:
 		return null
 	return get_channel_by_id(track.default_channel_id)
 
 
-## Route this track's mixer channel to the enclosing group bus, or Master.
+## Track paired to this mixer channel via default_channel_id, or null.
+func get_channel_paired_track(ch: Channel) -> Track:
+	if ch == null:
+		return null
+	for track in tracks:
+		if track.default_channel_id == ch.id:
+			return track
+	return null
+
+
+## Route this track's mixer channel: locked group parent, else Folder Bus, else Master.
 func sync_track_hierarchy_routing(track: Track) -> void:
 	var ch := get_track_mixer_channel(track)
 	if ch == null or ch.is_master:
 		return
-	var bus := get_enclosing_group_bus(track)
+	if ch.parent_channel_id >= 0:
+		if ch.output_channel_id != ch.parent_channel_id:
+			ch.set_route(ch.parent_channel_id)
+		return
+	var group_ch := get_enclosing_group_channel(track)
+	if group_ch:
+		if ch.output_channel_id != group_ch.id:
+			ch.set_route(group_ch.id)
+		return
+	var bus := get_enclosing_folder_bus(track)
 	var target_id := bus.id if bus else 1
 	if ch.id == target_id:
 		return
@@ -1133,18 +1193,16 @@ func sync_track_hierarchy_routing(track: Track) -> void:
 		ch.set_route(target_id)
 
 
-## Route a folder and every descendant according to group ancestry.
+## Route a parent and every descendant according to group / folder-bus ancestry.
 func sync_subtree_hierarchy_routing(track: Track) -> void:
 	if track == null:
 		return
 	sync_track_hierarchy_routing(track)
-	if track.type != Track.TrackType.FOLDER:
-		return
 	for child in get_track_children(track):
 		sync_subtree_hierarchy_routing(child)
 
 
-## Pair a folder with a bus (making it a group) and route descendants to that bus.
+## Pair a folder with a bus (making it a Folder Bus) and route descendants to that bus.
 func link_folder_to_bus(track: Track, bus: Channel) -> void:
 	if track == null or bus == null or track.type != Track.TrackType.FOLDER:
 		return
@@ -1154,7 +1212,7 @@ func link_folder_to_bus(track: Track, bus: Channel) -> void:
 	sync_subtree_hierarchy_routing(track)
 
 
-## Turn a group back into a channel-less folder and re-route descendants.
+## Turn a Folder Bus back into a channel-less folder and re-route descendants.
 func unlink_folder_from_bus(track: Track) -> void:
 	if track == null or track.type != Track.TrackType.FOLDER:
 		return
@@ -1175,11 +1233,11 @@ func create_and_link_folder_bus(track: Track) -> Channel:
 	return bus
 
 
-## Add a track as the last child of a folder.
+## Add a track as the last child of a folder or group.
 func add_track_to_folder(track_id: int, folder_id: int) -> bool:
 	var track = get_track_by_id(track_id)
 	var folder = get_track_by_id(folder_id)
-	if not track or not folder or folder.type != Track.TrackType.FOLDER:
+	if not track or not folder or not folder.can_contain_tracks():
 		return false
 	var after_sibling: Track = null
 	for child in get_track_children(folder):
@@ -1220,7 +1278,14 @@ func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) 
 
 	if new_parent_id >= 0:
 		var new_parent := get_track_by_id(new_parent_id)
-		if new_parent == null or new_parent.type != Track.TrackType.FOLDER:
+		if new_parent == null or not new_parent.can_contain_tracks():
+			return false
+
+	var mixer := get_track_mixer_channel(track)
+	if mixer and mixer.is_aux_return():
+		var source_ch := get_channel_by_id(mixer.parent_channel_id)
+		var source_track := get_channel_paired_track(source_ch) if source_ch else null
+		if source_track and new_parent_id != source_track.id:
 			return false
 
 	if after_sibling != null and after_sibling.parent_track_id != new_parent_id:
@@ -1262,11 +1327,15 @@ func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) 
 	for i in range(new_order.size()):
 		new_order[i].order = i
 
-	_sync_folder_child_ids(new_parent_id)
+	_sync_track_child_ids(new_parent_id)
 	if old_parent_id != new_parent_id:
 		_renumber_siblings(old_parent_id)
-		_sync_folder_child_ids(old_parent_id)
+		_sync_track_child_ids(old_parent_id)
+		if not _track_nest_syncing:
+			_sync_channel_nest_for_track_move(track, old_parent_id, new_parent_id, after_sibling)
 		sync_subtree_hierarchy_routing(track)
+	elif not _track_nest_syncing:
+		_sync_channel_order_for_track(track, new_parent_id, after_sibling)
 
 	end_track_layout_batch()
 	return true
@@ -1286,8 +1355,31 @@ func apply_track_layout(layout: Dictionary) -> void:
 		track.child_track_ids = child_ids
 		track.parent_track_id = entry["parent_track_id"]
 		track.order = entry["order"]
+	var restored_channel_fields := false
 	for track in tracks:
-		sync_track_hierarchy_routing(track)
+		if not layout.has(track.id):
+			continue
+		var entry: Dictionary = layout[track.id]
+		var ch := get_track_mixer_channel(track)
+		if ch == null:
+			continue
+		if entry.has("channel_parent_id"):
+			ch.parent_channel_id = int(entry["channel_parent_id"])
+			restored_channel_fields = true
+		if entry.has("channel_child_ids"):
+			var ch_child_ids: Array[int] = []
+			ch_child_ids.assign(entry["channel_child_ids"])
+			ch.child_channel_ids = ch_child_ids
+			restored_channel_fields = true
+		if entry.has("output_channel_id"):
+			var out_id: int = int(entry["output_channel_id"])
+			if out_id >= 0 and ch.output_channel_id != out_id:
+				ch.set_route(out_id)
+			restored_channel_fields = true
+		ch.notify_hierarchy_changed()
+	if not restored_channel_fields:
+		for track in tracks:
+			sync_track_hierarchy_routing(track)
 	end_track_layout_batch()
 
 
@@ -1327,17 +1419,191 @@ func _track_already_placed(track: Track, new_parent_id: int, after_sibling: Trac
 	return false
 
 
-## Keep a folder's child_track_ids in sibling order.
-func _sync_folder_child_ids(parent_id: int) -> void:
+## Keep a parent's child_track_ids in sibling order.
+func _sync_track_child_ids(parent_id: int) -> void:
 	if parent_id < 0:
 		return
-	var folder := get_track_by_id(parent_id)
-	if folder == null or folder.type != Track.TrackType.FOLDER:
+	var parent := get_track_by_id(parent_id)
+	if parent == null or not parent.can_contain_tracks():
 		return
 	var ids: Array[int] = []
-	for child in get_track_children(folder):
+	for child in get_track_children(parent):
 		ids.append(child.id)
-	folder.child_track_ids = ids
+	parent.child_track_ids = ids
+
+
+## True when `child` may nest under mixer `parent` (not bus/master, no cycles).
+func can_nest_channel(child: Channel, parent: Channel, after_sibling: Channel = null) -> bool:
+	if child == null or parent == null:
+		return false
+	if child.is_master or parent.is_master:
+		return false
+	if child.is_bus or parent.is_bus:
+		return false
+	if child.id == parent.id:
+		return false
+	if child.is_aux_return() and child.parent_channel_id >= 0 and parent.id != child.parent_channel_id:
+		return false
+	if channel_is_in_subtree(parent.id, child):
+		return false
+	if after_sibling != null and after_sibling.parent_channel_id != parent.id and after_sibling != child:
+		return false
+	return true
+
+
+## Nest `child` under `parent`, after `after_sibling` (null = first). Locks route to parent.
+func nest_channel(child: Channel, parent: Channel, after_sibling: Channel = null) -> bool:
+	if not can_nest_channel(child, parent, after_sibling):
+		return false
+
+	var old_parent_id := child.parent_channel_id
+	if old_parent_id >= 0 and old_parent_id != parent.id:
+		var old_parent := get_channel_by_id(old_parent_id)
+		if old_parent:
+			old_parent.child_channel_ids.erase(child.id)
+			old_parent.notify_hierarchy_changed()
+
+	child.parent_channel_id = parent.id
+	_insert_child_channel_id(parent, child.id, after_sibling)
+	if child.output_channel_id != parent.id:
+		child.set_route(parent.id)
+	child.notify_hierarchy_changed()
+	parent.notify_hierarchy_changed()
+
+	if not _channel_nest_syncing:
+		var child_track := get_channel_paired_track(child)
+		var parent_track := get_channel_paired_track(parent)
+		if child_track and parent_track:
+			var after_track := get_channel_paired_track(after_sibling) if after_sibling else null
+			_track_nest_syncing = true
+			place_track(child_track, parent_track.id, after_track)
+			_track_nest_syncing = false
+	return true
+
+
+## Un-nest `child` to mixer root and route to enclosing Folder Bus or Master.
+func unnest_channel(child: Channel) -> bool:
+	if child == null or child.parent_channel_id < 0:
+		return false
+	var old_parent := get_channel_by_id(child.parent_channel_id)
+	child.parent_channel_id = -1
+	if old_parent:
+		old_parent.child_channel_ids.erase(child.id)
+		old_parent.notify_hierarchy_changed()
+
+	var paired := get_channel_paired_track(child)
+	var bus := get_enclosing_folder_bus(paired) if paired else null
+	var target_id := bus.id if bus else 1
+	if child.output_channel_id != target_id:
+		child.set_route(target_id)
+	child.notify_hierarchy_changed()
+
+	if not _channel_nest_syncing and paired:
+		var old_group_track := get_channel_paired_track(old_parent) if old_parent else null
+		var new_parent_id := old_group_track.parent_track_id if old_group_track else -1
+		_track_nest_syncing = true
+		place_track(paired, new_parent_id, old_group_track)
+		_track_nest_syncing = false
+	return true
+
+
+## Direct mixer children of `ch` in fold-out order.
+func get_channel_children(ch: Channel) -> Array[Channel]:
+	var children: Array[Channel] = []
+	if ch == null:
+		return children
+	for child_id in ch.child_channel_ids:
+		var child := get_channel_by_id(child_id)
+		if child:
+			children.append(child)
+	return children
+
+
+## True if `maybe_descendant_id` is `root` or nested under it in the channel tree.
+func channel_is_in_subtree(maybe_descendant_id: int, root: Channel) -> bool:
+	if maybe_descendant_id < 0 or root == null:
+		return false
+	var walk_id := maybe_descendant_id
+	var visited: Dictionary = {}
+	while walk_id >= 0:
+		if walk_id == root.id:
+			return true
+		if visited.has(walk_id):
+			break
+		visited[walk_id] = true
+		var node := get_channel_by_id(walk_id)
+		if node == null:
+			break
+		walk_id = node.parent_channel_id
+	return false
+
+
+## Insert `child_id` into `parent.child_channel_ids` after `after_sibling` (null = first).
+func _insert_child_channel_id(parent: Channel, child_id: int, after_sibling: Channel) -> void:
+	parent.child_channel_ids.erase(child_id)
+	if after_sibling == null:
+		parent.child_channel_ids.insert(0, child_id)
+		return
+	var idx := parent.child_channel_ids.find(after_sibling.id)
+	if idx >= 0:
+		parent.child_channel_ids.insert(idx + 1, child_id)
+	else:
+		parent.child_channel_ids.append(child_id)
+
+
+## When a track moves into/out of a mix parent, nest or unnest its mixer channel.
+func _sync_channel_nest_for_track_move(
+	track: Track,
+	_old_parent_id: int,
+	new_parent_id: int,
+	after_sibling: Track
+) -> void:
+	var ch := get_track_mixer_channel(track)
+	if ch == null:
+		return
+	_channel_nest_syncing = true
+	var new_parent := get_track_by_id(new_parent_id)
+	var parent_ch := get_track_mixer_channel(new_parent) if new_parent else null
+	var after_ch := get_track_mixer_channel(after_sibling) if after_sibling else null
+	if parent_ch != null and can_nest_channel(ch, parent_ch, after_ch):
+		nest_channel(ch, parent_ch, after_ch)
+	elif ch.parent_channel_id >= 0 and not ch.is_aux_return():
+		unnest_channel(ch)
+	_channel_nest_syncing = false
+
+
+## Keep mixer sibling order in sync when reordering under the same mix parent.
+func _sync_channel_order_for_track(track: Track, new_parent_id: int, after_sibling: Track) -> void:
+	var parent_track := get_track_by_id(new_parent_id)
+	var parent_ch := get_track_mixer_channel(parent_track)
+	var child_ch := get_track_mixer_channel(track)
+	if parent_ch == null or child_ch == null:
+		return
+	if child_ch.parent_channel_id != parent_ch.id:
+		return
+	var after_ch := get_track_mixer_channel(after_sibling) if after_sibling else null
+	_insert_child_channel_id(parent_ch, child_ch.id, after_ch)
+	parent_ch.notify_hierarchy_changed()
+
+
+## Rebuild child_channel_ids from parent_channel_id when a save omitted the array.
+func _rebuild_channel_child_ids_from_parents() -> void:
+	var children_by_parent: Dictionary = {}
+	for ch in channels:
+		if ch.parent_channel_id < 0:
+			continue
+		if not children_by_parent.has(ch.parent_channel_id):
+			children_by_parent[ch.parent_channel_id] = []
+		children_by_parent[ch.parent_channel_id].append(ch.id)
+	for parent_id in children_by_parent:
+		var parent := get_channel_by_id(int(parent_id))
+		if parent == null:
+			continue
+		if not parent.child_channel_ids.is_empty():
+			continue
+		var ids: Array[int] = []
+		ids.assign(children_by_parent[parent_id])
+		parent.child_channel_ids = ids
 
 
 func _renumber_siblings(parent_id: int) -> void:
@@ -1431,18 +1697,26 @@ static func from_json(data: Dictionary) -> Project:
 		project.tracks.append(track)
 
 	_relink_folder_buses(project)
+	project._rebuild_channel_child_ids_from_parents()
+	AuxReturnSync.ensure_all(project)
 	return project
 
 
-## Re-bind folder/group tracks to their mixer buses after load.
+## Re-bind folder and group tracks to their mixer channels after load.
 static func _relink_folder_buses(project: Project) -> void:
 	for track in project.tracks:
-		if track == null or track.type != Track.TrackType.FOLDER:
+		if track == null:
+			continue
+		if track.type != Track.TrackType.FOLDER and track.type != Track.TrackType.GROUP:
 			continue
 		track.set_project_ref(project)
 		var ch := track.get_linked_channel()
-		print("[Project] Loaded folder '%s' (id %d) bus=%s default_channel_id=%d" % [
-			track.name, track.id, ("%d" % ch.id) if ch else "none", track.default_channel_id
+		print("[Project] Loaded %s '%s' (id %d) channel=%s default_channel_id=%d" % [
+			"Group" if track.is_group() else "folder",
+			track.name,
+			track.id,
+			("%d" % ch.id) if ch else "none",
+			track.default_channel_id
 		])
 
 

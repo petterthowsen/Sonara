@@ -2,6 +2,7 @@
 
 ## Bugs
 
+- [ ] Timeline clip intercepts middle-click, preventing panning
 
 ## Audio Engine
 
@@ -40,6 +41,8 @@ Done:
 
 - [ ] DeviceInstance and their UIs should init with loading state and wait for Engine updates
 - [ ] Multi-in and multi-out for devices
+  - [x] Drum Machine pads feed nested child mixer channels (extra-out buses before the child device chain)
+  - [ ] CLAP extra output ports into shared memory (child return channels are created when `audio_out_channels > 2`)
 - [ ] Add support for enum parameter type for builtins
 - [ ] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
 - [ ] In Engine: Simplify device advertisement to avoid creating temporary instances
@@ -148,6 +151,7 @@ Done:
 
 ### UI / Quality of Life
 
+- [ ] Add [Lucide](https://lucide.dev) icons throughout the UI; curate a subset as selectable track/channel icons
 - [x] Dock system: Inspector, Browser, and AI Chat freely placeable
   - Two side docks (left / right)
   - Each dock can stack panels vertically; split is draggable when two panels share a dock
@@ -159,6 +163,9 @@ Done:
 Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
 - [ ] Add playhead location and the currently focused musical element (clip, note) as a prompt variable
+- [ ] Button in chat UI: on click, open a popup showing the last rendered system prompt
+- [ ] Attach selection as prompt context (timeline range, selected clip(s), selected track, selected mixer channel); show a glowing badge in the chat composer for each active context
+- [ ] Format code and JSON in chat messages (especially tool call / tool result bubbles) for readability
 - [ ] Leverage Gemini models to reason over audio
   - Bounce a section of the track, include that in the next user prompt (when toggled), and ask questions about it. Enables an AI loop: make changes → listen → reason → adjust
 

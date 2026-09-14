@@ -64,6 +64,8 @@ pub struct MixBuffers {
     pub done: bool,
     /// Solo participation for this buffer (`Full` when nothing is soloed).
     pub solo_role: SoloRole,
+    /// First device writes extra buses into child channels this buffer.
+    pub has_aux_source: bool,
 }
 
 impl MixBuffers {

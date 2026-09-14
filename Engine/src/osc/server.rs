@@ -749,6 +749,25 @@ impl OscServer {
                     })?;
                 }
             }
+            ["channel", id_str, "aux_out"] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    let bus_index = args.first().and_then(|a| match a {
+                        OscType::Int(v) if *v >= 0 => Some(*v as usize),
+                        _ => None,
+                    });
+                    let target_id = args.get(1).and_then(|a| match a {
+                        OscType::Int(v) if *v >= 0 => Some(*v as usize),
+                        _ => None,
+                    });
+                    if let (Some(bus_index), Some(target_id)) = (bus_index, target_id) {
+                        command_tx.send(AudioCommand::SetAuxOut {
+                            id,
+                            bus_index,
+                            target_id,
+                        })?;
+                    }
+                }
+            }
 
             // MIDI routing configuration
             ["channel", id_str, "midi_input_device"] => {

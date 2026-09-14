@@ -135,9 +135,12 @@ static func compact_channel(c: Channel) -> Dictionary:
 	}
 
 
+## Compact type string for tools: group, folder_bus, folder, audio, or instrument.
 static func _track_kind(t: Track) -> String:
 	if t.is_group():
 		return "group"
+	if t.is_folder_bus():
+		return "folder_bus"
 	match t.type:
 		Track.TrackType.AUDIO:
 			return "audio"
@@ -147,12 +150,15 @@ static func _track_kind(t: Track) -> String:
 			return "instrument"
 
 
+## Compact mixer type string: group, bus, audio, or instrument.
 static func _channel_kind(c: Channel) -> String:
 	match c.channel_type:
 		Channel.ChannelType.AUDIO:
 			return "audio"
 		Channel.ChannelType.BUS:
 			return "bus"
+		Channel.ChannelType.GROUP:
+			return "group"
 		_:
 			return "instrument"
 

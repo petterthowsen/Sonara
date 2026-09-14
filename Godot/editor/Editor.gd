@@ -218,10 +218,10 @@ func _apply_record_arm_follows_active() -> void:
 		return
 	if project == null or focused_track == null:
 		return
-	if focused_track.type == Track.TrackType.FOLDER:
+	if not focused_track.has_clips():
 		return
 	for t in project.tracks:
-		if t.type == Track.TrackType.FOLDER:
+		if not t.has_clips():
 			continue
 		t.set_armed(t == focused_track)
 

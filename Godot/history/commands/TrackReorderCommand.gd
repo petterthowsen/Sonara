@@ -24,16 +24,20 @@ func _init(
 	after_layout = p_after
 
 
-## Capture current parent/order/children for every track in the project.
+## Capture current parent/order/children (and paired channel nest/route) for every track.
 static func capture_layout(p_project: Project) -> Dictionary:
 	var layout: Dictionary = {}
 	if p_project == null:
 		return layout
 	for track in p_project.tracks:
+		var ch := p_project.get_track_mixer_channel(track)
 		layout[track.id] = {
 			"parent_track_id": track.parent_track_id,
 			"order": track.order,
 			"child_track_ids": track.child_track_ids.duplicate(),
+			"channel_parent_id": ch.parent_channel_id if ch else -1,
+			"output_channel_id": ch.output_channel_id if ch else -1,
+			"channel_child_ids": ch.child_channel_ids.duplicate() if ch else [],
 		}
 	return layout
 
@@ -52,6 +56,12 @@ static func layouts_equal(a: Dictionary, b: Dictionary) -> bool:
 		if ae["order"] != be["order"]:
 			return false
 		if ae["child_track_ids"] != be["child_track_ids"]:
+			return false
+		if ae.get("channel_parent_id", -1) != be.get("channel_parent_id", -1):
+			return false
+		if ae.get("output_channel_id", -1) != be.get("output_channel_id", -1):
+			return false
+		if ae.get("channel_child_ids", []) != be.get("channel_child_ids", []):
 			return false
 	return true
 

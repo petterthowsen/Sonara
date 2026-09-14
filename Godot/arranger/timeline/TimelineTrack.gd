@@ -318,6 +318,8 @@ func _on_double_click(pos: Vector2) -> void:
 
 	if track_index < 0 or track == null:
 		return
+	if not track.has_clips():
+		return
 
 	var project = Sonara.editor.project
 
@@ -351,7 +353,9 @@ func _on_double_click(pos: Vector2) -> void:
 # DROP SUPPORT (Asset drops from Browser)
 # ============================================================================
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept Asset drops from Browser."""
+	"""Accept Asset drops from Browser onto tracks that hold clips."""
+	if track == null or not track.has_clips():
+		return false
 	return data is Asset
 
 
