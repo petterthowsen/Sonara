@@ -114,9 +114,13 @@ func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
 
 
 func _on_editor_time_signature_changed(numerator : int, denominator : int):
-	if is_visible_in_tree() or true:
-		grid_helper.time_numerator = numerator
-		grid_helper.time_denominator = denominator
+	# NOTE: always applied regardless of visibility. ClipEditor owns its own
+	# GridHelper instance (not shared with the Arranger's), and nothing
+	# resyncs it when this editor becomes visible again, so skipping the
+	# update while hidden would leave grid_helper stale until the next
+	# time-signature change.
+	grid_helper.time_numerator = numerator
+	grid_helper.time_denominator = denominator
 
 func _on_visibility_changed():
 	"""Handle visibility changes - bind pending clips when becoming visible."""
@@ -138,7 +142,7 @@ func _bind_pending_clips():
 		return
 	
 	# Store selected clips and determine mode
-	selected_clips = pending_clips
+	selected_clips = pending_clips.duplicate()
 	track_mode = pending_multi_track
 	_update_mode_ui()
 	

@@ -14,6 +14,8 @@ func _init() -> void:
 	_test_macro()
 	_test_property_merge()
 	_test_clear_and_save_point()
+	_test_save_point_after_undo_and_new_edits()
+	_test_save_point_not_falsely_clean_on_merge()
 	_test_property_on_stub_object()
 	if _failures == 0:
 		print("=== ALL PASSED ===")
@@ -103,6 +105,48 @@ func _test_clear_and_save_point() -> void:
 	_assert(hist.is_at_save_point(), "clean after undo to save point")
 	hist.clear()
 	_assert(not hist.can_undo() and not hist.can_redo(), "clear empties stacks")
+
+
+## B3: save at depth 3, undo to depth 1, then two new (non-mergeable) edits
+## bring the stack back to depth 3. Without invalidating save_point_index on
+## the undo-then-branch, is_at_save_point() would falsely report clean.
+func _test_save_point_after_undo_and_new_edits() -> void:
+	var hist := CommandHistory.new()
+	var target := {"value": 0}
+	var make_cmd := func(name: String, old_v: int, new_v: int) -> PropertyCommand:
+		var c := PropertyCommand.new(name, null, "", old_v, new_v)
+		c.set_callable(func(v): target["value"] = v)
+		return c
+	hist.execute(make_cmd.call("C1", 0, 1))
+	hist.execute(make_cmd.call("C2", 1, 2))
+	hist.execute(make_cmd.call("C3", 2, 3))
+	hist.mark_save_point()
+	_assert(hist.undo_count() == 3 and hist.is_at_save_point(), "saved at depth 3")
+	hist.undo()
+	hist.undo()
+	_assert(hist.undo_count() == 1, "undone back to depth 1")
+	hist.execute(make_cmd.call("C4", 1, 10))
+	hist.execute(make_cmd.call("C5", 10, 20))
+	_assert(hist.undo_count() == 3, "two new edits return stack to depth 3")
+	_assert(not hist.is_at_save_point(), "depth matches save point but content diverged: must report dirty")
+
+
+## B3: merging a new edit into the entry sitting exactly at the save point
+## must not silently rewrite the saved entry while keeping depth unchanged.
+func _test_save_point_not_falsely_clean_on_merge() -> void:
+	var hist := CommandHistory.new()
+	var target := {"value": 0.0}
+	var apply := func(v): target["value"] = v
+	var c1 := PropertyCommand.new("Vol", null, "", 0.0, 1.0)
+	c1.set_callable(apply).set_mergeable(true)
+	hist.record(c1)
+	hist.mark_save_point()
+	_assert(hist.is_at_save_point(), "clean right after save")
+	target["value"] = 2.0
+	var c2 := PropertyCommand.new("Vol", null, "", 1.0, 2.0)
+	c2.set_callable(apply).set_mergeable(true)
+	hist.record(c2)
+	_assert(not hist.is_at_save_point(), "merging into the save-point entry must mark dirty")
 
 
 ## Stub object with a setter — avoids loading Channel (engine OSC dependency).

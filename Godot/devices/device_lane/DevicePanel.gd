@@ -145,6 +145,16 @@ func _gui_input(event: InputEvent) -> void:
 			request_context_menu.emit()
 
 
+## Release engine subscriptions and popups when the panel leaves the tree
+## (e.g. DeviceLane.clear()/_on_channel_device_remmoved() freeing it).
+## Without this, custom views (like the spectrum analyzer) never get
+## _on_view_hidden() and the Large popup outlives the panel.
+func _exit_tree() -> void:
+	_close_large()
+	if device:
+		_unbind_from_device(device)
+
+
 ## This should not really happen.
 func _unbind_from_device(_dev : DeviceInstance):
 	# Disconnect signal
@@ -232,10 +242,10 @@ func _clear_parameter_controls() -> void:
 
 
 ## Handle device parameters updated (for plugins that load parameters asynchronously)
-func _on_device_parameters_updated(device_pos: int) -> void:
+func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
 	if not device:
 		return
-	if device.position == device_pos:
+	if device == device_instance:
 		if _param_list:
 			_param_list.refresh()
 		if _cc_list:
@@ -319,7 +329,7 @@ func _ensure_left_tab_active() -> void:
 func _update_cc_tab_visibility() -> void:
 	if not cc_button:
 		return
-	var show_cc = device != null and device.device.has_cc_parameters()
+	var show_cc = device != null and device.has_cc_parameters()
 	cc_button.visible = show_cc
 	if not show_cc and cc_button.button_pressed:
 		params_button.button_pressed = true
@@ -330,7 +340,7 @@ func _update_cc_tab_visibility() -> void:
 func _update_left_pane_visibility() -> void:
 	if device == null or content_left == null:
 		return
-	var has_params := not device.device.get_parameters_in_group("param").is_empty()
+	var has_params := not device.get_parameters_in_group("param").is_empty()
 	var has_cc := cc_button != null and cc_button.visible
 	var has_file := file_button != null and file_button.visible
 	params_button.visible = has_params
@@ -640,6 +650,8 @@ func _on_plugin_gui_closed() -> void:
 
 
 func _close_large() -> void:
+	if device == null:
+		return
 	# has plugin gui?
 	if device.device.has_gui():
 		device.close_gui()

@@ -49,6 +49,15 @@ func _ready() -> void:
 	set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
+## Release engine subscriptions when the panel leaves the tree (e.g. the
+## channel's device list rebuilding), matching DevicePanel's cleanup.
+func _exit_tree() -> void:
+	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
+		device_instance.name_changed.disconnect(_on_device_name_changed)
+	if _param_list:
+		_param_list.unbind()
+
+
 func _gui_input(event: InputEvent) -> void:
 	"""Handle GUI input - specifically double-click to open device in DeviceLane."""
 	if event is InputEventMouseButton:

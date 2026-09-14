@@ -115,6 +115,10 @@ func _on_project_opened(project: Project) -> void:
 func _on_project_closed() -> void:
 	"""Clear all channel items when project closes."""
 	if current_project:
+		if current_project.channel_added.is_connected(_on_channel_added):
+			current_project.channel_added.disconnect(_on_channel_added)
+		if current_project.channel_removed.is_connected(_on_channel_removed):
+			current_project.channel_removed.disconnect(_on_channel_removed)
 		for ch in current_project.channels:
 			if ch.name_changed.is_connected(_on_any_channel_renamed):
 				ch.name_changed.disconnect(_on_any_channel_renamed)

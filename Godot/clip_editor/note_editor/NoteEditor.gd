@@ -330,6 +330,16 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 	last_drag_mode = DragMode.POSITION
 
 	# Store starting positions for all selected notes
+	_snapshot_selection()
+
+	_history_begin_selection()
+
+
+func _snapshot_selection() -> void:
+	"""Capture (or re-capture, on a mid-drag mode switch) the starting tick/note/
+	velocity/duration and owning clip instance for every selected note. Must
+	include clip_instance so cross-clip note transfer keeps working after a
+	Shift/Alt mode switch mid-drag."""
 	drag_start_positions.clear()
 	resize_start_durations.clear()
 	for sel_note in selection_manager.selected_notes:
@@ -347,8 +357,6 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 				"clip_instance": source_clip_instance
 			}
 			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
-
-	_history_begin_selection()
 
 
 func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
@@ -373,15 +381,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		drag_start_mouse_pos = mouse_pos_local
 
 		# Update stored starting positions
-		for sel_note in selection_manager.selected_notes:
-			if not sel_note.midi_note_data:
-				continue
-			drag_start_positions[sel_note.midi_note_data.id] = {
-				"start_tick": sel_note.midi_note_data.start_tick,
-				"note": sel_note.midi_note_data.note,
-				"velocity": sel_note.midi_note_data.velocity
-			}
-			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
+		_snapshot_selection()
 
 		last_drag_mode = current_mode
 		print("[NoteEditor] Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY"][current_mode])
@@ -992,8 +992,9 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 		var new_start = max(0, note_data.start_tick + delta_ticks)
 		note_data.start_tick = new_start
 
-		var note_x = ticks_to_pixels(new_start)
-		sel_note.position.x = note_x
+		# Use the shared positioning logic so track-mode's per-clip offset
+		# (ci.start_ticks) is applied instead of a bare tick->pixel conversion.
+		_update_single_note_position(sel_note)
 
 	# Process overlaps and sync
 	var total_affected = 0

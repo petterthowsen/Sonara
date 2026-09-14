@@ -412,8 +412,8 @@ func load_project(path: String) -> bool:
 		push_error("[Editor] Failed to deserialize project from JSON")
 		return false
 	
-	project_path = path
 	open_project(loaded_project)
+	project_path = path
 	print("[Editor] Project loaded: ", path)
 	return true
 
@@ -513,6 +513,25 @@ func set_time_signature(numerator: int, denominator: int) -> void:
 	"""Set project time signature."""
 	if project == null:
 		return
+
+	var old_value := [project.time_numerator, project.time_denominator]
+	var new_value := [numerator, denominator]
+	if old_value == new_value:
+		return
+
+	_apply_time_signature_silent(new_value)
+
+	var cmd := PropertyCommand.new("Set Time Signature", self, "", old_value, new_value)
+	cmd.set_callable(func(v): _apply_time_signature_silent(v))
+	record_command(cmd)
+
+
+## Apply time signature without pushing history (used by undo/redo PropertyCommand).
+func _apply_time_signature_silent(value: Array) -> void:
+	if project == null:
+		return
+	var numerator: int = value[0]
+	var denominator: int = value[1]
 
 	project.time_numerator = numerator
 	project.time_denominator = denominator

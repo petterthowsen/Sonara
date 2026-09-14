@@ -52,6 +52,6 @@ func execute(args: Dictionary) -> Dictionary:
 	data["limit"] = page.limit
 	data["next_offset"] = page.next_offset
 	data["params"] = params
-	if inst.device and inst.device.parameters.is_empty() and str(inst.loading_state).begins_with("loading"):
+	if inst.device and inst.get_parameters().is_empty() and str(inst.loading_state).begins_with("loading"):
 		data["params"] = []
 	return ok(data)

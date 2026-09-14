@@ -75,6 +75,15 @@ var sample_waveform: DeviceWaveform = null
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
 
+## Parameter metadata advertised by the engine for THIS instance (SFZ/CLAP
+## devices whose param list depends on the loaded file/plugin instance).
+## Empty for built-ins with a static param list defined on the shared
+## `Device` registry object; use get_parameter()/get_parameters() etc.
+## instead of reaching into `device.parameters` directly, since that object
+## is shared by every instance of the same device type and must not be
+## overwritten per-instance.
+var parameters: Array[DeviceParameter] = []
+
 ## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
 var loaded_file_path: String = ""
 
@@ -87,6 +96,10 @@ var _expected_param_count: int = 0
 ## Parameter values restored from a project file, reapplied after the engine advertises params.
 ## SFZ/CLAP devices wipe and rebuild their parameter list on load; this keeps saved CC/param values.
 var _restored_parameter_values: Dictionary[int, float] = {}
+
+## Guards against double-registering OSC listeners (connect_to_engine can be
+## called both from Channel.connect_to_engine() and Channel.add_device()).
+var _is_connected: bool = false
 
 
 ## ============================================================================
@@ -105,7 +118,7 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 	if device == null:
 		push_error("[DeviceInstance] Created with null device (channel=%d, position=%d)" % [channel_id, position])
 		return
-	for param in device.get_parameters():
+	for param in get_parameters():
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
 
 
@@ -155,6 +168,52 @@ func set_channel(channel: Channel) -> void:
 ## PARAMETER MANAGEMENT
 ## ============================================================================
 
+## Get parameter metadata by ID: prefers this instance's own advertised
+## parameters (SFZ/CLAP) and falls back to the shared Device registry
+## (built-ins with a static param list).
+func get_parameter(param_id: int) -> DeviceParameter:
+	if not parameters.is_empty():
+		for param in parameters:
+			if param.id == param_id:
+				return param
+		return null
+	return device.get_parameter(param_id) if device else null
+
+
+## Get parameter metadata by name (case-insensitive), instance-first.
+func get_parameter_by_name(param_name: String) -> DeviceParameter:
+	if not parameters.is_empty():
+		var target = param_name.strip_edges().to_lower()
+		for param in parameters:
+			if String(param.name).to_lower() == target:
+				return param
+		return null
+	return device.get_parameter_by_name(param_name) if device else null
+
+
+## All parameter metadata for this instance, instance-first.
+func get_parameters() -> Array[DeviceParameter]:
+	if not parameters.is_empty():
+		return parameters
+	return device.get_parameters() if device else []
+
+
+## Parameters in a UI group ("param" or "cc"), instance-first.
+func get_parameters_in_group(group: String) -> Array[DeviceParameter]:
+	var source := get_parameters()
+	var result: Array[DeviceParameter] = []
+	for param in source:
+		var param_group = param.group if param.group != "" else "param"
+		if param_group == group:
+			result.append(param)
+	return result
+
+
+## True when this instance advertises at least one CC-tab parameter.
+func has_cc_parameters() -> bool:
+	return not get_parameters_in_group("cc").is_empty()
+
+
 ## Set a parameter value (normalized 0.0-1.0)
 ## This is called from UI controls and syncs to the engine.
 ## Does NOT emit signal - signal is emitted when engine echoes back via OSC.
@@ -169,7 +228,7 @@ func set_parameter_normalized(param_id: int, normalized_value: float) -> void:
 			# Update local cache (for immediate visual feedback)
 			parameter_values[param_id] = new_value
 
-			var param = device.get_parameter(param_id)
+			var param = get_parameter(param_id)
 			if param and not param.syncable:
 				# UI-local parameter: emit immediately, do not send OSC
 				parameter_changed.emit(param_id, parameter_values[param_id])
@@ -187,7 +246,7 @@ func get_parameter_normalized(param_id: int) -> float:
 func get_parameter_id_by_name(param_name: String) -> int:
 	if device == null:
 		return -1
-	var p = device.get_parameter_by_name(param_name)
+	var p = get_parameter_by_name(param_name)
 	return p.id if p else -1
 
 
@@ -208,7 +267,7 @@ func set_parameter_normalized_by_name(param_name: String, normalized_value: floa
 func get_parameter_real_by_name(param_name: String) -> float:
 	if device == null:
 		return 0.0
-	var param = device.get_parameter_by_name(param_name)
+	var param = get_parameter_by_name(param_name)
 	if param:
 		var normalized = get_parameter_normalized(param.id)
 		return param.normalized_to_value(normalized)
@@ -219,7 +278,7 @@ func get_parameter_real_by_name(param_name: String) -> float:
 func set_parameter_real_by_name(param_name: String, real_value: float) -> void:
 	if device == null:
 		return
-	var param = device.get_parameter_by_name(param_name)
+	var param = get_parameter_by_name(param_name)
 	if param:
 		var normalized = param.value_to_normalized(real_value)
 		set_parameter_normalized(param.id, normalized)
@@ -227,7 +286,7 @@ func set_parameter_real_by_name(param_name: String, real_value: float) -> void:
 
 ## Set a parameter value (real range)
 func set_parameter_real(param_id: int, real_value: float) -> void:
-	var param = device.get_parameter(param_id)
+	var param = get_parameter(param_id)
 	if param:
 		var normalized = param.value_to_normalized(real_value)
 		set_parameter_normalized(param_id, normalized)
@@ -303,7 +362,7 @@ func reconnect_to_engine() -> void:
 
 ## Get a parameter value (real range)
 func get_parameter_real(param_id: int) -> float:
-	var param = device.get_parameter(param_id)
+	var param = get_parameter(param_id)
 	if param:
 		var normalized = get_parameter_normalized(param_id)
 		return param.normalized_to_value(normalized)
@@ -391,8 +450,16 @@ func create_view(view_type: Device.ViewType) -> DeviceView:
 	return inst
 
 
-## Connect to audio engine and listen for state updates
+## Connect to audio engine and listen for state updates.
+## Registers OSC listeners only; the file (if any) is loaded with a proper
+## req_id by Channel.sync_to_engine()/_sync_device_tree_to_engine(), which
+## runs whenever this instance is synced to the engine (project load,
+## channel connect, or add_device while already connected).
 func connect_to_engine() -> void:
+	if _is_connected:
+		return
+	_is_connected = true
+
 	var active_addr = osc_addr("active")
 	var enabled_addr = osc_addr("enabled")
 	var param_count_addr = osc_addr("param/count")
@@ -406,23 +473,22 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
-	
+
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
 	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
-	
-	# If this device had a file loaded, reload it after engine connection
-	if loaded_file_path != "":
-		print("[DeviceInstance] Reloading file after engine connection: %s" % loaded_file_path)
-		AudioEngineOSC.send(osc_addr("load_file"), [loaded_file_path])
 
 	sync_slot_to_engine()
 	for child in children:
 		child.connect_to_engine()
 
 
-## Disconnect from audio engine: stop listening
+## Disconnect from audio engine: stop listening.
 func disconnect_from_engine() -> void:
+	if not _is_connected:
+		return
+	_is_connected = false
+
 	var active_addr = osc_addr("active")
 	var enabled_addr = osc_addr("enabled")
 	var param_count_addr = osc_addr("param/count")
@@ -531,7 +597,7 @@ func _on_param_count_received(args: Array) -> void:
 	
 	# Clear existing parameters when we receive a new count
 	# This handles cases where parameters change (e.g., SFZ file loaded)
-	device.parameters.clear()
+	parameters.clear()
 	parameter_values.clear()
 	
 	print("[DeviceInstance %s] Expecting %d parameters" % [device.name, count])
@@ -556,7 +622,7 @@ func _on_param_info_received(args: Array) -> void:
 	param.default_value = default_val
 	if args.size() >= 6 and args[5] is String:
 		param.group = args[5]
-	device.add_parameter(param)
+	parameters.append(param)
 	
 	parameter_values[param_id] = _value_for_advertised_param(param_id, param)
 	
@@ -564,7 +630,7 @@ func _on_param_info_received(args: Array) -> void:
 		[device.name, param_id, param_name, min_val, max_val, default_val])
 	
 	# Check if we've received all expected parameters
-	if device.parameters.size() >= _expected_param_count and _expected_param_count > 0:
+	if parameters.size() >= _expected_param_count and _expected_param_count > 0:
 		print("[DeviceInstance %s] All %d parameters loaded" % [device.name, _expected_param_count])
 		_expected_param_count = 0  # Reset
 		_push_restored_parameters_to_engine()
@@ -590,7 +656,7 @@ func _push_restored_parameters_to_engine() -> void:
 ## TODO: Implement this
 func sync_to_engine() -> void:
 	for param_id in parameter_values:
-		var param = device.get_parameter(param_id)
+		var param = get_parameter(param_id)
 		if param and not param.syncable:
 			continue
 		var normalized_value = parameter_values[param_id]
@@ -608,7 +674,7 @@ func sync_to_engine() -> void:
 ## Sync a single parameter to the audio engine
 func sync_parameter_to_engine(param_id: int) -> void:
 	if param_id in parameter_values:
-		var param = device.get_parameter(param_id)
+		var param = get_parameter(param_id)
 		if param and not param.syncable:
 			return
 		var normalized_value = parameter_values[param_id]

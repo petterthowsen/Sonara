@@ -41,7 +41,7 @@ func refresh() -> void:
 	clear()
 	if device == null or device.device == null:
 		return
-	for param in device.device.get_parameters_in_group(group):
+	for param in device.get_parameters_in_group(group):
 		var control: CompactParameterControl = CompactParameterControlScene.instantiate()
 		control.setup(device, param.id)
 		add_child(control)
@@ -61,6 +61,6 @@ func _listen_for_parameter_updates() -> void:
 		_channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 
-func _on_device_parameters_updated(device_pos: int) -> void:
-	if device and device.position == device_pos:
+func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
+	if device and device == device_instance:
 		refresh()

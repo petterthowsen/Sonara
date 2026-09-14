@@ -325,7 +325,7 @@ func _on_pan_changed(left : float, right: float = 0.0) -> void:
 	right /= 100
 	print("pan changed, setting channel.pan to ", left, ", ", right)
 	if channel:
-		var old_l := channel.pan
+		var old_l := channel.pan_left if channel.pan_mode == Channel.PanMode.STEREO_DUAL else channel.pan
 		var old_r := channel.pan_right if "pan_right" in channel else 0.0
 		channel.set_pan(left, right)
 		var cmd := PropertyCommand.new("Set Pan", channel, "set_pan", [old_l, old_r], [left, right])

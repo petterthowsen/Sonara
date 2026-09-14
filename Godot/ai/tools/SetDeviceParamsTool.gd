@@ -47,7 +47,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var planned: Array = []
 	for key in raw.keys():
 		var pname := str(key).strip_edges()
-		var param := inst.device.get_parameter_by_name(pname)
+		var param := inst.get_parameter_by_name(pname)
 		if param == null:
 			return fail("Unknown parameter '%s'" % pname)
 		var parsed := DeviceToolUtil.parse_param_value(param, raw[key])

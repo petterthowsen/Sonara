@@ -125,11 +125,6 @@ static func _is_internal_log_frame(path: String) -> bool:
 
 var print_prefix: String = ""
 
-var debug_messages: Array[String] = []
-var info_messages: Array[String] = []
-var warning_messages: Array[String] = []
-var error_messages: Array[String] = []
-
 var print_to_console: bool = true
 
 
@@ -149,7 +144,6 @@ static func make(prefix: String, ptc := true) -> Log:
 
 ## Write a debug line to last.log (and stdout when enabled).
 func debug(...message: Array[Variant]):
-	debug_messages.append(" ".join(message))
 	_write_line("[" + print_prefix + "] DEBUG: " + " ".join(message))
 	if print_to_console:
 		print("[" + print_prefix + "] DEBUG: " + " ".join(message))
@@ -157,7 +151,6 @@ func debug(...message: Array[Variant]):
 
 ## Write an info line to last.log (and stdout when enabled).
 func info(...message: Array[Variant]):
-	info_messages.append(" ".join(message))
 	_write_line("[" + print_prefix + "] INFO: " + " ".join(message))
 	if print_to_console:
 		print_rich("[color=green][" + print_prefix + "] INFO: " + " ".join(message) + "[/color]")
@@ -170,7 +163,6 @@ func warn(...msg: Array[Variant]):
 
 ## Write a warning to last.log (and stdout when enabled).
 func warning(...message: Array[Variant]):
-	warning_messages.append(" ".join(message))
 	_write_line("[" + print_prefix + "] WARN: " + " ".join(message))
 	if print_to_console:
 		print_rich("[color=yellow][" + print_prefix + "] WARNING: " + " ".join(message) + "[/color]")
@@ -178,7 +170,6 @@ func warning(...message: Array[Variant]):
 
 ## Write an error to last.log and surface it in the Godot debugger.
 func error(...message: Array[Variant]):
-	error_messages.append(" ".join(message))
 	_write_line("[" + print_prefix + "] ERROR: " + " ".join(message))
 	_set_skip_engine_capture(true)
 	push_error("[" + print_prefix + "] " + " ".join(message))

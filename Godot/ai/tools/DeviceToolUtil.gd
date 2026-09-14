@@ -10,9 +10,9 @@ static func filter_params(inst: DeviceInstance, group: String, query: String) ->
 		return out
 	var g := group.strip_edges().to_lower()
 	var q := query.strip_edges().to_lower()
-	var src: Array[DeviceParameter] = inst.device.get_parameters()
+	var src: Array[DeviceParameter] = inst.get_parameters()
 	if g == "param" or g == "cc":
-		src = inst.device.get_parameters_in_group(g)
+		src = inst.get_parameters_in_group(g)
 	for p in src:
 		if p == null:
 			continue

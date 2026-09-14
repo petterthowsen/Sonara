@@ -608,12 +608,11 @@ func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
 
 func disconnect_from_engine() -> void:
 	"""Disconnect project and all data from audio engine."""
-	if _connection_state == ConnectionState.DISCONNECTED:
-		return
-
-	print("[Project] Disconnecting from audio engine...")
-
-	# Disconnect signal listeners
+	# Always unregister listeners, even if the connection state already
+	# reads DISCONNECTED (e.g. the engine dropped the connection before the
+	# project was closed). Otherwise a closed project keeps listening for
+	# engine reconnection and OSC traffic, and comes back to life when the
+	# engine reconnects. This part must be idempotent.
 	if AudioEngineOSC.engine_connected.is_connected(_on_engine_confirmed_connected):
 		AudioEngineOSC.engine_connected.disconnect(_on_engine_confirmed_connected)
 	if AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
@@ -636,11 +635,13 @@ func disconnect_from_engine() -> void:
 	for channel in channels:
 		channel.disconnect_from_engine()
 
-	# Clear project (this clears clips, tracks, channels from engine)
-	AudioEngineOSC.send("/project/clear", [])
-
-	# Reset AudioEngineOSC connection state
-	AudioEngineOSC.reset_connection()
+	var was_connected := _connection_state != ConnectionState.DISCONNECTED
+	if was_connected:
+		print("[Project] Disconnecting from audio engine...")
+		# Clear project (this clears clips, tracks, channels from engine)
+		AudioEngineOSC.send("/project/clear", [])
+		# Reset AudioEngineOSC connection state
+		AudioEngineOSC.reset_connection()
 
 	_connection_state = ConnectionState.DISCONNECTED
 	connection_state_changed.emit(ConnectionState.DISCONNECTED)
@@ -1673,7 +1674,7 @@ static func from_json(data: Dictionary) -> Project:
 	project.modified_date = data.get("modified_date", 0)
 
 	# Restore ID counters
-	project.next_channel_id = data.get("next_channel_id", 1)
+	project.next_channel_id = data.get("next_channel_id", 2)
 	project.next_track_id = data.get("next_track_id", 0)
 	project.next_clip_id = data.get("next_clip_id", 1)
 	project.next_note_id = data.get("next_note_id", 1)
@@ -1693,6 +1694,12 @@ static func from_json(data: Dictionary) -> Project:
 	project.channels.clear()
 	for channel_data in data.get("channels", []):
 		project.channels.append(Channel.from_json(channel_data))
+
+	# Guard against a stale/missing next_channel_id counter: never hand out
+	# an ID that's already in use (e.g. from an older save with no counter).
+	for existing_channel in project.channels:
+		if existing_channel and existing_channel.id >= project.next_channel_id:
+			project.next_channel_id = existing_channel.id + 1
 
 	# Load tracks
 	for track_data in data.get("tracks", []):

@@ -439,7 +439,7 @@ func _on_mute_toggled(pressed: bool) -> void:
 func _on_label_value_changed(new_value: String) -> void:
 	"""Update track name when label is edited."""
 	if track:
-		track.name = new_value
+		HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, new_value)
 		print("[TrackItem] Track name changed to: ", new_value)
 
 

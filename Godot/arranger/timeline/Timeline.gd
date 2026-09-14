@@ -961,13 +961,20 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 		return
 	
 	var tracks_to_refresh: Array[TimelineTrack] = []
+	var cmds: Array[Command] = []
 	for inst in selected:
 		if not inst:
 			continue
+		var old_start: int = inst.start_ticks
 		var new_start = max(0, inst.start_ticks + clamped_delta)
-		if new_start == inst.start_ticks:
+		if new_start == old_start:
 			continue
 		inst.set_position(new_start)
+		cmds.append(ClipInstanceTransformCommand.new(
+			"Move Clip", inst,
+			old_start, inst.duration_ticks, inst.clip_offset,
+			new_start, inst.duration_ticks, inst.clip_offset
+		))
 		var track_ui = _get_timeline_track_for_instance(inst)
 		if track_ui and not tracks_to_refresh.has(track_ui):
 			tracks_to_refresh.append(track_ui)
@@ -975,6 +982,10 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 		if track_ui:
 			track_ui._update_clip_positions()
 			track_ui.queue_redraw()
+	if cmds.size() == 1:
+		HistoryUtil.record(cmds[0])
+	elif cmds.size() > 1:
+		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
 	clip_selection_manager.refresh_after_modification()
 	queue_redraw()
 
@@ -992,10 +1003,17 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 	var allowed_delta = _compute_allowed_track_delta(selected, initial_indices, delta_tracks)
 	if allowed_delta == 0:
 		return
-	
+
+	var old_starts: Dictionary = {}
+	var old_tracks: Dictionary = {}
+	for inst in selected:
+		if inst:
+			old_starts[inst] = inst.start_ticks
+			old_tracks[inst] = inst.track
+
 	# Clamp horizontal positions to avoid collisions on target tracks
 	var clamped_tick_delta = _clamp_instances_tick_delta(selected, 0, allowed_delta)
-	
+
 	# If we need to adjust horizontal positions (shouldn't happen with delta=0, but for safety)
 	if clamped_tick_delta != 0:
 		for inst in selected:
@@ -1003,7 +1021,7 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 				continue
 			var new_start = max(0, inst.start_ticks + clamped_tick_delta)
 			inst.set_position(new_start)
-	
+
 	for inst in selected:
 		if not inst:
 			continue
@@ -1019,6 +1037,28 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 		if inst.track:
 			inst.track.remove_clip_instance(inst)
 		target_track_node.track.add_clip_instance(inst)
+
+	var cmds: Array[Command] = []
+	for inst in selected:
+		if not inst:
+			continue
+		var old_start: int = old_starts.get(inst, inst.start_ticks)
+		var old_track: Track = old_tracks.get(inst, null)
+		var new_track: Track = inst.track
+		var new_start: int = inst.start_ticks
+		if old_track != null and new_track != null and old_track != new_track:
+			cmds.append(ClipInstanceMoveTrackCommand.new(inst, old_track, new_track, old_start, new_start))
+		elif old_start != new_start:
+			cmds.append(ClipInstanceTransformCommand.new(
+				"Move Clip", inst,
+				old_start, inst.duration_ticks, inst.clip_offset,
+				new_start, inst.duration_ticks, inst.clip_offset
+			))
+	if cmds.size() == 1:
+		HistoryUtil.record(cmds[0])
+	elif cmds.size() > 1:
+		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
+
 	clip_selection_manager.select_instances(selected)
 	clip_selection_manager.refresh_after_modification()
 	_refresh_tracks_for_instances(selected)

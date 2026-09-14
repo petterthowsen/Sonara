@@ -23,7 +23,7 @@ enum PanMode {
 signal name_changed(name : String)
 signal color_changed(color : Color)
 signal volume_changed(value: float)
-signal pan_changed(value: float)
+signal pan_changed(pan_left: float, pan_right: float)
 signal pan_mode_changed(pan_mode: PanMode)
 signal mute_changed(value: bool)
 signal solo_changed(value: bool)
@@ -44,8 +44,8 @@ signal send_changed(target_channel_id: int, send_config: SendConfig)
 signal device_added(device_instance: DeviceInstance, position: int)
 signal device_removed(position: int, device_id: String)
 signal device_moved(from_position: int, to_position: int)
-signal device_parameter_changed(position: int, param_id: int, value: float)
-signal device_parameters_updated(position: int)  # Emitted when plugin parameters are loaded
+signal device_parameter_changed(device_instance: DeviceInstance, param_id: int, value: float)
+signal device_parameters_updated(device_instance: DeviceInstance)  # Emitted when plugin parameters are loaded
 
 # ============================================================================
 # PROPERTIES
@@ -185,6 +185,10 @@ func disconnect_from_engine() -> void:
 		device_inst.disconnect_from_engine()
 	
 	# DeviceInstances handle their own parameter listeners now
+
+	# Drop back-references to tracks so this channel can be freed even if
+	# a Track elsewhere still holds a weak project ref pointing at us.
+	routed_tracks.clear()
 
 	_is_connected = false
 	print("[Channel %d] Disconnected from audio engine" % id)
@@ -469,7 +473,7 @@ func get_send(target_channel_id: int) -> SendConfig:
 
 func _on_peak_received(values) -> void:
 	"""Handle incoming peak and RMS meter data from audio engine."""
-	if values is Array and values.size() >= 2:
+	if values is Array and values.size() >= 4:
 		peak_left = values[0] as float
 		peak_right = values[1] as float
 		rms_left = values[2] as float
@@ -618,14 +622,14 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 	device_instance.set_parent_device(parent)
 	_reindex_host(host)
 
+	var relay := _on_device_parameter_changed.bind(device_instance)
+	if not device_instance.parameter_changed.is_connected(relay):
+		device_instance.parameter_changed.connect(relay)
+
 	if _is_connected:
 		_send_add_device_osc(device_instance, parent)
 		_sync_device_tree_to_engine(device_instance)
-		if not device_instance.parameter_changed.is_connected(_on_device_parameter_changed):
-			device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
 		device_instance.connect_to_engine()
-	elif not device_instance.parameter_changed.is_connected(_on_device_parameter_changed):
-		device_instance.parameter_changed.connect(_on_device_parameter_changed.bindv([position]))
 
 	if parent:
 		parent.child_added.emit(device_instance, position)
@@ -652,8 +656,13 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 		else:
 			AudioEngineOSC.send("/channel/%d/remove_device" % id, [position])
 
-	if removed_device.parameter_changed.is_connected(_on_device_parameter_changed):
-		removed_device.parameter_changed.disconnect(_on_device_parameter_changed)
+	var relay := _on_device_parameter_changed.bind(removed_device)
+	if removed_device.parameter_changed.is_connected(relay):
+		removed_device.parameter_changed.disconnect(relay)
+
+	var updated_relay := _on_device_parameters_updated.bind(removed_device)
+	if removed_device.parameters_updated.is_connected(updated_relay):
+		removed_device.parameters_updated.disconnect(updated_relay)
 
 	host.remove_at(position)
 	removed_device.set_parent_device(null)
@@ -754,8 +763,13 @@ func _send_add_device_osc(device_instance: DeviceInstance, parent: DeviceInstanc
 func _sync_device_tree_to_engine(device_instance: DeviceInstance) -> void:
 	## Sync parameters, file, slots, and nested children after the engine has the device.
 	device_instance.sync_to_engine()
-	if not device_instance.parameters_updated.is_connected(_on_device_parameters_updated):
-		device_instance.parameters_updated.connect(_on_device_parameters_updated.bind(device_instance.position))
+	# Bind the DeviceInstance itself, not its position: position drifts when
+	# devices are reordered, which would otherwise leave listeners refreshing
+	# the wrong device (and would never compare equal for the is_connected
+	# guard below, silently piling up duplicate connections).
+	var updated_relay := _on_device_parameters_updated.bind(device_instance)
+	if not device_instance.parameters_updated.is_connected(updated_relay):
+		device_instance.parameters_updated.connect(updated_relay)
 	if device_instance.device.device_type != Device.DeviceType.BuiltIn:
 		AudioEngineOSC.send(device_instance.osc_addr("get_parameters"), [])
 	if device_instance.loaded_file_path != "":
@@ -814,15 +828,17 @@ func _wire_loaded_device(device_instance: DeviceInstance, parent: DeviceInstance
 # PRIVATE CALLBACKS
 # ============================================================================
 
-func _on_device_parameter_changed(param_id: int, value: float, position: int) -> void:
+func _on_device_parameter_changed(param_id: int, value: float, device_instance: DeviceInstance) -> void:
 	"""Handle parameter change from a device instance.
-	
-	NOTE: We do NOT send to engine here - DeviceInstance.set_parameter_normalized() 
+
+	NOTE: We do NOT send to engine here - DeviceInstance.set_parameter_normalized()
 	already handles sending. This callback only relays the signal for UI notifications.
 	Sending here would create a feedback loop with engine echoes.
 	"""
-	# Relay signal for UI notifications (other UI components may listen to Channel's signal)
-	device_parameter_changed.emit(position, param_id, value)
+	# Relay signal for UI notifications (other UI components may listen to Channel's signal).
+	# Carries the DeviceInstance itself (not its position) so listeners aren't left
+	# pointing at a stale slot after the device chain is reordered.
+	device_parameter_changed.emit(device_instance, param_id, value)
 
 
 # ============================================================================
@@ -892,7 +908,7 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.aux_bus_index = data.get("aux_bus_index", -1)
 
 	# Load MIDI settings
-	channel.midi_input_device = data.get("midi_input_device", -2)
+	channel.midi_input_device = int(data.get("midi_input_device", -2))
 	channel.record_armed = data.get("record_armed", false)
 
 	# Load send_channels
@@ -910,7 +926,7 @@ static func from_json(data: Dictionary) -> Channel:
 				channel.devices.append(device_instance)
 				channel._wire_loaded_device(device_instance, null)
 				device_instance.parameter_changed.connect(
-					channel._on_device_parameter_changed.bindv([device_instance.position])
+					channel._on_device_parameter_changed.bind(device_instance)
 				)
 			else:
 				# Device not found - skip it but log
@@ -925,7 +941,7 @@ static func from_json(data: Dictionary) -> Channel:
 # ============================================================================
 
 ## Handle when a device's parameters are updated (forwarded from DeviceInstance)
-func _on_device_parameters_updated(device_pos: int) -> void:
+func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
 	"""Called when a device's parameter list changes (e.g., SFZ file loaded)."""
-	print("[Channel %d] Device %d parameters updated" % [id, device_pos])
-	device_parameters_updated.emit(device_pos)
+	print("[Channel %d] Device %d parameters updated" % [id, device_instance.position])
+	device_parameters_updated.emit(device_instance)

@@ -235,8 +235,11 @@ func _process(delta: float) -> void:
 
 		# Lerp horizontal scroll
 		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
-		h_scroll.scroll_horizontal = int(new_h_scroll)
-		grid_helper.scroll_position = new_h_scroll
+		if abs(new_h_scroll - target_scroll_horizontal) < 0.5:
+			new_h_scroll = target_scroll_horizontal
+		var rounded_h_scroll = roundi(new_h_scroll)
+		h_scroll.scroll_horizontal = rounded_h_scroll
+		grid_helper.scroll_position = rounded_h_scroll
 
 		# Lerp horizontal zoom (pixels per beat)
 		var current_ppb = grid_helper.pixels_per_beat
@@ -265,7 +268,7 @@ func _process(delta: float) -> void:
 		# Instant scrolling/zooming when smoothing is disabled
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-		grid_helper.scroll_position = target_scroll_horizontal
+		grid_helper.scroll_position = roundi(target_scroll_horizontal)
 
 		# Instant zoom
 		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:

@@ -37,11 +37,15 @@ var _is_applying: bool = false
 
 ## Whether undo is available.
 func can_undo() -> bool:
+	if _active_macro != null:
+		return false
 	return not _undo_stack.is_empty()
 
 
 ## Whether redo is available.
 func can_redo() -> bool:
+	if _active_macro != null:
+		return false
 	return not _redo_stack.is_empty()
 
 
@@ -176,9 +180,15 @@ func redo_count() -> int:
 ## Push onto undo stack, optionally merging with the previous entry.
 func _push(cmd: Command) -> void:
 	_redo_stack.clear()
-	# If we were past the save point and redo cleared, save point may be invalid
-	# only when undoing below it; clearing redo after a new edit past save is fine.
-	if not _undo_stack.is_empty():
+	# If we undid past the save point and are now branching with a new edit,
+	# the save point can never be reached again by depth alone; invalidate it
+	# so is_at_save_point() doesn't falsely report clean once depth matches again.
+	if save_point_index > _undo_stack.size():
+		save_point_index = -1
+	# Don't merge into the entry sitting exactly at the save point: merging
+	# would change already-saved content while leaving the depth (and thus
+	# is_at_save_point()) unchanged, falsely reporting clean.
+	if not _undo_stack.is_empty() and _undo_stack.size() != save_point_index:
 		var top: Command = _undo_stack.back()
 		if top.can_merge(cmd):
 			top.merge_with(cmd)

@@ -163,7 +163,7 @@ func _on_color_changed(new_color: Color) -> void:
 	if not current_track:
 		push_warning("[TrackItemContextMenu] color_changed with no current_track")
 		return
-	if current_project and current_track._project_ref == null:
+	if current_project and current_track.get_project_ref() == null:
 		current_track.set_project_ref(current_project)
 	var ch := current_track.get_linked_channel()
 	print("[TrackItemContextMenu] color → track %d '%s' linked_channel=%s" % [

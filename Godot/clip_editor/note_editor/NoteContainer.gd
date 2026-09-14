@@ -180,13 +180,13 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	logger.info("bind_to_clips called (multi-clip mode)")
 	logger.info("  - %d clip instances on track: %s" % [instances.size(), owner_track.name if owner_track else "null"])
 	
-	if clip_instances.size() == instances.size():
+	if clip_instances.size() == instances.size() and track == owner_track:
 		# already bound?
 		var bound = true
 		for i in range(clip_instances.size()):
 			if instances[i] != clip_instances[i]:
 				bound = false
-		
+
 		if bound:
 			logger.info("  - clip instances already bound!")
 			return

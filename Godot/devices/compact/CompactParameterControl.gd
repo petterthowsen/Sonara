@@ -64,7 +64,7 @@ func setup(p_device_instance: DeviceInstance, p_parameter_id: int) -> void:
 	"""
 	device_instance = p_device_instance
 	parameter_id = p_parameter_id
-	parameter = device_instance.device.get_parameter(parameter_id)
+	parameter = device_instance.get_parameter(parameter_id)
 
 	if not parameter:
 		push_error("Parameter %d not found in device" % parameter_id)

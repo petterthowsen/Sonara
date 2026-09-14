@@ -44,13 +44,13 @@ func _on_bind() -> void:
 
 	# Debug: dump parameter metadata we rely on
 	if _smoothing_param_id >= 0:
-		var p = device.device.get_parameter(_smoothing_param_id)
+		var p = device.get_parameter(_smoothing_param_id)
 		if p:
 			print("[SpectrumVisualizer] Speed enum_values=", p.enum_values)
 		else:
 			print("[SpectrumVisualizer] Speed param metadata missing")
 	if _resolution_param_id >= 0:
-		var pr = device.device.get_parameter(_resolution_param_id)
+		var pr = device.get_parameter(_resolution_param_id)
 		if pr:
 			print("[SpectrumVisualizer] FFT Size enum_values=", pr.enum_values)
 		else:
@@ -113,7 +113,7 @@ func _apply_speed_from_param(normalized: float) -> void:
 	# Enum mapping: 0 Freeze, 1 Slow, 2 Medium, 3 Fast (use enum length from metadata)
 	if not renderer:
 		return
-	var param := device.device.get_parameter(_smoothing_param_id)
+	var param := device.get_parameter(_smoothing_param_id)
 	var enum_len: int = param.enum_values.size() if param else 4
 	var idx: int = int(round(clamp(normalized, 0.0, 1.0) * float(max(1, enum_len - 1))))
 	print("[SpectrumVisualizer] _apply_speed_from_param normalized=", normalized, " enum_len=", enum_len, " idx=", idx)

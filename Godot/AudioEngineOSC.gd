@@ -96,7 +96,7 @@ func send(address: String, args: Array = []) -> void:
 		logger.debug("Queued send until OSC ready: %s" % address)
 		return
 	if osc_client:
-		logger.info("sending ", address, " args: ", args)
+		logger.debug("sending ", address, " args: ", args)
 		osc_client.send_message(address, args)
 	else:
 		logger.warn("OSC client not initialized")

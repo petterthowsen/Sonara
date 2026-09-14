@@ -67,11 +67,17 @@ func initialize():
 	var virt_device = MidiDevice.new(VIRTUAL_KEYBOARD_ID, "Virtual Keyboard", MidiDevice.DeviceType.VIRTUAL_KEYBOARD)
 	devices[VIRTUAL_KEYBOARD_ID] = virt_device
 
-	# Restore enabled devices from config
-	var enabled_list = Sonara.get_config("midi/enabled_devices", [VIRTUAL_KEYBOARD_ID])
-	for device_id in enabled_list:
-		if devices.has(device_id):
-			devices[device_id].enabled = true
+	# Physical devices are enabled by default unless explicitly disabled.
+	# Disabled devices are persisted by name (port indices aren't stable across
+	# reconnects/reboots), so JSON floats never leak in here as device IDs.
+	var disabled_names: Array = Sonara.get_config("midi/disabled_device_names", [])
+	for device_id in devices.keys():
+		if device_id == VIRTUAL_KEYBOARD_ID:
+			continue
+		var device = devices[device_id]
+		var enabled = device.device_name not in disabled_names
+		device.enabled = enabled
+		if enabled:
 			enabled_devices.append(device_id)
 
 	# Restore virtual keyboard settings
@@ -128,9 +134,14 @@ func set_device_enabled(device_id: int, enabled: bool):
 	elif not enabled and (device_id in enabled_devices):
 		enabled_devices.erase(device_id)
 
-	# Persist to config
+	# Persist to config by device name (port indices aren't stable identifiers)
 	if was_enabled != enabled:
-		Sonara.set_config("midi/enabled_devices", enabled_devices)
+		var disabled_names: Array = Sonara.get_config("midi/disabled_device_names", [])
+		if enabled:
+			disabled_names.erase(device.device_name)
+		elif device.device_name not in disabled_names:
+			disabled_names.append(device.device_name)
+		Sonara.set_config("midi/disabled_device_names", disabled_names)
 		Sonara.save_config()
 		devices_changed.emit()
 		logger.info("Device %d (%s) %s" % [device_id, device.device_name, "enabled" if enabled else "disabled"])
@@ -190,6 +201,11 @@ func _input(event: InputEvent):
 	# Physical MIDI events
 	if event is InputEventMIDI:
 		handle_physical_midi_event(event)
+		return
+
+	if event is InputEventKey and not event.is_echo() and event.is_action_pressed("toggle_computer_keyboard"):
+		if not _is_gui_text_editing():
+			set_virtual_keyboard_enabled(not virtual_keyboard_enabled)
 		return
 
 	if not virtual_keyboard_enabled:

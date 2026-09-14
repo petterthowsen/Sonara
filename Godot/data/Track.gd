@@ -65,20 +65,24 @@ var default_channel_id: int:
 		if _default_channel_id != value:
 			var old_channel_id = _default_channel_id
 			var is_now_routed = value >= 0
+
+			# Routing removed: disconnect while default_channel_id still
+			# reflects the old (>= 0) routing, since disconnect_from_engine()
+			# checks default_channel_id to decide whether to remove clip
+			# instances from the engine.
+			if _is_connected and not is_now_routed:
+				disconnect_from_engine()
+
 			_default_channel_id = value
 			default_channel_id_changed.emit(value)
-			
+
 			# Handle channel registration for bi-directional linking
 			_update_channel_registration(old_channel_id, value)
-			
+
 			# Handle connection state changes
-			if _is_connected:
-				if is_now_routed:
-					# Update routing to new channel
-					AudioEngineOSC.send("/track/%d/route" % id, [value])
-				else:
-					# Routing removed, disconnect
-					disconnect_from_engine()
+			if _is_connected and is_now_routed:
+				# Update routing to new channel
+				AudioEngineOSC.send("/track/%d/route" % id, [value])
 			# Note: We don't auto-connect here if not connected
 			# The Project will call connect_to_engine() when appropriate
 
@@ -108,7 +112,7 @@ var _is_connected: bool = false
 
 # Channel linking (for bi-directional color/name sync)
 var _linked_channel: Channel = null
-var _project_ref: Project = null  # reference to project for channel lookup
+var _project_ref: WeakRef = null  # weak reference to project for channel lookup, to avoid a Track<->Project cycle
 
 # ============================================================================
 # LIFECYCLE
@@ -240,26 +244,34 @@ func set_armed(value: bool) -> void:
 # ============================================================================
 
 func set_project_ref(project: Project) -> void:
-	"""Set project reference for channel lookup."""
+	"""Set project reference (weak, to avoid a Track<->Project cycle) for channel lookup."""
 	if project:
-		_project_ref = project
+		_project_ref = weakref(project)
 	get_linked_channel()
+
+
+## Resolve the weakly-held project reference, if it's still alive.
+func get_project_ref() -> Project:
+	if _project_ref == null:
+		return null
+	return _project_ref.get_ref() as Project
 
 
 func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> void:
 	"""Update channel registration when routing changes."""
-	if not _project_ref:
+	var project := get_project_ref()
+	if not project:
 		return
-	
+
 	# Unregister from old channel
 	if old_channel_id >= 0:
-		var old_channel = _project_ref.get_channel_by_id(old_channel_id)
+		var old_channel = project.get_channel_by_id(old_channel_id)
 		if old_channel:
 			old_channel.unregister_track(self)
-	
+
 	# Register with new channel
 	if new_channel_id >= 0:
-		var new_channel = _project_ref.get_channel_by_id(new_channel_id)
+		var new_channel = project.get_channel_by_id(new_channel_id)
 		if new_channel:
 			new_channel.register_track(self)
 			_linked_channel = new_channel
@@ -316,8 +328,8 @@ func has_clips() -> bool:
 func pair_mixer_channel(ch: Channel) -> void:
 	if ch == null:
 		return
-	if _project_ref == null:
-		_project_ref = _fallback_project()
+	if get_project_ref() == null:
+		set_project_ref(_fallback_project())
 	color_by_channel = true
 	name_by_channel = true
 	if _default_channel_id == ch.id:
@@ -343,16 +355,16 @@ func _ensure_linked_channel() -> Channel:
 		_linked_channel.register_track(self)
 		return _linked_channel
 
-	if _project_ref == null:
-		_project_ref = _fallback_project()
+	if get_project_ref() == null:
+		set_project_ref(_fallback_project())
 
-	var ch: Channel = _lookup_channel_in_project(_project_ref)
+	var ch: Channel = _lookup_channel_in_project(get_project_ref())
 	if ch == null:
 		var editor_project := _fallback_project()
-		if editor_project != _project_ref:
+		if editor_project != get_project_ref():
 			ch = _lookup_channel_in_project(editor_project)
 			if ch:
-				_project_ref = editor_project
+				set_project_ref(editor_project)
 	if ch == null:
 		ch = _find_channel_in_mixer_ui()
 
@@ -391,11 +403,12 @@ func _find_channel_in_mixer_ui() -> Channel:
 
 ## Put a recovered Channel back on the project list without spawning a second mixer strip.
 func _adopt_channel_into_project(ch: Channel) -> void:
-	if ch == null or _project_ref == null:
+	var project := get_project_ref()
+	if ch == null or project == null:
 		return
-	if _project_ref.get_channel_by_id(ch.id) != null:
+	if project.get_channel_by_id(ch.id) != null:
 		return
-	_project_ref.channels.append(ch)
+	project.channels.append(ch)
 	print("[Track %d] adopted channel %d (%s) into project.channels" % [id, ch.id, ch.name])
 
 

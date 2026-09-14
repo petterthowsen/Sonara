@@ -524,6 +524,8 @@ func find_average_note() -> int:
 	for note in midi_notes:
 		total_midi_sum += note.note
 		total_notes += 1
+	if total_notes == 0:
+		return 60  # Middle C (C3), used as a sensible default for an empty clip.
 	@warning_ignore("integer_division")
 	return total_midi_sum / total_notes
 
