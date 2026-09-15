@@ -38,6 +38,8 @@ func execute(args: Dictionary) -> Dictionary:
 	if page < 1:
 		page = 1
 
+	if type_filter == "device":
+		return fail("list_assets browses files; use search_assets type:device for devices")
 	var want := _type_from_filter(type_filter)
 	var rel_to_asset: Dictionary = {}
 	var rel_paths: Array = []

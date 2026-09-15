@@ -37,7 +37,10 @@ func execute(args: Dictionary) -> Dictionary:
 	var result := AssetService.search_assets(query, type_filter, limit, offset)
 	var hits: Array[Asset] = result.assets
 	var total: int = result.total
-	return ok_text(_format_text(hits, total, query, type_filter, offset), {"total": total, "paths": _paths(hits)})
+	var text := _format_text(hits, total, query, type_filter, offset)
+	if type_filter.strip_edges().to_lower() in ["", "device"]:
+		text += DeviceToolUtil.builtins_missing_hint()
+	return ok_text(text, {"total": total, "paths": _paths(hits)})
 
 
 func _paths(hits: Array[Asset]) -> Array:

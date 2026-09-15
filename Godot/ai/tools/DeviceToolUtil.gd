@@ -9,17 +9,44 @@ static func filter_params(inst: DeviceInstance, group: String, query: String) ->
 	if inst == null or inst.device == null:
 		return out
 	var g := group.strip_edges().to_lower()
-	var q := query.strip_edges().to_lower()
+	var q := param_key(query)
 	var src: Array[DeviceParameter] = inst.get_parameters()
 	if g == "param" or g == "cc":
 		src = inst.get_parameters_in_group(g)
 	for p in src:
 		if p == null:
 			continue
-		if not q.is_empty() and not p.name.to_lower().contains(q):
+		if not q.is_empty() and not param_key(p.name).contains(q):
 			continue
 		out.append(p)
 	return out
+
+
+## Loose key for parameter names: lowercase, `_` / `-` / `.` → space, whitespace collapsed,
+## so models writing `Waveform_A` or `osc-b-detune` still hit `Waveform A` / `Osc B Detune`.
+static func param_key(raw: String) -> String:
+	var k := raw.to_lower().replace("_", " ").replace("-", " ").replace(".", " ")
+	while k.contains("  "):
+		k = k.replace("  ", " ")
+	return k.strip_edges()
+
+
+## Parameter in `params` whose name matches `key` exactly, then loosely (`param_key`), then by
+## numeric id. Null when nothing matches.
+static func match_param(params: Array, key: String) -> DeviceParameter:
+	var raw := key.strip_edges()
+	for p in params:
+		if p is DeviceParameter and p.name == raw:
+			return p
+	var loose := param_key(raw)
+	for p in params:
+		if p is DeviceParameter and param_key(p.name) == loose:
+			return p
+	if raw.is_valid_int():
+		for p in params:
+			if p is DeviceParameter and p.id == int(raw):
+				return p
+	return null
 
 
 ## JSON-friendly current value: bool, enum label, or real float.
@@ -186,7 +213,8 @@ static func resolve_asset_fuzzy(args: Dictionary, type_filter: String = "") -> D
 	var hits: Array = result.get("assets", [])
 	if hits.is_empty():
 		var hint := filter if not filter.is_empty() else noun
-		return AiTool.fail("Unknown %s \"%s\". Use search_assets type:%s." % [noun, label, hint])
+		var missing := builtins_missing_hint() if noun == "device" else ""
+		return AiTool.fail("Unknown %s \"%s\". Use search_assets type:%s.%s" % [noun, label, hint, missing])
 	# An exact display-name match wins even when other assets also match the fuzzy query,
 	# so "delay" still resolves when both "Delay" and "Tape Delay" exist.
 	var exact_hits: Array = []
@@ -198,6 +226,17 @@ static func resolve_asset_fuzzy(args: Dictionary, type_filter: String = "") -> D
 		var picked: Asset = chosen[0]
 		return {"asset": picked, "note": "Resolved \"%s\" → %s" % [label, _describe_asset(picked)]}
 	return AiTool.fail("Unknown %s \"%s\". Did you mean: %s?" % [noun, label, _format_candidates(hits)])
+
+
+## Non-empty (leading space) when the engine has not advertised built-ins yet, which means
+## it is not running: device lookups would otherwise fail with no clue why.
+static func builtins_missing_hint() -> String:
+	if AssetService == null:
+		return ""
+	for device in AssetService.device_registry.get_devices():
+		if device.device_type == Device.DeviceType.BuiltIn:
+			return ""
+	return " Built-in devices (Drum Machine, Sampler, PolySynth, Delay, …) are not loaded because the audio engine is not connected. Ask the user to start the engine instead of guessing device ids."
 
 
 ## Fuzzy query for a device id: drop the `sonara.builtin.` prefix, `_`/`-`/`.` → spaces.

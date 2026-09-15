@@ -27,13 +27,15 @@
 - [ ] Multi-in and multi-out for devices
   - [x] Drum Machine pads feed nested child mixer channels (extra-out buses before the child device chain)
   - [ ] CLAP extra output ports into shared memory (child return channels are created when `audio_out_channels > 2`)
+  - [ ] Creating multi-out channels (like Drum Machine) should not create tracks for those sub channels, since the device routes MIDI input itself
+  - [ ] Multi-out devices do not show the child device on the device line for that child channel (neither in device lane nor in mixer channel)
 - [ ] Add support for enum parameter type for builtins
-- [ ] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
+- [x] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
 - [ ] In Engine: Simplify device advertisement to avoid creating temporary instances
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
 - [ ] Plugin GUI windows should be forced to stay above Godot App
-- [ ] Sforzando CLAP GUI embeds but renders black (may need an OpenGL context on the host window)
+- [ ] Sforzando CLAP GUI embeds but renders black
 - [ ] Improve logging of plugins
 
 ### Built-in Devices
@@ -63,6 +65,8 @@ Done:
 - [ ] Sync selection of tracks and linked channels bidirectionally
   - [ ] Might make this behavior adjustable in settings
 - [ ] Delete, Duplicate Channels
+- [ ] Master track should allow having devices/effects on it
+- [ ] hslider for pan should show values when adjusting
 - [ ] Deleting a track also deletes its linked channel (and vice versa), as one undoable step. Currently `TrackDeleteCommand` orphans the channel, and mixer delete isn't undoable and reroutes the linked track to Master (see docs/ai-names-and-placement-plan.md Phase 2)
 - [ ] Enforce unique track/channel names (auto-suffix "Drums 2", dedupe on load) (see docs/ai-names-and-placement-plan.md Phase 4)
 - [ ] Duplicate track

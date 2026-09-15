@@ -38,20 +38,33 @@ func execute(args: Dictionary) -> Dictionary:
 	var raw = args.get("params", {})
 	if not raw is Dictionary or raw.is_empty():
 		return fail("params must be a non-empty object")
+	var all_params: Array[DeviceParameter] = inst.get_parameters()
+	# Report every bad key at once: one-at-a-time errors made models loop, since key order varies.
+	var unknown: PackedStringArray = []
+	var errors: PackedStringArray = []
 	var planned: Array = []
 	for key in raw.keys():
 		var pname := str(key).strip_edges()
-		var param := inst.get_parameter_by_name(pname)
+		var param := DeviceToolUtil.match_param(all_params, pname)
 		if param == null:
-			return fail("Unknown parameter '%s'" % pname)
+			unknown.append("'%s'" % pname)
+			continue
 		var parsed := DeviceToolUtil.parse_param_value(param, raw[key])
 		if not parsed.get("ok", false):
-			return fail(str(parsed.get("error", "Invalid value for '%s'" % pname)))
+			errors.append("%s: %s" % [param.name, str(parsed.get("error", "invalid value"))])
+			continue
 		var new_n := float(parsed.normalized)
 		var old_n := inst.get_parameter_normalized(param.id)
 		if abs(old_n - new_n) <= 0.0001:
 			continue
 		planned.append({"param": param, "old": old_n, "new": new_n})
+	if not unknown.is_empty() or not errors.is_empty():
+		var parts: PackedStringArray = []
+		if not unknown.is_empty():
+			parts.append("Unknown parameter %s. Valid names: %s" % [", ".join(unknown), _name_list(all_params)])
+		if not errors.is_empty():
+			parts.append("Invalid values: %s" % "; ".join(errors))
+		return fail("%s. Nothing was changed." % ". ".join(parts))
 	if planned.is_empty():
 		return ok(compact_device(project, inst))
 	var cmds: Array[Command] = []
@@ -77,3 +90,14 @@ func execute(args: Dictionary) -> Dictionary:
 		})
 	data["changed"] = applied
 	return ok(data)
+
+
+## Up to 40 parameter names, comma-separated, for error hints.
+func _name_list(params: Array[DeviceParameter]) -> String:
+	var names: PackedStringArray = []
+	for p in params:
+		if names.size() >= 40:
+			names.append("… (use get_device query)")
+			break
+		names.append(p.name)
+	return ", ".join(names)

@@ -29,10 +29,13 @@ static func pretty_json(text: String) -> String:
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
 		return text
-	var parsed: Variant = JSON.parse_string(trimmed)
-	if parsed == null:
+	# Only try objects/arrays; JSON.new().parse() (unlike parse_string) doesn't log an error for plain text.
+	if not (trimmed.begins_with("{") or trimmed.begins_with("[")):
 		return text
-	return JSON.stringify(parsed, "\t")
+	var json := JSON.new()
+	if json.parse(trimmed) != OK:
+		return text
+	return JSON.stringify(json.data, "\t")
 
 
 ## Monospace JSON with light syntax coloring for tool call / result blocks.

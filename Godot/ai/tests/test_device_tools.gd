@@ -29,6 +29,7 @@ func run_tests() -> void:
 	_test_param_page()
 	_test_parse_param_value()
 	_test_pad_specs()
+	_test_match_param()
 
 
 func _test_sanitize_and_unique() -> void:
@@ -134,3 +135,12 @@ func _test_pad_specs() -> void:
 	_assert(int(ident.note) == 38 and str(ident.name) == "Snare", "infer snare from name")
 	ident = _device_tool_util.resolve_pad_identity({"name": "", "note": -1}, "kick_kick_drum_02", {36: true})
 	_assert(int(ident.note) == -1, "occupied kick note skipped")
+
+
+func _test_match_param() -> void:
+	var params: Array = [DeviceParameter.new(0, "Waveform A"), DeviceParameter.new(10, "Osc B Detune")]
+	_assert(_device_tool_util.match_param(params, "Waveform A") == params[0], "exact name")
+	_assert(_device_tool_util.match_param(params, "Waveform_A") == params[0], "underscore name")
+	_assert(_device_tool_util.match_param(params, "osc-b-detune") == params[1], "dashed lowercase name")
+	_assert(_device_tool_util.match_param(params, "10") == params[1], "numeric id")
+	_assert(_device_tool_util.match_param(params, "Waveform B") == null, "unknown name")
