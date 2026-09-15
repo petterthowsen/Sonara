@@ -38,6 +38,10 @@ func execute(name: String, args: Dictionary) -> Dictionary:
 		return AiTool.fail("Unknown tool: %s" % name)
 	if args == null:
 		args = {}
+	# Saved chats may still use the old *_id arguments; say what replaced them.
+	var legacy := AiTool.check_legacy_args(args)
+	if legacy.get("ok") == false:
+		return legacy
 	var result = await tool.execute(args)
 	if result is Dictionary:
 		return result
@@ -56,7 +60,7 @@ static func create_default() -> ToolRegistry:
 	reg.register(CreateTrackTool.new())
 	reg.register(RenameTrackTool.new())
 	reg.register(SetTrackColorTool.new())
-	reg.register(DeleteTrackTool.new())
+	reg.register(DeleteTool.new())
 	reg.register(SetMixerTool.new())
 	reg.register(RouteChannelTool.new())
 	reg.register(AddSendTool.new())

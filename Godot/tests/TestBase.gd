@@ -17,7 +17,7 @@ func _init() -> void:
 	# that touch autoload-referencing scripts (e.g. AiTool) compile cleanly.
 	await process_frame
 	print("=== %s ===" % suite_name())
-	run_tests()
+	await run_tests()
 	if _failures == 0:
 		print("=== ALL PASSED ===")
 	else:

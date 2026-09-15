@@ -15,9 +15,9 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"name": {"type": "string", "description": "Unique clip name (the handle for later reads/writes)"},
-			"track_id": {"type": "integer", "description": "Track to place the first instance on"},
-			"start": {"type": "string", "description": "bar.beat.tick or bar number (default: playhead)"},
-			"bars": {"type": "integer", "description": "Clip length in bars (default 2)"},
+			"track": {"type": "string", "description": "Track to place the first instance on"},
+			"start": {"type": "string", "description": "bar.beat.tick or bar number. Default: range start, else 1.1.000 on an empty track, else the playhead's bar"},
+			"bars": {"type": "integer", "description": "Clip length in bars (default: 1, or the range length)"},
 			"kind": {
 				"type": "string",
 				"enum": ["drums", "pitched"],
@@ -26,7 +26,7 @@ func get_parameters() -> Dictionary:
 			"key": {"type": "string", "description": "Key for pitched clips, e.g. Cmin"},
 			"text": {"type": "string", "description": "Optional initial grid or event list"},
 		},
-		"required": ["name", "track_id"],
+		"required": ["name", "track"],
 	}
 
 
@@ -47,10 +47,17 @@ func execute(args: Dictionary) -> Dictionary:
 	for existing in project.clips.values():
 		if existing is Clip and existing.name.to_lower() == clip_name.to_lower():
 			return fail("Clip '%s' already exists; use place_clip to add another instance" % existing.name)
-	var bars := maxi(1, int(args.get("bars", 2)))
-	var start := resolve_start_ticks(project, args)
 	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
-	var instance := ClipActions.create_clip(project, track, start, bars * tpb, clip_name)
+	var requested_length := -1
+	if args.has("bars"):
+		requested_length = maxi(1, int(args.bars)) * tpb
+	var placement := resolve_placement(project, track, args, requested_length)
+	if placement.has("error"):
+		return placement
+	var start: int = placement.start
+	var length: int = placement.length
+	var bars := length / tpb
+	var instance := ClipActions.create_clip(project, track, start, length, clip_name)
 	if instance == null or instance.clip == null or not project.clips.has(instance.clip.id):
 		return fail("Failed to create clip")
 	var clip: Clip = instance.clip
@@ -66,11 +73,12 @@ func execute(args: Dictionary) -> Dictionary:
 		var written := ClipText.apply(clip, project, text, opts)
 		if not written.get("ok", false):
 			return fail(str(written.get("error", "initial text failed")))
-	if clip.midi_notes.is_empty() and int(clip.content_length_ticks) > bars * tpb:
-		clip.content_length_ticks = bars * tpb
+	if clip.midi_notes.is_empty() and int(clip.content_length_ticks) > length:
+		clip.content_length_ticks = length
 	var ser := ClipText.serialize(clip, opts)
 	var data := compact_clip(project, clip)
 	if ser.get("ok", false):
 		data["text"] = ser.text
 		data["format"] = ser.kind
-	return ok(data)
+	var result_text := "Created clip \"%s\" on \"%s\" %s (%d bars)" % [clip_name, track.name, placement.reason, bars]
+	return ok_text(result_text, data)

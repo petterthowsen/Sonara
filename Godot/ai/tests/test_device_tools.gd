@@ -13,11 +13,16 @@ class StubDev extends RefCounted:
 		name = p_name
 
 
+# Loaded in run_tests(): DeviceToolUtil references autoloads, which don't resolve at -s parse time.
+var _device_tool_util: GDScript
+
+
 func suite_name() -> String:
 	return "Device tool tests"
 
 
 func run_tests() -> void:
+	_device_tool_util = load("res://ai/tools/DeviceToolUtil.gd")
 	_test_sanitize_and_unique()
 	_test_split_path()
 	_test_walk_named()
@@ -61,7 +66,7 @@ func _test_walk_named() -> void:
 	_assert(miss is Dictionary and miss.get("ok") == false, "missing name fails")
 	host.append(StubDev.new("Delay"))
 	var amb = DeviceNaming.walk_named(host, PackedStringArray(["Delay"]))
-	_assert(amb is Dictionary and str(amb.get("error", "")).contains("instance_id"), "ambiguous Delay")
+	_assert(amb is Dictionary and str(amb.get("error", "")).contains("Multiple devices"), "ambiguous Delay")
 
 
 func _test_param_page() -> void:
@@ -106,26 +111,26 @@ func _test_parse_param_value() -> void:
 
 
 func _test_pad_specs() -> void:
-	var specs: Array = DeviceToolUtil.collect_pad_specs({
+	var specs: Array = _device_tool_util.collect_pad_specs({
 		"asset_path": "/tmp/kick.wav",
 		"name": "Kick",
 		"note": 36,
 	})
 	_assert(specs.size() == 1 and specs[0].name == "Kick" and int(specs[0].note) == 36, "single asset_path spec")
-	specs = DeviceToolUtil.collect_pad_specs({
+	specs = _device_tool_util.collect_pad_specs({
 		"asset_paths": ["/tmp/a.wav", "/tmp/b.wav"],
 	})
 	_assert(specs.size() == 2 and specs[1].asset_path.ends_with("b.wav"), "asset_paths list")
-	specs = DeviceToolUtil.collect_pad_specs({
+	specs = _device_tool_util.collect_pad_specs({
 		"samples": [
 			{"asset_path": "/tmp/snare.wav", "name": "Snare"},
 			"/tmp/hat.wav",
 		],
 	})
 	_assert(specs.size() == 2 and specs[0].name == "Snare" and specs[1].name == "", "mixed samples array")
-	var ident := DeviceToolUtil.resolve_pad_identity({"name": "", "note": -1}, "kick_kick_drum_01", {})
+	var ident: Dictionary = _device_tool_util.resolve_pad_identity({"name": "", "note": -1}, "kick_kick_drum_01", {})
 	_assert(int(ident.note) == 36 and str(ident.name) == "KICK", "infer kick pad")
-	ident = DeviceToolUtil.resolve_pad_identity({"name": "Snare", "note": -1}, "x.wav", {36: true})
+	ident = _device_tool_util.resolve_pad_identity({"name": "Snare", "note": -1}, "x.wav", {36: true})
 	_assert(int(ident.note) == 38 and str(ident.name) == "Snare", "infer snare from name")
-	ident = DeviceToolUtil.resolve_pad_identity({"name": "", "note": -1}, "kick_kick_drum_02", {36: true})
+	ident = _device_tool_util.resolve_pad_identity({"name": "", "note": -1}, "kick_kick_drum_02", {36: true})
 	_assert(int(ident.note) == -1, "occupied kick note skipped")

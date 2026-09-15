@@ -105,6 +105,11 @@ var is_playing: bool = false
 var playhead_ticks: int = 0
 var audio_engine_playhead: int = 0  # Authoritative playhead from audio engine
 
+## Test-only override for get_time_range(). Empty means "read the real arranger".
+## Tests set this directly (e.g. `{"has": true, "start": 0, "has_end": true, "end": 1920}`)
+## since there is no arranger outside the scene tree.
+var test_time_range_override: Dictionary = {}
+
 # Selection State (Channels and tracks)
 var focused_channel : Channel
 var focused_track: Track
@@ -444,6 +449,21 @@ func stop() -> void:
 			project.set_start_position(0)
 		set_playhead(0)
 		logger.info("[Editor] Stop: reset start position and playhead to origin")
+
+
+## `{has: bool, start: int, has_end: bool, end: int}` — the arranger's active time-range
+## selection, so AI tools don't reach into the arranger directly. "No range" in test mode
+## or when there's no arranger yet. See `test_time_range_override` for faking this in tests.
+func get_time_range() -> Dictionary:
+	if not test_time_range_override.is_empty():
+		return test_time_range_override
+	var none := {"has": false, "start": 0, "has_end": false, "end": 0}
+	if Utils.is_test_mode() or arranger == null or arranger.timeline == null:
+		return none
+	var csm := arranger.timeline.clip_selection_manager
+	if csm == null or not csm.has_range():
+		return none
+	return {"has": true, "start": csm.range_start_tick, "has_end": csm.range_has_end, "end": csm.range_end_tick}
 
 
 func set_playhead(ticks: int) -> void:

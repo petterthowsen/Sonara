@@ -573,8 +573,19 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 # ============================================================================
 # CHANNEL MANAGEMENT
 # ============================================================================
-func add_channel(channel: Channel) -> void:
-	"""Add an existing channel to the project."""
+## Add an existing channel to the project. `paired_track` (about to be linked to it) may share its name.
+func add_channel(channel: Channel, paired_track: Track = null) -> void:
+	channel.set_project(self)
+	# Re-add path (undo/redo): the name may have been taken since the channel was removed.
+	var final_name := unique_name(channel.name, paired_track, channel, "Channel")
+	if final_name != channel.name:
+		logger.info("[Project] Re-added channel %d \"%s\" as \"%s\" (name taken)" % [channel.id, channel.name, final_name])
+		channel.set_name(final_name)
+	_attach_channel(channel)
+
+
+## Add `channel` as-is (its name was already made unique by the caller).
+func _attach_channel(channel: Channel) -> void:
 	channel.set_project(self)
 	channels.append(channel)
 	channel_added.emit(channel)
@@ -586,6 +597,11 @@ func add_channel(channel: Channel) -> void:
 
 func create_channel(channel_name: String = "Channel", channel_type: Channel.ChannelType = Channel.ChannelType.BUS) -> Channel:
 	"""Create a new channel with unique ID and add to project."""
+	return _new_channel(unique_name(channel_name, null, null, "Channel"), channel_type)
+
+
+## Create and add a channel named exactly `channel_name` (the caller made it unique).
+func _new_channel(channel_name: String, channel_type: Channel.ChannelType) -> Channel:
 	var channel = Channel.new(next_channel_id)
 	next_channel_id += 1
 
@@ -593,7 +609,7 @@ func create_channel(channel_name: String = "Channel", channel_type: Channel.Chan
 	channel.channel_type = channel_type
 	channel.output_channel_id = 1  # Route to master (ID 1) by default
 	channel.color = _generate_random_color()
-	add_channel(channel)
+	_attach_channel(channel)
 
 	return channel
 
@@ -609,6 +625,26 @@ func get_channel_by_id(channel_id: int) -> Channel:
 		if channel.id == channel_id:
 			return channel
 	return null
+
+
+## Every track and channel name except `exclude_track` / `exclude_channel` (and each one's linked partner).
+func names_in_use(exclude_track: Track = null, exclude_channel: Channel = null) -> PackedStringArray:
+	return ProjectNaming.names_in_use(self, exclude_track, exclude_channel)
+
+
+## `desired`, or `desired N` if the name is taken or reserved (see ProjectNaming).
+func unique_name(desired: String, exclude_track: Track = null, exclude_channel: Channel = null, fallback: String = "Track") -> String:
+	return ProjectNaming.unique_name(self, desired, exclude_track, exclude_channel, fallback)
+
+
+## The track or channel called `name` (case-insensitive), as {track, channel}. Either may be null.
+func find_by_name(name: String) -> Dictionary:
+	return ProjectNaming.find_by_name(self, name)
+
+
+## Rename duplicate or reserved track/channel names (run after loading).
+func dedupe_names() -> void:
+	ProjectNaming.dedupe_names(self)
 
 
 ## Find a device instance by id across all mixer channels.
@@ -700,7 +736,14 @@ func add_track(track: Track) -> void:
 	
 	# Set project reference for channel linking
 	track.set_project_ref(self)
-	
+
+	# Re-add path (undo/redo): the name may have been taken since the track was removed.
+	# The setter renames a name-synced linked channel to the same name.
+	var final_name := unique_name(track.name, track)
+	if final_name != track.name:
+		logger.info("[Project] Re-added track %d \"%s\" as \"%s\" (name taken)" % [track.id, track.name, final_name])
+		track.name = final_name
+
 	tracks.append(track)
 	track_added.emit(track)
 
@@ -714,7 +757,7 @@ func create_track(track_name: String = "Track") -> Track:
 	var track = Track.new(next_track_id)
 	next_track_id += 1
 
-	track.name = track_name
+	track.name = unique_name(track_name)
 	add_track(track)
 
 	return track
@@ -933,10 +976,12 @@ func _create_track_with_channel(
 	track_type: Track.TrackType,
 	channel_type: Channel.ChannelType
 ) -> Dictionary:
-	var track := create_track(track_name)
+	# One name for the pair, reserved before either exists so they don't collide with each other.
+	var pair_name := unique_name(track_name)
+	var track := create_track(pair_name)
 	track.type = track_type
 
-	var channel := create_channel(track_name, channel_type)
+	var channel := _new_channel(pair_name, channel_type)
 
 	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
 
@@ -961,9 +1006,10 @@ func create_group_track(group_name: String = "Group") -> Dictionary:
 	track.height = 60
 	track.set_project_ref(self)
 
-	var channel := create_channel(group_name, Channel.ChannelType.GROUP)
+	var pair_name := unique_name(group_name)
+	var channel := _new_channel(pair_name, Channel.ChannelType.GROUP)
 	track.pair_mixer_channel(channel)
-	track.name = group_name
+	track.name = pair_name
 	add_track(track)
 	logger.info("[Project] Group '%s' (track %d) channel=%d" % [track.name, track.id, channel.id])
 	return {"track": track, "channel": channel}
@@ -977,15 +1023,16 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = fa
 	track.height = 60
 	track.set_project_ref(self)
 
+	var pair_name := unique_name(folder_name)
 	var channel = null
 	if with_channel:
-		channel = create_channel(folder_name, Channel.ChannelType.BUS)
+		channel = _new_channel(pair_name, Channel.ChannelType.BUS)
 		track.pair_mixer_channel(channel)
 	else:
 		track.color_by_channel = false
 		track.name_by_channel = false
 
-	track.name = folder_name
+	track.name = pair_name
 	add_track(track)
 	logger.info("[Project] %s '%s' (track %d) bus=%s" % [
 		"Folder Bus" if with_channel else "Folder",
@@ -1092,9 +1139,9 @@ func unlink_folder_from_bus(track: Track) -> void:
 func create_and_link_folder_bus(track: Track) -> Channel:
 	if track == null or track.type != Track.TrackType.FOLDER:
 		return null
-	var bus := create_bus_channel(track.name)
+	# Excluding the folder lets the new bus share its name; linking makes them one pair.
+	var bus := _new_channel(unique_name(track.name, track, null, "Bus"), Channel.ChannelType.BUS)
 	bus.set_color(track.get_color())
-	bus.set_name(track.name)
 	link_folder_to_bus(track, bus)
 	return bus
 
@@ -1561,6 +1608,8 @@ static func from_json(data: Dictionary) -> Project:
 
 	_relink_folder_buses(project)
 	project._rebuild_channel_child_ids_from_parents()
+	# Before ensure_all, so pad returns re-syncing their names see an already unique namespace.
+	project.dedupe_names()
 	AuxReturnSync.ensure_all(project)
 	return project
 

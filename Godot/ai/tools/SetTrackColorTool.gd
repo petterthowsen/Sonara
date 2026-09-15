@@ -14,10 +14,10 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"track_id": {"type": "integer", "description": "Track id"},
+			"track": {"type": "string", "description": "Track name"},
 			"hex": {"type": "string", "description": "CSS hex color, e.g. #ff8800"},
 		},
-		"required": ["track_id", "hex"],
+		"required": ["track", "hex"],
 	}
 
 

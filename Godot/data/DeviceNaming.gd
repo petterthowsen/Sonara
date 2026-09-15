@@ -87,7 +87,7 @@ static func walk_named(host: Array, segments: PackedStringArray) -> Variant:
 		if hits.is_empty():
 			return {"ok": false, "error": "No device named '%s'" % seg}
 		if hits.size() > 1:
-			return {"ok": false, "error": "Multiple devices named '%s'; use instance_id" % seg}
+			return {"ok": false, "error": "Multiple devices named '%s'" % seg}
 		inst = hits[0]
 		current_host = item_children(inst)
 	return inst

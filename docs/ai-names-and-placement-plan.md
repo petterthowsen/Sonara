@@ -4,11 +4,11 @@ Implementation plan based on what went wrong in the city_pop_2 conversation. The
 
 ## Checklist
 
-- [ ] Phase 1: Fuzzy device and asset lookup (validate before creating anything)
-- [ ] Phase 2: Deleting a track or channel removes its linked partner
-- [ ] Phase 3: Where new clips go by default, and refusing overlaps
-- [ ] Phase 4: Unique track and channel names in the data model
-- [ ] Phase 5: Tools and the system prompt refer to things by name, not id
+- [x] Phase 1: Fuzzy device and asset lookup (validate before creating anything)
+- [x] Phase 2: Deleting a track or channel removes its linked partner (2.4, the `delete` tool, moved to Phase 5)
+- [x] Phase 3: Where new clips go by default, and refusing overlaps
+- [x] Phase 4: Unique track and channel names in the data model
+- [x] Phase 5: Tools and the system prompt refer to things by name, not id
 
 ## Why
 
@@ -116,6 +116,8 @@ Add `Godot/history/commands/ChannelDeleteCommand.gd`. It deletes the channel and
 - [TrackItemContextMenu.gd:187](../Godot/arranger/tracklist/TrackItemContextMenu.gd#L187) needs no change; it picks up the new `TrackDeleteCommand` behavior.
 
 ### 2.4 AI tool
+
+Deferred to Phase 5 (needs unique names).
 
 `delete_track` becomes `delete`, taking `{name}`. Because names become unique across tracks and channels (Phase 4), one name identifies exactly one track/channel pair, a bus, or a folder. The result lists everything removed: `Deleted track and channel "Drums"`.
 

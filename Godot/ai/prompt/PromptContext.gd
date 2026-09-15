@@ -17,6 +17,7 @@ func _init() -> void:
 	register("ppq", _ppq)
 	register("sample_rate", _sample_rate)
 	register("playhead", _playhead)
+	register("range", _range)
 	register("tracks", _tracks)
 	register("channels", _channels)
 	register("mixer", _channels)
@@ -92,21 +93,36 @@ func _playhead() -> String:
 	return "%d:%d:%03d (%d)" % [bbt.bar, bbt.beat, bbt.tick, ed.playhead_ticks]
 
 
+func _range() -> String:
+	var ed := _editor()
+	var p := _project()
+	if ed == null or p == null:
+		return "none"
+	var r: Dictionary = ed.get_time_range()
+	if not r.get("has", false):
+		return "none"
+	var start_s := ClipTextTime.format_bbt(int(r.start), p.ppq, p.time_numerator, p.time_denominator)
+	if r.get("has_end", false) and int(r.end) > int(r.start):
+		var end_s := ClipTextTime.format_bbt(int(r.end), p.ppq, p.time_numerator, p.time_denominator)
+		return "%s–%s" % [start_s, end_s]
+	return "start %s" % start_s
+
+
 func _tracks() -> String:
 	var p := _project()
 	if p == null:
 		return "_No project open._"
-	var lines: PackedStringArray = ["| id | name | type | channel | clips |", "|---|---|---|---|---|"]
+	var lines: PackedStringArray = ["| name | type | channel | clips |", "|---|---|---|---|"]
 	var extra := 0
 	for i in range(p.tracks.size()):
 		if i >= TABLE_CAP:
 			extra = p.tracks.size() - TABLE_CAP
 			break
 		var t: Track = p.tracks[i]
-		lines.append("| %d | %s | %s | %s | %d |" % [
-			t.id, _md_cell(t.name), AiTool.track_kind(t),
-			str(t.default_channel_id) if t.default_channel_id >= 0 else "—",
-			t.clip_instances.size()
+		var ch := t.get_linked_channel()
+		var ch_cell := _md_cell(ch.name) if ch and not DeviceNaming.names_equal(ch.name, t.name) else "—"
+		lines.append("| %s | %s | %s | %d |" % [
+			_md_cell(t.name), AiTool.track_kind(t), ch_cell, t.clip_instances.size()
 		])
 	if extra > 0:
 		lines.append("_%d more tracks omitted._" % extra)
@@ -118,8 +134,8 @@ func _channels() -> String:
 	if p == null:
 		return "_No project open._"
 	var lines: PackedStringArray = [
-		"| id | name | type | vol | pan | mute | solo | route | sends |",
-		"|---|---|---|---|---|---|---|---|---|"
+		"| name | type | vol | pan | mute | solo | route | sends |",
+		"|---|---|---|---|---|---|---|---|"
 	]
 	var extra := 0
 	for i in range(p.channels.size()):
@@ -130,11 +146,11 @@ func _channels() -> String:
 		var sends: PackedStringArray = []
 		for s in c.send_channels:
 			if s is SendConfig:
-				sends.append("%d@%.1fdB" % [s.target_channel_id, s.amount])
-		lines.append("| %d | %s | %s | %.1f | %.2f | %s | %s | %d | %s |" % [
-			c.id, _md_cell(c.name), AiTool.channel_kind(c), c.volume, c.pan,
+				sends.append("%s@%.1fdB" % [AiTool.describe_route_target(p, s.target_channel_id), s.amount])
+		lines.append("| %s | %s | %.1f | %.2f | %s | %s | %s | %s |" % [
+			_md_cell(c.name), AiTool.channel_kind(c), c.volume, c.pan,
 			"Y" if c.mute else "", "Y" if c.solo else "",
-			c.output_channel_id, ", ".join(sends) if not sends.is_empty() else "—"
+			AiTool.describe_route_target(p, c.output_channel_id), ", ".join(sends) if not sends.is_empty() else "—"
 		])
 	if extra > 0:
 		lines.append("_%d more channels omitted._" % extra)
@@ -147,9 +163,9 @@ func _selection() -> String:
 		return "_No selection._"
 	var bits: PackedStringArray = []
 	if ed.focused_track:
-		bits.append("track %d `%s`" % [ed.focused_track.id, ed.focused_track.name])
+		bits.append("track `%s`" % ed.focused_track.name)
 	if ed.focused_channel:
-		bits.append("channel %d `%s`" % [ed.focused_channel.id, ed.focused_channel.name])
+		bits.append("channel `%s`" % ed.focused_channel.name)
 	if ed.arranger and ed.arranger.timeline:
 		var clips: Array = ed.arranger.timeline.get_selected_clip_instances()
 		if not clips.is_empty():
@@ -244,10 +260,10 @@ func _devices() -> String:
 		return "_No focused channel._"
 	var ch: Channel = ed.focused_channel
 	if ch.devices.is_empty():
-		return "_No devices on channel %d._" % ch.id
+		return "_No devices on channel \"%s\"._" % ch.name
 	var p := _project()
-	var lines: PackedStringArray = ["Use `path` (e.g. `%s/Delay`) or `instance_id`. `get_device` is paged; `set_device_params` takes a `{name: value}` map. Audio samples go on a Drum Machine via `add_device` (`parent` + `asset_path`)." % ch.name]
-	lines.append("| path | name | id | bypass | note |")
+	var lines: PackedStringArray = ["Address devices by `path` (e.g. `%s/Delay`). `get_device` is paged; `set_device_params` takes a `{name: value}` map. Audio samples go on a Drum Machine via `add_device` (`parent` + `asset_path`)." % ch.name]
+	lines.append("| path | name | device_id | bypass | note |")
 	lines.append("|---|---|---|---|---|")
 	_append_device_rows(lines, p, ch.devices)
 	return "\n".join(lines)

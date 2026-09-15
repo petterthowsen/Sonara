@@ -14,13 +14,13 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Mixer channel id"},
+			"channel": {"type": "string", "description": "Mixer channel name"},
 			"volume_db": {"type": "number", "description": "Fader level in dB"},
 			"pan": {"type": "number", "description": "Stereo pan -1 (L) to 1 (R)"},
 			"mute": {"type": "boolean"},
 			"solo": {"type": "boolean"},
 		},
-		"required": ["channel_id"],
+		"required": ["channel"],
 	}
 
 
@@ -56,4 +56,4 @@ func execute(args: Dictionary) -> Dictionary:
 	if not cmds.is_empty():
 		HistoryUtil.execute_many("Set Mixer", cmds)
 	var text := "%s: %s" % [channel.name, ", ".join(changes)] if not changes.is_empty() else "%s: no change" % channel.name
-	return ok_text(text, compact_channel(channel))
+	return ok_text(text, compact_channel(project, channel))

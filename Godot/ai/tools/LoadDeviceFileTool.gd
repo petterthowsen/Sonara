@@ -15,11 +15,9 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Device path"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 			"asset_path": {"type": "string", "description": "Asset path from search_assets"},
 		},
-		"required": ["asset_path"],
+		"required": ["path", "asset_path"],
 	}
 
 
@@ -33,14 +31,19 @@ func execute(args: Dictionary) -> Dictionary:
 	var inst: DeviceInstance = inst_v
 	if AssetService == null:
 		return fail("AssetService is not available")
-	var asset_path := str(args.get("asset_path", "")).strip_edges()
-	var asset := AssetService.resolve_asset(asset_path)
-	if asset == null:
-		return fail("Asset not found: %s" % asset_path)
+	var type_filter := DeviceToolUtil.type_filter_for_device(inst.device)
+	var resolved := DeviceToolUtil.resolve_asset_fuzzy(args, type_filter)
+	if resolved.get("ok") == false:
+		return resolved
+	var asset: Asset = resolved.asset
 	if not DeviceDropUtil.can_drop_file_on_device(inst, asset):
 		return fail("Cannot load that file into %s" % inst.get_display_name())
 	var old_path := inst.loaded_file_path
 	var cmd := PropertyCommand.new("Load Device File", inst, "load_file", old_path, asset.path)
 	HistoryUtil.execute(cmd)
 	var data := compact_device(project, inst)
-	return ok_text("Loaded into %s" % data.path, data)
+	var text := "Loaded into %s" % data.path
+	var note := str(resolved.get("note", ""))
+	if not note.is_empty():
+		text += "\n%s" % note
+	return ok_text(text, data)

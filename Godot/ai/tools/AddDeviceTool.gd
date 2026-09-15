@@ -7,14 +7,14 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Add a device, SFZ, or drum-machine sample pad. For kits, pass a Drum Machine parent and samples/asset_paths (wav from search_assets). Optional name and MIDI note; omitted values are inferred (Kick=36, Snare=38, Hat=42, Open hat=46, Crash=49, Ride=51). Do not add an empty Sampler then load_device_file."
+	return "Add a device, SFZ, or drum-machine sample pad. For kits, pass a Drum Machine parent path and samples/asset_paths (wav from search_assets). Optional name and MIDI note; omitted values are inferred (Kick=36, Snare=38, Hat=42, Open hat=46, Crash=49, Ride=51). Do not add an empty Sampler then load_device_file."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Mixer channel id"},
+			"channel": {"type": "string", "description": "Mixer channel name"},
 			"asset_path": {"type": "string", "description": "Asset path from search_assets"},
 			"asset_paths": {
 				"type": "array",
@@ -29,18 +29,17 @@ func get_parameters() -> Dictionary:
 					"properties": {
 						"asset_path": {"type": "string", "description": "Audio path from search_assets"},
 						"name": {"type": "string", "description": "Pad name"},
-						"note": {"type": "integer", "description": "MIDI note 0–127"},
+						"note": {"type": "integer", "description": "MIDI note 0-127"},
 					},
 				},
 			},
 			"device_id": {"type": "string", "description": "Built-in or plugin device id"},
 			"name": {"type": "string", "description": "Pad/device display name (single add)"},
-			"note": {"type": "integer", "description": "Drum pad MIDI note 0–127 (single add)"},
+			"note": {"type": "integer", "description": "Drum pad MIDI note 0-127 (single add)"},
 			"position": {"type": "integer", "description": "Insert index, -1 appends"},
-			"parent": {"type": "string", "description": "Container path or relative name"},
-			"parent_instance_id": {"type": "string", "description": "Container instance_id"},
+			"parent": {"type": "string", "description": "Container path (channel or, for a nested drum machine, channel + machine path)"},
 		},
-		"required": ["channel_id"],
+		"required": ["channel"],
 	}
 
 
@@ -56,11 +55,27 @@ func execute(args: Dictionary) -> Dictionary:
 		return parent_v
 	var parent: DeviceInstance = parent_v
 	var specs: Array = DeviceToolUtil.collect_pad_specs(args)
+	var notes: Array[String] = []
 	if specs.is_empty():
-		var asset := DeviceToolUtil.resolve_asset(args)
-		if asset == null:
+		if not args.has("asset_path") and not args.has("device_id"):
 			return fail("Provide asset_path, samples, asset_paths, or device_id")
+		var resolved := DeviceToolUtil.resolve_asset_fuzzy(args)
+		if resolved.get("ok") == false:
+			return resolved
+		var asset: Asset = resolved.asset
+		_add_note(notes, resolved)
 		specs.append({"asset_path": asset.path, "name": str(args.get("name", "")).strip_edges(), "note": int(args.get("note", -1)), "_asset": asset})
+	else:
+		# Resolve every entry before adding anything, so a bad path in a batch adds nothing.
+		for i in range(specs.size()):
+			var spec: Dictionary = specs[i]
+			var resolved := DeviceToolUtil.resolve_asset_fuzzy({"asset_path": spec.get("asset_path", "")})
+			if resolved.get("ok") == false:
+				return resolved
+			spec["_asset"] = resolved.asset
+			spec["asset_path"] = resolved.asset.path
+			_add_note(notes, resolved)
+			specs[i] = spec
 	var added: Array = []
 	for spec in specs:
 		var one = DeviceToolUtil.add_one(channel, parent, spec, args)
@@ -72,27 +87,39 @@ func execute(args: Dictionary) -> Dictionary:
 			added.append(one)
 	if added.is_empty():
 		return fail("Device was not added")
+	var result: Dictionary
 	if added.size() == 1:
-		return _one_result(project, channel, added[0])
-	return _several_result(project, channel, parent, added)
+		result = _one_result(project, channel, added[0])
+	else:
+		result = _several_result(project, channel, parent, added)
+	if not notes.is_empty():
+		result.text = "%s\n%s" % [result.text, "\n".join(notes)]
+	return result
 
 
-## `Added <name> to <channel> → path "<path>" (id <id>)`, with `, pad note N` for drum pads.
+## Append `resolved.note` to `notes` when the lookup was a fuzzy match.
+func _add_note(notes: Array[String], resolved: Dictionary) -> void:
+	var note := str(resolved.get("note", ""))
+	if not note.is_empty():
+		notes.append(note)
+
+
+## `Added <name> to <channel> -> path "<path>"`, with `, pad note N` for drum pads.
 func _one_result(project: Project, channel: Channel, inst: DeviceInstance) -> Dictionary:
 	var data := compact_device(project, inst)
-	var text := "Added %s to %s → path \"%s\" (id %s)" % [inst.get_display_name(), channel.name, data.path, inst.id]
+	var text := "Added %s to %s → path \"%s\"" % [inst.get_display_name(), channel.name, data.path]
 	if inst.slot_note >= 0:
 		text += ", pad note %d" % inst.slot_note
 	return ok_text(text, data)
 
 
-## `Added N pads to <parent path>:` then `- <name> (note N, id …)` per pad.
+## `Added N pads to <parent path>:` then `- <name> (note N)` per pad.
 func _several_result(project: Project, channel: Channel, parent: DeviceInstance, added: Array) -> Dictionary:
 	var host_path := parent.address_path(project) if parent else channel.name
 	var rows: Array = []
 	var lines: Array = ["Added %d pads to %s:" % [added.size(), host_path]]
 	for inst in added:
 		rows.append(compact_device(project, inst))
-		var note_part := ("note %d, " % inst.slot_note) if inst.slot_note >= 0 else ""
-		lines.append("- %s (%sid %s)" % [inst.get_display_name(), note_part, inst.id])
+		var note_part := (" (note %d)" % inst.slot_note) if inst.slot_note >= 0 else ""
+		lines.append("- %s%s" % [inst.get_display_name(), note_part])
 	return ok_text("\n".join(lines), {"devices": rows, "count": rows.size()})

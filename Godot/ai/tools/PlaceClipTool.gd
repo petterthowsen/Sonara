@@ -14,10 +14,9 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"clip": {"type": "string", "description": "Clip name (preferred) or clip_id"},
-			"clip_id": {"type": "string", "description": "Clip id if the name is ambiguous"},
-			"track_id": {"type": "integer", "description": "Track to place on (default: first existing placement's track)"},
-			"start": {"type": "string", "description": "bar.beat.tick or bar number (default: playhead)"},
+			"clip": {"type": "string", "description": "Clip name"},
+			"track": {"type": "string", "description": "Track to place on (default: first existing placement's track)"},
+			"start": {"type": "string", "description": "bar.beat.tick or bar number. Default: range start, else 1.1.000 on an empty track, else the playhead's bar"},
 			"bars": {"type": "integer", "description": "Instance length in bars (default: clip length)"},
 		},
 		"required": ["clip"],
@@ -34,7 +33,7 @@ func execute(args: Dictionary) -> Dictionary:
 		return clip_v
 	var clip: Clip = clip_v
 	var track: Track = null
-	if args.has("track_id"):
+	if args.has("track"):
 		var t = resolve_track(project, args)
 		if t is Dictionary:
 			return t
@@ -45,18 +44,22 @@ func execute(args: Dictionary) -> Dictionary:
 				track = inst.track
 				break
 	if track == null:
-		return fail("track_id is required (this clip has no placements yet)")
+		return fail("track is required (this clip has no placements yet)")
 	if clip.type == Clip.ClipType.MIDI and track.type != Track.TrackType.INSTRUMENT:
 		return fail("MIDI clips go on instrument tracks")
 	if clip.type == Clip.ClipType.AUDIO and track.type != Track.TrackType.AUDIO:
 		return fail("Audio clips go on audio tracks")
-	var start := resolve_start_ticks(project, args)
-	var duration: int = clip.content_length_ticks
+	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
+	var length: int = clip.content_length_ticks
 	if args.has("bars"):
-		duration = maxi(1, int(args.bars)) * ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
+		length = maxi(1, int(args.bars)) * tpb
+	var placement := resolve_placement(project, track, args, length)
+	if placement.has("error"):
+		return placement
+	var start: int = placement.start
+	var duration: int = placement.length
 	HistoryUtil.execute(ClipInstanceCreateCommand.new(
 		track, clip, start, duration, project, false
 	))
-	var pos := ClipTextTime.format_bbt(start, project.ppq, project.time_numerator, project.time_denominator)
-	var text := "Placed \"%s\" on %s at %s" % [clip.name, track.name, pos]
+	var text := "Placed \"%s\" on %s %s" % [clip.name, track.name, placement.reason]
 	return ok_text(text, compact_clip(project, clip))

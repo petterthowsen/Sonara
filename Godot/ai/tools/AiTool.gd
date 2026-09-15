@@ -67,63 +67,134 @@ static func require_project() -> Variant:
 	return fail("No project open")
 
 
-## Resolve a track by id, or by unique name if `id` is missing.
-static func resolve_track(project: Project, args: Dictionary, id_key: String = "track_id") -> Variant:
-	if args.has(id_key):
-		var t := project.get_track_by_id(int(args[id_key]))
-		return t if t else fail("Track not found: %s" % args[id_key])
-	var name := str(args.get("name", "")).strip_edges()
-	if name.is_empty():
-		return fail("track_id is required")
-	var hits: Array = []
+## Legacy argument name -> replacement hint. Tools used to take numeric ids; old saved
+## conversations (and a resumed chat) may still call with these. Keep this mapping for one
+## release after the names migration ships, then delete it along with this comment.
+const _LEGACY_ARG_HINTS := {
+	"track_id": "track",
+	"channel_id": "channel",
+	"output_channel_id": "output",
+	"target_channel_id": "target",
+	"instance_id": "path",
+	"parent_instance_id": "parent",
+	"clip_id": "clip",
+}
+
+
+## Fail with a "the replacement is X" hint if `args` uses a removed id argument. Empty
+## dict when nothing legacy is present. Call this first thing in every tool's `execute()`.
+static func check_legacy_args(args: Dictionary) -> Dictionary:
+	for key in _LEGACY_ARG_HINTS:
+		if args.has(key):
+			return fail("%s is gone; pass %s: \"<name>\"" % [key, _LEGACY_ARG_HINTS[key]])
+	return {}
+
+
+## Up to 5 existing track/channel names that contain `query` (case-insensitive substring).
+static func _near_matches(project: Project, query: String) -> PackedStringArray:
+	var q := query.strip_edges().to_lower()
+	var out: PackedStringArray = []
+	if q.is_empty():
+		return out
+	var seen: Dictionary = {}
 	for t in project.tracks:
-		if t.name.to_lower() == name.to_lower():
-			hits.append(t)
-	if hits.size() == 1:
-		return hits[0]
-	if hits.is_empty():
-		return fail("No track named '%s'" % name)
-	return fail("Multiple tracks named '%s'; use track_id" % name)
-
-
-## Resolve a channel by id, or by unique name.
-static func resolve_channel(project: Project, args: Dictionary, id_key: String = "channel_id") -> Variant:
-	if args.has(id_key):
-		var c := project.get_channel_by_id(int(args[id_key]))
-		return c if c else fail("Channel not found: %s" % args[id_key])
-	var name := str(args.get("name", "")).strip_edges()
-	if name.is_empty():
-		return fail("channel_id is required")
-	var hits: Array = []
+		if out.size() >= 5:
+			break
+		if t.name.to_lower().contains(q) and not seen.has(t.name.to_lower()):
+			seen[t.name.to_lower()] = true
+			out.append(t.name)
 	for c in project.channels:
-		if c.name.to_lower() == name.to_lower():
-			hits.append(c)
-	if hits.size() == 1:
-		return hits[0]
-	if hits.is_empty():
-		return fail("No channel named '%s'" % name)
-	return fail("Multiple channels named '%s'; use channel_id" % name)
+		if out.size() >= 5:
+			break
+		if c.name.to_lower().contains(q) and not seen.has(c.name.to_lower()):
+			seen[c.name.to_lower()] = true
+			out.append(c.name)
+	return out
 
 
-## Compact track row for tool results.
+## "No track named 'X'." with up to 5 "did you mean" suggestions, same format as the
+## fuzzy asset/device lookup.
+static func _not_found(project: Project, noun: String, name: String) -> Dictionary:
+	var matches := _near_matches(project, name)
+	if matches.is_empty():
+		return fail("No %s named '%s'" % [noun, name])
+	return fail("No %s named '%s'. Did you mean: %s?" % [noun, name, ", ".join(matches)])
+
+
+## Resolve a track by unique name (`key`, default `track`). A name that belongs only to a
+## bus fails with a hint that it is a bus, not a track.
+static func resolve_track(project: Project, args: Dictionary, key: String = "track") -> Variant:
+	var name := str(args.get(key, "")).strip_edges()
+	if name.is_empty():
+		return fail("%s is required" % key)
+	var found: Dictionary = project.find_by_name(name)
+	var track: Track = found.get("track")
+	if track:
+		return track
+	if found.get("channel"):
+		return fail("\"%s\" is a bus, not a track" % name)
+	return _not_found(project, "track", name)
+
+
+## Resolve a channel by unique name (`key`, default `channel`). A folder without a mixer
+## channel fails with a hint.
+static func resolve_channel(project: Project, args: Dictionary, key: String = "channel") -> Variant:
+	var name := str(args.get(key, "")).strip_edges()
+	if name.is_empty():
+		return fail("%s is required" % key)
+	var found: Dictionary = project.find_by_name(name)
+	var channel: Channel = found.get("channel")
+	if channel:
+		return channel
+	if found.get("track"):
+		return fail("\"%s\" is a folder with no mixer channel" % name)
+	return _not_found(project, "channel", name)
+
+
+## Resolve a route target name to a channel id, or fail(...) with near matches.
+## "Master" -> 1, "None" -> 0, "Hardware Out" -> 1000, "Hardware Out N" -> 1000 + N,
+## anything else is a channel name.
+static func resolve_route_target(project: Project, value: String) -> Variant:
+	var v := value.strip_edges()
+	var key := v.to_lower()
+	if key == "master":
+		return 1
+	if key == "none":
+		return 0
+	if key == "hardware out":
+		return 1000
+	if key.begins_with("hardware out "):
+		var n_str := key.substr("hardware out ".length()).strip_edges()
+		if n_str.is_valid_int():
+			return 1000 + n_str.to_int()
+	var channel = resolve_channel(project, {"channel": v})
+	if channel is Dictionary:
+		return channel
+	return channel.id
+
+
+## Compact track row for tool results. `channel` is included only when the linked channel's
+## name differs from the track's own name.
 static func compact_track(t: Track) -> Dictionary:
-	return {
-		"id": t.id,
+	var row := {
 		"name": t.name,
 		"type": track_kind(t),
-		"channel_id": t.default_channel_id,
 		"clip_count": t.clip_instances.size(),
 		"color": "#%s" % t.get_color().to_html(false),
 	}
+	var ch := t.get_linked_channel()
+	if ch and not DeviceNaming.names_equal(ch.name, t.name):
+		row["channel"] = ch.name
+	return row
 
 
 ## Compact mixer row for tool results.
-static func compact_channel(c: Channel) -> Dictionary:
+static func compact_channel(project: Project, c: Channel) -> Dictionary:
 	var sends: Array = []
 	for s in c.send_channels:
 		if s is SendConfig:
 			sends.append({
-				"target_channel_id": s.target_channel_id,
+				"target": describe_route_target(project, s.target_channel_id),
 				"amount_db": s.amount,
 				"pre_fader": s.pre_fader,
 			})
@@ -132,14 +203,13 @@ static func compact_channel(c: Channel) -> Dictionary:
 		if d is DeviceInstance and d.device:
 			device_names.append(d.get_display_name())
 	return {
-		"id": c.id,
 		"name": c.name,
 		"type": channel_kind(c),
 		"volume_db": c.volume,
 		"pan": c.pan,
 		"mute": c.mute,
 		"solo": c.solo,
-		"output_channel_id": c.output_channel_id,
+		"output": describe_route_target(project, c.output_channel_id),
 		"sends": sends,
 		"devices": device_names,
 	}
@@ -175,16 +245,11 @@ static func channel_kind(c: Channel) -> String:
 			return "instrument"
 
 
-## Resolve a clip by `clip_id` or unique `name` / `clip`.
+## Resolve a clip by unique `clip` name (clip names are unique across the project).
 static func resolve_clip(project: Project, args: Dictionary) -> Variant:
-	var cid := str(args.get("clip_id", "")).strip_edges()
-	if not cid.is_empty() and project.clips.has(cid):
-		return project.clips[cid]
 	var name := str(args.get("clip", args.get("name", ""))).strip_edges()
 	if name.is_empty():
-		return fail("clip name or clip_id is required")
-	if project.clips.has(name):
-		return project.clips[name]
+		return fail("clip is required")
 	var hits: Array = []
 	for clip in project.clips.values():
 		if clip is Clip and clip.name.to_lower() == name.to_lower():
@@ -192,8 +257,17 @@ static func resolve_clip(project: Project, args: Dictionary) -> Variant:
 	if hits.size() == 1:
 		return hits[0]
 	if hits.is_empty():
-		return fail("No clip named '%s'" % name)
-	return fail("Multiple clips named '%s'; use clip_id" % name)
+		var q := name.to_lower()
+		var matches: PackedStringArray = []
+		for clip in project.clips.values():
+			if matches.size() >= 5:
+				break
+			if clip is Clip and clip.name.to_lower().contains(q):
+				matches.append(clip.name)
+		if matches.is_empty():
+			return fail("No clip named '%s'" % name)
+		return fail("No clip named '%s'. Did you mean: %s?" % [name, ", ".join(matches)])
+	return fail("Multiple clips named '%s'" % name)
 
 
 ## Every instance of a clip, in track order.
@@ -213,7 +287,6 @@ static func compact_clip(project: Project, clip: Clip) -> Dictionary:
 		placements.append(compact_instance(project, inst))
 	return {
 		"name": clip.name,
-		"clip_id": clip.id,
 		"type": "audio" if clip.type == Clip.ClipType.AUDIO else "midi",
 		"note_count": clip.midi_notes.size(),
 		"length_ticks": clip.content_length_ticks,
@@ -224,11 +297,8 @@ static func compact_clip(project: Project, clip: Clip) -> Dictionary:
 
 ## One timeline placement of a clip.
 static func compact_instance(project: Project, inst: ClipInstance) -> Dictionary:
-	var track_id := inst.track.id if inst.track else -1
 	var track_name := inst.track.name if inst.track else ""
 	return {
-		"instance_id": inst.id,
-		"track_id": track_id,
 		"track": track_name,
 		"start": ClipTextTime.format_bbt(inst.start_ticks, project.ppq, project.time_numerator, project.time_denominator),
 		"start_ticks": inst.start_ticks,
@@ -256,6 +326,69 @@ static func resolve_start_ticks(project: Project, args: Dictionary, key: String 
 		return maxi(0, n2)
 	var ticks := ClipTextTime.parse_bbt(s, project.ppq, project.time_numerator, project.time_denominator)
 	return ticks if ticks >= 0 else 0
+
+
+## Resolve where a new clip instance goes, and refuse if it would overlap.
+## `length` is the requested length in ticks, or -1 to let the range decide (create_clip only).
+## Returns `{start: int, length: int, reason: String}`, or fail(...) — check `.has("error")`.
+static func resolve_placement(project: Project, track: Track, args: Dictionary, length: int) -> Dictionary:
+	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
+	var start: int
+	var reason: String
+	var out_length := length
+	if args.has("start"):
+		start = resolve_start_ticks(project, args)
+		reason = "at %s" % ClipTextTime.format_bbt(start, project.ppq, project.time_numerator, project.time_denominator)
+	else:
+		var time_range: Dictionary = Sonara.editor.get_time_range() if Sonara and Sonara.editor else {"has": false, "start": 0, "has_end": false, "end": 0}
+		if time_range.get("has", false):
+			start = int(time_range.start)
+			if out_length == -1 and time_range.get("has_end", false) and int(time_range.end) > start:
+				out_length = int(time_range.end) - start
+			reason = "at range start %s" % ClipTextTime.format_bbt(start, project.ppq, project.time_numerator, project.time_denominator)
+		elif track.clip_instances.is_empty():
+			start = 0
+			reason = "at 1.1.000 (empty track)"
+		else:
+			var playhead := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
+			start = int(floor(float(playhead) / tpb)) * tpb
+			reason = "at playhead bar %d" % (start / tpb + 1)
+	if out_length == -1:
+		var bars := maxi(1, int(args.get("bars", 1)))
+		out_length = bars * tpb
+	if track.has_clip_overlap(start, out_length):
+		return _placement_overlap_error(project, track, start, out_length, tpb)
+	return {"start": start, "length": out_length, "reason": reason}
+
+
+## `Error: Bars 1–3 on "Drums" are occupied by "X" (1.1.000–3.1.000). Next free bar: 3.`
+static func _placement_overlap_error(project: Project, track: Track, start: int, length: int, tpb: int) -> Dictionary:
+	var end := start + length
+	var overlapping: Array = []
+	for inst in track.clip_instances:
+		if inst == null:
+			continue
+		if start < inst.start_ticks + inst.duration_ticks and inst.start_ticks < end:
+			overlapping.append(inst)
+	overlapping.sort_custom(func(a, b): return a.start_ticks < b.start_ticks)
+	var bar_start := int(start / tpb) + 1
+	var bar_end := int(floor(float(end - 1) / tpb)) + 1
+	var names: PackedStringArray = []
+	var last_end := 0
+	for inst in overlapping:
+		last_end = maxi(last_end, inst.start_ticks + inst.duration_ticks)
+		if names.size() < 3:
+			var cname: String = inst.clip.name if inst.clip else inst.clip_id
+			names.append("\"%s\" (%s–%s)" % [
+				cname,
+				ClipTextTime.format_bbt(inst.start_ticks, project.ppq, project.time_numerator, project.time_denominator),
+				ClipTextTime.format_bbt(inst.start_ticks + inst.duration_ticks, project.ppq, project.time_numerator, project.time_denominator),
+			])
+	var candidate_bar := int(ceil(float(last_end) / tpb))
+	while track.has_clip_overlap(candidate_bar * tpb, length):
+		candidate_bar += 1
+	var bars_text := "Bar %d" % bar_start if bar_start == bar_end else "Bars %d–%d" % [bar_start, bar_end]
+	return fail("%s on \"%s\" are occupied by %s. Next free bar: %d." % [bars_text, track.name, ", ".join(names), candidate_bar + 1])
 
 
 ## Shared serialize/apply options from a project + optional tool args.
@@ -335,23 +468,18 @@ static func _generic_drum_label(label: String) -> bool:
 	return s.is_empty() or s in ["sampler", "sfz", "audio", "device", "plugin"]
 
 
-## Resolve a device by `instance_id` or `path` (`Channel/Device/Child`).
+## Resolve a device by `path` (`Channel/Device/Child`), optionally scoped by `channel` name
+## when the path is relative (doesn't start with a channel name).
 static func resolve_device(project: Project, args: Dictionary) -> Variant:
-	var iid := str(args.get("instance_id", "")).strip_edges()
-	if not iid.is_empty():
-		var found := project.find_device_instance(iid)
-		if found:
-			return found
-		return fail("Device not found: %s" % iid)
 	var path := str(args.get("path", "")).strip_edges()
 	if path.is_empty():
-		return fail("path or instance_id is required")
+		return fail("path is required")
 	var segs := DeviceNaming.split_path(path)
 	if segs.is_empty():
-		return fail("path or instance_id is required")
+		return fail("path is required")
 	var channel: Channel = null
 	var rest: PackedStringArray = segs
-	if args.has("channel_id"):
+	if args.has("channel"):
 		var ch_v = resolve_channel(project, args)
 		if ch_v is Dictionary:
 			return ch_v
@@ -364,9 +492,9 @@ static func resolve_device(project: Project, args: Dictionary) -> Variant:
 			if DeviceNaming.names_equal(c.name, segs[0]):
 				hits.append(c)
 		if hits.is_empty():
-			return fail("No channel named '%s'" % segs[0])
+			return _not_found(project, "channel", segs[0])
 		if hits.size() > 1:
-			return fail("Multiple channels named '%s'; use channel_id" % segs[0])
+			return fail("Multiple channels named '%s'" % segs[0])
 		channel = hits[0]
 		rest = DeviceNaming.skip_first(segs)
 	var walked = DeviceNaming.walk_named(channel.devices, rest)
@@ -375,19 +503,14 @@ static func resolve_device(project: Project, args: Dictionary) -> Variant:
 	return walked
 
 
-## Container parent from `parent` path or `parent_instance_id`; null means channel root.
+## Container parent from a `parent` path; null means channel root.
 static func resolve_optional_parent(project: Project, args: Dictionary) -> Variant:
-	var parent_id := str(args.get("parent_instance_id", "")).strip_edges()
 	var parent_path := str(args.get("parent", "")).strip_edges()
-	if parent_id.is_empty() and parent_path.is_empty():
+	if parent_path.is_empty():
 		return null
-	var nested := {}
-	if not parent_id.is_empty():
-		nested["instance_id"] = parent_id
-	if not parent_path.is_empty():
-		nested["path"] = parent_path
-	if args.has("channel_id"):
-		nested["channel_id"] = args.channel_id
+	var nested := {"path": parent_path}
+	if args.has("channel"):
+		nested["channel"] = args.channel
 	var parent_v = resolve_device(project, nested)
 	if parent_v is Dictionary:
 		return parent_v
@@ -408,7 +531,6 @@ static func compact_device(project: Project, inst: DeviceInstance) -> Dictionary
 		category = Device.DeviceCategory.keys()[inst.device.category]
 	var row := {
 		"path": inst.address_path(project),
-		"instance_id": inst.id,
 		"name": inst.get_display_name(),
 		"device_id": inst.device.device_id if inst.device else "",
 		"category": category,
@@ -432,13 +554,15 @@ static func relative_asset_path(path: String) -> String:
 	return AssetPaths.to_relative(path, AssetService.get_roots())
 
 
-## `Master`, `no output`, `hardware out N`, or the channel's name/id.
+## `Master`, `None`, `Hardware Out` / `Hardware Out N`, or the channel's name.
 static func describe_route_target(project: Project, channel_id: int) -> String:
 	if channel_id == 0:
-		return "no output"
+		return "None"
 	if channel_id == 1:
 		return "Master"
-	if channel_id >= 1000:
-		return "hardware out %d" % channel_id
+	if channel_id == 1000:
+		return "Hardware Out"
+	if channel_id > 1000:
+		return "Hardware Out %d" % (channel_id - 1000)
 	var c := project.get_channel_by_id(channel_id)
-	return "%s (%d)" % [c.name, c.id] if c else str(channel_id)
+	return c.name if c else str(channel_id)

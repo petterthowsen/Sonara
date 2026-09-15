@@ -14,12 +14,12 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Source channel id"},
-			"target_channel_id": {"type": "integer", "description": "Bus / destination channel id"},
+			"channel": {"type": "string", "description": "Source channel name"},
+			"target": {"type": "string", "description": "Bus / destination channel name"},
 			"amount_db": {"type": "number", "description": "Send level in dB (default -12)"},
 			"pre_fader": {"type": "boolean", "description": "Pre-fader send (default false)"},
 		},
-		"required": ["channel_id", "target_channel_id"],
+		"required": ["channel", "target"],
 	}
 
 
@@ -30,14 +30,13 @@ func execute(args: Dictionary) -> Dictionary:
 	var channel = resolve_channel(project, args)
 	if channel is Dictionary:
 		return channel
-	var target_id := int(args.get("target_channel_id", -1))
-	var target: Channel = project.get_channel_by_id(target_id)
-	if target == null:
-		return fail("Target channel not found: %d" % target_id)
-	if target_id == channel.id:
+	var target = resolve_channel(project, args, "target")
+	if target is Dictionary:
+		return target
+	if target.id == channel.id:
 		return fail("Cannot send to self")
 	var amount := float(args.get("amount_db", -12.0))
 	var pre := bool(args.get("pre_fader", false))
-	HistoryUtil.execute(SendAddCommand.new(channel, target_id, amount, pre))
+	HistoryUtil.execute(SendAddCommand.new(channel, target.id, amount, pre))
 	var text := "Added send %s → %s (%g dB%s)" % [channel.name, target.name, amount, ", pre-fader" if pre else ""]
-	return ok_text(text, compact_channel(channel))
+	return ok_text(text, compact_channel(project, channel))

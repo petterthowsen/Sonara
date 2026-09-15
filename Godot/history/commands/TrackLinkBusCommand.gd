@@ -54,7 +54,7 @@ func do() -> void:
 			bus = project.create_and_link_folder_bus(track)
 		else:
 			if project.get_channel_by_id(bus.id) == null:
-				project.add_channel(bus)
+				project.add_channel(bus, track)
 			project.link_folder_to_bus(track, bus)
 		return
 	if bus:

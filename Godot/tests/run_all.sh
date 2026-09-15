@@ -18,7 +18,11 @@ failures=0
 for script in "${TEST_SCRIPTS[@]}"; do
 	rel="${script#./}"
 	echo "--- $rel ---"
-	if godot --headless --path . -s "$rel" -- --test; then
+	# Compile errors don't fail _assert(), so a broken script can still exit 0; catch them here.
+	output="$(godot --headless --path . -s "$rel" -- --test 2>&1)"
+	status=$?
+	echo "$output"
+	if [ "$status" -eq 0 ] && ! grep -qE 'SCRIPT ERROR|Failed to load script' <<<"$output"; then
 		:
 	else
 		failures=$((failures + 1))

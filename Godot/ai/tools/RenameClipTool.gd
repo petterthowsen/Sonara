@@ -14,8 +14,7 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"clip": {"type": "string", "description": "Current clip name or clip_id"},
-			"clip_id": {"type": "string", "description": "Clip id if the name is ambiguous"},
+			"clip": {"type": "string", "description": "Current clip name"},
 			"name": {"type": "string", "description": "New unique name"},
 		},
 		"required": ["clip", "name"],

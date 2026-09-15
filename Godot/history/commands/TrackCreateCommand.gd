@@ -79,4 +79,7 @@ func undo() -> void:
 		return
 	project.remove_track(track.id)
 	if channel != null:
+		# The removed track is still registered; drop it so remove_channel doesn't reroute it to
+		# Master, which would leave redo with an unpaired track (and a clashing "Name 2").
+		channel.unregister_track(track)
 		project.remove_channel(channel.id)

@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Remove a device by path (Channel/Device/Child) or instance_id. Undoable."
+	return "Remove a device by path (Channel/Device/Child). Undoable."
 
 
 func get_parameters() -> Dictionary:
@@ -15,10 +15,8 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Channel/device path"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 		},
-		"required": [],
+		"required": ["path"],
 	}
 
 

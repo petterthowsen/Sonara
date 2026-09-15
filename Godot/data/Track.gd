@@ -31,11 +31,13 @@ var name: String:
 	get:
 		return _name
 	set(value):
-		if _name != value:
+		# Unique across the project's tracks and channels (a no-op until attached, e.g. from_json).
+		var final_name := unique_name_for(value)
+		if _name != final_name:
 			var ch := get_linked_channel()
-			_name = value
-			if name_by_channel and ch:
-				ch.set_name(value)
+			_name = final_name
+			if name_by_channel and ch and not ch.is_master:
+				ch.set_name(final_name)
 			else:
 				name_changed.emit(_name)
 
@@ -207,6 +209,15 @@ var height: int:
 ## Set display name (used by undoable property commands).
 func set_name(new_name: String) -> void:
 	name = new_name
+
+
+## The name `set_name(desired)` would apply: suffixed if another track/channel uses it or it is reserved.
+## Record this (not `desired`) in undo commands so redo reproduces the same name.
+func unique_name_for(desired: String) -> String:
+	var project := get_project_ref()
+	if project == null:
+		return desired
+	return project.unique_name(desired, self)
 
 
 ## Take a color pushed from the paired channel without writing it back.

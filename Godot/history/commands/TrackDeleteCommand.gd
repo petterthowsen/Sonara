@@ -1,5 +1,6 @@
 # TrackDeleteCommand.gd
-# Undoable track deletion (keeps Track + linked Channel for redo).
+# Undoable track deletion: the track subtree plus each linked mixer channel no other track uses
+# (keeps Track + Channel identity for redo).
 class_name TrackDeleteCommand extends Command
 
 ## Project that owns the track.
@@ -8,53 +9,33 @@ var project: Project = null
 ## Track being deleted (subtree root).
 var track: Track = null
 
-## Full subtree being deleted: `track` plus every descendant, in the order
-## they must be re-added on undo (parents before children).
-var _subtree: Array[Track] = []
-
-## Layout snapshot (parent_track_id/order/child_track_ids/channel nest) for
-## every track in the project, captured just before deletion, so undo can
-## restore the deleted subtree's position among its siblings.
-var _layout_snapshot: Dictionary = {}
+## What the last do() removed and how to put it back.
+var _snapshot: LinkedDeleteSnapshot = null
 
 
-## Create a delete-track command (mirrors Project.remove_track; does not remove channels).
+## Create a delete-track command.
 func _init(p_project: Project = null, p_track: Track = null) -> void:
 	name = "Delete Track"
 	project = p_project
 	track = p_track
 
 
-## Remove the track (and its full subtree) from the project.
+## Remove the track subtree and its linked channels.
 func do() -> void:
 	if project == null or track == null:
 		return
-
-	# Snapshot the subtree and current layout before anything is removed,
-	# so undo can restore children and position (parent + index among
-	# siblings), not just the top track.
-	_subtree = _collect_subtree(track)
-	_layout_snapshot = TrackReorderCommand.capture_layout(project)
-
-	project.remove_track(track.id)
+	var roots: Array[Track] = [track]
+	_snapshot = LinkedDeleteSnapshot.new(project, roots)
+	name = "Delete Track and Channel" if _snapshot.channel_count() > 0 else "Delete Track"
+	_snapshot.remove()
 
 
-## Re-add the deleted subtree and restore its layout.
+## Re-add the deleted tracks and channels and restore routing and layout.
 func undo() -> void:
-	if project == null or track == null:
-		return
-
-	for t in _subtree:
-		if project.get_track_by_id(t.id) == null:
-			project.add_track(t)
-
-	if not _layout_snapshot.is_empty():
-		project.apply_track_layout(_layout_snapshot)
+	if _snapshot != null:
+		_snapshot.restore()
 
 
-## Collect `root` and all of its descendants (parents before children).
-func _collect_subtree(root: Track) -> Array[Track]:
-	var result: Array[Track] = [root]
-	for child in project.get_track_children(root):
-		result.append_array(_collect_subtree(child))
-	return result
+## Channels removed by the last do() (empty before the first do()).
+func removed_channels() -> Array[Channel]:
+	return _snapshot.channels if _snapshot else ([] as Array[Channel])

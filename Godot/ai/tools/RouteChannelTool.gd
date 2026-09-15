@@ -7,20 +7,20 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Set a channel's output. 1 = Master, 0 = no output, 1000+ = hardware out, other ids = buses."
+	return "Set a channel's output. Master, None, Hardware Out [N], or another channel name (a bus)."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Source channel id"},
-			"output_channel_id": {
-				"type": "integer",
-				"description": "Destination: 0 none, 1 master, 2-999 bus, 1000+ hardware",
+			"channel": {"type": "string", "description": "Source channel name"},
+			"output": {
+				"type": "string",
+				"description": "Destination: a channel name, Master, None, or Hardware Out [N]",
 			},
 		},
-		"required": ["channel_id", "output_channel_id"],
+		"required": ["channel", "output"],
 	}
 
 
@@ -33,9 +33,12 @@ func execute(args: Dictionary) -> Dictionary:
 		return channel
 	if channel.is_master:
 		return fail("Cannot change Master's output with this tool")
-	var dest := int(args.get("output_channel_id", 1))
+	var dest_v = resolve_route_target(project, str(args.get("output", "")))
+	if dest_v is Dictionary:
+		return dest_v
+	var dest := int(dest_v)
 	if dest == channel.id:
 		return fail("Cannot route a channel to itself")
 	HistoryUtil.execute_property("Route Channel", channel, "set_route", channel.output_channel_id, dest)
-	var text := "Routed %s (%d) → %s" % [channel.name, channel.id, describe_route_target(project, dest)]
-	return ok_text(text, compact_channel(channel))
+	var text := "Routed %s → %s" % [channel.name, describe_route_target(project, dest)]
+	return ok_text(text, compact_channel(project, channel))

@@ -14,8 +14,7 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"clip": {"type": "string", "description": "Clip name (preferred) or clip_id"},
-			"clip_id": {"type": "string", "description": "Clip id if the name is ambiguous"},
+			"clip": {"type": "string", "description": "Clip name"},
 			"format": {
 				"type": "string",
 				"enum": ["auto", "drums", "pitched", "events"],

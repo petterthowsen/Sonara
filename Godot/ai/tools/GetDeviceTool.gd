@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Inspect one device (path or instance_id) and a page of parameters. Default limit 32. Optional group param/cc/all and query substring."
+	return "Inspect one device (path) and a page of parameters. Default limit 32. Optional group param/cc/all and query substring."
 
 
 func get_parameters() -> Dictionary:
@@ -15,8 +15,6 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Channel/device path"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 			"offset": {"type": "integer", "description": "Parameter page offset (default 0)"},
 			"limit": {"type": "integer", "description": "Page size (default 32)"},
 			"group": {
@@ -26,6 +24,7 @@ func get_parameters() -> Dictionary:
 			},
 			"query": {"type": "string", "description": "Case-insensitive parameter name substring"},
 		},
+		"required": ["path"],
 	}
 
 

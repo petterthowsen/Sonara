@@ -168,7 +168,8 @@ static func _create_return_channel(
 ) -> Channel:
 	var ch := Channel.new(project.next_channel_id)
 	project.next_channel_id += 1
-	ch.name = return_name
+	# A second drum machine's KICK return becomes "KICK 2" (names are project-unique).
+	ch.name = project.unique_name(return_name, null, null, "Return")
 	ch.channel_type = Channel.ChannelType.INSTRUMENT
 	ch.output_channel_id = parent.id
 	ch.color = parent.color
@@ -184,7 +185,7 @@ static func _create_return_channel(
 		track.type = Track.TrackType.INSTRUMENT
 		track.set_project_ref(project)
 		track.pair_mixer_channel(ch)
-		track.name = return_name
+		track.name = ch.name
 		project.add_track(track)
 		var after_track := project.get_channel_paired_track(after) if after else null
 		project.place_track(track, parent_track.id, after_track)
@@ -260,11 +261,13 @@ static func _unbind_pad_name(pad: DeviceInstance) -> void:
 
 
 ## Rename the pad return when the pad device is renamed.
+## The return may end up suffixed (`KICK 2`); nothing renames the pad back, so this can't loop,
+## and re-running it (ensure_all, re-binding) settles on the same name.
 static func _on_pad_name_changed(new_name: String, project: Project, pad: DeviceInstance) -> void:
 	if project == null or pad == null:
 		return
 	var ch := project.get_channel_by_id(pad.return_channel_id)
-	if ch:
+	if ch and ch.name != ch.unique_name_for(new_name):
 		ch.set_name(new_name)
 
 

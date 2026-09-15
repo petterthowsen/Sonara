@@ -152,6 +152,123 @@ static func resolve_asset(args: Dictionary) -> Asset:
 	return fake
 
 
+## Resolve an asset from `asset_path` or `device_id`, falling back to a fuzzy `search_assets`
+## lookup when there is no exact match. `{asset: Asset, note: String}` on success (`note` is
+## empty for an exact match), or `AiTool.fail(...)` with "did you mean" suggestions.
+## `type_filter` restricts the fuzzy search; when empty it is inferred from `device_id`
+## ("device") or the `asset_path` extension.
+static func resolve_asset_fuzzy(args: Dictionary, type_filter: String = "") -> Dictionary:
+	var exact := resolve_asset(args)
+	if exact:
+		return {"asset": exact, "note": ""}
+	var device_id := str(args.get("device_id", "")).strip_edges()
+	var asset_path := str(args.get("asset_path", "")).strip_edges()
+	var label := ""
+	var query := ""
+	var filter := type_filter
+	var noun := "asset"
+	if not device_id.is_empty():
+		label = device_id
+		query = _device_query(device_id)
+		noun = "device"
+		if filter.is_empty():
+			filter = "device"
+	elif not asset_path.is_empty():
+		label = asset_path
+		query = _asset_path_query(asset_path)
+		if filter.is_empty():
+			filter = type_filter_for_extension(asset_path)
+	else:
+		return AiTool.fail("Provide asset_path or device_id")
+	if AssetService == null:
+		return AiTool.fail("Unknown %s \"%s\"" % [noun, label])
+	var result := AssetService.search_assets(query, filter, 6)
+	var hits: Array = result.get("assets", [])
+	if hits.is_empty():
+		var hint := filter if not filter.is_empty() else noun
+		return AiTool.fail("Unknown %s \"%s\". Use search_assets type:%s." % [noun, label, hint])
+	# An exact display-name match wins even when other assets also match the fuzzy query,
+	# so "delay" still resolves when both "Delay" and "Tape Delay" exist.
+	var exact_hits: Array = []
+	for a in hits:
+		if a is Asset and str(a.get_display_name()).strip_edges().to_lower() == query.to_lower():
+			exact_hits.append(a)
+	var chosen: Array = exact_hits if exact_hits.size() == 1 else hits
+	if chosen.size() == 1:
+		var picked: Asset = chosen[0]
+		return {"asset": picked, "note": "Resolved \"%s\" → %s" % [label, _describe_asset(picked)]}
+	return AiTool.fail("Unknown %s \"%s\". Did you mean: %s?" % [noun, label, _format_candidates(hits)])
+
+
+## Fuzzy query for a device id: drop the `sonara.builtin.` prefix, `_`/`-`/`.` → spaces.
+static func _device_query(device_id: String) -> String:
+	var q := device_id
+	if q.begins_with("sonara.builtin."):
+		q = q.substr("sonara.builtin.".length())
+	return _normalize_query(q)
+
+
+## Fuzzy query for a path: file name without extension, plus the last folder name.
+static func _asset_path_query(path: String) -> String:
+	var file_name := path.get_file().get_basename()
+	var folder := path.get_base_dir().get_file()
+	var parts: PackedStringArray = []
+	if not folder.is_empty():
+		parts.append(folder)
+	parts.append(file_name)
+	return _normalize_query(" ".join(parts))
+
+
+static func _normalize_query(raw: String) -> String:
+	var q := raw.replace("_", " ").replace("-", " ").replace(".", " ")
+	while q.contains("  "):
+		q = q.replace("  ", " ")
+	return q.strip_edges()
+
+
+## `search_assets` type filter inferred from a path's extension, or "" if unknown.
+static func type_filter_for_extension(path: String) -> String:
+	match path.get_extension().to_lower():
+		"sfz":
+			return "sfz"
+		"sf2", "sf3":
+			return "soundfont"
+		"wav", "mp3", "ogg", "flac", "aiff", "aif":
+			return "audio"
+		"mid", "midi":
+			return "midi"
+		_:
+			return ""
+
+
+## `search_assets` type filter for the file types a device accepts, from its advertised extensions.
+static func type_filter_for_device(device: Device) -> String:
+	if device == null:
+		return ""
+	for e in device.supported_file_extensions:
+		if str(e).to_lower() == ".sfz":
+			return "sfz"
+	if not device.supported_file_extensions.is_empty():
+		return "audio"
+	return ""
+
+
+## `Name (id)` for a device asset, or the library-relative path for anything else.
+static func _describe_asset(asset: Asset) -> String:
+	if asset.type == Asset.TYPE.Device:
+		return "%s (%s)" % [asset.get_display_name(), asset.path]
+	return AiTool.relative_asset_path(asset.path)
+
+
+## Up to 5 candidates as `_describe_asset(...)`, comma-separated.
+static func _format_candidates(hits: Array) -> String:
+	var parts: PackedStringArray = []
+	for i in range(mini(hits.size(), 5)):
+		if hits[i] is Asset:
+			parts.append(_describe_asset(hits[i]))
+	return ", ".join(parts)
+
+
 ## Add one asset (device, SFZ, or drum pad sample) to a channel or container. Returns the
 ## new `DeviceInstance`, or `AiTool.fail(...)` on error.
 static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, args: Dictionary) -> Variant:

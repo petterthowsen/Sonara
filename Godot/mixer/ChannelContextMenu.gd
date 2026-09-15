@@ -66,6 +66,8 @@ func _on_color_changed(color : Color):
 func _on_label_changed(new_name : String):
 	if not channel: return
 	channel.set_name(new_name)
+	# Show the final name: it may have been suffixed ("Drums 2") to stay unique.
+	label.set_value(channel.name)
 
 func _on_active_toggled(_active : bool):
 	if not channel: return

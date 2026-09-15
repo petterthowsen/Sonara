@@ -7,17 +7,17 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Rename a track by id. If the track syncs name from its channel, the channel is renamed too."
+	return "Rename a track by name. If the track syncs name from its channel, the channel is renamed too."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"track_id": {"type": "integer", "description": "Track id"},
-			"name": {"type": "string", "description": "New display name"},
+			"track": {"type": "string", "description": "Track name"},
+			"new_name": {"type": "string", "description": "New display name"},
 		},
-		"required": ["track_id", "name"],
+		"required": ["track", "new_name"],
 	}
 
 
@@ -28,9 +28,14 @@ func execute(args: Dictionary) -> Dictionary:
 	var track = resolve_track(project, args)
 	if track is Dictionary:
 		return track
-	var new_name := str(args.get("name", "")).strip_edges()
+	var new_name := str(args.get("new_name", "")).strip_edges()
 	if new_name.is_empty():
-		return fail("name is required")
+		return fail("new_name is required")
 	var old_name: String = track.name
-	HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, new_name)
-	return ok_text("Renamed track \"%s\" to \"%s\" (track %d)" % [old_name, new_name, track.id], compact_track(track))
+	# Record the final (possibly suffixed) name so redo reapplies exactly that.
+	var final_name: String = track.unique_name_for(new_name)
+	HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, final_name)
+	var text := "Renamed \"%s\" to \"%s\"" % [old_name, track.name]
+	if track.name != new_name:
+		text += " (\"%s\" is taken or reserved)" % new_name
+	return ok_text(text, compact_track(track))

@@ -178,6 +178,9 @@ func _on_name_changed(new_name: String) -> void:
 	"""Update track name when label changes."""
 	if current_track:
 		current_track.name = new_name
+		# Show the final name: it may have been suffixed ("Drums 2") to stay unique.
+		if name_label:
+			name_label.set_value(current_track.name)
 
 
 func _on_delete_pressed() -> void:

@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List arrangement tracks: id, name, type, channel_id, clip_count, color."
+	return "List arrangement tracks: name, type, channel (only if it differs from the track name), clip_count, color."
 
 
 func execute(_args: Dictionary) -> Dictionary:

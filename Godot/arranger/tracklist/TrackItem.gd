@@ -458,8 +458,13 @@ func _on_mute_toggled(pressed: bool) -> void:
 func _on_label_value_changed(new_value: String) -> void:
 	"""Update track name when label is edited."""
 	if track:
-		HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, new_value)
-		logger.info("Track name changed to: ", new_value)
+		# Record the final (possibly suffixed) name so redo reapplies exactly that.
+		var final_name := track.unique_name_for(new_value)
+		HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, final_name)
+		# The setter emits nothing when the suffixed name equals the current one; show it anyway.
+		if label:
+			label.set_value(track.name)
+		logger.info("Track name changed to: ", track.name)
 
 
 ## Forward Tab/Shift+Tab from the name field so TrackList can rename the next track.

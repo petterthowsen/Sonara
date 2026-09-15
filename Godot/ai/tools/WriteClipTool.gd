@@ -14,8 +14,7 @@ func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"clip": {"type": "string", "description": "Clip name (preferred) or clip_id"},
-			"clip_id": {"type": "string", "description": "Clip id if the name is ambiguous"},
+			"clip": {"type": "string", "description": "Clip name"},
 			"text": {"type": "string", "description": "Grid body (with clip header) or event ops"},
 			"key": {"type": "string", "description": "Key if not in the header"},
 			"format": {

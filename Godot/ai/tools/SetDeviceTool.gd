@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Set bypass and/or display name on a device (path or instance_id). Undoable."
+	return "Set bypass and/or display name on a device by path. Undoable."
 
 
 func get_parameters() -> Dictionary:
@@ -15,11 +15,10 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Channel/device path"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 			"bypass": {"type": "boolean", "description": "True to bypass (disable) the device"},
 			"name": {"type": "string", "description": "New instance name (sibling-unique)"},
 		},
+		"required": ["path"],
 	}
 
 

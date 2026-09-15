@@ -378,6 +378,8 @@ func _stop_resize():
 
 func _on_title_value_changed(new_name : String) -> void:
 	channel.set_name(new_name)
+	# Show the final name: it may have been suffixed ("Drums 2") to stay unique.
+	title.set_value(channel.name)
 
 func _on_header_gui_input(event : InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:

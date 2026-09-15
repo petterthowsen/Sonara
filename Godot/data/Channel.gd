@@ -250,14 +250,23 @@ func sync_to_engine() -> void:
 # ============================================================================
 # PROPERTY SETTERS (with audio engine sync where appropriate)
 # ============================================================================
+## Rename; suffixed (`Drums 2`) when another track/channel uses the name or it is reserved.
 func set_name(new_name : String):
-	name = new_name
+	name = unique_name_for(new_name)
 	name_changed.emit(name)
 	
 	# Update all routed tracks that sync name from channel
 	for track in routed_tracks:
 		if track.name_by_channel:
-			track.apply_channel_name(new_name)
+			track.apply_channel_name(name)
+
+
+## The name `set_name(desired)` would apply. Paired tracks don't count as a collision.
+func unique_name_for(desired: String) -> String:
+	var project := get_project()
+	if project == null:
+		return desired
+	return project.unique_name(desired, null, self, "Channel")
 
 
 func set_color(new_color : Color):

@@ -7,14 +7,14 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List named clips and every timeline placement. Same name = same clip (duplicates share notes). Optional track_id filter."
+	return "List named clips and every timeline placement. Same name = same clip (duplicates share notes). Optional track name filter."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"track_id": {"type": "integer", "description": "Only clips placed on this track"},
+			"track": {"type": "string", "description": "Only clips placed on this track"},
 		},
 	}
 
@@ -25,7 +25,7 @@ func execute(args: Dictionary) -> Dictionary:
 		return project_v
 	var project: Project = project_v
 	var filter_track: Track = null
-	if args.has("track_id"):
+	if args.has("track"):
 		var t = resolve_track(project, args)
 		if t is Dictionary:
 			return t

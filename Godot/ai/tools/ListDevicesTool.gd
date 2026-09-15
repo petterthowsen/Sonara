@@ -7,14 +7,14 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List devices as nested rows: path, name, instance_id, position, and (when set) bypass, loaded_file, slot_note, children. Optional channel_id; otherwise the focused channel, or all channels."
+	return "List devices as nested rows: path, name, position, and (when set) bypass, loaded_file, slot_note, children. Optional channel; otherwise the focused channel, or all channels."
 
 
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
 		"properties": {
-			"channel_id": {"type": "integer", "description": "Mixer channel id (omit for focused or all)"},
+			"channel": {"type": "string", "description": "Mixer channel name (omit for focused or all)"},
 		},
 	}
 
@@ -23,7 +23,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var project = require_project()
 	if project is Dictionary:
 		return project
-	if args.has("channel_id"):
+	if args.has("channel"):
 		var channel = resolve_channel(project, args)
 		if channel is Dictionary:
 			return channel
@@ -45,4 +45,4 @@ func _channel_payload(project: Project, channel: Channel) -> Dictionary:
 	for d in channel.devices:
 		if d is DeviceInstance and d.device:
 			devices.append(compact_device(project, d))
-	return {"channel_id": channel.id, "channel": channel.name, "devices": devices}
+	return {"channel": channel.name, "devices": devices}

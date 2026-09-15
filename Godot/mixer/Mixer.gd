@@ -291,13 +291,11 @@ func _on_channel_unnest_requested(channel: Channel) -> void:
 	MixerChannelDrag.commit(current_project, channel, null)
 
 
+## Delete a channel from the context menu, with its linked tracks, as one undoable step.
 func _on_channel_delete_requested(channel: Channel) -> void:
-	"""Handle delete request from context menu."""
-	if not current_project:
+	if not current_project or channel == null or channel.is_master:
 		return
-	
-	# Confirm deletion (skip for now, directly delete)
-	current_project.remove_channel(channel.id)
+	HistoryUtil.execute(ChannelDeleteCommand.new(current_project, channel))
 
 
 func deselect_channel(ch : Channel, erase := true, emit_deselect := true, emit_changed := true):

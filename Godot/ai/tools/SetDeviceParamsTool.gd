@@ -15,15 +15,13 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Channel/device path"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 			"params": {
 				"type": "object",
 				"description": "Map of parameter name to value",
 				"additionalProperties": true,
 			},
 		},
-		"required": ["params"],
+		"required": ["path", "params"],
 	}
 
 

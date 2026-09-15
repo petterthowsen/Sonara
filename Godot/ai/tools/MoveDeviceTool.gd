@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Reorder a device or move it into a container. Use path/instance_id, to_position, and optional parent path. Undoable."
+	return "Reorder a device or move it into a container. Use path, to_position, and optional parent path. Undoable."
 
 
 func get_parameters() -> Dictionary:
@@ -15,12 +15,10 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"path": {"type": "string", "description": "Device to move"},
-			"instance_id": {"type": "string", "description": "Device instance id"},
-			"channel_id": {"type": "integer", "description": "Channel id when path is relative"},
 			"to_position": {"type": "integer", "description": "Index in the destination host, -1 appends"},
 			"parent": {"type": "string", "description": "Destination container path; omit to stay on the same host"},
-			"parent_instance_id": {"type": "string", "description": "Destination container instance_id"},
 		},
+		"required": ["path"],
 	}
 
 
@@ -36,7 +34,7 @@ func execute(args: Dictionary) -> Dictionary:
 	if channel == null:
 		return fail("Channel not found for device")
 	var to_parent: DeviceInstance = inst.get_parent_device()
-	if args.has("parent") or args.has("parent_instance_id"):
+	if args.has("parent"):
 		var parent_v = resolve_optional_parent(project, args)
 		if parent_v is Dictionary:
 			return parent_v

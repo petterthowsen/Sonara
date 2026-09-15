@@ -19,7 +19,7 @@ func execute(_args: Dictionary) -> Dictionary:
 		tracks.append(compact_track(t))
 	var channels: Array = []
 	for c in project.channels:
-		channels.append(compact_channel(c))
+		channels.append(compact_channel(project, c))
 	return ok({
 		"name": project.project_name,
 		"tempo": project.tempo,
