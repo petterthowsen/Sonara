@@ -90,7 +90,8 @@ static func ensure_pad_return(
 		return existing
 
 	var after := _pad_after_sibling(project, drum, pad)
-	var ch := _create_return_channel(project, channel, pad.get_display_name(), after, bus_index)
+	# Don't create tracks for drum machine pads - the device routes MIDI internally
+	var ch := _create_return_channel(project, channel, pad.get_display_name(), after, bus_index, false)
 	pad.return_channel_id = ch.id
 	_bind_pad_name(project, pad)
 	sync_aux_map_to_engine(channel)
@@ -159,12 +160,15 @@ static func _ensure_tree(
 
 
 ## Create a nested INSTRUMENT return under `parent`, with optional timeline track.
+## When `create_track` is false, only the mixer channel is created (used for drum pads
+## where the device routes MIDI internally).
 static func _create_return_channel(
 	project: Project,
 	parent: Channel,
 	return_name: String,
 	after: Channel,
-	bus_index: int
+	bus_index: int,
+	create_track: bool = true
 ) -> Channel:
 	var ch := Channel.new(project.next_channel_id)
 	project.next_channel_id += 1
@@ -178,17 +182,18 @@ static func _create_return_channel(
 	ch.parent_channel_id = parent.id
 	project.add_channel(ch)
 	project.nest_channel(ch, parent, after)
-	var parent_track := project.get_channel_paired_track(parent)
-	if parent_track:
-		var track := Track.new(project.next_track_id)
-		project.next_track_id += 1
-		track.type = Track.TrackType.INSTRUMENT
-		track.set_project_ref(project)
-		track.pair_mixer_channel(ch)
-		track.name = ch.name
-		project.add_track(track)
-		var after_track := project.get_channel_paired_track(after) if after else null
-		project.place_track(track, parent_track.id, after_track)
+	if create_track:
+		var parent_track := project.get_channel_paired_track(parent)
+		if parent_track:
+			var track := Track.new(project.next_track_id)
+			project.next_track_id += 1
+			track.type = Track.TrackType.INSTRUMENT
+			track.set_project_ref(project)
+			track.pair_mixer_channel(ch)
+			track.name = ch.name
+			project.add_track(track)
+			var after_track := project.get_channel_paired_track(after) if after else null
+			project.place_track(track, parent_track.id, after_track)
 	return ch
 
 

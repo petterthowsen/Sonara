@@ -27,7 +27,7 @@
 - [ ] Multi-in and multi-out for devices
   - [x] Drum Machine pads feed nested child mixer channels (extra-out buses before the child device chain)
   - [ ] CLAP extra output ports into shared memory (child return channels are created when `audio_out_channels > 2`)
-  - [ ] Creating multi-out channels (like Drum Machine) should not create tracks for those sub channels, since the device routes MIDI input itself
+  - [x] Creating multi-out channels (like Drum Machine) should not create tracks for those sub channels, since the device routes MIDI input itself
   - [ ] Multi-out devices do not show the child device on the device line for that child channel (neither in device lane nor in mixer channel)
 - [ ] Add support for enum parameter type for builtins
 - [x] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)

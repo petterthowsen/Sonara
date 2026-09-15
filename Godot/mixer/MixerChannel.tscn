@@ -13,7 +13,7 @@
 [ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
 [ext_resource type="Script" uid="uid://c5hc8g1r5wo5i" path="res://mixer/MixerChannelChildren.gd" id="9_an1hh"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
-[ext_resource type="Script" path="res://mixer/PanControl.gd" id="11_panctl"]
+[ext_resource type="Script" uid="uid://cv2bu0k4y0j80" path="res://mixer/PanControl.gd" id="11_panctl"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -142,7 +142,7 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
-custom_minimum_size = Vector2(136, 0)
+custom_minimum_size = Vector2(100, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_right = 136.0
@@ -179,6 +179,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 
 [node name="SmartLineEdit" parent="HBox/VBox/Header/VBox" unique_id=1058095684 instance=ExtResource("2_xa46q")]
 layout_mode = 1
@@ -186,17 +187,19 @@ anchors_preset = 8
 anchor_left = 0.5
 anchor_right = 0.5
 offset_left = -50.0
-offset_top = -17.0
+offset_top = -24.0
 offset_right = 50.0
-offset_bottom = 17.0
+offset_bottom = 24.0
 size_flags_vertical = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
+text = "this is very a long name that wraps"
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
+clip_text = true
 text_overrun_behavior = 4
 
 [node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1" unique_id=1087718571]
@@ -423,7 +426,7 @@ script = ExtResource("9_an1hh")
 layout_mode = 2
 
 [node name="ParentHeader" type="Panel" parent="HBox/Children/VBoxContainer" unique_id=1082830830]
-custom_minimum_size = Vector2(30, 78)
+custom_minimum_size = Vector2(30, 6)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ea3ft")
 

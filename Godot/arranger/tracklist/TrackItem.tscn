@@ -4,6 +4,9 @@
 [ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="2_shsim"]
 [ext_resource type="Script" uid="uid://bj2urc8velriu" path="res://components/DropZone.gd" id="3_q68hb"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_vc4i6"]
+[ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="4_v1xsl"]
+[ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="5_mscrg"]
+[ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="6_ru4rj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
@@ -166,6 +169,20 @@ theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859
 theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
 toggle_mode = true
 text = "M"
+
+[node name="FoldoutToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=562567826]
+visible = false
+layout_mode = 2
+theme_override_constants/h_separation = 0
+theme_override_font_sizes/font_size = 24
+toggle_mode = true
+icon = ExtResource("4_v1xsl")
+flat = true
+icon_alignment = 2
+vertical_icon_alignment = 0
+script = ExtResource("5_mscrg")
+icon_default = ExtResource("4_v1xsl")
+icon_pressed = ExtResource("6_ru4rj")
 
 [node name="Bottom" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=1010182208]
 layout_mode = 2
