@@ -28,6 +28,9 @@ var device_registry: DeviceRegistry = DeviceRegistry.new()
 # All discovered assets (keyed by path for fast lookup)
 var _assets_by_path: Dictionary[String, Asset] = {}
 
+## Library roots for converting asset paths to/from the relative form the AI sees.
+var _roots: Array[Dictionary] = []
+
 # Asset metadata cache (favorites, tags, last_used)
 # Structure: { "asset_path": { "favorite": bool, "tags": Array, "last_used": int } }
 var _asset_metadata: Dictionary = {}
@@ -106,6 +109,7 @@ func _initialize_providers() -> void:
 	# Users can manually trigger scan via Edit > Scan Assets
 	logger.info("Skipping initial scan, relying on cached data")
 	_is_ready = true
+	_rebuild_roots()
 
 
 ## Trigger scan on all providers
@@ -164,31 +168,54 @@ func find_asset(path: String) -> Asset:
 	return _assets_by_path.get(path)
 
 
-## Fuzzy name/tag/path search (AssetSearch, same scoring as the Browser). Best score first,
-## then favorites, last_used and name. An empty query lists every asset of the type.
-func search_assets(query: String, type_filter: String = "", limit: int = 25) -> Array[Asset]:
+## Library roots used to convert asset paths to/from the relative form the AI sees.
+func get_roots() -> Array[Dictionary]:
+	return _roots
+
+
+## Library-relative path for an asset, e.g. "SFZ/VPO3/Strings/x.sfz". Device assets pass through unchanged.
+func relative_path(asset: Asset) -> String:
+	if asset == null:
+		return ""
+	if asset.type == Asset.TYPE.Device:
+		return asset.path
+	return AssetPaths.to_relative(asset.path, _roots)
+
+
+## Resolve an asset from either an absolute or a library-relative path.
+func resolve_asset(path: String) -> Asset:
+	var asset := find_asset(path)
+	if asset:
+		return asset
+	var abs_path := AssetPaths.to_absolute(path, _roots)
+	if abs_path.is_empty():
+		return null
+	return find_asset(abs_path)
+
+
+## Rebuild library roots from the samples and SFZ search path settings.
+func _rebuild_roots() -> void:
+	var dirs: Array = []
+	dirs.append_array(Settings.get_value("assets/samples/paths"))
+	dirs.append_array(Settings.get_value("assets/sfz/paths"))
+	_roots = AssetPaths.build_roots(dirs)
+
+
+## Word-matched name/tag/path search for the AI `search_assets` tool (`AssetSearch.rank_tokens`).
+## Every query word must match. Returns `{"assets": Array[Asset], "total": int}`, best score first.
+func search_assets(query: String, type_filter: String = "", limit: int = 25, offset: int = 0) -> Dictionary:
 	var cap := clampi(limit, 1, 100)
 	var want := _type_from_filter(type_filter)
 	var candidates: Array[Asset] = []
 	for asset in _assets_by_path.values():
 		if want < 0 or asset.type == want:
 			candidates.append(asset)
-	var ranked := AssetSearch.rank(candidates, query, true)
-	ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		if not is_equal_approx(a.score, b.score):
-			return a.score > b.score
-		var aa: Asset = a.asset
-		var bb: Asset = b.asset
-		if aa.favorite != bb.favorite:
-			return aa.favorite
-		if aa.last_used != bb.last_used:
-			return aa.last_used > bb.last_used
-		return aa.get_display_name().to_lower() < bb.get_display_name().to_lower()
-	)
+	var ranked := AssetSearch.rank_tokens(candidates, query, relative_path)
 	var hits: Array[Asset] = []
-	for i in range(mini(cap, ranked.size())):
+	var start := maxi(0, offset)
+	for i in range(start, mini(start + cap, ranked.size())):
 		hits.append(ranked[i].asset)
-	return hits
+	return {"assets": hits, "total": ranked.size()}
 
 
 func _type_from_filter(type_filter: String) -> int:
@@ -409,8 +436,10 @@ func _on_setting_changed(key: String, value) -> void:
 				provider._scan_interval = float(value)
 	elif key == "assets/samples/paths":
 		_rescan_provider(FileSystemAssetProvider)
+		_rebuild_roots()
 	elif key == "assets/sfz/paths":
 		_rescan_provider(SfzAssetProvider)
+		_rebuild_roots()
 
 
 ## Re-scan one provider so newly added search paths show up immediately.

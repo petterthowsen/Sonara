@@ -45,6 +45,21 @@ static func fail(message: String) -> Dictionary:
 	return {"ok": false, "error": message}
 
 
+## Success payload with plain-text model content. `data` is optional structured
+## output for tests and the UI; it is never sent to the model when `text` is present.
+static func ok_text(text: String, data: Dictionary = {}) -> Dictionary:
+	return {"ok": true, "text": text, "data": data}
+
+
+## Model-facing content for a tool result: text if present, else JSON. Never throws.
+static func to_model_content(result: Dictionary) -> String:
+	if not result.get("ok", false):
+		return "Error: %s" % str(result.get("error", "Unknown error"))
+	if result.has("text"):
+		return str(result.text)
+	return JSON.stringify(result)
+
+
 ## Open project, or a fail dict if none.
 static func require_project() -> Variant:
 	if Sonara and Sonara.editor and Sonara.editor.project:
@@ -397,11 +412,33 @@ static func compact_device(project: Project, inst: DeviceInstance) -> Dictionary
 		"name": inst.get_display_name(),
 		"device_id": inst.device.device_id if inst.device else "",
 		"category": category,
-		"bypass": not inst.enabled,
-		"loaded_file": inst.loaded_file_path,
 		"position": inst.position,
-		"children": kids,
 	}
+	if not inst.enabled:
+		row["bypass"] = true
+	if not inst.loaded_file_path.is_empty():
+		row["loaded_file"] = relative_asset_path(inst.loaded_file_path)
+	if not kids.is_empty():
+		row["children"] = kids
 	if inst.slot_note >= 0:
 		row["slot_note"] = inst.slot_note
 	return row
+
+
+## Library-relative form of an absolute asset path, for display to the model.
+static func relative_asset_path(path: String) -> String:
+	if AssetService == null:
+		return path
+	return AssetPaths.to_relative(path, AssetService.get_roots())
+
+
+## `Master`, `no output`, `hardware out N`, or the channel's name/id.
+static func describe_route_target(project: Project, channel_id: int) -> String:
+	if channel_id == 0:
+		return "no output"
+	if channel_id == 1:
+		return "Master"
+	if channel_id >= 1000:
+		return "hardware out %d" % channel_id
+	var c := project.get_channel_by_id(channel_id)
+	return "%s (%d)" % [c.name, c.id] if c else str(channel_id)

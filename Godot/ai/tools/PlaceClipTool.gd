@@ -57,4 +57,6 @@ func execute(args: Dictionary) -> Dictionary:
 	HistoryUtil.execute(ClipInstanceCreateCommand.new(
 		track, clip, start, duration, project, false
 	))
-	return ok(compact_clip(project, clip))
+	var pos := ClipTextTime.format_bbt(start, project.ppq, project.time_numerator, project.time_denominator)
+	var text := "Placed \"%s\" on %s at %s" % [clip.name, track.name, pos]
+	return ok_text(text, compact_clip(project, clip))

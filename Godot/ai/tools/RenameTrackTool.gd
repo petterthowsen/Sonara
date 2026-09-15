@@ -31,5 +31,6 @@ func execute(args: Dictionary) -> Dictionary:
 	var new_name := str(args.get("name", "")).strip_edges()
 	if new_name.is_empty():
 		return fail("name is required")
+	var old_name: String = track.name
 	HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, new_name)
-	return ok(compact_track(track))
+	return ok_text("Renamed track \"%s\" to \"%s\" (track %d)" % [old_name, new_name, track.id], compact_track(track))

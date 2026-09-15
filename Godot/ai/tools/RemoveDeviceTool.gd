@@ -34,5 +34,6 @@ func execute(args: Dictionary) -> Dictionary:
 	if channel == null:
 		return fail("Channel not found for device")
 	var snapshot := compact_device(project, inst)
+	var path: String = snapshot.path
 	HistoryUtil.execute(DeviceRemoveCommand.new(channel, inst))
-	return ok(snapshot)
+	return ok_text("Removed %s" % path, snapshot)

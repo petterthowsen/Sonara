@@ -31,4 +31,5 @@ func execute(args: Dictionary) -> Dictionary:
 	HistoryUtil.execute(cmd)
 	if cmd.channel == null:
 		return fail("Failed to create bus")
-	return ok(compact_channel(cmd.channel))
+	var text := "Created bus \"%s\" (channel %d)" % [cmd.channel.name, cmd.channel.id]
+	return ok_text(text, compact_channel(cmd.channel))

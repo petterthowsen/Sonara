@@ -52,6 +52,7 @@ static func create_default() -> ToolRegistry:
 	reg.register(ListChannelsTool.new())
 	reg.register(ListDevicesTool.new())
 	reg.register(SearchAssetsTool.new())
+	reg.register(ListAssetsTool.new())
 	reg.register(CreateTrackTool.new())
 	reg.register(RenameTrackTool.new())
 	reg.register(SetTrackColorTool.new())

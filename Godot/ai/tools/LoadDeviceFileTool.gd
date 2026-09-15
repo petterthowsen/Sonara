@@ -34,7 +34,7 @@ func execute(args: Dictionary) -> Dictionary:
 	if AssetService == null:
 		return fail("AssetService is not available")
 	var asset_path := str(args.get("asset_path", "")).strip_edges()
-	var asset := AssetService.find_asset(asset_path)
+	var asset := AssetService.resolve_asset(asset_path)
 	if asset == null:
 		return fail("Asset not found: %s" % asset_path)
 	if not DeviceDropUtil.can_drop_file_on_device(inst, asset):
@@ -42,4 +42,5 @@ func execute(args: Dictionary) -> Dictionary:
 	var old_path := inst.loaded_file_path
 	var cmd := PropertyCommand.new("Load Device File", inst, "load_file", old_path, asset.path)
 	HistoryUtil.execute(cmd)
-	return ok(compact_device(project, inst))
+	var data := compact_device(project, inst)
+	return ok_text("Loaded into %s" % data.path, data)

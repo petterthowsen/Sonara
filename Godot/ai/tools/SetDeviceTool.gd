@@ -32,17 +32,21 @@ func execute(args: Dictionary) -> Dictionary:
 		return inst_v
 	var inst: DeviceInstance = inst_v
 	var cmds: Array[Command] = []
+	var changes: Array[String] = []
 	if args.has("bypass"):
 		var enabled := not bool(args.bypass)
 		if enabled != inst.enabled:
 			cmds.append(PropertyCommand.new("Set Bypass", inst, "set_enabled", inst.enabled, enabled))
+			changes.append("bypassed" if not enabled else "unbypassed")
 	if args.has("name"):
 		var new_name := str(args.name).strip_edges()
 		if new_name.is_empty():
 			return fail("name must not be empty")
 		if new_name != inst.name:
 			cmds.append(PropertyCommand.new("Rename Device", inst, "set_name", inst.name, new_name))
-	if cmds.is_empty():
-		return ok(compact_device(project, inst))
-	HistoryUtil.execute_many("Set Device", cmds)
-	return ok(compact_device(project, inst))
+			changes.append("renamed to \"%s\"" % new_name)
+	if not cmds.is_empty():
+		HistoryUtil.execute_many("Set Device", cmds)
+	var data := compact_device(project, inst)
+	var text := "%s: %s" % [data.path, ", ".join(changes)] if not changes.is_empty() else "%s: no change" % data.path
+	return ok_text(text, data)

@@ -39,4 +39,5 @@ func execute(args: Dictionary) -> Dictionary:
 	var amount := float(args.get("amount_db", -12.0))
 	var pre := bool(args.get("pre_fader", false))
 	HistoryUtil.execute(SendAddCommand.new(channel, target_id, amount, pre))
-	return ok(compact_channel(channel))
+	var text := "Added send %s → %s (%g dB%s)" % [channel.name, target.name, amount, ", pre-fader" if pre else ""]
+	return ok_text(text, compact_channel(channel))

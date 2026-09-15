@@ -33,4 +33,4 @@ func execute(args: Dictionary) -> Dictionary:
 	if color.a <= 0.0 and not hex.to_lower().ends_with("00"):
 		return fail("Invalid hex color: %s" % hex)
 	HistoryUtil.execute_property("Set Track Color", track, "set_color", track.get_color(), color)
-	return ok(compact_track(track))
+	return ok_text("Set %s's color to %s" % [track.name, hex], compact_track(track))

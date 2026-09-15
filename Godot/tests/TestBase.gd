@@ -12,6 +12,10 @@ var _failures: int = 0
 
 
 func _init() -> void:
+	# Autoload singletons (Sonara, etc.) aren't resolvable as bare identifiers
+	# until the tree has processed at least one frame. Wait one out so suites
+	# that touch autoload-referencing scripts (e.g. AiTool) compile cleanly.
+	await process_frame
 	print("=== %s ===" % suite_name())
 	run_tests()
 	if _failures == 0:

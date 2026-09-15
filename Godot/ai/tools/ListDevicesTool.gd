@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "List devices as nested rows: path, name, instance_id, bypass, loaded_file, slot_note. Optional channel_id; otherwise the focused channel, or all channels."
+	return "List devices as nested rows: path, name, instance_id, position, and (when set) bypass, loaded_file, slot_note, children. Optional channel_id; otherwise the focused channel, or all channels."
 
 
 func get_parameters() -> Dictionary:

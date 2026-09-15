@@ -37,4 +37,5 @@ func execute(args: Dictionary) -> Dictionary:
 	if dest == channel.id:
 		return fail("Cannot route a channel to itself")
 	HistoryUtil.execute_property("Route Channel", channel, "set_route", channel.output_channel_id, dest)
-	return ok(compact_channel(channel))
+	var text := "Routed %s (%d) → %s" % [channel.name, channel.id, describe_route_target(project, dest)]
+	return ok_text(text, compact_channel(channel))

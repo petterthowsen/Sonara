@@ -57,13 +57,13 @@ func execute(args: Dictionary) -> Dictionary:
 	var parent: DeviceInstance = parent_v
 	var specs: Array = DeviceToolUtil.collect_pad_specs(args)
 	if specs.is_empty():
-		var asset := _resolve_asset(args)
+		var asset := DeviceToolUtil.resolve_asset(args)
 		if asset == null:
 			return fail("Provide asset_path, samples, asset_paths, or device_id")
 		specs.append({"asset_path": asset.path, "name": str(args.get("name", "")).strip_edges(), "note": int(args.get("note", -1)), "_asset": asset})
 	var added: Array = []
 	for spec in specs:
-		var one = _add_one(project, channel, parent, spec, args)
+		var one = DeviceToolUtil.add_one(channel, parent, spec, args)
 		if one is Dictionary and one.get("ok") == false:
 			if added.is_empty():
 				return one
@@ -73,98 +73,26 @@ func execute(args: Dictionary) -> Dictionary:
 	if added.is_empty():
 		return fail("Device was not added")
 	if added.size() == 1:
-		return ok(compact_device(project, added[0]))
+		return _one_result(project, channel, added[0])
+	return _several_result(project, channel, parent, added)
+
+
+## `Added <name> to <channel> → path "<path>" (id <id>)`, with `, pad note N` for drum pads.
+func _one_result(project: Project, channel: Channel, inst: DeviceInstance) -> Dictionary:
+	var data := compact_device(project, inst)
+	var text := "Added %s to %s → path \"%s\" (id %s)" % [inst.get_display_name(), channel.name, data.path, inst.id]
+	if inst.slot_note >= 0:
+		text += ", pad note %d" % inst.slot_note
+	return ok_text(text, data)
+
+
+## `Added N pads to <parent path>:` then `- <name> (note N, id …)` per pad.
+func _several_result(project: Project, channel: Channel, parent: DeviceInstance, added: Array) -> Dictionary:
+	var host_path := parent.address_path(project) if parent else channel.name
 	var rows: Array = []
+	var lines: Array = ["Added %d pads to %s:" % [added.size(), host_path]]
 	for inst in added:
 		rows.append(compact_device(project, inst))
-	return ok({"devices": rows, "count": rows.size()})
-
-
-## Add one asset (device, SFZ, or drum pad sample).
-func _add_one(_project: Project, channel: Channel, parent: DeviceInstance, spec: Dictionary, args: Dictionary) -> Variant:
-	var asset: Asset = spec.get("_asset", null)
-	if asset == null:
-		asset = _resolve_asset({"asset_path": spec.get("asset_path", "")})
-	if asset == null:
-		return fail("Asset not found: %s" % str(spec.get("asset_path", "")))
-	if parent:
-		if not DeviceDropUtil.can_drop_on_container(channel, parent, asset):
-			return fail("Cannot add that asset into %s" % parent.get_display_name())
-	elif not DeviceDropUtil.can_drop_asset_on_channel(channel, asset):
-		if asset.type == Asset.TYPE.Audio:
-			return fail("Audio samples go on a Drum Machine: pass parent (e.g. Drums/Drum Machine)")
-		return fail("Cannot add that asset to channel %d (%s)" % [channel.id, channel.name])
-	var host: Array[DeviceInstance] = parent.children if parent else channel.devices
-	var before: Dictionary = {}
-	for d in host:
-		if d is DeviceInstance:
-			before[d.id] = true
-	var position := int(args.get("position", -1))
-	if parent and asset.type == Asset.TYPE.Audio and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
-		var identity := DeviceToolUtil.resolve_pad_identity(spec, asset.get_display_name(), _used_notes(parent))
-		var note := int(identity.note)
-		if note < 0:
-			note = parent.next_free_drum_note()
-		DeviceDropUtil.drop_on_drum_pad(channel, parent, note, asset)
-		var pad := _find_added(host, before)
-		if pad == null:
-			return fail("Sample pad was not added")
-		if not str(identity.name).is_empty():
-			pad.set_name(str(identity.name))
-		return pad
-	elif parent:
-		DeviceDropUtil.drop_on_container(channel, parent, asset)
-	else:
-		DeviceDropUtil.drop_asset(channel, asset, position, parent)
-	var added := _find_added(host, before)
-	if added == null or added.device == null:
-		return fail("Device was not added")
-	var extra_name := str(spec.get("name", "")).strip_edges()
-	if not extra_name.is_empty():
-		added.set_name(extra_name)
-	return added
-
-
-## MIDI notes already used by drum-machine children.
-func _used_notes(parent: DeviceInstance) -> Dictionary:
-	var used := {}
-	if parent == null:
-		return used
-	for child in parent.children:
-		if child and child.slot_note >= 0:
-			used[child.slot_note] = true
-	return used
-
-
-## First host child whose id was not in `before`.
-func _find_added(host: Array, before: Dictionary) -> DeviceInstance:
-	for d in host:
-		if d is DeviceInstance and not before.has(d.id):
-			return d
-	return null
-
-
-func _resolve_asset(args: Dictionary) -> Asset:
-	if AssetService == null:
-		return null
-	var path := str(args.get("asset_path", "")).strip_edges()
-	if not path.is_empty():
-		var by_path := AssetService.find_asset(path)
-		if by_path:
-			return by_path
-	var device_id := str(args.get("device_id", "")).strip_edges()
-	if device_id.is_empty():
-		device_id = path
-	if device_id.is_empty():
-		return null
-	var by_id := AssetService.find_asset(device_id)
-	if by_id:
-		return by_id
-	var device := AssetService.get_device(device_id)
-	if device == null:
-		return null
-	var fake := Asset.new()
-	fake.type = Asset.TYPE.Device
-	fake.path = device.device_id
-	fake.name = device.name
-	return fake
+		var note_part := ("note %d, " % inst.slot_note) if inst.slot_note >= 0 else ""
+		lines.append("- %s (%sid %s)" % [inst.get_display_name(), note_part, inst.id])
+	return ok_text("\n".join(lines), {"devices": rows, "count": rows.size()})

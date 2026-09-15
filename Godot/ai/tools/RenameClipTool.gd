@@ -37,5 +37,6 @@ func execute(args: Dictionary) -> Dictionary:
 	for other in project.clips.values():
 		if other is Clip and other != clip and other.name.to_lower() == new_name.to_lower():
 			return fail("A clip named '%s' already exists" % other.name)
+	var old_name := clip.name
 	HistoryUtil.execute_property("Rename Clip", clip, "set_name", clip.name, new_name)
-	return ok(compact_clip(project, clip))
+	return ok_text("Renamed clip \"%s\" to \"%s\"" % [old_name, new_name], compact_clip(project, clip))

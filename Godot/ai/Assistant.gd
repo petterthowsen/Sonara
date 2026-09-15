@@ -256,7 +256,7 @@ func _run_turn() -> void:
 			tool_started.emit(tc.name, tc.arguments)
 			var result: Dictionary = await registry.execute(tc.name, tc.arguments)
 			tool_finished.emit(tc.name, result)
-			var tool_msg := ChatTypes.ORChatMessage.tool_result(tc.id, JSON.stringify(result))
+			var tool_msg := ChatTypes.ORChatMessage.tool_result(tc.id, AiTool.to_model_content(result))
 			conv.messages.append(tool_msg)
 		if hist:
 			hist.end_macro()

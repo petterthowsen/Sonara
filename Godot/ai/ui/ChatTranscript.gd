@@ -89,7 +89,7 @@ func add_tool_call(tool_name: String, args: Dictionary) -> void:
 
 ## Show a collapsed block for a tool result or error.
 func add_tool_result(tool_name: String, result: Dictionary) -> void:
-	var body := JSON.stringify(result, "\t")
+	var body := AiTool.to_model_content(result)
 	_list.add_child(CollapsibleBlock.new("result", "Result · %s" % tool_name, body))
 	_scroll_to_end()
 

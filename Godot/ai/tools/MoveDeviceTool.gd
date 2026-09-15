@@ -45,4 +45,5 @@ func execute(args: Dictionary) -> Dictionary:
 	if not DeviceDropUtil.can_drop_instance_on_host(channel, inst, to_parent):
 		return fail("Cannot move that device onto the destination host")
 	DeviceDropUtil.drop_instance(channel, inst, to_parent, to_position)
-	return ok(compact_device(project, inst))
+	var data := compact_device(project, inst)
+	return ok_text("Moved %s to \"%s\"" % [inst.get_display_name(), data.path], data)

@@ -28,5 +28,6 @@ func execute(args: Dictionary) -> Dictionary:
 	if track is Dictionary:
 		return track
 	var snapshot := compact_track(track)
+	var name: String = snapshot.name
 	HistoryUtil.execute(TrackDeleteCommand.new(project, track))
-	return ok(snapshot)
+	return ok_text("Deleted track \"%s\"" % name, snapshot)

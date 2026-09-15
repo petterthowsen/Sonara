@@ -63,6 +63,8 @@ Done:
 - [ ] Sync selection of tracks and linked channels bidirectionally
   - [ ] Might make this behavior adjustable in settings
 - [ ] Delete, Duplicate Channels
+- [ ] Deleting a track also deletes its linked channel (and vice versa), as one undoable step. Currently `TrackDeleteCommand` orphans the channel, and mixer delete isn't undoable and reroutes the linked track to Master (see docs/ai-names-and-placement-plan.md Phase 2)
+- [ ] Enforce unique track/channel names (auto-suffix "Drums 2", dedupe on load) (see docs/ai-names-and-placement-plan.md Phase 4)
 - [ ] Duplicate track
 - [ ] Investigate metering in mixer and track UI: improvements, whether the current approach is sound, and any bugs. Lerp/smooth the peak? also should probably add text showing the peak value along with the line
   - also: (`components/meter/Meter.gd`): `queue_redraw()` runs every frame, even when hidden or settled, with a big and a compact meter per strip, and the lerp isn't delta-scaled. Return early when `not is_visible_in_tree()` and stop processing when settled, as `Volumeter.gd` already does.
@@ -151,7 +153,8 @@ Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 - [x] Button in chat UI: on click, open a popup showing the last rendered system prompt
 - [x] Format code and JSON in chat messages (especially tool call / tool result bubbles) for readability and easy dev UX
 - [ ] Attach selection as prompt context (timeline range, selected clip(s), selected track, selected mixer channel); show a glowing badge in the chat composer for each active context that will be sent on the next message depending on selected element. Make a badge component that is a rounded colored pin with optional icon and label.
-- [ ] Investigate if tool results can be presented in a simpler way to assistant?
+- [x?] Investigate if tool results can be presented in a simpler way to assistant? (see docs/ai-tool-results-plan.md)
+- [ ] AI tools: fuzzy device lookup, default clip placement + overlap refusal, reference tracks/channels by name instead of id (see docs/ai-names-and-placement-plan.md)
 - [ ] Add to AI settings personality presets for assistant. Default (helpful, concise, friendly), and Teacher is an interesting idea (less dumping info, more back-and-forth)
 - [ ] Allow the AI to ask questions via a tool with multiple choice answers (but always with a custom answer option), optionally tagging a clip, track, channel. The question will then be presented to the user and the element highlighted and scrolled towards in mixerchannel or timeline (and switch arranger/mic view if needed).
 
