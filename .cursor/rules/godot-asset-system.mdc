@@ -7,51 +7,36 @@ alwaysApply: false
 ## Overview
 - Asset discovery is provider-based: each `AssetProvider` subclasses `AssetProvider.gd`, emits `assets_changed`, and stays free of UI concerns.
 - `AssetService.gd` is the sole entry point; it initializes providers at startup, runs scans, merges results, and broadcasts updates to consumers.
-- Stable providers today are `FileSystemAssetProvider` (audio/MIDI files), `DeviceAssetProvider` (built-in and plugin devices), and `SfzAssetProvider` (SFZ sampler instruments).
+- Providers: `FileSystemAssetProvider` (audio/MIDI files) and `SfzAssetProvider` (SFZ instruments), both on `FileScanAssetProvider`, plus `DeviceAssetProvider` (built-in and plugin devices from `DeviceRegistry`).
 
 ## Asset & Provider Contracts
 - `Asset.gd` wraps identity plus metadata (favorite, tags, last_used, size, modified time) and exposes helpers (`get_display_name`, type guards: `is_audio`, `is_midi`, `is_sfz`, `is_soundfont`).
 - Asset types: `Audio` (audio files), `Midi` (MIDI files), `Device` (plugins/instruments), `SFZ` (SFZ instruments), `SoundFont` (SF2/SF3 instruments).
 - Providers must populate `Asset.path` with an absolute file path or canonical device ID; `AssetService` keys on this value.
-- Providers may opt into hot reload by setting `supports_hot_reload`; they are responsible for scheduling their own refresh loop.
 - Change detection flows through the `assets_changed(added, removed, modified)` signal; AssetService reloads metadata and rebroadcasts.
 
 ## AssetService Autoload
-- Reads `Sonara` config to determine enabled providers and scan paths, then calls `initialize(SceneTree)` on each provider.
+- Reads `Settings` for enabled providers and scan paths, then calls `initialize(SceneTree)` on each provider.
 - Providers emit cached assets during `initialize()` so `_assets_by_path` is populated via `assets_changed` callbacks before any live scan.
 - **No automatic scan on startup** – relies on hot-reload timers for first scan (after `scan_interval_seconds`). Users can manually trigger via Edit → Scan Assets.
 - `scan()` clears the registry, invokes `provider.scan()`, and consolidates every provider's `get_assets()` result into `_assets_by_path`.
 - Metadata cache lives in `~/.config/sonara/assets.json`; the service loads it on startup, applies it to Assets, and persists on every write.
-- Device-specific helpers (`get_device`, `get_instruments`, `get_effects`) proxy to the device provider, so providers must keep their registries authoritative.
-- Manual plugin discovery goes through `scan_plugins()`, which delegates to the device provider and requires no additional UI wiring.
+- `get_device(id)` and `scan_plugins()` delegate to `device_registry` (created even when the `devices` provider is disabled, so projects still load their devices).
+- `search_assets(query, type, limit)` (used by the AI) and the Browser search box both score with `AssetSearch`. The AI variant also accepts a substring hit on the path.
 
-## FileSystemAssetProvider
-- Honors `assets/samples/paths` and `assets/scan_interval_seconds` from config; `~/` is expanded to the user home.
-- Supports audio (`wav`, `mp3`, `ogg`) and MIDI (`mid`, `midi`) extensions; all other files are ignored.
-- Maintains `_file_mod_times` to detect additions, removals, and modifications, emitting a single aggregated change event per scan.
-- Uses `SceneTree.create_timer()` for recurring scans; timers are chained so the provider never blocks `_ready()`.
-- Caches discovered assets to `~/.config/sonara/samples_cache.json` for instant availability on startup.
+## FileScanAssetProvider (FileSystemAssetProvider, SfzAssetProvider)
+- Subclasses only override `_scan_paths_setting()`, `_cache_file_name()` and `_asset_type_for_extension()`.
+- Walks the directories from the setting (`Utils.expand_path` expands `~/` and `$HOME/`) every `assets/scan_interval_seconds`, chaining `SceneTree.create_timer()` so `_ready()` never blocks.
+- Diffs against the previous scan by path (Dictionary lookups) and mtime, emits one `assets_changed`, and rewrites the cache only when something changed.
+- Caches: `samples_cache.json` (`wav`, `mp3`, `ogg`, `mid`, `midi` from `assets/samples/paths`) and `sfz_cache.json` (`.sfz` from `assets/sfz/paths`). Cached entries are re-typed from their extension on load.
+- SFZ files are loaded into the built-in sfizz device via `DeviceDropUtil` (queued `DeviceInstance` file load).
 
-## SfzAssetProvider
-- Honors `assets/sfz/paths` and `assets/scan_interval_seconds` from config.
-- Supports SFZ sampler instrument files (`.sfz` extension only); classified as `Asset.TYPE.SFZ` (distinct from regular audio files).
-- Maintains `_file_mod_times` to detect changes identical to FileSystemAssetProvider pattern.
-- Uses `SceneTree.create_timer()` for recurring scans with the same hot-reload architecture.
-- Caches discovered SFZ files to `~/.config/sonara/sfz_cache.json` for instant availability on startup.
-- SFZ files are loaded into the built-in sfizz device via `DeviceInstance.load_file()` method.
-- Must be enabled in `assets/enabled_providers` array (default: `["filesystem", "devices", "sfz"]`).
-- Browser UI displays SFZ assets in a dedicated "SFZ" tab with their own ItemList.
-
-## DeviceAssetProvider
-- On startup, loads cached plugins, registers OSC listeners, and immediately sends `/builtin/request`; the engine answers with `/builtin/info` messages (one per device) followed by `/builtin/complete`.
-- Maintains `_devices` keyed by `device_id`; built-ins and plugins live in the same dictionary so `scan()` rebuilds the full asset list after every advertisement or scan completion.
-- Plugin discovery is manual: `trigger_plugin_scan()` prunes cached plugin assets, then sends `/plugin/scan` via `AudioEngineOSC`.
-- Incoming `/builtin/info` payloads include audio/MIDI capabilities, parameter descriptors, and optional file loading support; the provider batches new built-ins and emits them when `/builtin/complete` arrives.
-	- Parameter descriptors ship the scalar range plus `param_type` (`"float"`, `"bool"`, `"enum"`), a `syncable` flag, and enum labels; keep these hydrated so UI factories can build the correct controls without heuristics.
-- `/plugin/info` messages provide `[id, name, vendor, version, category, description, path]`; devices store metadata plus CLAP-specific fields.
-- `/plugin/scan_complete` triggers `scan()`, emits added plugin assets, and persists the registry to `~/.config/sonara/plugins.json`.
-- Cached plugins are reloaded on startup before the engine responds, so Browser UI stays populated even without a fresh scan; hot reconnects re-request built-ins by listening to `AudioEngineOSC.engine_connected`.
-- Built-in visuals are registered by preloading PackedScenes in provider constants and calling `device.register_panel_view(...)`, `register_large_view(...)`, or `register_auxiliary_view(...)` before the device is stored, so UI factories never rely on string paths at runtime.
+## DeviceRegistry and DeviceAssetProvider
+- `DeviceRegistry.start()` loads `plugins.json`, registers OSC listeners and sends `/builtin/request`. It re-requests built-ins on `AudioEngineOSC.engine_connected`.
+- `/builtin/info` payloads carry audio/MIDI capabilities, typed parameter descriptors (`param_type`, `syncable`, enum labels, range) and file-loading support. Each registers a `Device` and emits `device_registered`; `/builtin/complete` emits one `devices_changed` batch.
+- `is_logarithmic` is still guessed from the parameter name (time, cutoff, frequency, speed) until the engine advertises it.
+- `/plugin/info` gives `[id, name, vendor, version, category, description, path]`. `scan_plugins()` drops cached plugins (emitting them as removed) and sends `/plugin/scan`; `/plugin/scan_complete` emits the plugins as added and saves `plugins.json`.
+- `DeviceAssetProvider` only maps registry devices to `Asset`s and forwards `devices_changed` as `assets_changed`. AssetService connects the provider before starting the registry so cached plugins reach the browser.
 
 ## Metadata Cache
 - `AssetService` writes all user metadata (favorite, tags, last_used) to `assets.json` under the same config directory as the plugin cache.

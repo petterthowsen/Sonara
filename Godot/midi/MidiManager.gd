@@ -59,9 +59,11 @@ func _ready():
 func initialize():
 	## Initialize MIDI system, enumerate devices, restore config.
 
-	# Enumerate physical MIDI devices
-	OS.open_midi_inputs()
-	refresh_devices()
+	# Enumerate physical MIDI devices. Skipped under --test: OS.open_midi_inputs()
+	# crashes in headless test runs.
+	if not Utils.is_test_mode():
+		OS.open_midi_inputs()
+		refresh_devices()
 
 	# Create virtual keyboard device
 	var virt_device = MidiDevice.new(VIRTUAL_KEYBOARD_ID, "Virtual Keyboard", MidiDevice.DeviceType.VIRTUAL_KEYBOARD)
@@ -81,14 +83,12 @@ func initialize():
 			enabled_devices.append(device_id)
 
 	# Restore virtual keyboard settings
-	virtual_keyboard_enabled = Sonara.get_config("midi/virtual_keyboard/enabled", true)
-	keyboard_transpose = Sonara.get_config("midi/virtual_keyboard/transpose", 0)
-	keyboard_velocity = Sonara.get_config("midi/virtual_keyboard/velocity", 100)
+	virtual_keyboard_enabled = Settings.get_value("midi/virtual_keyboard/enabled")
+	keyboard_transpose = Settings.get_value("midi/virtual_keyboard/transpose")
+	keyboard_velocity = Settings.get_value("midi/virtual_keyboard/velocity")
 
-	# Connect to Settings autoload for runtime updates
-	var settings = get_node_or_null("/root/Settings")
-	if settings:
-		settings.connect("setting_changed", _on_setting_changed)
+	# Settings is the source of truth; local fields follow its change signal.
+	Settings.setting_changed.connect(_on_setting_changed)
 
 	devices_changed.emit()
 	logger.info("Initialized with %d devices (%d enabled)" % [devices.size(), enabled_devices.size()])
@@ -279,26 +279,18 @@ func handle_virtual_keyboard_action(event: InputEventKey):
 
 	# Transpose controls
 	if event.is_action_pressed("keyboard_transpose_up"):
-		keyboard_transpose = clampi(keyboard_transpose + 12, -24, 24)
-		Sonara.set_config("midi/virtual_keyboard/transpose", keyboard_transpose)
-		logger.info("Keyboard transpose: %d" % keyboard_transpose)
+		Settings.set_value("midi/virtual_keyboard/transpose", keyboard_transpose + 12)
 		return
 	elif event.is_action_pressed("keyboard_transpose_down"):
-		keyboard_transpose = clampi(keyboard_transpose - 12, -24, 24)
-		Sonara.set_config("midi/virtual_keyboard/transpose", keyboard_transpose)
-		logger.info("Keyboard transpose: %d" % keyboard_transpose)
+		Settings.set_value("midi/virtual_keyboard/transpose", keyboard_transpose - 12)
 		return
 
 	# Velocity controls
 	elif event.is_action_pressed("keyboard_velocity_up"):
-		keyboard_velocity = clampi(keyboard_velocity + VELOCITY_STEP, 1, 127)
-		Sonara.set_config("midi/virtual_keyboard/velocity", keyboard_velocity)
-		logger.info("Keyboard velocity: %d" % keyboard_velocity)
+		Settings.set_value("midi/virtual_keyboard/velocity", keyboard_velocity + VELOCITY_STEP)
 		return
 	elif event.is_action_pressed("keyboard_velocity_down"):
-		keyboard_velocity = clampi(keyboard_velocity - VELOCITY_STEP, 1, 127)
-		Sonara.set_config("midi/virtual_keyboard/velocity", keyboard_velocity)
-		logger.info("Keyboard velocity: %d" % keyboard_velocity)
+		Settings.set_value("midi/virtual_keyboard/velocity", keyboard_velocity - VELOCITY_STEP)
 		return
 
 	# Note actions (keyboard_c3, keyboard_d#4, etc.)
@@ -406,7 +398,7 @@ func route_midi_event(device_id: int, event: InputEventMIDI):
 			accepts_device = true
 
 		if accepts_device:
-			send_midi_to_channel(channel.id, event)
+			send_midi_to_channel(channel, event)
 
 
 func route_virtual_midi_event(event: Dictionary):
@@ -428,12 +420,16 @@ func route_virtual_midi_event(event: Dictionary):
 			accepts_device = true
 
 		if accepts_device:
-			send_midi_to_channel(channel.id, event)
+			send_midi_to_channel(channel, event)
 
 
 ## Send a note-on or note-off straight to `channel_id`, skipping record-arm routing.
 func send_note_to_channel(channel_id: int, note: int, velocity: int, is_note_on: bool) -> void:
-	send_midi_to_channel(channel_id, {
+	var project: Project = Sonara.editor.project if Sonara.editor else null
+	var channel := project.get_channel_by_id(channel_id) if project else null
+	if channel == null:
+		return
+	send_midi_to_channel(channel, {
 		"message": MIDI_MESSAGE_NOTE_ON if is_note_on else MIDI_MESSAGE_NOTE_OFF,
 		"channel": 0,
 		"pitch": note,
@@ -441,12 +437,9 @@ func send_note_to_channel(channel_id: int, note: int, velocity: int, is_note_on:
 	})
 
 
-func send_midi_to_channel(channel_id: int, event):
-	## Send MIDI event to engine via OSC.
+func send_midi_to_channel(channel: Channel, event):
+	## Forward a MIDI event to the channel, which sends it to the engine.
 	## Accepts both InputEventMIDI (physical devices) and Dictionary (virtual keyboard).
-	# Get microsecond timestamp
-	var timestamp_us = int(Time.get_ticks_usec())
-
 	# Extract message, channel, pitch, velocity from either InputEventMIDI or Dictionary
 	var message: int
 	var midi_channel: int
@@ -467,27 +460,16 @@ func send_midi_to_channel(channel_id: int, event):
 		push_warning("[MidiManager] Invalid event type")
 		return
 
-	# Route to appropriate OSC message based on type
 	match message:
 		MIDI_MESSAGE_NOTE_ON, MIDI_MESSAGE_NOTE_OFF:
-			AudioEngineOSC.send(
-				"/channel/%d/midi_event" % channel_id,
-				[channel_id, message, midi_channel, pitch, velocity, timestamp_us]
-			)
+			channel.send_midi_event(message, midi_channel, pitch, velocity)
 
 		MIDI_MESSAGE_CONTROL_CHANGE:
-			# For InputEventMIDI, we need controller_number and controller_value
 			if event is InputEventMIDI:
-				AudioEngineOSC.send(
-					"/channel/%d/midi_cc" % channel_id,
-					[channel_id, midi_channel, event.controller_number, event.controller_value, timestamp_us]
-				)
+				channel.send_midi_cc(midi_channel, event.controller_number, event.controller_value)
 			else:
-				# For dictionary-based CC events (if we add them later)
-				AudioEngineOSC.send(
-					"/channel/%d/midi_cc" % channel_id,
-					[channel_id, midi_channel, pitch, velocity, timestamp_us]
-				)
+				# Dictionary CC events carry controller/value in pitch/velocity.
+				channel.send_midi_cc(midi_channel, pitch, velocity)
 
 		# Add more message types as needed
 		_:
@@ -500,22 +482,12 @@ func send_midi_to_channel(channel_id: int, event):
 
 func set_virtual_keyboard_enabled(enabled: bool):
 	## Enable or disable virtual keyboard input.
-	if virtual_keyboard_enabled != enabled:
-		virtual_keyboard_enabled = enabled
-
-		# Release all active notes when disabling
-		if not enabled:
-			_release_active_keyboard_notes()
-
-		# Persist to config
-		Sonara.set_config("midi/virtual_keyboard/enabled", enabled)
-		Sonara.save_config()
-		devices_changed.emit()
-		print("[MidiManager] Virtual keyboard %s" % ("enabled" if enabled else "disabled"))
+	# Settings saves and emits setting_changed, which applies the state via _apply_virtual_keyboard_enabled.
+	Settings.set_value("midi/virtual_keyboard/enabled", enabled)
 
 
 # ---------------------------------------------------------------------------
-# Settings synchronization (called when SettingsDialog changes a value)
+# Settings synchronization 
 # ---------------------------------------------------------------------------
 
 func _on_setting_changed(key: String, value) -> void:
@@ -524,18 +496,18 @@ func _on_setting_changed(key: String, value) -> void:
 		"midi/virtual_keyboard/enabled":
 			_apply_virtual_keyboard_enabled(value)
 		"midi/virtual_keyboard/transpose":
-			keyboard_transpose = clampi(int(value), -24, 24)
-			logger.info("Keyboard transpose updated: %d" % keyboard_transpose)
+			keyboard_transpose = int(value)
+			logger.info("Keyboard transpose: %d" % keyboard_transpose)
 		"midi/virtual_keyboard/velocity":
-			keyboard_velocity = clampi(int(value), 1, 127)
-			logger.info("Keyboard velocity updated: %d" % keyboard_velocity)
+			keyboard_velocity = int(value)
+			logger.info("Keyboard velocity: %d" % keyboard_velocity)
 
 
 func _apply_virtual_keyboard_enabled(enabled: bool) -> void:
-	"""Update virtual keyboard state without persisting (Settings dialog handles save)."""
+	"""Update virtual keyboard state; persistence is handled by Settings."""
 	if virtual_keyboard_enabled != enabled:
 		virtual_keyboard_enabled = enabled
 		if not enabled:
 			_release_active_keyboard_notes()
 		devices_changed.emit()
-		print("[MidiManager] Virtual keyboard %s" % ("enabled" if enabled else "disabled"))
+		logger.info("Virtual keyboard %s" % ("enabled" if enabled else "disabled"))

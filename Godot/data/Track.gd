@@ -1,5 +1,7 @@
 class_name Track extends RefCounted
 
+static var logger := Log.make("Track")
+
 enum TrackType { AUDIO, INSTRUMENT, FOLDER, GROUP }
 
 # ============================================================================
@@ -171,7 +173,7 @@ func set_color(new_color: Color) -> void:
 	_color = new_color
 	var ch := get_linked_channel()
 	if ch:
-		print("[Track %d] set_color → channel %d (%s) type=%s" % [
+		logger.debug("[Track %d] set_color → channel %d (%s) type=%s" % [
 			id, ch.id, ch.name, TrackType.keys()[type]
 		])
 		ch.set_color(new_color)
@@ -180,14 +182,6 @@ func set_color(new_color: Color) -> void:
 
 # Shorthand property for compatibility
 var color: Color:
-	get:
-		return get_color()
-	set(value):
-		set_color(value)
-
-
-## Alias for `color`. Kept so UI code can keep using track_color.
-var track_color: Color:
 	get:
 		return get_color()
 	set(value):
@@ -213,6 +207,23 @@ var height: int:
 ## Set display name (used by undoable property commands).
 func set_name(new_name: String) -> void:
 	name = new_name
+
+
+## Take a color pushed from the paired channel without writing it back.
+func apply_channel_color(new_color: Color) -> void:
+	_color = new_color
+	color_changed.emit(new_color)
+
+
+## Take a name pushed from the paired channel without writing it back.
+func apply_channel_name(new_name: String) -> void:
+	_name = new_name
+	name_changed.emit(new_name)
+
+
+## True while this track is connected to the audio engine.
+func is_engine_connected() -> bool:
+	return _is_connected
 
 
 func set_mute(value: bool) -> void:
@@ -296,11 +307,6 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 		_linked_channel = null
 
 
-func _update_channel_link() -> void:
-	"""Update the linked channel reference and register for color/name sync."""
-	get_linked_channel()
-
-
 ## True when this folder is paired with a mixer bus (Folder Bus).
 func is_folder_bus() -> bool:
 	return type == TrackType.FOLDER and _default_channel_id >= 0
@@ -329,7 +335,7 @@ func pair_mixer_channel(ch: Channel) -> void:
 	if ch == null:
 		return
 	if get_project_ref() == null:
-		set_project_ref(_fallback_project())
+		logger.error("[%d] pair_mixer_channel(%d) before set_project_ref" % [id, ch.id])
 	color_by_channel = true
 	name_by_channel = true
 	if _default_channel_id == ch.id:
@@ -337,7 +343,7 @@ func pair_mixer_channel(ch: Channel) -> void:
 		ch.register_track(self)
 		return
 	default_channel_id = ch.id
-	print("[Track %d] pair_mixer_channel: channel %d (%s)" % [id, ch.id, ch.name])
+	logger.debug("[%d] pair_mixer_channel: channel %d (%s)" % [id, ch.id, ch.name])
 
 
 ## Mixer channel paired for color/name/mute: routed strip, group, or folder bus.
@@ -355,70 +361,21 @@ func _ensure_linked_channel() -> Channel:
 		_linked_channel.register_track(self)
 		return _linked_channel
 
-	if get_project_ref() == null:
-		set_project_ref(_fallback_project())
-
-	var ch: Channel = _lookup_channel_in_project(get_project_ref())
-	if ch == null:
-		var editor_project := _fallback_project()
-		if editor_project != get_project_ref():
-			ch = _lookup_channel_in_project(editor_project)
-			if ch:
-				set_project_ref(editor_project)
-	if ch == null:
-		ch = _find_channel_in_mixer_ui()
-
-	if ch:
-		_linked_channel = ch
-		ch.register_track(self)
-		_adopt_channel_into_project(ch)
-	return ch
-
-
-## Look up this track's mixer channel on one project instance.
-func _lookup_channel_in_project(project: Project) -> Channel:
-	if project == null or _default_channel_id < 0:
-		return null
-	return project.get_channel_by_id(_default_channel_id)
-
-
-## MixerChannel nodes keep the Channel object even if project.channels dropped it.
-func _find_channel_in_mixer_ui() -> Channel:
-	if Engine.is_editor_hint():
-		return null
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree == null or _default_channel_id < 0:
-		return null
-	for node in tree.get_nodes_in_group("mixer_channel"):
-		if not (node is MixerChannel):
-			continue
-		var mixer_ch: Channel = (node as MixerChannel).channel
-		if mixer_ch == null:
-			continue
-		if mixer_ch.id == _default_channel_id:
-			print("[Track %d] recovered channel %d from mixer UI" % [id, mixer_ch.id])
-			return mixer_ch
-	return null
-
-
-## Put a recovered Channel back on the project list without spawning a second mixer strip.
-func _adopt_channel_into_project(ch: Channel) -> void:
 	var project := get_project_ref()
-	if ch == null or project == null:
-		return
-	if project.get_channel_by_id(ch.id) != null:
-		return
-	project.channels.append(ch)
-	print("[Track %d] adopted channel %d (%s) into project.channels" % [id, ch.id, ch.name])
-
-
-## Editor project when this track was never given a project ref.
-func _fallback_project() -> Project:
-	if Engine.is_editor_hint():
+	if project == null:
+		# Not attached yet (during from_json) or the project was freed.
 		return null
-	if Sonara and Sonara.editor:
-		return Sonara.editor.project
-	return null
+
+	var ch := project.get_channel_by_id(_default_channel_id)
+	if ch == null:
+		logger.error("[%d] '%s': default_channel_id %d is not in project.channels" % [
+			id, _name, _default_channel_id
+		])
+		return null
+
+	_linked_channel = ch
+	ch.register_track(self)
+	return ch
 
 
 # ============================================================================
@@ -432,7 +389,7 @@ func connect_to_engine() -> void:
 
 	# Folder and group tracks have no engine timeline (mixer pairing only).
 	if type == TrackType.FOLDER or type == TrackType.GROUP:
-		print("[Track %d] %s not connected to engine (mixer pairing only)" % [
+		logger.info("[Track %d] %s not connected to engine (mixer pairing only)" % [
 			id, "Group" if type == TrackType.GROUP else "Folder"
 		])
 		return
@@ -448,10 +405,10 @@ func connect_to_engine() -> void:
 		for instance in clip_instances:
 			_sync_clip_instance_to_engine(instance)
 		
-		print("[Track %d] Connected to audio engine (routed to channel %d)" % [id, default_channel_id])
+		logger.info("[Track %d] Connected to audio engine (routed to channel %d)" % [id, default_channel_id])
 	else:
 		# Track not routed to a channel - don't connect yet
-		print("[Track %d] Not connected (no routing)" % id)
+		logger.info("[Track %d] Not connected (no routing)" % id)
 
 
 func disconnect_from_engine() -> void:
@@ -465,22 +422,22 @@ func disconnect_from_engine() -> void:
 			AudioEngineOSC.send("/track/%d/remove_instance" % id, [instance.id])
 
 	_is_connected = false
-	print("[Track %d] Disconnected from audio engine" % id)
+	logger.info("[Track %d] Disconnected from audio engine" % id)
 
 
 func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 	"""Sync clip instance to the audio engine using new clip/instance API."""
 	if not _is_connected:
-		print("[Track %d] WARNING: _sync_clip_instance_to_engine called but not connected!" % id)
+		logger.warn("[Track %d] WARNING: _sync_clip_instance_to_engine called but not connected!" % id)
 		return
-	
+
 	if not instance.clip:
-		print("[Track %d] WARNING: instance %s has no clip reference!" % [id, instance.id])
+		logger.warn("[Track %d] WARNING: instance %s has no clip reference!" % [id, instance.id])
 		return
 
 	# Send clip instance to engine
 	# Engine will resolve notes from the clip pool during playback
-	print("[Track %d] Syncing instance %s (clip: %s) to engine" % [id, instance.id, instance.clip_id])
+	logger.info("[Track %d] Syncing instance %s (clip: %s) to engine" % [id, instance.id, instance.clip_id])
 	AudioEngineOSC.send("/track/%d/add_instance" % id, [
 		instance.id,
 		instance.clip_id,
@@ -513,27 +470,6 @@ func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 		])
 
 
-func _on_clip_note_added(_note: MidiNoteData, _instance: ClipInstance) -> void:
-	"""Handle when a note is added to the source clip."""
-	# Clip changes are handled by Project.gd which syncs the clip to engine
-	# Engine automatically updates all instances during playback
-	pass
-
-
-func _on_clip_note_removed(_note: MidiNoteData, _instance: ClipInstance) -> void:
-	"""Handle when a note is removed from the source clip."""
-	# Clip changes are handled by Project.gd which syncs the clip to engine
-	# Engine automatically updates all instances during playback
-	pass
-
-
-func _on_clip_note_changed(_note: MidiNoteData, _instance: ClipInstance) -> void:
-	"""Handle when a note is changed in the source clip."""
-	# Clip changes are handled by Project.gd which syncs the clip to engine
-	# Engine automatically updates all instances during playback
-	pass
-
-
 func _clear_clip_instance_from_engine(instance: ClipInstance) -> void:
 	"""Remove clip instance from the engine."""
 	if not _is_connected:
@@ -556,19 +492,6 @@ func add_clip_instance(instance: ClipInstance) -> void:
 	# Sync to engine if connected
 	if _is_connected:
 		_sync_clip_instance_to_engine(instance)
-
-		# Listen to source clip changes (but only if not already connected)
-		if instance.clip:
-			var callback_note_added = _on_clip_note_added.bind(instance)
-			var callback_note_removed = _on_clip_note_removed.bind(instance)
-			var callback_note_changed = _on_clip_note_changed.bind(instance)
-
-			if not instance.clip.midi_note_added.is_connected(callback_note_added):
-				instance.clip.midi_note_added.connect(callback_note_added)
-			if not instance.clip.midi_note_removed.is_connected(callback_note_removed):
-				instance.clip.midi_note_removed.connect(callback_note_removed)
-			if not instance.clip.midi_note_changed.is_connected(callback_note_changed):
-				instance.clip.midi_note_changed.connect(callback_note_changed)
 
 	clip_instance_added.emit(instance)
 
@@ -614,19 +537,6 @@ func remove_clip_instance(instance: ClipInstance) -> void:
 		if _is_connected:
 			_clear_clip_instance_from_engine(instance)
 
-			# Disconnect from source clip signals (match the bind parameters)
-			if instance.clip:
-				var callback_note_added = _on_clip_note_added.bind(instance)
-				var callback_note_removed = _on_clip_note_removed.bind(instance)
-				var callback_note_changed = _on_clip_note_changed.bind(instance)
-
-				if instance.clip.midi_note_added.is_connected(callback_note_added):
-					instance.clip.midi_note_added.disconnect(callback_note_added)
-				if instance.clip.midi_note_removed.is_connected(callback_note_removed):
-					instance.clip.midi_note_removed.disconnect(callback_note_removed)
-				if instance.clip.midi_note_changed.is_connected(callback_note_changed):
-					instance.clip.midi_note_changed.disconnect(callback_note_changed)
-
 		clip_instance_removed.emit(instance)
 
 
@@ -636,26 +546,23 @@ func remove_clip_instance(instance: ClipInstance) -> void:
 
 # Serialize to JSON
 func to_json() -> Dictionary:
-	return {
+	var data := JsonFields.write(self, JSON_FIELDS)
+	data.merge({
 		"id": id,
-		"name": name,
 		"type": TrackType.keys()[type],
 		"color": Utils.color_to_json(_color),
-		"color_by_channel": color_by_channel,
-		"name_by_channel": name_by_channel,
-		"order": _order,
 		"clip_instances": clip_instances.map(func(i): return i.to_json()),
-		"automation_lanes": automation_lanes.map(func(a): return a.to_json()) if not automation_lanes.is_empty() else [],
-		"default_channel_id": default_channel_id,
-		"parent_track_id": parent_track_id,
-		"child_track_ids": child_track_ids,
-		"is_folder_expanded": is_folder_expanded,
-		"height": _height,
-		"folded": folded,
-		"muted": muted,
-		"solo": solo,
-		"armed": armed
-	}
+		"automation_lanes": automation_lanes.map(func(a): return a.to_json()),
+		"child_track_ids": child_track_ids.duplicate(),
+	})
+	return data
+
+
+## Plain fields copied by JsonFields (through their setters); defaults come from the initializers.
+const JSON_FIELDS: Array[String] = [
+	"name", "color_by_channel", "name_by_channel", "order", "default_channel_id",
+	"parent_track_id", "is_folder_expanded", "height", "folded", "muted", "solo", "armed",
+]
 
 
 # Deserialize from JSON
@@ -663,29 +570,10 @@ static func from_json(data: Dictionary) -> Track:
 	var track_id = data.get("id", -1)
 	var track = Track.new(track_id)
 
-	track.name = data.get("name", "Track")
-
-	# Parse track type
-	var type_str = data.get("type", "INSTRUMENT")
-	track.type = TrackType.get(type_str) if TrackType.has(type_str) else TrackType.INSTRUMENT
-
-	track._color = Utils.color_from_json(data.get("color", "#FFFFFF"), Color.WHITE)
-	track.color_by_channel = data.get("color_by_channel", true)
-	track.name_by_channel = data.get("name_by_channel", true)
-	track.order = data.get("order", 0)
-	track.default_channel_id = data.get("default_channel_id", -1)
-	track.parent_track_id = data.get("parent_track_id", -1)
-	
-	# Convert child_track_ids to typed array
-	var child_ids = data.get("child_track_ids", [])
-	track.child_track_ids.assign(child_ids)
-	
-	track.is_folder_expanded = data.get("is_folder_expanded", true)
-	track.height = data.get("height", 38)
-	track.folded = data.get("folded", false)
-	track.muted = data.get("muted", false)
-	track.solo = data.get("solo", false)
-	track.armed = data.get("armed", false)
+	track.type = TrackType.get(str(data.get("type", "")), track.type)
+	track._color = Utils.color_from_json(data.get("color"), track._color)
+	JsonFields.read(track, data, JSON_FIELDS)
+	track.child_track_ids.assign(data.get("child_track_ids", []))
 
 	# Load clip instances (clip references will be resolved by Project.from_json)
 	for instance_data in data.get("clip_instances", []):

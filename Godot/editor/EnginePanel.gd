@@ -10,6 +10,7 @@ class_name EnginePanel extends PanelContainer
 ## Last Time.get_ticks_msec() that received /status/engine_load (0 = never).
 var _last_engine_load_msec: int = 0
 var _show_connected: bool = false
+var _engine_status := EngineStatus.new()
 const AUDIO_STALL_MSEC := 2000
 
 
@@ -22,8 +23,8 @@ func _ready() -> void:
 	Sonara.editor.project_opened.connect(_on_project_opened)
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	
-	# Connect to audio engine OSC signals
-	_connect_osc_signals()
+	_engine_status.engine_load_received.connect(_on_engine_load_received)
+	_engine_status.start()
 	
 	# Initialize UI state (no project active)
 	_update_ui_no_project()
@@ -97,10 +98,10 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 			_show_connected = true
 			_last_engine_load_msec = Time.get_ticks_msec()
 
-func _connect_osc_signals() -> void:
-	"""Connect to audio engine OSC signals for performance metrics."""
-	if AudioEngineOSC:
-		AudioEngineOSC.listen("/status/engine_load", _on_engine_load_received)
+
+func _exit_tree() -> void:
+	_engine_status.stop()
+
 
 ## Show a stall warning when OSC is up but the audio callback has gone quiet.
 func _process(_delta: float) -> void:
@@ -112,10 +113,9 @@ func _process(_delta: float) -> void:
 		performance_text.text = "Audio stalled (no callback)"
 
 
-func _on_engine_load_received(values: Array) -> void:
+func _on_engine_load_received(load_value: float) -> void:
 	"""Handle engine load metric from audio engine."""
 	_last_engine_load_msec = Time.get_ticks_msec()
-	if engine_load_graph and values.size() > 0:
-		var load_value = float(values[0])
+	if engine_load_graph:
 		engine_load_graph.add_point(load_value)
 		performance_text.text = "Engine Load: %.2f%%" % (load_value * 100.0)

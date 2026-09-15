@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Add a device, SFZ, or drum-machine sample pad. For kits, pass a Drum Machine parent and samples/asset_paths (wav from search_assets). Optional name and MIDI note; omitted values are inferred (Kick=36, Snare=38, Hat=42, Open hat=46, Crash=49, Ride=51). Do not add an empty Sampler then load_device_file."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -67,7 +63,7 @@ func execute(args: Dictionary) -> Dictionary:
 		specs.append({"asset_path": asset.path, "name": str(args.get("name", "")).strip_edges(), "note": int(args.get("note", -1)), "_asset": asset})
 	var added: Array = []
 	for spec in specs:
-		var one = await _add_one(project, channel, parent, spec, args)
+		var one = _add_one(project, channel, parent, spec, args)
 		if one is Dictionary and one.get("ok") == false:
 			if added.is_empty():
 				return one
@@ -103,14 +99,13 @@ func _add_one(_project: Project, channel: Channel, parent: DeviceInstance, spec:
 	for d in host:
 		if d is DeviceInstance:
 			before[d.id] = true
-	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	var position := int(args.get("position", -1))
 	if parent and asset.type == Asset.TYPE.Audio and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
 		var identity := DeviceToolUtil.resolve_pad_identity(spec, asset.get_display_name(), _used_notes(parent))
 		var note := int(identity.note)
 		if note < 0:
 			note = parent.next_free_drum_note()
-		await DeviceDropUtil.drop_on_drum_pad(channel, parent, note, asset, tree)
+		DeviceDropUtil.drop_on_drum_pad(channel, parent, note, asset)
 		var pad := _find_added(host, before)
 		if pad == null:
 			return fail("Sample pad was not added")
@@ -118,9 +113,9 @@ func _add_one(_project: Project, channel: Channel, parent: DeviceInstance, spec:
 			pad.set_name(str(identity.name))
 		return pad
 	elif parent:
-		await DeviceDropUtil.drop_on_container(channel, parent, asset, tree)
+		DeviceDropUtil.drop_on_container(channel, parent, asset)
 	else:
-		await DeviceDropUtil.drop_asset(channel, asset, position, parent, tree)
+		DeviceDropUtil.drop_asset(channel, asset, position, parent)
 	var added := _find_added(host, before)
 	if added == null or added.device == null:
 		return fail("Device was not added")

@@ -1,5 +1,7 @@
 class_name Project extends RefCounted
 
+static var logger := Log.make("Project")
+
 # ============================================================================
 # ENUMS
 # ============================================================================
@@ -64,7 +66,6 @@ var _pending_waveform_retries: Dictionary = {}
 #   - 1001+: Additional output devices (future support for multi-device routing)
 var next_channel_id: int = 2  # Counter for assigning unique channel IDs (starts after master)
 var next_track_id: int = 0    # Counter for assigning unique track IDs
-var next_clip_id: int = 1     # Counter for assigning unique clip IDs
 var next_note_id: int = 1     # Counter for assigning unique MIDI note IDs
 
 # Project metadata
@@ -106,6 +107,7 @@ func _init():
 	master.order = 1000  # High order value to appear on the right
 	master.volume = 0.0  # Master at unity gain (0 dB)
 	master.color = Color.from_string("#333333", Color.WHITE)
+	master.set_project(self)
 	channels.append(master)
 
 
@@ -116,13 +118,13 @@ func _init():
 func connect_to_engine() -> void:
 	"""Connect project and all data to audio engine."""
 	if _connection_state != ConnectionState.DISCONNECTED:
-		print("[Project] Already connected or connecting (state: %d)" % _connection_state)
+		logger.info("[Project] Already connected or connecting (state: %d)" % _connection_state)
 		return
 
 	# Set state to CONNECTING immediately (before any async operations)
 	_connection_state = ConnectionState.CONNECTING
 	connection_state_changed.emit(ConnectionState.CONNECTING)
-	print("[Project] Connecting to audio engine...")
+	logger.info("[Project] Connecting to audio engine...")
 
 	# Listen for engine connection confirmation
 	if not AudioEngineOSC.engine_connected.is_connected(_on_engine_confirmed_connected):
@@ -138,13 +140,6 @@ func connect_to_engine() -> void:
 	# Clear any previous project state in engine, then initialize
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
-	
-	# Check if engine is already connected (signal may have fired before we connected to it)
-	# If so, the /project/init won't send back /status/connected, so we need to sync now
-	if AudioEngineOSC._is_engine_connected:
-		print("[Project] Engine already connected, waiting for /status/connected response")
-		# Note: The /project/init command will still trigger a /status/connected response
-		# which will call _on_engine_confirmed_connected via the signal
 
 
 func _on_engine_confirmed_connected() -> void:
@@ -152,14 +147,14 @@ func _on_engine_confirmed_connected() -> void:
 	if _connection_state == ConnectionState.CONNECTED:
 		# Heartbeats keep flowing across a fast engine restart, so Godot never disconnects
 		# and skips recreating master — mix then has nowhere to go.
-		print("[Project] Engine session restarted, resyncing project...")
+		logger.info("[Project] Engine session restarted, resyncing project...")
 		_mark_engine_data_unsynced()
 		_connection_state = ConnectionState.DISCONNECTED
 		connection_state_changed.emit(ConnectionState.DISCONNECTED)
 		connect_to_engine()
 		return
 
-	print("[Project] Engine confirmed connection, syncing project data...")
+	logger.info("[Project] Engine confirmed connection, syncing project data...")
 	
 	# Mark as connected so sync methods work
 	_connection_state = ConnectionState.CONNECTED
@@ -177,7 +172,7 @@ func _on_engine_confirmed_connected() -> void:
 	for track in tracks:
 		track.connect_to_engine()
 
-	print("[Project] Connected to audio engine")
+	logger.info("[Project] Connected to audio engine")
 
 
 func _on_engine_disconnected() -> void:
@@ -185,7 +180,7 @@ func _on_engine_disconnected() -> void:
 	if _connection_state == ConnectionState.DISCONNECTED:
 		return  # Already disconnected
 	
-	print("[Project] Engine connection lost!")
+	logger.warn("[Project] Engine connection lost!")
 	_mark_engine_data_unsynced()
 	_connection_state = ConnectionState.DISCONNECTED
 	connection_state_changed.emit(ConnectionState.DISCONNECTED)
@@ -230,7 +225,7 @@ func _record_clip_request(clip_id: String, req_id: String) -> void:
 		return
 	_clip_request_lookup[clip_id] = req_id
 	_request_clip_lookup[req_id] = clip_id
-	print("[Project] Tracked clip request", clip_id, "->", req_id)
+	logger.info("[Project] Tracked clip request", clip_id, "->", req_id)
 
 
 func _clear_clip_request_by_req(req_id: String) -> void:
@@ -238,7 +233,7 @@ func _clear_clip_request_by_req(req_id: String) -> void:
 		return
 	if _request_clip_lookup.has(req_id):
 		var clip_id: String = _request_clip_lookup[req_id]
-		print("[Project] Clearing clip request", clip_id, "for", req_id)
+		logger.info("[Project] Clearing clip request", clip_id, "for", req_id)
 		_request_clip_lookup.erase(req_id)
 		_clip_request_lookup.erase(clip_id)
 
@@ -263,7 +258,8 @@ func _get_device_by_req_id(req_id: String) -> DeviceInstance:
 
 
 func _get_scene_tree() -> SceneTree:
-	return Sonara.editor.get_tree()
+	return Engine.get_main_loop() as SceneTree
+
 
 func _on_clip_load_state_received(args: Array, address: String) -> void:
 	if address.is_empty():
@@ -272,10 +268,10 @@ func _on_clip_load_state_received(args: Array, address: String) -> void:
 	if parts.size() < 3:
 		return
 	var clip_id := parts[2]
-	print("[Project] load_state", args, "from", address)
+	logger.info("[Project] load_state", args, "from", address)
 	var clip := get_clip(clip_id)
 	if clip == null:
-		print("[Project] Received load_state for unknown clip: ", clip_id)
+		logger.warn("[Project] Received load_state for unknown clip: ", clip_id)
 		return
 
 	var state_label: String = str(args[0]) if args.size() > 0 else ""
@@ -323,159 +319,54 @@ func _on_clip_load_state_received(args: Array, address: String) -> void:
 
 
 func _on_audiofile_decode_ready(args: Array) -> void:
-	"""Handle OSC /audiofile/decode/ready event from audio engine.
+	"""Handle OSC /audiofile/decode/ready: decoded metadata and the waveform cache key.
 
-	Called when audio file decoding completes. Updates clip with decoded audio metadata
-	(sample rate, channels, frame count, duration) and locates the waveform cache file.
-
-	Progressive flow:
-	  1. This handler fires when decoding completes
-	  2. Subsequent /audiofile/waveform/level events load each resolution level
-	  3. UI renders waveforms progressively as each level loads
-
+	Waveform levels follow as /audiofile/waveform/level events and render progressively.
 	OSC args: [req_id, cache_key, channels, frames, sample_rate, duration_s, sample_count?]
 	"""
-	if args.size() < 6:
-		push_error("[Project] decode_ready: Insufficient arguments (need 6, got %d)" % args.size())
+	if args.is_empty():
 		return
-
 	var req_id := str(args[0])
+	var pyramid := _waveform_for_req(req_id)
+	if pyramid == null or not pyramid.apply_decode_ready(args):
+		return
 	var clip := _get_clip_by_req_id(req_id)
-	if clip == null:
-		_apply_device_decode_ready(req_id, args)
-		return
-
-	var cache_key: String = str(args[1])
-	var decoded_channels: int = int(args[2])
-	var frames: int = int(args[3])
-	var decoded_sample_rate: int = int(args[4])
-	var duration_s: float = float(args[5])
-	var sample_count: int = int(args[6]) if args.size() > 6 else 0
-
-	# Calculate frames if not provided
-	if frames <= 0:
-		if sample_count > 0 and decoded_channels > 0:
-			# Calculate from sample count (total interleaved samples / channels)
-			@warning_ignore("integer_division")
-			frames = sample_count / decoded_channels
-		elif duration_s > 0.0 and decoded_sample_rate > 0:
-			# Fallback: calculate from duration
-			frames = int(duration_s * float(decoded_sample_rate))
-
-	# If duration is 0 but we have frames and sample rate, calculate it
-	if duration_s <= 0.0 and frames > 0 and decoded_sample_rate > 0:
-		duration_s = float(frames) / float(decoded_sample_rate)
-
-	clip.waveform_cache_key = cache_key
-
-	# Locate waveform cache file from standard locations
-	var cache_path = Sonara.find_waveform_cache_file(cache_key)
-	if not cache_path.is_empty():
-		clip.set_waveform_cache(cache_path, cache_key)
-	else:
-		push_warning("[Project] Waveform cache not found: %s" % cache_key)
-
-	# Update clip with decoded audio metadata
-	clip.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
-	clip.update_content_length_from_metadata(tempo, ppq)
+	if clip:
+		clip.update_content_length_from_metadata(tempo, ppq)
 
 
-## Apply AFS decode metadata to a sampler DeviceInstance.
-func _apply_device_decode_ready(req_id: String, args: Array) -> void:
+## Waveform pyramid for an AudioFileService request: the clip's, or the device's (created on demand).
+func _waveform_for_req(req_id: String) -> WaveformPyramid:
+	var clip := _get_clip_by_req_id(req_id)
+	if clip:
+		return clip.waveform
 	var inst := _get_device_by_req_id(req_id)
 	if inst == null:
-		return
+		return null
 	if inst.sample_waveform == null:
-		inst.sample_waveform = DeviceWaveform.new()
-	var cache_key: String = str(args[1])
-	var decoded_channels: int = int(args[2])
-	var frames: int = int(args[3])
-	var decoded_sample_rate: int = int(args[4])
-	var duration_s: float = float(args[5])
-	var cache_path := Sonara.find_waveform_cache_file(cache_key)
-	if not cache_path.is_empty():
-		inst.sample_waveform.set_waveform_cache(cache_path, cache_key)
-	inst.sample_waveform.set_audio_metadata(decoded_sample_rate, decoded_channels, frames, duration_s)
-
-
-## Ingest one waveform pyramid level into a sampler DeviceInstance.
-func _apply_device_waveform_level(req_id: String, args: Array) -> void:
-	var inst := _get_device_by_req_id(req_id)
-	if inst == null:
-		return
-	if inst.sample_waveform == null:
-		inst.sample_waveform = DeviceWaveform.new()
-	var level := int(args[1])
-	var block_size := int(args[2])
-	var num_blocks := int(args[3]) if args.size() >= 4 else 0
-	var file_path := str(args[4]) if args.size() >= 5 else ""
-	if file_path.is_empty() and not inst.sample_waveform.waveform_cache_path.is_empty():
-		file_path = inst.sample_waveform.waveform_cache_path
-	if not file_path.is_empty():
-		if inst.sample_waveform.waveform_cache_key.is_empty():
-			inst.sample_waveform.waveform_cache_key = file_path.get_file()
-		inst.sample_waveform.set_waveform_cache(file_path, inst.sample_waveform.waveform_cache_key)
-	inst.sample_waveform.ensure_audio_waveform()
-	inst.sample_waveform.ingest_waveform_level_from_cache(level, block_size, num_blocks)
+		inst.sample_waveform = WaveformPyramid.new()
+	return inst.sample_waveform
 
 
 func _on_audiofile_waveform_level(args: Array) -> void:
-	"""Handle OSC /audiofile/waveform/level event from audio engine.
+	"""Handle OSC /audiofile/waveform/level: ingest one resolution level from the cache file.
 
-	Called progressively as each waveform resolution level becomes available during
-	processing. Ingests peak/RMS data into the clip's multi-resolution pyramid.
-
-	Supports variable argument count (engine may send 3-5+ arguments):
-	  [req_id, level, block_size, num_blocks?, file_path?]
-
-	If num_blocks or file_path are missing, reads them from the cache file.
-	Implements retry logic with exponential backoff if ingestion fails.
-
-	OSC args: [req_id, level, block_size, num_blocks?, file_path?]
+	OSC args: [req_id, level, block_size, num_blocks?, file_path?, byte_offset?, byte_len?]
+	Clip levels that fail to ingest are retried with backoff.
 	"""
-	# Minimum required: req_id, level, block_size
 	if args.size() < 3:
 		push_error("[Project] Waveform level: Insufficient arguments (got %d, need 3)" % args.size())
 		return
-
 	var req_id := str(args[0])
-	var clip := _get_clip_by_req_id(req_id)
-	if clip == null:
-		_apply_device_waveform_level(req_id, args)
+	var pyramid := _waveform_for_req(req_id)
+	if pyramid == null:
 		return
-
-	var level := int(args[1])
-	var block_size := int(args[2])
-	var num_blocks := 0
-	var file_path := ""
-
-	# Parse remaining arguments: num_blocks, file_path, byte_offset, byte_len
-	# Engine sends: [req_id, level, block_size, num_blocks, file_path, byte_offset, byte_len]
-	if args.size() >= 4:
-		num_blocks = int(args[3])
-	if args.size() >= 5:
-		file_path = str(args[4])
-	# byte_offset and byte_len are in args[5] and args[6] if present, but not currently used
-
-	# Fallback to cached file path
-	if file_path.is_empty() and not clip.waveform_cache_path.is_empty():
-		file_path = clip.waveform_cache_path
-
-	# Update cache path if provided
-	if not file_path.is_empty():
-		if clip.waveform_cache_key.is_empty():
-			clip.waveform_cache_key = file_path.get_file()
-		clip.set_waveform_cache(file_path, clip.waveform_cache_key)
-
-	# Ensure waveform object exists
-	clip.ensure_audio_waveform()
-
-	# Try to ingest level data, retry if fails
-	if not clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
-		_schedule_waveform_retry(req_id, level, block_size, num_blocks, file_path)
-	else:
-		# Successfully loaded - UI will render progressively
-		pass
+	if pyramid.apply_waveform_level(args):
+		return
+	if _get_clip_by_req_id(req_id):
+		var num_blocks := int(args[3]) if args.size() >= 4 else 0
+		var file_path := str(args[4]) if args.size() >= 5 else ""
+		_schedule_waveform_retry(req_id, int(args[1]), int(args[2]), num_blocks, file_path)
 
 
 func _on_audiofile_progress(args: Array) -> void:
@@ -579,22 +470,8 @@ func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
 	var block_size := int(info.get("block_size", 0))
 	var num_blocks := int(info.get("num_blocks", 0))
 
-	# Try to read num_blocks from cache if still not available
-	if num_blocks <= 0 and not clip.waveform_cache_path.is_empty():
-		var reader = WaveformCacheReader.new()
-		if reader.load(clip.waveform_cache_path):
-			var level_info = reader.read_level(level, clip.audio_channels)
-			if not level_info.is_empty():
-				num_blocks = int(level_info.get("num_blocks", 0))
-
-	# Ensure cache path is available
-	if clip.waveform_cache_path.is_empty() and not clip.waveform_cache_key.is_empty():
-		var cache_path = Sonara.find_waveform_cache_file(clip.waveform_cache_key)
-		if not cache_path.is_empty():
-			clip.set_waveform_cache(cache_path, clip.waveform_cache_key)
-
 	# Retry ingestion
-	if clip.ingest_waveform_level_from_cache(level, block_size, num_blocks):
+	if clip.waveform.retry_waveform_level(level, block_size, num_blocks):
 		_pending_waveform_retries.erase(key)
 	else:
 		# Check if we should retry again
@@ -637,7 +514,7 @@ func disconnect_from_engine() -> void:
 
 	var was_connected := _connection_state != ConnectionState.DISCONNECTED
 	if was_connected:
-		print("[Project] Disconnecting from audio engine...")
+		logger.info("[Project] Disconnecting from audio engine...")
 		# Clear project (this clears clips, tracks, channels from engine)
 		AudioEngineOSC.send("/project/clear", [])
 		# Reset AudioEngineOSC connection state
@@ -645,27 +522,27 @@ func disconnect_from_engine() -> void:
 
 	_connection_state = ConnectionState.DISCONNECTED
 	connection_state_changed.emit(ConnectionState.DISCONNECTED)
-	print("[Project] Disconnected from audio engine")
+	logger.info("[Project] Disconnected from audio engine")
 
 
 func _sync_clip_to_engine(clip: Clip) -> void:
 	"""Sync a clip and its MIDI notes or audio data to the audio engine."""
 	if _connection_state != ConnectionState.CONNECTED:
-		print("[Project] WARNING: _sync_clip_to_engine called but not connected!")
+		logger.warn("[Project] _sync_clip_to_engine called but not connected!")
 		return
 
 	# Create clip in engine
 	var clip_type_str = "midi" if clip.type == Clip.ClipType.MIDI else "audio"
-	print("[Project] Creating %s clip in engine: %s" % [clip_type_str, clip.id])
+	logger.info("[Project] Creating %s clip in engine: %s" % [clip_type_str, clip.id])
 	AudioEngineOSC.send("/clip/create", [clip.id, clip_type_str, clip.name])
 	# Mark as synced locally so subsequent updates (move/resize) don't warn
-	clip._synced_to_engine = true
+	clip.mark_synced_to_engine()
 
 	# Sync MIDI notes (if MIDI clip)
 	if clip.type == Clip.ClipType.MIDI:
-		print("[Project] Syncing %d MIDI notes for clip: %s" % [clip.midi_notes.size(), clip.id])
+		logger.info("[Project] Syncing %d MIDI notes for clip: %s" % [clip.midi_notes.size(), clip.id])
 		for note in clip.midi_notes:
-			print("[Project]   - Note %d: pitch=%d start=%d dur=%d" % [note.id, note.note, note.start_tick, note.duration_ticks])
+			logger.info("[Project]   - Note %d: pitch=%d start=%d dur=%d" % [note.id, note.note, note.start_tick, note.duration_ticks])
 			AudioEngineOSC.send("/clip/%s/add_note" % clip.id, [
 				note.id,
 				note.note,
@@ -678,7 +555,7 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 		if not clip.audio_file_path.is_empty():
 			var sample_rate_hint: int = clip.audio_sample_rate if clip.audio_sample_rate > 0 else 0
 			var channel_hint: int = clip.audio_channels if clip.audio_channels > 0 else 0
-			print("[Project] Requesting engine-side load for clip %s (%s)" % [clip.id, clip.audio_file_path])
+			logger.info("[Project] Requesting engine-side load for clip %s (%s)" % [clip.id, clip.audio_file_path])
 			clip.apply_load_state(Clip.LoadState.LOADING, "", "")
 			clip.load_progress = 0.0
 			var prev_req_id: String = _clip_request_lookup.get(clip.id, "")
@@ -690,7 +567,7 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 				channel_hint
 			])
 		else:
-			print("[Project] WARNING: Audio clip %s has no audio_file_path!" % clip.id)
+			logger.warn("[Project] Audio clip %s has no audio_file_path!" % clip.id)
 
 
 # ============================================================================
@@ -698,6 +575,7 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 # ============================================================================
 func add_channel(channel: Channel) -> void:
 	"""Add an existing channel to the project."""
+	channel.set_project(self)
 	channels.append(channel)
 	channel_added.emit(channel)
 
@@ -752,7 +630,7 @@ func remove_channel(channel_id: int) -> bool:
 	
 	# Prevent removing the master channel
 	if channel.is_master:
-		print("[Project] Cannot remove master channel")
+		logger.warn("[Project] Cannot remove master channel")
 		return false
 	
 	# Reroute any tracks that were using this channel to the master channel
@@ -769,13 +647,13 @@ func remove_channel(channel_id: int) -> bool:
 		track.name_by_channel = old_name_by_channel
 		track.color_by_channel = old_color_by_channel
 		
-		print("[Project] Track '%s' rerouted to Master (was using removed channel %d)" % [track.name, channel_id])
+		logger.info("[Project] Track '%s' rerouted to Master (was using removed channel %d)" % [track.name, channel_id])
 	
 	# Reroute any channels that were routing to this channel to the master channel
 	for ch in channels:
 		if ch.output_channel_id == channel_id:
 			ch.set_route(1)  # Route to master (ID 1)
-			print("[Project] Channel '%s' rerouted to Master (was routing to removed channel %d)" % [ch.name, channel_id])
+			logger.info("[Project] Channel '%s' rerouted to Master (was routing to removed channel %d)" % [ch.name, channel_id])
 		if ch.parent_channel_id == channel_id:
 			ch.parent_channel_id = -1
 			ch.notify_hierarchy_changed()
@@ -789,7 +667,7 @@ func remove_channel(channel_id: int) -> bool:
 		channel.parent_channel_id = -1
 	
 	# Disconnect from engine if connected
-	if _connection_state == ConnectionState.CONNECTED and channel._is_connected:
+	if _connection_state == ConnectionState.CONNECTED and channel.is_engine_connected():
 		channel.disconnect_from_engine()
 		# Tell engine to remove the channel
 		AudioEngineOSC.send("/channel/%d/remove" % channel_id, [])
@@ -798,11 +676,12 @@ func remove_channel(channel_id: int) -> bool:
 	var index = channels.find(channel)
 	if index >= 0:
 		channels.remove_at(index)
+	channel.set_project(null)
 	
 	# Emit signal before cleanup
 	channel_removed.emit(channel)
 	
-	print("[Project] Channel removed: %s (ID: %d)" % [channel.name, channel_id])
+	logger.info("[Project] Channel removed: %s (ID: %d)" % [channel.name, channel_id])
 	return true
 
 
@@ -875,7 +754,7 @@ func remove_track(track_id: int) -> bool:
 		_renumber_siblings(-1)
 	
 	# Disconnect from engine if connected
-	if _connection_state == ConnectionState.CONNECTED and track._is_connected:
+	if _connection_state == ConnectionState.CONNECTED and track.is_engine_connected():
 		track.disconnect_from_engine()
 	
 	# Remove from tracks array
@@ -886,51 +765,33 @@ func remove_track(track_id: int) -> bool:
 	# Emit signal before cleanup
 	track_removed.emit(track)
 	
-	print("[Project] Track removed: %s (ID: %d)" % [track.name, track_id])
+	logger.info("[Project] Track removed: %s (ID: %d)" % [track.name, track_id])
 	return true
 
 
 func get_track_children(track: Track) -> Array[Track]:
 	"""Get direct children of a track (not recursive)."""
-	var children: Array[Track] = []
 	if track == null:
-		return children
-	for t in tracks:
-		if t.parent_track_id == track.id:
-			children.append(t)
-	children.sort_custom(func(a, b): return a.order < b.order)
-	return children
-
-
-func get_track_siblings(track: Track) -> Array[Track]:
-	"""Get sibling tracks (tracks with same parent)."""
-	var siblings: Array[Track] = []
-	for t in tracks:
-		if t != track and t.parent_track_id == track.parent_track_id:
-			siblings.append(t)
-	# Sort by order
-	siblings.sort_custom(func(a, b): return a.order < b.order)
-	return siblings
+		return []
+	return _sorted_track_siblings(track.id)
 
 
 func get_visual_track_list() -> Array[Track]:
 	"""Build a flat list of tracks in visual order from the hierarchy."""
 	var result: Array[Track] = []
-	
-	# Get root tracks (no parent)
-	var root_tracks: Array[Track] = []
-	for track in tracks:
-		if track.parent_track_id < 0:
-			root_tracks.append(track)
-	
-	# Sort root tracks by order
-	root_tracks.sort_custom(func(a, b): return a.order < b.order)
-	
-	# Recursively add each root and its descendants
-	for root in root_tracks:
+	for root in _sorted_track_siblings(-1):
 		_add_track_and_descendants_to_list(root, result)
-	
 	return result
+
+
+## Tracks under `parent_id` (any negative id = root) sorted by `order`.
+func _sorted_track_siblings(parent_id: int) -> Array[Track]:
+	var siblings: Array[Track] = []
+	for t in tracks:
+		if t.parent_track_id == parent_id or (parent_id < 0 and t.parent_track_id < 0):
+			siblings.append(t)
+	siblings.sort_custom(func(a, b): return a.order < b.order)
+	return siblings
 
 
 func _add_track_and_descendants_to_list(track: Track, result: Array[Track]) -> void:
@@ -971,13 +832,20 @@ func add_clip(clip: Clip) -> void:
 		push_warning("[Project] Clip with ID %s already exists, replacing" % clip.id)
 
 	clips[clip.id] = clip
-	print("[Project] Added clip to pool: %s (total clips: %d)" % [clip.id, clips.size()])
+	logger.info("[Project] Added clip to pool: %s (total clips: %d)" % [clip.id, clips.size()])
 
 	# Sync to engine if connected
 	if _connection_state == ConnectionState.CONNECTED:
 		_sync_clip_to_engine(clip)
 
 	clip_added.emit(clip)
+
+
+## Hand out the next project-wide MIDI note ID.
+func allocate_note_id() -> int:
+	var note_id := next_note_id
+	next_note_id += 1
+	return note_id
 
 
 func get_clip(clip_id: String) -> Clip:
@@ -1050,30 +918,28 @@ func get_clip_instance_count(clip_id: String) -> int:
 # Create instrument track with corresponding channel
 func create_instrument_track(track_name: String = "Instrument") -> Dictionary:
 	"""Create a track + channel pair for an instrument."""
-	var track = create_track(track_name)
-	track.type = Track.TrackType.INSTRUMENT
-
-	var channel = create_channel(track_name, Channel.ChannelType.INSTRUMENT)
-
-	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
-	
-	# Connect track to engine now that it has a valid channel
-	if _connection_state == ConnectionState.CONNECTED:
-		track.connect_to_engine()
-
-	return {"track": track, "channel": channel}
+	return _create_track_with_channel(track_name, Track.TrackType.INSTRUMENT, Channel.ChannelType.INSTRUMENT)
 
 
 # Create audio track with corresponding channel
 func create_audio_track(track_name: String = "Audio") -> Dictionary:
 	"""Create a track + channel pair for audio."""
-	var track = create_track(track_name)
-	track.type = Track.TrackType.AUDIO
+	return _create_track_with_channel(track_name, Track.TrackType.AUDIO, Channel.ChannelType.AUDIO)
 
-	var channel = create_channel(track_name, Channel.ChannelType.AUDIO)
+
+## Track of `track_type` paired with a new channel of `channel_type`. Returns {track, channel}.
+func _create_track_with_channel(
+	track_name: String,
+	track_type: Track.TrackType,
+	channel_type: Channel.ChannelType
+) -> Dictionary:
+	var track := create_track(track_name)
+	track.type = track_type
+
+	var channel := create_channel(track_name, channel_type)
 
 	track.default_channel_id = channel.id  # Setter auto-reconnects if needed
-	
+
 	# Connect track to engine now that it has a valid channel
 	if _connection_state == ConnectionState.CONNECTED:
 		track.connect_to_engine()
@@ -1099,7 +965,7 @@ func create_group_track(group_name: String = "Group") -> Dictionary:
 	track.pair_mixer_channel(channel)
 	track.name = group_name
 	add_track(track)
-	print("[Project] Group '%s' (track %d) channel=%d" % [track.name, track.id, channel.id])
+	logger.info("[Project] Group '%s' (track %d) channel=%d" % [track.name, track.id, channel.id])
 	return {"track": track, "channel": channel}
 
 
@@ -1121,7 +987,7 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = fa
 
 	track.name = folder_name
 	add_track(track)
-	print("[Project] %s '%s' (track %d) bus=%s" % [
+	logger.info("[Project] %s '%s' (track %d) bus=%s" % [
 		"Folder Bus" if with_channel else "Folder",
 		track.name,
 		track.id,
@@ -1132,31 +998,25 @@ func create_folder_track(folder_name: String = "Folder", with_channel: bool = fa
 
 ## Mixer bus of the nearest ancestor Folder Bus, or null if none.
 func get_enclosing_folder_bus(track: Track) -> Channel:
-	if track == null:
-		return null
-	var parent_id := track.parent_track_id
-	while parent_id >= 0:
-		var parent := get_track_by_id(parent_id)
-		if parent == null:
-			break
-		if parent.is_folder_bus():
-			return parent.get_linked_channel()
-		parent_id = parent.parent_track_id
-	return null
+	var folder := _ancestor_where(track, func(t: Track) -> bool: return t.is_folder_bus())
+	return folder.get_linked_channel() if folder else null
 
 
 ## Mixer channel of the nearest ancestor Group, or null if none.
 func get_enclosing_group_channel(track: Track) -> Channel:
+	var group := _ancestor_where(track, func(t: Track) -> bool: return t.is_group())
+	return group.get_linked_channel() if group else null
+
+
+## Nearest ancestor of `track` (not the track itself) for which `predicate` is true, or null.
+func _ancestor_where(track: Track, predicate: Callable) -> Track:
 	if track == null:
 		return null
-	var parent_id := track.parent_track_id
-	while parent_id >= 0:
-		var parent := get_track_by_id(parent_id)
-		if parent == null:
-			break
-		if parent.is_group():
-			return parent.get_linked_channel()
-		parent_id = parent.parent_track_id
+	var parent := get_track_by_id(track.parent_track_id) if track.parent_track_id >= 0 else null
+	while parent:
+		if predicate.call(parent):
+			return parent
+		parent = get_track_by_id(parent.parent_track_id) if parent.parent_track_id >= 0 else null
 	return null
 
 
@@ -1391,20 +1251,26 @@ func apply_track_layout(layout: Dictionary) -> void:
 
 ## True if `maybe_descendant_id` is `root` or nested under it.
 func track_is_in_subtree(maybe_descendant_id: int, root: Track) -> bool:
-	if maybe_descendant_id < 0 or root == null:
+	if root == null:
 		return false
-	var walk_id := maybe_descendant_id
+	return _id_in_subtree(maybe_descendant_id, root.id, func(id: int) -> int:
+		var node := get_track_by_id(id)
+		return node.parent_track_id if node else -1
+	)
+
+
+## Walk parents from `id` via `parent_of(id) -> parent id (-1 at the root)`; true on reaching `root_id`.
+## Stops on a cycle.
+static func _id_in_subtree(id: int, root_id: int, parent_of: Callable) -> bool:
 	var visited: Dictionary = {}
+	var walk_id := id
 	while walk_id >= 0:
-		if walk_id == root.id:
+		if walk_id == root_id:
 			return true
 		if visited.has(walk_id):
-			break
+			return false
 		visited[walk_id] = true
-		var node := get_track_by_id(walk_id)
-		if node == null:
-			break
-		walk_id = node.parent_track_id
+		walk_id = int(parent_of.call(walk_id))
 	return false
 
 
@@ -1413,12 +1279,7 @@ func _track_already_placed(track: Track, new_parent_id: int, after_sibling: Trac
 	if track.parent_track_id != new_parent_id:
 		return false
 	var previous: Track = null
-	var siblings: Array[Track] = []
-	for t in tracks:
-		if t.parent_track_id == new_parent_id:
-			siblings.append(t)
-	siblings.sort_custom(func(a, b): return a.order < b.order)
-	for sibling in siblings:
+	for sibling in _sorted_track_siblings(new_parent_id):
 		if sibling == track:
 			return previous == after_sibling
 		previous = sibling
@@ -1527,21 +1388,12 @@ func get_channel_children(ch: Channel) -> Array[Channel]:
 
 ## True if `maybe_descendant_id` is `root` or nested under it in the channel tree.
 func channel_is_in_subtree(maybe_descendant_id: int, root: Channel) -> bool:
-	if maybe_descendant_id < 0 or root == null:
+	if root == null:
 		return false
-	var walk_id := maybe_descendant_id
-	var visited: Dictionary = {}
-	while walk_id >= 0:
-		if walk_id == root.id:
-			return true
-		if visited.has(walk_id):
-			break
-		visited[walk_id] = true
-		var node := get_channel_by_id(walk_id)
-		if node == null:
-			break
-		walk_id = node.parent_channel_id
-	return false
+	return _id_in_subtree(maybe_descendant_id, root.id, func(id: int) -> int:
+		var node := get_channel_by_id(id)
+		return node.parent_channel_id if node else -1
+	)
 
 
 ## Insert `child_id` into `parent.child_channel_ids` after `after_sibling` (null = first).
@@ -1614,15 +1466,7 @@ func _rebuild_channel_child_ids_from_parents() -> void:
 
 func _renumber_siblings(parent_id: int) -> void:
 	"""Renumber all tracks with the same parent to have sequential order."""
-	var siblings: Array[Track] = []
-	for t in tracks:
-		if t.parent_track_id == parent_id:
-			siblings.append(t)
-	
-	# Sort by current order
-	siblings.sort_custom(func(a, b): return a.order < b.order)
-	
-	# Renumber
+	var siblings := _sorted_track_siblings(parent_id)
 	for i in range(siblings.size()):
 		siblings[i].order = i
 
@@ -1635,9 +1479,9 @@ func _renumber_siblings(parent_id: int) -> void:
 func to_json() -> Dictionary:
 	# Serialize clip pool
 	var clips_array = []
-	print("[Project] Serializing %d clips from pool: %s" % [clips.size(), str(clips.keys())])
+	logger.info("[Project] Serializing %d clips from pool: %s" % [clips.size(), str(clips.keys())])
 	for clip_id in clips.keys():
-		print("[Project] Serializing clip: %s" % clip_id)
+		logger.info("[Project] Serializing clip: %s" % clip_id)
 		clips_array.append(clips[clip_id].to_json())
 
 	return {
@@ -1651,7 +1495,6 @@ func to_json() -> Dictionary:
 		"modified_date": modified_date,
 		"next_channel_id": next_channel_id,
 		"next_track_id": next_track_id,
-		"next_clip_id": next_clip_id,
 		"next_note_id": next_note_id,
 		"next_marker_id": next_marker_id,
 		"markers": markers.map(func(m): return m.to_json()),
@@ -1676,7 +1519,6 @@ static func from_json(data: Dictionary) -> Project:
 	# Restore ID counters
 	project.next_channel_id = data.get("next_channel_id", 2)
 	project.next_track_id = data.get("next_track_id", 0)
-	project.next_clip_id = data.get("next_clip_id", 1)
 	project.next_note_id = data.get("next_note_id", 1)
 	project.next_marker_id = data.get("next_marker_id", 1)
 
@@ -1693,7 +1535,9 @@ static func from_json(data: Dictionary) -> Project:
 	# Clear default master and load channels
 	project.channels.clear()
 	for channel_data in data.get("channels", []):
-		project.channels.append(Channel.from_json(channel_data))
+		var channel := Channel.from_json(channel_data)
+		channel.set_project(project)
+		project.channels.append(channel)
 
 	# Guard against a stale/missing next_channel_id counter: never hand out
 	# an ID that's already in use (e.g. from an older save with no counter).
@@ -1730,7 +1574,7 @@ static func _relink_folder_buses(project: Project) -> void:
 			continue
 		track.set_project_ref(project)
 		var ch := track.get_linked_channel()
-		print("[Project] Loaded %s '%s' (id %d) channel=%s default_channel_id=%d" % [
+		logger.info("[Project] Loaded %s '%s' (id %d) channel=%s default_channel_id=%d" % [
 			"Group" if track.is_group() else "folder",
 			track.name,
 			track.id,
@@ -1785,7 +1629,7 @@ func create_marker(start_ticks: int, duration_ticks: int, marker_name: String = 
 
 
 func get_ticks_per_beat() -> int:
-	return ppq
+	return GridHelper.beat_ticks(ppq, time_denominator)
 
 # ============================================================================
 # HELPERS

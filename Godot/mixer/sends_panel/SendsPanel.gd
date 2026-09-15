@@ -1,5 +1,7 @@
 class_name SendsPanel extends PanelContainer
 
+var logger : Log = Log.make("SendsPanel")
+
 ## SendsPanel - Manages send controls for a channel
 ##
 ## Dynamically generates rotary knobs for each BUS channel in the project,
@@ -149,7 +151,7 @@ func _on_project_channel_removed(ch: Channel) -> void:
 ## Rebuild the sends UI based on available BUS channels.
 func _rebuild_sends_ui() -> void:
 	if not channel or not project or not flow_container:
-		print("[SendsPanel] Cannot rebuild: channel=%s project=%s flow_container=%s" % [channel != null, project != null, flow_container != null])
+		logger.warn("Cannot rebuild: channel=%s project=%s flow_container=%s" % [channel != null, project != null, flow_container != null])
 		return
 
 	_disconnect_bus_name_signals()
@@ -160,7 +162,7 @@ func _rebuild_sends_ui() -> void:
 		if ch.channel_type == Channel.ChannelType.BUS and ch.id != channel.id:
 			bus_channels.append(ch)
 
-	print("[SendsPanel] Rebuild for channel %d (%s): Found %d bus channels" % [channel.id, Channel.ChannelType.keys()[channel.channel_type], bus_channels.size()])
+	logger.info("Rebuild for channel %d (%s): Found %d bus channels" % [channel.id, Channel.ChannelType.keys()[channel.channel_type], bus_channels.size()])
 
 	for bus_ch in bus_channels:
 		var send_config = channel.get_send(bus_ch.id)
@@ -217,7 +219,7 @@ func _on_send_knob_gui_input(event: InputEvent, target_channel_id: int, _knob: C
 		# - Mute send
 		var send_config = channel.get_send(target_channel_id)
 		if send_config:
-			print("[SendsPanel] Right-clicked send to channel %d (%.1f dB)" % [target_channel_id, send_config.amount])
+			logger.info("Right-clicked send to channel %d (%.1f dB)" % [target_channel_id, send_config.amount])
 
 
 ## Convert dB value (-60 to +12) to normalized 0-1 range.

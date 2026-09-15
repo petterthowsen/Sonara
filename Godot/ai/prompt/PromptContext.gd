@@ -88,7 +88,7 @@ func _playhead() -> String:
 	var ed := _editor()
 	if ed == null or ed.project == null:
 		return "1:1:000 (0)"
-	var bbt: Dictionary = ed.ticks_to_bbt(ed.playhead_ticks)
+	var bbt: Dictionary = ClipTextTime.ticks_to_bbt(ed.playhead_ticks, ed.project.ppq, ed.project.time_numerator, ed.project.time_denominator)
 	return "%d:%d:%03d (%d)" % [bbt.bar, bbt.beat, bbt.tick, ed.playhead_ticks]
 
 
@@ -104,7 +104,7 @@ func _tracks() -> String:
 			break
 		var t: Track = p.tracks[i]
 		lines.append("| %d | %s | %s | %s | %d |" % [
-			t.id, _md_cell(t.name), _track_kind(t),
+			t.id, _md_cell(t.name), AiTool.track_kind(t),
 			str(t.default_channel_id) if t.default_channel_id >= 0 else "—",
 			t.clip_instances.size()
 		])
@@ -132,7 +132,7 @@ func _channels() -> String:
 			if s is SendConfig:
 				sends.append("%d@%.1fdB" % [s.target_channel_id, s.amount])
 		lines.append("| %d | %s | %s | %.1f | %.2f | %s | %s | %d | %s |" % [
-			c.id, _md_cell(c.name), _channel_kind(c), c.volume, c.pan,
+			c.id, _md_cell(c.name), AiTool.channel_kind(c), c.volume, c.pan,
 			"Y" if c.mute else "", "Y" if c.solo else "",
 			c.output_channel_id, ", ".join(sends) if not sends.is_empty() else "—"
 		])
@@ -158,7 +158,7 @@ func _selection() -> String:
 				if inst is ClipInstance:
 					var ci: ClipInstance = inst
 					var cname: String = ci.clip.name if ci.clip else ci.clip_id
-					clip_bits.append("%s@%s" % [cname, ClipTextTime.format_bbt(ci.start_ticks, ed.project.ppq, ed.project.time_numerator) if ed.project else str(ci.start_ticks)])
+					clip_bits.append("%s@%s" % [cname, ClipTextTime.format_bbt(ci.start_ticks, ed.project.ppq, ed.project.time_numerator, ed.project.time_denominator) if ed.project else str(ci.start_ticks)])
 				if clip_bits.size() >= 8:
 					break
 			bits.append("clips: " + ", ".join(clip_bits))
@@ -190,11 +190,11 @@ func _clips() -> String:
 			var track_name: String = ci.track.name if ci.track else "?"
 			places.append("%s %s" % [
 				track_name,
-				ClipTextTime.format_bbt(ci.start_ticks, p.ppq, p.time_numerator),
+				ClipTextTime.format_bbt(ci.start_ticks, p.ppq, p.time_numerator, p.time_denominator),
 			])
 			if places.size() >= 4:
 				break
-		var bars := ClipTextTime.bars_from_ticks(clip.content_length_ticks, p.ppq, p.time_numerator)
+		var bars := ClipTextTime.bars_from_ticks(clip.content_length_ticks, p.ppq, p.time_numerator, p.time_denominator)
 		var more := insts.size() - places.size()
 		var place_s := ", ".join(places) if not places.is_empty() else "—"
 		if more > 0:
@@ -225,7 +225,7 @@ func _active_clip() -> String:
 			continue
 		var inst: ClipInstance = inst_v
 		var clip: Clip = inst.clip
-		var at: String = ClipTextTime.format_bbt(inst.start_ticks, p.ppq, p.time_numerator) if p else str(inst.start_ticks)
+		var at: String = ClipTextTime.format_bbt(inst.start_ticks, p.ppq, p.time_numerator, p.time_denominator) if p else str(inst.start_ticks)
 		bits.append("`%s` (%s) on %s @ %s, %d notes" % [
 			clip.name,
 			"audio" if clip.type == Clip.ClipType.AUDIO else "midi",
@@ -274,36 +274,6 @@ func _append_device_rows(lines: PackedStringArray, project: Project, host: Array
 func _date() -> String:
 	var dt := Time.get_datetime_dict_from_system()
 	return "%04d-%02d-%02d" % [dt.year, dt.month, dt.day]
-
-
-## Compact type string for prompt tables: group, folder_bus, folder, audio, or instrument.
-func _track_kind(t: Track) -> String:
-	if t.is_group():
-		return "group"
-	if t.is_folder_bus():
-		return "folder_bus"
-	match t.type:
-		Track.TrackType.AUDIO:
-			return "audio"
-		Track.TrackType.FOLDER:
-			return "folder"
-		_:
-			return "instrument"
-
-
-## Compact mixer type string: master, group, bus, audio, or instrument.
-func _channel_kind(c: Channel) -> String:
-	if c.is_master:
-		return "master"
-	match c.channel_type:
-		Channel.ChannelType.AUDIO:
-			return "audio"
-		Channel.ChannelType.BUS:
-			return "bus"
-		Channel.ChannelType.GROUP:
-			return "group"
-		_:
-			return "instrument"
 
 
 func _md_cell(text: String) -> String:

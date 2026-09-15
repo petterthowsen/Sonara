@@ -1,14 +1,14 @@
 # test_openrouter_sse.gd
 # Headless tests for OpenRouterSse, ChatTypes wire format, and ORChatError.
-# Run: godot --headless --path Godot -s ai/tests/test_openrouter_sse.gd
-extends SceneTree
+# Run: godot --headless --path Godot -s ai/tests/test_openrouter_sse.gd -- --test
+extends TestBase
 
 
-var _failures: int = 0
+func suite_name() -> String:
+	return "OpenRouter SSE / ChatTypes tests"
 
 
-func _init() -> void:
-	print("=== OpenRouter SSE / ChatTypes tests ===")
+func run_tests() -> void:
 	_test_split_mid_line()
 	_test_multiple_events_per_chunk()
 	_test_done_and_comments()
@@ -17,20 +17,6 @@ func _init() -> void:
 	_test_tool_call_merge()
 	_test_chat_error_401()
 	_test_audio_modalities_force_stream()
-	if _failures == 0:
-		print("=== ALL PASSED ===")
-	else:
-		print("=== FAILED: %d ===" % _failures)
-	quit(_failures)
-
-
-func _assert(cond: bool, msg: String) -> void:
-	if not cond:
-		_failures += 1
-		push_error("FAIL: " + msg)
-		print("FAIL: ", msg)
-	else:
-		print("ok: ", msg)
 
 
 ## A payload split across two feed() calls is reassembled.

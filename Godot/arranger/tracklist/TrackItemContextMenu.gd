@@ -1,5 +1,7 @@
 class_name TrackItemContextMenu extends PopupPanel
 
+var logger : Log = Log.make("TrackItemContextMenu")
+
 const BUS_NONE := TrackLinkBusCommand.UNLINK
 const BUS_NEW := TrackLinkBusCommand.CREATE_NEW
 
@@ -163,10 +165,8 @@ func _on_color_changed(new_color: Color) -> void:
 	if not current_track:
 		push_warning("[TrackItemContextMenu] color_changed with no current_track")
 		return
-	if current_project and current_track.get_project_ref() == null:
-		current_track.set_project_ref(current_project)
 	var ch := current_track.get_linked_channel()
-	print("[TrackItemContextMenu] color → track %d '%s' linked_channel=%s" % [
+	logger.info("color → track %d '%s' linked_channel=%s" % [
 		current_track.id,
 		current_track.name,
 		("%d" % ch.id) if ch else "none"
@@ -183,6 +183,6 @@ func _on_name_changed(new_name: String) -> void:
 func _on_delete_pressed() -> void:
 	"""Delete the track."""
 	if current_track and current_project:
-		print("[TrackItemContextMenu] Deleting track: ", current_track.name)
+		logger.info("Deleting track: ", current_track.name)
 		HistoryUtil.execute(TrackDeleteCommand.new(current_project, current_track))
 		hide()

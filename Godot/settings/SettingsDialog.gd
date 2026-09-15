@@ -108,8 +108,7 @@ func _restore_snapshot() -> void:
 			old_val = (old_val as Array).duplicate()
 		elif old_val is Dictionary:
 			old_val = (old_val as Dictionary).duplicate(true)
-		Sonara.set_config(key, old_val)
-		_settings.call("emit_signal", "setting_changed", key, old_val)
+		_settings.set_value(key, old_val)
 	_refresh_rows()
 
 

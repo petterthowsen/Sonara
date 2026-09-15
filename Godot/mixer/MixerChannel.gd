@@ -1,6 +1,8 @@
 @tool
 class_name MixerChannel extends PanelContainer
 
+var logger : Log = Log.make("MixerChannel")
+
 # UI References
 @onready var header: Panel = $HBox/VBox/Header
 @onready var title: SmartLineEdit = $HBox/VBox/Header/VBox/SmartLineEdit
@@ -18,10 +20,7 @@ class_name MixerChannel extends PanelContainer
 @onready var io: PanelContainer = $HBox/VBox/IO
 @onready var output_menu_buttton: MenuButton = $HBox/VBox/IO/OutputMenuButtton
 
-@onready var panning: PanelContainer = $HBox/VBox/Panning
-@onready var panning_combined_slider: HorSlider = $HBox/VBox/Panning/HSlider
-@onready var panning_dual_slider: HDualSlider = $HBox/VBox/Panning/DualPanSlider
-@onready var pan_mode_popup: PopupMenu = $PanModePopup
+@onready var pan_control: PanControl = $HBox/VBox/Panning
 
 # main volume, fader and/or volume
 @onready var volume: PanelContainer = $HBox/VBox/Volume
@@ -119,9 +118,6 @@ func _ready():
 	big_meter.volume_changed.connect(_on_volume_changed)
 	bottom_small_meter.volume_changed.connect(_on_volume_changed)
 	
-	panning_combined_slider.value_changed.connect(_on_pan_changed)
-	panning_dual_slider.values_changed.connect(_on_pan_changed)
-
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 
@@ -145,10 +141,6 @@ func _ready():
 		if not Engine.is_editor_hint():
 			children_slide.visible = false
 
-	# panning mode control
-	panning.gui_input.connect(_on_panning_gui_input)
-	pan_mode_popup.id_pressed.connect(_on_pan_mode_selected)
-
 	# output routing menu
 	if output_menu_buttton:
 		output_menu_buttton.get_popup().id_pressed.connect(_on_output_menu_selected)
@@ -167,8 +159,6 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.mute_changed.disconnect(_on_channel_mute_changed)
 		channel.solo_changed.disconnect(_on_channel_solo_changed)
 		channel.peak_updated.disconnect(_on_channel_peak_updated)
-		channel.pan_mode_changed.disconnect(_on_channel_pan_mode_changed)
-		channel.pan_changed.disconnect(_on_channel_pan_changed)
 		channel.route_changed.disconnect(_on_channel_route_changed)
 		channel.device_added.disconnect(_on_channel_device_added)
 		channel.device_removed.disconnect(_on_channel_device_removed)
@@ -179,6 +169,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 
 	channel = ch
 	project = proj
+	pan_control.bind_to_channel(channel)
 
 	# Connect to channel signals
 	if channel:
@@ -187,8 +178,6 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 		channel.mute_changed.connect(_on_channel_mute_changed)
 		channel.solo_changed.connect(_on_channel_solo_changed)
 		channel.peak_updated.connect(_on_channel_peak_updated)
-		channel.pan_mode_changed.connect(_on_channel_pan_mode_changed)
-		channel.pan_changed.connect(_on_channel_pan_changed)
 		channel.route_changed.connect(_on_channel_route_changed)
 		channel.device_added.connect(_on_channel_device_added)
 		channel.device_removed.connect(_on_channel_device_removed)
@@ -234,20 +223,6 @@ func _update_from_channel() -> void:
 
 	# Update volume slider and meter faders (scene default is -6 dB for regular channels)
 	_apply_volume_to_ui(channel.volume)
-
-	# Update pan mode and values
-	if channel.pan_mode == Channel.PanMode.STEREO_COMBINED:
-		panning_dual_slider.visible = false
-		panning_combined_slider.visible = true
-		panning_combined_slider.set_value_no_signal(channel.pan * 100)
-		pan_mode_popup.set_item_checked(0, true)
-		pan_mode_popup.set_item_checked(1, false)
-	else:
-		panning_combined_slider.visible = false
-		panning_dual_slider.visible = true
-		panning_dual_slider.set_values_no_signal(channel.pan_left * 100, channel.pan_right * 100)
-		pan_mode_popup.set_item_checked(0, false)
-		pan_mode_popup.set_item_checked(1, true)
 
 	# Update meter (peak levels)
 	big_meter.set_peak_levels(channel.peak_left, channel.peak_right)
@@ -320,32 +295,6 @@ func _on_volume_changed(value: float) -> void:
 		var old_volume := channel.volume
 		channel.set_volume(value)
 		HistoryUtil.record_property("Set Volume", channel, "set_volume", old_volume, channel.volume, true)
-
-func _on_pan_changed(left : float, right: float = 0.0) -> void:
-	left /= 100
-	right /= 100
-	print("pan changed, setting channel.pan to ", left, ", ", right)
-	if channel:
-		var old_l := channel.pan_left if channel.pan_mode == Channel.PanMode.STEREO_DUAL else channel.pan
-		var old_r := channel.pan_right if "pan_right" in channel else 0.0
-		channel.set_pan(left, right)
-		var cmd := PropertyCommand.new("Set Pan", channel, "set_pan", [old_l, old_r], [left, right])
-		cmd.set_unpack_array(true).set_mergeable(true)
-		HistoryUtil.record(cmd)
-
-func _on_panning_gui_input(event : InputEvent):
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-		pan_mode_popup.popup(
-			Rect2(panning.global_position, Vector2(0, 0))
-		)
-
-func _on_pan_mode_selected(pan_mode_id):
-	if pan_mode_id == Channel.PanMode.STEREO_COMBINED:
-		channel.set_pan_mode(Channel.PanMode.STEREO_COMBINED)
-		print("set pan mode to stereo combined")
-	else:
-		channel.set_pan_mode(Channel.PanMode.STEREO_DUAL)
-		print("set pan mode to stereo dual")
 
 
 func _on_mouse_entered() -> void:
@@ -593,27 +542,6 @@ func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: flo
 	bottom_small_meter.set_peak_levels(peak_left, peak_right)
 	bottom_small_meter.set_rms_levels(rms_left, rms_right)
 
-func _on_channel_pan_mode_changed(pan_mode : Channel.PanMode):
-	print("channel pan mode changed. applying to UI...")
-	if pan_mode == Channel.PanMode.STEREO_COMBINED:
-		panning_dual_slider.visible = false
-		panning_combined_slider.visible = true
-		panning_combined_slider.set_value_no_signal(channel.pan * 100)
-		pan_mode_popup.set_item_checked(0, true)
-		pan_mode_popup.set_item_checked(1, false)
-	else:
-		panning_combined_slider.visible = false
-		panning_dual_slider.visible = true
-		panning_dual_slider.set_values_no_signal(channel.pan_left * 100, channel.pan_right * 100)
-		pan_mode_popup.set_item_checked(0, false)
-		pan_mode_popup.set_item_checked(1, true)
-
-func _on_channel_pan_changed(pan_left : float, pan_right : float = 0.0):
-	if channel.pan_mode == Channel.PanMode.STEREO_COMBINED:
-		panning_combined_slider.set_value_no_signal(pan_left * 100)
-	else:
-		panning_dual_slider.set_values_no_signal(pan_left * 100, pan_right * 100)
-
 # ============================================================================
 # HELPERS, SIZING
 # ============================================================================
@@ -770,11 +698,11 @@ func _on_output_menu_selected(item_id: int) -> void:
 	if channel.is_master:
 		channel.device_output_id = item_id
 		_update_output_button_text()
-		print("[MixerChannel] Master routed to device %d" % item_id)
+		logger.info("Master routed to device %d" % item_id)
 	else:
 		# Regular channel: set channel routing
 		channel.set_route(item_id)
-		print("[MixerChannel] Channel %d routed to %d" % [channel.id, item_id])
+		logger.info("Channel %d routed to %d" % [channel.id, item_id])
 
 
 func _update_output_button_text() -> void:
@@ -857,13 +785,13 @@ func _sync_children_slide() -> void:
 func _on_channel_device_added(device_instance: DeviceInstance, position: int) -> void:
 	"""React to device added to channel."""
 	# ChannelDeviceList handles UI updates via bind_to_channel
-	print("[MixerChannel] Device added at position %d: %s" % [position, device_instance.device.name])
+	logger.info("Device added at position %d: %s" % [position, device_instance.device.name])
 
 
 func _on_channel_device_removed(position: int, device_id: String) -> void:
 	"""React to device removed from channel."""
 	# ChannelDeviceList handles UI updates via its internal signal listeners
-	print("[MixerChannel] Device removed from position %d: %s" % [position, device_id])
+	logger.info("Device removed from position %d: %s" % [position, device_id])
 
 
 # ============================================================================
@@ -884,7 +812,7 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	var preview := MixerChannelDrag.make_preview(channel)
 	var drag_data := MixerChannelDrag.new(self, channel, preview)
 	set_drag_preview(preview)
-	print("[MixerChannel] Started nest drag: ", channel.name)
+	logger.info("Started nest drag: ", channel.name)
 	return drag_data
 
 
@@ -895,29 +823,7 @@ func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
 			return true
 		var kids := _enclosing_children_pane()
 		return kids != null and kids._can_drop_data(at_position, data)
-	if not channel or not data is Asset:
-		return false
-
-	# Handle SFZ file drops (can only be dropped on INSTRUMENT channels)
-	if data.type == Asset.TYPE.SFZ:
-		return channel.channel_type == Channel.ChannelType.INSTRUMENT
-
-	# Handle device drops
-	if data.type != Asset.TYPE.Device:
-		return false
-
-	# Get the device metadata to check its category
-	var device = AssetService.get_device(data.path)
-	if not device:
-		return false
-
-	# INSTRUMENT devices can only be dropped on INSTRUMENT channels
-	if device.category == Device.DeviceCategory.Instrument:
-		return channel.channel_type == Channel.ChannelType.INSTRUMENT
-
-	# EFFECT devices can be dropped on any channel (not Master if we want to restrict)
-	# Allow effects on regular channels and bus channels
-	return not channel.is_master
+	return channel != null and data is Asset and DeviceDropUtil.can_drop_asset_on_channel(channel, data)
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
@@ -930,32 +836,8 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 		if kids:
 			kids._drop_data(at_position, data)
 		return
-	if not data is Asset or not channel:
-		return
-
-	var asset = data as Asset
-	
-	# Handle SFZ file drops
-	if asset.type == Asset.TYPE.SFZ:
-		_handle_sfz_drop(asset)
-		return
-	
-	# Handle device drops
-	if asset.type != Asset.TYPE.Device:
-		return
-
-	print("[MixerChannel] Device dropped on channel %d: %s" % [channel.id, asset.name])
-
-	# Get the device metadata
-	var device = AssetService.get_device(asset.path)
-	if not device:
-		push_error("[MixerChannel] Failed to get device: ", asset.path)
-		return
-
-	# Create device instance and add to channel
-	var device_instance = DeviceInstance.new(device, channel.id, channel.get_device_count())
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	print("[MixerChannel] Device added to channel: %s" % device.device_id)
+	if channel and data is Asset:
+		DeviceDropUtil.drop_asset(channel, data, -1, null)
 
 
 ## True when this GROUP or instrument strip can take `data.channel` as a nested child.
@@ -988,25 +870,3 @@ func _enclosing_children_pane() -> MixerChannelChildren:
 			return n as MixerChannelChildren
 		n = n.get_parent()
 	return null
-
-
-func _handle_sfz_drop(asset: Asset) -> void:
-	"""Handle dropping an SFZ file on this channel."""
-	print("[MixerChannel] SFZ dropped on channel %d: %s" % [channel.id, asset.name])
-	
-	# Get the sfizz device from AssetService
-	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
-	if not sfizz_device:
-		push_error("[MixerChannel] Failed to get sfizz device")
-		return
-	
-	# Create sfizz device instance and add to channel
-	var device_instance = DeviceInstance.new(sfizz_device, channel.id, channel.get_device_count())
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	
-	# Load the SFZ file into the device
-	# Give the engine a moment to create the device before loading the file
-	await get_tree().create_timer(0.1).timeout
-	device_instance.load_file(asset.path)
-	
-	print("[MixerChannel] SFZ loaded into channel: %s" % asset.name)

@@ -10,6 +10,52 @@ Line numbers are approximate and will drift. **Verification levels:**
 
 Risk / payoff / size use L/M/H and S/M/L.
 
+## Progress
+
+Last updated: 2026-09-15. Tick an item when it's merged, and change the section's **Status** line to match.
+
+| § | Item | Status |
+|---|---|---|
+| 3.1 | Bugs B1–B20 | ✅ Done |
+| 3.2 | Performance quick wins | ✅ Done |
+| 3.3 | Dead code and leftovers | ✅ Done |
+| 3.4 | Logging cleanup (hot paths) | ✅ Done |
+| 3.5 | API key file mode, env var, TLS warning | 🟢 Implemented, unverified |
+| 4.1 | Layering | 🟡 Partial: Transport → §5.1 |
+| 4.2 | Signal unbind convention | ✅ Done |
+| 4.3 | Settings / Config layering | ✅ Done |
+| 4.4 | Duplication hot spots | 🟢 Implemented, unverified; `ViewNavigator` and `VisualTrackListBinder` moved to §5.5 |
+| 4.5 | Code-style conformance | 🟡 Partial: BBT math and warnings done |
+| 4.6 | Test runner | 🟢 Implemented, unverified |
+| 5.1 | `Transport` model | ⬜ Not started |
+| 5.2 | Split `Project.gd` | ⬜ Not started |
+| 5.3 | Device chain and drop consolidation | 🟢 Implemented, unverified |
+| 5.4 | Split `MixerChannel.gd` | ⬜ Not started |
+| 5.5 | Split `Timeline.gd` / `NoteEditor.gd` / `TrackList.gd` | ⬜ Not started |
+| 5.6 | Browser and asset pipeline | ⬜ Not started |
+| 5.7 | Project root reorganization | ⬜ Not started |
+
+### TODO
+
+- [x] **§3.3 Dead code.** Delete the root scratch files (`AudioFileLoader.gd`, `Test.gd` + `test.tscn`, `mcp_testing/test_scene.tscn`, `components/test_components.tscn`, `assets/theme_testing.tscn`) and the unused members listed in §3.3. Use the Godot editor for scene deletes.
+- [x] **§3.3** Decide on `AiTool.is_read_only()`: use it or drop it. Rewrite or delete `test_scoring.gd`.
+- [x?] **§3.5** Save `config.json` with mode 0600, prefer `OPENROUTER_API_KEY`, warn on non-TLS remote `base_url`.
+- [x] **§4.2** Document the `bind_to_x` / `_unbind` / `_exit_tree` convention in `godot-architecture.mdc`, then apply it to `Mixer`, `TrackItem`, `DeviceView`, `DevicePanel` and the Timeline/TrackList `_clear_all_*` methods.
+- [x?] **§4.4** Extract shared helpers, starting with the ones §5.3 needs: device drop host, `DeviceInstance.get_channel()` callers, pending `load_file`.
+- [x?] **§4.4** `FileScanAssetProvider` base class and `Utils.expand_path`.
+- [x?] **§4.4** `HistoryUtil.execute_many` / `record_many`, `GridHelper.floor_ticks`, `PanControl`, `BaseRuler`, `ClipActions.create_clip`.
+- [x?] **§4.4** `AssetSearch`, `WaveformPyramid`, `JsonFields`, Project sibling/ancestor/subtree helpers, shared track/channel kind strings.
+- [ ] **§4.5** `##` docs, spacing, typed locals, colors to exports/theme, scene-built UI. Do these file by file while touching each file.
+- [x?] **§4.5** Remaining `print()` calls: converted to `Log.make` across app code (33 files, ~226 calls). Remaining `print()` calls are intentionally left in third-party addons (`addons/godot_ai`, `addons/godOSC`), headless test-runner scripts (`history/test_command_history.gd`, `ai/tests/test_*.gd`), and `support/Log.gd` itself.
+- [x?] **§4.6** `Godot/tests/` with `TestBase` and `run_all.sh`. Added `Utils.is_test_mode()` (checks `--test` in `OS.get_cmdline_user_args()`); `Sonara`, `AudioEngineOSC`, `AssetService` and `MidiManager` skip their side effects in test mode. Migrated all five `test_*.gd` scripts to extend `TestBase`; moved `history/test_command_history.gd` to `tests/`; added `tests/test_fuzzy_match.gd` (rewritten `test_scoring.gd`, deleted in §3.3). Ran `tests/run_all.sh`: all six scripts pass, no `MidiManager` crash. `test_device_tools.gd`'s pre-existing `AudioEngineOSC` compile error (§4.6 note above) is unrelated and still present.
+- [ ] **§5.1** `data/Transport.gd` out of `Editor.gd`; `project.set_tempo()` / `set_time_signature()` with history; `Editor.request_close()` / `new_project()`.
+- [ ] **§5.2** Split `Project.gd` (1812 lines): ClipLoadCoordinator → EngineSession → MixRouting → TrackHierarchy.
+- [x?] **§5.3** `DeviceRegistry` out of `DeviceAssetProvider`; consolidate device drops.
+- [ ] **§5.4** Split `MixerChannel.gd` (1012 lines); mixer channel registry in place of group scans.
+- [ ] **§5.5** Split `Timeline.gd` (1237), `NoteEditor.gd` (1131) and `TrackList.gd` (920); `ViewNavigator`, `VisualTrackListBinder` (from §4.4).
+- [ ] **§5.6** Asset scan off the main thread; split `Browser.gd` (991); keep metadata on rescan.
+- [ ] **§5.7** Move `Midi.gd`, `Utils.gd`, `AudioEngineOSC.gd` out of the project root (through the Godot editor).
+
 ---
 
 ## 1. Executive summary
@@ -53,133 +99,52 @@ The audit found four kinds of problems:
 
 ---
 
-## 3. Phase 1: quick wins (low risk, high ROI)
-
-Each item below is S-sized and independent, so they can go in as small commits.
-
-### 3.1 Bugs
-
-| # | Bug | Where | Fix | Ver. |
-|---|---|---|---|---|
-| B1 | **Save after Open acts as Save As.** `load_project` sets `project_path` and then calls `open_project()`. That calls `close_project()`, which clears the path. | `editor/Editor.gd` ~415, ~347 | Set `project_path` after `open_project()`, or pass it as a parameter. | ✅ |
-| B2 | **Physical MIDI input never works.** `handle_physical_midi_event` drops devices that are not in `enabled_devices`. That list defaults to the virtual keyboard only, and `set_device_enabled` has no callers. Device IDs are also port indices that come back from JSON as floats. | `midi/MidiManager.gd` ~71, ~251, ~113 | Enable physical inputs by default or add a UI toggle. Persist by device name and cast with `int()`. | ✅ |
-| B3 | **Undo save point can falsely report "clean".** Save at depth 3, undo to 1, make two new edits: the stack is at depth 3 again and reads as the save point. Merging into the save-point entry also keeps it clean. | `history/CommandHistory.gd` `_push` ~177 | In `_push`, if `save_point_index > _undo_stack.size()`, set it to -1. Don't merge when `size == save_point_index`. | ✅ |
-| B4 | **Logger keeps every message in memory forever.** The `*_messages` arrays are never read. `AudioEngineOSC.send` logs *every* outgoing message at INFO: notes, parameter drags, clip moves. | `support/Log.gd` ~128–181, `AudioEngineOSC.gd` ~99 | Delete the arrays. Log sends at `debug`, or not at all. | ✅ |
-| B5 | **Arranger scroll loops every frame.** `_process` sets `grid_helper.scroll_position` to the float lerp value, then `_update_ruler()` sets it back to the integer scroll value. Two `changed` emits per frame, forever, whenever the target is fractional. Each emit recomputes timeline width (walking all clips) and redraws rulers. | `arranger/Arranger.gd` ~239, ~285, ~513 | Round targets to whole pixels. Assign `scroll_position` once per frame. Recompute song length only when clips change. | ✅ |
-| B6 | **ClipEditor wipes its own selection.** `selected_clips = pending_clips` aliases the array, then `pending_clips.clear()` empties both. | `clip_editor/ClipEditor.gd` ~141, ~171 | `pending_clips = []`. Also remove the leftover `or true` at ~117. | ✅ |
-| B7 | **Pan undo is wrong in dual mode.** The command captures `channel.pan` instead of `pan_left`. | `mixer/MixerChannel.gd` ~328 | Capture `pan_left if dual else pan`. | ✅ |
-| B8 | **`bindv` connections are never disconnected.** `parameter_changed.connect(cb.bindv([position]))` is disconnected with the unbound callable, which never matches. Connections accumulate on add/undo, and the bound `position` goes stale after moves, so `ParameterList` and `DevicePanel` refresh the wrong device. | `data/Channel.gd` ~625, ~656, ~913 | Delete the relay. Emit or connect with the `DeviceInstance` instead of its position. | ✅ |
-| B9 | **Device files load twice on connect.** `Channel.sync_to_engine` loads with a `req_id`, then `DeviceInstance.connect_to_engine` sends `load_file` again without one. It also has no guard against being called twice, so listeners are registered twice. | `data/DeviceInstance.gd` ~415, `data/Channel.gd` ~163 | Make `connect_to_engine` register listeners only, and add an `_is_connected` guard. | ✅ |
-| B10 | **Freeing a `DevicePanel` leaks engine subscriptions.** It has no `_exit_tree`, so views never receive `_on_view_hidden()` when the lane clears. For example, a spectrum analyzer keeps streaming. The Large popup is parented to `Sonara.editor` and outlives the panel. | `devices/device_lane/DevicePanel.gd`, `DeviceLane.gd` ~104, ~168 | Add `_exit_tree()` that calls `_close_large()`, `_clear_panel_and_aux()` and unbinds the device. | ✅ |
-| B11 | **Mixer never disconnects `project.channel_added` / `channel_removed` on close.** | `mixer/Mixer.gd` ~97, ~116 | Disconnect them in `_on_project_closed`. | ✅ |
-| B12 | **Shared `Device` parameter lists are overwritten per instance.** `DeviceInstance._on_param_count_received` clears and refills `device.parameters` on the *registry* object shared by every instance, so two SFZ or CLAP instances clobber each other. *(M-sized; listed here for its payoff.)* | `data/DeviceInstance.gd` ~534, ~559 | Store advertised parameters on the instance. | 👁 |
-| B13 | **Closed projects can come back to life.** `disconnect_from_engine()` returns early when the state is DISCONNECTED, so listeners stay registered. `Track._project_ref` ↔ `Project.tracks` form a cycle. When the engine reconnects, the dead project re-inits and resyncs. | `data/Project.gd` ~611, `Track.gd` ~111, `Channel.gd` ~105 | Always unregister listeners. Use a `WeakRef` (as `DeviceInstance` does). Clear `routed_tracks` on close. | 👁 |
-| B14 | **Undoing a track delete loses children and position.** | `history/commands/TrackDeleteCommand.gd` | Snapshot the subtree and layout, then restore via `apply_track_layout`. *(M)* | 👁 |
-| B15 | **Small crashes and wrong values:** <br>• `Channel._on_peak_received` checks size ≥ 2 but reads `[3]`. <br>• `Clip.find_average_note` divides by zero on an empty clip. <br>• `Project.from_json` defaults `next_channel_id` to 1, which is master's ID. <br>• `Channel.pan_changed` is declared with 1 argument but emitted with 2. <br>• `Track` sets `default_channel_id = -1` *before* `disconnect_from_engine()`, which checks `>= 0`. | `data/*` | One-liners each. | 👁 |
-| B16 | **Note editor:** <br>• A mid-drag Shift/Alt switch rebuilds the drag snapshot without `clip_instance`, which breaks cross-clip transfer. <br>• Arrow-key nudge ignores the clip offset in track mode. <br>• `bind_to_clips` early-returns and keeps a stale `track`. | `clip_editor/note_editor/NoteEditor.gd` ~379, ~710, ~995; `NoteContainer.gd` ~183 | Use one `_snapshot_selection()` helper. Call `_update_single_note_position`. Compare `owner_track` in the early-return check. | 👁 |
-| B17 | **Undo history gaps and bypasses:** <br>• Arrow-key clip moves are not undoable. <br>• Time-signature changes are not recorded, so undo/redo can mark the project clean while the change is unsaved. <br>• TrackList device drops call `channel.add_device` directly. <br>• `TrackItem` renames with `track.name =`. | `Timeline.gd` ~951, ~982; `Editor.gd` ~524; `TrackList.gd` ~504–572; `TrackItem.gd` ~442, ~492 | Route through `HistoryUtil` / existing commands. | 👁 |
-| B18 | **AI batch and undo interaction.** The Assistant opens a macro and then `await`s tools. Ctrl+Z pops older history while the macro is open, and UI edits made meanwhile silently join the "Assistant" macro. | `ai/Assistant.gd` ~249 | Block undo/redo while a macro is open. Close the macro on every exit path. | 👁 |
-| B19 | **Autoload order.** `MidiManager._ready` runs before `Settings` is in the tree, so `get_node_or_null("/root/Settings")` returns null and it never hears setting changes. | `midi/MidiManager.gd` ~83, `project.godot` | Use the `Settings` global directly, or reorder the autoloads. | ❓ |
-| B20 | **Caps-lock `toggle_computer_keyboard` action is declared but never handled.** | `project.godot`, `MidiManager.gd` | Handle it in `_input`. | 👁 |
-
-DONE
-
-### 3.2 Performance quick wins
-
-- **`MixerChannel._process`** polls the cursor every frame per strip. Use `_gui_input` and enable processing only while resizing or moving. `DeviceLightButton._process` has the same problem.
-- **`MidiclipRenderer._process`** polls per clip per frame through `Sonara.editor.arranger.timeline` and uses `print_rich` inside `_draw`. Listen to `grid_helper.changed` instead.
-- **Browser rebuilds:** `asset_added` and `assets_updated` both trigger a full `_refresh_asset_list()`, so adding N files causes N+1 full rebuilds. Listen only to `assets_updated` and coalesce the refresh with `call_deferred`. Also debounce search and mark other tabs dirty (they currently show stale results after switching).
-- **`AudioEngineOSC`** compiles a new `RegEx` for every `/data` message and walks all listener patterns per message. Cache the regex and keep wildcard listeners in a separate list.
-- **`SpectrumRenderer`** calls `log()` per bin per redraw and allocates a `PackedVector2Array` each frame. Cache bin x positions and reuse the buffer.
-- **`TimelineTrack._draw_grid`** draws the full content width on every track during zoom. Clip it to the visible range.
-
-DONE
-
-### 3.3 Dead code and leftovers to delete
-
-All of these were grepped for references across `.gd`, `.tscn` and `.tres`. Moves and deletes of scenes should go through the Godot editor or MCP so UIDs stay intact.
-
-- **Root scratch files:** `AudioFileLoader.gd` (310 lines, zero refs; the engine decodes now), `Test.gd` + `test.tscn`, `mcp_testing/test_scene.tscn`, `components/test_components.tscn`, `assets/theme_testing.tscn`.
-- **`AudioEngineOSC`:** `send_audio_data()` (no callers), and the unused `engine_log_message` / `device_data_received` signals.
-- **`Editor.gd`:** the deprecated `clip_instance_selected` signal and its emit, the unused `browser_panel` / `assistant_panel` `find_child` lookups, `pause_here()`, and the commented-out block ~145.
-- **`Device.gd`:** `create_builtin_oscillator/delay/sfizz`, `register_visual_scene` / `visual_scene_path`, `register_controls_scene` / `controls_scene_path` / `has_custom_controls`.
-- **`Channel.gd`:** `get_pan_coefficients`, `get_linear_gain`. **`Track.gd`:** `_update_channel_link`, the no-op `_on_clip_note_*` handlers and their wiring, and the `track_color` alias. **`Project.gd`:** `get_track_siblings`, `next_clip_id`, and the no-op `_is_engine_connected` read ~144. **`ClipInstance.gd`:** `get_midi_notes_for_playback`.
-- **`NoteEditor.gd`:** `_snap_position_to_grid`, `_find_clip_instance_for_note`, `drag_start_ticks`. **`Arranger.gd`:** `_timeline_tracks`, `_get_track_index_at_position`, `_find_track_by_id` and the `_on_track_added` / `_on_track_removed` wiring. These also index by the wrong order.
-- **`AiTool.is_read_only()`** is never read. Either use it (skip the macro for read-only batches) or drop it.
-- **`test_scoring.gd`** is stale: it fails all 3 scenarios against the current `Utils.fuzzy_match` and never asserts. Rewrite it as property assertions under `tests/`, or delete it.
-
-### 3.4 Logging cleanup
-
-Replace `print()` with `Log.make("Name")` loggers. Start with the hot paths, where the noise costs real time:
-- per-note prints during drag (`NoteEditor.gd` ~480)
-- per-parameter prints in `DeviceInstance.sync_parameter_to_engine` and `SpectrumAnalyzerDefaultView`
-- `Channel.set_pan` / `set_color`
-- every volumeter drag (`TrackItem.gd` ~468)
-- every waveform level (`TimelineClip.gd` ~205)
-- `NoteContainer.gd` ~340, which builds a debug string even when logging is off
-
-Warning-level prints should use `logger.warn` / `push_warning`. This is mechanical and safe, and it makes the log useful again for the debugging workflow described in AGENTS.md.
-
-### 3.5 Security
-
-The OpenRouter key is stored in plaintext in `~/.config/sonara/config.json`, which is world-readable (mode 644). `base_url` accepts `http://`, so the Bearer token can go out unencrypted.
-- Set the file mode to 0600 on save.
-- Prefer the `OPENROUTER_API_KEY` environment variable.
-- Warn on non-TLS URLs that aren't localhost.
-
----
-
 ## 4. Cross-cutting themes
 
 ### 4.1 Layering: OSC outside `data/`, and the data layer reaching into the UI
+
+**Status:** 🟡 Partial. Data→UI leaks, MIDI and engine status are done; Transport and DeviceRegistry are open.
 
 Two opposite leaks break the documented rule that the UI calls setters and the data layer owns OSC.
 
 **UI / services sending OSC directly**
 
-| Location | What | Proposed home |
-|---|---|---|
-| `editor/Editor.gd` ~239–527, ~757–848 | `/transport/*` sends, `/status/playhead` and `/status/playing` listeners, playhead smoothing, BBT conversion | new `data/Transport.gd` (see §5.1) |
-| `midi/MidiManager.gd` ~457–473 | per-note MIDI OSC | `Channel.send_midi()` / `send_cc()` |
-| `browser/DeviceAssetProvider.gd` ~81–369 | `/plugin/scan`, `/builtin/request` protocol, `Device` construction, log-parameter guessing by name | new `data/DeviceRegistry.gd`; the provider only maps devices to `Asset`s. The log flag should come from the engine. |
-| `editor/EnginePanel.gd` ~103 | `/status/engine_load` listener | small engine-status model, or accept it as a documented exception |
+| Location | What | Proposed home | Status |
+|---|---|---|---|
+| `editor/Editor.gd` ~239–541 | `/transport/*` sends, `/status/playhead` and `/status/playing` listeners, playhead smoothing | new `data/Transport.gd` | Open, see §5.1 |
+| `browser/DeviceAssetProvider.gd` ~81–369 | `/plugin/scan`, `/builtin/request` protocol, `Device` construction, log-parameter guessing by name | new `data/DeviceRegistry.gd`; the provider only maps devices to `Asset`s. The log flag should come from the engine. | Done (log flag still guessed by name; needs an engine change) |
+| `midi/MidiManager.gd` | per-note MIDI OSC | `Channel.send_midi_event()` / `send_midi_cc()` | Done |
+| `editor/EnginePanel.gd` | `/status/engine_load` listener | `data/EngineStatus.gd` (`start()` / `stop()`, `engine_load_received`) | Done |
 
-**Data layer depending on the UI or `Sonara.editor`**
+**Data layer depending on the UI or `Sonara.editor`**: done. `grep Sonara.editor data/` is now empty.
 
-| Location | Issue | Fix |
-|---|---|---|
-| `data/Track.gd` ~337–408 | `_find_channel_in_mixer_ui`, `_adopt_channel_into_project`, `_fallback_project`: searches the `mixer_channel` scene group to "recover" channels. This covers up a root-cause bug where channels drop out of `project.channels`. | Log the root cause, delete the fallbacks, fail loudly. |
-| `Channel.gd` ~558–713, `AuxReturnSync.gd` ~127, `DeviceInstance.gd` ~642 | `Sonara.editor.project` fallbacks | Inject `_project_ref: WeakRef`. |
-| `Clip.gd` ~393 | Note IDs allocated from `Sonara.editor.project.next_note_id`, also incremented by hand in 5 UI places | `Project.allocate_note_id()`, passed in as a Callable. |
-| `Project.gd` ~265, ~553 | `Sonara.editor.get_tree()` for timers | `Engine.get_main_loop() as SceneTree` |
-| `DeviceInstance.gd` ~361 `create_view()` | Data object instantiates UI scenes | `devices/DeviceViewFactory.gd` (3 callers, all in `DevicePanel`) |
-| Various | Private fields read across classes: `_is_connected`, `_synced_to_engine` (including from `ai/clip_text/ClipTextGrid.gd`), `_color`, `_name` | Public accessors |
-
-### 4.2 Signal lifecycle
-
-One recurring pattern causes most of the leak bugs: views connect to data signals in `bind_*` or `_on_project_opened` and never disconnect them. Examples: `Mixer`, `EnginePanel`, `TrackItem.bind_to_track`, `DeviceView.bind_to_device`, `DevicePanel` (`plugin_gui_closed` with no `is_connected` guard), and the `_clear_all_*` methods in Timeline and TrackList.
-
-Suggested convention, documented in `godot-architecture.mdc`:
-- Every `bind_to_x(obj)` starts with `_unbind()` and ends by storing `obj`.
-- `_unbind()` is also called from `_exit_tree()`.
-- Never connect a `bind`/`bindv` callable you intend to disconnect. Keep the bound callable in a variable, or pass the object in the signal instead.
-
-### 4.3 Settings: one store, two access paths, disagreeing defaults
-
-There is a single store (`Sonara.get_config` / `set_config`). `Settings` is a metadata registry on top of it. Most consumers bypass `Settings`, so defaults are copied and disagree. For example, `assets/sfz/paths` defaults to `~/Music/libs/SFZ` in `Settings.gd`, `~/Music/SFZ` in `AssetService.gd`, and `[]` in `SfzAssetProvider.gd` / `Browser.gd`.
-
-Other symptoms:
-- `MidiManager`'s transpose and velocity hotkeys write config without signalling or saving.
-- `SettingsDialog` uses dynamic `.call("emit_signal", …)`.
-- The key `appearence/…` is misspelled.
-
-**Rules to adopt:**
-- Registered user settings always go through `Settings.get_value` / `set_value`.
-- `Sonara.get/set_config` is only for internal UI state (dock layout, browser state).
-- Delete `AssetService._setup_default_config`.
-- Update `godot-config-system.mdc`, which doesn't mention `Settings` at all.
+| Was | Now |
+|---|---|
+| `Track._find_channel_in_mixer_ui`, `_adopt_channel_into_project`, `_fallback_project` searched the `mixer_channel` group to recover channels | Deleted. `Track._ensure_linked_channel` looks only in `get_project_ref()` and logs an error if `default_channel_id` isn't in `project.channels`. `pair_mixer_channel` logs an error if there's no project ref yet. `TrackItem` and `TrackItemContextMenu` no longer patch the ref from the UI. |
+| `Channel._fallback_project` / `AuxReturnSync` / `DeviceInstance.load_file` used `Sonara.editor.project` | `Channel` holds a weak `_project_ref` (`set_project` / `get_project`), set in `Project._init` (master), `add_channel` and `from_json`, and cleared in `remove_channel`. `DeviceInstance` resolves the project through `get_channel().get_project()`. |
+| Note IDs incremented by hand in 7 places | `Project.allocate_note_id()`. `Clip.cut_overlapping_notes_at_pitch` takes it as a required `Callable`. |
+| `Project._get_scene_tree` used `Sonara.editor.get_tree()` | `Engine.get_main_loop() as SceneTree` |
+| `DeviceInstance.create_view()` | `devices/DeviceViewFactory.create(instance, type)` |
+| Private reads across classes | `Track/Channel.is_engine_connected()`, `Clip.is_synced_to_engine()` / `mark_synced_to_engine()` / `extend_content_length()`, `Track.apply_channel_color()` / `apply_channel_name()` |
 
 ### 4.4 Duplication hot spots
+
+**Status:** 🟢 Implemented, unverified (2026-09-15). Compiles headless; helper round trips checked with a throwaway headless script; not yet exercised in the app.
+
+Resolution notes:
+- **Device drops / channel lookup / pending load:** see §5.3.
+- **Providers:** `browser/FileScanAssetProvider.gd` holds the walk, diff, cache and timer; FS and SFZ providers are ~25 lines each. Removal detection uses a Dictionary and the cache is saved only when a scan changed something (the §5.6 threading work is still open). `Utils.expand_path` replaces the three `_expand_path` copies.
+- **Waveform:** `DeviceWaveform` became `data/WaveformPyramid.gd`. `Clip` owns one as `clip.waveform` and forwards its old fields, and `Project`'s decode/level handlers use one path for clips and devices (`_waveform_for_req`). Retries stay clip-only.
+- **Asset search:** `browser/AssetSearch.gd` (`score`, `rank`) is used by the Browser and by `AssetService.search_assets`, which also accepts a path substring hit.
+- **Clip creation:** `history/ClipActions.create_clip()` (named without `_midi_` because the timeline double-click still creates audio clips on audio tracks). The note editor's clip creation is now undoable as its own step.
+- **Macros:** `HistoryUtil.execute_many` / `record_many` replace the 7 Timeline sites, NoteEditor and three AI tools.
+- **Snapping:** `GridHelper.floor_ticks()`. Note-editor position drags now snap the drag delta, so notes keep their relative offsets; resize uses `_snapped_duration()`.
+- **Project:** `_sorted_track_siblings`, `_ancestor_where`, `_id_in_subtree` (tracks and channels) and `_create_track_with_channel`.
+- **Serialization:** `data/JsonFields.gd` plus a `JSON_FIELDS` list on Channel, Track and Clip. Missing keys keep constructor values, which fixes the disagreeing defaults (Channel volume now -6 for non-master, Track height 48, Clip sample rate 44100). Clip colors are saved as RGBA arrays; legacy hex strings still load.
+- **Kind strings:** `AiTool.track_kind` / `channel_kind` (now returns `master`) are used by `PromptContext`.
+- **Pan UI:** `mixer/PanControl.gd` is the script on the `Panning` node, and `PanModePopup` moved under it in `MixerChannel.tscn`.
+- **Rulers:** `components/BaseRuler.gd` holds the exports, GridHelper binding, background, start arrow and `_draw_tick_line`.
+- **Not done here:** `ViewNavigator` and `VisualTrackListBinder` are interactive gesture/layout code that needs in-app testing; they move to §5.5.
 
 | Duplicate | Locations | Extraction |
 |---|---|---|
@@ -202,33 +167,16 @@ Other symptoms:
 
 ### 4.5 Code-style conformance
 
+**Status:** 🟡 Partial
+
 These are mechanical items, best done file by file *while touching them* rather than in one big diff:
 - Switch `"""docstrings"""` to `##`. Note that `## ====` banner lines attach to the next symbol as doc comments.
 - Use two blank lines between functions.
 - Add types to untyped locals and collections: `Array[SendConfig]`, `Array` automation lanes, `Dictionary` lookups in `Project`.
 - Move hardcoded colors and sizes in `_draw` to exports or the theme: `SamplerDefaultView` (6), `Meter`, `DropZone`, `SendControl`, `SpectrumRenderer` labels.
 - UI built in code, against the style guide: `DevicePanel._create_cc_tab` / `_create_container_folder`, `SendsPanel.SendControl`.
-- `BBT` math ignores the time-signature denominator (6/8 is shown as six quarters). It is consistent across `Editor.gd`, `GridHelper.gd` and `ClipTextTime`, so fix it in `GridHelper` and delete the Editor copy.
-- Consider re-enabling `unused_variable` / `unused_parameter` warnings (prefix intentionally unused names with `_`). That would have flagged much of the dead code above.
-
-### 4.6 Tests
-
-There are six test scripts in three places (root, `history/`, `ai/tests/`), each with its own copy-pasted `_assert` code and no runner.
-
-Running them headless also boots every autoload:
-- they read the real `~/.config/sonara`
-- AssetService starts scans
-- MidiManager opens MIDI inputs
-
-In the reviewer's sandbox every script crashed at `MidiManager.gd` `OS.open_midi_inputs` *after* printing ALL PASSED (possibly environment-specific ❓). `test_device_tools.gd` also logs a compile error.
-
-**Proposal:**
-- Create `Godot/tests/` with a shared `TestBase` (asserts, failure count, exit code).
-- Add `tests/run_all.sh`, which runs each script and checks the exit code.
-- Autoloads skip side effects when `--test` is in `OS.get_cmdline_user_args()`.
-- Move `history/test_command_history.gd` and a rewritten `test_scoring` there.
-
----
+- ~~`BBT` math ignores the time-signature denominator.~~ Done: `GridHelper.beat_ticks`/`bar_ticks`/`bbt_of` are the single source; `ClipTextTime` delegates to them and the Editor copy is gone.
+- ~~Consider re-enabling `unused_variable` / `unused_parameter` warnings.~~ Re-enabled in `project.godot`; prefix intentionally unused names with `_` as the warnings surface.
 
 ## 5. Phase 2: structural refactors (strategic)
 
@@ -256,10 +204,6 @@ At the same time, add `Editor.request_close(then: Callable)` and `Editor.new_pro
 4. **`data/project/TrackHierarchy.gd`** (~500 lines, medium risk because of the re-entrancy flags): place, apply layout, children, visual list, nesting and the channel-nest sync.
 
 Result: `Project.gd` is about 450 lines. A similar extraction of `ChannelDeviceChain.gd` (`Channel.gd` ~603–811) brings `Channel.gd` under 750.
-
-### 5.3 Device chain and drop consolidation: low risk, medium payoff, M
-
-This covers the device drop zones, "which channel owns this device" and the `create_timer(0.1)` rows in §4.4, plus `DeviceViewFactory` and `DeviceRegistry` from §4.1. It removes about 300 lines across six files and fixes several drop-behaviour inconsistencies. For example, `MixerChannel` drops skip the Audio-channel rule that `DeviceDropUtil` enforces.
 
 ### 5.4 Split `MixerChannel.gd` (1002 lines)
 
@@ -313,42 +257,3 @@ Also: `TrackList.gd` (920) → `TrackReorderController` (~280) + `TrackAssetDrop
 | `Sonara.find_waveform_cache_file` | the waveform / clip-loading code (its only user) |
 
 After this the project root contains only `project.godot`, `Sonara.gd` and `icon.svg`. Do the moves through the Godot editor so `.uid` references stay valid.
-
----
-
-## 6. Suggested roadmap
-
-| Phase | Content | Est. |
-|---|---|---|
-| **1a: bug batch** | B1–B11, B15, B19, B20 | ~1 day |
-| **1b: hygiene** | §3.3 dead code, §3.4 logging in hot paths, §3.2 perf quick wins, §3.5 key permissions | ~1 day |
-| **1c: lifecycle** | B12, B13, B14, B16–B18; signal unbind convention (§4.2) | ~1–2 days |
-| **2a** | Transport model + close/new consolidation (§5.1); settings access rule (§4.3) | ~1–2 days |
-| **2b** | `Project.gd` split steps 1–2, then 3–4 (§5.2) | ~2–3 days |
-| **2c** | Device chain / drop consolidation (§5.3), `MixerChannel` split (§5.4) | ~2 days |
-| **2d** | Test runner (§4.6), root reorg (§5.7) | ~0.5 day |
-| **3** | Timeline / NoteEditor / TrackList splits (§5.5), browser threading and split (§5.6), `ViewNavigator`, selection gesture sharing | as the areas get touched |
-
-Suggested TODO.md entries to replace the investigation item:
-
-```md
-- [ ] Frontend audit phase 1a: bug batch (docs/frontend-architecture-audit.md §3.1 B1–B11, B15, B19, B20)
-- [ ] Frontend audit phase 1b: dead code, logging, perf quick wins, API key perms (§3.2–3.5)
-- [ ] Frontend audit phase 1c: lifecycle/undo bugs + signal unbind convention (B12–B14, B16–B18, §4.2)
-- [ ] Transport model out of Editor.gd; unify save-prompt/close flow (§5.1)
-- [ ] Split Project.gd (§5.2)
-- [ ] Consolidate device drop/chain code; split MixerChannel.gd (§5.3, §5.4)
-- [ ] Godot test runner + project root reorg (§4.6, §5.7)
-```
-
----
-
-## 7. What's already in good shape
-
-- `components/` controls have no dependency on `Sonara.editor` or the project, so they are reusable.
-- `editor/docks/` files are small, documented and free of OSC.
-- AI tools mostly go through the same Commands and `DeviceDropUtil` as the UI. The exceptions are a few `set_name` / `clip.color` calls in `AddDeviceTool` and `CreateClipTool`.
-- `CommandHistory`, `PropertyCommand` merging and `HistoryUtil` form a sound foundation; the bugs above are edge cases.
-- `GridHelper` sharing works as documented. The remaining issues are manual snapping and duplicated navigation around it, not the helper itself.
-- The `Log` class, with engine error capture into `Godot/logs/last.log`, is good infrastructure that just needs adopting.
-- `Meter`, `RealTimeRuler` and `DropZone` already expose most visual values as exports.

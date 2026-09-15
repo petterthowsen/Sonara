@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Add a send from a channel to a bus. amount_db defaults to -12. Optional pre_fader."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

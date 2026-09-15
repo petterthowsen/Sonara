@@ -4,6 +4,8 @@
 @tool
 class_name TimelineTrack extends Control
 
+var logger : Log = Log.make("TimelineTrack")
+
 
 @export var grid_color_bar: Color = "#000":
 	set(value):
@@ -230,8 +232,8 @@ func _get_lane_color() -> Color:
 	if track == null:
 		return bg_color
 	var tint_by_track := true
-	if not Engine.is_editor_hint() and Sonara:
-		tint_by_track = Sonara.get_config("appearence/color_timeline_by_track", true)
+	if not Engine.is_editor_hint():
+		tint_by_track = Settings.get_value("appearance/color_timeline_by_track")
 	if tint_by_track:
 		var col := Color.from_hsv(track.color.h, track.color.s, bg_color.v)
 		col.a = 0.5
@@ -339,21 +341,10 @@ func _on_double_click(pos: Vector2) -> void:
 	if timeline and timeline.grid_helper:
 		snapped_ticks = timeline.grid_helper.snap_ticks(click_ticks)
 
-	# Create a new Clip in the project's clip pool
+	# Create a 4-beat clip in the pool plus its instance (undoable)
 	var clip_type = Clip.ClipType.MIDI if track.type == Track.TrackType.INSTRUMENT else Clip.ClipType.AUDIO
 	var clip_name = track.name + " %d" % (project.clips.size() + 1)
-	var new_clip = project.create_clip(clip_name, clip_type)
-
-	# Set clip properties
-	new_clip.color = track.color
-	new_clip.content_length_ticks = project.ppq * 4  # Default: 4 beats
-	
-	# Add clip to project pool (required for serialization!)
-	# Create via undoable command (adds clip to pool + instance)
-	var ppq = project.ppq
-	HistoryUtil.execute(ClipInstanceCreateCommand.new(
-		track, new_clip, snapped_ticks, ppq * 4, project, true
-	))
+	ClipActions.create_clip(project, track, snapped_ticks, project.ppq * 4, clip_name, clip_type)
 
 
 
@@ -373,7 +364,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 		return
 
 	if not track or not Sonara or not Sonara.editor or not Sonara.editor.project:
-		print("[TimelineTrack] Drop failed: missing dependencies")
+		logger.error("Drop failed: missing dependencies")
 		return
 
 	var asset = data as Asset
@@ -381,7 +372,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 	# Convert drop position to timeline ticks
 	if not timeline:
-		print("[TimelineTrack] Drop failed: no timeline reference")
+		logger.error("Drop failed: no timeline reference")
 		return
 
 	var drop_ticks = timeline.pixels_to_ticks(at_position.x)
@@ -399,7 +390,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 		track, clip, drop_ticks, instance_duration, project, false
 	))
 
-	print("[TimelineTrack] Created %s clip from: %s" % [
+	logger.info("Created %s clip from: %s" % [
 		"audio" if asset.is_audio() else "MIDI",
 		asset.get_display_name()
 	])

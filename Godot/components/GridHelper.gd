@@ -48,13 +48,41 @@ static func from_project(p : Project) -> GridHelper:
 # GRID INTERVAL CALCULATION
 # ============================================================================
 
+## Ticks in one beat. A beat is a 1/denominator note (an eighth in 6/8).
+static func beat_ticks(ppq_val: int, denominator: int) -> int:
+	@warning_ignore("integer_division")
+	return maxi(1, maxi(1, ppq_val) * 4 / maxi(1, denominator))
+
+## Ticks in one bar (numerator beats).
+static func bar_ticks(ppq_val: int, numerator: int, denominator: int) -> int:
+	return maxi(1, numerator) * beat_ticks(ppq_val, denominator)
+
+## Ticks to 1-based bar/beat/sixteenth plus the tick remainder within the sixteenth.
+@warning_ignore("integer_division")
+static func bbt_of(ticks: int, ppq_val: int, numerator: int, denominator: int) -> Dictionary:
+	var tpbar := bar_ticks(ppq_val, numerator, denominator)
+	var tpbeat := beat_ticks(ppq_val, denominator)
+	var tpsix := maxi(1, maxi(1, ppq_val) / 4)
+	var t := maxi(0, ticks)
+	var rem := t % tpbar
+	var beat_rem := rem % tpbeat
+	return {
+		"bar": t / tpbar + 1,
+		"beat": rem / tpbeat + 1,
+		"sixteenth": beat_rem / tpsix + 1,
+		"tick": beat_rem % tpsix,
+	}
+
 func get_ticks_per_bar() -> int:
 	"""Get the number of ticks in one bar."""
-	return ppq * time_numerator
+	return bar_ticks(ppq, time_numerator, time_denominator)
 
 func get_ticks_per_beat() -> int:
 	"""Get the number of ticks in one beat."""
-	return ppq
+	return beat_ticks(ppq, time_denominator)
+
+func ticks_to_bbt(ticks: int) -> Dictionary:
+	return bbt_of(ticks, ppq, time_numerator, time_denominator)
 
 func get_snap_interval() -> int:
 	"""Get the current snap interval in ticks - matches finest visible grid line."""
@@ -65,7 +93,7 @@ func get_snap_interval() -> int:
 		return subdivision_interval
 	elif pixels_per_beat >= 32.0:
 		# If beats are visible, snap to beats
-		return ppq
+		return get_ticks_per_beat()
 	else:
 		# Otherwise snap to bars
 		return get_ticks_per_bar()
@@ -94,6 +122,13 @@ func snap_ticks(ticks: int) -> int:
 	if interval > 0:
 		# Use rounding instead of truncation for better snapping behavior
 		return roundi(float(ticks) / float(interval)) * interval
+	return ticks
+
+## Snap ticks down to the current grid interval (the grid line at or before `ticks`).
+func floor_ticks(ticks: int) -> int:
+	var interval := get_snap_interval()
+	if interval > 0:
+		return floori(float(ticks) / float(interval)) * interval
 	return ticks
 
 func snap_pixels(pixels: float) -> float:

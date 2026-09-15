@@ -1,17 +1,20 @@
 # Settings.gd
-# Central registry for all application settings.
-# Provides a single source of truth for setting metadata (labels, types,
-# defaults, categories) and delegates persistence to the Sonara config system.
+# Registry for user-facing settings, layered on top of the Sonara config store.
+# Every user preference is declared here exactly once, with its default, type
+# and constraints. This is the only place setting defaults live.
+#
+# Layers (each calls only the one below it):
+#   Consumers -> Settings.get_value / set_value
+#   Settings  -> Sonara.get_config / set_config / save_config (plain JSON store)
+# Only internal, unregistered UI state (dock layout, browser state) may use
+# Sonara.get_config / set_config directly.
 #
 # Usage:
 #   Settings.get_value("midi/virtual_keyboard/transpose")   -> 0
-#   Settings.set_value("midi/virtual_keyboard/transpose", 12)
-#   Settings.set_value("midi/virtual_keyboard/transpose", 12)
-#   Settings.save()  ->  writes config.json to disk
+#   Settings.set_value("midi/virtual_keyboard/transpose", 12)  -> validates, saves, emits
 #   Settings.setting_changed.connect(...)  ->  react to live changes
 #
-# Register as autoload in project.godot:
-#   Settings="*res://settings/Settings.gd"
+# Registered as an autoload before any consumer autoload in project.godot.
 extends Node
 
 
@@ -55,12 +58,32 @@ const CATEGORY_SHORTCUTS = "Shortcuts"
 const CATEGORY_AI = "AI"
 
 var _settings: Dictionary = {}
-var _settings_loaded := false
+
+
+func _init() -> void:
+	# Register in _init so the registry is usable as soon as the node exists.
+	_register_all_settings()
 
 
 func _ready() -> void:
-	_register_all_settings()
-	_settings_loaded = true
+	_migrate_renamed_keys()
+
+
+## Keys that were renamed: old -> new. Old values are copied once if the new key is unset.
+const _RENAMED_KEYS := {
+	"appearence/color_timeline_by_track": "appearance/color_timeline_by_track",
+}
+
+
+func _migrate_renamed_keys() -> void:
+	var migrated := false
+	for old_key in _RENAMED_KEYS:
+		var old_val = Sonara.get_config(old_key)
+		if old_val != null and Sonara.get_config(_RENAMED_KEYS[old_key]) == null:
+			Sonara.set_config(_RENAMED_KEYS[old_key], old_val)
+			migrated = true
+	if migrated:
+		Sonara.save_config()
 
 
 func _register_all_settings() -> void:
@@ -152,7 +175,7 @@ func _register_all_settings() -> void:
 
 	# --- Appearance ---
 	_register(Setting.new(
-		"appearence/color_timeline_by_track",
+		"appearance/color_timeline_by_track",
 		"Color Timeline by Track",
 		Type.BOOL,
 		true,
@@ -169,7 +192,7 @@ func _register_all_settings() -> void:
 		Type.SECRET,
 		"",
 		CATEGORY_AI,
-		"API key from openrouter.ai. Stored in ~/.config/sonara/config.json (plaintext, same as other Sonara settings)."
+		"API key from openrouter.ai. Stored in plaintext in ~/.config/sonara/config.json (mode 0600). The OPENROUTER_API_KEY environment variable takes precedence."
 	))
 	_register(Setting.new(
 		"ai/openrouter/base_url",
@@ -297,38 +320,61 @@ func get_value(key: String):
 	return Sonara.get_config(key, s.default)
 
 
-func get_typed_value(key: String, default = null):
-	"""Read a config value, returning *default* if the key is not registered."""
-	if not _settings.has(key):
-		return Sonara.get_config(key, default)
-	var s = _settings[key]
-	return Sonara.get_config(key, s.default)
-
-
 func set_value(key: String, value) -> void:
-	"""Write a value to the in-memory config and emit the change signal."""
-	if not _settings.has(key):
+	"""Validate a value, write it to config, save, and emit the change signal."""
+	var s = _settings.get(key)
+	if s == null:
 		push_warning("Settings: no registration for key '%s'" % key)
 		return
-	var current = Sonara.get_config(key, _settings[key].default)
+	value = _coerce(s, value)
+	var current = Sonara.get_config(key, s.default)
 	if current == value:
 		return
 	Sonara.set_config(key, value)
+	Sonara.save_config()
 	setting_changed.emit(key, value)
 
 
 func save() -> void:
-	"""Persist all config values to disk."""
+	"""Persist all config values to disk. set_value already saves; kept for batch callers."""
 	Sonara.save_config()
+
+
+func _coerce(s: Setting, value):
+	"""Convert *value* to the setting's type and clamp it to its range."""
+	match s.type:
+		Type.BOOL:
+			return bool(value)
+		Type.INT:
+			var i := int(value)
+			if s.max_val > s.min_val:
+				i = clampi(i, int(s.min_val), int(s.max_val))
+			return i
+		Type.FLOAT:
+			var f := float(value)
+			if s.max_val > s.min_val:
+				f = clampf(f, s.min_val, s.max_val)
+			return f
+		Type.STRING, Type.PATH, Type.SECRET:
+			return str(value)
+		Type.CHOICE:
+			if not s.options.is_empty() and value not in s.options:
+				push_warning("Settings: invalid choice '%s' for '%s'" % [value, s.key])
+				return s.default
+			return value
+		Type.CHOICE_MULTI, Type.PATH_ARRAY:
+			return (value as Array).duplicate() if value is Array else s.default.duplicate()
+	return value
 
 
 func reset_to_defaults() -> void:
 	"""Reset every registered setting to its default, then save."""
 	for key in _settings.keys():
 		var s = _settings[key]
-		Sonara.set_config(key, s.default)
-		setting_changed.emit(key, s.default)
-	save()
+		var def = s.default.duplicate() if s.default is Array else s.default
+		Sonara.set_config(key, def)
+		setting_changed.emit(key, def)
+	Sonara.save_config()
 
 
 # ---------------------------------------------------------------------------

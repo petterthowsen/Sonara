@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Set bypass and/or display name on a device (path or instance_id). Undoable."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -48,8 +44,5 @@ func execute(args: Dictionary) -> Dictionary:
 			cmds.append(PropertyCommand.new("Rename Device", inst, "set_name", inst.name, new_name))
 	if cmds.is_empty():
 		return ok(compact_device(project, inst))
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("Set Device", cmds))
+	HistoryUtil.execute_many("Set Device", cmds)
 	return ok(compact_device(project, inst))

@@ -1,50 +1,11 @@
 # Draws a ruler with vertical lines at real-time positions (seconds, minutes, hours)
 # Shows time labels and automatically adjusts major unit based on zoom level
 @tool
-class_name RealTimeRuler extends Control
-
-# Visual settings
-@export var bg_color: Color = Color(0.15, 0.15, 0.15):
-	set(value):
-		if bg_color != value:
-			bg_color = value
-			queue_redraw()
-
-@export var text_color: Color = Color(0.9, 0.9, 0.9):
-	set(value):
-		if text_color != value:
-			text_color = value
-			queue_redraw()
-
-@export var start_position_color: Color = Color(0.2, 0.6, 1.0):  # Blue for start position arrow
-	set(value):
-		if start_position_color != value:
-			start_position_color = value
-			queue_redraw()
-
-@export var font_size: int = 12:
-	set(value):
-		if font_size != value:
-			font_size = value
-			queue_redraw()
-
-@export var offset_x: float = 0.0:  # Horizontal draw offset (e.g., for piano keyboard width)
-	set(value):
-		if offset_x != value:
-			offset_x = value
-			queue_redraw()
+class_name RealTimeRuler extends BaseRuler
 
 @export var min_major_spacing: float = 100.0  # Minimum pixels between major lines
 
-# Grid helper for calculations
-var grid_helper: GridHelper = GridHelper.new()
-var start_position_ticks: int = 0
-
-# Signal when user clicks to set start position
-signal start_position_requested(ticks: int)
-
 enum TimeUnit { MILLISECONDS, SECONDS, MINUTES, HOURS }
-enum VerticalAlignment { TOP, BOTTOM }
 
 # Ruler scale configuration
 # Each entry defines: [time_unit, major_interval, minor_subdivisions]
@@ -80,51 +41,6 @@ const RULER_SCALES = [
 	[TimeUnit.HOURS, 6, 6],              # 6hr major, 1hr minor
 	[TimeUnit.HOURS, 12, 12],            # 12hr major, 1hr minor
 ]
-
-@export var vertical_alignment = VerticalAlignment.BOTTOM:
-	set(value):
-		if vertical_alignment != value:
-			vertical_alignment = value
-			queue_redraw()
-
-func _ready() -> void:
-	if not grid_helper:
-		grid_helper = GridHelper.new()
-
-func set_grid_helper(gh: GridHelper) -> void:
-	"""Set the grid helper and connect to its signals."""
-	if grid_helper and grid_helper.changed.is_connected(queue_redraw):
-		grid_helper.changed.disconnect(queue_redraw)
-	
-	grid_helper = gh
-	
-	if grid_helper:
-		grid_helper.changed.connect(queue_redraw)
-
-# Utility function that delegates to GridHelper in case caller doesn't have the GridHelper
-func update(scroll: float, zoom: float) -> void:
-	grid_helper.pixels_per_beat = zoom
-	grid_helper.scroll_position = scroll
-	# We don't need to redraw here, GridHelper will emit a signal when it changes
-
-func set_start_position(ticks: int) -> void:
-	"""Update start position and redraw."""
-	if start_position_ticks != ticks:
-		start_position_ticks = ticks
-		queue_redraw()
-
-func _draw():
-	# Draw background
-	var sb_normal = get_theme_stylebox("normal", "Ruler")
-	if sb_normal:
-		draw_style_box(sb_normal, Rect2(0, 0, size.x, size.y))
-	else:
-		draw_rect(Rect2(0, 0, size.x, size.y), bg_color)
-
-	# Draw ruler markings
-	if grid_helper:
-		_draw_ruler()
-		_draw_start_position_arrow()
 
 ## Represents a ruler scale with unit, major interval, and subdivision count
 class RulerScale:
@@ -292,57 +208,10 @@ func _draw_ruler() -> void:
 
 				var minor_x = grid_helper.ticks_to_pixels(minor_ticks) - scroll_offset + offset_x
 
-				# Only draw if within visible bounds
 				if minor_x >= offset_x and minor_x <= size.x:
-					# Draw minor line (half height)
-					var line_height = size.y * 0.5
-					var start_y: float
-					var end_y: float
-
-					match vertical_alignment:
-						VerticalAlignment.TOP:
-							start_y = 0.0
-							end_y = line_height
-						VerticalAlignment.BOTTOM:
-							start_y = size.y - line_height
-							end_y = size.y
-
-					draw_line(Vector2(minor_x, start_y), Vector2(minor_x, end_y), minor_line_color, 1.0, true)
+					_draw_tick_line(minor_x, 0.5, minor_line_color)
 
 		current_time += scale.major_interval
-
-func _draw_start_position_arrow() -> void:
-	"""Draw blue arrow indicating the start position."""
-	if not grid_helper:
-		return
-	
-	# theme vars
-	var start_arrow_color = get_theme_color("start_arrow_color", "Ruler")
-	if not start_arrow_color:
-		start_arrow_color = start_position_color
-
-	# Calculate start position x in pixels (GridHelper handles scroll position)
-	var start_pixel_x = grid_helper.ticks_to_pixels(start_position_ticks) - grid_helper.scroll_position + offset_x
-
-	# Only draw if visible in viewport
-	if start_pixel_x >= offset_x and start_pixel_x <= size.x:
-		# Draw a small blue triangle arrow at the bottom of the ruler (pointing up)
-		var arrow_width = 8.0
-		var arrow_height = 10.0
-
-		# Create triangle points (pointing up from bottom)
-		var points = PackedVector2Array([
-			Vector2(start_pixel_x, size.y),  # Bottom point (tip)
-			Vector2(start_pixel_x - arrow_width / 2.0, size.y - arrow_height),  # Top left
-			Vector2(start_pixel_x + arrow_width / 2.0, size.y - arrow_height),  # Top right
-		])
-
-		draw_colored_polygon(points, start_arrow_color)
-
-		# Draw a thin vertical line from arrow base to top of ruler
-		# Constrain height to max(10, 50% of ruler height)
-		var line_height = maxf(10.0, size.y * 0.5)
-		draw_line(Vector2(start_pixel_x, size.y - arrow_height), Vector2(start_pixel_x, size.y - line_height), start_position_color, 1.0, true)
 
 func _gui_input(event: InputEvent) -> void:
 	"""Handle ruler clicks to set start position (snapped to major grid lines)."""

@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Set mixer volume_db (-60 to 12), pan (-1 to 1), mute, and/or solo on a channel."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -54,8 +50,5 @@ func execute(args: Dictionary) -> Dictionary:
 			cmds.append(PropertyCommand.new("Set Solo", channel, "set_solo", channel.solo, solo))
 	if cmds.is_empty():
 		return ok(compact_channel(channel))
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("Set Mixer", cmds))
+	HistoryUtil.execute_many("Set Mixer", cmds)
 	return ok(compact_channel(channel))

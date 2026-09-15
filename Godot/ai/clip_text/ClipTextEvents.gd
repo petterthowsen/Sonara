@@ -7,6 +7,7 @@ class_name ClipTextEvents extends RefCounted
 static func serialize(clip: Object, opts: Dictionary) -> String:
 	var ppq: int = int(opts.get("ppq", 960))
 	var numerator: int = int(opts.get("numerator", 4))
+	var denominator: int = int(opts.get("denominator", 4))
 	var notes: Array[MidiNoteData] = ClipTextGrid.notes_of(clip)
 	if notes.is_empty():
 		return "# empty — use add  bar.beat.tick  pitch  duration  vNN"
@@ -17,7 +18,7 @@ static func serialize(clip: Object, opts: Dictionary) -> String:
 	var lines: PackedStringArray = []
 	for n in notes:
 		var nid := "n" + str(n.id).pad_zeros(width)
-		var at := ClipTextTime.format_bbt(n.start_tick, ppq, numerator)
+		var at := ClipTextTime.format_bbt(n.start_tick, ppq, numerator, denominator)
 		var pitch := ClipTextKey.pitch_name(n.note, opts.get("key", {}))
 		var dur := ClipTextTime.format_duration(n.duration_ticks, ppq)
 		lines.append("%s  %s  %s  %s  v%d" % [nid, at, pitch, dur, n.velocity])
@@ -63,13 +64,14 @@ static func apply(clip: Object, project: Object, text: String, opts: Dictionary)
 static func _apply_ops(clip: Object, project: Object, text: String, opts: Dictionary) -> Dictionary:
 	var ppq: int = int(opts.get("ppq", 960))
 	var numerator: int = int(opts.get("numerator", 4))
+	var denominator: int = int(opts.get("denominator", 4))
 	var key: Dictionary = opts.get("key", {})
 	var changes: Array = []
 	for raw in text.split("\n"):
 		var line := raw.strip_edges()
 		if line.is_empty() or line.begins_with("#") or line.begins_with("clip "):
 			continue
-		var err := _apply_one(clip, project, line, ppq, numerator, key, changes)
+		var err := _apply_one(clip, project, line, ppq, numerator, denominator, key, changes)
 		if not err.is_empty():
 			return {"error": err, "changes": changes}
 	return {"changes": changes}
@@ -78,6 +80,7 @@ static func _apply_ops(clip: Object, project: Object, text: String, opts: Dictio
 static func _apply_list_as_adds(clip: Object, project: Object, text: String, opts: Dictionary) -> Dictionary:
 	var ppq: int = int(opts.get("ppq", 960))
 	var numerator: int = int(opts.get("numerator", 4))
+	var denominator: int = int(opts.get("denominator", 4))
 	var key: Dictionary = opts.get("key", {})
 	var changes: Array = []
 	for raw in text.split("\n"):
@@ -89,7 +92,7 @@ static func _apply_list_as_adds(clip: Object, project: Object, text: String, opt
 			return {"error": "Event line needs id start pitch duration velocity: %s" % line}
 		# n01  5.1.000  C2  1/4  v104
 		var add_line := "add %s %s %s %s" % [toks[1], toks[2], toks[3], toks[4]]
-		var err := _apply_one(clip, project, add_line, ppq, numerator, key, changes)
+		var err := _apply_one(clip, project, add_line, ppq, numerator, denominator, key, changes)
 		if not err.is_empty():
 			return {"error": err, "changes": changes}
 	return {"changes": changes}
@@ -101,6 +104,7 @@ static func _apply_one(
 	line: String,
 	ppq: int,
 	numerator: int,
+	denominator: int,
 	key: Dictionary,
 	changes: Array
 ) -> String:
@@ -110,11 +114,11 @@ static func _apply_one(
 	var verb := toks[0].to_lower()
 	match verb:
 		"add":
-			return _op_add(clip, project, toks, ppq, numerator, key, changes)
+			return _op_add(clip, project, toks, ppq, numerator, denominator, key, changes)
 		"del":
 			return _op_del(clip, toks, changes)
 		"move":
-			return _op_move(clip, toks, ppq, numerator, changes)
+			return _op_move(clip, toks, ppq, numerator, denominator, changes)
 		"vel":
 			return _op_vel(clip, toks, changes)
 		"len":
@@ -129,13 +133,14 @@ static func _op_add(
 	toks: PackedStringArray,
 	ppq: int,
 	numerator: int,
+	denominator: int,
 	key: Dictionary,
 	changes: Array
 ) -> String:
 	# add  6.3.000  Ab2  1/8  v76
 	if toks.size() < 5:
 		return "add needs: add <bar.beat.tick> <pitch> <duration> v<vel>"
-	var start := ClipTextTime.parse_bbt(toks[1], ppq, numerator)
+	var start := ClipTextTime.parse_bbt(toks[1], ppq, numerator, denominator)
 	if start < 0:
 		return "Bad start time: %s" % toks[1]
 	var pitch := ClipTextKey.parse_pitch(toks[2], key)
@@ -174,6 +179,7 @@ static func _op_move(
 	toks: PackedStringArray,
 	ppq: int,
 	numerator: int,
+	denominator: int,
 	changes: Array
 ) -> String:
 	if toks.size() < 3:
@@ -185,7 +191,7 @@ static func _op_move(
 	if dest.begins_with("+") or dest.begins_with("-"):
 		note.start_tick = maxi(0, note.start_tick + ClipTextTime.parse_signed_delta(dest, ppq))
 	else:
-		var abs_t := ClipTextTime.parse_bbt(dest, ppq, numerator)
+		var abs_t := ClipTextTime.parse_bbt(dest, ppq, numerator, denominator)
 		if abs_t < 0:
 			return "Bad move target: %s" % dest
 		note.start_tick = abs_t

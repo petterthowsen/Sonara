@@ -2,6 +2,8 @@
 # Per-project sidecar (`*.aichat/`) or untitled scratch folder.
 class_name ConversationStore extends RefCounted
 
+static var logger := Log.make("ConversationStore")
+
 
 const INDEX_NAME := "index.json"
 const SCRATCH_REL := "aichat/scratch"
@@ -136,7 +138,7 @@ func migrate_scratch_to(project_path: String) -> void:
 	_index = _read_index()
 	if _current:
 		save(_current)
-	print("[ConversationStore] Migrated scratch → %s" % dest)
+	logger.info("Migrated scratch → %s" % dest)
 
 
 ## Write the active conversation immediately.

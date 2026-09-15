@@ -2,6 +2,8 @@
 # Visual representation of a Clip on the timeline
 class_name TimelineClip extends Control
 
+static var logger := Log.make("TimelineClip")
+
 # Signals
 signal select_requested(clip_ui: TimelineClip, add_to_selection: bool)  # Request to select this clip; add_to_selection = shift held
 signal exclusive_click_requested(clip_ui: TimelineClip)  # Plain click finished without a drag
@@ -202,7 +204,7 @@ func _on_clip_waveform_level_loaded(level: int, clip: Clip) -> void:
 		level: Resolution level index that just loaded
 		clip: The Clip object that was updated
 	"""
-	print_rich("[color=green][TIMELINE_CLIP][/color] Waveform level %d loaded, queuing redraw" % level)
+	logger.debug("Waveform level %d loaded, queuing redraw" % level)
 	clip_renderer.queue_redraw()
 
 
@@ -398,9 +400,7 @@ func _gui_input(event: InputEvent) -> void:
 
 			# Snap to grid
 			var snap_interval = timeline.get_snap_interval()
-			if snap_interval > 0:
-				@warning_ignore("integer_division")
-				new_start_ticks = (new_start_ticks / snap_interval) * snap_interval
+			new_start_ticks = timeline.grid_helper.floor_ticks(new_start_ticks)
 
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
@@ -449,11 +449,7 @@ func _gui_input(event: InputEvent) -> void:
 
 			# Snap to grid (snap the end point)
 			var snap_interval = timeline.get_snap_interval()
-			if snap_interval > 0:
-				var new_end_ticks = resize_start_ticks + new_duration
-				@warning_ignore("integer_division")
-				new_end_ticks = (new_end_ticks / snap_interval) * snap_interval
-				new_duration = new_end_ticks - resize_start_ticks
+			new_duration = timeline.grid_helper.floor_ticks(resize_start_ticks + new_duration) - resize_start_ticks
 
 			# Minimum duration of 1 snap interval (or 1 tick if no snap)
 			var min_duration = snap_interval if snap_interval > 0 else 1
@@ -501,10 +497,7 @@ func _gui_input(event: InputEvent) -> void:
 			var new_start_ticks = drag_start_ticks + tick_delta
 
 			# Snap to grid
-			var snap_interval = timeline.get_snap_interval()
-			if snap_interval > 0:
-				@warning_ignore("integer_division")
-				new_start_ticks = (new_start_ticks / snap_interval) * snap_interval
+			new_start_ticks = timeline.grid_helper.floor_ticks(new_start_ticks)
 
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
@@ -534,25 +527,25 @@ func _add_padding_to_clip(padding_ticks: int) -> void:
 	var clip = clip_instance.clip
 	
 	if clip.type == Clip.ClipType.MIDI:
-		print("[TimelineClip] Before padding: %d notes in clip %s" % [clip.midi_notes.size(), clip.id])
+		logger.debug("Before padding: %d notes in clip %s" % [clip.midi_notes.size(), clip.id])
 		for note in clip.midi_notes:
-			print("[TimelineClip]   Note %d: start=%d" % [note.id, note.start_tick])
-		
+			logger.debug("  Note %d: start=%d" % [note.id, note.start_tick])
+
 		# Shift all MIDI notes forward
 		for note in clip.midi_notes:
 			note.start_tick += padding_ticks
-		
+
 		# Increase clip content length
 		clip.content_length_ticks += padding_ticks
-		
+
 		# Notify the clip that it has been modified (triggers update_note OSC calls)
 		for note in clip.midi_notes:
 			clip.update_midi_note(note)
-		
-		print("[TimelineClip] After padding: Added %d ticks to clip %s (new length: %d)" % 
+
+		logger.debug("After padding: Added %d ticks to clip %s (new length: %d)" %
 			[padding_ticks, clip.id, clip.content_length_ticks])
 		for note in clip.midi_notes:
-			print("[TimelineClip]   Note %d: start=%d" % [note.id, note.start_tick])
+			logger.debug("  Note %d: start=%d" % [note.id, note.start_tick])
 	
 	elif clip.type == Clip.ClipType.AUDIO:
 		# For audio clips, we'd need to prepend silence samples

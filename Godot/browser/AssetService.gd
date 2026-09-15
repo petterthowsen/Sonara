@@ -22,6 +22,9 @@ signal asset_modified(asset: Asset)
 # All providers managed by this service
 var _providers: Array[AssetProvider] = []
 
+## Built-in and plugin Device types discovered from the engine.
+var device_registry: DeviceRegistry = DeviceRegistry.new()
+
 # All discovered assets (keyed by path for fast lookup)
 var _assets_by_path: Dictionary[String, Asset] = {}
 
@@ -33,15 +36,18 @@ var _asset_metadata: Dictionary = {}
 var _is_ready: bool = false
 var _is_scanning: bool = false
 
+var logger := Log.make("AssetService")
+
 
 # ============================================================================
 # LIFECYCLE
 # ============================================================================
 
 func _ready() -> void:
-	print("[AssetService] Initializing...")
+	if Utils.is_test_mode():
+		return
+	logger.info("Initializing...")
 	_load_asset_cache()
-	_setup_default_config()
 	_initialize_providers()
 	
 	# Connect to Settings autoload for runtime updates
@@ -49,7 +55,7 @@ func _ready() -> void:
 	if settings:
 		settings.connect("setting_changed", _on_setting_changed)
 	
-	print("[AssetService] Ready")
+	logger.info("Ready")
 
 
 func _exit_tree() -> void:
@@ -67,7 +73,7 @@ func _exit_tree() -> void:
 func _initialize_providers() -> void:
 	_providers.clear()
 
-	var enabled_providers = Sonara.get_config("assets/enabled_providers", ["filesystem", "devices", "sfz"])
+	var enabled_providers = Settings.get_value("assets/enabled_providers")
 
 	# File system provider
 	if "filesystem" in enabled_providers:
@@ -75,15 +81,18 @@ func _initialize_providers() -> void:
 		fs_provider.assets_changed.connect(_on_provider_assets_changed)
 		fs_provider.initialize(get_tree())  # Pass SceneTree for timer management
 		_providers.append(fs_provider)
-		print("[AssetService] Registered FileSystemAssetProvider")
+		logger.info("Registered FileSystemAssetProvider")
 
-	# Device provider (stub)
+	# Device provider: connected before the registry starts so cached plugins reach the browser.
+	if not device_registry.device_registered.is_connected(DeviceViewFactory.register_builtin_views):
+		device_registry.device_registered.connect(DeviceViewFactory.register_builtin_views)
 	if "devices" in enabled_providers:
-		var device_provider = DeviceAssetProvider.new()
+		var device_provider = DeviceAssetProvider.new(device_registry)
 		device_provider.assets_changed.connect(_on_provider_assets_changed)
 		device_provider.initialize(get_tree())
 		_providers.append(device_provider)
-		print("[AssetService] Registered DeviceAssetProvider")
+		logger.info("Registered DeviceAssetProvider")
+	device_registry.start()
 
 	# SFZ sampler provider
 	if "sfz" in enabled_providers:
@@ -91,11 +100,11 @@ func _initialize_providers() -> void:
 		sfz_provider.assets_changed.connect(_on_provider_assets_changed)
 		sfz_provider.initialize(get_tree())
 		_providers.append(sfz_provider)
-		print("[AssetService] Registered SfzAssetProvider")
+		logger.info("Registered SfzAssetProvider")
 
 	# Skip initial scan - rely on cache and hot-reload timers
 	# Users can manually trigger scan via Edit > Scan Assets
-	print("[AssetService] Skipping initial scan, relying on cached data")
+	logger.info("Skipping initial scan, relying on cached data")
 	_is_ready = true
 
 
@@ -109,7 +118,7 @@ func _scan_all_providers() -> void:
 		return
 
 	_is_scanning = true
-	print("[AssetService] Starting asset scan...")
+	logger.info("Starting asset scan...")
 
 	# Clear previous assets
 	_assets_by_path.clear()
@@ -122,7 +131,7 @@ func _scan_all_providers() -> void:
 	_is_ready = true
 	_is_scanning = false
 	assets_updated.emit()
-	print("[AssetService] Asset scan complete: %d assets found" % _assets_by_path.size())
+	logger.info("Asset scan complete: %d assets found" % _assets_by_path.size())
 
 
 ## Consolidate assets from a provider into the main asset registry
@@ -155,43 +164,31 @@ func find_asset(path: String) -> Asset:
 	return _assets_by_path.get(path)
 
 
-## Case-insensitive name/path/tag search. Favorites, then last_used, then name.
+## Fuzzy name/tag/path search (AssetSearch, same scoring as the Browser). Best score first,
+## then favorites, last_used and name. An empty query lists every asset of the type.
 func search_assets(query: String, type_filter: String = "", limit: int = 25) -> Array[Asset]:
 	var cap := clampi(limit, 1, 100)
-	var needle := query.strip_edges().to_lower()
 	var want := _type_from_filter(type_filter)
-	var hits: Array[Asset] = []
+	var candidates: Array[Asset] = []
 	for asset in _assets_by_path.values():
-		if want >= 0 and asset.type != want:
-			continue
-		if needle.is_empty() or _asset_matches(asset, needle):
-			hits.append(asset)
-	hits.sort_custom(func(a: Asset, b: Asset) -> bool:
-		if a.favorite != b.favorite:
-			return a.favorite
-		if a.last_used != b.last_used:
-			return a.last_used > b.last_used
-		return a.get_display_name().to_lower() < b.get_display_name().to_lower()
+		if want < 0 or asset.type == want:
+			candidates.append(asset)
+	var ranked := AssetSearch.rank(candidates, query, true)
+	ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if not is_equal_approx(a.score, b.score):
+			return a.score > b.score
+		var aa: Asset = a.asset
+		var bb: Asset = b.asset
+		if aa.favorite != bb.favorite:
+			return aa.favorite
+		if aa.last_used != bb.last_used:
+			return aa.last_used > bb.last_used
+		return aa.get_display_name().to_lower() < bb.get_display_name().to_lower()
 	)
-	if hits.size() > cap:
-		var trimmed: Array[Asset] = []
-		for i in range(cap):
-			trimmed.append(hits[i])
-		return trimmed
+	var hits: Array[Asset] = []
+	for i in range(mini(cap, ranked.size())):
+		hits.append(ranked[i].asset)
 	return hits
-
-
-func _asset_matches(asset: Asset, needle: String) -> bool:
-	if asset.name.to_lower().contains(needle):
-		return true
-	if asset.path.to_lower().contains(needle):
-		return true
-	if asset.get_display_name().to_lower().contains(needle):
-		return true
-	for tag in asset.tags:
-		if str(tag).to_lower().contains(needle):
-			return true
-	return false
 
 
 func _type_from_filter(type_filter: String) -> int:
@@ -237,33 +234,7 @@ func get_soundfont_assets() -> Array[Asset]:
 
 ## Get device by ID (for built-in or plugin devices)
 func get_device(device_id: String) -> Device:
-	for provider in _providers:
-		if provider is DeviceAssetProvider:
-			var device: Device = (provider as DeviceAssetProvider).get_builtin_device(device_id)
-			if device:
-				return device
-	return null
-
-
-## Get all available device categories (instruments, effects, utilities)
-func get_instruments() -> Array[Device]:
-	var result: Array[Device] = []
-	for provider in _providers:
-		if provider is DeviceAssetProvider:
-			for device in (provider as DeviceAssetProvider).get_builtin_devices():
-				if device.category == Device.DeviceCategory.Instrument:
-					result.append(device)
-	return result
-
-
-func get_effects() -> Array[Device]:
-	var result: Array[Device] = []
-	for provider in _providers:
-		if provider is DeviceAssetProvider:
-			for device in (provider as DeviceAssetProvider).get_builtin_devices():
-				if device.category == Device.DeviceCategory.Effect:
-					result.append(device)
-	return result
+	return device_registry.get_device(device_id)
 
 
 ## Check if service is ready
@@ -273,12 +244,8 @@ func is_ready() -> bool:
 
 ## Manually trigger plugin scan
 func scan_plugins() -> void:
-	print("[AssetService] Manually triggering plugin scan...")
-	for provider in _providers:
-		if provider is DeviceAssetProvider:
-			(provider as DeviceAssetProvider).trigger_plugin_scan()
-			return
-	push_warning("[AssetService] No DeviceAssetProvider found")
+	logger.info("Manually triggering plugin scan...")
+	device_registry.scan_plugins()
 
 
 # ============================================================================
@@ -381,25 +348,6 @@ func _on_provider_assets_changed(added: Array[Asset], removed: Array[Asset], mod
 # CONFIGURATION
 # ============================================================================
 
-## Setup default configuration if not already present
-func _setup_default_config() -> void:
-	# Ensure assets config structure exists
-	if not Sonara.config.has("assets"):
-		var default_config = {
-			"samples": {
-				"paths": ["~/Music"]
-			},
-			"sfz": {
-				"paths": ["~/Music/SFZ"]
-			},
-			"scan_interval_seconds": 30.0,
-			"enabled_providers": ["filesystem", "devices", "sfz"]
-		}
-		Sonara.set_config("assets", default_config)
-		Sonara.save_config()
-		print("[AssetService] Created default asset configuration")
-
-
 # ============================================================================
 # ASSET CACHE (assets.json)
 # ============================================================================
@@ -422,7 +370,7 @@ func _load_asset_cache() -> void:
 			var error = json.parse(json_string)
 			if error == OK:
 				_asset_metadata = json.data
-				print("[AssetService] Asset cache loaded from: ", cache_path)
+				logger.info("Asset cache loaded from: ", cache_path)
 			else:
 				push_error("[AssetService] Failed to parse asset cache JSON: " + json.get_error_message())
 				_asset_metadata = {}
@@ -430,7 +378,7 @@ func _load_asset_cache() -> void:
 			push_error("[AssetService] Failed to open asset cache file: " + cache_path)
 			_asset_metadata = {}
 	else:
-		print("[AssetService] No asset cache found, starting fresh")
+		logger.info("No asset cache found, starting fresh")
 		_asset_metadata = {}
 
 
@@ -469,6 +417,6 @@ func _on_setting_changed(key: String, value) -> void:
 func _rescan_provider(provider_type) -> void:
 	for provider in _providers:
 		if is_instance_of(provider, provider_type):
-			print("[AssetService] Rescanning %s after search path change" % provider.provider_name)
+			logger.info("Rescanning %s after search path change" % provider.provider_name)
 			provider.scan()
 			return

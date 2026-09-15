@@ -71,17 +71,11 @@ var supported_file_extensions: Array[String] = []
 ## Description of supported file types (e.g., "SFZ Sample Files")
 var file_type_description: String = ""
 
-## DEPRECATED: Path-based visual scene (use PackedScene registrations below)
-var visual_scene_path: String = ""
-
 ## PackedScene references (null when unsupported)
 var panel_view_scene: PackedScene = null
 var large_view_scene: PackedScene = null
 var auxiliary_view_scene: PackedScene = null
 var compact_view_scene: PackedScene = null
-
-## Path to custom controls scene (optional override for parameters)
-var controls_scene_path: String = ""
 
 
 ## ============================================================================
@@ -162,16 +156,6 @@ func register_compact_view(scene: PackedScene) -> void:
 	compact_view_scene = scene
 
 
-## Back-compat shim (transition only): map old API to Panel view
-func register_visual_scene(scene: PackedScene) -> void:
-	panel_view_scene = scene
-
-
-## Register a custom controls scene for this device
-func register_controls_scene(path: String) -> void:
-	controls_scene_path = path
-
-
 ## Availability checks
 func has_panel_view() -> bool:
 	return panel_view_scene != null
@@ -187,11 +171,6 @@ func has_auxiliary_view() -> bool:
 
 func has_compact_view() -> bool:
 	return compact_view_scene != null
-
-
-## Check if this device has custom controls
-func has_custom_controls() -> bool:
-	return controls_scene_path != ""
 
 
 ## ============================================================================
@@ -263,82 +242,3 @@ func get_icon() -> String:
 ## Example: "Dragonfly Hall Reverb" -> "D. Hall Rev"
 func get_short_name(max_length: int = 15) -> String:
 	return Utils.shorten_text(name, max_length)
-
-
-## ============================================================================
-## FACTORY METHODS
-## ============================================================================
-
-## Create a built-in oscillator device
-## @deprecated
-static func create_builtin_oscillator() -> Device:
-	var device = Device.new("sonara.builtin.oscillator", "Oscillator", DeviceCategory.Instrument)
-	device.title = "Oscillator"
-	device.description = "A polyphonic synthesizer featuring sine, square, sawtooth, and triangle waveforms. Perfect for creating everything from classic synth sounds to experimental textures."
-	device.author = "Sonara"
-	device.accepts_midi = true
-	device.audio_in_channels = 0
-	device.audio_out_channels = 2
-
-	var waveform_param = DeviceParameter.new(0, "Waveform", "")
-	waveform_param.min_value = 0.0
-	waveform_param.max_value = 1.0
-	waveform_param.default_value = 0.0
-	waveform_param.description = "Waveform type: sine (0.0), square (0.25), sawtooth (0.5), triangle (0.75)"
-	device.add_parameter(waveform_param)
-
-	var amplitude_param = DeviceParameter.new(1, "Amplitude", "")
-	amplitude_param.min_value = 0.0
-	amplitude_param.max_value = 1.0
-	amplitude_param.default_value = 0.3
-	amplitude_param.description = "Output amplitude / volume"
-	device.add_parameter(amplitude_param)
-
-	return device
-
-
-## Create a built-in delay device
-## @deprecated
-static func create_builtin_delay() -> Device:
-	var device = Device.new("sonara.builtin.delay", "Delay", DeviceCategory.Effect)
-	device.title = "Stereo Delay"
-	device.description = "A classic stereo delay effect with adjustable time and wet/dry mix. Built-in feedback creates repeating echoes. Perfect for adding depth and space to any track."
-	device.author = "Sonara"
-	device.accepts_midi = false
-	device.audio_in_channels = 2
-	device.audio_out_channels = 2
-
-	var delay_time_param = DeviceParameter.new(0, "Delay Time", "ms")
-	delay_time_param.min_value = 1.0
-	delay_time_param.max_value = 1250.0
-	delay_time_param.default_value = 250.0
-	delay_time_param.description = "Delay time in milliseconds (1-1250ms)"
-	delay_time_param.is_logarithmic = true
-	device.add_parameter(delay_time_param)
-
-	var wet_amount_param = DeviceParameter.new(1, "Wet Amount", "")
-	wet_amount_param.min_value = 0.0
-	wet_amount_param.max_value = 1.0
-	wet_amount_param.default_value = 0.5
-	wet_amount_param.description = "Mix between dry (0.0) and wet (1.0)"
-	device.add_parameter(wet_amount_param)
-
-	return device
-
-
-## Create a built-in SFZ sampler device
-static func create_builtin_sfizz() -> Device:
-	var device = Device.new("sonara.builtin.sfizz", "SFZ Sampler", DeviceCategory.Instrument)
-	device.title = "SFZ Sampler"
-	device.description = "SFZ sample player powered by Sfizz."
-	device.author = "Sonara"
-	device.accepts_midi = true
-	device.audio_in_channels = 0
-	device.audio_out_channels = 2
-	
-	# File loading support
-	device.supports_file_loading = true
-	device.supported_file_extensions = [".sfz", ".SFZ"] as Array[String]
-	device.file_type_description = "SFZ Sample Files"
-
-	return device

@@ -25,6 +25,16 @@ func _on_bind() -> void:
 	_rebuild()
 
 
+## Disconnect the child-list signals connected in _on_bind().
+func _on_unbind() -> void:
+	if device.child_added.is_connected(_on_children_changed):
+		device.child_added.disconnect(_on_children_changed)
+	if device.child_removed.is_connected(_on_children_changed):
+		device.child_removed.disconnect(_on_children_changed)
+	if device.child_moved.is_connected(_on_children_changed):
+		device.child_moved.disconnect(_on_children_changed)
+
+
 ## Highlight the row whose child is currently shown in the folder.
 func set_focused_child(child: DeviceInstance) -> void:
 	_selected = child

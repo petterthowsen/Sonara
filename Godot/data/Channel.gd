@@ -1,5 +1,7 @@
 class_name Channel extends RefCounted
 
+static var logger := Log.make("Channel")
+
 # Channel types
 enum ChannelType {
 	INSTRUMENT,  # MIDI instrument track
@@ -101,6 +103,9 @@ var rms_right: float = 0.0
 # Connection state
 var _is_connected: bool = false
 
+## Owning project (weak, to avoid a Channel<->Project cycle). Set by Project.
+var _project_ref: WeakRef = null
+
 # Track routing (tracks that route to this channel)
 var routed_tracks: Array[Track] = []
 
@@ -116,6 +121,23 @@ var is_master : bool:
 var is_group_channel : bool:
 	get:
 		return channel_type == ChannelType.GROUP
+
+
+## True while this channel is connected to the audio engine.
+func is_engine_connected() -> bool:
+	return _is_connected
+
+
+## Record the owning project; null detaches the channel (on removal).
+func set_project(project: Project) -> void:
+	_project_ref = weakref(project) if project else null
+
+
+## Owning project, or null if detached or the project has been freed.
+func get_project() -> Project:
+	if _project_ref == null:
+		return null
+	return _project_ref.get_ref() as Project
 
 
 ## True when output is forced to the mixer parent (group children).
@@ -169,7 +191,7 @@ func connect_to_engine() -> void:
 	_is_connected = true
 	# Drum pad / plugin extra-out maps require _is_connected (see AuxReturnSync).
 	AuxReturnSync.sync_aux_map_to_engine(self)
-	print("[Channel %d] Connected to audio engine" % id)
+	logger.info("[%d] Connected to audio engine" % id)
 
 
 func disconnect_from_engine() -> void:
@@ -191,7 +213,7 @@ func disconnect_from_engine() -> void:
 	routed_tracks.clear()
 
 	_is_connected = false
-	print("[Channel %d] Disconnected from audio engine" % id)
+	logger.info("[%d] Disconnected from audio engine" % id)
 
 
 func sync_to_engine() -> void:
@@ -235,8 +257,7 @@ func set_name(new_name : String):
 	# Update all routed tracks that sync name from channel
 	for track in routed_tracks:
 		if track.name_by_channel:
-			track._name = new_name
-			track.name_changed.emit(new_name)
+			track.apply_channel_name(new_name)
 
 
 func set_color(new_color : Color):
@@ -244,7 +265,7 @@ func set_color(new_color : Color):
 	if color == new_color:
 		return
 	color = new_color
-	print("[Channel %d] set_color %s routed_tracks=%d" % [id, color, routed_tracks.size()])
+	logger.debug("[%d] set_color %s routed_tracks=%d" % [id, color, routed_tracks.size()])
 	color_changed.emit(color)
 	_sync_color_to_paired_tracks(new_color)
 
@@ -284,7 +305,7 @@ func set_pan(pan_l: float, pan_r : float = 0.0) -> void:
 		pan = clamp(pan_l, -1.0, 1.0)
 		pan_left = pan
 		if _is_connected:
-			print("sending channel pan to ", pan)
+			logger.debug("[%d] sending channel pan to " % id, pan)
 			AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
 	elif pan_mode == PanMode.STEREO_DUAL:
 		pan_left = clamp(pan_l, -1.0, 1.0)
@@ -323,7 +344,7 @@ func set_route(output_id: int) -> void:
 	"""
 	# Validate routing: reject self-routing to prevent feedback loops
 	if output_id == id:
-		print("[Channel %d] Cannot route to self, ignoring route to %d" % [id, output_id])
+		logger.warn("[%d] Cannot route to self, ignoring route to %d" % [id, output_id])
 		return
 
 	output_channel_id = output_id
@@ -340,7 +361,7 @@ func set_midi_input_device(device_id: int):
 		if _is_connected:
 			AudioEngineOSC.send("/channel/%d/midi_input_device" % id, [midi_input_device])
 		midi_input_device_changed.emit(device_id)
-		print("[Channel %d] MIDI input device set to %d" % [id, device_id])
+		logger.info("[%d] MIDI input device set to %d" % [id, device_id])
 
 
 func set_record_armed(armed: bool):
@@ -350,7 +371,7 @@ func set_record_armed(armed: bool):
 		if _is_connected:
 			AudioEngineOSC.send("/channel/%d/record_armed" % id, [1 if armed else 0])
 		record_armed_changed.emit(armed)
-		print("[Channel %d] Record armed: %s" % [id, armed])
+		logger.info("[%d] Record armed: %s" % [id, armed])
 
 
 # ============================================================================
@@ -362,12 +383,12 @@ func add_send(target_channel_id: int, amount_db: float = -12.0, pre_fader: bool 
 	# Check if send already exists
 	for send in send_channels:
 		if send.target_channel_id == target_channel_id:
-			print("[Channel %d] Send to channel %d already exists" % [id, target_channel_id])
+			logger.warn("[%d] Send to channel %d already exists" % [id, target_channel_id])
 			return
 	
 	# Validate target is not self
 	if target_channel_id == id:
-		print("[Channel %d] Cannot send to self" % id)
+		logger.warn("[%d] Cannot send to self" % id)
 		return
 	
 	# Create send config
@@ -385,7 +406,7 @@ func add_send(target_channel_id: int, amount_db: float = -12.0, pre_fader: bool 
 		AudioEngineOSC.send("/channel/%d/send/%d/add" % [id, target_channel_id], [amount_db, 1 if pre_fader else 0])
 	
 	send_added.emit(target_channel_id, send_config)
-	print("[Channel %d] Send added to channel %d (%.1f dB, %s)" % [id, target_channel_id, amount_db, "pre-fader" if pre_fader else "post-fader"])
+	logger.info("[%d] Send added to channel %d (%.1f dB, %s)" % [id, target_channel_id, amount_db, "pre-fader" if pre_fader else "post-fader"])
 
 
 func remove_send(target_channel_id: int) -> void:
@@ -398,7 +419,7 @@ func remove_send(target_channel_id: int) -> void:
 			break
 	
 	if not found:
-		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		logger.warn("[%d] Send to channel %d not found" % [id, target_channel_id])
 		return
 	
 	# Sync to engine
@@ -406,14 +427,14 @@ func remove_send(target_channel_id: int) -> void:
 		AudioEngineOSC.send("/channel/%d/send/%d/remove" % [id, target_channel_id])
 	
 	send_removed.emit(target_channel_id)
-	print("[Channel %d] Send removed to channel %d" % [id, target_channel_id])
+	logger.info("[%d] Send removed to channel %d" % [id, target_channel_id])
 
 
 func set_send_amount(target_channel_id: int, amount_db: float) -> void:
 	"""Set send level and sync to audio engine."""
 	var send_config = get_send(target_channel_id)
 	if not send_config:
-		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		logger.warn("[%d] Send to channel %d not found" % [id, target_channel_id])
 		return
 	
 	send_config.amount = clamp(amount_db, -60.0, 12.0)
@@ -429,7 +450,7 @@ func set_send_pre_fader(target_channel_id: int, pre_fader: bool) -> void:
 	"""Set send pre/post fader and sync to audio engine."""
 	var send_config = get_send(target_channel_id)
 	if not send_config:
-		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		logger.warn("[%d] Send to channel %d not found" % [id, target_channel_id])
 		return
 	
 	send_config.pre_fader = pre_fader
@@ -439,14 +460,14 @@ func set_send_pre_fader(target_channel_id: int, pre_fader: bool) -> void:
 		AudioEngineOSC.send("/channel/%d/send/%d/pre_fader" % [id, target_channel_id], [1 if pre_fader else 0])
 	
 	send_changed.emit(target_channel_id, send_config)
-	print("[Channel %d] Send to channel %d set to %s" % [id, target_channel_id, "pre-fader" if pre_fader else "post-fader"])
+	logger.info("[%d] Send to channel %d set to %s" % [id, target_channel_id, "pre-fader" if pre_fader else "post-fader"])
 
 
 func set_send_mute(target_channel_id: int, muted: bool) -> void:
 	"""Set send mute state and sync to audio engine."""
 	var send_config = get_send(target_channel_id)
 	if not send_config:
-		print("[Channel %d] Send to channel %d not found" % [id, target_channel_id])
+		logger.warn("[%d] Send to channel %d not found" % [id, target_channel_id])
 		return
 	
 	send_config.muted = muted
@@ -456,7 +477,26 @@ func set_send_mute(target_channel_id: int, muted: bool) -> void:
 		AudioEngineOSC.send("/channel/%d/send/%d/mute" % [id, target_channel_id], [1 if muted else 0])
 	
 	send_changed.emit(target_channel_id, send_config)
-	print("[Channel %d] Send to channel %d %s" % [id, target_channel_id, "muted" if muted else "unmuted"])
+	logger.info("[%d] Send to channel %d %s" % [id, target_channel_id, "muted" if muted else "unmuted"])
+
+
+## Send a live note on/off (or other channel-voice) event to this channel's first device.
+## `message` is a MIDI status nibble (e.g. MIDI_MESSAGE_NOTE_ON).
+func send_midi_event(message: int, midi_channel: int, pitch: int, velocity: int) -> void:
+	if not _is_connected:
+		return
+	AudioEngineOSC.send("/channel/%d/midi_event" % id, [
+		id, message, midi_channel, pitch, velocity, Time.get_ticks_usec()
+	])
+
+
+## Send a live MIDI control change to this channel's first device.
+func send_midi_cc(midi_channel: int, controller: int, value: int) -> void:
+	if not _is_connected:
+		return
+	AudioEngineOSC.send("/channel/%d/midi_cc" % id, [
+		id, midi_channel, controller, value, Time.get_ticks_usec()
+	])
 
 
 func get_send(target_channel_id: int) -> SendConfig:
@@ -482,60 +522,6 @@ func _on_peak_received(values) -> void:
 
 
 # ============================================================================
-# UTILITY METHODS
-# ============================================================================
-
-# Get effective pan values based on mode
-func get_pan_coefficients() -> Dictionary:
-	match pan_mode:
-		PanMode.STEREO_COMBINED:
-			# Constant power panning
-			var angle = (pan + 1.0) * 0.5 * PI * 0.5  # Map -1..1 to 0..PI/2
-			return {
-				"left_to_left": cos(angle),
-				"right_to_right": sin(angle),
-				"left_to_right": 0.0,
-				"right_to_left": 0.0
-			}
-		PanMode.STEREO_DUAL:
-			var angle_l = (pan_left + 1.0) * 0.5 * PI * 0.5
-			var angle_r = (pan_right + 1.0) * 0.5 * PI * 0.5
-			return {
-				"left_to_left": cos(angle_l),
-				"right_to_right": sin(angle_r),
-				"left_to_right": sin(angle_l),
-				"right_to_left": cos(angle_r)
-			}
-		PanMode.STEREO_BALANCE:
-			# Simple balance: pan < 0 reduces right, pan > 0 reduces left
-			var left_gain = 1.0 if pan <= 0.0 else (1.0 - pan)
-			var right_gain = 1.0 if pan >= 0.0 else (1.0 + pan)
-			return {
-				"left_to_left": left_gain,
-				"right_to_right": right_gain,
-				"left_to_right": 0.0,
-				"right_to_left": 0.0
-			}
-		PanMode.MONO:
-			# Mono to stereo panning
-			var angle = (pan + 1.0) * 0.5 * PI * 0.5
-			return {
-				"left_to_left": cos(angle),
-				"right_to_right": sin(angle),
-				"left_to_right": sin(angle),
-				"right_to_left": cos(angle)
-			}
-
-	# Fallback
-	return {"left_to_left": 1.0, "right_to_right": 1.0, "left_to_right": 0.0, "right_to_left": 0.0}
-
-
-# Convert dB to linear gain
-func get_linear_gain() -> float:
-	return Sonara.db_to_lin(volume)
-
-
-# ============================================================================
 # TRACK ROUTING MANAGEMENT
 # ============================================================================
 
@@ -543,7 +529,7 @@ func register_track(track: Track) -> void:
 	"""Register a track that routes to this channel."""
 	if track not in routed_tracks:
 		routed_tracks.append(track)
-		print("[Channel %d] Track '%s' registered (routes to this channel)" % [id, track.name])
+		logger.info("[%d] Track '%s' registered (routes to this channel)" % [id, track.name])
 
 
 func unregister_track(track: Track) -> void:
@@ -551,7 +537,7 @@ func unregister_track(track: Track) -> void:
 	var idx = routed_tracks.find(track)
 	if idx >= 0:
 		routed_tracks.remove_at(idx)
-		print("[Channel %d] Track '%s' unregistered" % [id, track.name])
+		logger.info("[%d] Track '%s' unregistered" % [id, track.name])
 
 
 ## Push this channel's color onto every track that syncs from it.
@@ -559,7 +545,7 @@ func _sync_color_to_paired_tracks(new_color: Color) -> void:
 	var notified: Dictionary = {}
 	for track in routed_tracks:
 		_apply_color_to_track(track, new_color, notified)
-	var project := _fallback_project()
+	var project := get_project()
 	if project == null:
 		return
 	for track in project.tracks:
@@ -574,17 +560,7 @@ func _apply_color_to_track(track: Track, new_color: Color, notified: Dictionary)
 	if not track.color_by_channel:
 		return
 	notified[track] = true
-	track._color = new_color
-	track.color_changed.emit(new_color)
-
-
-## Active editor project when this channel has no other project handle.
-func _fallback_project() -> Project:
-	if Engine.is_editor_hint():
-		return null
-	if Sonara and Sonara.editor:
-		return Sonara.editor.project
-	return null
+	track.apply_channel_color(new_color)
 
 
 ## Convert Device.DeviceType enum to string for OSC
@@ -635,15 +611,15 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		parent.child_added.emit(device_instance, position)
 	else:
 		device_added.emit(device_instance, position)
-	print("[Channel %d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
-	AuxReturnSync.on_device_added(_fallback_project(), self, device_instance, parent)
+	logger.info("[%d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
+	AuxReturnSync.on_device_added(get_project(), self, device_instance, parent)
 
 
 func remove_device(position: int, parent: DeviceInstance = null) -> void:
 	## Remove a device from the channel root list or from a container parent.
 	var host: Array[DeviceInstance] = parent.children if parent else devices
 	if position < 0 or position >= host.size():
-		print("[Channel %d] Invalid device position: %d" % [id, position])
+		logger.warn("[%d] Invalid device position: %d" % [id, position])
 		return
 
 	var removed_device = host[position]
@@ -673,8 +649,8 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 		parent.child_removed.emit(position, device_id)
 	else:
 		device_removed.emit(position, device_id)
-	print("[Channel %d] Device removed: %s" % [id, device_id])
-	AuxReturnSync.on_device_removed(_fallback_project(), self, removed_device, parent)
+	logger.info("[%d] Device removed: %s" % [id, device_id])
+	AuxReturnSync.on_device_removed(get_project(), self, removed_device, parent)
 
 
 ## Remove a nested or root device by instance.
@@ -690,10 +666,10 @@ func move_device(from_position: int, to_position: int, parent: DeviceInstance = 
 	## Move a device within the channel root list or a container parent.
 	var host: Array[DeviceInstance] = parent.children if parent else devices
 	if from_position < 0 or from_position >= host.size():
-		print("[Channel %d] Invalid from_position: %d" % [id, from_position])
+		logger.warn("[%d] Invalid from_position: %d" % [id, from_position])
 		return
 	if to_position < 0 or to_position >= host.size():
-		print("[Channel %d] Invalid to_position: %d" % [id, to_position])
+		logger.warn("[%d] Invalid to_position: %d" % [id, to_position])
 		return
 	if from_position == to_position:
 		return
@@ -718,8 +694,8 @@ func move_device(from_position: int, to_position: int, parent: DeviceInstance = 
 		parent.child_moved.emit(from_position, to_position)
 	else:
 		device_moved.emit(from_position, to_position)
-	print("[Channel %d] Device moved from %d to %d: %s" % [id, from_position, to_position, device_instance.device.name])
-	AuxReturnSync.on_device_moved(_fallback_project(), self, parent)
+	logger.info("[%d] Device moved from %d to %d: %s" % [id, from_position, to_position, device_instance.device.name])
+	AuxReturnSync.on_device_moved(get_project(), self, parent)
 
 
 func _reindex_host(host: Array[DeviceInstance]) -> void:
@@ -847,31 +823,25 @@ func _on_device_parameter_changed(param_id: int, value: float, device_instance: 
 
 # Serialize to JSON
 func to_json() -> Dictionary:
-	return {
+	var data := JsonFields.write(self, JSON_FIELDS)
+	data.merge({
 		"id": id,
-		"name": name,
 		"color": Utils.color_to_json(color),
-		"order": order,
 		"channel_type": ChannelType.keys()[channel_type],
-		"device_output_id": device_output_id,
-		"volume": volume,
-		"pan": pan,
-		"pan_left": pan_left,
-		"pan_right": pan_right,
 		"pan_mode": PanMode.keys()[pan_mode],
-		"mute": mute,
-		"solo": solo,
-		"phase_invert": phase_invert,
-		"output_channel_id": output_channel_id,
-		"parent_channel_id": parent_channel_id,
 		"child_channel_ids": child_channel_ids.duplicate(),
-		"is_children_expanded": is_children_expanded,
-		"aux_bus_index": aux_bus_index,
-		"midi_input_device": midi_input_device,
-		"record_armed": record_armed,
-		"send_channels": send_channels.map(func(s): return s.to_json()) if not send_channels.is_empty() else [],
-		"devices": devices.map(func(d): return d.to_json()) if not devices.is_empty() else []
-	}
+		"send_channels": send_channels.map(func(s): return s.to_json()),
+		"devices": devices.map(func(d): return d.to_json()),
+	})
+	return data
+
+
+## Plain fields copied by JsonFields; defaults come from the initializers and _init().
+const JSON_FIELDS: Array[String] = [
+	"name", "order", "device_output_id", "volume", "pan", "pan_left", "pan_right",
+	"mute", "solo", "phase_invert", "output_channel_id", "parent_channel_id",
+	"is_children_expanded", "aux_bus_index", "midi_input_device", "record_armed",
+]
 
 
 # Deserialize from JSON
@@ -879,37 +849,11 @@ static func from_json(data: Dictionary) -> Channel:
 	var channel_id = data.get("id", -1)
 	var channel = Channel.new(channel_id)
 
-	channel.name = data.get("name", "Channel")
-	channel.color = Utils.color_from_json(data.get("color", "#FFFFFF"), Color.WHITE)
-	channel.order = data.get("order", 0)
-
-	# Parse channel type
-	var channel_type_str = data.get("channel_type", "INSTRUMENT")
-	channel.channel_type = ChannelType.get(channel_type_str) if ChannelType.has(channel_type_str) else ChannelType.INSTRUMENT
-
-	channel.device_output_id = data.get("device_output_id", 1000)
-	channel.volume = data.get("volume", 0.0)
-	channel.pan = data.get("pan", 0.0)
-	channel.pan_left = data.get("pan_left", 0.0)
-	channel.pan_right = data.get("pan_right", 0.0)
-
-	# Parse pan mode
-	var pan_mode_str = data.get("pan_mode", "STEREO_COMBINED")
-	channel.pan_mode = PanMode.get(pan_mode_str) if PanMode.has(pan_mode_str) else PanMode.STEREO_COMBINED
-
-	channel.mute = data.get("mute", false)
-	channel.solo = data.get("solo", false)
-	channel.phase_invert = data.get("phase_invert", false)
-	channel.output_channel_id = data.get("output_channel_id", 1)
-	channel.parent_channel_id = data.get("parent_channel_id", -1)
-	var child_ids = data.get("child_channel_ids", [])
-	channel.child_channel_ids.assign(child_ids)
-	channel.is_children_expanded = data.get("is_children_expanded", true)
-	channel.aux_bus_index = data.get("aux_bus_index", -1)
-
-	# Load MIDI settings
-	channel.midi_input_device = int(data.get("midi_input_device", -2))
-	channel.record_armed = data.get("record_armed", false)
+	JsonFields.read(channel, data, JSON_FIELDS)
+	channel.color = Utils.color_from_json(data.get("color"), channel.color)
+	channel.channel_type = ChannelType.get(str(data.get("channel_type", "")), channel.channel_type)
+	channel.pan_mode = PanMode.get(str(data.get("pan_mode", "")), channel.pan_mode)
+	channel.child_channel_ids.assign(data.get("child_channel_ids", []))
 
 	# Load send_channels
 	for send_data in data.get("send_channels", []):
@@ -931,7 +875,7 @@ static func from_json(data: Dictionary) -> Channel:
 			else:
 				# Device not found - skip it but log
 				var device_id = device_data.get("device_id", "unknown")
-				print("[Channel] Skipping missing device: %s (run Edit > Scan Plugins)" % device_id)
+				logger.warn("Skipping missing device: %s (run Edit > Scan Plugins)" % device_id)
 
 	return channel
 
@@ -943,5 +887,5 @@ static func from_json(data: Dictionary) -> Channel:
 ## Handle when a device's parameters are updated (forwarded from DeviceInstance)
 func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
 	"""Called when a device's parameter list changes (e.g., SFZ file loaded)."""
-	print("[Channel %d] Device %d parameters updated" % [id, device_instance.position])
+	logger.info("[%d] Device %d parameters updated" % [id, device_instance.position])
 	device_parameters_updated.emit(device_instance)

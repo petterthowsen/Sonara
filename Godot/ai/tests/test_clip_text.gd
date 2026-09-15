@@ -1,10 +1,7 @@
 # test_clip_text.gd
 # Headless tests for clip text time, grids, events, and round-trip apply.
-# Run: godot --headless --path Godot -s ai/tests/test_clip_text.gd
-extends SceneTree
-
-
-var _failures: int = 0
+# Run: godot --headless --path Godot -s ai/tests/test_clip_text.gd -- --test
+extends TestBase
 
 
 ## Stand-in for Clip so this script never loads Clip.gd (AudioEngineOSC) in -s.
@@ -13,15 +10,19 @@ class StubClip extends RefCounted:
 	var type: int = 1
 	var midi_notes: Array = []
 	var content_length_ticks: int = 3840
-	var _synced_to_engine: bool = false
+	func is_synced_to_engine() -> bool:
+		return false
 
-	func _extend_content_length(end_tick: int) -> void:
+	func extend_content_length(end_tick: int) -> void:
 		if end_tick > content_length_ticks:
 			content_length_ticks = end_tick
 
 
-func _init() -> void:
-	print("=== Clip text format tests ===")
+func suite_name() -> String:
+	return "Clip text format tests"
+
+
+func run_tests() -> void:
 	_test_time()
 	_test_key_and_tiers()
 	_test_drum_grid_roundtrip()
@@ -31,20 +32,6 @@ func _init() -> void:
 	_test_header_parse()
 	_test_format_selection()
 	_test_sloppy_model_text()
-	if _failures == 0:
-		print("=== ALL PASSED ===")
-	else:
-		print("=== FAILED: %d ===" % _failures)
-	quit(_failures)
-
-
-func _assert(cond: bool, msg: String) -> void:
-	if not cond:
-		_failures += 1
-		push_error("FAIL: " + msg)
-		print("FAIL: ", msg)
-	else:
-		print("ok: ", msg)
 
 
 func _clip(name: String = "Test", bars: int = 1) -> StubClip:
@@ -69,6 +56,10 @@ func _test_time() -> void:
 	_assert(ClipTextTime.ticks_per_step(960, 16) == 240, "16th = 240 ticks")
 	_assert(ClipTextTime.parse_bbt("5.1.000", 960, 4) == 4 * 3840, "bar 5 start")
 	_assert(ClipTextTime.format_bbt(0, 960, 4) == "1.1.000", "tick 0 is 1.1.000")
+	_assert(ClipTextTime.ticks_per_bar(960, 6, 8) == 2880, "6/8 bar = six eighths")
+	_assert(ClipTextTime.format_bbt(2880 + 480, 960, 6, 8) == "2.2.000", "6/8 bar 2 beat 2")
+	_assert(ClipTextTime.parse_bbt("2.2.000", 960, 6, 8) == 3360, "6/8 parse bar 2 beat 2")
+	_assert(GridHelper.bbt_of(3840 + 960 + 240 + 5, 960, 4, 4) == {"bar": 2, "beat": 2, "sixteenth": 2, "tick": 5}, "4/4 bbt")
 	_assert(ClipTextTime.parse_duration("1/4", 960) == 960, "quarter = ppq")
 	_assert(ClipTextTime.parse_duration("1/4.", 960) == 1440, "dotted quarter")
 	_assert(ClipTextTime.parse_duration("1/4t", 960) == 640, "triplet quarter")

@@ -13,7 +13,7 @@ const DevicePanelScene: PackedScene = preload("res://devices/device_lane/DeviceP
 var channel: Channel = null
 var container: DeviceInstance = null
 var focus_child: DeviceInstance = null
-var drop_zones: Array[DropZone] = []
+var _drop_host := DeviceChainDropHost.new(true, 12.0)
 var _panels: Dictionary = {}  # instance id -> Control (DevicePanel)
 
 
@@ -45,7 +45,8 @@ func bind_to_container(p_container: DeviceInstance) -> void:
 		return
 	_unbind()
 	container = p_container
-	channel = _channel_for(container)
+	channel = container.get_channel() if container else null
+	_drop_host.bind(channel, container)
 	_apply_scroll_policy()
 	if container == null:
 		_clear_panels()
@@ -93,11 +94,12 @@ func _unbind() -> void:
 	container = null
 	channel = null
 	focus_child = null
+	_drop_host.bind(null)
 
 
 ## Free every child panel and drop zone immediately so leftover nodes do not inflate min size.
 func _clear_panels() -> void:
-	_cleanup_drop_zones()
+	_drop_host.clear()
 	if devices:
 		for child in devices.get_children():
 			devices.remove_child(child)
@@ -150,13 +152,6 @@ func _update_empty_hint() -> void:
 		empty_hint.visible = container != null and _panels.is_empty()
 
 
-## Channel that owns `inst`, or null if the project is unavailable.
-func _channel_for(inst: DeviceInstance) -> Channel:
-	if inst == null or Sonara.editor == null or Sonara.editor.project == null:
-		return null
-	return Sonara.editor.project.get_channel_by_id(inst.channel_id)
-
-
 ## True when only the focused child should be visible (Layer, Drum Machine).
 func _focuses_one_child() -> bool:
 	return container != null and container.device != null and container.device.container_focuses_one_child()
@@ -179,17 +174,6 @@ func _notify_content_size() -> void:
 	update_minimum_size()
 
 
-## Insert-point spacer between child panels (invisible until a drag starts).
-func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.create_insert_spacer(true, 12.0)
-	drop_zone.set_drag_forwarding(
-		_get_drag_data.bind(),
-		_can_drop_data_at_position.bind(d_position),
-		_drop_data_at_position.bind(d_position)
-	)
-	return drop_zone
-
-
 ## Keep invisible spacer drop zones interleaved with the current child panels.
 func _create_drop_zones() -> void:
 	if container == null or devices == null:
@@ -199,11 +183,7 @@ func _create_drop_zones() -> void:
 		if child is DropZone:
 			continue
 		panel_list.append(child)
-	drop_zones = DropZone.rebuild_insert_layout(
-		devices,
-		panel_list,
-		func(i: int) -> DropZone: return _create_drop_zone(_drop_index_for_panel(i))
-	)
+	_drop_host.rebuild(devices, panel_list, _drop_index_for_panel)
 
 
 ## Map a visible-panel index to the container child index (focus mode uses the real position).
@@ -213,65 +193,12 @@ func _drop_index_for_panel(visible_index: int) -> int:
 	return visible_index
 
 
-## Remove spacer drop zones from the child row.
-func _cleanup_drop_zones() -> void:
-	for drop_zone in drop_zones:
-		if is_instance_valid(drop_zone):
-			var parent := drop_zone.get_parent()
-			if parent:
-				parent.remove_child(drop_zone)
-			drop_zone.queue_free()
-	drop_zones.clear()
-
-
-## Drop zones do not originate drags.
-func _get_drag_data(_at_position: Vector2) -> Variant:
-	return null
-
-
 ## Accept a device or asset dropped on empty list space (append).
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	if channel == null or container == null:
-		return false
-	if data is DeviceInstance:
-		return DeviceDropUtil.can_drop_instance_on_host(channel, data, container)
-	if data is Asset:
-		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
-	return false
+	return container != null and _drop_host.can_drop(data)
 
 
 ## Append a device or asset as a child of the bound container.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	if channel == null or container == null:
-		return
-	if data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, container, -1)
-		return
-	if data is Asset:
-		await DeviceDropUtil.drop_asset(channel, data, -1, container, get_tree())
-
-
-## Accept a device or asset at a specific insert index.
-func _can_drop_data_at_position(_at_position: Vector2, data: Variant, d_position: int = -1) -> bool:
-	if channel == null or container == null:
-		return false
-	if data is DeviceInstance:
-		if not DeviceDropUtil.can_drop_instance_on_host(channel, data, container):
-			return false
-		if data.get_parent_device() == container and data.position == d_position:
-			return false
-		return true
-	if data is Asset:
-		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
-	return false
-
-
-## Insert a device or asset at `d_position` in the bound container.
-func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position: int = -1) -> void:
-	if channel == null or container == null:
-		return
-	if data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, container, d_position)
-		return
-	if data is Asset:
-		await DeviceDropUtil.drop_asset(channel, data, d_position, container, get_tree())
+	if container != null:
+		_drop_host.drop(data)

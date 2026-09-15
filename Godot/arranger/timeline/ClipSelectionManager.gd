@@ -1,6 +1,8 @@
 ## Owns arranger clip selection, time-range boundaries, and the box-select gesture.
 class_name ClipSelectionManager extends RefCounted
 
+static var logger := Log.make("ClipSelectionManager")
+
 signal selection_changed(instances: Array[ClipInstance])
 signal box_selection_changed(rect: Rect2)
 signal range_changed()
@@ -108,7 +110,7 @@ func set_range_start(tick: int) -> void:
 		selection.clear()
 	if timeline:
 		timeline.queue_redraw()
-	print("[ClipSelectionManager] Selection start set to tick %d" % tick)
+	logger.info("Selection start set to tick %d" % tick)
 
 
 ## True when a start boundary is visible (end may still be unset).

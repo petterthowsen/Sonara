@@ -1,6 +1,14 @@
 # DeviceDropUtil.gd
 # Shared drop rules for adding/reordering devices on a channel or inside a container.
+# Every drop target (device lane, mixer strip, compact list, container folder, drum pad,
+# AI tools) goes through these so they accept and do the same thing.
+# Drops are synchronous: files for new devices are queued on the instance and loaded by
+# Channel.add_device() right after the engine is told to create the device.
 class_name DeviceDropUtil extends RefCounted
+
+const SFIZZ_ID := "sonara.builtin.sfizz"
+const SAMPLER_ID := "sonara.builtin.sampler"
+const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
 
 
 ## Whether this asset can be added to the channel (device, SFZ, or audio-into-drum).
@@ -45,25 +53,79 @@ static func drop_asset(
 	channel: Channel,
 	asset: Asset,
 	position: int,
-	parent: DeviceInstance,
-	tree: SceneTree
+	parent: DeviceInstance
 ) -> void:
 	if channel == null or asset == null:
 		return
-	if asset.type == Asset.TYPE.SFZ:
-		await _drop_sfz(channel, asset, position, parent, tree)
+	if asset.type == Asset.TYPE.Audio and _is_drum_machine(parent):
+		drop_on_drum_pad(channel, parent, parent.next_free_drum_note(), asset)
 		return
-	if asset.type == Asset.TYPE.Audio and parent and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
-		await drop_on_drum_pad(channel, parent, parent.next_free_drum_note(), asset, tree)
-		return
-	if asset.type != Asset.TYPE.Device:
-		return
-	var device := AssetService.get_device(asset.path)
+	var device_instance := instance_for_asset(asset, channel.id, position)
+	if device_instance:
+		HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position, parent))
+
+
+## New instance for a Device asset, or an sfizz instance with the SFZ queued. Null for other assets.
+static func instance_for_asset(asset: Asset, channel_id: int, position: int = -1) -> DeviceInstance:
+	if asset == null:
+		return null
+	var device_id := ""
+	match asset.type:
+		Asset.TYPE.SFZ:
+			device_id = SFIZZ_ID
+		Asset.TYPE.Device:
+			device_id = asset.path
+		_:
+			return null
+	var device := AssetService.get_device(device_id)
 	if device == null:
-		push_error("[DeviceDropUtil] Failed to get device: %s" % asset.path)
-		return
-	var device_instance := DeviceInstance.new(device, channel.id, position)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position, parent))
+		push_error("[DeviceDropUtil] Failed to get device: %s" % device_id)
+		return null
+	var device_instance := DeviceInstance.new(device, channel_id, position)
+	if asset.type == Asset.TYPE.SFZ:
+		device_instance.queue_file_load(asset.path)
+	return device_instance
+
+
+## Whether a Device or SFZ asset dropped on empty track/mixer space gets its own instrument track.
+static func creates_instrument_track(asset: Asset) -> bool:
+	if asset == null:
+		return false
+	if asset.type == Asset.TYPE.SFZ:
+		return true
+	if asset.type != Asset.TYPE.Device:
+		return false
+	var device := AssetService.get_device(asset.path)
+	return device != null and device.creates_instrument_track()
+
+
+## Create an instrument track named after `asset` with its device (sfizz for SFZ) on the channel.
+static func create_instrument_track_for_asset(project: Project, asset: Asset) -> Channel:
+	if project == null or not creates_instrument_track(asset):
+		return null
+	var track_cmd := TrackCreateCommand.new(project, "instrument", _track_name_for(asset))
+	track_cmd.do()
+	var channel := track_cmd.channel
+	if channel == null:
+		push_error("[DeviceDropUtil] Failed to create instrument track for %s" % asset.path)
+		return null
+	var cmds: Array[Command] = [track_cmd]
+	var device_instance := instance_for_asset(asset, channel.id, 0)
+	if device_instance:
+		var add_cmd := DeviceAddCommand.new(channel, device_instance, -1)
+		add_cmd.do()
+		cmds.append(add_cmd)
+	HistoryUtil.record_many(track_cmd.name, cmds)
+	return channel
+
+
+## Device name for a Device asset, file name for an SFZ.
+static func _track_name_for(asset: Asset) -> String:
+	if asset.type == Asset.TYPE.Device:
+		var device := AssetService.get_device(asset.path)
+		if device:
+			return device.name
+	return asset.name
 
 
 ## Reorder within `to_parent`, or relocate from another parent on the same channel.
@@ -127,6 +189,28 @@ static func find_file_loading_descendant(inst: DeviceInstance) -> DeviceInstance
 	return null
 
 
+## Whether `data` can be dropped onto the device panel for `inst`: a child for a container, or a file to load.
+static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
+	if inst == null:
+		return false
+	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, data):
+		return true
+	return data is Asset and can_drop_file_on_device(inst, data)
+
+
+## Drop `data` onto the device panel for `inst`. Returns true when it was added into the container.
+static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
+	if inst == null:
+		return false
+	var channel := inst.get_channel()
+	if inst.is_container() and can_drop_on_container(channel, inst, data):
+		drop_on_container(channel, inst, data)
+		return true
+	if data is Asset and can_drop_file_on_device(inst, data):
+		inst.load_file((data as Asset).path)
+	return false
+
+
 ## Drop onto a container device itself (append a child).
 static func can_drop_on_container(channel: Channel, container: DeviceInstance, data: Variant) -> bool:
 	if channel == null or container == null or not container.is_container():
@@ -134,7 +218,7 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 	if data is DeviceInstance:
 		return can_drop_instance_on_host(channel, data, container)
 	if data is Asset:
-		if data.type == Asset.TYPE.Audio and container.device and container.device.device_id == "sonara.builtin.drum_machine":
+		if data.type == Asset.TYPE.Audio and _is_drum_machine(container):
 			return channel.channel_type == Channel.ChannelType.INSTRUMENT
 		return can_drop_asset_on_channel(channel, data)
 	return false
@@ -144,8 +228,7 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 static func drop_on_container(
 	channel: Channel,
 	container: DeviceInstance,
-	data: Variant,
-	tree: SceneTree
+	data: Variant
 ) -> void:
 	if not can_drop_on_container(channel, container, data):
 		return
@@ -153,30 +236,11 @@ static func drop_on_container(
 		drop_instance(channel, data, container, -1)
 		return
 	if data is Asset:
-		if data.type == Asset.TYPE.Audio and container.device and container.device.device_id == "sonara.builtin.drum_machine":
-			await drop_on_drum_pad(channel, container, container.next_free_drum_note(), data, tree)
-			return
-		await drop_asset(channel, data, -1, container, tree)
+		drop_asset(channel, data, -1, container)
 
 
-static func _drop_sfz(
-	channel: Channel,
-	asset: Asset,
-	position: int,
-	parent: DeviceInstance,
-	tree: SceneTree
-) -> void:
-	var sfizz_device := AssetService.get_device("sonara.builtin.sfizz")
-	if sfizz_device == null:
-		push_error("[DeviceDropUtil] Failed to get sfizz device")
-		return
-	var device_instance := DeviceInstance.new(sfizz_device, channel.id, position)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position, parent))
-	if tree:
-		await tree.create_timer(0.1).timeout
-		device_instance.load_file(asset.path)
-	else:
-		device_instance.load_file(asset.path)
+static func _is_drum_machine(inst: DeviceInstance) -> bool:
+	return inst != null and inst.device != null and inst.device.device_id == DRUM_MACHINE_ID
 
 
 ## Whether `data` can land on a drum pad (empty, occupied file-load, or pad-to-pad move/swap).
@@ -209,8 +273,7 @@ static func drop_on_drum_pad(
 	channel: Channel,
 	container: DeviceInstance,
 	note: int,
-	data: Variant,
-	tree: SceneTree
+	data: Variant
 ) -> void:
 	if channel == null or container == null:
 		return
@@ -226,15 +289,15 @@ static func drop_on_drum_pad(
 		if can_drop_file_on_device(target, asset):
 			target.load_file(asset.path)
 		return
+	var device_instance: DeviceInstance = null
 	if asset.type == Asset.TYPE.Audio:
-		await _drop_sampler_on_pad(channel, container, note, asset, tree)
+		device_instance = _sampler_for(asset, channel.id)
+	else:
+		device_instance = instance_for_asset(asset, channel.id)
+	if device_instance == null:
 		return
-	await drop_asset(channel, asset, -1, container, tree)
-	var added := _child_for_note(container, note)
-	if added == null and not container.children.is_empty():
-		added = container.children[container.children.size() - 1]
-	if added:
-		added.set_slot_note(note)
+	device_instance.slot_note = note
+	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1, container))
 
 
 ## Move `inst` onto `note`, swapping with `occupied` when that pad already has a child.
@@ -289,21 +352,12 @@ static func _child_for_note(container: DeviceInstance, note: int) -> DeviceInsta
 	return null
 
 
-## Add a sampler on `note` and load `asset` into it.
-static func _drop_sampler_on_pad(
-	channel: Channel,
-	container: DeviceInstance,
-	note: int,
-	asset: Asset,
-	tree: SceneTree
-) -> void:
-	var sampler_device := AssetService.get_device("sonara.builtin.sampler")
+## New sampler instance with the audio `asset` queued for loading.
+static func _sampler_for(asset: Asset, channel_id: int) -> DeviceInstance:
+	var sampler_device := AssetService.get_device(SAMPLER_ID)
 	if sampler_device == null:
 		push_error("[DeviceDropUtil] Failed to get sampler device")
-		return
-	var device_instance := DeviceInstance.new(sampler_device, channel.id, -1)
-	device_instance.slot_note = note
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1, container))
-	if tree:
-		await tree.create_timer(0.1).timeout
-	device_instance.load_file(asset.path)
+		return null
+	var device_instance := DeviceInstance.new(sampler_device, channel_id, -1)
+	device_instance.queue_file_load(asset.path)
+	return device_instance

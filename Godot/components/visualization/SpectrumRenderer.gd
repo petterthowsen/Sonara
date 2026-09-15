@@ -10,6 +10,8 @@
 ## The renderer will also draw a legend and labels.
 class_name SpectrumRenderer extends Control
 
+var logger := Log.make("SpectrumRenderer")
+
 # ============================================================================
 # STYLING
 # ============================================================================
@@ -211,7 +213,7 @@ enum Resolution { Tiny, Small, Medium, Large }
 			_:
 				fft_size = 4096
 		
-		print("FFT Size: ", fft_size)
+		logger.info("FFT Size: ", fft_size)
 		_rebuild_axis_cache()
 		queue_redraw()
 

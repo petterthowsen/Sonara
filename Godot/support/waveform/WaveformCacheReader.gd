@@ -4,6 +4,8 @@
 
 class_name WaveformCacheReader extends RefCounted
 
+static var logger := Log.make("WaveformCacheReader")
+
 const MAGIC_STRING := "SONAWRM1"
 const METADATA_DIRECTORY_OFFSET := 34  # Fixed offset right after header
 
@@ -61,7 +63,7 @@ func load(path: String) -> bool:
 		level_metadata.append(meta)
 		if i < 2:
 			var ch0_offset = meta.get("channel_offsets", [])
-			print("[WaveformCacheReader] Level %d: block_size=%d, num_blocks=%d, ch0_offset=%s" % [i, meta["block_size"], meta["num_blocks"], ch0_offset[0] if ch0_offset.size() > 0 else "N/A"])
+			logger.info("Level %d: block_size=%d, num_blocks=%d, ch0_offset=%s" % [i, meta["block_size"], meta["num_blocks"], ch0_offset[0] if ch0_offset.size() > 0 else "N/A"])
 
 	file.close()
 	file_path = path
@@ -135,7 +137,7 @@ func read_level(level_index: int, channel_count: int = -1) -> Dictionary:
 			channel_rms.append(rms_val)
 
 		if level_index == 0 and ch == 0:
-			print("[WaveformCacheReader] Level 0, ch 0, first 3 blocks: %s" % [first_vals])
+			logger.info("Level 0, ch 0, first 3 blocks: %s" % [first_vals])
 
 		peaks.append(channel_peaks)
 		rms.append(channel_rms)

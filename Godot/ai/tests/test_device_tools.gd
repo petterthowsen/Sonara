@@ -1,10 +1,7 @@
 # test_device_tools.gd
 # Headless tests for device names, paths, and parameter paging.
-# Run: godot --headless --path Godot -s ai/tests/test_device_tools.gd
-extends SceneTree
-
-
-var _failures: int = 0
+# Run: godot --headless --path Godot -s ai/tests/test_device_tools.gd -- --test
+extends TestBase
 
 
 ## Stub host item for path walking (avoids DeviceInstance / autoloads).
@@ -16,28 +13,17 @@ class StubDev extends RefCounted:
 		name = p_name
 
 
-func _init() -> void:
-	print("=== Device tool tests ===")
+func suite_name() -> String:
+	return "Device tool tests"
+
+
+func run_tests() -> void:
 	_test_sanitize_and_unique()
 	_test_split_path()
 	_test_walk_named()
 	_test_param_page()
 	_test_parse_param_value()
 	_test_pad_specs()
-	if _failures == 0:
-		print("=== ALL PASSED ===")
-	else:
-		print("=== FAILED: %d ===" % _failures)
-	quit(_failures)
-
-
-func _assert(cond: bool, msg: String) -> void:
-	if not cond:
-		_failures += 1
-		push_error("FAIL: " + msg)
-		print("FAIL: ", msg)
-	else:
-		print("ok: ", msg)
 
 
 func _test_sanitize_and_unique() -> void:

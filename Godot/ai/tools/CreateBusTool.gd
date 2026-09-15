@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Create a mixer bus channel (no arrangement track). Undoable."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

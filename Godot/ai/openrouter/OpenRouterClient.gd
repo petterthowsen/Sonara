@@ -16,6 +16,10 @@ signal request_cancelled()
 
 const APP_REFERER := "https://sonara.app"
 const APP_TITLE := "Sonara"
+## Takes precedence over the key stored in config.json.
+const API_KEY_ENV := "OPENROUTER_API_KEY"
+
+var logger := Log.make("OpenRouterClient")
 
 var _http := HTTPClient.new()
 var _sse := OpenRouterSse.new()
@@ -70,8 +74,12 @@ func configure_from_settings() -> void:
 	var settings := get_node_or_null("/root/Settings")
 	if settings == null:
 		return
-	_api_key = str(settings.call("get_value", "ai/openrouter/api_key"))
-	_base_url = str(settings.call("get_value", "ai/openrouter/base_url")).rstrip("/")
+	var env_key := OS.get_environment(API_KEY_ENV).strip_edges()
+	_api_key = env_key if not env_key.is_empty() else str(settings.call("get_value", "ai/openrouter/api_key"))
+	var base_url := str(settings.call("get_value", "ai/openrouter/base_url")).rstrip("/")
+	if base_url != _base_url or _host.is_empty():
+		_warn_if_insecure(base_url)
+	_base_url = base_url
 	_default_model = str(settings.call("get_value", "ai/openrouter/model"))
 	_temperature = float(settings.call("get_value", "ai/chat/temperature"))
 	_max_tokens = int(settings.call("get_value", "ai/chat/max_tokens"))
@@ -214,7 +222,7 @@ func _read_body() -> void:
 			return
 		_response_code = _http.get_response_code()
 		_headers_seen = true
-		print("[OpenRouter] response HTTP %d stream=%s" % [_response_code, _streaming])
+		logger.info("response HTTP %d stream=%s" % [_response_code, _streaming])
 	var chunk := _http.read_response_body_chunk()
 	if chunk.is_empty():
 		return
@@ -286,7 +294,7 @@ func _finish_body() -> void:
 	if _response_code < 200 or _response_code >= 300:
 		var body_text := _error_body.get_string_from_utf8()
 		if not body_text.is_empty():
-			print("[OpenRouter] error body: %s" % body_text.substr(0, 1500))
+			logger.error("error body: %s" % body_text.substr(0, 1500))
 		_fail(ChatTypes.ORChatError.from_http(_response_code, body_text))
 		return
 	if not _streaming:
@@ -312,7 +320,7 @@ func _finish_body() -> void:
 			parts.append(img)
 		msg.content = parts
 	_close_http()
-	print("[OpenRouter] finished reason=%s chars=%d tools=%d audio=%d" % [
+	logger.info("finished reason=%s chars=%d tools=%d audio=%d" % [
 		_finish_reason, _text.length(), calls.size(), _audio_b64.length()
 	])
 	message_finished.emit(msg)
@@ -362,7 +370,7 @@ func _fail(error: ChatTypes.ORChatError) -> void:
 	if not _in_flight:
 		return
 	_close_http()
-	print("[OpenRouter] failed: %s" % error.message)
+	logger.error("failed: %s" % error.message)
 	request_failed.emit(error)
 
 
@@ -456,6 +464,20 @@ func _parse_base_url(url: String) -> void:
 		_host = host_port
 
 
+## Warn when the API key would be sent unencrypted to a host other than localhost.
+func _warn_if_insecure(url: String) -> void:
+	if not url.begins_with("http://"):
+		return
+	var host := url.trim_prefix("http://").get_slice("/", 0)
+	if host.begins_with("["):
+		host = host.get_slice("]", 0).trim_prefix("[")
+	else:
+		host = host.get_slice(":", 0)
+	if host in ["localhost", "127.0.0.1", "::1"] or host.begins_with("127."):
+		return
+	push_warning("[OpenRouter] base_url %s is not HTTPS; the API key will be sent unencrypted" % url)
+
+
 ## Store architecture.input/output_modalities from GET /models.
 func _cache_model_caps(data: Array) -> void:
 	for item in data:
@@ -485,7 +507,7 @@ func _log_request(request: ChatTypes.ORChatRequest) -> void:
 				image_n += 1
 			elif part is ChatTypes.ORContentPart and part.kind == "input_audio":
 				audio_n += 1
-	print("[OpenRouter] chat model=%s stream=%s modalities=%s messages=%d images=%d audio_parts=%d" % [
+	logger.info("chat model=%s stream=%s modalities=%s messages=%d images=%d audio_parts=%d" % [
 		request.model, request.stream, ",".join(request.modalities),
 		request.messages.size(), image_n, audio_n
 	])

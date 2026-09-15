@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Create an arrangement track. kind is instrument, audio, folder, or group."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

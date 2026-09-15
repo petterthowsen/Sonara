@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Load an audio or SFZ file into an existing Sampler/Sfizz. To add a new drum pad, use add_device on the Drum Machine instead."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

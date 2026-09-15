@@ -4,6 +4,8 @@
 # see Mixer.gd where several ChannelsBox's are used within a HSplit.
 class_name ChannelsBox extends HBoxContainer
 
+var logger : Log = Log.make("ChannelsBox")
+
 ## When set, sibling order is stored on this parent's `child_channel_ids`.
 var nest_parent: Channel = null
 
@@ -32,7 +34,7 @@ func _on_channel_request_move(new_index: int, channel_item: MixerChannel) -> voi
 	# Move the child to the new position
 	move_child(channel_item, clamped_index)
 	_sync_channel_order()
-	print("[ChannelsBox] Moved channel from position ", current_child_index, " to ", clamped_index)
+	logger.info("Moved channel from position ", current_child_index, " to ", clamped_index)
 
 
 ## Persist mixer display order after a live reorder.

@@ -238,6 +238,7 @@ static func _normalize_opts(clip: Object, opts: Dictionary) -> Dictionary:
 	var o := opts.duplicate()
 	o.ppq = int(o.get("ppq", 960))
 	o.numerator = int(o.get("numerator", 4))
+	o.denominator = int(o.get("denominator", 4))
 	o.tempo = float(o.get("tempo", 0.0))
 	o.res_denom = int(o.get("res_denom", ClipTextTime.parse_res(str(o.get("res", "1/16")))))
 	var key_val = o.get("key", {})
@@ -262,14 +263,14 @@ static func _normalize_opts(clip: Object, opts: Dictionary) -> Dictionary:
 		var ticks: int = int(clip.content_length_ticks) if clip else 0
 		if ticks <= 0 and clip and clip.has_method("get_content_length"):
 			ticks = int(clip.get_content_length())
-		o.bars = ClipTextTime.bars_from_ticks(ticks, o.ppq, o.numerator)
+		o.bars = ClipTextTime.bars_from_ticks(ticks, o.ppq, o.numerator, o.denominator)
 	return o
 
 
 static func _apply_header_length(clip: Object, o: Dictionary, header_bars: int) -> void:
 	if clip == null or header_bars <= 0:
 		return
-	clip.content_length_ticks = header_bars * ClipTextTime.ticks_per_bar(o.ppq, o.numerator)
+	clip.content_length_ticks = header_bars * ClipTextTime.ticks_per_bar(o.ppq, o.numerator, o.denominator)
 
 
 static func _looks_like_grid(text: String) -> bool:

@@ -13,6 +13,7 @@
 [ext_resource type="PackedScene" uid="uid://csa4qoy44e5vn" path="res://mixer/device_list/ChannelDeviceList.tscn" id="8_xa46q"]
 [ext_resource type="Script" uid="uid://c5hc8g1r5wo5i" path="res://mixer/MixerChannelChildren.gd" id="9_an1hh"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
+[ext_resource type="Script" path="res://mixer/PanControl.gd" id="11_panctl"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -323,6 +324,7 @@ text = "M"
 layout_mode = 2
 focus_mode = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_573y5")
+script = ExtResource("11_panctl")
 
 [node name="HSlider" type="Control" parent="HBox/VBox/Panning" unique_id=1152018147]
 custom_minimum_size = Vector2(0, 24)
@@ -350,6 +352,19 @@ b_value = 0.0
 bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
 fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
+
+[node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/Panning" unique_id=506406282]
+oversampling_override = 1.0
+title = "Pan Mode"
+size = Vector2i(174, 100)
+item_count = 2
+item_0/text = "Stereo Combined"
+item_0/checkable = 1
+item_0/checked = true
+item_0/id = 0
+item_1/text = "Stereo Dual"
+item_1/checkable = 1
+item_1/id = 1
 
 [node name="Volume" type="PanelContainer" parent="HBox/VBox" unique_id=450510557]
 custom_minimum_size = Vector2(0, 100)
@@ -426,19 +441,6 @@ size_flags_horizontal = 3
 [node name="DeviceList" parent="HBox/Details" unique_id=90880029 instance=ExtResource("8_xa46q")]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
-
-[node name="PanModePopup" type="PopupMenu" parent="." unique_id=506406282]
-oversampling_override = 1.0
-title = "Pan Mode"
-size = Vector2i(174, 100)
-item_count = 2
-item_0/text = "Stereo Combined"
-item_0/checkable = 1
-item_0/checked = true
-item_0/id = 0
-item_1/text = "Stereo Dual"
-item_1/checkable = 1
-item_1/id = 1
 
 [editable path="HBox/VBox/Header/VBox/SmartLineEdit"]
 [editable path="HBox/VBox/BigMeter"]

@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Remove a device by path (Channel/Device/Child) or instance_id. Undoable."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

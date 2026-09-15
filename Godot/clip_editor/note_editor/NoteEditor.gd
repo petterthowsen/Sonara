@@ -13,7 +13,6 @@ var interaction_mode: InteractionMode = InteractionMode.NONE
 
 # Drag/resize state
 var dragging_note: VisualNote = null
-var drag_start_ticks: int = 0
 var drag_start_midi_note: int = 0
 var drag_start_mouse_pos: Vector2 = Vector2.ZERO
 var drag_start_positions: Dictionary = {}  # note_id -> {start_tick, note, velocity, clip_instance}
@@ -134,10 +133,7 @@ func _history_commit(action_name: String) -> void:
 	_history_clip_snapshots.clear()
 	if cmds.is_empty():
 		return
-	if cmds.size() == 1:
-		HistoryUtil.record(cmds[0])
-	else:
-		HistoryUtil.record(MacroCommand.new(action_name, cmds))
+	HistoryUtil.record_many(action_name, cmds)
 
 
 ## Compare two note snapshots for equality (id + fields).
@@ -232,7 +228,7 @@ func handle_key_input(event: InputEventKey) -> void:
 # ============================================================================
 func _place_note_at_position(pos: Vector2) -> VisualNote:
 	"""Place a MIDI note at the given position."""
-	print("placing note at ", pos.y)
+	logger.debug("placing note at ", pos.y)
 
 	# Clear selection before placing new note
 	selection_manager.clear_selection()
@@ -243,10 +239,8 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var tick_position = pixels_to_ticks(pixel_x)
 
 	# Snap to grid
-	var snap = get_snap_interval()
-	if snap > 0:
-		@warning_ignore("integer_division")
-		tick_position = (tick_position / snap) * snap
+	if grid_helper:
+		tick_position = grid_helper.floor_ticks(tick_position)
 
 	var end_tick = tick_position + default_note_length_ticks
 
@@ -256,7 +250,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		# MULTI-CLIP MODE: Find clip at cursor position, or create one
 		var target_clip_instance = get_or_create_clip_at_position(tick_position)
 		if not target_clip_instance:
-			print("[NoteEditor] No clip at position and creation not yet implemented (Phase 5)")
+			logger.warn("No clip at position and creation not yet implemented (Phase 5)")
 			return null
 		target_clip = target_clip_instance.clip
 		# In multi-clip mode, tick_position is song-relative, need to convert to clip-local
@@ -265,22 +259,18 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	else:
 		# SINGLE-CLIP MODE: Use the bound clip
 		if not clip:
-			print("No clip loaded in MIDI editor")
+			logger.warn("No clip loaded in MIDI editor")
 			return null
 		target_clip = clip
 
 	_history_begin_clips([target_clip])
 	# Cut overlapping notes
-	var affected_notes = target_clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick)
+	var affected_notes = target_clip.cut_overlapping_notes_at_pitch(midi_note_num, tick_position, end_tick, _note_id_allocator())
 
 	if not affected_notes.is_empty():
-		print("[NoteEditor] Cut/merged %d overlapping notes" % affected_notes.size())
+		logger.info("Cut/merged %d overlapping notes" % affected_notes.size())
 
-	# Get unique note ID
-	var note_id = -1
-	if Sonara and Sonara.editor and Sonara.editor.project:
-		note_id = Sonara.editor.project.next_note_id
-		Sonara.editor.project.next_note_id += 1
+	var note_id: int = _note_id_allocator().call()
 
 	# Add note to clip
 	var note_data = target_clip.add_midi_note(note_id, midi_note_num, 100, tick_position, default_note_length_ticks)
@@ -289,7 +279,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		_history_clip_snapshots.clear()
 		return null
 
-	print("[NoteEditor] Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, default_note_length_ticks])
+	logger.info("Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, default_note_length_ticks])
 
 	# Get visual note created reactively
 	var note_instance = get_visual_note(note_data.id)
@@ -297,7 +287,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		push_error("[NoteEditor] Failed to find visual note after creation")
 		return null
 
-	print("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_note_length_ticks])
+	logger.info("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_note_length_ticks])
 
 	# Select the newly placed note (uses coordinate conversion callback)
 	_history_commit("Place Note")
@@ -324,7 +314,6 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 		selection_manager.select_note(note)
 
 	dragging_note = note
-	drag_start_ticks = note.midi_note_data.start_tick
 	drag_start_midi_note = note.midi_note_data.note
 	drag_start_mouse_pos = click_position
 	last_drag_mode = DragMode.POSITION
@@ -384,11 +373,13 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		_snapshot_selection()
 
 		last_drag_mode = current_mode
-		print("[NoteEditor] Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY"][current_mode])
+		logger.info("Drag mode switched to: %s" % ["POSITION", "RESIZE", "VELOCITY"][current_mode])
 
 	var delta_x = mouse_pos_local.x - drag_start_mouse_pos.x
 	var delta_y = mouse_pos_local.y - drag_start_mouse_pos.y
 	var delta_ticks = pixels_to_ticks(delta_x)
+	# Snap the drag delta, not each note, so notes keep their offsets from each other.
+	var snapped_delta_ticks: int = grid_helper.snap_ticks(delta_ticks) if grid_helper else delta_ticks
 
 	if alt_pressed:
 		# Alt mode: Control velocity
@@ -418,14 +409,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			if start_duration == null:
 				continue
 
-			var new_duration = max(get_snap_interval(), start_duration + delta_ticks)
-
-			# Apply snapping
-			if grid_helper:
-				var snap_interval = grid_helper.get_snap_interval()
-				new_duration = max(snap_interval, new_duration)
-				@warning_ignore("integer_division")
-				new_duration = int(new_duration / snap_interval) * snap_interval
+			var new_duration := _snapped_duration(start_duration + delta_ticks)
 
 			sel_note.midi_note_data.duration_ticks = new_duration
 			var note_width = ticks_to_pixels(new_duration)
@@ -445,12 +429,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			if not start_pos:
 				continue
 
-			var new_ticks = max(0, start_pos.start_tick + delta_ticks)
+			var new_ticks = max(0, start_pos.start_tick + snapped_delta_ticks)
 			var new_midi_note = clamp(start_pos.note + delta_midi_note, 0, 127)
-
-			# Apply snapping
-			if grid_helper:
-				new_ticks = grid_helper.snap_ticks(new_ticks)
 
 			# Clamp within clip content in track-mode to avoid crossing instance boundaries
 			if multi_clip_mode:
@@ -477,8 +457,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 					owner_ci_vis = get_clip_instance_for_note(sel_note.midi_note_data.id)
 				if owner_ci_vis:
 					visual_offset_ticks = owner_ci_vis.start_ticks
-					print("[NoteEditor] Drag render note ", sel_note.midi_note_data.id, 
-						" ci=", owner_ci_vis.id, " ci_start=", owner_ci_vis.start_ticks, 
+					logger.debug("Drag render note ", sel_note.midi_note_data.id,
+						" ci=", owner_ci_vis.id, " ci_start=", owner_ci_vis.start_ticks,
 						" clip_local=", new_ticks)
 
 			var note_x = ticks_to_pixels(new_ticks + visual_offset_ticks)
@@ -512,7 +492,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 			break
 
 	if not any_changes:
-		print("[NoteEditor] Drag ended with no changes")
+		logger.info("Drag ended with no changes")
 		dragging_note = null
 		drag_start_positions.clear()
 		resize_start_durations.clear()
@@ -547,6 +527,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 			note_data.note,
 			note_data.start_tick,
 			end_tick,
+			_note_id_allocator(),
 			note_data.id
 		)
 
@@ -554,9 +535,9 @@ func _on_drag_ended(note: VisualNote) -> void:
 		note_clip.update_midi_note(note_data)
 
 	if total_affected > 0:
-		print("[NoteEditor] Multi-drag ended - cut/merged %d overlapping notes" % total_affected)
+		logger.info("Multi-drag ended - cut/merged %d overlapping notes" % total_affected)
 
-	print("[NoteEditor] Updated %d note(s) position/duration" % selection_manager.selected_notes.size())
+	logger.info("Updated %d note(s) position/duration" % selection_manager.selected_notes.size())
 
 	_history_commit("Move Notes")
 
@@ -592,6 +573,14 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 	_history_begin_selection()
 
 
+## Note length floored to the grid, never shorter than one grid step.
+func _snapped_duration(ticks: int) -> int:
+	var snap_interval := get_snap_interval()
+	if grid_helper:
+		ticks = grid_helper.floor_ticks(ticks)
+	return maxi(snap_interval, ticks)
+
+
 func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	"""Handle note resize update."""
 	if resizing_note != note or not note.midi_note_data:
@@ -600,14 +589,7 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	var delta = mouse_pos_local - resize_start_mouse_pos
 	var delta_ticks = pixels_to_ticks(delta.x)
 
-	var new_duration = max(get_snap_interval(), resize_start_duration + delta_ticks)
-
-	# Apply snapping
-	if grid_helper:
-		var snap_interval = grid_helper.get_snap_interval()
-		new_duration = max(snap_interval, new_duration)
-		@warning_ignore("integer_division")
-		new_duration = int(new_duration / snap_interval) * snap_interval
+	var new_duration := _snapped_duration(resize_start_duration + delta_ticks)
 
 	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
 
@@ -624,13 +606,7 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		else:
 			# Default: Apply same delta to each note
 			var note_start_duration = resize_start_durations.get(sel_note.midi_note_data.id, sel_note.midi_note_data.duration_ticks)
-			note_new_duration = max(get_snap_interval(), note_start_duration + delta_ticks)
-
-			if grid_helper:
-				var snap_interval = grid_helper.get_snap_interval()
-				note_new_duration = max(snap_interval, note_new_duration)
-				@warning_ignore("integer_division")
-				note_new_duration = int(note_new_duration / snap_interval) * snap_interval
+			note_new_duration = _snapped_duration(note_start_duration + delta_ticks)
 
 		sel_note.midi_note_data.duration_ticks = note_new_duration
 		var note_width = ticks_to_pixels(note_new_duration)
@@ -644,7 +620,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 
 	# Store new note length as default
 	default_note_length_ticks = note.midi_note_data.duration_ticks
-	print("[NoteEditor] Updated default note length to %d ticks" % default_note_length_ticks)
+	logger.info("Updated default note length to %d ticks" % default_note_length_ticks)
 
 	# Process all selected notes
 	var total_affected = 0
@@ -664,6 +640,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 			note_data.note,
 			note_data.start_tick,
 			end_tick,
+			_note_id_allocator(),
 			note_data.id
 		)
 
@@ -671,9 +648,9 @@ func _on_resize_ended(note: VisualNote) -> void:
 		note_clip.update_midi_note(note_data)
 
 	if total_affected > 0:
-		print("[NoteEditor] Multi-resize ended - cut/merged %d overlapping notes" % total_affected)
+		logger.info("Multi-resize ended - cut/merged %d overlapping notes" % total_affected)
 
-	print("[NoteEditor] Updated %d note(s) duration" % selection_manager.selected_notes.size())
+	logger.info("Updated %d note(s) duration" % selection_manager.selected_notes.size())
 
 	# Don't update selection range - keep grid-snapped box selection boundaries
 	queue_redraw()
@@ -691,7 +668,6 @@ func _start_place_and_drag(note: VisualNote) -> void:
 
 	interaction_mode = InteractionMode.PLACING_AND_DRAGGING
 	dragging_note = note
-	drag_start_ticks = note.midi_note_data.start_tick
 	drag_start_midi_note = note.midi_note_data.note
 	drag_start_mouse_pos = get_local_mouse_position()
 	last_drag_mode = DragMode.POSITION
@@ -714,7 +690,7 @@ func _start_place_and_drag(note: VisualNote) -> void:
 			}
 			resize_start_durations[sel_note.midi_note_data.id] = sel_note.midi_note_data.duration_ticks
 
-	print("[NoteEditor] Started place-and-drag for note %d" % note.midi_note_data.id)
+	logger.info("Started place-and-drag for note %d" % note.midi_note_data.id)
 
 
 func _erase_note(note: VisualNote) -> void:
@@ -734,22 +710,6 @@ func _erase_note(note: VisualNote) -> void:
 # ============================================================================
 # HELPER METHODS FOR SELECTION MANAGER
 # ============================================================================
-func _snap_position_to_grid(pos: Vector2) -> Vector2:
-	"""Snap a position to the grid (both X and Y)."""
-	var snapped_pos = pos
-
-	# Snap Y to note height boundaries
-	var note_num = y_to_note(pos.y)
-	snapped_pos.y = note_to_y(note_num)
-
-	# Snap X to time grid
-	var ticks = grid_helper.pixels_to_ticks(pos.x)
-	ticks = grid_helper.snap_ticks(ticks)
-	snapped_pos.x = grid_helper.ticks_to_pixels(ticks)
-
-	return snapped_pos
-
-
 func _get_notes_in_box(box_rect: Rect2) -> Array[VisualNote]:
 	"""Find all visual notes that intersect with the given box."""
 	var notes: Array[VisualNote] = []
@@ -767,19 +727,19 @@ func _get_notes_in_box(box_rect: Rect2) -> Array[VisualNote]:
 func _cut_selection() -> void:
 	"""Cut selected notes (copy + delete)."""
 	if selection_manager.selected_notes.is_empty():
-		print("[NoteEditor] No notes selected to cut")
+		logger.warn("No notes selected to cut")
 		return
 
 	selection_manager.copy_selection()
 	_delete_selection()
 
-	print("[NoteEditor] Cut %d notes" % selection_manager.clipboard.notes.size())
+	logger.info("Cut %d notes" % selection_manager.clipboard.notes.size())
 
 
 func _paste_at_position(tick_position: int) -> void:
 	"""Paste clipboard contents at the specified tick position."""
 	if not selection_manager.clipboard or selection_manager.clipboard.is_empty():
-		print("[NoteEditor] Clipboard is empty")
+		logger.warn("Clipboard is empty")
 		return
 
 	# Determine target clip
@@ -790,7 +750,7 @@ func _paste_at_position(tick_position: int) -> void:
 		# MULTI-CLIP MODE: Find or create clip at cursor position
 		var target_clip_instance = get_or_create_clip_at_position(tick_position)
 		if not target_clip_instance:
-			print("[NoteEditor] Cannot paste - no clip at position")
+			logger.warn("Cannot paste - no clip at position")
 			return
 		target_clip = target_clip_instance.clip
 		# Convert to clip-local position
@@ -798,16 +758,14 @@ func _paste_at_position(tick_position: int) -> void:
 	else:
 		# SINGLE-CLIP MODE: Use bound clip
 		if not clip:
-			print("[NoteEditor] No clip loaded")
+			logger.warn("No clip loaded")
 			return
 		target_clip = clip
 		clip_local_position = tick_position
 
 	# Snap to grid
-	var snap = get_snap_interval()
-	if snap > 0:
-		@warning_ignore("integer_division")
-		clip_local_position = (clip_local_position / snap) * snap
+	if grid_helper:
+		clip_local_position = grid_helper.floor_ticks(clip_local_position)
 
 	# Get notes positioned at paste location
 	var notes_to_paste = selection_manager.clipboard.get_notes_at_position(clip_local_position)
@@ -817,21 +775,20 @@ func _paste_at_position(tick_position: int) -> void:
 	var total_affected = 0
 	for note_data in notes_to_paste:
 		var end_tick = note_data.start_tick + note_data.duration_ticks
-		var affected = target_clip.cut_overlapping_notes_at_pitch(note_data.note, note_data.start_tick, end_tick)
+		var affected = target_clip.cut_overlapping_notes_at_pitch(note_data.note, note_data.start_tick, end_tick, _note_id_allocator())
 		total_affected += affected.size()
 
 	if total_affected > 0:
-		print("[NoteEditor] Paste cut/merged %d overlapping notes" % total_affected)
+		logger.info("Paste cut/merged %d overlapping notes" % total_affected)
 
 	selection_manager.clear_selection()
 
 	# Add notes to clip
-	var project = Sonara.editor.project
+	var allocate_note_id := _note_id_allocator()
 	var pasted_note_ids: Array[int] = []
 
 	for note_data in notes_to_paste:
-		note_data.id = project.next_note_id
-		project.next_note_id += 1
+		note_data.id = allocate_note_id.call()
 
 		var added = target_clip.add_midi_note_data(note_data)
 		if added == null:
@@ -859,7 +816,7 @@ func _paste_at_position(tick_position: int) -> void:
 
 	selection_manager.selection_changed.emit(selection_manager.selected_notes)
 
-	print("[NoteEditor] Pasted %d notes at tick %d (range: %d-%d)" % [
+	logger.info("Pasted %d notes at tick %d (range: %d-%d)" % [
 		pasted_note_ids.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
 	])
 	_history_commit("Paste Notes")
@@ -869,12 +826,12 @@ func _duplicate_selection() -> void:
 	"""Duplicate selected notes immediately after the selection."""
 	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
-		print("[NoteEditor] No notes selected to duplicate")
+		logger.warn("No notes selected to duplicate")
 		return
 
 	var selection_length = selection_manager.box_selection_end_tick - selection_manager.box_selection_start_tick
 	if selection_length <= 0:
-		print("[NoteEditor] Cannot duplicate - invalid selection range")
+		logger.warn("Cannot duplicate - invalid selection range")
 		return
 
 	var selection: NoteSelection
@@ -895,7 +852,7 @@ func _duplicate_selection() -> void:
 	_paste_at_position(duplicate_position)
 	selection_manager.clipboard = old_clipboard
 
-	print("[NoteEditor] Duplicated %d notes (duration: %d ticks)" % [selection.notes.size(), selection.duration_ticks])
+	logger.info("Duplicated %d notes (duration: %d ticks)" % [selection.notes.size(), selection.duration_ticks])
 	_history_commit("Duplicate Notes")
 
 
@@ -903,7 +860,7 @@ func _delete_selection() -> void:
 	"""Delete all selected notes."""
 	_history_begin_selection()
 	if selection_manager.selected_notes.is_empty():
-		print("[NoteEditor] No notes selected to delete")
+		logger.warn("No notes selected to delete")
 		return
 
 	var count = selection_manager.selected_notes.size()
@@ -923,7 +880,7 @@ func _delete_selection() -> void:
 
 	update_container_width()
 
-	print("[NoteEditor] Deleted %d notes" % count)
+	logger.info("Deleted %d notes" % count)
 	_history_commit("Delete Notes")
 
 
@@ -963,6 +920,7 @@ func _move_selection_vertical(semitones: int) -> void:
 			note_data.note,
 			note_data.start_tick,
 			end_tick,
+			_note_id_allocator(),
 			note_data.id
 		)
 
@@ -970,9 +928,9 @@ func _move_selection_vertical(semitones: int) -> void:
 		note_clip.update_midi_note(note_data)
 
 	if total_affected > 0:
-		print("[NoteEditor] Keyboard move vertical - cut/merged %d overlapping notes" % total_affected)
+		logger.info("Keyboard move vertical - cut/merged %d overlapping notes" % total_affected)
 
-	print("[NoteEditor] Moved %d note(s) %+d semitones" % [selection_manager.selected_notes.size(), semitones])
+	logger.info("Moved %d note(s) %+d semitones" % [selection_manager.selected_notes.size(), semitones])
 	update_container_width()
 	_history_commit("Transpose Notes")
 
@@ -1013,6 +971,7 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 			note_data.note,
 			note_data.start_tick,
 			end_tick,
+			_note_id_allocator(),
 			note_data.id
 		)
 
@@ -1020,9 +979,9 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 		note_clip.update_midi_note(note_data)
 
 	if total_affected > 0:
-		print("[NoteEditor] Keyboard move horizontal - cut/merged %d overlapping notes" % total_affected)
+		logger.info("Keyboard move horizontal - cut/merged %d overlapping notes" % total_affected)
 
-	print("[NoteEditor] Moved %d note(s) %+d ticks" % [selection_manager.selected_notes.size(), delta_ticks])
+	logger.info("Moved %d note(s) %+d ticks" % [selection_manager.selected_notes.size(), delta_ticks])
 
 	# Don't update selection range - keep grid-snapped box selection boundaries
 	queue_redraw()
@@ -1094,16 +1053,14 @@ func _handle_cross_clip_transfers() -> void:
 
 func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance, dest: ClipInstance, song_position: int) -> void:
 	"""Transfer a note from source clip to destination clip."""
-	print("[NoteEditor] Transferring note %d from clip '%s' to '%s'" % [note_data.id, source.clip.name if source.clip else "?", dest.clip.name if dest.clip else "?"])
+	logger.info("Transferring note %d from clip '%s' to '%s'" % [note_data.id, source.clip.name if source.clip else "?", dest.clip.name if dest.clip else "?"])
 
 	# Calculate clip-local position for destination clip
 	var dest_local_position = song_position - dest.start_ticks
 
 	# Create a copy of the note data for the destination clip
 	var new_note = MidiNoteData.new()
-	var project = Sonara.editor.project
-	new_note.id = project.next_note_id
-	project.next_note_id += 1
+	new_note.id = _note_id_allocator().call()
 	new_note.note = note_data.note
 	new_note.velocity = note_data.velocity
 	new_note.start_tick = dest_local_position
@@ -1115,7 +1072,12 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 	# Add to destination clip (this will trigger reactive addition)
 	dest.clip.add_midi_note_data(new_note)
 
-	print("[NoteEditor] Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
+	logger.info("Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
+
+
+## Note ID source for new and split notes: the open project's counter.
+func _note_id_allocator() -> Callable:
+	return Sonara.editor.project.allocate_note_id
 
 
 func _get_clip_for_note(note_id: int) -> Clip:

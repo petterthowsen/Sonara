@@ -2,6 +2,8 @@
 # Load ~/.config/sonara/aichat/system_prompt.md and expand {variables}.
 class_name PromptTemplate extends RefCounted
 
+static var logger := Log.make("PromptTemplate")
+
 
 const USER_RELATIVE := "aichat/system_prompt.md"
 const SHIPPED_PATH := "res://ai/prompt/system_prompt.md"
@@ -122,4 +124,4 @@ static func _copy_shipped(dest: String) -> void:
 		return
 	file.store_string(src)
 	file.close()
-	print("[PromptTemplate] Copied default system prompt to %s" % dest)
+	logger.info("Copied default system prompt to %s" % dest)

@@ -4,6 +4,8 @@
 
 class_name Timeline extends VBoxContainer
 
+var logger : Log = Log.make("Timeline")
+
 # Timeline track items indexed by track index
 var timeline_tracks: Array[TimelineTrack] = []
 
@@ -110,9 +112,9 @@ func set_project(new_project: Project) -> void:
 		# Update grid and timeline
 		_update_timeline_width()
 		
-		print("[Timeline] Project set: ", project.project_name)
+		logger.info("Project set: ", project.project_name)
 	else:
-		print("[Timeline] Project cleared")
+		logger.info("Project cleared")
 
 func _unbind_from_project() -> void:
 	"""Disconnect from current project signals and clear UI."""
@@ -163,7 +165,7 @@ func _on_track_added(track: Track) -> void:
 	if not _is_rebuilding:
 		_update_visual_order()
 
-	print("[Timeline] Timeline track added for: ", track.name, " at index ", index, " with order ", track.order)
+	logger.info("Timeline track added for: ", track.name, " at index ", index, " with order ", track.order)
 
 
 func _on_track_removed(track: Track) -> void:
@@ -173,11 +175,7 @@ func _on_track_removed(track: Track) -> void:
 		push_warning("[Timeline] Timeline track not found for removed track: %s" % track.name)
 		return
 	
-	# Disconnect from track signals
-	if track.order_changed.is_connected(_on_track_layout_changed):
-		track.order_changed.disconnect(_on_track_layout_changed)
-	if track.parent_changed.is_connected(_on_track_layout_changed):
-		track.parent_changed.disconnect(_on_track_layout_changed)
+	_disconnect_track_layout_signals(track)
 	
 	# Remove from timeline_tracks array
 	var index = timeline_tracks.find(timeline_track)
@@ -198,7 +196,17 @@ func _on_track_removed(track: Track) -> void:
 	# Update timeline width in case this affects layout
 	_update_timeline_width()
 	
-	print("[Timeline] Timeline track removed for: ", track.name)
+	logger.info("Timeline track removed for: ", track.name)
+
+
+## Undo the per-track layout connections made in _on_track_added.
+func _disconnect_track_layout_signals(track: Track) -> void:
+	if track == null:
+		return
+	if track.order_changed.is_connected(_on_track_layout_changed):
+		track.order_changed.disconnect(_on_track_layout_changed)
+	if track.parent_changed.is_connected(_on_track_layout_changed):
+		track.parent_changed.disconnect(_on_track_layout_changed)
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -237,7 +245,7 @@ func _update_visual_order() -> void:
 		if child is TimelineTrack:
 			timeline_tracks.append(child as TimelineTrack)
 	
-	print("[Timeline] Updated visual order (%d tracks)" % visual_tracks.size())
+	logger.info("Updated visual order (%d tracks)" % visual_tracks.size())
 
 
 func _find_timeline_track(track: Track) -> TimelineTrack:
@@ -258,6 +266,7 @@ func _clear_all_tracks() -> void:
 	"""Remove all timeline tracks."""
 	for timeline_track in timeline_tracks:
 		if timeline_track:
+			_disconnect_track_layout_signals(timeline_track.track)
 			if clip_selection_manager:
 				for clip_ui in timeline_track.clip_instances:
 					if clip_ui:
@@ -278,7 +287,7 @@ func _clear_all_tracks() -> void:
 	if clip_selection_manager:
 		clip_selection_manager.clear_selection()
 	
-	print("[Timeline] All timeline tracks cleared")
+	logger.info("All timeline tracks cleared")
 
 
 ## Left-click empty space: Ctrl/Cmd starts a time-range gesture; otherwise set the playhead.
@@ -398,7 +407,7 @@ func _update_timeline_width() -> void:
 
 	# Calculate minimum width based on content or default minimum
 	var ppq = project.ppq
-	var ticks_per_bar = ppq * project.time_numerator
+	var ticks_per_bar = GridHelper.bar_ticks(ppq, project.time_numerator, project.time_denominator)
 	var min_ticks = MIN_TIMELINE_BARS * ticks_per_bar
 
 	# Calculate the visible viewport extent in ticks to enable infinite scroll
@@ -735,10 +744,7 @@ func _finish_drag() -> void:
 				old_start, inst.duration_ticks, inst.clip_offset,
 				new_start, inst.duration_ticks, inst.clip_offset
 			))
-	if cmds.size() == 1:
-		HistoryUtil.record(cmds[0])
-	elif cmds.size() > 1:
-		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
+	HistoryUtil.record_many("Move Clips", cmds)
 
 	_drag_active = false
 	_drag_cross_track = false
@@ -817,17 +823,17 @@ func _find_track_index_at_global_position(mouse_pos_global: Vector2) -> int:
 func copy_selection_to_clipboard() -> void:
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
-		print("[Timeline] Copy skipped - no clips selected")
+		logger.warn("Copy skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
 	_apply_time_range_to_clipboard(clip_clipboard)
-	print("[Timeline] Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
+	logger.info("Copied %d clips to clipboard" % clip_clipboard.clip_instances.size())
 
 
 func cut_selection_to_clipboard() -> void:
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
-		print("[Timeline] Cut skipped - no clips selected")
+		logger.warn("Cut skipped - no clips selected")
 		return
 	clip_clipboard = clip_selection_manager.selection.clone()
 	_apply_time_range_to_clipboard(clip_clipboard)
@@ -836,12 +842,9 @@ func cut_selection_to_clipboard() -> void:
 	for inst in selected:
 		if inst and inst.track:
 			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	elif cmds.size() > 1:
-		HistoryUtil.execute(MacroCommand.new("Cut Clips", cmds))
+	HistoryUtil.execute_many("Cut Clips", cmds)
 	clip_selection_manager.clear_selection()
-	print("[Timeline] Cut %d clips to clipboard" % selected.size())
+	logger.info("Cut %d clips to clipboard" % selected.size())
 
 
 ## Paste clipboard clips at the selection start (or playhead). Refuses if they would overlap.
@@ -849,16 +852,16 @@ func paste_clipboard() -> void:
 	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
 	var target_tick := clip_selection_manager.get_paste_tick(playhead_ticks) if clip_selection_manager else playhead_ticks
 	if clip_clipboard == null or clip_clipboard.is_empty():
-		print("[Timeline] Paste skipped - clipboard empty")
+		logger.warn("Paste skipped - clipboard empty")
 		return
 	if _clipboard_placement_blocked(clip_clipboard, target_tick):
-		print("[Timeline] Paste skipped - no adequate space")
+		logger.warn("Paste skipped - no adequate space")
 		return
 	var new_instances = paste_clipboard_at(target_tick)
 	if new_instances.is_empty():
-		print("[Timeline] Paste skipped - clipboard empty")
+		logger.warn("Paste skipped - clipboard empty")
 	else:
-		print("[Timeline] Pasted %d clips at tick %d" % [new_instances.size(), target_tick])
+		logger.info("Pasted %d clips at tick %d" % [new_instances.size(), target_tick])
 
 
 ## Insert `source` (or the clipboard) at `target_tick`. Returns [] when blocked or empty.
@@ -908,10 +911,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	if new_instances.is_empty():
 		return []
 
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("%s Clips" % action_name, cmds))
+	HistoryUtil.execute_many("%s Clips" % action_name, cmds)
 
 	if update_selection and clip_selection_manager:
 		clip_selection_manager.select_instances(new_instances)
@@ -936,13 +936,13 @@ func duplicate_selection() -> void:
 	var target_tick := clip_selection_manager.get_duplicate_tick(selection_clone.end_tick)
 	if _clipboard_placement_blocked(selection_clone, target_tick):
 		clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
-		print("[Timeline] Duplicate skipped - no adequate space")
+		logger.warn("Duplicate skipped - no adequate space")
 		return
 	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate")
 	clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
 
 	if not new_instances.is_empty():
-		print("[Timeline] Duplicated %d clips starting at %d" % [new_instances.size(), target_tick])
+		logger.info("Duplicated %d clips starting at %d" % [new_instances.size(), target_tick])
 
 
 ## True when placing `source` at `target_tick` would overlap an existing clip.
@@ -996,10 +996,7 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 		if track_ui:
 			track_ui._update_clip_positions()
 			track_ui.queue_redraw()
-	if cmds.size() == 1:
-		HistoryUtil.record(cmds[0])
-	elif cmds.size() > 1:
-		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
+	HistoryUtil.record_many("Move Clips", cmds)
 	clip_selection_manager.refresh_after_modification()
 	queue_redraw()
 
@@ -1068,16 +1065,13 @@ func move_selection_by_tracks(delta_tracks: int) -> void:
 				old_start, inst.duration_ticks, inst.clip_offset,
 				new_start, inst.duration_ticks, inst.clip_offset
 			))
-	if cmds.size() == 1:
-		HistoryUtil.record(cmds[0])
-	elif cmds.size() > 1:
-		HistoryUtil.record(MacroCommand.new("Move Clips", cmds))
+	HistoryUtil.record_many("Move Clips", cmds)
 
 	clip_selection_manager.select_instances(selected)
 	clip_selection_manager.refresh_after_modification()
 	_refresh_tracks_for_instances(selected)
 	queue_redraw()
-	print("[Timeline] Moved selection by %d track(s)" % allowed_delta)
+	logger.info("Moved selection by %d track(s)" % allowed_delta)
 
 
 ## Stamp the visible time-range onto a clipboard so paste/duplicate keep empty lead-in.
@@ -1175,10 +1169,7 @@ func _on_clip_delete_requested(instances: Array[ClipInstance]) -> void:
 			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
 	if cmds.is_empty():
 		return
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("Delete Clips", cmds))
+	HistoryUtil.execute_many("Delete Clips", cmds)
 
 
 func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
@@ -1197,10 +1188,7 @@ func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
 		cmds.append(MakeClipUniqueCommand.new(proj, instance))
 	if cmds.is_empty():
 		return
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("Make Clips Unique", cmds))
+	HistoryUtil.execute_many("Make Clips Unique", cmds)
 
 
 

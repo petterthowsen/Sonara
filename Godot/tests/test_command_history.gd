@@ -1,14 +1,14 @@
 # test_command_history.gd
 # Headless unit tests for CommandHistory, MacroCommand, and PropertyCommand.
-# Run: godot --headless --path Godot -s history/test_command_history.gd
-extends SceneTree
+# Run: godot --headless --path Godot -s tests/test_command_history.gd -- --test
+extends TestBase
 
 
-var _failures: int = 0
+func suite_name() -> String:
+	return "CommandHistory tests"
 
 
-func _init() -> void:
-	print("=== CommandHistory tests ===")
+func run_tests() -> void:
 	_test_execute_undo_redo()
 	_test_record()
 	_test_macro()
@@ -17,20 +17,6 @@ func _init() -> void:
 	_test_save_point_after_undo_and_new_edits()
 	_test_save_point_not_falsely_clean_on_merge()
 	_test_property_on_stub_object()
-	if _failures == 0:
-		print("=== ALL PASSED ===")
-	else:
-		print("=== FAILED: %d ===" % _failures)
-	quit(_failures)
-
-
-func _assert(cond: bool, msg: String) -> void:
-	if not cond:
-		_failures += 1
-		push_error("FAIL: " + msg)
-		print("FAIL: ", msg)
-	else:
-		print("ok: ", msg)
 
 
 func _test_execute_undo_redo() -> void:

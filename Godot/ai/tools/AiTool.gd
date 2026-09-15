@@ -18,11 +18,6 @@ func get_parameters() -> Dictionary:
 	return {"type": "object", "properties": {}}
 
 
-## True when this tool must not mutate the project.
-func is_read_only() -> bool:
-	return true
-
-
 ## Run the tool. Returns `{ok:true, data:{}}` or `{ok:false, error:"..."}`.
 func execute(_args: Dictionary) -> Dictionary:
 	return fail("Not implemented")
@@ -100,7 +95,7 @@ static func compact_track(t: Track) -> Dictionary:
 	return {
 		"id": t.id,
 		"name": t.name,
-		"type": _track_kind(t),
+		"type": track_kind(t),
 		"channel_id": t.default_channel_id,
 		"clip_count": t.clip_instances.size(),
 		"color": "#%s" % t.get_color().to_html(false),
@@ -124,7 +119,7 @@ static func compact_channel(c: Channel) -> Dictionary:
 	return {
 		"id": c.id,
 		"name": c.name,
-		"type": "master" if c.is_master else _channel_kind(c),
+		"type": channel_kind(c),
 		"volume_db": c.volume,
 		"pan": c.pan,
 		"mute": c.mute,
@@ -135,8 +130,8 @@ static func compact_channel(c: Channel) -> Dictionary:
 	}
 
 
-## Compact type string for tools: group, folder_bus, folder, audio, or instrument.
-static func _track_kind(t: Track) -> String:
+## Compact type string for tools and prompts: group, folder_bus, folder, audio, or instrument.
+static func track_kind(t: Track) -> String:
 	if t.is_group():
 		return "group"
 	if t.is_folder_bus():
@@ -150,8 +145,10 @@ static func _track_kind(t: Track) -> String:
 			return "instrument"
 
 
-## Compact mixer type string: group, bus, audio, or instrument.
-static func _channel_kind(c: Channel) -> String:
+## Compact mixer type string for tools and prompts: master, group, bus, audio, or instrument.
+static func channel_kind(c: Channel) -> String:
+	if c.is_master:
+		return "master"
 	match c.channel_type:
 		Channel.ChannelType.AUDIO:
 			return "audio"
@@ -218,7 +215,7 @@ static func compact_instance(project: Project, inst: ClipInstance) -> Dictionary
 		"instance_id": inst.id,
 		"track_id": track_id,
 		"track": track_name,
-		"start": ClipTextTime.format_bbt(inst.start_ticks, project.ppq, project.time_numerator),
+		"start": ClipTextTime.format_bbt(inst.start_ticks, project.ppq, project.time_numerator, project.time_denominator),
 		"start_ticks": inst.start_ticks,
 		"duration_ticks": inst.duration_ticks,
 	}
@@ -234,15 +231,15 @@ static func resolve_start_ticks(project: Project, args: Dictionary, key: String 
 	if v is float or v is int:
 		var n := int(v)
 		if n >= 1 and n <= 512:
-			return ClipTextTime.bbt_to_ticks(n, 1, 0, project.ppq, project.time_numerator)
+			return ClipTextTime.bbt_to_ticks(n, 1, 0, project.ppq, project.time_numerator, project.time_denominator)
 		return maxi(0, n)
 	var s := str(v).strip_edges()
 	if s.is_valid_int():
 		var n2 := s.to_int()
 		if n2 >= 1 and n2 <= 512:
-			return ClipTextTime.bbt_to_ticks(n2, 1, 0, project.ppq, project.time_numerator)
+			return ClipTextTime.bbt_to_ticks(n2, 1, 0, project.ppq, project.time_numerator, project.time_denominator)
 		return maxi(0, n2)
-	var ticks := ClipTextTime.parse_bbt(s, project.ppq, project.time_numerator)
+	var ticks := ClipTextTime.parse_bbt(s, project.ppq, project.time_numerator, project.time_denominator)
 	return ticks if ticks >= 0 else 0
 
 
@@ -251,6 +248,7 @@ static func clip_text_opts(project: Project, args: Dictionary = {}, track: Track
 	var o := {
 		"ppq": project.ppq,
 		"numerator": project.time_numerator,
+		"denominator": project.time_denominator,
 		"tempo": project.tempo,
 	}
 	var key := str(args.get("key", "")).strip_edges()

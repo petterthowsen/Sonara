@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Create a named MIDI clip and place it on a track. Names must be unique — use place_clip to duplicate an existing clip on the timeline. Optional text writes the first notes. Drum hits are 1-9 or x, rests are `.` — e.g. KICK |9 . . .|9 . . .|9 . . .|9 . . .|"
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -53,14 +49,11 @@ func execute(args: Dictionary) -> Dictionary:
 			return fail("Clip '%s' already exists; use place_clip to add another instance" % existing.name)
 	var bars := maxi(1, int(args.get("bars", 2)))
 	var start := resolve_start_ticks(project, args)
-	var clip: Clip = project.create_clip(clip_name, Clip.ClipType.MIDI)
-	clip.color = track.get_color()
-	clip.content_length_ticks = bars * ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator)
-	HistoryUtil.execute(ClipInstanceCreateCommand.new(
-		track, clip, start, clip.content_length_ticks, project, true
-	))
-	if clip.id.is_empty() or not project.clips.has(clip.id):
+	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
+	var instance := ClipActions.create_clip(project, track, start, bars * tpb, clip_name)
+	if instance == null or instance.clip == null or not project.clips.has(instance.clip.id):
 		return fail("Failed to create clip")
+	var clip: Clip = instance.clip
 	var opts := clip_text_opts(project, args, track)
 	opts["bars"] = bars
 	var kind := str(args.get("kind", "")).to_lower()
@@ -73,7 +66,6 @@ func execute(args: Dictionary) -> Dictionary:
 		var written := ClipText.apply(clip, project, text, opts)
 		if not written.get("ok", false):
 			return fail(str(written.get("error", "initial text failed")))
-	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator)
 	if clip.midi_notes.is_empty() and int(clip.content_length_ticks) > bars * tpb:
 		clip.content_length_ticks = bars * tpb
 	var ser := ClipText.serialize(clip, opts)

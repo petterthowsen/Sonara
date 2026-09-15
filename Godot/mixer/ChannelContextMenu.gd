@@ -3,6 +3,8 @@
 # Can popup at any location given a Channel instance
 class_name ChannelContextMenu extends PopupPanel
 
+var logger : Log = Log.make("ChannelContextMenu")
+
 signal delete_requested(channel: Channel)
 signal unnest_requested(channel: Channel)
 
@@ -56,7 +58,7 @@ func _on_color_changed(color : Color):
 	if not channel:
 		push_warning("[ChannelContextMenu] color_changed with no channel")
 		return
-	print("[ChannelContextMenu] color → channel %d '%s' routed_tracks=%d" % [
+	logger.info("color → channel %d '%s' routed_tracks=%d" % [
 		channel.id, channel.name, channel.routed_tracks.size()
 	])
 	channel.set_color(color)

@@ -219,10 +219,10 @@ func unbind():
 
 func bind_to_clip_instance(ci : ClipInstance):
 	"""Bind to a single clip instance (clip-mode)."""
-	print("[MidiEditor] bind_to_clip_instance called (clip-mode)")
-	print("  - clip_instance: ", ci)
-	print("  - clip_id: ", ci.clip_id if ci else "null")
-	print("  - clip: ", ci.clip if ci else "null")
+	logger.info("bind_to_clip_instance called (clip-mode)")
+	logger.info("  - clip_instance: ", ci)
+	logger.info("  - clip_id: ", ci.clip_id if ci else "null")
+	logger.info("  - clip: ", ci.clip if ci else "null")
 	
 	if clip_instance or track_mode:
 		unbind()
@@ -399,7 +399,7 @@ func _unhandled_input(event: InputEvent):
 		if mevent.button_index == MOUSE_BUTTON_RIGHT and mevent.is_released():
 			var active_editor = get_active_note_editor()
 			if active_editor and (active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING):
-				print("[MidiEditor] Right mouse released - forcing erase mode exit (safety handler)")
+				logger.info("Right mouse released - forcing erase mode exit (safety handler)")
 				active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 				active_editor.erasing_mode = false
 				active_editor.last_erased_note = null
@@ -601,7 +601,7 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 		accept_event()
 
 	elif active_editor.placed_note_awaiting_drag:
-		print("[MidiEditor] Note placed without drag")
+		logger.info("Note placed without drag")
 		active_editor.update_container_width()
 		active_editor.placed_note_awaiting_drag = null
 		accept_event()
@@ -627,7 +627,7 @@ func _handle_right_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouse
 		accept_event()
 	else:
 		active_editor.selection_manager.clear_selection()
-		print("[MidiEditor] Right-click on empty space - cleared selection, erase mode active")
+		logger.info("Right-click on empty space - cleared selection, erase mode active")
 
 	_update_selection_overlays()
 
@@ -639,7 +639,7 @@ func _handle_right_mouse_release() -> void:
 		return
 
 	if active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
-		print("[MidiEditor] Right mouse released - exiting erase mode")
+		logger.info("Right mouse released - exiting erase mode")
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		active_editor.erasing_mode = false
 		active_editor.last_erased_note = null
@@ -660,7 +660,7 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 		var distance = current_mouse_pos.distance_to(active_editor.placed_note_mouse_pos)
 
 		if distance >= active_editor.DRAG_THRESHOLD:
-			print("[MidiEditor] Starting drag after placement (moved %.1f pixels)" % distance)
+			logger.info("Starting drag after placement (moved %.1f pixels)" % distance)
 			active_editor.start_place_and_drag(active_editor.placed_note_awaiting_drag)
 			active_editor.placed_note_awaiting_drag = null
 			accept_event()

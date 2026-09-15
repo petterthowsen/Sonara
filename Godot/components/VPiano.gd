@@ -48,6 +48,8 @@ class_name VPiano extends Control
 			border_color = bc
 			queue_redraw()
 
+var logger := Log.make("VPiano")
+
 
 func _get_minimum_size() -> Vector2:
 	return Vector2(minimum_width, note_to_y_bottom(0))
@@ -139,4 +141,4 @@ func _draw():
 	if border_width > 0:
 		draw_line(Vector2(size.x, 0), Vector2(size.x, size.y), border_color, border_width, true)
 	
-	print("drew ", count, " keys.")
+	logger.info("drew ", count, " keys.")

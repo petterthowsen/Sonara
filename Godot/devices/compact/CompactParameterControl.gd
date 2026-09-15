@@ -5,6 +5,8 @@
 # For use in CompactDevicePanel.
 class_name CompactParameterControl extends VBoxContainer
 
+var logger : Log = Log.make("CompactParameterControl")
+
 # ============================================================================
 # EXPORTED PROPERTIES
 # ============================================================================
@@ -164,7 +166,7 @@ func _on_slider_changed(value: float) -> void:
 		return  # Already at this value, don't send
 
 	# Update device parameter (sends to engine, doesn't emit signal)
-	print("[ParamControl] slider param_id=", parameter_id, " normalized=", value)
+	logger.info("slider param_id=", parameter_id, " normalized=", value)
 	var old_value = current_value
 	device_instance.set_parameter_normalized(parameter_id, value)
 	var cmd := PropertyCommand.new(
@@ -222,5 +224,5 @@ func _on_option_selected(index: int) -> void:
 		return
 	var n: int = max(1, parameter.enum_values.size())
 	var normalized: float = 0.0 if n <= 1 else float(index) / float(n - 1)
-	print("[ParamControl] option param_id=", parameter_id, " index=", index, " normalized=", normalized)
+	logger.info("option param_id=", parameter_id, " index=", index, " normalized=", normalized)
 	device_instance.set_parameter_normalized(parameter_id, normalized)

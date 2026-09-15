@@ -3,6 +3,8 @@ class_name TrackItem extends PanelContainer
 
 ## Header row for a single arranger track. Emits selection and context-menu requests.
 
+static var logger := Log.make("TrackItem")
+
 # Emitted when the track item is right-clicked
 signal right_clicked(track: Track, mouse_position: Vector2)
 ## Request that TrackList update selection. additive = Ctrl/Cmd, range_select = Shift.
@@ -88,10 +90,12 @@ func _ready():
 	queue_redraw()
 
 
-## Redraw on resize. Live reorder no longer uses the empty spacer as a drop target.
+## Redraw on resize; unbind on free (not _exit_tree: DockHost reparents the arranger).
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		queue_redraw()
+	elif what == NOTIFICATION_PREDELETE:
+		_unbind()
 
 
 func _enter_tree() -> void:
@@ -193,17 +197,13 @@ func _content_min_height() -> int:
 
 func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 	"""Bind this UI element to a Track data object and its associated channel."""
-	print("[TrackItem] bind_to_track called: track=", t.name if t else "null", " project=", project)
+	logger.info("bind_to_track called: track=", t.name if t else "null", " project=", project)
 
-	# Disconnect from old channel if any
-	_unbind_from_channel()
+	_unbind()
 
 	track = t
 	track_index = idx
 	current_project = project
-
-	if track and current_project:
-		track.set_project_ref(current_project)
 
 	# Connect to track signals
 	if track:
@@ -252,12 +252,12 @@ func _update_from_track() -> void:
 func _bind_to_track_channel() -> void:
 	"""Look up and bind to the channel associated with this track (including folder buses)."""
 	if track == null or current_project == null:
-		print("[TrackItem] Cannot bind to channel: track=", track, " project=", current_project)
+		logger.warn("Cannot bind to channel: track=", track, " project=", current_project)
 		return
 
 	channel = track.get_linked_channel()
 	if channel:
-		print("[TrackItem] Bound to channel ", channel.id, " (", channel.name, ")")
+		logger.info("Bound to channel ", channel.id, " (", channel.name, ")")
 		channel.volume_changed.connect(_on_channel_volume_changed)
 		channel.peak_updated.connect(_on_channel_peak_updated)
 		channel.record_armed_changed.connect(_on_channel_record_armed_changed)
@@ -270,10 +270,29 @@ func _bind_to_track_channel() -> void:
 			volumeter.visible = true
 		return
 
-	print("[TrackItem] No valid channel found for track ", track.name, " (default_channel_id=", track.default_channel_id, ")")
+	logger.warn("No valid channel found for track ", track.name, " (default_channel_id=", track.default_channel_id, ")")
 	channel = null
 	if volumeter:
 		volumeter.visible = false
+
+
+## Disconnect from the bound track, its channel and its parent's color. Idempotent.
+func _unbind() -> void:
+	_unbind_from_channel()
+	_bind_parent_color(null)
+	if track:
+		if track.name_changed.is_connected(_on_track_name_changed):
+			track.name_changed.disconnect(_on_track_name_changed)
+		if track.color_changed.is_connected(_on_track_color_changed):
+			track.color_changed.disconnect(_on_track_color_changed)
+		if track.height_changed.is_connected(_on_track_height_changed):
+			track.height_changed.disconnect(_on_track_height_changed)
+		if track.default_channel_id_changed.is_connected(_on_track_channel_id_changed):
+			track.default_channel_id_changed.disconnect(_on_track_channel_id_changed)
+		if track.parent_changed.is_connected(_on_track_parent_changed):
+			track.parent_changed.disconnect(_on_track_parent_changed)
+	track = null
+	current_project = null
 
 
 func _unbind_from_channel() -> void:
@@ -354,7 +373,7 @@ func _on_track_height_changed(new_height: int) -> void:
 
 func _on_track_channel_id_changed(new_channel_id: int) -> void:
 	"""React to track's channel routing change."""
-	print("[TrackItem] Track channel ID changed to: ", new_channel_id)
+	logger.info("Track channel ID changed to: ", new_channel_id)
 	_unbind_from_channel()
 	_bind_to_track_channel()
 
@@ -400,7 +419,7 @@ func _update_nesting_indent() -> void:
 	if parent_track:
 		stylebox.border_color = Utils.display_color(parent_track.color)
 	
-	print("[TrackItem] Track '", track.name, "' nesting level: ", nesting_level, " indent: ", indent_pixels, "px")
+	logger.info("Track '", track.name, "' nesting level: ", nesting_level, " indent: ", indent_pixels, "px")
 
 
 ## Keep the folder indent border in sync when the parent track color changes.
@@ -440,7 +459,7 @@ func _on_label_value_changed(new_value: String) -> void:
 	"""Update track name when label is edited."""
 	if track:
 		HistoryUtil.execute_property("Rename Track", track, "set_name", track.name, new_value)
-		print("[TrackItem] Track name changed to: ", new_value)
+		logger.info("Track name changed to: ", new_value)
 
 
 ## Forward Tab/Shift+Tab from the name field so TrackList can rename the next track.
@@ -462,10 +481,10 @@ func begin_rename() -> void:
 func _on_volumeter_volume_changed(db_volume: float) -> void:
 	"""User adjusted volumeter - sync dB value to channel."""
 	if channel == null:
-		print("[TrackItem] Volumeter changed but no channel bound")
+		logger.warn("Volumeter changed but no channel bound")
 		return
 
-	print("[TrackItem] Volumeter changed: dB=", db_volume)
+	logger.debug("Volumeter changed: dB=", db_volume)
 	channel.set_volume(db_volume)
 
 
@@ -517,7 +536,7 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	if track_list:
 		track_list.begin_track_reorder(drag_data)
 
-	print("[TrackItem] Started dragging %d track(s) from: %s" % [drag_tracks.size(), track.name])
+	logger.info("Started dragging %d track(s) from: %s" % [drag_tracks.size(), track.name])
 	return drag_data
 
 

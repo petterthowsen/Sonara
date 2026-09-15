@@ -31,6 +31,7 @@ func get_window_title() -> String:
 ## Bind this view to a device instance
 ## Subclasses should override _on_bind() for device-specific setup
 func bind_to_device(dev_instance) -> void:
+	_unbind()
 	device = dev_instance
 	channel_id = dev_instance.channel_id
 	device_position = dev_instance.position
@@ -41,9 +42,29 @@ func bind_to_device(dev_instance) -> void:
 	_on_bind()
 
 
+## Disconnect from the bound device. Idempotent; also runs when the view is freed.
+func _unbind() -> void:
+	if device == null:
+		return
+	_on_unbind()
+	if device.parameter_changed.is_connected(_on_device_parameter_changed):
+		device.parameter_changed.disconnect(_on_device_parameter_changed)
+	device = null
+
+
+## Unbind on free (not _exit_tree: DockHost reparents the device lane).
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
+
+
 ## Override this in subclasses to handle binding
 ## Called after device_instance, channel_id, and device_position are set
 @abstract func _on_bind() -> void
+
+## Override to disconnect whatever _on_bind() connected. `device` is still set.
+func _on_unbind() -> void:
+	pass
 
 ## Called when view becomes visible (subscribe to data streams)
 ## Override to subscribe to device data (e.g., spectrum, oscilloscope)

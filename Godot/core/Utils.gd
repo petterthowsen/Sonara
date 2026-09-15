@@ -1,5 +1,12 @@
 class_name Utils extends RefCounted
 
+## Whether the app was launched with `--test` (see `tests/run_all.sh`).
+## Autoloads check this to skip side effects that break headless test runs:
+## real MIDI device enumeration, config file I/O, and asset scans.
+static func is_test_mode() -> bool:
+	return "--test" in OS.get_cmdline_user_args()
+
+
 ## Clamp color components to 0–1 for drawing. Does not mutate the source.
 static func display_color(color: Color) -> Color:
 	return color.clamp()
@@ -54,6 +61,18 @@ static func lin_to_db(linear: float, db_floor: float = -60.0) -> float:
 	if linear <= 0.000001:
 		return db_floor
 	return 20.0 * log(linear) / log(10.0)
+
+
+## Expand a leading `~/` or `$HOME/` to the user's home directory.
+static func expand_path(path: String) -> String:
+	var home := OS.get_environment("HOME")
+	if home.is_empty():
+		return path
+	if path.begins_with("~/"):
+		return home + path.substr(1)
+	if path.begins_with("$HOME/"):
+		return home + path.substr(5)
+	return path
 
 
 ## Convert decibels to linear amplitude

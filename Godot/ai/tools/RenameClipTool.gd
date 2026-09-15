@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Rename a clip. Every instance on the timeline shows the new name. Names must stay unique."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

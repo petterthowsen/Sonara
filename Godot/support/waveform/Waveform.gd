@@ -4,6 +4,8 @@
 
 class_name Waveform extends RefCounted
 
+static var logger := Log.make("Waveform")
+
 # ============================================================================
 # PROPERTIES
 # ============================================================================
@@ -57,17 +59,17 @@ func load_from_cache(res: int, num_channels: int, _num_blocks: int, channel_peak
 	channels = num_channels
 	num_blocks = _num_blocks
 
-	print("[Waveform.load_from_cache] res=%d, channels=%d, num_blocks=%d, channel_peaks.size()=%d" % [res, num_channels, _num_blocks, channel_peaks.size()])
+	logger.info("load_from_cache res=%d, channels=%d, num_blocks=%d, channel_peaks.size()=%d" % [res, num_channels, _num_blocks, channel_peaks.size()])
 
 	if channel_peaks.size() > 0:
 		peak_data_left = channel_peaks[0].duplicate()
-		print("[Waveform.load_from_cache] Loaded left: %d peaks" % peak_data_left.size())
+		logger.info("load_from_cache Loaded left: %d peaks" % peak_data_left.size())
 	else:
 		peak_data_left = PackedVector2Array()
 
 	if channels > 1 and channel_peaks.size() > 1:
 		peak_data_right = channel_peaks[1].duplicate()
-		print("[Waveform.load_from_cache] Loaded right: %d peaks" % peak_data_right.size())
+		logger.info("load_from_cache Loaded right: %d peaks" % peak_data_right.size())
 	else:
 		peak_data_right = PackedVector2Array()
 

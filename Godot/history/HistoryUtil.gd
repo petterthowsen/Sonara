@@ -24,6 +24,28 @@ static func record(cmd: Command) -> void:
 		Sonara.editor.record_command(cmd)
 
 
+## Execute `cmds` as one history entry: the command itself when there is one, else a MacroCommand named `label`.
+static func execute_many(label: String, cmds: Array[Command]) -> void:
+	var cmd := _one_or_macro(label, cmds)
+	if cmd:
+		execute(cmd)
+
+
+## Record already-applied `cmds` as one history entry (see execute_many).
+static func record_many(label: String, cmds: Array[Command]) -> void:
+	var cmd := _one_or_macro(label, cmds)
+	if cmd:
+		record(cmd)
+
+
+static func _one_or_macro(label: String, cmds: Array[Command]) -> Command:
+	if cmds.is_empty():
+		return null
+	if cmds.size() == 1:
+		return cmds[0]
+	return MacroCommand.new(label, cmds)
+
+
 ## Record a mergeable property change that was already applied via the setter.
 static func record_property(
 	label: String,

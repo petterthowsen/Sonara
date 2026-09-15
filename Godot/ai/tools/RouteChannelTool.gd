@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Set a channel's output. 1 = Master, 0 = no output, 1000+ = hardware out, other ids = buses."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

@@ -12,7 +12,7 @@ var logger : Log = Log.make("DeviceLane")
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
 
 var channel : Channel
-var drop_zones: Array[DropZone] = []  # Track drop zones for cleanup
+var _drop_host := DeviceChainDropHost.new(true, 16.0, false)
 var current_project: Project = null  # Track which project we're listening to
 
 func _ready():
@@ -94,11 +94,12 @@ func unbind():
 	channel.device_added.disconnect(_add_device)
 	channel.device_removed.disconnect(_on_channel_device_remmoved)
 	channel.device_moved.disconnect(_on_channel_device_moved)
+	_drop_host.bind(null)
 
 
 func clear():
 	header_label.text = "N/A"
-	_cleanup_drop_zones()
+	_drop_host.clear()
 	for node in devices.get_children():
 		devices.remove_child(node)
 		node.queue_free()
@@ -118,6 +119,7 @@ func bind_to_channel(channel : Channel):
 	
 	# bind to new channel
 	self.channel = channel
+	_drop_host.bind(channel)
 	
 	# set heade label and bg color
 	header_label.text = channel.name
@@ -188,17 +190,6 @@ func _on_channel_color_changed(c : Color):
 # DRAG AND DROP ZONES
 # ============================================================================
 
-## Insert-point spacer between DevicePanels (invisible until a drag starts).
-func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.create_insert_spacer(true, 16.0)
-	drop_zone.set_drag_forwarding(
-		_get_drag_data.bind(),
-		_can_drop_data_at_position.bind(d_position),
-		_drop_data_at_position.bind(d_position)
-	)
-	return drop_zone
-
-
 ## Keep invisible spacer drop zones interleaved with the current DevicePanels.
 func _create_drop_zones() -> void:
 	if not channel or devices == null:
@@ -208,49 +199,7 @@ func _create_drop_zones() -> void:
 		if child is DevicePanel:
 			device_panels.append(child)
 	device_panels.sort_custom(func(a: DevicePanel, b: DevicePanel): return a.device.position < b.device.position)
-	drop_zones = DropZone.rebuild_insert_layout(devices, device_panels, _create_drop_zone, false)
-
-
-## Remove spacer drop zones from the device row.
-func _cleanup_drop_zones() -> void:
-	for drop_zone in drop_zones:
-		if is_instance_valid(drop_zone):
-			var parent := drop_zone.get_parent()
-			if parent:
-				parent.remove_child(drop_zone)
-			drop_zone.queue_free()
-	drop_zones.clear()
-
-
-func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data (not used for drop zones, but required by set_drag_forwarding)."""
-	return null
-
-
-func _can_drop_data_at_position(_at_position: Vector2, data: Variant, d_position: int = -1) -> bool:
-	"""Check if we can drop data at the specified position."""
-	if not channel:
-		return false
-	if data is DeviceInstance:
-		if not DeviceDropUtil.can_drop_instance_on_host(channel, data, null):
-			return false
-		if data.get_parent_device() == null and data.position == d_position:
-			return false
-		return true
-	if data is Asset:
-		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
-	return false
-
-
-func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position : int = -1) -> void:
-	"""Handle dropping data at the specified position."""
-	if not channel:
-		return
-	if data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, null, d_position)
-		return
-	if data is Asset:
-		await DeviceDropUtil.drop_asset(channel, data, d_position, null, get_tree())
+	_drop_host.rebuild(devices, device_panels)
 
 
 # ============================================================================
@@ -269,23 +218,10 @@ func _on_device_panel_request_context_menu(device_instance : DeviceInstance) -> 
 # DRAG AND DROP
 # ============================================================================
 
+## Drops on the lane outside a spacer append to the channel.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Check if we can drop a device or SFZ file on this device lane."""
-	if not channel:
-		return false
-	if data is DeviceInstance:
-		return DeviceDropUtil.can_drop_instance_on_host(channel, data, null)
-	if data is Asset:
-		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
-	return false
+	return _drop_host.can_drop(data)
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device or SFZ file on this device lane (fallback for non-position drops)."""
-	if not channel:
-		return
-	if data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, null, -1)
-		return
-	if data is Asset:
-		await DeviceDropUtil.drop_asset(channel, data, -1, null, get_tree())
+	_drop_host.drop(data)

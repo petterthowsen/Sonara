@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Place another instance of an existing named clip. All instances share the same notes — editing the clip updates every placement."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -57,7 +53,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var start := resolve_start_ticks(project, args)
 	var duration: int = clip.content_length_ticks
 	if args.has("bars"):
-		duration = maxi(1, int(args.bars)) * ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator)
+		duration = maxi(1, int(args.bars)) * ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
 	HistoryUtil.execute(ClipInstanceCreateCommand.new(
 		track, clip, start, duration, project, false
 	))

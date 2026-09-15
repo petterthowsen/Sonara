@@ -67,13 +67,15 @@ var _refresh_pending: bool = false
 # (or the current `_search_filter`). Populated lazily when a tab becomes visible.
 var _dirty_tabs: Dictionary = {}
 
+var logger := Log.make("Browser")
+
 
 # ============================================================================
 # LIFECYCLE
 # ============================================================================
 
 func _ready() -> void:
-	print("[Browser] Initializing...")
+	logger.info("Initializing...")
 	_load_ui_state()
 	_setup_ui()
 	_connect_to_asset_service()
@@ -191,7 +193,7 @@ func _connect_to_asset_service() -> void:
 		# so listening to it alone is sufficient and avoids one full rebuild per
 		# individual asset_added signal when N files are discovered at once.
 		AssetService.assets_updated.connect(_on_assets_updated)
-		print("[Browser] Connected to AssetService")
+		logger.info("Connected to AssetService")
 
 
 # ============================================================================
@@ -241,7 +243,7 @@ func _rebuild_asset_partitions() -> void:
 ## (see `_switch_tab`), avoiding wasted work on hidden tabs.
 func _refresh_asset_list() -> void:
 	if not AssetService:
-		print("[Browser] AssetService not available")
+		logger.warn("AssetService not available")
 		return
 
 	_rebuild_asset_partitions()
@@ -275,44 +277,9 @@ func _populate_tab_for(asset_type: Asset.TYPE) -> void:
 	_dirty_tabs[asset_type] = false
 
 
+## Filter and fuzzy-score assets against the search box. Returns `{asset, score}` dicts, best first.
 func _filter_and_score_assets(assets: Array[Asset]) -> Array[Dictionary]:
-	"""Filter and score assets based on fuzzy search. Returns array of {asset, score} dicts."""
-	if _search_filter.is_empty():
-		# Return all assets with perfect score when no search filter
-		var result: Array[Dictionary] = []
-		for asset in assets:
-			result.append({"asset": asset, "score": 1.0})
-		return result
-
-	var scored_results: Array[Dictionary] = []
-	var search_lower = _search_filter.to_lower()
-
-	for asset in assets:
-		var best_score = 0.0
-
-		# Always check display name
-		var display_name = asset.get_display_name().to_lower()
-		var display_score = Utils.fuzzy_match(search_lower, display_name)
-		best_score = max(best_score, display_score)
-
-		# For device assets, also check category and vendor
-		if asset.type == Asset.TYPE.Device:
-			var device = AssetService.get_device(asset.path)
-			if device:
-				var category = device.get_category_string().to_lower()
-				var vendor = device.author.to_lower()
-				var category_score = Utils.fuzzy_match(search_lower, category)
-				var vendor_score = Utils.fuzzy_match(search_lower, vendor)
-				best_score = max(best_score, category_score, vendor_score)
-
-		# Only include assets that have some match (score > 0)
-		if best_score > 0.5:
-			scored_results.append({"asset": asset, "score": best_score})
-
-	# Sort by score (highest first)
-	scored_results.sort_custom(func(a, b): return a.score > b.score)
-
-	return scored_results
+	return AssetSearch.rank(assets, _search_filter)
 
 
 func _populate_samples_tab() -> void:
@@ -606,14 +573,14 @@ func _get_search_paths_for_assets(assets: Array[Asset]) -> Array[String]:
 	match first_type:
 		Asset.TYPE.Audio, Asset.TYPE.Midi:
 			# For audio/midi, get sample paths
-			var paths = Sonara.get_config("assets/samples/paths", [])
+			var paths = Settings.get_value("assets/samples/paths")
 			for path in paths:
-				search_paths.append(_expand_path(path))
+				search_paths.append(Utils.expand_path(path))
 		Asset.TYPE.SFZ:
 			# For SFZ, get SFZ paths
-			var paths = Sonara.get_config("assets/sfz/paths", [])
+			var paths = Settings.get_value("assets/sfz/paths")
 			for path in paths:
-				search_paths.append(_expand_path(path))
+				search_paths.append(Utils.expand_path(path))
 		Asset.TYPE.Device:
 			# Devices might not have search paths, return empty
 			pass
@@ -639,15 +606,6 @@ func _strip_search_path_prefix(asset_path: String, search_paths: Array[String]) 
 	
 	# Strip the prefix and leading slash
 	return asset_path.substr(longest_match.length() + 1)
-
-
-func _expand_path(path: String) -> String:
-	"""Expand path with environment variables or special prefixes."""
-	if path.begins_with("~/"):
-		return OS.get_environment("HOME") + path.substr(1)
-	elif path.begins_with("$HOME/"):
-		return OS.get_environment("HOME") + path.substr(5)
-	return path
 
 
 func _prune_empty_directories(parent: TreeItem) -> bool:
@@ -927,7 +885,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	# This is typically handled by the target (timeline/arranger)
 	# but we can log for debugging
 	if data is Asset:
-		print("[Browser] Drop event for asset: %s" % data.path)
+		logger.info("Drop event for asset: %s" % data.path)
 
 
 func _get_drag_data_tree(_at_position: Vector2) -> Variant:

@@ -25,7 +25,9 @@ Sonara (autoload)  ── Sonara.editor ──►  Editor (editor/Editor.gd)
 data/ contains self-synchronizing (via OSC) data models (Project, Track, Channel, Clip, ClipInstance, DeviceInstance etc.), each with its own signals and `to_json()`/`from_json()` serialization.
 - `Project.gd` emits structural signals (`track_added/removed`, `channel_added/removed`, `clip_added/removed`, `connection_state_changed`), owns the OSC listeners for clip/audiofile events, maps `req_id` ↔ clip IDs, and coordinates retries when waveform cache reads fail.
 - Objects emit property signals (e.g. `Track.name_changed`, `Channel.volume_changed`, `Track.clip_instance_added`).
-- `Clip.gd` tracks `LoadState`, load progress, waveform cache metadata, and uses `WaveformCacheReader` to ingest progressive waveform levels emitted by the engine.
+- `Clip.gd` tracks `LoadState` and load progress. Decoded audio metadata and the waveform live in `WaveformPyramid` (`clip.waveform`, also `DeviceInstance.sample_waveform` for Samplers); `Project` feeds both from `/audiofile/decode/ready` and `/audiofile/waveform/level`. Clip keeps forwarding properties (`audio_sample_rate`, `audio_waveform`, …).
+- `DeviceRegistry.gd` (owned by `AssetService.device_registry`) holds every `Device` type and owns the `/builtin/*` and `/plugin/*` OSC plus `plugins.json`. Look devices up with `AssetService.get_device(id)`.
+- Serialization: list plain fields in a `JSON_FIELDS` const and use `JsonFields.write` / `JsonFields.read`. A missing key keeps the constructor value, so defaults live only in the field initializers. Hand-write arrays, enums-by-name, colors (`Utils.color_to_json`) and nested models.
 
 ## Components
 in ./components A set of small reusable custom UI controls such as Meters, Sliders, RotaryKnobs etc.
@@ -64,7 +66,7 @@ AudioEngineOSC.gd is a Low-level OSC transport class with `send` and `listen` in
 1. Editor.gd opens/creates a `Project` and emits `project_opened` / `project_activated`.
 2. Project establishes connection to audio engine via AudioEngineOSC.
 3. Container views (e.g. `TrackList`) listen to `Sonara.editor.project_activated`/`project_closed`, then connect to the project's structural signals (`track_added`, …) and instantiate one item per object.
-4. Items bind to their object (`TrackItem.bind_to_track()`, `MixerChannel.bind_to_channel()`) and connect to its property signals to refresh UI.
+4. Items bind to their object (`TrackItem.bind_to_track()`, `MixerChannel.bind_to_channel()`) and connect to its property signals to refresh UI. See "Signal lifecycle" below for the unbind rules.
 5. Godot > Engine: UI callbacks call `set_[prop]` setters on data objects, which update state, send OSC, and emit the signal — UI never mutates fields or sends OSC directly.
 
 ## Undo / Redo
@@ -72,10 +74,41 @@ AudioEngineOSC.gd is a Low-level OSC transport class with `send` and `listen` in
 - Document mutations that should be undoable go through `Sonara.editor.history` via `HistoryUtil.execute()` / `HistoryUtil.record()` (or `Editor.execute_command` / `record_command`).
 - Data-object setters (`Channel.set_volume`, `Clip.add_midi_note`, …) must **not** push history themselves — they stay “apply + OSC + signal” only.
 - Use `execute` when the command should call `do()`; use `record` when the UI already applied the change live (e.g. fader/clip/note drag) and commits one command on gesture end (or via mergeable `PropertyCommand`s during the drag).
+- For a batch, collect `Array[Command]` and call `HistoryUtil.execute_many(label, cmds)` / `record_many` (one command as itself, several as a `MacroCommand`, none as a no-op). Don't use `begin_macro`/`end_macro` for synchronous UI actions.
+- Shared undoable actions: `ClipActions.create_clip()` (timeline double-click, note editor, AI), `DeviceDropUtil` for every device drop.
 - Clear history on new/open/close project; call `history.mark_save_point()` on save so undo-to-save-point clears the dirty flag.
 
 ## UI Binding Practices
 
 - When refreshing a control from a data signal, use `set_pressed_no_signal()`, `set_value_no_signal()` etc. so the update doesn't re-trigger the setter and loop.
 - Many UI controls are `@tool` scripts; guard runtime-only work (autoload access, data/editor signal connections) with `Engine.is_editor_hint()` so scenes still load in the Godot editor.
-- Disconnect from data objects when an item is rebound or freed, and handle objects removed from the project gracefully (check for `null`/freed instances before use).
+- Handle objects removed from the project gracefully (check for `null`/freed instances before use).
+
+## Signal lifecycle (bind / unbind)
+
+Views that connect to data objects (a project, track, channel, device) follow one shape:
+
+```gdscript
+var track: Track = null
+
+func bind_to_track(t: Track) -> void:
+	_unbind()                      # always first: rebinding must not stack connections
+	track = t
+	if track:
+		track.name_changed.connect(_on_track_name_changed)
+
+## Disconnect everything bind_to_track connected. Idempotent.
+func _unbind() -> void:
+	if track and track.name_changed.is_connected(_on_track_name_changed):
+		track.name_changed.disconnect(_on_track_name_changed)
+	track = null
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
+```
+
+- `bind_to_x(obj)` starts with `_unbind()` and then stores `obj`. `_unbind()` disconnects with `is_connected` guards, releases non-signal resources (engine data subscriptions, popups), and nulls the reference.
+- Call `_unbind()` from `NOTIFICATION_PREDELETE`, **not** `_exit_tree()`. `DockHost` reparents docks, which fires `_exit_tree()` on every descendant, and `is_queued_for_deletion()` is only true on the node `queue_free()` was called on, not its children. Godot does drop connections that target a freed object, so the predelete call matters for rebinding, for subscriptions and popups, and for callbacks that run between `queue_free()` and the actual free.
+- Containers that connect to each child's data object (e.g. `order_changed` per track) disconnect those in their `_clear_all_*` methods too, not only in the per-item remove handler. Otherwise reopening a project re-connects and errors, and closed-project objects keep calling the container.
+- Never pass `callable.bind(x)` / `bindv` to `disconnect()` or `is_connected()` and rely on it matching. Keep the bound callable in a variable or dictionary (see `Mixer._channel_hierarchy_cbs`), or have the signal carry the object.

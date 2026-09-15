@@ -30,7 +30,7 @@ const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePane
 
 var channel: Channel = null
 var device_panels: Dictionary[String, CompactDevicePanel] = {}  # Map of device instance ID -> CompactDevicePanel
-var drop_zones: Array[DropZone] = []  # Track drop zones for cleanup
+var _drop_host := DeviceChainDropHost.new(false, 8.0)
 
 
 # ============================================================================
@@ -60,6 +60,7 @@ func bind_to_channel(p_channel: Channel) -> void:
 		channel.device_moved.disconnect(_on_device_moved)
 
 	channel = p_channel
+	_drop_host.bind(channel)
 
 	# Connect to device signals
 	channel.device_added.connect(_on_device_added)
@@ -69,14 +70,14 @@ func bind_to_channel(p_channel: Channel) -> void:
 	# Populate initial devices
 	_populate_devices()
 
-	print("[ChannelDeviceList] Bound to channel %d (%s)" % [channel.id, channel.name])
+	logger.info("Bound to channel %d (%s)" % [channel.id, channel.name])
 
 
 ## Refresh the device list from channel
 func _populate_devices() -> void:
 	"""Refresh the display to show all current devices on the channel."""
 	# Clean up drop zones first
-	_cleanup_drop_zones()
+	_drop_host.clear()
 	
 	# Clear existing panels
 	for device_id in device_panels:
@@ -110,23 +111,23 @@ func _add_device_panel(device_instance: DeviceInstance, position: int) -> void:
 		device_instance: The DeviceInstance to create a panel for
 		position: Position in device chain
 	"""
-	print("[ChannelDeviceList] _add_device_panel() called for device: %s at position %d" % [device_instance.device.name, position])
+	logger.info("_add_device_panel() called for device: %s at position %d" % [device_instance.device.name, position])
 
 	# Instantiate panel
 	var panel: CompactDevicePanel
 	panel = CompactDevicePanelScene.instantiate()
-	print("[ChannelDeviceList] Panel instantiated")
+	logger.info("Panel instantiated")
 	
 	panel.collapsed = collapsed_by_default
 	panel.hide_parameters = hide_parameters
 	
 	# Setup the panel
 	panel.setup(device_instance, position)
-	print("[ChannelDeviceList] Panel setup complete")
+	logger.info("Panel setup complete")
 
 	# Add to vbox
 	vbox.add_child(panel)
-	print("[ChannelDeviceList] Panel added to vbox. Total panels now: %d" % vbox.get_child_count())
+	logger.info("Panel added to vbox. Total panels now: %d" % vbox.get_child_count())
 	
 	# listen to right-click
 	panel.request_context_menu.connect(_on_device_panel_request_context_menu.bind(device_instance))
@@ -164,13 +165,13 @@ func _remove_device_panel_at(position: int) -> void:
 func _on_device_added(device_instance: DeviceInstance, position: int) -> void:
 	"""Handle device added to channel."""
 	_add_device_panel(device_instance, position)
-	print("[ChannelDeviceList] Device added at position %d" % position)
+	logger.info("Device added at position %d" % position)
 
 
 func _on_device_removed(position: int, _device_id: String) -> void:
 	"""Handle device removed from channel."""
 	_remove_device_panel_at(position)
-	print("[ChannelDeviceList] Device removed from position %d" % position)
+	logger.info("Device removed from position %d" % position)
 
 
 func _on_device_moved(from_position: int, to_position: int):
@@ -191,17 +192,6 @@ func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> v
 # DRAG AND DROP ZONES
 # ============================================================================
 
-## Insert-point spacer between compact device panels (invisible until a drag starts).
-func _create_drop_zone(d_position: int) -> DropZone:
-	var drop_zone = DropZone.create_insert_spacer(false, 8.0)
-	drop_zone.set_drag_forwarding(
-		_get_drag_data.bind(),
-		_can_drop_data_at_position.bind(d_position),
-		_drop_data_at_position.bind(d_position)
-	)
-	return drop_zone
-
-
 ## Keep invisible spacer drop zones interleaved with the current compact panels.
 func _create_drop_zones() -> void:
 	if not channel or vbox == null:
@@ -211,46 +201,4 @@ func _create_drop_zones() -> void:
 		if child is CompactDevicePanel:
 			panel_list.append(child)
 	panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
-	drop_zones = DropZone.rebuild_insert_layout(vbox, panel_list, _create_drop_zone)
-
-
-## Remove spacer drop zones from the compact list.
-func _cleanup_drop_zones() -> void:
-	for drop_zone in drop_zones:
-		if is_instance_valid(drop_zone):
-			var parent := drop_zone.get_parent()
-			if parent:
-				parent.remove_child(drop_zone)
-			drop_zone.queue_free()
-	drop_zones.clear()
-
-
-func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data (not used for drop zones, but required by set_drag_forwarding)."""
-	return null
-
-
-func _can_drop_data_at_position(_at_position: Vector2, data: Variant, d_position: int = -1) -> bool:
-	"""Check if we can drop data at the specified position."""
-	if not channel:
-		return false
-	if data is DeviceInstance:
-		if not DeviceDropUtil.can_drop_instance_on_host(channel, data, null):
-			return false
-		if data.get_parent_device() == null and data.position == d_position:
-			return false
-		return true
-	if data is Asset:
-		return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
-	return false
-
-
-func _drop_data_at_position(_at_position: Vector2, data: Variant, d_position: int = -1) -> void:
-	"""Handle dropping data at the specified position."""
-	if not channel:
-		return
-	if data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, null, d_position)
-		return
-	if data is Asset:
-		await DeviceDropUtil.drop_asset(channel, data, d_position, null, get_tree())
+	_drop_host.rebuild(vbox, panel_list)

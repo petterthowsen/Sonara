@@ -24,8 +24,12 @@ Godot UI:
 
 ```bash
 godot --path Godot                               # run the app; the engine must already be running
-godot --headless --path Godot -s path/to/script.gd  # script path relative to Godot/
+godot --headless --path Godot -s path/to/script.gd -- --test  # script path relative to Godot/
+Godot/tests/run_all.sh                           # run every test_*.gd script and report a summary
 ```
+
+- Test scripts (`test_*.gd`, found in `Godot/tests/` and `Godot/ai/tests/`) extend `TestBase` (`Godot/tests/TestBase.gd`), which supplies `_assert()` and the pass/fail exit code. The `-- --test` after the script path is required: autoloads check `Utils.is_test_mode()` and skip side effects (real config I/O, asset scans, physical MIDI enumeration, OSC sockets) that don't work headless or in a shared dev environment.
+
 ## Architecture
 
 ### Engine threads (`Engine/src/`)

@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Set several device parameters at once. params is a map of parameter name to real value, bool, or enum label. Unknown names fail the whole call. Undoable."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",
@@ -72,10 +68,7 @@ func execute(args: Dictionary) -> Dictionary:
 		)
 		cmd.set_callable(func(argv): inst.set_parameter_normalized(argv[0], argv[1])).set_unpack_array(true)
 		cmds.append(cmd)
-	if cmds.size() == 1:
-		HistoryUtil.execute(cmds[0])
-	else:
-		HistoryUtil.execute(MacroCommand.new("Set Device Params", cmds))
+	HistoryUtil.execute_many("Set Device Params", cmds)
 	var data := compact_device(project, inst)
 	var applied: Array = []
 	for item in planned:

@@ -48,6 +48,8 @@ func get_projects_dir() -> String:
 
 
 func _ready() -> void:
+	if Utils.is_test_mode():
+		return
 	_ensure_config_dir()
 	_ensure_projects_dir()
 	load_config()
@@ -115,11 +117,12 @@ func _ensure_projects_dir() -> void:
 		logger.debug("Projects directory verified: ", projects_dir)
 
 
-## Save the current configuration to disk
+## Save the current configuration to disk (mode 0600, set before writing)
 func save_config():
 	var config_path = get_config_path()
 	var file = FileAccess.open(config_path, FileAccess.WRITE)
 	if file:
+		_restrict_config_permissions(config_path)
 		var json_string = JSON.stringify(config, "\t")
 		file.store_string(json_string)
 		file.close()
@@ -128,10 +131,23 @@ func save_config():
 		logger.error("Failed to save config to: ", config_path)
 
 
+## chmod 0600: config.json holds the OpenRouter API key.
+func _restrict_config_permissions(config_path: String) -> void:
+	var mode := FileAccess.UNIX_READ_OWNER | FileAccess.UNIX_WRITE_OWNER
+	if FileAccess.get_unix_permissions(config_path) == mode:
+		return
+	if FileAccess.set_unix_permissions(config_path, mode) != OK:
+		logger.warn("Failed to restrict config permissions to 0600: ", config_path)
+
+
 ## Load configuration from disk (called automatically on init)
 func load_config():
+	if Utils.is_test_mode():
+		config = {}
+		return
 	var config_path = get_config_path()
 	if FileAccess.file_exists(config_path):
+		_restrict_config_permissions(config_path)
 		var file = FileAccess.open(config_path, FileAccess.READ)
 		if file:
 			var json_string = file.get_as_text()

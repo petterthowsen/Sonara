@@ -50,6 +50,21 @@ func _on_bind() -> void:
 	_rebuild()
 
 
+## Disconnect the child-list signals connected in _on_bind().
+func _on_unbind() -> void:
+	if device.child_added.is_connected(_on_children_changed):
+		device.child_added.disconnect(_on_children_changed)
+	if device.child_removed.is_connected(_on_children_changed):
+		device.child_removed.disconnect(_on_children_changed)
+	if device.child_moved.is_connected(_on_children_changed):
+		device.child_moved.disconnect(_on_children_changed)
+	for child in device.children:
+		if child.slot_changed.is_connected(_on_children_changed):
+			child.slot_changed.disconnect(_on_children_changed)
+		if child.loading_state_changed.is_connected(_on_children_changed):
+			child.loading_state_changed.disconnect(_on_children_changed)
+
+
 ## Release any pads still held when the view is hidden.
 func _on_view_hidden() -> void:
 	for pad in _pads:
@@ -136,8 +151,7 @@ func _release_all_sounding() -> void:
 func _on_pad_drop(note: int, data: Variant) -> void:
 	if device == null:
 		return
-	var channel := _channel()
-	await DeviceDropUtil.drop_on_drum_pad(channel, device, note, data, get_tree())
+	DeviceDropUtil.drop_on_drum_pad(device.get_channel(), device, note, data)
 	var child := _child_for_note(note)
 	if child:
 		_selected = child
@@ -153,10 +167,3 @@ func _child_for_note(note: int) -> DeviceInstance:
 		if child.slot_note == note:
 			return child
 	return null
-
-
-## Channel that owns this drum machine.
-func _channel() -> Channel:
-	if device == null or Sonara.editor == null or Sonara.editor.project == null:
-		return null
-	return Sonara.editor.project.get_channel_by_id(device.channel_id)

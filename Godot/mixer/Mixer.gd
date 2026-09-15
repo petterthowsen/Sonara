@@ -6,6 +6,8 @@
 # default Master mus should go at the end of RightPane/HBox
 class_name Mixer extends VBoxContainer
 
+var logger : Log = Log.make("Mixer")
+
 # CONSTANTS
 const MixerChannelScene = preload("res://mixer/MixerChannel.tscn")
 
@@ -36,6 +38,8 @@ const MixerChannelScene = preload("res://mixer/MixerChannel.tscn")
 
 # Project reference
 var current_project: Project = null
+## Channel -> the bound hierarchy_changed callable, kept so it can be disconnected.
+var _channel_hierarchy_cbs: Dictionary[Channel, Callable] = {}
 
 # Export property to control whether channels can be resized
 @export var resizable_channels: bool = true
@@ -89,8 +93,10 @@ func _ready():
 
 func _on_project_opened(project: Project) -> void:
 	"""Called when a project is opened - build UI for all channels."""
-	print("[Mixer] Project opened: ", project.project_name)
+	logger.info("Project opened: ", project.project_name)
 
+	_unbind()
+	_clear_all_channels()
 	current_project = project
 
 	# Connect to project signals
@@ -114,19 +120,31 @@ func _on_project_opened(project: Project) -> void:
 
 func _on_project_closed() -> void:
 	"""Clear all channel items when project closes."""
+	_unbind()
+	_clear_all_channels()
+
+
+## Disconnect from the current project and its channels. Idempotent.
+func _unbind() -> void:
 	if current_project:
 		if current_project.channel_added.is_connected(_on_channel_added):
 			current_project.channel_added.disconnect(_on_channel_added)
 		if current_project.channel_removed.is_connected(_on_channel_removed):
 			current_project.channel_removed.disconnect(_on_channel_removed)
 		for ch in current_project.channels:
-			if ch.name_changed.is_connected(_on_any_channel_renamed):
-				ch.name_changed.disconnect(_on_any_channel_renamed)
-			var hierarchy_cb := _on_channel_hierarchy_changed.bind(ch)
-			if ch.hierarchy_changed.is_connected(hierarchy_cb):
-				ch.hierarchy_changed.disconnect(hierarchy_cb)
+			_disconnect_channel_mixer_signals(ch)
+	# Channels removed without a channel_removed signal still hold a callable here.
+	for ch in _channel_hierarchy_cbs.keys():
+		_disconnect_channel_mixer_signals(ch)
 	current_project = null
-	_clear_all_channels()
+	selection.clear()
+	focused_channel = null
+
+
+## Unbind on free (not _exit_tree: DockHost reparents the mixer).
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
 
 
 func _on_channel_added(channel: Channel) -> void:
@@ -136,7 +154,7 @@ func _on_channel_added(channel: Channel) -> void:
 	# Nested children are spawned by the parent fold-out; skip root panes.
 	if channel.parent_channel_id >= 0:
 		_rebuild_all_routing_menus()
-		print("[Mixer] Nested channel skipped for root panes: ", channel.name, " with ID ", channel.id)
+		logger.info("Nested channel skipped for root panes: ", channel.name, " with ID ", channel.id)
 		return
 
 	_spawn_root_channel_ui(channel)
@@ -148,8 +166,22 @@ func _connect_channel_mixer_signals(channel: Channel) -> void:
 		return
 	if not channel.name_changed.is_connected(_on_any_channel_renamed):
 		channel.name_changed.connect(_on_any_channel_renamed)
-	if not channel.hierarchy_changed.is_connected(_on_channel_hierarchy_changed.bind(channel)):
-		channel.hierarchy_changed.connect(_on_channel_hierarchy_changed.bind(channel))
+	if not _channel_hierarchy_cbs.has(channel):
+		var hierarchy_cb := _on_channel_hierarchy_changed.bind(channel)
+		_channel_hierarchy_cbs[channel] = hierarchy_cb
+		channel.hierarchy_changed.connect(hierarchy_cb)
+
+
+## Undo _connect_channel_mixer_signals.
+func _disconnect_channel_mixer_signals(channel: Channel) -> void:
+	if channel == null:
+		return
+	if channel.name_changed.is_connected(_on_any_channel_renamed):
+		channel.name_changed.disconnect(_on_any_channel_renamed)
+	var hierarchy_cb: Callable = _channel_hierarchy_cbs.get(channel, Callable())
+	if hierarchy_cb.is_valid() and channel.hierarchy_changed.is_connected(hierarchy_cb):
+		channel.hierarchy_changed.disconnect(hierarchy_cb)
+	_channel_hierarchy_cbs.erase(channel)
 
 
 ## Place a top-level MixerChannel in the left or right pane and bind it.
@@ -176,7 +208,7 @@ func _spawn_root_channel_ui(channel: Channel) -> void:
 	if channel.is_bus:
 		_rebuild_all_sends_panels()
 
-	print("[Mixer] Channel added: ", channel.name, " with ID ", channel.id, " and order ", channel.order)
+	logger.info("Channel added: ", channel.name, " with ID ", channel.id, " and order ", channel.order)
 
 
 ## Wire selection, context menu, and toolbar toggles for a strip (root or nested).
@@ -227,11 +259,7 @@ func _is_root_mixer_channel(mc: MixerChannel) -> bool:
 
 func _on_channel_removed(channel: Channel) -> void:
 	"""Remove the MixerChannel UI element when a channel is removed."""
-	if channel.name_changed.is_connected(_on_any_channel_renamed):
-		channel.name_changed.disconnect(_on_any_channel_renamed)
-	var hierarchy_cb := _on_channel_hierarchy_changed.bind(channel)
-	if channel.hierarchy_changed.is_connected(hierarchy_cb):
-		channel.hierarchy_changed.disconnect(hierarchy_cb)
+	_disconnect_channel_mixer_signals(channel)
 
 	var mixer_channel = find_mixer_channel_ui_for_channel(channel)
 	if mixer_channel:
@@ -253,7 +281,7 @@ func _on_channel_removed(channel: Channel) -> void:
 		if channel.is_bus:
 			_rebuild_all_sends_panels()
 		
-		print("[Mixer] Channel removed from UI: ", channel.name, " (ID: ", channel.id, ")")
+		logger.info("Channel removed from UI: ", channel.name, " (ID: ", channel.id, ")")
 
 
 ## Un-nest a group child from the mixer context menu.
@@ -359,7 +387,7 @@ func _on_left_add_menu_pressed(id: int) -> void:
 				Channel.ChannelType.INSTRUMENT
 			)
 			channel.output_channel_id = 1
-			print("[Mixer] Added new instrument channel: ", channel.name)
+			logger.info("Added new instrument channel: ", channel.name)
 		LeftAddItem.GROUP_TRACK:
 			HistoryUtil.execute(TrackCreateCommand.new(project, "group", "Group"))
 
@@ -373,7 +401,7 @@ func _on_right_add_button_pressed() -> void:
 	var project = Sonara.editor.project
 	var channel = project.create_channel("Bus %d" % (project.channels.size()), Channel.ChannelType.BUS)
 	channel.output_channel_id = 1  # Route to master
-	print("[Mixer] Added new bus channel: ", channel.name)
+	logger.info("Added new bus channel: ", channel.name)
 
 # ============================================================================
 # INTERNAL HELPERS
@@ -392,7 +420,7 @@ func _clear_all_channels() -> void:
 	for child in right_channels.get_children():
 		child.queue_free()
 
-	print("[Mixer] All channels cleared")
+	logger.info("All channels cleared")
 
 
 # ============================================================================
@@ -408,19 +436,19 @@ func _on_compact_toggled(pressed: bool) -> void:
 	resizable_channels = not pressed
 	get_tree().call_group("mixer_channel", "set_resizable", resizable_channels)
 
-	print("[Mixer] Compact mode: ", pressed, " | Resizable channels: ", resizable_channels)
+	logger.info("Compact mode: ", pressed, " | Resizable channels: ", resizable_channels)
 
 
 func _on_io_toggled(pressed: bool) -> void:
 	"""Toggle IO panel visibility."""
 	get_tree().call_group("mixer_channel_io", "set", "visible", pressed)
-	print("[Mixer] IO panel: ", pressed)
+	logger.info("IO panel: ", pressed)
 
 
 func _on_sends_toggled(pressed: bool) -> void:
 	"""Toggle Sends panel visibility."""
 	get_tree().call_group("mixer_channel_sends", "set", "visible", pressed)
-	print("[Mixer] Sends panel: ", pressed)
+	logger.info("Sends panel: ", pressed)
 
 func _on_big_meters_toggled(pressed: bool):
 	get_tree().call_group("mixer_channel_big_meters", "set", "visible", pressed)
@@ -466,7 +494,7 @@ func _rebuild_all_routing_menus() -> void:
 
 func _rebuild_all_sends_panels() -> void:
 	"""Rebuild sends panels for all mixer channels when a bus is added or removed."""
-	print("[Mixer] Rebuilding all sends panels")
+	logger.info("Rebuilding all sends panels")
 	if not is_inside_tree():
 		return
 	for node in get_tree().get_nodes_in_group("mixer_channel"):
@@ -531,7 +559,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	
 	# Handle array of assets
 	if data is Array:
-		print("[Mixer] Dropping %d assets" % data.size())
+		logger.info("Dropping %d assets" % data.size())
 		for asset in data:
 			if asset is Asset:
 				_handle_single_asset_drop(asset)
@@ -542,87 +570,9 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		_handle_single_asset_drop(data)
 
 
+## Instruments and SFZ files dropped on empty mixer space get their own instrument channel.
 func _handle_single_asset_drop(asset: Asset) -> void:
-	"""Handle dropping a single asset on the left pane."""
-	# Handle SFZ asset drops
-	if asset.type == Asset.TYPE.SFZ:
-		print("[Mixer] SFZ dropped: ", asset.name, " (", asset.path, ")")
-		_create_sfz_instrument_channel(asset.path, asset.name)
-		return
-	
-	# Handle device asset drops
-	if asset.type == Asset.TYPE.Device:
-		print("[Mixer] Device dropped: ", asset.name, " (", asset.path, ")")
-		
-		# Get the device metadata
-		var device = AssetService.get_device(asset.path)
-		if not device:
-			push_error("[Mixer] Failed to get device: ", asset.path)
-			return
-		
-		# Instruments and MIDI containers (Layer/Chain) get their own channel.
-		if device.creates_instrument_track():
-			_create_instrument_channel_with_device(device)
-		else:
-			push_warning("[Mixer] Cannot drop %s on empty area. Drop on an existing channel instead." % device.get_category_string())
-
-
-func _create_instrument_channel_with_device(device: Device) -> void:
-	"""Create a new instrument channel with the specified device."""
-	print("[Mixer] Creating instrument channel with device: ", device.name)
-	
-	# Create new instrument track + channel pair
-	var result = current_project.create_instrument_track(device.name)
-	if not result:
-		push_error("[Mixer] Failed to create instrument track")
-		return
-	
-	var track = result["track"] as Track
-	var channel = result["channel"] as Channel
-	
-	if not track or not channel:
-		push_error("[Mixer] Invalid track or channel returned")
-		return
-	
-	print("[Mixer] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
-	print("[Mixer] Created channel: ", channel.name, " (id=", channel.id, ")")
-	
-	# Create device instance and add to channel
-	var device_instance = DeviceInstance.new(device, channel.id, 0)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-
-
-func _create_sfz_instrument_channel(sfz_path: String, sfz_name: String) -> void:
-	"""Create a new instrument channel with sfizz device and load the SFZ file."""
-	print("[Mixer] Creating SFZ instrument channel: ", sfz_name)
-	
-	# Get the sfizz device from AssetService
-	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
-	if not sfizz_device:
-		push_error("[Mixer] Failed to get sfizz device")
-		return
-	
-	# Create new instrument track + channel pair
-	var result = current_project.create_instrument_track(sfz_name)
-	if not result:
-		push_error("[Mixer] Failed to create instrument track")
-		return
-	
-	var track = result["track"] as Track
-	var channel = result["channel"] as Channel
-	
-	if not track or not channel:
-		push_error("[Mixer] Invalid track or channel returned")
-		return
-	
-	print("[Mixer] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
-	print("[Mixer] Created channel: ", channel.name, " (id=", channel.id, ")")
-	
-	# Create sfizz device instance and add to channel
-	var device_instance = DeviceInstance.new(sfizz_device, channel.id, 0)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	
-	# Load the SFZ file into the device
-	# Give the engine a moment to create the device before loading the file
-	await get_tree().create_timer(0.1).timeout
-	device_instance.load_file(sfz_path)
+	if DeviceDropUtil.creates_instrument_track(asset):
+		DeviceDropUtil.create_instrument_track_for_asset(current_project, asset)
+	elif asset.type == Asset.TYPE.Device:
+		push_warning("[Mixer] Cannot drop %s on empty area. Drop on an existing channel instead." % asset.get_display_name())

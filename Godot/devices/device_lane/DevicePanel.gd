@@ -1,6 +1,8 @@
 # A full device panel, as shown in the DeviceLane
 class_name DevicePanel extends PanelContainer
 
+var logger : Log = Log.make("DevicePanel")
+
 @onready var header : PanelContainer = $VBoxContainer/Header
 
 # light button toggles inactive/active and enabled/disabled
@@ -38,6 +40,8 @@ var ccs_box: VBoxContainer
 var _large_popup: Window = null
 
 var device : DeviceInstance
+## Channel whose device_parameters_updated this panel listens to.
+var _channel: Channel = null
 var loaded_file_path: String = ""
 
 ## View state
@@ -145,27 +149,30 @@ func _gui_input(event: InputEvent) -> void:
 			request_context_menu.emit()
 
 
-## Release engine subscriptions and popups when the panel leaves the tree
-## (e.g. DeviceLane.clear()/_on_channel_device_remmoved() freeing it).
+## Release engine subscriptions and popups when the panel is freed (e.g.
+## DeviceLane.clear()/_on_channel_device_removed(), or a parent being freed).
 ## Without this, custom views (like the spectrum analyzer) never get
 ## _on_view_hidden() and the Large popup outlives the panel.
-## Skipped on plain reparenting (DockHost moves docks around), which would
-## otherwise wipe the parameter controls with nothing to rebuild them.
-func _exit_tree() -> void:
-	if not is_queued_for_deletion():
+## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
+## controls with nothing to rebuild them.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
+
+
+## Disconnect from the bound device and tear down its views. Idempotent.
+func _unbind() -> void:
+	if device == null:
 		return
-	_close_large()
-	if device:
-		_unbind_from_device(device)
-
-
-## This should not really happen.
-func _unbind_from_device(_dev : DeviceInstance):
-	# Disconnect signal
-	if _dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
-		_dev.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
-	if _dev.name_changed.is_connected(_on_device_name_changed):
-		_dev.name_changed.disconnect(_on_device_name_changed)
+	if _large_open:
+		_close_large()
+	if device.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
+		device.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
+	if device.name_changed.is_connected(_on_device_name_changed):
+		device.name_changed.disconnect(_on_device_name_changed)
+	if _channel and _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
+		_channel.device_parameters_updated.disconnect(_on_device_parameters_updated)
+	_channel = null
 	_clear_parameter_controls()
 	_clear_panel_and_aux()
 	_folder_focus = null
@@ -175,6 +182,7 @@ func _unbind_from_device(_dev : DeviceInstance):
 	if folder_button:
 		folder_button.visible = false
 		folder_button.set_pressed_no_signal(false)
+	device = null
 
 
 ## Refresh the header when the instance is renamed.
@@ -186,8 +194,7 @@ func _on_device_name_changed(new_name: String) -> void:
 
 
 func bind_to_device(dev : DeviceInstance):
-	if device:
-		_unbind_from_device(device)
+	_unbind()
 	device = dev
 
 	if not is_node_ready():
@@ -202,10 +209,10 @@ func bind_to_device(dev : DeviceInstance):
 	# (param/count + param/info) while a panel view scene is still loading,
 	# and a listener connected only after that await would miss the signal,
 	# leaving the parameters pane stuck hidden.
-	var channel = Sonara.editor.project.get_channel_by_id(dev.channel_id)
-	if channel:
-		if not channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
-			channel.device_parameters_updated.connect(_on_device_parameters_updated)
+	_channel = dev.get_channel()
+	if _channel:
+		if not _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
+			_channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 	_create_parameter_controls()
 	_update_cc_tab_visibility()
@@ -224,7 +231,8 @@ func bind_to_device(dev : DeviceInstance):
 	large_button.button_pressed = false
 
 	# Listen for GUI closed events from engine
-	dev.plugin_gui_closed.connect(_on_plugin_gui_closed)
+	if not dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
+		dev.plugin_gui_closed.connect(_on_plugin_gui_closed)
 
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
@@ -409,7 +417,7 @@ func _on_file_selected(path: String) -> void:
 	if not device:
 		return
 	
-	print("[DevicePanel] Loading file: %s" % path)
+	logger.info("Loading file: %s" % path)
 	
 	# Load file into device
 	device.load_file(path)
@@ -419,7 +427,7 @@ func _on_file_selected(path: String) -> void:
 	var filename = path.get_file()
 	file_status_label.text = filename
 	
-	print("[DevicePanel] ✓ File loaded: %s" % filename)
+	logger.info("✓ File loaded: %s" % filename)
 
 
 # ============================================================================
@@ -433,44 +441,20 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	return null
 
 
+## Accept sample files, or devices dropped onto a container.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept sample files, or devices dropped onto a container."""
-	if not device:
-		return false
-	var channel := _channel_for_device()
-	if device.is_container() and DeviceDropUtil.can_drop_on_container(channel, device, data):
-		return true
-	if not data is Asset:
-		return false
-	return DeviceDropUtil.can_drop_file_on_device(device, data)
+	return DeviceDropUtil.can_drop_on_device(device, data)
 
 
+## Add into this container (and reveal the new child), or load a dropped file.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device onto a container, or a sample file onto this device."""
-	if not device:
+	if device == null:
 		return
-	var channel := _channel_for_device()
-	if device.is_container() and DeviceDropUtil.can_drop_on_container(channel, device, data):
-		await DeviceDropUtil.drop_on_container(channel, device, data, get_tree())
+	if DeviceDropUtil.drop_on_device(device, data):
 		_open_folder_after_drop()
-		return
-	if not data is Asset:
-		return
-	var asset = data as Asset
-	if not DeviceDropUtil.can_drop_file_on_device(device, asset):
-		return
-	print("[DevicePanel] File dropped on device: %s" % asset.name)
-	device.load_file(asset.path)
-	loaded_file_path = asset.path
-	var filename = asset.path.get_file()
-	file_status_label.text = filename
-	print("[DevicePanel] ✓ File loaded: %s" % filename)
-
-
-func _channel_for_device() -> Channel:
-	if device == null or Sonara.editor == null or Sonara.editor.project == null:
-		return null
-	return Sonara.editor.project.get_channel_by_id(device.channel_id)
+	elif not device.loaded_file_path.is_empty():
+		loaded_file_path = device.loaded_file_path
+		file_status_label.text = loaded_file_path.get_file()
 
 
 ## ============================================================================
@@ -479,7 +463,7 @@ func _channel_for_device() -> Channel:
 
 func _load_panel_view(dev: DeviceInstance) -> void:
 	_clear_panel_view()
-	_panel_view = dev.create_view(Device.ViewType.Panel)
+	_panel_view = DeviceViewFactory.create(dev, Device.ViewType.Panel)
 	if _panel_view:
 		# Bind first so view has device context before any show/subscription
 		_panel_view.bind_to_device(dev)
@@ -501,7 +485,7 @@ func _clear_panel_view() -> void:
 
 func _load_aux_view(dev: DeviceInstance) -> void:
 	_clear_aux_view()
-	_aux_view = dev.create_view(Device.ViewType.Auxiliary)
+	_aux_view = DeviceViewFactory.create(dev, Device.ViewType.Auxiliary)
 	if _aux_view:
 		# Bind first so view has device context before any show/subscription
 		_aux_view.bind_to_device(dev)
@@ -527,24 +511,24 @@ func _clear_panel_and_aux() -> void:
 
 func _show_panel_in_right() -> void:
 	if _panel_view and _panel_view.visible:
-		print("[DevicePanel] showing panel view")
+		logger.info("showing panel view")
 
 		if not _panel_view.is_node_ready():
-			print("[DevicePanel] waiting for panel view to be ready...")
+			logger.info("waiting for panel view to be ready...")
 			await _panel_view.ready
 
-		print("[DevicePanel] panel view is ready, calling _on_view_shown...")
+		logger.info("panel view is ready, calling _on_view_shown...")
 		_panel_view.show()
 		_panel_view._on_view_shown()
 	
 	if _aux_view and _aux_view.visible:
-		print("[DevicePanel] hiding aux view")
+		logger.info("hiding aux view")
 
 		if not _aux_view.is_node_ready():
-			print("[DevicePanel] waiting for aux view to be ready...")
+			logger.info("waiting for aux view to be ready...")
 			await _aux_view.ready
 
-		print("[DevicePanel] aux view is ready, calling _on_view_hidden...")
+		logger.info("aux view is ready, calling _on_view_hidden...")
 		_aux_view.hide()
 		_aux_view._on_view_hidden()
 	
@@ -553,19 +537,19 @@ func _show_panel_in_right() -> void:
 func _show_aux_in_right() -> void:
 	if _aux_view and not _aux_view.visible:
 		if not _aux_view.is_node_ready():
-			print("[DevicePanel] waiting for aux view to be ready...")
+			logger.info("waiting for aux view to be ready...")
 			await _aux_view.ready
 
-		print("[DevicePanel] aux view is ready, calling _on_view_shown...")
+		logger.info("aux view is ready, calling _on_view_shown...")
 		_aux_view.show()
 		_aux_view._on_view_shown()
 	
 	if _panel_view and _panel_view.visible:
 		if not _panel_view.is_node_ready():
-			print("[DevicePanel] waiting for panel view to be ready...")
+			logger.info("waiting for panel view to be ready...")
 			await _panel_view.ready
 
-		print("[DevicePanel] panel view is ready, calling _on_view_hidden...")
+		logger.info("panel view is ready, calling _on_view_hidden...")
 		_panel_view.hide()
 		_panel_view._on_view_hidden()
 	
@@ -619,7 +603,7 @@ func _open_large() -> void:
 	
 	if device.device.has_large_view():
 		# create large view
-		_large_view = device.create_view(Device.ViewType.Large)
+		_large_view = DeviceViewFactory.create(device, Device.ViewType.Large)
 		
 		# add large view to window
 		var popup = _get_large_window()
@@ -651,7 +635,7 @@ func _on_large_window_request_close() -> void:
 
 ## Handle plugin GUI closed notification from engine
 func _on_plugin_gui_closed() -> void:
-	print("[DevicePanel] Plugin GUI closed notification received")
+	logger.info("Plugin GUI closed notification received")
 	_large_open = false
 	large_button.button_pressed = false
 	_apply_large_state()
@@ -669,15 +653,19 @@ func _close_large() -> void:
 
 	# has large view?
 	if _large_view and _large_open:
-		_large_popup.hide()
-
-		Sonara.editor.remove_child(_large_popup)
-		_large_popup.queue_free()
-		_large_popup = null
-
-		_large_view._on_view_hidden()
-		_large_view.queue_free()
+		# The popup (and the view inside it) may already be gone when the
+		# editor is freed on quit before this panel.
+		if is_instance_valid(_large_view):
+			_large_view._on_view_hidden()
+			_large_view.queue_free()
 		_large_view = null
+
+		if is_instance_valid(_large_popup):
+			_large_popup.hide()
+			if _large_popup.get_parent():
+				_large_popup.get_parent().remove_child(_large_popup)
+			_large_popup.queue_free()
+		_large_popup = null
 	
 	_large_open = false
 	_apply_large_state()

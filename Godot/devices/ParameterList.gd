@@ -63,9 +63,9 @@ func clear() -> void:
 
 
 func _listen_for_parameter_updates() -> void:
-	if device == null or Sonara.editor == null or Sonara.editor.project == null:
+	if device == null:
 		return
-	_channel = Sonara.editor.project.get_channel_by_id(device.channel_id)
+	_channel = device.get_channel()
 	if _channel and not _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
 		_channel.device_parameters_updated.connect(_on_device_parameters_updated)
 

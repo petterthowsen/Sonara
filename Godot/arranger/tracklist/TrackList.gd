@@ -6,6 +6,8 @@ class_name TrackList extends VBoxContainer
 
 ## Owns arranger track-header selection: multi-select, active track, and visual updates.
 
+var logger : Log = Log.make("TrackList")
+
 # Scene to instantiate for each track
 const track_item_scene: PackedScene = preload("res://arranger/tracklist/TrackItem.tscn")
 
@@ -81,9 +83,11 @@ func _input(event: InputEvent) -> void:
 # ============================================================================
 func _on_project_activated(project: Project) -> void:
 	"""Called when a project is activated - bind to its signals and sync UI."""
-	# Clean up old connections if any
+	# Clean up old connections and items if any (re-activation without a close)
 	if current_project:
 		_unbind_from_project()
+		_clear_selection(false)
+		_clear_all_track_items()
 
 	current_project = project
 
@@ -104,7 +108,7 @@ func _on_project_activated(project: Project) -> void:
 	if not visual_tracks.is_empty():
 		_select_track(visual_tracks[0], false, false, false)
 
-	print("[TrackList] Project activated: ", project.project_name)
+	logger.info("Project activated: ", project.project_name)
 
 
 func _on_project_closed() -> void:
@@ -168,7 +172,7 @@ func _on_track_added(track: Track) -> void:
 		track_items.resize(index + 1)
 	track_items[index] = track_item
 
-	print("[TrackList] Track added: ", track.name, " at index ", index, " with order ", track.order)
+	logger.info("Track added: ", track.name, " at index ", index, " with order ", track.order)
 
 	if not _is_rebuilding:
 		_update_visual_order()
@@ -182,11 +186,7 @@ func _on_track_removed(track: Track) -> void:
 		push_warning("[TrackList] Track item not found for removed track: %s" % track.name)
 		return
 	
-	# Disconnect from track signals
-	if track.order_changed.is_connected(_on_track_layout_changed):
-		track.order_changed.disconnect(_on_track_layout_changed)
-	if track.parent_changed.is_connected(_on_track_layout_changed):
-		track.parent_changed.disconnect(_on_track_layout_changed)
+	_disconnect_track_layout_signals(track)
 
 	_remove_track_from_selection(track)
 	
@@ -198,7 +198,17 @@ func _on_track_removed(track: Track) -> void:
 	# Remove from scene tree and free
 	track_item.queue_free()
 	
-	print("[TrackList] Track item removed for: ", track.name)
+	logger.info("Track item removed for: ", track.name)
+
+
+## Undo the per-track layout connections made in _on_track_added.
+func _disconnect_track_layout_signals(track: Track) -> void:
+	if track == null:
+		return
+	if track.order_changed.is_connected(_on_track_layout_changed):
+		track.order_changed.disconnect(_on_track_layout_changed)
+	if track.parent_changed.is_connected(_on_track_layout_changed):
+		track.parent_changed.disconnect(_on_track_layout_changed)
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -244,7 +254,7 @@ func _on_track_item_right_clicked(track: Track, mouse_position: Vector2) -> void
 	if not track or not track_item_context_menu:
 		return
 	
-	print("[TrackList] Track item right-clicked: ", track.name)
+	logger.info("Track item right-clicked: ", track.name)
 
 	if not selected_tracks.has(track):
 		_select_track(track, false, false)
@@ -265,6 +275,7 @@ func _clear_all_track_items() -> void:
 	"""Remove all track items."""
 	for track_item in track_items:
 		if track_item is TrackItem:
+			_disconnect_track_layout_signals(track_item.track)
 			track_item.queue_free()
 	
 	track_items.clear()
@@ -438,7 +449,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	
 	# Handle array of assets
 	if data is Array:
-		print("[TrackList] Dropping %d assets" % data.size())
+		logger.info("Dropping %d assets" % data.size())
 		for asset in data:
 			if asset is Asset:
 				_handle_single_asset_drop(asset)
@@ -449,126 +460,38 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		_handle_single_asset_drop(data)
 
 
+## Instruments and SFZ files get a new instrument track; effects go on the active (or first) track.
 func _handle_single_asset_drop(asset: Asset) -> void:
-	"""Handle dropping a single asset."""
-	# Handle SFZ asset drops
-	if asset.type == Asset.TYPE.SFZ:
-		print("[TrackList] SFZ dropped: ", asset.name, " (", asset.path, ")")
-		_create_sfz_instrument_track(asset.path, asset.name)
+	if DeviceDropUtil.creates_instrument_track(asset):
+		DeviceDropUtil.create_instrument_track_for_asset(current_project, asset)
 		return
-	
-	# Handle device asset drops
-	if asset.type == Asset.TYPE.Device:
-		print("[TrackList] Device dropped: ", asset.name, " (", asset.path, ")")
-		
-		# Get the device metadata
-		var device = AssetService.get_device(asset.path)
-		if not device:
-			push_error("[TrackList] Failed to get device: ", asset.path)
-			return
-		
-		# Instruments and MIDI containers (Layer/Chain) get their own track.
-		if device.creates_instrument_track():
-			_create_instrument_track_with_device(device)
-		elif device.category == Device.DeviceCategory.Effect or device.category == Device.DeviceCategory.Utility:
-			_add_effect_to_track(device)
-		else:
-			push_warning("[TrackList] No drop handler for %s (%s)" % [device.name, device.get_category_string()])
-
-
-func _create_instrument_track_with_device(device: Device) -> void:
-	"""Create a new instrument track and add the device to its channel."""
-	print("[TrackList] Creating instrument track with device: ", device.name)
-
-	# Create new instrument track + channel pair
-	var _track_cmd := TrackCreateCommand.new(current_project, "instrument", device.name)
-	HistoryUtil.execute(_track_cmd)
-	var result = {"track": _track_cmd.track, "channel": _track_cmd.channel}
-	if not result:
-		push_error("[TrackList] Failed to create instrument track")
+	if asset.type != Asset.TYPE.Device:
 		return
-
-	var track = result["track"] as Track
-	var channel = result["channel"] as Channel
-
-	if not track or not channel:
-		push_error("[TrackList] Invalid track or channel returned")
+	var device := AssetService.get_device(asset.path)
+	if device == null:
+		push_error("[TrackList] Failed to get device: ", asset.path)
 		return
-
-	print("[TrackList] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
-	print("[TrackList] Created channel: ", channel.name, " (id=", channel.id, ")")
-
-	# Create device instance and add to channel
-	# Channel.add_device() handles OSC sync and emits device_added signal
-	var device_instance = DeviceInstance.new(device, channel.id, 0)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
+	if device.category == Device.DeviceCategory.Effect or device.category == Device.DeviceCategory.Utility:
+		_add_effect_to_track(asset)
+	else:
+		push_warning("[TrackList] No drop handler for %s (%s)" % [device.name, device.get_category_string()])
 
 
-func _add_effect_to_track(device: Device) -> void:
-	"""Add effect device to the first track's channel (or create a new track if none exist)."""
-	print("[TrackList] Adding effect device: ", device.name)
-
-	var target_channel: Channel = null
+## Add an effect to the active (or first) track's channel, or to a new bus when there is none.
+func _add_effect_to_track(asset: Asset) -> void:
 	var target_track: Track = active_track
 	if target_track == null and current_project.tracks.size() > 0:
 		target_track = current_project.tracks[0] as Track
-
+	var target_channel: Channel = null
 	if target_track:
-		for ch in current_project.channels:
-			if ch.id == target_track.default_channel_id:
-				target_channel = ch
-				break
-
-	# If no channel found, create a new bus channel for the effect
-	if not target_channel:
-		print("[TrackList] No target channel found, creating bus channel")
-		target_channel = current_project.create_bus_channel(device.name)
-		if not target_channel:
+		target_channel = current_project.get_channel_by_id(target_track.default_channel_id)
+	if target_channel == null:
+		target_channel = current_project.create_bus_channel(asset.get_display_name())
+		if target_channel == null:
 			push_error("[TrackList] Failed to create bus channel")
 			return
-
-	# Create device instance and add to channel
-	# Channel.add_device() handles OSC sync and emits device_added signal
-	var device_instance = DeviceInstance.new(device, target_channel.id, target_channel.get_device_count())
-	HistoryUtil.execute(DeviceAddCommand.new(target_channel, device_instance, -1))
-
-
-func _create_sfz_instrument_track(sfz_path: String, sfz_name: String) -> void:
-	"""Create a new instrument track with sfizz device and load the SFZ file."""
-	print("[TrackList] Creating SFZ instrument track: ", sfz_name)
-	
-	# Get the sfizz device from AssetService
-	var sfizz_device = AssetService.get_device("sonara.builtin.sfizz")
-	if not sfizz_device:
-		push_error("[TrackList] Failed to get sfizz device")
-		return
-	
-	# Create new instrument track + channel pair
-	var _track_cmd := TrackCreateCommand.new(current_project, "instrument", sfz_name)
-	HistoryUtil.execute(_track_cmd)
-	var result = {"track": _track_cmd.track, "channel": _track_cmd.channel}
-	if not result:
-		push_error("[TrackList] Failed to create instrument track")
-		return
-	
-	var track = result["track"] as Track
-	var channel = result["channel"] as Channel
-	
-	if not track or not channel:
-		push_error("[TrackList] Invalid track or channel returned")
-		return
-	
-	print("[TrackList] Created track: ", track.name, " (id=", track.id, ", channel_id=", track.default_channel_id, ")")
-	print("[TrackList] Created channel: ", channel.name, " (id=", channel.id, ")")
-	
-	# Create sfizz device instance and add to channel
-	var device_instance = DeviceInstance.new(sfizz_device, channel.id, 0)
-	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1))
-	
-	# Load the SFZ file into the device
-	# Give the engine a moment to create the device before loading the file
-	await get_tree().create_timer(0.1).timeout
-	device_instance.load_file(sfz_path)
+	if DeviceDropUtil.can_drop_asset_on_channel(target_channel, asset):
+		DeviceDropUtil.drop_asset(target_channel, asset, -1, null)
 
 
 # ============================================================================
@@ -625,7 +548,7 @@ func begin_track_reorder(drag: TrackDrag) -> void:
 	_reorder_drag.before_layout = TrackReorderCommand.capture_layout(current_project)
 	_reorder_drag.did_commit = false
 	_set_dragged_items_dimmed(true)
-	print("[TrackList] Live reorder started: %d track(s)" % _dragged_roots().size())
+	logger.info("Live reorder started: %d track(s)" % _dragged_roots().size())
 
 
 ## Move the dragged tracks under the pointer so headers and timeline stay in sync.
@@ -650,8 +573,8 @@ func preview_track_drop(mouse_global: Vector2) -> void:
 		after_sibling = root
 	current_project.end_track_layout_batch()
 	if any_moved:
-		print(
-			"[TrackList] Live place %d track(s) parent=%s after=%s"
+		logger.info(
+			"Live place %d track(s) parent=%s after=%s"
 			% [
 				roots.size(),
 				str(parent_id),
@@ -670,7 +593,7 @@ func commit_track_drop() -> void:
 		HistoryUtil.record(
 			TrackReorderCommand.new(current_project, _reorder_drag.before_layout, after_layout)
 		)
-		print("[TrackList] Reorder committed: %d track(s)" % _dragged_roots().size())
+		logger.info("Reorder committed: %d track(s)" % _dragged_roots().size())
 	_end_track_reorder()
 
 
@@ -681,7 +604,7 @@ func _on_track_drag_ended() -> void:
 	if _reorder_drag.did_commit:
 		_end_track_reorder()
 		return
-	print("[TrackList] Reorder cancelled, restoring layout")
+	logger.warn("Reorder cancelled, restoring layout")
 	current_project.apply_track_layout(_reorder_drag.before_layout)
 	_end_track_reorder()
 
@@ -895,7 +818,7 @@ func _update_visual_order() -> void:
 			move_child(track_item, i)
 
 	if _reorder_drag == null:
-		print("[TrackList] Updated visual order (%d tracks)" % visual_tracks.size())
+		logger.info("Updated visual order (%d tracks)" % visual_tracks.size())
 
 
 ## Find the TrackItem UI element for a given track.

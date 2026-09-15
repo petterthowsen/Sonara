@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Reorder a device or move it into a container. Use path/instance_id, to_position, and optional parent path. Undoable."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

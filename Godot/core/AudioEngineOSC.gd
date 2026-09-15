@@ -10,10 +10,8 @@ extends Node
 
 signal engine_connected()
 signal engine_disconnected()
-signal engine_log_message(level: String, message: String)  # Emitted for warn/error logs from engine
 
 # Device data subscriptions (`osc_path` is `/channel/{id}/device/{n}` or nested `/child/{n}`)
-signal device_data_received(osc_path: String, data_type: String, data: PackedByteArray)
 signal device_spectrum_received(osc_path: String, spectrum: PackedFloat32Array)
 
 # ============================================================================
@@ -55,6 +53,8 @@ var _device_data_regex: RegEx = null  # lazily compiled, cached across /data mes
 # ============================================================================
 
 func _ready() -> void:
+	if Utils.is_test_mode():
+		return
 	# Create OSC client (sends to Rust)
 	osc_client = OSCClient.new()
 	osc_client.ip_address = "127.0.0.1"
@@ -111,33 +111,6 @@ func _flush_pending_sends() -> void:
 	_pending_sends.clear()
 	for item in queued:
 		send(item["address"], item["args"])
-
-
-func send_audio_data(address: String, audio_samples: PackedFloat32Array, sample_rate: int, channels: int) -> void:
-	"""Send audio clip data as OSC message with proper binary encoding.
-
-	Converts PackedFloat32Array to binary blob format for OSC transmission.
-	"""
-	if not osc_client:
-		logger.warn("OSC client not initialized")
-		return
-
-	# Convert float samples to bytes (little-endian)
-	var bytes = PackedByteArray()
-	for sample in audio_samples:
-		# Use var_to_bytes which handles the conversion properly
-		# It returns the raw bytes of the float value
-		var float_bytes = var_to_bytes(sample)
-		# var_to_bytes returns: [type_byte (4 bytes), data...]
-		# Skip the first 4 bytes and take the next 4 which are the float
-		if float_bytes.size() >= 8:
-			bytes.append_array(float_bytes.slice(4, 8))
-
-	logger.info("Sending audio data: %d samples, %d Hz, %d channels (blob size: %d bytes)" % [
-		audio_samples.size(), sample_rate, channels, bytes.size()
-	])
-
-	osc_client.send_message(address, [bytes, sample_rate, channels])
 
 
 ## Subscribe to device visualization data (spectrum, oscilloscope, etc.).
@@ -235,7 +208,6 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			var osc_path: String = result.get_string(1)
 			var data_type: String = values[0]
 			var blob: PackedByteArray = values[1]
-			device_data_received.emit(osc_path, data_type, blob)
 			if data_type == "spectrum":
 				var spectrum = _decode_f32_array(blob)
 				device_spectrum_received.emit(osc_path, spectrum)
@@ -247,7 +219,6 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 		if values is Array and values.size() >= 2:
 			var level: String = values[0]
 			var message: String = values[1]
-			engine_log_message.emit(level, message)
 			# Also log to console for convenience
 			if level == "error":
 				logger.error("[Engine] ", message)

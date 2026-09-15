@@ -176,19 +176,13 @@ func _make_drag_preview() -> Control:
 	return preview
 
 
-## Channel that owns this drum machine (for drop-host checks).
-func _channel() -> Channel:
-	var inst := container if container else child
-	if inst == null or Sonara.editor == null or Sonara.editor.project == null:
-		return null
-	return Sonara.editor.project.get_channel_by_id(inst.channel_id)
-
-
 ## Accept samples, devices, or another pad's device (move or swap).
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return DeviceDropUtil.can_drop_on_drum_pad(data, child, _channel(), container)
+	var inst := container if container else child
+	var channel := inst.get_channel() if inst else null
+	return DeviceDropUtil.can_drop_on_drum_pad(data, child, channel, container)
 
 
-## Forward the drop to DrumMachineDefaultView so it can await file loads.
+## Forward the drop to DrumMachineDefaultView, which applies it and focuses the pad.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	drop_requested.emit(note, data)

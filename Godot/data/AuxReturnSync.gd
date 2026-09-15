@@ -122,9 +122,9 @@ static func ensure_plugin_returns(project: Project, channel: Channel, device: De
 
 ## Tell the engine which extra buses feed which child channels.
 static func sync_aux_map_to_engine(channel: Channel) -> void:
-	if channel == null or not channel._is_connected:
+	if channel == null or not channel.is_engine_connected():
 		return
-	var project := channel._fallback_project()
+	var project := channel.get_project()
 	if project == null:
 		return
 	for child_id in channel.child_channel_ids:

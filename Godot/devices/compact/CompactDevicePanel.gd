@@ -5,6 +5,8 @@
 
 class_name CompactDevicePanel extends VBoxContainer
 
+var logger : Log = Log.make("CompactDevicePanel")
+
 # ============================================================================
 # NODE REFS
 # ============================================================================
@@ -49,17 +51,22 @@ func _ready() -> void:
 	set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
-## Release engine subscriptions when the panel leaves the tree (e.g. the
-## channel's device list rebuilding), matching DevicePanel's cleanup.
-## Skipped on plain reparenting (DockHost moves docks around), which would
-## otherwise wipe the parameter list with nothing to rebuild it.
-func _exit_tree() -> void:
-	if not is_queued_for_deletion():
-		return
+## Release engine subscriptions when the panel is freed (e.g. the channel's
+## device list rebuilding, or a parent being freed), matching DevicePanel.
+## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
+## list with nothing to rebuild it.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
+
+
+## Disconnect from the bound device instance. Idempotent.
+func _unbind() -> void:
 	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
 		device_instance.name_changed.disconnect(_on_device_name_changed)
 	if _param_list:
 		_param_list.unbind()
+	device_instance = null
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -85,9 +92,8 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 		p_device_instance: The DeviceInstance to display
 		position: Position in device chain (for display)
 	"""
-	print("[CompactDevicePanel] setup() called for device: %s at position %d" % [p_device_instance.get_display_name(), position])
-	if device_instance and device_instance.name_changed.is_connected(_on_device_name_changed):
-		device_instance.name_changed.disconnect(_on_device_name_changed)
+	logger.info("setup() called for device: %s at position %d" % [p_device_instance.get_display_name(), position])
+	_unbind()
 	device_instance = p_device_instance
 	
 	await ready
@@ -156,7 +162,7 @@ func _on_collapse_button_toggled(button_pressed: bool) -> void:
 	
 	# Update parameters panel visibility
 	parameters.visible = not collapsed
-	print("[CompactDevicePanel] Collapsed state changed to: %s" % collapsed)
+	logger.info("Collapsed state changed to: %s" % collapsed)
 
 
 func _on_double_clicked() -> void:
@@ -170,7 +176,7 @@ func _on_double_clicked() -> void:
 		return
 	
 	# For built-in devices: get the channel and open DeviceLane
-	var channel: Channel = Sonara.editor.project.get_channel_by_id(device_instance.channel_id)
+	var channel := device_instance.get_channel()
 	if not channel:
 		push_warning("[CompactDevicePanel] Cannot find channel with ID %d" % device_instance.channel_id)
 		return
@@ -191,7 +197,7 @@ func _on_double_clicked() -> void:
 	var device_panel: DevicePanel = Sonara.editor.device_lane.find_device_panel(device_instance)
 	if device_panel:
 		device_panel.grab_focus()
-		print("[CompactDevicePanel] Grabbed focus on DevicePanel for device: %s" % device_instance.device.name)
+		logger.info("Grabbed focus on DevicePanel for device: %s" % device_instance.device.name)
 	else:
 		push_warning("[CompactDevicePanel] Could not find DevicePanel for device: %s" % device_instance.device.name)
 
@@ -207,37 +213,11 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	return null
 
 
+## Accept sample files, or devices dropped onto a container.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept sample files, or devices dropped onto a container."""
-	if not device_instance:
-		return false
-	var channel := _channel_for_device()
-	if device_instance.is_container() and DeviceDropUtil.can_drop_on_container(channel, device_instance, data):
-		return true
-	if not data is Asset:
-		return false
-	return DeviceDropUtil.can_drop_file_on_device(device_instance, data)
+	return DeviceDropUtil.can_drop_on_device(device_instance, data)
 
 
+## Add into this container, or load a dropped file.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a device onto a container, or a sample file onto this device."""
-	if not device_instance:
-		return
-	var channel := _channel_for_device()
-	if device_instance.is_container() and DeviceDropUtil.can_drop_on_container(channel, device_instance, data):
-		await DeviceDropUtil.drop_on_container(channel, device_instance, data, get_tree())
-		return
-	if not data is Asset:
-		return
-	var asset = data as Asset
-	if not DeviceDropUtil.can_drop_file_on_device(device_instance, asset):
-		return
-	print("[CompactDevicePanel] File dropped on device: %s" % asset.name)
-	device_instance.load_file(asset.path)
-	print("[CompactDevicePanel] File loaded: %s" % asset.name)
-
-
-func _channel_for_device() -> Channel:
-	if device_instance == null or Sonara.editor == null or Sonara.editor.project == null:
-		return null
-	return Sonara.editor.project.get_channel_by_id(device_instance.channel_id)
+	DeviceDropUtil.drop_on_device(device_instance, data)

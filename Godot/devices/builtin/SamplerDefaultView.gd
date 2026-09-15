@@ -52,6 +52,17 @@ func _on_bind() -> void:
 	queue_redraw()
 
 
+## Stop listening to the bound instance's waveform.
+func _on_unbind() -> void:
+	var wf: WaveformPyramid = device.sample_waveform
+	if wf == null:
+		return
+	if wf.waveform_level_updated.is_connected(_on_waveform_changed):
+		wf.waveform_level_updated.disconnect(_on_waveform_changed)
+	if wf.metadata_changed.is_connected(_on_waveform_changed):
+		wf.metadata_changed.disconnect(_on_waveform_changed)
+
+
 ## Reconnect waveform listeners and refresh the envelope when the panel is shown.
 func _on_view_shown() -> void:
 	_connect_waveform()
@@ -65,10 +76,10 @@ func _on_device_parameter_changed(_param_id: int, _value: float) -> void:
 	queue_redraw()
 
 
-## Create a DeviceWaveform on the instance if the engine has not supplied one yet.
+## Create a WaveformPyramid on the instance if the engine has not supplied one yet.
 func _ensure_waveform() -> void:
 	if device and device.sample_waveform == null:
-		device.sample_waveform = DeviceWaveform.new()
+		device.sample_waveform = WaveformPyramid.new()
 
 
 ## Listen for waveform metadata/level updates so the panel redraws.
@@ -76,7 +87,7 @@ func _connect_waveform() -> void:
 	_ensure_waveform()
 	if device == null or device.sample_waveform == null:
 		return
-	var wf: DeviceWaveform = device.sample_waveform
+	var wf: WaveformPyramid = device.sample_waveform
 	if not wf.waveform_level_updated.is_connected(_on_waveform_changed):
 		wf.waveform_level_updated.connect(_on_waveform_changed)
 	if not wf.metadata_changed.is_connected(_on_waveform_changed):

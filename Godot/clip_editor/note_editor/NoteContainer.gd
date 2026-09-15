@@ -305,9 +305,8 @@ func update_container_width() -> void:
 		return
 
 	# Calculate minimum visible width
-	var ppq = grid_helper.ppq if grid_helper else 960
-	var beats_per_bar = grid_helper.time_numerator if grid_helper else 4
-	var min_width_ticks = min_width_bars * beats_per_bar * ppq
+	var ticks_per_bar = grid_helper.get_ticks_per_bar() if grid_helper else 3840
+	var min_width_ticks = min_width_bars * ticks_per_bar
 	var min_width_pixels = ticks_to_pixels(min_width_ticks)
 
 	# Get current scroll position and viewport width
@@ -330,7 +329,7 @@ func update_container_width() -> void:
 	var rightmost_pixels = ticks_to_pixels(rightmost_tick)
 
 	# Calculate required width
-	var extra_ticks = extra_width_bars * beats_per_bar * ppq
+	var extra_ticks = extra_width_bars * ticks_per_bar
 	var extra_pixels = ticks_to_pixels(extra_ticks)
 
 	var width_from_scroll = scroll_pos + viewport_width + extra_pixels
@@ -370,8 +369,7 @@ func _load_notes_from_single_clip() -> void:
 	for note_data in clip.midi_notes:
 		# Assign note ID if not already assigned
 		if note_data.id < 0:
-			note_data.id = project.next_note_id
-			project.next_note_id += 1
+			note_data.id = project.allocate_note_id()
 
 		# Create visual note instance
 		var note_instance = visual_note_scene.instantiate()
@@ -406,8 +404,7 @@ func _load_notes_from_multiple_clips() -> void:
 		for note_data in ci.clip.midi_notes:
 			# Assign note ID if not already assigned
 			if note_data.id < 0:
-				note_data.id = project.next_note_id
-				project.next_note_id += 1
+				note_data.id = project.allocate_note_id()
 
 			# Create visual note instance
 			var note_instance = visual_note_scene.instantiate()
@@ -594,16 +591,6 @@ func get_clip_instance_for_note(note_id: int) -> ClipInstance:
 	return null
 
 
-func _find_clip_instance_for_note(note_data: MidiNoteData) -> ClipInstance:
-	"""Find which clip instance contains the given note (multi-clip mode)."""
-	for ci in clip_instances:
-		if ci and ci.clip:
-			for note in ci.clip.midi_notes:
-				if note.id == note_data.id:
-					return ci
-	return null
-
-
 func get_clip_at_position(tick: int) -> ClipInstance:
 	"""Get the clip instance at the given tick position (multi-clip mode)."""
 	if not multi_clip_mode:
@@ -630,9 +617,7 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 	logger.info("Creating new clip at tick %d on track '%s'" % [tick, track.name])
 
 	# Calculate clip boundaries (snap to bars for clean organization)
-	var ppq = grid_helper.ppq if grid_helper else 960
-	var beats_per_bar = grid_helper.time_numerator if grid_helper else 4
-	var ticks_per_bar = beats_per_bar * ppq
+	var ticks_per_bar = grid_helper.get_ticks_per_bar() if grid_helper else 3840
 
 	# Snap start position to bar boundary
 	@warning_ignore("integer_division")
@@ -687,12 +672,14 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 		logger.error("Cannot create clip: no project available")
 		return null
 
-	var new_clip = project.create_clip("Clip %d" % project.clips.size(), Clip.ClipType.MIDI)
-	new_clip.content_length_ticks = clip_length_ticks
-	project.add_clip(new_clip)
-
-	# Create clip instance on track
-	var new_clip_instance = track.create_clip_instance(new_clip, clip_start_ticks, clip_length_ticks)
+	# Undoable, like creating a clip on the timeline
+	var new_clip_instance := ClipActions.create_clip(
+		project, track, clip_start_ticks, clip_length_ticks, "Clip %d" % project.clips.size()
+	)
+	if new_clip_instance == null:
+		logger.error("Cannot create clip: track rejected the instance")
+		return null
+	var new_clip := new_clip_instance.clip
 
 	logger.info("Created clip '%s' (instance: %s) at tick %d (length: %d)" % [new_clip.name, new_clip_instance.id, clip_start_ticks, clip_length_ticks])
 

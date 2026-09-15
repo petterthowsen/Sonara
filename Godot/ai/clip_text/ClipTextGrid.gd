@@ -56,14 +56,16 @@ static func pitch_span(clip: Object) -> int:
 static func serialize(clip: Object, opts: Dictionary) -> String:
 	var ppq: int = int(opts.get("ppq", 960))
 	var numerator: int = int(opts.get("numerator", 4))
+	var denominator: int = int(opts.get("denominator", 4))
 	var res_denom: int = int(opts.get("res_denom", 16))
 	var bars: int = int(opts.get("bars", 1))
 	var drums: bool = bool(opts.get("drums", false))
 	var key: Dictionary = opts.get("key", {})
 	var drum_names: Dictionary = opts.get("drum_names", {})
 	var step_ticks := ClipTextTime.ticks_per_step(ppq, res_denom)
-	var steps_beat := ClipTextTime.steps_per_beat(ppq, res_denom)
-	var steps := maxi(steps_beat, bars * numerator * steps_beat)
+	var steps_beat := ClipTextTime.steps_per_beat(ppq, res_denom, denominator)
+	@warning_ignore("integer_division")
+	var steps := maxi(steps_beat, bars * ClipTextTime.ticks_per_bar(ppq, numerator, denominator) / ClipTextTime.ticks_per_step(ppq, res_denom))
 	var lanes: Array[int] = _lane_pitches(clip, drums, drum_names)
 	var cells: Dictionary = _cells_from_clip(clip, lanes, steps, step_ticks)
 	return _render_blocks(lanes, cells, steps, steps_beat, drums, key, drum_names)
@@ -73,13 +75,15 @@ static func serialize(clip: Object, opts: Dictionary) -> String:
 static func parse(text: String, opts: Dictionary) -> Dictionary:
 	var ppq: int = int(opts.get("ppq", 960))
 	var numerator: int = int(opts.get("numerator", 4))
+	var denominator: int = int(opts.get("denominator", 4))
 	var res_denom: int = int(opts.get("res_denom", 16))
 	var bars: int = int(opts.get("bars", 1))
 	var drums: bool = bool(opts.get("drums", false))
 	var key: Dictionary = opts.get("key", {})
 	var drum_names: Dictionary = opts.get("drum_names", {})
-	var steps_beat := ClipTextTime.steps_per_beat(ppq, res_denom)
-	var expected := maxi(steps_beat, bars * numerator * steps_beat)
+	var steps_beat := ClipTextTime.steps_per_beat(ppq, res_denom, denominator)
+	@warning_ignore("integer_division")
+	var expected := maxi(steps_beat, bars * ClipTextTime.ticks_per_bar(ppq, numerator, denominator) / ClipTextTime.ticks_per_step(ppq, res_denom))
 	var inv_drums := _invert_drum_names(drum_names)
 	var hint_oct := 3
 	var by_pitch: Dictionary = {}
@@ -487,7 +491,7 @@ static func _tier_char(velocity: int) -> String:
 static func _add_note(clip: Object, project: Object, pitch: int, start: int, dur: int, tier: int) -> MidiNoteData:
 	var nid := _next_id(clip, project)
 	var vel := ClipTextKey.tier_to_velocity(tier)
-	if clip._synced_to_engine:
+	if clip.is_synced_to_engine():
 		return clip.add_midi_note(nid, pitch, vel, start, dur)
 	var n := MidiNoteData.new()
 	n.id = nid
@@ -496,29 +500,27 @@ static func _add_note(clip: Object, project: Object, pitch: int, start: int, dur
 	n.start_tick = start
 	n.duration_ticks = dur
 	clip.midi_notes.append(n)
-	clip._extend_content_length(start + dur)
+	clip.extend_content_length(start + dur)
 	return n
 
 
 static func _remove_note(clip: Object, note: MidiNoteData) -> void:
-	if clip._synced_to_engine:
+	if clip.is_synced_to_engine():
 		clip.remove_midi_note(note)
 		return
 	clip.midi_notes.erase(note)
 
 
 static func _touch_note(clip: Object, note: MidiNoteData) -> void:
-	if clip._synced_to_engine:
+	if clip.is_synced_to_engine():
 		clip.update_midi_note(note)
 	else:
-		clip._extend_content_length(note.start_tick + note.duration_ticks)
+		clip.extend_content_length(note.start_tick + note.duration_ticks)
 
 
 static func _next_id(clip: Object, project: Object) -> int:
 	if project:
-		var nid: int = project.next_note_id
-		project.next_note_id += 1
-		return nid
+		return project.allocate_note_id()
 	var mx := 0
 	for n in notes_of(clip):
 		mx = maxi(mx, n.id)

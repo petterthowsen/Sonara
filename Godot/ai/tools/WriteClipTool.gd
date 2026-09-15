@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Write notes into a named MIDI clip. Drum hits are 1-9 or x, rests are `.` — e.g. KICK |9 . . .|9 . . .|9 . . .|9 . . .|. Grids are diffed cell-by-cell (unchanged cells keep velocity and microtiming). Event lists must be ops: add / del / move / vel / len — never a rewritten list. All instances of this clip update together."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

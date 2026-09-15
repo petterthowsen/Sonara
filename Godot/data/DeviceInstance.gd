@@ -4,6 +4,8 @@
 
 class_name DeviceInstance extends RefCounted
 
+static var logger := Log.make("DeviceInstance")
+
 ## ============================================================================
 ## SIGNALS
 ## ============================================================================
@@ -70,7 +72,7 @@ var return_channel_id: int = -1
 var return_channel_ids: Array[int] = []
 
 ## Waveform pyramid when this instance is a Sampler (or other sample-loading device).
-var sample_waveform: DeviceWaveform = null
+var sample_waveform: WaveformPyramid = null
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
@@ -411,45 +413,6 @@ func close_gui() -> void:
 	AudioEngineOSC.send(osc_addr("gui/close"), [])
 
 
-## =========================================================================
-## VIEW FACTORY
-## =========================================================================
-
-## Create a DeviceView instance for the requested view type using
-## Device's PackedScene registrations. Returns null if unsupported.
-func create_view(view_type: Device.ViewType) -> DeviceView:
-	if device == null:
-		return null
-
-	var scene: PackedScene = null
-	match view_type:
-		Device.ViewType.Panel:
-			scene = device.panel_view_scene
-		Device.ViewType.Large:
-			scene = device.large_view_scene
-		Device.ViewType.Auxiliary:
-			scene = device.auxiliary_view_scene
-		Device.ViewType.Compact:
-			scene = device.compact_view_scene
-		_:
-			scene = null
-
-	if scene == null:
-		return null
-
-	var inst = scene.instantiate()
-	if not inst is DeviceView:
-		push_error("[DeviceInstance] View scene must extend DeviceView")
-		inst.queue_free()
-		return null
-
-	# Annotate the view type if supported
-	if inst.has_method("set_view_type"):
-		inst.set_view_type(view_type)
-
-	return inst
-
-
 ## Connect to audio engine and listen for state updates.
 ## Registers OSC listeners only; the file (if any) is loaded with a proper
 ## req_id by Channel.sync_to_engine()/_sync_device_tree_to_engine(), which
@@ -542,12 +505,12 @@ func _on_loading_state_received(values: Array) -> void:
 			if loading_state.begins_with("failed:"):
 				push_error("[DeviceInstance %s] Loading failed: %s" % [device.name, loading_state])
 			elif loading_state == "ready":
-				print("[DeviceInstance %s] Loading complete" % device.name)
+				logger.info("[%s] Loading complete" % device.name)
 
 
 func _on_gui_closed_received(_values: Array) -> void:
 	"""Handle GUI closed notification from engine."""
-	print("[DeviceInstance %s] Plugin GUI closed by engine" % device.name)
+	logger.info("[%s] Plugin GUI closed by engine" % device.name)
 	plugin_gui_closed.emit()
 
 
@@ -600,7 +563,7 @@ func _on_param_count_received(args: Array) -> void:
 	parameters.clear()
 	parameter_values.clear()
 	
-	print("[DeviceInstance %s] Expecting %d parameters" % [device.name, count])
+	logger.debug("[%s] Expecting %d parameters" % [device.name, count])
 
 
 func _on_param_info_received(args: Array) -> void:
@@ -626,12 +589,12 @@ func _on_param_info_received(args: Array) -> void:
 	
 	parameter_values[param_id] = _value_for_advertised_param(param_id, param)
 	
-	print("[DeviceInstance %s] Param %d: %s [%.2f - %.2f, default %.2f]" % 
+	logger.debug("[%s] Param %d: %s [%.2f - %.2f, default %.2f]" %
 		[device.name, param_id, param_name, min_val, max_val, default_val])
-	
+
 	# Check if we've received all expected parameters
 	if parameters.size() >= _expected_param_count and _expected_param_count > 0:
-		print("[DeviceInstance %s] All %d parameters loaded" % [device.name, _expected_param_count])
+		logger.debug("[%s] All %d parameters loaded" % [device.name, _expected_param_count])
 		_expected_param_count = 0  # Reset
 		_push_restored_parameters_to_engine()
 		parameters_updated.emit()
@@ -680,15 +643,15 @@ func sync_parameter_to_engine(param_id: int) -> void:
 		var normalized_value = parameter_values[param_id]
 		if param and param.param_type == "bool":
 			var idx: int = 1 if normalized_value >= 0.5 else 0
-			print("[DeviceInstance] send BOOL param_id=", param_id, " idx=", idx)
+			logger.debug("send BOOL param_id=", param_id, " idx=", idx)
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		elif param and param.param_type == "enum":
 			var n: int = max(1, param.enum_values.size())
 			var idx: int = int(round(normalized_value * float(n - 1)))
-			print("[DeviceInstance] send ENUM param_id=", param_id, " idx=", idx, " n=", n, " normalized=", normalized_value)
+			logger.debug("send ENUM param_id=", param_id, " idx=", idx, " n=", n, " normalized=", normalized_value)
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		else:
-			print("[DeviceInstance] send FLOAT param_id=", param_id, " normalized=", normalized_value)
+			logger.debug("send FLOAT param_id=", param_id, " normalized=", normalized_value)
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
 
 
@@ -698,16 +661,30 @@ func load_file(file_path: String) -> void:
 		push_error("[DeviceInstance] Device %s does not support file loading" % device.name)
 		return
 
-	print("[DeviceInstance] Loading file into %s: %s" % [device.name, file_path])
+	logger.info("Loading file into %s: %s" % [device.name, file_path])
 	loaded_file_path = file_path
 	if sample_waveform == null:
-		sample_waveform = DeviceWaveform.new()
+		sample_waveform = WaveformPyramid.new()
 	else:
 		sample_waveform.reset()
 	var req_id := "device:%s:%d" % [id, Time.get_ticks_usec()]
-	if Sonara.editor and Sonara.editor.project:
-		Sonara.editor.project.track_device_request(self, req_id)
+	var channel := get_channel()
+	var project := channel.get_project() if channel else null
+	if project:
+		project.track_device_request(self, req_id)
+	else:
+		logger.warn("load_file on %s before it is on a project channel; waveform won't be tracked" % name)
 	AudioEngineOSC.send(osc_addr("load_file"), [file_path, req_id])
+
+
+## Remember `file_path` for an instance that is not on a channel yet. Channel.add_device()
+## loads it right after telling the engine to create the device (or on connect when offline),
+## so callers never have to wait for the engine before loading.
+func queue_file_load(file_path: String) -> void:
+	if device == null or not device.supports_file_loading:
+		push_error("[DeviceInstance] Device %s does not support file loading" % (device.name if device else "?"))
+		return
+	loaded_file_path = file_path
 
 
 ## Send Layer/Drum slot controls to the engine (no-op for other parents).
@@ -806,7 +783,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	var loaded_device = AssetService.get_device(device_id)
 	
 	if not loaded_device:
-		print("[DeviceInstance] Device not found (may need plugin scan): %s" % device_id)
+		logger.warn("Device not found (may need plugin scan): %s" % device_id)
 		return null
 	
 	var chan_id = data.get("channel_id", 0)

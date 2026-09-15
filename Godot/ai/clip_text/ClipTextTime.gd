@@ -3,9 +3,9 @@
 class_name ClipTextTime extends RefCounted
 
 
-## Ticks in one bar. Matches Editor.ticks_to_bbt (PPQ × numerator).
-static func ticks_per_bar(ppq: int, numerator: int) -> int:
-	return maxi(1, ppq) * maxi(1, numerator)
+## Ticks in one bar. Beats are 1/denominator notes (see GridHelper.bar_ticks).
+static func ticks_per_bar(ppq: int, numerator: int, denominator: int = 4) -> int:
+	return GridHelper.bar_ticks(ppq, numerator, denominator)
 
 
 ## Ticks per grid step for a `1/N` resolution (N subdivisions of a whole note).
@@ -15,8 +15,8 @@ static func ticks_per_step(ppq: int, res_denom: int) -> int:
 
 
 ## Grid steps in one beat at this resolution.
-static func steps_per_beat(ppq: int, res_denom: int) -> int:
-	return maxi(1, maxi(1, ppq) / ticks_per_step(ppq, res_denom))
+static func steps_per_beat(ppq: int, res_denom: int, denominator: int = 4) -> int:
+	return maxi(1, GridHelper.beat_ticks(ppq, denominator) / ticks_per_step(ppq, res_denom))
 
 
 ## Parse `1/16` / `16` into the resolution denominator. Defaults to 16.
@@ -36,36 +36,36 @@ static func format_res(res_denom: int) -> String:
 
 
 ## Clip-local bar.beat.tick (1-based bar/beat, tick within the beat).
-static func ticks_to_bbt(ticks: int, ppq: int, numerator: int) -> Dictionary:
-	var tpb := ticks_per_bar(ppq, numerator)
-	var p := maxi(1, ppq)
+static func ticks_to_bbt(ticks: int, ppq: int, numerator: int, denominator: int = 4) -> Dictionary:
+	var tpb := ticks_per_bar(ppq, numerator, denominator)
+	var beat_t := GridHelper.beat_ticks(ppq, denominator)
 	var t := maxi(0, ticks)
 	@warning_ignore("integer_division")
 	var bar := t / tpb
 	var rem := t % tpb
 	@warning_ignore("integer_division")
-	var beat := rem / p
-	var tick := rem % p
+	var beat := rem / beat_t
+	var tick := rem % beat_t
 	return {"bar": bar + 1, "beat": beat + 1, "tick": tick}
 
 
 ## Inverse of ticks_to_bbt. Bar and beat are 1-based.
-static func bbt_to_ticks(bar: int, beat: int, tick: int, ppq: int, numerator: int) -> int:
-	var tpb := ticks_per_bar(ppq, numerator)
-	var p := maxi(1, ppq)
+static func bbt_to_ticks(bar: int, beat: int, tick: int, ppq: int, numerator: int, denominator: int = 4) -> int:
+	var tpb := ticks_per_bar(ppq, numerator, denominator)
+	var beat_t := GridHelper.beat_ticks(ppq, denominator)
 	var b := maxi(1, bar)
 	var be := maxi(1, beat)
-	return (b - 1) * tpb + (be - 1) * p + maxi(0, tick)
+	return (b - 1) * tpb + (be - 1) * beat_t + maxi(0, tick)
 
 
 ## `5.1.000` (bar.beat.tick). Tick is zero-padded to 3.
-static func format_bbt(ticks: int, ppq: int, numerator: int) -> String:
-	var bbt := ticks_to_bbt(ticks, ppq, numerator)
+static func format_bbt(ticks: int, ppq: int, numerator: int, denominator: int = 4) -> String:
+	var bbt := ticks_to_bbt(ticks, ppq, numerator, denominator)
 	return "%d.%d.%03d" % [bbt.bar, bbt.beat, bbt.tick]
 
 
 ## Parse `5.1.000`, `5:1:000`, or a bare bar number. -1 on failure.
-static func parse_bbt(text: String, ppq: int, numerator: int) -> int:
+static func parse_bbt(text: String, ppq: int, numerator: int, denominator: int = 4) -> int:
 	var s := text.strip_edges()
 	if s.is_empty():
 		return -1
@@ -82,7 +82,7 @@ static func parse_bbt(text: String, ppq: int, numerator: int) -> int:
 		beat = maxi(1, parts[1].to_int())
 	if parts.size() >= 3:
 		tick = maxi(0, parts[2].to_int())
-	return bbt_to_ticks(bar, beat, tick, ppq, numerator)
+	return bbt_to_ticks(bar, beat, tick, ppq, numerator, denominator)
 
 
 ## Inclusive bar range `5-8` → `{start:5, end:8, bars:4}`. Also accepts `2` as 1–2.
@@ -112,8 +112,8 @@ static func format_bars(bar_count: int) -> String:
 
 
 ## Clip length in whole bars (at least 1), rounded up from ticks.
-static func bars_from_ticks(ticks: int, ppq: int, numerator: int) -> int:
-	var tpb := ticks_per_bar(ppq, numerator)
+static func bars_from_ticks(ticks: int, ppq: int, numerator: int, denominator: int = 4) -> int:
+	var tpb := ticks_per_bar(ppq, numerator, denominator)
 	return maxi(1, ceili(float(maxi(0, ticks)) / float(tpb)))
 
 

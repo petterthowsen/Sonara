@@ -92,7 +92,7 @@ func set_position(ticks: int) -> void:
 		start_ticks = ticks
 
 		# Sync to audio engine if we have track reference
-		if track and track._is_connected:
+		if track and track.is_engine_connected():
 			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
 
 		position_changed.emit(start_ticks)
@@ -105,7 +105,7 @@ func set_duration(ticks: int) -> void:
 		duration_ticks = max(1, ticks)  # Minimum 1 tick
 
 		# Sync to audio engine if we have track reference
-		if track and track._is_connected:
+		if track and track.is_engine_connected():
 			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
 
 		duration_changed.emit(duration_ticks)
@@ -118,7 +118,7 @@ func set_clip_offset(offset: int) -> void:
 		clip_offset = max(0, offset)  # Minimum 0 ticks
 
 		# Sync to audio engine if we have track reference
-		if track and track._is_connected:
+		if track and track.is_engine_connected():
 			AudioEngineOSC.send("/track/%d/instance/%s/set_position" % [track.id, id], [start_ticks, duration_ticks, clip_offset])
 
 		instance_modified.emit()
@@ -160,81 +160,6 @@ func get_effective_color() -> Color:
 	if clip:
 		return clip.color
 	return Color.WHITE
-
-
-# ============================================================================
-# MIDI NOTE RESOLUTION
-# ============================================================================
-
-func get_midi_notes_for_playback(project_start_tick: int, project_end_tick: int) -> Array[Dictionary]:
-	"""
-	Get MIDI notes from the referenced clip, adjusted for this instance's position and settings.
-	Returns array of dictionaries with absolute timeline positions and transposition applied.
-	Applies clip_offset to only play a portion of the clip.
-	"""
-	if not clip or clip.type != Clip.ClipType.MIDI:
-		return []
-
-	var notes: Array[Dictionary] = []
-
-	# Calculate which part of the instance is being played
-	var instance_start = start_ticks
-	var instance_end = get_end_ticks()
-
-	# Clip to requested range
-	var play_start = max(project_start_tick, instance_start)
-	var play_end = min(project_end_tick, instance_end)
-
-	if play_start >= play_end:
-		return []  # Instance not in requested range
-
-	# Convert to local instance time (relative to instance start)
-	var local_start = play_start - instance_start
-	var local_end = play_end - instance_start
-
-	# Get notes from clip, applying clip_offset and loop logic
-	for midi_note in clip.midi_notes:
-		# Apply clip_offset: only consider notes that are at or after the offset
-		var note_start = midi_note.start_tick - clip_offset
-		var note_end = midi_note.get_end_tick() - clip_offset
-		
-		# Skip notes that are before the clip_offset
-		if note_end <= 0:
-			continue
-
-		# Handle looping
-		if loop_enabled:
-			# Calculate which loop iteration(s) this note appears in
-			var loop_len = loop_length_ticks if loop_length_ticks > 0 else clip.content_length_ticks
-			var iterations = ceili(float(duration_ticks) / float(loop_len))
-
-			for i in range(iterations):
-				var offset = i * loop_len
-				var instance_note_start = note_start + offset
-				var instance_note_end = note_end + offset
-
-				# Check if this iteration's note is in range
-				if instance_note_start < local_end and instance_note_end > local_start:
-					# Add note with absolute timeline position
-					notes.append({
-						"note": midi_note.note + transpose,
-						"velocity": midi_note.velocity,
-						"start_ticks": instance_start + instance_note_start,
-						"duration_ticks": midi_note.duration_ticks,
-						"engine_note_id": midi_note.engine_note_id
-					})
-		else:
-			# No looping - just check if note is in range
-			if note_start < local_end and note_end > local_start:
-				notes.append({
-					"note": midi_note.note + transpose,
-					"velocity": midi_note.velocity,
-					"start_ticks": instance_start + note_start,
-					"duration_ticks": midi_note.duration_ticks,
-					"engine_note_id": midi_note.engine_note_id
-				})
-
-	return notes
 
 
 # ============================================================================

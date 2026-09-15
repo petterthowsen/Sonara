@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Delete a track by id. Undoable. Does not delete the linked mixer channel."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

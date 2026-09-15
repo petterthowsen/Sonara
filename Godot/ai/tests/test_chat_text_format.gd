@@ -1,13 +1,13 @@
 # test_chat_text_format.gd
-# Run: godot --headless --path Godot -s ai/tests/test_chat_text_format.gd
-extends SceneTree
+# Run: godot --headless --path Godot -s ai/tests/test_chat_text_format.gd -- --test
+extends TestBase
 
 
-var _failures: int = 0
+func suite_name() -> String:
+	return "ChatTextFormat tests"
 
 
-func _init() -> void:
-	print("=== ChatTextFormat tests ===")
+func run_tests() -> void:
 	_test_escape_bbcode()
 	_test_pretty_json()
 	_test_json_highlights_keys()
@@ -17,17 +17,6 @@ func _init() -> void:
 	_test_message_link()
 	_test_message_list()
 	_test_message_heading()
-	if _failures == 0:
-		print("=== ALL PASSED ===")
-	else:
-		print("=== FAILED: %d ===" % _failures)
-	quit(_failures)
-
-
-func _assert(cond: bool, msg: String) -> void:
-	if not cond:
-		_failures += 1
-		push_error("FAIL: " + msg)
 
 
 func _test_escape_bbcode() -> void:

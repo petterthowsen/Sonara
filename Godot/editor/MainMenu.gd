@@ -2,6 +2,8 @@
 # It handles signals and actions by itself and calls various Editor.gd methods (open project, undo etc.) 
 class_name MainMenu extends MenuBar
 
+var logger : Log = Log.make("MainMenu")
+
 enum  MENU { File, Edit, AI }
 
 enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
@@ -163,7 +165,7 @@ func _on_new_project() -> void:
 	new_project.project_name = "Untitled"
 	new_project.created_date = Time.get_unix_time_from_system()
 	Sonara.editor.open_project(new_project)
-	print("[MainMenu] New project created")
+	logger.info("[MainMenu] New project created")
 
 
 func _on_open_project() -> void:
@@ -222,7 +224,7 @@ func _on_quit() -> void:
 	"""Quit application."""
 	# TODO: Prompt to save if modified
 	if Sonara.editor.is_modified:
-		print("[MainMenu] Warning: Quitting without saving")
+		logger.warn("[MainMenu] Quitting without saving")
 
 	# Delegate shutdown to Editor for unified behavior
 	Sonara.editor.quit()
@@ -246,13 +248,13 @@ func _on_redo() -> void:
 
 func _on_scan_plugins() -> void:
 	"""Trigger plugin scan via AssetService."""
-	print("[MainMenu] Scanning plugins...")
+	logger.info("[MainMenu] Scanning plugins...")
 	AssetService.scan_plugins()
 
 
 func _on_scan_assets() -> void:
 	"""Trigger asset rescan (audio, MIDI, SFZ, etc.) via AssetService."""
-	print("[MainMenu] Scanning assets...")
+	logger.info("[MainMenu] Scanning assets...")
 	AssetService.scan()
 
 
@@ -269,9 +271,9 @@ func _on_test_connection() -> void:
 	_ensure_ai_client()
 	_ai_client.configure_from_settings()
 	if not _ai_client.has_api_key():
-		print("[AI] Test Connection failed: OpenRouter API key is not set. Add it in Settings → AI.")
+		logger.error("[AI] Test Connection failed: OpenRouter API key is not set. Add it in Settings → AI.")
 		return
-	print("[AI] Test Connection: sending ping…")
+	logger.info("[AI] Test Connection: sending ping…")
 	_ai_client.test_connection()
 
 
@@ -284,22 +286,22 @@ func _ensure_ai_client() -> void:
 	_ai_client.text_delta.connect(_on_ai_test_delta)
 	_ai_client.message_finished.connect(_on_ai_test_finished)
 	_ai_client.request_failed.connect(_on_ai_test_failed)
-	_ai_client.request_cancelled.connect(func(): print("[AI] Test Connection cancelled"))
+	_ai_client.request_cancelled.connect(func(): logger.info("[AI] Test Connection cancelled"))
 
 
 ## Streamed assistant text for the connection smoke test.
 func _on_ai_test_delta(text: String) -> void:
-	print("[AI] Test Connection delta: ", text)
+	logger.info("[AI] Test Connection delta: ", text)
 
 
 ## Completed assistant message from Test Connection.
 func _on_ai_test_finished(message: ChatTypes.ORChatMessage) -> void:
-	print("[AI] Test Connection: ", message.get_text())
+	logger.info("[AI] Test Connection: ", message.get_text())
 
 
 ## Failed Test Connection (401, network, missing key).
 func _on_ai_test_failed(error: ChatTypes.ORChatError) -> void:
-	print("[AI] Test Connection failed: ", error.message)
+	logger.error("[AI] Test Connection failed: ", error.message)
 
 
 # ============================================================================

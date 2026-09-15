@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Set a track color from a hex string such as #4a90d9."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

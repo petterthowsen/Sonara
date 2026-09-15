@@ -56,8 +56,7 @@ func _duplicate_clip(source: Clip) -> Clip:
 	if source.type == Clip.ClipType.MIDI:
 		for note in source.midi_notes:
 			var nn := MidiNoteData.new()
-			nn.id = project.next_note_id
-			project.next_note_id += 1
+			nn.id = project.allocate_note_id()
 			nn.note = note.note
 			nn.velocity = note.velocity
 			nn.start_tick = note.start_tick
@@ -92,6 +91,6 @@ func _duplicate_clip(source: Clip) -> Clip:
 
 ## Resync the instance on the engine after retargeting the clip.
 func _resync_instance() -> void:
-	if instance.track and instance.track._is_connected:
+	if instance.track and instance.track.is_engine_connected():
 		instance.track._clear_clip_instance_from_engine(instance)
 		instance.track._sync_clip_instance_to_engine(instance)

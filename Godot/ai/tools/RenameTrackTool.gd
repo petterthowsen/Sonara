@@ -10,10 +10,6 @@ func get_description() -> String:
 	return "Rename a track by id. If the track syncs name from its channel, the channel is renamed too."
 
 
-func is_read_only() -> bool:
-	return false
-
-
 func get_parameters() -> Dictionary:
 	return {
 		"type": "object",

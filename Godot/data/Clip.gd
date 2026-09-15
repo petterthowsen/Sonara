@@ -5,6 +5,8 @@
 
 class_name Clip extends RefCounted
 
+static var logger := Log.make("Clip")
+
 enum ClipType { AUDIO, MIDI }
 enum LoadState { UNLOADED, LOADING, READY, FAILED }
 
@@ -42,16 +44,33 @@ var midi_events: Array[MidiEvent] = []  # CC, program change, etc.
 
 # Audio data (for audio clips)
 var audio_file_path: String = ""
-var audio_sample_rate: int = 44100
-var audio_channels: int = 2
-var audio_frames: int = 0  # Total frame count (per channel)
-var audio_duration_seconds: float = 0.0
 var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
-var waveform_cache_key: String = ""  # Cache file identifier/key
-var waveform_cache_path: String = ""  # Full filesystem path to waveform cache file
 
-var audio_waveform: MultiResWaveform = null  # Cached multi-resolution waveforms
-var _waveform_cache_reader: WaveformCacheReader = null  # Cached reader for the waveform file
+## Decoded audio metadata and multi-resolution waveform (shared ingest with Sampler devices).
+var waveform: WaveformPyramid = WaveformPyramid.new()
+
+# Forwarded to `waveform` so callers and serialization keep using the clip fields.
+var audio_sample_rate: int:
+	get: return waveform.audio_sample_rate
+	set(value): waveform.audio_sample_rate = value
+var audio_channels: int:
+	get: return waveform.audio_channels
+	set(value): waveform.audio_channels = value
+var audio_frames: int:  # Total frame count (per channel)
+	get: return waveform.audio_frames
+	set(value): waveform.audio_frames = value
+var audio_duration_seconds: float:
+	get: return waveform.audio_duration_seconds
+	set(value): waveform.audio_duration_seconds = value
+var waveform_cache_key: String:  # Cache file identifier/key
+	get: return waveform.waveform_cache_key
+	set(value): waveform.waveform_cache_key = value
+var waveform_cache_path: String:  # Full filesystem path to waveform cache file
+	get: return waveform.waveform_cache_path
+	set(value): waveform.waveform_cache_path = value
+var audio_waveform: MultiResWaveform:  # Cached multi-resolution waveforms
+	get: return waveform.audio_waveform
+	set(value): waveform.audio_waveform = value
 
 # Async load tracking
 var load_state: LoadState = LoadState.UNLOADED
@@ -96,24 +115,11 @@ func update_load_progress(value: float) -> void:
 
 
 func set_waveform_cache(path: String, cache_key: String) -> void:
-	# Clear cached reader if switching to a different cache file
-	if path != waveform_cache_path:
-		_waveform_cache_reader = null
-	waveform_cache_path = path
-	waveform_cache_key = cache_key
+	waveform.set_waveform_cache(path, cache_key)
 
 
 func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_seconds: float = -1.0) -> void:
-	audio_sample_rate = max(1, sample_rate)
-	audio_channels = max(1, channels)
-	audio_frames = max(0, frames)
-	if duration_seconds >= 0.0:
-		audio_duration_seconds = duration_seconds
-	elif audio_sample_rate > 0:
-		audio_duration_seconds = float(audio_frames) / float(audio_sample_rate)
-	else:
-		audio_duration_seconds = 0.0
-	clip_modified.emit()
+	waveform.set_audio_metadata(sample_rate, channels, frames, duration_seconds)
 
 
 func update_content_length_from_metadata(project_tempo: float, project_ppq: int) -> void:
@@ -129,82 +135,12 @@ func update_content_length_from_metadata(project_tempo: float, project_ppq: int)
 
 
 func ensure_audio_waveform() -> void:
-	"""Initialize audio_waveform if not already created."""
-	if audio_waveform == null:
-		audio_waveform = MultiResWaveform.new()
+	waveform.ensure_audio_waveform()
 
 
+## Read one pyramid level from the engine cache file. False lets Project retry.
 func ingest_waveform_level_from_cache(level: int, block_size: int, num_blocks: int) -> bool:
-	"""Load a waveform level from cache file and populate audio_waveform.
-
-	Reads peak/RMS data from the waveform cache file for the specified resolution level
-	and adds it to the multi-resolution pyramid. Called progressively as each level
-	becomes available from the audio engine.
-
-	Args:
-		level: Resolution level index (0 = highest resolution)
-		block_size: Number of audio frames per block at this resolution
-		num_blocks: Total number of blocks at this resolution
-
-	Returns:
-		true on success, false on failure (allows retry logic in Project.gd)
-	"""
-	# Ensure waveform container exists
-	ensure_audio_waveform()
-
-	# Validate cache file exists
-	if waveform_cache_path.is_empty() or not FileAccess.file_exists(waveform_cache_path):
-		push_error("[Clip] Waveform cache file not found: %s" % waveform_cache_path)
-		return false
-
-	# Load cache file once and reuse reader for all levels
-	if _waveform_cache_reader == null:
-		_waveform_cache_reader = WaveformCacheReader.new()
-		if not _waveform_cache_reader.load(waveform_cache_path):
-			push_error("[Clip] Failed to open waveform cache: %s" % waveform_cache_path)
-			_waveform_cache_reader = null
-			return false
-
-	# Read this specific resolution level from cache
-	var level_data = _waveform_cache_reader.read_level(level, audio_channels)
-	if level_data.is_empty():
-		push_error("[Clip] Failed to read level %d from cache" % level)
-		return false
-
-	# Create waveform object for this resolution level
-	var waveform = Waveform.new()
-	var channel_peaks = level_data.get("peaks", [])
-	var channel_rms = level_data.get("rms", [])
-
-	if level == 0:
-		print("[Clip] Level 0 peaks from cache: %d channels, ch0 has %d blocks" % [channel_peaks.size(), channel_peaks[0].size() if channel_peaks.size() > 0 else 0])
-
-	# Populate waveform with peak/RMS data
-	# Note: resolution is the samples per block (which is block_size in this context)
-	waveform.load_from_cache(block_size, audio_channels, num_blocks, channel_peaks, channel_rms)
-
-	if level == 0:
-		print("[Clip] After load_from_cache: waveform.num_blocks=%d, peak_data_left.size()=%d" % [waveform.num_blocks, waveform.peak_data_left.size()])
-
-	# Ensure levels array is large enough to hold this level
-	while audio_waveform.levels.size() <= level:
-		audio_waveform.levels.append(null)
-
-	# Add waveform to multi-resolution pyramid
-	audio_waveform.levels[level] = waveform
-	print_rich("[color=cyan][CLIP_INGEST][/color] Added level %d to pyramid. Peak data sizes: L=%d, R=%d. num_blocks=%d" % [
-		level,
-		waveform.peak_data_left.size(),
-		waveform.peak_data_right.size(),
-		waveform.num_blocks
-	])
-
-	# Notify listeners that a new level is ready (triggers UI redraw)
-	print_rich("[color=magenta][CLIP_INGEST][/color] EMITTING waveform_level_updated(level=%d)" % level)
-	waveform_level_updated.emit(level, self)
-	print_rich("[color=magenta][CLIP_INGEST][/color] Signal emitted, returning true")
-
-	return true
+	return waveform.ingest_waveform_level_from_cache(level, block_size, num_blocks)
 
 
 # ============================================================================
@@ -221,6 +157,17 @@ func _init(clip_id: String = ""):
 
 	created_date = Time.get_unix_time_from_system()
 	modified_date = created_date
+	# Bound methods, not lambdas: a lambda would hold a strong ref back to this clip.
+	waveform.waveform_level_updated.connect(_on_waveform_level_updated)
+	waveform.metadata_changed.connect(_on_waveform_metadata_changed)
+
+
+func _on_waveform_level_updated(level: int) -> void:
+	waveform_level_updated.emit(level, self)
+
+
+func _on_waveform_metadata_changed() -> void:
+	clip_modified.emit()
 
 
 func _generate_uuid() -> String:
@@ -255,7 +202,7 @@ func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, dura
 	midi_note.start_tick = start_tick
 	midi_note.duration_ticks = duration
 	midi_notes.append(midi_note)
-	_extend_content_length(end_tick)
+	extend_content_length(end_tick)
 
 	# Ensure clip exists on engine (create if needed)
 	_ensure_synced_to_engine()
@@ -306,13 +253,13 @@ func update_midi_note(midi_note: MidiNoteData) -> void:
 	Note: If the note is currently playing, the active voice won't change until
 	playback is stopped and restarted. Updates only affect future Note On events.
 	"""
-	_extend_content_length(midi_note.start_tick + midi_note.duration_ticks)
+	extend_content_length(midi_note.start_tick + midi_note.duration_ticks)
 
 	# Sync to audio engine if clip exists on engine
 	if _synced_to_engine:
 		var osc_path = "/clip/%s/update_note" % id
 		AudioEngineOSC.send(osc_path, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity])
-		print("[Clip] Updated note %d in clip %s: pitch=%d start=%d dur=%d" % [midi_note.id, id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks])
+		logger.info("[Clip] Updated note %d in clip %s: pitch=%d start=%d dur=%d" % [midi_note.id, id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks])
 	else:
 		push_warning("[Clip] Attempted to update note %d but clip %s not synced to engine!" % [midi_note.id, id])
 
@@ -339,7 +286,7 @@ func get_notes_in_range(start_tick: int, end_tick: int) -> Array[MidiNoteData]:
 	return notes
 
 
-func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tick: int, exclude_note_id: int = -1) -> Array[MidiNoteData]:
+func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tick: int, allocate_note_id: Callable, exclude_note_id: int = -1) -> Array[MidiNoteData]:
 	"""
 	Cut/trim existing notes at the given pitch that overlap with the new note range.
 	Returns an array of notes that were modified or removed.
@@ -348,6 +295,7 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		pitch: MIDI note number to check
 		new_start_tick: Start tick of the new/moved note
 		new_end_tick: End tick of the new/moved note
+		allocate_note_id: Returns a fresh note ID for split notes (Project.allocate_note_id)
 		exclude_note_id: Note ID to exclude from comparison (to avoid comparing a note against itself)
 	
 	Logic:
@@ -385,14 +333,12 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		
 		# Case 1: Existing note fully contains the new note -> split into two
 		if existing_note.start_tick < new_start_tick and existing_end_tick > new_end_tick:
-			print("[Clip] Splitting note %d (start=%d, end=%d) around new note (start=%d, end=%d)" % 
+			logger.info("[Clip] Splitting note %d (start=%d, end=%d) around new note (start=%d, end=%d)" % 
 				[existing_note.id, existing_note.start_tick, existing_end_tick, new_start_tick, new_end_tick])
 			
 			# Create the "after" portion (keep original ID for the first part)
 			var after_note = MidiNoteData.new()
-			if Sonara and Sonara.editor and Sonara.editor.project:
-				after_note.id = Sonara.editor.project.next_note_id
-				Sonara.editor.project.next_note_id += 1
+			after_note.id = allocate_note_id.call()
 			after_note.note = existing_note.note
 			after_note.velocity = existing_note.velocity
 			after_note.start_tick = new_end_tick
@@ -405,14 +351,14 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		
 		# Case 2: Existing note starts before new note -> trim its end
 		elif existing_note.start_tick < new_start_tick:
-			print("[Clip] Trimming end of note %d (was end=%d, now end=%d)" % 
+			logger.info("[Clip] Trimming end of note %d (was end=%d, now end=%d)" % 
 				[existing_note.id, existing_end_tick, new_start_tick])
 			existing_note.duration_ticks = new_start_tick - existing_note.start_tick
 			update_midi_note(existing_note)
 		
 		# Case 3: Existing note ends after new note -> trim its start
 		elif existing_end_tick > new_end_tick:
-			print("[Clip] Trimming start of note %d (was start=%d, now start=%d)" % 
+			logger.info("[Clip] Trimming start of note %d (was start=%d, now start=%d)" % 
 				[existing_note.id, existing_note.start_tick, new_end_tick])
 			existing_note.start_tick = new_end_tick
 			existing_note.duration_ticks = existing_end_tick - new_end_tick
@@ -420,7 +366,7 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		
 		# Case 4: Existing note is fully contained within new note -> remove it
 		else:
-			print("[Clip] Removing fully overlapped note %d" % existing_note.id)
+			logger.info("[Clip] Removing fully overlapped note %d" % existing_note.id)
 			midi_notes.remove_at(i)
 			if _synced_to_engine:
 				var osc_path = "/clip/%s/remove_note" % id
@@ -457,7 +403,7 @@ func get_content_length() -> int:
 
 
 ## Grow stored clip length when a note extends past it. Does not shrink on delete.
-func _extend_content_length(end_tick: int) -> void:
+func extend_content_length(end_tick: int) -> void:
 	if end_tick > content_length_ticks:
 		content_length_ticks = end_tick
 
@@ -535,49 +481,34 @@ func find_average_note() -> int:
 # ============================================================================
 
 func to_json() -> Dictionary:
-	return {
+	var data := JsonFields.write(self, JSON_FIELDS)
+	data.merge({
 		"id": id,
-		"name": name,
 		"type": ClipType.keys()[type],
-		"color": color.to_html(),
-		"content_length_ticks": content_length_ticks,
+		"color": Utils.color_to_json(color),
 		"midi_notes": _serialize_midi_notes(),
 		"midi_events": _serialize_midi_events(),
-		"audio_file_path": audio_file_path,
-		"audio_sample_rate": audio_sample_rate,
-		"audio_channels": audio_channels,
-		"audio_frames": audio_frames,
-		"audio_duration_seconds": audio_duration_seconds,
-		"waveform_cache_key": waveform_cache_key,
-		"recorded_bpm": recorded_bpm,
-		"created_date": created_date,
-		"modified_date": modified_date
-	}
+	})
+	return data
+
+
+## Plain fields copied by JsonFields; defaults come from the initializers.
+const JSON_FIELDS: Array[String] = [
+	"name", "content_length_ticks", "audio_file_path", "audio_sample_rate", "audio_channels",
+	"audio_frames", "audio_duration_seconds", "waveform_cache_key", "recorded_bpm",
+	"created_date", "modified_date",
+]
 
 
 static func from_json(data: Dictionary) -> Clip:
 	var clip_id = data.get("id", "")
 	var clip = Clip.new(clip_id)
 
-	clip.name = data.get("name", "Clip")
-
-	# Parse clip type
-	var type_str = data.get("type", "MIDI")
-	clip.type = ClipType.get(type_str) if ClipType.has(type_str) else ClipType.MIDI
-
-	clip.color = Color.from_string(data.get("color", "#4A90E2"), Color.BLUE)
-	clip.content_length_ticks = data.get("content_length_ticks", 3840)
+	clip.type = ClipType.get(str(data.get("type", "")), clip.type)
+	clip.color = Utils.color_from_json(data.get("color"), clip.color)
+	JsonFields.read(clip, data, JSON_FIELDS)
 	clip._deserialize_midi_notes(data.get("midi_notes", []))
 	clip._deserialize_midi_events(data.get("midi_events", []))
-	clip.audio_file_path = data.get("audio_file_path", "")
-	clip.audio_sample_rate = data.get("audio_sample_rate", 48000)
-	clip.audio_channels = data.get("audio_channels", 2)
-	clip.audio_frames = data.get("audio_frames", 0)
-	clip.audio_duration_seconds = data.get("audio_duration_seconds", 0.0)
-	clip.waveform_cache_key = data.get("waveform_cache_key", "")
-	clip.recorded_bpm = data.get("recorded_bpm", 120.0)
-	clip.created_date = data.get("created_date", 0)
-	clip.modified_date = data.get("modified_date", 0)
 	clip.load_state = LoadState.UNLOADED
 	clip.load_progress = 0.0
 
@@ -616,6 +547,16 @@ func _deserialize_midi_events(data: Array) -> void:
 # ENGINE SYNC
 # ============================================================================
 
+## True once this clip has been created on the audio engine.
+func is_synced_to_engine() -> bool:
+	return _synced_to_engine
+
+
+## Record that the clip was created on the engine by someone else (Project's full clip sync).
+func mark_synced_to_engine() -> void:
+	_synced_to_engine = true
+
+
 ## Ensure this clip has been created on the audio engine
 func _ensure_synced_to_engine() -> void:
 	"""Create clip on engine if it doesn't exist yet."""
@@ -625,4 +566,4 @@ func _ensure_synced_to_engine() -> void:
 	var clip_type_str = "midi" if type == Clip.ClipType.MIDI else "audio"
 	AudioEngineOSC.send("/clip/create", [id, clip_type_str, name])
 	_synced_to_engine = true
-	print("[Clip] Created clip %s on engine" % id)
+	logger.info("[Clip] Created clip %s on engine" % id)

@@ -3,6 +3,8 @@
 ## Those responsibilities belong to NoteEditor.
 class_name NoteSelectionManager extends RefCounted
 
+static var logger := Log.make("NoteSelectionManager")
+
 
 signal selection_changed(notes: Array[VisualNote])
 
@@ -98,17 +100,17 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 	# The box_selection_start_tick and box_selection_end_tick were already set by update_box_selection()
 
 	if selected_notes.is_empty():
-		print("[NoteSelectionManager] Box selection completed - no notes, boundaries at grid: %d-%d" % [
+		logger.info("Box selection completed - no notes, boundaries at grid: %d-%d" % [
 			box_selection_start_tick, box_selection_end_tick
 		])
 	else:
-		print("[NoteSelectionManager] Box selection completed - %d notes, boundaries at grid: %d-%d" % [
+		logger.info("Box selection completed - %d notes, boundaries at grid: %d-%d" % [
 			selected_notes.size(), box_selection_start_tick, box_selection_end_tick
 		])
 
 	selection_changed.emit(selected_notes)
 
-	print("[NoteSelectionManager] Ended box selection - %d notes selected (range: %d-%d ticks)" % [
+	logger.info("Ended box selection - %d notes selected (range: %d-%d ticks)" % [
 		selected_notes.size(), box_selection_start_tick, box_selection_end_tick
 	])
 
@@ -184,7 +186,7 @@ func toggle_note_selection(note: VisualNote) -> void:
 	selection_changed.emit(selected_notes)
 	#container.queue_redraw()
 
-	print("[NoteSelectionManager] Toggled note selection - %d notes selected (range: %d-%d)" % [
+	logger.info("Toggled note selection - %d notes selected (range: %d-%d)" % [
 		selected_notes.size(), box_selection_start_tick, box_selection_end_tick
 	])
 
@@ -256,12 +258,12 @@ func _update_selection_range() -> void:
 func copy_selection() -> void:
 	"""Copy selected notes to clipboard."""
 	if selected_notes.is_empty():
-		print("[NoteSelectionManager] No notes selected to copy")
+		logger.info("No notes selected to copy")
 		return
 
 	var selection_length = box_selection_end_tick - box_selection_start_tick
 	if selection_length <= 0:
-		print("[NoteSelectionManager] Cannot copy - invalid selection range")
+		logger.warn("Cannot copy - invalid selection range")
 		return
 
 	if box_selection_start_tick > 0 or box_selection_end_tick > 0:
@@ -273,7 +275,7 @@ func copy_selection() -> void:
 	else:
 		clipboard = NoteSelection.from_visual_notes(selected_notes)
 
-	print("[NoteSelectionManager] Copied %d notes (duration: %d ticks)" % [clipboard.notes.size(), clipboard.duration_ticks])
+	logger.info("Copied %d notes (duration: %d ticks)" % [clipboard.notes.size(), clipboard.duration_ticks])
 
 
 # Drawing removed - now handled by MidiEditor._draw()

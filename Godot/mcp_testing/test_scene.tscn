@@ -1,8 +1,0 @@
-[gd_scene format=3 uid="uid://cq7h70ktg1sy5"]
-
-[node name="test_scene" type="Node2D"]
-
-[node name="TestLabel" type="Label" parent="."]
-offset_right = 126.0
-offset_bottom = 23.0
-text = "Hello from MCP!"

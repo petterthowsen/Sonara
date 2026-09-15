@@ -97,8 +97,6 @@ var current_project: Project = null
 # Shared grid helper for timeline and ruler
 var grid_helper: GridHelper = GridHelper.new()  # Default grid helper instance
 
-var _timeline_tracks: Dictionary = {}   # Maps TimelineTrack to its corresponding Track
-
 # Signal for multi-track selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
@@ -128,16 +126,16 @@ func _ready():
 	h_scroll.get_h_scroll_bar().value_changed.connect(_on_h_scroll_changed)
 
 	# Connect custom TimelineScrollBar
-	print("[Arranger] timeline_scroll_bar: ", timeline_scroll_bar)
+	logger.info("timeline_scroll_bar: ", timeline_scroll_bar)
 	if timeline_scroll_bar:
 		timeline_scroll_bar.step = 1.0
 		timeline_scroll_bar.allow_greater = true
 		timeline_scroll_bar.allow_lesser = false
 		timeline_scroll_bar.grid_helper = grid_helper
 		timeline_scroll_bar.scroll_changed.connect(_on_timeline_scroll_bar_changed)
-		print("[Arranger] TimelineScrollBar configured and connected")
+		logger.info("TimelineScrollBar configured and connected")
 	else:
-		print("[Arranger] ERROR: timeline_scroll_bar is null!")
+		logger.error("ERROR: timeline_scroll_bar is null!")
 
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
@@ -181,7 +179,7 @@ func _on_mouse_entered() -> void:
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		return
 	
-	print("[Arranger] mouse entered")
+	logger.info("mouse entered")
 	grab_click_focus()
 	
 
@@ -190,7 +188,7 @@ func _on_mouse_exited() -> void:
 
 
 func _on_visibility_changed() -> void:
-	print("[Arranger] visibility changed")
+	logger.info("visibility changed")
 	if is_visible_in_tree():
 		grab_click_focus()
 		# When becoming visible after being hidden (e.g., mixer view active during project load),
@@ -579,7 +577,7 @@ func _on_add_track_pressed() -> void:
 	var new_channel: Channel = cmd.channel
 	if new_track and new_channel:
 		new_track.color = new_channel.color
-		print("[Arranger] Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
+		logger.info("Added track '%s' (ID %d) with channel (ID %d)" % [track_name, new_track.id, new_channel.id])
 
 
 func _on_add_folder_pressed() -> void:
@@ -600,7 +598,7 @@ func _on_add_folder_pressed() -> void:
 	HistoryUtil.execute(cmd)
 	var new_folder: Track = cmd.track
 	if new_folder:
-		print("[Arranger] Added folder '%s' (ID %d)" % [folder_name, new_folder.id])
+		logger.info("Added folder '%s' (ID %d)" % [folder_name, new_folder.id])
 
 
 ## Show or hide the bar/beat ruler row from the metronome toggle.
@@ -677,7 +675,7 @@ func _on_project_activated(project: Project) -> void:
 		ruler.start_position_requested.connect(_on_ruler_start_position_requested)
 		ruler.set_start_position(project.start_position_ticks)
 
-	print("[Arranger] Project activated: ", project.project_name)
+	logger.info("Project activated: ", project.project_name)
 
 
 func _on_project_closed() -> void:
@@ -710,8 +708,6 @@ func _unbind_from_project() -> void:
 		for track in current_project.tracks:
 			if track.height_changed.is_connected(_on_track_height_changed_for_layout):
 				track.height_changed.disconnect(_on_track_height_changed_for_layout)
-
-	_timeline_tracks.clear()
 
 	current_project = null
 
@@ -763,9 +759,6 @@ func _on_track_added(track: Track) -> void:
 
 	if not timeline_track.empty_area_clicked.is_connected(_on_timeline_track_clicked):
 		timeline_track.empty_area_clicked.connect(_on_timeline_track_clicked)
-	
-	# Store reference for later lookup
-	_timeline_tracks[timeline_track] = track
 	if not track.height_changed.is_connected(_on_track_height_changed_for_layout):
 		track.height_changed.connect(_on_track_height_changed_for_layout)
 	_sync_arranger_content_height()
@@ -776,13 +769,7 @@ func _on_track_removed(track: Track) -> void:
 	if track and track.height_changed.is_connected(_on_track_height_changed_for_layout):
 		track.height_changed.disconnect(_on_track_height_changed_for_layout)
 
-	# Remove from timeline_tracks mapping
-	for timeline_track in _timeline_tracks.keys():
-		if _timeline_tracks[timeline_track] == track:
-			_timeline_tracks.erase(timeline_track)
-			break
-
-	print("[Arranger] Cleaned up tracking for removed track: ", track.name)
+	logger.info("Cleaned up tracking for removed track: ", track.name)
 	_sync_arranger_content_height()
 
 
@@ -790,36 +777,7 @@ func _on_timeline_track_clicked(ticks: int, _pixels: float) -> void:
 	"""Handle timeline track click to set playhead position."""
 	if Sonara and Sonara.editor:
 		Sonara.editor.set_playhead(ticks)
-		print("[Arranger] Set playhead to tick %d" % ticks)
-
-
-func _get_track_index_at_position(global_position: Vector2) -> int:
-	"""Find which track is under the global mouse position."""
-	if not timeline:
-		return -1
-
-	# Convert global to local position in timeline
-	var local_pos = timeline.get_local_mouse_position()
-
-	# Find which TimelineTrack is under this position
-	for i in range(timeline.timeline_tracks.size()):
-		var timeline_track = timeline.timeline_tracks[i]
-		if not timeline_track:
-			continue
-
-		var track_rect = timeline_track.get_rect()
-		if track_rect.has_point(local_pos):
-			return i
-
-	return -1
-
-
-func _find_track_by_id(track_id: int) -> Track:
-	"""Find a track by its ID."""
-	for track in current_project.tracks:
-		if track.id == track_id:
-			return track
-	return null
+		logger.info("Set playhead to tick %d" % ticks)
 
 
 func _get_timeline_track_for_track(track: Track) -> TimelineTrack:
@@ -857,14 +815,14 @@ func _on_ruler_start_position_requested(ticks: int) -> void:
 		current_project.set_start_position(ticks)
 		if Sonara and Sonara.editor:
 			Sonara.editor.set_playhead(ticks)
-		print("[Arranger] Set start position to tick %d and seeked playhead" % ticks)
+		logger.info("Set start position to tick %d and seeked playhead" % ticks)
 
 
 ## Ctrl/Cmd click on the ruler sets the arranger time-range start (no playhead move).
 func _on_ruler_selection_start_requested(ticks: int) -> void:
 	if timeline and timeline.clip_selection_manager:
 		timeline.clip_selection_manager.set_range_start(ticks)
-		print("[Arranger] Ruler set selection start to tick %d" % ticks)
+		logger.info("Ruler set selection start to tick %d" % ticks)
 
 
 ## Ctrl/Cmd drag on the ruler starts a box select that spans every track lane.
@@ -874,7 +832,7 @@ func _on_ruler_box_select_started(content_x: float) -> void:
 	timeline.clip_selection_manager.start_box_selection(Vector2(content_x, 0.0), true)
 	var current_x := timeline.get_local_mouse_position().x
 	timeline.clip_selection_manager.update_box_selection(Vector2(current_x, 0.0))
-	print("[Arranger] Ruler box-select started at x=%.1f" % content_x)
+	logger.info("Ruler box-select started at x=%.1f" % content_x)
 
 
 ## Right-click empty timeline chrome (outside track lanes) hides the time range.

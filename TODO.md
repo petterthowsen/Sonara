@@ -11,20 +11,6 @@
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
 
-Done:
-
-- [x] Keep audio engine running after playback so instruments (PolySynth) and reverb/delay effects can settle after stopping
-- [x] Solo causes a sharp click
-- [x] RMS Metering
-- [x] Performance profiling: emit engine load metrics via OSC for UI display
-- [x] Mixing: reverb/delay tails on a routed bus cut off when playback pauses (verified live)
-- [x] Mixing: a bus or master that receives audio in more than one routing pass runs its devices and pan more than once per buffer (verified live with nested buses)
-  - Fix: routing and sends run in dependency order (`pending_inputs` in `MixBuffers`). Each channel finishes once, after all its inputs; route targets run devices even with no input, then pan, then route onward.
-- [x] Solo behavior: Bus channels should still sound when instrument/audio channels are soloed
-- [x] Solo behavior: Bus solo is a group solo (route feeders stay fully audible; send-only feeders keep the send and mute dry)
-  - Engine implemented; needs live verification
-- [x] Mixer channel sends do not sync bus names until send knob is touched
-
 ### Audio Thread
 
 - [ ] Remove the shared `Arc<Mutex<EngineState>>` (phase 2): the audio thread should own its state and drain a lock-free command queue, with removed objects sent back to be dropped off-thread
@@ -66,7 +52,6 @@ Done:
 - [x] Chain container (serial children + volume)
 - [x] Layer container (parallel mix, per-slot mute/solo)
 - [x] Sampler and Drum Machine devices
-- [x] Sampler ADSR (high prio — samples click without an envelope)
 
 ---
 
@@ -119,6 +104,8 @@ Done:
 ### Devices
 
 - [x] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code
+- [ ] `DrumMachineDefaultView._rebuild` connects `slot_changed` / `loading_state_changed` on child devices but never disconnects them when a child is removed from the drum machine
+- [ ] `CompactDevicePanel.setup()` does `await ready` unconditionally, so it hangs if the panel is already in the tree (use `if not is_node_ready(): await ready`)
 
 Done:
 

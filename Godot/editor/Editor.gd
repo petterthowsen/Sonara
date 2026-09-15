@@ -4,6 +4,8 @@
 
 class_name Editor extends MarginContainer
 
+var logger : Log = Log.make("Editor")
+
 # ============================================================================
 # SIGNALS - UI event notifications
 # ============================================================================
@@ -25,7 +27,6 @@ signal playback_stopped()
 signal playhead_moved(ticks: int)
 
 # Selection / Focus
-signal clip_instance_selected(instance: ClipInstance)  # DEPRECATED: Use clips_selected instead
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)  # Emitted when clip selection changes
 
 signal channel_focused(channel : Channel)
@@ -82,8 +83,6 @@ signal tracks_selected(tracks: Array[Track])
 # secondary panels
 @onready var device_lane : DeviceLane = $VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary/DeviceLane
 
-@onready var browser_panel: PanelContainer = find_child("BrowserPanel", true, false) as PanelContainer
-@onready var assistant_panel: Control = find_child("AssistantPanel", true, false)
 
 # ============================================================================
 # STATE
@@ -141,16 +140,6 @@ func _ready():
 	new_project.project_name = "Untitled"
 	new_project.created_date = Time.get_unix_time_from_system()
 	open_project(new_project)
-	
-	# for testing, create a instrument track
-	#project.create_instrument_track()
-
-	# Optionally auto-add PolySynth when advertised by engine (skip if not available yet)
-	#var channel := project.get_channel_by_id(2) #0 = null, 1 = master, 2 = first user channel
-	#var polysynth := AssetService.get_device("sonara.builtin.polysynth")
-	#if polysynth:
-	#	var device_instance := DeviceInstance.new(polysynth, channel.id, 0, true, true)
-	#	channel.add_device(device_instance)
 
 
 func _connect_ui_signals():
@@ -239,7 +228,7 @@ func _connect_audio_engine_signals():
 		AudioEngineOSC.listen("/status/playhead", _on_playhead_received)
 		AudioEngineOSC.listen("/status/playing", _on_playing_received)
 		AudioEngineOSC.engine_connected.connect(_on_audio_engine_connected)
-		print("[Editor] Connected to audio engine OSC signals")
+		logger.info("[Editor] Connected to audio engine OSC signals")
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Handle input actions."""
@@ -257,7 +246,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.shift_pressed:
 			if is_playing:
 				# Pause without seeking
-				pause_here()
+				pause()
 			else:
 				# Start playback from current position
 				play()
@@ -319,7 +308,7 @@ func open_project(p: Project) -> void:
 	if AudioEngineOSC:
 		_connect_project_to_engine.call_deferred()
 
-	print("[Editor] Project opened: ", project.project_name)
+	logger.info("[Editor] Project opened: ", project.project_name)
 
 
 func _connect_project_to_engine() -> void:
@@ -338,7 +327,7 @@ func close_project() -> void:
 
 	# TODO: Prompt to save if modified
 	if is_modified:
-		print("[Editor] Warning: Closing modified project without saving")
+		logger.warn("[Editor] Closing modified project without saving")
 
 	# Disconnect from audio engine
 	project.disconnect_from_engine()
@@ -353,7 +342,7 @@ func close_project() -> void:
 	selected_tracks.clear()
 
 	project_closed.emit()
-	print("[Editor] Project closed")
+	logger.info("[Editor] Project closed")
 
 func save_project(path: String = "") -> bool:
 	"""Save the current project to a file."""
@@ -389,7 +378,7 @@ func save_project(path: String = "") -> bool:
 	history.mark_save_point()
 
 	project_saved.emit(save_path)
-	print("[Editor] Project saved: ", save_path)
+	logger.info("[Editor] Project saved: ", save_path)
 	return true
 
 func load_project(path: String) -> bool:
@@ -414,7 +403,7 @@ func load_project(path: String) -> bool:
 	
 	open_project(loaded_project)
 	project_path = path
-	print("[Editor] Project loaded: ", path)
+	logger.info("[Editor] Project loaded: ", path)
 	return true
 
 # Note: Track and Channel management now done via Project methods
@@ -431,19 +420,14 @@ func play() -> void:
 
 	# Send play command to audio engine (it will update our state)
 	AudioEngineOSC.send("/transport/play", [])
-	print("[Editor] Play command sent to audio engine")
+	logger.info("[Editor] Play command sent to audio engine")
 
 
 func pause() -> void:
 	"""Pause playback (stops playing but keeps playhead position)."""
 	# Send pause command to audio engine (it will update our state)
 	AudioEngineOSC.send("/transport/pause", [])
-	print("[Editor] Pause command sent to audio engine")
-
-
-func pause_here() -> void:
-	"""Pause playback without seeking (keeps playhead where it is)."""
-	pause()
+	logger.info("[Editor] Pause command sent to audio engine")
 
 
 func stop() -> void:
@@ -451,7 +435,7 @@ func stop() -> void:
 	if is_playing:
 		# If playing, stop and seek to start_position
 		AudioEngineOSC.send("/transport/stop", [])
-		print("[Editor] Stop command sent to audio engine (seeking to start position)")
+		logger.info("[Editor] Stop command sent to audio engine (seeking to start position)")
 		if project:
 			set_playhead(project.start_position_ticks)
 	else:
@@ -459,7 +443,7 @@ func stop() -> void:
 		if project:
 			project.set_start_position(0)
 		set_playhead(0)
-		print("[Editor] Stop: reset start position and playhead to origin")
+		logger.info("[Editor] Stop: reset start position and playhead to origin")
 
 
 func set_playhead(ticks: int) -> void:
@@ -557,7 +541,7 @@ func switch_view() -> void:
 		current_view = View.ARRANGER
 	
 	_update_view_visibility()
-	print("[Editor] Switched to ", View.keys()[current_view], " view")
+	logger.info("[Editor] Switched to ", View.keys()[current_view], " view")
 
 
 func switch_extra_view() -> void:
@@ -568,7 +552,7 @@ func switch_extra_view() -> void:
 		current_view = View.EDITOR
 	
 	_update_view_visibility()
-	print("[Editor] Switched to ", View.keys()[current_view], " view")
+	logger.info("[Editor] Switched to ", View.keys()[current_view], " view")
 
 
 ## Show or hide the AI Chat dock panel without affecting other docked panels.
@@ -576,7 +560,7 @@ func toggle_assistant() -> void:
 	if dock_host == null:
 		return
 	dock_host.toggle_panel_visible("assistant")
-	print("[Editor] Assistant %s" % ("shown" if dock_host.is_panel_visible("assistant") else "hidden"))
+	logger.info("[Editor] Assistant %s" % ("shown" if dock_host.is_panel_visible("assistant") else "hidden"))
 
 
 ## Ensure the AI Chat panel is visible in a side dock.
@@ -586,7 +570,7 @@ func show_assistant() -> void:
 
 
 func toggle_device_lane():
-	print("toggglng device lane")
+	logger.info("toggglng device lane")
 	if seconday_panel.visible and device_lane.visible:
 		# hide device lane
 		device_lane.hide()
@@ -594,7 +578,7 @@ func toggle_device_lane():
 	else:
 		# show - fail if no channel is focused
 		if focused_channel == null:
-			print("[Editor] Cannot open device lane: no channel is focused")
+			logger.warn("[Editor] Cannot open device lane: no channel is focused")
 			return
 		
 		device_lane.show()
@@ -635,15 +619,10 @@ func _on_time_signature_changed(text: String) -> void:
 
 func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) -> void:
 	"""Handle clip selection from Arranger."""
-	print("[Editor] Clips selected: %d clips, multi_track=%s" % [clips.size(), multi_track])
+	logger.info("[Editor] Clips selected: %d clips, multi_track=%s" % [clips.size(), multi_track])
 	
 	# Emit new multi-clip signal
 	clips_selected.emit(clips, multi_track)
-	
-	# Also emit old single-clip signal for backwards compatibility (if any clips selected)
-	if not clips.is_empty():
-		var last := clips[-1]
-		clip_instance_selected.emit(last)
 
 
 # ============================================================================
@@ -714,7 +693,7 @@ func _update_transport_ui() -> void:
 	
 	# Update position display
 	if transport_position_label and project:
-		var bbt = ticks_to_bbt(playhead_ticks)
+		var bbt = GridHelper.bbt_of(playhead_ticks, project.ppq, project.time_numerator, project.time_denominator)
 		transport_position_label.text = "%d.%d.%d.%03d" % [bbt.bar, bbt.beat, bbt.sixteenth, bbt.tick]
 	
 	# Update time display
@@ -724,31 +703,6 @@ func _update_transport_ui() -> void:
 		var secs = int(seconds) % 60
 		var ms = int((seconds - int(seconds)) * 1000)
 		transport_time_label.text = "%02d:%02d.%03d" % [minutes, secs, ms]
-
-func ticks_to_bbt(ticks: int) -> Dictionary:
-	"""Convert ticks to bars/beats/sixteenths/ticks (4-number format like Bitwig)."""
-	if project == null:
-		return {"bar": 1, "beat": 1, "sixteenth": 1, "tick": 0}
-	
-	@warning_ignore("integer_division")
-	var ticks_per_bar = project.ppq * project.time_numerator
-	@warning_ignore("integer_division")
-	var bar = ticks / ticks_per_bar
-	var remaining = ticks % ticks_per_bar
-	
-	@warning_ignore("integer_division")
-	var beat = remaining / project.ppq
-	var beat_remainder = remaining % project.ppq
-	
-	# Sixteenth note = quarter of a beat (PPQ / 4)
-	@warning_ignore("integer_division")
-	var ticks_per_sixteenth = project.ppq / 4
-	@warning_ignore("integer_division")
-	var sixteenth = beat_remainder / ticks_per_sixteenth
-	var tick = beat_remainder % ticks_per_sixteenth
-	
-	return {"bar": bar + 1, "beat": beat + 1, "sixteenth": sixteenth + 1, "tick": tick}
-
 
 func ticks_to_seconds(ticks: int) -> float:
 	"""Convert ticks to seconds."""
@@ -814,7 +768,7 @@ func _process(delta: float) -> void:
 
 func _on_audio_engine_connected() -> void:
 	"""Called when audio engine connection is established."""
-	print("[Editor] Audio engine connected (project connection state: %s)" % (
+	logger.info("[Editor] Audio engine connected (project connection state: %s)" % (
 		"CONNECTED" if project and project.is_connected_to_engine() else 
 		"CONNECTING" if project and project.get_connection_state() == Project.ConnectionState.CONNECTING else
 		"DISCONNECTED"
@@ -828,7 +782,7 @@ func _on_playhead_received(values) -> void:
 	if values is Array and values.size() > 0:
 		tick_value = values[0]
 	else:
-		print("[Editor] WARNING: Unexpected playhead format: ", values)
+		logger.warn("[Editor] Unexpected playhead format: ", values)
 		return
 
 	audio_engine_playhead = tick_value
@@ -859,11 +813,11 @@ func _on_playing_received(values) -> void:
 		if playing:
 			playback_started.emit()
 			set_process(true)
-			print("[Editor] Playback started (from engine)")
+			logger.info("[Editor] Playback started (from engine)")
 		else:
 			playback_stopped.emit()
 			set_process(false)
-			print("[Editor] Playback stopped (from engine)")
+			logger.info("[Editor] Playback stopped (from engine)")
 
 
 # ============================================================================
