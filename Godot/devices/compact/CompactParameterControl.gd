@@ -176,7 +176,7 @@ func _on_slider_changed(value: float) -> void:
 		[parameter_id, old_value],
 		[parameter_id, value]
 	)
-	cmd.set_callable(func(args): device_instance.set_parameter_normalized(args[0], args[1])).set_unpack_array(true).set_mergeable(true)
+	cmd.set_callable(func(id, v): device_instance.set_parameter_normalized(id, v)).set_unpack_array(true).set_mergeable(true)
 	HistoryUtil.record(cmd)
 
 	# Update value display immediately for responsive feedback

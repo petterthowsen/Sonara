@@ -198,7 +198,7 @@ func _commit_envelope_param(param_id: int, value: float) -> void:
 		[param_id, old_value],
 		[param_id, new_value]
 	)
-	cmd.set_callable(func(args): device.set_parameter_normalized(args[0], args[1])).set_unpack_array(true).set_mergeable(true)
+	cmd.set_callable(func(id, v): device.set_parameter_normalized(id, v)).set_unpack_array(true).set_mergeable(true)
 	HistoryUtil.record(cmd)
 
 

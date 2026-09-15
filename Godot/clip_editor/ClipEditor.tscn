@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene load_steps=17 format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
@@ -9,6 +9,7 @@
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
+[ext_resource type="Texture2D" uid="uid://1sdwj750u4bc" path="res://assets/icons/headphones.svg" id="10_audit"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1nvnf"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -225,3 +226,9 @@ layout_mode = 2
 [node name="Quantize" type="Button" parent="BottomPanel/Toolbar"]
 layout_mode = 2
 text = "Quantize"
+
+[node name="AuditionToggle" type="Button" parent="BottomPanel/Toolbar"]
+layout_mode = 2
+tooltip_text = "Audition notes: clicking a note plays it on the track's instrument"
+toggle_mode = true
+icon = ExtResource("10_audit")

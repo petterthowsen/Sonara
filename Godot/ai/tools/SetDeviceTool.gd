@@ -38,12 +38,14 @@ func execute(args: Dictionary) -> Dictionary:
 			cmds.append(PropertyCommand.new("Set Bypass", inst, "set_enabled", inst.enabled, enabled))
 			changes.append("bypassed" if not enabled else "unbypassed")
 	if args.has("name"):
-		var new_name := str(args.name).strip_edges()
+		var new_name := name_arg(args, "name")
 		if new_name.is_empty():
 			return fail("name must not be empty")
-		if new_name != inst.name:
-			cmds.append(PropertyCommand.new("Rename Device", inst, "set_name", inst.name, new_name))
-			changes.append("renamed to \"%s\"" % new_name)
+		# Record the final (possibly suffixed) name so redo reapplies exactly that.
+		var final_name := inst.unique_name_for(new_name)
+		if final_name != inst.name:
+			cmds.append(PropertyCommand.new("Rename Device", inst, "set_name", inst.name, final_name))
+			changes.append("renamed to \"%s\"" % final_name)
 	if not cmds.is_empty():
 		HistoryUtil.execute_many("Set Device", cmds)
 	var data := compact_device(project, inst)

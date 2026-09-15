@@ -128,7 +128,7 @@ static func pad_spec_from(item: Variant) -> Dictionary:
 
 ## Fill empty pad name/note from the sample label; skip notes already used.
 static func resolve_pad_identity(spec: Dictionary, hint: String, used_notes: Dictionary) -> Dictionary:
-	var pad_name := str(spec.get("name", "")).strip_edges()
+	var pad_name := NameStyle.format(str(spec.get("name", "")))
 	var note := int(spec.get("note", -1))
 	var guess_src := pad_name if not pad_name.is_empty() else hint
 	if note < 0 or note > 127:
@@ -138,7 +138,7 @@ static func resolve_pad_identity(spec: Dictionary, hint: String, used_notes: Dic
 	if pad_name.is_empty() and note >= 0:
 		pad_name = ClipTextKey.drum_label(note)
 	elif pad_name.is_empty() and not hint.is_empty():
-		pad_name = DeviceNaming.sanitize(hint.replace("_", " ").replace("-", " "))
+		pad_name = NameStyle.format(DeviceNaming.sanitize(hint.replace("-", " ")))
 	return {"name": pad_name, "note": note}
 
 
@@ -348,7 +348,7 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 	var added := _find_added(host, before)
 	if added == null or added.device == null:
 		return AiTool.fail("Device was not added")
-	var extra_name := str(spec.get("name", "")).strip_edges()
+	var extra_name := NameStyle.format(str(spec.get("name", "")))
 	if not extra_name.is_empty():
 		added.set_name(extra_name)
 	return added

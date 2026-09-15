@@ -7,7 +7,7 @@ var logger : Log = Log.make("DevicePanel")
 
 # light button toggles inactive/active and enabled/disabled
 @onready var device_light: DeviceLightButton = $VBoxContainer/Header/HBox/DeviceLight
-@onready var name_label : Label = $VBoxContainer/Header/HBox/Name
+@onready var name_label : SmartLineEdit = $VBoxContainer/Header/HBox/Name
 @onready var tab_buttons : HBoxContainer = $VBoxContainer/Header/HBox/TabButtons
 @onready var params_button : Button = $VBoxContainer/Header/HBox/TabButtons/Parameters
 @onready var file_button: Button = $VBoxContainer/Header/HBox/TabButtons/File
@@ -78,6 +78,9 @@ func _ready() -> void:
 	# Connect file loading
 	file_load_button.pressed.connect(_on_load_file_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
+
+	# Inline rename of the device instance via the header's SmartLineEdit
+	name_label.value_changed.connect(_on_name_edited)
 
 	# Initial tab state: show Parameters on the left
 	params_button.button_pressed = true
@@ -188,9 +191,16 @@ func _unbind() -> void:
 ## Refresh the header when the instance is renamed.
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
-		name_label.text = new_name
+		name_label.set_value(new_name)
 	if _large_popup:
 		_large_popup.title = new_name
+
+
+## Commit an inline rename from the header's SmartLineEdit.
+func _on_name_edited(value) -> void:
+	if device == null:
+		return
+	name_label.set_value(DeviceActions.rename(device, str(value)))
 
 
 func bind_to_device(dev : DeviceInstance):
@@ -200,7 +210,7 @@ func bind_to_device(dev : DeviceInstance):
 	if not is_node_ready():
 		await ready
 	device_light.bind_to_device_instance(dev)
-	name_label.text = dev.get_display_name()
+	name_label.set_value(dev.get_display_name())
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)
 	# Listen for parameter list updates (when plugins load params asynchronously)

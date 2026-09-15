@@ -18,6 +18,7 @@ func get_parameters() -> Dictionary:
 			"track": {"type": "string", "description": "Track to place on (default: first existing placement's track)"},
 			"start": {"type": "string", "description": "bar.beat.tick or bar number. Default: range start, else 1.1.000 on an empty track, else the playhead's bar"},
 			"bars": {"type": "integer", "description": "Instance length in bars (default: clip length)"},
+			"overwrite": {"type": "boolean", "description": "Replace clips in the way instead of refusing (default false)"},
 		},
 		"required": ["clip"],
 	}
@@ -58,6 +59,8 @@ func execute(args: Dictionary) -> Dictionary:
 		return placement
 	var start: int = placement.start
 	var duration: int = placement.length
+	if bool(args.get("overwrite", false)):
+		HistoryUtil.record_many("Clear Clips", ClipRangeActions.clear(track, start, start + duration))
 	HistoryUtil.execute(ClipInstanceCreateCommand.new(
 		track, clip, start, duration, project, false
 	))

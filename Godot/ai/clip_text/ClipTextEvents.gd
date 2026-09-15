@@ -3,6 +3,10 @@
 class_name ClipTextEvents extends RefCounted
 
 
+const ADD_SYNTAX := "add <bar.beat.tick> <pitch[,pitch…]> <duration> [v<velocity>]"
+const ADD_EXAMPLE := "add 1.1.000 C3,E3,G3 1/2 v90"
+
+
 ## Serialize clip notes as an event list (`n12  1.1.000  C2  1/4  v104`).
 static func serialize(clip: Object, opts: Dictionary) -> String:
 	var ppq: int = int(opts.get("ppq", 960))
@@ -10,7 +14,7 @@ static func serialize(clip: Object, opts: Dictionary) -> String:
 	var denominator: int = int(opts.get("denominator", 4))
 	var notes: Array[MidiNoteData] = ClipTextGrid.notes_of(clip)
 	if notes.is_empty():
-		return "# empty — use add  bar.beat.tick  pitch  duration  vNN"
+		return "# empty — write with: %s" % ADD_EXAMPLE
 	notes.sort_custom(func(a, b): return a.start_tick < b.start_tick or (a.start_tick == b.start_tick and a.note > b.note))
 	var width := 1
 	for n in notes:
@@ -67,13 +71,14 @@ static func _apply_ops(clip: Object, project: Object, text: String, opts: Dictio
 	var denominator: int = int(opts.get("denominator", 4))
 	var key: Dictionary = opts.get("key", {})
 	var changes: Array = []
-	for raw in text.split("\n"):
-		var line := raw.strip_edges()
+	var lines := text.split("\n")
+	for i in range(lines.size()):
+		var line := lines[i].strip_edges()
 		if line.is_empty() or line.begins_with("#") or line.begins_with("clip "):
 			continue
 		var err := _apply_one(clip, project, line, ppq, numerator, denominator, key, changes)
 		if not err.is_empty():
-			return {"error": err, "changes": changes}
+			return {"error": "Line %d `%s`: %s" % [i + 1, line, err], "changes": changes}
 	return {"changes": changes}
 
 
@@ -108,7 +113,7 @@ static func _apply_one(
 	key: Dictionary,
 	changes: Array
 ) -> String:
-	var toks := _tokens(line)
+	var toks := _tokens(_join_chord_commas(line))
 	if toks.is_empty():
 		return ""
 	var verb := toks[0].to_lower()
@@ -137,29 +142,37 @@ static func _op_add(
 	key: Dictionary,
 	changes: Array
 ) -> String:
-	# add  6.3.000  Ab2  1/8  v76
-	if toks.size() < 5:
-		return "add needs: add <bar.beat.tick> <pitch> <duration> v<vel>"
+	# add  6.3.000  Ab2  1/8  v76   /   add  1.1.000  C3,E3,G3  1/2  v90
+	if toks.size() < 4 or toks.size() > 5:
+		return "expected %s, e.g. %s" % [ADD_SYNTAX, ADD_EXAMPLE]
 	var start := ClipTextTime.parse_bbt(toks[1], ppq, numerator, denominator)
-	if start < 0:
-		return "Bad start time: %s" % toks[1]
-	var pitch := ClipTextKey.parse_pitch(toks[2], key)
-	if pitch < 0:
-		return "Bad pitch: %s" % toks[2]
-	var dur := ClipTextTime.parse_duration(toks[3], ppq)
+	if start < 0 or not _looks_like_bbt(toks[1]):
+		return "bad start '%s' (bar.beat.tick, e.g. 3.2.240). Syntax: %s" % [toks[1], ADD_SYNTAX]
+	var pitches: Array[int] = []
+	for name in toks[2].split(",", false):
+		var pitch := ClipTextKey.parse_pitch(name, key)
+		if pitch < 0:
+			return "bad pitch '%s' (e.g. C3, F#2, Bb4; middle C = C3). Syntax: %s" % [name, ADD_SYNTAX]
+		pitches.append(pitch)
+	if pitches.is_empty():
+		return "bad pitch '%s'. Syntax: %s" % [toks[2], ADD_SYNTAX]
+	var dur := ClipTextTime.parse_duration(toks[3], ppq, denominator)
 	if dur < 0:
-		return "Bad duration: %s" % toks[3]
-	var vel := _parse_vel(toks[4])
-	if vel < 0:
-		return "Bad velocity: %s" % toks[4]
-	var note := ClipTextGrid._add_note(clip, project, pitch, start, dur, ClipTextKey.velocity_to_tier(vel))
-	if note == null:
-		return "Could not add note (overlap at %s)?" % toks[2]
-	# Preserve exact velocity (not the tier curve) for event-list writes.
-	if note.velocity != vel:
-		note.velocity = clampi(vel, 1, 127)
-		ClipTextGrid._touch_note(clip, note)
-	changes.append("add n%d %s" % [note.id, toks[2]])
+		return "bad duration '%s' (use %s). Syntax: %s" % [toks[3], ClipTextTime.DURATION_FORMS, ADD_SYNTAX]
+	var vel := 100
+	if toks.size() == 5:
+		vel = _parse_vel(toks[4])
+		if vel < 0:
+			return "bad velocity '%s' (v1–v127)" % toks[4]
+	for pitch in pitches:
+		var note := ClipTextGrid._add_note(clip, project, pitch, start, dur, ClipTextKey.velocity_to_tier(vel))
+		if note == null:
+			return "could not add %s at %s (overlaps a note of the same pitch)" % [Midi.midi_to_note_name(pitch), toks[1]]
+		# Preserve exact velocity (not the tier curve) for event-list writes.
+		if note.velocity != vel:
+			note.velocity = clampi(vel, 1, 127)
+			ClipTextGrid._touch_note(clip, note)
+		changes.append("add n%d %s" % [note.id, Midi.midi_to_note_name(pitch)])
 	return ""
 
 
@@ -189,6 +202,8 @@ static func _op_move(
 		return "No note %s" % toks[1]
 	var dest := toks[2]
 	if dest.begins_with("+") or dest.begins_with("-"):
+		if ClipTextTime.parse_duration(dest.substr(1), ppq) < 0:
+			return "bad move delta '%s' (e.g. +1/16, -2b, +240t)" % dest
 		note.start_tick = maxi(0, note.start_tick + ClipTextTime.parse_signed_delta(dest, ppq))
 	else:
 		var abs_t := ClipTextTime.parse_bbt(dest, ppq, numerator, denominator)
@@ -223,7 +238,7 @@ static func _op_len(clip: Object, toks: PackedStringArray, ppq: int, changes: Ar
 		return "No note %s" % toks[1]
 	var dur := ClipTextTime.parse_duration(toks[2], ppq)
 	if dur < 0:
-		return "Bad duration: %s" % toks[2]
+		return "bad duration '%s' (use %s)" % [toks[2], ClipTextTime.DURATION_FORMS]
 	note.duration_ticks = dur
 	ClipTextGrid._touch_note(clip, note)
 	changes.append("len %s %s" % [toks[1], toks[2]])
@@ -256,6 +271,18 @@ static func _parse_vel(token: String) -> int:
 	if not s.is_valid_int():
 		return -1
 	return clampi(s.to_int(), 1, 127)
+
+
+## `C3, E3 ,G3` → `C3,E3,G3` so a chord stays one token.
+static func _join_chord_commas(line: String) -> String:
+	var re := RegEx.create_from_string("\\s*,\\s*")
+	return re.sub(line, ",", true)
+
+
+## `1.1.000` / `2.3` / `5` — not a duration like `1/4` that parse_bbt would half-read.
+static func _looks_like_bbt(token: String) -> bool:
+	var re := RegEx.create_from_string("^\\d+([.:]\\d+){0,2}$")
+	return re.search(token) != null
 
 
 static func _first_token(line: String) -> String:

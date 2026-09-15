@@ -38,11 +38,7 @@ func unbind() -> void:
 func _on_label_changed(value) -> void:
 	if device == null:
 		return
-	var new_name := str(value).strip_edges()
-	if new_name.is_empty() or new_name == device.name:
-		return
-	HistoryUtil.execute_property("Rename Device", device, "set_name", device.name, new_name)
-	label.set_value(device.name)
+	label.set_value(DeviceActions.rename(device, str(value)))
 
 
 func _on_remove_pressed() -> void:

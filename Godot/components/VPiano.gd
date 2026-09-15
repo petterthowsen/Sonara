@@ -48,7 +48,40 @@ class_name VPiano extends Control
 			border_color = bc
 			queue_redraw()
 
+## Tint applied to the key under the mouse in the note area (or on the piano).
+@export var hover_color := Color(0.45, 0.55, 1.0, 0.35):
+	set(hc):
+		hover_color = hc
+		queue_redraw()
+
+## Fraction of the key width at each end that clamps to min/max velocity.
+@export_range(0.0, 0.45) var velocity_padding := 0.2
+
+## Emitted when a key is clicked (or entered while dragging) with a velocity
+## mapped from the horizontal click position: quiet at the left, loud at the right.
+signal key_pressed(note: int, velocity: int)
+signal key_released(note: int)
+
+## Note lane to highlight, -1 for none. Set by the owner (e.g. MidiEditor hover).
+var hovered_note := -1:
+	set(hn):
+		if hovered_note != hn:
+			hovered_note = hn
+			queue_redraw()
+
+## Key currently held down by the mouse, -1 for none.
+var pressed_note := -1:
+	set(pn):
+		if pressed_note != pn:
+			pressed_note = pn
+			queue_redraw()
+
 var logger := Log.make("VPiano")
+
+
+func _ready() -> void:
+	# Pass so wheel scroll/zoom and middle-drag panning still reach MidiEditor.
+	mouse_filter = Control.MOUSE_FILTER_PASS
 
 
 func _get_minimum_size() -> Vector2:
@@ -95,16 +128,103 @@ func note_has_label(note : int) -> bool:
 	return true
 
 
+## Key under a local position. Black keys sit on top, so they win where they overlap.
+func get_note_at_position(pos: Vector2) -> int:
+	if pos.x < 0 or pos.x > size.x or key_height <= 0:
+		return -1
+	var lane := clampi(127 - int(floor(pos.y / key_height)), 0, 127)
+	for note in [lane, lane + 1, lane - 1]:
+		if note >= 0 and note <= 127 and Midi.is_black_key(note) and get_note_rect(note).has_point(pos):
+			return note
+	for note in [lane, lane + 1, lane - 1]:
+		if note >= 0 and note <= 127 and not Midi.is_black_key(note) and get_note_rect(note).has_point(pos):
+			return note
+	return lane
+
+
+## Map a horizontal position across the key to a MIDI velocity (1-127).
+func get_velocity_at_position(note: int, x: float) -> int:
+	var width := float(get_note_width(note))
+	if width <= 0:
+		return 100
+	var usable := 1.0 - velocity_padding * 2.0
+	var t := clampf((x / width - velocity_padding) / usable, 0.0, 1.0)
+	return clampi(roundi(lerpf(1.0, 127.0, t)), 1, 127)
+
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				_press_at(mb.position)
+			else:
+				_release_pressed()
+			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			# Keep right-clicks from reaching MidiEditor's erase handling.
+			accept_event()
+	elif event is InputEventMouseMotion and pressed_note >= 0:
+		# Glide across keys while held.
+		var note := get_note_at_position(event.position)
+		if note >= 0 and note != pressed_note:
+			_release_pressed()
+			_press_at(event.position)
+		accept_event()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
+		_release_pressed()
+	elif what == NOTIFICATION_PREDELETE:
+		_release_pressed()
+
+
+func _press_at(pos: Vector2) -> void:
+	var note := get_note_at_position(pos)
+	if note < 0:
+		return
+	pressed_note = note
+	key_pressed.emit(note, get_velocity_at_position(note, pos.x))
+
+
+func _release_pressed() -> void:
+	if pressed_note < 0:
+		return
+	var note := pressed_note
+	pressed_note = -1
+	key_released.emit(note)
+
+
 func _draw_key(note : int):
 	var black = Midi.is_black_key(note)
 	var color = key_color_black if black else key_color_white
 	if invert_colors:
 		color = key_color_black if not black else key_color_white
 	
-	var note_rect = get_note_rect(note)
+	var note_rect: Rect2 = get_note_rect(note)
+	var is_pressed := note == pressed_note
+	
+	if is_pressed:
+		# Depressed: the key sinks back (shorter), darkens, and its front edge casts a shadow.
+		draw_rect(note_rect, color.darkened(0.25), true, -1.0, true)
+		note_rect = note_rect.grow_side(SIDE_RIGHT, -3.0)
+		color = color.darkened(0.12)
 	
 	# draw key
 	draw_rect(note_rect, color, true, -1.0, true)
+	
+	if note == hovered_note or is_pressed:
+		var hc := hover_color
+		if is_pressed:
+			hc.a = minf(1.0, hover_color.a * 1.6)
+		draw_rect(note_rect, hc, true, -1.0, true)
+	
+	if is_pressed:
+		var shadow := Color(0, 0, 0, 0.35)
+		var edge_x := note_rect.end.x
+		draw_rect(Rect2(edge_x - 2.0, note_rect.position.y, 2.0, note_rect.size.y), shadow, true, -1.0, false)
+		draw_rect(Rect2(note_rect.position.x, note_rect.position.y, note_rect.size.x, 2.0), shadow, true, -1.0, false)
 	
 	# draw border
 	if not black:
@@ -140,5 +260,3 @@ func _draw():
 	# border
 	if border_width > 0:
 		draw_line(Vector2(size.x, 0), Vector2(size.x, size.y), border_color, border_width, true)
-	
-	logger.info("drew ", count, " keys.")

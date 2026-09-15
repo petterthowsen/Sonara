@@ -25,6 +25,12 @@ var grid_helper : GridHelper = GridHelper.new()
 		border_color = c
 		queue_redraw()
 
+## Line between natural semitone neighbours (E/F and B/C).
+@export var semitone_border_color := Color("#3a3a3a"):
+	set(c):
+		semitone_border_color = c
+		queue_redraw()
+
 func _get_minimum_size() -> Vector2:
 	return Vector2(100, note_to_y_bottom(0))
 
@@ -55,3 +61,10 @@ func _draw_lanes():
 		
 		if note < 127:
 			draw_line(Vector2(0, bottom), Vector2(size.x, bottom), border_color, 0.5, true)
+
+	# E/F and B/C boundaries: the bottom edge of every F and C lane.
+	for note in 128:
+		var n = Midi.get_note_in_octave(note)
+		if note > 0 and (n == 0 or n == 5):
+			var bottom = note_to_y_bottom(note)
+			draw_line(Vector2(0, bottom), Vector2(w, bottom), semitone_border_color, 1.0, false)

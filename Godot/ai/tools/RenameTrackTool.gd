@@ -28,7 +28,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var track = resolve_track(project, args)
 	if track is Dictionary:
 		return track
-	var new_name := str(args.get("new_name", "")).strip_edges()
+	var new_name := name_arg(args, "new_name")
 	if new_name.is_empty():
 		return fail("new_name is required")
 	var old_name: String = track.name

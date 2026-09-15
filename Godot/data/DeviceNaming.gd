@@ -11,13 +11,13 @@ static func sanitize(raw: String, fallback: String = "Device") -> String:
 	return s if not s.is_empty() else fallback
 
 
-## True when `candidate` matches an existing name (case-insensitive).
+## True when `candidate` matches an existing name under `NameStyle.key` (case, `_` and spacing ignored).
 static func is_taken(existing: PackedStringArray, candidate: String) -> bool:
-	var key := candidate.strip_edges().to_lower()
+	var key := NameStyle.key(candidate)
 	if key.is_empty():
 		return false
 	for n in existing:
-		if str(n).strip_edges().to_lower() == key:
+		if NameStyle.key(str(n)) == key:
 			return true
 	return false
 
@@ -43,9 +43,9 @@ static func split_path(path: String) -> PackedStringArray:
 	return out
 
 
-## Case-insensitive name equality.
+## Name equality under `NameStyle.key` (case, `_` and spacing ignored).
 static func names_equal(a: String, b: String) -> bool:
-	return a.strip_edges().to_lower() == b.strip_edges().to_lower()
+	return NameStyle.same(a, b)
 
 
 ## All segments after the first.

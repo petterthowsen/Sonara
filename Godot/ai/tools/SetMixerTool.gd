@@ -37,12 +37,12 @@ func execute(args: Dictionary) -> Dictionary:
 		var vol := clampf(float(args.volume_db), -60.0, 12.0)
 		if vol != channel.volume:
 			cmds.append(PropertyCommand.new("Set Volume", channel, "set_volume", channel.volume, vol))
-			changes.append("volume %g dB" % vol)
+			changes.append("volume %s dB" % str(snappedf(vol, 0.01)))
 	if args.has("pan"):
 		var pan := clampf(float(args.pan), -1.0, 1.0)
 		if pan != channel.pan:
 			cmds.append(PropertyCommand.new("Set Pan", channel, "set_pan", channel.pan, pan))
-			changes.append("pan %g" % pan)
+			changes.append("pan %s" % str(snappedf(pan, 0.01)))
 	if args.has("mute"):
 		var mute := bool(args.mute)
 		if mute != channel.mute:

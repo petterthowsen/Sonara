@@ -58,9 +58,16 @@ func _ready() -> void:
 	label.gui_input.connect(_on_label_gui_input)
 
 
-## Steal Tab/Shift+Tab while editing so they commit instead of switching views.
+## While editing: a mouse press outside the line edit commits, and Tab/Shift+Tab commit instead of
+## switching views. The outside click is not consumed, so it still reaches whatever was clicked.
 func _input(event: InputEvent) -> void:
 	if Engine.is_editor_hint() or not is_editing:
+		return
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and _is_click_button(mouse_event.button_index) \
+				and not line_edit.get_global_rect().has_point(mouse_event.global_position):
+			stop_editing()
 		return
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
@@ -231,7 +238,12 @@ func _on_label_gui_input(event: InputEvent) -> void:
 			_last_click_time = current_time
 
 
-## Internal: handle LineEdit focus exit
+## Left, right or middle button (wheel "buttons" don't end editing).
+static func _is_click_button(button: MouseButton) -> bool:
+	return button in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]
+
+
+## Internal: losing focus (clicking another control, closing a popup) commits like Enter.
 func _on_line_edit_focus_exited() -> void:
 	if is_editing:
-		cancel_editing()
+		stop_editing()

@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://devices/device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
 content_margin_left = 0.0
@@ -111,11 +112,22 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Name" type="Label" parent="VBoxContainer/Header/HBox"]
+[node name="Name" parent="VBoxContainer/Header/HBox" instance=ExtResource("3_smle")]
 layout_mode = 2
 size_flags_horizontal = 3
+mouse_filter = 1
+value_type = 1
+display_format = "%s"
+
+[node name="Label" parent="VBoxContainer/Header/HBox/Name" index="0"]
 text = "PolySynth"
 label_settings = SubResource("LabelSettings_r4rlf")
+horizontal_alignment = 0
+clip_text = true
+
+[node name="LineEdit" parent="VBoxContainer/Header/HBox/Name" index="1"]
+max_length = 0
+alignment = 0
 
 [node name="TabButtons" type="HBoxContainer" parent="VBoxContainer/Header/HBox"]
 layout_mode = 2

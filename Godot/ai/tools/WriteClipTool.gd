@@ -7,7 +7,14 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Write notes into a named MIDI clip. Drum hits are 1-9 or x, rests are `.` — e.g. KICK |9 . . .|9 . . .|9 . . .|9 . . .|. Grids are diffed cell-by-cell (unchanged cells keep velocity and microtiming). Event lists must be ops: add / del / move / vel / len — never a rewritten list. All instances of this clip update together."
+	return (
+		"Write notes into a named MIDI clip. All instances of this clip update together. The whole write is rolled back if any line fails.\n"
+		+ "Grids: drum hits are 1-9 or x, rests are `.` — e.g. KICK |9 . . .|9 . . .|9 . . .|9 . . .|. Grids are diffed cell-by-cell (unchanged cells keep velocity and microtiming).\n"
+		+ "Event ops, one per line (never a rewritten list):\n"
+		+ "  %s — e.g. %s\n" % [ClipTextEvents.ADD_SYNTAX, ClipTextEvents.ADD_EXAMPLE]
+		+ "  del n12 | move n12 2.1.000 | move n12 +1/16 | vel n12 88 | len n12 1/2  (ids from read_clip)\n"
+		+ "Durations: %s. Middle C = C3." % ClipTextTime.DURATION_FORMS
+	)
 
 
 func get_parameters() -> Dictionary:
@@ -15,7 +22,7 @@ func get_parameters() -> Dictionary:
 		"type": "object",
 		"properties": {
 			"clip": {"type": "string", "description": "Clip name"},
-			"text": {"type": "string", "description": "Grid body (with clip header) or event ops"},
+			"text": {"type": "string", "description": "Grid body (with clip header) or event op lines"},
 			"key": {"type": "string", "description": "Key if not in the header"},
 			"format": {
 				"type": "string",

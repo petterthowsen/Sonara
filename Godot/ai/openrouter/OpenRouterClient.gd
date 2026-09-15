@@ -56,6 +56,15 @@ var _audio_b64: String = ""
 var _audio_transcript: String = ""
 var _images: Array = []
 var _tool_acc: Dictionary = {}
+var _usage: Dictionary = {}
+var _generation_id: String = ""
+var _sse_events: int = 0
+
+var _request_dict: Dictionary = {}
+var _started_unix: float = 0.0
+var _started_msec: int = 0
+var _last_exchange: Dictionary = {}
+var _models_loading: bool = false
 
 
 ## Wire Settings and keep process off until a request starts.
@@ -98,10 +107,26 @@ func get_model_capabilities(model_id: String) -> Dictionary:
 	return _model_caps.get(model_id, {})
 
 
+## Context window in tokens from the cached /models list, or 0 when unknown.
+func get_context_length(model_id: String) -> int:
+	return int(get_model_capabilities(model_id).get("context_length", 0))
+
+
+## True once /models has been fetched this session.
+func has_model_cache() -> bool:
+	return not _model_caps.is_empty()
+
+
+## Raw request/response record of the last chat() (unredacted), or {} if none was sent.
+## Keys: status (ok / error / cancelled), started_unix, duration_ms, endpoint, model, request, response.
+func get_last_exchange() -> Dictionary:
+	return _last_exchange
+
+
 ## GET /models (non-stream). Caches input/output modalities. Returns the data array.
 func list_models(output_modalities: String = "all") -> Array:
 	configure_from_settings()
-	if not has_api_key():
+	if not has_api_key() or _models_loading:
 		return []
 	if _models_http == null:
 		_models_http = HTTPRequest.new()
@@ -111,7 +136,9 @@ func list_models(output_modalities: String = "all") -> Array:
 	if err != OK:
 		push_warning("[OpenRouter] list_models request failed to start")
 		return []
+	_models_loading = true
 	var completed: Array = await _models_http.request_completed
+	_models_loading = false
 	var result: int = completed[0]
 	var code: int = completed[1]
 	var body: PackedByteArray = completed[3]
@@ -132,6 +159,7 @@ func list_models(output_modalities: String = "all") -> Array:
 func chat(request: ChatTypes.ORChatRequest) -> void:
 	if _in_flight:
 		cancel()
+	_last_exchange = {}
 	configure_from_settings()
 	if not has_api_key():
 		request_failed.emit(ChatTypes.ORChatError.missing_key())
@@ -144,12 +172,17 @@ func chat(request: ChatTypes.ORChatRequest) -> void:
 	_reset_accumulator()
 	_streaming = request.stream
 	_request_path = _api_path + "/chat/completions"
-	_request_body = JSON.stringify(request.to_openrouter())
+	_request_dict = request.to_openrouter()
+	_request_body = JSON.stringify(_request_dict)
+	_started_unix = Time.get_unix_time_from_system()
+	_started_msec = Time.get_ticks_msec()
 	_log_request(request)
 	var tls: TLSOptions = TLSOptions.client() if _use_tls else null
 	var err := _http.connect_to_host(_host, _port, tls)
 	if err != OK:
-		request_failed.emit(ChatTypes.ORChatError.from_connect(0, "TLS / connect failed: %s" % error_string(err)))
+		var connect_err := ChatTypes.ORChatError.from_connect(0, "TLS / connect failed: %s" % error_string(err))
+		_record_exchange("error", null, connect_err)
+		request_failed.emit(connect_err)
 		return
 	_in_flight = true
 	_request_sent = false
@@ -162,6 +195,7 @@ func cancel() -> void:
 	if not _in_flight:
 		return
 	_close_http()
+	_record_exchange("cancelled")
 	request_cancelled.emit()
 
 
@@ -252,7 +286,12 @@ func _handle_sse_payload(payload: String) -> void:
 		return
 	if not parsed is Dictionary:
 		return
+	_sse_events += 1
 	var delta := ChatTypes.ORChatDelta.from_openrouter_chunk(parsed)
+	if not delta.generation_id.is_empty():
+		_generation_id = delta.generation_id
+	if not delta.usage.is_empty():
+		_usage = delta.usage
 	if not delta.error_message.is_empty():
 		var err := ChatTypes.ORChatError.new()
 		err.message = delta.error_message
@@ -312,6 +351,7 @@ func _finish_body() -> void:
 	msg.reasoning = _reasoning
 	msg.audio_b64 = _audio_b64
 	msg.audio_transcript = _audio_transcript
+	msg.usage = _usage
 	if not _images.is_empty():
 		var parts: Array = []
 		if not _text.is_empty():
@@ -320,9 +360,11 @@ func _finish_body() -> void:
 			parts.append(img)
 		msg.content = parts
 	_close_http()
-	logger.info("finished reason=%s chars=%d tools=%d audio=%d" % [
-		_finish_reason, _text.length(), calls.size(), _audio_b64.length()
+	logger.info("finished reason=%s chars=%d tools=%d audio=%d prompt_tokens=%d completion_tokens=%d" % [
+		_finish_reason, _text.length(), calls.size(), _audio_b64.length(),
+		int(_usage.get("prompt_tokens", 0)), int(_usage.get("completion_tokens", 0)),
 	])
+	_record_exchange("ok", msg)
 	message_finished.emit(msg)
 
 
@@ -332,6 +374,10 @@ func _apply_plain_response(text: String) -> void:
 	if parsed == null or not parsed is Dictionary:
 		_fail(ChatTypes.ORChatError.parse_failure("Invalid JSON in non-stream response."))
 		return
+	_generation_id = str(parsed.get("id", ""))
+	var raw_usage = parsed.get("usage", null)
+	if raw_usage is Dictionary:
+		_usage = raw_usage
 	if parsed.has("error"):
 		_fail(ChatTypes.ORChatError.from_http(_response_code, text))
 		return
@@ -371,6 +417,7 @@ func _fail(error: ChatTypes.ORChatError) -> void:
 		return
 	_close_http()
 	logger.error("failed: %s" % error.message)
+	_record_exchange("error", null, error)
 	request_failed.emit(error)
 
 
@@ -392,6 +439,9 @@ func _reset_accumulator() -> void:
 	_audio_transcript = ""
 	_images.clear()
 	_tool_acc.clear()
+	_usage = {}
+	_generation_id = ""
+	_sse_events = 0
 	_error_body = PackedByteArray()
 	_plain_body = PackedByteArray()
 	_response_code = 0
@@ -492,7 +542,43 @@ func _cache_model_caps(data: Array) -> void:
 		if arch is Dictionary:
 			inputs = arch.get("input_modalities", [])
 			outputs = arch.get("output_modalities", [])
-		_model_caps[id] = {"input": inputs, "output": outputs}
+		var ctx = item.get("context_length", null)
+		if ctx == null and item.get("top_provider", null) is Dictionary:
+			ctx = item.top_provider.get("context_length", null)
+		_model_caps[id] = {"input": inputs, "output": outputs, "context_length": int(ctx) if ctx != null else 0}
+
+
+## Snapshot the finished request for debugging. Headers (and so the API key) are never included.
+func _record_exchange(status: String, msg: ChatTypes.ORChatMessage = null, error: ChatTypes.ORChatError = null) -> void:
+	var response := {
+		"http_status": _response_code,
+		"generation_id": _generation_id,
+		"finish_reason": _finish_reason,
+		"sse_events": _sse_events,
+		"usage": _usage,
+	}
+	if msg:
+		var wire := msg.to_openrouter()
+		if not msg.reasoning.is_empty():
+			wire["reasoning"] = msg.reasoning
+		response["message"] = wire
+	elif status == "cancelled" and not (_text.is_empty() and _tool_acc.is_empty()):
+		response["partial_text"] = _text
+	if error:
+		response["error"] = {"message": error.message, "code": error.code}
+	if not _error_body.is_empty():
+		var body_text := _error_body.get_string_from_utf8()
+		var parsed = JSON.parse_string(body_text)
+		response["error_body"] = parsed if parsed != null else body_text
+	_last_exchange = {
+		"status": status,
+		"started_unix": _started_unix,
+		"duration_ms": Time.get_ticks_msec() - _started_msec,
+		"endpoint": _request_path,
+		"model": str(_request_dict.get("model", "")),
+		"request": _request_dict,
+		"response": response,
+	}
 
 
 ## Log model and part counts only — never the key or media payloads.

@@ -130,12 +130,18 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 
 ## Assign a path-safe, sibling-unique display name. Emits `name_changed` when it differs.
 func set_name(new_name: String) -> void:
-	var fallback := device.name if device and not device.name.is_empty() else "Device"
-	var unique := DeviceNaming.unique_in(_sibling_names(), new_name, fallback)
+	var unique := unique_name_for(new_name)
 	if unique == name:
 		return
 	name = unique
 	name_changed.emit(name)
+
+
+## The name `set_name(desired)` would apply (sanitized, suffixed on a sibling collision).
+## Record this (not `desired`) in undo commands so redo reproduces the same name.
+func unique_name_for(desired: String) -> String:
+	var fallback := device.name if device and not device.name.is_empty() else "Device"
+	return DeviceNaming.unique_in(_sibling_names(), desired, fallback)
 
 
 ## Names of siblings on the same host, excluding this instance.

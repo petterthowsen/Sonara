@@ -143,6 +143,7 @@ func _ready():
 
 	# Connect to Timeline signals
 	timeline.clips_selected.connect(_on_timeline_clips_selected)
+	track_list.connect("selection_changed", _on_track_list_selection_changed)
 	if timeline_panel:
 		timeline_panel.gui_input.connect(_on_timeline_panel_gui_input)
 
@@ -154,6 +155,7 @@ func _ready():
 	if marker_track:
 		marker_track.selection_start_requested.connect(_on_ruler_selection_start_requested)
 		marker_track.box_select_started.connect(_on_ruler_box_select_started)
+		marker_track.selection_manager = timeline.clip_selection_manager
 
 	_ensure_selection_bounds_overlay()
 
@@ -813,9 +815,17 @@ func _on_start_position_changed(ticks: int) -> void:
 func _on_ruler_start_position_requested(ticks: int) -> void:
 	if current_project:
 		current_project.set_start_position(ticks)
+		if timeline and timeline.clip_selection_manager:
+			timeline.clip_selection_manager.set_anchor(null, ticks)
 		if Sonara and Sonara.editor:
 			Sonara.editor.set_playhead(ticks)
 		logger.info("Set start position to tick %d and seeked playhead" % ticks)
+
+
+## Selecting a track header moves the paste anchor onto the active track.
+func _on_track_list_selection_changed(_tracks: Array[Track], active: Track) -> void:
+	if timeline and timeline.clip_selection_manager:
+		timeline.clip_selection_manager.set_anchor(active)
 
 
 ## Ctrl/Cmd click on the ruler sets the arranger time-range start (no playhead move).

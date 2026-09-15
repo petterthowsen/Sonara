@@ -41,6 +41,8 @@ func run_tests() -> void:
 	_test_header_parse()
 	_test_format_selection()
 	_test_sloppy_model_text()
+	_test_city_pop_keys_regressions()
+	_test_ruler_restarts_each_bar()
 
 
 func _clip(name: String = "Test", bars: int = 1) -> StubClip:
@@ -215,3 +217,60 @@ func _test_sloppy_model_text() -> void:
 	_assert(cont.midi_notes[0].note == 36, "continuation stays on C1")
 	var orphan: Dictionary = _clip_text.apply(_clip("x", 1), null, "   |9 . . .|9 . . .|9 . . .|9 . . .|", {"kind": "drums", "ppq": 960})
 	_assert(not bool(orphan.get("ok", false)), "unlabeled first line is an error")
+
+
+## Replays of the city_pop_5 chat, where a chord clip took seven calls.
+func _test_city_pop_keys_regressions() -> void:
+	var t := _clip_text_time
+	_assert(t.parse_duration("4", 960) == -1, "bare number is not a silent tick count")
+	_assert(t.parse_duration("2b", 960) == 1920, "2b = two beats")
+	_assert(t.parse_duration("1.5b", 960) == 1440, "1.5b")
+	_assert(t.parse_duration("3/8", 960) == 1440, "3/8 fraction")
+	_assert(t.parse_duration("2/1", 960) == 7680, "2/1 = two bars")
+	_assert(t.parse_duration("0.4.000", 960) == -1, "bar.beat.tick is not a duration")
+	_assert(t.parse_duration("1b", 960, 8) == 480, "a beat in x/8 is an eighth")
+
+	# kind=pitched with add lines used to fail as "Grid has no lanes".
+	var keys := _clip("City Pop Keys", 2)
+	var r: Dictionary = _clip_text.apply(keys, null,
+		"add 1.1.000 D#3, G3, A#3,D4 1/2 v80\nadd 2.1.000 D3,F#3,A#3 2b",
+		{"kind": "pitched", "ppq": 960})
+	_assert(bool(r.get("ok", false)), "add lines under kind=pitched are ops: %s" % r.get("error", ""))
+	_assert(keys.midi_notes.size() == 7, "chord shorthand adds every pitch")
+	_assert(keys.midi_notes[0].duration_ticks == 1920 and keys.midi_notes[0].velocity == 80, "chord dur/vel")
+	_assert(keys.midi_notes[6].velocity == 100, "velocity is optional")
+
+	# Swapped pitch/duration: the error names the line and the syntax.
+	var bad: Dictionary = _clip_text.apply(_clip("x", 1), null,
+		"add 1.1.000 C3 1/4\nadd 1.1.000 0.4.000 D#3 80", {"kind": "events", "ppq": 960})
+	var err := str(bad.get("error", ""))
+	_assert(not bool(bad.get("ok", false)), "swapped tokens fail")
+	_assert(err.contains("Line 2") and err.contains("add <bar.beat.tick>"), "error has line and syntax: %s" % err)
+	var bare: Dictionary = _clip_text.apply(_clip("x", 1), null, "add 1.1.000 C3 4 v80", {"kind": "events", "ppq": 960})
+	_assert(str(bare.get("error", "")).contains("2b (beats)"), "bare-number error lists duration forms")
+
+
+## Rulers number beats within a bar; multi-bar clips get one `# bar N` block per bar.
+func _test_ruler_restarts_each_bar() -> void:
+	var two := _clip("Two", 2)
+	_add(two, 1, 60, 0, 1920, 90)
+	_add(two, 2, 60, 3840, 480, 90)
+	var ser: Dictionary = _clip_text.serialize(two, {"kind": "pitched", "ppq": 960})
+	var text := str(ser.get("text", ""))
+	_assert(text.contains("# bar 1") and text.contains("# bar 2"), "2-bar clip has bar blocks:\n%s" % text)
+	_assert(not text.contains("|5 e & a|"), "beat 5 never appears in 4/4:\n%s" % text)
+	var copy := _clip("Two", 2)
+	_add(copy, 1, 60, 0, 1920, 90)
+	_add(copy, 2, 60, 3840, 480, 90)
+	var back: Dictionary = _clip_text.apply(copy, null, text, {"kind": "pitched", "ppq": 960})
+	_assert(bool(back.get("ok", false)) and (back.get("changes", []) as Array).is_empty(), "bar blocks round-trip as a no-op: %s" % back)
+
+	var waltz := _clip("Waltz", 2)
+	_add(waltz, 1, 60, 2880, 960, 90)
+	var w: Dictionary = _clip_text.serialize(waltz, {"kind": "pitched", "ppq": 960, "numerator": 3})
+	var wt := str(w.get("text", ""))
+	_assert(wt.contains("# bar 2") and wt.contains("|1 e & a|2 e & a|3 e & a|") and not wt.contains("|4 e"), "3/4 bars are 3 beats:\n%s" % wt)
+	var wcopy := _clip("Waltz", 2)
+	wcopy.content_length_ticks = 5760
+	var wb: Dictionary = _clip_text.apply(wcopy, null, wt, {"kind": "pitched", "ppq": 960, "numerator": 3})
+	_assert(bool(wb.get("ok", false)) and wcopy.midi_notes.size() == 1 and wcopy.midi_notes[0].start_tick == 2880, "3/4 note lands on bar 2: %s" % wb)

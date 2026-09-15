@@ -58,7 +58,6 @@ theme_override_font_sizes/font_size = 16
 theme_override_styles/focus = SubResource("StyleBoxFlat_an1hh")
 text = "-6"
 alignment = 1
-max_length = 5
 context_menu_enabled = false
 emoji_menu_enabled = false
 drag_and_drop_selection_enabled = false

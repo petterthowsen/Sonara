@@ -30,11 +30,11 @@ func execute(args: Dictionary) -> Dictionary:
 	if clip_v is Dictionary:
 		return clip_v
 	var clip: Clip = clip_v
-	var new_name := str(args.get("name", "")).strip_edges()
+	var new_name := name_arg(args, "name")
 	if new_name.is_empty():
 		return fail("name is required")
 	for other in project.clips.values():
-		if other is Clip and other != clip and other.name.to_lower() == new_name.to_lower():
+		if other is Clip and other != clip and NameStyle.same(other.name, new_name):
 			return fail("A clip named '%s' already exists" % other.name)
 	var old_name := clip.name
 	HistoryUtil.execute_property("Rename Clip", clip, "set_name", clip.name, new_name)

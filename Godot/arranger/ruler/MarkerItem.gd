@@ -3,6 +3,7 @@
 class_name MarkerItem extends Control
 
 signal range_gesture_finished(marker: SongMarker, old_start: int, old_duration: int, gesture_label: String)
+signal context_menu_requested(marker: SongMarker, global_pos: Vector2)
 
 const RESIZE_EDGE_SIZE := 8.0
 const DRAG_THRESHOLD := 10.0
@@ -25,7 +26,6 @@ var _drag_start_global: Vector2 = Vector2.ZERO
 var _drag_start_ticks: int = 0
 var _drag_start_duration: int = 0
 
-var _name_before_edit: String = ""
 var _last_click_time: float = 0.0
 const DOUBLE_CLICK_THRESHOLD := 0.3
 
@@ -35,9 +35,15 @@ func _ready() -> void:
 	clip_contents = true
 	if name_edit:
 		name_edit.value_type = SmartLineEdit.ValueType.STRING
-		name_edit.edit_via_click = true
+		# The item handles clicks itself (drag, double-click rename, context menu); only the
+		# LineEdit takes input while editing.
+		name_edit.edit_via_click = false
+		name_edit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_edit.label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# Edit in place on the marker color instead of SmartLineEdit's black focus box.
+		for style_name in ["normal", "focus", "read_only"]:
+			name_edit.line_edit.add_theme_stylebox_override(style_name, StyleBoxEmpty.new())
 		name_edit.value_changed.connect(_on_name_committed)
-		name_edit.line_edit.focus_entered.connect(_on_name_edit_focus_entered)
 
 
 ## Bind UI to marker data and shared grid state.
@@ -67,7 +73,6 @@ func bind(marker: SongMarker, gh: GridHelper) -> void:
 ## Open the name field for editing (e.g. right after create).
 func begin_name_edit() -> void:
 	if name_edit:
-		_name_before_edit = song_marker.name if song_marker else ""
 		name_edit.start_editing()
 
 
@@ -81,8 +86,8 @@ func refresh_layout() -> void:
 	if get_parent():
 		lane_h = get_parent().size.y
 	position = Vector2(x, 0.0)
-	size = Vector2(maxi(4.0, w), lane_h)
-	custom_minimum_size = Vector2(maxi(4.0, w), 22)
+	size = Vector2(maxf(4.0, w), lane_h)
+	custom_minimum_size = Vector2(maxf(4.0, w), 22)
 
 
 func _refresh_from_marker() -> void:
@@ -142,6 +147,12 @@ func _gui_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseMotion:
 		_update_cursor(get_local_mouse_position())
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if not _is_resizing and not _is_dragging:
+			context_menu_requested.emit(song_marker, event.global_position)
+		accept_event()
+		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -229,9 +240,8 @@ func _apply_move(pixel_delta_x: float) -> void:
 		return
 	var tick_delta := grid_helper.pixels_to_ticks(pixel_delta_x)
 	var new_start := _drag_start_ticks + tick_delta
-	var min_dur := _min_duration_ticks()
-	new_start = track.clamp_marker_move(song_marker, new_start, _drag_start_duration, min_dur)
-	song_marker.set_range(new_start, _drag_start_duration, min_dur)
+	new_start = track.clamp_marker_move(song_marker, new_start, _drag_start_ticks, _drag_start_duration)
+	song_marker.set_range(new_start, _drag_start_duration, 1)
 	refresh_layout()
 
 
@@ -285,17 +295,10 @@ func _on_marker_range_changed(_start: int, _duration: int) -> void:
 	refresh_layout()
 
 
-func _on_name_edit_focus_entered() -> void:
-	if song_marker:
-		_name_before_edit = song_marker.name
-
-
 func _on_name_committed(new_name: Variant) -> void:
 	if song_marker == null:
 		return
-	var new_str := str(new_name).strip_edges()
-	if new_str.is_empty():
-		new_str = "Marker"
-	if new_str == _name_before_edit:
-		return
-	HistoryUtil.execute_property("Rename Marker", song_marker, "set_name", _name_before_edit, new_str)
+	var track := _marker_track()
+	MarkerActions.rename_marker(track.project if track else null, song_marker, str(new_name))
+	# Show the applied name: it may carry a uniqueness suffix, or be unchanged.
+	name_edit.set_value(song_marker.name)

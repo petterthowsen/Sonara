@@ -24,8 +24,10 @@ func _init() -> void:
 	register("selection", _selection)
 	register("devices", _devices)
 	register("clips", _clips)
+	register("markers", _markers)
 	register("active_clip", _active_clip)
 	register("date", _date)
+	register("user_instructions", _user_instructions)
 
 
 ## Add or replace a `{name}` provider. `fn` returns a markdown string.
@@ -181,6 +183,19 @@ func _selection() -> String:
 	return "; ".join(bits) if not bits.is_empty() else "_Nothing focused._"
 
 
+func _markers() -> String:
+	var p := _project()
+	if p == null or p.markers.is_empty():
+		return "_No markers._"
+	var bits: PackedStringArray = []
+	for m in ListMarkersTool.sorted_markers(p):
+		if bits.size() >= TABLE_CAP:
+			bits.append("+%d more" % (p.markers.size() - TABLE_CAP))
+			break
+		bits.append(ListMarkersTool.describe_marker(p, m))
+	return ", ".join(bits)
+
+
 func _clips() -> String:
 	var p := _project()
 	if p == null or p.clips.is_empty():
@@ -290,6 +305,12 @@ func _append_device_rows(lines: PackedStringArray, project: Project, host: Array
 func _date() -> String:
 	var dt := Time.get_datetime_dict_from_system()
 	return "%04d-%02d-%02d" % [dt.year, dt.month, dt.day]
+
+
+func _user_instructions() -> String:
+	if not Settings:
+		return ""
+	return str(Settings.get_value("ai/chat/user_instructions")).strip_edges()
 
 
 func _md_cell(text: String) -> String:

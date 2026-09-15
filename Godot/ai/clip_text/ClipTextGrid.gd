@@ -68,7 +68,7 @@ static func serialize(clip: Object, opts: Dictionary) -> String:
 	var steps := maxi(steps_beat, bars * ClipTextTime.ticks_per_bar(ppq, numerator, denominator) / ClipTextTime.ticks_per_step(ppq, res_denom))
 	var lanes: Array[int] = _lane_pitches(clip, drums, drum_names)
 	var cells: Dictionary = _cells_from_clip(clip, lanes, steps, step_ticks)
-	return _render_blocks(lanes, cells, steps, steps_beat, drums, key, drum_names)
+	return _render_blocks(lanes, cells, steps, steps_beat, maxi(1, numerator), drums, key, drum_names)
 
 
 ## Parse grid body into `{lanes: {pitch: PackedStringArray}, error}`.
@@ -239,22 +239,29 @@ static func _render_blocks(
 	cells: Dictionary,
 	steps: int,
 	steps_beat: int,
+	beats_per_bar: int,
 	drums: bool,
 	key: Dictionary,
 	drum_names: Dictionary
 ) -> String:
-	var block := mini(steps, _block_steps(steps, steps_beat))
+	var steps_bar := maxi(1, steps_beat * beats_per_bar)
+	var block := mini(steps, _block_steps(steps, steps_bar))
 	var lines: PackedStringArray = []
 	var label_w := _label_width(lanes, drums, key, drum_names)
 	var offset := 0
-	var bar_i := 1
 	while offset < steps:
 		var count := mini(block, steps - offset)
 		if offset > 0:
 			lines.append("")
 		if steps > block:
-			lines.append("# bar %d" % bar_i)
-		lines.append(_header_row(label_w, count, steps_beat))
+			@warning_ignore("integer_division")
+			var bar_i := offset / steps_bar + 1
+			if offset % steps_bar == 0:
+				lines.append("# bar %d" % bar_i)
+			else:
+				@warning_ignore("integer_division")
+				lines.append("# bar %d, from beat %d" % [bar_i, (offset % steps_bar) / steps_beat + 1])
+		lines.append(_header_row(label_w, count, steps_beat, offset % steps_bar, steps_bar))
 		for p in lanes:
 			var row: PackedStringArray = cells.get(p, PackedStringArray())
 			var slice := PackedStringArray()
@@ -263,16 +270,14 @@ static func _render_blocks(
 				slice.append(row[idx] if idx < row.size() else ".")
 			lines.append(_lane_row(p, slice, label_w, steps_beat, drums, key, drum_names))
 		offset += count
-		bar_i += 1
 	return "\n".join(lines)
 
 
-static func _block_steps(steps: int, steps_beat: int) -> int:
-	if steps <= MAX_STEPS_PER_LINE:
+## Steps per rendered block: one bar, split further only when a bar is wider than a line.
+static func _block_steps(steps: int, steps_bar: int) -> int:
+	if steps <= steps_bar and steps <= MAX_STEPS_PER_LINE:
 		return steps
-	var per_bar := maxi(steps_beat * 4, steps_beat)
-	# Prefer one-bar blocks when a full clip would wrap.
-	return per_bar if per_bar <= MAX_STEPS_PER_LINE else MAX_STEPS_PER_LINE
+	return mini(steps_bar, MAX_STEPS_PER_LINE)
 
 
 static func _label_width(lanes: Array[int], drums: bool, key: Dictionary, drum_names: Dictionary) -> int:
@@ -292,9 +297,9 @@ static func _lane_label(pitch: int, drums: bool, key: Dictionary, drum_names: Di
 	return "%s  %s" % [name, deg]
 
 
-static func _header_row(label_w: int, steps: int, steps_beat: int) -> String:
+static func _header_row(label_w: int, steps: int, steps_beat: int, bar_offset: int = 0, steps_bar: int = 0) -> String:
 	var left := " ".repeat(label_w)
-	return left + " " + _cells_string(_beat_labels(steps, steps_beat), steps_beat)
+	return left + " " + _cells_string(_beat_labels(steps, steps_beat, bar_offset, steps_bar), steps_beat)
 
 
 static func _lane_row(
@@ -325,11 +330,16 @@ static func _cells_string(cells: PackedStringArray, steps_beat: int) -> String:
 	return out
 
 
-static func _beat_labels(steps: int, steps_beat: int) -> PackedStringArray:
+## Ruler cells; beat numbers restart every bar (`steps_bar`), starting `bar_offset` steps into it.
+static func _beat_labels(steps: int, steps_beat: int, bar_offset: int = 0, steps_bar: int = 0) -> PackedStringArray:
 	var beat := maxi(1, steps_beat)
 	var cells := PackedStringArray()
-	for i in range(steps):
+	for j in range(steps):
+		var i := j + bar_offset
+		if steps_bar > 0:
+			i %= steps_bar
 		var pos := i % beat
+		@warning_ignore("integer_division")
 		var beat_n: int = i / beat + 1
 		if pos == 0:
 			cells.append(str(beat_n))

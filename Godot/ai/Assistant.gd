@@ -11,11 +11,16 @@ signal tool_started(tool_name: String, args: Dictionary)
 signal tool_finished(tool_name: String, result: Dictionary)
 signal turn_finished()
 signal turn_failed(error: ChatTypes.ORChatError)
+## Model metadata (context length) became available.
+signal model_info_changed()
 
 
 const DEFAULT_MAX_TOOL_ROUNDS := 64
 const MIN_TOOL_ROUNDS := 8
 const MAX_TOOL_ROUNDS_CAP := 256
+const DEFAULT_KEEP_EXCHANGES := 200
+## Assistant notice for a failed request. Shown in the transcript, never sent to the model.
+const FINISH_ERROR := "error"
 
 var client: OpenRouterClient
 var store: ConversationStore = ConversationStore.new()
@@ -29,6 +34,7 @@ var _wait_err: ChatTypes.ORChatError = null
 var _wait_cancelled: bool = false
 var _editor_wired: bool = false
 var _last_rendered_system_prompt: String = ""
+var _tools_token_estimate: int = -1
 
 
 ## Create the OpenRouter client and bind the current editor project.
@@ -77,25 +83,65 @@ func get_last_rendered_system_prompt() -> String:
 	return _last_rendered_system_prompt
 
 
-## Bind store to a project file path (empty = scratch).
+## Token/cost totals for the current conversation plus the model's context window.
+## Adds `context_length` (0 when unknown) and `model` to Conversation.usage_summary().
+func get_usage_summary() -> Dictionary:
+	var conv := store.get_current()
+	var summary: Dictionary = conv.usage_summary(_tools_estimate()) if conv else Conversation.new().usage_summary()
+	var model := get_model_label()
+	summary["model"] = model
+	summary["context_length"] = client.get_context_length(model) if client else 0
+	return summary
+
+
+## Fetch /models once per session so context_length is known. Emits model_info_changed.
+func refresh_model_info() -> void:
+	if client == null or not client.has_api_key() or client.has_model_cache():
+		return
+	var data: Array = await client.list_models()
+	if not data.is_empty():
+		model_info_changed.emit()
+
+
+## Stored request/response record for the current conversation, or {}.
+func load_exchange(exchange_id: String) -> Dictionary:
+	var conv := store.get_current()
+	if conv == null:
+		return {}
+	return ExchangeLog.read(store.exchange_dir(conv.id), exchange_id)
+
+
+## Folder of request/response records for the current conversation ("" when unbound).
+func get_exchange_dir() -> String:
+	var conv := store.get_current()
+	return store.exchange_dir(conv.id) if conv else ""
+
+
+## Bind store to a project file path and reopen its last conversation. Empty = fresh scratch
+## for a new untitled project.
 func bind_project(project_path: String) -> void:
-	store.bind_project(project_path)
+	if _busy:
+		cancel()
+	store.bind_project(project_path, project_path.is_empty())
 	_sync_system_prompt_from_current_conversation()
 	conversation_changed.emit()
 
 
 ## Flush and unbind on project close.
 func unbind_project() -> void:
+	if _busy:
+		cancel()
 	store.unbind()
 	_last_rendered_system_prompt = ""
 	conversation_changed.emit()
 
 
-## After Save As, move scratch chats next to the project.
-func migrate_if_scratch(project_path: String) -> void:
-	if store.is_scratch() and not project_path.is_empty():
-		store.migrate_scratch_to(project_path)
-		conversation_changed.emit()
+## After Save / Save As, carry the current chats over to the saved file's sidecar.
+func migrate_to_saved(project_path: String) -> void:
+	if project_path.is_empty() or project_path == store.get_bound_path():
+		return
+	store.migrate_to(project_path)
+	conversation_changed.emit()
 
 
 ## Start a new thread on the current project.
@@ -128,8 +174,9 @@ func delete_conversation(id: String) -> void:
 	conversation_changed.emit()
 
 
-## User turn: text and optional ContentPart array. No-ops if busy or missing key.
-func send_user(text: String, parts: Array = []) -> void:
+## User turn: text, optional ContentPart array, and optional SelectionContext items attached
+## as a `<selection_context>` block. No-ops if busy or missing key.
+func send_user(text: String, parts: Array = [], context: Array = []) -> void:
 	if _busy:
 		return
 	if client == null or not client.has_api_key():
@@ -151,6 +198,7 @@ func send_user(text: String, parts: Array = []) -> void:
 		for p in parts:
 			all_parts.append(p)
 		msg = ChatTypes.ORChatMessage.user_parts(all_parts)
+	msg.context = SelectionContext.to_storage(context)
 	conv.messages.append(msg)
 	conv.ensure_title_from_first_user()
 	store.schedule_save()
@@ -198,9 +246,10 @@ func _on_project_closed() -> void:
 
 
 func _on_project_saved(path: String) -> void:
-	migrate_if_scratch(path)
 	if store.get_current() == null:
 		bind_project(path)
+	else:
+		migrate_to_saved(path)
 
 
 func _on_client_text(text: String) -> void:
@@ -226,6 +275,7 @@ func _on_client_cancelled() -> void:
 func _run_turn() -> void:
 	_busy = true
 	_cancel = false
+	refresh_model_info()
 	turn_started.emit()
 	var conv := store.get_current()
 	var hist = HistoryUtil.history()
@@ -331,15 +381,50 @@ func _chat_once(conv: Conversation, with_tools: bool = true, emit_fail: bool = t
 	system.content = _last_rendered_system_prompt
 	var msgs: Array = [system]
 	for m in conv.messages:
+		if m is ChatTypes.ORChatMessage and m.finish_reason == FINISH_ERROR:
+			continue
 		msgs.append(m)
 	req.messages = msgs
 	client.chat(req)
 	while _wait_msg == null and _wait_err == null and not _wait_cancelled:
 		await get_tree().process_frame
+	var exchange_id := _store_exchange(conv)
 	if _wait_err:
+		var notice := ChatTypes.ORChatMessage.assistant_text("Request failed: %s" % _wait_err.message)
+		notice.finish_reason = FINISH_ERROR
+		notice.exchange_id = exchange_id
+		conv.messages.append(notice)
+		store.schedule_save()
 		if emit_fail:
 			turn_failed.emit(_wait_err)
 		return null
 	if _wait_cancelled or _wait_msg == null:
 		return null
+	_wait_msg.exchange_id = exchange_id
 	return _wait_msg
+
+
+## Persist the client's last request/response for `conv`. Returns the exchange id or "".
+func _store_exchange(conv: Conversation) -> String:
+	var record: Dictionary = client.get_last_exchange()
+	var keep := _keep_exchanges()
+	if record.is_empty() or keep <= 0:
+		return ""
+	var id := ExchangeLog.new_id()
+	var path := ExchangeLog.write(store.exchange_dir(conv.id), id, conv.id, record, keep)
+	return id if not path.is_empty() else ""
+
+
+## How many request/response records to keep per conversation (0 = off).
+func _keep_exchanges() -> int:
+	var settings := get_node_or_null("/root/Settings")
+	if settings:
+		return int(settings.call("get_value", "ai/debug/keep_exchanges"))
+	return DEFAULT_KEEP_EXCHANGES
+
+
+## Estimated tokens for the tool schemas sent with every request (cached).
+func _tools_estimate() -> int:
+	if _tools_token_estimate < 0:
+		_tools_token_estimate = TokenEstimate.text(JSON.stringify(registry.get_openrouter_tools()))
+	return _tools_token_estimate

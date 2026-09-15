@@ -90,9 +90,9 @@ static func check_legacy_args(args: Dictionary) -> Dictionary:
 	return {}
 
 
-## Up to 5 existing track/channel names that contain `query` (case-insensitive substring).
+## Up to 5 existing track/channel names that contain `query` (substring under `NameStyle.key`).
 static func _near_matches(project: Project, query: String) -> PackedStringArray:
-	var q := query.strip_edges().to_lower()
+	var q := NameStyle.key(query)
 	var out: PackedStringArray = []
 	if q.is_empty():
 		return out
@@ -100,14 +100,14 @@ static func _near_matches(project: Project, query: String) -> PackedStringArray:
 	for t in project.tracks:
 		if out.size() >= 5:
 			break
-		if t.name.to_lower().contains(q) and not seen.has(t.name.to_lower()):
-			seen[t.name.to_lower()] = true
+		if NameStyle.key(t.name).contains(q) and not seen.has(NameStyle.key(t.name)):
+			seen[NameStyle.key(t.name)] = true
 			out.append(t.name)
 	for c in project.channels:
 		if out.size() >= 5:
 			break
-		if c.name.to_lower().contains(q) and not seen.has(c.name.to_lower()):
-			seen[c.name.to_lower()] = true
+		if NameStyle.key(c.name).contains(q) and not seen.has(NameStyle.key(c.name)):
+			seen[NameStyle.key(c.name)] = true
 			out.append(c.name)
 	return out
 
@@ -156,7 +156,7 @@ static func resolve_channel(project: Project, args: Dictionary, key: String = "c
 ## anything else is a channel name.
 static func resolve_route_target(project: Project, value: String) -> Variant:
 	var v := value.strip_edges()
-	var key := v.to_lower()
+	var key := NameStyle.key(v)
 	if key == "master":
 		return 1
 	if key == "none":
@@ -245,6 +245,11 @@ static func channel_kind(c: Channel) -> String:
 			return "instrument"
 
 
+## A name argument in the project's naming convention (`bass_line` -> `Bass Line`, see NameStyle).
+static func name_arg(args: Dictionary, key: String, default: String = "") -> String:
+	return NameStyle.format(str(args.get(key, default)))
+
+
 ## Resolve a clip by unique `clip` name (clip names are unique across the project).
 static func resolve_clip(project: Project, args: Dictionary) -> Variant:
 	var name := str(args.get("clip", args.get("name", ""))).strip_edges()
@@ -252,17 +257,17 @@ static func resolve_clip(project: Project, args: Dictionary) -> Variant:
 		return fail("clip is required")
 	var hits: Array = []
 	for clip in project.clips.values():
-		if clip is Clip and clip.name.to_lower() == name.to_lower():
+		if clip is Clip and NameStyle.same(clip.name, name):
 			hits.append(clip)
 	if hits.size() == 1:
 		return hits[0]
 	if hits.is_empty():
-		var q := name.to_lower()
+		var q := NameStyle.key(name)
 		var matches: PackedStringArray = []
 		for clip in project.clips.values():
 			if matches.size() >= 5:
 				break
-			if clip is Clip and clip.name.to_lower().contains(q):
+			if clip is Clip and NameStyle.key(clip.name).contains(q):
 				matches.append(clip.name)
 		if matches.is_empty():
 			return fail("No clip named '%s'" % name)
@@ -328,7 +333,72 @@ static func resolve_start_ticks(project: Project, args: Dictionary, key: String 
 	return ticks if ticks >= 0 else 0
 
 
+## `start`/`end` (end exclusive) or `start` + `bars`, falling back to the selected range.
+## With `allow_all`, no span at all means the whole timeline (for clip-filtered edits).
+## Returns `{start: int, end: int, all: bool}`, or fail(...) — check `.has("error")`.
+static func resolve_time_span(project: Project, args: Dictionary, allow_all: bool = false) -> Dictionary:
+	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
+	var time_range: Dictionary = Sonara.editor.get_time_range() if Sonara and Sonara.editor else {}
+	var start: int
+	if args.has("start"):
+		start = resolve_start_ticks(project, args)
+	elif time_range.get("has", false) and time_range.get("has_end", false):
+		start = int(time_range.start)
+	elif allow_all and not args.has("end") and not args.has("bars"):
+		return {"start": 0, "end": 1 << 60, "all": true}
+	else:
+		return fail("start and end are required (no range is selected)")
+	var end: int
+	if args.has("end"):
+		end = resolve_start_ticks(project, args, "end")
+	elif args.has("bars"):
+		end = start + int(round(float(args.bars) * tpb))
+	elif not args.has("start"):
+		end = int(time_range.end)
+	else:
+		return fail("end or bars is required")
+	if end <= start:
+		return fail("end must be after start")
+	return {"start": start, "end": end, "all": false}
+
+
+## Tracks named in `tracks` (array or comma-separated string), or every clip-holding track when absent.
+## Returns Array[Track], or fail(...).
+static func resolve_track_filter(project: Project, args: Dictionary) -> Variant:
+	var out: Array[Track] = []
+	var raw = args.get("tracks", [])
+	var names: Array = []
+	if raw is Array:
+		names = raw
+	elif raw is String:
+		names = Array(raw.split(",", false))
+	if names.is_empty():
+		for t in project.tracks:
+			if t.has_clips():
+				out.append(t)
+		return out
+	for n in names:
+		var t = resolve_track(project, {"track": str(n)})
+		if t is Dictionary:
+			return t
+		if not t.has_clips():
+			return fail("\"%s\" is a folder and holds no clips" % t.name)
+		if not out.has(t):
+			out.append(t)
+	return out
+
+
+## `"Kick" on Drums 1.1.000–3.1.000`
+static func describe_instance(project: Project, inst: ClipInstance) -> String:
+	var fmt := func(t: int) -> String:
+		return ClipTextTime.format_bbt(t, project.ppq, project.time_numerator, project.time_denominator)
+	var cname: String = inst.clip.name if inst.clip else inst.clip_id
+	var tname: String = inst.track.name if inst.track else "?"
+	return "\"%s\" on %s %s–%s" % [cname, tname, fmt.call(inst.start_ticks), fmt.call(inst.get_end_ticks())]
+
+
 ## Resolve where a new clip instance goes, and refuse if it would overlap.
+## With `overwrite: true` in args the overlap check is skipped; the caller clears the span.
 ## `length` is the requested length in ticks, or -1 to let the range decide (create_clip only).
 ## Returns `{start: int, length: int, reason: String}`, or fail(...) — check `.has("error")`.
 static func resolve_placement(project: Project, track: Track, args: Dictionary, length: int) -> Dictionary:
@@ -356,7 +426,7 @@ static func resolve_placement(project: Project, track: Track, args: Dictionary, 
 	if out_length == -1:
 		var bars := maxi(1, int(args.get("bars", 1)))
 		out_length = bars * tpb
-	if track.has_clip_overlap(start, out_length):
+	if not bool(args.get("overwrite", false)) and track.has_clip_overlap(start, out_length):
 		return _placement_overlap_error(project, track, start, out_length, tpb)
 	return {"start": start, "length": out_length, "reason": reason}
 
@@ -388,7 +458,7 @@ static func _placement_overlap_error(project: Project, track: Track, start: int,
 	while track.has_clip_overlap(candidate_bar * tpb, length):
 		candidate_bar += 1
 	var bars_text := "Bar %d" % bar_start if bar_start == bar_end else "Bars %d–%d" % [bar_start, bar_end]
-	return fail("%s on \"%s\" are occupied by %s. Next free bar: %d." % [bars_text, track.name, ", ".join(names), candidate_bar + 1])
+	return fail("%s on \"%s\" are occupied by %s. Next free bar: %d, or pass overwrite: true." % [bars_text, track.name, ", ".join(names), candidate_bar + 1])
 
 
 ## Shared serialize/apply options from a project + optional tool args.

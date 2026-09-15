@@ -156,6 +156,17 @@ var pan_start_h_scroll_mouse_pos: Vector2 = Vector2.ZERO  # Mouse pos relative t
 # The clip instance that opened this editor (for context, not edited directly)
 var clip_instance: ClipInstance = null
 
+## When on, clicking (or placing/dragging) a note plays it on the track's instrument.
+var audition_enabled := false:
+	set(on):
+		audition_enabled = on
+		if not on:
+			_stop_preview_note()
+
+# The one note currently previewed (piano key or audition), -1 when silent.
+var _preview_note := -1
+var _preview_channel_id := -1
+
 # Convenience to get the Clip of clip_instance
 var clip: Clip:
 	get:
@@ -175,6 +186,10 @@ func _ready():
 	if scene_note_editor:
 		note_editors.append(scene_note_editor)
 		_configure_note_editor(scene_note_editor)
+
+	v_piano.key_pressed.connect(_on_piano_key_pressed)
+	v_piano.key_released.connect(_on_piano_key_released)
+	visibility_changed.connect(_on_visibility_changed)
 
 func _process(delta: float):
 	# Smooth scroll interpolation
@@ -197,10 +212,12 @@ func _process(delta: float):
 
 	# Update playhead position based on scroll/zoom
 	_update_playhead_position()
+	_update_hovered_key()
 
 
 func unbind():
 	"""Unbind all clip instances and clear note editors."""
+	_stop_preview_note()
 	clip = null
 	clip_instance = null
 	track_mode = false
@@ -233,6 +250,8 @@ func bind_to_clip_instance(ci : ClipInstance):
 	# Bind to the first (and only) note editor
 	if note_editor:
 		_configure_note_editor(note_editor)
+		if clip_instance and clip_instance.track:
+			note_editor.note_color = clip_instance.track.color
 		note_editor.bind(clip_instance)
 		# Clip-mode: no position offset (notes show at clip-local positions)
 		note_editor.position_offset_ticks = 0
@@ -552,6 +571,8 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 
 	if clicked_note:
 		# Clicking on a note
+		if not mevent.ctrl_pressed:
+			_audition_visual_note(clicked_note)
 		if mevent.ctrl_pressed:
 			active_editor.selection_manager.toggle_note_selection(clicked_note)
 			accept_event()
@@ -570,7 +591,8 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 			active_editor.interaction_mode = NoteEditor.InteractionMode.BOX_SELECTING
 			accept_event()
 		else:
-			active_editor.place_note_at_position(note_editor_pos)
+			var placed: VisualNote = active_editor.place_note_at_position(note_editor_pos)
+			_audition_visual_note(placed)
 			accept_event()
 
 	_update_selection_overlays()
@@ -578,6 +600,7 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 
 func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button release for note editing."""
+	_stop_preview_note()
 	var active_editor = get_active_note_editor()
 	if not active_editor:
 		return
@@ -678,6 +701,7 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
 		if active_editor.dragging_note:
 			active_editor._on_drag_updated(active_editor.dragging_note, note_editor_pos)
+			_retrigger_audition_on_pitch_change(active_editor.dragging_note)
 			accept_event()
 			_update_selection_overlays()
 
@@ -819,3 +843,74 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.cursor_position_ticks = cursor_position_ticks
 	if grid_helper:
 		editor.grid_helper = grid_helper
+
+
+# ============================================================================
+# KEY HOVER + NOTE PREVIEW (piano keys and audition mode)
+# ============================================================================
+func _on_visibility_changed() -> void:
+	if not is_visible_in_tree():
+		_stop_preview_note()
+		v_piano.hovered_note = -1
+
+
+## Highlight the piano key for the lane under the mouse (note area or piano).
+func _update_hovered_key() -> void:
+	var note := -1
+	var hovered: Control = get_viewport().gui_get_hovered_control() if is_visible_in_tree() else null
+	if hovered and (hovered == self or is_ancestor_of(hovered)) and not is_panning:
+		if hovered == v_piano:
+			note = v_piano.get_note_at_position(v_piano.get_local_mouse_position())
+		else:
+			var y := note_lanes.get_local_mouse_position().y
+			if y >= 0.0 and y < note_lanes.note_to_y_bottom(0):
+				note = clampi(Midi.MIDI_MAX - int(y / note_height), 0, Midi.MIDI_MAX)
+	v_piano.hovered_note = note
+
+
+## Channel that previews should play on: the focused track in track-mode,
+## otherwise the bound clip's track.
+func _get_preview_channel_id() -> int:
+	var t: Track = current_track if track_mode else (clip_instance.track if clip_instance else null)
+	return t.default_channel_id if t else -1
+
+
+func _start_preview_note(note: int, velocity: int) -> void:
+	_stop_preview_note()
+	var channel_id := _get_preview_channel_id()
+	if channel_id < 0:
+		return
+	_preview_note = note
+	_preview_channel_id = channel_id
+	MidiManager.send_note_to_channel(channel_id, note, velocity, true)
+
+
+func _stop_preview_note() -> void:
+	if _preview_note < 0:
+		return
+	MidiManager.send_note_to_channel(_preview_channel_id, _preview_note, 0, false)
+	_preview_note = -1
+	_preview_channel_id = -1
+
+
+func _on_piano_key_pressed(note: int, velocity: int) -> void:
+	_start_preview_note(note, velocity)
+
+
+func _on_piano_key_released(note: int) -> void:
+	if note == _preview_note:
+		_stop_preview_note()
+
+
+func _audition_visual_note(vn: VisualNote) -> void:
+	if not audition_enabled or vn == null or vn.midi_note_data == null:
+		return
+	_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)
+
+
+## While dragging with audition on, replay the note whenever its pitch changes.
+func _retrigger_audition_on_pitch_change(vn: VisualNote) -> void:
+	if not audition_enabled or _preview_note < 0 or vn == null or vn.midi_note_data == null:
+		return
+	if vn.midi_note_data.note != _preview_note:
+		_start_preview_note(vn.midi_note_data.note, vn.midi_note_data.velocity)

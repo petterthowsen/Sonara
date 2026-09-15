@@ -1,12 +1,17 @@
 # MarkerTrack.gd
-# Lane for song markers; double-click empty space to add a marker at the playhead grid.
+# Lane for song markers. Double-click or right-click > Add Marker on empty space creates a marker
+# (spanning the arranger time range when one is set); right-click a marker for its menu.
+# Double-click-and-hold places like a note: the new marker follows the mouse (Shift drags only its
+# end) and is committed, carving overlapped markers, on release. Escape cancels the placement.
 class_name MarkerTrack extends Control
 
 const MarkerItemScene := preload("res://arranger/ruler/MarkerItem.tscn")
+const MarkerContextMenuScene := preload("res://arranger/ruler/MarkerContextMenu.tscn")
 const DEFAULT_MARKER_BEATS := 4
 const ADDITIVE_DRAG_THRESHOLD := 6.0
 const DOUBLE_CLICK_THRESHOLD := 0.3
 const MAX_MARKER_TICK := 999999999
+const RENAME_ON_CREATE_SETTING := "arranger/markers/rename_on_create"
 
 signal marker_created(marker: SongMarker)
 ## Ctrl/Cmd click without drag: set arranger time-range start (same as beat ruler).
@@ -19,11 +24,24 @@ signal box_select_started(content_x: float)
 
 var grid_helper: GridHelper = null
 var project: Project = null
+## Arranger selection; its time range (when both edges are set) becomes the new marker's range.
+var selection_manager: ClipSelectionManager = null
 
 var _marker_items: Dictionary = {}  # SongMarker -> MarkerItem
 var _last_click_time: float = 0.0
 var _additive_pending: bool = false
 var _additive_press_pos: Vector2 = Vector2.ZERO
+var _lane_menu: PopupMenu = null
+var _lane_menu_x: float = 0.0
+var _marker_menu: MarkerContextMenu = null
+
+## Marker being placed by a double-click drag: in the project for display, not yet in history.
+var _placing_marker: SongMarker = null
+var _place_resizing: bool = false
+## Mouse X and marker range where the current place mode (move or Shift-resize) began.
+var _place_origin_x: float = 0.0
+var _place_origin_start: int = 0
+var _place_origin_duration: int = 0
 
 
 func _ready() -> void:
@@ -32,6 +50,19 @@ func _ready() -> void:
 	custom_minimum_size.y = 24
 	if not resized.is_connected(_on_grid_changed):
 		resized.connect(_on_grid_changed)
+
+	_lane_menu = PopupMenu.new()
+	_lane_menu.add_item("Add Marker", 0)
+	_lane_menu.id_pressed.connect(func(_id: int): _create_marker_at_x(_lane_menu_x))
+	add_child(_lane_menu)
+
+	_marker_menu = MarkerContextMenuScene.instantiate() as MarkerContextMenu
+	_marker_menu.visible = false
+	add_child(_marker_menu)
+	_marker_menu.add_marker_requested.connect(_on_add_marker_requested)
+	_marker_menu.split_requested.connect(_on_split_requested)
+	_marker_menu.delete_requested.connect(_on_delete_requested)
+	_marker_menu.rename_requested.connect(_on_rename_requested)
 
 
 func _draw() -> void:
@@ -58,6 +89,7 @@ func set_grid_helper(gh: GridHelper) -> void:
 
 ## Bind to project marker list; pass null to clear.
 func bind_project(p: Project) -> void:
+	_placing_marker = null
 	if project:
 		if project.marker_added.is_connected(_on_marker_added):
 			project.marker_added.disconnect(_on_marker_added)
@@ -78,11 +110,17 @@ func bind_project(p: Project) -> void:
 func _gui_input(event: InputEvent) -> void:
 	if project == null or grid_helper == null:
 		return
-	if not (event is InputEventMouseButton):
-		return
-	if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
+	if not (event is InputEventMouseButton) or not event.pressed:
 		return
 	if _is_pointer_over_marker():
+		return
+
+	if event.button_index == MOUSE_BUTTON_RIGHT:
+		_lane_menu_x = event.position.x
+		_lane_menu.popup(Rect2(get_global_mouse_position() - Vector2.ONE * 10, Vector2.ZERO))
+		accept_event()
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 
 	if event.ctrl_pressed or event.meta_pressed:
@@ -93,14 +131,16 @@ func _gui_input(event: InputEvent) -> void:
 	var now := Time.get_ticks_msec() / 1000.0
 	if now - _last_click_time < DOUBLE_CLICK_THRESHOLD:
 		_last_click_time = 0.0
-		_create_marker_at_x(event.position.x)
+		_begin_place_marker(event.position.x)
 		accept_event()
 	else:
 		_last_click_time = now
 
 
 func _input(event: InputEvent) -> void:
-	if _additive_pending:
+	if _placing_marker:
+		_handle_place_input(event)
+	elif _additive_pending:
 		_handle_additive_input(event)
 
 
@@ -141,20 +181,120 @@ func _snapped_ticks_from_local(local_x: float) -> int:
 	return maxi(grid_helper.snap_ticks(grid_helper.pixels_to_ticks(_content_x_from_local(local_x))), 0)
 
 
-func _create_marker_at_x(local_x: float) -> void:
-	var content_x := local_x + grid_helper.scroll_position
-	var start_ticks := grid_helper.snap_ticks(grid_helper.pixels_to_ticks(content_x))
+## Range (start, duration) for a new marker at track-local X: the arranger time range when set
+## and X falls inside it, else the default length from the snapped position.
+func _new_marker_range(local_x: float) -> Vector2i:
+	var start_ticks := _snapped_ticks_from_local(local_x)
 	var duration := default_marker_beats * grid_helper.get_ticks_per_beat()
-	var min_dur := grid_helper.get_ticks_per_beat()
-	var clamped := clamp_marker_range(null, start_ticks, duration, min_dur)
-	start_ticks = clamped.x
-	duration = clamped.y
-	if duration < min_dur:
+	if selection_manager:
+		var time_range := selection_manager.get_full_range()
+		var click_ticks := grid_helper.pixels_to_ticks(_content_x_from_local(local_x))
+		if time_range.y > time_range.x and click_ticks >= time_range.x and click_ticks < time_range.y:
+			start_ticks = time_range.x
+			duration = time_range.y - time_range.x
+	return Vector2i(start_ticks, duration)
+
+
+## Create a marker at track-local X (or over the arranger time range when X is inside it).
+func _create_marker_at_x(local_x: float) -> void:
+	if project == null or grid_helper == null:
 		return
-	var marker := project.create_marker(start_ticks, duration)
-	HistoryUtil.execute(MarkerCreateCommand.new(project, marker))
+	var r := _new_marker_range(local_x)
+	_on_marker_created(MarkerActions.create_marker(project, r.x, r.y))
+
+
+## Show a new marker at track-local X that follows the mouse until the button is released.
+func _begin_place_marker(local_x: float) -> void:
+	var r := _new_marker_range(local_x)
+	var marker := project.create_marker(r.x, r.y, MarkerActions.unique_name(project, MarkerActions.DEFAULT_NAME))
+	project.add_marker(marker)
+	_placing_marker = marker
+	_rebase_place_drag(local_x)
+
+
+func _handle_place_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_finish_place_marker()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		_cancel_place_marker()
+		get_viewport().set_input_as_handled()
+	elif not is_visible_in_tree():
+		_finish_place_marker()
+	elif event is InputEventMouseMotion or (event is InputEventKey and event.keycode == KEY_SHIFT):
+		_update_place_drag()
+		get_viewport().set_input_as_handled()
+
+
+## Start a move (or Shift-resize) segment from the current mouse X and marker range.
+func _rebase_place_drag(local_x: float) -> void:
+	_place_origin_x = local_x
+	_place_origin_start = _placing_marker.start_ticks
+	_place_origin_duration = _placing_marker.duration_ticks
+	_place_resizing = Input.is_key_pressed(KEY_SHIFT)
+
+
+## Move the placed marker with the mouse, or drag only its end while Shift is held.
+## Overlaps are allowed until release, when the range is carved out of the other markers.
+func _update_place_drag() -> void:
+	var local_x := get_local_mouse_position().x
+	if Input.is_key_pressed(KEY_SHIFT) != _place_resizing:
+		_rebase_place_drag(local_x)
+	var tick_delta := grid_helper.pixels_to_ticks(local_x - _place_origin_x)
+	var min_duration := grid_helper.get_ticks_per_beat()
+	if _place_resizing:
+		var end_ticks := grid_helper.snap_ticks(_place_origin_start + _place_origin_duration + tick_delta)
+		_placing_marker.set_range(_place_origin_start, end_ticks - _place_origin_start, min_duration)
+	else:
+		# Snap the delta so a time-range marker keeps its offset from the grid.
+		var new_start := _place_origin_start + grid_helper.snap_ticks(tick_delta)
+		_placing_marker.set_range(new_start, _place_origin_duration, min_duration)
+
+
+func _finish_place_marker() -> void:
+	var marker := _placing_marker
+	_placing_marker = null
+	MarkerActions.commit_marker(project, marker)
+	_on_marker_created(marker)
+
+
+func _cancel_place_marker() -> void:
+	var marker := _placing_marker
+	_placing_marker = null
+	project.remove_marker(marker)
+
+
+func _on_marker_created(marker: SongMarker) -> void:
+	if marker == null:
+		return
 	marker_created.emit(marker)
-	call_deferred("_begin_edit_for_marker", marker)
+	if Settings.get_value(RENAME_ON_CREATE_SETTING):
+		call_deferred("_begin_edit_for_marker", marker)
+
+
+func _on_item_context_menu_requested(marker: SongMarker, global_pos: Vector2) -> void:
+	if marker == null or grid_helper == null:
+		return
+	var local_x := global_pos.x - get_global_rect().position.x
+	_marker_menu.bind_to_marker(marker, _snapped_ticks_from_local(local_x))
+	# Nudge so the cursor sits inside the panel; a corner popup closes on mouse-up.
+	_marker_menu.popup(Rect2(global_pos - Vector2(8, 8), _marker_menu.get_contents_minimum_size()))
+
+
+func _on_add_marker_requested(marker: SongMarker, tick: int) -> void:
+	_on_marker_created(MarkerActions.add_marker_at_split(project, marker, tick))
+
+
+func _on_split_requested(marker: SongMarker, tick: int) -> void:
+	MarkerActions.split_marker(project, marker, tick)
+
+
+func _on_rename_requested(marker: SongMarker, new_name: String) -> void:
+	MarkerActions.rename_marker(project, marker, new_name)
+
+
+func _on_delete_requested(marker: SongMarker) -> void:
+	MarkerActions.delete_marker(project, marker)
 
 
 func _begin_edit_for_marker(marker: SongMarker) -> void:
@@ -188,6 +328,8 @@ func _add_marker_ui(marker: SongMarker) -> void:
 	item.bind(marker, grid_helper)
 	if not item.range_gesture_finished.is_connected(_on_item_range_gesture_finished):
 		item.range_gesture_finished.connect(_on_item_range_gesture_finished)
+	if not item.context_menu_requested.is_connected(_on_item_context_menu_requested):
+		item.context_menu_requested.connect(_on_item_context_menu_requested)
 	_marker_items[marker] = item
 
 
@@ -198,6 +340,8 @@ func _remove_marker_ui(marker: SongMarker) -> void:
 	_marker_items.erase(marker)
 	if item.range_gesture_finished.is_connected(_on_item_range_gesture_finished):
 		item.range_gesture_finished.disconnect(_on_item_range_gesture_finished)
+	if item.context_menu_requested.is_connected(_on_item_context_menu_requested):
+		item.context_menu_requested.disconnect(_on_item_context_menu_requested)
 	item.queue_free()
 
 
@@ -265,66 +409,15 @@ func nearest_marker_start_right(marker: SongMarker, at_or_after_tick: int) -> in
 	return nearest
 
 
-## Clamp so [start, start + duration) does not overlap other markers (`marker` excluded).
-func clamp_marker_range(
-	marker: SongMarker,
-	start: int,
-	duration: int,
-	min_duration: int
-) -> Vector2i:
-	var new_start := maxi(0, start)
-	var new_duration := maxi(min_duration, duration)
-	if project == null:
-		return Vector2i(new_start, new_duration)
-
-	var guard := 0
-	while guard < project.markers.size() + 2:
-		guard += 1
-		var left_limit := nearest_marker_end_left(marker, new_start)
-		new_start = maxi(left_limit, new_start)
-
-		var new_end := new_start + new_duration
-		var right_limit := nearest_marker_start_right(marker, new_end)
-		if new_end > right_limit:
-			new_end = right_limit
-			new_duration = new_end - new_start
-			if new_duration < min_duration:
-				new_duration = min_duration
-				new_start = new_end - new_duration
-				left_limit = nearest_marker_end_left(marker, new_start)
-				new_start = maxi(left_limit, new_start)
-				new_duration = maxi(min_duration, new_end - new_start)
-
-		var blocker := _first_overlapping_marker(marker, new_start, new_duration)
-		if blocker == null:
-			break
-		new_start = blocker.get_end_ticks()
-
-	return Vector2i(new_start, new_duration)
-
-
-func _first_overlapping_marker(
-	marker: SongMarker,
-	start: int,
-	duration: int
-) -> SongMarker:
-	if project == null:
-		return null
-	var end := start + duration
-	for other in project.markers:
-		if other == marker:
-			continue
-		if start < other.get_end_ticks() and other.start_ticks < end:
-			return other
-	return null
-
-
-## Clamp a move keeping duration fixed (uses gesture-start duration).
-func clamp_marker_move(marker: SongMarker, new_start: int, duration: int, min_duration: int) -> int:
+## Clamp a move keeping duration fixed: the marker stays inside the gap it occupied at gesture
+## start (between the lane start / previous marker end and the next marker start).
+func clamp_marker_move(marker: SongMarker, new_start: int, gesture_start: int, duration: int) -> int:
 	if grid_helper:
 		new_start = grid_helper.snap_ticks(new_start)
-	var clamped := clamp_marker_range(marker, new_start, duration, min_duration)
-	return clamped.x
+	var left_limit := nearest_marker_end_left(marker, gesture_start)
+	var right_limit := nearest_marker_start_right(marker, gesture_start + duration)
+	new_start = mini(new_start, right_limit - duration)
+	return maxi(new_start, left_limit)
 
 
 ## Clamp left-edge resize; `fixed_end` is the end tick at gesture start.

@@ -25,7 +25,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var project = require_project()
 	if project is Dictionary:
 		return project
-	var bus_name := str(args.get("name", "Bus")).strip_edges()
+	var bus_name := name_arg(args, "name", "Bus")
 	if bus_name.is_empty():
 		bus_name = "Bus"
 	var cmd := BusCreateCommand.new(project, bus_name)

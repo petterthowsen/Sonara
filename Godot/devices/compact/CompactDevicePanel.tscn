@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://dnb0judqvs27u" path="res://devices/compact/CompactDevicePanel.gd" id="1_6d71u"]
 [ext_resource type="PackedScene" uid="uid://q0m43fo1g33u" path="res://devices/compact/CompactParameterControl.tscn" id="1_o5nab"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_jx3fc"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6d71u"]
 content_margin_left = 0.0
@@ -77,12 +78,23 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Name" type="Label" parent="Header/HBoxContainer"]
+[node name="Name" parent="Header/HBoxContainer" instance=ExtResource("3_smle")]
 layout_mode = 2
 size_flags_horizontal = 3
+mouse_filter = 1
+value_type = 1
+display_format = "%s"
+
+[node name="Label" parent="Header/HBoxContainer/Name" index="0"]
 text = "PolySynth"
 label_settings = SubResource("LabelSettings_6d71u")
+horizontal_alignment = 0
 clip_text = true
+
+[node name="LineEdit" parent="Header/HBoxContainer/Name" index="1"]
+max_length = 0
+theme_override_font_sizes/font_size = 14
+alignment = 0
 
 [node name="CollapseToggle" type="Button" parent="Header/HBoxContainer"]
 custom_minimum_size = Vector2(24, 0)

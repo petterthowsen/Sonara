@@ -1,5 +1,6 @@
 # ConversationStore.gd
-# Per-project sidecar (`*.aichat/`) or untitled scratch folder.
+# Per-project sidecar (`*.aichat/`) or untitled scratch folder. Only the bound project's
+# conversations are listed; the scratch folder belongs to the current untitled project.
 class_name ConversationStore extends RefCounted
 
 static var logger := Log.make("ConversationStore")
@@ -15,19 +16,26 @@ var _current: Conversation = null
 var _bound_path: String = ""
 var _save_due: bool = false
 var _save_at_msec: int = 0
+## Tests: use this folder instead of ~/.config/sonara/aichat/scratch.
+var scratch_dir_override: String = ""
 
 
-## Empty path → scratch under ~/.config/sonara/aichat/scratch.
-func bind_project(project_path: String) -> void:
+## Bind to a project's sidecar and reopen its last active conversation.
+## Empty path → scratch under ~/.config/sonara/aichat/scratch, wiped first when `fresh_scratch`
+## (a new untitled project must not inherit chats from an earlier unsaved one).
+func bind_project(project_path: String, fresh_scratch: bool = false) -> void:
 	autosave_current()
+	_current = null
 	_bound_path = project_path
 	if project_path.is_empty():
 		_dir = _scratch_dir()
+		if fresh_scratch:
+			_remove_dir_recursive(_dir)
 	else:
 		_dir = _sidecar_dir(project_path)
 	DirAccess.make_dir_recursive_absolute(_dir)
 	_index = _read_index()
-	_current = null
+	_repair_index()
 	var active_id := str(_index.get("active_id", ""))
 	if not active_id.is_empty() and FileAccess.file_exists(_conv_path(active_id)):
 		_current = load_conversation(active_id)
@@ -73,10 +81,17 @@ func save(conversation: Conversation) -> void:
 	_atomic_write(_index_path(), JSON.stringify(_index, "\t"))
 
 
+## Folder holding ExchangeLog records for one conversation, or "" when unbound.
+func exchange_dir(conversation_id: String) -> String:
+	if _dir.is_empty() or conversation_id.is_empty():
+		return ""
+	return _dir.path_join(ExchangeLog.DIR_NAME).path_join(conversation_id)
+
+
 ## Create, persist, and activate a new conversation.
 func create() -> Conversation:
 	var c := Conversation.create_new()
-	c.title = "New chat"
+	c.title = Conversation.PLACEHOLDER_TITLE
 	_current = c
 	_index["active_id"] = c.id
 	save(c)
@@ -90,6 +105,7 @@ func delete_conversation(id: String) -> void:
 	var path := _conv_path(id)
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+	_remove_dir_recursive(exchange_dir(id))
 	var kept: Array = []
 	for entry in list_conversations():
 		if entry is Dictionary and str(entry.get("id", "")) != id:
@@ -106,8 +122,9 @@ func delete_conversation(id: String) -> void:
 			_current = create()
 
 
-## Move scratch files next to a newly saved project.
-func migrate_scratch_to(project_path: String) -> void:
+## Rebind after saving to `project_path`. Scratch chats move next to the project (the scratch
+## folder is emptied); a Save As from another project copies its chats and keeps the original.
+func migrate_to(project_path: String) -> void:
 	if project_path.is_empty():
 		return
 	var dest := _sidecar_dir(project_path)
@@ -115,30 +132,33 @@ func migrate_scratch_to(project_path: String) -> void:
 		_bound_path = project_path
 		return
 	autosave_current()
-	DirAccess.make_dir_recursive_absolute(dest)
 	var src := _dir
+	var was_scratch := is_scratch()
 	if src.is_empty() or not DirAccess.dir_exists_absolute(src):
 		bind_project(project_path)
 		return
-	var da := DirAccess.open(src)
-	if da:
-		da.list_dir_begin()
-		var name := da.get_next()
-		while name != "":
-			if name != "." and name != "..":
-				var from_path := src.path_join(name)
-				var to_path := dest.path_join(name)
-				if FileAccess.file_exists(to_path):
-					DirAccess.remove_absolute(to_path)
-				DirAccess.copy_absolute(from_path, to_path)
-			name = da.get_next()
-		da.list_dir_end()
+	var src_entries := list_conversations().duplicate()
 	_dir = dest
+	var dest_index := _read_index()
+	_copy_dir_recursive(src, dest)
+	if was_scratch:
+		_remove_dir_recursive(src)
 	_bound_path = project_path
-	_index = _read_index()
+	# The copy overwrote dest's index.json; keep chats that already lived there.
+	_index = dest_index
+	for entry in src_entries:
+		if entry is Dictionary:
+			_upsert_index(Conversation.from_storage(entry))
+	_index["active_id"] = _current.id if _current else str(dest_index.get("active_id", ""))
+	_atomic_write(_index_path(), JSON.stringify(_index, "\t"))
 	if _current:
 		save(_current)
-	logger.info("Migrated scratch → %s" % dest)
+	logger.info("Migrated %s → %s" % [src, dest])
+
+
+## Project file the store is bound to ("" for scratch or unbound).
+func get_bound_path() -> String:
+	return _bound_path
 
 
 ## Write the active conversation immediately.
@@ -185,6 +205,8 @@ func is_scratch() -> bool:
 
 
 func _scratch_dir() -> String:
+	if not scratch_dir_override.is_empty():
+		return scratch_dir_override
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree and tree.root:
 		var sonara := tree.root.get_node_or_null("Sonara")
@@ -224,6 +246,43 @@ func _read_index() -> Dictionary:
 	return {"active_id": "", "conversations": []}
 
 
+## Drop empty non-active conversations and derive placeholder titles from the first user
+## message (titles were never set before). Rewrites the index when anything changed.
+func _repair_index() -> void:
+	var active_id := str(_index.get("active_id", ""))
+	var kept: Array = []
+	var changed := false
+	for entry in list_conversations():
+		if not entry is Dictionary:
+			changed = true
+			continue
+		var id := str(entry.get("id", ""))
+		var title := str(entry.get("title", ""))
+		if id == active_id and not title.is_empty() and title != Conversation.PLACEHOLDER_TITLE:
+			kept.append(entry)
+			continue
+		var conv := load_conversation(id)
+		if conv == null:
+			changed = true
+			continue
+		if conv.messages.is_empty() and id != active_id:
+			DirAccess.remove_absolute(_conv_path(id))
+			_remove_dir_recursive(exchange_dir(id))
+			changed = true
+			continue
+		if title.is_empty() or title == Conversation.PLACEHOLDER_TITLE:
+			conv.title = ""
+			conv.ensure_title_from_first_user()
+			if conv.title != title:
+				entry["title"] = conv.title
+				_atomic_write(_conv_path(id), JSON.stringify(conv.to_storage(), "\t"))
+				changed = true
+		kept.append(entry)
+	if changed:
+		_index["conversations"] = kept
+		_atomic_write(_index_path(), JSON.stringify(_index, "\t"))
+
+
 func _upsert_index(conversation: Conversation) -> void:
 	var entries: Array = list_conversations()
 	var found := false
@@ -236,6 +295,28 @@ func _upsert_index(conversation: Conversation) -> void:
 		entries.append(conversation.to_index_entry())
 	_index["conversations"] = entries
 	_index["active_id"] = conversation.id
+
+
+## Copy files and subfolders (exchange logs) from `src` into `dest`, overwriting.
+static func _copy_dir_recursive(src: String, dest: String) -> void:
+	DirAccess.make_dir_recursive_absolute(dest)
+	for name in DirAccess.get_files_at(src):
+		var to_path := dest.path_join(name)
+		if FileAccess.file_exists(to_path):
+			DirAccess.remove_absolute(to_path)
+		DirAccess.copy_absolute(src.path_join(name), to_path)
+	for name in DirAccess.get_directories_at(src):
+		_copy_dir_recursive(src.path_join(name), dest.path_join(name))
+
+
+static func _remove_dir_recursive(path: String) -> void:
+	if path.is_empty() or not DirAccess.dir_exists_absolute(path):
+		return
+	for name in DirAccess.get_files_at(path):
+		DirAccess.remove_absolute(path.path_join(name))
+	for name in DirAccess.get_directories_at(path):
+		_remove_dir_recursive(path.path_join(name))
+	DirAccess.remove_absolute(path)
 
 
 func _atomic_write(path: String, text: String) -> void:

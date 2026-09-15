@@ -213,6 +213,14 @@ class ORChatMessage:
 	var audio_b64: String = ""
 	var audio_transcript: String = ""
 	var reasoning: String = ""
+	## OpenRouter `usage` for the request that produced this message (assistant only).
+	var usage: Dictionary = {}
+	## Id of the stored request/response record (ExchangeLog), or "".
+	var exchange_id: String = ""
+	## Selection snapshot attached to a user message (SelectionContext.to_storage items: plain
+	## JSON, color as html).
+	## Sent to the model as a `<selection_context>` block before the text; not part of get_text().
+	var context: Array = []
 
 
 	## User message with plain text.
@@ -274,8 +282,11 @@ class ORChatMessage:
 				if tc is ORToolCall:
 					calls.append(tc.to_openrouter())
 			d["tool_calls"] = calls
+		var context_block := get_context_text()
 		if content is Array:
 			var parts: Array = []
+			if not context_block.is_empty():
+				parts.append(ORContentPart.text_part(context_block).to_openrouter())
 			for part in content:
 				if part is ORContentPart:
 					parts.append(part.to_openrouter())
@@ -283,9 +294,23 @@ class ORChatMessage:
 		elif content is String:
 			if content.is_empty() and not tool_calls.is_empty():
 				d["content"] = null
+			elif not context_block.is_empty():
+				d["content"] = context_block + "\n\n" + content
 			else:
 				d["content"] = content
 		return d
+
+
+	## The `<selection_context>` block for this message, or "" when nothing is attached.
+	func get_context_text() -> String:
+		if role != "user" or context.is_empty():
+			return ""
+		var lines: PackedStringArray = ["<selection_context>", "What the user had selected when sending this message:"]
+		for item in context:
+			if item is Dictionary:
+				lines.append("- " + str(item.get("text", "")))
+		lines.append("</selection_context>")
+		return "\n".join(lines)
 
 
 	## Parse a completed OpenRouter message object.
@@ -330,6 +355,12 @@ class ORChatMessage:
 		}
 		if not audio_b64.is_empty():
 			d["audio_b64"] = audio_b64
+		if not usage.is_empty():
+			d["usage"] = usage
+		if not exchange_id.is_empty():
+			d["exchange_id"] = exchange_id
+		if not context.is_empty():
+			d["context"] = context
 		if content is Array:
 			var parts: Array = []
 			for part in content:
@@ -357,6 +388,13 @@ class ORChatMessage:
 		msg.reasoning = str(data.get("reasoning", ""))
 		msg.audio_transcript = str(data.get("audio_transcript", ""))
 		msg.audio_b64 = str(data.get("audio_b64", ""))
+		msg.exchange_id = str(data.get("exchange_id", ""))
+		var stored_context = data.get("context", [])
+		if stored_context is Array:
+			msg.context = stored_context
+		var stored_usage = data.get("usage", {})
+		if stored_usage is Dictionary:
+			msg.usage = stored_usage
 		if data.has("content_parts") and data.content_parts is Array:
 			var parts: Array = []
 			for item in data.content_parts:
@@ -459,11 +497,19 @@ class ORChatDelta:
 	var image_part: ORContentPart = null
 	var error_message: String = ""
 	var error_code: String = ""
+	## `usage` from the final accounting chunk, else {}.
+	var usage: Dictionary = {}
+	## OpenRouter generation id (`gen-…`), repeated on every chunk.
+	var generation_id: String = ""
 
 
 	## Parse one `data:` JSON object from the SSE stream.
 	static func from_openrouter_chunk(data: Dictionary) -> ORChatDelta:
 		var delta := ORChatDelta.new()
+		delta.generation_id = str(data.get("id", ""))
+		var raw_usage = data.get("usage", null)
+		if raw_usage is Dictionary:
+			delta.usage = raw_usage
 		if data.has("error") and data.error is Dictionary:
 			delta.error_message = ORChatError.format_openrouter_error(data.error, 0)
 			delta.error_code = str(data.error.get("code", ""))

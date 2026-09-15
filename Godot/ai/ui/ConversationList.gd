@@ -29,6 +29,9 @@ func rebuild(entries: Array, active_id: String) -> void:
 		if title.is_empty():
 			title = "New chat"
 		add_item(title)
+		var updated := int(entry.get("updated_unix", 0))
+		if updated > 0:
+			set_item_tooltip(item_count - 1, "%s\nUpdated %s" % [title, Time.get_datetime_string_from_unix_time(updated, true)])
 		_ids.append(id)
 		if id == active_id:
 			select = _ids.size() - 1

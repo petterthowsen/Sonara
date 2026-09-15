@@ -35,7 +35,7 @@ func execute(args: Dictionary) -> Dictionary:
 	var kind := str(args.get("kind", "instrument")).to_lower()
 	if kind not in ["instrument", "audio", "folder", "group"]:
 		return fail("kind must be instrument, audio, folder, or group")
-	var track_name := str(args.get("name", "Track")).strip_edges()
+	var track_name := name_arg(args, "name", "Track")
 	if track_name.is_empty():
 		track_name = "Track"
 	# Resolve the device/asset before creating anything, so a bad id leaves no half-made track.

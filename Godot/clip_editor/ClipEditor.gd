@@ -16,6 +16,9 @@ var log := Log.make("ClipEditor")
 
 @onready var midi_editor = $HSplit/MainPanel/VBox/MidiEditor
 
+@onready var audition_toggle: Button = $BottomPanel/Toolbar/AuditionToggle
+const AUDITION_CONFIG_KEY := "clip_editor/audition"
+
 # for multi-track clip editing
 @onready var track_selector: ClipEditorTrackList = $HSplit/LeftPanel/VBox/ClipEditorTrackList
 
@@ -71,6 +74,11 @@ func _ready():
 		track_mode_toggle.toggled.connect(_on_track_mode_toggle_toggled)
 		_update_mode_ui()
 	
+	var audition_on: bool = Sonara.get_config(AUDITION_CONFIG_KEY, false)
+	audition_toggle.set_pressed_no_signal(audition_on)
+	midi_editor.audition_enabled = audition_on
+	audition_toggle.toggled.connect(_on_audition_toggled)
+	
 	if Sonara.editor:
 		Sonara.editor.clips_selected.connect(_on_editor_clips_selected)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
@@ -111,6 +119,12 @@ func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
 	# If we're already visible, bind immediately
 	if is_visible_in_tree():
 		_bind_pending_clips()
+
+
+func _on_audition_toggled(on: bool) -> void:
+	midi_editor.audition_enabled = on
+	Sonara.set_config(AUDITION_CONFIG_KEY, on)
+	Sonara.save_config()
 
 
 func _on_editor_time_signature_changed(numerator : int, denominator : int):

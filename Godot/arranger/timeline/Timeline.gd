@@ -286,6 +286,8 @@ func _clear_all_tracks() -> void:
 
 	if clip_selection_manager:
 		clip_selection_manager.clear_selection()
+		clip_selection_manager.anchor_track = null
+		clip_selection_manager.anchor_tick = -1
 	
 	logger.info("All timeline tracks cleared")
 
@@ -314,11 +316,13 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 		return
 
-	if clip_selection_manager:
-		clip_selection_manager.clear_selection()
-
 	var click_ticks = pixels_to_ticks(local_pos.x)
 	var snapped_ticks = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
+	if clip_selection_manager:
+		clip_selection_manager.clear_selection()
+		var lane_index := _find_track_index_at_global_position(get_global_mouse_position())
+		var lane_track: Track = timeline_tracks[lane_index].track if lane_index >= 0 else null
+		clip_selection_manager.set_anchor(lane_track, snapped_ticks)
 	Sonara.editor.set_playhead(snapped_ticks)
 	accept_event()
 
@@ -847,25 +851,31 @@ func cut_selection_to_clipboard() -> void:
 	logger.info("Cut %d clips to clipboard" % selected.size())
 
 
-## Paste clipboard clips at the selection start (or playhead). Refuses if they would overlap.
+## Paste clipboard clips at the last clicked location (range start, clicked tick, or playhead)
+## onto the last clicked track. Refuses if they would overlap or run past the last track.
 func paste_clipboard() -> void:
 	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
 	var target_tick := clip_selection_manager.get_paste_tick(playhead_ticks) if clip_selection_manager else playhead_ticks
+	var target_track: Track = clip_selection_manager.anchor_track if clip_selection_manager else null
 	if clip_clipboard == null or clip_clipboard.is_empty():
 		logger.warn("Paste skipped - clipboard empty")
 		return
-	if _clipboard_placement_blocked(clip_clipboard, target_tick):
+	if _plan_placement(clip_clipboard, target_tick, target_track).is_empty():
+		logger.warn("Paste skipped - clips would run past the last track")
+		return
+	if _clipboard_placement_blocked(clip_clipboard, target_tick, target_track):
 		logger.warn("Paste skipped - no adequate space")
 		return
-	var new_instances = paste_clipboard_at(target_tick)
+	var new_instances = paste_clipboard_at(target_tick, null, true, "Paste", target_track)
 	if new_instances.is_empty():
 		logger.warn("Paste skipped - clipboard empty")
 	else:
 		logger.info("Pasted %d clips at tick %d" % [new_instances.size(), target_tick])
 
 
-## Insert `source` (or the clipboard) at `target_tick`. Returns [] when blocked or empty.
-func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste") -> Array[ClipInstance]:
+## Insert `source` (or the clipboard) at `target_tick`, with the topmost clip on `target_track`
+## (null keeps each clip's own track). Returns [] when blocked or empty.
+func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste", target_track: Track = null) -> Array[ClipInstance]:
 	if not Sonara.editor or not Sonara.editor.project:
 		push_warning("[Timeline] Cannot paste clips - no active project")
 		return []
@@ -877,23 +887,16 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 	if source == null or source.is_empty():
 		return []
 
-	if _clipboard_placement_blocked(source, target_tick):
+	if _clipboard_placement_blocked(source, target_tick, target_track):
 		return []
 
-	var delta_ticks := target_tick - source.start_tick
 	var new_instances: Array[ClipInstance] = []
 	var cmds: Array[Command] = []
-	for original_inst in source.get_sorted_by_start():
-		if not original_inst:
-			continue
-		var target_track: Track = original_inst.track
-		if not target_track or not target_track.has_clips():
-			continue
+	for placement in _plan_placement(source, target_tick, target_track):
+		var original_inst: ClipInstance = placement.instance
+		var dest_track: Track = placement.track
+		var new_start: int = placement.start
 		var clip_ref: Clip = original_inst.clip
-		if not clip_ref:
-			continue
-
-		var new_start = max(0, original_inst.start_ticks + delta_ticks)
 		var new_instance := ClipInstance.new("", clip_ref.id)
 		new_instance.clip = clip_ref
 		new_instance.start_ticks = new_start
@@ -902,7 +905,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		new_instances.append(new_instance)
 
 		var cmd := ClipInstanceCreateCommand.new(
-			target_track, clip_ref, new_start, original_inst.duration_ticks,
+			dest_track, clip_ref, new_start, original_inst.duration_ticks,
 			null, false, new_instance
 		)
 		cmd.name = "%s Clip" % action_name
@@ -945,21 +948,59 @@ func duplicate_selection() -> void:
 		logger.info("Duplicated %d clips starting at %d" % [new_instances.size(), target_tick])
 
 
-## True when placing `source` at `target_tick` would overlap an existing clip.
-func _clipboard_placement_blocked(source: ClipSelection, target_tick: int) -> bool:
-	if source == null or source.is_empty():
-		return false
-	var delta_ticks := target_tick - source.start_tick
-	for original_inst in source.get_sorted_by_start():
-		if not original_inst or not original_inst.clip:
-			continue
-		var target_track: Track = original_inst.track
-		if not target_track or not target_track.has_clips():
-			continue
-		var new_start := maxi(0, original_inst.start_ticks + delta_ticks)
-		if target_track.has_clip_overlap(new_start, original_inst.duration_ticks):
+## True when placing `source` at `target_tick` / `target_track` would overlap an existing clip.
+func _clipboard_placement_blocked(source: ClipSelection, target_tick: int, target_track: Track = null) -> bool:
+	for placement in _plan_placement(source, target_tick, target_track):
+		var inst: ClipInstance = placement.instance
+		var dest_track: Track = placement.track
+		if dest_track.has_clip_overlap(placement.start, inst.duration_ticks):
 			return true
 	return false
+
+
+## Where each clip in `source` lands: [{instance, track, start}]. With a clip-capable `target_track`,
+## the topmost source track maps onto it and the others keep their lane spacing (folders skipped).
+## Returns [] when nothing is placeable or the layout would run past the last lane.
+func _plan_placement(source: ClipSelection, target_tick: int, target_track: Track = null) -> Array[Dictionary]:
+	var plan: Array[Dictionary] = []
+	if source == null or source.is_empty():
+		return plan
+
+	var lanes: Array[Track] = []
+	for lane in timeline_tracks:
+		if lane and lane.track and lane.track.has_clips():
+			lanes.append(lane.track)
+	var target_index := lanes.find(target_track) if target_track else -1
+	var instances := source.get_sorted_by_start()
+
+	var top_index := -1
+	for inst in instances:
+		if inst and inst.clip and inst.track:
+			var index := lanes.find(inst.track)
+			if index >= 0 and (top_index < 0 or index < top_index):
+				top_index = index
+	var track_delta := target_index - top_index if target_index >= 0 and top_index >= 0 else 0
+
+	var delta_ticks := target_tick - source.start_tick
+	for inst in instances:
+		if not inst or not inst.clip or not inst.track:
+			continue
+		var dest_track: Track = inst.track
+		var source_index := lanes.find(inst.track)
+		if track_delta != 0 and source_index >= 0:
+			var dest_index := source_index + track_delta
+			if dest_index < 0 or dest_index >= lanes.size():
+				plan.clear()
+				return plan
+			dest_track = lanes[dest_index]
+		if not dest_track.has_clips():
+			continue
+		plan.append({
+			"instance": inst,
+			"track": dest_track,
+			"start": maxi(0, inst.start_ticks + delta_ticks),
+		})
+	return plan
 
 
 func move_selection_by_ticks(delta_ticks: int) -> void:

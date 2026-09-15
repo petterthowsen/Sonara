@@ -33,6 +33,9 @@ signal channel_focused(channel : Channel)
 signal track_focused(track : Track)
 signal tracks_selected(tracks: Array[Track])
 
+# View
+signal view_changed(view: int)  # Editor.View
+
 # ============================================================================
 # NODE REFERENCES
 # ============================================================================
@@ -293,12 +296,13 @@ func _unhandled_input(event: InputEvent) -> void:
 # ============================================================================
 # PROJECT MANAGEMENT
 # ============================================================================
-func open_project(p: Project) -> void:
-	"""Open a project and connect it to audio engine."""
+func open_project(p: Project, path: String = "") -> void:
+	"""Open a project and connect it to audio engine. `path` is the file it was loaded from."""
 	if project != null:
 		close_project()
 
 	project = p
+	project_path = path
 	is_modified = false
 	history.clear()
 
@@ -406,8 +410,7 @@ func load_project(path: String) -> bool:
 		push_error("[Editor] Failed to deserialize project from JSON")
 		return false
 	
-	open_project(loaded_project)
-	project_path = path
+	open_project(loaded_project, path)
 	logger.info("[Editor] Project loaded: ", path)
 	return true
 
@@ -738,6 +741,7 @@ func _update_view_visibility() -> void:
 	arranger.visible = (current_view == View.ARRANGER)
 	mixer.visible = (current_view == View.MIXER)
 	clip_editor.visible = (current_view == View.EDITOR)
+	view_changed.emit(current_view)
 
 	if clip_editor.visible:
 		clip_editor.call_deferred("grab_focus")

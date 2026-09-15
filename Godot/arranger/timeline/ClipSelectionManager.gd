@@ -33,6 +33,10 @@ var range_start_tick: int = 0
 var range_end_tick: int = 0
 var range_has_end: bool = false
 
+## Last clicked arranger location: lane/clip clicks and track header selection. Paste targets it.
+var anchor_track: Track = null
+var anchor_tick: int = -1
+
 var _box_span_all_tracks: bool = false
 var _preserve_range: bool = false
 var _additive_start_pos: Vector2 = Vector2.ZERO
@@ -102,6 +106,7 @@ func hide_range() -> void:
 
 ## Show only the start boundary at a grid-snapped tick and drop any clip selection.
 func set_range_start(tick: int) -> void:
+	anchor_tick = tick
 	_preserve_range = true
 	_set_range(tick, tick, false)
 	if selection.is_empty():
@@ -118,10 +123,27 @@ func has_range() -> bool:
 	return range_visible
 
 
-## Paste target: range start when a range exists, otherwise `fallback`.
+## (start, end) of the time range when both boundaries are set, otherwise (0, 0).
+func get_full_range() -> Vector2i:
+	if range_visible and range_has_end and range_end_tick > range_start_tick:
+		return Vector2i(range_start_tick, range_end_tick)
+	return Vector2i.ZERO
+
+
+## Remember the last clicked location. A null `track` or negative `tick` leaves that part unchanged.
+func set_anchor(track: Track, tick: int = -1) -> void:
+	if track:
+		anchor_track = track
+	if tick >= 0:
+		anchor_tick = tick
+
+
+## Paste target: range start, else the last clicked tick, else `fallback`.
 func get_paste_tick(fallback: int) -> int:
 	if range_visible:
 		return range_start_tick
+	if anchor_tick >= 0:
+		return anchor_tick
 	return fallback
 
 
@@ -186,6 +208,8 @@ func begin_additive_gesture(pos: Vector2, pending_clip: ClipInstance = null) -> 
 	_additive_start_pos = pos
 	_pending_additive_clip = pending_clip
 	_box_span_all_tracks = false
+	var lane := _track_at_y(pos.y)
+	set_anchor(lane.track if lane else null)
 
 
 ## Stretch a pending or active additive gesture to `pos`.
@@ -266,6 +290,7 @@ func _on_clip_select_requested(_clip_ui: TimelineClip, additive: bool) -> void:
 		return
 
 	var instance := _clip_ui.clip_instance
+	set_anchor(instance.track, instance.start_ticks)
 	if additive:
 		_pending_exclusive = null
 		toggle_selection(instance)

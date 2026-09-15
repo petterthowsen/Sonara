@@ -117,31 +117,41 @@ static func bars_from_ticks(ticks: int, ppq: int, numerator: int, denominator: i
 	return maxi(1, ceili(float(maxi(0, ticks)) / float(tpb)))
 
 
-## Parse `1/4`, `1/4.`, `1/4t`, `240t`, or a raw tick count. -1 on failure.
-static func parse_duration(text: String, ppq: int) -> int:
+## Accepted duration spellings, for error messages and tool descriptions.
+const DURATION_FORMS := "1/4, 1/8. (dotted), 1/4t (triplet), 3/8, 2b (beats), 240t (ticks)"
+
+
+## Parse `1/4`, `3/8`, `1/4.`, `1/4t`, `2b` / `1.5b` (beats), or `240t` (ticks). -1 on failure.
+## A bare number is refused: models read `4` as beats, ticks would be a silent 4-tick note.
+static func parse_duration(text: String, ppq: int, denominator: int = 4) -> int:
 	var s := text.strip_edges().to_lower()
 	if s.is_empty():
 		return -1
 	var p := maxi(1, ppq)
+	if s.ends_with("b") and not s.contains("/"):
+		var beats := s.substr(0, s.length() - 1)
+		if not beats.is_valid_float() or beats.to_float() <= 0.0:
+			return -1
+		return maxi(1, int(round(beats.to_float() * GridHelper.beat_ticks(p, denominator))))
 	if s.ends_with("t") and not s.contains("/"):
 		var raw := s.substr(0, s.length() - 1)
 		if raw.is_valid_int():
 			return maxi(1, raw.to_int())
 		return -1
-	if s.is_valid_int():
-		return maxi(1, s.to_int())
 	var dotted := s.ends_with(".")
 	if dotted:
 		s = s.substr(0, s.length() - 1)
 	var triplet := s.ends_with("t")
 	if triplet:
 		s = s.substr(0, s.length() - 1)
-	if not s.begins_with("1/"):
+	var frac := s.split("/")
+	if frac.size() != 2 or not frac[0].is_valid_int() or not frac[1].is_valid_int():
 		return -1
-	var denom := s.substr(2).to_int()
-	if denom <= 0:
+	var num := frac[0].to_int()
+	var denom := frac[1].to_int()
+	if num <= 0 or denom <= 0:
 		return -1
-	var ticks := int(float(p) * 4.0 / float(denom))
+	var ticks := int(float(p) * 4.0 * float(num) / float(denom))
 	if dotted:
 		ticks = int(round(float(ticks) * 1.5))
 	if triplet:

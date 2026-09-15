@@ -75,6 +75,9 @@ static func apply(clip: Object, project: Object, text: String, opts: Dictionary 
 	var kind := str(header.get("kind", ""))
 	if kind.is_empty():
 		kind = str(o.kind)
+	# A caller's kind/format is a hint about the clip, not proof the text is a grid: `add` lines are ops.
+	if kind in ["drums", "pitched"] and ClipTextEvents.looks_like_ops(text) and not _looks_like_grid(text):
+		kind = "events"
 	if kind.is_empty():
 		if ClipTextEvents.looks_like_ops(text) or ClipTextEvents.looks_like_list(text):
 			kind = "events"

@@ -2,7 +2,10 @@
 class_name ChatTranscript extends ScrollContainer
 
 
+signal exchange_requested(exchange_id: String)
+
 const MESSAGE_SCENE := preload("res://ai/ui/ChatMessage.tscn")
+const LINK_COLOR := Color(0.6, 0.62, 0.68, 0.75)
 
 @onready var _list: VBoxContainer = $List
 
@@ -30,6 +33,10 @@ func rebuild(conversation: Conversation) -> void:
 				if msg.finish_reason == "max_tool_rounds":
 					_add_message(ChatMessage.Kind.LIMIT, msg.get_text(), msg)
 					continue
+				if msg.finish_reason == "error":
+					_add_message(ChatMessage.Kind.ERROR, msg.get_text(), msg)
+					_add_exchange_link(msg)
+					continue
 				if show_thinking and not msg.reasoning.is_empty():
 					_list.add_child(CollapsibleBlock.new("thinking", "Thinking", msg.reasoning))
 				var text: String = msg.get_text()
@@ -39,6 +46,7 @@ func rebuild(conversation: Conversation) -> void:
 					if tc is ChatTypes.ORToolCall:
 						var args_text: String = JSON.stringify(tc.arguments, "\t") if not tc.arguments.is_empty() else tc.arguments_raw
 						_list.add_child(CollapsibleBlock.new("tool", "Tool · %s" % tc.name, args_text))
+				_add_exchange_link(msg)
 			"tool":
 				var body := str(msg.content)
 				var title := "Result"
@@ -100,6 +108,38 @@ func _add_message(kind: ChatMessage.Kind, text: String, msg: ChatTypes.ORChatMes
 	_list.add_child(bubble)
 	bubble.configure(kind, text, msg)
 	return bubble
+
+
+## Small right-aligned link under an assistant round that opens its stored request/response.
+func _add_exchange_link(msg: ChatTypes.ORChatMessage) -> void:
+	if msg.exchange_id.is_empty():
+		return
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	var link := LinkButton.new()
+	link.text = exchange_link_label(msg.usage)
+	link.tooltip_text = "Open the raw request and response for this round"
+	link.underline = LinkButton.UNDERLINE_MODE_ON_HOVER
+	link.focus_mode = Control.FOCUS_NONE
+	link.add_theme_font_size_override("font_size", 10)
+	link.add_theme_color_override("font_color", LINK_COLOR)
+	var exchange_id := msg.exchange_id
+	link.pressed.connect(func() -> void: exchange_requested.emit(exchange_id))
+	row.add_child(link)
+	_list.add_child(row)
+
+
+## "{ } 12.4k in · 310 out · $0.0042", or "{ } request" without usage.
+static func exchange_link_label(usage: Dictionary) -> String:
+	if usage.is_empty():
+		return "{ } request"
+	var text := "{ } %s in · %s out" % [
+		TokenEstimate.format_count(int(usage.get("prompt_tokens", 0))),
+		TokenEstimate.format_count(int(usage.get("completion_tokens", 0))),
+	]
+	if usage.get("cost", null) != null:
+		text += " · $%.4f" % float(usage.cost)
+	return text
 
 
 ## Resolve a tool-call id to the tool name in this conversation.

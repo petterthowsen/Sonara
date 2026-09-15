@@ -52,6 +52,9 @@ func execute(name: String, args: Dictionary) -> Dictionary:
 static func create_default() -> ToolRegistry:
 	var reg := ToolRegistry.new()
 	reg.register(ListProjectTool.new())
+	reg.register(SetTempoTool.new())
+	reg.register(ListMarkersTool.new())
+	reg.register(CreateMarkerTool.new())
 	reg.register(ListTracksTool.new())
 	reg.register(ListChannelsTool.new())
 	reg.register(ListDevicesTool.new())
@@ -77,5 +80,8 @@ static func create_default() -> ToolRegistry:
 	reg.register(WriteClipTool.new())
 	reg.register(CreateClipTool.new())
 	reg.register(PlaceClipTool.new())
+	reg.register(MoveClipsTool.new())
+	reg.register(DeleteClipsTool.new())
 	reg.register(RenameClipTool.new())
+	reg.register(MakeClipUniqueTool.new())
 	return reg

@@ -1,0 +1,92 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://arranger/ruler/MarkerContextMenu.gd" id="1_markerctx"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_smartline"]
+[ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="3_trash"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
+draw_center = false
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_sep"]
+content_margin_left = 4.0
+content_margin_top = 0.0
+content_margin_right = 4.0
+content_margin_bottom = 0.0
+color = Color(1, 1, 1, 0.1764706)
+grow_begin = -1.0
+grow_end = -1.0
+
+[node name="MarkerContextMenu" type="PopupPanel"]
+oversampling_override = 1.0
+size = Vector2i(190, 143)
+script = ExtResource("1_markerctx")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 4.0
+offset_right = -2.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_header")
+
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header"]
+layout_mode = 2
+
+[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header/HBox"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+color = Color(0.11764706, 0.5647059, 1, 1)
+edit_alpha = false
+edit_intensity = false
+
+[node name="Label" parent="VBoxContainer/Header/HBox" instance=ExtResource("2_smartline")]
+layout_mode = 2
+size_flags_horizontal = 3
+value_type = 1
+display_format = "%s"
+
+[node name="LineEdit" parent="VBoxContainer/Header/HBox/Label" index="1"]
+max_length = 200
+flat = false
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_sep")
+
+[node name="AddMarkerButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+tooltip_text = "Split here and start a new marker from this point"
+text = "Add Marker Here (Split)"
+
+[node name="SplitButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+tooltip_text = "Split into two markers with the same name"
+text = "Split"
+
+[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_sep")
+
+[node name="DeleteButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Delete"
+icon = ExtResource("3_trash")
+
+[editable path="VBoxContainer/Header/HBox/Label"]

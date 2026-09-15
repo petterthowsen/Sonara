@@ -77,7 +77,7 @@ func execute(args: Dictionary) -> Dictionary:
 			[param.id, item.old],
 			[param.id, item.new]
 		)
-		cmd.set_callable(func(argv): inst.set_parameter_normalized(argv[0], argv[1])).set_unpack_array(true)
+		cmd.set_callable(func(id, value): inst.set_parameter_normalized(id, value)).set_unpack_array(true)
 		cmds.append(cmd)
 	HistoryUtil.execute_many("Set Device Params", cmds)
 	var data := compact_device(project, inst)

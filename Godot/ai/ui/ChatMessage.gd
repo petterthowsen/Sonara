@@ -1,11 +1,12 @@
 ## One chat bubble: speaker, wrapping body, optional media attachments.
 class_name ChatMessage extends PanelContainer
 
-enum Kind { USER, ASSISTANT, LIMIT }
+enum Kind { USER, ASSISTANT, LIMIT, ERROR }
 
 @export var user_color := Color(0.35, 0.45, 0.62, 0.35)
 @export var assistant_color := Color(0.22, 0.22, 0.26, 0.55)
 @export var limit_color := Color(0.45, 0.32, 0.18, 0.5)
+@export var error_color := Color(0.55, 0.2, 0.2, 0.5)
 
 @onready var _who: Label = $Column/Who
 @onready var _body: RichTextLabel = $Column/Body
@@ -13,6 +14,7 @@ enum Kind { USER, ASSISTANT, LIMIT }
 
 var _kind: Kind = Kind.ASSISTANT
 var _plain_text: String = ""
+var _context_row: HFlowContainer = null
 
 
 ## Fill speaker, body, panel color, and optional attachments.
@@ -22,6 +24,7 @@ func configure(kind: Kind, text: String, msg: ChatTypes.ORChatMessage = null) ->
 	_plain_text = text
 	_apply_body_text()
 	_apply_color()
+	_fill_context(msg)
 	_fill_media(msg)
 
 
@@ -46,6 +49,8 @@ func _speaker_name() -> String:
 			return "You"
 		Kind.LIMIT:
 			return "Limit"
+		Kind.ERROR:
+			return "Error"
 		_:
 			return "Assistant"
 
@@ -61,9 +66,33 @@ func _apply_color() -> void:
 			style.bg_color = user_color
 		Kind.LIMIT:
 			style.bg_color = limit_color
+		Kind.ERROR:
+			style.bg_color = error_color
 		_:
 			style.bg_color = assistant_color
 	add_theme_stylebox_override("panel", style)
+
+
+## Badges for the selection context attached to a user message (tooltip = what the model saw).
+func _fill_context(msg: ChatTypes.ORChatMessage) -> void:
+	if _context_row:
+		_context_row.queue_free()
+		_context_row = null
+	if msg == null or msg.context.is_empty():
+		return
+	_context_row = HFlowContainer.new()
+	_context_row.add_theme_constant_override("h_separation", 4)
+	_context_row.add_theme_constant_override("v_separation", 4)
+	for item in msg.context:
+		if not item is Dictionary:
+			continue
+		var badge := Badge.make(str(item.get("label", "")), SelectionContext.color_for(item), SelectionContext.icon_for(item))
+		badge.font_size = 10
+		badge.icon_size = 10
+		badge.tooltip_text = str(item.get("text", ""))
+		_context_row.add_child(badge)
+	$Column.add_child(_context_row)
+	$Column.move_child(_context_row, _who.get_index() + 1)
 
 
 ## Attach image and audio previews from message content parts.

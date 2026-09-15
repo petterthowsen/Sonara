@@ -15,9 +15,18 @@ var _target_rms_right := 0.0
 @export var rms_left := 0.0
 @export var rms_right := 0.0
 
-# Smoothing factors (lower = smoother but slower response)
-@export var peak_smoothing := 0.3  # Peaks respond quickly
-@export var rms_smoothing := 0.15   # RMS is more averaged
+# Ballistics (time-based, so frame-rate independent)
+@export var peak_release_db_per_sec := 30.0      # peak value falls at this rate after a transient
+@export var peak_hold_time := 1.5                # seconds the peak hold line sticks at its max
+@export var peak_hold_release_db_per_sec := 15.0 # hold line fall rate once the hold time is over
+@export var rms_attack_time := 0.05              # RMS smoothing time constants (seconds)
+@export var rms_release_time := 0.3
+
+# Peak hold line state (dB), per side
+var peak_hold_left_db := -INF
+var peak_hold_right_db := -INF
+var _hold_timer_left := 0.0
+var _hold_timer_right := 0.0
 
 # if enabled, draws a single bar (assumes peak_left/rms_left are the mono signal)
 @export var mono := false
@@ -38,7 +47,10 @@ var _target_rms_right := 0.0
 @export var show_fader := false
 @export var fader_color := Color("#624d99")
 @export var fader_bg_color := Color.DIM_GRAY
-@export var volume_db := -6.0
+@export var volume_db := -6.0:
+	set(v):
+		volume_db = v
+		queue_redraw()
 @export var fader_handle_color := Color.WHITE_SMOKE
 @export var fader_handle_color_hover := Color.WHITE
 
@@ -71,11 +83,23 @@ var peak_combined: float:
 func set_peak_levels(left : float, right : float) -> void:
 	_target_peak_left = left
 	_target_peak_right = right
+	_wake()
 
 
 func set_rms_levels(left : float, right : float) -> void:
 	_target_rms_left = left
 	_target_rms_right = right
+	_wake()
+
+
+func _wake() -> void:
+	if not is_processing() and is_visible_in_tree():
+		set_process(true)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		set_process(is_visible_in_tree())
 
 
 func _ready() -> void:
@@ -104,20 +128,69 @@ func _on_mouse_exited():
 
 
 func _process(delta: float) -> void:
-	# Smooth/lerp peak and RMS values for visual smoothness
-	# Peaks fall quickly but rise with slight smoothing
-	peak_left = lerp(peak_left, _target_peak_left, peak_smoothing if _target_peak_left > peak_left else 0.5)
-	peak_right = lerp(peak_right, _target_peak_right, peak_smoothing if _target_peak_right > peak_right else 0.5)
-	
-	# RMS is heavily smoothed in both directions
-	rms_left = lerp(rms_left, _target_rms_left, rms_smoothing)
-	rms_right = lerp(rms_right, _target_rms_right, rms_smoothing)
-	
+	if Engine.is_editor_hint():
+		set_process(false)
+		return
+	if not is_visible_in_tree():
+		set_process(false)
+		return
+
+	# Peaks: instant attack, constant dB/s release
+	peak_left = _release_peak(peak_left, _target_peak_left, delta)
+	peak_right = _release_peak(peak_right, _target_peak_right, delta)
+
+	# Peak hold lines: stick for peak_hold_time, then fall
+	var hold_l := _update_hold(peak_hold_left_db, _hold_timer_left, _lin_to_db(peak_left), delta)
+	peak_hold_left_db = hold_l.x
+	_hold_timer_left = hold_l.y
+	var hold_r := _update_hold(peak_hold_right_db, _hold_timer_right, _lin_to_db(peak_right), delta)
+	peak_hold_right_db = hold_r.x
+	_hold_timer_right = hold_r.y
+
+	# RMS: exponential smoothing with separate attack/release
+	rms_left = _smooth_rms(rms_left, _target_rms_left, delta)
+	rms_right = _smooth_rms(rms_right, _target_rms_right, delta)
+
 	queue_redraw()
 
-	# update cursor based on fader handle hover
-	if show_fader:
-		_update_cursor_for_fader()
+	# Stop redrawing once everything has settled; new levels wake us up again
+	if _is_settled():
+		set_process(false)
+
+
+func _release_peak(current: float, target: float, delta: float) -> float:
+	if target >= current:
+		return target
+	var db := _lin_to_db(current) - peak_release_db_per_sec * delta
+	if db <= db_bottom:
+		return target
+	return max(target, db_to_linear(db))
+
+
+## Returns Vector2(hold_db, hold_timer).
+func _update_hold(hold_db: float, timer: float, peak_db: float, delta: float) -> Vector2:
+	if peak_db >= hold_db:
+		return Vector2(peak_db, peak_hold_time)
+	if timer > 0.0:
+		return Vector2(hold_db, timer - delta)
+	return Vector2(max(peak_db, hold_db - peak_hold_release_db_per_sec * delta), 0.0)
+
+
+func _smooth_rms(current: float, target: float, delta: float) -> float:
+	var tau := rms_attack_time if target > current else rms_release_time
+	var value: float = lerp(current, target, 1.0 - exp(-delta / max(tau, 0.001)))
+	# snap once visually indistinguishable so the meter can settle
+	if absf(value - target) < 0.0001:
+		return target
+	return value
+
+
+func _is_settled() -> bool:
+	return peak_left == _target_peak_left and peak_right == _target_peak_right \
+		and rms_left == _target_rms_left and rms_right == _target_rms_right \
+		and _hold_timer_left <= 0.0 and _hold_timer_right <= 0.0 \
+		and peak_hold_left_db <= _lin_to_db(peak_left) \
+		and peak_hold_right_db <= _lin_to_db(peak_right)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -141,6 +214,7 @@ func _gui_input(event: InputEvent) -> void:
 
 	elif event is InputEventMouseMotion:
 		var mouse_event = event as InputEventMouseMotion
+		_update_cursor_for_fader()
 		if mouse_event.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			if _is_mouse_over_fader_handle(mouse_event.position) or _is_dragging_fader:
 				# dragging the fader
@@ -281,15 +355,15 @@ func _draw() -> void:
 	var fader_offset = 0
 	
 	if mono:
-		_draw_bar(rms_left, peak_left, offset_x, bars_width)
+		_draw_bar(rms_left, peak_left, peak_hold_left_db, offset_x, bars_width)
 		fader_offset = offset_x + bars_width + 2
 	else:
 		var bar_width = max(0.0, (bars_width - bars_spacing) * 0.5)
 		fader_offset = offset_x + bar_width
 		var offset_left = offset_x
 		var offset_right = offset_x + bar_width + bars_spacing
-		_draw_bar(rms_left,  peak_left,  offset_left,  bar_width)
-		_draw_bar(rms_right, peak_right, offset_right, bar_width)
+		_draw_bar(rms_left,  peak_left,  peak_hold_left_db,  offset_left,  bar_width)
+		_draw_bar(rms_right, peak_right, peak_hold_right_db, offset_right, bar_width)
 	
 	if show_fader:
 		_draw_fader(fader_offset, bars_spacing)
@@ -389,12 +463,12 @@ func _draw_tick_marks(ticks_width := 28.0) -> void:
 # -------------------------
 # bar drawing
 # -------------------------
-func _draw_bar(rms_lin: float, peak_lin: float, offset_x: float, width: float) -> void:
+func _draw_bar(rms_lin: float, peak_lin: float, hold_db: float, offset_x: float, width: float) -> void:
 	# background
 	draw_rect(Rect2(offset_x, 0, width, size.y), bar_bg_color, true)
 
 	# nothing to show
-	if rms_lin <= 0.0 and peak_lin <= 0.0:
+	if rms_lin <= 0.0 and peak_lin <= 0.0 and hold_db <= db_bottom:
 		return
 
 	# convert to dB with floor
@@ -414,11 +488,12 @@ func _draw_bar(rms_lin: float, peak_lin: float, offset_x: float, width: float) -
 	if h > 0.0:
 		draw_rect(Rect2(offset_x, y_top, width, h), fill_color, true)
 
-	# draw a thin peak line
-	var y_peak = _db_to_y(peak_db)
-	var y_line = floor(y_peak) + 0.5
-	draw_line(Vector2(offset_x, y_line), Vector2(offset_x + width, y_line), Color(1,1,1,0.8), 1.0)
+	# peak hold line (sticks, then falls slowly)
+	if hold_db > db_bottom:
+		var y_line = floor(_db_to_y(hold_db)) + 0.5
+		var line_color := bar_color_clip if hold_db >= 0.0 else Color(1, 1, 1, 0.8)
+		draw_line(Vector2(offset_x, y_line), Vector2(offset_x + width, y_line), line_color, 1.0)
 
-	# optional: clip LED on the very top few pixels (visual candy)
-	if peak_db >= 0.0:
+	# clip LED on the very top few pixels, held as long as the hold line is at/above 0 dB
+	if hold_db >= 0.0:
 		draw_rect(Rect2(offset_x, 0, width, 3), bar_color_clip, true)

@@ -10,7 +10,7 @@ static var _hardware_out_re := RegEx.create_from_string("^hardware out( \\d+)?$"
 
 ## True when `candidate` is reserved: `Master` (except for channel 1), `None`, `Hardware Out [N]`.
 static func is_reserved(candidate: String, for_channel: Channel = null) -> bool:
-	var key := candidate.strip_edges().to_lower()
+	var key := NameStyle.key(candidate)
 	if key == "master":
 		return for_channel == null or not for_channel.is_master
 	if key == "none":

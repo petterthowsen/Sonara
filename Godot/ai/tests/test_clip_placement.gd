@@ -35,6 +35,7 @@ func run_tests() -> void:
 	_test_range_with_end_sets_length()
 	_test_overlap_refused()
 	_test_explicit_start_used_exactly()
+	_test_bad_text_creates_no_clip()
 
 
 ## New project + editor wired together, no arranger (test mode / headless).
@@ -124,3 +125,16 @@ func _test_explicit_start_used_exactly() -> void:
 	_assert(out.get("ok", false), "create_clip succeeds with explicit start: %s" % out.get("error", ""))
 	var start_ticks: int = out.data.placements[0].start_ticks
 	_assert(start_ticks == 13, "explicit start 1.1.013 is used exactly, got %d" % start_ticks)
+
+
+## A create_clip whose text fails must not leave an empty clip behind (city_pop_5 chat).
+func _test_bad_text_creates_no_clip() -> void:
+	var s := _setup()
+	var tool: Object = _create_clip_tool.new()
+	var out: Dictionary = tool.execute({"name": "Keys", "track": s.track.name, "bars": 2, "text": "add 1.1.000 C3 4 v80"})
+	_assert(not out.get("ok", true), "bare-number duration fails")
+	_assert(str(out.get("error", "")).contains("No clip was created"), "error says nothing was created: %s" % out.get("error", ""))
+	_assert(s.project.clips.is_empty(), "no clip left in the pool")
+	var chords: Dictionary = tool.execute({"name": "Keys", "track": s.track.name, "bars": 2, "format": "pitched", "text": "add 1.1.000 C3,E3,G3 1/2 v90"})
+	_assert(chords.get("ok", false), "chord text under format=pitched creates the clip: %s" % chords.get("error", ""))
+	_assert(int(chords.data.get("note_count", 0)) == 3, "three chord notes: %s" % chords.data)

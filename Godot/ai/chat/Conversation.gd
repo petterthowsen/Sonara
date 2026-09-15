@@ -66,9 +66,52 @@ func touch(p_model: String = "") -> void:
 		model = p_model
 
 
-## Set title from the first user line if still empty.
+## Token and cost totals. `context_tokens` is the size of the next request: the last reported
+## prompt + completion, plus estimates for messages added since. Before any reported usage it is
+## an estimate of the system prompt, messages, and `extra_estimate` (e.g. tool schemas).
+func usage_summary(extra_estimate: int = 0) -> Dictionary:
+	var summary := {
+		"context_tokens": 0,
+		"estimated": true,
+		"requests": 0,
+		"prompt_tokens": 0,
+		"completion_tokens": 0,
+		"cached_tokens": 0,
+		"reasoning_tokens": 0,
+		"cost": 0.0,
+	}
+	var last_idx := -1
+	for i in range(messages.size()):
+		var msg = messages[i]
+		if not msg is ChatTypes.ORChatMessage or msg.usage.is_empty():
+			continue
+		var u: Dictionary = msg.usage
+		summary.requests += 1
+		summary.prompt_tokens += int(u.get("prompt_tokens", 0))
+		summary.completion_tokens += int(u.get("completion_tokens", 0))
+		summary.cost += float(u.get("cost", 0.0)) if u.get("cost", null) != null else 0.0
+		if u.get("prompt_tokens_details", null) is Dictionary:
+			summary.cached_tokens += int(u.prompt_tokens_details.get("cached_tokens", 0))
+		if u.get("completion_tokens_details", null) is Dictionary:
+			summary.reasoning_tokens += int(u.completion_tokens_details.get("reasoning_tokens", 0))
+		if int(u.get("prompt_tokens", 0)) > 0:
+			last_idx = i
+	if last_idx >= 0:
+		var last: Dictionary = messages[last_idx].usage
+		var tail := TokenEstimate.messages(messages.slice(last_idx + 1))
+		summary.context_tokens = int(last.get("prompt_tokens", 0)) + int(last.get("completion_tokens", 0)) + tail
+		summary.estimated = tail > 0
+	else:
+		summary.context_tokens = TokenEstimate.text(last_rendered_system_prompt) + TokenEstimate.messages(messages) + extra_estimate
+	return summary
+
+
+const PLACEHOLDER_TITLE := "New chat"
+
+
+## Set title from the first user line while it is still empty or the placeholder.
 func ensure_title_from_first_user() -> void:
-	if not title.is_empty():
+	if not title.is_empty() and title != PLACEHOLDER_TITLE:
 		return
 	for msg in messages:
 		if msg is ChatTypes.ORChatMessage and msg.role == "user":
@@ -76,10 +119,10 @@ func ensure_title_from_first_user() -> void:
 			var line: String = bits[0] if bits.size() > 0 else ""
 			if line.length() > 40:
 				line = line.substr(0, 40).strip_edges() + "…"
-			title = line if not line.is_empty() else "New chat"
+			title = line if not line.is_empty() else PLACEHOLDER_TITLE
 			return
 	if title.is_empty():
-		title = "New chat"
+		title = PLACEHOLDER_TITLE
 
 
 static func _hex_id() -> String:

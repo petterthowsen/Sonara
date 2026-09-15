@@ -19,7 +19,7 @@ extends Node
 
 
 ## Setting type enum — drives which editor widget the dialog uses.
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT }
 
 
 ## Data class describing one registered setting.
@@ -172,6 +172,14 @@ func _register_all_settings() -> void:
 		CATEGORY_BEHAVIOR,
 		"When enabled, changing the active track record-arms that track and disarms the others.",
 	))
+	_register(Setting.new(
+		"arranger/markers/rename_on_create",
+		"Rename New Markers",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, a newly created marker opens its name for editing (after the mouse is released).",
+	))
 
 	# --- Appearance ---
 	_register(Setting.new(
@@ -223,11 +231,11 @@ func _register_all_settings() -> void:
 	_settings["ai/chat/temperature"].step = 0.1
 	_register(Setting.new(
 		"ai/chat/max_tokens",
-		"Max Tokens",
+		"Max Output Tokens",
 		Type.INT,
 		4096,
 		CATEGORY_AI,
-		"Maximum tokens in a chat completion response."
+		"Cap on tokens the model may generate per request (each tool round is a separate request). Thinking tokens count toward it. Does not limit the context sent."
 	))
 	_settings["ai/chat/max_tokens"].min_val = 256
 	_settings["ai/chat/max_tokens"].max_val = 32000
@@ -261,6 +269,14 @@ func _register_all_settings() -> void:
 	))
 	_settings["ai/chat/reasoning_effort"].options = ["low", "medium", "high"]
 	_register(Setting.new(
+		"ai/chat/user_instructions",
+		"Custom Instructions",
+		Type.TEXT,
+		"",
+		CATEGORY_AI,
+		"Extra instructions added to the assistant's system prompt via {user_instructions}."
+	))
+	_register(Setting.new(
 		"ai/audio/voice",
 		"Audio Voice",
 		Type.STRING,
@@ -277,6 +293,17 @@ func _register_all_settings() -> void:
 		"Audio format for chat audio output. wav plays natively in Godot."
 	))
 	_settings["ai/audio/format"].options = ["wav", "mp3"]
+	_register(Setting.new(
+		"ai/debug/keep_exchanges",
+		"Keep Request Logs",
+		Type.INT,
+		200,
+		CATEGORY_AI,
+		"How many raw request/response JSON records to keep per conversation (next to the chat files) for the request viewer. 0 turns logging off. Each record holds the full request, so long chats use several MB."
+	))
+	_settings["ai/debug/keep_exchanges"].min_val = 0
+	_settings["ai/debug/keep_exchanges"].max_val = 2000
+	_settings["ai/debug/keep_exchanges"].step = 50
 
 
 func _register(s: Setting) -> void:
@@ -355,7 +382,7 @@ func _coerce(s: Setting, value):
 			if s.max_val > s.min_val:
 				f = clampf(f, s.min_val, s.max_val)
 			return f
-		Type.STRING, Type.PATH, Type.SECRET:
+		Type.STRING, Type.PATH, Type.SECRET, Type.TEXT:
 			return str(value)
 		Type.CHOICE:
 			if not s.options.is_empty() and value not in s.options:
