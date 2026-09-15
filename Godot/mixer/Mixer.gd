@@ -293,7 +293,7 @@ func _on_channel_unnest_requested(channel: Channel) -> void:
 
 ## Delete a channel from the context menu, with its linked tracks, as one undoable step.
 func _on_channel_delete_requested(channel: Channel) -> void:
-	if not current_project or channel == null or channel.is_master:
+	if not current_project or channel == null or channel.is_master or channel.is_plugin_return():
 		return
 	HistoryUtil.execute(ChannelDeleteCommand.new(current_project, channel))
 

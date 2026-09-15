@@ -236,18 +236,20 @@ func _test_pad_returns_do_not_loop() -> void:
 		return
 	_assert(first.name == "KICK", "first return is 'KICK': %s" % first.name)
 	_assert(second.name == "KICK 2", "second return is 'KICK 2': %s" % second.name)
-	var second_track: Object = project.get_channel_paired_track(second)
-	_assert(second_track != null and second_track.name == "KICK 2", "second return track is 'KICK 2'")
+	_assert(project.get_channel_paired_track(second) == null, "pad returns have no timeline track")
 
 	var renames := [0]
-	second.name_changed.connect(func(_n: String) -> void: renames[0] += 1)
+	var count_rename := func(_n: String) -> void: renames[0] += 1
+	second.name_changed.connect(count_rename)
 	_aux_return_sync.ensure_all(project)
 	pads[1].name_changed.emit("KICK")
 	_assert(second.name == "KICK 2" and first.name == "KICK", "re-sync keeps 'KICK' / 'KICK 2'")
 	_assert(renames[0] == 0, "re-sync doesn't rename the return (no loop): %d renames" % renames[0])
 
 	pads[1].set_name("SNARE")
-	_assert(second.name == "SNARE" and second_track.name == "SNARE", "pad rename renames its return: %s" % second.name)
+	_assert(second.name == "SNARE", "pad rename renames its return: %s" % second.name)
 	pads[1].set_name("KICK")
 	_assert(second.name == "KICK 2", "renaming back to a taken name settles on 'KICK 2': %s" % second.name)
 	_assert(renames[0] == 2, "exactly one rename per pad rename: %d" % renames[0])
+	# A lambda still connected when the test script is freed crashes Godot at exit.
+	second.name_changed.disconnect(count_rename)

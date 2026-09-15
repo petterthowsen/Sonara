@@ -32,6 +32,10 @@ func execute(args: Dictionary) -> Dictionary:
 	var channel: Channel = found.get("channel")
 	if track == null and channel == null:
 		return _not_found(project, "track or channel", name)
+	if track == null and channel and channel.is_plugin_return():
+		var parent: Channel = project.get_channel_by_id(channel.parent_channel_id)
+		var parent_name := parent.name if parent else "its parent"
+		return fail("\"%s\" is a return channel fed by a device on \"%s\"; remove that device instead" % [channel.name, parent_name])
 	if track:
 		var cmd := TrackDeleteCommand.new(project, track)
 		HistoryUtil.execute(cmd)

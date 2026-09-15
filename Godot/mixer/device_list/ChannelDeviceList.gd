@@ -31,6 +31,8 @@ const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePane
 var channel: Channel = null
 var device_panels: Dictionary[String, CompactDevicePanel] = {}  # Map of device instance ID -> CompactDevicePanel
 var _drop_host := DeviceChainDropHost.new(false, 8.0)
+## A drum pad return lists its pad lane (pad device + own devices), rebuilt on every change.
+var _pad_lane := PadLaneWatcher.new()
 
 
 # ============================================================================
@@ -41,6 +43,7 @@ var _drop_host := DeviceChainDropHost.new(false, 8.0)
 func _ready() -> void:
 	if vbox:
 		vbox.add_theme_constant_override("separation", 0)
+	_pad_lane.changed.connect(_on_pad_lane_changed)
 	for node in vbox.get_children():
 		vbox.remove_child(node)
 		node.free()
@@ -61,6 +64,7 @@ func bind_to_channel(p_channel: Channel) -> void:
 
 	channel = p_channel
 	_drop_host.bind(channel)
+	_pad_lane.bind(channel)
 
 	# Connect to device signals
 	channel.device_added.connect(_on_device_added)
@@ -96,11 +100,15 @@ func _populate_devices() -> void:
 	if not channel:
 		return
 
-	for i in range(channel.get_device_count()):
-		var device_instance = channel.get_device(i)
-		if device_instance:
-			_add_device_panel(device_instance, i)
+	var lane: Array[DeviceInstance] = PadLane.devices(channel) if _pad_lane.active() else channel.devices
+	for i in lane.size():
+		_add_device_panel(lane[i], i)
 	_create_drop_zones()
+
+
+func _on_pad_lane_changed() -> void:
+	if _pad_lane.active():
+		_populate_devices()
 
 
 ## Add a panel for a device
@@ -164,12 +172,16 @@ func _remove_device_panel_at(position: int) -> void:
 
 func _on_device_added(device_instance: DeviceInstance, position: int) -> void:
 	"""Handle device added to channel."""
+	if _pad_lane.active():
+		return
 	_add_device_panel(device_instance, position)
 	logger.info("Device added at position %d" % position)
 
 
 func _on_device_removed(position: int, _device_id: String) -> void:
 	"""Handle device removed from channel."""
+	if _pad_lane.active():
+		return
 	_remove_device_panel_at(position)
 	logger.info("Device removed from position %d" % position)
 
@@ -200,5 +212,6 @@ func _create_drop_zones() -> void:
 	for child in vbox.get_children():
 		if child is CompactDevicePanel:
 			panel_list.append(child)
-	panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
+	if not _pad_lane.active():
+		panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
 	_drop_host.rebuild(vbox, panel_list)

@@ -60,6 +60,22 @@ func _init(
 			for child in project.get_channel_children(ch):
 				if child.is_aux_return():
 					pending_channels.append(child)
+	# A plugin return can't be deleted on its own, only with its parent (or by removing its source).
+	var kept: Array[Channel] = []
+	for ch in channels:
+		if not _is_lone_return(ch):
+			kept.append(ch)
+	channels = kept
+
+
+## True when `ch` is a plugin return whose parent channel isn't deleted with it.
+func _is_lone_return(ch: Channel) -> bool:
+	if not ch.is_plugin_return() or ch.parent_channel_id < 0:
+		return false
+	for other in channels:
+		if other.id == ch.parent_channel_id:
+			return _is_lone_return(other)
+	return project.get_channel_by_id(ch.parent_channel_id) != null
 
 
 ## Number of channels this delete removes.

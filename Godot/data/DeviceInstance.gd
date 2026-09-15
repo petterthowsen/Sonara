@@ -71,6 +71,10 @@ var return_channel_id: int = -1
 ## Extra-out return channels for a multi-out plugin (index = extra stereo bus).
 var return_channel_ids: Array[int] = []
 
+## Return channels removed along with this device (or pad), kept by id so re-adding the same
+## instance (undo, move) restores them with their settings. Not persisted. See AuxReturnSync.
+var detached_returns: Dictionary[int, Channel] = {}
+
 ## Waveform pyramid when this instance is a Sampler (or other sample-loading device).
 var sample_waveform: WaveformPyramid = null
 

@@ -84,8 +84,13 @@ var send_channels: Array = []  # Array of SendConfig objects
 var parent_channel_id: int = -1
 var child_channel_ids: Array[int] = []
 var is_children_expanded: bool = true
-## Extra device bus this nested strip receives (-1 = not an aux return).
+## Extra device bus this nested strip receives (-1 = not an aux return, or an empty drum pad).
 var aux_bus_index: int = -1
+## Drum Machine pad note this strip is the return of (-1 = not a pad return). Stays set while
+## the pad is empty, so a device added on that note adopts this return (see AuxReturnSync).
+var aux_pad_note: int = -1
+## Number of aux-out bus slots last sent to the engine, so stale slots can be cleared. Not persisted.
+var aux_out_sent_count: int = 0
 
 # MIDI input configuration
 var midi_input_device: int = -2  # -3=none, -2=all, -1=virtual keyboard, 0+=physical device
@@ -147,7 +152,17 @@ func route_locked() -> bool:
 
 ## True when this strip is a drum-pad or plugin extra-out return.
 func is_aux_return() -> bool:
-	return aux_bus_index >= 0
+	return aux_bus_index >= 0 or aux_pad_note >= 0
+
+
+## True when this strip is a Drum Machine pad's return (the pad may be empty).
+func is_pad_return() -> bool:
+	return aux_pad_note >= 0
+
+
+## True when this strip is an extra-out return of a non-drum device (can't be deleted on its own).
+func is_plugin_return() -> bool:
+	return aux_bus_index >= 0 and aux_pad_note < 0
 
 
 ## Notify UI that parent/children membership changed.
@@ -849,7 +864,7 @@ func to_json() -> Dictionary:
 const JSON_FIELDS: Array[String] = [
 	"name", "order", "device_output_id", "volume", "pan", "pan_left", "pan_right",
 	"mute", "solo", "phase_invert", "output_channel_id", "parent_channel_id",
-	"is_children_expanded", "aux_bus_index", "midi_input_device", "record_armed",
+	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
 ]
 
 

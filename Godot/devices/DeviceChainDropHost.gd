@@ -26,7 +26,8 @@ func _init(vertical: bool = true, gap: float = 16.0, empty_zone: bool = true) ->
 	_empty_zone = empty_zone
 
 
-## Point the row at `p_channel`'s root chain, or at `p_parent`'s children.
+## Point the row at `p_channel`'s root chain, or at `p_parent`'s children. A drum pad return's
+## root chain is its pad lane (see PadLane): positions are lane indices.
 func bind(p_channel: Channel, p_parent: DeviceInstance = null) -> void:
 	channel = p_channel
 	parent = p_parent
@@ -59,6 +60,8 @@ func clear() -> void:
 func can_drop(data: Variant, position: int = -1) -> bool:
 	if channel == null:
 		return false
+	if parent == null and PadLane.is_pad_lane(channel):
+		return PadLane.can_drop(channel, data, position)
 	if data is DeviceInstance:
 		var inst := data as DeviceInstance
 		if not DeviceDropUtil.can_drop_instance_on_host(channel, inst, parent):
@@ -74,6 +77,9 @@ func can_drop(data: Variant, position: int = -1) -> bool:
 ## Insert (or move) `data` at `position` (-1 = append).
 func drop(data: Variant, position: int = -1) -> void:
 	if not can_drop(data, position):
+		return
+	if parent == null and PadLane.is_pad_lane(channel):
+		PadLane.drop(channel, data, position)
 		return
 	if data is DeviceInstance:
 		DeviceDropUtil.drop_instance(channel, data, parent, position)

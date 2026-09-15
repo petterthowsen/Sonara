@@ -49,8 +49,8 @@ func bind_to_channel(ch : Channel):
 		label.cancel_editing()
 	label.set_value(channel.name)
 	
-	# Disable delete button for master channel
-	delete_button.disabled = channel.is_master
+	# Master can't be deleted; a plugin return only goes with its parent or its source device.
+	delete_button.disabled = channel.is_master or channel.is_plugin_return()
 	if unnest_button:
 		unnest_button.visible = MixerChannelDrag.can_unnest(channel)
 

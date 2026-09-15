@@ -139,6 +139,7 @@ func _on_child_moved(_from_position: int, _to_position: int) -> void:
 
 ## Popup the device context menu at the cursor.
 func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> void:
+	device_context_menu.removes_drum_pad = AuxReturnSync.is_drum_machine(container)
 	device_context_menu.bind_to_device(device_instance)
 	var c_pos = get_global_mouse_position()
 	var c_size = device_context_menu.get_contents_minimum_size()
