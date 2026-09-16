@@ -403,7 +403,7 @@ fn build_stream(
             mix_and_output(&mut state, data, channels, frames, &status_tx);
 
             for channel in state.channels.values_mut() {
-                channel.update_peaks();
+                channel.update_peaks(frames, sample_rate as f32);
             }
 
             let processing_time = processing_start.elapsed();
@@ -434,13 +434,16 @@ fn build_stream(
                     let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
                 }
 
-                for channel in state.channels.values() {
+                // Draining the peaks starts a fresh max for the next interval, so a transient
+                // in any block between sends still reaches the meter.
+                for channel in state.channels.values_mut() {
+                    let (peak_left, peak_right, rms_left, rms_right) = channel.take_meters();
                     let _ = status_tx.send(EngineStatus::ChannelPeaks {
                         id: channel.id,
-                        peak_left: channel.peak_left,
-                        peak_right: channel.peak_right,
-                        rms_left: channel.rms_left,
-                        rms_right: channel.rms_right,
+                        peak_left,
+                        peak_right,
+                        rms_left,
+                        rms_right,
                     });
                 }
             }

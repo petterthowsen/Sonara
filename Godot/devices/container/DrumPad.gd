@@ -33,6 +33,8 @@ func _ready() -> void:
 	_selected_style = _make_style(Color(0.32, 0.42, 0.55, 1.0))
 	_hit_style = _make_style(Color(0.45, 0.58, 0.72, 1.0))
 	add_theme_stylebox_override("panel", _idle_style)
+	# Pads take device drops themselves; the device lane shows no insert target over them.
+	add_to_group(DeviceDropTarget.OWN_DROPS_GROUP)
 	_refresh()
 
 
@@ -161,8 +163,9 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 		return null
 	_drag_started = true
 	_stop_preview()
-	set_drag_preview(_make_drag_preview())
-	return child
+	var preview := _make_drag_preview()
+	set_drag_preview(preview)
+	return DeviceDrag.new(self, child, preview)
 
 
 ## Preview shown while dragging a pad's device.

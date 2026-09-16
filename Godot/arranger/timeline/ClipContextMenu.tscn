@@ -76,6 +76,18 @@ text = "Muted"
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_aoahj")
 
+[node name="Cut" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Cut"
+
+[node name="Copy" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Copy"
+
+[node name="HSeparator3" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxLine_aoahj")
+
 [node name="MakeUnique" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 text = "Make Unique"

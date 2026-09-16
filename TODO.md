@@ -69,54 +69,81 @@ Done:
 
 ### Mixer & Tracks
 
-- [ ] Soloing a channel from mixer should sync to the linked track
-- [ ] Sync selection of tracks and linked channels bidirectionally
-  - [ ] Might make this behavior adjustable in settings
-- [ ] Delete, Duplicate Channels
-- [ ] Nested MixerChannels should have their header height reduced (~50%) to make more room for the rest of the controls; also reads better visually
-- [ ] Master track should allow having devices/effects on it
-- [ ] hslider for pan should show values when adjusting
-- [ ] Deleting a track also deletes its linked channel (and vice versa), as one undoable step. Currently `TrackDeleteCommand` orphans the channel, and mixer delete isn't undoable and reroutes the linked track to Master (see docs/ai-names-and-placement-plan.md Phase 2)
-- [ ] Enforce unique track/channel names (auto-suffix "Drums 2", dedupe on load) (see docs/ai-names-and-placement-plan.md Phase 4)
-- [ ] Duplicate track
-- [ ] Investigate metering in mixer and track UI: improvements, whether the current approach is sound, and any bugs. Lerp/smooth the peak? also should probably add text showing the peak value along with the line
-  - also: (`components/meter/Meter.gd`): `queue_redraw()` runs every frame, even when hidden or settled, with a big and a compact meter per strip, and the lerp isn't delta-scaled. Return early when `not is_visible_in_tree()` and stop processing when settled, as `Volumeter.gd` already does.
+#### Phase 1: Track/channel hierarchy, sync and track actions (complex)
+
+1. Track ↔ channel hierarchy sync (foundation for the rest)
+   - [x?] Bug: create a group track in the arranger, create an instrument track, move it into the group: the MixerChannel is not nested into the group. Not reproduced: the model and the real Mixer scene both nest correctly (`test_track_routing.gd`). Fixed two gaps that give this symptom: a channel-less (or shared-strip) sibling above the moved track un-nested it instead, and routing a track inside a group to a new channel only routed the strip without nesting it. Verify in the UI; if it still happens, note the exact steps
+   - [x?] On `Track.parent_changed` (TrackReorderCommand), nest/unnest the linked channel in the same undo step. Already done by `Project.place_track`, with `TrackReorderCommand.capture_layout` snapshotting both sides (no separate `ChannelNestCommand` needed); covered by tests
+   - [x?] Reverse direction: nesting a channel in the mixer reparents its linked track in the arranger (`Project.nest_channel`/`unnest_channel`; covered by tests)
+2. Mixer drag and drop into/out of group channels
+   - [x] Dropping onto a group strip nests; dropping onto the children pane inserts at the hovered index. All strip drops resolve through `MixerChannelDropTarget`; nested non-group strips no longer swallow the drop as a nest, and dragging a child also reorders it inside the fold-out
+   - [x] Dragging a child out of the children pane onto the root `ChannelsBox` unnests it, placed at the hovered gap
+   - [x] Clear drop indicator (insert line / group highlight) while dragging (`Mixer._process`, same resolver as the drop)
+3. Nested mixer layout
+   - [x] `MixerChannel.children_header_height` (default 12) sizes the parent's ParentHeader and is subtracted from nested header heights (plus panel margin/separation per level, floor 24 px), so header bottoms line up two levels deep (`test_mixer_channel_drop.gd`)
+   - [ ] "For nested mixer channels, we need a way to …" (unfinished item: define it before starting)
+4. Folding child tracks in the arranger
+   - [x?] Wire the folder/group fold button to `is_folder_expanded` and hide/show the child subtree in TrackList and Timeline (`AutomationRowOrder` leaves out folded-away rows for both columns)
+   - [x?] Animate the slide up/down: one shared `TrackFoldAnimation` per folder, both columns size rows from `AutomationRowOrder.fold_heights`. Rows cut short below 40 px hide instead, since a TrackItem can't shrink past its content (37 px). Verify visually that headers and timeline rows stay aligned
+   - [x?] Persist fold state (already saved in `Track.JSON_FIELDS`); selecting a track inside a folded folder (also from the mixer) or dropping into a folded folder expands it
+5. Track ↔ channel state sync
+   - [x?] Selection: `TrackList.selection_changed` ↔ `Mixer.selection_changed` mirrored in `Editor` through `SelectionSync` and silent setters (no feedback loop). Selecting a bus clears the arranger selection
+   - [x?] Solo/mute: the channel is the single source of truth. `Track.muted`/`solo` read the linked channel (a channel-less track keeps its own, taken from its last strip), routing no longer pushes the track's copy into the strip, and TrackItem buttons follow channel signals
+6. TrackItem context menu (uses the selection from 5)
+   - [x?] Single track: `Delete Track` (keeps channel) and `Delete Track & Channel`. `TrackDeleteCommand` keep-channels option; `LinkedDeleteSnapshot` unregisters/re-registers tracks on kept channels
+   - [x?] Single track: `Duplicate Track` (clips, same channel) and `Duplicate Track & Channel` (also copies channel settings, devices with fresh ids, sends, routing and group nesting). New `TrackDuplicateCommand`. Only clip tracks can be duplicated (not folders/groups); aux returns of multi-out devices are not copied
+   - [x?] Multiple selected: title is read-only and shows "N tracks" (color applies to all, routing dropdowns hidden)
+   - [x?] Multiple selected: `Delete Tracks` / `Duplicate Tracks` (plus `& Channels` variants), each one undo step (delete: one snapshot; duplicate: `MacroCommand`)
+   - [x?] Tests for the delete/duplicate variants and their undo (`test_track_actions.gd`)
+
+#### Phase 2: Quick fixes (easy)
+
+- [ ] Pan sliders show the value while adjusting (label/tooltip from `PanControl._on_slider_changed`, hidden on release).
+- [ ] Master channel: allow devices/effects, hide its sends panel.
 
 ### Arranger & Timeline
 
 - [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
 - [ ] Chord track: Implement chord track with visual notations
 - [x] Marking track: Add marking/marker tracks (section labels, etc.)
-- [ ] Folders and groups: implement folding capability, ideally animated (sliding down / up)
-- [x?] Marker Track
-  - [x?] Double-click empty marker area creates a new marker; if there's a current selection range, create the marker spanning that range instead
-  - [x?] Click and drag to move a marker around (blocked by collision with track start or another marker's boundary)
-  - [x?] Disallow overlapping markers: when a move/create/split would overlap, split or cut the existing marker(s) instead
-  - [x?] Empty marker area context menu (right-click): "Add Marker" places the marker and enters edit mode on its name
-  - [x?] Right-click on a marker shows its context menu, styled like other context menus (color | SmartLineEdit label), with: Add Marker Here (Split), Split (just splits), Delete
-  - [x?] Creating a new marker on top of an existing marker (via the marker context menu) should be allowed, applying split/cut logic to avoid overlap
-  - [x?] Double-click-and-hold places like a note: drag moves the new marker, Shift drags only its end, overlaps are cut on release, Escape cancels
-  - [x?] Rename a new marker only after mouse release, behind the Behavior setting "Rename New Markers"
-  - [x?] Marker names are unique (create, rename and split add a number suffix: `Verse` -> `Verse 2`)
 
 ### Clips
 
-- [ ] Look at ways to improve waveform generation and display
-- [/] TimelineClip context menu
-  - [x?] SmartLineEdit for clip name
-  - [ ] Cut
-  - [ ] Copy
-  - [x] Make Unique: makes clip instance unique (if ClipInstance shares underlying clip with any other ClipInstance)
-    - [ ] gray the button if there's only one instance of it
-  - [x] Delete
-- [ ] some way to visually say if a clip is instanced more than once
-  - [ ] context menu > select all instances (grey if none)
+#### Phase 1: Clip instance awareness and unused clips (complex)
+
+1. Instance count as observable state (foundation)
+   - [ ] `Project` emits `clip_instance_count_changed(clip_id, count)` whenever an instance is added, removed, moved to another track or made unique (hook into `Track.clip_instance_added/removed`).
+   - [ ] Tests: count updates across create, delete, Make Unique and undo/redo.
+2. Instance count badge
+   - [ ] TimelineClip header shows the count right-aligned; show nothing when count is 1.
+   - [ ] Update from the signal in 1, not by polling in `_draw`. Hide the badge when the clip is too narrow.
+3. `Select All Instances` in the clip context menu
+   - [ ] Selects every instance of the clicked clip(s) through `ClipSelectionManager`, across tracks.
+   - [ ] Disabled when no other instances exist (same check as Make Unique).
+4. Rename clips that lose their last instance
+   - [ ] When the count reaches 0, rename: strip the number suffix (`Clip.uniqueness_base`), append `_unused`, then re-suffix so names stay unique among unused clips too.
+   - [ ] When an instance comes back (undo, or later placing from the asset browser), restore the original name. Store it on the clip so undo doesn't depend on reversing the string.
+   - [ ] Make the rename part of `ClipInstanceDeleteCommand` (and multi-delete) so a single undo step restores both the instance and the name.
+   - [ ] Tests for rename, suffix collisions and undo.
+5. Waveforms (investigation, open-ended)
+   - [ ] Profile generation (`AudioFileService` waveform caches) and drawing on long audio clips; write findings to STATUS.md before choosing fixes (e.g. multi-resolution peaks, min/max + RMS drawing, caching per zoom level).
+
+#### Phase 2: Quick fixes (easy)
+
+- [x?] Clip resize handles snap by rounding: `TimelineClip.gd` now uses `grid_helper.snap_ticks` for the resize start/end and for clip moves, for consistent behavior. Minimum-duration clamp verified unaffected (it depends only on `snap_interval`, not the floor/round choice).
+- [x?] Clip context menu `Cut` and `Copy`: added buttons to `ClipContextMenu.tscn`/`.gd` (new `cut_requested`/`copy_requested` signals), wired in `Timeline.gd` to sync `clip_selection_manager` to the bound instances (so a right-click on an unselected clip cuts/copies the right clip) then call the existing `cut_selection_to_clipboard()` / `copy_selection_to_clipboard()`.
+- [x?] Make Unique is grayed out when no selected instance shares its clip: `ClipContextMenu.bind_to_instances` already sets `make_unique.disabled`. Verify in the UI.
+- [x?] SmartLineEdit for clip name (verify).
+- [x] Make Unique
+- [x] Delete
+
+#### Maybe
+
 - [ ] Differentiate clicking the clip header from the clip body, with settings under the Behavior category:
   - [ ] Double-click body: open the clip and switch to the MIDI editor in clip mode
   - [ ] Double-click header/text: rename
   - [ ] Right-click header: context menu
   - [ ] Right-click body: delete; holding the button deletes clips as the mouse moves over them
-- [ ] adjusting TimelineClip length via handle clamps poorly at least the right side handle. Seems like snapping is floored (should round instead), currently one needs to drag very close to the next snap point for it to actually change size.
 
 ### Clip Editor / Note Editor
 
@@ -190,7 +217,7 @@ Done:
 
 ### Settings
 
-- [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type and optional explicit input control type, and build the UI from that registry (rendered when the settings window opens)
+- [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type / input control type, and build the UI from that registry (rendered when the settings window opens)
   - [ ] Sub-category renders as a large-font label with margins between sub-categories
   - [ ] Table-like layout with the controls aligned on the right for readability
 - [ ] Searchable settings: fuzzy search bar at the top, with a little debounce

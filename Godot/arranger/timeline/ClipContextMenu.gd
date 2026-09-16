@@ -7,11 +7,15 @@ class_name ClipContextMenu extends PopupPanel
 # Data Controls
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
+@onready var cut: Button = $VBoxContainer/Cut
+@onready var copy: Button = $VBoxContainer/Copy
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
 @onready var delete: Button = $VBoxContainer/Delete
 
 signal delete_requested(instances: Array[ClipInstance])
 signal make_unique_requested(instances: Array[ClipInstance])
+signal cut_requested(instances: Array[ClipInstance])
+signal copy_requested(instances: Array[ClipInstance])
 
 var clip_instance: ClipInstance = null
 var selected_instances: Array[ClipInstance] = []
@@ -19,6 +23,10 @@ var selected_instances: Array[ClipInstance] = []
 
 ## Wire buttons, size the title so the name is readable, and listen for renames.
 func _ready() -> void:
+	if is_instance_valid(cut):
+		cut.pressed.connect(_on_cut_pressed)
+	if is_instance_valid(copy):
+		copy.pressed.connect(_on_copy_pressed)
 	if is_instance_valid(make_unique):
 		make_unique.pressed.connect(_on_make_unique_pressed)
 	if is_instance_valid(delete):
@@ -87,6 +95,22 @@ func _on_name_changed(new_value) -> void:
 	if new_name.is_empty() or new_name == clip_instance.clip.name:
 		return
 	HistoryUtil.execute_property("Rename Clip", clip_instance.clip, "set_name", clip_instance.clip.name, new_name)
+
+
+## Request Cut for the bound instances.
+func _on_cut_pressed() -> void:
+	if selected_instances.is_empty():
+		return
+	cut_requested.emit(selected_instances.duplicate())
+	hide()
+
+
+## Request Copy for the bound instances.
+func _on_copy_pressed() -> void:
+	if selected_instances.is_empty():
+		return
+	copy_requested.emit(selected_instances.duplicate())
+	hide()
 
 
 ## Delete the bound instances.

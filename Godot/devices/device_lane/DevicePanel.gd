@@ -89,7 +89,7 @@ func _ready() -> void:
 	_show_parameters_tab()
 	# Right pane visibility will be managed when binding to a device
 
-	# Enable drag and drop for SFZ files on the panel and key child nodes
+	# Drag the device from the header and content areas; drops resolve through DeviceDropTarget.
 	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	ccs_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
@@ -444,23 +444,33 @@ func _on_file_selected(path: String) -> void:
 # DRAG AND DROP
 # ============================================================================
 
+## Start a device drag (a DeviceDrag payload). Nothing moves until the drop.
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data for reordering - returns DeviceInstance."""
-	if device:
-		return device
-	return null
+	return DeviceDrag.start(self, device)
 
 
-## Accept sample files, or devices dropped onto a container.
+## Resolve from the pointer in the enclosing device lane: insert beside this panel, or onto its
+## header (child into a container, file load). Outside a lane, only drops onto the device.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	if DeviceDropTarget.find_root(self):
+		return DeviceDropTarget.resolve_for(self, data).is_valid()
 	return DeviceDropUtil.can_drop_on_device(device, data)
 
 
-## Add into this container (and reveal the new child), or load a dropped file.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if device == null:
 		return
-	if DeviceDropUtil.drop_on_device(device, data):
+	if DeviceDropTarget.find_root(self):
+		DeviceDropTarget.resolve_for(self, data).commit(data)
+		return
+	after_drop_onto(DeviceDropUtil.drop_on_device(device, data))
+
+
+## After a drop onto this panel: reveal a child added to a container, or show a loaded file.
+func after_drop_onto(added_child: bool) -> void:
+	if device == null:
+		return
+	if added_child:
 		_open_folder_after_drop()
 	elif not device.loaded_file_path.is_empty():
 		loaded_file_path = device.loaded_file_path

@@ -38,8 +38,8 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 @export var automation_toggle: Button
 @export var automation_menu_button: Button
 
-# at the bottom, a drop zone
-@export var drop_zone: DropZone
+## Folder/group fold button (hidden for tracks without children).
+@onready var foldout_toggle: Button = get_node_or_null("VBoxContainer/HBox/MarginContainer/HBox/FoldoutToggle")
 
 # Data binding
 var track: Track = null
@@ -78,6 +78,8 @@ func _ready():
 			automation_toggle.toggled.connect(_on_automation_toggled)
 		if automation_menu_button:
 			automation_menu_button.pressed.connect(_on_automation_menu_pressed)
+		if foldout_toggle:
+			foldout_toggle.toggled.connect(_on_foldout_toggled)
 
 		# Connect volumeter signal for volume changes
 		if volumeter:
@@ -88,11 +90,6 @@ func _ready():
 			label.value_changed.connect(_on_label_value_changed)
 			label.tab_requested.connect(_on_label_tab_requested)
 		
-		# Set up drop zone (visual separator only; live reorder uses TrackItem/TrackList drops)
-		if drop_zone:
-			drop_zone.visible = false
-			drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
 		# Buttons/label/meter sit on top of the header; Godot asks them about
 		# drops, so they must forward TrackDrag or a release over Mute cancels.
 		_forward_track_drops_from(self)
@@ -223,6 +220,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 		track.default_channel_id_changed.connect(_on_track_channel_id_changed)
 		track.parent_changed.connect(_on_track_parent_changed)
 		track.automation_expanded_changed.connect(_on_track_automation_expanded_changed)
+		track.folder_expanded_changed.connect(_on_track_folder_expanded_changed)
 
 	# Look up and bind to the track's channel
 	_bind_to_track_channel()
@@ -252,6 +250,7 @@ func _update_from_track() -> void:
 	if mute_toggle:
 		mute_toggle.set_pressed_no_signal(track.muted)
 	_update_automation_controls()
+	_update_foldout_toggle()
 
 	# Apply track color, selection styling, and nesting indent
 	_update_header_style()
@@ -273,6 +272,12 @@ func _bind_to_track_channel() -> void:
 		channel.volume_changed.connect(_on_channel_volume_changed)
 		channel.peak_updated.connect(_on_channel_peak_updated)
 		channel.record_armed_changed.connect(_on_channel_record_armed_changed)
+		channel.mute_changed.connect(_on_channel_mute_changed)
+		channel.solo_changed.connect(_on_channel_solo_changed)
+		if mute_toggle:
+			mute_toggle.set_pressed_no_signal(channel.mute)
+		if solo_toggle:
+			solo_toggle.set_pressed_no_signal(channel.solo)
 		if not channel.color_changed.is_connected(_on_channel_color_changed):
 			channel.color_changed.connect(_on_channel_color_changed)
 		_update_volumeter_from_channel()
@@ -282,10 +287,19 @@ func _bind_to_track_channel() -> void:
 			volumeter.visible = true
 		return
 
-	logger.warn("No valid channel found for track ", track.name, " (default_channel_id=", track.default_channel_id, ")")
+	if track.default_channel_id < 0:
+		# Unrouted track (folder, or one created via "New Track"): no strip to meter.
+		logger.info("Track ", track.name, " has no channel; volumeter hidden")
+	else:
+		logger.warn("No valid channel found for track ", track.name, " (default_channel_id=", track.default_channel_id, ")")
 	channel = null
 	if volumeter:
 		volumeter.visible = false
+	# Unrouted: the track holds its own mute/solo (kept from its last strip).
+	if mute_toggle:
+		mute_toggle.set_pressed_no_signal(track.muted)
+	if solo_toggle:
+		solo_toggle.set_pressed_no_signal(track.solo)
 
 
 ## Disconnect from the bound track, its channel and its parent's color. Idempotent.
@@ -305,6 +319,8 @@ func _unbind() -> void:
 			track.parent_changed.disconnect(_on_track_parent_changed)
 		if track.automation_expanded_changed.is_connected(_on_track_automation_expanded_changed):
 			track.automation_expanded_changed.disconnect(_on_track_automation_expanded_changed)
+		if track.folder_expanded_changed.is_connected(_on_track_folder_expanded_changed):
+			track.folder_expanded_changed.disconnect(_on_track_folder_expanded_changed)
 	track = null
 	current_project = null
 
@@ -320,6 +336,10 @@ func _unbind_from_channel() -> void:
 		channel.peak_updated.disconnect(_on_channel_peak_updated)
 	if channel.record_armed_changed.is_connected(_on_channel_record_armed_changed):
 		channel.record_armed_changed.disconnect(_on_channel_record_armed_changed)
+	if channel.mute_changed.is_connected(_on_channel_mute_changed):
+		channel.mute_changed.disconnect(_on_channel_mute_changed)
+	if channel.solo_changed.is_connected(_on_channel_solo_changed):
+		channel.solo_changed.disconnect(_on_channel_solo_changed)
 	if channel.color_changed.is_connected(_on_channel_color_changed):
 		channel.color_changed.disconnect(_on_channel_color_changed)
 
@@ -469,6 +489,17 @@ func _on_mute_toggled(pressed: bool) -> void:
 		track.set_mute(pressed)
 
 
+## Mixer (or anything else) muted the strip: follow it without writing back.
+func _on_channel_mute_changed(value: bool) -> void:
+	if mute_toggle:
+		mute_toggle.set_pressed_no_signal(value)
+
+
+func _on_channel_solo_changed(value: bool) -> void:
+	if solo_toggle:
+		solo_toggle.set_pressed_no_signal(value)
+
+
 ## Open or close this track's automation lane rows. TrackList owns the row bookkeeping; this
 ## header only reports the gesture.
 func _on_automation_toggled(pressed: bool) -> void:
@@ -492,8 +523,9 @@ func _update_automation_controls() -> void:
 	if track == null:
 		return
 	if automation_toggle:
-		automation_toggle.set_pressed_no_signal(track.automation_expanded)
-		automation_toggle.text = "v" if track.automation_expanded else ">"
+		# ToggleIconButton.set_state: set_pressed_no_signal + icon sync in one, without
+		# emitting `toggled` back at the model that's being reflected.
+		automation_toggle.set_state(track.automation_expanded)
 		automation_toggle.disabled = track.automation_lanes.is_empty()
 		automation_toggle.tooltip_text = (
 			"Show/hide automation lanes (%d)" % track.automation_lanes.size()
@@ -567,7 +599,7 @@ func _on_channel_record_armed_changed(armed: bool) -> void:
 # DRAG AND DROP
 # ============================================================================
 
-## Start dragging this track (or the current multi-selection) and begin live placement.
+## Start dragging this track (or the current multi-selection). Nothing moves until the drop.
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	if not track or Engine.is_editor_hint() or is_resizing:
 		return null
@@ -584,13 +616,13 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	set_drag_preview(preview)
 
 	if track_list:
-		track_list.begin_track_reorder(drag_data)
+		track_list.begin_track_drag(drag_data)
 
 	logger.info("Started dragging %d track(s) from: %s" % [drag_tracks.size(), track.name])
 	return drag_data
 
 
-## Let descendant controls accept the same live reorder drop as this header.
+## Let descendant controls accept the same track drop as this header.
 func _forward_track_drops_from(node: Node) -> void:
 	for child in node.get_children():
 		if child is Control:
@@ -598,26 +630,24 @@ func _forward_track_drops_from(node: Node) -> void:
 		_forward_track_drops_from(child)
 
 
-## Forward track reordering to TrackList so the header moves with the pointer.
+## Track drags resolve from the pointer in TrackList (see TrackDropTarget).
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	if not data is TrackDrag or not track:
 		return false
 	var track_list := _get_track_list()
-	if track_list:
-		track_list.preview_track_drop(get_global_mouse_position())
-	return true
+	return track_list != null and track_list.can_drop_track_drag(data as TrackDrag)
 
 
-## Commit a live track reorder through TrackList.
+## Commit a track drag through TrackList.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if not data is TrackDrag:
 		return
 	var track_list := _get_track_list()
 	if track_list:
-		track_list.commit_track_drop()
+		track_list.drop_track_drag(data as TrackDrag)
 
 
-## Create a compact ghost that follows the cursor while the real header slides in the list.
+## Create a compact ghost that follows the cursor; the headers stay put until the drop.
 func _create_drag_preview(drag_tracks: Array[Track] = []) -> Control:
 	var preview = PanelContainer.new()
 	var label_node = Label.new()
@@ -654,3 +684,28 @@ func _get_track_list() -> TrackList:
 			return node as TrackList
 		node = node.get_parent()
 	return null
+
+
+# ============================================================================
+# FOLDING
+# ============================================================================
+
+## Show the fold button on folders and groups, pressed while children are shown.
+func _update_foldout_toggle() -> void:
+	if foldout_toggle == null or track == null:
+		return
+	foldout_toggle.visible = track.can_contain_tracks()
+	if foldout_toggle is ToggleIconButton:
+		(foldout_toggle as ToggleIconButton).set_state(track.is_folder_expanded)
+	else:
+		foldout_toggle.set_pressed_no_signal(track.is_folder_expanded)
+	foldout_toggle.tooltip_text = "Hide child tracks" if track.is_folder_expanded else "Show child tracks"
+
+
+func _on_foldout_toggled(pressed: bool) -> void:
+	if track:
+		track.is_folder_expanded = pressed
+
+
+func _on_track_folder_expanded_changed(_expanded: bool) -> void:
+	_update_foldout_toggle()

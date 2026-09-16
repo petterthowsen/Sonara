@@ -1,5 +1,5 @@
 # MixerChannelDrag.gd
-# Payload for Godot GUI mixer-strip reparent (nest / un-nest). Sibling reorder stays header-slide.
+# Payload for a mixer strip drag (nest / insert / un-nest / reorder), applied only on drop.
 class_name MixerChannelDrag
 
 ## Emitted when Godot destroys the drag preview (drop, Escape, or drag cancelled).
@@ -28,7 +28,7 @@ func _on_tree_exiting() -> void:
 	drag_completed.emit(self)
 
 
-## Ghost label that follows the cursor during a mixer reparent drag.
+## Ghost label that follows the cursor during a mixer strip drag.
 static func make_preview(ch: Channel) -> Control:
 	var ghost := PanelContainer.new()
 	var label_node := Label.new()
@@ -53,11 +53,9 @@ static func make_preview(ch: Channel) -> Control:
 	return ghost
 
 
-## True when `child` may be dragged as a mixer nest/un-nest source.
+## True when `ch` may be dragged (buses only reorder within the right pane).
 static func can_drag(ch: Channel) -> bool:
-	if ch == null:
-		return false
-	return not ch.is_master and not ch.is_bus
+	return ch != null and not ch.is_master
 
 
 ## True when `child` can leave its mixer parent to the left-pane root.
@@ -82,12 +80,6 @@ static func after_sibling_at(box: ChannelsBox, mouse_x: float, exclude: Channel 
 			break
 	return after
 
-
-## Last child of `parent`, or null when the group is empty.
-static func last_child(project: Project, parent: Channel) -> Channel:
-	if project == null or parent == null or parent.child_channel_ids.is_empty():
-		return null
-	return project.get_channel_by_id(parent.child_channel_ids[parent.child_channel_ids.size() - 1])
 
 
 ## Nest under `parent` (null = un-nest) through history. Mixer waits for drop; no live reparent.

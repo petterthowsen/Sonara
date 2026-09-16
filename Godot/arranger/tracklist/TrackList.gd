@@ -37,13 +37,19 @@ var active_track: Track = null
 var _selection_anchor: Track = null
 var _is_rebuilding: bool = false
 
-## Live track-header reorder (null when no TrackDrag is in progress).
-var _reorder_drag: TrackDrag = null
+## Color of the track drag insert line and folder header glow.
+@export var drop_indicator_color := DropIndicator.DEFAULT_COLOR
+
+## Glowing track drag overlay (top-level, so it never takes layout space), created on first use.
+var _drop_indicator: DropIndicator = null
 
 ## Pixels per folder nesting level; matches TrackItem indent.
 @export var folder_indent_pixels: int = 12
 
 signal selection_changed(tracks: Array[Track], active: Track)
+
+## Rows from the last _update_visual_order, resized on every fold animation step.
+var _fold_rows: Array = []
 
 func _ready():
 	# remove any nodes
@@ -61,6 +67,7 @@ func _ready():
 
 	# Enable drag and drop
 	set_drag_forwarding(Callable(self, "_get_drag_data"), Callable(self, "_can_drop_data"), Callable(self, "_drop_data"))
+	set_process(false)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -71,19 +78,33 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
-## Finish or revert a track reorder when Godot ends the GUI drag.
+## Track the drop indicator only while a track drag is in progress.
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_DRAG_END:
-		_on_track_drag_ended()
+	if what == NOTIFICATION_DRAG_BEGIN:
+		set_process(DragDrop.current_drag(self) is TrackDrag)
+	elif what == NOTIFICATION_DRAG_END:
+		set_process(false)
+		DropIndicator.hide_indicator(_drop_indicator)
 
 
-## Cancel live reorder via Escape so the layout snapshot can be restored.
+## Escape cancels a track drag; nothing moved, so there is nothing to restore.
 func _input(event: InputEvent) -> void:
-	if _reorder_drag == null:
-		return
-	if event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("ui_cancel") and DragDrop.current_drag(self) is TrackDrag:
 		get_viewport().gui_cancel_drag()
 		accept_event()
+
+
+## Show where a track drag lands.
+func _process(_delta: float) -> void:
+	var data: Variant = DragDrop.current_drag(self)
+	if not data is TrackDrag:
+		DropIndicator.hide_indicator(_drop_indicator)
+		return
+	var target := TrackDropTarget.resolve(self, data as TrackDrag, get_global_mouse_position())
+	if not target.is_valid():
+		DropIndicator.hide_indicator(_drop_indicator)
+		return
+	_drop_indicator = DropIndicator.place(self, _drop_indicator, target.indicator_rect, target.is_nest(), drop_indicator_color)
 
 
 # ============================================================================
@@ -126,7 +147,6 @@ func _on_project_closed() -> void:
 
 	_clear_selection(false)
 	_clear_all_track_items()
-	_end_track_reorder()
 
 	current_project = null
 
@@ -181,6 +201,7 @@ func _on_track_added(track: Track) -> void:
 	track.automation_lane_added.connect(_on_automation_lane_added.bind(track))
 	track.automation_lane_removed.connect(_on_automation_lane_removed.bind(track))
 	track.automation_expanded_changed.connect(_on_automation_expanded_changed.bind(track))
+	track.folder_expanded_changed.connect(_on_folder_expanded_changed.bind(track))
 	_rebuild_lane_headers(track)
 
 	# Store reference
@@ -235,6 +256,9 @@ func _disconnect_track_layout_signals(track: Track) -> void:
 	for connection in track.automation_expanded_changed.get_connections():
 		if connection["callable"].get_object() == self:
 			track.automation_expanded_changed.disconnect(connection["callable"])
+	for connection in track.folder_expanded_changed.get_connections():
+		if connection["callable"].get_object() == self:
+			track.folder_expanded_changed.disconnect(connection["callable"])
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -285,8 +309,8 @@ func _on_track_item_right_clicked(track: Track, mouse_position: Vector2) -> void
 	if not selected_tracks.has(track):
 		_select_track(track, false, false)
 	
-	# Bind the context menu to the track
-	track_item_context_menu.bind(track, current_project)
+	# Bind the context menu to the selection (the right-clicked track is in it)
+	track_item_context_menu.bind_tracks(selected_tracks, track, current_project)
 	
 	# Show the context menu at the mouse position
 	track_item_context_menu.popup(Rect2(mouse_position - Vector2.ONE * 10, Vector2.ZERO))
@@ -320,6 +344,9 @@ func _clear_all_track_items() -> void:
 func _select_track(track: Track, additive: bool, range_select: bool, apply_record_arm: bool = true) -> void:
 	if track == null:
 		return
+	# Selecting a track hidden inside a collapsed folder (e.g. from the mixer) unfolds it.
+	if current_project:
+		current_project.reveal_track(track)
 
 	if range_select:
 		if _selection_anchor == null:
@@ -355,6 +382,23 @@ func _select_track(track: Track, additive: bool, range_select: bool, apply_recor
 	_refresh_selection_visuals()
 	_notify_editor(apply_record_arm)
 	selection_changed.emit(selected_tracks, active_track)
+
+
+## Replace the selection without emitting selection_changed (selection mirrored from the mixer).
+## Tracks inside collapsed folders are unfolded so the selection is visible.
+func set_selection_silent(tracks: Array[Track], active: Track) -> void:
+	selected_tracks.clear()
+	for t in tracks:
+		if t and not selected_tracks.has(t):
+			selected_tracks.append(t)
+			if current_project:
+				current_project.reveal_track(t)
+	active_track = active if selected_tracks.has(active) else null
+	_selection_anchor = active_track
+	_refresh_selection_visuals()
+	var item := _find_track_item(active_track) if active_track else null
+	if item:
+		_ensure_track_item_visible(item)
 
 
 ## Drop a track from the current selection, keeping another selected track active if possible.
@@ -410,7 +454,7 @@ func _get_visual_tracks() -> Array[Track]:
 	for child in get_children():
 		if child is TrackItem:
 			var item := child as TrackItem
-			if item.track:
+			if item.track and item.visible:
 				result.append(item.track)
 	return result
 
@@ -443,14 +487,13 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	return null
 
 
-## Accept live track reordering or device/SFZ asset drops.
+## Accept a track drag (resolved from the pointer) or device/SFZ asset drops.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	if not current_project:
 		return false
 
 	if data is TrackDrag:
-		preview_track_drop(get_global_mouse_position())
-		return true
+		return can_drop_track_drag(data as TrackDrag)
 
 	# Check if data is a single asset
 	if data is Asset:
@@ -475,7 +518,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		return
 
 	if data is TrackDrag:
-		commit_track_drop()
+		drop_track_drag(data as TrackDrag)
 		return
 	
 	# Handle array of assets
@@ -571,266 +614,41 @@ func _has_selected_ancestor(track: Track, selected_ids: Dictionary) -> bool:
 	return false
 
 
-## Start a live reorder: snapshot layout and dim every dragged header.
-func begin_track_reorder(drag: TrackDrag) -> void:
-	if drag == null or drag.track == null or current_project == null:
+## Dim every header that moves with `drag` until the drag ends.
+func begin_track_drag(drag: TrackDrag) -> void:
+	if drag == null or current_project == null:
 		return
-	_reorder_drag = drag
-	_reorder_drag.before_layout = TrackReorderCommand.capture_layout(current_project)
-	_reorder_drag.did_commit = false
-	_set_dragged_items_dimmed(true)
-	logger.info("Live reorder started: %d track(s)" % _dragged_roots().size())
-
-
-## Move the dragged tracks under the pointer so headers and timeline stay in sync.
-func preview_track_drop(mouse_global: Vector2) -> void:
-	if _reorder_drag == null or current_project == null:
-		return
-	var placement := _compute_drop_placement(mouse_global)
-	if placement.is_empty():
-		return
-	var parent_id := int(placement["parent_id"])
-	var after_sibling: Track = placement.get("after_sibling")
-	var after_anchor := after_sibling
-	var roots := _dragged_roots()
-	for root in roots:
-		if current_project.track_is_in_subtree(parent_id, root):
-			return
-	current_project.begin_track_layout_batch()
-	var any_moved := false
-	for root in roots:
-		if current_project.place_track(root, parent_id, after_sibling):
-			any_moved = true
-		after_sibling = root
-	current_project.end_track_layout_batch()
-	if any_moved:
-		logger.info(
-			"Live place %d track(s) parent=%s after=%s"
-			% [
-				roots.size(),
-				str(parent_id),
-				after_anchor.name if after_anchor else "first",
-			]
-		)
-
-
-## Commit the live layout to history, or no-op if nothing changed.
-func commit_track_drop() -> void:
-	if _reorder_drag == null or current_project == null:
-		return
-	_reorder_drag.did_commit = true
-	var after_layout := TrackReorderCommand.capture_layout(current_project)
-	if not TrackReorderCommand.layouts_equal(_reorder_drag.before_layout, after_layout):
-		HistoryUtil.record(
-			TrackReorderCommand.new(current_project, _reorder_drag.before_layout, after_layout)
-		)
-		logger.info("Reorder committed: %d track(s)" % _dragged_roots().size())
-	_end_track_reorder()
-
-
-## Restore the pre-drag layout when ESC or an unsuccessful drop cancels.
-func _on_track_drag_ended() -> void:
-	if _reorder_drag == null:
-		return
-	if _reorder_drag.did_commit:
-		_end_track_reorder()
-		return
-	logger.warn("Reorder cancelled, restoring layout")
-	current_project.apply_track_layout(_reorder_drag.before_layout)
-	_end_track_reorder()
-
-
-## Clear drag visuals and session state.
-func _end_track_reorder() -> void:
-	_set_dragged_items_dimmed(false)
-	_reorder_drag = null
-
-
-## Dim or restore every header in the dragged subtrees.
-func _set_dragged_items_dimmed(dimmed: bool) -> void:
-	if _reorder_drag == null:
-		return
-	var ids := _all_dragged_subtree_ids()
-	var alpha := 0.7 if dimmed else 1.0
-	for child in get_children():
-		if child is TrackItem:
-			var item := child as TrackItem
-			if item.track and ids.has(item.track.id):
-				item.modulate.a = alpha
-
-
-## Movable roots for the current drag (folder/group children travel with their parent).
-func _dragged_roots() -> Array[Track]:
-	if _reorder_drag == null:
-		return []
-	if not _reorder_drag.tracks.is_empty():
-		return _reorder_drag.tracks
-	if _reorder_drag.track:
-		return [_reorder_drag.track]
-	return []
-
-
-## Compute parent + after-sibling from pointer Y (order) and X (folder indent).
-func _compute_drop_placement(mouse_global: Vector2) -> Dictionary:
-	if _reorder_drag == null or current_project == null:
-		return {}
-	var skip := _dragged_root_ids()
-	var subtree := _all_dragged_subtree_ids()
-	var remaining: Array[TrackItem] = []
-	for child in get_children():
-		if child is TrackItem:
-			var item := child as TrackItem
-			if item.track and not subtree.has(item.track.id):
-				remaining.append(item)
-	if remaining.is_empty():
-		return {}
-
-	var hovered: TrackItem = null
-	var insert_before := true
-	for item in remaining:
-		var rect := item.get_global_rect()
-		if mouse_global.y < rect.position.y + rect.size.y * 0.5:
-			hovered = item
-			insert_before = true
-			break
-		if mouse_global.y < rect.end.y:
-			hovered = item
-			insert_before = false
-			break
-	if hovered == null:
-		hovered = remaining.back()
-		insert_before = false
-
-	var local_x := mouse_global.x - get_global_rect().position.x
-	if insert_before:
-		return _placement_before(hovered.track, _desired_level_before(hovered.track, local_x), skip)
-	var nest_into_parent := (
-		hovered.track.can_contain_tracks()
-		and mouse_global.x >= hovered.get_global_rect().get_center().x
-	)
-	return _placement_after(
-		hovered.track,
-		_desired_level_after(hovered.track, local_x, nest_into_parent),
-		skip
-	)
-
-
-## Nesting level when inserting after `item`. Right half of a folder/group nests; a left gutter un-nests.
-func _desired_level_after(item: Track, local_x: float, nest_into_parent: bool) -> int:
-	var item_level := item.get_nesting_level(current_project)
-	if nest_into_parent and item.can_contain_tracks():
-		return item_level + 1
-	return _desired_level_from_x(item_level, local_x)
-
-
-## Nesting level when inserting before `item`: same as `item`, or one level shallower in the left gutter.
-func _desired_level_before(item: Track, local_x: float) -> int:
-	return _desired_level_from_x(item.get_nesting_level(current_project), local_x)
-
-
-## Keep `item_level` unless the pointer is in the left gutter, which pulls out one folder level.
-func _desired_level_from_x(item_level: int, local_x: float) -> int:
-	if item_level <= 0:
-		return 0
-	var item_indent := float(item_level * folder_indent_pixels)
-	if local_x < item_indent + 20.0:
-		return item_level - 1
-	return item_level
-
-
-## Insert before `item`, un-nesting when the pointer is left of `item`'s indent.
-func _placement_before(item: Track, desired_level: int, skip: Dictionary) -> Dictionary:
-	var item_level := item.get_nesting_level(current_project)
-	var level := clampi(desired_level, 0, item_level)
-	var cursor := item
-	while cursor:
-		var cursor_level := cursor.get_nesting_level(current_project)
-		if cursor_level <= level:
-			return {
-				"parent_id": cursor.parent_track_id,
-				"after_sibling": _previous_sibling(cursor, skip),
-			}
-		if cursor.parent_track_id < 0:
-			break
-		cursor = current_project.get_track_by_id(cursor.parent_track_id)
-	return {
-		"parent_id": item.parent_track_id,
-		"after_sibling": _previous_sibling(item, skip),
-	}
-
-
-## Insert after `item`; indenting into a folder/group makes the dragged tracks its first children.
-func _placement_after(item: Track, desired_level: int, skip: Dictionary) -> Dictionary:
-	var item_level := item.get_nesting_level(current_project)
-	var max_level := item_level + (1 if item.can_contain_tracks() else 0)
-	var level := clampi(desired_level, 0, max_level)
-	if item.can_contain_tracks() and level > item_level:
-		var nest_blocked := false
-		for root in _dragged_roots():
-			if current_project.track_is_in_subtree(item.id, root):
-				nest_blocked = true
-				break
-		if not nest_blocked:
-			return {"parent_id": item.id, "after_sibling": null}
-
-	var cursor := item
-	while cursor:
-		var cursor_level := cursor.get_nesting_level(current_project)
-		if cursor_level <= level:
-			var after: Track = cursor
-			if skip.has(cursor.id):
-				after = _previous_sibling(cursor, skip)
-			return {
-				"parent_id": cursor.parent_track_id,
-				"after_sibling": after,
-			}
-		if cursor.parent_track_id < 0:
-			return {"parent_id": -1, "after_sibling": cursor}
-		cursor = current_project.get_track_by_id(cursor.parent_track_id)
-	return {"parent_id": item.parent_track_id, "after_sibling": item}
-
-
-## Sibling directly above `track` in the same folder, skipping dragged roots.
-func _previous_sibling(track: Track, skip: Dictionary) -> Track:
-	var siblings: Array[Track] = []
-	for t in current_project.tracks:
-		if t.parent_track_id == track.parent_track_id:
-			siblings.append(t)
-	siblings.sort_custom(func(a, b): return a.order < b.order)
-	var previous: Track = null
-	for sibling in siblings:
-		if sibling == track:
-			break
-		if not skip.has(sibling.id):
-			previous = sibling
-	return previous
-
-
-## IDs of movable drag roots (not their descendants).
-func _dragged_root_ids() -> Dictionary:
 	var ids: Dictionary = {}
-	for root in _dragged_roots():
+	for root in drag.tracks:
 		ids[root.id] = true
-	return ids
+	for child in get_children():
+		if child is TrackItem and (child as TrackItem).track:
+			var t := (child as TrackItem).track
+			if ids.has(t.id) or _has_selected_ancestor(t, ids):
+				(child as TrackItem).modulate.a = 0.5
+	drag.drag_completed.connect(_on_track_drag_completed)
+	logger.info("Track drag started: %d track(s)" % drag.tracks.size())
 
 
-## Every track that moves with the current drag, including nested descendants.
-func _all_dragged_subtree_ids() -> Dictionary:
-	var ids: Dictionary = {}
-	for root in _dragged_roots():
-		_collect_subtree_ids(root, ids)
-	return ids
+## Undim the dragged headers.
+func _on_track_drag_completed(_drag: TrackDrag) -> void:
+	for child in get_children():
+		if child is TrackItem:
+			(child as TrackItem).modulate.a = 1.0
 
 
-## Recursively record `track` and its descendants into `ids`.
-func _collect_subtree_ids(track: Track, ids: Dictionary) -> void:
-	if track == null:
-		return
-	ids[track.id] = true
-	if current_project == null or not track.can_contain_tracks():
-		return
-	for child in current_project.get_track_children(track):
-		_collect_subtree_ids(child, ids)
+## True when a track drag would move something at the pointer.
+func can_drop_track_drag(drag: TrackDrag) -> bool:
+	return TrackDropTarget.resolve(self, drag, get_global_mouse_position()).is_valid()
+
+
+## Apply a track drag at the pointer through history.
+func drop_track_drag(drag: TrackDrag) -> void:
+	var target := TrackDropTarget.resolve(self, drag, get_global_mouse_position())
+	DropIndicator.hide_indicator(_drop_indicator)
+	if target.commit(drag):
+		drag.did_commit = true
+		logger.info("Track drop committed: %d track(s)" % drag.tracks.size())
 
 
 ## Update UI to match hierarchical track order.
@@ -840,11 +658,41 @@ func _update_visual_order() -> void:
 	
 	# One ordering helper for both arranger columns, so headers and timeline rows can't drift.
 	var rows := AutomationRowOrder.build(current_project)
+	_fold_rows = rows
 	_sync_lane_header_visibility(rows)
+	_sync_track_item_visibility(rows)
 	AutomationRowOrder.apply(self, rows, _node_for_row)
+	AutomationRowOrder.apply_heights(current_project, rows, _node_for_row)
 
-	if _reorder_drag == null:
-		logger.info("Updated visual order (%d rows)" % rows.size())
+	logger.info("Updated visual order (%d rows)" % rows.size())
+
+
+## Hide TrackItems of tracks folded away (not in `rows`); apply_heights() shows the rest.
+func _sync_track_item_visibility(rows: Array) -> void:
+	var shown: Dictionary = {}
+	for row in rows:
+		if row.get("lane") == null:
+			shown[row["track"]] = true
+	for child in get_children():
+		if child is TrackItem and (child as TrackItem).track:
+			child.visible = shown.has((child as TrackItem).track)
+
+
+## Start (or reverse) the fold slide and rebuild rows; heights follow each animation step.
+func _on_folder_expanded_changed(_expanded: bool, track: Track) -> void:
+	if current_project == null:
+		return
+	var anim := TrackFoldAnimation.start(track)
+	if anim and not anim.updated.is_connected(_on_fold_step):
+		anim.updated.connect(_on_fold_step)
+		anim.finished.connect(_update_visual_order)
+	_update_visual_order()
+
+
+## Resize rows for the current fold animation step.
+func _on_fold_step() -> void:
+	if current_project:
+		AutomationRowOrder.apply_heights(current_project, _fold_rows, _node_for_row)
 
 
 ## The child Control representing `row`: a TrackItem for a track row, the lane's header for a

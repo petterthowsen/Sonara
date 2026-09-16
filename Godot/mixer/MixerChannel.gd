@@ -56,12 +56,6 @@ var resize_width_start := 0
 @export var border_color := Color("#333")
 @export var border_color_selected := Color("#999")
 
-# Moving (re-ordering)
-var is_moving := false
-var move_index_start := 0
-var move_mouse_start := Vector2.ZERO
-var move_awaiting := false
-
 var is_selected := false:
 	set(selected):
 		if is_selected == selected:
@@ -74,7 +68,6 @@ var is_selected := false:
 			_apply_selection_layout()
 
 
-signal request_move(new_index : int)
 signal request_show_context_menu
 
 # Data binding
@@ -93,6 +86,20 @@ enum Mode {COMPACT, LARGE}
 const compact_min_width = 50
 const large_min_width = 100
 
+## Height of the parent-colored bar above nested strips in this strip's fold-out. Nested strip
+## headers shrink by the same amount so every header ends on the same row.
+@export var children_header_height := 12:
+	set(value):
+		children_header_height = value
+		if is_inside_tree() and children_slide and not Engine.is_editor_hint():
+			children_slide.apply_header_height(value)
+
+## Nested headers never shrink below this, so the title stays readable.
+const MIN_NESTED_HEADER_HEIGHT := 24.0
+
+## Header height from the scene, before nesting shrinks it.
+var _base_header_height := 0.0
+
 ## Extra width for the focused/selected strip so compact device parameters are usable.
 @export var selected_min_width := 120
 
@@ -100,6 +107,8 @@ const large_min_width = 100
 	set = set_mode
 
 func _ready():
+	if header:
+		_base_header_height = header.custom_minimum_size.y
 	_update_container_sizing()
 	_apply_selection_layout()
 	_init_details_pane()
@@ -196,6 +205,7 @@ func bind_to_channel(ch: Channel, proj: Project = null) -> void:
 	# Update UI from channel data
 	_update_from_channel()
 	_rebuild_output_menu()
+	_apply_nested_header_height()
 	_sync_children_slide()
 
 
@@ -315,7 +325,7 @@ func _update_hover_cursor(local_mouse: Vector2) -> void:
 
 func _gui_input(event: InputEvent):
 	if event is InputEventMouseMotion:
-		if not is_resizing and not is_moving:
+		if not is_resizing:
 			_update_hover_cursor(event.position)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and not is_resizing:
@@ -337,15 +347,8 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
 			_stop_resize()
 			accept_event()
-	if is_moving and event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
-			_stop_move()
-			accept_event()
 
 func _start_resize():
-	if is_moving:
-		return
-	
 	var mouse = get_global_mouse_position()
 	resize_mouse_start = mouse
 	resize_width_start = int(size.x)
@@ -364,17 +367,14 @@ func _process(_delta : float):
 		new_width = max(new_width, _total_min_width())
 
 		custom_minimum_size.x = new_width
-	elif is_moving:
-		_update_move()
 	else:
-		# Neither resizing nor moving: nothing to poll, stop ticking.
+		# Not resizing: nothing to poll, stop ticking.
 		set_process(false)
 
 func _stop_resize():
 	is_resizing = false
 	mouse_default_cursor_shape = Control.CURSOR_ARROW
-	if not is_moving:
-		set_process(false)
+	set_process(false)
 
 func _on_title_value_changed(new_name : String) -> void:
 	channel.set_name(new_name)
@@ -389,71 +389,6 @@ func _on_header_gui_input(event : InputEvent) -> void:
 
 		if mouse_event.pressed:
 			_request_mixer_selection(mouse_event.ctrl_pressed)
-
-		if mouse_event.shift_pressed or mouse_event.ctrl_pressed:
-			return
-
-		if not is_moving and event.is_pressed():
-			if get_local_mouse_position().x >= size.x - 8:
-				return
-			# start moving
-			_start_move()
-		elif is_moving  and event.is_released():
-			_stop_move()
-
-
-
-func _start_move():
-	if is_resizing: return
-	is_moving = true
-	move_mouse_start = get_global_mouse_position()
-	move_index_start = get_index()
-	set_process(true)
-
-
-func _move_completed() -> void:
-	move_index_start = get_index()
-	move_mouse_start = get_global_mouse_position()
-	move_awaiting = false
-
-
-## Reorder by the mouse's position among sibling midpoints so a fast drag can skip multiple channels.
-func _update_move():
-	var parent := get_parent()
-	if parent == null:
-		return
-
-	var mouse_x := get_global_mouse_position().x
-	var current_index := get_index()
-	var target_index := current_index
-
-	for i in range(current_index):
-		var sibling := parent.get_child(i) as Control
-		if sibling == null:
-			continue
-		if mouse_x < sibling.get_global_rect().get_center().x:
-			target_index = i
-			break
-
-	for i in range(current_index + 1, parent.get_child_count()):
-		var sibling := parent.get_child(i) as Control
-		if sibling == null:
-			continue
-		if mouse_x > sibling.get_global_rect().get_center().x:
-			target_index = i
-		else:
-			break
-
-	if target_index != current_index:
-		request_move.emit(target_index)
-		_move_completed()
-
-
-func _stop_move():
-	is_moving = false
-	move_awaiting = false
-	if not is_resizing:
-		set_process(false)
 
 
 ## Forward header clicks to the owning Mixer selection logic (strip body uses Mixer.gui_input).
@@ -801,8 +736,8 @@ func _on_channel_device_removed(position: int, device_id: String) -> void:
 # ============================================================================
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Start a mixer reparent drag from the header; sibling slide stays a separate header gesture."""
-	if Engine.is_editor_hint() or is_resizing or is_moving:
+	"""Start a strip drag from the header. Nothing moves until the drop (see MixerChannelDropTarget)."""
+	if Engine.is_editor_hint() or is_resizing:
 		return null
 	if not MixerChannelDrag.can_drag(channel):
 		return null
@@ -814,61 +749,62 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	var preview := MixerChannelDrag.make_preview(channel)
 	var drag_data := MixerChannelDrag.new(self, channel, preview)
 	set_drag_preview(preview)
-	logger.info("Started nest drag: ", channel.name)
+	# Dim in place (modulate never changes layout) until the drag ends.
+	modulate.a = 0.5
+	drag_data.drag_completed.connect(_on_strip_drag_completed)
+	logger.info("Started strip drag: ", channel.name)
 	return drag_data
 
 
-func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
-	"""Accept a mixer nest onto this GROUP strip, a sibling insert in a fold-out, or a device/SFZ asset."""
+## Undim once our strip drag ends (method callable: auto-disconnects if a drop re-spawned us).
+func _on_strip_drag_completed(_data: MixerChannelDrag) -> void:
+	modulate.a = 1.0
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	"""Accept a mixer strip drag (resolved by the Mixer from the pointer), a device drop on the
+	device list, or a device/SFZ asset appended to the channel."""
 	if data is MixerChannelDrag:
-		if _can_drop_channel_nest(data as MixerChannelDrag):
-			return true
-		var kids := _enclosing_children_pane()
-		return kids != null and kids._can_drop_data(at_position, data)
+		var mixer := _find_mixer()
+		return mixer != null and mixer.can_drop_channel_drag(data as MixerChannelDrag)
+	if device_list and DeviceDropTarget.resolve_for(device_list, data).is_valid():
+		return true
 	return channel != null and data is Asset and DeviceDropUtil.can_drop_asset_on_channel(channel, data)
 
 
-func _drop_data(at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a nested mixer channel, device, or SFZ file on this strip."""
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	"""Handle dropping a mixer strip (nest / insert / un-nest), device, or SFZ file on this strip."""
 	if data is MixerChannelDrag:
-		if _can_drop_channel_nest(data as MixerChannelDrag):
-			_drop_channel_nest(data as MixerChannelDrag)
-			return
-		var kids := _enclosing_children_pane()
-		if kids:
-			kids._drop_data(at_position, data)
+		var mixer := _find_mixer()
+		if mixer:
+			mixer.drop_channel_drag(data as MixerChannelDrag)
 		return
+	if device_list:
+		var target := DeviceDropTarget.resolve_for(device_list, data)
+		if target.is_valid():
+			target.commit(data)
+			return
 	if channel and data is Asset:
 		DeviceDropUtil.drop_asset(channel, data, -1, null)
 
 
-## True when this GROUP or instrument strip can take `data.channel` as a nested child.
-func _can_drop_channel_nest(data: MixerChannelDrag) -> bool:
-	if data == null or data.channel == null or channel == null or project == null:
-		return false
-	if data.channel == channel:
-		return false
-	# Already a child: sibling header-slide owns reorder inside this group.
-	if data.channel.parent_channel_id == channel.id:
-		return false
-	return project.can_nest_channel(data.channel, channel)
-
-
-## Nest the dragged strip under this GROUP, appending after the current last child.
-func _drop_channel_nest(data: MixerChannelDrag) -> void:
-	if not _can_drop_channel_nest(data):
+## Shrink the header by every enclosing fold-out's top offset so header bottoms line up.
+func _apply_nested_header_height() -> void:
+	if header == null or _base_header_height <= 0.0:
 		return
-	data.destination = self
-	var after := MixerChannelDrag.last_child(project, channel)
-	if MixerChannelDrag.commit(project, data.channel, channel, after):
-		data.did_commit = true
-
-
-## Fold-out pane that owns this strip when nested under a Group.
-func _enclosing_children_pane() -> MixerChannelChildren:
+	# Every nesting level also adds a strip panel's top margin inside the fold-out.
+	var style := get_theme_stylebox("panel")
+	var strip_margin := style.get_margin(SIDE_TOP) if style else 0.0
+	var offset := 0.0
 	var n := get_parent()
 	while n:
 		if n is MixerChannelChildren:
-			return n as MixerChannelChildren
+			offset += (n as MixerChannelChildren).get_children_top_offset() + strip_margin
 		n = n.get_parent()
-	return null
+	header.custom_minimum_size.y = maxf(_base_header_height - offset, MIN_NESTED_HEADER_HEIGHT)
+
+
+## Global rect of the strip itself, excluding the fold-out and details pane.
+func get_strip_column_rect() -> Rect2:
+	var column := get_node_or_null("HBox/VBox") as Control
+	return column.get_global_rect() if column else get_global_rect()

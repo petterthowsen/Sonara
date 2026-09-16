@@ -244,6 +244,7 @@ func remove_midi_note(midi_note: MidiNoteData) -> bool:
 		midi_note_removed.emit(midi_note)
 		clip_modified.emit()
 		return true
+	push_warning("[Clip] Cannot remove note %d from clip %s: it is not in this clip. The caller resolved the wrong owning clip." % [midi_note.id, id])
 	return false
 
 

@@ -12,6 +12,9 @@ var logger : Log = Log.make("ChannelDeviceList")
 
 const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePanel.tscn")
 
+## Space between compact panels, in pixels.
+const PANEL_GAP := 2
+
 @onready var scroll_container : ScrollContainer = $ScrollContainer
 @onready var vbox : VBoxContainer = $ScrollContainer/VBoxContainer
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
@@ -30,7 +33,10 @@ const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePane
 
 var channel: Channel = null
 var device_panels: Dictionary[String, CompactDevicePanel] = {}  # Map of device instance ID -> CompactDevicePanel
-var _drop_host := DeviceChainDropHost.new(false, 8.0)
+## Device row drop rules; DeviceDropTarget resolves drops on this list.
+var drop_host := DeviceChainDropHost.new()
+## Glowing drop overlay (top-level, so it never takes layout space), created on first use.
+var _drop_indicator: DropIndicator = null
 ## A drum pad return lists its pad lane (pad device + own devices), rebuilt on every change.
 var _pad_lane := PadLaneWatcher.new()
 
@@ -42,7 +48,10 @@ var _pad_lane := PadLaneWatcher.new()
 ## Keep the list empty; compact panels are spawned in `_add_device_panel()`.
 func _ready() -> void:
 	if vbox:
-		vbox.add_theme_constant_override("separation", 0)
+		vbox.add_theme_constant_override("separation", PANEL_GAP)
+	drop_host.attach(self, vbox, true)
+	add_to_group(DeviceDropTarget.ROOT_GROUP)
+	set_process(false)
 	_pad_lane.changed.connect(_on_pad_lane_changed)
 	for node in vbox.get_children():
 		vbox.remove_child(node)
@@ -63,7 +72,7 @@ func bind_to_channel(p_channel: Channel) -> void:
 		channel.device_moved.disconnect(_on_device_moved)
 
 	channel = p_channel
-	_drop_host.bind(channel)
+	drop_host.bind(channel)
 	_pad_lane.bind(channel)
 
 	# Connect to device signals
@@ -80,9 +89,6 @@ func bind_to_channel(p_channel: Channel) -> void:
 ## Refresh the device list from channel
 func _populate_devices() -> void:
 	"""Refresh the display to show all current devices on the channel."""
-	# Clean up drop zones first
-	_drop_host.clear()
-	
 	# Clear existing panels
 	for device_id in device_panels:
 		if device_panels[device_id]:
@@ -103,7 +109,6 @@ func _populate_devices() -> void:
 	var lane: Array[DeviceInstance] = PadLane.devices(channel) if _pad_lane.active() else channel.devices
 	for i in lane.size():
 		_add_device_panel(lane[i], i)
-	_create_drop_zones()
 
 
 func _on_pad_lane_changed() -> void:
@@ -142,7 +147,8 @@ func _add_device_panel(device_instance: DeviceInstance, position: int) -> void:
 	
 	# Track the panel
 	device_panels[device_instance.id] = panel
-	_create_drop_zones()
+	if not _pad_lane.active():
+		drop_host.sort_panels_by_position()
 
 
 ## Remove a panel for a device
@@ -159,7 +165,6 @@ func _remove_device_panel_at(position: int) -> void:
 			if parent:
 				parent.remove_child(panel)
 			panel.queue_free()
-			_create_drop_zones()
 			return
 	
 	logger.error("[ChannelDeviceList] Device panel not found at position %d" % position)
@@ -188,7 +193,8 @@ func _on_device_removed(position: int, _device_id: String) -> void:
 
 func _on_device_moved(from_position: int, to_position: int):
 	"""Handle device moved signal - reorder CompactDevicePanel nodes."""
-	_create_drop_zones()
+	if not _pad_lane.active():
+		drop_host.sort_panels_by_position()
 	logger.info("[ChannelDeviceList] DevicePanel reordered from position %d to %d" % [from_position, to_position])
 
 
@@ -201,17 +207,30 @@ func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> v
 
 
 # ============================================================================
-# DRAG AND DROP ZONES
+# DRAG AND DROP
 # ============================================================================
 
-## Keep invisible spacer drop zones interleaved with the current compact panels.
-func _create_drop_zones() -> void:
-	if not channel or vbox == null:
-		return
-	var panel_list: Array[CompactDevicePanel] = []
-	for child in vbox.get_children():
-		if child is CompactDevicePanel:
-			panel_list.append(child)
-	if not _pad_lane.active():
-		panel_list.sort_custom(func(a: CompactDevicePanel, b: CompactDevicePanel): return a.device_instance.position < b.device_instance.position)
-	_drop_host.rebuild(vbox, panel_list)
+## Show where a device or asset drag lands (only while one is in progress).
+func _process(_delta: float) -> void:
+	_drop_indicator = DeviceDropTarget.update_indicator(self, _drop_indicator)
+
+
+## Resolve drops only while a device or asset drag is in progress; let child controls forward them.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_BEGIN:
+		if DeviceDropTarget.accepts(DragDrop.current_drag(self)):
+			DragDrop.forward_drops(self, _can_drop_data, _drop_data, DeviceDropTarget.OWN_DROPS_GROUP)
+			set_process(true)
+	elif what == NOTIFICATION_DRAG_END:
+		set_process(false)
+		DropIndicator.hide_indicator(_drop_indicator)
+
+
+## Insert between panels or drop onto a device. Anything else falls through to the mixer strip.
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	return DeviceDropTarget.resolve_for(self, data).is_valid()
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	DeviceDropTarget.resolve_for(self, data).commit(data)
+	DropIndicator.hide_indicator(_drop_indicator)

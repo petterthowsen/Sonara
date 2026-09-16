@@ -26,12 +26,18 @@ var _channel_order: Array[Channel] = []
 var _track_order: Array[Track] = []
 
 
+## Tracks whose channel stays in the mixer (include_track_channels false); re-registered on restore.
+var _detached_tracks: Array[Track] = []
+
+
 ## Collect `root_tracks` (with subtrees) and `root_channels`, closing over linked partners.
 ## A channel reached only through a track is kept if a track outside the set still uses it.
+## With `include_track_channels` false, tracks never pull in their channels (Delete Track).
 func _init(
 	p_project: Project = null,
 	root_tracks: Array[Track] = [],
-	root_channels: Array[Channel] = []
+	root_channels: Array[Channel] = [],
+	include_track_channels: bool = true
 ) -> void:
 	project = p_project
 	if project == null:
@@ -45,6 +51,8 @@ func _init(
 				continue
 			_add_subtree(t)
 		for t in tracks:
+			if not include_track_channels:
+				break
 			var ch := project.get_track_mixer_channel(t)
 			if ch and not channels.has(ch) and _only_used_by_set(ch):
 				pending_channels.append(ch)
@@ -98,6 +106,14 @@ func remove() -> void:
 			"child_channel_ids": ch.child_channel_ids.duplicate(),
 		}
 
+	# A surviving channel must forget removed tracks, or its later removal reroutes the ghosts.
+	_detached_tracks.clear()
+	for t in tracks:
+		var ch := project.get_track_mixer_channel(t)
+		if ch and not channels.has(ch):
+			ch.unregister_track(t)
+			_detached_tracks.append(t)
+
 	for t in tracks:
 		if project.get_track_by_id(t.id) == t:
 			project.remove_track(t.id)
@@ -130,6 +146,10 @@ func restore() -> void:
 		if project.get_track_by_id(t.id) == null:
 			project.add_track(t)
 	_restore_order(project.tracks, _track_order)
+	for t in _detached_tracks:
+		var ch := project.get_track_mixer_channel(t)
+		if ch:
+			ch.register_track(t)
 
 	var touched: Array[Channel] = []
 	for ch in _channel_state:

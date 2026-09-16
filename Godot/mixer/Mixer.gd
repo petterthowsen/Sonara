@@ -44,6 +44,12 @@ var _channel_hierarchy_cbs: Dictionary[Channel, Callable] = {}
 # Export property to control whether channels can be resized
 @export var resizable_channels: bool = true
 
+## Color of the strip drag insert line and group header glow.
+@export var drop_indicator_color := DropIndicator.DEFAULT_COLOR
+
+## Glowing strip drag overlay (top-level, so it never takes layout space), created on first use.
+var _drop_indicator: DropIndicator = null
+
 # ============================================================================
 # Selection
 # ============================================================================
@@ -86,6 +92,9 @@ func _ready():
 	if left_hbox:
 		left_hbox.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
 	left_channels.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
+	# Bus reorder drops on the right pane.
+	for node: Control in [right_pane, right_pane_hbox, right_channels]:
+		node.set_drag_forwarding(Callable(), _can_drop_strip, _drop_strip)
 
 # ============================================================================
 # EDITOR/PROJECT SIGNAL CALLBACKS
@@ -140,11 +149,6 @@ func _unbind() -> void:
 	selection.clear()
 	focused_channel = null
 
-
-## Unbind on free (not _exit_tree: DockHost reparents the mixer).
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE:
-		_unbind()
 
 
 func _on_channel_added(channel: Channel) -> void:
@@ -339,6 +343,23 @@ func select_channel(ch : Channel, multi := false, emit_select := true, emit_chan
 		channel_focused.emit(ch)
 
 
+## Replace the selection without emitting (selection mirrored from the arranger).
+func set_selection_silent(channels: Array[Channel], focused: Channel) -> void:
+	for ch in selection:
+		var old_ui := find_mixer_channel_ui_for_channel(ch)
+		if old_ui:
+			old_ui.is_selected = false
+	selection.clear()
+	for ch in channels:
+		if ch == null or selection.has(ch):
+			continue
+		selection.append(ch)
+		var mc := find_mixer_channel_ui_for_channel(ch)
+		if mc:
+			mc.is_selected = true
+	focused_channel = focused
+
+
 func _on_channel_item_gui_input(event : InputEvent, channel : Channel):
 	if event is InputEventMouseButton:
 		var me = event as InputEventMouseButton
@@ -513,18 +534,95 @@ func _on_channel_request_context_menu(channel : Channel):
 # DRAG AND DROP (LEFT PANE ONLY - for creating instrument channels)
 # ============================================================================
 
+## True when a strip drag would nest, insert, un-nest, or reorder at the pointer.
+func can_drop_channel_drag(drag: MixerChannelDrag) -> bool:
+	return MixerChannelDropTarget.resolve(self, drag, get_global_mouse_position()).is_valid()
+
+
+## Apply a strip drag at the pointer through history.
+func drop_channel_drag(drag: MixerChannelDrag) -> void:
+	var target := MixerChannelDropTarget.resolve(self, drag, get_global_mouse_position())
+	_hide_drop_indicator()
+	if target.commit(self, drag):
+		drag.destination = self
+		drag.did_commit = true
+
+
+## Move a root strip to sit after `after` (null = first) in its pane and persist the order.
+## Returns true when the strip moved.
+func place_root_strip(ch: Channel, after: Channel) -> bool:
+	var mc := find_mixer_channel_ui_for_channel(ch)
+	if mc == null:
+		return false
+	var box := mc.get_parent() as ChannelsBox
+	if box != left_channels and box != right_channels:
+		return false
+	var index := 0
+	if after:
+		var after_ui := find_mixer_channel_ui_for_channel(after)
+		if after_ui and after_ui.get_parent() == box:
+			index = after_ui.get_index() + 1
+			if after_ui.get_index() > mc.get_index():
+				index -= 1
+	index = clampi(index, 0, box.get_child_count() - 1)
+	if index == mc.get_index():
+		return false
+	box.move_child(mc, index)
+	box.sync_channel_order()
+	return true
+
+
+# ============================================================================
+# DROP INDICATOR
+# ============================================================================
+
+## Show where a strip drag lands; hidden whenever no strip drag is in progress.
+func _process(_delta: float) -> void:
+	var data: Variant = DragDrop.current_drag(self)
+	if not data is MixerChannelDrag or current_project == null:
+		_hide_drop_indicator()
+		return
+	var target := MixerChannelDropTarget.resolve(self, data as MixerChannelDrag, get_global_mouse_position())
+	if not target.is_valid():
+		_hide_drop_indicator()
+		return
+	_drop_indicator = DropIndicator.place(self, _drop_indicator, target.indicator_rect, target.is_nest(), drop_indicator_color)
+
+
+## Unbind on free (not _exit_tree: DockHost reparents the mixer); drop the indicator on drag end.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unbind()
+	elif what == NOTIFICATION_DRAG_END:
+		_hide_drop_indicator()
+
+
+func _hide_drop_indicator() -> void:
+	DropIndicator.hide_indicator(_drop_indicator)
+
+
+## Right pane: only strip drags (bus reorder), never assets.
+func _can_drop_strip(_at_position: Vector2, data: Variant) -> bool:
+	return data is MixerChannelDrag and can_drop_channel_drag(data as MixerChannelDrag)
+
+
+func _drop_strip(_at_position: Vector2, data: Variant) -> void:
+	if data is MixerChannelDrag:
+		drop_channel_drag(data as MixerChannelDrag)
+
+
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	"""Return drag data (not used for mixer)."""
 	return null
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept an un-nest to the left-pane root, or device/SFZ assets that create channels."""
+	"""Accept a strip drag (un-nest / reorder), or device/SFZ assets that create channels."""
 	if not current_project:
 		return false
 
 	if data is MixerChannelDrag:
-		return MixerChannelDrag.can_unnest((data as MixerChannelDrag).channel)
+		return can_drop_channel_drag(data as MixerChannelDrag)
 
 	# Check if data is a single asset
 	if data is Asset:
@@ -549,10 +647,7 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		return
 
 	if data is MixerChannelDrag:
-		var drag := data as MixerChannelDrag
-		if MixerChannelDrag.commit(current_project, drag.channel, null):
-			drag.destination = self
-			drag.did_commit = true
+		drop_channel_drag(data as MixerChannelDrag)
 		return
 	
 	# Handle array of assets

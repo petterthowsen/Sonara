@@ -47,6 +47,9 @@ var automation_selection_manager: AutomationPointSelectionManager = AutomationPo
 ## VBox so AutomationRowOrder can interleave them with the TimelineTracks.
 var _lane_rows: Dictionary = {}
 
+## Rows from the last _update_visual_order, resized on every fold animation step.
+var _fold_rows: Array = []
+
 # Signal emitted when clip selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
@@ -73,6 +76,12 @@ func _ready():
 
 	if not clip_ctx_menu.make_unique_requested.is_connected(_on_clip_make_unique_requested):
 		clip_ctx_menu.make_unique_requested.connect(_on_clip_make_unique_requested)
+
+	if not clip_ctx_menu.cut_requested.is_connected(_on_clip_cut_requested):
+		clip_ctx_menu.cut_requested.connect(_on_clip_cut_requested)
+
+	if not clip_ctx_menu.copy_requested.is_connected(_on_clip_copy_requested):
+		clip_ctx_menu.copy_requested.connect(_on_clip_copy_requested)
 
 	automation_selection_manager.grid_helper = grid_helper
 	automation_selection_manager.selection_changed.connect(_on_automation_selection_changed)
@@ -173,6 +182,7 @@ func _on_track_added(track: Track) -> void:
 	track.automation_lane_added.connect(_on_automation_lane_added.bind(track))
 	track.automation_lane_removed.connect(_on_automation_lane_removed)
 	track.automation_expanded_changed.connect(_on_automation_expanded_changed)
+	track.folder_expanded_changed.connect(_on_folder_expanded_changed.bind(track))
 	for lane in track.automation_lanes:
 		_ensure_lane_row(track, lane)
 
@@ -237,6 +247,9 @@ func _disconnect_track_layout_signals(track: Track) -> void:
 		track.automation_lane_removed.disconnect(_on_automation_lane_removed)
 	if track.automation_expanded_changed.is_connected(_on_automation_expanded_changed):
 		track.automation_expanded_changed.disconnect(_on_automation_expanded_changed)
+	for connection in track.folder_expanded_changed.get_connections():
+		if connection["callable"].get_object() == self:
+			track.folder_expanded_changed.disconnect(connection["callable"])
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -260,17 +273,49 @@ func _update_visual_order() -> void:
 	
 	# One ordering helper for both arranger columns, so rows can't drift out of alignment.
 	var rows := AutomationRowOrder.build(project)
+	_fold_rows = rows
 	_sync_lane_row_visibility(rows)
+	_sync_track_row_visibility(rows)
 	AutomationRowOrder.apply(self, rows, _node_for_row)
+	AutomationRowOrder.apply_heights(project, rows, _node_for_row)
 	
 	# Rebuild timeline_tracks array to match visual order
 	timeline_tracks.clear()
 	for i in range(get_child_count()):
 		var child = get_child(i)
-		if child is TimelineTrack:
+		# Folded-away rows are skipped so cross-track clip drags only land on shown tracks.
+		if child is TimelineTrack and child.visible:
 			timeline_tracks.append(child as TimelineTrack)
 	
 	logger.info("Updated visual order (%d rows)" % rows.size())
+
+
+## Hide TimelineTracks of tracks folded away (not in `rows`); apply_heights() shows the rest.
+func _sync_track_row_visibility(rows: Array) -> void:
+	var shown: Dictionary = {}
+	for row in rows:
+		if row.get("lane") == null:
+			shown[row["track"]] = true
+	for child in get_children():
+		if child is TimelineTrack and (child as TimelineTrack).track:
+			child.visible = shown.has((child as TimelineTrack).track)
+
+
+## Follow the same fold slide as TrackList (TrackFoldAnimation.start is shared and idempotent).
+func _on_folder_expanded_changed(_expanded: bool, track: Track) -> void:
+	if project == null:
+		return
+	var anim := TrackFoldAnimation.start(track)
+	if anim and not anim.updated.is_connected(_on_fold_step):
+		anim.updated.connect(_on_fold_step)
+		anim.finished.connect(_update_visual_order)
+	_update_visual_order()
+
+
+## Resize rows for the current fold animation step.
+func _on_fold_step() -> void:
+	if project:
+		AutomationRowOrder.apply_heights(project, _fold_rows, _node_for_row)
 
 
 ## The child Control representing `row`: a TimelineTrack for a track row, the lane's row for a
@@ -1419,6 +1464,22 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 	var c_pos = mouse_pos_global - Vector2(8, 8)
 	var c_size = clip_ctx_menu.get_contents_minimum_size()
 	clip_ctx_menu.popup(Rect2(c_pos, c_size))
+
+
+## Cut the instances bound to the context menu (may not match the live selection if the clicked clip was unselected).
+func _on_clip_cut_requested(instances: Array[ClipInstance]) -> void:
+	if not instances or instances.is_empty() or not clip_selection_manager:
+		return
+	clip_selection_manager.select_instances(instances)
+	cut_selection_to_clipboard()
+
+
+## Copy the instances bound to the context menu (may not match the live selection if the clicked clip was unselected).
+func _on_clip_copy_requested(instances: Array[ClipInstance]) -> void:
+	if not instances or instances.is_empty() or not clip_selection_manager:
+		return
+	clip_selection_manager.select_instances(instances)
+	copy_selection_to_clipboard()
 
 
 func _on_clip_delete_requested(instances: Array[ClipInstance]) -> void:

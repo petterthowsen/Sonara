@@ -19,6 +19,8 @@ signal parent_changed(new_parent_id: int)
 signal automation_lane_added(lane: AutomationLane)
 signal automation_lane_removed(lane: AutomationLane)
 signal automation_expanded_changed(expanded: bool)
+## Folder/group children shown or hidden in the arranger.
+signal folder_expanded_changed(expanded: bool)
 
 # ============================================================================
 # PROPERTIES
@@ -108,7 +110,16 @@ var parent_track_id: int:
 			parent_changed.emit(_parent_track_id)
 
 var child_track_ids: Array[int] = []  # Child tracks of a folder or group
-var is_folder_expanded: bool = true  # UI state for folder/group tracks
+var _is_folder_expanded: bool = true
+
+## Whether a folder/group's child tracks are shown in the arranger (saved with the project).
+var is_folder_expanded: bool:
+	get:
+		return _is_folder_expanded
+	set(value):
+		if _is_folder_expanded != value:
+			_is_folder_expanded = value
+			folder_expanded_changed.emit(_is_folder_expanded)
 
 var _automation_expanded: bool = false
 
@@ -130,8 +141,24 @@ var automation_expanded: bool:
 # UI state
 var _height: int = 48  # Track height in pixels
 var folded: bool = false  # Collapsed in UI
-var muted: bool = false
-var solo: bool = false
+var _muted: bool = false
+var _solo: bool = false
+
+## Mute state. The linked channel is the single source of truth; a channel-less track keeps its own.
+var muted: bool:
+	get:
+		var ch := get_linked_channel()
+		return ch.mute if ch else _muted
+	set(value):
+		_muted = value
+
+## Solo state, read from the linked channel like `muted`.
+var solo: bool:
+	get:
+		var ch := get_linked_channel()
+		return ch.solo if ch else _solo
+	set(value):
+		_solo = value
 var armed: bool = false  # Record armed
 
 # Connection state
@@ -260,20 +287,22 @@ func is_engine_connected() -> bool:
 	return _is_connected
 
 
+## Mute the linked channel, or this track when it has none.
 func set_mute(value: bool) -> void:
-	"""Set mute state. If linked to a channel, delegates to channel's set_mute."""
-	muted = value
 	var ch := get_linked_channel()
 	if ch:
 		ch.set_mute(value)
+	else:
+		_muted = value
 
 
+## Solo the linked channel, or this track when it has none.
 func set_solo(value: bool) -> void:
-	"""Set solo state. If linked to a channel, delegates to channel's set_solo."""
-	solo = value
 	var ch := get_linked_channel()
 	if ch:
 		ch.set_solo(value)
+	else:
+		_solo = value
 
 
 func set_armed(value: bool) -> void:
@@ -312,6 +341,9 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 	if old_channel_id >= 0:
 		var old_channel = project.get_channel_by_id(old_channel_id)
 		if old_channel:
+			# Keep the strip's last mute/solo when this track ends up without a channel.
+			_muted = old_channel.mute
+			_solo = old_channel.solo
 			old_channel.unregister_track(self)
 
 	# Register with new channel
@@ -329,9 +361,7 @@ func _update_channel_registration(old_channel_id: int, new_channel_id: int) -> v
 				_name = new_channel.name
 				name_changed.emit(_name)
 			
-			# Sync mute/solo/armed state TO channel (track state is authoritative)
-			new_channel.set_mute(muted)
-			new_channel.set_solo(solo)
+			# Mute/solo belong to the channel; record arm still follows the track.
 			new_channel.set_record_armed(armed)
 		else:
 			push_warning("[Track %d] _update_channel_registration: channel %d not in project.channels" % [

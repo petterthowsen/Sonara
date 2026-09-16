@@ -27,6 +27,10 @@ var logger := Log.make("MidiEditor")
 @onready var h_scroll: ScrollContainer = $HBox/NoteArea/HScroll
 var note_editors : Array[NoteEditor] = []
 
+# Active track.color_changed subscriptions, as [track, callable] pairs, so note
+# colors follow the track color while the editor is bound.
+var _color_bindings : Array = []
+
 # Track-mode state
 var track_mode: bool = false  # True when displaying multiple clips across tracks
 var current_track: Track = null:  # Active track in track-mode
@@ -274,6 +278,7 @@ func unbind():
 	clip_instance = null
 	track_mode = false
 	current_track = null
+	_clear_color_bindings()
 	
 	# Unbind all note editors
 	for editor in note_editors:
@@ -303,7 +308,7 @@ func bind_to_clip_instance(ci : ClipInstance):
 	if note_editor:
 		_configure_note_editor(note_editor)
 		if clip_instance and clip_instance.track:
-			note_editor.note_color = clip_instance.track.color
+			_bind_track_color(note_editor, clip_instance.track)
 		note_editor.bind(clip_instance)
 		# Clip-mode: no position offset (notes show at clip-local positions)
 		note_editor.position_offset_ticks = 0
@@ -350,8 +355,8 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 		# Bind to ALL clips on this track (multi-clip mode)
 		editor.bind_to_clips(all_track_clips, track)
 
-		# Set color from track
-		editor.note_color = track.color
+		# Set color from track (and keep following it)
+		_bind_track_color(editor, track)
 
 		logger.info("  - Bound editor %d to track '%s' with %d clips" % [i, track.name, all_track_clips.size()])
 
@@ -365,6 +370,31 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 
 	call_deferred("refresh_note_map")
 	call_deferred("scroll_to_note")
+
+
+func _bind_track_color(editor: NoteEditor, track: Track) -> void:
+	"""Apply the track color to the editor and keep it in sync with later changes."""
+	if not editor or not track:
+		return
+	editor.note_color = track.color
+	var cb := Callable(self, "_on_track_color_changed").bind(editor)
+	if not track.color_changed.is_connected(cb):
+		track.color_changed.connect(cb)
+		_color_bindings.append([track, cb])
+
+
+func _on_track_color_changed(new_color: Color, editor: NoteEditor) -> void:
+	if is_instance_valid(editor):
+		editor.note_color = new_color
+
+
+func _clear_color_bindings() -> void:
+	for binding in _color_bindings:
+		var track: Track = binding[0]
+		var cb: Callable = binding[1]
+		if is_instance_valid(track) and track.color_changed.is_connected(cb):
+			track.color_changed.disconnect(cb)
+	_color_bindings.clear()
 
 
 # set vertical scroll to the given note, or default to average note or C3 if no notes

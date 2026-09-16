@@ -135,6 +135,8 @@ var test_time_range_override: Dictionary = {}
 var focused_channel : Channel
 var focused_track: Track
 var selected_tracks: Array[Track] = []
+## True while one selection view is being updated from the other.
+var _syncing_selection: bool = false
 
 # View state
 enum View { ARRANGER, MIXER, EDITOR }
@@ -183,9 +185,36 @@ func _connect_ui_signals():
 	# Mixer
 	mixer.channel_focused.connect(_on_mixer_channel_focused)
 
+	# Track <-> channel selection sync
+	(arranger.track_list as TrackList).selection_changed.connect(_on_track_list_selection_changed)
+	mixer.selection_changed.connect(_on_mixer_selection_changed)
+
 	if Settings:
 		Settings.setting_changed.connect(_on_setting_changed)
 	
+
+## Mirror arranger track selection onto the mixer.
+func _on_track_list_selection_changed(tracks: Array[Track], active: Track) -> void:
+	if _syncing_selection:
+		return
+	_syncing_selection = true
+	var mapped := SelectionSync.channels_for_tracks(project, tracks, active)
+	mixer.set_selection_silent(mapped["channels"], mapped["focused"])
+	_syncing_selection = false
+
+
+## Mirror mixer channel selection onto the arranger (and DeviceLane / record-arm through it).
+func _on_mixer_selection_changed(channels: Array[Channel]) -> void:
+	if _syncing_selection:
+		return
+	_syncing_selection = true
+	var active_channel: Channel = channels.back() if not channels.is_empty() else null
+	var mapped := SelectionSync.tracks_for_channels(project, channels, active_channel)
+	(arranger.track_list as TrackList).set_selection_silent(mapped["tracks"], mapped["active"])
+	if mapped["active"]:
+		set_track_selection(mapped["tracks"], mapped["active"], false)
+	_syncing_selection = false
+
 
 func _on_mixer_channel_focused(channel : Channel):
 	focus_channel(channel)

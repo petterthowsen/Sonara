@@ -400,7 +400,7 @@ func _gui_input(event: InputEvent) -> void:
 
 			# Snap to grid
 			var snap_interval = timeline.get_snap_interval()
-			new_start_ticks = timeline.grid_helper.floor_ticks(new_start_ticks)
+			new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
 
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
@@ -449,7 +449,7 @@ func _gui_input(event: InputEvent) -> void:
 
 			# Snap to grid (snap the end point)
 			var snap_interval = timeline.get_snap_interval()
-			new_duration = timeline.grid_helper.floor_ticks(resize_start_ticks + new_duration) - resize_start_ticks
+			new_duration = timeline.grid_helper.snap_ticks(resize_start_ticks + new_duration) - resize_start_ticks
 
 			# Minimum duration of 1 snap interval (or 1 tick if no snap)
 			var min_duration = snap_interval if snap_interval > 0 else 1
@@ -497,7 +497,7 @@ func _gui_input(event: InputEvent) -> void:
 			var new_start_ticks = drag_start_ticks + tick_delta
 
 			# Snap to grid
-			new_start_ticks = timeline.grid_helper.floor_ticks(new_start_ticks)
+			new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
 
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)

@@ -992,6 +992,57 @@ func _create_track_with_channel(
 	return {"track": track, "channel": channel}
 
 
+## Create a track with no mixer channel. Route it later with route_track_to_channel().
+func create_bare_track(
+	track_name: String = "Track",
+	track_type: Track.TrackType = Track.TrackType.INSTRUMENT
+) -> Track:
+	var track := create_track(track_name)
+	track.type = track_type
+	# Nothing to sync from, so the track owns its own name and color.
+	track.color_by_channel = false
+	track.name_by_channel = false
+	track.set_color(_generate_random_color())
+	logger.info("[Project] Bare track '%s' (track %d, no channel)" % [track.name, track.id])
+	return track
+
+
+## Route `track` through `channel`, or unroute it when `channel` is null.
+## The track adopts the strip's name and color only when it is the strip's sole track.
+func route_track_to_channel(track: Track, channel: Channel) -> void:
+	if track == null:
+		return
+	if channel == null:
+		track.color_by_channel = false
+		track.name_by_channel = false
+		track.default_channel_id = -1
+		return
+	# Read the pairing before rerouting, or this track answers its own question.
+	var paired := get_channel_paired_track(channel)
+	var adopts := paired == null or paired == track
+	track.color_by_channel = adopts
+	track.name_by_channel = adopts
+	track.default_channel_id = channel.id
+	# A track created without routing never connected; give it its chance now.
+	if _connection_state == ConnectionState.CONNECTED and not track.is_engine_connected():
+		track.connect_to_engine()
+
+
+## Create a channel matching the track's type, route the track through it, and place the
+## new strip under any enclosing group or folder bus.
+func create_and_link_track_channel(track: Track) -> Channel:
+	if track == null:
+		return null
+	var channel_type := Channel.ChannelType.AUDIO if track.type == Track.TrackType.AUDIO \
+		else Channel.ChannelType.INSTRUMENT
+	# Excluding the track lets the new channel share its name; routing makes them one pair.
+	var channel := _new_channel(unique_name(track.name, track, null, "Channel"), channel_type)
+	channel.set_color(track.get_color())
+	route_track_to_channel(track, channel)
+	sync_track_hierarchy_routing(track)
+	return channel
+
+
 # Create bus channel (no track)
 func create_bus_channel(bus_name: String = "Bus") -> Channel:
 	"""Create a bus channel (routing only, no track)."""
@@ -1093,6 +1144,15 @@ func sync_track_hierarchy_routing(track: Track) -> void:
 		if ch.output_channel_id != ch.parent_channel_id:
 			ch.set_route(ch.parent_channel_id)
 		return
+	var parent_track := get_track_by_id(track.parent_track_id) if track.parent_track_id >= 0 else null
+	var parent_ch := get_track_mixer_channel(parent_track)
+	if parent_ch and parent_ch.is_group_channel and not _channel_nest_syncing:
+		# A strip under a Group track belongs in the group's fold-out, not just routed to it.
+		_channel_nest_syncing = true
+		var nested := nest_channel(ch, parent_ch, _nested_channel_before(track, parent_ch))
+		_channel_nest_syncing = false
+		if nested:
+			return
 	var group_ch := get_enclosing_group_channel(track)
 	if group_ch:
 		if ch.output_channel_id != group_ch.id:
@@ -1146,6 +1206,19 @@ func create_and_link_folder_bus(track: Track) -> Channel:
 	return bus
 
 
+## True when a collapsed ancestor folder/group hides `track` in the arranger.
+func is_track_folded_away(track: Track) -> bool:
+	return _ancestor_where(track, func(t: Track) -> bool: return not t.is_folder_expanded) != null
+
+
+## Expand every collapsed ancestor of `track` so it is shown in the arranger.
+func reveal_track(track: Track) -> void:
+	var folded := _ancestor_where(track, func(t: Track) -> bool: return not t.is_folder_expanded)
+	while folded:
+		folded.is_folder_expanded = true
+		folded = _ancestor_where(track, func(t: Track) -> bool: return not t.is_folder_expanded)
+
+
 ## Add a track as the last child of a folder or group.
 func add_track_to_folder(track_id: int, folder_id: int) -> bool:
 	var track = get_track_by_id(track_id)
@@ -1178,11 +1251,10 @@ func end_track_layout_batch() -> void:
 	tracks_layout_changed.emit()
 
 
-## Move `track` under `new_parent_id`, sitting after `after_sibling` (null = first child / first root).
-func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) -> bool:
+## True when `track` may live under `new_parent_id` (-1 = root): not inside its own subtree, the
+## parent holds tracks, and an aux return stays under its source.
+func can_place_track(track: Track, new_parent_id: int) -> bool:
 	if track == null:
-		return false
-	if after_sibling == track:
 		return false
 	if new_parent_id == track.id:
 		return false
@@ -1200,6 +1272,17 @@ func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) 
 		var source_track := get_channel_paired_track(source_ch) if source_ch else null
 		if source_track and new_parent_id != source_track.id:
 			return false
+	return true
+
+
+## Move `track` under `new_parent_id`, sitting after `after_sibling` (null = first child / first root).
+func place_track(track: Track, new_parent_id: int, after_sibling: Track = null) -> bool:
+	if track == null:
+		return false
+	if after_sibling == track:
+		return false
+	if not can_place_track(track, new_parent_id):
+		return false
 
 	if after_sibling != null and after_sibling.parent_track_id != new_parent_id:
 		return false
@@ -1461,7 +1544,7 @@ func _sync_channel_nest_for_track_move(
 	track: Track,
 	_old_parent_id: int,
 	new_parent_id: int,
-	after_sibling: Track
+	_after_sibling: Track
 ) -> void:
 	var ch := get_track_mixer_channel(track)
 	if ch == null:
@@ -1469,7 +1552,7 @@ func _sync_channel_nest_for_track_move(
 	_channel_nest_syncing = true
 	var new_parent := get_track_by_id(new_parent_id)
 	var parent_ch := get_track_mixer_channel(new_parent) if new_parent else null
-	var after_ch := get_track_mixer_channel(after_sibling) if after_sibling else null
+	var after_ch := _nested_channel_before(track, parent_ch) if parent_ch else null
 	if parent_ch != null and can_nest_channel(ch, parent_ch, after_ch):
 		nest_channel(ch, parent_ch, after_ch)
 	elif ch.parent_channel_id >= 0 and not ch.is_aux_return():
@@ -1477,8 +1560,24 @@ func _sync_channel_nest_for_track_move(
 	_channel_nest_syncing = false
 
 
+## Mixer sibling for `track`'s strip under `parent_ch`: the channel of the nearest earlier track
+## sibling that is actually nested there (bare tracks and shared strips are skipped), or null.
+func _nested_channel_before(track: Track, parent_ch: Channel) -> Channel:
+	if track == null or parent_ch == null:
+		return null
+	var own := get_track_mixer_channel(track)
+	var previous: Channel = null
+	for sibling in _sorted_track_siblings(track.parent_track_id):
+		if sibling == track:
+			return previous
+		var sib_ch := get_track_mixer_channel(sibling)
+		if sib_ch and sib_ch != own and sib_ch.parent_channel_id == parent_ch.id:
+			previous = sib_ch
+	return previous
+
+
 ## Keep mixer sibling order in sync when reordering under the same mix parent.
-func _sync_channel_order_for_track(track: Track, new_parent_id: int, after_sibling: Track) -> void:
+func _sync_channel_order_for_track(track: Track, new_parent_id: int, _after_sibling: Track) -> void:
 	var parent_track := get_track_by_id(new_parent_id)
 	var parent_ch := get_track_mixer_channel(parent_track)
 	var child_ch := get_track_mixer_channel(track)
@@ -1486,7 +1585,7 @@ func _sync_channel_order_for_track(track: Track, new_parent_id: int, after_sibli
 		return
 	if child_ch.parent_channel_id != parent_ch.id:
 		return
-	var after_ch := get_track_mixer_channel(after_sibling) if after_sibling else null
+	var after_ch := _nested_channel_before(track, parent_ch)
 	_insert_child_channel_id(parent_ch, child_ch.id, after_ch)
 	parent_ch.notify_hierarchy_changed()
 

@@ -113,7 +113,7 @@ func _history_begin_selection() -> void:
 	for sel_note in selection_manager.selected_notes:
 		if not sel_note or not sel_note.midi_note_data:
 			continue
-		var note_clip: Clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		var note_clip: Clip = _clip_for_visual_note(sel_note)
 		if note_clip and note_clip not in clips:
 			clips.append(note_clip)
 	_history_begin_clips(clips)
@@ -452,7 +452,12 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 				else:
 					owner_ci_clamp = get_clip_instance_for_note(sel_note.midi_note_data.id)
 				if owner_ci_clamp and owner_ci_clamp.clip:
-					var clip_len = owner_ci_clamp.clip.get_content_length()
+					# The bound is the instance's played window, not the content
+					# length: content length is the rightmost note end, so using it
+					# would pin the last note in place and make dragging right a no-op.
+					# Content that reaches past the window (a trimmed instance) still
+					# gets that larger bound, so no note is ever clamped backwards.
+					var clip_len: int = max(owner_ci_clamp.duration_ticks, owner_ci_clamp.clip.get_content_length())
 					if clip_len > 0:
 						new_ticks = clamp(new_ticks, 0, max(0, clip_len - sel_note.midi_note_data.duration_ticks))
 
@@ -517,20 +522,17 @@ func _on_drag_ended(note: VisualNote) -> void:
 
 	# Process all selected notes (cut overlaps and update)
 	var total_affected = 0
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
+	for sel_note in selection_manager.selected_notes.duplicate():
+		# A cross-clip transfer above frees the old visual and replaces it with a new
+		# one carrying a new id; the stale entry must not be updated.
+		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
 			continue
 
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
 		# Get the clip this visual note belongs to (prefer meta clip_instance)
-		var owner_ci: ClipInstance = null
-		if sel_note.has_meta("clip_instance"):
-			owner_ci = sel_note.get_meta("clip_instance")
-		else:
-			owner_ci = get_clip_instance_for_note(sel_note.midi_note_data.id)
-		var note_clip: Clip = owner_ci.clip if owner_ci else _get_clip_for_note(sel_note.midi_note_data.id)
+		var note_clip: Clip = _clip_for_visual_note(sel_note)
 		if not note_clip:
 			continue
 
@@ -647,7 +649,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
 		# Get the clip this note belongs to
-		var note_clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		var note_clip = _clip_for_visual_note(sel_note)
 		if not note_clip:
 			continue
 
@@ -715,7 +717,10 @@ func _erase_note(note: VisualNote) -> void:
 
 	last_erased_note = note
 
-	var note_clip = _get_clip_for_note(note.midi_note_data.id)
+	# Use the clicked visual note's own clip, not an id lookup: in track mode the
+	# same note id can be visible on several instances and the lookup returns the
+	# first match, which may belong to another clip.
+	var note_clip = _clip_for_visual_note(note)
 	if note_clip:
 		_history_begin_clips([note_clip])
 		note_clip.remove_midi_note(note.midi_note_data)
@@ -884,7 +889,7 @@ func _delete_selection() -> void:
 	for i in range(selection_manager.selected_notes.size() - 1, -1, -1):
 		var note = selection_manager.selected_notes[i]
 		if is_instance_valid(note) and note.midi_note_data:
-			var note_clip = _get_clip_for_note(note.midi_note_data.id)
+			var note_clip = _clip_for_visual_note(note)
 			if note_clip:
 				note_clip.remove_midi_note(note.midi_note_data)
 			note.queue_free()
@@ -926,7 +931,7 @@ func _move_selection_vertical(semitones: int) -> void:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
-		var note_clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		var note_clip = _clip_for_visual_note(sel_note)
 		if not note_clip:
 			continue
 
@@ -977,7 +982,7 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
-		var note_clip = _get_clip_for_note(sel_note.midi_note_data.id)
+		var note_clip = _clip_for_visual_note(sel_note)
 		if not note_clip:
 			continue
 
@@ -1003,7 +1008,7 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 	_history_commit("Nudge Notes")
 
 
-func _on_clip_note_removed(note_data: MidiNoteData) -> void:
+func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is removed from the clip."""
 	# Remove from selection if selected
 	var note_instance = get_visual_note(note_data.id)
@@ -1014,7 +1019,7 @@ func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 			selection_manager.selected_note = null
 
 	# Call parent implementation
-	super._on_clip_note_removed(note_data)
+	super._on_clip_note_removed(note_data, source_clip)
 
 
 # ============================================================================
@@ -1025,8 +1030,10 @@ func _handle_cross_clip_transfers() -> void:
 	if not multi_clip_mode:
 		return
 
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
+	# Iterate a copy: removing a note fires midi_note_removed, which erases entries
+	# from selected_notes and would make this loop skip elements.
+	for sel_note in selection_manager.selected_notes.duplicate():
+		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
 			continue
 
 		var note_data = sel_note.midi_note_data
@@ -1037,8 +1044,15 @@ func _handle_cross_clip_transfers() -> void:
 		if not start_pos:
 			continue
 
-		var source_clip_instance = start_pos.get("clip_instance") as ClipInstance
+		# Resolve the source from the note's current owner rather than the snapshot
+		# taken at drag start: an earlier transfer may already have moved it, and a
+		# stale source makes the removal below silently do nothing.
+		var source_clip_instance: ClipInstance = null
+		if sel_note.has_meta("clip_instance"):
+			source_clip_instance = sel_note.get_meta("clip_instance")
 		if not source_clip_instance:
+			source_clip_instance = start_pos.get("clip_instance") as ClipInstance
+		if not source_clip_instance or not source_clip_instance.clip:
 			continue
 
 		# Calculate song-relative position (note position + clip offset)
@@ -1080,13 +1094,42 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 	new_note.start_tick = dest_local_position
 	new_note.duration_ticks = note_data.duration_ticks
 
+	# Clear the landing spot first. Without this the add below is rejected as an
+	# overlap and the note would be dropped entirely.
+	dest.clip.cut_overlapping_notes_at_pitch(
+		new_note.note,
+		new_note.start_tick,
+		new_note.start_tick + new_note.duration_ticks,
+		_note_id_allocator()
+	)
+
 	# Remove from source clip (this will trigger reactive removal)
-	source.clip.remove_midi_note(note_data)
+	if not source.clip.remove_midi_note(note_data):
+		logger.warn("Transfer aborted: note %d is not in clip '%s'" % [note_data.id, source.clip.name])
+		return
 
 	# Add to destination clip (this will trigger reactive addition)
-	dest.clip.add_midi_note_data(new_note)
+	if dest.clip.add_midi_note_data(new_note) == null:
+		# Put it back rather than losing it.
+		logger.warn("Transfer of note %d into '%s' was rejected; restoring it in '%s'" % [note_data.id, dest.clip.name, source.clip.name])
+		source.clip.add_midi_note_data(note_data)
+		return
 
 	logger.info("Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
+
+
+## The clip a given visual note belongs to. Prefers the clip_instance stamped on the
+## note itself, which is unambiguous even when several instances show the same id.
+func _clip_for_visual_note(note: VisualNote) -> Clip:
+	if not note or not note.midi_note_data:
+		return null
+	if not multi_clip_mode:
+		return clip
+	if note.has_meta("clip_instance"):
+		var ci: ClipInstance = note.get_meta("clip_instance")
+		if ci and ci.clip:
+			return ci.clip
+	return _get_clip_for_note(note.midi_note_data.id)
 
 
 ## Note ID source for new and split notes: the open project's counter.

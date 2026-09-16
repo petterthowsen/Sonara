@@ -32,7 +32,27 @@ func bind_to_parent(ch: Channel, proj: Project, host: MixerChannel) -> void:
 		channels_box.nest_parent = ch
 	if ch:
 		apply_header_color(ch.color)
+	if host:
+		apply_header_height(host.children_header_height)
 	sync_children()
+
+
+## Set the parent header bar height (MixerChannel.children_header_height).
+func apply_header_height(height: float) -> void:
+	if parent_header:
+		parent_header.custom_minimum_size.y = height
+
+
+## Distance from this fold-out's top to its nested strips: panel margin, header bar, separation.
+func get_children_top_offset() -> float:
+	var offset := parent_header.custom_minimum_size.y if parent_header else 0.0
+	var style := get_theme_stylebox("panel")
+	if style:
+		offset += style.get_margin(SIDE_TOP)
+	var column := get_node_or_null("VBoxContainer") as VBoxContainer
+	if column:
+		offset += column.get_theme_constant("separation")
+	return offset
 
 
 ## Tint the fold-out header with the parent channel color.
@@ -112,30 +132,21 @@ func _spawn_child(child_id: int) -> MixerChannel:
 	return ui
 
 
-## Accept a mixer nest into this group's fold-out (empty box or header).
+## Accept a mixer strip drag; the Mixer resolves nest / insert from the pointer.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	if not data is MixerChannelDrag or channel == null or project == null:
+	if not data is MixerChannelDrag:
 		return false
-	var drag := data as MixerChannelDrag
-	if drag.channel == null or drag.channel == channel:
-		return false
-	# Already a child: sibling header-slide owns reorder inside this box.
-	if drag.channel.parent_channel_id == channel.id:
-		return false
-	return project.can_nest_channel(drag.channel, channel)
+	var mixer := _find_mixer()
+	return mixer != null and mixer.can_drop_channel_drag(data as MixerChannelDrag)
 
 
-## Nest the dragged strip under this parent, inserting from the pointer's X.
+## Insert the dragged strip at the hovered index (resolved by the Mixer).
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	if not _can_drop_data(_at_position, data):
+	if not data is MixerChannelDrag:
 		return
-	var drag := data as MixerChannelDrag
-	drag.destination = self
-	var after := MixerChannelDrag.after_sibling_at(
-		channels_box, get_global_mouse_position().x, drag.channel
-	)
-	if MixerChannelDrag.commit(project, drag.channel, channel, after):
-		drag.did_commit = true
+	var mixer := _find_mixer()
+	if mixer:
+		mixer.drop_channel_drag(data as MixerChannelDrag)
 
 
 ## Walk ancestors to the Mixer that owns this fold-out.

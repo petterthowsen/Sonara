@@ -1,131 +1,144 @@
 ---
-description: When Implementing Drag and Drop or re-ordering functionality
+description: When implementing or changing drag and drop, re-ordering, nesting, or drop indicators in the Godot UI
 alwaysApply: false
 ---
-## Godot 4.x Drag and Drop System
 
-`Control` nodes have 3 virtual private functions you can override and will enable drag and drop functionality:  
+# Godot drag and drop
 
-    # Control that can be dragged from
-    func _get_drag_data(at_position:Vector2)->Variant
-    # Control that can be dragged to
-    func _can_drop_data(at_position:Vector2, data:Variant)->bool
-    func _drop_data(at_position:Vector2, data:Variant)->void
-    
+Every drag in Sonara follows one model: **nothing moves until the mouse is released**. While dragging, the
+UI only shows *where* the drop will land, with a glowing indicator that never takes layout space.
 
-The drag and drop mechanism also works in that order:
+Shared pieces:
+- @Godot/components/DropIndicator.gd (glow line and header outline; `DropIndicator.place` / `hide_indicator`)
+- @Godot/components/DragDrop.gd (`current_drag`, `visible_rect` / `is_point_visible`, `forward_drops`)
 
-1.  `_get_drag_data` - returns the data that can be dragged from the current `Control`. In my case, if a slot has an item, then I'll return the item, otherwise `null`.
-2.  `_can_drop_data` - will continuously be called on the `Control` under the mouse position, passing the relative mouse position and `data`, and returns whether or not this `data` can be accepted. This is where I check if the current item fits in the inventory grid at the mouse position, and if the current slot is even compatible with the item type (Weapon slot for weapons, Back slot for backpacks, etc.)
-3.  `_drop_data` - the final call, which is the same as `_can_drop_data`, except here we are accepting the drop, and should handle removing the item from the previous container, and add it to the current `Control` (or whatever else you plan on doing with the `data`)
+Implementations (payload, resolver, owner, test):
+- Mixer strips: `mixer/MixerChannelDrag.gd`, `mixer/MixerChannelDropTarget.gd`, `mixer/Mixer.gd`,
+  `tests/test_mixer_channel_drop.gd`
+- Arranger tracks: `arranger/tracklist/TrackDrag.gd`, `arranger/tracklist/TrackDropTarget.gd`,
+  `arranger/tracklist/TrackList.gd`, `tests/test_track_drop.gd`
+- Devices (DeviceLane, nested container folders, mixer compact lists): `devices/DeviceDrag.gd`,
+  `devices/DeviceDropTarget.gd`, `devices/DeviceChainDropHost.gd`, `tests/test_device_drop.gd`
 
-To handle the display preview of the drag and drop operation, we use:  
-`func set_drag_preview(control:Control)->void`
+## Rules
 
-As one can expect, this will use the `Control` node you pass as the display icon of the drag and drop, add it to the scene tree, and destroy it once the drag is complete.
+1. **Commit on drop only.** Never `move_child`, reparent, or change model data during the drag. Don't
+   build "live reorder, then revert on cancel" logic. A cancelled drag (Escape, invalid target) then
+   needs no cleanup.
+2. **No placeholders or gaps.** Don't insert spacer or placeholder nodes, and don't grow margins to
+   open a gap. Anything that changes layout while dragging makes the whole UI jump.
+3. **Indicators are overlays.** Draw them on a `top_level = true`, `mouse_filter = IGNORE` control with
+   a raised `z_index`, positioned by `global_position`/`size`. Create it lazily, hide it on
+   `NOTIFICATION_DRAG_END` and whenever the target is invalid.
+4. **Glowing blue style.** Use the shared look: accent `#5aa0ff` (export it as `drop_indicator_color`),
+   a bright ~3px core with a soft layered halo.
+   - *Insert between items*: a glowing line across the gap (vertical for horizontal lists, horizontal
+     for vertical lists), placed on the edge of the item the drop lands before.
+   - *Drop onto / into a container* (group header, folder, slot): a glowing outline of that header
+     with a faint fill. Outline only the header, not the whole item and its children.
+   Use `DropIndicator` instead of drawing a new style.
+5. **One resolver.** Put "what happens if dropped at this point" in a single
+   static `resolve(owner, drag, global_mouse) -> Target` returning a `kind`, the model arguments
+   (parent, after-sibling …) and `indicator_rect`. `_can_drop_data`, `_drop_data` and the indicator
+   all call it, so the indicator always shows exactly what the drop does. `commit()` lives on the
+   target.
+6. **Resolve from the global mouse, not `at_position`.** Drops are forwarded from many child controls
+   (`set_drag_forwarding`); forward them all to the owner, which resolves with
+   `get_global_mouse_position()`. Restrict to the visible pane rect so scrolled-out content can't
+   catch drops.
+7. **Positions are "after sibling" (null = first)**, computed from item midpoints while skipping the
+   dragged item itself, not raw child indices. Dropping into the item's current slot is valid but
+   `commit()` returns false (no-op, no history entry).
+8. **Nest targets are explicit.** Nesting happens only over a container's header (or its
+   fold-out header bar). Anywhere else on the item means "insert beside it".
+9. **Only valid targets glow.** Show the indicator only when the resolver returns a valid target for
+   the drag in progress. Never light up zones on `NOTIFICATION_DRAG_BEGIN` regardless of drag type.
+   Owners that do per-frame work can `set_process()` on DRAG_BEGIN only when the drag data is theirs.
+10. **Mark the source in place.** Dim the dragged item with `modulate.a` (never `visible`, which
+    changes layout) and restore it from the payload's `drag_completed`. Connect a method, not a lambda,
+    because a drop may free and respawn the source.
+11. **Go through the model and history.** Commit through the data model / `HistoryUtil`, never by
+    editing UI nodes. The UI rebuilds from model signals. Root display order that has no model call
+    (e.g. `ChannelsBox.sync_channel_order()`) is the only exception.
+12. **Test the resolver headless.** Resolve at points taken from real rects (`header.get_global_rect()`
+    etc.), assert `kind`, target args and `indicator_rect`, assert that resolving moved nothing, then
+    `commit()` and assert the model.
 
-> There is also `force_drag(data:Variant, preview:Control)->void` which will initiate a drag and drop programmatically. If you are calling this from the `_drop_data` handler, use `call_deferred` to call it in the next frame, since the current drag operation is still finishing. I use this when dragging items to a slot that already has an item, so I initiate a drag on the previous item for a faster swapping UX.
+## Payload pattern
 
-## Using it
+Wrap every drag in a payload object whose lifetime is tied to the preview (Godot frees the preview on
+drop, cancel or Escape):
 
-It's a simple interface, the basic usage is straight forward - Create some data that will be dragged from a `Control`, check this data, and potentially accept this data in a `Control` that can be dragged to.
+```gdscript
+class_name ThingDrag
 
-One last problem I had was detecting if the user ends the drag, but on a `Control` that will not accept it. Here we can return to `Node` basics and use the lifetime of the preview `Control`! The full lifecycle then looks as follows:
+signal drag_completed(data: ThingDrag)
 
-1.  User clicks and drags, Godot calls: `_get_drag_data`
-2.  We call: `set_drag_preview`
-3.  User drags over a `Control`, Godot calls: `_can_drop_data`
-4.  User releases the drag, and `_can_drop_data` was true, Godot calls: `_drop_data`
-5.  `preview_control.tree_exiting` signal is emitted
+var source: Control = null
+var thing: Thing = null
+var preview: Control = null
+var did_commit := false
 
-To simplify this lifecycle, I'm using a separate object for managing the drag operation:  
+func _init(_source: Control, _thing: Thing, _preview: Control) -> void:
+	source = _source
+	thing = _thing
+	preview = _preview
+	if preview:
+		preview.tree_exiting.connect(_on_tree_exiting)
 
-    class_name ItemDrag
-    
-    signal drag_completed(data:ItemDrag)
-    
-    var source: Control = null
-    var destination: Control = null
-    
-    var item: Item
-    var preview: Control
-    
-    func _init(_source: Control, _item: Item, _preview: Control):
-        self.source = _source
-        self.item = _item
-        self.preview = _preview
-        self.preview.tree_exiting.connect(_on_tree_exiting)
-    
-    func _on_tree_exiting()->void:
-        drag_completed.emit(self)
-    
+func _on_tree_exiting() -> void:
+	drag_completed.emit(self)
+```
 
-Enter fullscreen mode Exit fullscreen mode
+Source control:
 
-Using this class, an example of the other functions could be:  
+```gdscript
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	if not _drag_handle_hit():        # e.g. only from the header
+		return null
+	var preview := ThingDrag.make_preview(thing)
+	var drag := ThingDrag.new(self, thing, preview)
+	set_drag_preview(preview)
+	modulate.a = 0.5
+	drag.drag_completed.connect(_on_drag_completed)
+	return drag
+```
 
-    func remove_item(item:Item)->void:
-        inventory.remove_item(item)
-    
-    func _get_drag_data(at_position:Vector2)->Variant:
-        var item := inventory.item_at(at_position)
-        if item == null: return null
-    
-        var drag_data = ItemDrag.new(self, item, _create_item_preview(item))
-        set_drag_preview(drag_data.preview)
-    
-        return drag_data
-    
-    func _can_drop_data(at_position:Vector2, data:Variant)->bool:
-        if !data is ItemDrag: return false
-        var drag_data := data as ItemDrag
-        # Check if the item can fit in the inventory at this position
-        return !inventory.intersects_at(drag_data.item, at_position)
-    
-    func _drop_data(at_position:Vector2, data:Variant)->void:
-        if !data is ItemDrag: return
-        var drag_data := data as ItemDrag
-    
-        drag_data.destination = self
-        if drag_data.source: drag_data.source.remove_item(drag_data.item)
-    
-        inventory.add_item_at(drag_data.item, at_position)
-    
+Owner (the list/pane that resolves drops):
 
-Enter fullscreen mode Exit fullscreen mode
+```gdscript
+func _process(_delta: float) -> void:
+	var vp := get_viewport()
+	var data: Variant = vp.gui_get_drag_data() if vp.gui_is_dragging() else null
+	if not data is ThingDrag:
+		_hide_drop_indicator()
+		return
+	var target := ThingDropTarget.resolve(self, data, get_global_mouse_position())
+	if not target.is_valid():
+		_hide_drop_indicator()
+		return
+	_indicator().show_at(target.indicator_rect, target.is_nest())
 
-Some of the functionality could be enforced by the `ItemDrag` class, especially giving things like `source` and `destination` stronger types that are guaranteed to have an interface for handling/adding/removing items. But having this set of functions defined is a good start to handling the full drag and drop cycle of operations.
+func _can_drop_data(_p: Vector2, data: Variant) -> bool:
+	return data is ThingDrag and ThingDropTarget.resolve(self, data, get_global_mouse_position()).is_valid()
 
-## Global drag and drop
+func _drop_data(_p: Vector2, data: Variant) -> void:
+	var target := ThingDropTarget.resolve(self, data, get_global_mouse_position())
+	_hide_drop_indicator()
+	data.did_commit = target.commit(self, data)
+```
 
-In addition to the above `Control`\-based (GUI-based) approach, Godot provides some more event hooks into the lifecycle. `Viewport` and `Control` provide functions on querying the state of any drag and drop operations:  
+## Godot notes
 
-    # Viewport
-    func gui_is_dragging()->bool
-    func gui_get_drag_data()->Variant
-    func gui_is_drag_successful()->bool
-    # Control
-    func is_drag_successful()->bool
-    
-
-Enter fullscreen mode Exit fullscreen mode
-
-The first 2 should be obvious - the first can be queried to see if a drag and drop is happening at any point, the second to get the same `data` we returned in the `_get_drag_data` callback in our `Control` (or whatever `data` is contained from `force_drag` or other ways a drag has been initiated).
-
-The last 2 can be used with the `func _notification(what:int)->void` handler to receive global notifications when a drag and drop has started or ended, and if it ended successfully:  
-
-    func _notification(what:int)->void:
-        if what == Node.NOTIFICATION_DRAG_BEGIN:
-            # Drag data is available (populated by our _get_drag_data() function for example)
-            var data = get_viewport().gui_get_drag_data()
-            # Use the drag data
-        if what == Node.NOTIFICATION_DRAG_END:
-            # Drag data is no longer available and has been disposed already
-            print("Drag ended. Success: ", get_viewport().gui_is_drag_successful())
-    
-
-Enter fullscreen mode Exit fullscreen mode
-
-These may come in handy, but are further from the drag and drop context. Some use-cases could be used by relevant drop receivers to highlight themselves, based on the drag data.
-
-With these tools, any drag and drop scenario can be handled, hopefully this saves you any attempts at writing a custom drag and drop implementation. I wish you the best of luck and success in using this information!
+- Drag starts only after the mouse moves past Godot's drag threshold, so a plain click on the same
+  handle can still select.
+- `_can_drop_data` runs on the control under the mouse. Use `set_drag_forwarding(Callable(), can, drop)`
+  on child containers so every visible part of the owner accepts the drop.
+- To accept only some drag types on a sub-area, give that area its own narrow handlers rather than
+  the owner's general ones (e.g. the mixer right pane accepts strip drags but not assets).
+- A rejected drop bubbles up through `MOUSE_FILTER_PASS` parents (containers) but stops at a
+  `MOUSE_FILTER_STOP` control (buttons, knobs). `DragDrop.forward_drops(root, can, drop, skip_group)`
+  forwards drops from stopping controls that have no handlers of their own.
+- `NOTIFICATION_DRAG_BEGIN` / `NOTIFICATION_DRAG_END` arrive on every node; use DRAG_END to hide
+  indicators. `get_viewport().gui_is_drag_successful()` tells whether a drop happened.
+- Calling `force_drag()` from `_drop_data` must be deferred.

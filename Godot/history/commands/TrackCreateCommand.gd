@@ -1,5 +1,5 @@
 # TrackCreateCommand.gd
-# Undoable instrument/audio/folder/group track creation (keeps Track + Channel identity).
+# Undoable instrument/audio/bare/folder/group track creation (keeps Track + Channel identity).
 class_name TrackCreateCommand extends Command
 
 ## Project that owns the track/channel.
@@ -11,7 +11,7 @@ var track: Track = null
 ## Created channel (may be null for folder without channel).
 var channel: Channel = null
 
-## Creation kind: "instrument", "audio", "folder", or "group".
+## Creation kind: "instrument", "audio", "track" (no channel), "folder", or "group".
 var kind: String = "instrument"
 
 ## Display name used when (re)creating.
@@ -43,6 +43,8 @@ func _init(
 			name = "Create Folder"
 		"group":
 			name = "Create Group Track"
+		"track":
+			name = "Create Track"
 		_:
 			name = "Create Instrument Track"
 
@@ -57,6 +59,11 @@ func do() -> void:
 			project.add_channel(channel)
 		if project.get_track_by_id(track.id) == null:
 			project.add_track(track)
+		return
+
+	if kind == "track":
+		# Channel-less track: it gets its output from the routing dropdown later.
+		track = project.create_bare_track(track_name)
 		return
 
 	var result: Dictionary

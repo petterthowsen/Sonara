@@ -2,6 +2,9 @@ class_name DeviceLane extends HBoxContainer
 
 const DevicePanelScene : PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
 
+## Space between device panels, in pixels.
+const PANEL_GAP := 16
+
 var logger : Log = Log.make("DeviceLane")
 
 @onready var header: Panel = $Header
@@ -16,14 +19,20 @@ var channel : Channel
 var _parent_channel: Channel = null
 var _parent_header: Panel = null
 var _parent_header_label: VerticalLabel = null
-var _drop_host := DeviceChainDropHost.new(true, 16.0, false)
+## Device row drop rules; DeviceDropTarget resolves drops for this lane and its nested folders.
+var drop_host := DeviceChainDropHost.new()
+## Glowing drop overlay (top-level, so it never takes layout space), created on first use.
+var _drop_indicator: DropIndicator = null
 ## A drum pad return shows its pad lane (pad device + own devices), rebuilt on every change.
 var _pad_lane := PadLaneWatcher.new()
 var current_project: Project = null  # Track which project we're listening to
 
 func _ready():
 	if devices:
-		devices.add_theme_constant_override("separation", 0)
+		devices.add_theme_constant_override("separation", PANEL_GAP)
+	drop_host.attach(self, devices, false)
+	add_to_group(DeviceDropTarget.ROOT_GROUP)
+	set_process(false)
 	_create_parent_header()
 	_pad_lane.changed.connect(_on_pad_lane_changed)
 	clear()
@@ -104,7 +113,7 @@ func unbind():
 	channel.device_added.disconnect(_add_device)
 	channel.device_removed.disconnect(_on_channel_device_remmoved)
 	channel.device_moved.disconnect(_on_channel_device_moved)
-	_drop_host.bind(null)
+	drop_host.bind(null)
 	_pad_lane.bind(null)
 
 
@@ -115,7 +124,6 @@ func clear():
 
 
 func _clear_devices() -> void:
-	_drop_host.clear()
 	for node in devices.get_children():
 		devices.remove_child(node)
 		node.queue_free()
@@ -129,7 +137,6 @@ func _rebuild_devices() -> void:
 	var lane: Array[DeviceInstance] = PadLane.devices(channel) if _pad_lane.active() else channel.devices
 	for device_inst in lane:
 		_add_device_panel(device_inst)
-	_create_drop_zones()
 
 
 func _on_pad_lane_changed() -> void:
@@ -151,7 +158,7 @@ func bind_to_channel(channel : Channel):
 	
 	# bind to new channel
 	self.channel = channel
-	_drop_host.bind(channel)
+	drop_host.bind(channel)
 	_pad_lane.bind(channel)
 	
 	# set heade label and bg color
@@ -176,7 +183,7 @@ func _add_device(device_instance : DeviceInstance, _position : int):
 	if _pad_lane.active():
 		return
 	_add_device_panel(device_instance)
-	_create_drop_zones()
+	drop_host.sort_panels_by_position()
 
 
 func _add_device_panel(device_instance: DeviceInstance) -> void:
@@ -210,12 +217,12 @@ func _on_channel_device_remmoved(d_position : int, device_id : String):
 		return
 	devices.remove_child(dp)
 	dp.queue_free()
-	_create_drop_zones()
 
 
 func _on_channel_device_moved(from_position: int, to_position: int):
 	"""Handle device moved signal - reorder DevicePanel nodes."""
-	_create_drop_zones()
+	if not _pad_lane.active():
+		drop_host.sort_panels_by_position()
 	logger.info("[DeviceLane] DevicePanel reordered from position %d to %d" % [from_position, to_position])
 
 
@@ -294,24 +301,6 @@ func _on_parent_header_gui_input(event: InputEvent) -> void:
 
 
 # ============================================================================
-# DRAG AND DROP ZONES
-# ============================================================================
-
-## Keep invisible spacer drop zones interleaved with the current DevicePanels.
-func _create_drop_zones() -> void:
-	if not channel or devices == null:
-		return
-	var device_panels: Array[DevicePanel] = []
-	for child in devices.get_children():
-		if child is DevicePanel:
-			device_panels.append(child)
-	# Pad lane panels are already in lane order; plain chains follow device position.
-	if not _pad_lane.active():
-		device_panels.sort_custom(func(a: DevicePanel, b: DevicePanel): return a.device.position < b.device.position)
-	_drop_host.rebuild(devices, device_panels)
-
-
-# ============================================================================
 # SIGNAL HANDLERS
 # ============================================================================
 
@@ -327,10 +316,28 @@ func _on_device_panel_request_context_menu(device_instance : DeviceInstance) -> 
 # DRAG AND DROP
 # ============================================================================
 
-## Drops on the lane outside a spacer append to the channel.
+## Show where a device or asset drag lands (only while one is in progress).
+func _process(_delta: float) -> void:
+	_drop_indicator = DeviceDropTarget.update_indicator(self, _drop_indicator)
+
+
+## Resolve drops only while a device or asset drag is in progress; let child controls forward them.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_BEGIN:
+		var data: Variant = DragDrop.current_drag(self)
+		if DeviceDropTarget.accepts(data):
+			DragDrop.forward_drops(self, _can_drop_data, _drop_data, DeviceDropTarget.OWN_DROPS_GROUP)
+			set_process(true)
+	elif what == NOTIFICATION_DRAG_END:
+		set_process(false)
+		DropIndicator.hide_indicator(_drop_indicator)
+
+
+## Drops anywhere on the lane resolve from the pointer (insert between panels, or onto a device).
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return _drop_host.can_drop(data)
+	return DeviceDropTarget.resolve_for(self, data).is_valid()
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	_drop_host.drop(data)
+	DeviceDropTarget.resolve_for(self, data).commit(data)
+	DropIndicator.hide_indicator(_drop_indicator)

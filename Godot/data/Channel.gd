@@ -255,7 +255,11 @@ func sync_to_engine() -> void:
 	"""Sync current channel state to audio engine."""
 	AudioEngineOSC.send("/channel/%d/create" % id, [name])
 	AudioEngineOSC.send("/channel/%d/volume" % id, [volume])
-	AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
+	AudioEngineOSC.send("/channel/%d/pan_mode" % id, [pan_mode])
+	if pan_mode == PanMode.STEREO_DUAL:
+		AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
+	else:
+		AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
 	AudioEngineOSC.send("/channel/%d/mute" % id, [1 if mute else 0])
 	AudioEngineOSC.send("/channel/%d/solo" % id, [1 if solo else 0])
 

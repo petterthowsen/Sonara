@@ -152,6 +152,7 @@ focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
 resizable = false
+children_header_height = null
 selected_min_width = 156
 mode = 1
 
@@ -196,7 +197,6 @@ value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
-text = "this is very a long name that wraps"
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 clip_text = true
@@ -209,7 +209,6 @@ anchor_bottom = 0.5
 offset_top = -15.5
 offset_bottom = 15.5
 text = "Layer"
-max_length = 0
 expand_to_text_length = true
 flat = false
 

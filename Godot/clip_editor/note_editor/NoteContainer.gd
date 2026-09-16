@@ -141,26 +141,55 @@ func _note_dict_key(ci: ClipInstance, note_id: int) -> String:
 	return "single:%d" % note_id
 
 
+## Wire a clip's note signals, binding the clip itself so the handlers know which
+## clip the note belongs to. A clip can appear on the track more than once, so the
+## is_connected guards keep repeated instances from connecting twice.
+func _connect_clip_signals(c: Clip) -> void:
+	# The bound Callable is what gets connected, so it is also what is_connected and
+	# disconnect must be given; a bare _on_clip_note_added never matches it.
+	var on_added := _on_clip_note_added.bind(c)
+	var on_removed := _on_clip_note_removed.bind(c)
+	var on_changed := _on_clip_note_changed.bind(c)
+	if not c.midi_note_added.is_connected(on_added):
+		c.midi_note_added.connect(on_added)
+	if not c.midi_note_removed.is_connected(on_removed):
+		c.midi_note_removed.connect(on_removed)
+	if not c.midi_note_changed.is_connected(on_changed):
+		c.midi_note_changed.connect(on_changed)
+
+
+func _disconnect_clip_signals(c: Clip) -> void:
+	var on_added := _on_clip_note_added.bind(c)
+	var on_removed := _on_clip_note_removed.bind(c)
+	var on_changed := _on_clip_note_changed.bind(c)
+	if c.midi_note_added.is_connected(on_added):
+		c.midi_note_added.disconnect(on_added)
+	if c.midi_note_removed.is_connected(on_removed):
+		c.midi_note_removed.disconnect(on_removed)
+	if c.midi_note_changed.is_connected(on_changed):
+		c.midi_note_changed.disconnect(on_changed)
+
+
+## Every clip instance on this track that plays `c`. Notes are clip-local and shared
+## by all instances of that clip, so a note edit shows up once per matching instance
+## and never on instances of a different clip.
+func _instances_of_clip(c: Clip) -> Array[ClipInstance]:
+	var out: Array[ClipInstance] = []
+	for ci in clip_instances:
+		if ci and ci.clip == c:
+			out.append(ci)
+	return out
+
+
 func unbind():
 	# Disconnect from clip signals (single-clip mode)
 	if clip:
-		if clip.midi_note_added.is_connected(_on_clip_note_added):
-			clip.midi_note_added.disconnect(_on_clip_note_added)
-		if clip.midi_note_removed.is_connected(_on_clip_note_removed):
-			clip.midi_note_removed.disconnect(_on_clip_note_removed)
-		if clip.midi_note_changed.is_connected(_on_clip_note_changed):
-			clip.midi_note_changed.disconnect(_on_clip_note_changed)
+		_disconnect_clip_signals(clip)
 
 	# Disconnect from all clips (multi-clip mode)
 	for ci in clip_instances:
 		if ci and ci.clip:
-			var c = ci.clip
-			if c.midi_note_added.is_connected(_on_clip_note_added):
-				c.midi_note_added.disconnect(_on_clip_note_added)
-			if c.midi_note_removed.is_connected(_on_clip_note_removed):
-				c.midi_note_removed.disconnect(_on_clip_note_removed)
-			if c.midi_note_changed.is_connected(_on_clip_note_changed):
-				c.midi_note_changed.disconnect(_on_clip_note_changed)
+			_disconnect_clip_signals(ci.clip)
 
 	# Keep grid_helper connected. Unbind only clears clip data; zoom/scroll
 	# still need to relayout this editor when it is reused (the scene editor).
@@ -191,9 +220,7 @@ func bind(ci : ClipInstance):
 
 		# Connect to clip signals for reactive updates
 		if clip:
-			clip.midi_note_added.connect(_on_clip_note_added)
-			clip.midi_note_removed.connect(_on_clip_note_removed)
-			clip.midi_note_changed.connect(_on_clip_note_changed)
+			_connect_clip_signals(clip)
 
 		_load_clip_notes()
 		queue_sort()
@@ -227,10 +254,7 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	# Connect to all clips' signals for reactive updates
 	for ci in clip_instances:
 		if ci and ci.clip:
-			var c = ci.clip
-			c.midi_note_added.connect(_on_clip_note_added)
-			c.midi_note_removed.connect(_on_clip_note_removed)
-			c.midi_note_changed.connect(_on_clip_note_changed)
+			_connect_clip_signals(ci.clip)
 
 	_load_clip_notes()
 	queue_sort()
@@ -491,13 +515,13 @@ func _load_notes_from_multiple_clips() -> void:
 # ============================================================================
 # REACTIVE SIGNAL HANDLERS - Clip data changes
 # ============================================================================
-func _on_clip_note_added(note_data: MidiNoteData) -> void:
+func _on_clip_note_added(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is added to the clip (reactive)."""
 	if multi_clip_mode:
-		# Create a visual note for EACH clip instance on this track (shared clip content)
-		for ci in clip_instances:
-			if not ci or not ci.clip:
-				continue
+		# Create a visual note for each instance OF THE CLIP THAT GAINED THE NOTE.
+		# Other clips on this track must not get one: their visuals would claim
+		# ownership of the note and later edits would be routed to the wrong clip.
+		for ci in _instances_of_clip(source_clip):
 			# Avoid duplicates
 			var key = _make_note_key(ci, note_data)
 			if visual_notes_by_id.has(key):
@@ -530,17 +554,18 @@ func _on_clip_note_added(note_data: MidiNoteData) -> void:
 	notes_changed.emit()
 
 
-func _on_clip_note_removed(note_data: MidiNoteData) -> void:
+func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is removed from the clip (reactive)."""
 	if multi_clip_mode:
-		# Remove ALL instances of this note id across repeated clips
+		# Remove the visuals on every instance of the emitting clip, and only those.
+		var owned := _instances_of_clip(source_clip)
 		var to_free: Array[VisualNote] = []
 		for child in get_children():
 			if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_data.id:
-				# Erase dictionary entry
-				if child.has_meta("clip_instance"):
-					var ci: ClipInstance = child.get_meta("clip_instance")
-					visual_notes_by_id.erase(_make_note_key(ci, note_data))
+				var ci: ClipInstance = child.get_meta("clip_instance") if child.has_meta("clip_instance") else null
+				if ci not in owned:
+					continue
+				visual_notes_by_id.erase(_make_note_key(ci, note_data))
 				to_free.append(child)
 		for vn in to_free:
 			vn.queue_free()
@@ -559,12 +584,16 @@ func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 	notes_changed.emit()
 
 
-func _on_clip_note_changed(note_data: MidiNoteData) -> void:
+func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is modified in the clip (reactive)."""
 	if multi_clip_mode:
-		# Update ALL instances for this shared note id
+		# Update every instance of the emitting clip, and only those.
+		var owned := _instances_of_clip(source_clip)
 		for child in get_children():
 			if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_data.id:
+				var ci: ClipInstance = child.get_meta("clip_instance") if child.has_meta("clip_instance") else null
+				if ci not in owned:
+					continue
 				child._update_visual()
 				_update_single_note_position(child)
 	else:
@@ -796,10 +825,8 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 	clip_instances.append(new_clip_instance)
 	
 	# Connect to new clip's signals for reactive updates
-	if new_clip and not new_clip.midi_note_added.is_connected(_on_clip_note_added):
-		new_clip.midi_note_added.connect(_on_clip_note_added)
-		new_clip.midi_note_removed.connect(_on_clip_note_removed)
-		new_clip.midi_note_changed.connect(_on_clip_note_changed)
+	if new_clip:
+		_connect_clip_signals(new_clip)
 	
 	# Refresh container width to account for new clip
 	update_container_width()

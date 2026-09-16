@@ -1,9 +1,13 @@
 # NestedDeviceList.gd
-# Horizontal strip of child DevicePanels plus drop zones, bound to a container DeviceInstance.
+# Horizontal strip of child DevicePanels bound to a container DeviceInstance. Drops resolve through
+# DeviceDropTarget from the enclosing DeviceLane.
 # Chain shows every child and sizes the folder to fit them; Layer/Drum Machine show one focused child.
 class_name NestedDeviceList extends Control
 
 const DevicePanelScene: PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
+
+## Space between child panels, in pixels.
+const PANEL_GAP := 12
 
 @onready var scroll: ScrollContainer = $ScrollContainer
 @onready var devices: HBoxContainer = $ScrollContainer/Devices
@@ -13,7 +17,8 @@ const DevicePanelScene: PackedScene = preload("res://devices/device_lane/DeviceP
 var channel: Channel = null
 var container: DeviceInstance = null
 var focus_child: DeviceInstance = null
-var _drop_host := DeviceChainDropHost.new(true, 12.0)
+## Container row drop rules (see DeviceDropTarget).
+var drop_host := DeviceChainDropHost.new()
 var _panels: Dictionary = {}  # instance id -> Control (DevicePanel)
 
 
@@ -22,7 +27,8 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	if devices:
 		devices.size_flags_horizontal = Control.SIZE_FILL
-		devices.add_theme_constant_override("separation", 0)
+		devices.add_theme_constant_override("separation", PANEL_GAP)
+	drop_host.attach(self, devices, false, _drop_index_for_panel)
 	if empty_hint:
 		empty_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if device_context_menu:
@@ -46,7 +52,7 @@ func bind_to_container(p_container: DeviceInstance) -> void:
 	_unbind()
 	container = p_container
 	channel = container.get_channel() if container else null
-	_drop_host.bind(channel, container)
+	drop_host.bind(channel, container)
 	_apply_scroll_policy()
 	if container == null:
 		_clear_panels()
@@ -78,7 +84,6 @@ func refresh() -> void:
 			await _add_child_panel(child)
 	_apply_scroll_policy()
 	_update_empty_hint()
-	_create_drop_zones()
 	_notify_content_size()
 
 
@@ -94,12 +99,11 @@ func _unbind() -> void:
 	container = null
 	channel = null
 	focus_child = null
-	_drop_host.bind(null)
+	drop_host.bind(null)
 
 
-## Free every child panel and drop zone immediately so leftover nodes do not inflate min size.
+## Free every child panel immediately so leftover nodes do not inflate min size.
 func _clear_panels() -> void:
-	_drop_host.clear()
 	if devices:
 		for child in devices.get_children():
 			devices.remove_child(child)
@@ -162,7 +166,7 @@ func _focuses_one_child() -> bool:
 func _apply_scroll_policy() -> void:
 	if devices:
 		devices.size_flags_horizontal = Control.SIZE_FILL
-		devices.add_theme_constant_override("separation", 0)
+		devices.add_theme_constant_override("separation", PANEL_GAP)
 	if scroll == null:
 		return
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -175,18 +179,6 @@ func _notify_content_size() -> void:
 	update_minimum_size()
 
 
-## Keep invisible spacer drop zones interleaved with the current child panels.
-func _create_drop_zones() -> void:
-	if container == null or devices == null:
-		return
-	var panel_list: Array[Control] = []
-	for child in devices.get_children():
-		if child is DropZone:
-			continue
-		panel_list.append(child)
-	_drop_host.rebuild(devices, panel_list, _drop_index_for_panel)
-
-
 ## Map a visible-panel index to the container child index (focus mode uses the real position).
 func _drop_index_for_panel(visible_index: int) -> int:
 	if _focuses_one_child() and focus_child:
@@ -194,12 +186,11 @@ func _drop_index_for_panel(visible_index: int) -> int:
 	return visible_index
 
 
-## Accept a device or asset dropped on empty list space (append).
+## Drops on the list resolve from the pointer through the enclosing device lane.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return container != null and _drop_host.can_drop(data)
+	return container != null and DeviceDropTarget.resolve_for(self, data).is_valid()
 
 
-## Append a device or asset as a child of the bound container.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if container != null:
-		_drop_host.drop(data)
+		DeviceDropTarget.resolve_for(self, data).commit(data)

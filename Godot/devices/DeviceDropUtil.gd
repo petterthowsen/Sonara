@@ -1,5 +1,6 @@
 # DeviceDropUtil.gd
 # Shared drop rules for adding/reordering devices on a channel or inside a container.
+# Drag data may be a DeviceDrag, a DeviceInstance or an Asset; DeviceDrag is unwrapped here.
 # Every drop target (device lane, mixer strip, compact list, container folder, drum pad,
 # AI tools) goes through these so they accept and do the same thing.
 # Drops are synchronous: files for new devices are queued on the instance and loaded by
@@ -191,6 +192,7 @@ static func find_file_loading_descendant(inst: DeviceInstance) -> DeviceInstance
 
 ## Whether `data` can be dropped onto the device panel for `inst`: a child for a container, or a file to load.
 static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
+	data = DeviceDrag.unwrap(data)
 	if inst == null:
 		return false
 	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, data):
@@ -200,6 +202,7 @@ static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 
 ## Drop `data` onto the device panel for `inst`. Returns true when it was added into the container.
 static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
+	data = DeviceDrag.unwrap(data)
 	if inst == null:
 		return false
 	var channel := inst.get_channel()
@@ -213,6 +216,7 @@ static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 
 ## Drop onto a container device itself (append a child).
 static func can_drop_on_container(channel: Channel, container: DeviceInstance, data: Variant) -> bool:
+	data = DeviceDrag.unwrap(data)
 	if channel == null or container == null or not container.is_container():
 		return false
 	if data is DeviceInstance:
@@ -230,6 +234,7 @@ static func drop_on_container(
 	container: DeviceInstance,
 	data: Variant
 ) -> void:
+	data = DeviceDrag.unwrap(data)
 	if not can_drop_on_container(channel, container, data):
 		return
 	if data is DeviceInstance:
@@ -250,6 +255,7 @@ static func can_drop_on_drum_pad(
 	channel: Channel = null,
 	container: DeviceInstance = null
 ) -> bool:
+	data = DeviceDrag.unwrap(data)
 	if data is DeviceInstance:
 		var inst := data as DeviceInstance
 		if inst == occupied:
@@ -277,6 +283,7 @@ static func drop_on_drum_pad(
 ) -> void:
 	if channel == null or container == null:
 		return
+	data = DeviceDrag.unwrap(data)
 	var occupied := _child_for_note(container, note)
 	if data is DeviceInstance:
 		_drop_instance_on_drum_pad(channel, container, note, data, occupied)

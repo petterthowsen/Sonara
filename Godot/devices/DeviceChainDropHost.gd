@@ -1,8 +1,11 @@
 # DeviceChainDropHost.gd
-# Drop handling for one row of device panels: a channel's root chain or a container's children.
-# Owns the insert-point spacers between panels and the accept/drop rules, so DeviceLane,
-# ChannelDeviceList and NestedDeviceList behave the same.
+# One row of device panels that accepts drops: a channel's root chain (DeviceLane,
+# ChannelDeviceList) or a container's children (NestedDeviceList). Knows the row's panels, their
+# insert indices and the accept/drop rules. DeviceDropTarget picks the row under the pointer.
 class_name DeviceChainDropHost extends RefCounted
+
+## Owners of a host (controls with a `drop_host` property) join this group.
+const GROUP := &"device_chain_drop_host"
 
 ## Channel whose devices the row shows.
 var channel: Channel = null
@@ -10,20 +13,27 @@ var channel: Channel = null
 ## Container whose children the row shows, or null for the channel root.
 var parent: DeviceInstance = null
 
-## Spacers currently interleaved with the panels.
-var drop_zones: Array[DropZone] = []
+## Control whose visible area accepts drops for this row.
+var owner: Control = null
 
-var _vertical: bool = true
-var _gap: float = 16.0
-var _empty_zone: bool = true
+## Box holding the panels.
+var row: BoxContainer = null
+
+## True when panels stack top to bottom (compact list); false for a left-to-right lane.
+var vertical: bool = false
+
+## Maps a visible panel index (0..panel count) to the host insert index. Defaults to identity.
+var index_for_panel: Callable = Callable()
 
 
-## `vertical` spacers sit between panels in an HBox; horizontal ones between rows in a VBox.
-## `empty_zone` adds a single spacer when there are no panels.
-func _init(vertical: bool = true, gap: float = 16.0, empty_zone: bool = true) -> void:
-	_vertical = vertical
-	_gap = gap
-	_empty_zone = empty_zone
+## Register `p_owner` (which must expose this host as `drop_host`) with its panel `p_row`.
+func attach(p_owner: Control, p_row: BoxContainer, p_vertical: bool, p_index_for_panel: Callable = Callable()) -> void:
+	owner = p_owner
+	row = p_row
+	vertical = p_vertical
+	index_for_panel = p_index_for_panel
+	if owner and not owner.is_in_group(GROUP):
+		owner.add_to_group(GROUP)
 
 
 ## Point the row at `p_channel`'s root chain, or at `p_parent`'s children. A drum pad return's
@@ -33,40 +43,59 @@ func bind(p_channel: Channel, p_parent: DeviceInstance = null) -> void:
 	parent = p_parent
 
 
-## Lay out `row` as [spacer][panel]...[panel][spacer]. `index_for_panel` maps a visible
-## panel index to the host insert index (defaults to the same index).
-func rebuild(row: Node, panels: Array, index_for_panel: Callable = Callable()) -> void:
-	drop_zones = DropZone.rebuild_insert_layout(
-		row,
-		panels,
-		func(i: int) -> DropZone:
-			return _make_zone(int(index_for_panel.call(i)) if index_for_panel.is_valid() else i),
-		_empty_zone
-	)
+## Device panels in the row, in display order.
+func panels() -> Array[Control]:
+	var out: Array[Control] = []
+	if row == null:
+		return out
+	for child in row.get_children():
+		if not child is Control or child.is_queued_for_deletion() or not child.visible:
+			continue
+		if panel_device(child) != null:
+			out.append(child)
+	return out
 
 
-## Free every spacer.
-func clear() -> void:
-	for drop_zone in drop_zones:
-		if is_instance_valid(drop_zone):
-			var zone_parent := drop_zone.get_parent()
-			if zone_parent:
-				zone_parent.remove_child(drop_zone)
-			drop_zone.queue_free()
-	drop_zones.clear()
+## Order plain chain panels by device position (pad lanes and containers build in order).
+func sort_panels_by_position() -> void:
+	var list := panels()
+	list.sort_custom(func(a: Control, b: Control): return panel_device(a).position < panel_device(b).position)
+	for i in list.size():
+		row.move_child(list[i], i)
 
 
-## Whether `data` (a DeviceInstance or Asset) can be inserted at `position` (-1 = append).
+## Host insert index before visible panel `i` (`i` == panel count means after the last one).
+func insert_index(i: int) -> int:
+	return int(index_for_panel.call(i)) if index_for_panel.is_valid() else i
+
+
+## The DeviceInstance a panel shows, or null for other nodes.
+static func panel_device(panel: Node) -> DeviceInstance:
+	if panel is DevicePanel:
+		return (panel as DevicePanel).device
+	if panel is CompactDevicePanel:
+		return (panel as CompactDevicePanel).device_instance
+	return null
+
+
+## Global rect of a panel's header (drops there go onto the device).
+static func panel_header_rect(panel: Control) -> Rect2:
+	var header: Control = panel.get("header")
+	return header.get_global_rect() if header else Rect2()
+
+
+## Whether `data` (a DeviceDrag, DeviceInstance or Asset) can be inserted at `position` (-1 = append).
+## Dropping a device back into its own slot is accepted; `is_noop` tells it apart.
 func can_drop(data: Variant, position: int = -1) -> bool:
+	data = DeviceDrag.unwrap(data)
 	if channel == null:
 		return false
 	if parent == null and PadLane.is_pad_lane(channel):
+		if data is DeviceInstance:
+			return PadLane.devices(channel).has(data)
 		return PadLane.can_drop(channel, data, position)
 	if data is DeviceInstance:
-		var inst := data as DeviceInstance
-		if not DeviceDropUtil.can_drop_instance_on_host(channel, inst, parent):
-			return false
-		return position < 0 or inst.get_parent_device() != parent or inst.position != position
+		return DeviceDropUtil.can_drop_instance_on_host(channel, data, parent)
 	if not data is Asset:
 		return false
 	if parent:
@@ -74,32 +103,30 @@ func can_drop(data: Variant, position: int = -1) -> bool:
 	return DeviceDropUtil.can_drop_asset_on_channel(channel, data)
 
 
-## Insert (or move) `data` at `position` (-1 = append).
-func drop(data: Variant, position: int = -1) -> void:
-	if not can_drop(data, position):
-		return
+## True when dropping `data` at `position` would leave everything where it is.
+func is_noop(data: Variant, position: int = -1) -> bool:
+	data = DeviceDrag.unwrap(data)
+	if not data is DeviceInstance:
+		return false
+	var inst := data as DeviceInstance
+	if parent == null and PadLane.is_pad_lane(channel):
+		return not PadLane.can_drop(channel, inst, position)
+	if inst.get_parent_device() != parent:
+		return false
+	var count := parent.children.size() if parent else channel.devices.size()
+	var at := count if position < 0 or position > count else position
+	return at == inst.position or at == inst.position + 1
+
+
+## Insert (or move) `data` at `position` (-1 = append). Returns true when something changed.
+func drop(data: Variant, position: int = -1) -> bool:
+	if not can_drop(data, position) or is_noop(data, position):
+		return false
+	data = DeviceDrag.unwrap(data)
 	if parent == null and PadLane.is_pad_lane(channel):
 		PadLane.drop(channel, data, position)
-		return
-	if data is DeviceInstance:
+	elif data is DeviceInstance:
 		DeviceDropUtil.drop_instance(channel, data, parent, position)
 	elif data is Asset:
 		DeviceDropUtil.drop_asset(channel, data, position, parent)
-
-
-func _make_zone(position: int) -> DropZone:
-	var zone := DropZone.create_insert_spacer(_vertical, _gap)
-	zone.set_drag_forwarding(_no_drag, _can_drop_at.bind(position), _drop_at.bind(position))
-	return zone
-
-
-func _no_drag(_at_position: Vector2) -> Variant:
-	return null
-
-
-func _can_drop_at(_at_position: Vector2, data: Variant, position: int) -> bool:
-	return can_drop(data, position)
-
-
-func _drop_at(_at_position: Vector2, data: Variant, position: int) -> void:
-	drop(data, position)
+	return true
