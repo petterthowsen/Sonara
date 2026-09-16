@@ -9,6 +9,8 @@ class_name HDualSlider extends Control
 signal a_value_changed(new_value: float)
 signal b_value_changed(new_value: float)
 signal values_changed(a_value : float, b_value : float)
+signal drag_started
+signal drag_ended
 
 enum DragMode { NONE, A_VALUE, B_VALUE }
 var _drag_mode := DragMode.NONE
@@ -122,10 +124,13 @@ func _gui_input(event: InputEvent):
 					_drag_mode = DragMode.A_VALUE
 				else:
 					_drag_mode = DragMode.B_VALUE
-				
+
+				drag_started.emit()
 				_update_value_from_mouse(event.position)
 			else:
-				_drag_mode = DragMode.NONE
+				if _drag_mode != DragMode.NONE:
+					_drag_mode = DragMode.NONE
+					drag_ended.emit()
 	elif event is InputEventMouseMotion:
 		if _drag_mode != DragMode.NONE:
 			_update_value_from_mouse(event.position)

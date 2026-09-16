@@ -69,43 +69,44 @@ Done:
 
 ### Mixer & Tracks
 
-#### Phase 1: Track/channel hierarchy, sync and track actions (complex)
+Mixer Layout Refactor
 
-1. Track ↔ channel hierarchy sync (foundation for the rest)
-   - [x?] Bug: create a group track in the arranger, create an instrument track, move it into the group: the MixerChannel is not nested into the group. Not reproduced: the model and the real Mixer scene both nest correctly (`test_track_routing.gd`). Fixed two gaps that give this symptom: a channel-less (or shared-strip) sibling above the moved track un-nested it instead, and routing a track inside a group to a new channel only routed the strip without nesting it. Verify in the UI; if it still happens, note the exact steps
-   - [x?] On `Track.parent_changed` (TrackReorderCommand), nest/unnest the linked channel in the same undo step. Already done by `Project.place_track`, with `TrackReorderCommand.capture_layout` snapshotting both sides (no separate `ChannelNestCommand` needed); covered by tests
-   - [x?] Reverse direction: nesting a channel in the mixer reparents its linked track in the arranger (`Project.nest_channel`/`unnest_channel`; covered by tests)
-2. Mixer drag and drop into/out of group channels
-   - [x] Dropping onto a group strip nests; dropping onto the children pane inserts at the hovered index. All strip drops resolve through `MixerChannelDropTarget`; nested non-group strips no longer swallow the drop as a nest, and dragging a child also reorders it inside the fold-out
-   - [x] Dragging a child out of the children pane onto the root `ChannelsBox` unnests it, placed at the hovered gap
-   - [x] Clear drop indicator (insert line / group highlight) while dragging (`Mixer._process`, same resolver as the drop)
-3. Nested mixer layout
-   - [x] `MixerChannel.children_header_height` (default 12) sizes the parent's ParentHeader and is subtracted from nested header heights (plus panel margin/separation per level, floor 24 px), so header bottoms line up two levels deep (`test_mixer_channel_drop.gd`)
-   - [ ] "For nested mixer channels, we need a way to …" (unfinished item: define it before starting)
-4. Folding child tracks in the arranger
-   - [x?] Wire the folder/group fold button to `is_folder_expanded` and hide/show the child subtree in TrackList and Timeline (`AutomationRowOrder` leaves out folded-away rows for both columns)
-   - [x?] Animate the slide up/down: one shared `TrackFoldAnimation` per folder, both columns size rows from `AutomationRowOrder.fold_heights`. Rows cut short below 40 px hide instead, since a TrackItem can't shrink past its content (37 px). Verify visually that headers and timeline rows stay aligned
-   - [x?] Persist fold state (already saved in `Track.JSON_FIELDS`); selecting a track inside a folded folder (also from the mixer) or dropping into a folded folder expands it
-5. Track ↔ channel state sync
-   - [x?] Selection: `TrackList.selection_changed` ↔ `Mixer.selection_changed` mirrored in `Editor` through `SelectionSync` and silent setters (no feedback loop). Selecting a bus clears the arranger selection
-   - [x?] Solo/mute: the channel is the single source of truth. `Track.muted`/`solo` read the linked channel (a channel-less track keeps its own, taken from its last strip), routing no longer pushes the track's copy into the strip, and TrackItem buttons follow channel signals
-6. TrackItem context menu (uses the selection from 5)
-   - [x?] Single track: `Delete Track` (keeps channel) and `Delete Track & Channel`. `TrackDeleteCommand` keep-channels option; `LinkedDeleteSnapshot` unregisters/re-registers tracks on kept channels
-   - [x?] Single track: `Duplicate Track` (clips, same channel) and `Duplicate Track & Channel` (also copies channel settings, devices with fresh ids, sends, routing and group nesting). New `TrackDuplicateCommand`. Only clip tracks can be duplicated (not folders/groups); aux returns of multi-out devices are not copied
-   - [x?] Multiple selected: title is read-only and shows "N tracks" (color applies to all, routing dropdowns hidden)
-   - [x?] Multiple selected: `Delete Tracks` / `Duplicate Tracks` (plus `& Channels` variants), each one undo step (delete: one snapshot; duplicate: `MacroCommand`)
-   - [x?] Tests for the delete/duplicate variants and their undo (`test_track_actions.gd`)
+To make the mixer view more easily customizable to the user's needs, we should redesign it by splitting up compact/non-compact modes and sizes into two separately toggleable things.
 
-#### Phase 2: Quick fixes (easy)
+MixerChannel scene has been updated, remaining is to update node paths and wire the logic to spec below. 
 
-- [ ] Pan sliders show the value while adjusting (label/tooltip from `PanControl._on_slider_changed`, hidden on release).
-- [ ] Master channel: allow devices/effects, hide its sends panel.
+A size mode controls the base width of strips between three sizes: narrow, medium, wide. (We should look at a custom toggle for this with 3 cycleable states and 3 icons maybe.) Toggles are in bottom of Mixer scene in a "Toggles" hbox.
+
+1. At narrow, the minimum_size.x = 0 - simply the smallest it can be.
+2. At medium, it's medium_base_width (default to 108)
+3. At wide, it's 138
+
+A tall-vs-compact mode controls whether the SidePane is used to display some elements or not.
+
+Tall Mode:
+1. The SidePane is hidden and has no elements.
+2. width is the base width, always
+
+Compact Mode:
+1. The DeviceList and Sends are moved into the SidePane
+2. width is base width, but when the channel is selected, it has no minimum_size.x, and shows the SidePane. Ideally it should animate (slide out over maybe 0.2s).
+
+Big Meters toggle works like this when enabled:
+1. BigMeter is visible at the top of MainPain/VSplit
+2. volume in MainPane switches to the Fader (pure knob), letting the Big Meter handle metering visualization.
+
+---
+
+- [ ] Master track doesn't accept device drops on its device lane and compact device list. Master track should accept devices.
+- [ ] "For nested mixer channels, we need a way to
+
 
 ### Arranger & Timeline
 
 - [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
 - [ ] Chord track: Implement chord track with visual notations
 - [x] Marking track: Add marking/marker tracks (section labels, etc.)
+- [ ] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself.
 
 ### Clips
 

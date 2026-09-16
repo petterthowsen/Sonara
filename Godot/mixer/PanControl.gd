@@ -6,6 +6,7 @@ class_name PanControl extends PanelContainer
 @onready var _combined_slider: HorSlider = $HSlider
 @onready var _dual_slider: HDualSlider = $DualPanSlider
 @onready var _mode_popup: PopupMenu = $PanModePopup
+@onready var _value_label: Label = $ValueLabel
 
 var channel: Channel = null
 
@@ -13,8 +14,14 @@ var channel: Channel = null
 func _ready() -> void:
 	_combined_slider.value_changed.connect(_on_slider_changed)
 	_dual_slider.values_changed.connect(_on_slider_changed)
+	_combined_slider.drag_started.connect(_on_drag_started)
+	_combined_slider.drag_ended.connect(_on_drag_ended)
+	_dual_slider.drag_started.connect(_on_drag_started)
+	_dual_slider.drag_ended.connect(_on_drag_ended)
 	gui_input.connect(_on_gui_input)
 	_mode_popup.id_pressed.connect(_on_mode_selected)
+	_value_label.visible = false
+	_value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_refresh()
 
 
@@ -71,6 +78,35 @@ func _on_slider_changed(left: float, right: float = 0.0) -> void:
 	var cmd := PropertyCommand.new("Set Pan", channel, "set_pan", [old_l, old_r], [left, right])
 	cmd.set_unpack_array(true).set_mergeable(true)
 	HistoryUtil.record(cmd)
+	_update_value_label(left, right)
+
+
+## Format the -1..1 pan value(s) as text and refresh the tooltip label.
+func _update_value_label(left: float, right: float = 0.0) -> void:
+	if channel == null:
+		return
+	if channel.pan_mode == Channel.PanMode.STEREO_DUAL:
+		_value_label.text = "%s / %s" % [_format_pan(left), _format_pan(right)]
+	else:
+		_value_label.text = _format_pan(left)
+
+
+func _format_pan(p: float) -> String:
+	if is_zero_approx(p):
+		return "C"
+	return "%dL" % roundi(-p * 100.0) if p < 0.0 else "%dR" % roundi(p * 100.0)
+
+
+func _on_drag_started() -> void:
+	if channel == null:
+		return
+	var dual := channel.pan_mode == Channel.PanMode.STEREO_DUAL
+	_update_value_label(channel.pan_left if dual else channel.pan, channel.pan_right if dual else 0.0)
+	_value_label.visible = true
+
+
+func _on_drag_ended() -> void:
+	_value_label.visible = false
 
 
 func _on_gui_input(event: InputEvent) -> void:

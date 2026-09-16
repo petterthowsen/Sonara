@@ -30,6 +30,8 @@ var mouse_hovered := false
 signal volume_changed(volume : float)
 
 var is_adjusting := false
+var _last_adjust_mouse_y := 0.0
+@export var fine_drag_scale := 0.15
 
 func _ready() -> void:
 	mouse_entered.connect(_on_mouse_entered)
@@ -69,7 +71,11 @@ func _draw():
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if not is_adjusting and event.is_pressed():
+			if event.double_click:
+				_start_editing()
+				return
 			is_adjusting = true
+			_last_adjust_mouse_y = get_local_mouse_position().y
 			accept_event()
 			set_process(true)
 		elif is_adjusting and event.is_released():
@@ -83,15 +89,39 @@ func _process(delta: float) -> void:
 	const DB_RANGE = MAX_DB - MIN_DB  # 72 dB
 
 	if is_adjusting:
-		var mouse = get_local_mouse_position()
+		var mouse: Vector2 = get_local_mouse_position()
+		var target_norm: float
 
-		# Convert mouse Y position to normalized (0.0 at bottom, 1.0 at top)
-		var target_norm = clamp(1.0 - (mouse.y / size.y), 0.0, 1.0)
+		if Input.is_key_pressed(KEY_SHIFT):
+			# Fine adjustment: scale the mouse movement instead of jumping to its position.
+			var current_norm: float = clampf((volume_db - MIN_DB) / DB_RANGE, 0.0, 1.0)
+			var delta_norm: float = -(mouse.y - _last_adjust_mouse_y) / size.y * fine_drag_scale
+			target_norm = clamp(current_norm + delta_norm, 0.0, 1.0)
+		else:
+			# Convert mouse Y position to normalized (0.0 at bottom, 1.0 at top)
+			target_norm = clamp(1.0 - (mouse.y / size.y), 0.0, 1.0)
 
 		# Convert normalized to dB: matches VSlider's remap(normalized, 0, 1, min_value, max_value)
 		var target_db = clamp(target_norm * DB_RANGE + MIN_DB, -60.0, 12.0)
 
 		volume_db = target_db
+		volume_changed.emit(volume_db)
+		_last_adjust_mouse_y = mouse.y
+
+
+## Open a floating LineEdit above the control to type a new volume directly.
+func _start_editing() -> void:
+	var editor := FloatingValueEditor.new()
+	add_child(editor)
+	editor.committed.connect(_on_edit_committed)
+	var editor_size := Vector2(56.0, 22.0)
+	editor.open("%.1f" % volume_db, FloatingValueEditor.position_above(self, editor_size), editor_size)
+
+
+func _on_edit_committed(text: String) -> void:
+	var trimmed := text.strip_edges()
+	if trimmed.is_valid_float():
+		volume_db = float(trimmed)
 		volume_changed.emit(volume_db)
 
 

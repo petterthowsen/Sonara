@@ -34,6 +34,7 @@ var logger : Log = Log.make("MixerChannel")
 @onready var device_list: ChannelDeviceList = $HBox/VBox/DeviceList
 
 # sends panel
+@onready var sends: ScrollContainer = $HBox/VBox/Sends
 @onready var sends_panel: SendsPanel = $HBox/VBox/Sends/SendsPanel
 
 # Details pane visibility
@@ -241,6 +242,12 @@ func _update_from_channel() -> void:
 	_update_output_button_text()
 
 	pinned = channel.is_master
+
+	# Master has no sends target (nothing to route to); keep it hidden
+	# regardless of the mixer-wide "show sends" toggle.
+	if channel.is_master and sends:
+		sends.remove_from_group("mixer_channel_sends")
+		sends.visible = false
 
 
 # ============================================================================

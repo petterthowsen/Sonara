@@ -3,6 +3,8 @@
 class_name HorSlider extends Control
 
 signal value_changed(new_value: float)
+signal drag_started
+signal drag_ended
 
 var _dragging := false
 
@@ -129,9 +131,12 @@ func _gui_input(event: InputEvent) -> void:
 					accept_event()
 					return
 				_dragging = true
+				drag_started.emit()
 				_update_value_from_mouse(event.position)
 			else:
-				_dragging = false
+				if _dragging:
+					_dragging = false
+					drag_ended.emit()
 	elif event is InputEventMouseMotion:
 		if _dragging:
 			_update_value_from_mouse(event.position)

@@ -10,17 +10,29 @@ var _target_rms_left := 0.0
 var _target_rms_right := 0.0
 
 # Smoothed display values (lerped for visual smoothness)
-@export var peak_left := 0.0
-@export var peak_right := 0.0
-@export var rms_left := 0.0
-@export var rms_right := 0.0
+@export var peak_left := 0.0: ## Smoothed left-channel peak level (linear, 0..1+)
+	set(v):
+		peak_left = v
+		_wake()
+@export var peak_right := 0.0: ## Smoothed right-channel peak level (linear, 0..1+)
+	set(v):
+		peak_right = v
+		_wake()
+@export var rms_left := 0.0: ## Smoothed left-channel RMS level (linear, 0..1+)
+	set(v):
+		rms_left = v
+		_wake()
+@export var rms_right := 0.0: ## Smoothed right-channel RMS level (linear, 0..1+)
+	set(v):
+		rms_right = v
+		_wake()
 
 # Ballistics (time-based, so frame-rate independent)
-@export var peak_release_db_per_sec := 30.0      # peak value falls at this rate after a transient
-@export var peak_hold_time := 1.5                # seconds the peak hold line sticks at its max
-@export var peak_hold_release_db_per_sec := 15.0 # hold line fall rate once the hold time is over
-@export var rms_attack_time := 0.05              # RMS smoothing time constants (seconds)
-@export var rms_release_time := 0.3
+@export var peak_release_db_per_sec := 30.0 ## Peak value falls at this rate (dB/s) after a transient
+@export var peak_hold_time := 1.5 ## Seconds the peak hold line sticks at its max
+@export var peak_hold_release_db_per_sec := 15.0 ## Hold line fall rate (dB/s) once the hold time is over
+@export var rms_attack_time := 0.05 ## RMS smoothing time constant when the level is rising (seconds)
+@export var rms_release_time := 0.3 ## RMS smoothing time constant when the level is falling (seconds)
 
 # Peak hold line state (dB), per side
 var peak_hold_left_db := -INF
@@ -29,36 +41,102 @@ var _hold_timer_left := 0.0
 var _hold_timer_right := 0.0
 
 # if enabled, draws a single bar (assumes peak_left/rms_left are the mono signal)
-@export var mono := false
+@export var mono := false: ## Draw a single bar using peak_left/rms_left instead of stereo left/right bars
+	set(v):
+		mono = v
+		_wake()
 
 # styling
-@export var bars_spacing := 2
-@export var bar_bg_color := Color.DIM_GRAY
-@export var bar_color_low := Color(0.21, 0.85, 0.62)     # greenish
-@export var bar_color_high := Color(1.0, 0.75, 0.15)     # yellow/orange
-@export var bar_color_clip := Color(1.0, 0.25, 0.25)     # red
-@export var tick_color := Color(0.75, 0.75, 0.75, 0.5)
-@export var tick_minor_color := Color(0.7, 0.7, 0.7, 0.25)
-@export var zero_db_color := Color(1,1,1,0.75)
-@export var tick_font_size := 12
-@export var show_minor_ticks := false
+@export var bars_spacing := 2: ## Pixel gap between the left and right bars (and between bars and fader)
+	set(v):
+		bars_spacing = v
+		_wake()
+@export var bar_bg_color := Color.DIM_GRAY: ## Background fill of each meter bar
+	set(v):
+		bar_bg_color = v
+		_wake()
+@export var bar_color_low := Color(0.21, 0.85, 0.62): ## Bar color when the level is in the normal range
+	set(v):
+		bar_color_low = v
+		_wake()
+@export var bar_color_high := Color(1.0, 0.75, 0.15): ## Bar color when RMS is above -3 dB
+	set(v):
+		bar_color_high = v
+		_wake()
+@export var bar_color_clip := Color(1.0, 0.25, 0.25): ## Bar/peak-hold/LED color when the level clips (>= 0 dB)
+	set(v):
+		bar_color_clip = v
+		_wake()
+@export var tick_color := Color(0.75, 0.75, 0.75, 0.5): ## Color of the dB tick lines and labels
+	set(v):
+		tick_color = v
+		_wake()
+@export var tick_minor_color := Color(0.7, 0.7, 0.7, 0.25): ## Color of minor tick lines (unused unless show_minor_ticks is on)
+	set(v):
+		tick_minor_color = v
+		_wake()
+@export var zero_db_color := Color(1,1,1,0.75): ## Color of the 0 dB tick line and label
+	set(v):
+		zero_db_color = v
+		_wake()
+@export var tick_font_size := 12: ## Font size for tick labels
+	set(v):
+		tick_font_size = v
+		_wake()
+@export var show_minor_ticks := false: ## Whether to draw minor tick lines between the main labeled ticks
+	set(v):
+		show_minor_ticks = v
+		_wake()
+
+## Horizontal size (px) below which the tick/label column on the left is hidden to save space
+@export var min_width_for_ticks := 28.0:
+	set(v):
+		min_width_for_ticks = v
+		_wake()
 
 # show an integrated fader control
-@export var show_fader := false
-@export var fader_color := Color("#624d99")
-@export var fader_bg_color := Color.DIM_GRAY
-@export var volume_db := -6.0:
+@export var show_fader := false: ## Whether to draw an interactive volume fader alongside the meter bars
+	set(v):
+		show_fader = v
+		_wake()
+@export var fader_color := Color("#624d99"): ## Fill color of the fader's filled (below-handle) portion
+	set(v):
+		fader_color = v
+		_wake()
+@export var fader_bg_color := Color.DIM_GRAY: ## Background fill behind the fader
+	set(v):
+		fader_bg_color = v
+		_wake()
+@export var volume_db := -6.0: ## Current fader value in dB; drives volume_changed when edited by the user
 	set(v):
 		volume_db = v
 		queue_redraw()
-@export var fader_handle_color := Color.WHITE_SMOKE
-@export var fader_handle_color_hover := Color.WHITE
+@export var fader_handle_color := Color.WHITE_SMOKE: ## Fader handle color when not hovered
+	set(v):
+		fader_handle_color = v
+		_wake()
+@export var fader_handle_color_hover := Color.WHITE: ## Fader handle color while hovered
+	set(v):
+		fader_handle_color_hover = v
+		_wake()
 
 # scale
-@export var db_top := 6.0
-@export var db_bottom := -60.0
-@export var gamma_warp_min := 1.5
-@export var gamma_warp_max := 3.0
+@export var db_top := 6.0: ## dB value at the top of the meter/fader range
+	set(v):
+		db_top = v
+		_wake()
+@export var db_bottom := -60.0: ## dB value at the bottom of the meter/fader range (also the "silent" floor)
+	set(v):
+		db_bottom = v
+		_wake()
+@export var gamma_warp_min := 1.5: ## Gamma warp applied at the tallest reference height (h_high), giving less perceptual expansion
+	set(v):
+		gamma_warp_min = v
+		_wake()
+@export var gamma_warp_max := 3.0: ## Gamma warp applied at the shortest reference height (h_low), giving more perceptual expansion near 0 dB
+	set(v):
+		gamma_warp_max = v
+		_wake()
 
 var gamma_warp : float:
 	get:
@@ -74,6 +152,8 @@ var gamma_warp : float:
 signal volume_changed(volume : float)
 
 var _is_dragging_fader := false
+var _last_fader_mouse_pos := Vector2.ZERO
+@export var fader_fine_drag_scale := 0.15 ## Multiplier applied to mouse movement during shift-held fine fader drags
 var mouse_hovered := false
 
 var peak_combined: float:
@@ -129,7 +209,9 @@ func _on_mouse_exited():
 
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
+		# no ballistics/animation in the editor, just redraw once to reflect export changes
 		set_process(false)
+		queue_redraw()
 		return
 	if not is_visible_in_tree():
 		set_process(false)
@@ -203,9 +285,13 @@ func _gui_input(event: InputEvent) -> void:
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 			if _is_mouse_in_fader(mouse_event.position):
 				if mouse_event.pressed:
-					# start dragging
-					_is_dragging_fader = true
-					_handle_fader_drag(mouse_event.position)
+					if mouse_event.double_click:
+						_start_value_edit()
+					else:
+						# start dragging
+						_is_dragging_fader = true
+						_last_fader_mouse_pos = mouse_event.position
+						_handle_fader_drag(mouse_event.position)
 					accept_event()
 				else:
 					# stop dragging
@@ -218,9 +304,26 @@ func _gui_input(event: InputEvent) -> void:
 		if mouse_event.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			if _is_mouse_over_fader_handle(mouse_event.position) or _is_dragging_fader:
 				# dragging the fader
-				_handle_fader_drag(mouse_event.position)
+				_handle_fader_drag(mouse_event.position, mouse_event.shift_pressed)
 				accept_event()
 				queue_redraw()
+
+
+## Open a floating LineEdit above the fader to type a new volume directly.
+func _start_value_edit() -> void:
+	_is_dragging_fader = false
+	var editor := FloatingValueEditor.new()
+	add_child(editor)
+	editor.committed.connect(_on_edit_committed)
+	var editor_size := Vector2(56.0, 22.0)
+	editor.open("%.1f" % volume_db, FloatingValueEditor.position_above(self, editor_size), editor_size)
+
+
+func _on_edit_committed(text: String) -> void:
+	var trimmed := text.strip_edges()
+	if trimmed.is_valid_float():
+		volume_db = clamp(float(trimmed), db_bottom, db_top)
+		volume_changed.emit(volume_db)
 
 
 func _is_mouse_in_fader(pos : Vector2) -> bool:
@@ -237,8 +340,8 @@ func _get_fader_offset_x() -> float:
 
 	# find fader x position (same calculation as _draw)
 	var minimum_bars_width = 12 if mono else 25
-	var show_ticks = size.x >= 28.0 + minimum_bars_width
-	var ticks_width = 28.0 if show_ticks else 0.0
+	var show_ticks = size.x >= min_width_for_ticks + minimum_bars_width
+	var ticks_width = min_width_for_ticks if show_ticks else 0.0
 	var bars_width = max(0.0, size.x - ticks_width)
 	var offset_x = ticks_width
 
@@ -247,7 +350,7 @@ func _get_fader_offset_x() -> float:
 	else:
 		var bar_width = max(0.0, (bars_width - bars_spacing) * 0.5)
 		fader_offset_x = offset_x + bar_width
-	
+
 	return fader_offset_x
 
 
@@ -281,9 +384,17 @@ func _is_mouse_over_fader_handle(mouse_pos: Vector2) -> bool:
 	return handle_pos.distance_to(mouse_pos) <= handle_radius * 1.5
 
 
-func _handle_fader_drag(mouse_pos: Vector2) -> void:
-	# convert mouse y position to volume dB (with gamma warp inverse)
-	var y_normalized = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)  # 0 at top, 1 at bottom
+func _handle_fader_drag(mouse_pos: Vector2, fine: bool = false) -> void:
+	# 0 at top, 1 at bottom of the fader's screen-space (post-warp) range
+	var y_normalized: float
+	if fine:
+		# Fine adjustment: scale the mouse movement instead of jumping to its position.
+		var last_y_normalized: float = clamp(1.0 - (_last_fader_mouse_pos.y / size.y), 0.0, 1.0)
+		var new_y_normalized: float = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)
+		var delta: float = (new_y_normalized - last_y_normalized) * fader_fine_drag_scale
+		y_normalized = clamp(_db_to_norm(volume_db) + delta, 0.0, 1.0)
+	else:
+		y_normalized = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)
 
 	# apply inverse gamma warp
 	var n_unwarp = y_normalized
@@ -296,6 +407,8 @@ func _handle_fader_drag(mouse_pos: Vector2) -> void:
 	if new_volume_db != volume_db:
 		volume_db = clamp(new_volume_db, db_bottom, db_top)
 		volume_changed.emit(volume_db)
+
+	_last_fader_mouse_pos = mouse_pos
 
 
 func _update_cursor_for_fader() -> void:
@@ -326,18 +439,17 @@ func _db_to_norm(db: float) -> float:
 		n = pow(n, gamma_warp)
 	return n
 
-var minimum_ticks_width = 28.0
 var minimum_bars_width : int:
 	get:
 		return 12 if mono else 25
 
 func _should_show_ticks() -> bool:
 	# Show ticks if we have enough horizontal space
-	return size.x >= minimum_ticks_width + minimum_bars_width
+	return size.x >= min_width_for_ticks + minimum_bars_width
 
 var ticks_width : float:
 	get:
-		return minimum_ticks_width if _should_show_ticks() else 0.0
+		return min_width_for_ticks if _should_show_ticks() else 0.0
 
 var bars_width : float:
 	get:
@@ -394,7 +506,7 @@ func _draw_fader(offset_x : float, width : float):
 		var text_size = font.get_string_size(value_text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
 
 		# position above handle if handle is in lower half, otherwise below
-		var label_y = fader_top - text_size.y - 6 if fader_top > size.y * 0.5 else fader_top + handle_radius + 16
+		var label_y = fader_top - text_size.y - 6 if fader_top > size.y * 0.5 else fader_top + handle_radius + 28
 		var label_x = offset_x + (width / 2) - (text_size.x / 2)
 
 		draw_string(

@@ -142,26 +142,25 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
-custom_minimum_size = Vector2(100, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
-offset_right = 136.0
+offset_top = 1.0
+offset_right = 55.0
 grow_vertical = 2
 size_flags_horizontal = 0
 focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
 resizable = false
-children_header_height = null
 selected_min_width = 156
-mode = 1
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=1923224323]
 layout_mode = 2
 theme_override_constants/separation = 0
+alignment = 2
 
 [node name="VBox" type="VBoxContainer" parent="HBox" unique_id=1118467946]
-custom_minimum_size = Vector2(100, 0)
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 4
@@ -173,7 +172,7 @@ size_flags_vertical = 0
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_yexk5")
 
-[node name="VBox" type="Control" parent="HBox/VBox/Header" unique_id=1230355716]
+[node name="VBox" type="VBoxContainer" parent="HBox/VBox/Header" unique_id=435749440]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -182,22 +181,30 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
+[node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox" unique_id=630004199]
+layout_mode = 2
+theme_override_constants/h_separation = 0
+theme_override_font_sizes/font_size = 24
+toggle_mode = true
+icon = ExtResource("3_ea3ft")
+flat = true
+icon_alignment = 2
+vertical_icon_alignment = 0
+script = ExtResource("4_ghf7e")
+icon_default = ExtResource("3_ea3ft")
+icon_pressed = ExtResource("5_ghf7e")
+
 [node name="SmartLineEdit" parent="HBox/VBox/Header/VBox" unique_id=1058095684 instance=ExtResource("2_xa46q")]
-layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -50.0
-offset_top = -24.0
-offset_right = 50.0
-offset_bottom = 24.0
+layout_mode = 2
 size_flags_vertical = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
+text = "Test Channel Name"
 label_settings = SubResource("LabelSettings_xv6e8")
+vertical_alignment = 0
 autowrap_mode = 3
 clip_text = true
 text_overrun_behavior = 4
@@ -212,31 +219,28 @@ text = "Layer"
 expand_to_text_length = true
 flat = false
 
-[node name="FoldoutToggle" type="Button" parent="HBox/VBox/Header/VBox" unique_id=630004199]
-layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -32.0
-offset_bottom = 32.0
-grow_horizontal = 0
-theme_override_constants/h_separation = 0
-theme_override_font_sizes/font_size = 24
-toggle_mode = true
-icon = ExtResource("3_ea3ft")
-flat = true
-icon_alignment = 2
-vertical_icon_alignment = 0
-script = ExtResource("4_ghf7e")
-icon_default = ExtResource("3_ea3ft")
-icon_pressed = ExtResource("5_ghf7e")
+[node name="MainAndSideBox" type="HBoxContainer" parent="HBox/VBox" unique_id=1684471378]
+layout_mode = 2
+size_flags_vertical = 3
 
-[node name="BigMeter" parent="HBox/VBox" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
-visible = false
-custom_minimum_size = Vector2(0, 200)
+[node name="MainPane" type="VBoxContainer" parent="HBox/VBox/MainAndSideBox" unique_id=194528483]
+layout_mode = 2
+
+[node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
+layout_mode = 2
+size_flags_vertical = 3
+size_flags_stretch_ratio = 2.0
+split_offsets = PackedInt32Array(-82, -136)
+split_offset = -82
+
+[node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
+custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_stretch_ratio = 3.0
 peak_left = 0.0
+peak_right = 0.0
+rms_left = 0.0
+rms_right = 0.0
 bars_spacing = 2
 bar_bg_color = Color(0.0859375, 0.0859375, 0.0859375, 1)
 bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
@@ -245,30 +249,30 @@ bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
 tick_color = Color(1, 1, 1, 0.39215687)
 zero_db_color = Color(1, 1, 1, 0.74509805)
 tick_font_size = 14
+show_fader = false
 volume_db = -6.0
 fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 
-[node name="DeviceList" parent="HBox/VBox" unique_id=2101730065 instance=ExtResource("8_xa46q")]
-custom_minimum_size = Vector2(0, 87.88)
+[node name="DeviceList" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2101730065 instance=ExtResource("8_xa46q")]
 layout_mode = 2
-size_flags_stretch_ratio = 1.3
+size_flags_stretch_ratio = 2.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
 hide_parameters = true
 
-[node name="Sends" type="ScrollContainer" parent="HBox/VBox" unique_id=1983758220 groups=["mixer_channel_sends"]]
-custom_minimum_size = Vector2(0, 68)
+[node name="Sends" type="ScrollContainer" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=1983758220 groups=["mixer_channel_sends"]]
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
+vertical_scroll_mode = 4
 
-[node name="SendsPanel" parent="HBox/VBox/Sends" unique_id=2063406988 instance=ExtResource("5_xa46q")]
+[node name="SendsPanel" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends" unique_id=2063406988 instance=ExtResource("5_xa46q")]
 layout_mode = 2
 
-[node name="IO" type="PanelContainer" parent="HBox/VBox" unique_id=1905663024 groups=["mixer_channel_io"]]
+[node name="IO" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1905663024 groups=["mixer_channel_io"]]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_an1hh")
 
-[node name="OutputMenuButtton" type="MenuButton" parent="HBox/VBox/IO" unique_id=1831876084]
+[node name="OutputMenuButtton" type="MenuButton" parent="HBox/VBox/MainAndSideBox/MainPane/IO" unique_id=1831876084]
 layout_mode = 2
 text = "Master"
 flat = false
@@ -279,16 +283,16 @@ item_count = 1
 popup/item_0/text = "Master"
 popup/item_0/id = 0
 
-[node name="Controls" type="PanelContainer" parent="HBox/VBox" unique_id=1464112293 groups=["mixer_channels_controls"]]
+[node name="Controls" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1464112293 groups=["mixer_channels_controls"]]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_nssln")
 
-[node name="FlowContainer" type="FlowContainer" parent="HBox/VBox/Controls" unique_id=1930449426]
+[node name="FlowContainer" type="FlowContainer" parent="HBox/VBox/MainAndSideBox/MainPane/Controls" unique_id=1930449426]
 layout_mode = 2
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="ArmToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer" unique_id=1363042798]
+[node name="ArmToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer" unique_id=1363042798]
 custom_minimum_size = Vector2(16, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -298,13 +302,13 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_pfcwk")
 toggle_mode = true
 text = "R"
 
-[node name="SoloMute" type="FlowContainer" parent="HBox/VBox/Controls/FlowContainer" unique_id=1155262334]
+[node name="SoloMute" type="FlowContainer" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer" unique_id=1155262334]
 layout_mode = 2
 size_flags_horizontal = 3
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="SoloToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer/SoloMute" unique_id=4408635]
+[node name="SoloToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=4408635]
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -313,7 +317,7 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_m2250")
 toggle_mode = true
 text = "S"
 
-[node name="MuteToggle" type="Button" parent="HBox/VBox/Controls/FlowContainer/SoloMute" unique_id=1401776336]
+[node name="MuteToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=1401776336]
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -322,13 +326,13 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_cybrc")
 toggle_mode = true
 text = "M"
 
-[node name="Panning" type="PanelContainer" parent="HBox/VBox" unique_id=657729377]
+[node name="Panning" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=657729377]
 layout_mode = 2
 focus_mode = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_573y5")
 script = ExtResource("11_panctl")
 
-[node name="HSlider" type="Control" parent="HBox/VBox/Panning" unique_id=1152018147]
+[node name="HSlider" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=1152018147]
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_filter = 1
@@ -340,7 +344,7 @@ step = 1.0
 bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
 fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 
-[node name="DualPanSlider" type="Control" parent="HBox/VBox/Panning" unique_id=1577488519]
+[node name="DualPanSlider" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=1577488519]
 visible = false
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
@@ -355,7 +359,14 @@ bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
 fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
 
-[node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/Panning" unique_id=506406282]
+[node name="ValueLabel" type="Label" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=657729378]
+visible = false
+layout_mode = 2
+text = "C"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=506406282]
 oversampling_override = 1.0
 title = "Pan Mode"
 size = Vector2i(174, 100)
@@ -368,20 +379,21 @@ item_1/text = "Stereo Dual"
 item_1/checkable = 1
 item_1/id = 1
 
-[node name="Volume" type="PanelContainer" parent="HBox/VBox" unique_id=450510557]
+[node name="Volume" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=450510557]
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_vertical = 3
+size_flags_stretch_ratio = 0.5
 theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")
 
-[node name="HBox" type="HBoxContainer" parent="HBox/VBox/Volume" unique_id=1420576274]
-layout_mode = 2
-theme_override_constants/separation = 4
-
-[node name="CompactMeter" parent="HBox/VBox/Volume/HBox" unique_id=1247433210 groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
+[node name="CompactMeter" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1247433210 groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
+visible = false
 layout_mode = 2
 peak_left = 0.0
-bars_spacing = 6
+peak_right = 0.0
+rms_left = 0.0
+rms_right = 0.0
+rms_release_time = 0.1
 bar_bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
 bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
 bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
@@ -389,13 +401,11 @@ bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
 tick_color = Color(1, 1, 1, 0.39215687)
 zero_db_color = Color(1, 1, 1, 0.74509805)
 tick_font_size = 14
-show_fader = true
 fader_bg_color = Color(0.14642392, 0.11433411, 0.23046875, 1)
 volume_db = -6.0
 fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 
-[node name="Fader" type="Control" parent="HBox/VBox/Volume/HBox" unique_id=1988525762 groups=["mixer_channel_fader"]]
-visible = false
+[node name="Fader" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1988525762 groups=["mixer_channel_fader"]]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_default_cursor_shape = 2
@@ -404,47 +414,63 @@ value = -6.0
 bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
 fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 
-[node name="SmartLineEdit" parent="HBox/VBox/Volume/HBox/Fader" unique_id=1108990559 instance=ExtResource("2_xa46q")]
+[node name="SmartLineEdit" parent="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader" unique_id=1108990559 instance=ExtResource("2_xa46q")]
 layout_mode = 1
+anchors_preset = -1
+anchor_top = 0.2
+anchor_bottom = 0.2
 mouse_filter = 1
 suffix = "dB"
 edit_via_click = false
 
-[node name="Label" parent="HBox/VBox/Volume/HBox/Fader/SmartLineEdit" index="0" unique_id=448001948]
+[node name="Label" parent="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader/SmartLineEdit" index="0" unique_id=448001948]
 text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
+[node name="SidePane" type="VBoxContainer" parent="HBox/VBox/MainAndSideBox" unique_id=2080402458]
+visible = false
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/SidePane" unique_id=479493447]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
 [node name="Children" type="PanelContainer" parent="HBox" unique_id=470089133]
 visible = false
-custom_minimum_size = Vector2(30, 0)
+custom_minimum_size = Vector2(91.685, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ghf7e")
 script = ExtResource("9_an1hh")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="HBox/Children" unique_id=1771647144]
+[node name="VBox" type="VBoxContainer" parent="HBox/Children" unique_id=1771647144]
 layout_mode = 2
 
-[node name="ParentHeader" type="Panel" parent="HBox/Children/VBoxContainer" unique_id=1082830830]
-custom_minimum_size = Vector2(30, 6)
+[node name="ParentHeader" type="Panel" parent="HBox/Children/VBox" unique_id=1082830830]
+custom_minimum_size = Vector2(30, 16)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ea3ft")
 
-[node name="ChildBox" type="HBoxContainer" parent="HBox/Children/VBoxContainer" unique_id=165950930]
+[node name="ChildBox" type="HBoxContainer" parent="HBox/Children/VBox" unique_id=165950930]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 script = ExtResource("10_8wi2u")
 
-[node name="Details" type="VBoxContainer" parent="HBox" unique_id=1745792697]
-visible = false
+[node name="EmptyNotice" type="Label" parent="HBox/Children" unique_id=588737186]
 layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="DeviceList" parent="HBox/Details" unique_id=90880029 instance=ExtResource("8_xa46q")]
-layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
+size_flags_vertical = 1
+theme_override_colors/font_color = Color(1, 1, 1, 0.49803922)
+text = "Drop
+Channels
+Here"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 1
 
 [editable path="HBox/VBox/Header/VBox/SmartLineEdit"]
-[editable path="HBox/VBox/BigMeter"]
-[editable path="HBox/VBox/Volume/HBox/CompactMeter"]
-[editable path="HBox/VBox/Volume/HBox/Fader/SmartLineEdit"]
+[editable path="HBox/VBox/MainAndSideBox/MainPane/VSplit/BigMeter"]
+[editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/CompactMeter"]
+[editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader/SmartLineEdit"]

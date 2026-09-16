@@ -174,7 +174,9 @@ func _gui_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
-				if mb.double_click or mb.ctrl_pressed:
+				if mb.double_click:
+					_start_editing()
+				elif mb.ctrl_pressed:
 					value = value_default
 				else:
 					_dragging = true
@@ -188,6 +190,22 @@ func _gui_input(event: InputEvent) -> void:
 			var drag_scale: float = fine_drag_scale if motion.shift_pressed else 1.0
 			var new_n: float = _value_to_normalized(_value) + (-motion.relative.y) * drag_sensitivity * drag_scale
 			value = _normalized_to_value(new_n)
+
+
+## Open a floating LineEdit above the knob to type a new value directly.
+func _start_editing() -> void:
+	_dragging = false
+	var editor := FloatingValueEditor.new()
+	add_child(editor)
+	editor.committed.connect(_on_edit_committed)
+	var editor_size := Vector2(56.0, 22.0)
+	editor.open(value_format % _value, FloatingValueEditor.position_above(self, editor_size), editor_size)
+
+
+func _on_edit_committed(text: String) -> void:
+	var trimmed := text.strip_edges()
+	if trimmed.is_valid_float():
+		value = float(trimmed)
 
 
 func _on_mouse_entered() -> void:
