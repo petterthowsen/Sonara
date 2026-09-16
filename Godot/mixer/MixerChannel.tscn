@@ -225,18 +225,10 @@ size_flags_vertical = 3
 custom_minimum_size = Vector2(108, 0)
 layout_mode = 2
 
-[node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
-layout_mode = 2
-size_flags_vertical = 3
-size_flags_stretch_ratio = 1.5
-split_offsets = PackedInt32Array(-111)
-split_offset = -111
-
-[node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
-visible = false
+[node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
-size_flags_stretch_ratio = 3.0
+size_flags_stretch_ratio = 1.5
 peak_left = 0.0
 peak_right = 0.0
 rms_left = 0.0
@@ -253,6 +245,13 @@ show_fader = false
 volume_db = -6.0
 fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 
+[node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
+layout_mode = 2
+size_flags_vertical = 3
+size_flags_stretch_ratio = 1.5
+split_offsets = PackedInt32Array(35)
+split_offset = 35
+
 [node name="DeviceList" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2101730065 instance=ExtResource("8_xa46q")]
 layout_mode = 2
 size_flags_stretch_ratio = 2.0
@@ -260,6 +259,7 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
 hide_parameters = true
 
 [node name="Sends" type="ScrollContainer" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=1983758220 groups=["mixer_channel_sends"]]
+custom_minimum_size = Vector2(0, 70)
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
@@ -383,7 +383,6 @@ item_1/id = 1
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_vertical = 3
-size_flags_stretch_ratio = 0.5
 theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")
 
 [node name="CompactMeter" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1247433210 groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
@@ -481,6 +480,6 @@ vertical_alignment = 1
 autowrap_mode = 1
 
 [editable path="HBox/VBox/Header/VBox/SmartLineEdit"]
-[editable path="HBox/VBox/MainAndSideBox/MainPane/VSplit/BigMeter"]
+[editable path="HBox/VBox/MainAndSideBox/MainPane/BigMeter"]
 [editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/CompactMeter"]
 [editable path="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader/SmartLineEdit"]

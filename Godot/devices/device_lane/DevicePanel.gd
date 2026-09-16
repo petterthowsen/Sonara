@@ -3,41 +3,49 @@ class_name DevicePanel extends PanelContainer
 
 var logger : Log = Log.make("DevicePanel")
 
-@onready var header : PanelContainer = $VBoxContainer/Header
+const ICON_FOLDOUT_CLOSED: Texture2D = preload("res://assets/icons/chevron-right.svg")
+const ICON_FOLDOUT_OPEN: Texture2D = preload("res://assets/icons/chevron-left.svg")
+
+## Top header: light, name, children foldout. Drops onto it go onto the device.
+@onready var header : PanelContainer = $VBox/TopHeader
 
 # light button toggles inactive/active and enabled/disabled
-@onready var device_light: DeviceLightButton = $VBoxContainer/Header/HBox/DeviceLight
-@onready var name_label : SmartLineEdit = $VBoxContainer/Header/HBox/Name
-@onready var tab_buttons : HBoxContainer = $VBoxContainer/Header/HBox/TabButtons
-@onready var params_button : Button = $VBoxContainer/Header/HBox/TabButtons/Parameters
-@onready var file_button: Button = $VBoxContainer/Header/HBox/TabButtons/File
-@onready var large_button: Button = $VBoxContainer/Header/HBox/TabButtons/Large
+@onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
+@onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
+@onready var folder_button: Button = $VBox/TopHeader/HBox/FoldoutToggle
 
-## MIDI CC tab (created at runtime so it shares P-tab styles until we have icons)
+# Left header: View and Window toggles, then the Parameters/CCs/File tabs (one ButtonGroup)
+@onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/TabButtons
+@onready var view_button: Button = $VBox/HBox/LeftHeader/TabButtons/View
+@onready var window_button: Button = $VBox/HBox/LeftHeader/TabButtons/Window
+@onready var params_button : Button = $VBox/HBox/LeftHeader/TabButtons/Parameters
+@onready var file_button: Button = $VBox/HBox/LeftHeader/TabButtons/File
+
+## MIDI CC tab (duplicated from Parameters at runtime until it gets its own icon)
 var cc_button: Button
+var ccs_pane: Control
 var ccs_scroll: ScrollContainer
 var ccs_box: VBoxContainer
 
-# Left side: scollcontainer of parameters and file selection
-@onready var content_left : Control = $VBoxContainer/Content/HBoxContainer/ContentLeft
+# Content row: [Parameters | CCs | File] [View] [children folder]
+@onready var content_hbox: HBoxContainer = $VBox/HBox/Content/HBox
+@onready var parameters_pane: Control = $VBox/HBox/Content/HBox/Parameters
+@onready var parameters_scroll : ScrollContainer = $VBox/HBox/Content/HBox/Parameters/Scroll
+@onready var parameters_box : VBoxContainer = $VBox/HBox/Content/HBox/Parameters/Scroll/VBox
+@onready var file_box: Control = $VBox/HBox/Content/HBox/File
 
-@onready var parameters_scroll : ScrollContainer = $VBoxContainer/Content/HBoxContainer/ContentLeft/Parameters
-@onready var parameters_box : VBoxContainer = $VBoxContainer/Content/HBoxContainer/ContentLeft/Parameters/VBox
-@onready var file_box: VBoxContainer = $VBoxContainer/Content/HBoxContainer/ContentLeft/File
-
-# right side: custom / Immediate UI (not the parameter list, not container children)
-@onready var content_right : Control = $VBoxContainer/Content/HBoxContainer/ContentRight
-@onready var content_hbox: HBoxContainer = $VBoxContainer/Content/HBoxContainer
+# Custom UI (Panel view, or Companion view while the device window is open)
+@onready var view_pane : Control = $VBox/HBox/Content/HBox/View
 
 # For Opening files for devices that support file loading
 @onready var file_dialog: FileDialog = $FileDialog
-@onready var file_status_label: Label = $VBoxContainer/Content/HBoxContainer/ContentLeft/File/StatusLabel
-@onready var file_load_button: Button = $VBoxContainer/Content/HBoxContainer/ContentLeft/File/LoadButton
+@onready var file_status_label: Label = $VBox/HBox/Content/HBox/File/VBox/StatusLabel
+@onready var file_load_button: Button = $VBox/HBox/Content/HBox/File/VBox/LoadButton
 
-# Large window popup
-# set in _create_large_window()
-# freed in _close_large()
-var _large_popup: Window = null
+# Device window popup (Window view)
+# set in _get_window()
+# freed in _close_window()
+var _window_popup: Window = null
 
 var device : DeviceInstance
 ## Channel whose device_parameters_updated this panel listens to.
@@ -46,34 +54,33 @@ var loaded_file_path: String = ""
 
 ## View state
 var _panel_view: DeviceView = null
-var _aux_view: DeviceView = null
-var _large_view: DeviceView = null
-var _large_open: bool = false
+var _companion_view: DeviceView = null
+var _window_view: DeviceView = null
+var _window_open: bool = false
 
-## Universal parameter lists (P tab and C tab)
+## Universal parameter lists (Parameters and CCs tabs)
 var _param_list: ParameterList
 var _cc_list: ParameterList
 
 ## Container children slide-out (to the right of params + custom UI)
-var folder_button: Button
 var folder: ContainerFolder
 var _folder_focus: DeviceInstance = null
 
 signal request_context_menu()
 
 func _ready() -> void:
-	# make parameters box wider
-	parameters_box.custom_minimum_size.x = 100
-
 	_create_cc_tab()
 	_create_parameter_lists()
 	_create_container_folder()
 
-	# Connect tab buttons
-	params_button.toggled.connect(_on_params_tab_toggled)
-	cc_button.toggled.connect(_on_ccs_tab_toggled)
-	file_button.toggled.connect(_on_file_tab_toggled)
-	large_button.toggled.connect(_on_large_toggled)
+	# Parameters/CCs/File share a ButtonGroup; clicking the active tab collapses its pane.
+	params_button.button_group.allow_unpress = true
+	params_button.toggled.connect(_on_tab_toggled.unbind(1))
+	cc_button.toggled.connect(_on_tab_toggled.unbind(1))
+	file_button.toggled.connect(_on_tab_toggled.unbind(1))
+	view_button.toggled.connect(_on_view_toggled)
+	window_button.toggled.connect(_on_window_toggled)
+	folder_button.toggled.connect(_on_folder_toggled)
 
 	# Connect file loading
 	file_load_button.pressed.connect(_on_load_file_pressed)
@@ -82,12 +89,11 @@ func _ready() -> void:
 	# Inline rename of the device instance via the header's SmartLineEdit
 	name_label.value_changed.connect(_on_name_edited)
 
-	# Initial tab state: show Parameters on the left
-	params_button.button_pressed = true
-	cc_button.button_pressed = false
-	file_button.button_pressed = false
-	_show_parameters_tab()
-	# Right pane visibility will be managed when binding to a device
+	# Initial state: View and Parameters open; panes resolve when binding to a device
+	view_button.set_pressed_no_signal(true)
+	params_button.set_pressed_no_signal(true)
+	folder_button.visible = false
+	_update_tab_panes()
 
 	# Drag the device from the header and content areas; drops resolve through DeviceDropTarget.
 	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
@@ -96,28 +102,30 @@ func _ready() -> void:
 	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 
 
-## Duplicate the P tab button and parameter scroller to make a C tab for MIDI CCs.
+## Duplicate the Parameters tab button and pane to make a CCs tab for MIDI CCs.
 func _create_cc_tab() -> void:
-	cc_button = params_button.duplicate()
+	cc_button = params_button.duplicate()  # keeps the ButtonGroup
 	cc_button.name = "CCs"
+	cc_button.icon = null
 	cc_button.text = "C"
+	cc_button.tooltip_text = "MIDI CCs"
 	cc_button.button_pressed = false
 	cc_button.visible = false
 	tab_buttons.add_child(cc_button)
 	tab_buttons.move_child(cc_button, file_button.get_index())
 
-	ccs_scroll = parameters_scroll.duplicate()
-	ccs_scroll.name = "CCs"
-	ccs_scroll.visible = false
-	content_left.add_child(ccs_scroll)
-	content_left.move_child(ccs_scroll, file_box.get_index())
+	ccs_pane = parameters_pane.duplicate()
+	ccs_pane.name = "CCs"
+	ccs_pane.visible = false
+	content_hbox.add_child(ccs_pane)
+	content_hbox.move_child(ccs_pane, file_box.get_index())
+	ccs_scroll = ccs_pane.get_node("Scroll")
 	ccs_box = ccs_scroll.get_node("VBox")
-	ccs_box.custom_minimum_size.x = 100
 	for child in ccs_box.get_children():
 		child.queue_free()
 
 
-## Host interchangeable ParameterList instances in the P and C scrollers.
+## Host interchangeable ParameterList instances in the Parameters and CCs panes.
 func _create_parameter_lists() -> void:
 	_param_list = ParameterList.new()
 	_param_list.group = "param"
@@ -128,18 +136,9 @@ func _create_parameter_lists() -> void:
 		ccs_box.add_child(_cc_list)
 
 
-## Folder toggle on the header and a slide-out pane after the custom UI.
+## Slide-out children pane after the custom UI (toggled by the header's FoldoutToggle).
 func _create_container_folder() -> void:
-	folder_button = Button.new()
-	folder_button.name = "Folder"
-	folder_button.toggle_mode = true
-	folder_button.text = "▸"
 	folder_button.tooltip_text = "Show contained devices"
-	folder_button.visible = false
-	folder_button.custom_minimum_size = Vector2(28, 0)
-	folder_button.toggled.connect(_on_folder_toggled)
-	tab_buttons.add_child(folder_button)
-
 	folder = ContainerFolder.new()
 	folder.name = "ContentFolder"
 	content_hbox.add_child(folder)
@@ -155,7 +154,7 @@ func _gui_input(event: InputEvent) -> void:
 ## Release engine subscriptions and popups when the panel is freed (e.g.
 ## DeviceLane.clear()/_on_channel_device_removed(), or a parent being freed).
 ## Without this, custom views (like the spectrum analyzer) never get
-## _on_view_hidden() and the Large popup outlives the panel.
+## _on_view_hidden() and the window popup outlives the panel.
 ## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
 ## controls with nothing to rebuild them.
 func _notification(what: int) -> void:
@@ -167,8 +166,8 @@ func _notification(what: int) -> void:
 func _unbind() -> void:
 	if device == null:
 		return
-	if _large_open:
-		_close_large()
+	if _window_open:
+		_close_window()
 	if device.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
 		device.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
 	if device.name_changed.is_connected(_on_device_name_changed):
@@ -177,14 +176,14 @@ func _unbind() -> void:
 		_channel.device_parameters_updated.disconnect(_on_device_parameters_updated)
 	_channel = null
 	_clear_parameter_controls()
-	_clear_panel_and_aux()
+	_clear_panel_and_companion()
 	_folder_focus = null
 	if folder:
 		folder.set_open(false, false)
 		folder.bind_to_container(null)
 	if folder_button:
 		folder_button.visible = false
-		folder_button.set_pressed_no_signal(false)
+		_set_foldout_pressed(false)
 	device = null
 
 
@@ -192,8 +191,8 @@ func _unbind() -> void:
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
 		name_label.set_value(new_name)
-	if _large_popup:
-		_large_popup.title = new_name
+	if _window_popup:
+		_window_popup.title = new_name
 
 
 ## Commit an inline rename from the header's SmartLineEdit.
@@ -231,14 +230,15 @@ func bind_to_device(dev : DeviceInstance):
 		await _load_panel_view(dev)
 		_show_right_pane_current()
 	else:
-		_clear_panel_and_aux()
-		content_right.visible = false
+		_clear_panel_and_companion()
+	view_button.visible = dev.device.has_panel_view() or dev.device.has_companion_view()
+	_update_view_pane_visibility()
 
 	_configure_container_folder(dev)
 
-	# Large toggle visibility (native GUI or LargeView scene)
-	large_button.visible = dev.device.has_gui() or dev.device.has_large_view()
-	large_button.button_pressed = false
+	# Window toggle visibility (native GUI or Window view scene)
+	window_button.visible = dev.device.has_gui() or dev.device.has_window_view()
+	window_button.set_pressed_no_signal(false)
 
 	# Listen for GUI closed events from engine
 	if not dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
@@ -283,75 +283,39 @@ func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
 ## TAB SWITCHING
 ## ============================================================================
 
-func _on_params_tab_toggled(pressed: bool) -> void:
+## Any of Parameters/CCs/File changed (the ButtonGroup keeps at most one pressed).
+func _on_tab_toggled() -> void:
+	_update_tab_panes()
+
+
+## Show the pane of the pressed tab; a hidden tab never shows its pane.
+func _update_tab_panes() -> void:
+	parameters_pane.visible = params_button.visible and params_button.button_pressed
+	if ccs_pane:
+		ccs_pane.visible = cc_button.visible and cc_button.button_pressed
+	file_box.visible = file_button.visible and file_button.button_pressed
+
+
+## View toggle: show or hide the custom UI pane.
+func _on_view_toggled(_pressed: bool) -> void:
+	_update_view_pane_visibility()
+
+
+## Window toggle: native plugin GUI or the Window view popup.
+func _on_window_toggled(pressed: bool) -> void:
 	if pressed:
-		cc_button.button_pressed = false
-		file_button.button_pressed = false
-		_show_parameters_tab()
+		_open_window()
 	else:
-		_ensure_left_tab_active()
+		_close_window()
 
 
-## Left-pane C tab (MIDI CCs the SFZ did not label as parameters).
-func _on_ccs_tab_toggled(pressed: bool) -> void:
-	if pressed:
-		params_button.button_pressed = false
-		file_button.button_pressed = false
-		_show_ccs_tab()
-	else:
-		_ensure_left_tab_active()
+## The View pane shows when toggled on and a Panel or Companion view is loaded.
+func _update_view_pane_visibility() -> void:
+	var has_view := _panel_view != null or _companion_view != null
+	view_pane.visible = has_view and view_button.button_pressed
 
 
-func _on_file_tab_toggled(pressed: bool) -> void:
-	if pressed:
-		params_button.button_pressed = false
-		cc_button.button_pressed = false
-		_show_file_tab()
-	else:
-		_ensure_left_tab_active()
-
-
-func _on_large_toggled(pressed: bool) -> void:
-	if pressed:
-		_open_large()
-	else:
-		_close_large()
-
-
-func _show_parameters_tab() -> void:
-	parameters_scroll.visible = true
-	if ccs_scroll:
-		ccs_scroll.visible = false
-	file_box.visible = false
-
-
-## Show the C tab's MIDI CC list in the left pane.
-func _show_ccs_tab() -> void:
-	parameters_scroll.visible = false
-	if ccs_scroll:
-		ccs_scroll.visible = true
-	file_box.visible = false
-
-
-func _show_file_tab() -> void:
-	parameters_scroll.visible = false
-	if ccs_scroll:
-		ccs_scroll.visible = false
-	file_box.visible = true
-
-
-## Keep one left-pane tab pressed (P, C, or F).
-func _ensure_left_tab_active() -> void:
-	if params_button.button_pressed:
-		return
-	if cc_button and cc_button.visible and cc_button.button_pressed:
-		return
-	if file_button.visible and file_button.button_pressed:
-		return
-	params_button.button_pressed = true
-
-
-## Show the C tab only when this device has unlabeled MIDI CCs.
+## Show the CCs tab only when this device has unlabeled MIDI CCs.
 func _update_cc_tab_visibility() -> void:
 	if not cc_button:
 		return
@@ -362,18 +326,20 @@ func _update_cc_tab_visibility() -> void:
 	_update_left_pane_visibility()
 
 
-## Hide the left pane when this device has no parameters, CCs, or file tab.
+## Hide tab buttons the device has nothing for, then refresh the panes.
 func _update_left_pane_visibility() -> void:
-	if device == null or content_left == null:
+	if device == null:
 		return
-	var has_params := not device.get_parameters_in_group("param").is_empty()
-	var has_cc := cc_button != null and cc_button.visible
-	var has_file := file_button != null and file_button.visible
-	params_button.visible = has_params
-	content_left.visible = has_params or has_cc or has_file
-
-
-## Right-pane visibility is managed via Panel/Aux switching
+	params_button.visible = not device.get_parameters_in_group("param").is_empty()
+	# A pressed tab that just disappeared hands over to the first available one.
+	var pressed := params_button.button_group.get_pressed_button()
+	if pressed and not pressed.visible:
+		pressed.set_pressed_no_signal(false)
+		for tab in [params_button, cc_button, file_button]:
+			if tab.visible:
+				tab.set_pressed_no_signal(true)
+				break
+	_update_tab_panes()
 
 
 ## ============================================================================
@@ -408,9 +374,6 @@ func _configure_file_loading() -> void:
 			file_status_label.text = "No File Loaded"
 	else:
 		file_button.visible = false
-		# Switch to parameters tab if file tab is hidden
-		if file_button.button_pressed:
-			params_button.button_pressed = true
 
 
 ## Handle load file button pressed
@@ -478,7 +441,7 @@ func after_drop_onto(added_child: bool) -> void:
 
 
 ## ============================================================================
-## VIEW MANAGEMENT (Panel / Auxiliary / Large)
+## VIEW MANAGEMENT (Panel / Companion / Window)
 ## ============================================================================
 
 func _load_panel_view(dev: DeviceInstance) -> void:
@@ -489,7 +452,7 @@ func _load_panel_view(dev: DeviceInstance) -> void:
 		_panel_view.bind_to_device(dev)
 		if not _panel_view.container_child_requested.is_connected(open_container_folder):
 			_panel_view.container_child_requested.connect(open_container_folder)
-		content_right.add_child(_panel_view)
+		view_pane.add_child(_panel_view)
 		_panel_view.visible = true
 		if not _panel_view.is_node_ready():
 			await _panel_view.ready
@@ -503,33 +466,33 @@ func _clear_panel_view() -> void:
 		_panel_view = null
 
 
-func _load_aux_view(dev: DeviceInstance) -> void:
-	_clear_aux_view()
-	_aux_view = DeviceViewFactory.create(dev, Device.ViewType.Auxiliary)
-	if _aux_view:
+func _load_companion_view(dev: DeviceInstance) -> void:
+	_clear_companion_view()
+	_companion_view = DeviceViewFactory.create(dev, Device.ViewType.Companion)
+	if _companion_view:
 		# Bind first so view has device context before any show/subscription
-		_aux_view.bind_to_device(dev)
-		content_right.add_child(_aux_view)
-		_aux_view.visible = false
-		if not _aux_view.is_node_ready():
-			await _aux_view.ready
+		_companion_view.bind_to_device(dev)
+		view_pane.add_child(_companion_view)
+		_companion_view.visible = false
+		if not _companion_view.is_node_ready():
+			await _companion_view.ready
 
 
-func _clear_aux_view() -> void:
-	if _aux_view:
-		if _aux_view.has_method("_on_view_hidden"):
-			_aux_view._on_view_hidden()
-		_aux_view.queue_free()
-		_aux_view = null
+func _clear_companion_view() -> void:
+	if _companion_view:
+		if _companion_view.has_method("_on_view_hidden"):
+			_companion_view._on_view_hidden()
+		_companion_view.queue_free()
+		_companion_view = null
 
 
-func _clear_panel_and_aux() -> void:
+func _clear_panel_and_companion() -> void:
 	_clear_panel_view()
-	_clear_aux_view()
-	content_right.visible = false
+	_clear_companion_view()
+	_update_view_pane_visibility()
 
 
-func _show_panel_in_right() -> void:
+func _show_panel_view() -> void:
 	if _panel_view and _panel_view.visible:
 		logger.info("showing panel view")
 
@@ -541,28 +504,28 @@ func _show_panel_in_right() -> void:
 		_panel_view.show()
 		_panel_view._on_view_shown()
 	
-	if _aux_view and _aux_view.visible:
-		logger.info("hiding aux view")
+	if _companion_view and _companion_view.visible:
+		logger.info("hiding companion view")
 
-		if not _aux_view.is_node_ready():
-			logger.info("waiting for aux view to be ready...")
-			await _aux_view.ready
+		if not _companion_view.is_node_ready():
+			logger.info("waiting for companion view to be ready...")
+			await _companion_view.ready
 
-		logger.info("aux view is ready, calling _on_view_hidden...")
-		_aux_view.hide()
-		_aux_view._on_view_hidden()
+		logger.info("companion view is ready, calling _on_view_hidden...")
+		_companion_view.hide()
+		_companion_view._on_view_hidden()
 	
-	content_right.visible = _panel_view != null
+	_update_view_pane_visibility()
 
-func _show_aux_in_right() -> void:
-	if _aux_view and not _aux_view.visible:
-		if not _aux_view.is_node_ready():
-			logger.info("waiting for aux view to be ready...")
-			await _aux_view.ready
+func _show_companion_view() -> void:
+	if _companion_view and not _companion_view.visible:
+		if not _companion_view.is_node_ready():
+			logger.info("waiting for companion view to be ready...")
+			await _companion_view.ready
 
-		logger.info("aux view is ready, calling _on_view_shown...")
-		_aux_view.show()
-		_aux_view._on_view_shown()
+		logger.info("companion view is ready, calling _on_view_shown...")
+		_companion_view.show()
+		_companion_view._on_view_shown()
 	
 	if _panel_view and _panel_view.visible:
 		if not _panel_view.is_node_ready():
@@ -573,26 +536,26 @@ func _show_aux_in_right() -> void:
 		_panel_view.hide()
 		_panel_view._on_view_hidden()
 	
-	content_right.visible = _aux_view != null
+	_update_view_pane_visibility()
 
 
-func _hide_aux_show_panel() -> void:
-	_show_panel_in_right()
+func _hide_companion_show_panel() -> void:
+	_show_panel_view()
 
 
 func _show_right_pane_current() -> void:
-	if _large_open and _aux_view:
-		_show_aux_in_right()
+	if _window_open and _companion_view:
+		_show_companion_view()
 	else:
-		_show_panel_in_right()
+		_show_panel_view()
 
 
-## Get or create large window popup for Large View
-func _get_large_window() -> Window:
-	# create large window if not already created
-	if not _large_popup:
+## Get or create the popup that hosts the Window view
+func _get_window() -> Window:
+	# create window if not already created
+	if not _window_popup:
 		var popup := Window.new()
-		popup.name = "DeviceWindowLarge_%s" % device.get_display_name()
+		popup.name = "DeviceWindow_%s" % device.get_display_name()
 		popup.unresizable = false
 		popup.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
 		popup.handle_input_locally = false # we want to still accept input events the window doesn't handle.
@@ -603,103 +566,103 @@ func _get_large_window() -> Window:
 		popup.force_native = false # not native
 		popup.minimize_disabled = true # cannot minimize
 		popup.maximize_disabled = true # cannot maximize
-		popup.close_requested.connect(_on_large_window_request_close)
-		_large_popup = popup
+		popup.close_requested.connect(_on_window_request_close)
+		_window_popup = popup
 
-	# return large window
-	return _large_popup
+	# return window
+	return _window_popup
 
 
-## Large window management (native GUI or Large view scene)
-func _open_large() -> void:
+## Device window: native plugin GUI or the Window view scene
+func _open_window() -> void:
 	if not device:
 		return
 	
 	if device.device.has_gui():
 		device.open_gui()
-		_large_open = true
-		_apply_large_state()
+		_window_open = true
+		_apply_window_state()
 		return
 	
-	if device.device.has_large_view():
-		# create large view
-		_large_view = DeviceViewFactory.create(device, Device.ViewType.Large)
+	if device.device.has_window_view():
+		# create window view
+		_window_view = DeviceViewFactory.create(device, Device.ViewType.Window)
 		
-		# add large view to window
-		var popup = _get_large_window()
-		popup.add_child(_large_view)
+		# add window view to popup
+		var popup = _get_window()
+		popup.add_child(_window_view)
 		
-		# bind large view to device
-		_large_view.bind_to_device(device)
+		# bind window view to device
+		_window_view.bind_to_device(device)
 
 		# add window to editor
 		Sonara.editor.add_child(popup)
 
-		# wait for large view to be ready
-		if not _large_view.is_node_ready():
-			await _large_view.ready
+		# wait for window view to be ready
+		if not _window_view.is_node_ready():
+			await _window_view.ready
 
 		# show window
 		popup.popup_centered(Vector2(300, 200))
-		# notify large view it is now visible so it can subscribe
-		_large_view._on_view_shown()
+		# notify window view it is now visible so it can subscribe
+		_window_view._on_view_shown()
 
-		# set large open flag
-		_large_open = true
-		_apply_large_state()
+		# set window open flag
+		_window_open = true
+		_apply_window_state()
 
 
-func _on_large_window_request_close() -> void:
-	_close_large()
+func _on_window_request_close() -> void:
+	_close_window()
 
 
 ## Handle plugin GUI closed notification from engine
 func _on_plugin_gui_closed() -> void:
 	logger.info("Plugin GUI closed notification received")
-	_large_open = false
-	large_button.button_pressed = false
-	_apply_large_state()
+	_window_open = false
+	window_button.set_pressed_no_signal(false)
+	_apply_window_state()
 
 
-func _close_large() -> void:
+func _close_window() -> void:
 	if device == null:
 		return
 	# has plugin gui?
 	if device.device.has_gui():
 		device.close_gui()
-		_large_open = false
-		_apply_large_state()
+		_window_open = false
+		_apply_window_state()
 		return
 
-	# has large view?
-	if _large_view and _large_open:
+	# has window view?
+	if _window_view and _window_open:
 		# The popup (and the view inside it) may already be gone when the
 		# editor is freed on quit before this panel.
-		if is_instance_valid(_large_view):
-			_large_view._on_view_hidden()
-			_large_view.queue_free()
-		_large_view = null
+		if is_instance_valid(_window_view):
+			_window_view._on_view_hidden()
+			_window_view.queue_free()
+		_window_view = null
 
-		if is_instance_valid(_large_popup):
-			_large_popup.hide()
-			if _large_popup.get_parent():
-				_large_popup.get_parent().remove_child(_large_popup)
-			_large_popup.queue_free()
-		_large_popup = null
+		if is_instance_valid(_window_popup):
+			_window_popup.hide()
+			if _window_popup.get_parent():
+				_window_popup.get_parent().remove_child(_window_popup)
+			_window_popup.queue_free()
+		_window_popup = null
 	
-	_large_open = false
-	_apply_large_state()
+	_window_open = false
+	_apply_window_state()
 
 
-func _apply_large_state() -> void:
-	if _large_open and device and device.device.has_auxiliary_view():
-		if _aux_view == null:
-			_load_aux_view(device)
-		_show_aux_in_right()
+func _apply_window_state() -> void:
+	if _window_open and device and device.device.has_companion_view():
+		if _companion_view == null:
+			_load_companion_view(device)
+		_show_companion_view()
 	else:
-		_hide_aux_show_panel()
+		_hide_companion_show_panel()
 
-	large_button.button_pressed = _large_open
+	window_button.set_pressed_no_signal(_window_open)
 
 
 ## ============================================================================
@@ -711,8 +674,7 @@ func _configure_container_folder(dev: DeviceInstance) -> void:
 	_folder_focus = null
 	if folder_button:
 		folder_button.visible = dev.is_container()
-		folder_button.set_pressed_no_signal(false)
-		folder_button.text = "▸"
+		_set_foldout_pressed(false)
 	if folder:
 		if dev.is_container():
 			await folder.bind_to_container(dev)
@@ -734,8 +696,7 @@ func open_container_folder(child: DeviceInstance = null) -> void:
 	await folder.set_focus_child(_folder_focus if single else null)
 	folder.set_open(true)
 	if folder_button:
-		folder_button.set_pressed_no_signal(true)
-		folder_button.text = "◂"
+		_set_foldout_pressed(true)
 	if _panel_view and _panel_view.has_method("set_focused_child"):
 		_panel_view.set_focused_child(_folder_focus)
 
@@ -748,7 +709,13 @@ func _on_folder_toggled(pressed: bool) -> void:
 		open_container_folder(_folder_focus)
 	else:
 		folder.set_open(false)
-		folder_button.text = "▸"
+		_set_foldout_pressed(false)
+
+
+## Sync the FoldoutToggle's pressed state and chevron without re-triggering it.
+func _set_foldout_pressed(pressed: bool) -> void:
+	folder_button.set_pressed_no_signal(pressed)
+	folder_button.icon = ICON_FOLDOUT_OPEN if pressed else ICON_FOLDOUT_CLOSED
 
 
 ## After a drop into this container, reveal the new child.

@@ -2,7 +2,9 @@
 
 [ext_resource type="Theme" uid="uid://c77m063o570pp" path="res://assets/Sonara_Theme.tres" id="1_10umj"]
 [ext_resource type="Script" uid="uid://bkp1f1jc0ubfx" path="res://editor/Editor.gd" id="2_ribbq"]
+[ext_resource type="Texture2D" uid="uid://kev1as0j2s0c" path="res://assets/icons/play.svg" id="4_hi76l"]
 [ext_resource type="Script" uid="uid://cb24qblgyl84v" path="res://editor/MainMenu.gd" id="4_wmsa6"]
+[ext_resource type="Texture2D" uid="uid://r2a82ngldduk" path="res://assets/icons/circle-stop.svg" id="5_6l011"]
 [ext_resource type="Script" uid="uid://cyscqn1lg7s3g" path="res://editor/EnginePanel.gd" id="5_yh6b6"]
 [ext_resource type="Script" uid="uid://cgprg67xmvidv" path="res://components/visualization/Graph.gd" id="6_js5sm"]
 [ext_resource type="Script" uid="uid://bfx70o648n4b8" path="res://editor/WindowButtons.gd" id="7_30oug"]
@@ -131,12 +133,14 @@ layout_mode = 2
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 toggle_mode = true
-text = "Play"
+icon = ExtResource("4_hi76l")
+icon_alignment = 1
 
 [node name="StopButton" type="Button" parent="VBoxContainer/Top/Transport/TransportControls/Buttons" unique_id=1569763539]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
-text = "Stop"
+icon = ExtResource("5_6l011")
+icon_alignment = 1
 
 [node name="TransportStatus" type="PanelContainer" parent="VBoxContainer/Top/Transport" unique_id=893402596]
 layout_mode = 2
@@ -402,11 +406,12 @@ theme_type_variation = &"PrimaryPanel"
 layout_mode = 2
 
 [node name="AssistantPanel" parent="VBoxContainer/Middle/LeftRightSplit/RightDock" unique_id=1299192409 instance=ExtResource("12_cnodj")]
-visible = true
 layout_mode = 0
-size_flags_horizontal = 3
-size_flags_vertical = 3
-theme_type_variation = &"PrimaryPanel"
+anchors_preset = 0
+anchor_right = 0.0
+anchor_bottom = 0.0
+grow_horizontal = 1
+grow_vertical = 1
 
 [node name="Bottom" type="VBoxContainer" parent="VBoxContainer" unique_id=365378792]
 layout_mode = 2

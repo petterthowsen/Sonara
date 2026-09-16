@@ -9,10 +9,10 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerDefaultView.tscn"),
 	"sonara.builtin.drum_machine": preload("res://devices/builtin/DrumMachineDefaultView.tscn"),
 }
-const BUILTIN_LARGE_SCENES := {
+const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 }
-const BUILTIN_AUXILIARY_SCENES := {}
+const BUILTIN_COMPANION_SCENES := {}
 const BUILTIN_COMPACT_SCENES := {}
 
 
@@ -24,10 +24,10 @@ static func register_builtin_views(device: Device) -> void:
 	var id := device.device_id
 	if BUILTIN_PANEL_SCENES.has(id):
 		device.register_panel_view(BUILTIN_PANEL_SCENES[id])
-	if BUILTIN_LARGE_SCENES.has(id):
-		device.register_large_view(BUILTIN_LARGE_SCENES[id])
-	if BUILTIN_AUXILIARY_SCENES.has(id):
-		device.register_auxiliary_view(BUILTIN_AUXILIARY_SCENES[id])
+	if BUILTIN_WINDOW_SCENES.has(id):
+		device.register_window_view(BUILTIN_WINDOW_SCENES[id])
+	if BUILTIN_COMPANION_SCENES.has(id):
+		device.register_companion_view(BUILTIN_COMPANION_SCENES[id])
 	if BUILTIN_COMPACT_SCENES.has(id):
 		device.register_compact_view(BUILTIN_COMPACT_SCENES[id])
 
@@ -56,10 +56,10 @@ static func _scene_for(device: Device, view_type: Device.ViewType) -> PackedScen
 	match view_type:
 		Device.ViewType.Panel:
 			return device.panel_view_scene
-		Device.ViewType.Large:
-			return device.large_view_scene
-		Device.ViewType.Auxiliary:
-			return device.auxiliary_view_scene
+		Device.ViewType.Window:
+			return device.window_view_scene
+		Device.ViewType.Companion:
+			return device.companion_view_scene
 		Device.ViewType.Compact:
 			return device.compact_view_scene
 	return null

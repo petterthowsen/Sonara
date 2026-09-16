@@ -37,7 +37,7 @@ alwaysApply: false
 
 ## SFZ CC Parameters
 - After an SFZ loads, the device merges `synth.cc_labels()` with a host-standard set (Mod Wheel, Volume, Pan, Expression, Sustain) so unlabeled dynamics (often CC1) stay controllable.
-- Labeled CCs go on the `"param"` group (P tab); unlabeled host CCs go on `"cc"` (C tab). `param_id` is the CC number (0–127), range 0.0–1.0.
+- Labeled CCs go on the `"param"` group (Parameters tab); unlabeled host CCs go on `"cc"` (CCs tab). `param_id` is the CC number (0–127), range 0.0–1.0.
 - `set_parameter` sends MIDI HDCC via `try_lock()`; contended locks queue the change for the next block.
 - `take_parameters_changed()` is polled from `mixing.rs`. When true, the engine emits `PluginParameterCount` + `PluginParameterInfo` so Godot rebuilds the device panel. No Godot-side special case — same path as CLAP parameter lists.
 

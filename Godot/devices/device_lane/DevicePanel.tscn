@@ -3,6 +3,11 @@
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://devices/device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
+[ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="4_n5ici"]
+[ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
+[ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
+[ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="6_n5ici"]
+[ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
 content_margin_left = 1.0
@@ -24,7 +29,7 @@ corner_detail = 5
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_khhpn"]
 content_margin_left = 2.0
 content_margin_top = 1.0
-content_margin_right = 8.0
+content_margin_right = 2.0
 content_margin_bottom = 1.0
 bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
 corner_radius_top_left = 3
@@ -46,9 +51,9 @@ fill_to = Vector2(0.14529915, 0.14102565)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cpmka"]
 content_margin_left = 2.0
-content_margin_top = 1.0
-content_margin_right = 8.0
-content_margin_bottom = 1.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
 bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
 corner_radius_bottom_left = 3
 corner_detail = 5
@@ -73,12 +78,19 @@ content_margin_left = 0.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
-bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
-draw_center = false
+bg_color = Color(0.072842635, 0.072842635, 0.072842635, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_n5ici"]
+content_margin_left = 3.0
+content_margin_top = 2.0
+content_margin_right = 3.0
+content_margin_bottom = 2.0
+bg_color = Color(0.12591085, 0.12591085, 0.12591082, 1)
 corner_detail = 5
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_r4rlf"]
@@ -86,30 +98,31 @@ content_margin_left = 3.0
 content_margin_top = 2.0
 content_margin_right = 3.0
 content_margin_bottom = 2.0
-bg_color = Color(0.12890625, 0.12890625, 0.12890625, 1)
+bg_color = Color(0.06879827, 0.06879828, 0.06879828, 1)
 corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="Device" type="PanelContainer" unique_id=1822906056]
-offset_right = 322.0
-offset_bottom = 222.0
+custom_minimum_size = Vector2(160, 0)
+offset_right = 194.0
+offset_bottom = 235.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=590796349]
+[node name="VBox" type="VBoxContainer" parent="." unique_id=590796349]
 layout_mode = 2
 theme_override_constants/separation = 0
 
-[node name="Header" type="PanelContainer" parent="VBoxContainer" unique_id=1456966153]
+[node name="TopHeader" type="PanelContainer" parent="VBox" unique_id=1456966153]
 layout_mode = 2
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_khhpn")
 
-[node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header" unique_id=1851421730]
+[node name="HBox" type="HBoxContainer" parent="VBox/TopHeader" unique_id=1851421730]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="DeviceLight" type="Control" parent="VBoxContainer/Header/HBox" unique_id=1700853950]
+[node name="DeviceLight" type="Control" parent="VBox/TopHeader/HBox" unique_id=1700853950]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_vertical = 4
@@ -126,92 +139,116 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Name" parent="VBoxContainer/Header/HBox" unique_id=547742797 instance=ExtResource("3_smle")]
+[node name="Name" parent="VBox/TopHeader/HBox" unique_id=547742797 instance=ExtResource("3_smle")]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
-[node name="Label" parent="VBoxContainer/Header/HBox/Name" index="0" unique_id=448001948]
-text = "Device Name"
+[node name="Label" parent="VBox/TopHeader/HBox/Name" index="0" unique_id=448001948]
 label_settings = SubResource("LabelSettings_r4rlf")
 horizontal_alignment = 0
 clip_text = true
 
-[node name="LineEdit" parent="VBoxContainer/Header/HBox/Name" index="1" unique_id=1087718571]
+[node name="LineEdit" parent="VBox/TopHeader/HBox/Name" index="1" unique_id=1087718571]
 alignment = 0
 
-[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer" unique_id=701909924]
+[node name="FoldoutToggle" type="Button" parent="VBox/TopHeader/HBox" unique_id=510668841]
+layout_mode = 2
+toggle_mode = true
+icon = ExtResource("4_n5ici")
+icon_alignment = 1
+
+[node name="HBox" type="HBoxContainer" parent="VBox" unique_id=701909924]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/separation = 2
+theme_override_constants/separation = 0
 
-[node name="LeftHeader" type="PanelContainer" parent="VBoxContainer/HBoxContainer" unique_id=2018168621]
+[node name="LeftHeader" type="PanelContainer" parent="VBox/HBox" unique_id=2018168621]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_cpmka")
 
-[node name="TabButtons" type="BoxContainer" parent="VBoxContainer/HBoxContainer/LeftHeader" unique_id=1070410924]
+[node name="TabButtons" type="BoxContainer" parent="VBox/HBox/LeftHeader" unique_id=1070410924]
 layout_mode = 2
-size_flags_horizontal = 3
+alignment = 1
 vertical = true
 
-[node name="Parameters" type="Button" parent="VBoxContainer/HBoxContainer/LeftHeader/TabButtons" unique_id=759836976]
+[node name="View" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=58150463]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
+size_flags_vertical = 3
+tooltip_text = "View Device Controls"
+toggle_mode = true
+icon = ExtResource("6_n5ici")
+
+[node name="Window" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1513885063]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+tooltip_text = "Open External Window"
+toggle_mode = true
+icon = ExtResource("7_ohvca")
+
+[node name="Parameters" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=759836976]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Parameters"
 theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
 toggle_mode = true
-button_pressed = true
 button_group = SubResource("ButtonGroup_1cidk")
-text = "P"
+icon = ExtResource("5_n5ici")
 
-[node name="File" type="Button" parent="VBoxContainer/HBoxContainer/LeftHeader/TabButtons" unique_id=1192976894]
+[node name="File" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1192976894]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "File"
 theme_override_styles/pressed = SubResource("StyleBoxFlat_7u30j")
 toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
-text = "F"
+icon = ExtResource("5_ohvca")
 
-[node name="Window" type="Button" parent="VBoxContainer/HBoxContainer/LeftHeader/TabButtons" unique_id=1513885063]
-custom_minimum_size = Vector2(28, 0)
-layout_mode = 2
-toggle_mode = true
-text = "L"
-
-[node name="Content" type="PanelContainer" parent="VBoxContainer/HBoxContainer" unique_id=106644029]
+[node name="Content" type="PanelContainer" parent="VBox/HBox" unique_id=106644029]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_v0u3q")
 
-[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/HBoxContainer/Content" unique_id=2048753777]
+[node name="HBox" type="HBoxContainer" parent="VBox/HBox/Content" unique_id=2048753777]
 layout_mode = 2
+theme_override_constants/separation = 4
 
-[node name="ContentLeft" type="PanelContainer" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer" unique_id=214953315]
+[node name="Parameters" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=174185541]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
+theme_override_styles/panel = SubResource("StyleBoxFlat_n5ici")
 
-[node name="Parameters" type="ScrollContainer" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer/ContentLeft" unique_id=1185048471]
-visible = false
+[node name="Scroll" type="ScrollContainer" parent="VBox/HBox/Content/HBox/Parameters" unique_id=1185048471]
 custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 follow_focus = true
 horizontal_scroll_mode = 0
 
-[node name="VBox" type="VBoxContainer" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer/ContentLeft/Parameters" unique_id=1474575267]
+[node name="VBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/Parameters/Scroll" unique_id=1474575267]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 4
 
-[node name="File" type="VBoxContainer" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer/ContentLeft" unique_id=613901230]
+[node name="File" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=45017796]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_n5ici")
+
+[node name="VBox" type="VBoxContainer" parent="VBox/HBox/Content/HBox/File" unique_id=613901230]
 layout_mode = 2
 alignment = 1
 
-[node name="StatusLabel" type="Label" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer/ContentLeft/File" unique_id=525961453]
+[node name="StatusLabel" type="Label" parent="VBox/HBox/Content/HBox/File/VBox" unique_id=525961453]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "No File Loaded"
@@ -219,15 +256,16 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 3
 
-[node name="LoadButton" type="Button" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer/ContentLeft/File" unique_id=1309556089]
+[node name="LoadButton" type="Button" parent="VBox/HBox/Content/HBox/File/VBox" unique_id=1309556089]
 layout_mode = 2
 size_flags_vertical = 4
 text = "Load File"
 
-[node name="ContentRight" type="VBoxContainer" parent="VBoxContainer/HBoxContainer/Content/HBoxContainer" unique_id=1326414494]
-custom_minimum_size = Vector2(200, 150)
+[node name="View" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=214953315]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
 
 [node name="FileDialog" type="FileDialog" parent="." unique_id=1757953003]
 oversampling_override = 1.0
@@ -239,4 +277,4 @@ display_mode = 1
 access = 2
 filters = PackedStringArray("*.sfz")
 
-[editable path="VBoxContainer/Header/HBox/Name"]
+[editable path="VBox/TopHeader/HBox/Name"]

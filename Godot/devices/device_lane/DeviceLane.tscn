@@ -1,4 +1,4 @@
-[gd_scene load_steps=6 format=3 uid="uid://iq3vudg11v8b"]
+[gd_scene format=3 uid="uid://iq3vudg11v8b"]
 
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://devices/device_lane/DeviceLane.gd" id="1_2f6nw"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="2_oh1x1"]
@@ -10,7 +10,7 @@ bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
 corner_radius_top_left = 3
 corner_radius_bottom_left = 3
 
-[node name="DeviceLane" type="HBoxContainer"]
+[node name="DeviceLane" type="HBoxContainer" unique_id=680950558]
 custom_minimum_size = Vector2(0, 76.585)
 offset_right = 1280.0
 offset_bottom = 207.0
@@ -18,12 +18,12 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 0
 script = ExtResource("1_2f6nw")
 
-[node name="Header" type="Panel" parent="."]
+[node name="Header" type="Panel" parent="." unique_id=1475555900]
 custom_minimum_size = Vector2(42, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ktvss")
 
-[node name="Label" type="Control" parent="Header"]
+[node name="Label" type="Control" parent="Header" unique_id=1393463038]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -34,7 +34,7 @@ script = ExtResource("2_oh1x1")
 text = "LABEL"
 font_size = 20
 
-[node name="Content" type="MarginContainer" parent="."]
+[node name="Content" type="MarginContainer" parent="." unique_id=824630520]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_left = 8
@@ -42,22 +42,22 @@ theme_override_constants/margin_top = 8
 theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 8
 
-[node name="ScrollContainer" type="ScrollContainer" parent="Content"]
+[node name="ScrollContainer" type="ScrollContainer" parent="Content" unique_id=1650099144]
 layout_mode = 2
 follow_focus = true
-horizontal_scroll_mode = 4
+horizontal_scroll_mode = 5
 vertical_scroll_mode = 0
 
-[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer"]
+[node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer" unique_id=195122867]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 16
 
-[node name="Device" parent="Content/ScrollContainer/Devices" instance=ExtResource("3_m4540")]
+[node name="Device" parent="Content/ScrollContainer/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
 layout_mode = 2
 
-[node name="Device2" parent="Content/ScrollContainer/Devices" instance=ExtResource("3_m4540")]
+[node name="Device2" parent="Content/ScrollContainer/Devices" unique_id=666575919 instance=ExtResource("3_m4540")]
 layout_mode = 2
 
-[node name="DeviceContextMenu" parent="." instance=ExtResource("3_oh1x1")]
+[node name="DeviceContextMenu" parent="." unique_id=1107586009 instance=ExtResource("3_oh1x1")]
 visible = false

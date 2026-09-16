@@ -23,7 +23,7 @@ func is_type(t: int) -> bool:
 	return view_type == t
 
 
-## Optional window title for Large views
+## Optional window title for Window views
 func get_window_title() -> String:
 	return device.get_display_name() if device else "Device"
 

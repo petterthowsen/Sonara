@@ -16,7 +16,7 @@ var logger : Log = Log.make("MixerChannel")
 @onready var side_pane: Control = $HBox/VBox/MainAndSideBox/SidePane
 @onready var side_vsplit: VSplitContainer = $HBox/VBox/MainAndSideBox/SidePane/VSplit
 
-@onready var big_meter: Meter = $HBox/VBox/MainAndSideBox/MainPane/VSplit/BigMeter
+@onready var big_meter: Meter = $HBox/VBox/MainAndSideBox/MainPane/BigMeter
 
 @onready var controls: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/Controls
 @onready var arm_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/ArmToggle

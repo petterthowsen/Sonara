@@ -6,9 +6,9 @@ class_name Device extends RefCounted
 
 enum DeviceType { BuiltIn, LV2, CLAP }
 enum DeviceCategory { Instrument, Effect, Utility }
-## Panel = device custom UI (not the parameter list). Large/Auxiliary are extra views.
+## Panel = device custom UI (not the parameter list). Window = popup view (for devices without a native GUI); Companion = shown in the panel while the window or plugin GUI is open.
 ## Immediate UI (plugin-drawn in-device controls) is a planned right-pane view, separate from ParameterList.
-enum ViewType { Panel, Large, Auxiliary, Compact }
+enum ViewType { Panel, Window, Companion, Compact }
 
 ## ============================================================================
 ## PROPERTIES
@@ -73,8 +73,8 @@ var file_type_description: String = ""
 
 ## PackedScene references (null when unsupported)
 var panel_view_scene: PackedScene = null
-var large_view_scene: PackedScene = null
-var auxiliary_view_scene: PackedScene = null
+var window_view_scene: PackedScene = null
+var companion_view_scene: PackedScene = null
 var compact_view_scene: PackedScene = null
 
 
@@ -144,12 +144,12 @@ func register_panel_view(scene: PackedScene) -> void:
 	panel_view_scene = scene
 
 
-func register_large_view(scene: PackedScene) -> void:
-	large_view_scene = scene
+func register_window_view(scene: PackedScene) -> void:
+	window_view_scene = scene
 
 
-func register_auxiliary_view(scene: PackedScene) -> void:
-	auxiliary_view_scene = scene
+func register_companion_view(scene: PackedScene) -> void:
+	companion_view_scene = scene
 
 
 func register_compact_view(scene: PackedScene) -> void:
@@ -161,12 +161,12 @@ func has_panel_view() -> bool:
 	return panel_view_scene != null
 
 
-func has_large_view() -> bool:
-	return large_view_scene != null
+func has_window_view() -> bool:
+	return window_view_scene != null
 
 
-func has_auxiliary_view() -> bool:
-	return auxiliary_view_scene != null
+func has_companion_view() -> bool:
+	return companion_view_scene != null
 
 
 func has_compact_view() -> bool:

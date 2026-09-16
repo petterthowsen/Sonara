@@ -5,8 +5,10 @@ alwaysApply: false
 # Godot Device Views
 
 ## Overview
-- Device metadata exposes up to four view types (`Panel`, `Large`, `Auxiliary`, `Compact`) registered via PackedScene references.
+- Device metadata exposes up to four view types (`Panel`, `Window`, `Companion`, `Compact`) registered via PackedScene references.
 - All device visuals extend `DeviceView`, which binds to a `DeviceInstance` and supplies `_on_view_shown`/`_on_view_hidden` lifecycle hooks.
+- Panels host views; they are not views. `DevicePanel` (`devices/device_lane/`, the full panel in DeviceLane and nested folders) hosts the Panel, Companion and Window views. `CompactDevicePanel` (`devices/compact/`, mixer lists) builds its own `CompactParameterControl`s and does not load a Compact view yet.
+- View types: Panel = custom UI in the panel. Window = popup view for devices without a native GUI. Companion = replaces the Panel view while the Window view or native plugin GUI is open. Compact = reserved for `CompactDevicePanel`.
 
 ## Registration
 - Built-in view scenes are preloaded in the `BUILTIN_*_SCENES` consts of `DeviceViewFactory.gd`. To give a built-in a view, add its device ID there; never store file-system paths.
@@ -34,7 +36,9 @@ alwaysApply: false
 - UI controls (e.g., `CompactParameterControl`) branch on `param_type` to choose a checkbox, option button, or slider—make sure new views follow the same pattern when rendering device parameters.
 
 ## DevicePanel Orchestration
-- Binding a device loads the Panel view first; if no Panel view exists, the right pane hides entirely.
-- The Large toggle is visible only when `device.has_gui()` or `has_large_view()` is true; pressing it either opens the plugin's native GUI or spawns a `Window` under `Sonara.editor` containing the Large view.
-- `_apply_large_state()` ensures Auxiliary views replace the right pane whenever a Large view is open and the device advertises one; closing the Large window frees the view and returns to the Panel.
+- Binding a device loads the Panel view first; the View pane (toggled by the left header's View button) hides when neither a Panel nor a Companion view is loaded. Parameters/CCs/File are one ButtonGroup with `allow_unpress`; the header's FoldoutToggle opens the container children folder.
+- The Window toggle is visible only when `device.has_gui()` or `has_window_view()` is true; pressing it either opens the plugin's native GUI or spawns a `Window` under `Sonara.editor` containing the Window view.
+- `_apply_window_state()` shows the Companion view in the View pane instead of the Panel view whenever the device window (Window view or native plugin GUI) is open and the device advertises one; closing the window frees the view and returns to the Panel.
+- Container children: `DevicePanel` adds a `ContainerFolder` (slide-out pane at the end of `Content/HBox`) that wraps a `NestedDeviceList`, which instantiates one `DevicePanel` per child (recursive). The FoldoutToggle only shows for `is_container()` devices. When `container_focuses_one_child()` (Layer, Drum Machine) the folder shows a single child; a custom view picks it by emitting `DeviceView.container_child_requested`, and gets `set_focused_child()` back. Drops onto a container reveal the new child (`after_drop_onto`).
+- Scene layout (`DevicePanel.tscn`): `VBox/TopHeader` (light, name, FoldoutToggle; `header`, the drop-onto rect), `VBox/HBox/LeftHeader/TabButtons` (View, Window, Parameters, File; CCs button duplicated at runtime), `VBox/HBox/Content/HBox` (Parameters, CCs, File, View, ContentFolder).
 - Views are bound before being added to the scene tree, and every show/hide path calls `_on_view_shown()` or `_on_view_hidden()` so long-running subscriptions clean up reliably.
