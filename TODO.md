@@ -184,6 +184,10 @@ Done:
 - [x] Dragging devices around on the device lane, or within containers: drop targets occupy space at all times but are invisible, serving as spacers and drop targets simultaneously
 - [x] Drum Machine: Clicking a slot should play the sample (velocity from the Y click position in the slot with some padding so that 80% Y position is highest velocity and 20% Y is lowest velocity)
 
+#### Plugins
+
+- [ ] Subfolders aren't scanned: the engine only looks at the top level of each plugin folder. The CLAP spec says to search subfolders, so a plugin at ~/.clap/<vendor>/Foo.clap isn't found today.
+
 ### Save / Load / Export
 
 - [ ] Welcome Screen with recent projects, templates
@@ -217,10 +221,17 @@ Done:
 
 ### Settings
 
-- [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type / input control type, and build the UI from that registry (rendered when the settings window opens)
+- [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type / input control type, and build the UI from that registry (rendered when the settings window opens), we may allow custom controls linking to a packed scene perhaps for certain settings (maybe for assets path definitions).
   - [ ] Sub-category renders as a large-font label with margins between sub-categories
   - [ ] Table-like layout with the controls aligned on the right for readability
 - [ ] Searchable settings: fuzzy search bar at the top, with a little debounce
+- [] Move asset related settings to a top-level Assets category and include paths to search for Clap plugins. Default values should point to common clap paths on linux.
+
+#### Asset Browser
+
+- [ ] each asset path entry from settings should show as its own top-level folder in the tree.
+- [ ] Split browser into two vertical areas, tree at top and details at bottom. Details show info about item, dependong on asset type. audio can show waveform and a preview button that plays the sound, ideally this should play to the output the master is set to (don't play on the master itself, that would color the preview if master has any fx devices.)
+- [ ] Tree view can have icons, maybe audio / midi / device, we have a few lucide icons, but we might fetch more filetype icons from lucide.dev
 
 ### AI Assistant
 
