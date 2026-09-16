@@ -1,9 +1,12 @@
-[gd_scene load_steps=9 format=3 uid="uid://dul180dx6ngl4"]
+[gd_scene load_steps=12 format=3 uid="uid://dul180dx6ngl4"]
 
 [ext_resource type="Script" uid="uid://dnb0judqvs27u" path="res://devices/compact/CompactDevicePanel.gd" id="1_6d71u"]
 [ext_resource type="PackedScene" uid="uid://q0m43fo1g33u" path="res://devices/compact/CompactParameterControl.tscn" id="1_o5nab"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_jx3fc"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
+[ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="4_toggle"]
+[ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="5_chevron_right"]
+[ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="6_chevron_down"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6d71u"]
 content_margin_left = 0.0
@@ -100,10 +103,13 @@ alignment = 0
 custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
 size_flags_horizontal = 8
-theme_override_font_sizes/font_size = 12
+focus_mode = 0
 toggle_mode = true
-text = "V"
 flat = true
+icon = ExtResource("5_chevron_right")
+script = ExtResource("4_toggle")
+icon_default = ExtResource("5_chevron_right")
+icon_pressed = ExtResource("6_chevron_down")
 
 [node name="Parameters" type="PanelContainer" parent="."]
 layout_mode = 2

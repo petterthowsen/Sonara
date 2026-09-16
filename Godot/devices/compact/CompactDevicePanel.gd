@@ -15,7 +15,7 @@ var logger : Log = Log.make("CompactDevicePanel")
 @onready var header : PanelContainer = $Header
 @onready var device_light: DeviceLightButton = $Header/HBoxContainer/DeviceLight
 @onready var name_label : SmartLineEdit = $Header/HBoxContainer/Name
-@onready var collapse_button : Button = $Header/HBoxContainer/CollapseToggle
+@onready var collapse_button : ToggleIconButton = $Header/HBoxContainer/CollapseToggle
 
 # ============================================================================
 # PROPERTIES
@@ -43,6 +43,7 @@ signal request_context_menu()
 
 func _ready() -> void:
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
+	collapse_button.set_state(not collapsed)
 	name_label.value_changed.connect(_on_name_edited)
 
 	# Apply initial state
@@ -68,14 +69,25 @@ func _unbind() -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	"""Handle GUI input - specifically double-click to open device in DeviceLane."""
+	"""Handle GUI input: single-click selects the channel, double-click opens the device."""
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.double_click:
 			_on_double_clicked()
 			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			_select_channel(mb.ctrl_pressed)
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 			request_context_menu.emit()
+
+
+## Selecting a compact device also selects the channel it belongs to.
+func _select_channel(multi := false) -> void:
+	if not device_instance:
+		return
+	var channel := device_instance.get_channel()
+	if channel:
+		Sonara.editor.mixer.select_channel(channel, multi)
 
 
 # ============================================================================
@@ -145,16 +157,10 @@ func _ensure_param_list() -> void:
 ## Update UI visibility based on collapsed and hide_parameters states
 func _update_ui_visibility() -> void:
 	"""Update visibility of parameters panel and collapse button based on state."""
-	# Hide collapse button and parameters panel if hide_parameters is true
-	if hide_parameters:
-		collapse_button.visible = false
-		parameters.visible = false
-	else:
-		# Show collapse button
-		collapse_button.visible = true
-
-		# Show/hide parameters panel based on collapsed state
-		parameters.visible = not collapsed
+	# The collapse toggle stays visible regardless of selection; only the parameters
+	# panel itself is forced hidden when hide_parameters is set (channel not selected).
+	collapse_button.visible = true
+	parameters.visible = not hide_parameters and not collapsed
 
 
 # ============================================================================

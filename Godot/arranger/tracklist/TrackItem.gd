@@ -353,7 +353,7 @@ func _update_volumeter_from_channel() -> void:
 
 	# Volumeter now works directly with dB values
 	volumeter.set_volume_no_signal(channel.volume)
-	volumeter.peak = max(channel.peak_left, channel.peak_right)
+	volumeter.set_levels(max(channel.peak_left, channel.peak_right), max(channel.rms_left, channel.rms_right))
 
 
 # ============================================================================
@@ -579,12 +579,12 @@ func _on_channel_volume_changed(db_volume: float) -> void:
 	volumeter.set_volume_no_signal(db_volume)
 
 
-func _on_channel_peak_updated(peak_left: float, peak_right: float, _rms_left: float, _rms_right: float) -> void:
+func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:
 	"""Channel peak levels updated - update volumeter meter display."""
 	if volumeter == null:
 		return
 
-	volumeter.peak = max(peak_left, peak_right)
+	volumeter.set_levels(max(peak_left, peak_right), max(rms_left, rms_right))
 
 
 ## Keep the header arm button in sync when record-arm is changed elsewhere.

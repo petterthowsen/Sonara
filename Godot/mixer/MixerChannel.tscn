@@ -202,7 +202,6 @@ display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
 label_settings = SubResource("LabelSettings_xv6e8")
-vertical_alignment = 0
 autowrap_mode = 3
 clip_text = true
 text_overrun_behavior = 4

@@ -59,13 +59,21 @@ var _hold_timer_right := 0.0
 	set(v):
 		bar_color_low = v
 		_wake()
-@export var bar_color_high := Color(1.0, 0.75, 0.15): ## Bar color when RMS is above -3 dB
+@export var bar_color_high := Color(1.0, 0.75, 0.15): ## Bar color for the part of the bar between warn_db and 0 dB
 	set(v):
 		bar_color_high = v
 		_wake()
 @export var bar_color_clip := Color(1.0, 0.25, 0.25): ## Bar/peak-hold/LED color when the level clips (>= 0 dB)
 	set(v):
 		bar_color_clip = v
+		_wake()
+@export var warn_db := -6.0: ## Level where the bar color switches from low to high
+	set(v):
+		warn_db = v
+		_wake()
+@export_range(0.0, 1.0) var peak_bar_alpha := 0.45: ## Opacity of the peak bar drawn behind the solid RMS bar
+	set(v):
+		peak_bar_alpha = v
 		_wake()
 @export var tick_color := Color(0.75, 0.75, 0.75, 0.5): ## Color of the dB tick lines and labels
 	set(v):
@@ -150,6 +158,16 @@ var gamma_warp : float:
 			return 1.0
 
 signal volume_changed(volume : float)
+## Emitted when the highest peak since the last reset changes (-INF after a reset).
+signal max_peak_changed(db: float)
+## Emitted when the user clicks the meter bars to clear the clip lights and max peak.
+signal peak_memory_reset_requested
+
+## Highest peak (dB) since the last reset_peak_memory().
+var max_peak_db := -INF
+# Clip lights stay on until reset_peak_memory()
+var _clip_left := false
+var _clip_right := false
 
 var _is_dragging_fader := false
 var _last_fader_mouse_pos := Vector2.ZERO
@@ -163,7 +181,26 @@ var peak_combined: float:
 func set_peak_levels(left : float, right : float) -> void:
 	_target_peak_left = left
 	_target_peak_right = right
+	if left >= 1.0 and not _clip_left:
+		_clip_left = true
+		queue_redraw()
+	if right >= 1.0 and not _clip_right:
+		_clip_right = true
+		queue_redraw()
+	var db := Utils.lin_to_db(maxf(left, right), -INF)
+	if db > max_peak_db:
+		max_peak_db = db
+		max_peak_changed.emit(db)
 	_wake()
+
+
+## Clear the clip lights and the max peak.
+func reset_peak_memory() -> void:
+	_clip_left = false
+	_clip_right = false
+	max_peak_db = -INF
+	max_peak_changed.emit(max_peak_db)
+	queue_redraw()
 
 
 func set_rms_levels(left : float, right : float) -> void:
@@ -276,6 +313,14 @@ func _is_settled() -> bool:
 
 
 func _gui_input(event: InputEvent) -> void:
+	# clicking the bars (not the fader) clears the clip lights and max peak
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
+			and not (show_fader and _is_mouse_in_fader(event.position)):
+		peak_memory_reset_requested.emit()
+		reset_peak_memory()
+		accept_event()
+		return
+
 	if not show_fader:
 		return
 
@@ -467,15 +512,15 @@ func _draw() -> void:
 	var fader_offset = 0
 	
 	if mono:
-		_draw_bar(rms_left, peak_left, peak_hold_left_db, offset_x, bars_width)
+		_draw_bar(rms_left, peak_left, peak_hold_left_db, _clip_left or _clip_right, offset_x, bars_width)
 		fader_offset = offset_x + bars_width + 2
 	else:
 		var bar_width = max(0.0, (bars_width - bars_spacing) * 0.5)
 		fader_offset = offset_x + bar_width
 		var offset_left = offset_x
 		var offset_right = offset_x + bar_width + bars_spacing
-		_draw_bar(rms_left,  peak_left,  peak_hold_left_db,  offset_left,  bar_width)
-		_draw_bar(rms_right, peak_right, peak_hold_right_db, offset_right, bar_width)
+		_draw_bar(rms_left,  peak_left,  peak_hold_left_db,  _clip_left,  offset_left,  bar_width)
+		_draw_bar(rms_right, peak_right, peak_hold_right_db, _clip_right, offset_right, bar_width)
 	
 	if show_fader:
 		_draw_fader(fader_offset, bars_spacing)
@@ -575,30 +620,15 @@ func _draw_tick_marks(ticks_width := 28.0) -> void:
 # -------------------------
 # bar drawing
 # -------------------------
-func _draw_bar(rms_lin: float, peak_lin: float, hold_db: float, offset_x: float, width: float) -> void:
+func _draw_bar(rms_lin: float, peak_lin: float, hold_db: float, clipped: bool, offset_x: float, width: float) -> void:
 	# background
 	draw_rect(Rect2(offset_x, 0, width, size.y), bar_bg_color, true)
 
-	# nothing to show
-	if rms_lin <= 0.0 and peak_lin <= 0.0 and hold_db <= db_bottom:
-		return
-
-	# convert to dB with floor
-	var rms_db := _lin_to_db(rms_lin)
-	var peak_db := _lin_to_db(peak_lin)
-
-	# choose color by dB
-	var fill_color := bar_color_low
-	if peak_db >= 0.0:
-		fill_color = bar_color_clip
-	elif rms_db > -3.0:
-		fill_color = bar_color_high
-
-	# fill from bottom up according to RMS
-	var y_top := _db_to_y(rms_db)
-	var h := size.y - y_top
-	if h > 0.0:
-		draw_rect(Rect2(offset_x, y_top, width, h), fill_color, true)
+	# peak bar (dim) behind the solid RMS bar, both colored by level
+	if peak_lin > 0.0:
+		_draw_level(_lin_to_db(peak_lin), offset_x, width, peak_bar_alpha)
+	if rms_lin > 0.0:
+		_draw_level(_lin_to_db(rms_lin), offset_x, width, 1.0)
 
 	# peak hold line (sticks, then falls slowly)
 	if hold_db > db_bottom:
@@ -606,6 +636,23 @@ func _draw_bar(rms_lin: float, peak_lin: float, hold_db: float, offset_x: float,
 		var line_color := bar_color_clip if hold_db >= 0.0 else Color(1, 1, 1, 0.8)
 		draw_line(Vector2(offset_x, y_line), Vector2(offset_x + width, y_line), line_color, 1.0)
 
-	# clip LED on the very top few pixels, held as long as the hold line is at/above 0 dB
-	if hold_db >= 0.0:
-		draw_rect(Rect2(offset_x, 0, width, 3), bar_color_clip, true)
+	# clip light, latched until reset_peak_memory()
+	if clipped:
+		draw_rect(Rect2(offset_x, 0, width, 4), bar_color_clip, true)
+
+
+## Fill from the bottom up to `db`: low color below warn_db, high color up to 0 dB, clip color above.
+func _draw_level(db: float, offset_x: float, width: float, alpha: float) -> void:
+	if db <= db_bottom:
+		return
+	var y_top := _db_to_y(db)
+	var y_warn := maxf(_db_to_y(warn_db), y_top)
+	var y_zero := maxf(_db_to_y(0.0), y_top)
+	var low := Color(bar_color_low, bar_color_low.a * alpha)
+	var high := Color(bar_color_high, bar_color_high.a * alpha)
+	var clip := Color(bar_color_clip, bar_color_clip.a * alpha)
+	draw_rect(Rect2(offset_x, y_warn, width, size.y - y_warn), low, true)
+	if y_warn > y_zero:
+		draw_rect(Rect2(offset_x, y_zero, width, y_warn - y_zero), high, true)
+	if y_zero > y_top:
+		draw_rect(Rect2(offset_x, y_top, width, y_zero - y_top), clip, true)

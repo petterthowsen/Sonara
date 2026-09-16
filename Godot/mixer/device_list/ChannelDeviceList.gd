@@ -49,10 +49,14 @@ var _pad_lane := PadLaneWatcher.new()
 func _ready() -> void:
 	if vbox:
 		vbox.add_theme_constant_override("separation", PANEL_GAP)
+		# Layout-only container: let empty-space clicks fall through to the ScrollContainer.
+		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	drop_host.attach(self, vbox, true)
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
 	set_process(false)
 	_pad_lane.changed.connect(_on_pad_lane_changed)
+	if scroll_container:
+		scroll_container.gui_input.connect(_on_scroll_container_gui_input)
 	for node in vbox.get_children():
 		vbox.remove_child(node)
 		node.free()
@@ -204,6 +208,18 @@ func _on_device_panel_request_context_menu(device_instance: DeviceInstance) -> v
 	var c_size = device_context_menu.get_contents_minimum_size()
 	device_context_menu.popup(Rect2(c_pos, c_size))
 	device_context_menu.show()
+
+
+## A click that lands on empty list space (not on a device panel) still selects the channel.
+func _on_scroll_container_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_select_channel(event.ctrl_pressed)
+
+
+func _select_channel(multi := false) -> void:
+	if channel == null or Engine.is_editor_hint():
+		return
+	Sonara.editor.mixer.select_channel(channel, multi)
 
 
 # ============================================================================

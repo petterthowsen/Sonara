@@ -125,6 +125,8 @@ var _children_tween: Tween
 ## Dragging it on one strip applies to all others. -1 means "use the scene default".
 static var _shared_vsplit_offset := -1
 
+var _peak_readout: Label
+
 func _ready():
 	if header:
 		_base_header_height = header.custom_minimum_size.y
@@ -148,6 +150,7 @@ func _ready():
 	
 	big_meter.volume_changed.connect(_on_volume_changed)
 	bottom_small_meter.volume_changed.connect(_on_volume_changed)
+	_setup_peak_readout()
 	
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
@@ -465,6 +468,44 @@ func _apply_header_color(new_color: Color) -> void:
 	header.queue_redraw()
 	if title:
 		title.set_font_color(Utils.contrasting_text_color(drawn))
+
+
+## Max-peak readout above the big meter. Clicking it or either meter's bars resets both meters.
+func _setup_peak_readout() -> void:
+	_peak_readout = Label.new()
+	_peak_readout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_peak_readout.add_theme_font_size_override("font_size", 11)
+	_peak_readout.mouse_filter = Control.MOUSE_FILTER_STOP
+	_peak_readout.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_peak_readout.tooltip_text = "Max peak (click to reset)"
+	big_meter.add_sibling(_peak_readout)
+	big_meter.get_parent().move_child(_peak_readout, big_meter.get_index())
+	_peak_readout.visible = big_meter.visible
+	big_meter.visibility_changed.connect(func(): _peak_readout.visible = big_meter.visible)
+	_peak_readout.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_reset_peak_memory())
+	big_meter.peak_memory_reset_requested.connect(_reset_peak_memory)
+	bottom_small_meter.peak_memory_reset_requested.connect(_reset_peak_memory)
+	big_meter.max_peak_changed.connect(_on_max_peak_changed)
+	_on_max_peak_changed(-INF)
+
+
+func _reset_peak_memory() -> void:
+	big_meter.reset_peak_memory()
+	bottom_small_meter.reset_peak_memory()
+
+
+func _on_max_peak_changed(db: float) -> void:
+	if db == -INF:
+		_peak_readout.text = "-inf"
+		_peak_readout.remove_theme_color_override("font_color")
+	else:
+		_peak_readout.text = "%.1f" % db
+		if db >= 0.0:
+			_peak_readout.add_theme_color_override("font_color", big_meter.bar_color_clip)
+		else:
+			_peak_readout.remove_theme_color_override("font_color")
 
 
 func _on_channel_peak_updated(peak_left: float, peak_right: float, rms_left: float, rms_right: float) -> void:
