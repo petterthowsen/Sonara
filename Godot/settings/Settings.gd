@@ -34,6 +34,8 @@ class Setting:
 	var max_val: float = 0.0
 	var step: float = 1.0
 	var options: Array = []
+	var sub_category: String = ""
+	var control_scene: String = ""
 
 	func _init(p_key: String, p_label: String, p_type: Type, p_default, p_category: String, p_description: String = ""):
 		key = p_key
@@ -42,6 +44,28 @@ class Setting:
 		default = p_default
 		category = p_category
 		description = p_description
+
+	## Set the numeric range and step. Returns self for chaining.
+	func range(min_v: float, max_v: float, step_v: float = 1.0) -> Setting:
+		min_val = min_v
+		max_val = max_v
+		step = step_v
+		return self
+
+	## Set the allowed choices for CHOICE / CHOICE_MULTI settings. Returns self for chaining.
+	func choices(opts: Array) -> Setting:
+		options = opts
+		return self
+
+	## Assign a sub-category for grouping within the category page. Returns self for chaining.
+	func sub(name: String) -> Setting:
+		sub_category = name
+		return self
+
+	## Use a custom control scene instead of the built-in widget. Returns self for chaining.
+	func scene(path: String) -> Setting:
+		control_scene = path
+		return self
 
 
 signal setting_changed(key: String, value)
@@ -52,6 +76,7 @@ signal setting_changed(key: String, value)
 # ---------------------------------------------------------------------------
 
 const CATEGORY_AUDIO = "Audio"
+const CATEGORY_ASSETS = "Assets"
 const CATEGORY_BEHAVIOR = "Behavior"
 const CATEGORY_APPEARANCE = "Appearance"
 const CATEGORY_SHORTCUTS = "Shortcuts"
@@ -98,7 +123,7 @@ func _register_all_settings() -> void:
 		CATEGORY_BEHAVIOR,
 		"Use the computer keyboard as a MIDI input device.\n\n"
 		+ "Tip: caps-lock toggles this setting at runtime."
-	))
+	)).sub("Computer Keyboard")
 	_register(Setting.new(
 		"midi/virtual_keyboard/transpose",
 		"Transpose (semitones)",
@@ -106,7 +131,7 @@ func _register_all_settings() -> void:
 		0,
 		CATEGORY_BEHAVIOR,
 		"Transpose the virtual keyboard up or down.",
-	))
+	)).sub("Computer Keyboard").range(-24, 24, 1)
 	_register(Setting.new(
 		"midi/virtual_keyboard/velocity",
 		"Default Velocity",
@@ -114,55 +139,54 @@ func _register_all_settings() -> void:
 		100,
 		CATEGORY_BEHAVIOR,
 		"Default MIDI velocity for virtual keyboard notes.",
-	))
-	# min/max/step for the two INT settings above
-	_settings["midi/virtual_keyboard/transpose"].min_val = -24
-	_settings["midi/virtual_keyboard/transpose"].max_val = 24
-	_settings["midi/virtual_keyboard/transpose"].step = 1
-	_settings["midi/virtual_keyboard/velocity"].min_val = 1
-	_settings["midi/virtual_keyboard/velocity"].max_val = 127
-	_settings["midi/virtual_keyboard/velocity"].step = 1
+	)).sub("Computer Keyboard").range(1, 127, 1)
 
-	# --- Behavior: Asset scanning ---
+	# --- Assets ---
 	_register(Setting.new(
 		"assets/scan_interval_seconds",
 		"Asset Scan Interval",
 		Type.FLOAT,
 		30.0,
-		CATEGORY_BEHAVIOR,
+		CATEGORY_ASSETS,
 		"How often (in seconds) the browser rescans asset directories.",
-	))
-	_settings["assets/scan_interval_seconds"].min_val = 1.0
-	_settings["assets/scan_interval_seconds"].max_val = 120.0
-	_settings["assets/scan_interval_seconds"].step = 1.0
+	)).sub("Browser").range(1.0, 120.0, 1.0)
 
 	_register(Setting.new(
 		"assets/enabled_providers",
 		"Enabled Asset Providers",
 		Type.CHOICE_MULTI,
 		["filesystem", "devices", "sfz"],
-		CATEGORY_BEHAVIOR,
+		CATEGORY_ASSETS,
 		"Which asset providers are active in the browser.",
-	))
-	_settings["assets/enabled_providers"].options = ["filesystem", "devices", "sfz"]
+	)).sub("Browser").choices(["filesystem", "devices", "sfz"])
 
 	_register(Setting.new(
 		"assets/samples/paths",
 		"Audio/MIDI Search Paths",
 		Type.PATH_ARRAY,
 		["~/Music"],
-		CATEGORY_BEHAVIOR,
+		CATEGORY_ASSETS,
 		"Directories to scan for audio and MIDI files.",
-	))
+	)).sub("Audio & MIDI")
 
 	_register(Setting.new(
 		"assets/sfz/paths",
 		"SFZ Instrument Search Paths",
 		Type.PATH_ARRAY,
 		["~/Music/libs/SFZ"],
-		CATEGORY_BEHAVIOR,
+		CATEGORY_ASSETS,
 		"Directories to scan for SFZ instrument files.",
-	))
+	)).sub("SFZ Instruments")
+
+	_register(Setting.new(
+		"assets/clap/paths",
+		"CLAP Plugin Search Paths",
+		Type.PATH_ARRAY,
+		["~/.clap", "/usr/lib/clap", "/usr/local/lib/clap"],
+		CATEGORY_ASSETS,
+		"Directories scanned for .clap plugins. Entries in the CLAP_PATH environment variable are also scanned.\n\n"
+		+ "Run Edit › Scan Plugins after changing this.",
+	)).sub("CLAP Plugins")
 
 	_register(Setting.new(
 		"arranger/record_arm_follows_active_track",
@@ -171,7 +195,7 @@ func _register_all_settings() -> void:
 		true,
 		CATEGORY_BEHAVIOR,
 		"When enabled, changing the active track record-arms that track and disarms the others.",
-	))
+	)).sub("Arranger")
 	_register(Setting.new(
 		"arranger/markers/rename_on_create",
 		"Rename New Markers",
@@ -179,7 +203,7 @@ func _register_all_settings() -> void:
 		true,
 		CATEGORY_BEHAVIOR,
 		"When enabled, a newly created marker opens its name for editing (after the mouse is released).",
-	))
+	)).sub("Arranger")
 
 	# --- Appearance ---
 	_register(Setting.new(
@@ -189,7 +213,7 @@ func _register_all_settings() -> void:
 		true,
 		CATEGORY_APPEARANCE,
 		"Use the track color as the timeline background tint.",
-	))
+	)).sub("Arranger")
 	_register(Setting.new(
 		"appearance/automation_lane_height",
 		"Automation Lane Height",
@@ -197,10 +221,7 @@ func _register_all_settings() -> void:
 		40,
 		CATEGORY_APPEARANCE,
 		"Row height, in pixels, for a newly created automation lane.",
-	))
-	_settings["appearance/automation_lane_height"].min_val = 20
-	_settings["appearance/automation_lane_height"].max_val = 200
-	_settings["appearance/automation_lane_height"].step = 1
+	)).sub("Arranger").range(20, 200, 1)
 
 	# --- Audio (placeholder — engine does not expose OSC config yet) ---
 
@@ -212,7 +233,7 @@ func _register_all_settings() -> void:
 		"",
 		CATEGORY_AI,
 		"API key from openrouter.ai. Stored in plaintext in ~/.config/sonara/config.json (mode 0600). The OPENROUTER_API_KEY environment variable takes precedence."
-	))
+	)).sub("Connection")
 	_register(Setting.new(
 		"ai/openrouter/base_url",
 		"OpenRouter Base URL",
@@ -220,7 +241,7 @@ func _register_all_settings() -> void:
 		"https://openrouter.ai/api/v1",
 		CATEGORY_AI,
 		"Override for proxies. Default is the official OpenRouter Chat Completions API."
-	))
+	)).sub("Connection")
 	_register(Setting.new(
 		"ai/openrouter/model",
 		"Model",
@@ -228,7 +249,7 @@ func _register_all_settings() -> void:
 		"anthropic/claude-sonnet-4.5",
 		CATEGORY_AI,
 		"OpenRouter model id, e.g. anthropic/claude-sonnet-4.5"
-	))
+	)).sub("Connection")
 	_register(Setting.new(
 		"ai/chat/temperature",
 		"Temperature",
@@ -236,10 +257,7 @@ func _register_all_settings() -> void:
 		0.7,
 		CATEGORY_AI,
 		"Sampling temperature for chat completions."
-	))
-	_settings["ai/chat/temperature"].min_val = 0.0
-	_settings["ai/chat/temperature"].max_val = 2.0
-	_settings["ai/chat/temperature"].step = 0.1
+	)).sub("Chat").range(0.0, 2.0, 0.1)
 	_register(Setting.new(
 		"ai/chat/max_tokens",
 		"Max Output Tokens",
@@ -247,10 +265,7 @@ func _register_all_settings() -> void:
 		4096,
 		CATEGORY_AI,
 		"Cap on tokens the model may generate per request (each tool round is a separate request). Thinking tokens count toward it. Does not limit the context sent."
-	))
-	_settings["ai/chat/max_tokens"].min_val = 256
-	_settings["ai/chat/max_tokens"].max_val = 32000
-	_settings["ai/chat/max_tokens"].step = 256
+	)).sub("Chat").range(256, 32000, 256)
 	_register(Setting.new(
 		"ai/chat/max_tool_rounds",
 		"Max Tool Rounds",
@@ -258,10 +273,7 @@ func _register_all_settings() -> void:
 		64,
 		CATEGORY_AI,
 		"How many tool-call rounds the assistant may run in one turn before it must stop and reply."
-	))
-	_settings["ai/chat/max_tool_rounds"].min_val = 8
-	_settings["ai/chat/max_tool_rounds"].max_val = 256
-	_settings["ai/chat/max_tool_rounds"].step = 8
+	)).sub("Chat").range(8, 256, 8)
 	_register(Setting.new(
 		"ai/chat/reasoning",
 		"Show Thinking",
@@ -269,7 +281,7 @@ func _register_all_settings() -> void:
 		false,
 		CATEGORY_AI,
 		"Request model reasoning tokens and show them as a collapsible block in chat."
-	))
+	)).sub("Chat")
 	_register(Setting.new(
 		"ai/chat/reasoning_effort",
 		"Thinking Effort",
@@ -277,8 +289,7 @@ func _register_all_settings() -> void:
 		"medium",
 		CATEGORY_AI,
 		"How much reasoning the model should do when Show Thinking is on."
-	))
-	_settings["ai/chat/reasoning_effort"].options = ["low", "medium", "high"]
+	)).sub("Chat").choices(["low", "medium", "high"])
 	_register(Setting.new(
 		"ai/chat/user_instructions",
 		"Custom Instructions",
@@ -286,7 +297,7 @@ func _register_all_settings() -> void:
 		"",
 		CATEGORY_AI,
 		"Extra instructions added to the assistant's system prompt via {user_instructions}."
-	))
+	)).sub("Chat")
 	_register(Setting.new(
 		"ai/audio/voice",
 		"Audio Voice",
@@ -294,7 +305,7 @@ func _register_all_settings() -> void:
 		"alloy",
 		CATEGORY_AI,
 		"Voice id for chat audio output (and later TTS)."
-	))
+	)).sub("Audio")
 	_register(Setting.new(
 		"ai/audio/format",
 		"Audio Format",
@@ -302,8 +313,7 @@ func _register_all_settings() -> void:
 		"wav",
 		CATEGORY_AI,
 		"Audio format for chat audio output. wav plays natively in Godot."
-	))
-	_settings["ai/audio/format"].options = ["wav", "mp3"]
+	)).sub("Audio").choices(["wav", "mp3"])
 	_register(Setting.new(
 		"ai/debug/keep_exchanges",
 		"Keep Request Logs",
@@ -311,14 +321,12 @@ func _register_all_settings() -> void:
 		200,
 		CATEGORY_AI,
 		"How many raw request/response JSON records to keep per conversation (next to the chat files) for the request viewer. 0 turns logging off. Each record holds the full request, so long chats use several MB."
-	))
-	_settings["ai/debug/keep_exchanges"].min_val = 0
-	_settings["ai/debug/keep_exchanges"].max_val = 2000
-	_settings["ai/debug/keep_exchanges"].step = 50
+	)).sub("Debug").range(0, 2000, 50)
 
 
-func _register(s: Setting) -> void:
+func _register(s: Setting) -> Setting:
 	_settings[s.key] = s
+	return s
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +334,16 @@ func _register(s: Setting) -> void:
 # ---------------------------------------------------------------------------
 
 func get_categories() -> Array[String]:
-	"""Return the ordered list of category names."""
-	return [CATEGORY_AUDIO, CATEGORY_BEHAVIOR, CATEGORY_APPEARANCE, CATEGORY_AI, CATEGORY_SHORTCUTS]
+	"""Return the ordered list of category names that have at least one registered setting."""
+	var all_categories := [CATEGORY_AUDIO, CATEGORY_ASSETS, CATEGORY_BEHAVIOR, CATEGORY_APPEARANCE, CATEGORY_AI, CATEGORY_SHORTCUTS]
+	var used: Dictionary = {}
+	for s in _settings.values():
+		used[s.category] = true
+	var result: Array[String] = []
+	for c in all_categories:
+		if used.has(c):
+			result.append(c)
+	return result
 
 
 func get_settings_for_category(category: String) -> Array[Setting]:
@@ -336,6 +352,56 @@ func get_settings_for_category(category: String) -> Array[Setting]:
 	for s in _settings.values():
 		if s.category == category:
 			result.append(s)
+	return result
+
+
+func get_sub_categories(category: String) -> Array[String]:
+	"""Distinct sub-categories of *category*, in registration order. "" (no sub-category) sorts first, if present."""
+	var order: Array[String] = []
+	var seen: Dictionary = {}
+	var has_unassigned := false
+	for s in _settings.values():
+		if s.category != category:
+			continue
+		if s.sub_category == "":
+			has_unassigned = true
+			continue
+		if not seen.has(s.sub_category):
+			seen[s.sub_category] = true
+			order.append(s.sub_category)
+	if has_unassigned:
+		order.push_front("")
+	return order
+
+
+## Scores at or below this are not a match.
+const SEARCH_MIN_SCORE := 0.5
+
+
+func search(query: String) -> Array[Setting]:
+	"""Settings matching *query*, best first. Empty query returns []."""
+	var q := query.strip_edges()
+	var result: Array[Setting] = []
+	if q.is_empty():
+		return result
+	var scored: Array = []
+	var idx := 0
+	for s in _settings.values():
+		var score = Utils.fuzzy_match(q, s.label)
+		score = maxf(score, 0.9 * Utils.fuzzy_match(q, s.sub_category))
+		score = maxf(score, 0.8 * Utils.fuzzy_match(q, s.category))
+		score = maxf(score, 0.7 * Utils.fuzzy_match(q, s.description))
+		score = maxf(score, 0.6 * Utils.fuzzy_match(q, s.key))
+		if score >= SEARCH_MIN_SCORE:
+			scored.append([score, idx, s])
+		idx += 1
+	scored.sort_custom(func(a, b):
+		if a[0] != b[0]:
+			return a[0] > b[0]
+		return a[1] < b[1]
+	)
+	for entry in scored:
+		result.append(entry[2])
 	return result
 
 

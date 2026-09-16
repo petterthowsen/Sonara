@@ -4,10 +4,10 @@ Implementation plan for TODO.md › Settings (all four items).
 
 ## Checklist
 
-- [ ] Phase 1: Registry API (sub-category, builder helpers, custom control scene)
-- [ ] Phase 2: Dialog layout (sub-category headers, table rows)
-- [ ] Phase 3: Fuzzy search with debounce
-- [ ] Phase 4: Assets category and CLAP search paths (Godot + engine)
+- [x?] Phase 1: Registry API (sub-category, builder helpers, custom control scene)
+- [x?] Phase 2: Dialog layout (sub-category headers, table rows)
+- [x?] Phase 3: Fuzzy search with debounce
+- [x?] Phase 4: Assets category and CLAP search paths (Godot + engine)
 
 Do the phases in order. Run `Godot/tests/run_all.sh` after each Godot phase and `cargo test` (from `Engine/`) after Phase 4. Mark the TODO items `[x?]` when a phase is done, never `[x]`.
 

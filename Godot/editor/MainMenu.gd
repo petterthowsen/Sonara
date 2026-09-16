@@ -261,7 +261,7 @@ func _on_scan_assets() -> void:
 func _on_preferences() -> void:
 	"""Show settings dialog."""
 	if Sonara.editor.settings_dialog:
-		Sonara.editor.settings_dialog.popup_centered_size(Vector2(800, 500))
+		Sonara.editor.settings_dialog.popup_centered_size(Vector2(900, 600))
 	else:
 		push_error("[MainMenu] SettingsDialog not found on Editor")
 

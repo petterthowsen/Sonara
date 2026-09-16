@@ -1,5 +1,6 @@
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Instant;
 use tracing::{info, warn};
@@ -334,7 +335,9 @@ pub enum AudioCommand {
     },
 
     // Plugin management
-    ScanPlugins,
+    ScanPlugins {
+        paths: Vec<PathBuf>,
+    },
     AdvertiseBuiltinDevices,
     GetPluginParameters {
         channel_id: ChannelId,
@@ -2317,7 +2320,7 @@ pub fn process_command(
         | AudioCommand::AddDeviceToChannel { .. }
         | AudioCommand::RemoveDeviceFromChannel { .. }
         | AudioCommand::ClearChannelDevices { .. }
-        | AudioCommand::ScanPlugins
+        | AudioCommand::ScanPlugins { .. }
         | AudioCommand::AdvertiseBuiltinDevices) => {
             warn!("{:?} must be handled by CommandWorker, ignoring", other);
         }

@@ -5,7 +5,7 @@
 [node name="SettingsDialog" type="Window" unique_id=2100000000]
 oversampling_override = 1.0
 title = "Settings"
-size = Vector2i(800, 500)
+size = Vector2i(900, 600)
 visible = false
 transient = true
 force_native = true
@@ -35,6 +35,15 @@ grow_vertical = 2
 layout_mode = 2
 theme_override_constants/separation = 8
 
+[node name="SearchEdit" type="LineEdit" parent="MarginContainer/VBoxContainer" unique_id=2100000018]
+layout_mode = 2
+placeholder_text = "Search settings…"
+clear_button_enabled = true
+
+[node name="SearchDebounce" type="Timer" parent="MarginContainer/VBoxContainer" unique_id=2100000019]
+wait_time = 0.15
+one_shot = true
+
 [node name="HSplitContainer" type="HSplitContainer" parent="MarginContainer/VBoxContainer" unique_id=2100000003]
 layout_mode = 2
 size_flags_vertical = 3
@@ -58,10 +67,15 @@ theme_type_variation = &"DarkPanel"
 layout_mode = 2
 horizontal_scroll_mode = 0
 
-[node name="Content" type="VBoxContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel/ScrollContainer" unique_id=2100000008]
+[node name="ContentMargin" type="MarginContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel/ScrollContainer" unique_id=2100000017]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 6
+theme_override_constants/margin_right = 12
+
+[node name="Content" type="VBoxContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel/ScrollContainer/ContentMargin" unique_id=2100000008]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
 
 [node name="BottomBar" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=2100000009]
 layout_mode = 2

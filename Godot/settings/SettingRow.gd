@@ -3,7 +3,7 @@
 # Dynamically creates the appropriate editor widget based on Setting.type.
 # Emits value_changed when the user edits the value.
 # Emits request_browse when a path editor needs a FileDialog.
-class_name SettingRow extends HBoxContainer
+class_name SettingRow extends VBoxContainer
 
 
 enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT }
@@ -15,8 +15,10 @@ signal request_browse(path: String, is_directory: bool)
 var setting
 
 
-@onready var name_label: Label = $NameLabel
-@onready var editor_container: HBoxContainer = $EditorContainer
+@onready var name_label: Label = $Line/LabelBox/NameLabel
+@onready var help_label: Label = $Line/LabelBox/HelpLabel
+@onready var editor_container: HBoxContainer = $Line/EditorContainer
+@onready var wide_editor_container: MarginContainer = $WideEditorContainer
 
 var _settings = null
 var _editor_widget: Control = null
@@ -56,6 +58,8 @@ func set_value_no_signal(value) -> void:
 
 
 func get_current_value():
+	if not setting.control_scene.is_empty() and _editor_widget:
+		return _editor_widget.get_value()
 	match setting.type:
 		Type.BOOL:
 			return (_editor_widget as CheckBox).button_pressed
@@ -85,9 +89,17 @@ func _refresh_ui() -> void:
 	name_label.text = setting.label
 	name_label.tooltip_text = setting.description
 
+	var help_text = setting.description.split("\n\n")[0] if not setting.description.is_empty() else ""
+	help_label.text = help_text
+	help_label.visible = not help_text.is_empty()
+
 	for child in editor_container.get_children():
 		editor_container.remove_child(child)
 		child.queue_free()
+	for child in wide_editor_container.get_children():
+		wide_editor_container.remove_child(child)
+		child.queue_free()
+	wide_editor_container.visible = false
 	_editor_widget = null
 
 	var start_value = setting.default
@@ -95,6 +107,9 @@ func _refresh_ui() -> void:
 		start_value = _settings.call("get_value", setting.key)
 	elif Sonara:
 		start_value = Sonara.get_config(setting.key, setting.default)
+
+	if not setting.control_scene.is_empty() and _build_custom_widget(start_value):
+		return
 
 	match setting.type:
 		Type.BOOL:
@@ -135,7 +150,8 @@ func _refresh_ui() -> void:
 			te.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 			te.text = str(start_value)
 			te.text_changed.connect(_on_edited)
-			editor_container.add_child(te)
+			wide_editor_container.add_child(te)
+			wide_editor_container.visible = true
 			_editor_widget = te
 
 		Type.CHOICE:
@@ -186,8 +202,31 @@ func _refresh_ui() -> void:
 			add_btn.text = "Add Path"
 			add_btn.pressed.connect(_on_path_array_add.bind(vbox))
 			vbox.add_child(add_btn)
-			editor_container.add_child(vbox)
+			wide_editor_container.add_child(vbox)
+			wide_editor_container.visible = true
 			_editor_widget = vbox
+
+
+## Instantiate setting.control_scene into editor_container. Returns true on success;
+## on failure it push_errors and leaves editor_container empty so the caller falls
+## back to the built-in widget.
+func _build_custom_widget(start_value) -> bool:
+	var packed: PackedScene = load(setting.control_scene)
+	if packed == null:
+		push_error("SettingRow: failed to load control_scene '%s' for '%s'" % [setting.control_scene, setting.key])
+		return false
+	var widget = packed.instantiate()
+	if widget == null or not (widget.has_method("setup") and widget.has_method("set_value") and widget.has_method("get_value")):
+		push_error("SettingRow: control_scene '%s' for '%s' does not implement the required interface" % [setting.control_scene, setting.key])
+		if widget:
+			widget.queue_free()
+		return false
+	editor_container.add_child(widget)
+	widget.setup(setting, start_value)
+	if widget.has_signal("value_edited"):
+		widget.value_edited.connect(_on_edited)
+	_editor_widget = widget
+	return true
 
 
 ## Create one editable path row and keep it above the Add Path button.
@@ -218,6 +257,9 @@ func _add_path_row(initial_text: String, parent_vbox: VBoxContainer) -> void:
 
 
 func _apply_value_to_widget(value) -> void:
+	if not setting.control_scene.is_empty() and _editor_widget:
+		_editor_widget.set_value(value)
+		return
 	match setting.type:
 		Type.BOOL:
 			(_editor_widget as CheckBox).button_pressed = bool(value)
@@ -357,6 +399,12 @@ func _on_path_array_text_committed(_unused = null) -> void:
 
 func _emit_path_array_changed() -> void:
 	_write_value(_read_path_array())
+
+
+## Give keyboard focus to this row's editor widget, if it has one.
+func grab_editor_focus() -> void:
+	if _editor_widget and _editor_widget.has_method("grab_focus"):
+		_editor_widget.grab_focus()
 
 
 ## Apply a FileDialog result to the active Path or PATH_ARRAY editor.

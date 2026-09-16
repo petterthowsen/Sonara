@@ -6,6 +6,7 @@
 //! because the worker is the only thread that adds or removes channels and devices.
 
 use crossbeam::channel::{Receiver, Sender};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::{info, warn};
 
@@ -76,7 +77,7 @@ impl CommandWorker {
     /// Run slow commands with the lock released and everything else under the lock.
     fn handle(&mut self, cmd: AudioCommand) {
         match cmd {
-            AudioCommand::ScanPlugins => self.scan_plugins(),
+            AudioCommand::ScanPlugins { paths } => self.scan_plugins(paths),
             AudioCommand::AdvertiseBuiltinDevices => self.advertise_builtin_devices(),
             AudioCommand::AddDeviceToChannel {
                 channel_id,
@@ -159,8 +160,9 @@ impl CommandWorker {
     }
 
     /// Scan for CLAP plugins and report each one to Godot.
-    fn scan_plugins(&mut self) {
+    fn scan_plugins(&mut self, paths: Vec<PathBuf>) {
         info!("Starting plugin scan...");
+        self.plugin_scanner.set_paths(paths);
         let count = match self.plugin_scanner.scan() {
             Ok(count) => count,
             Err(e) => {

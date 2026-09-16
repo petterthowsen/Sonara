@@ -2,15 +2,32 @@
 
 [ext_resource type="Script" uid="uid://b7lx7h0woekkx" path="res://settings/SettingRow.gd" id="1_sr1"]
 
-[node name="SettingRow" type="HBoxContainer" unique_id=1436807021]
+[node name="SettingRow" type="VBoxContainer" unique_id=1436807021]
 size_flags_horizontal = 3
-theme_override_constants/separation = 8
 script = ExtResource("1_sr1")
 
-[node name="NameLabel" type="Label" parent="." unique_id=1645828936]
-custom_minimum_size = Vector2(180, 0)
+[node name="Line" type="HBoxContainer" parent="." unique_id=1436807022]
 layout_mode = 2
+theme_override_constants/separation = 16
 
-[node name="EditorContainer" type="HBoxContainer" parent="." unique_id=1627341075]
+[node name="LabelBox" type="VBoxContainer" parent="Line" unique_id=1436807023]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="NameLabel" type="Label" parent="Line/LabelBox" unique_id=1645828936]
+layout_mode = 2
+
+[node name="HelpLabel" type="Label" parent="Line/LabelBox" unique_id=1436807024]
+layout_mode = 2
+modulate = Color(1, 1, 1, 0.6)
+theme_override_font_sizes/font_size = 13
+autowrap_mode = 2
+
+[node name="EditorContainer" type="HBoxContainer" parent="Line" unique_id=1627341075]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+alignment = 2
+
+[node name="WideEditorContainer" type="MarginContainer" parent="." unique_id=1436807025]
+visible = false
+layout_mode = 2

@@ -26,10 +26,13 @@ pub struct PluginScanner {
 }
 
 impl PluginScanner {
-    /// Create a new plugin scanner with default scan paths
+    /// Create a new plugin scanner with default scan paths, plus CLAP_PATH if set
     pub fn new() -> Self {
         Self {
-            scan_paths: Self::default_scan_paths(),
+            scan_paths: Self::resolve_scan_paths(
+                Vec::new(),
+                std::env::var("CLAP_PATH").ok().as_deref(),
+            ),
             discovered_plugins: HashMap::new(),
         }
     }
@@ -40,6 +43,34 @@ impl PluginScanner {
             scan_paths: paths,
             discovered_plugins: HashMap::new(),
         }
+    }
+
+    /// Replace the configured scan paths. An empty `paths` falls back to the built-in
+    /// defaults. CLAP_PATH entries, if set, are always appended.
+    pub fn set_paths(&mut self, paths: Vec<PathBuf>) {
+        self.scan_paths =
+            Self::resolve_scan_paths(paths, std::env::var("CLAP_PATH").ok().as_deref());
+    }
+
+    /// Build the effective scan path list: `configured` (or the built-in defaults, if
+    /// `configured` is empty), plus any directories from `clap_path_env` (a `CLAP_PATH`-style
+    /// `:`-separated list), with duplicates removed while keeping first-seen order.
+    fn resolve_scan_paths(configured: Vec<PathBuf>, clap_path_env: Option<&str>) -> Vec<PathBuf> {
+        let mut paths = if configured.is_empty() {
+            Self::default_scan_paths()
+        } else {
+            configured
+        };
+
+        if let Some(env_value) = clap_path_env {
+            for path in std::env::split_paths(env_value) {
+                paths.push(path);
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        paths.retain(|p| seen.insert(p.clone()));
+        paths
     }
 
     /// Get standard CLAP plugin paths (Linux-specific)
@@ -276,5 +307,47 @@ mod tests {
         let custom_paths = vec![PathBuf::from("/custom/path")];
         let scanner = PluginScanner::with_paths(custom_paths.clone());
         assert_eq!(scanner.scan_paths, custom_paths);
+    }
+
+    #[test]
+    fn test_resolve_scan_paths_empty_configured_uses_defaults() {
+        let resolved = PluginScanner::resolve_scan_paths(Vec::new(), None);
+        assert_eq!(resolved, PluginScanner::default_scan_paths());
+    }
+
+    #[test]
+    fn test_resolve_scan_paths_configured_replaces_defaults() {
+        let configured = vec![PathBuf::from("/custom/path")];
+        let resolved = PluginScanner::resolve_scan_paths(configured.clone(), None);
+        assert_eq!(resolved, configured);
+    }
+
+    #[test]
+    fn test_resolve_scan_paths_appends_clap_path_entries() {
+        let configured = vec![PathBuf::from("/custom/path")];
+        let resolved =
+            PluginScanner::resolve_scan_paths(configured, Some("/from/env/a:/from/env/b"));
+        assert_eq!(
+            resolved,
+            vec![
+                PathBuf::from("/custom/path"),
+                PathBuf::from("/from/env/a"),
+                PathBuf::from("/from/env/b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_scan_paths_deduplicates_keeping_order() {
+        let configured = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let resolved = PluginScanner::resolve_scan_paths(configured, Some("/b:/a:/c"));
+        assert_eq!(
+            resolved,
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
     }
 }

@@ -4,7 +4,7 @@ use rosc::{OscMessage, OscPacket, OscType};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::net::{SocketAddr, UdpSocket};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1451,9 +1451,18 @@ impl OscServer {
                 }
             }
             // Plugin management - path-based: /plugin/{command}
+            // /plugin/scan [path:String]* — with no args, the engine uses its built-in
+            // default search paths (and CLAP_PATH, if set).
             ["plugin", "scan"] => {
-                info!("Scan plugins");
-                command_tx.send(AudioCommand::ScanPlugins)?;
+                let paths: Vec<PathBuf> = args
+                    .iter()
+                    .filter_map(|a| match a {
+                        OscType::String(s) => Some(PathBuf::from(s)),
+                        _ => None,
+                    })
+                    .collect();
+                info!("Scan plugins: {} configured path(s)", paths.len());
+                command_tx.send(AudioCommand::ScanPlugins { paths })?;
             }
             ["builtin", "request"] => {
                 info!("Request builtin devices");
