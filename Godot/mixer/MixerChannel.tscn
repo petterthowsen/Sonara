@@ -229,10 +229,11 @@ layout_mode = 2
 layout_mode = 2
 size_flags_vertical = 3
 size_flags_stretch_ratio = 1.5
-split_offsets = PackedInt32Array(-82, -136)
-split_offset = -82
+split_offsets = PackedInt32Array(-111)
+split_offset = -111
 
 [node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
+visible = false
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_stretch_ratio = 3.0
@@ -386,7 +387,6 @@ size_flags_stretch_ratio = 0.5
 theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")
 
 [node name="CompactMeter" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1247433210 groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]
-visible = false
 layout_mode = 2
 peak_left = 0.0
 peak_right = 0.0
@@ -405,6 +405,7 @@ volume_db = -6.0
 fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 
 [node name="Fader" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1988525762 groups=["mixer_channel_fader"]]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_default_cursor_shape = 2
@@ -468,6 +469,7 @@ theme_override_constants/separation = 0
 script = ExtResource("10_8wi2u")
 
 [node name="EmptyNotice" type="Label" parent="HBox/ChildrenClip/Children" unique_id=588737186]
+visible = false
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_colors/font_color = Color(1, 1, 1, 0.49803922)

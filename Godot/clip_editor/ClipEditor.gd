@@ -2,6 +2,10 @@ class_name ClipEditor extends VBoxContainer
 
 var log := Log.make("ClipEditor")
 
+## Emitted when the user picks a track in the Track-Mode track list (not on programmatic/silent
+## selection). Editor uses this to optionally mirror the pick onto the arranger/mixer selection.
+signal track_mode_track_selected(track: Track)
+
 # left panel will show track list when showing multiple clips, with buttons to switch between clips
 @onready var left_panel: PanelContainer = $HSplit/LeftPanel
 
@@ -591,6 +595,7 @@ func _on_track_selector_track_selected(track: Track):
 		midi_editor.current_track = track
 		last_track_mode_selected_track = track
 		log.info("  - Active track changed to: '%s'" % [track.name])
+	track_mode_track_selected.emit(track)
 
 
 func _select_last_active_clip_for_track(track: Track) -> ClipInstance:

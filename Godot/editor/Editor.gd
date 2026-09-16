@@ -181,7 +181,10 @@ func _connect_ui_signals():
 	
 	# Arranger selection changes
 	arranger.clips_selected.connect(_on_arranger_clips_selected)
-	
+
+	# Clip editor (MIDI editor) track-mode track list selection
+	clip_editor.track_mode_track_selected.connect(_on_clip_editor_track_mode_track_selected)
+
 	# Mixer
 	mixer.channel_focused.connect(_on_mixer_channel_focused)
 
@@ -692,9 +695,36 @@ func _on_time_signature_changed(text: String) -> void:
 func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) -> void:
 	"""Handle clip selection from Arranger."""
 	logger.info("[Editor] Clips selected: %d clips, multi_track=%s" % [clips.size(), multi_track])
-	
+
 	# Emit new multi-clip signal
 	clips_selected.emit(clips, multi_track)
+
+	if not clips.is_empty() and Settings and Settings.get_value("selection/track_follows_clip_selection"):
+		var tracks: Array[Track] = []
+		for c in clips:
+			if c.track and not tracks.has(c.track):
+				tracks.append(c.track)
+		if not tracks.is_empty():
+			_select_track_externally(tracks, clips.back().track)
+
+
+## Handle a track pick in the MIDI editor's Track-Mode track list.
+func _on_clip_editor_track_mode_track_selected(track: Track) -> void:
+	if track == null or not Settings or not Settings.get_value("selection/track_follows_midi_editor_track_list"):
+		return
+	_select_track_externally([track] as Array[Track], track)
+
+
+## Apply a track selection that originated outside the arranger track headers (clip selection,
+## MIDI editor track list), keeping TrackList's visuals and Editor's selection state in sync
+## without record-arming the track (mirrors _on_mixer_selection_changed).
+func _select_track_externally(tracks: Array[Track], active: Track) -> void:
+	if _syncing_selection:
+		return
+	_syncing_selection = true
+	(arranger.track_list as TrackList).set_selection_silent(tracks, active)
+	set_track_selection(tracks, active, false)
+	_syncing_selection = false
 
 
 # ============================================================================

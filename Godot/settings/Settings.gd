@@ -205,6 +205,24 @@ func _register_all_settings() -> void:
 		"When enabled, a newly created marker opens its name for editing (after the mouse is released).",
 	)).sub("Arranger")
 
+	# --- Behavior: Selection ---
+	_register(Setting.new(
+		"selection/track_follows_clip_selection",
+		"Track Selection Follows Clip Selection",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, selecting a clip in the arranger also selects its track.",
+	)).sub("Selection")
+	_register(Setting.new(
+		"selection/track_follows_midi_editor_track_list",
+		"Track Selection Follows MIDI Editor Track List",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, selecting a track in the MIDI editor's track list (Track Mode) also selects that track in the arranger and mixer. Useful for quickly adjusting a track's devices via the device lane while in Track Mode.",
+	)).sub("Selection")
+
 	# --- Appearance ---
 	_register(Setting.new(
 		"appearance/color_timeline_by_track",
