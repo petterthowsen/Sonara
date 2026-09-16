@@ -49,6 +49,10 @@ pub fn process_audio(
     // This allows live MIDI input to play instruments without transport running
     schedule_live_midi_events(state, callback_start, frames, sample_rate);
 
+    // Resolve automation before the transport check, so a seek while stopped still applies
+    // (REQ-008). When the tick has not moved the per-lane dedup makes this nearly free.
+    super::automation::apply_automation(state, state.get_current_tick());
+
     // Only advance playhead and process clips when playing
     if !state.get_is_playing() {
         return;

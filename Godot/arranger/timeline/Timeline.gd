@@ -33,10 +33,19 @@ var grid_helper: GridHelper:
 
 		if clip_selection_manager:
 			clip_selection_manager.grid_helper = value
+		if automation_selection_manager:
+			automation_selection_manager.grid_helper = value
 var _grid_helper: GridHelper = null
 
 var clip_selection_manager: ClipSelectionManager = ClipSelectionManager.new()
 @onready var clip_ctx_menu = $ClipContextMenu
+
+## Automation point selection, the counterpart of `clip_selection_manager` (REQ-020, REQ-021).
+var automation_selection_manager: AutomationPointSelectionManager = AutomationPointSelectionManager.new()
+
+## Timeline lane rows, keyed by the AutomationLane they show. They are direct children of this
+## VBox so AutomationRowOrder can interleave them with the TimelineTracks.
+var _lane_rows: Dictionary = {}
 
 # Signal emitted when clip selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
@@ -65,6 +74,9 @@ func _ready():
 	if not clip_ctx_menu.make_unique_requested.is_connected(_on_clip_make_unique_requested):
 		clip_ctx_menu.make_unique_requested.connect(_on_clip_make_unique_requested)
 
+	automation_selection_manager.grid_helper = grid_helper
+	automation_selection_manager.selection_changed.connect(_on_automation_selection_changed)
+
 
 func _on_grid_helper_changed() -> void:
 	"""Update timeline width when grid_helper properties change (scroll, zoom, etc)."""
@@ -75,6 +87,9 @@ func _on_grid_helper_changed() -> void:
 	for timeline_track in timeline_tracks:
 		if timeline_track:
 			timeline_track.queue_redraw()
+	for row in _lane_rows.values():
+		if is_instance_valid(row):
+			row.queue_redraw()
 
 
 func get_viewport_width() -> float:
@@ -154,6 +169,13 @@ func _on_track_added(track: Track) -> void:
 	track.order_changed.connect(_on_track_layout_changed)
 	track.parent_changed.connect(_on_track_layout_changed)
 
+	# Automation lane rows follow the track's lanes and its disclosure state.
+	track.automation_lane_added.connect(_on_automation_lane_added.bind(track))
+	track.automation_lane_removed.connect(_on_automation_lane_removed)
+	track.automation_expanded_changed.connect(_on_automation_expanded_changed)
+	for lane in track.automation_lanes:
+		_ensure_lane_row(track, lane)
+
 	# Store reference
 	if index >= timeline_tracks.size():
 		timeline_tracks.resize(index + 1)
@@ -176,6 +198,7 @@ func _on_track_removed(track: Track) -> void:
 		return
 	
 	_disconnect_track_layout_signals(track)
+	_clear_lane_rows(track)
 	
 	# Remove from timeline_tracks array
 	var index = timeline_tracks.find(timeline_track)
@@ -207,6 +230,13 @@ func _disconnect_track_layout_signals(track: Track) -> void:
 		track.order_changed.disconnect(_on_track_layout_changed)
 	if track.parent_changed.is_connected(_on_track_layout_changed):
 		track.parent_changed.disconnect(_on_track_layout_changed)
+	for connection in track.automation_lane_added.get_connections():
+		if connection["callable"].get_object() == self:
+			track.automation_lane_added.disconnect(connection["callable"])
+	if track.automation_lane_removed.is_connected(_on_automation_lane_removed):
+		track.automation_lane_removed.disconnect(_on_automation_lane_removed)
+	if track.automation_expanded_changed.is_connected(_on_automation_expanded_changed):
+		track.automation_expanded_changed.disconnect(_on_automation_expanded_changed)
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -228,15 +258,10 @@ func _update_visual_order() -> void:
 	if not project:
 		return
 	
-	# Get flat visual list from hierarchy
-	var visual_tracks = project.get_visual_track_list()
-	
-	# Reorder children to match visual order
-	for i in range(visual_tracks.size()):
-		var track = visual_tracks[i]
-		var timeline_track = _find_timeline_track(track)
-		if timeline_track:
-			move_child(timeline_track, i)
+	# One ordering helper for both arranger columns, so rows can't drift out of alignment.
+	var rows := AutomationRowOrder.build(project)
+	_sync_lane_row_visibility(rows)
+	AutomationRowOrder.apply(self, rows, _node_for_row)
 	
 	# Rebuild timeline_tracks array to match visual order
 	timeline_tracks.clear()
@@ -245,7 +270,95 @@ func _update_visual_order() -> void:
 		if child is TimelineTrack:
 			timeline_tracks.append(child as TimelineTrack)
 	
-	logger.info("Updated visual order (%d tracks)" % visual_tracks.size())
+	logger.info("Updated visual order (%d rows)" % rows.size())
+
+
+## The child Control representing `row`: a TimelineTrack for a track row, the lane's row for a
+## lane row.
+func _node_for_row(row: Dictionary) -> Node:
+	var lane: AutomationLane = row.get("lane")
+	if lane == null:
+		return _find_timeline_track(row["track"])
+	var lane_row = _lane_rows.get(lane)
+	return lane_row if is_instance_valid(lane_row) else null
+
+
+## Show only the lane rows AutomationRowOrder put in `rows`, keeping the rest alive so a
+## re-checked lane comes back instantly with its points and height.
+func _sync_lane_row_visibility(rows: Array) -> void:
+	var shown: Dictionary = {}
+	for row in rows:
+		var lane: AutomationLane = row.get("lane")
+		if lane != null:
+			shown[lane] = true
+	for lane in _lane_rows:
+		var lane_row = _lane_rows[lane]
+		if is_instance_valid(lane_row):
+			lane_row.visible = shown.has(lane)
+
+
+# ============================================================================
+# AUTOMATION LANE ROWS (REQ-013)
+# ============================================================================
+
+func _ensure_lane_row(track: Track, lane: AutomationLane) -> AutomationLaneRow:
+	if lane == null:
+		return null
+	var existing = _lane_rows.get(lane)
+	if is_instance_valid(existing):
+		return existing
+
+	var lane_row := AutomationLaneRow.new()
+	add_child(lane_row)
+	lane_row.bind_to_lane(lane, track, self)
+	lane.visibility_changed.connect(_on_lane_visibility_changed)
+	_lane_rows[lane] = lane_row
+	return lane_row
+
+
+func _clear_lane_rows(track: Track) -> void:
+	if track == null:
+		return
+	for lane in track.automation_lanes:
+		_drop_lane_row(lane)
+
+
+func _drop_lane_row(lane: AutomationLane) -> void:
+	if lane == null:
+		return
+	if lane.visibility_changed.is_connected(_on_lane_visibility_changed):
+		lane.visibility_changed.disconnect(_on_lane_visibility_changed)
+	automation_selection_manager.forget_lane(lane)
+	var lane_row = _lane_rows.get(lane)
+	if is_instance_valid(lane_row):
+		lane_row.queue_free()
+	_lane_rows.erase(lane)
+
+
+func _on_automation_lane_added(lane: AutomationLane, track: Track) -> void:
+	_ensure_lane_row(track, lane)
+	_update_visual_order()
+
+
+func _on_automation_lane_removed(lane: AutomationLane) -> void:
+	_drop_lane_row(lane)
+	_update_visual_order()
+
+
+func _on_automation_expanded_changed(_expanded: bool) -> void:
+	_update_visual_order()
+
+
+func _on_lane_visibility_changed(_visible: bool) -> void:
+	_update_visual_order()
+
+
+## Clearing the clip selection when points get selected (and vice versa) keeps exactly one of the
+## two selections active, which is what routes cut/copy/paste in `_automation_is_active()`.
+func _on_automation_selection_changed(_lane: AutomationLane, _point_ids: Array) -> void:
+	if automation_selection_manager.has_selection() and clip_selection_manager.has_selection():
+		clip_selection_manager.clear_selection()
+	queue_redraw()
 
 
 func _find_timeline_track(track: Track) -> TimelineTrack:
@@ -275,6 +388,10 @@ func _clear_all_tracks() -> void:
 							clip_selection_manager.remove_instance(clip_ui.clip_instance)
 			timeline_track.queue_free()
 	timeline_tracks.clear()
+	for lane in _lane_rows.keys():
+		_drop_lane_row(lane)
+	_lane_rows.clear()
+	automation_selection_manager.clear_selection()
 	_drag_active = false
 	_drag_cross_track = false
 	_drag_anchor_instance = null
@@ -824,7 +941,101 @@ func _find_track_index_at_global_position(mouse_pos_global: Vector2) -> int:
 	return -1
 
 
+# ============================================================================
+# AUTOMATION RANGE OPERATIONS (REQ-021)
+# ============================================================================
+# The four clipboard operations are shared between clips and automation points. The automation
+# path wins whenever points are the active selection; otherwise nothing changes for clips.
+
+## True when cut/copy/paste/duplicate should act on automation points rather than clips.
+func _automation_is_active() -> bool:
+	return automation_selection_manager != null and (
+		automation_selection_manager.has_selection()
+		or automation_selection_manager.get_full_range() != Vector2i.ZERO
+	)
+
+
+## Copy the active point range/selection. Returns false when there was nothing to copy.
+func _automation_copy() -> bool:
+	return automation_selection_manager.copy()
+
+
+func _automation_cut() -> void:
+	var operand := automation_selection_manager.get_operand()
+	if operand.is_empty() or operand["points"].is_empty():
+		logger.warn("Cut skipped - no automation points selected")
+		return
+	if not automation_selection_manager.copy():
+		return
+	AutomationActions.delete_points(operand["lane"], operand["points"])
+	automation_selection_manager.clear_selection()
+	logger.info("Cut %d automation point(s)" % operand["points"].size())
+
+
+## Paste the point clipboard into the active lane at the anchor (range start, else last click,
+## else the playhead), matching the clip paste anchor conventions.
+func _automation_paste() -> void:
+	if not automation_selection_manager.has_clipboard():
+		logger.warn("Paste skipped - automation clipboard empty")
+		return
+	var lane := automation_selection_manager.lane
+	if lane == null:
+		logger.warn("Paste skipped - no automation lane is active")
+		return
+	var playhead_ticks: int = Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
+	var target_tick := automation_selection_manager.get_paste_tick(playhead_ticks)
+	var pasted := AutomationActions.paste_segment(lane, automation_selection_manager.clipboard_specs_at(target_tick))
+	_select_pasted_points(lane, pasted)
+	logger.info("Pasted %d automation point(s) at tick %d" % [pasted.size(), target_tick])
+
+
+## Duplicate the active range/selection immediately after itself, as clip duplicate does.
+func _automation_duplicate() -> void:
+	var operand := automation_selection_manager.get_operand()
+	if operand.is_empty() or operand["points"].is_empty():
+		return
+	var previous: Dictionary = automation_selection_manager.clipboard
+	if not automation_selection_manager.copy():
+		return
+	var lane: AutomationLane = operand["lane"]
+	var target_tick := automation_selection_manager.get_duplicate_tick(int(operand["origin"]) + int(operand["length"]))
+	var pasted := AutomationActions.paste_segment(
+		lane, automation_selection_manager.clipboard_specs_at(target_tick), "Duplicate Points"
+	)
+	# Duplicate is not a copy: leave whatever was on the clipboard before untouched.
+	automation_selection_manager.clipboard = previous
+	_select_pasted_points(lane, pasted)
+	logger.info("Duplicated %d automation point(s) at tick %d" % [pasted.size(), target_tick])
+
+
+## Leave the freshly pasted points selected so a following duplicate chains off them.
+func _select_pasted_points(lane: AutomationLane, pasted: Array) -> void:
+	if pasted.is_empty():
+		return
+	var ids: Array = []
+	for point in pasted:
+		ids.append(point.id)
+	automation_selection_manager.hide_range()
+	automation_selection_manager.select_ids(lane, ids)
+
+
+## Delete the selected automation points (REQ-018). Returns false when there was no selection.
+func delete_automation_selection() -> bool:
+	if automation_selection_manager == null or not automation_selection_manager.has_selection():
+		return false
+	var lane := automation_selection_manager.lane
+	var points := automation_selection_manager.get_selected_points()
+	if points.is_empty():
+		return false
+	AutomationActions.delete_points(lane, points)
+	automation_selection_manager.clear_selection()
+	return true
+
+
 func copy_selection_to_clipboard() -> void:
+	if _automation_is_active():
+		_automation_copy()
+		return
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
 		logger.warn("Copy skipped - no clips selected")
@@ -835,6 +1046,9 @@ func copy_selection_to_clipboard() -> void:
 
 
 func cut_selection_to_clipboard() -> void:
+	if _automation_is_active():
+		_automation_cut()
+		return
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		clip_clipboard = null
 		logger.warn("Cut skipped - no clips selected")
@@ -854,6 +1068,9 @@ func cut_selection_to_clipboard() -> void:
 ## Paste clipboard clips at the last clicked location (range start, clicked tick, or playhead)
 ## onto the last clicked track. Refuses if they would overlap or run past the last track.
 func paste_clipboard() -> void:
+	if _automation_is_active() or (automation_selection_manager and automation_selection_manager.has_clipboard() and not clip_selection_manager.has_selection()):
+		_automation_paste()
+		return
 	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
 	var target_tick := clip_selection_manager.get_paste_tick(playhead_ticks) if clip_selection_manager else playhead_ticks
 	var target_track: Track = clip_selection_manager.anchor_track if clip_selection_manager else null
@@ -926,6 +1143,9 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 
 ## Duplicate selected clips at the selection end. Refuses if they would overlap.
 func duplicate_selection() -> void:
+	if _automation_is_active():
+		_automation_duplicate()
+		return
 	if not clip_selection_manager or not clip_selection_manager.has_selection():
 		return
 

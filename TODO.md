@@ -175,6 +175,7 @@ Done:
 
 - [ ] Modulation
   - [ ] Basic modulation, similar to Bitwig: allow any channel and device parameter to be modulatable
+  - [ ] Phase 1: track automation lanes for channel and device parameters (incl. MIDI CCs) — spec `docs/specs/003-automation/`
 
 ### UI / Quality of Life
 

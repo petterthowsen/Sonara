@@ -447,6 +447,10 @@ func _handle_input(event: InputEvent) -> void:
 		elif event.is_action_pressed("ui_duplicate"):
 			timeline.duplicate_selection()
 			accept_event()
+		elif event.is_action_pressed("ui_delete"):
+			# Automation points only: clips are still deleted through their context menu.
+			if timeline.delete_automation_selection():
+				accept_event()
 		elif timeline.clip_selection_manager.has_selection():
 			if event.is_action_pressed("ui_left"):
 				timeline.move_selection_by_ticks(-timeline.get_move_step_ticks())

@@ -467,8 +467,15 @@ impl ClipInstance {
 pub struct Channel {
     pub id: ChannelId,
     pub name: String,
-    pub volume_db: f32,    // dB (-60.0 to +12.0)
-    pub pan: f32,          // -1.0 (left) to +1.0 (right) for STEREO_COMBINED/MONO/BALANCE
+    pub volume_db: f32, // dB (-60.0 to +12.0)
+    pub pan: f32,       // -1.0 (left) to +1.0 (right) for STEREO_COMBINED/MONO/BALANCE
+    /// Normalized 0.0-1.0 automation override for the fader. `None` means the base `volume_db` is
+    /// used. Written only by the automation pass on the audio callback; never writes `volume_db`.
+    pub automation_volume: Option<f32>,
+    /// Normalized 0.0-1.0 automation override for `pan`, with the same ownership as
+    /// `automation_volume`. Ignored in `PanMode::StereoDual`, which has two independent controls
+    /// and so no single automatable pan target.
+    pub automation_pan: Option<f32>,
     pub pan_left: f32,     // For STEREO_DUAL mode
     pub pan_right: f32,    // For STEREO_DUAL mode
     pub pan_mode: PanMode, // Pan mode (combined, dual, balance, mono)
@@ -540,6 +547,8 @@ impl Channel {
             name,
             volume_db: if id == 1 { 0.0 } else { -6.0 },
             pan: 0.0,
+            automation_volume: None,
+            automation_pan: None,
             pan_left: 0.0,
             pan_right: 0.0,
             pan_mode: PanMode::default(),
@@ -570,11 +579,26 @@ impl Channel {
     }
 
     /// Convert dB to linear gain (target value, not smoothed)
+    ///
+    /// Prefers the automation override when one is set, leaving `volume_db` — the base value the
+    /// project saves — untouched.
     pub fn get_gain(&self) -> f32 {
-        if self.volume_db <= -60.0 {
+        let db = match self.automation_volume {
+            Some(normalized) => super::automation::normalized_to_db(normalized),
+            None => self.volume_db,
+        };
+        if db <= -60.0 {
             0.0
         } else {
-            10.0_f32.powf(self.volume_db / 20.0)
+            10.0_f32.powf(db / 20.0)
+        }
+    }
+
+    /// Pan position in use: the automation override when set, otherwise the base `pan`.
+    fn effective_pan(&self) -> f32 {
+        match self.automation_pan {
+            Some(normalized) => super::automation::normalized_to_pan(normalized),
+            None => self.pan,
         }
     }
 
@@ -592,10 +616,12 @@ impl Channel {
     pub fn get_pan_coefficients(&self) -> PanCoefficients {
         use std::f32::consts::FRAC_PI_2;
 
+        let pan = self.effective_pan();
+
         match self.pan_mode {
             PanMode::StereoCombined => {
                 // Constant power panning
-                let angle = (self.pan + 1.0) * 0.5 * FRAC_PI_2; // Map -1..1 to 0..PI/2
+                let angle = (pan + 1.0) * 0.5 * FRAC_PI_2; // Map -1..1 to 0..PI/2
                 PanCoefficients {
                     left_to_left: angle.cos(),
                     right_to_right: angle.sin(),
@@ -616,8 +642,8 @@ impl Channel {
             }
             PanMode::StereoBalance => {
                 // Simple balance: pan < 0 reduces right, pan > 0 reduces left
-                let left_gain = if self.pan <= 0.0 { 1.0 } else { 1.0 - self.pan };
-                let right_gain = if self.pan >= 0.0 { 1.0 } else { 1.0 + self.pan };
+                let left_gain = if pan <= 0.0 { 1.0 } else { 1.0 - pan };
+                let right_gain = if pan >= 0.0 { 1.0 } else { 1.0 + pan };
                 PanCoefficients {
                     left_to_left: left_gain,
                     right_to_right: right_gain,
@@ -627,7 +653,7 @@ impl Channel {
             }
             PanMode::Mono => {
                 // Mono to stereo panning
-                let angle = (self.pan + 1.0) * 0.5 * FRAC_PI_2;
+                let angle = (pan + 1.0) * 0.5 * FRAC_PI_2;
                 PanCoefficients {
                     left_to_left: angle.cos(),
                     right_to_right: angle.sin(),
@@ -923,6 +949,8 @@ pub struct Track {
     pub active_voices: HashMap<MidiNote, Voice>,
     // Track fractional sample positions for audio playback (per clip instance)
     pub audio_playback_positions: HashMap<ClipInstanceId, f64>,
+    /// Automation lanes driving parameters on the track's linked channel.
+    pub automation_lanes: Vec<super::automation::AutomationLane>,
 }
 
 impl Track {
@@ -933,7 +961,16 @@ impl Track {
             clip_instances: Vec::new(),
             active_voices: HashMap::new(),
             audio_playback_positions: HashMap::new(),
+            automation_lanes: Vec::new(),
         }
+    }
+
+    /// Mutable lane with this id, if the track has one.
+    pub fn automation_lane_mut(
+        &mut self,
+        lane_id: &str,
+    ) -> Option<&mut super::automation::AutomationLane> {
+        self.automation_lanes.iter_mut().find(|l| l.id == lane_id)
     }
 }
 

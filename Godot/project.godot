@@ -28,8 +28,8 @@ AudioEngineOSC="*res://core/AudioEngineOSC.gd"
 Settings="*res://settings/Settings.gd"
 AssetService="*res://browser/AssetService.gd"
 MidiManager="*res://midi/MidiManager.gd"
-_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 Assistant="*res://ai/Assistant.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [debug]
 

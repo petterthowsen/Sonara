@@ -190,6 +190,17 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Use the track color as the timeline background tint.",
 	))
+	_register(Setting.new(
+		"appearance/automation_lane_height",
+		"Automation Lane Height",
+		Type.INT,
+		40,
+		CATEGORY_APPEARANCE,
+		"Row height, in pixels, for a newly created automation lane.",
+	))
+	_settings["appearance/automation_lane_height"].min_val = 20
+	_settings["appearance/automation_lane_height"].max_val = 200
+	_settings["appearance/automation_lane_height"].step = 1
 
 	# --- Audio (placeholder — engine does not expose OSC config yet) ---
 

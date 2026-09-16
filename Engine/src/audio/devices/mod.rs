@@ -252,6 +252,17 @@ pub trait AudioDevice: Send {
     /// Device maps normalized range to meaningful values.
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue);
 
+    /// Set a parameter value (normalized 0.0-1.0) taking effect at `frame_offset` samples into
+    /// the upcoming block.
+    ///
+    /// This is the seam for sample-accurate automation: the automation pass always calls this
+    /// rather than `set_parameter`, so a device that can stamp its parameter events (CLAP, and
+    /// `polysynth`) only has to override this one method. The default ignores the offset and
+    /// applies the value between blocks, which is what every device does today.
+    fn set_parameter_at(&mut self, param_id: ParamId, value: ParamValue, _frame_offset: usize) {
+        self.set_parameter(param_id, value);
+    }
+
     /// Get current parameter value (normalized 0.0-1.0)
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue>;
 

@@ -7,6 +7,8 @@
 [ext_resource type="Texture2D" uid="uid://pcrbk3wdxtd4" path="res://assets/icons/folder.svg" id="4_v1xsl"]
 [ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="5_mscrg"]
 [ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="6_ru4rj"]
+[ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="7_ru4rj"]
+[ext_resource type="Texture2D" uid="uid://ddyiilul4naja" path="res://assets/icons/audio-waveform.svg" id="8_xkg54"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
@@ -52,9 +54,9 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "drop_zone")]
+[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "drop_zone")]
 custom_minimum_size = Vector2(123, 38)
-offset_right = 224.0
+offset_right = 470.0
 offset_bottom = 38.0
 size_flags_vertical = 0
 focus_mode = 1
@@ -62,10 +64,12 @@ mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_vc4i6")
 script = ExtResource("1_q68hb")
 volumeter = NodePath("VBoxContainer/HBox/Volumeter")
-label = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Label")
-arm_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/ArmToggle")
-solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute/SoloToggle")
-mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute/MuteToggle")
+label = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Label")
+arm_toggle = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles/ArmToggle")
+solo_toggle = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles/SoloMute/SoloToggle")
+mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles/SoloMute/MuteToggle")
+automation_toggle = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Controls/Automation/AutomationToggle")
+automation_menu_button = NodePath("VBoxContainer/HBox/MarginContainer/HBox/Controls/Automation/AutomationMenuButton")
 drop_zone = NodePath("DropZone")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=883583283]
@@ -95,84 +99,12 @@ theme_override_constants/margin_top = 3
 theme_override_constants/margin_right = 3
 theme_override_constants/margin_bottom = 0
 
-[node name="Box" type="BoxContainer" parent="VBoxContainer/HBox/MarginContainer" unique_id=690933534]
+[node name="HBox" type="HBoxContainer" parent="VBoxContainer/HBox/MarginContainer" unique_id=219184688]
 layout_mode = 2
-size_flags_horizontal = 3
-size_flags_stretch_ratio = 20.0
-theme_override_constants/separation = 2
-vertical = true
 
-[node name="Top" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=896232702]
+[node name="FoldoutToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox" unique_id=562567826]
 layout_mode = 2
-size_flags_vertical = 3
-
-[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=79821339 instance=ExtResource("3_vc4i6")]
-custom_minimum_size = Vector2(24.015, 17.445)
-layout_mode = 2
-size_flags_horizontal = 3
-mouse_filter = 1
-value_type = 1
-
-[node name="Label" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="0" unique_id=448001948]
-horizontal_alignment = 0
-clip_text = true
-text_overrun_behavior = 3
-
-[node name="LineEdit" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Label" index="1" unique_id=1087718571]
-offset_top = -6.7775
-offset_bottom = 6.7775
-alignment = 0
-max_length = 200
-
-[node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=1090121590]
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-theme_override_constants/h_separation = 4
-theme_override_constants/v_separation = 4
-alignment = 2
-last_wrap_alignment = 2
-
-[node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles" unique_id=843832981]
-custom_minimum_size = Vector2(30, 18)
-layout_mode = 2
-size_flags_stretch_ratio = 0.33
-focus_mode = 0
-theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
-toggle_mode = true
-text = "R"
-
-[node name="SoloMute" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles" unique_id=1905271235]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/h_separation = 4
-theme_override_constants/v_separation = 4
-alignment = 1
-last_wrap_alignment = 2
-
-[node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute" unique_id=837592276]
-custom_minimum_size = Vector2(28, 18)
-layout_mode = 2
-size_flags_horizontal = 3
-focus_mode = 0
-theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
-theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
-toggle_mode = true
-text = "S"
-
-[node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top/Toggles/SoloMute" unique_id=1093482891]
-custom_minimum_size = Vector2(28, 18)
-layout_mode = 2
-size_flags_horizontal = 3
-focus_mode = 0
-theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
-theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
-toggle_mode = true
-text = "M"
-
-[node name="FoldoutToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/Box/Top" unique_id=562567826]
-visible = false
-layout_mode = 2
+size_flags_vertical = 4
 theme_override_constants/h_separation = 0
 theme_override_font_sizes/font_size = 24
 toggle_mode = true
@@ -184,10 +116,114 @@ script = ExtResource("5_mscrg")
 icon_default = ExtResource("4_v1xsl")
 icon_pressed = ExtResource("6_ru4rj")
 
+[node name="Label" parent="VBoxContainer/HBox/MarginContainer/HBox" unique_id=79821339 instance=ExtResource("3_vc4i6")]
+custom_minimum_size = Vector2(24.015, 17.445)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 1
+value_type = 1
+
+[node name="Label" parent="VBoxContainer/HBox/MarginContainer/HBox/Label" index="0" unique_id=448001948]
+text = "Test test"
+horizontal_alignment = 0
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="LineEdit" parent="VBoxContainer/HBox/MarginContainer/HBox/Label" index="1" unique_id=1087718571]
+offset_top = -6.7775
+offset_bottom = 6.7775
+alignment = 0
+max_length = 200
+
+[node name="Controls" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/HBox" unique_id=38626194]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+size_flags_stretch_ratio = 1.5
+alignment = 2
+last_wrap_alignment = 3
+
+[node name="Toggles" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls" unique_id=1090121590]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+alignment = 2
+last_wrap_alignment = 3
+
+[node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles" unique_id=843832981]
+custom_minimum_size = Vector2(30, 18)
+layout_mode = 2
+size_flags_stretch_ratio = 0.33
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
+toggle_mode = true
+text = "R"
+
+[node name="SoloMute" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles" unique_id=1905271235]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+alignment = 1
+last_wrap_alignment = 2
+
+[node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles/SoloMute" unique_id=837592276]
+custom_minimum_size = Vector2(28, 18)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
+toggle_mode = true
+text = "S"
+
+[node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Toggles/SoloMute" unique_id=1093482891]
+custom_minimum_size = Vector2(28, 18)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
+theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
+toggle_mode = true
+text = "M"
+
+[node name="Automation" type="HBoxContainer" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls" unique_id=1802344050]
+layout_mode = 2
+
+[node name="AutomationToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Automation" unique_id=1982835944]
+layout_mode = 2
+size_flags_horizontal = 10
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+icon = ExtResource("7_ru4rj")
+flat = true
+
+[node name="AutomationMenuButton" type="Button" parent="VBoxContainer/HBox/MarginContainer/HBox/Controls/Automation" unique_id=552412794]
+layout_mode = 2
+size_flags_horizontal = 10
+tooltip_text = "Automation lanes"
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+icon = ExtResource("8_xkg54")
+
+[node name="Box" type="BoxContainer" parent="VBoxContainer/HBox/MarginContainer" unique_id=690933534]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Top" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=896232702]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+last_wrap_alignment = 1
+
 [node name="Bottom" type="FlowContainer" parent="VBoxContainer/HBox/MarginContainer/Box" unique_id=1010182208]
 layout_mode = 2
-size_flags_vertical = 6
-alignment = 2
+size_flags_horizontal = 3
+reverse_fill = true
 
 [node name="empty" type="Control" parent="VBoxContainer" unique_id=1616882018]
 custom_minimum_size = Vector2(0, 2)
@@ -208,4 +244,4 @@ hover_color = Color(0.64166665, 0.5, 1, 1)
 hover_thickness = 2.0
 always_show = true
 
-[editable path="VBoxContainer/HBox/MarginContainer/Box/Top/Label"]
+[editable path="VBoxContainer/HBox/MarginContainer/HBox/Label"]

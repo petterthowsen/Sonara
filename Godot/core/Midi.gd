@@ -128,3 +128,52 @@ static func frequency_text(frequency: float, short := true) -> String:
 		return str(roundi(frequency)) + ("" if short else " Hz")
 	else:
 		return str(roundi(frequency / 1000.0)) + ("k" if short else " kHz")
+
+# ============================================================================
+# CC NAMES
+# ============================================================================
+
+## Standard MIDI CC (Control Change) names, keyed by controller number (REQ-016).
+const CC_NAMES: Dictionary = {
+	1: "Mod Wheel",
+	2: "Breath",
+	4: "Foot Controller",
+	5: "Portamento Time",
+	7: "Volume",
+	8: "Balance",
+	10: "Pan",
+	11: "Expression",
+	64: "Sustain",
+	65: "Portamento",
+	66: "Sostenuto",
+	67: "Soft Pedal",
+	68: "Legato",
+	69: "Hold 2",
+	71: "Resonance",
+	72: "Release Time",
+	73: "Attack Time",
+	74: "Cutoff",
+	75: "Decay Time",
+	76: "Vibrato Rate",
+	77: "Vibrato Depth",
+	78: "Vibrato Delay",
+	84: "Portamento Control",
+	91: "Reverb",
+	93: "Chorus",
+	120: "All Sound Off",
+	121: "Reset All Controllers",
+	122: "Local Control",
+	123: "All Notes Off",
+}
+
+
+## Standard name for controller `cc`, falling back to `CC{n}` when unassigned (REQ-016).
+static func cc_name(cc: int) -> String:
+	return CC_NAMES.get(cc, "CC%d" % cc)
+
+
+## Display name for controller `cc`: a non-empty `device_supplied` label wins, else `cc_name`,
+## prefixed with the controller number (e.g. `CC1 Mod Wheel`).
+static func cc_display_name(cc: int, device_supplied: String = "") -> String:
+	var label := device_supplied if device_supplied != "" else cc_name(cc)
+	return "CC%d %s" % [cc, label]

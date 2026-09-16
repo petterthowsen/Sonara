@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Instant;
 use tracing::{info, warn};
 
+use super::automation::{
+    AutomationLane, AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
+};
 use super::devices::DevicePath;
 use super::render_scratch::RenderScratch;
 use super::types::*;
@@ -131,6 +134,42 @@ pub enum AudioCommand {
     SetTrackRoute {
         id: TrackId,
         channel_id: ChannelId,
+    },
+
+    // Automation (see `audio::automation`). None of these echo an `EngineStatus`: Godot owns the
+    // lane data, and an echo would clobber and then persist the user's base values.
+    CreateAutomationLane {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+        target: AutomationTarget,
+    },
+    DeleteAutomationLane {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+    },
+    SetAutomationLaneBypass {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+        bypassed: bool,
+    },
+    AddAutomationPoint {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+        point: AutomationPoint,
+    },
+    UpdateAutomationPoint {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+        point: AutomationPoint,
+    },
+    RemoveAutomationPoint {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
+        point_id: AutomationPointId,
+    },
+    ClearAutomationLane {
+        track_id: TrackId,
+        lane_id: AutomationLaneId,
     },
 
     // Clip management (new architecture)
@@ -627,6 +666,30 @@ impl Default for EngineState {
     }
 }
 
+/// Look up a lane for an automation command, warning once when the track or lane is missing.
+fn automation_lane_mut<'a>(
+    state: &'a mut EngineState,
+    track_id: TrackId,
+    lane_id: &str,
+    action: &str,
+) -> Option<&'a mut AutomationLane> {
+    let Some(track) = state.tracks.get_mut(&track_id) else {
+        warn!(
+            "Cannot {} automation lane: track {} not found",
+            action, track_id
+        );
+        return None;
+    };
+    let lane = track.automation_lane_mut(lane_id);
+    if lane.is_none() {
+        warn!(
+            "Cannot {} automation lane {}: not found on track {}",
+            action, lane_id, track_id
+        );
+    }
+    lane
+}
+
 /// Apply a command to the engine state. Runs on the command thread with the state lock held, so
 /// it must stay fast; slow commands are handled by `CommandWorker` instead.
 pub fn process_command(
@@ -1019,6 +1082,141 @@ pub fn process_command(
                 info!("Track {} routed to channel {}", id, channel_id);
             } else {
                 warn!("Cannot set route for track {} (not found)", id);
+            }
+        }
+
+        // Automation lane management. These arms only mutate lane data — they deliberately send no
+        // `EngineStatus`, so playback never rewrites what Godot has stored and saves.
+        AudioCommand::CreateAutomationLane {
+            track_id,
+            lane_id,
+            target,
+        } => {
+            let Some(track) = state.tracks.get_mut(&track_id) else {
+                warn!(
+                    "Cannot create automation lane on track {} (not found)",
+                    track_id
+                );
+                return None;
+            };
+            if track.automation_lanes.iter().any(|l| l.id == lane_id) {
+                warn!(
+                    "Automation lane {} already exists on track {} - ignoring duplicate create",
+                    lane_id, track_id
+                );
+                return None;
+            }
+            info!(
+                "Automation lane {} created on track {} targeting {}",
+                lane_id, track_id, target
+            );
+            track
+                .automation_lanes
+                .push(AutomationLane::new(lane_id, target));
+        }
+        AudioCommand::DeleteAutomationLane { track_id, lane_id } => {
+            // Hand the parameter back to its base value before the lane disappears (REQ-004).
+            super::automation::release_track_lane(state, track_id, &lane_id);
+            let Some(track) = state.tracks.get_mut(&track_id) else {
+                warn!(
+                    "Cannot delete automation lane on track {} (not found)",
+                    track_id
+                );
+                return None;
+            };
+            let before = track.automation_lanes.len();
+            track.automation_lanes.retain(|l| l.id != lane_id);
+            if track.automation_lanes.len() == before {
+                warn!(
+                    "Automation lane {} not found on track {} for delete",
+                    lane_id, track_id
+                );
+            } else {
+                info!(
+                    "Automation lane {} deleted from track {}",
+                    lane_id, track_id
+                );
+            }
+        }
+        AudioCommand::SetAutomationLaneBypass {
+            track_id,
+            lane_id,
+            bypassed,
+        } => {
+            if let Some(lane) = automation_lane_mut(state, track_id, &lane_id, "bypass") {
+                lane.bypassed = bypassed;
+                info!(
+                    "Automation lane {} on track {} bypass={}",
+                    lane_id, track_id, bypassed
+                );
+                if bypassed {
+                    // Restore the base value now rather than waiting for the next buffer, so a
+                    // bypass with the transport stopped is audible immediately (REQ-009).
+                    super::automation::release_track_lane(state, track_id, &lane_id);
+                }
+            }
+        }
+        AudioCommand::AddAutomationPoint {
+            track_id,
+            lane_id,
+            point,
+        } => {
+            if let Some(lane) = automation_lane_mut(state, track_id, &lane_id, "add point") {
+                if lane.insert_point(point) {
+                    info!(
+                        "Automation point {} added to lane {} on track {}: tick={} value={}",
+                        point.id, lane_id, track_id, point.tick, point.value
+                    );
+                } else {
+                    warn!(
+                        "Automation point {} already exists in lane {} - ignoring duplicate add",
+                        point.id, lane_id
+                    );
+                }
+            }
+        }
+        AudioCommand::UpdateAutomationPoint {
+            track_id,
+            lane_id,
+            point,
+        } => {
+            if let Some(lane) = automation_lane_mut(state, track_id, &lane_id, "update point") {
+                if lane.update_point(point) {
+                    info!(
+                        "Automation point {} updated in lane {} on track {}: tick={} value={}",
+                        point.id, lane_id, track_id, point.tick, point.value
+                    );
+                } else {
+                    warn!(
+                        "Automation point {} not found in lane {} for update",
+                        point.id, lane_id
+                    );
+                }
+            }
+        }
+        AudioCommand::RemoveAutomationPoint {
+            track_id,
+            lane_id,
+            point_id,
+        } => {
+            if let Some(lane) = automation_lane_mut(state, track_id, &lane_id, "remove point") {
+                if lane.remove_point(point_id) {
+                    info!(
+                        "Automation point {} removed from lane {} on track {}",
+                        point_id, lane_id, track_id
+                    );
+                } else {
+                    warn!(
+                        "Automation point {} not found in lane {} for removal",
+                        point_id, lane_id
+                    );
+                }
+            }
+        }
+        AudioCommand::ClearAutomationLane { track_id, lane_id } => {
+            if let Some(lane) = automation_lane_mut(state, track_id, &lane_id, "clear") {
+                lane.clear_points();
+                info!("Automation lane {} on track {} cleared", lane_id, track_id);
             }
         }
 

@@ -1,5 +1,49 @@
 # Sonara DAW - Project Status
 
+## Parameter automation (docs/specs/003-automation)
+
+Phases 1 and 2 (engine) are in. Lanes live on `Track`, resolve once per buffer in
+`audio/automation.rs`, and apply as overrides that never write a base value.
+
+### Phase 5 (arranger UI, T-018 – T-026) implemented, not yet live-verified
+All rows share the vertical order from `arranger/AutomationRowOrder.gd` so the tracklist
+header and the timeline row stay aligned. Point edits go through `history/AutomationActions.gd`
+(one undo step per gesture, drags merge), and `Timeline` routes cut/copy/paste/duplicate/delete to
+the automation manager whenever a point selection or range is active, else to the clip path.
+Unresolved lanes (REQ-024) are marked and drawn distinctly, stop syncing to the engine but keep
+every point (`Track.refresh_automation_resolution`, driven by the linked channel's structure
+signals), and log one warning per transition.
+
+- `tests/run_all.sh`: all 32 scripts pass, including the new
+  `tests/test_automation_range_ops.gd` (T-025: 1-bar copy → paste at bar 3 lands shifted with
+  curves intact, overwrite inside the span, undo restores, anchor priority).
+- After adding new `class_name` scripts, run `godot --headless --path Godot --editor --quit` once
+  or the whole headless suite fails on the stale `global_script_class_cache.cfg` (22 spurious
+  failures this session until regenerated).
+- Still open: every "Verify: live" item in tasks.md T-018–T-026 (needs the engine running and a
+  human ear), plus phase 6 (T-027 docs) and the phase-7 walk (T-028).
+
+### Working
+- `cargo test`: 89 unit tests pass, 15 of them new in `audio/automation.rs`. `cargo fmt` clean.
+- Live (OSC only, no UI yet): all seven `/track/{id}/automation/*` addresses dispatch and apply
+  against the running engine; an unparseable target logs exactly one warning and is dropped; no
+  `PluginParameterValueChanged` echo appears in the log.
+
+### T-010 finding — the 5 ms fader smoothing is acceptable, unchanged
+`Channel::get_smoothed_gain`'s one-pole has tau = 5 ms, so a full-scale step on an automated
+volume lane reaches 90% in ~11.5 ms and 99% in ~23 ms (measured by
+`automation_volume_step_settles_within_the_fader_smoothing`, which pins those numbers). At 120 BPM
+a sixteenth note is 125 ms, so a step lane reads as a fast fade rather than a gate, and the
+smoothing that prevents zipper noise on a moving lane stays in place. No change made to
+`types.rs` or `mixing.rs`. **Still to confirm by ear** — a step lane alternating 0.0/1.0 every
+beat should sound soft-edged, not smeared; if it smears, shorten the constant only while
+`automation_volume` is `Some`.
+
+### Not verified
+- Everything audible: no UI exists yet, so nothing has been heard. The phase-7 walk (T-028)
+  covers it.
+- Plugin IPC under a moving lane (the dedup is unit-tested, the ring is not).
+
 ## Audio thread stalls (shared `Arc<Mutex<EngineState>>`)
 
 The audio callback blocked on `state.lock()` while the command thread held the lock for the whole of `process_command`, so anything slow in a command froze audio.

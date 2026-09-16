@@ -20,6 +20,14 @@ const track_item_scene: PackedScene = preload("res://arranger/tracklist/TrackIte
 # Track items indexed by track index
 var track_items: Array[TrackItem] = []
 
+## Automation lane header rows, keyed by the AutomationLane they show. Rows live as direct
+## children of this VBox so AutomationRowOrder can interleave them with the TrackItems.
+var _lane_headers: Dictionary = {}
+
+## Lazily created popups (REQ-014, REQ-015).
+var _lane_menu: AutomationLaneMenu = null
+var _parameter_picker: AutomationParameterPicker = null
+
 # Current project reference
 var current_project: Project = null
 
@@ -40,7 +48,7 @@ signal selection_changed(tracks: Array[Track], active: Track)
 func _ready():
 	# remove any nodes
 	for child in get_children():
-		if child is TrackItem:
+		if child is TrackItem or child is AutomationLaneHeader:
 			child.free()
 	
 	# Ensure TrackList fills parent so empty areas can receive drops
@@ -166,6 +174,14 @@ func _on_track_added(track: Track) -> void:
 	track_item.right_clicked.connect(_on_track_item_right_clicked)
 	track_item.select_requested.connect(_on_track_item_select_requested)
 	track_item.rename_tab_requested.connect(_on_track_item_rename_tab_requested)
+	track_item.automation_disclosure_toggled.connect(_on_automation_disclosure_toggled)
+	track_item.automation_menu_requested.connect(_on_automation_menu_requested)
+
+	# Automation lane rows follow the track's lanes and its disclosure state.
+	track.automation_lane_added.connect(_on_automation_lane_added.bind(track))
+	track.automation_lane_removed.connect(_on_automation_lane_removed.bind(track))
+	track.automation_expanded_changed.connect(_on_automation_expanded_changed.bind(track))
+	_rebuild_lane_headers(track)
 
 	# Store reference
 	if index >= track_items.size():
@@ -187,6 +203,7 @@ func _on_track_removed(track: Track) -> void:
 		return
 	
 	_disconnect_track_layout_signals(track)
+	_clear_lane_headers(track)
 
 	_remove_track_from_selection(track)
 	
@@ -209,6 +226,15 @@ func _disconnect_track_layout_signals(track: Track) -> void:
 		track.order_changed.disconnect(_on_track_layout_changed)
 	if track.parent_changed.is_connected(_on_track_layout_changed):
 		track.parent_changed.disconnect(_on_track_layout_changed)
+	for connection in track.automation_lane_added.get_connections():
+		if connection["callable"].get_object() == self:
+			track.automation_lane_added.disconnect(connection["callable"])
+	for connection in track.automation_lane_removed.get_connections():
+		if connection["callable"].get_object() == self:
+			track.automation_lane_removed.disconnect(connection["callable"])
+	for connection in track.automation_expanded_changed.get_connections():
+		if connection["callable"].get_object() == self:
+			track.automation_expanded_changed.disconnect(connection["callable"])
 
 
 ## Rebuild UI order when a track's sibling order or folder parent changes.
@@ -275,10 +301,15 @@ func _clear_all_track_items() -> void:
 	"""Remove all track items."""
 	for track_item in track_items:
 		if track_item is TrackItem:
+			_clear_lane_headers(track_item.track)
 			_disconnect_track_layout_signals(track_item.track)
 			track_item.queue_free()
 	
 	track_items.clear()
+	for header in _lane_headers.values():
+		if is_instance_valid(header):
+			header.queue_free()
+	_lane_headers.clear()
 	
 
 # ============================================================================
@@ -807,18 +838,175 @@ func _update_visual_order() -> void:
 	if not current_project:
 		return
 	
-	# Get flat visual list from hierarchy
-	var visual_tracks = current_project.get_visual_track_list()
-	
-	# Reorder UI elements to match
-	for i in range(visual_tracks.size()):
-		var track = visual_tracks[i]
-		var track_item = _find_track_item(track)
-		if track_item:
-			move_child(track_item, i)
+	# One ordering helper for both arranger columns, so headers and timeline rows can't drift.
+	var rows := AutomationRowOrder.build(current_project)
+	_sync_lane_header_visibility(rows)
+	AutomationRowOrder.apply(self, rows, _node_for_row)
 
 	if _reorder_drag == null:
-		logger.info("Updated visual order (%d tracks)" % visual_tracks.size())
+		logger.info("Updated visual order (%d rows)" % rows.size())
+
+
+## The child Control representing `row`: a TrackItem for a track row, the lane's header for a
+## lane row.
+func _node_for_row(row: Dictionary) -> Node:
+	var lane: AutomationLane = row.get("lane")
+	if lane == null:
+		return _find_track_item(row["track"])
+	var header = _lane_headers.get(lane)
+	return header if is_instance_valid(header) else null
+
+
+## Show only the lane headers that AutomationRowOrder put in `rows`; hide the rest without
+## freeing them, so re-checking a lane in the menu is instant and keeps its height.
+func _sync_lane_header_visibility(rows: Array) -> void:
+	var shown: Dictionary = {}
+	for row in rows:
+		var lane: AutomationLane = row.get("lane")
+		if lane != null:
+			shown[lane] = true
+	for lane in _lane_headers:
+		var header = _lane_headers[lane]
+		if is_instance_valid(header):
+			header.visible = shown.has(lane)
+
+
+# ============================================================================
+# AUTOMATION LANE ROWS
+# ============================================================================
+
+## Create the header rows for every lane on `track` that does not have one yet.
+func _rebuild_lane_headers(track: Track) -> void:
+	if track == null:
+		return
+	for lane in track.automation_lanes:
+		_ensure_lane_header(track, lane)
+
+
+func _ensure_lane_header(track: Track, lane: AutomationLane) -> AutomationLaneHeader:
+	if lane == null:
+		return null
+	var existing = _lane_headers.get(lane)
+	if is_instance_valid(existing):
+		return existing
+
+	var header := AutomationLaneHeader.new()
+	add_child(header)
+	header.bind_to_lane(lane, track, current_project)
+	header.bypass_toggled.connect(_on_lane_bypass_toggled)
+	header.delete_requested.connect(_on_lane_delete_requested.bind(track))
+	# A lane menu checkbox changes which rows exist, so both columns re-order.
+	lane.visibility_changed.connect(_on_lane_visibility_changed)
+	_lane_headers[lane] = header
+	return header
+
+
+## Free every lane header belonging to `track`.
+func _clear_lane_headers(track: Track) -> void:
+	if track == null:
+		return
+	for lane in track.automation_lanes:
+		_drop_lane_header(lane)
+
+
+func _drop_lane_header(lane: AutomationLane) -> void:
+	if lane == null:
+		return
+	if lane.visibility_changed.is_connected(_on_lane_visibility_changed):
+		lane.visibility_changed.disconnect(_on_lane_visibility_changed)
+	var header = _lane_headers.get(lane)
+	if is_instance_valid(header):
+		header.queue_free()
+	_lane_headers.erase(lane)
+
+
+func _on_automation_lane_added(lane: AutomationLane, track: Track) -> void:
+	_ensure_lane_header(track, lane)
+	# A lane the user just created should be visible without a second click.
+	track.automation_expanded = true
+	_update_visual_order()
+	var item := _find_track_item(track)
+	if item:
+		item._update_automation_controls()
+
+
+func _on_automation_lane_removed(lane: AutomationLane, track: Track) -> void:
+	_drop_lane_header(lane)
+	_update_visual_order()
+	var item := _find_track_item(track)
+	if item:
+		item._update_automation_controls()
+
+
+func _on_automation_expanded_changed(_expanded: bool, _track: Track) -> void:
+	_update_visual_order()
+
+
+func _on_lane_visibility_changed(_visible: bool) -> void:
+	_update_visual_order()
+
+
+## Disclosure arrow on a track header.
+func _on_automation_disclosure_toggled(track: Track, expanded: bool) -> void:
+	if track:
+		track.automation_expanded = expanded
+
+
+## Automation button on a track header: open the lane menu (REQ-014).
+func _on_automation_menu_requested(track: Track, mouse_position: Vector2) -> void:
+	if track == null:
+		return
+	if _lane_menu == null:
+		_lane_menu = AutomationLaneMenu.new()
+		add_child(_lane_menu)
+		_lane_menu.add_lane_requested.connect(_on_add_lane_requested)
+	_lane_menu.open_for(track, mouse_position)
+
+
+## `+ Add new` in the lane menu: pick a parameter, then create the lane (REQ-015).
+func _on_add_lane_requested(track: Track) -> void:
+	if track == null:
+		return
+	if _parameter_picker == null:
+		_parameter_picker = AutomationParameterPicker.new()
+		add_child(_parameter_picker)
+		_parameter_picker.parameter_chosen.connect(_on_automation_parameter_chosen)
+	_parameter_picker.open_for(track, get_global_mouse_position())
+
+
+## Build the lane and record it as one undoable step. It starts with a single point holding the
+## parameter's current value, so creating a lane never jumps what you hear (REQ-004).
+func _on_automation_parameter_chosen(track: Track, target: AutomationTarget) -> void:
+	if track == null or target == null:
+		return
+	var lane := AutomationLane.new(_unique_lane_id(track), target)
+	lane.height = Settings.get_value("appearance/automation_lane_height")
+	lane.color = Utils.display_color(track.color)
+	var seed_value: float = target.current_normalized_value(track.get_linked_channel())
+	AutomationActions.create_lane(track, lane)
+	AutomationActions.add_point(lane, 0, seed_value)
+
+
+## A lane id unique within `track`. Ids are per-track because that is the OSC addressing scope.
+func _unique_lane_id(track: Track) -> String:
+	var used: Dictionary = {}
+	for lane in track.automation_lanes:
+		used[lane.id] = true
+	var n := track.automation_lanes.size()
+	while used.has("lane%d" % n):
+		n += 1
+	return "lane%d" % n
+
+
+func _on_lane_bypass_toggled(lane: AutomationLane, bypassed: bool) -> void:
+	HistoryUtil.execute_property(
+		"Bypass Lane" if bypassed else "Enable Lane",
+		lane, "set_bypassed", not bypassed, bypassed
+	)
+
+
+func _on_lane_delete_requested(lane: AutomationLane, track: Track) -> void:
+	AutomationActions.delete_lane(track, lane)
 
 
 ## Find the TrackItem UI element for a given track.

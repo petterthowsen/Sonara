@@ -11,6 +11,10 @@ signal right_clicked(track: Track, mouse_position: Vector2)
 signal select_requested(track: Track, additive: bool, range_select: bool)
 ## Tab/Shift+Tab while renaming: apply the name and continue on the adjacent track.
 signal rename_tab_requested(track: Track, reverse: bool)
+## Disclosure arrow toggled: TrackList shows or hides this track's automation lane rows (REQ-014).
+signal automation_disclosure_toggled(track: Track, expanded: bool)
+## Lane-menu button pressed: TrackList pops up AutomationLaneMenu at this position (REQ-014).
+signal automation_menu_requested(track: Track, mouse_position: Vector2)
 
 @export var bg_color := Color.CORNFLOWER_BLUE:
 	set(c):
@@ -31,6 +35,8 @@ signal rename_tab_requested(track: Track, reverse: bool)
 @export var arm_toggle: Button
 @export var solo_toggle: Button 
 @export var mute_toggle: Button
+@export var automation_toggle: Button
+@export var automation_menu_button: Button
 
 # at the bottom, a drop zone
 @export var drop_zone: DropZone
@@ -68,6 +74,10 @@ func _ready():
 			solo_toggle.toggled.connect(_on_solo_toggled)
 		if mute_toggle:
 			mute_toggle.toggled.connect(_on_mute_toggled)
+		if automation_toggle:
+			automation_toggle.toggled.connect(_on_automation_toggled)
+		if automation_menu_button:
+			automation_menu_button.pressed.connect(_on_automation_menu_pressed)
 
 		# Connect volumeter signal for volume changes
 		if volumeter:
@@ -212,6 +222,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 		track.height_changed.connect(_on_track_height_changed)
 		track.default_channel_id_changed.connect(_on_track_channel_id_changed)
 		track.parent_changed.connect(_on_track_parent_changed)
+		track.automation_expanded_changed.connect(_on_track_automation_expanded_changed)
 
 	# Look up and bind to the track's channel
 	_bind_to_track_channel()
@@ -240,6 +251,7 @@ func _update_from_track() -> void:
 		solo_toggle.set_pressed_no_signal(track.solo)
 	if mute_toggle:
 		mute_toggle.set_pressed_no_signal(track.muted)
+	_update_automation_controls()
 
 	# Apply track color, selection styling, and nesting indent
 	_update_header_style()
@@ -291,6 +303,8 @@ func _unbind() -> void:
 			track.default_channel_id_changed.disconnect(_on_track_channel_id_changed)
 		if track.parent_changed.is_connected(_on_track_parent_changed):
 			track.parent_changed.disconnect(_on_track_parent_changed)
+		if track.automation_expanded_changed.is_connected(_on_track_automation_expanded_changed):
+			track.automation_expanded_changed.disconnect(_on_track_automation_expanded_changed)
 	track = null
 	current_project = null
 
@@ -453,6 +467,37 @@ func _on_solo_toggled(pressed: bool) -> void:
 func _on_mute_toggled(pressed: bool) -> void:
 	if track:
 		track.set_mute(pressed)
+
+
+## Open or close this track's automation lane rows. TrackList owns the row bookkeeping; this
+## header only reports the gesture.
+func _on_automation_toggled(pressed: bool) -> void:
+	if track:
+		automation_disclosure_toggled.emit(track, pressed)
+
+
+func _on_automation_menu_pressed() -> void:
+	if track:
+		automation_menu_requested.emit(track, get_global_mouse_position())
+
+
+## Follow the model when the disclosure is changed elsewhere (the lane menu expands the track
+## when a lane is created or re-checked).
+func _on_track_automation_expanded_changed(_expanded: bool) -> void:
+	_update_automation_controls()
+
+
+## Reflect the track's disclosure state, and show the arrow as filled when lanes exist.
+func _update_automation_controls() -> void:
+	if track == null:
+		return
+	if automation_toggle:
+		automation_toggle.set_pressed_no_signal(track.automation_expanded)
+		automation_toggle.text = "v" if track.automation_expanded else ">"
+		automation_toggle.disabled = track.automation_lanes.is_empty()
+		automation_toggle.tooltip_text = (
+			"Show/hide automation lanes (%d)" % track.automation_lanes.size()
+		)
 
 
 func _on_label_value_changed(new_value: String) -> void:

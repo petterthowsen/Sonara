@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+use crate::audio::automation::{AutomationPoint, AutomationPointId, AutomationTarget, CurveKind};
 use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
 use crate::audio::types::ClipLoadState;
@@ -949,6 +950,114 @@ impl OscServer {
                     command_tx.send(AudioCommand::SetTrackRoute {
                         id,
                         channel_id: *channel_id as usize,
+                    })?;
+                }
+            }
+
+            // Automation - path-based: /track/{id}/automation/...
+            ["track", id_str, "automation", "create"] => {
+                if let (
+                    Ok(track_id),
+                    Some(OscType::String(lane_id)),
+                    Some(OscType::String(target)),
+                ) = (id_str.parse::<usize>(), args.get(0), args.get(1))
+                {
+                    match AutomationTarget::parse(target) {
+                        Some(target) => {
+                            info!(
+                                "Create automation lane {} on track {} targeting {}",
+                                lane_id, track_id, target
+                            );
+                            command_tx.send(AudioCommand::CreateAutomationLane {
+                                track_id,
+                                lane_id: lane_id.clone(),
+                                target,
+                            })?;
+                        }
+                        None => {
+                            warn!(
+                                "Unparseable automation target '{}' for lane {} on track {} - ignoring",
+                                target, lane_id, track_id
+                            );
+                        }
+                    }
+                }
+            }
+            ["track", id_str, "automation", lane_id, "delete"] => {
+                if let Ok(track_id) = id_str.parse::<usize>() {
+                    info!("Delete automation lane {} on track {}", lane_id, track_id);
+                    command_tx.send(AudioCommand::DeleteAutomationLane {
+                        track_id,
+                        lane_id: lane_id.to_string(),
+                    })?;
+                }
+            }
+            ["track", id_str, "automation", lane_id, "bypass"] => {
+                if let (Ok(track_id), Some(OscType::Int(bypassed))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    info!(
+                        "Set automation lane {} on track {} bypass={}",
+                        lane_id, track_id, bypassed
+                    );
+                    command_tx.send(AudioCommand::SetAutomationLaneBypass {
+                        track_id,
+                        lane_id: lane_id.to_string(),
+                        bypassed: *bypassed != 0,
+                    })?;
+                }
+            }
+            ["track", id_str, "automation", lane_id, "add_point"] => {
+                if let (Ok(track_id), Some(point)) =
+                    (id_str.parse::<usize>(), parse_automation_point(args))
+                {
+                    info!(
+                        "Add automation point {} to lane {} on track {}: tick={} value={}",
+                        point.id, lane_id, track_id, point.tick, point.value
+                    );
+                    command_tx.send(AudioCommand::AddAutomationPoint {
+                        track_id,
+                        lane_id: lane_id.to_string(),
+                        point,
+                    })?;
+                }
+            }
+            ["track", id_str, "automation", lane_id, "update_point"] => {
+                if let (Ok(track_id), Some(point)) =
+                    (id_str.parse::<usize>(), parse_automation_point(args))
+                {
+                    info!(
+                        "Update automation point {} in lane {} on track {}: tick={} value={}",
+                        point.id, lane_id, track_id, point.tick, point.value
+                    );
+                    command_tx.send(AudioCommand::UpdateAutomationPoint {
+                        track_id,
+                        lane_id: lane_id.to_string(),
+                        point,
+                    })?;
+                }
+            }
+            ["track", id_str, "automation", lane_id, "remove_point"] => {
+                if let (Ok(track_id), Some(OscType::Int(point_id))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    info!(
+                        "Remove automation point {} from lane {} on track {}",
+                        point_id, lane_id, track_id
+                    );
+                    command_tx.send(AudioCommand::RemoveAutomationPoint {
+                        track_id,
+                        lane_id: lane_id.to_string(),
+                        point_id: *point_id as AutomationPointId,
+                    })?;
+                }
+            }
+            ["track", id_str, "automation", lane_id, "clear"] => {
+                if let Ok(track_id) = id_str.parse::<usize>() {
+                    info!("Clear automation lane {} on track {}", lane_id, track_id);
+                    command_tx.send(AudioCommand::ClearAutomationLane {
+                        track_id,
+                        lane_id: lane_id.to_string(),
                     })?;
                 }
             }
@@ -2174,4 +2283,31 @@ fn generate_device_request_id(channel_id: usize, device_path: &DevicePath) -> St
         .unwrap_or_default()
         .as_nanos();
     format!("device:{}:{}:{}", channel_id, device_path, now)
+}
+
+/// Parse the shared `i:point_id, i:tick, f:value, s:curve, f:tension` argument list used by
+/// `/track/{id}/automation/{lane_id}/add_point` and `.../update_point`.
+fn parse_automation_point(args: &[OscType]) -> Option<AutomationPoint> {
+    let (
+        Some(OscType::Int(point_id)),
+        Some(OscType::Int(tick)),
+        Some(OscType::Float(value)),
+        Some(OscType::String(curve)),
+    ) = (args.get(0), args.get(1), args.get(2), args.get(3))
+    else {
+        warn!("Malformed automation point arguments: {:?}", args);
+        return None;
+    };
+    // Tension is optional on the wire; phase-1 Godot always sends 0.0.
+    let tension = match args.get(4) {
+        Some(OscType::Float(t)) => *t,
+        _ => 0.0,
+    };
+    Some(AutomationPoint::new(
+        *point_id as AutomationPointId,
+        *tick as i64,
+        *value,
+        CurveKind::parse(curve),
+        tension,
+    ))
 }

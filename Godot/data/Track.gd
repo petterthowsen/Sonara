@@ -16,6 +16,9 @@ signal height_changed(new_height: int)
 signal default_channel_id_changed(new_channel_id: int)
 signal order_changed(new_order: int)
 signal parent_changed(new_parent_id: int)
+signal automation_lane_added(lane: AutomationLane)
+signal automation_lane_removed(lane: AutomationLane)
+signal automation_expanded_changed(expanded: bool)
 
 # ============================================================================
 # PROPERTIES
@@ -57,7 +60,7 @@ var order: int:
 
 # Timeline data (PPQ-based positions)
 var clip_instances: Array[ClipInstance] = []  # Array of ClipInstance objects
-var automation_lanes: Array = []  # Array of AutomationLane objects
+var automation_lanes: Array[AutomationLane] = []
 
 # Routing
 var _default_channel_id: int = -1  # -1 = no routing, otherwise ID of Channel
@@ -83,6 +86,9 @@ var default_channel_id: int:
 			# Handle channel registration for bi-directional linking
 			_update_channel_registration(old_channel_id, value)
 
+			# The linked channel changed: every lane's target must be re-evaluated (REQ-024).
+			refresh_automation_resolution()
+
 			# Handle connection state changes
 			if _is_connected and is_now_routed:
 				# Update routing to new channel
@@ -103,6 +109,23 @@ var parent_track_id: int:
 
 var child_track_ids: Array[int] = []  # Child tracks of a folder or group
 var is_folder_expanded: bool = true  # UI state for folder/group tracks
+
+var _automation_expanded: bool = false
+
+## The channel whose structure signals currently drive `refresh_automation_resolution`, so
+## re-linking doesn't stack duplicate connections (REQ-024).
+var _automation_watch_channel: Channel = null
+
+## Whether this track's automation lane rows are disclosed in the arranger (REQ-014). Both
+## arranger columns read it through AutomationRowOrder, so it lives on the model rather than on
+## either TrackItem or the timeline row.
+var automation_expanded: bool:
+	get:
+		return _automation_expanded
+	set(value):
+		if _automation_expanded != value:
+			_automation_expanded = value
+			automation_expanded_changed.emit(_automation_expanded)
 
 # UI state
 var _height: int = 48  # Track height in pixels
@@ -415,7 +438,11 @@ func connect_to_engine() -> void:
 		# Sync all clip instances
 		for instance in clip_instances:
 			_sync_clip_instance_to_engine(instance)
-		
+
+		# Sync all automation lanes (REQ-012)
+		for lane in automation_lanes:
+			lane.sync_to_engine()
+
 		logger.info("[Track %d] Connected to audio engine (routed to channel %d)" % [id, default_channel_id])
 	else:
 		# Track not routed to a channel - don't connect yet
@@ -432,6 +459,8 @@ func disconnect_from_engine() -> void:
 		for instance in clip_instances:
 			AudioEngineOSC.send("/track/%d/remove_instance" % id, [instance.id])
 
+	# Automation lanes live on the engine's track record, so they go away with it; clearing the
+	# connected flag makes a later connect_to_engine() resync them from scratch (REQ-012).
 	_is_connected = false
 	logger.info("[Track %d] Disconnected from audio engine" % id)
 
@@ -552,6 +581,106 @@ func remove_clip_instance(instance: ClipInstance) -> void:
 
 
 # ============================================================================
+# AUTOMATION LANE MANAGEMENT
+# ============================================================================
+
+## Add a lane, syncing it to the engine when this track is connected (REQ-001, REQ-012).
+func add_automation_lane(lane: AutomationLane) -> void:
+	lane.track = self
+	automation_lanes.append(lane)
+	# Evaluate the new lane's target against the linked channel before syncing (REQ-024).
+	refresh_automation_resolution()
+	if _is_connected:
+		lane.sync_to_engine()
+	automation_lane_added.emit(lane)
+
+
+## Remove a lane, deleting it from the engine when connected.
+func remove_automation_lane(lane: AutomationLane) -> void:
+	var idx := automation_lanes.find(lane)
+	if idx < 0:
+		return
+	automation_lanes.remove_at(idx)
+	if _is_connected:
+		AudioEngineOSC.send("/track/%d/automation/%s/delete" % [id, lane.id])
+	lane.track = null
+	automation_lane_removed.emit(lane)
+
+
+## The lane driving `target` on this track, or null when none exists (REQ-015: used to skip
+## parameters that already have a lane).
+func get_automation_lane_for(target: AutomationTarget) -> AutomationLane:
+	if target == null:
+		return null
+	var target_str := str(target)
+	for lane in automation_lanes:
+		if lane.target != null and str(lane.target) == target_str:
+			return lane
+	return null
+
+
+# ============================================================================
+# LANE RESOLUTION (REQ-024)
+# ============================================================================
+
+## Re-evaluate every lane's `resolved` flag against the linked channel. A lane whose target
+## stopped resolving keeps its points, stops syncing to the engine, and logs exactly one
+## warning; one that re-resolves (e.g. the device came back) is resynced so it drives again.
+func refresh_automation_resolution() -> void:
+	var ch := _ensure_linked_channel()
+	_watch_automation_channel(ch)
+	if automation_lanes.is_empty():
+		return
+	for lane in automation_lanes:
+		var ok := lane.target != null and lane.target.is_resolvable(ch)
+		if ok == lane.resolved:
+			continue
+		if ok:
+			lane.set_resolved(true)
+			if _is_connected:
+				lane.sync_to_engine()
+			logger.info("[Track %d] automation lane '%s' target resolves again" % [id, lane.id])
+		else:
+			lane.set_resolved(false)
+			logger.warn("[Track %d] automation lane '%s' no longer resolves against channel %s; points kept, engine sync paused" % [
+				id, lane.id, str(ch.id if ch else -1)])
+
+
+## Subscribe to the linked channel's structure signals, any of which can change whether a lane
+## target resolves (device added/removed/moved, plugin parameters loaded, sends changed).
+## Idempotent, and disconnects from the previous channel on re-link.
+func _watch_automation_channel(ch: Channel) -> void:
+	if ch == _automation_watch_channel:
+		return
+	if _automation_watch_channel != null:
+		for sig_name in _automation_channel_signals():
+			var old_sig: Signal = _automation_watch_channel.get(sig_name)
+			if old_sig.is_connected(_on_automation_channel_structure_changed):
+				old_sig.disconnect(_on_automation_channel_structure_changed)
+	_automation_watch_channel = ch
+	if ch != null:
+		for sig_name in _automation_channel_signals():
+			var sig: Signal = ch.get(sig_name)
+			if not sig.is_connected(_on_automation_channel_structure_changed):
+				sig.connect(_on_automation_channel_structure_changed)
+
+
+static func _automation_channel_signals() -> Array[String]:
+	return [
+		"device_added",
+		"device_removed",
+		"device_moved",
+		"device_parameters_updated",
+		"send_added",
+		"send_removed",
+	]
+
+
+func _on_automation_channel_structure_changed(_a = null, _b = null) -> void:
+	refresh_automation_resolution()
+
+
+# ============================================================================
 # SERIALIZATION
 # ============================================================================
 
@@ -573,6 +702,7 @@ func to_json() -> Dictionary:
 const JSON_FIELDS: Array[String] = [
 	"name", "color_by_channel", "name_by_channel", "order", "default_channel_id",
 	"parent_track_id", "is_folder_expanded", "height", "folded", "muted", "solo", "armed",
+	"automation_expanded",
 ]
 
 
@@ -594,6 +724,14 @@ static func from_json(data: Dictionary) -> Track:
 			instance.track = track
 			track.clip_instances.append(instance)
 
-	# TODO: Load automation when AutomationLane exists
+	# Load automation lanes. A missing key loads as zero lanes; a lane/point without an id gets
+	# one assigned by index; retired curve names load as LINEAR (REQ-023).
+	var lane_index := 0
+	for lane_data in data.get("automation_lanes", []):
+		if lane_data is Dictionary:
+			var lane := AutomationLane.from_json(lane_data, "lane%d" % lane_index)
+			lane.track = track
+			track.automation_lanes.append(lane)
+			lane_index += 1
 
 	return track
