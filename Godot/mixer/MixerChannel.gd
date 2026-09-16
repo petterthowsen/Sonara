@@ -8,38 +8,37 @@ var logger : Log = Log.make("MixerChannel")
 @onready var title: SmartLineEdit = $HBox/VBox/Header/VBox/SmartLineEdit
 @onready var foldout_toggle: Button = $HBox/VBox/Header/VBox/FoldoutToggle
 
-@onready var children_slide = $HBox/Children # fold-out pane
+@onready var children_clip: Control = $HBox/ChildrenClip # clips the fold-out while it slides
+@onready var children_slide = $HBox/ChildrenClip/Children # fold-out pane
 
-@onready var big_meter: Meter = $HBox/VBox/BigMeter
+@onready var main_pane: VBoxContainer = $HBox/VBox/MainAndSideBox/MainPane
+@onready var main_vsplit: VSplitContainer = $HBox/VBox/MainAndSideBox/MainPane/VSplit
+@onready var side_pane: Control = $HBox/VBox/MainAndSideBox/SidePane
+@onready var side_vsplit: VSplitContainer = $HBox/VBox/MainAndSideBox/SidePane/VSplit
 
-@onready var controls: PanelContainer = $HBox/VBox/Controls
-@onready var arm_toggle: Button = $HBox/VBox/Controls/FlowContainer/ArmToggle
-@onready var solo_toggle: Button = $HBox/VBox/Controls/FlowContainer/SoloMute/SoloToggle
-@onready var mute_toggle: Button = $HBox/VBox/Controls/FlowContainer/SoloMute/MuteToggle
+@onready var big_meter: Meter = $HBox/VBox/MainAndSideBox/MainPane/VSplit/BigMeter
 
-@onready var io: PanelContainer = $HBox/VBox/IO
-@onready var output_menu_buttton: MenuButton = $HBox/VBox/IO/OutputMenuButtton
+@onready var controls: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/Controls
+@onready var arm_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/ArmToggle
+@onready var solo_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/SoloToggle
+@onready var mute_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/MuteToggle
 
-@onready var pan_control: PanControl = $HBox/VBox/Panning
+@onready var io: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/IO
+@onready var output_menu_buttton: MenuButton = $HBox/VBox/MainAndSideBox/MainPane/IO/OutputMenuButtton
+
+@onready var pan_control: PanControl = $HBox/VBox/MainAndSideBox/MainPane/Panning
 
 # main volume, fader and/or volume
-@onready var volume: PanelContainer = $HBox/VBox/Volume
-@onready var bottom_volume_slider: VolumeSlider = $HBox/VBox/Volume/HBox/Fader
-@onready var bottom_small_meter: Meter = $HBox/VBox/Volume/HBox/CompactMeter
+@onready var volume: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/Volume
+@onready var bottom_volume_slider: VolumeSlider = $HBox/VBox/MainAndSideBox/MainPane/Volume/Fader
+@onready var bottom_small_meter: Meter = $HBox/VBox/MainAndSideBox/MainPane/Volume/CompactMeter
 
-# extra details on the right side can be shown/hidden
-@onready var details: VBoxContainer = $HBox/Details
+# compact devices parameter control; lives in MainPane/VSplit (Tall mode) or SidePane/VSplit (Compact mode)
+@onready var device_list: ChannelDeviceList = $HBox/VBox/MainAndSideBox/MainPane/VSplit/DeviceList
 
-# compact devices parameter control
-@onready var device_list: ChannelDeviceList = $HBox/VBox/DeviceList
-
-# sends panel
-@onready var sends: ScrollContainer = $HBox/VBox/Sends
-@onready var sends_panel: SendsPanel = $HBox/VBox/Sends/SendsPanel
-
-# Details pane visibility
-var details_visible := false
-var details_pane_width := 0
+# sends panel; lives in MainPane/VSplit (Tall mode) or SidePane/VSplit (Compact mode)
+@onready var sends: ScrollContainer = $HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends
+@onready var sends_panel: SendsPanel = $HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends/SendsPanel
 
 # Resizing
 var is_resizing := false
@@ -82,10 +81,16 @@ var _header_fill: StyleBoxFlat = null
 		pinned = p
 		_update_container_sizing()
 
-enum Mode {COMPACT, LARGE}
+## Base strip width. Narrow has no floor (shrink to content); medium and wide are fixed floors.
+enum SizeMode {NARROW, MEDIUM, WIDE}
+const NARROW_WIDTH := 0
+const MEDIUM_BASE_WIDTH := 108
+const WIDE_WIDTH := 138
 
-const compact_min_width = 50
-const large_min_width = 100
+## Tall keeps DeviceList/Sends in the main column. Compact moves them into the SidePane,
+## which only shows (and slides out) while this strip is selected.
+enum LayoutMode {TALL, COMPACT}
+const SIDE_PANE_ANIM_DURATION := 0.2
 
 ## Height of the parent-colored bar above nested strips in this strip's fold-out. Nested strip
 ## headers shrink by the same amount so every header ends on the same row.
@@ -101,18 +106,34 @@ const MIN_NESTED_HEADER_HEIGHT := 24.0
 ## Header height from the scene, before nesting shrinks it.
 var _base_header_height := 0.0
 
-## Extra width for the focused/selected strip so compact device parameters are usable.
-@export var selected_min_width := 120
+@export var size_mode: SizeMode = SizeMode.MEDIUM:
+	set = set_size_mode
 
-@export var mode = Mode.COMPACT:
-	set = set_mode
+@export var strip_layout_mode: LayoutMode = LayoutMode.TALL:
+	set = set_strip_layout_mode
+
+## Width of the SidePane when slid open (Compact + selected). SidePane is a plain Control so
+## its content never forces the width; this value (animated) is the only thing that sizes it.
+@export var side_pane_width := 180.0
+var _side_pane_tween: Tween
+
+## 0..1 fraction of the fold-out's width currently revealed; tweened when toggling.
+var _children_reveal := 0.0
+var _children_tween: Tween
+
+## Main/SidePane VSplit offset (device list vs sends/meter divider), shared across every strip.
+## Dragging it on one strip applies to all others. -1 means "use the scene default".
+static var _shared_vsplit_offset := -1
 
 func _ready():
 	if header:
 		_base_header_height = header.custom_minimum_size.y
+	if side_pane:
+		side_pane.custom_minimum_size.x = 0
+		side_pane.clip_contents = true
 	_update_container_sizing()
+	_apply_layout_mode()
 	_apply_selection_layout()
-	_init_details_pane()
 	set_process(false)
 
 	# Connect UI signals
@@ -134,6 +155,12 @@ func _ready():
 	if title:
 		title.value_changed.connect(_on_title_value_changed)
 
+	if main_vsplit:
+		main_vsplit.dragged.connect(_on_vsplit_dragged)
+	if side_vsplit:
+		side_vsplit.dragged.connect(_on_vsplit_dragged)
+	_apply_shared_vsplit_offset()
+
 	if header:
 		header.gui_input.connect(_on_header_gui_input)
 		# Full-rect layout control must not eat clicks meant for the header panel (move / select).
@@ -149,7 +176,7 @@ func _ready():
 		if children_slide.contents_changed.is_connected(_update_size_for_mode) == false:
 			children_slide.contents_changed.connect(_update_size_for_mode)
 		if not Engine.is_editor_hint():
-			children_slide.visible = false
+			children_clip.visible = false
 
 	# output routing menu
 	if output_menu_buttton:
@@ -248,45 +275,6 @@ func _update_from_channel() -> void:
 	if channel.is_master and sends:
 		sends.remove_from_group("mixer_channel_sends")
 		sends.visible = false
-
-
-# ============================================================================
-# DETAILS PANE MANAGEMENT
-# ============================================================================
-func _init_details_pane() -> void:
-	"""Initialize the details pane as hidden by default."""
-	if details:
-		details.visible = false
-		# Wait for layout to be ready
-		await get_tree().process_frame  # Extra frame to ensure size calculation
-		# Get the actual size when visible (will be used for toggling)
-		details_pane_width = int(details.get_size().x)
-		if details_pane_width == 0:
-			# Fallback: use get_minimum_size if size is still 0
-			details_pane_width = int(details.get_minimum_size().x)
-			if details_pane_width == 0:
-				details_pane_width = 140  # Conservative estimate
-
-
-func _toggle_details_pane() -> void:
-	"""Toggle the details pane visibility and adjust sizing."""
-	if not details:
-		return
-
-	details_visible = !details_visible
-	details.visible = details_visible
-
-	# If showing details, wait a frame for layout to settle and capture actual width
-	if details_visible:
-		await get_tree().process_frame
-
-		# Get the actual size the pane now occupies
-		var actual_details_width = int(details.get_size().x)
-		if actual_details_width > 0:
-			details_pane_width = actual_details_width
-
-	# Update size based on new state
-	_update_size_for_mode()
 
 
 # ============================================================================
@@ -494,36 +482,126 @@ func _get_minimum_size() -> Vector2:
 	return Vector2(_total_min_width(), 0)
 
 
-## Compact or large floor, raised when this channel is selected.
-func _mode_min_width() -> int:
-	var w := compact_min_width if mode == Mode.COMPACT else large_min_width
-	if is_selected:
-		w = maxi(w, selected_min_width)
-	return w
+## Base width from the size mode: narrow has no floor, medium/wide are fixed floors.
+func _base_width() -> int:
+	match size_mode:
+		SizeMode.NARROW:
+			return NARROW_WIDTH
+		SizeMode.WIDE:
+			return WIDE_WIDTH
+		_:
+			return MEDIUM_BASE_WIDTH
+
+
+## MainPane keeps the base width in every mode; the SidePane adds on top of it.
+func _strip_min_width() -> int:
+	return _base_width()
 
 
 ## Widen the selected strip and expose compact device parameters on it.
 func _apply_selection_layout() -> void:
 	if device_list:
 		device_list.hide_parameters = not is_selected
+	_update_side_pane()
 	_update_size_for_mode()
 
 
-## Switch compact/large layout and refresh width plus device-parameter visibility.
-func set_mode(m : Mode):
-	mode = m
+## Cycle/apply the narrow-medium-wide base width.
+func set_size_mode(m: SizeMode) -> void:
+	size_mode = m
+	_update_size_for_mode()
+
+
+## Switch Tall/Compact layout: Compact moves DeviceList/Sends into the SidePane, which only
+## shows (and slides out) while the strip is selected. Tall keeps them in the main column.
+func set_strip_layout_mode(m: LayoutMode) -> void:
+	strip_layout_mode = m
 	if is_inside_tree():
-		_apply_selection_layout()
-	else:
-		_update_size_for_mode()
+		_apply_layout_mode()
+	_update_size_for_mode()
+
+
+## Propagate a manual VSplit drag (MainPane or SidePane) to every mixer strip.
+func _on_vsplit_dragged(offset: int) -> void:
+	_shared_vsplit_offset = offset
+	get_tree().call_group("mixer_channel", "_apply_shared_vsplit_offset")
+
+
+## Apply the shared VSplit offset (from whichever strip was last dragged) to this strip.
+func _apply_shared_vsplit_offset() -> void:
+	if _shared_vsplit_offset < 0:
+		return
+	if main_vsplit and main_vsplit.split_offset != _shared_vsplit_offset:
+		main_vsplit.split_offset = _shared_vsplit_offset
+	if side_vsplit and side_vsplit.split_offset != _shared_vsplit_offset:
+		side_vsplit.split_offset = _shared_vsplit_offset
+
+
+## Move DeviceList/Sends between MainPane and SidePane to match the current layout mode.
+func _apply_layout_mode() -> void:
+	if Engine.is_editor_hint() or not is_inside_tree():
+		return
+	if _side_pane_tween and _side_pane_tween.is_valid():
+		_side_pane_tween.kill()
+	match strip_layout_mode:
+		LayoutMode.TALL:
+			_reparent_into(device_list, main_vsplit)
+			_reparent_into(sends, main_vsplit)
+			if side_pane:
+				side_pane.visible = false
+				side_pane.custom_minimum_size.x = 0
+		LayoutMode.COMPACT:
+			_reparent_into(device_list, side_vsplit)
+			_reparent_into(sends, side_vsplit)
+			_update_side_pane()
+
+
+## Move `node` under `new_parent`, preserving it (no-op if already there).
+func _reparent_into(node: Control, new_parent: Node) -> void:
+	if node == null or new_parent == null or node.get_parent() == new_parent:
+		return
+	var old_parent := node.get_parent()
+	if old_parent:
+		old_parent.remove_child(node)
+	new_parent.add_child(node)
+
+
+## Slide the SidePane open (Compact + selected) or closed, animating its width.
+func _update_side_pane() -> void:
+	if side_pane == null or Engine.is_editor_hint() or not is_inside_tree():
+		return
+	var should_show := strip_layout_mode == LayoutMode.COMPACT and is_selected
+	# Skip in the common Tall-mode case: already collapsed and staying that way.
+	if not should_show and side_pane.custom_minimum_size.x <= 0.0 and not side_pane.visible:
+		return
+	if _side_pane_tween and _side_pane_tween.is_valid():
+		_side_pane_tween.kill()
+	if should_show:
+		side_pane.visible = true
+	_side_pane_tween = create_tween()
+	var target := side_pane_width if should_show else 0.0
+	_side_pane_tween.tween_method(_set_side_pane_width, side_pane.custom_minimum_size.x, target, SIDE_PANE_ANIM_DURATION)
+	if not should_show:
+		_side_pane_tween.finished.connect(_hide_side_pane)
+
+
+func _set_side_pane_width(w: float) -> void:
+	if side_pane:
+		side_pane.custom_minimum_size.x = w
+	_update_size_for_mode()
+
+
+func _hide_side_pane() -> void:
+	if side_pane:
+		side_pane.visible = false
 
 
 func _update_size_for_mode() -> void:
-	"""Update custom_minimum_size based on current mode, selection, details, and children."""
+	"""Update custom_minimum_size based on size mode, layout mode, selection, and children."""
 	custom_minimum_size.x = _total_min_width()
-	var strip := get_node_or_null("HBox/VBox") as Control
-	if strip:
-		strip.custom_minimum_size.x = _mode_min_width()
+	if main_pane:
+		main_pane.custom_minimum_size.x = _strip_min_width()
+	_update_children_clip()
 	update_minimum_size()
 	_notify_parent_mixer_channel_size()
 
@@ -538,14 +616,24 @@ func _notify_parent_mixer_channel_size() -> void:
 		n = n.get_parent()
 
 
-## Strip floor plus open details pane and expanded nested children.
+## Strip floor plus the SidePane's current (possibly mid-animation) width and expanded nested children.
 func _total_min_width() -> int:
-	var w := _mode_min_width()
-	if details_visible and details_pane_width > 0:
-		w += details_pane_width
-	if children_slide and children_slide.visible:
-		w += maxi(int(children_slide.get_combined_minimum_size().x), 0)
+	var w := _strip_min_width()
+	if side_pane:
+		w += maxi(int(side_pane.custom_minimum_size.x), 0)
+	if children_clip and children_clip.visible:
+		w += maxi(int(children_clip.custom_minimum_size.x), 0)
 	return w
+
+
+## Size the clip to the revealed fraction of the fold-out, and pin the fold-out at its full width.
+func _update_children_clip() -> void:
+	if children_clip == null or children_slide == null:
+		return
+	var full: float = children_slide.get_combined_minimum_size().x
+	children_slide.offset_left = 0.0
+	children_slide.offset_right = full
+	children_clip.custom_minimum_size.x = full * _children_reveal
 
 
 func set_resizable(value: bool) -> void:
@@ -699,7 +787,7 @@ func _on_foldout_toggled(pressed: bool) -> void:
 	if channel == null:
 		return
 	channel.is_children_expanded = pressed
-	_sync_children_slide()
+	_sync_children_slide(true)
 
 
 ## Show the fold-out for GROUP channels or any channel that already has children.
@@ -710,7 +798,8 @@ func _shows_children_foldout() -> bool:
 
 
 ## Update fold-out chrome, spawn nested strips, and refresh this strip's width.
-func _sync_children_slide() -> void:
+## `animate` slides the fold-out open/closed; otherwise it snaps (binding, hierarchy changes).
+func _sync_children_slide(animate := false) -> void:
 	var show_fold := _shows_children_foldout()
 	var expanded := show_fold and channel != null and channel.is_children_expanded
 
@@ -719,10 +808,41 @@ func _sync_children_slide() -> void:
 		foldout_toggle.set_pressed_no_signal(expanded)
 
 	if children_slide:
-		children_slide.visible = expanded
 		if show_fold and channel:
 			children_slide.bind_to_parent(channel, project, self)
+		_slide_children(expanded, animate)
 
+	_update_size_for_mode()
+
+
+## Reveal or hide the fold-out, tweening `_children_reveal` when `animate` is set.
+func _slide_children(expanded: bool, animate: bool) -> void:
+	if children_clip == null or Engine.is_editor_hint():
+		return
+	var target := 1.0 if expanded else 0.0
+	if _children_tween and _children_tween.is_valid():
+		_children_tween.kill()
+	if expanded:
+		children_clip.visible = true
+	if not animate or not is_inside_tree() or is_equal_approx(_children_reveal, target):
+		_set_children_reveal(target)
+		if not expanded:
+			children_clip.visible = false
+		return
+	_children_tween = create_tween()
+	_children_tween.tween_method(_set_children_reveal, _children_reveal, target, SIDE_PANE_ANIM_DURATION)
+	if not expanded:
+		_children_tween.finished.connect(_hide_children_clip)
+
+
+func _set_children_reveal(r: float) -> void:
+	_children_reveal = r
+	_update_size_for_mode()
+
+
+func _hide_children_clip() -> void:
+	if children_clip:
+		children_clip.visible = false
 	_update_size_for_mode()
 
 
@@ -811,7 +931,7 @@ func _apply_nested_header_height() -> void:
 	header.custom_minimum_size.y = maxf(_base_header_height - offset, MIN_NESTED_HEADER_HEIGHT)
 
 
-## Global rect of the strip itself, excluding the fold-out and details pane.
+## Global rect of the strip itself, excluding the fold-out.
 func get_strip_column_rect() -> Rect2:
 	var column := get_node_or_null("HBox/VBox") as Control
 	return column.get_global_rect() if column else get_global_rect()

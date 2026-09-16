@@ -3,8 +3,8 @@ class_name MixerChannelChildren extends PanelContainer
 
 signal contents_changed
 
-@onready var parent_header: Panel = $VBoxContainer/ParentHeader
-@onready var channels_box: ChannelsBox = $VBoxContainer/ChildBox
+@onready var parent_header: Panel = $VBox/ParentHeader
+@onready var channels_box: ChannelsBox = $VBox/ChildBox
 
 var channel: Channel = null
 var project: Project = null
@@ -49,7 +49,7 @@ func get_children_top_offset() -> float:
 	var style := get_theme_stylebox("panel")
 	if style:
 		offset += style.get_margin(SIDE_TOP)
-	var column := get_node_or_null("VBoxContainer") as VBoxContainer
+	var column := get_node_or_null("VBox") as VBoxContainer
 	if column:
 		offset += column.get_theme_constant("separation")
 	return offset

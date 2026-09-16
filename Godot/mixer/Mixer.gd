@@ -29,10 +29,15 @@ const MixerChannelScene = preload("res://mixer/MixerChannel.tscn")
 @onready var right_add_button: Button = $HSplit/RightPane/HBox/Options/AddButton
 
 # Toolbar toggles
+@onready var size_mode_button: Button = $Toolbar/HBox/Toggles/SizeMode
 @onready var compact_toggle: Button = $Toolbar/HBox/Toggles/Compact
 @onready var io_toggle: Button = $Toolbar/HBox/Toggles/IO
 @onready var sends_toggle: Button = $Toolbar/HBox/Toggles/Sends
 @onready var big_meters_toggle: Button = $Toolbar/HBox/Toggles/BigMeters
+
+## Narrow/medium/wide size-mode cycle button, in enum order.
+const SIZE_MODE_LABELS := ["Narrow", "Medium", "Wide"]
+var current_size_mode: MixerChannel.SizeMode = MixerChannel.SizeMode.MEDIUM
 
 @onready var channel_ctx_menu : ChannelContextMenu = $ChannelContextMenu
 
@@ -77,6 +82,8 @@ func _ready():
 	right_add_button.pressed.connect(_on_right_add_button_pressed)
 
 	# Connect toolbar toggles
+	size_mode_button.text = SIZE_MODE_LABELS[current_size_mode]
+	size_mode_button.pressed.connect(_on_size_mode_pressed)
 	compact_toggle.toggled.connect(_on_compact_toggled)
 	io_toggle.toggled.connect(_on_io_toggled)
 	sends_toggle.toggled.connect(_on_sends_toggled)
@@ -446,16 +453,20 @@ func _clear_all_channels() -> void:
 # TOOLBAR TOGGLE CALLBACKS
 # ============================================================================
 
+## Cycle the narrow/medium/wide base width for every strip.
+func _on_size_mode_pressed() -> void:
+	current_size_mode = ((current_size_mode + 1) % SIZE_MODE_LABELS.size()) as MixerChannel.SizeMode
+	size_mode_button.text = SIZE_MODE_LABELS[current_size_mode]
+	get_tree().call_group("mixer_channel", "set_size_mode", current_size_mode)
+	logger.info("Size mode: ", SIZE_MODE_LABELS[current_size_mode])
+
+
 func _on_compact_toggled(pressed: bool) -> void:
-	"""Toggle compact mode - sets all mixer channels to compact or large mode."""
-	var mode = MixerChannel.Mode.COMPACT if pressed else MixerChannel.Mode.LARGE
-	get_tree().call_group("mixer_channel", "set_mode", mode)
-
-	# When in compact mode, disable free resizing; when in large mode, enable it
-	resizable_channels = not pressed
-	get_tree().call_group("mixer_channel", "set_resizable", resizable_channels)
-
-	logger.info("Compact mode: ", pressed, " | Resizable channels: ", resizable_channels)
+	"""Toggle Tall vs Compact layout. Compact moves DeviceList/Sends into each strip's SidePane,
+	which only shows (and slides out) while that strip is selected."""
+	var layout := MixerChannel.LayoutMode.COMPACT if pressed else MixerChannel.LayoutMode.TALL
+	get_tree().call_group("mixer_channel", "set_strip_layout_mode", layout)
+	logger.info("Compact layout: ", pressed)
 
 
 func _on_io_toggled(pressed: bool) -> void:
@@ -477,9 +488,9 @@ func _on_big_meters_toggled(pressed: bool):
 
 func _apply_toggle_states_to_channel(channel_item: MixerChannel) -> void:
 	"""Apply current toggle states to a newly created mixer channel."""
-	# Apply compact mode toggle
-	var compact_mode = MixerChannel.Mode.COMPACT if compact_toggle.button_pressed else MixerChannel.Mode.LARGE
-	channel_item.set_mode(compact_mode)
+	channel_item.set_size_mode(current_size_mode)
+	var layout := MixerChannel.LayoutMode.COMPACT if compact_toggle.button_pressed else MixerChannel.LayoutMode.TALL
+	channel_item.set_strip_layout_mode(layout)
 	channel_item.set_resizable(resizable_channels)
 
 	# Apply IO / Sends / meters from the toolbar so nested strips match roots.

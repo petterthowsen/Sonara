@@ -142,17 +142,17 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
+custom_minimum_size = Vector2(108, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_top = 1.0
-offset_right = 55.0
+offset_right = 111.0
 grow_vertical = 2
 size_flags_horizontal = 0
 focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
 resizable = false
-selected_min_width = 156
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=1923224323]
 layout_mode = 2
@@ -160,7 +160,6 @@ theme_override_constants/separation = 0
 alignment = 2
 
 [node name="VBox" type="VBoxContainer" parent="HBox" unique_id=1118467946]
-custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 4
@@ -202,7 +201,6 @@ value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="0" unique_id=448001948]
-text = "Test Channel Name"
 label_settings = SubResource("LabelSettings_xv6e8")
 vertical_alignment = 0
 autowrap_mode = 3
@@ -224,12 +222,13 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="MainPane" type="VBoxContainer" parent="HBox/VBox/MainAndSideBox" unique_id=194528483]
+custom_minimum_size = Vector2(108, 0)
 layout_mode = 2
 
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
 layout_mode = 2
 size_flags_vertical = 3
-size_flags_stretch_ratio = 2.0
+size_flags_stretch_ratio = 1.5
 split_offsets = PackedInt32Array(-82, -136)
 split_offset = -82
 
@@ -427,39 +426,48 @@ edit_via_click = false
 text = "-6.0dB"
 label_settings = SubResource("LabelSettings_xa46q")
 
-[node name="SidePane" type="VBoxContainer" parent="HBox/VBox/MainAndSideBox" unique_id=2080402458]
-visible = false
-custom_minimum_size = Vector2(120, 0)
+[node name="SidePane" type="Control" parent="HBox/VBox/MainAndSideBox" unique_id=2080402458]
+clip_contents = true
 layout_mode = 2
-size_flags_horizontal = 3
 
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/SidePane" unique_id=479493447]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 
-[node name="Children" type="PanelContainer" parent="HBox" unique_id=470089133]
+[node name="ChildrenClip" type="Control" parent="HBox" unique_id=470089134]
 visible = false
-custom_minimum_size = Vector2(91.685, 0)
+clip_contents = true
 layout_mode = 2
+
+[node name="Children" type="PanelContainer" parent="HBox/ChildrenClip" unique_id=470089133]
+custom_minimum_size = Vector2(91.685, 0)
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 91.685
+grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ghf7e")
 script = ExtResource("9_an1hh")
 
-[node name="VBox" type="VBoxContainer" parent="HBox/Children" unique_id=1771647144]
+[node name="VBox" type="VBoxContainer" parent="HBox/ChildrenClip/Children" unique_id=1771647144]
 layout_mode = 2
 
-[node name="ParentHeader" type="Panel" parent="HBox/Children/VBox" unique_id=1082830830]
+[node name="ParentHeader" type="Panel" parent="HBox/ChildrenClip/Children/VBox" unique_id=1082830830]
 custom_minimum_size = Vector2(30, 16)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ea3ft")
 
-[node name="ChildBox" type="HBoxContainer" parent="HBox/Children/VBox" unique_id=165950930]
+[node name="ChildBox" type="HBoxContainer" parent="HBox/ChildrenClip/Children/VBox" unique_id=165950930]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 script = ExtResource("10_8wi2u")
 
-[node name="EmptyNotice" type="Label" parent="HBox/Children" unique_id=588737186]
+[node name="EmptyNotice" type="Label" parent="HBox/ChildrenClip/Children" unique_id=588737186]
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_colors/font_color = Color(1, 1, 1, 0.49803922)

@@ -69,36 +69,9 @@ Done:
 
 ### Mixer & Tracks
 
-Mixer Layout Refactor
-
-To make the mixer view more easily customizable to the user's needs, we should redesign it by splitting up compact/non-compact modes and sizes into two separately toggleable things.
-
-MixerChannel scene has been updated, remaining is to update node paths and wire the logic to spec below. 
-
-A size mode controls the base width of strips between three sizes: narrow, medium, wide. (We should look at a custom toggle for this with 3 cycleable states and 3 icons maybe.) Toggles are in bottom of Mixer scene in a "Toggles" hbox.
-
-1. At narrow, the minimum_size.x = 0 - simply the smallest it can be.
-2. At medium, it's medium_base_width (default to 108)
-3. At wide, it's 138
-
-A tall-vs-compact mode controls whether the SidePane is used to display some elements or not.
-
-Tall Mode:
-1. The SidePane is hidden and has no elements.
-2. width is the base width, always
-
-Compact Mode:
-1. The DeviceList and Sends are moved into the SidePane
-2. width is base width, but when the channel is selected, it has no minimum_size.x, and shows the SidePane. Ideally it should animate (slide out over maybe 0.2s).
-
-Big Meters toggle works like this when enabled:
-1. BigMeter is visible at the top of MainPain/VSplit
-2. volume in MainPane switches to the Fader (pure knob), letting the Big Meter handle metering visualization.
-
----
+- MixerChannel: Sync MainPane/VSplit's offset between all mixerchannels. Adjusting one > applies to all others.
 
 - [ ] Master track doesn't accept device drops on its device lane and compact device list. Master track should accept devices.
-- [ ] "For nested mixer channels, we need a way to
 
 
 ### Arranger & Timeline
