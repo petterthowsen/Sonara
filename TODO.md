@@ -9,8 +9,11 @@
 - [ ] Plugin latency compensation
 - [ ] Send amount curve is wrong: with Dragonfly Hall Reverb (100% wet) on a bus at 0 dB and a send of 0.5 from Drums, almost no signal reaches the reverb; past 0.5 it ramps up very steeply. Send amount should be in dB (-inf to 0 dB) like Bitwig, not a raw linear 0-1 factor
 - [ ] Bug (`city_pop_5` project): soloing the Reverb channel appears to stop processing the Drum channel even though Drums sends into it. Closing and reopening the project doesn't fix it. Solo logic should keep channels alive that feed a soloed route target
-- [ ] Playhead line is jittery during playback - could be OSC (status rate/jitter) or engine-side position reporting. Godot also logs `Unhandled message: /status/sample_position`, so that status isn't handled at all in `AudioEngineOSC`
-  - [ ] Consider a broader audit of the audio engine's transport/position reporting while investigating
+- [x] Playhead line is jittery during playback. Traced to Godot, not OSC or the engine: `Editor._process()` drove the playhead from the error against the last received tick and clamped it to that tick, so visual velocity rippled at the 20 Hz update rate (10-30% velocity sd, up to 29x slowest-to-fastest frame with frame-time jitter). Replaced with a float clock that free-runs at tempo rate and corrects phase gradually; sd now under 4%. Covered by `Godot/tests/test_playhead_interpolation.gd`
+  - [x] Engine status cadence: `samples_since_update` was reset to 0 instead of subtracting the interval, discarding the remainder (18.75 Hz instead of 20 at 512 frames/48 kHz)
+  - [x] Removed `/status/sample_position` entirely - it was a free-running device sample counter, never reset on stop or seek, advancing even while stopped, and had no listener in Godot
+  - [x] Verified live: playhead is smooth during playback
+  - [ ] Optional, no longer jitter-related: OSC receive runs in `OSCServer._process()` on the main thread, so every message is delayed up to a frame. Affects parameter changes and meters too. Note `AudioEngineOSC.gd:70` claims a polling thread that doesn't exist
 - [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)

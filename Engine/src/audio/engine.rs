@@ -424,17 +424,14 @@ fn build_stream(
                 *cumulative_block_duration.borrow_mut() = Duration::ZERO;
             }
 
-            state.advance_sample_position(frames as u64);
-
             samples_since_update += frames;
             if samples_since_update >= update_interval as usize {
-                samples_since_update = 0;
+                // Subtract rather than reset: resetting discards the remainder, which makes
+                // the status cadence slower and less regular than the nominal rate.
+                samples_since_update -= update_interval as usize;
 
                 if state.get_is_playing() {
                     let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
-                    let _ = status_tx.send(EngineStatus::SamplePositionUpdate(
-                        state.get_current_sample_position(),
-                    ));
                 }
 
                 for channel in state.channels.values() {

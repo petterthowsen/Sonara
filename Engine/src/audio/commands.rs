@@ -1,6 +1,6 @@
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Instant;
 use tracing::{info, warn};
 
@@ -370,8 +370,6 @@ pub enum CommandResponse {
 #[derive(Debug, Clone)]
 pub enum EngineStatus {
     PlayheadUpdate(Tick),
-    /// Optional: sample-accurate transport position in samples
-    SamplePositionUpdate(u64),
     PlayingStateChanged(bool),
     ChannelPeaks {
         id: ChannelId,
@@ -536,8 +534,6 @@ pub struct EngineState {
     pub current_tick: AtomicI64,
     /// Fractional tick accumulator carried across buffers for sample-accurate scheduling (stored as fixed-point * 1e9)
     pub fractional_tick_accumulator: AtomicI64,
-    /// Master sample-accurate transport position (increments by frames per callback)
-    pub current_sample_position: AtomicU64,
     /// When true, the next playing callback dispatches MIDI at the playhead tick (play/seek).
     pub dispatch_playhead_tick: AtomicBool,
 }
@@ -562,17 +558,6 @@ impl EngineState {
     pub fn set_fractional_tick_accumulator(&self, value: f64) {
         self.fractional_tick_accumulator
             .store((value * 1_000_000_000.0) as i64, Ordering::Release);
-    }
-
-    /// Get the current sample position (lock-free)
-    pub fn get_current_sample_position(&self) -> u64 {
-        self.current_sample_position.load(Ordering::Acquire)
-    }
-
-    /// Advance the current sample position by the given number of samples (lock-free)
-    pub fn advance_sample_position(&self, samples: u64) {
-        self.current_sample_position
-            .fetch_add(samples, Ordering::Release);
     }
 
     /// Get playing state (lock-free)
@@ -637,7 +622,6 @@ impl Default for EngineState {
             is_playing: AtomicBool::new(false),
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
-            current_sample_position: AtomicU64::new(0),
             dispatch_playhead_tick: AtomicBool::new(false),
         }
     }

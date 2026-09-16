@@ -108,6 +108,24 @@ var is_playing: bool = false
 var playhead_ticks: int = 0
 var audio_engine_playhead: int = 0  # Authoritative playhead from audio engine
 
+## Visual playhead position as a float, driven by _process().
+## The engine reports at ~20 Hz while the UI renders at 60+ Hz, so we free-run this
+## clock at tempo rate and correct its phase toward the engine gradually.
+## Do not drive the playhead from the error against `audio_engine_playhead`, and do not
+## clamp it to that value: doing so ties visual velocity to the update rate and makes it
+## ripple (measured 10-30% velocity sd, worse at higher frame rates), which is what the
+## playhead jitter was. See tests/test_playhead_interpolation.gd.
+var _playhead_precise: float = 0.0
+## Outstanding phase error (ticks) measured at the last engine update, bled off over time.
+var _playhead_error: float = 0.0
+
+## Ticks of disagreement with the engine beyond which we snap instead of correcting.
+## Seeks, loop wraps and tempo changes land here. Expressed as a fraction of a beat.
+const PLAYHEAD_SNAP_BEAT_FRACTION := 0.25
+## How fast phase error is bled off, in units of "fraction of the error per second".
+## Higher converges faster but passes more transport jitter through to the pixels.
+const PLAYHEAD_CORRECTION_RATE := 5.0
+
 ## Test-only override for get_time_range(). Empty means "read the real arranger".
 ## Tests set this directly (e.g. `{"has": true, "start": 0, "has_end": true, "end": 1920}`)
 ## since there is no arranger outside the scene tree.
@@ -345,6 +363,7 @@ func close_project() -> void:
 	project_path = ""
 	is_modified = false
 	playhead_ticks = 0
+	_reset_playhead_interpolation(0)
 	is_playing = false
 	history.clear()
 	focused_track = null
@@ -476,6 +495,7 @@ func set_playhead(ticks: int) -> void:
 	# Update both local and engine playhead immediately to avoid desync
 	playhead_ticks = ticks
 	audio_engine_playhead = ticks
+	_reset_playhead_interpolation(ticks)
 	playhead_moved.emit(ticks)
 	_update_transport_ui()
 
@@ -752,38 +772,35 @@ func _update_view_visibility() -> void:
 
 
 func _process(delta: float) -> void:
-	"""Update playhead during playback with smooth interpolation."""
+	"""Advance the visual playhead smoothly between engine updates."""
 	if not is_playing or project == null:
 		return
-	
-	# Calculate expected advance rate based on tempo
-	var ticks_per_second = (project.tempo * project.ppq) / 60.0
-	var expected_advance = ticks_per_second * delta
-	
-	# Check for large discontinuities (seeks, loops, tempo changes, etc.)
-	var diff = audio_engine_playhead - playhead_ticks
-	@warning_ignore("integer_division")
-	var SNAP_THRESHOLD = project.ppq / 4  # Quarter note - snap immediately for larger jumps
-	
-	if abs(diff) > SNAP_THRESHOLD:
-		# Large jump detected - snap immediately to avoid visible lag
-		playhead_ticks = audio_engine_playhead
-	else:
-		# Small difference - interpolate smoothly with adaptive correction
-		# Correction factor scales with drift size for faster convergence
-		var correction_factor = clamp(abs(diff) / float(project.ppq), 0.05, 0.3)
-		var correction = diff * correction_factor
-		
-		playhead_ticks += int(expected_advance + correction)
-		
-		# Clamp to engine position (handles both forward and backward movement)
-		if diff > 0:
-			playhead_ticks = min(playhead_ticks, audio_engine_playhead)
-		else:
-			playhead_ticks = max(playhead_ticks, audio_engine_playhead)
-	
+
+	# Free-run at tempo rate. `_playhead_precise` is a float, so no fractional ticks are
+	# lost per frame the way integer truncation used to lose them.
+	var ticks_per_second := (project.tempo * project.ppq) / 60.0
+	_playhead_precise += ticks_per_second * delta
+
+	# Bleed off whatever phase error the last engine update reported, spread over time
+	# rather than applied in one frame.
+	if not is_zero_approx(_playhead_error):
+		var step: float = _playhead_error * clampf(PLAYHEAD_CORRECTION_RATE * delta, 0.0, 1.0)
+		_playhead_precise += step
+		_playhead_error -= step
+
+	var ticks := int(_playhead_precise)
+	if ticks == playhead_ticks:
+		return
+	playhead_ticks = ticks
 	playhead_moved.emit(playhead_ticks)
 	_update_transport_ui()
+
+
+## Snap the visual playhead to `ticks`, discarding any in-flight phase correction.
+## Used for seeks, stops and loop wraps, where interpolating would be wrong.
+func _reset_playhead_interpolation(ticks: int) -> void:
+	_playhead_precise = float(ticks)
+	_playhead_error = 0.0
 
 
 # ============================================================================
@@ -811,13 +828,24 @@ func _on_playhead_received(values) -> void:
 
 	audio_engine_playhead = tick_value
 
-	# Always update UI immediately when playhead is reset to 0 (stop command)
-	# or when not playing (since _process() is disabled)
+	# Reset to 0 (stop), or any update while stopped: _process() is disabled, so apply it
+	# directly and re-seed the interpolator.
 	if tick_value == 0 or not is_playing:
+		_reset_playhead_interpolation(tick_value)
 		playhead_ticks = tick_value
 		playhead_moved.emit(playhead_ticks)
 		_update_transport_ui()
-	# When playing (and not reset), don't emit playhead_moved here - let _process() handle smooth interpolation
+		return
+
+	# Playing: record how far the free-running clock has drifted from the engine.
+	# _process() applies the correction gradually; a large disagreement (seek, loop wrap,
+	# tempo change) snaps instead.
+	var error := float(tick_value) - _playhead_precise
+	var snap_threshold := float(project.ppq) * PLAYHEAD_SNAP_BEAT_FRACTION if project else 240.0
+	if absf(error) > snap_threshold:
+		_reset_playhead_interpolation(tick_value)
+	else:
+		_playhead_error = error
 
 
 func _on_playing_received(values) -> void:
@@ -835,6 +863,8 @@ func _on_playing_received(values) -> void:
 
 		# Emit signals
 		if playing:
+			# Seed the interpolator from the current position before _process() takes over.
+			_reset_playhead_interpolation(playhead_ticks)
 			playback_started.emit()
 			set_process(true)
 			logger.info("[Editor] Playback started (from engine)")

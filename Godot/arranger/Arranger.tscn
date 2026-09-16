@@ -241,7 +241,7 @@ layout_mode = 2
 mouse_filter = 2
 
 [node name="Playhead" type="Control" parent="VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay" unique_id=1528365166]
-custom_minimum_size = Vector2(1, 0)
+custom_minimum_size = Vector2(2, 0)
 layout_mode = 1
 anchors_preset = 9
 anchor_bottom = 1.0
