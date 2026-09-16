@@ -22,6 +22,9 @@ class StubClip extends RefCounted:
 var _clip_text: GDScript
 var _clip_text_time: GDScript
 var _grid_helper: GDScript
+var _ai_tool: GDScript
+var _project_script: GDScript
+var _channel_script: GDScript
 
 
 func suite_name() -> String:
@@ -32,6 +35,11 @@ func run_tests() -> void:
 	_clip_text = load("res://ai/clip_text/ClipText.gd")
 	_clip_text_time = load("res://ai/clip_text/ClipTextTime.gd")
 	_grid_helper = load("res://components/GridHelper.gd")
+	_ai_tool = load("res://ai/tools/AiTool.gd")
+	_project_script = load("res://data/Project.gd")
+	# Channel.gd references AudioEngineOSC by bare name; naming it by class here
+	# would drag it into this script's compile graph and break Project.gd with it.
+	_channel_script = load("res://data/Channel.gd")
 	_test_time()
 	_test_key_and_tiers()
 	_test_drum_grid_roundtrip()
@@ -43,6 +51,7 @@ func run_tests() -> void:
 	_test_sloppy_model_text()
 	_test_city_pop_keys_regressions()
 	_test_ruler_restarts_each_bar()
+	_test_lane_names_from_note_map()
 
 
 func _clip(name: String = "Test", bars: int = 1) -> StubClip:
@@ -274,3 +283,29 @@ func _test_ruler_restarts_each_bar() -> void:
 	wcopy.content_length_ticks = 5760
 	var wb: Dictionary = _clip_text.apply(wcopy, null, wt, {"kind": "pitched", "ppq": 960, "numerator": 3})
 	_assert(bool(wb.get("ok", false)) and wcopy.midi_notes.size() == 1 and wcopy.midi_notes[0].start_tick == 2880, "3/4 note lands on bar 2: %s" % wb)
+
+
+## REQ-025: lane names come from the track's effective note map, so a named map
+## labels drum lanes even on a channel with no Drum Machine.
+func _test_lane_names_from_note_map() -> void:
+	var project: Object = _project_script.new()
+	var pair: Dictionary = project.create_instrument_track("Kit")
+	var track: Object = pair.track
+	var channel: Object = pair.channel
+
+	var map := NoteMap.new("Studio Kit", "Drums", "Peter")
+	map.set_entry(36, "Kick", Color.RED)
+	map.set_entry(38, "Snare", Color.BLUE)
+	channel.set_note_map(map)
+
+	var names: Dictionary = _ai_tool.drum_names_for_track(project, track)
+	_assert(names.get(36, "") == "KICK" or names.get(36, "") == "Kick",
+		"REQ-025: pitch 36 is labelled from the named map, got '%s'" % str(names.get(36, "")))
+	_assert(names.get(38, "") == "SNARE" or names.get(38, "") == "Snare",
+		"REQ-025: pitch 38 is labelled from the named map, got '%s'" % str(names.get(38, "")))
+	_assert(names.size() == 2, "REQ-025: only mapped pitches get lane names (got %d)" % names.size())
+
+	# None means no labels at all.
+	channel.set_note_map_mode(_channel_script.NoteMapMode.NONE)
+	_assert(_ai_tool.drum_names_for_track(project, track).is_empty(),
+		"REQ-025: a channel set to None has no lane names")

@@ -18,6 +18,13 @@ class_name GridRenderer extends Control
 		subdivision_line_color = slc
 		queue_redraw()
 
+# Line widths in whole pixels. Bars read as heavier than beats through width,
+# beats as heavier than subdivisions through colour: a sub-pixel width cannot be
+# drawn crisply, so the hierarchy below one pixel is carried by the colours.
+const BAR_LINE_WIDTH: float = 2.0
+const BEAT_LINE_WIDTH: float = 1.0
+const SUBDIVISION_LINE_WIDTH: float = 1.0
+
 # Grid helper for calculations
 var grid_helper: GridHelper = GridHelper.new()
 @export var start_position_ticks: int = 0
@@ -59,18 +66,28 @@ func _draw_ruler() -> void:
 	for line in grid_lines:
 		# GridHelper already accounts for scroll position, so use line.x directly
 		var x = line.x
-		
+
 		# Only draw if within visible bounds
 		if x >= 0 and x <= size.x:
 			match line.type:
 				GridHelper.GridLineType.BAR:
-					# Draw bar line (full height, thicker)
-					draw_line(Vector2(x, 0), Vector2(x, size.y), bar_line_color, 1.5, true)
-				
+					_draw_grid_line(x, BAR_LINE_WIDTH, bar_line_color)
+
 				GridHelper.GridLineType.BEAT:
-					# Draw beat line (full height)
-					draw_line(Vector2(x, 0), Vector2(x, size.y), beat_line_color, 1.0, true)
-				
+					_draw_grid_line(x, BEAT_LINE_WIDTH, beat_line_color)
+
 				GridHelper.GridLineType.SUBDIVISION:
-					# Draw subdivision line (full height, thinner)
-					draw_line(Vector2(x, 0), Vector2(x, size.y), subdivision_line_color, 0.5, true)
+					_draw_grid_line(x, SUBDIVISION_LINE_WIDTH, subdivision_line_color)
+
+
+## Draw one vertical line snapped to the pixel grid.
+##
+## Grid positions come out of GridHelper at fractional x, and an antialiased
+## draw_line() there spreads the line over two columns of pixels at partial alpha,
+## so neighbouring lines of the same kind come out at visibly different strengths
+## (and a sub-pixel width nearly disappears). Drawing a whole-pixel rect at a
+## rounded x instead makes every line of a kind identical at any zoom or scroll.
+## Wider lines stay centred on the grid position, the way draw_line() had them.
+func _draw_grid_line(x: float, width: float, color: Color) -> void:
+	var left := roundf(x) - floorf(width * 0.5)
+	draw_rect(Rect2(left, 0.0, width, size.y), color, true, -1.0, false)

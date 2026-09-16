@@ -4,12 +4,26 @@
 @tool
 class_name VPiano extends Control
 
+## Shared pitch <-> row <-> Y math, handed down by MidiEditor. Defaults to its own
+## chromatic layout so the @tool preview still renders in the Godot editor.
+var layout: LaneLayout = LaneLayout.chromatic():
+	set(l):
+		if layout == l:
+			return
+		if layout and layout.changed.is_connected(_on_layout_changed):
+			layout.changed.disconnect(_on_layout_changed)
+		layout = l if l else LaneLayout.chromatic()
+		layout.changed.connect(_on_layout_changed)
+		_on_layout_changed()
+
+## Row height. Kept as an export so the scene and the @tool preview still set it;
+## it simply forwards to the shared layout.
 @export var key_height := 20.0:
+	get:
+		return layout.row_height if layout else 20.0
 	set(kh):
-		if key_height != kh:
-			key_height = kh
-			update_minimum_size()
-			queue_redraw()
+		if layout and not is_equal_approx(layout.row_height, kh):
+			layout.row_height = kh
 
 @export var minimum_width := 100.0:
 	set(mw):
@@ -48,6 +62,19 @@ class_name VPiano extends Control
 			border_color = bc
 			queue_redraw()
 
+## Effective note map. Mapped keys show the entry name in place of the note name
+## and are tinted with the entry colour (REQ-013). Null means no map.
+var note_map: NoteMap = null:
+	set(m):
+		note_map = m
+		queue_redraw()
+
+## How strongly a mapped key is tinted with its entry colour.
+@export_range(0.0, 1.0) var map_tint_strength := 0.55:
+	set(t):
+		map_tint_strength = t
+		queue_redraw()
+
 ## Tint applied to the key under the mouse in the note area (or on the piano).
 @export var hover_color := Color(0.45, 0.55, 1.0, 0.35):
 	set(hc):
@@ -82,22 +109,29 @@ var logger := Log.make("VPiano")
 func _ready() -> void:
 	# Pass so wheel scroll/zoom and middle-drag panning still reach MidiEditor.
 	mouse_filter = Control.MOUSE_FILTER_PASS
+	if layout and not layout.changed.is_connected(_on_layout_changed):
+		layout.changed.connect(_on_layout_changed)
+
+
+func _on_layout_changed() -> void:
+	update_minimum_size()
+	queue_redraw()
 
 
 func _get_minimum_size() -> Vector2:
-	return Vector2(minimum_width, note_to_y_bottom(0))
+	return Vector2(minimum_width, layout.total_height())
 
 # returns the top Y value of the given note lane
-func note_to_y(note : int):
-	return (127.0 - note) * key_height
+func note_to_y(note : int) -> float:
+	return layout.pitch_to_y(note)
 
 # returns the bottom Y value of the given note lane
-func note_to_y_bottom(note : int):
-	return note_to_y(note) + key_height
+func note_to_y_bottom(note : int) -> float:
+	return layout.pitch_to_y_bottom(note)
 
 # returns the center Y value of the given note lane
-func note_to_y_center(note : int):
-	return note_to_y(note) + (key_height * 0.5)
+func note_to_y_center(note : int) -> float:
+	return layout.pitch_to_y_center(note)
 
 func get_note_width(note : int) -> int:
 	if Midi.is_black_key(note):
@@ -107,17 +141,18 @@ func get_note_width(note : int) -> int:
 
 # note rect is expanded vertically to account for differing white key heights
 func get_note_rect(note : int) -> Rect2:
-	var r = Rect2(0, note_to_y(note), get_note_width(note), key_height)
+	var h := layout.row_height
+	var r = Rect2(0, note_to_y(note), get_note_width(note), h)
 	
 	var n = Midi.get_note_in_octave(note)
 	
 	if n == 0 or n == 5: # grow top
-		r = r.grow_side(SIDE_TOP, key_height * 0.5)
+		r = r.grow_side(SIDE_TOP, h * 0.5)
 	if n == 2 or n == 7 or n == 9: # grow both
-		r = r.grow_side(SIDE_TOP, key_height * 0.5)
-		r = r.grow_side(SIDE_BOTTOM, key_height * 0.5)
+		r = r.grow_side(SIDE_TOP, h * 0.5)
+		r = r.grow_side(SIDE_BOTTOM, h * 0.5)
 	if n == 4 or n == 11: # grow down
-		r = r.grow_side(SIDE_BOTTOM, key_height * 0.5)
+		r = r.grow_side(SIDE_BOTTOM, h * 0.5)
 	
 	return r
 
@@ -130,9 +165,9 @@ func note_has_label(note : int) -> bool:
 
 ## Key under a local position. Black keys sit on top, so they win where they overlap.
 func get_note_at_position(pos: Vector2) -> int:
-	if pos.x < 0 or pos.x > size.x or key_height <= 0:
+	if pos.x < 0 or pos.x > size.x or layout.row_height <= 0:
 		return -1
-	var lane := clampi(127 - int(floor(pos.y / key_height)), 0, 127)
+	var lane := layout.y_to_pitch(pos.y)
 	for note in [lane, lane + 1, lane - 1]:
 		if note >= 0 and note <= 127 and Midi.is_black_key(note) and get_note_rect(note).has_point(pos):
 			return note
@@ -201,6 +236,13 @@ func _draw_key(note : int):
 	var color = key_color_black if black else key_color_white
 	if invert_colors:
 		color = key_color_black if not black else key_color_white
+
+	# A mapped key takes its entry's colour and name (REQ-013).
+	var entry_name := note_map.get_name(note) if note_map else ""
+	var entry_color := note_map.get_color(note) if note_map else Color(0, 0, 0, 0)
+	var mapped := entry_color.a > 0.0
+	if mapped and map_tint_strength > 0.0:
+		color = color.lerp(Color(entry_color.r, entry_color.g, entry_color.b, 1.0), map_tint_strength)
 	
 	var note_rect: Rect2 = get_note_rect(note)
 	var is_pressed := note == pressed_note
@@ -231,16 +273,20 @@ func _draw_key(note : int):
 		draw_rect(note_rect, key_color_border, false, 0.5, true)
 	
 	# draw label?
-	if note_has_label(note):
+	if note_has_label(note) or not entry_name.is_empty():
 		var font = get_theme_default_font()
 		var font_size = 14
-		var label = Midi.midi_to_note_name(note)
+		var label := entry_name if not entry_name.is_empty() else Midi.midi_to_note_name(note)
 		var label_size = font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, TextServer.JUSTIFICATION_NONE,TextServer.DIRECTION_LTR,TextServer.ORIENTATION_HORIZONTAL)
 		var label_y = note_to_y_center(note) + (label_size.y * 0.3)
 		var label_color = key_color_white if black else key_color_black
 		if invert_colors:
 			label_color = key_color_black if black else key_color_white
-		draw_string(font, Vector2(4, label_y), Midi.midi_to_note_name(note), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, label_color)
+		if mapped:
+			# The tinted key can be any brightness, so pick text that reads on it.
+			label_color = Utils.contrasting_text_color(color)
+		var max_width := note_rect.size.x - 6.0
+		draw_string(font, Vector2(4, label_y), label, HORIZONTAL_ALIGNMENT_LEFT, int(max_width), font_size, label_color)
 
 func _draw():
 	var count = 0

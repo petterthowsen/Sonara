@@ -235,6 +235,9 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	# Convert position to MIDI note and tick
 	var midi_note_num = y_to_note(pos.y)
+	if midi_note_num < 0:
+		# Drum View with no rows: there is nowhere to put a note (REQ-023).
+		return null
 	var pixel_x = pos.x
 	var tick_position = pixels_to_ticks(pixel_x)
 
@@ -242,7 +245,10 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	if grid_helper:
 		tick_position = grid_helper.floor_ticks(tick_position)
 
-	var end_tick = tick_position + default_note_length_ticks
+	# Drum View hits are one grid step long, not the remembered note length (REQ-019).
+	var new_note_length := get_snap_interval() if layout.is_folded() else default_note_length_ticks
+
+	var end_tick = tick_position + new_note_length
 
 	# Determine which clip to add note to
 	var target_clip: Clip
@@ -255,7 +261,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		target_clip = target_clip_instance.clip
 		# In multi-clip mode, tick_position is song-relative, need to convert to clip-local
 		tick_position = tick_position - target_clip_instance.start_ticks
-		end_tick = tick_position + default_note_length_ticks
+		end_tick = tick_position + new_note_length
 	else:
 		# SINGLE-CLIP MODE: Use the bound clip
 		if not clip:
@@ -273,13 +279,13 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var note_id: int = _note_id_allocator().call()
 
 	# Add note to clip
-	var note_data = target_clip.add_midi_note(note_id, midi_note_num, 100, tick_position, default_note_length_ticks)
+	var note_data = target_clip.add_midi_note(note_id, midi_note_num, 100, tick_position, new_note_length)
 	if note_data == null:
 		push_error("[NoteEditor] Failed to add note after cutting overlaps")
 		_history_clip_snapshots.clear()
 		return null
 
-	logger.info("Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, default_note_length_ticks])
+	logger.info("Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, new_note_length])
 
 	# Get visual note created reactively
 	var note_instance = get_visual_note(note_data.id)
@@ -287,7 +293,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 		push_error("[NoteEditor] Failed to find visual note after creation")
 		return null
 
-	logger.info("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, default_note_length_ticks])
+	logger.info("Placed note: MIDI %d at tick %d (duration: %d)" % [midi_note_num, tick_position, new_note_length])
 
 	# Select the newly placed note (uses coordinate conversion callback)
 	_history_commit("Place Note")
@@ -356,6 +362,11 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
 	var alt_pressed = Input.is_key_pressed(KEY_ALT)
 
+	# Drum View draws hits, not bars, so there is no length to drag out (REQ-022).
+	# Shift falls back to plain dragging rather than silently changing durations.
+	if layout.is_folded():
+		shift_pressed = false
+
 	# Determine current mode
 	var current_mode: DragMode
 	if alt_pressed:
@@ -418,8 +429,9 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			default_note_length_ticks = new_duration
 	else:
 		# Normal mode: Control position
-		var current_midi_note = y_to_note(mouse_pos_local.y)
-		var delta_midi_note = current_midi_note - drag_start_midi_note
+		# Row-wise in Drum View, semitone-wise in the piano roll (REQ-020). The two
+		# agree exactly in chromatic mode.
+		var delta_steps := layout.row_of_pitch(drag_start_midi_note) - layout.y_to_row(mouse_pos_local.y)
 
 		for sel_note in selection_manager.selected_notes:
 			if not sel_note.midi_note_data:
@@ -430,7 +442,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 				continue
 
 			var new_ticks = max(0, start_pos.start_tick + snapped_delta_ticks)
-			var new_midi_note = clamp(start_pos.note + delta_midi_note, 0, 127)
+			var new_midi_note := step_note(start_pos.note, delta_steps)
 
 			# Clamp within clip content in track-mode to avoid crossing instance boundaries
 			if multi_clip_mode:
@@ -462,8 +474,7 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 						" clip_local=", new_ticks)
 
 			var note_x = ticks_to_pixels(new_ticks + visual_offset_ticks)
-			var note_y = note_to_y(new_midi_note)
-			sel_note.position = Vector2(note_x, note_y)
+			sel_note.position = Vector2(note_x, note_visual_y(new_midi_note))
 			sel_note._update_visual()
 
 
@@ -555,6 +566,10 @@ func _on_drag_ended(note: VisualNote) -> void:
 func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 	"""Handle note resize start."""
 	if not note.midi_note_data:
+		return
+
+	# Drum View draws hits, not bars: there is no length to drag (REQ-022).
+	if layout.is_folded():
 		return
 
 	if note not in selection_manager.selected_notes:
@@ -896,11 +911,10 @@ func _move_selection_vertical(semitones: int) -> void:
 			continue
 
 		var note_data = sel_note.midi_note_data
-		var new_pitch = clamp(note_data.note + semitones, 0, 127)
+		var new_pitch := step_note(note_data.note, semitones)
 		note_data.note = new_pitch
 
-		var note_y = note_to_y(new_pitch)
-		sel_note.position.y = note_y
+		sel_note.position.y = note_visual_y(new_pitch)
 		sel_note._update_visual()
 
 	# Process overlaps and sync
@@ -1076,10 +1090,6 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 
 
 ## Note ID source for new and split notes: the open project's counter.
-func _note_id_allocator() -> Callable:
-	return Sonara.editor.project.allocate_note_id
-
-
 func _get_clip_for_note(note_id: int) -> Clip:
 	"""Get the clip that owns this note (works in both single and multi-clip modes)."""
 	if not multi_clip_mode:

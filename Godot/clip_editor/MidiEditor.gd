@@ -16,6 +16,9 @@ class_name MidiEditor extends ScrollContainer
 var logger := Log.make("MidiEditor")
 
 @onready var v_piano: VPiano = $HBox/VPiano
+## Drum View's replacement for the piano keys. Shares VPiano's slot in the HBox;
+## exactly one of the two is visible.
+@onready var drum_row_header: DrumRowHeader = $HBox/DrumRowHeader
 @onready var note_area: Control = $HBox/NoteArea
 @onready var note_lanes: NoteLanes = $HBox/NoteArea/NoteLanes
 @onready var grid_renderer: GridRenderer = $HBox/NoteArea/GridRenderer
@@ -31,6 +34,9 @@ var current_track: Track = null:  # Active track in track-mode
 		if current_track != value:
 			current_track = value
 			_update_note_editor_states()
+			# Labels and colours come from the focused track's map (REQ-024).
+			if is_inside_tree():
+				call_deferred("refresh_note_map")
 
 # Primary note editor (backwards compatibility, first in note_editors array)
 var note_editor: NoteEditor:
@@ -106,17 +112,56 @@ var cursor_position_ticks: int = 0:
 				editor.cursor_position_ticks = cursor_position_ticks
 
 
-# note height: synced to v_piano, note_lanes and note_editor(s)
+## Shared pitch <-> row <-> Y math. Handed to VPiano, NoteLanes, DrumRowHeader and
+## every NoteEditor so they all agree on where a pitch sits, exactly as they share
+## one GridHelper horizontally. Chromatic in the piano roll, folded in Drum View.
+var lane_layout: LaneLayout = LaneLayout.chromatic(20.0)
+
+## Effective note map for the active track's channel, resolved once per change and
+## cached (resolving walks the device chain, so never per frame).
+var note_map: NoteMap = NoteMap.new()
+
+## Tells us when a derived Auto map may have changed (REQ-004).
+var _note_map_watcher := NoteMapWatcher.new()
+var _watched_channel: Channel = null
+
+## True while the editor shows Drum View instead of the piano roll.
+var drum_view: bool = false:
+	set(value):
+		if drum_view == value:
+			return
+		drum_view = value
+		_apply_view_mode()
+
+## Set while a rebuild was deferred because a drag was in progress (REQ-021).
+var _rows_dirty := false
+## Set while a rebuild is already queued for the end of this frame, so a clip
+## edit touching many notes still costs one rebuild.
+var _rebuild_queued := false
+
+## Emitted whenever the row set or the effective map changed, so ClipEditor can
+## refresh the toolbar and the empty-view hint.
+signal view_state_changed
+
+## The user clicked the empty-Drum-View hint (REQ-023).
+signal note_map_editor_requested
+
+## Hint shown when Drum View has no rows to draw. Built in code because it only
+## ever appears in this one state.
+var _empty_hint: Button = null
+
+# note height: drives lane_layout.row_height, which v_piano, note_lanes and the
+# note editor(s) all read from
 var note_height_min := 8
 var note_height_max := 40
 @export var note_height := 20:
 	set(nh):
 		if note_height != nh:
 			note_height = clamp(nh, note_height_min, note_height_max)
+			lane_layout.row_height = note_height
 			if is_inside_tree():
-				v_piano.key_height = note_height
-				note_lanes.key_height = note_height
-				# Update all note editors
+				# Note editors resize from the layout's `changed` signal, but they
+				# still mirror note_height for their own minimum size bookkeeping.
 				for editor in note_editors:
 					if editor:
 						editor.note_height = note_height
@@ -178,8 +223,9 @@ func _ready():
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal
-	v_piano.key_height = note_height
-	note_lanes.key_height = note_height
+	lane_layout.row_height = note_height
+	v_piano.layout = lane_layout
+	note_lanes.layout = lane_layout
 	
 	# Find existing NoteEditor in scene tree (from .tscn)
 	var scene_note_editor = h_scroll.get_node_or_null("NoteEditor")
@@ -189,7 +235,13 @@ func _ready():
 
 	v_piano.key_pressed.connect(_on_piano_key_pressed)
 	v_piano.key_released.connect(_on_piano_key_released)
+	# The Drum View header emits the same signals, so audition works either way.
+	drum_row_header.layout = lane_layout
+	drum_row_header.key_pressed.connect(_on_piano_key_pressed)
+	drum_row_header.key_released.connect(_on_piano_key_released)
+	_note_map_watcher.changed.connect(_on_note_map_changed)
 	visibility_changed.connect(_on_visibility_changed)
+	_apply_view_mode()
 
 func _process(delta: float):
 	# Smooth scroll interpolation
@@ -256,6 +308,7 @@ func bind_to_clip_instance(ci : ClipInstance):
 		# Clip-mode: no position offset (notes show at clip-local positions)
 		note_editor.position_offset_ticks = 0
 	
+	call_deferred("refresh_note_map")
 	call_deferred("scroll_to_note")
 
 
@@ -310,6 +363,7 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	if not tracks.is_empty():
 		current_track = tracks[0]
 
+	call_deferred("refresh_note_map")
 	call_deferred("scroll_to_note")
 
 
@@ -321,7 +375,7 @@ func scroll_to_note(note: int = -1):
 		else:
 			note = clip.find_average_note()
 	
-	var y = note_editor.note_to_y(note)
+	var y := lane_layout.pitch_to_y(note)
 	target_scroll_vertical = max(0, y - (size.y * 0.5))
 
 
@@ -420,6 +474,7 @@ func _unhandled_input(event: InputEvent):
 			if active_editor and (active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING):
 				logger.info("Right mouse released - forcing erase mode exit (safety handler)")
 				active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+				on_interaction_finished()
 				active_editor.erasing_mode = false
 				active_editor.last_erased_note = null
 				_update_selection_overlays()
@@ -609,18 +664,21 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
 		active_editor.selection_manager.end_box_selection(notes_in_box)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		on_interaction_finished()
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DRAGGING or active_editor.interaction_mode == NoteEditor.InteractionMode.PLACING_AND_DRAGGING:
 		if active_editor.dragging_note:
 			active_editor._on_drag_ended(active_editor.dragging_note)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		on_interaction_finished()
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
 		if active_editor.resizing_note:
 			active_editor._on_resize_ended(active_editor.resizing_note)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		on_interaction_finished()
 		accept_event()
 
 	elif active_editor.placed_note_awaiting_drag:
@@ -664,6 +722,7 @@ func _handle_right_mouse_release() -> void:
 	if active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
 		logger.info("Right mouse released - exiting erase mode")
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+		on_interaction_finished()
 		active_editor.erasing_mode = false
 		active_editor.last_erased_note = null
 		_update_selection_overlays()
@@ -839,6 +898,9 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 		return
 	editor.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	editor.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	editor.layout = lane_layout
+	if not editor.notes_changed.is_connected(queue_row_rebuild):
+		editor.notes_changed.connect(queue_row_rebuild)
 	editor.note_height = note_height
 	editor.cursor_position_ticks = cursor_position_ticks
 	if grid_helper:
@@ -852,20 +914,186 @@ func _on_visibility_changed() -> void:
 	if not is_visible_in_tree():
 		_stop_preview_note()
 		v_piano.hovered_note = -1
+		drum_row_header.hovered_note = -1
 
 
 ## Highlight the piano key for the lane under the mouse (note area or piano).
 func _update_hovered_key() -> void:
 	var note := -1
+	var header: Control = drum_row_header if drum_view else v_piano
 	var hovered: Control = get_viewport().gui_get_hovered_control() if is_visible_in_tree() else null
 	if hovered and (hovered == self or is_ancestor_of(hovered)) and not is_panning:
-		if hovered == v_piano:
-			note = v_piano.get_note_at_position(v_piano.get_local_mouse_position())
+		if hovered == header:
+			note = header.get_note_at_position(header.get_local_mouse_position())
 		else:
 			var y := note_lanes.get_local_mouse_position().y
-			if y >= 0.0 and y < note_lanes.note_to_y_bottom(0):
-				note = clampi(Midi.MIDI_MAX - int(y / note_height), 0, Midi.MIDI_MAX)
-	v_piano.hovered_note = note
+			if y >= 0.0 and y < lane_layout.total_height():
+				note = lane_layout.y_to_pitch(y)
+	header.hovered_note = note
+
+
+# ============================================================================
+# NOTE MAPS AND DRUM VIEW
+# ============================================================================
+
+## Channel whose note map applies: the focused track's in track-mode, otherwise
+## the bound clip's track's.
+func get_active_channel() -> Channel:
+	var t: Track = current_track if track_mode else (clip_instance.track if clip_instance else null)
+	if t == null:
+		return null
+	# The track's own link first: it needs no editor, which keeps this usable
+	# headless and during load, before Sonara.editor is wired up.
+	var ch := t.get_linked_channel()
+	if ch:
+		return ch
+	var project: Project = Sonara.editor.project if Sonara.editor else null
+	return project.get_channel_by_id(t.default_channel_id) if project else null
+
+
+## Re-bind the watcher and re-resolve the map for the channel now in focus. Called
+## whenever the binding changes; the watcher then keeps it current by itself.
+func refresh_note_map() -> void:
+	var channel := get_active_channel()
+	if channel != _watched_channel:
+		_watched_channel = channel
+		_note_map_watcher.bind(channel)
+	note_map = NoteMapResolver.effective_map(channel)
+	v_piano.note_map = note_map
+	note_lanes.note_map = note_map
+	drum_row_header.note_map = note_map
+	rebuild_rows()
+	view_state_changed.emit()
+
+
+## The Auto map's source changed (a pad renamed, moved, added or recoloured), or
+## the assignment did. Coalesced to one call per frame by NoteMapWatcher.
+func _on_note_map_changed() -> void:
+	refresh_note_map()
+
+
+## Whether this channel's clips should open in Drum View (REQ-028).
+func wants_drum_view() -> bool:
+	return NoteMapResolver.wants_drum_view(get_active_channel())
+
+
+## Every clip currently on screen, across all note editors.
+func _visible_clips() -> Array:
+	var clips: Array = []
+	for editor in note_editors:
+		if editor == null:
+			continue
+		if editor.multi_clip_mode:
+			clips.append_array(editor.clip_instances)
+		elif editor.clip_instance:
+			clips.append(editor.clip_instance)
+	return clips
+
+
+## Rows for Drum View: the union across every editor of its map's pitches and the
+## pitches its clips use (REQ-016, REQ-024).
+func compute_rows() -> PackedInt32Array:
+	return DrumRows.rows_for(note_map, _visible_clips())
+
+
+## Recompute the folded row set. Deferred while a drag is running so rows can't
+## reshuffle under the cursor (REQ-021); the drag's end calls this again.
+func rebuild_rows() -> void:
+	if not drum_view:
+		return
+	var active := get_active_note_editor()
+	if active and active.interaction_mode != NoteEditor.InteractionMode.NONE:
+		_rows_dirty = true
+		return
+	_rows_dirty = false
+	lane_layout.set_rows(compute_rows())
+	_update_empty_hint()
+	view_state_changed.emit()
+
+
+## Called when an interaction finishes, so a row set that changed mid-drag is
+## applied once the cursor is released (REQ-021).
+func on_interaction_finished() -> void:
+	if _rows_dirty:
+		rebuild_rows()
+
+
+## Ask for a row rebuild after the current frame. Notes added, erased or dragged
+## to a new pitch change the row set; while a drag is running rebuild_rows()
+## defers itself, and on_interaction_finished() picks it up on release.
+func queue_row_rebuild() -> void:
+	if not drum_view or _rebuild_queued:
+		return
+	_rows_dirty = true
+	_rebuild_queued = true
+	_flush_row_rebuild.call_deferred()
+
+
+func _flush_row_rebuild() -> void:
+	_rebuild_queued = false
+	rebuild_rows()
+
+
+## Swap the header controls and the layout mode, keeping the selection and a
+## visible pitch on screen (REQ-015).
+func _apply_view_mode() -> void:
+	if not is_inside_tree():
+		return
+	# A pitch that is on screen now, so the same row can be brought back after the
+	# switch. Selection lives in the note editors and is untouched either way.
+	var anchor := _visible_anchor_pitch()
+
+	v_piano.visible = not drum_view
+	drum_row_header.visible = drum_view
+	if drum_view:
+		lane_layout.set_rows(compute_rows())
+	else:
+		lane_layout.set_chromatic()
+	_rows_dirty = false
+
+	if anchor >= 0 and lane_layout.row_of_pitch(anchor) >= 0:
+		call_deferred("scroll_to_note", anchor)
+	_update_empty_hint()
+	view_state_changed.emit()
+
+
+## A pitch to keep in view across a mode switch: the first selected note's, else
+## whatever sits in the middle of the viewport.
+func _visible_anchor_pitch() -> int:
+	var active := get_active_note_editor()
+	if active and active.selection_manager:
+		for vn in active.selection_manager.selected_notes:
+			if vn and vn.midi_note_data:
+				return vn.midi_note_data.note
+	if lane_layout.total_height() <= 0:
+		return -1
+	return lane_layout.y_to_pitch(scroll_vertical + size.y * 0.5)
+
+
+## True when Drum View has nothing to show, so ClipEditor can offer the hint
+## that opens the note map editor (REQ-023).
+func drum_view_is_empty() -> bool:
+	return drum_view and lane_layout.row_count() == 0
+
+
+## Show or hide the "nothing to show here" hint over the note area (REQ-023).
+func _update_empty_hint() -> void:
+	var should_show := drum_view_is_empty()
+	if _empty_hint == null:
+		if not should_show:
+			return
+		_empty_hint = Button.new()
+		_empty_hint.name = "DrumViewEmptyHint"
+		_empty_hint.text = "No drum rows yet — set up a note map for this channel"
+		_empty_hint.flat = true
+		_empty_hint.focus_mode = Control.FOCUS_NONE
+		_empty_hint.mouse_filter = Control.MOUSE_FILTER_STOP
+		_empty_hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+		_empty_hint.offset_top = 24.0
+		_empty_hint.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_empty_hint.pressed.connect(func(): note_map_editor_requested.emit())
+		note_area.add_child(_empty_hint)
+	_empty_hint.visible = should_show
 
 
 ## Channel that previews should play on: the focused track in track-mode,

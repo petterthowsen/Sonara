@@ -10,6 +10,13 @@ enum ChannelType {
 	GROUP        # Group mix parent (left pane, nested children)
 }
 
+# Where a channel's note map comes from (REQ-001)
+enum NoteMapMode {
+	NONE,   # No labels or colours
+	AUTO,   # Derived live from the channel's instrument (a Drum Machine today)
+	NAMED,  # A user map, embedded in the project as `note_map`
+}
+
 # Pan modes (Cubase-style)
 enum PanMode {
 	STEREO_COMBINED,  # Single pan knob controls stereo balance (Cubase default)
@@ -32,6 +39,10 @@ signal solo_changed(value: bool)
 signal peak_updated(left: float, right: float, rms_left: float, rms_right: float)
 signal route_changed(output_id: int)
 signal hierarchy_changed
+
+## Assignment, embedded map or Drum View preference changed. Purely a UI concern:
+## note maps are labels and are never sent to the engine.
+signal note_map_changed
 
 # MIDI signals
 signal midi_input_device_changed(device_id: int)
@@ -91,6 +102,15 @@ var aux_bus_index: int = -1
 var aux_pad_note: int = -1
 ## Number of aux-out bus slots last sent to the engine, so stale slots can be cleared. Not persisted.
 var aux_out_sent_count: int = 0
+
+# Note map (labels and colours for MIDI pitches; never sent to the engine)
+var note_map_mode: NoteMapMode = NoteMapMode.AUTO
+## The embedded copy of a named map. Null unless note_map_mode is NAMED. Kept in
+## the project so it survives a machine whose library lacks the map (REQ-011).
+var note_map: NoteMap = null
+## Whether this channel's clips open in Drum View: -1 unset, 0 piano roll, 1 Drum
+## View. Unset resolves per effective map at open time (REQ-028).
+var drum_view: int = -1
 
 # MIDI input configuration
 var midi_input_device: int = -2  # -3=none, -2=all, -1=virtual keyboard, 0+=physical device
@@ -282,6 +302,41 @@ func unique_name_for(desired: String) -> String:
 	if project == null:
 		return desired
 	return project.unique_name(desired, null, self, "Channel")
+
+
+## Switch between None, Auto and a named map. Assigning NAMED without a map
+## leaves the channel showing nothing until set_note_map() supplies one.
+func set_note_map_mode(mode: NoteMapMode) -> void:
+	if note_map_mode == mode:
+		return
+	note_map_mode = mode
+	note_map_changed.emit()
+
+
+## Assign (a copy of) a named map, or null to clear it. Passing a map switches the
+## channel to NAMED; the copy is what keeps library and project independent
+## (REQ-010, REQ-026).
+func set_note_map(map: NoteMap) -> void:
+	if map == null:
+		if note_map == null:
+			return
+		note_map = null
+		if note_map_mode == NoteMapMode.NAMED:
+			note_map_mode = NoteMapMode.AUTO
+		note_map_changed.emit()
+		return
+	note_map = map.duplicate_map()
+	note_map_mode = NoteMapMode.NAMED
+	note_map_changed.emit()
+
+
+## -1 unset, 0 piano roll, 1 Drum View (REQ-028).
+func set_drum_view(value: int) -> void:
+	var clamped := clampi(value, -1, 1)
+	if drum_view == clamped:
+		return
+	drum_view = clamped
+	note_map_changed.emit()
 
 
 func set_color(new_color : Color):
@@ -853,6 +908,8 @@ func to_json() -> Dictionary:
 		"color": Utils.color_to_json(color),
 		"channel_type": ChannelType.keys()[channel_type],
 		"pan_mode": PanMode.keys()[pan_mode],
+		"note_map_mode": NoteMapMode.keys()[note_map_mode],
+		"note_map": note_map.to_json() if note_map else null,
 		"child_channel_ids": child_channel_ids.duplicate(),
 		"send_channels": send_channels.map(func(s): return s.to_json()),
 		"devices": devices.map(func(d): return d.to_json()),
@@ -865,6 +922,7 @@ const JSON_FIELDS: Array[String] = [
 	"name", "order", "device_output_id", "volume", "pan", "pan_left", "pan_right",
 	"mute", "solo", "phase_invert", "output_channel_id", "parent_channel_id",
 	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
+	"drum_view",
 ]
 
 
@@ -877,6 +935,10 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.color = Utils.color_from_json(data.get("color"), channel.color)
 	channel.channel_type = ChannelType.get(str(data.get("channel_type", "")), channel.channel_type)
 	channel.pan_mode = PanMode.get(str(data.get("pan_mode", "")), channel.pan_mode)
+	# A project saved before note maps existed has no key, so it lands on AUTO (REQ-012).
+	channel.note_map_mode = NoteMapMode.get(str(data.get("note_map_mode", "")), channel.note_map_mode)
+	if data.get("note_map") is Dictionary:
+		channel.note_map = NoteMap.from_json(data["note_map"])
 	channel.child_channel_ids.assign(data.get("child_channel_ids", []))
 
 	# Load send_channels

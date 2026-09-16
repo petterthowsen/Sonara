@@ -7,6 +7,10 @@
 ### Mixing & Playback
 
 - [ ] Plugin latency compensation
+- [ ] Send amount curve is wrong: with Dragonfly Hall Reverb (100% wet) on a bus at 0 dB and a send of 0.5 from Drums, almost no signal reaches the reverb; past 0.5 it ramps up very steeply. Send amount should be in dB (-inf to 0 dB) like Bitwig, not a raw linear 0-1 factor
+- [ ] Bug (`city_pop_5` project): soloing the Reverb channel appears to stop processing the Drum channel even though Drums sends into it. Closing and reopening the project doesn't fix it. Solo logic should keep channels alive that feed a soloed route target
+- [ ] Playhead line is jittery during playback - could be OSC (status rate/jitter) or engine-side position reporting. Godot also logs `Unhandled message: /status/sample_position`, so that status isn't handled at all in `AudioEngineOSC`
+  - [ ] Consider a broader audit of the audio engine's transport/position reporting while investigating
 - [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [ ] Make sample rate and buffer size configurable (currently constants in `engine.rs`)
@@ -104,10 +108,16 @@ Done:
   - [x] Delete
 - [ ] some way to visually say if a clip is instanced more than once
   - [ ] context menu > select all instances (grey if none)
+- [ ] Differentiate clicking the clip header from the clip body, with settings under the Behavior category:
+  - [ ] Double-click body: open the clip and switch to the MIDI editor in clip mode
+  - [ ] Double-click header/text: rename
+  - [ ] Right-click header: context menu
+  - [ ] Right-click body: delete; holding the button deletes clips as the mouse moves over them
 - [ ] adjusting TimelineClip length via handle clamps poorly at least the right side handle. Seems like snapping is floored (should round instead), currently one needs to drag very close to the next snap point for it to actually change size.
 
 ### Clip Editor / Note Editor
 
+- [x?] Note maps and drum view: labeled/colored keys, a drum editing mode that folds to mapped rows, a note map library, and auto maps from the Drum Machine (see `docs/specs/002-note-maps/`)
 - [ ] NoteContainer seems to assign IDs to midi notes. This responsibility should be moved elsewhere (Clip probably?)
 - [ ] In track mode, notes from all clips should be visible
 - [ ] Ctrl+click and drag ON a VisualNote should initiate "drag to duplicate anywhere"
@@ -119,6 +129,9 @@ Done:
   - [ ] In track mode, the track list should be ordered the same as the timeline
   - [ ] In track mode, draw a track-colored overlay on the ruler for clip start/end. Unfocused clips as gray/white below; clips of the active/focused tracks above
 - [ ] Modifier+right-click to open context menu in NoteEditor
+- [ ] Bug: the blue vertical range line at the start of the clip renders off-screen
+- [ ] Unify the ruler between the arranger and the note editor: share a set of ruler components so the note editor also gets real-time display, range interaction, selection and start position
+- [ ] Incoming MIDI events (live input and playback) should depress keys on the vertical piano roll the same way clicking does, in blue. Change the hover color to a lighter gray/white and prioritize key press over hover
 
 - [x?] should probably add a gray line between E/F and between B/C
 - [x?] note audition mode, a toggle at the bottom (use one of our icons) when on, clicking a note plays it on that instrument, at the velocity of the note.
@@ -170,6 +183,13 @@ Done:
   - Ensure drop targets never change size (show/hide visually only)
 - [x] Asset Browser: Persist tree/list mode state and collapsed/uncollapsed folders
 - [x?] SmartLineEdit: clicking outside (or losing focus) commits the edit, like Enter
+
+### Settings
+
+- [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type and optional explicit input control type, and build the UI from that registry (rendered when the settings window opens)
+  - [ ] Sub-category renders as a large-font label with margins between sub-categories
+  - [ ] Table-like layout with the controls aligned on the right for readability
+- [ ] Searchable settings: fuzzy search bar at the top, with a little debounce
 
 ### AI Assistant
 

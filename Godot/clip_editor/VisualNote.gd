@@ -18,6 +18,15 @@ var note_color: Color = Color(0.3, 0.6, 0.9)  # Base color (inherited from track
 # Resize handle size (pixels from right edge)
 const RESIZE_HANDLE_WIDTH: float = 8.0
 
+## Width of a Drum View hit marker. Fixed on purpose: vertical zoom changes how
+## tall a row is, never how long a hit looks. NoteContainer.drum_marker_size()
+## still shrinks it to fit the grid step and the note's own length.
+const DRUM_MARKER_WIDTH: float = 12.0
+
+## True while the note is drawn as a Drum View hit marker rather than a bar.
+## The stored duration is untouched either way (REQ-022).
+var drum_mode: bool = false
+
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	focus_mode = Control.FOCUS_NONE
@@ -37,6 +46,25 @@ func prepare_piano_roll_layout() -> void:
 	size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	custom_minimum_size = Vector2.ZERO
+	drum_mode = false
+	if label:
+		label.visible = true
+
+
+## Drum View: the note is a hit marker at its start instead of a bar spanning its
+## duration. Velocity shading is kept, the pitch label is hidden (a whole row is
+## one pitch already) and the note cannot be resized (REQ-022).
+func prepare_drum_layout() -> void:
+	prepare_piano_roll_layout()
+	drum_mode = true
+	if label:
+		label.visible = false
+
+
+## Height of the hit marker for a given row height: it fills the row, minus a
+## hairline so neighbouring rows stay readable.
+static func drum_marker_height(row_height: float) -> float:
+	return maxf(3.0, row_height - 2.0)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -105,6 +133,10 @@ func update_label_visibility(target_height: float) -> void:
 	if not label:
 		return
 
+	if drum_mode:
+		label.visible = false
+		return
+
 	if target_height < 26.0:
 		label.visible = false
 	else:
@@ -113,4 +145,7 @@ func update_label_visibility(target_height: float) -> void:
 
 func _is_over_resize_handle(pos: Vector2) -> bool:
 	"""Check if mouse is over the resize handle."""
+	if drum_mode:
+		# Hit markers have no length to drag (REQ-022).
+		return false
 	return pos.x >= size.x - RESIZE_HANDLE_WIDTH

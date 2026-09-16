@@ -20,14 +20,39 @@ const visual_note_scene = preload("res://clip_editor/VisualNote.tscn")
 # PROPERTIES
 # These must be set by the parent ClipEditor/MidiEditor
 #=========================================================
+## A note was added, removed or changed, so the set of pitches in use may have
+## moved. MidiEditor listens to rebuild Drum View's rows (REQ-016).
+signal notes_changed
+
+## Shared pitch <-> row <-> Y math, handed down by MidiEditor. Defaults to its own
+## chromatic layout so a standalone NoteEditor still positions notes.
+var layout: LaneLayout = LaneLayout.chromatic():
+	set(l):
+		if layout == l:
+			return
+		if layout and layout.changed.is_connected(_on_layout_changed):
+			layout.changed.disconnect(_on_layout_changed)
+		layout = l if l else LaneLayout.chromatic()
+		layout.changed.connect(_on_layout_changed)
+		_on_layout_changed()
+
 @export var note_height := 20.0:
 	set(nh):
 		if note_height != nh:
 			note_height = nh
+			if layout and not is_equal_approx(layout.row_height, nh):
+				layout.row_height = nh
 			# Notify parent ScrollContainer that our size changed
 			# and queue relayout
 			update_minimum_size()
 			queue_sort()
+
+
+## Rows or row height changed: every note needs repositioning and the container
+## needs to resize (Drum View is far shorter than 128 chromatic lanes).
+func _on_layout_changed() -> void:
+	update_minimum_size()
+	queue_sort()
 
 # Horizontal scrolling configuration
 @export var min_width_bars: int = 8		# minimum width in bars
@@ -216,9 +241,8 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 # Visual Note Placement
 # ============================================================================
 func _get_minimum_size() -> Vector2:
-	# Total height for 128 MIDI notes (0-127)
-	var total_height = 128 * note_height
-	return Vector2(0, total_height)
+	# 128 chromatic lanes in the piano roll, one per visible row in Drum View.
+	return Vector2(0, layout.total_height())
 
 
 func _notification(what):
@@ -255,15 +279,29 @@ func _update_single_note_position(note: VisualNote) -> void:
 		# SINGLE-CLIP MODE: Use position_offset_ticks (usually 0 in clip-mode)
 		offset_ticks = position_offset_ticks
 
+	# Pitches with no row are hidden. Drum View's row set always covers every used
+	# pitch (REQ-016), so this only ever hides notes mid-rebuild.
+	if layout.row_of_pitch(note_data.note) < 0:
+		note.visible = false
+		return
+	note.visible = true
+
 	# Apply position offset for song-relative positioning
 	var note_x = ticks_to_pixels(note_data.start_tick + offset_ticks)
-	var note_y = note_to_y(note_data.note)
-	var note_width = ticks_to_pixels(note_data.duration_ticks)
+	var note_y = layout.pitch_to_y(note_data.note)
+	var row_height := layout.row_height
 
-	note.prepare_piano_roll_layout()
-	note.position = Vector2(note_x, note_y)
-	note.size = Vector2(maxf(1.0, note_width), note_height)
-	note.update_label_visibility(note_height)
+	if layout.is_folded():
+		# Hit marker at the note's start; the stored duration is untouched (REQ-022).
+		note.prepare_drum_layout()
+		note.position = Vector2(note_x, note_visual_y(note_data.note))
+		note.size = drum_marker_size(note_data.duration_ticks)
+	else:
+		var note_width = ticks_to_pixels(note_data.duration_ticks)
+		note.prepare_piano_roll_layout()
+		note.position = Vector2(note_x, note_y)
+		note.size = Vector2(maxf(1.0, note_width), row_height)
+	note.update_label_visibility(row_height)
 
 
 func get_note_song_position(note: VisualNote) -> Dictionary:
@@ -358,18 +396,41 @@ func _load_clip_notes() -> void:
 	update_container_width()
 
 
+## Source of fresh note ids: the project's allocator when there is an editor, and
+## the bound clips' own ids otherwise, so binding and placing notes work headless
+## instead of crashing on a null project.
+func _note_id_allocator() -> Callable:
+	var editor = Sonara.editor
+	if editor and editor.project:
+		return editor.project.allocate_note_id
+	return _local_note_id
+
+
+## Next id above every note in the clips this editor is bound to.
+func _local_note_id() -> int:
+	var next := 1
+	var clips: Array = [clip] if not multi_clip_mode else clip_instances.map(func(ci): return ci.clip if ci else null)
+	for c in clips:
+		if c == null:
+			continue
+		for n in c.midi_notes:
+			if n and n.id >= next:
+				next = n.id + 1
+	return next
+
+
 func _load_notes_from_single_clip() -> void:
 	"""Load notes from single clip instance (clip-mode)."""
 	if not clip:
 		logger.error("No clip to load!")
 		return
 
-	var project = Sonara.editor.project
+	var allocate := _note_id_allocator()
 
 	for note_data in clip.midi_notes:
 		# Assign note ID if not already assigned
 		if note_data.id < 0:
-			note_data.id = project.allocate_note_id()
+			note_data.id = allocate.call()
 
 		# Create visual note instance
 		var note_instance = visual_note_scene.instantiate()
@@ -390,7 +451,7 @@ func _load_notes_from_multiple_clips() -> void:
 		logger.warn("No clip instances to load!")
 		return
 
-	var project = Sonara.editor.project
+	var allocate := _note_id_allocator()
 	var total_notes = 0
 
 	for ci in clip_instances:
@@ -404,7 +465,7 @@ func _load_notes_from_multiple_clips() -> void:
 		for note_data in ci.clip.midi_notes:
 			# Assign note ID if not already assigned
 			if note_data.id < 0:
-				note_data.id = project.allocate_note_id()
+				note_data.id = allocate.call()
 
 			# Create visual note instance
 			var note_instance = visual_note_scene.instantiate()
@@ -466,6 +527,7 @@ func _on_clip_note_added(note_data: MidiNoteData) -> void:
 
 	update_container_width()
 	logger.info("Reactively added visual note %d" % note_data.id)
+	notes_changed.emit()
 
 
 func _on_clip_note_removed(note_data: MidiNoteData) -> void:
@@ -494,6 +556,7 @@ func _on_clip_note_removed(note_data: MidiNoteData) -> void:
 	update_container_width()
 
 	logger.info("Reactively removed visual note %d" % note_data.id)
+	notes_changed.emit()
 
 
 func _on_clip_note_changed(note_data: MidiNoteData) -> void:
@@ -516,19 +579,64 @@ func _on_clip_note_changed(note_data: MidiNoteData) -> void:
 	update_container_width()
 
 	logger.info("Reactively updated visual note %d" % note_data.id)
+	notes_changed.emit()
 
 
 # ============================================================================
 # COORDINATE CONVERSION
 # ============================================================================
+
 func y_to_note(y: float) -> int:
-	"""Convert Y pixel position to MIDI note number."""
-	var note = Midi.MIDI_MAX - int(y / note_height)
-	return clamp(note, MIDI_MIN, MIDI_MAX)
+	"""Convert Y pixel position to MIDI note number (the row's pitch in Drum View)."""
+	return layout.y_to_pitch(y)
 
 
 func note_to_y(note : int) -> float:
-	return (127.0 - note) * note_height
+	return layout.pitch_to_y(note)
+
+
+## Size of a Drum View hit marker: a fixed width that fills the row vertically.
+## The width is deliberately independent of the row height, so zooming vertically
+## only makes the markers taller. It is still capped so a marker is never wider
+## than one grid step, nor wider than the note itself.
+##
+## `duration_ticks` is the note's own length. Notes on one pitch never overlap in
+## the data, so clamping to that length is what actually guarantees the markers
+## don't overlap on screen: the grid step alone is wrong whenever notes are
+## shorter than the current snap, and the old 3 px floor overlapped once a step
+## shrank below it at low zoom. Pass 0 (the default) for the generic marker size
+## with no note in hand.
+func drum_marker_size(duration_ticks: int = 0) -> Vector2:
+	var h := VisualNote.drum_marker_height(layout.row_height)
+	var w := VisualNote.DRUM_MARKER_WIDTH
+	var step_px := ticks_to_pixels(get_snap_interval())
+	if step_px > 0.0:
+		w = minf(w, step_px - 1.0)
+	if duration_ticks > 0:
+		w = minf(w, ticks_to_pixels(duration_ticks) - 1.0)
+	return Vector2(maxf(1.0, w), h)
+
+
+## Top Y of a note's *visual*, which in Drum View is the centred hit marker rather
+## than the whole row. Drag code positions notes through this so markers don't
+## jump to the row's top edge mid-drag.
+func note_visual_y(pitch: int) -> float:
+	var y := layout.pitch_to_y(pitch)
+	if layout.is_folded():
+		y += (layout.row_height - VisualNote.drum_marker_height(layout.row_height)) * 0.5
+	return y
+
+
+## Vertical delta between two Y positions, measured in rows and signed so that
+## positive is upward (a higher pitch). In the piano roll this is the semitone
+## delta; in Drum View it counts visible rows (REQ-020).
+func y_delta_to_steps(from_y: float, to_y: float) -> int:
+	return layout.y_to_row(from_y) - layout.y_to_row(to_y)
+
+
+## Move a pitch by whole rows, saturating at the ends (REQ-020).
+func step_note(note: int, steps: int) -> int:
+	return layout.step_pitch(note, steps)
 
 
 func ticks_to_pixels(ticks: int) -> float:

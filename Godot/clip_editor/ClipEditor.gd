@@ -19,6 +19,27 @@ var log := Log.make("ClipEditor")
 @onready var audition_toggle: Button = $BottomPanel/Toolbar/AuditionToggle
 const AUDITION_CONFIG_KEY := "clip_editor/audition"
 
+# Note map / Drum View toolbar (docs/specs/002-note-maps)
+@onready var mode_switch: Button = $BottomPanel/Toolbar/ModeSwitch
+@onready var note_map_button: Button = $BottomPanel/Toolbar/NoteMapButton
+@onready var note_map_popup: PopupMenu = $BottomPanel/Toolbar/NoteMapButton/NoteMapPopup
+@onready var note_map_load_button: Button = $BottomPanel/Toolbar/NoteMapLoad
+@onready var note_map_edit_button: Button = $BottomPanel/Toolbar/NoteMapEdit
+@onready var note_map_save_button: Button = $BottomPanel/Toolbar/NoteMapSave
+
+## Popup item ids. Library entries use LIBRARY_ID_BASE + index.
+const NOTE_MAP_ID_NONE := 0
+const NOTE_MAP_ID_AUTO := 1
+const NOTE_MAP_LIBRARY_ID_BASE := 100
+
+var _note_map_editor: NoteMapEditorDialog = null
+var _note_map_browser: NoteMapBrowserDialog = null
+var _note_map_save_dialog: NoteMapSaveDialog = null
+## Library maps currently listed in the dropdown, indexed by popup id offset.
+var _popup_library_maps: Array[NoteMap] = []
+## True while the toolbar is being rebuilt, so syncing controls doesn't loop.
+var _syncing_toolbar := false
+
 # for multi-track clip editing
 @onready var track_selector: ClipEditorTrackList = $HSplit/LeftPanel/VBox/ClipEditorTrackList
 
@@ -79,6 +100,8 @@ func _ready():
 	midi_editor.audition_enabled = audition_on
 	audition_toggle.toggled.connect(_on_audition_toggled)
 	
+	_setup_note_map_toolbar()
+
 	if Sonara.editor:
 		Sonara.editor.clips_selected.connect(_on_editor_clips_selected)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
@@ -230,6 +253,7 @@ func _bind_track_mode():
 	else:
 		midi_editor.current_track = selected_tracks[0] if not selected_tracks.is_empty() else null
 	log.info("  - Active track set to: '%s'" % [midi_editor.current_track.name if midi_editor and midi_editor.current_track else "null"])
+	call_deferred("_apply_drum_view_preference")
 
 
 func _bind_clip_mode():
@@ -245,6 +269,231 @@ func _bind_clip_mode():
 			log.info("  - Clip's track: '%s'" % [clip_inst.track.name])
 		midi_editor.bind_to_clip_instance(clip_inst)
 		bound_clip_instance = clip_inst
+	call_deferred("_apply_drum_view_preference")
+
+
+# ============================================================================
+# NOTE MAPS AND DRUM VIEW (docs/specs/002-note-maps)
+# ============================================================================
+
+func _setup_note_map_toolbar() -> void:
+	mode_switch.toggled.connect(_on_mode_switch_toggled)
+	note_map_button.pressed.connect(_on_note_map_button_pressed)
+	note_map_popup.id_pressed.connect(_on_note_map_popup_id_pressed)
+	note_map_load_button.pressed.connect(_on_note_map_load_pressed)
+	note_map_edit_button.pressed.connect(_on_note_map_edit_pressed)
+	note_map_save_button.pressed.connect(_on_note_map_save_pressed)
+	midi_editor.view_state_changed.connect(_sync_note_map_toolbar)
+	# The empty-Drum-View hint opens this same editor (REQ-023).
+	midi_editor.note_map_editor_requested.connect(_on_note_map_edit_pressed)
+	_sync_note_map_toolbar()
+
+
+## The channel whose note map the toolbar acts on.
+func _note_map_channel() -> Channel:
+	return midi_editor.get_active_channel() if midi_editor else null
+
+
+## Reflect the bound channel's assignment and view mode in the toolbar.
+func _sync_note_map_toolbar() -> void:
+	if _syncing_toolbar or mode_switch == null:
+		return
+	_syncing_toolbar = true
+
+	var channel := _note_map_channel()
+	var has_channel := channel != null
+
+	mode_switch.disabled = not has_channel
+	mode_switch.set_pressed_no_signal(midi_editor.drum_view)
+	mode_switch.text = "Drum View" if midi_editor.drum_view else "Piano Roll"
+
+	note_map_button.disabled = not has_channel
+	note_map_load_button.disabled = not has_channel
+	note_map_edit_button.disabled = not has_channel
+	note_map_save_button.disabled = not has_channel
+	note_map_button.text = _assignment_label(channel)
+
+	if _note_map_editor and _note_map_editor.visible:
+		_note_map_editor.refresh()
+
+	_syncing_toolbar = false
+
+
+func _assignment_label(channel: Channel) -> String:
+	if channel == null:
+		return "Note Map"
+	match channel.note_map_mode:
+		Channel.NoteMapMode.NONE:
+			return "None"
+		Channel.NoteMapMode.NAMED:
+			var named := channel.note_map.map_name if channel.note_map else ""
+			return named if not named.is_empty() else "Named Map"
+		_:
+			return "Auto"
+
+
+## Apply the channel's remembered view preference when a clip is bound (REQ-028).
+func _apply_drum_view_preference() -> void:
+	if midi_editor == null:
+		return
+	midi_editor.refresh_note_map()
+	midi_editor.drum_view = midi_editor.wants_drum_view()
+	_sync_note_map_toolbar()
+
+
+func _on_mode_switch_toggled(pressed: bool) -> void:
+	if _syncing_toolbar:
+		return
+	midi_editor.drum_view = pressed
+	# The choice is remembered per channel, so reopening a clip lands the same way.
+	var channel := _note_map_channel()
+	if channel:
+		channel.set_drum_view(1 if pressed else 0)
+	_sync_note_map_toolbar()
+
+
+## The dropdown opens upwards: the toolbar sits at the bottom of the window, so a
+## popup dropped downwards would fall off screen.
+func _on_note_map_button_pressed() -> void:
+	_rebuild_note_map_popup()
+	var rect := note_map_button.get_global_rect()
+	var popup_size := note_map_popup.get_contents_minimum_size()
+	var origin := note_map_button.get_screen_transform().origin
+	note_map_popup.popup(Rect2i(
+		Vector2i(origin),
+		Vector2i(int(maxf(rect.size.x, popup_size.x)), int(popup_size.y))
+	))
+	# popup() positions by the top-left corner, so lift it by its own height.
+	note_map_popup.position = Vector2i(int(origin.x), int(origin.y - note_map_popup.size.y))
+
+
+func _rebuild_note_map_popup() -> void:
+	var channel := _note_map_channel()
+	note_map_popup.clear()
+	_popup_library_maps = NoteMapLibrary.list()
+
+	note_map_popup.add_radio_check_item("None", NOTE_MAP_ID_NONE)
+	note_map_popup.add_radio_check_item("Auto", NOTE_MAP_ID_AUTO)
+	note_map_popup.set_item_checked(0, channel and channel.note_map_mode == Channel.NoteMapMode.NONE)
+	note_map_popup.set_item_checked(1, channel and channel.note_map_mode == Channel.NoteMapMode.AUTO)
+	# Auto with no source has nothing to show; still selectable, just empty.
+	note_map_popup.set_item_tooltip(1, "Derived from the channel's instrument")
+
+	if _popup_library_maps.is_empty():
+		return
+	note_map_popup.add_separator("Library")
+	var current_name := channel.note_map.map_name if (channel and channel.note_map) else ""
+	for i in _popup_library_maps.size():
+		var map := _popup_library_maps[i]
+		var label := map.map_name
+		if not map.category.strip_edges().is_empty():
+			label = "%s / %s" % [map.category, map.map_name]
+		note_map_popup.add_radio_check_item(label, NOTE_MAP_LIBRARY_ID_BASE + i)
+		var index := note_map_popup.get_item_index(NOTE_MAP_LIBRARY_ID_BASE + i)
+		note_map_popup.set_item_checked(index,
+			channel and channel.note_map_mode == Channel.NoteMapMode.NAMED and map.map_name == current_name)
+
+
+func _on_note_map_popup_id_pressed(id: int) -> void:
+	var channel := _note_map_channel()
+	if channel == null:
+		return
+	if id == NOTE_MAP_ID_NONE:
+		_set_assignment(channel, Channel.NoteMapMode.NONE, null)
+	elif id == NOTE_MAP_ID_AUTO:
+		_set_assignment(channel, Channel.NoteMapMode.AUTO, null)
+	elif id >= NOTE_MAP_LIBRARY_ID_BASE:
+		var index := id - NOTE_MAP_LIBRARY_ID_BASE
+		if index >= 0 and index < _popup_library_maps.size():
+			# A copy, so editing it on the channel never touches the library (REQ-010).
+			_assign_map(channel, _popup_library_maps[index].duplicate_map())
+	_after_assignment_change()
+
+
+## Assign a named map as one undoable step.
+func _assign_map(channel: Channel, map: NoteMap) -> void:
+	var old_map: NoteMap = channel.note_map.duplicate_map() if channel.note_map else null
+	HistoryUtil.execute_property("Assign Note Map", channel, "set_note_map", old_map, map)
+
+
+func _set_assignment(channel: Channel, mode: Channel.NoteMapMode, map: NoteMap) -> void:
+	if map:
+		_assign_map(channel, map)
+		return
+	HistoryUtil.execute_property("Set Note Map Mode", channel, "set_note_map_mode", channel.note_map_mode, mode)
+
+
+## After any assignment change the effective map, the rows and the default view
+## may all differ, so re-resolve everything.
+func _after_assignment_change() -> void:
+	midi_editor.refresh_note_map()
+	_sync_note_map_toolbar()
+
+
+func _on_note_map_load_pressed() -> void:
+	if _note_map_browser == null:
+		_note_map_browser = NoteMapBrowserDialog.new()
+		add_child(_note_map_browser)
+		_note_map_browser.map_chosen.connect(_on_note_map_chosen)
+	_note_map_browser.open()
+
+
+func _on_note_map_chosen(map: NoteMap) -> void:
+	var channel := _note_map_channel()
+	if channel == null:
+		return
+	_assign_map(channel, map)
+	_after_assignment_change()
+
+
+func _on_note_map_edit_pressed() -> void:
+	var channel := _note_map_channel()
+	if channel == null:
+		return
+	open_note_map_editor(channel)
+
+
+## Open the note map editor for a channel. Also the target of Drum View's
+## empty-view hint (REQ-023).
+func open_note_map_editor(channel: Channel) -> void:
+	if _note_map_editor == null:
+		_note_map_editor = NoteMapEditorDialog.new()
+		add_child(_note_map_editor)
+		# Auditioning reuses MidiEditor's existing preview-note path (REQ-008).
+		_note_map_editor.audition_started.connect(midi_editor._start_preview_note)
+		_note_map_editor.audition_stopped.connect(func(_n): midi_editor._stop_preview_note())
+		_note_map_editor.map_edited.connect(_after_assignment_change)
+		_note_map_editor.save_requested.connect(_open_save_dialog)
+	_note_map_editor.open_for(channel)
+
+
+func _on_note_map_save_pressed() -> void:
+	var channel := _note_map_channel()
+	if channel == null:
+		return
+	_open_save_dialog(NoteMapResolver.effective_map(channel))
+
+
+func _open_save_dialog(map: NoteMap) -> void:
+	if _note_map_save_dialog == null:
+		_note_map_save_dialog = NoteMapSaveDialog.new()
+		add_child(_note_map_save_dialog)
+		_note_map_save_dialog.map_saved.connect(_on_note_map_saved)
+	_note_map_save_dialog.open_for(map)
+
+
+## Saving is also how a map gets adopted: the channel switches to the map that was
+## just written, so "Save as…" on an Auto map leaves you editing the new named map
+## rather than still on the read-only Auto one.
+func _on_note_map_saved(saved_name: String) -> void:
+	log.info("Saved note map '%s' to the library" % saved_name)
+	var channel := _note_map_channel()
+	var saved := NoteMapLibrary.load_map(saved_name)
+	if channel and saved:
+		_assign_map(channel, saved)
+		_after_assignment_change()
+	_sync_note_map_toolbar()
+
 
 func _on_grid_helper_changed():
 	"""GridHelper changes are handled automatically via signals."""

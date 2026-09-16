@@ -504,7 +504,9 @@ static func track_prefers_drums(project: Project, track: Track) -> bool:
 	return false
 
 
-## Drum machine pad names for a track, if any.
+## Lane names for a track, taken from its channel's effective note map (REQ-025).
+## That is the Drum Machine's pads when the channel is on Auto, and a user's named
+## map otherwise, so named maps label assistant clip text as well as pads do.
 static func drum_names_for_track(project: Project, track: Track) -> Dictionary:
 	var names := {}
 	if project == null or track == null:
@@ -514,22 +516,18 @@ static func drum_names_for_track(project: Project, track: Track) -> Dictionary:
 		ch = project.get_channel_by_id(track.default_channel_id)
 	if ch == null:
 		return names
-	for d in ch.devices:
-		if d == null or d.device == null:
-			continue
-		if d.device.device_id != "sonara.builtin.drum_machine":
-			continue
-		var used: Dictionary = {}
-		for child in d.children:
-			if child == null or child.slot_note < 0:
-				continue
-			var label := child.get_display_name() if child else ""
-			if _generic_drum_label(label) or used.has(label.to_upper()):
-				label = ClipTextKey.drum_label(child.slot_note)
-			if used.has(label.to_upper()):
-				label = "%s %s" % [label, ClipTextKey.pitch_name(child.slot_note)]
-			used[label.to_upper()] = true
-			names[child.slot_note] = label
+	var map := NoteMapResolver.effective_map(ch)
+	# De-duplication and the generic-label fallback are unchanged, so existing
+	# clip text keeps rendering the same for Drum Machine channels.
+	var used: Dictionary = {}
+	for pitch in map.pitches():
+		var label := map.get_name(pitch)
+		if _generic_drum_label(label) or used.has(label.to_upper()):
+			label = ClipTextKey.drum_label(pitch)
+		if used.has(label.to_upper()):
+			label = "%s %s" % [label, ClipTextKey.pitch_name(pitch)]
+		used[label.to_upper()] = true
+		names[pitch] = label
 	return names
 
 

@@ -40,6 +40,19 @@ in ./components A set of small reusable custom UI controls such as Meters, Slide
 - `note_editor/NoteEditor.gd` extends `NoteContainer`, exposes a public API (place, erase, move, resize) called from `MidiEditor`, and keeps `NoteSelectionManager` as the data source for selection/clipboard state.
 - `note_editor/NoteSelectionManager.gd` manages multi-note selection, clipboard payloads, and box-select ranges; `MidiEditor` now consumes its signals to drive all selection visuals.
 
+## Lane layout and note maps
+
+Spec: `docs/specs/002-note-maps/`.
+
+- `clip_editor/LaneLayout.gd` is the single source of truth for pitch ↔ row ↔ Y, shared exactly the way `GridHelper` is shared horizontally. `MidiEditor` owns one and hands the same instance to `VPiano`, `NoteLanes`, `DrumRowHeader` and every `NoteEditor`; all of them redraw on its `changed` signal. Chromatic mode is the piano roll (128 rows, row 0 at the top holding pitch 127, reproducing the old `(127 - note) * key_height`); folded mode is Drum View, where rows are an arbitrary ascending pitch list and everything else is hidden. Never write the `(127 - note)` formula again — call `pitch_to_y` / `y_to_pitch` / `step_pitch`.
+- A **note map** (`data/NoteMap.gd`) is a set of names and colours, at most one per pitch. It is labels only and is never sent to the engine.
+- `Channel` carries the assignment: `note_map_mode` (`NONE` / `AUTO` / `NAMED`, default `AUTO`), an embedded `note_map` for the named case, and `drum_view` (-1 unset, 0 piano roll, 1 Drum View). All three persist in `.sonara`; a project without the keys loads as Auto with Drum View unset. `note_map_changed` covers all three, and `sync_to_engine()` is untouched.
+- `data/NoteMapResolver.gd` computes the effective map. Auto maps are **derived on demand** from the first Drum Machine on the channel's root chain (names from pad devices, colours from their return channels) rather than stored, which is what makes them follow pad edits for free. `wants_drum_view()` applies the per-channel default.
+- `data/NoteMapWatcher.gd` (modelled on `devices/PadLaneWatcher.gd`) re-binds and emits one coalesced `changed` per frame when anything the derived map depends on moves. `MidiEditor` caches the resolved map and only re-resolves on that signal — never per frame.
+- `data/NoteMapLibrary.gd` is the user's library of named maps, one JSON file per map under `~/.config/sonara/note_maps/`, with a `dir_override` for tests like `ai/chat/ConversationStore.gd`. Assigning a library map stores a **copy** on the channel, so project and library never write through to each other.
+- `clip_editor/DrumRows.gd` computes Drum View's rows: mapped pitches ∪ pitches the bound clips use, so no note is ever hidden. `MidiEditor.rebuild_rows()` defers while an interaction is running so rows can't reshuffle mid-drag.
+- `clip_editor/DrumRowHeader.gd` takes `VPiano`'s slot in `MidiEditor/HBox` and emits the same `key_pressed` / `key_released`, so audition and hover work without `MidiEditor` knowing which header is showing.
+
 ## Timeline & Grid
 
 - `components/GridHelper.gd` centralizes tempo/PPQ/zoom/scroll state and exposes ticks↔pixels conversions, snapping, and grid-line generation consumed by Timeline, Ruler, and Midi editors.
