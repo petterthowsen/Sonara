@@ -180,6 +180,11 @@ pub struct ParamInfo {
     pub param_type: ParamType,
     pub syncable: bool,
     pub enum_values: Vec<String>,
+    pub is_hidden: bool,
+    pub is_read_only: bool,
+    pub is_bypass: bool,
+    /// CLAP module path, e.g. "Early/Size"; "" if none
+    pub module: String,
 }
 
 /// Base trait for all audio devices (instruments and effects)

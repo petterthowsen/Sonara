@@ -1,0 +1,22 @@
+[gd_scene format=3 uid="uid://t5d0a5qn2e37"]
+
+[ext_resource type="Script" path="res://devices/simple_view/SimpleControl.gd" id="1_6l8wj"]
+
+[node name="SimpleControl" type="VBoxContainer" unique_id=35416503]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 2
+script = ExtResource("1_6l8wj")
+
+[node name="Title" type="Label" parent="." unique_id=2046778451]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Parameter"
+horizontal_alignment = 1
+clip_text = true
+
+[node name="Body" type="Control" parent="." unique_id=1784942269]
+custom_minimum_size = Vector2(40, 30)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3

@@ -18,6 +18,9 @@ const ICON_FOLDOUT_OPEN: Texture2D = preload("res://assets/icons/chevron-left.sv
 @onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/TabButtons
 @onready var view_button: Button = $VBox/HBox/LeftHeader/TabButtons/View
 @onready var window_button: Button = $VBox/HBox/LeftHeader/TabButtons/Window
+## Switches between a device's own Panel view and the generated Simple View (REQ-011 decision).
+## Visible only for a device that has both.
+@onready var simple_button: Button = $VBox/HBox/LeftHeader/TabButtons/Simple
 @onready var params_button : Button = $VBox/HBox/LeftHeader/TabButtons/Parameters
 @onready var file_button: Button = $VBox/HBox/LeftHeader/TabButtons/File
 
@@ -80,6 +83,7 @@ func _ready() -> void:
 	file_button.toggled.connect(_on_tab_toggled.unbind(1))
 	view_button.toggled.connect(_on_view_toggled)
 	window_button.toggled.connect(_on_window_toggled)
+	simple_button.toggled.connect(_on_simple_toggled)
 	folder_button.toggled.connect(_on_folder_toggled)
 
 	# Connect file loading
@@ -225,13 +229,14 @@ func bind_to_device(dev : DeviceInstance):
 
 	_create_parameter_controls()
 	_update_cc_tab_visibility()
-	# PanelView = custom UI only (not ParameterList, not container children)
-	if dev.device.has_panel_view():
+	# PanelView = custom UI only (not ParameterList, not container children). A device with no
+	# Panel view of its own still gets one when it qualifies for the generated Simple View.
+	if dev.device.has_panel_view() or dev.device.uses_simple_view(dev.get_parameters()):
 		await _load_panel_view(dev)
 		_show_right_pane_current()
 	else:
 		_clear_panel_and_companion()
-	view_button.visible = dev.device.has_panel_view() or dev.device.has_companion_view()
+	_update_view_toggle_visibility()
 	_update_view_pane_visibility()
 
 	_configure_container_folder(dev)
@@ -277,6 +282,43 @@ func _on_device_parameters_updated(device_instance: DeviceInstance) -> void:
 		if _cc_list:
 			_cc_list.refresh()
 		_update_cc_tab_visibility()
+		_refresh_panel_view_for_params()
+
+
+## Re-evaluate the Panel view once a plugin/SFZ device's parameter list arrives or changes: a
+## device that qualifies for the Simple View only once it has visible parameters (`uses_simple_view`)
+## may not have had a Panel view loaded yet. A view that's already showing reconciles and rebuilds
+## itself from its own `parameters_updated` subscription (`SimpleView._on_parameters_updated`), so
+## this only needs to create one where there wasn't one before.
+func _refresh_panel_view_for_params() -> void:
+	if device == null:
+		return
+	_update_view_toggle_visibility()
+	if _panel_view == null and (device.device.has_panel_view() or device.device.uses_simple_view(device.get_parameters())):
+		await _load_panel_view(device)
+		_show_right_pane_current()
+	_update_view_pane_visibility()
+
+
+## Show/hide the View toggle (any custom or Simple view exists) and the Simple toggle (only when
+## the device has both its own Panel view and visible parameters to generate a Simple View from).
+func _update_view_toggle_visibility() -> void:
+	if device == null:
+		return
+	var can_simple := device.device.uses_simple_view(device.get_parameters())
+	view_button.visible = device.device.has_panel_view() or device.device.has_companion_view() or can_simple
+	simple_button.visible = device.device.has_panel_view() and can_simple
+	simple_button.set_pressed_no_signal(bool(Sonara.get_config("devices/simple_view/%s" % device.device.device_id, false)))
+
+
+## "Simple" toggle: switch the Panel pane between the device's own view and the generated Simple
+## View, and remember the choice per device id (REQ-011 decision).
+func _on_simple_toggled(pressed: bool) -> void:
+	if device == null:
+		return
+	Sonara.set_config("devices/simple_view/%s" % device.device.device_id, pressed)
+	await _load_panel_view(device)
+	_show_right_pane_current()
 
 
 ## ============================================================================

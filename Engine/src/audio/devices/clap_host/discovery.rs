@@ -17,6 +17,8 @@ pub struct PluginDescriptor {
     pub path: PathBuf, // Path to .clap bundle
     pub description: Option<String>,
     pub url: Option<String>,
+    /// CLAP feature tags, e.g. ["audio-effect", "reverb"]
+    pub features: Vec<String>,
 }
 
 /// Plugin scanner that finds .clap files in standard locations
@@ -228,6 +230,11 @@ impl PluginScanner {
         // Infer category from plugin features
         let category = Self::infer_category(&descriptor);
 
+        let features = descriptor
+            .features()
+            .filter_map(|feature| feature.to_str().ok().map(|s| s.to_string()))
+            .collect();
+
         Ok(PluginDescriptor {
             id,
             name,
@@ -237,6 +244,7 @@ impl PluginScanner {
             path: bundle_path.to_path_buf(),
             description,
             url,
+            features,
         })
     }
 

@@ -6,11 +6,133 @@ use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
-use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager, SharedMemory};
+use crate::audio::ipc::{
+    PluginCommand, PluginParameterInfo, PluginResponse, ProcessManager, SharedMemory,
+};
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
+
+/// Maps a plugin's reported parameter metadata to the engine's `ParamInfo`.
+///
+/// Stepped parameters with 2 values become `Bool`, 3-64 become `Enum` (using the
+/// plugin-provided step labels), and everything else stays `Float`.
+pub fn plugin_param_to_info(p: &PluginParameterInfo) -> ParamInfo {
+    let step_count = if p.is_stepped {
+        ((p.max - p.min).round() as i64 + 1).max(0)
+    } else {
+        0
+    };
+
+    let (param_type, enum_values) = match step_count {
+        2 => (ParamType::Bool, Vec::new()),
+        3..=64 => (ParamType::Enum, p.step_labels.clone()),
+        _ => (ParamType::Float, Vec::new()),
+    };
+
+    ParamInfo {
+        id: p.id,
+        name: p.name.clone(),
+        unit: p.unit.clone(),
+        min: p.min,
+        max: p.max,
+        default: p.default,
+        is_automation_safe: p.is_automation_safe,
+        param_type,
+        syncable: true,
+        enum_values,
+        is_hidden: p.is_hidden,
+        is_read_only: p.is_read_only,
+        is_bypass: p.is_bypass,
+        module: p.module.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_info() -> PluginParameterInfo {
+        PluginParameterInfo {
+            id: 0,
+            name: "Test".to_string(),
+            unit: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            is_automation_safe: true,
+            is_stepped: false,
+            is_hidden: false,
+            is_read_only: false,
+            is_bypass: false,
+            module: String::new(),
+            step_labels: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn two_steps_maps_to_bool() {
+        let mut p = base_info();
+        p.is_stepped = true;
+        p.min = 0.0;
+        p.max = 1.0;
+
+        let info = plugin_param_to_info(&p);
+
+        assert_eq!(info.param_type, ParamType::Bool);
+        assert!(info.enum_values.is_empty());
+    }
+
+    #[test]
+    fn five_steps_with_labels_maps_to_enum() {
+        let mut p = base_info();
+        p.is_stepped = true;
+        p.min = 0.0;
+        p.max = 4.0;
+        p.step_labels = vec![
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+            "E".to_string(),
+        ];
+
+        let info = plugin_param_to_info(&p);
+
+        assert_eq!(info.param_type, ParamType::Enum);
+        assert_eq!(info.enum_values, p.step_labels);
+    }
+
+    #[test]
+    fn two_hundred_steps_maps_to_float() {
+        let mut p = base_info();
+        p.is_stepped = true;
+        p.min = 0.0;
+        p.max = 199.0;
+
+        let info = plugin_param_to_info(&p);
+
+        assert_eq!(info.param_type, ParamType::Float);
+        assert!(info.enum_values.is_empty());
+    }
+
+    #[test]
+    fn flags_and_module_are_copied() {
+        let mut p = base_info();
+        p.is_hidden = true;
+        p.is_read_only = true;
+        p.is_bypass = true;
+        p.module = "Early/Size".to_string();
+
+        let info = plugin_param_to_info(&p);
+
+        assert!(info.is_hidden);
+        assert!(info.is_read_only);
+        assert!(info.is_bypass);
+        assert_eq!(info.module, "Early/Size");
+    }
+}
 
 /// Loading state for async plugin initialization
 #[derive(Clone)]
@@ -124,21 +246,7 @@ pub fn spawn_loading_thread(
                                     info!("✅ Plugin has {} parameters", params.len());
 
                                     // Convert to ParamInfo format
-                                    params
-                                        .iter()
-                                        .map(|p| ParamInfo {
-                                            id: p.id,
-                                            name: p.name.clone(),
-                                            unit: p.unit.clone(),
-                                            min: p.min,
-                                            max: p.max,
-                                            default: p.default,
-                                            is_automation_safe: p.is_automation_safe,
-                                            param_type: ParamType::Float,
-                                            syncable: true,
-                                            enum_values: Vec::new(),
-                                        })
-                                        .collect()
+                                    params.iter().map(plugin_param_to_info).collect()
                                 }
                                 Ok(resp) => {
                                     error!(

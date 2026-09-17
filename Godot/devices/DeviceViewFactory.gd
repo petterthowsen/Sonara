@@ -15,6 +15,10 @@ const BUILTIN_WINDOW_SCENES := {
 const BUILTIN_COMPANION_SCENES := {}
 const BUILTIN_COMPACT_SCENES := {}
 
+## The generated Simple View (`devices/simple_view/`), used for the Panel view of any device
+## without a registered Panel view, and of devices whose "Simple" toggle is on (T-013).
+const SIMPLE_VIEW_SCENE := preload("res://devices/simple_view/SimpleView.tscn")
+
 
 ## Attach the built-in view scenes for `device`. Connected to DeviceRegistry.device_registered,
 ## so views are in place before any panel binds to an instance of the device.
@@ -32,12 +36,15 @@ static func register_builtin_views(device: Device) -> void:
 		device.register_compact_view(BUILTIN_COMPACT_SCENES[id])
 
 
-## Create a view of `view_type` from the Device's registered scenes. Returns null if unsupported.
+## Create a view of `view_type` from the Device's registered scenes, or the generated Simple View
+## for a Panel view when the device qualifies for one (see `_use_simple_view`). Returns null if
+## unsupported.
 static func create(instance: DeviceInstance, view_type: Device.ViewType) -> DeviceView:
 	if instance == null or instance.device == null:
 		return null
 
-	var scene := _scene_for(instance.device, view_type)
+	var scene: PackedScene = SIMPLE_VIEW_SCENE if view_type == Device.ViewType.Panel and _use_simple_view(instance) \
+			else _scene_for(instance.device, view_type)
 	if scene == null:
 		return null
 
@@ -50,6 +57,18 @@ static func create(instance: DeviceInstance, view_type: Device.ViewType) -> Devi
 
 	view.set_view_type(view_type)
 	return view
+
+
+## True when `instance`'s Panel view should be the generated Simple View rather than a registered
+## Panel view: the device has no Panel view of its own and qualifies for one (`uses_simple_view`),
+## or it has one but the per-device "Simple" toggle (`devices/simple_view/<id>`) is on.
+static func _use_simple_view(instance: DeviceInstance) -> bool:
+	var device := instance.device
+	if not device.uses_simple_view(instance.get_parameters()):
+		return false
+	if not device.has_panel_view():
+		return true
+	return bool(Sonara.get_config("devices/simple_view/%s" % device.device_id, false))
 
 
 static func _scene_for(device: Device, view_type: Device.ViewType) -> PackedScene:

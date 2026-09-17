@@ -188,6 +188,7 @@ impl CommandWorker {
                 category,
                 description: plugin.description.clone(),
                 path: plugin.path.to_string_lossy().to_string(),
+                features: plugin.features.clone(),
             });
         }
 

@@ -71,6 +71,9 @@ var supported_file_extensions: Array[String] = []
 ## Description of supported file types (e.g., "SFZ Sample Files")
 var file_type_description: String = ""
 
+## CLAP feature tags (e.g., ["audio-effect", "reverb"]). Empty for builtins.
+var features: Array[String] = []
+
 ## PackedScene references (null when unsupported)
 var panel_view_scene: PackedScene = null
 var window_view_scene: PackedScene = null
@@ -242,3 +245,18 @@ func get_icon() -> String:
 ## Example: "Dragonfly Hall Reverb" -> "D. Hall Rev"
 func get_short_name(max_length: int = 15) -> String:
 	return Utils.shorten_text(name, max_length)
+
+
+## True when this device gets a generated Simple View (`devices/simple_view/`, REQ-001): never
+## for a container, and only once there's at least one visible parameter (`ParamClassifier.is_visible`).
+## Pass `params` for an instance's own advertised list (CLAP/SFZ devices, whose parameters live on
+## `DeviceInstance` rather than this shared registry object) when it's non-empty; otherwise this
+## falls back to `parameters`, so a plugin with no params advertised yet correctly reports false.
+func uses_simple_view(params: Array = []) -> bool:
+	if is_container:
+		return false
+	var list: Array = params if not params.is_empty() else parameters
+	for param in list:
+		if ParamClassifier.is_visible(param):
+			return true
+	return false

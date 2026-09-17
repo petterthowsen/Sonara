@@ -1,0 +1,35 @@
+[gd_scene format=3 uid="uid://w8crf2ud3vhf"]
+
+[ext_resource type="Script" uid="uid://cfm1llxsymt31" path="res://devices/simple_view/SimpleView.gd" id="1_1uhqw"]
+
+[node name="SimpleView" type="Control" unique_id=1474561239]
+custom_minimum_size = Vector2(360, 160)
+layout_mode = 3
+anchors_preset = 0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_1uhqw")
+
+[node name="VBox" type="VBoxContainer" parent="." unique_id=1627668268]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="PageTabs" type="TabBar" parent="VBox" unique_id=2057874422]
+layout_mode = 2
+clip_tabs = false
+
+[node name="Scroll" type="ScrollContainer" parent="VBox" unique_id=260695334]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Grid" type="Control" parent="VBox/Scroll" unique_id=888834911]
+custom_minimum_size = Vector2(220, 148)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3

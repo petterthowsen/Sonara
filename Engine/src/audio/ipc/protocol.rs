@@ -165,6 +165,14 @@ pub struct PluginParameterInfo {
     pub max: f32,
     pub default: f32,
     pub is_automation_safe: bool,
+    pub is_stepped: bool,
+    pub is_hidden: bool,
+    pub is_read_only: bool,
+    pub is_bypass: bool,
+    /// CLAP module path, e.g. "Early/Size"; "" if none
+    pub module: String,
+    /// Per-step display labels, only when `is_stepped` and (max-min+1) <= 64; else empty
+    pub step_labels: Vec<String>,
 }
 
 /// Shared memory layout for audio and MIDI data

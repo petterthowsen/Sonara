@@ -384,6 +384,7 @@ theme_type_variation = &"PrimaryPanel"
 theme_override_styles/panel = SubResource("StyleBoxFlat_10umj")
 
 [node name="DeviceLane" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/MiddleCenter/Secondary" unique_id=1241292927 instance=ExtResource("10_2m1gq")]
+custom_minimum_size = Vector2(0, 76)
 layout_mode = 2
 
 [node name="RightDock" type="Control" parent="VBoxContainer/Middle/LeftRightSplit" unique_id=1248627906]

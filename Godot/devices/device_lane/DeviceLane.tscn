@@ -12,8 +12,8 @@ corner_radius_bottom_left = 3
 
 [node name="DeviceLane" type="HBoxContainer" unique_id=680950558]
 custom_minimum_size = Vector2(0, 76.585)
-offset_right = 1280.0
-offset_bottom = 207.0
+offset_right = 394.0
+offset_bottom = 208.0
 size_flags_horizontal = 3
 theme_override_constants/separation = 0
 script = ExtResource("1_2f6nw")
@@ -40,16 +40,19 @@ size_flags_horizontal = 3
 theme_override_constants/margin_left = 8
 theme_override_constants/margin_top = 8
 theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_bottom = 0
 
 [node name="ScrollContainer" type="ScrollContainer" parent="Content" unique_id=1650099144]
 layout_mode = 2
+theme_override_constants/scrollbar_h_separation = 8
+theme_override_constants/scrollbar_v_separation = 8
 follow_focus = true
-horizontal_scroll_mode = 5
+horizontal_scroll_mode = 2
 vertical_scroll_mode = 0
 
 [node name="Devices" type="HBoxContainer" parent="Content/ScrollContainer" unique_id=195122867]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 16
 

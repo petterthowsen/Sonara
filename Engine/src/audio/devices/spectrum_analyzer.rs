@@ -369,6 +369,10 @@ impl AudioDevice for SpectrumAnalyzerDevice {
                 max: 1.0,
                 default: 0.5, // index will be derived on UI side
                 is_automation_safe: true,
+                is_hidden: false,
+                is_read_only: false,
+                is_bypass: false,
+                module: String::new(),
                 param_type: ParamType::Enum,
                 syncable: true,
                 enum_values: vec![
@@ -386,6 +390,10 @@ impl AudioDevice for SpectrumAnalyzerDevice {
                 max: 1.0,
                 default: 0.75, // default to Medium/Fast-ish
                 is_automation_safe: true,
+                is_hidden: false,
+                is_read_only: false,
+                is_bypass: false,
+                module: String::new(),
                 param_type: ParamType::Enum,
                 syncable: false,
                 enum_values: vec![
@@ -407,6 +415,10 @@ impl AudioDevice for SpectrumAnalyzerDevice {
             max: 0.0,
             default: 0.0,
             is_automation_safe: false,
+            is_hidden: false,
+            is_read_only: false,
+            is_bypass: false,
+            module: String::new(),
             param_type: ParamType::Enum,
             syncable: false,
             enum_values: vec!["Log".to_string(), "Linear".to_string()],
@@ -419,6 +431,10 @@ impl AudioDevice for SpectrumAnalyzerDevice {
             max: 0.0,
             default: 0.0,
             is_automation_safe: false,
+            is_hidden: false,
+            is_read_only: false,
+            is_bypass: false,
+            module: String::new(),
             param_type: ParamType::Enum,
             syncable: false,
             enum_values: vec!["Bars".to_string(), "Line".to_string()],

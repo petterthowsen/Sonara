@@ -587,7 +587,7 @@ func _on_param_info_received(args: Array) -> void:
 	var min_val: float = args[2]
 	var max_val: float = args[3]
 	var default_val: float = args[4]
-	
+
 	# Create DeviceParameter and add to device
 	var param = DeviceParameter.new(param_id, param_name, "")
 	param.min_value = min_val
@@ -595,12 +595,28 @@ func _on_param_info_received(args: Array) -> void:
 	param.default_value = default_val
 	if args.size() >= 6 and args[5] is String:
 		param.group = args[5]
+	if args.size() >= 7 and args[6] is String:
+		param.param_type = args[6]
+	var flags: int = args[7] if args.size() >= 8 else 0
+	param.is_hidden = (flags & 1) != 0
+	param.is_read_only = (flags & 2) != 0
+	param.is_bypass = (flags & 4) != 0
+	if args.size() >= 9 and args[8] is String:
+		param.module = args[8]
+	if args.size() >= 10:
+		var enum_count: int = args[9]
+		var enum_values: Array[String] = []
+		for i in range(enum_count):
+			var arg_idx := 10 + i
+			if arg_idx < args.size():
+				enum_values.append(str(args[arg_idx]))
+		param.enum_values = enum_values
 	parameters.append(param)
 	
 	parameter_values[param_id] = _value_for_advertised_param(param_id, param)
 	
-	logger.debug("[%s] Param %d: %s [%.2f - %.2f, default %.2f]" %
-		[device.name, param_id, param_name, min_val, max_val, default_val])
+	logger.debug("[%s] Param %d: %s [%.2f - %.2f, default %.2f, type %s, module '%s']" %
+		[device.name, param_id, param_name, min_val, max_val, default_val, param.param_type, param.module])
 
 	# Check if we've received all expected parameters
 	if parameters.size() >= _expected_param_count and _expected_param_count > 0:

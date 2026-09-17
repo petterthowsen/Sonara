@@ -489,6 +489,12 @@ fn forward_device_events(
                             max: param.max,
                             default: param.default,
                             group: sfizz_device.parameter_group(param.id).to_string(),
+                            param_type: param.param_type,
+                            is_hidden: false,
+                            is_read_only: false,
+                            is_bypass: false,
+                            module: String::new(),
+                            enum_values: param.enum_values.clone(),
                         });
                     }
                 }

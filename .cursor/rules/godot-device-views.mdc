@@ -29,6 +29,15 @@ alwaysApply: false
 - A pad persists without a device. Removing the pad device (`DeviceRemoveCommand`) empties the pad and keeps its return. A device added on that note adopts the return. `ChannelDeleteCommand` on a pad return removes the pad; plugin returns can't be deleted on their own (`Channel.is_plugin_return()`).
 - A pad return's device row is its pad lane (`devices/PadLane.gd`): [pad device][return devices…]. List devices with `PadLane.devices(channel)` and rebuild on `PadLaneWatcher.changed` while `active()`. `DeviceChainDropHost` already routes pad-lane drops through `PadLane.drop`, and positions there are lane indices. The front device is the Drum Machine child on the pad note; moves between the Drum Machine and the return channel use `DeviceTransferCommand`.
 
+## Simple View (generated panels)
+- Spec: `docs/specs/004-simple-view/`. Code in `devices/simple_view/`.
+- Fallback rule: `DeviceViewFactory.create` returns `SimpleView` for a Panel view when `Device.uses_simple_view(params)` (not a container, at least one visible parameter per `ParamClassifier.is_visible`) and the device has no Panel view of its own, or has one but the DevicePanel "Simple" toggle is on (`Sonara.get_config("devices/simple_view/<id>")`).
+- Pipeline: `DeviceKind.infer` → `ParamClassifier.classify` (with a strategy) → `CompoundDetector.detect` (xy, envelope, eq_band) → `SimpleLayoutGenerator.group_items` → `GridPacker.pack_pages`. Module paths group parameters when they're hierarchical or shared; otherwise the strategy's roles do.
+- Extension point: add a kind in `DeviceKind` and a `strategies/<Kind>Strategy.gd` extending `GenericStrategy` (role keywords, weights, groups), then map it in `SimpleLayoutGenerator.strategy_for`.
+- Layouts: `SimpleLayoutStore` loads/saves `~/.config/sonara/device_layouts/<sanitized id>-<hash>.json` (`SimpleLayout`, version 1: `grid`, `pages[{title, groups, controls[{kind, params, rect, group?, label?, unit?}]}]`, `rect` = `[col, row, w, h]` cells). A loaded layout is reconciled against the current parameters; a file that fails to parse is never overwritten. Footprints live in `SimpleControlKinds.FOOTPRINT`.
+- Rendering: `SimpleControl` must stay inside its cell rect (it clips; inner controls need a small minimum size). A segmented control falls back to a dropdown when its labels don't fit. Group titles get their own header strip in `SimpleView` pixel placement.
+- Headless tests: `tests/test_simple_layout_model.gd`, `tests/test_simple_layout_generator.gd`. Code loaded by tests can't reference autoloads like `Sonara` by name; look them up through the scene tree.
+
 ## Parameter Typing
 - `DeviceParameter.param_type` is one of `"float"`, `"bool"`, or `"enum"`; `"enum"` parameters must populate `enum_values` with display strings where the index matches the engine payload.
 - Keep `default_value`, `min_value`, and `max_value` aligned with the declared type: booleans stay in `[0,1]`, enums use integer indices, floats can still mark `is_logarithmic`.

@@ -102,7 +102,7 @@ static func _category_from_string(category_str: String) -> Device.DeviceCategory
 ## PLUGINS (ENGINE → GODOT)
 ## ============================================================================
 
-## One plugin found during a scan: [id, name, vendor, version, category, description, path].
+## One plugin found during a scan: [id, name, vendor, version, category, description, path, features].
 func _on_plugin_info_received(args: Array) -> void:
 	if args.size() < 7:
 		logger.warn("Invalid /plugin/info message: %s" % str(args))
@@ -119,6 +119,11 @@ func _on_plugin_info_received(args: Array) -> void:
 	device.description = description if description != "" else "CLAP Plugin"
 	device.title = plugin_name
 	device.plugin_path = args[6]
+	if args.size() >= 8 and args[7] is String and not String(args[7]).is_empty():
+		var features: Array[String] = []
+		for tag in String(args[7]).split(","):
+			features.append(tag)
+		device.features = features
 	if category == Device.DeviceCategory.Instrument:
 		device.accepts_midi = true
 		device.audio_in_channels = 0
@@ -297,7 +302,8 @@ static func _device_to_cache_data(device: Device) -> Dictionary:
 		"author": device.author,
 		"accepts_midi": device.accepts_midi,
 		"audio_in_channels": device.audio_in_channels,
-		"audio_out_channels": device.audio_out_channels
+		"audio_out_channels": device.audio_out_channels,
+		"features": device.features
 	}
 
 
@@ -317,4 +323,8 @@ static func _device_from_cache_data(data: Dictionary) -> Device:
 	device.accepts_midi = bool(data.get("accepts_midi", false))
 	device.audio_in_channels = int(data.get("audio_in_channels", 2))
 	device.audio_out_channels = int(data.get("audio_out_channels", 2))
+	var features: Array[String] = []
+	for tag in data.get("features", []):
+		features.append(str(tag))
+	device.features = features
 	return device

@@ -474,6 +474,7 @@ pub enum EngineStatus {
         category: String,
         description: Option<String>,
         path: String, // Path to plugin file
+        features: Vec<String>,
     },
 
     // Builtin device advertisement
@@ -506,6 +507,13 @@ pub enum EngineStatus {
         default: f32,
         /// `"param"` for the P tab, `"cc"` for the C tab.
         group: String,
+        param_type: super::devices::ParamType,
+        is_hidden: bool,
+        is_read_only: bool,
+        is_bypass: bool,
+        /// CLAP module path, e.g. "Early/Size"; "" if none
+        module: String,
+        enum_values: Vec<String>,
     },
     PluginParameterCount {
         channel_id: ChannelId,
@@ -1974,6 +1982,12 @@ pub fn process_command(
                             max: param.max,
                             default: param.default,
                             group: device.parameter_group(param.id).to_string(),
+                            param_type: param.param_type,
+                            is_hidden: param.is_hidden,
+                            is_read_only: param.is_read_only,
+                            is_bypass: param.is_bypass,
+                            module: param.module.clone(),
+                            enum_values: param.enum_values.clone(),
                         });
                     }
                 } else {
@@ -2020,6 +2034,12 @@ pub fn process_command(
                                 max: param.max,
                                 default: param.default,
                                 group: device.parameter_group(param.id).to_string(),
+                                param_type: param.param_type,
+                                is_hidden: param.is_hidden,
+                                is_read_only: param.is_read_only,
+                                is_bypass: param.is_bypass,
+                                module: param.module.clone(),
+                                enum_values: param.enum_values.clone(),
                             });
                         }
                     }

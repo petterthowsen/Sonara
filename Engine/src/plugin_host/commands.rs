@@ -6,7 +6,7 @@
 use tracing::{error, info, warn};
 
 use clack_extensions::gui::{GuiSize, PluginGui};
-use clack_extensions::params::{ParamInfoBuffer, PluginParams};
+use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
 use clack_host::events::event_types::{NoteOffEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{Pckn, UnknownEvent};
@@ -499,6 +499,44 @@ pub fn process_command(
                                 .unwrap_or("Unknown")
                                 .trim_end_matches('\0')
                                 .to_string();
+                            let module = std::str::from_utf8(clap_info.module)
+                                .unwrap_or("")
+                                .trim_end_matches('\0')
+                                .to_string();
+
+                            let is_stepped = clap_info.flags.contains(ParamInfoFlags::IS_STEPPED);
+                            let min = clap_info.min_value;
+                            let max = clap_info.max_value;
+                            let param_id = clap_info.id;
+
+                            let step_labels = if is_stepped {
+                                let step_count = (max - min).round() as i64 + 1;
+                                if step_count > 0 && step_count <= 64 {
+                                    let mut labels = Vec::with_capacity(step_count as usize);
+                                    for step in 0..step_count {
+                                        let value = min + step as f64;
+                                        let mut text_buffer =
+                                            [std::mem::MaybeUninit::<u8>::uninit(); 256];
+                                        let label = params
+                                            .value_to_text(
+                                                &mut handle,
+                                                param_id,
+                                                value,
+                                                &mut text_buffer,
+                                            )
+                                            .ok()
+                                            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| (value.round() as i64).to_string());
+                                        labels.push(label);
+                                    }
+                                    labels
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
 
                             let param_info = PluginParameterInfo {
                                 id: i, // Use sequential index as ID
@@ -507,9 +545,15 @@ pub fn process_command(
                                 min: clap_info.min_value as f32,
                                 max: clap_info.max_value as f32,
                                 default: clap_info.default_value as f32,
-                                is_automation_safe: clap_info.flags.contains(
-                                    clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE,
-                                ),
+                                is_automation_safe: clap_info
+                                    .flags
+                                    .contains(ParamInfoFlags::IS_AUTOMATABLE),
+                                is_stepped,
+                                is_hidden: clap_info.flags.contains(ParamInfoFlags::IS_HIDDEN),
+                                is_read_only: clap_info.flags.contains(ParamInfoFlags::IS_READONLY),
+                                is_bypass: clap_info.flags.contains(ParamInfoFlags::IS_BYPASS),
+                                module,
+                                step_labels,
                             };
 
                             param_infos.push(param_info);

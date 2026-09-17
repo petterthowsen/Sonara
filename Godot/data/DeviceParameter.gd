@@ -47,6 +47,18 @@ var syncable: bool = true
 # Enum labels for param_type == "enum"
 var enum_values: Array[String] = []
 
+## Whether the device marks this parameter as hidden
+var is_hidden: bool = false
+
+## Whether the device marks this parameter as read-only
+var is_read_only: bool = false
+
+## Whether this is the device's bypass parameter
+var is_bypass: bool = false
+
+## CLAP module path, e.g. "Early/Size"; empty if none
+var module: String = ""
+
 
 ## ============================================================================
 ## INITIALIZATION

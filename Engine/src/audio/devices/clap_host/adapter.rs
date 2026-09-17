@@ -321,6 +321,10 @@ impl ClapDeviceAdapter {
                     .unwrap_or("Unknown")
                     .trim_end_matches('\0')
                     .to_string();
+                let module = std::str::from_utf8(clap_info.module)
+                    .unwrap_or("")
+                    .trim_end_matches('\0')
+                    .to_string();
 
                 let clap_id = clap_info.id;
                 let our_id = i; // Use index as our sequential ID
@@ -343,6 +347,16 @@ impl ClapDeviceAdapter {
                     param_type: super::super::ParamType::Float,
                     syncable: true,
                     enum_values: Vec::new(),
+                    is_hidden: clap_info
+                        .flags
+                        .contains(clack_extensions::params::ParamInfoFlags::IS_HIDDEN),
+                    is_read_only: clap_info
+                        .flags
+                        .contains(clack_extensions::params::ParamInfoFlags::IS_READONLY),
+                    is_bypass: clap_info
+                        .flags
+                        .contains(clack_extensions::params::ParamInfoFlags::IS_BYPASS),
+                    module,
                 };
 
                 tracing::debug!(

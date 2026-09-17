@@ -1680,6 +1680,7 @@ impl OscServer {
                 category,
                 description,
                 path,
+                features,
             } => {
                 tracing::info!("📨 Sending plugin info: {} ({})", name, id);
                 let mut args = vec![
@@ -1693,6 +1694,8 @@ impl OscServer {
                 args.push(OscType::String(description.unwrap_or_default()));
                 // Add path
                 args.push(OscType::String(path));
+                // Add feature tags, joined with commas
+                args.push(OscType::String(features.join(",")));
                 ("/plugin/info".to_string(), args)
             }
             EngineStatus::BuiltinDeviceInfo {
@@ -1769,17 +1772,40 @@ impl OscServer {
                 max,
                 default,
                 group,
-            } => (
-                device_path.to_osc_addr(channel_id, "param/info"),
-                vec![
+                param_type,
+                is_hidden,
+                is_read_only,
+                is_bypass,
+                module,
+                enum_values,
+            } => {
+                let param_type_str = match param_type {
+                    crate::audio::devices::ParamType::Float => "float",
+                    crate::audio::devices::ParamType::Bool => "bool",
+                    crate::audio::devices::ParamType::Enum => "enum",
+                };
+                // Bitmask: 1 = hidden, 2 = read-only, 4 = bypass
+                let flags =
+                    (is_hidden as i32) | ((is_read_only as i32) << 1) | ((is_bypass as i32) << 2);
+
+                let mut args = vec![
                     OscType::Int(param_id as i32),
                     OscType::String(name),
                     OscType::Float(min),
                     OscType::Float(max),
                     OscType::Float(default),
                     OscType::String(group),
-                ],
-            ),
+                    OscType::String(param_type_str.to_string()),
+                    OscType::Int(flags),
+                    OscType::String(module),
+                    OscType::Int(enum_values.len() as i32),
+                ];
+                for ev in enum_values {
+                    args.push(OscType::String(ev));
+                }
+
+                (device_path.to_osc_addr(channel_id, "param/info"), args)
+            }
             EngineStatus::PluginParameterCount {
                 channel_id,
                 device_path,

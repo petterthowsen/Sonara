@@ -7,6 +7,7 @@
 [ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
 [ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
 [ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="6_n5ici"]
+[ext_resource type="Texture2D" uid="uid://cpre341cdgoij" path="res://assets/icons/gauge.svg" id="7_d6wny"]
 [ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
@@ -104,8 +105,9 @@ corner_detail = 5
 
 [node name="Device" type="PanelContainer" unique_id=1822906056]
 custom_minimum_size = Vector2(160, 0)
-offset_right = 194.0
+offset_right = 215.0
 offset_bottom = 235.0
+size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
 
@@ -188,6 +190,14 @@ layout_mode = 2
 tooltip_text = "Open External Window"
 toggle_mode = true
 icon = ExtResource("7_ohvca")
+
+[node name="Simple" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1844591318]
+visible = false
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+tooltip_text = "Switch to the Simple View"
+toggle_mode = true
+icon = ExtResource("7_d6wny")
 
 [node name="Parameters" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=759836976]
 custom_minimum_size = Vector2(28, 0)
