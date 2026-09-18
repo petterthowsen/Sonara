@@ -77,7 +77,7 @@ strip above each row where a titled group starts, so group titles no longer cove
 Verified live: rendering looks right.
 
 Edit mode (T-014/T-015) is deferred to `TODO.md`. `OSC_PROTOCOL.md` (T-016) and the Simple View
-section in `.cursor/rules/godot-device-views.mdc` (T-017) are written.
+section in `docs/subsystems/godot-device-views.md` (T-017) are written.
 
 ### Not verified (T-013 live checks)
 - A device with a registered Panel view (e.g. the Sampler) shows the "Simple" toggle and switches views.

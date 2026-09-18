@@ -198,7 +198,7 @@ Run all Godot tests with `Godot/tests/run_all.sh`; a single one with
 ## Phase 7 — Docs
 
 - [x?] **T-021** [REQ-all] Document the feature for future work.
-  - _Files_: `.cursor/rules/godot-architecture.mdc`, `TODO.md`
+  - _Files_: `docs/subsystems/godot-architecture.md`, `TODO.md`
   - _Output_: a short `LaneLayout` / note map section in the rule file; `TODO.md` entry
     "Note maps and drum view (docs/specs/002-note-maps)" under the Godot UI section
   - _Verify_: the rule file describes `LaneLayout`, `NoteMapResolver` and the channel keys; the

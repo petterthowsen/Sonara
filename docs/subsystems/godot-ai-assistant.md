@@ -1,8 +1,3 @@
----
-description: Apply when working on the in-app AI assistant (Assistant autoload, OpenRouter, tools, clip text, chat UI). Not the Godot MCP addon.
-globs: Godot/ai/**/*.gd
-alwaysApply: false
----
 # Godot AI Assistant
 
 In-project chat lives under `Godot/ai/`. Do **not** confuse it with `Godot/addons/godot_ai` (editor MCP). The `Assistant` autoload (`res://ai/Assistant.gd`) owns the tool loop; UI only listens to its signals.

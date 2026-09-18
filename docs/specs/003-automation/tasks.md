@@ -271,11 +271,11 @@ Gates before any task is marked `[x]`: `cargo test` and `cargo fmt` for engine t
 ## Phase 6 — Docs
 
 - [ ] **T-027** [REQ-all] Document the protocol and fix the stale reference.
-  - _Files_: `.cursor/rules/osc-protocol.mdc`, `AGENTS.md`,
-    `.cursor/rules/godot-architecture.mdc`, `TODO.md`
+  - _Files_: `docs/subsystems/osc-protocol.md`, `AGENTS.md`,
+    `docs/subsystems/godot-architecture.md`, `TODO.md`
   - _Output_: the seven `/track/{id}/automation/*` messages and the target-string grammar
     documented; `AGENTS.md`'s `OSC_PROTOCOL.md` reference corrected to
-    `.cursor/rules/osc-protocol.mdc` and automation noted under "Channels and devices"; the
+    `docs/subsystems/osc-protocol.md` and automation noted under "Channels and devices"; the
     automation row/lane structure added to the Godot architecture rule; the `TODO.md` entry marked
   - _Verify_: every message added by T-006 appears in the protocol doc with its argument types
     and direction; no reference to `OSC_PROTOCOL.md` remains (`grep -rn OSC_PROTOCOL.md .`)

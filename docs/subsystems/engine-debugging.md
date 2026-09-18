@@ -1,7 +1,3 @@
----
-description: When debugging issues
-alwaysApply: false
----
 # Debugging
 
 ## Log File Layout

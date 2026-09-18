@@ -31,7 +31,7 @@ The engine initializes PipeWire/JACK/ALSA, starts OSC (listens on UDP 7000, talk
 Engine/     Rust audio engine, plugin host, OSC server
 Godot/      Godot 4 UI
 docs/       Research, design notes, open checklists
-.cursor/rules/   Docs for implemented systems (agent-facing, keep current)
+docs/subsystems/   Docs for implemented systems (agent-facing, keep current)
 TODO.md     Backlog
 STATUS.md   Notes on in-flight hard problems
 ```
@@ -78,4 +78,4 @@ If the engine fails to start, install ALSA headers (`libasound2-dev` / `alsa-lib
 
 - Middle C = C3 = MIDI 60
 - 960 PPQ
-- OSC is resource-based (`/channel/{id}/volume`, …). Catalog: `.cursor/rules/osc-protocol.mdc`
+- OSC is resource-based (`/channel/{id}/volume`, …). Catalog: `docs/subsystems/osc-protocol.md`

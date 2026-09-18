@@ -149,7 +149,7 @@ toggle, which is internal UI state.)
 | `Godot/tests/test_drum_rows.gd` | **New.** `LaneLayout` and `DrumRows` tests |
 | `docs/specs/002-note-maps/tasks.md` | Written at the next gate |
 | `TODO.md` | Backlog entry for the feature |
-| `.cursor/rules/godot-architecture.mdc` | Short section on `LaneLayout` and note maps once the code lands |
+| `docs/subsystems/godot-architecture.md` | Short section on `LaneLayout` and note maps once the code lands |
 
 ## Migration and compatibility
 

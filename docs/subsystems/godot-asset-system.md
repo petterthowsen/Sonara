@@ -1,7 +1,3 @@
----
-description: Apply when working on the Godot browser asset system (AssetService, Asset providers, device discovery, asset metadata).
-alwaysApply: false
----
 # Godot Asset System
 
 ## Overview

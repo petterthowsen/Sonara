@@ -1,7 +1,7 @@
 class_name AutomationLane extends RefCounted
 
 ## A lane of automation points driving one target on the track's linked channel. Follows the
-## self-syncing pattern from `.cursor/rules/godot-osc.mdc`: mutators update state, send OSC, then
+## self-syncing pattern from `docs/subsystems/godot-osc.md`: mutators update state, send OSC, then
 ## emit. Mirrors `Engine/src/audio/automation.rs::AutomationLane`.
 
 signal point_added(point: AutomationPoint)

@@ -1,7 +1,3 @@
----
-alwaysApply: false
-description: Applies when building or running the Rust audio engine crates.
----
 # Engine Build Guidance
 
 ## Overview

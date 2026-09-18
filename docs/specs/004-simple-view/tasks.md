@@ -111,7 +111,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified · `[-]
   - _Depends on_: T-003, T-004
 
 - [x] **T-017** [REQ-all] Update the device view rules and the backlog.
-  - _Files_: `.cursor/rules/godot-device-views.mdc`, `TODO.md`
+  - _Files_: `docs/subsystems/godot-device-views.md`, `TODO.md`
   - _Output_: a Simple View section (location, fallback rule, layout file format and path, the strategy extension point). The TODO entry points to this spec
   - _Verify_: the rule file mentions `devices/simple_view/` and `device_layouts/`, and `TODO.md` links `docs/specs/004-simple-view/`
   - _Depends on_: T-013 (T-015 deferred)

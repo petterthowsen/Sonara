@@ -83,7 +83,7 @@ Godot:
 Docs:
 
 - **`AGENTS.md` is stale on one point:** it names `OSC_PROTOCOL.md`, which does not exist. The
-  real protocol reference is `.cursor/rules/osc-protocol.mdc` (clip-note messages at lines 96–101).
+  real protocol reference is `docs/subsystems/osc-protocol.md` (clip-note messages at lines 96–101).
   This spec updates that file, and fixes the `AGENTS.md` reference as part of the docs task.
 
 ## Approach
@@ -226,7 +226,7 @@ lane_id, point }`, `RemoveAutomationPoint { track_id, lane_id, point_id }`,
 
 ### Godot data model
 
-`AutomationLane.gd` follows the self-syncing pattern from `.cursor/rules/godot-osc.mdc`: setters
+`AutomationLane.gd` follows the self-syncing pattern from `docs/subsystems/godot-osc.md`: setters
 mutate, send OSC, then emit. New signals: `point_added(point)`, `point_removed(point_id)`,
 `point_changed(point)`, `bypass_changed(bypassed)`, `visibility_changed(visible)`,
 `height_changed(height)`, `resolved_changed(resolved)`. `Track` gains
@@ -301,9 +301,9 @@ constrained to 20–200), used as the height of a newly created lane. Read throu
 
 | File | Change |
 |---|---|
-| `.cursor/rules/osc-protocol.mdc` | Document the seven `/track/{id}/automation/*` messages and the target-string grammar. |
-| `AGENTS.md` | Fix the stale `OSC_PROTOCOL.md` reference to `.cursor/rules/osc-protocol.mdc`, and add automation to the "Channels and devices" notes. |
-| `.cursor/rules/godot-architecture.mdc` | Add the automation row/lane structure alongside the existing "Lane layout and note maps" section. |
+| `docs/subsystems/osc-protocol.md` | Document the seven `/track/{id}/automation/*` messages and the target-string grammar. |
+| `AGENTS.md` | Fix the stale `OSC_PROTOCOL.md` reference to `docs/subsystems/osc-protocol.md`, and add automation to the "Channels and devices" notes. |
+| `docs/subsystems/godot-architecture.md` | Add the automation row/lane structure alongside the existing "Lane layout and note maps" section. |
 | `TODO.md` | Mark the phase-1 half of the "Modulation" item (line 176–177). |
 
 ## Migration and compatibility
@@ -379,7 +379,7 @@ constrained to 20–200), used as the height of a newly created lane. Read throu
 | Two `_update_visual_order()` implementations (`TrackList.gd:806`, `Timeline.gd:227`) must agree row-for-row or the columns visibly desync while scrolling. | `AutomationRowOrder.gd` is the single source of ordering; both call it and neither computes order itself. Scroll-alignment is an explicit live check. |
 | Point inserts are O(n) memmove under the state lock; a large paste arrives as many messages. | Fine for interactive editing. If a paste of hundreds of points stutters, add a batched `add_points` message rather than making the callback sort. |
 | The engine's and Godot's curve evaluators drift, so the drawn curve stops matching what is heard. | `test_automation_curve_parity.gd` asserts against the same expected values as the Rust curve test; `TENSION_RANGE` is a named constant on both sides, changed only in tandem. |
-| `AutomationLaneRow.gd` absorbs curve drawing, input and hit-testing, and could pass the 600-line guideline in `.cursor/rules/godot-code-style.mdc`. | Less pressing now that the tension handle and draw tool are deferred. Selection and clipboard already live in `AutomationPointSelectionManager`; if the row still grows too large, split drawing into a sibling the way `MidiclipRenderer.gd` is split from `TimelineClip.gd`. |
+| `AutomationLaneRow.gd` absorbs curve drawing, input and hit-testing, and could pass the 600-line guideline in `docs/subsystems/godot-code-style.md`. | Less pressing now that the tension handle and draw tool are deferred. Selection and clipboard already live in `AutomationPointSelectionManager`; if the row still grows too large, split drawing into a sibling the way `MidiclipRenderer.gd` is split from `TimelineClip.gd`. |
 
 ## Follow-ups
 

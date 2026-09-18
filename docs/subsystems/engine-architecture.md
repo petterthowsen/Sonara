@@ -1,7 +1,3 @@
----
-globs: Engine/**/*.*
-alwaysApply: false
----
 # Audio Engine Architecture
 
 ### Thread Model
@@ -46,7 +42,7 @@ Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful
 - Clip lifecycle: `/clip/{id}/load_state [state, req_id, source_path, cache_key, sample_rate, channels, message]`
 - Audio file service: `/audiofile/decode/ready`, `/audiofile/waveform/level`, `/audiofile/progress`, `/audiofile/error`
 
-Full message catalog: `.cursor/rules/osc-protocol.mdc`.
+Full message catalog: `docs/subsystems/osc-protocol.md`.
 
 ### File Structure
 ```

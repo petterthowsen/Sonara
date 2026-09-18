@@ -1,7 +1,3 @@
----
-globs: Godot/devices/**/*.gd
-alwaysApply: false
----
 # Godot Device Views
 
 ## Overview
@@ -20,7 +16,7 @@ alwaysApply: false
 
 ## Drops and channel lookup
 - Every device drop goes through `DeviceDropUtil`. Device drags carry a `DeviceDrag` payload (`DeviceDrag.start(self, inst)` in `_get_drag_data`); `DeviceDropUtil` unwraps it, so its functions also take a bare `DeviceInstance` or `Asset`.
-- Rows of panels (DeviceLane, ChannelDeviceList, NestedDeviceList) expose a `drop_host: DeviceChainDropHost` (accept/drop rules and insert indices, no spacer nodes). DeviceLane and ChannelDeviceList are drop roots: `DeviceDropTarget.resolve(root, data, mouse)` picks the innermost row under the pointer and returns an INSERT between panels or ONTO a panel header (child into a container, file load). Panel and list drop handlers call `DeviceDropTarget.resolve_for(self, data)`, and the root's `_process` draws the `DropIndicator`. Controls that take device drops themselves (drum pads) join `DeviceDropTarget.OWN_DROPS_GROUP`. See `godot-drag-and-drop.mdc`.
+- Rows of panels (DeviceLane, ChannelDeviceList, NestedDeviceList) expose a `drop_host: DeviceChainDropHost` (accept/drop rules and insert indices, no spacer nodes). DeviceLane and ChannelDeviceList are drop roots: `DeviceDropTarget.resolve(root, data, mouse)` picks the innermost row under the pointer and returns an INSERT between panels or ONTO a panel header (child into a container, file load). Panel and list drop handlers call `DeviceDropTarget.resolve_for(self, data)`, and the root's `_process` draws the `DropIndicator`. Controls that take device drops themselves (drum pads) join `DeviceDropTarget.OWN_DROPS_GROUP`. See `godot-drag-and-drop.md`.
 - Drops are synchronous. A new instance that needs a file gets `DeviceInstance.queue_file_load(path)` before `DeviceAddCommand`; `Channel.add_device()` loads it right after the engine creates the device. Never `await` a timer before `load_file`.
 - Find a device's channel with `DeviceInstance.get_channel()`, not `Sonara.editor.project.get_channel_by_id(inst.channel_id)`.
 

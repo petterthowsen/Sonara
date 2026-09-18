@@ -3,7 +3,7 @@
 <!-- How it will be built. Every file and symbol named here must already exist, or be created
      by a task in tasks.md. Verify with search_files before writing a path — a spec that
      invents `FooManager.gd` is worse than no spec.
-     Read AGENTS.md and the matching .cursor/rules/*.mdc for this subsystem first. -->
+     Read AGENTS.md and the matching docs/subsystems/*.md for this subsystem first. -->
 
 Implements [requirements.md](./requirements.md).
 

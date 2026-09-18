@@ -1,7 +1,3 @@
----
-alwaysApply: false
-description: Applies when working on the subprocess-based plugin host or shared IPC infrastructure.
----
 # Plugin Architecture: Subprocess-Based CLAP Hosting
 
 ## Overview

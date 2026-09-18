@@ -1,6 +1,3 @@
----
-alwaysApply: true
----
 # Code Style & Rules
 
 1. Files should never be more than 1000 lines.

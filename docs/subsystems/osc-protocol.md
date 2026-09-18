@@ -1,8 +1,3 @@
----
-description: When adding or changing OSC messages between Godot and the Rust audio engine
-globs: Engine/src/osc/**/*.rs, Godot/**/AudioEngineOSC.gd, Godot/data/**/*.gd
-alwaysApply: false
----
 # OSC Protocol Specification
 
 Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.

@@ -1,8 +1,3 @@
----
-description: When implementing or changing drag and drop, re-ordering, nesting, or drop indicators in the Godot UI
-alwaysApply: false
----
-
 # Godot drag and drop
 
 Every drag in Sonara follows one model: **nothing moves until the mouse is released**. While dragging, the

@@ -1,7 +1,3 @@
----
-description: When implementing or modifying the built-in SFZ sampler powered by sfizz.
-alwaysApply: false
----
 # Built-In SFZ Sampler (Sfizz)
 
 ## Overview

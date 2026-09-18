@@ -1,7 +1,3 @@
----
-description: When wiring Godot to Audio Engine via OSC
-alwaysApply: false
----
 ### Modifying Data and Syncing to Audio Engine
 
 **The pattern** (object-oriented, self-synchronizing):

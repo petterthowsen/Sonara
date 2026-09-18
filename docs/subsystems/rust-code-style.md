@@ -1,7 +1,3 @@
----
-globs: Engine/**/*
-alwaysApply: false
----
 ## Rust Code Style
 
 - Follow standard Rust conventions (`cargo fmt`)

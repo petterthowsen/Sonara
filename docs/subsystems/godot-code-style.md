@@ -1,7 +1,3 @@
----
-globs: Godot/**/*.gd
-alwaysApply: false
----
 # Godot Code Guidelines
 
 ## GDScript

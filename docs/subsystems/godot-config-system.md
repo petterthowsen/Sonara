@@ -1,7 +1,3 @@
----
-description: Apply when working on the Sonara/Settings autoloads or code that reads/writes configuration or user settings.
-alwaysApply: false
----
 # Godot Config System
 
 ## Overview

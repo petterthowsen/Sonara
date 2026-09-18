@@ -240,7 +240,7 @@ A unit only changes how the value is shown. The value sent to the engine is alwa
 | `Godot/devices/device_lane/DevicePanel.gd` + `.tscn` | Load the panel view when there's a registered one **or** a Simple View. Add a "Simple" toggle to `TabButtons`, shown only when `has_panel_view()`, which swaps between the custom and Simple panel views. The toggle state is stored per device id with `Sonara.set_config("devices/simple_view/<id>", bool)` |
 | `Godot/tests/test_simple_layout_generator.gd` (new) | REQ-002–008 |
 | `Godot/tests/test_simple_layout_model.gd` (new) | REQ-010, REQ-016, REQ-017, JSON round-trip |
-| `.cursor/rules/godot-device-views.mdc` | Section on the Simple View: where it lives, the fallback rule, the layout format |
+| `docs/subsystems/godot-device-views.md` | Section on the Simple View: where it lives, the fallback rule, the layout format |
 | `TODO.md` | Backlog entry |
 
 ## Migration and compatibility

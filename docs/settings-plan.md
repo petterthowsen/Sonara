@@ -13,7 +13,7 @@ Do the phases in order. Run `Godot/tests/run_all.sh` after each Godot phase and 
 
 ## What already exists (don't rebuild it)
 
-Most of the "data-driven settings system" is already in place. Read these files fully before starting, plus `.cursor/rules/godot-config-system.mdc`:
+Most of the "data-driven settings system" is already in place. Read these files fully before starting, plus `docs/subsystems/godot-config-system.md`:
 
 | File | What it does now |
 |---|---|

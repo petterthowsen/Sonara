@@ -1,7 +1,3 @@
----
-description: When working with the audio thread / DSP / mixing / routing
-alwaysApply: false
----
 # Audio Thread & Mixing Logic
 
 ## Audio Thread Safety (Critical)
@@ -153,4 +149,4 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 - `Engine/src/audio/processing.rs`: Callback pipeline orchestration
 - `Engine/src/audio/engine.rs`: Engine initialization and types
 - `Engine/src/audio/types.rs`: Channel, Track, Voice data structures
-- `engine_architecture.mdc`: High-level architecture overview
+- `engine-architecture.md`: High-level architecture overview

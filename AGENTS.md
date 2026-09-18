@@ -82,26 +82,40 @@ The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_
 
 ## Subsystem references
 
-`.cursor/rules/` has detailed, subsystem-specific notes. Read the matching file before working in that area. They may lag behind the code, so check claims against the source.
+`docs/subsystems/` has detailed, subsystem-specific notes. Read the matching file before working in that area. They may lag behind the code, so check claims against the source.
 
 | Area | Rule file |
 |---|---|
-| Engine threads, pipeline, mixing, time-stretching | `engine-architecture.mdc`, `engine-audio-thread.mdc` |
-| CLAP subprocess hosting, IPC, plugin GUIs | `engine-plugin-architecture.mdc` |
-| SFZ sampler (sfizz) | `engine-sfz-sampler.mdc` |
-| Logs and debugging | `engine-debugging.mdc` |
-| Godot structure, clip/MIDI editor, GridHelper | `godot-architecture.mdc` |
-| OSC sync pattern, device data streams, clip loading | `godot-osc.mdc` |
-| Device views and parameter types | `godot-device-views.mdc` |
-| Asset browser and providers | `godot-asset-system.mdc` |
-| Config system | `godot-config-system.mdc` |
-| Drag and drop | `godot-drag-and-drop.mdc` |
+| Engine threads, pipeline, mixing, time-stretching | `engine-architecture.md`, `engine-audio-thread.md` |
+| CLAP subprocess hosting, IPC, plugin GUIs | `engine-plugin-architecture.md` |
+| SFZ sampler (sfizz) | `engine-sfz-sampler.md` |
+| Logs and debugging | `engine-debugging.md` |
+| Godot structure, clip/MIDI editor, GridHelper | `godot-architecture.md` |
+| OSC sync pattern, device data streams, clip loading | `godot-osc.md` |
+| Device views and parameter types | `godot-device-views.md` |
+| Asset browser and providers | `godot-asset-system.md` |
+| Config system | `godot-config-system.md` |
+| Drag and drop | `godot-drag-and-drop.md` |
 
 ## Debugging
 
 - Engine logs are written to `logs/` relative to the working directory, normally `Engine/logs/`. The files are `last_info.log`, `last_warn.log` (WARN and above) and `last_combined.log`. `/project/init` rotates them into `session_<timestamp>_*.log` files and keeps the 5 newest.
 - WARN and ERROR messages are also forwarded to Godot over `/log`. Godot writes its own log to `Godot/logs/last.log`.
 - When debugging, add plenty of logging and ask the user to reproduce the problem and report back.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (petterthowsen/Sonara); use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ## Project tracking
 
