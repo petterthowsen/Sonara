@@ -52,6 +52,9 @@ pub struct Oscillator {
 
 impl Oscillator {
     pub fn new() -> Self {
+        // Build the shared sine table here (devices are created off the audio thread) rather
+        // than on first use, which would allocate and compute 64k sines inside the callback.
+        Lazy::force(&SINE_TABLE);
         Self {
             phase: 0.0,
             phase_increment: 0.0,

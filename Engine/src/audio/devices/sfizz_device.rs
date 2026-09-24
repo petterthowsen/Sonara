@@ -271,17 +271,12 @@ impl SfizzDevice {
             Err(_) => return false, // Can't lock, keep pending
         };
 
-        // Successfully got both locks - flush all pending parameters
-        let pending = std::mem::take(&mut self.pending_param_changes);
-        let count = pending.len();
-
-        for (cc_number, value) in pending {
+        // Successfully got both locks - flush all pending parameters. Cleared in place (no
+        // take/drop, no logging): this runs from `process_block` on the audio thread.
+        for &(cc_number, value) in &self.pending_param_changes {
             send_normalized_cc(&synth_guard.0, cc_number, value);
         }
-
-        if count > 0 {
-            info!("  ✅ Flushed {} pending parameter(s) to sfizz", count);
-        }
+        self.pending_param_changes.clear();
 
         true
     }
