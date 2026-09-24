@@ -19,9 +19,11 @@
 
 use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 use tracing::{error, info};
 
 // Import the modular plugin_host modules
+use engine::audio::ipc::HostSharedMemory;
 use engine::plugin_host::event_loop::run_plugin_host;
 use engine::plugin_host::install_x11_error_handler;
 
@@ -62,8 +64,26 @@ fn main() {
     let socket = unsafe { UnixStream::from_raw_fd(socket_fd) };
     info!("✅ Using control socket FD {}", socket_fd);
 
+    // The host doorbell region (one word the engine and this host ring at each other) arrives as
+    // descriptor 4.
+    const DOORBELL_FD: i32 = 4;
+    unsafe {
+        let flags = libc::fcntl(DOORBELL_FD, libc::F_GETFD);
+        if flags < 0 {
+            error!("Doorbell FD {} is not open", DOORBELL_FD);
+            std::process::exit(1);
+        }
+        libc::fcntl(DOORBELL_FD, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+    }
+    // SAFETY: same contract as the socket descriptor.
+    let doorbell = unsafe { HostSharedMemory::from_fd(DOORBELL_FD) }.unwrap_or_else(|e| {
+        error!("Failed to map host doorbell: {}", e);
+        std::process::exit(1);
+    });
+    info!("✅ Using doorbell FD {}", DOORBELL_FD);
+
     // Run plugin host event loop
-    if let Err(e) = run_plugin_host(socket) {
+    if let Err(e) = run_plugin_host(socket, Arc::new(doorbell)) {
         error!("Plugin host error: {}", e);
         // Use libc::_exit to avoid IO safety checks during error cleanup
         unsafe {

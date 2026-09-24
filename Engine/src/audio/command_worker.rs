@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
+use super::block_clock::BlockClock;
 use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::{
     PluginBlockStats, PluginIpcHandle, PluginLoad,
@@ -39,6 +40,8 @@ struct PolledPlugin {
     handle: PluginIpcHandle,
     load: Arc<PluginLoad>,
     writes: Vec<(ParamId, ParamValue)>,
+    /// Parameter changes the plugin made while processing (from its output events).
+    output_events: Vec<(ParamId, ParamValue)>,
     stats: PluginBlockStats,
 }
 
@@ -68,6 +71,7 @@ impl CommandWorker {
         command_tx: Sender<AudioCommand>,
         device_sample_rate: f32,
         max_buffer_size: usize,
+        block_clock: Arc<BlockClock>,
     ) -> Self {
         let process_manager = Arc::new(ProcessManager::new());
         let device_factory = DeviceFactory::new(
@@ -76,6 +80,7 @@ impl CommandWorker {
             max_buffer_size,
             status_tx.clone(),
             command_tx,
+            block_clock,
         );
 
         Self {
@@ -127,12 +132,15 @@ impl CommandWorker {
                         }
                         let mut writes = Vec::new();
                         plugin.drain_queued_parameters(&mut writes);
+                        let mut output_events = Vec::new();
+                        plugin.drain_output_events(&mut output_events);
                         plugins.push(PolledPlugin {
                             channel_id,
                             device_path: *device_path,
                             handle: plugin.ipc_handle(),
                             load,
                             writes,
+                            output_events,
                             stats: plugin.take_stats(),
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
@@ -151,6 +159,15 @@ impl CommandWorker {
             }
             if !plugin.writes.is_empty() {
                 plugin.handle.set_parameters(&plugin.writes);
+            }
+            for (param_id, value) in plugin.output_events.iter().copied() {
+                reported.push((plugin.channel_id, plugin.device_path, param_id, value));
+                statuses.push(EngineStatus::PluginParameterValueChanged {
+                    channel_id: plugin.channel_id,
+                    device_path: plugin.device_path,
+                    param_id,
+                    value,
+                });
             }
             events.clear();
             plugin.handle.poll_events(&mut events);
@@ -218,7 +235,7 @@ impl CommandWorker {
     /// Add a plugin's audio-thread counters to the running totals for the next log.
     fn record_plugin_stats(&mut self, plugin: &PolledPlugin) {
         let s = plugin.stats;
-        if s.input_overflows == 0 && s.output_underruns == 0 && s.midi_drops == 0 {
+        if s.deadline_misses == 0 && s.event_drops == 0 {
             return;
         }
         let entry = self
@@ -228,9 +245,8 @@ impl CommandWorker {
                 name: plugin.handle.device_name().to_string(),
                 stats: PluginBlockStats::default(),
             });
-        entry.stats.input_overflows += s.input_overflows;
-        entry.stats.output_underruns += s.output_underruns;
-        entry.stats.midi_drops += s.midi_drops;
+        entry.stats.deadline_misses += s.deadline_misses;
+        entry.stats.event_drops += s.event_drops;
     }
 
     /// Log and reset per-plugin problem counts every `PLUGIN_STATS_LOG_INTERVAL`.
@@ -242,14 +258,13 @@ impl CommandWorker {
         for ((channel_id, device_path), entry) in self.plugin_stats.drain() {
             let s = entry.stats;
             warn!(
-                "Plugin {} (channel {} device {}) in the last {:.0}s: {} dropout blocks (output not ready), {} input overflows, {} MIDI events dropped",
+                "Plugin {} (channel {} device {}) in the last {:.0}s: {} blocks missed the processing deadline, {} input events dropped",
                 entry.name,
                 channel_id,
                 device_path,
                 elapsed.as_secs_f32(),
-                s.output_underruns,
-                s.input_overflows,
-                s.midi_drops
+                s.deadline_misses,
+                s.event_drops
             );
         }
         self.plugin_stats_since = Instant::now();
@@ -604,21 +619,30 @@ impl CommandWorker {
             return;
         }
 
-        let (action, result) = if active {
-            ("activate", handle.activate())
+        let latency = if active {
+            match handle.activate() {
+                Ok(latency) => latency,
+                Err(e) => {
+                    warn!(
+                        "Failed to activate device at channel {} path {}: {}",
+                        channel_id, device_path, e
+                    );
+                    return;
+                }
+            }
         } else {
-            ("deactivate", handle.deactivate())
+            if let Err(e) = handle.deactivate() {
+                warn!(
+                    "Failed to deactivate device at channel {} path {}: {}",
+                    channel_id, device_path, e
+                );
+                return;
+            }
+            0
         };
-        if let Err(e) = result {
-            warn!(
-                "Failed to {} device at channel {} path {}: {}",
-                action, channel_id, device_path, e
-            );
-            return;
-        }
 
         self.with_plugin(channel_id, &device_path, |plugin| {
-            plugin.set_active_state(active)
+            plugin.set_active_state(active, latency)
         });
         info!(
             "Device {}: channel={} device={}",

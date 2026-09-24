@@ -7,12 +7,12 @@ use crate::audio::devices::DevicePath;
 use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
 use crate::audio::ipc::{
-    InstanceId, PluginCommand, PluginParameterInfo, PluginResponse, ProcessManager, SharedMemory,
-    REQUEST_TIMEOUT,
+    HostSharedMemory, InstanceId, PluginCommand, PluginParameterInfo, PluginResponse,
+    ProcessManager, SharedMemory, REQUEST_TIMEOUT,
 };
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -61,17 +61,24 @@ mod tests {
     fn plugin_load_exposes_shared_memory_only_when_ready() {
         let load = PluginLoad::new();
         assert!(load.shared_memory().is_none());
+        assert!(load.shared().is_none());
         assert!(!load.is_ready());
+        assert_eq!(load.latency_frames(), 0);
 
         let shm = SharedMemory::new("sonara_test_plugin_load", SharedMemoryLayout::new(64))
             .expect("shared memory");
-        load.set_ready(Arc::new(shm));
+        let doorbell = HostSharedMemory::new("sonara_test_plugin_load_doorbell").expect("doorbell");
+        load.set_ready(Arc::new(shm), Arc::new(doorbell));
         assert!(load.is_ready());
         assert!(load.shared_memory().is_some());
+        assert!(load.shared().is_some());
+
+        load.set_latency_frames(128);
+        assert_eq!(load.latency_frames(), 128);
 
         load.set_failed("crashed".to_string());
         assert!(load.is_failed());
-        assert!(load.shared_memory().is_none());
+        assert!(load.shared().is_none());
         assert_eq!(load.error().as_deref(), Some("crashed"));
     }
 
@@ -160,6 +167,13 @@ const LOADING: u8 = 0;
 const READY: u8 = 1;
 const FAILED: u8 = 2;
 
+/// Everything the audio thread needs to run the per-block handshake with one plugin instance:
+/// its shared block and its host's doorbell.
+pub struct PluginShared {
+    pub memory: Arc<SharedMemory>,
+    pub doorbell: Arc<HostSharedMemory>,
+}
+
 /// Load state of a subprocess plugin, shared by the loading thread, the command thread and the
 /// audio thread.
 ///
@@ -167,37 +181,48 @@ const FAILED: u8 = 2;
 /// thread. The failure message sits behind a mutex that only non-audio threads touch.
 pub struct PluginLoad {
     state: AtomicU8,
-    shared_memory: OnceLock<Arc<SharedMemory>>,
+    shared: OnceLock<PluginShared>,
     error: Mutex<Option<String>>,
+    /// Frames the plugin reported at activation, for latency compensation (Phase 8).
+    latency_frames: AtomicU32,
 }
 
 impl PluginLoad {
     pub fn new() -> Self {
         Self {
             state: AtomicU8::new(LOADING),
-            shared_memory: OnceLock::new(),
+            shared: OnceLock::new(),
             error: Mutex::new(None),
+            latency_frames: AtomicU32::new(0),
         }
     }
 
-    /// The plugin's shared memory once it is ready, else None. Lock-free.
-    pub fn shared_memory(&self) -> Option<&SharedMemory> {
+    /// The instance's block and doorbell once it is ready, else None. Lock-free.
+    pub fn shared(&self) -> Option<&PluginShared> {
         if self.state.load(Ordering::Acquire) == READY {
-            self.shared_memory.get().map(|shm| shm.as_ref())
+            self.shared.get()
         } else {
             None
         }
+    }
+
+    /// The instance's shared block once it is ready, else None.
+    #[allow(dead_code)] // used by tests; the adapter reads the whole `PluginShared`
+    pub fn shared_memory(&self) -> Option<&SharedMemory> {
+        self.shared().map(|shared| shared.memory.as_ref())
     }
 
     pub fn is_ready(&self) -> bool {
         self.state.load(Ordering::Acquire) == READY
     }
 
+    #[allow(dead_code)] // Phase 4 reports the crashed state to the UI
     pub fn is_failed(&self) -> bool {
         self.state.load(Ordering::Acquire) == FAILED
     }
 
     /// The failure message, if loading failed or the subprocess died.
+    #[allow(dead_code)] // Phase 4 sends the reason with the crashed state
     pub fn error(&self) -> Option<String> {
         self.error
             .lock()
@@ -205,8 +230,18 @@ impl PluginLoad {
             .clone()
     }
 
-    fn set_ready(&self, shared_memory: Arc<SharedMemory>) {
-        let _ = self.shared_memory.set(shared_memory);
+    /// Frame latency the plugin reported at activation.
+    #[allow(dead_code)] // read through `AudioDevice::latency_frames`; Phase 8 compensates
+    pub fn latency_frames(&self) -> u32 {
+        self.latency_frames.load(Ordering::Relaxed)
+    }
+
+    pub fn set_latency_frames(&self, frames: u32) {
+        self.latency_frames.store(frames, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_ready(&self, memory: Arc<SharedMemory>, doorbell: Arc<HostSharedMemory>) {
+        let _ = self.shared.set(PluginShared { memory, doorbell });
         self.state.store(READY, Ordering::Release);
     }
 
@@ -268,9 +303,21 @@ pub fn spawn_loading_thread(
         };
 
         info!("🔄 Activating plugin: {}", plugin_id);
-        match connection.request(PluginCommand::Activate, Duration::from_secs(5)) {
-            Ok(PluginResponse::ActivateResult { success: true, .. }) => {
-                info!("✅ Plugin activated successfully");
+        let mut latency_frames = 0;
+        match connection.request(
+            PluginCommand::Activate { sample_rate },
+            Duration::from_secs(5),
+        ) {
+            Ok(PluginResponse::ActivateResult {
+                success: true,
+                latency_frames: latency,
+                ..
+            }) => {
+                latency_frames = latency;
+                info!(
+                    "✅ Plugin activated successfully (latency {} frames)",
+                    latency
+                );
             }
             Ok(PluginResponse::ActivateResult { error, .. }) => {
                 error!(
@@ -308,7 +355,11 @@ pub fn spawn_loading_thread(
 
         let param_count = params.len();
         *param_cache.lock().unwrap() = params;
-        load.set_ready(Arc::clone(connection.shared_memory()));
+        load.set_latency_frames(latency_frames);
+        load.set_ready(
+            Arc::clone(connection.shared_memory()),
+            Arc::clone(connection.host_shared()),
+        );
 
         info!(
             "✅ Plugin fully loaded and activated: {} (instance {}, host pid {}, {} params)",

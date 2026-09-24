@@ -4,13 +4,15 @@
 //! including initialization, activation, parameter management, and GUI operations.
 
 use std::os::fd::{IntoRawFd, OwnedFd};
+use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use clack_extensions::gui::{GuiSize, PluginGui};
+use clack_extensions::latency::PluginLatency;
 use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
-use clack_host::events::event_types::{NoteOffEvent, ParamValueEvent};
+use clack_host::events::event_types::ParamValueEvent;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
-use clack_host::events::{Pckn, UnknownEvent};
+use clack_host::events::Pckn;
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 use clack_host::utils::Cookie;
@@ -20,6 +22,7 @@ use crate::audio::ipc::{
     SharedMemoryLayout,
 };
 
+use crate::plugin_host::audio_thread::AudioThreadHandle;
 use crate::plugin_host::operations::{
     close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui,
 };
@@ -33,6 +36,7 @@ pub fn process_command(
     fds: Vec<OwnedFd>,
     plugin_state: &mut Option<PluginState>,
     event_tx: &std::sync::mpsc::Sender<HostMessage>,
+    audio: &AudioThreadHandle,
 ) -> Option<PluginResponse> {
     match cmd {
         PluginCommand::Initialize {
@@ -63,7 +67,7 @@ pub fn process_command(
             };
             let layout = SharedMemoryLayout::new(max_buffer_size);
             let shared_memory = match SharedMemory::from_fd(shm_fd.into_raw_fd(), layout) {
-                Ok(shm) => shm,
+                Ok(shm) => Arc::new(shm),
                 Err(e) => {
                     error!("Failed to map shared memory: {}", e);
                     return Some(PluginResponse::InitializeError {
@@ -98,11 +102,7 @@ pub fn process_command(
             let device_version = "1.0".to_string();
             let category = "effect".to_string();
 
-            // Allocate audio buffers (stereo)
-            let input_buffers = vec![vec![0.0; max_buffer_size]; 2];
-            let output_buffers = vec![vec![0.0; max_buffer_size]; 2];
-
-            // Store plugin state
+            // Store plugin state (audio buffers live on the audio thread)
             *plugin_state = Some(PluginState {
                 instance_id,
                 bundle,
@@ -113,12 +113,8 @@ pub fn process_command(
                 processing: false,
                 sample_rate,
                 max_buffer_size,
-                audio_processor: None,
-                shared_memory: Some(shared_memory),
-                input_buffers,
-                output_buffers,
-                output_event_buffer: EventBuffer::new(),
-                pending_param_changes: Vec::new(),
+                shared_memory,
+                latency_frames: 0,
                 param_map: None,
             });
 
@@ -219,117 +215,113 @@ pub fn process_command(
             None
         }
 
-        PluginCommand::Activate => {
-            if let Some(ref mut state) = plugin_state {
-                if state.activated {
-                    return Some(PluginResponse::ActivateResult {
-                        success: true,
-                        error: None,
-                    });
-                }
-
-                info!(
-                    "Activating plugin (sample_rate={}, max_buffer_size={})",
-                    state.sample_rate, state.max_buffer_size
-                );
-
-                // Activate plugin with audio configuration
-                let config = PluginAudioConfiguration {
-                    sample_rate: state.sample_rate as f64,
-                    min_frames_count: 1,
-                    max_frames_count: state.max_buffer_size as u32,
-                };
-
-                match state.instance.activate(|_, _| (), config) {
-                    Ok(processor) => {
-                        // Start processing
-                        match processor.start_processing() {
-                            Ok(started_processor) => {
-                                // Store the processor so we can use it for audio processing
-                                state.audio_processor =
-                                    Some(PluginAudioProcessorEnum::Started(started_processor));
-                                state.activated = true;
-                                state.processing = true;
-                                info!("✅ Plugin activated and processing started");
-                                Some(PluginResponse::ActivateResult {
-                                    success: true,
-                                    error: None,
-                                })
-                            }
-                            Err(e) => {
-                                error!("Failed to start processing: {:?}", e);
-                                Some(PluginResponse::ActivateResult {
-                                    success: false,
-                                    error: Some(format!("Failed to start processing: {:?}", e)),
-                                })
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to activate plugin: {:?}", e);
-                        Some(PluginResponse::ActivateResult {
-                            success: false,
-                            error: Some(format!("{:?}", e)),
-                        })
-                    }
-                }
-            } else {
-                Some(PluginResponse::ActivateResult {
+        PluginCommand::Activate { sample_rate } => {
+            let Some(state) = plugin_state.as_mut() else {
+                return Some(PluginResponse::ActivateResult {
                     success: false,
                     error: Some("Plugin not initialized".to_string()),
-                })
+                    latency_frames: 0,
+                });
+            };
+
+            // Already active at this rate: nothing to do.
+            if state.activated && (state.sample_rate - sample_rate).abs() < f32::EPSILON {
+                return Some(PluginResponse::ActivateResult {
+                    success: true,
+                    error: None,
+                    latency_frames: state.latency_frames,
+                });
             }
+            // Re-activation at a new rate (Phase 7's sample-rate change path) deactivates first.
+            if state.activated {
+                deactivate_plugin(state, audio);
+            }
+            state.sample_rate = sample_rate;
+
+            info!(
+                "Activating plugin (sample_rate={}, max_buffer_size={})",
+                state.sample_rate, state.max_buffer_size
+            );
+
+            let config = PluginAudioConfiguration {
+                sample_rate: state.sample_rate as f64,
+                min_frames_count: 1,
+                max_frames_count: state.max_buffer_size as u32,
+            };
+
+            let stopped = match state.instance.activate(|_, _| (), config) {
+                Ok(stopped) => stopped,
+                Err(e) => {
+                    error!("Failed to activate plugin: {:?}", e);
+                    return Some(PluginResponse::ActivateResult {
+                        success: false,
+                        error: Some(format!("{:?}", e)),
+                        latency_frames: 0,
+                    });
+                }
+            };
+            let started = match stopped.start_processing() {
+                Ok(started) => started,
+                Err(e) => {
+                    error!("Failed to start processing: {:?}", e);
+                    return Some(PluginResponse::ActivateResult {
+                        success: false,
+                        error: Some(format!("Failed to start processing: {:?}", e)),
+                        latency_frames: 0,
+                    });
+                }
+            };
+
+            let param_map = Some(Arc::clone(state.param_map()));
+            if let Err(e) = audio.set_processor(
+                PluginAudioProcessorEnum::Started(started),
+                Arc::clone(&state.shared_memory),
+                param_map,
+            ) {
+                error!("Failed to hand the processor to the audio thread: {}", e);
+                return Some(PluginResponse::ActivateResult {
+                    success: false,
+                    error: Some(e),
+                    latency_frames: 0,
+                });
+            }
+
+            let latency = query_latency(state);
+            state.latency_frames = latency;
+            state.activated = true;
+            state.processing = true;
+            info!(
+                "✅ Plugin activated and processing started (latency {} frames)",
+                latency
+            );
+            Some(PluginResponse::ActivateResult {
+                success: true,
+                error: None,
+                latency_frames: latency,
+            })
         }
 
         PluginCommand::Deactivate => {
-            if let Some(ref mut state) = plugin_state {
-                if !state.activated {
-                    return Some(PluginResponse::DeactivateResult {
-                        success: true,
-                        error: None,
-                    });
-                }
-
-                info!("Deactivating plugin");
-
-                // Stop processing and deactivate properly
-                if let Some(processor) = state.audio_processor.take() {
-                    let stopped = match processor {
-                        PluginAudioProcessorEnum::Started(started) => started.stop_processing(),
-                        _ => {
-                            warn!("Plugin processor in invalid state");
-                            return Some(PluginResponse::DeactivateResult {
-                                success: false,
-                                error: Some("Plugin processor in invalid state".to_string()),
-                            });
-                        }
-                    };
-
-                    // Deactivate the plugin
-                    state.instance.deactivate(stopped);
-                    state.activated = false;
-                    state.processing = false;
-
-                    info!("✅ Plugin deactivated successfully");
-                    Some(PluginResponse::DeactivateResult {
-                        success: true,
-                        error: None,
-                    })
-                } else {
-                    // No processor to deactivate
-                    state.activated = false;
-                    state.processing = false;
-                    Some(PluginResponse::DeactivateResult {
-                        success: true,
-                        error: None,
-                    })
-                }
-            } else {
-                Some(PluginResponse::DeactivateResult {
+            let Some(state) = plugin_state.as_mut() else {
+                return Some(PluginResponse::DeactivateResult {
                     success: false,
                     error: Some("Plugin not initialized".to_string()),
-                })
+                });
+            };
+            if !state.activated {
+                return Some(PluginResponse::DeactivateResult {
+                    success: true,
+                    error: None,
+                });
             }
+
+            info!("Deactivating plugin");
+            deactivate_plugin(state, audio);
+            info!("✅ Plugin deactivated successfully");
+            Some(PluginResponse::DeactivateResult {
+                success: true,
+                error: None,
+            })
         }
 
         PluginCommand::StartProcessing => {
@@ -370,85 +362,9 @@ pub fn process_command(
         }
 
         PluginCommand::Reset => {
-            if let Some(ref mut state) = plugin_state {
-                // Send "all notes off" MIDI messages (CC 123) to ensure voices stop
-                // Many plugins require explicit note-off messages, not just reset()
-                if let Some(ref mut processor) = state.audio_processor {
-                    if let PluginAudioProcessorEnum::Started(ref mut started_processor) = processor
-                    {
-                        // Send note-off for all possible MIDI notes (0-127) on all channels (0-15)
-                        let mut note_off_events = Vec::new();
-                        for channel in 0..16u16 {
-                            for note in 0..128u16 {
-                                let event = NoteOffEvent::new(
-                                    0, // sample offset
-                                    Pckn::new(0u16, channel, note, note as u32),
-                                    0.0, // velocity
-                                );
-                                note_off_events.push(event);
-                            }
-                        }
-
-                        // Convert to event references
-                        let event_refs: Vec<&UnknownEvent> =
-                            note_off_events.iter().map(|e| e.as_unknown()).collect();
-
-                        // Process these note-offs through the plugin
-                        let input_events = InputEvents::from_buffer(&event_refs);
-                        let mut output_events =
-                            OutputEvents::from_buffer(&mut state.output_event_buffer);
-
-                        // Create empty audio buffers for this reset pass
-                        for buf in &mut state.input_buffers {
-                            buf.fill(0.0);
-                        }
-                        for buf in &mut state.output_buffers {
-                            buf.fill(0.0);
-                        }
-
-                        let mut input_ports = AudioPorts::with_capacity(2, 1);
-                        let mut output_ports = AudioPorts::with_capacity(2, 1);
-
-                        let input_audio = input_ports.with_input_buffers([AudioPortBuffer {
-                            latency: 0,
-                            channels: AudioPortBufferType::f32_input_only(
-                                state
-                                    .input_buffers
-                                    .iter_mut()
-                                    .map(|b| InputChannel::constant(&mut b[..64])),
-                            ),
-                        }]);
-
-                        let mut output_audio =
-                            output_ports.with_output_buffers([AudioPortBuffer {
-                                latency: 0,
-                                channels: AudioPortBufferType::f32_output_only(
-                                    state.output_buffers.iter_mut().map(|b| &mut b[..64]),
-                                ),
-                            }]);
-
-                        // Process to deliver all note-offs
-                        let _ = started_processor.process(
-                            &input_audio,
-                            &mut output_audio,
-                            &input_events,
-                            &mut output_events,
-                            None,
-                            None,
-                        );
-
-                        // Now call reset() to clear internal state
-                        started_processor.reset();
-                        info!("Plugin reset: sent all-notes-off and called reset()");
-                    }
-                }
-
-                // Clear MIDI event queue to prevent any queued events from playing
-                if let Some(ref mut shm) = state.shared_memory {
-                    let mut midi_queue = shm.midi_queue();
-                    midi_queue.clear();
-                    info!("MIDI queue cleared during reset");
-                }
+            // `reset()` belongs on the audio thread: hand it over and clear any queued events.
+            if plugin_state.is_some() {
+                audio.reset();
             }
             Some(PluginResponse::ResetComplete)
         }
@@ -536,7 +452,9 @@ pub fn process_command(
                     }
 
                     info!("✅ Queried {} parameters from plugin", param_infos.len());
-                    state.param_map = Some(ParamMap::build(&mut state.instance));
+                    // Rebuild the map and publish it to the audio thread.
+                    state.param_map = Some(Arc::new(ParamMap::build(&mut state.instance)));
+                    audio.set_param_map(Arc::clone(state.param_map.as_ref().expect("built above")));
                     Some(PluginResponse::ParameterInfo {
                         params: param_infos,
                     })
@@ -595,38 +513,49 @@ pub fn process_command(
                 });
             };
             let denormalized = entry.denormalize(value);
-            info!(
-                "Queuing parameter change: {} = {} (denormalized: {:.2})",
-                param_id, value, denormalized
-            );
 
-            // Reported back to the engine by the event loop
-            state
-                .pending_param_changes
-                .push((entry.clap_id, denormalized));
+            if state.activated {
+                // While the plugin is processing, the audio thread applies the change as an
+                // input event, which keeps it ordered with the audio it affects.
+                info!(
+                    "Queuing parameter change for the audio thread: {} = {} (denormalized: {:.2})",
+                    param_id, value, denormalized
+                );
+                audio.set_parameter(entry.clap_id, denormalized);
+            } else {
+                // Not processing: apply it directly so edits take effect while stopped.
+                info!(
+                    "Applying parameter change: {} = {} (denormalized: {:.2})",
+                    param_id, value, denormalized
+                );
+                let mut handle = state.instance.plugin_handle();
+                let Some(params) = handle.get_extension::<PluginParams>() else {
+                    return Some(PluginResponse::Error {
+                        command: "SetParameter".to_string(),
+                        error: "Plugin does not support params extension".to_string(),
+                    });
+                };
+                let mut input_events = EventBuffer::new();
+                input_events.push(&ParamValueEvent::new(
+                    0, // Sample offset
+                    entry.clap_id,
+                    Pckn::new(0u16, 0u16, 0u16, 0u32),
+                    denormalized,
+                    Cookie::empty(),
+                ));
+                let mut output_events = EventBuffer::new();
+                params.flush(
+                    &mut handle,
+                    &InputEvents::from_buffer(&input_events),
+                    &mut OutputEvents::from_buffer(&mut output_events),
+                );
+            }
 
-            // Flush right away so the change applies even while audio isn't running
-            let mut handle = state.instance.plugin_handle();
-            let Some(params) = handle.get_extension::<PluginParams>() else {
-                return Some(PluginResponse::Error {
-                    command: "SetParameter".to_string(),
-                    error: "Plugin does not support params extension".to_string(),
-                });
-            };
-            let mut input_events = EventBuffer::new();
-            input_events.push(&ParamValueEvent::new(
-                0, // Sample offset
-                entry.clap_id,
-                Pckn::new(0u16, 0u16, 0u16, 0u32),
-                denormalized,
-                Cookie::empty(),
-            ));
-            let mut output_events = EventBuffer::new();
-            params.flush(
-                &mut handle,
-                &InputEvents::from_buffer(&input_events),
-                &mut OutputEvents::from_buffer(&mut output_events),
-            );
+            // Echo the engine's own value back so Godot's control follows the model.
+            let _ = event_tx.send(HostMessage::Event {
+                instance_id,
+                event: crate::audio::ipc::PluginEvent::ParameterValueChanged { param_id, value },
+            });
 
             None // No response needed (fire-and-forget)
         }
@@ -640,4 +569,27 @@ pub fn process_command(
             })
         }
     }
+}
+
+/// Stop processing on the audio thread and deactivate the instance on the main thread.
+fn deactivate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) {
+    if let Some(stopped) = audio.take_processor() {
+        state.instance.deactivate(stopped);
+    } else if state.instance.is_active() {
+        // No processor to hand back (the audio thread wasn't holding one): deactivate directly.
+        if let Err(e) = state.instance.try_deactivate() {
+            warn!("Failed to deactivate plugin instance: {:?}", e);
+        }
+    }
+    state.activated = false;
+    state.processing = false;
+}
+
+/// The plugin's reported latency at the current sample rate, 0 when it has no latency extension.
+fn query_latency(state: &mut PluginState) -> u32 {
+    let mut handle = state.instance.plugin_handle();
+    let Some(latency) = handle.get_extension::<PluginLatency>() else {
+        return 0;
+    };
+    latency.get(&mut handle)
 }

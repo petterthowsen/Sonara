@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
+use clack_extensions::latency::{HostLatency, HostLatencyImpl};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
@@ -130,6 +131,7 @@ impl HostHandlers for SubprocessHost {
         builder.register::<HostGui>();
         builder.register::<HostTimer>();
         builder.register::<HostParams>();
+        builder.register::<HostLatency>();
     }
 }
 
@@ -228,6 +230,13 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
         } else {
             Err(HostError::Message("Unknown timer ID"))
         }
+    }
+}
+
+impl HostLatencyImpl for SubprocessHostMainThread<'_> {
+    fn changed(&mut self) {
+        // Re-queried by the engine after activation; nothing to do here.
+        info!("Plugin reported a latency change");
     }
 }
 

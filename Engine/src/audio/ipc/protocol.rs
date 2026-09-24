@@ -59,8 +59,9 @@ pub enum PluginCommand {
         max_buffer_size: usize,
     },
 
-    /// Activate plugin for audio processing
-    Activate,
+    /// Activate (or re-activate at a new rate) the plugin for audio processing. Re-activation
+    /// deactivates first, which is the sample-rate change path Phase 7 uses.
+    Activate { sample_rate: f32 },
 
     /// Deactivate plugin (stop processing, free buffers)
     Deactivate,
@@ -119,10 +120,12 @@ pub enum PluginResponse {
     /// Initialization failed
     InitializeError { error: String },
 
-    /// Activation result
+    /// Activation result. `latency_frames` is the plugin's reported latency at this sample rate
+    /// (0 when the plugin has no latency extension).
     ActivateResult {
         success: bool,
         error: Option<String>,
+        latency_frames: u32,
     },
 
     /// Deactivation result
@@ -209,142 +212,186 @@ pub struct PluginParameterInfo {
     pub step_labels: Vec<String>,
 }
 
-/// Shared memory layout for audio and MIDI data
+/// Audio channels carried by one instance's shared block (planar input and output).
+pub const MAX_PLUGIN_CHANNELS: usize = 2;
+
+/// Events one side may send per block (input events from the engine, output events from the
+/// plugin).
+pub const MAX_BLOCK_EVENTS: usize = 256;
+
+/// Shared memory layout for one plugin instance's audio block.
 ///
-/// Memory layout:
+/// The engine fills the input audio and the input events, publishes `request_seq`, then rings the
+/// host process's doorbell. The host processes exactly that block, writes the output audio and
+/// its output events, and sets `done_seq`. Offsets are byte offsets into the mapping.
+///
 /// ```text
-/// [AudioRingBuffer: input]   - Input audio from engine
-/// [AudioRingBuffer: output]  - Output audio to engine
-/// [MidiEventQueue]           - MIDI events from engine
-/// [ControlData]              - Control/status info
+/// [input audio:  max_frames × max_channels f32, planar]
+/// [output audio: max_frames × max_channels f32, planar]
+/// [input events: max_events × BlockEvent]
+/// [output events: max_events × BlockEvent]
+/// [BlockControl]
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SharedMemoryLayout {
-    /// Size of input audio ring buffer (in samples)
-    pub input_buffer_size: usize,
+    /// Frames per block (per channel).
+    pub max_frames: usize,
+    /// Audio channels per plane.
+    pub max_channels: usize,
+    /// Events per direction.
+    pub max_events: usize,
 
-    /// Size of output audio ring buffer (in samples)
-    pub output_buffer_size: usize,
-
-    /// Number of MIDI event slots
-    pub midi_queue_size: usize,
-
-    /// Offset to input audio buffer
     pub input_offset: usize,
-
-    /// Offset to output audio buffer
     pub output_offset: usize,
-
-    /// Offset to MIDI queue
-    pub midi_offset: usize,
-
-    /// Offset to control data
+    pub input_events_offset: usize,
+    pub output_events_offset: usize,
     pub control_offset: usize,
 }
 
 impl SharedMemoryLayout {
-    /// Create a new layout with standard sizes
-    pub fn new(max_buffer_size: usize) -> Self {
-        // Allocate just 2 buffers worth of data for low latency
-        // Any more causes noticeable delay
-        let input_buffer_size = max_buffer_size * 2 * 2; // Stereo * 2 buffers
-        let output_buffer_size = max_buffer_size * 2 * 2;
-        let midi_queue_size = 256; // 256 MIDI events
+    /// Layout for stereo blocks of up to `max_frames` frames.
+    pub fn new(max_frames: usize) -> Self {
+        Self::with_channels(max_frames, MAX_PLUGIN_CHANNELS)
+    }
+
+    pub fn with_channels(max_frames: usize, max_channels: usize) -> Self {
+        let max_frames = max_frames.max(1);
+        let max_channels = max_channels.max(1);
+        let plane_bytes = max_frames * max_channels * std::mem::size_of::<f32>();
+        let events_bytes = MAX_BLOCK_EVENTS * std::mem::size_of::<BlockEvent>();
 
         let input_offset = 0;
-        let output_offset = input_offset + input_buffer_size * std::mem::size_of::<f32>();
-        let midi_offset = output_offset + output_buffer_size * std::mem::size_of::<f32>();
-        let control_offset = midi_offset + midi_queue_size * std::mem::size_of::<MidiEvent>();
+        let output_offset = align_up(input_offset + plane_bytes, 64);
+        let input_events_offset = align_up(output_offset + plane_bytes, 64);
+        let output_events_offset = align_up(input_events_offset + events_bytes, 64);
+        let control_offset = align_up(output_events_offset + events_bytes, 64);
 
         Self {
-            input_buffer_size,
-            output_buffer_size,
-            midi_queue_size,
+            max_frames,
+            max_channels,
+            max_events: MAX_BLOCK_EVENTS,
             input_offset,
             output_offset,
-            midi_offset,
+            input_events_offset,
+            output_events_offset,
             control_offset,
         }
     }
 
-    /// Calculate total shared memory size
+    /// Total shared memory size in bytes.
     pub fn total_size(&self) -> usize {
-        self.control_offset + std::mem::size_of::<ControlData>()
+        self.control_offset + std::mem::size_of::<BlockControl>()
     }
 }
 
-/// MIDI event stored in shared memory queue
+fn align_up(value: usize, align: usize) -> usize {
+    (value + align - 1) & !(align - 1)
+}
+
+/// Note on / note off inside a block's event array.
+pub const EVENT_NOTE_ON: u16 = 1;
+pub const EVENT_NOTE_OFF: u16 = 2;
+/// Parameter change inside a block's event array.
+pub const EVENT_PARAM: u16 = 3;
+
+/// One event in a block's input or output event array.
+///
+/// `sample_offset` is relative to the block start, which makes notes and parameter changes
+/// sample-accurate. `value` is a note velocity or a normalized (0.0–1.0) parameter value; `id` is
+/// the engine's parameter index for parameter events and 0 for notes.
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct MidiEvent {
-    /// Sample offset within buffer
+pub struct BlockEvent {
     pub sample_offset: u32,
-
-    /// Note number (0-127)
+    pub kind: u16,
     pub note: u8,
-
-    /// Velocity (0-127)
-    pub velocity: u8,
-
-    /// 1 = note on, 0 = note off
-    pub is_note_on: u8,
-
-    /// Padding for alignment
-    pub _padding: u8,
+    pub _reserved: u8,
+    pub value: f32,
+    pub id: u32,
 }
 
-/// Control data shared between engine and plugin
-#[derive(Debug)]
-#[repr(C)]
-pub struct ControlData {
-    /// Write position in input ring buffer (samples)
-    pub input_write_pos: std::sync::atomic::AtomicUsize,
-
-    /// Read position in input ring buffer (samples)
-    pub input_read_pos: std::sync::atomic::AtomicUsize,
-
-    /// Write position in output ring buffer (samples)
-    pub output_write_pos: std::sync::atomic::AtomicUsize,
-
-    /// Read position in output ring buffer (samples)
-    pub output_read_pos: std::sync::atomic::AtomicUsize,
-
-    /// Write position in MIDI queue (events)
-    pub midi_write_pos: std::sync::atomic::AtomicUsize,
-
-    /// Read position in MIDI queue (events)
-    pub midi_read_pos: std::sync::atomic::AtomicUsize,
-
-    /// Plugin is processing (1 = yes, 0 = no)
-    pub is_processing: std::sync::atomic::AtomicU8,
-
-    /// Request shutdown (1 = yes, 0 = no)
-    pub shutdown_requested: std::sync::atomic::AtomicU8,
-
-    /// Padding for alignment
-    _padding: [u8; 6],
-}
-
-impl Default for ControlData {
-    fn default() -> Self {
+impl BlockEvent {
+    pub fn note(sample_offset: u32, note: u8, velocity_01: f32, is_note_on: bool) -> Self {
         Self {
-            input_write_pos: std::sync::atomic::AtomicUsize::new(0),
-            input_read_pos: std::sync::atomic::AtomicUsize::new(0),
-            output_write_pos: std::sync::atomic::AtomicUsize::new(0),
-            output_read_pos: std::sync::atomic::AtomicUsize::new(0),
-            midi_write_pos: std::sync::atomic::AtomicUsize::new(0),
-            midi_read_pos: std::sync::atomic::AtomicUsize::new(0),
-            is_processing: std::sync::atomic::AtomicU8::new(0),
-            shutdown_requested: std::sync::atomic::AtomicU8::new(0),
-            _padding: [0; 6],
+            sample_offset,
+            kind: if is_note_on {
+                EVENT_NOTE_ON
+            } else {
+                EVENT_NOTE_OFF
+            },
+            note,
+            _reserved: 0,
+            value: velocity_01,
+            id: 0,
+        }
+    }
+
+    pub fn param(sample_offset: u32, param_id: u32, value_01: f32) -> Self {
+        Self {
+            sample_offset,
+            kind: EVENT_PARAM,
+            note: 0,
+            _reserved: 0,
+            value: value_01,
+            id: param_id,
         }
     }
 }
 
-/// Ring buffer statistics for debugging
-#[derive(Debug, Clone, Copy)]
-pub struct RingBufferStats {
-    pub available_samples: usize,
-    pub capacity: usize,
-    pub utilization_percent: f32,
+/// Per-instance control block for the block handshake.
+///
+/// Ordering: the engine writes the input and the input events, then stores `request_seq` with
+/// `Release`. The host loads it with `Acquire`, processes, writes the output and its output
+/// events, then stores `done_seq` (the processed `request_seq`) with `Release`. The engine loads
+/// `done_seq` with `Acquire`. The counters in between are plain `Relaxed` atomics ordered by the
+/// two sequence numbers.
+#[repr(C)]
+pub struct BlockControl {
+    /// Incremented by the engine for every block it publishes.
+    pub request_seq: std::sync::atomic::AtomicU64,
+    /// The `request_seq` value the host has finished processing.
+    pub done_seq: std::sync::atomic::AtomicU64,
+    /// Frames the engine wrote into the input planes.
+    pub input_frames: std::sync::atomic::AtomicU32,
+    /// Frames the host wrote into the output planes.
+    pub output_frames: std::sync::atomic::AtomicU32,
+    /// Input events the engine wrote.
+    pub input_event_count: std::sync::atomic::AtomicU32,
+    /// Output events the host wrote.
+    pub output_event_count: std::sync::atomic::AtomicU32,
+    /// 0 = ok, 1 = the plugin's `process()` failed on the last block.
+    pub status: std::sync::atomic::AtomicU32,
+    pub _reserved: [u8; 24],
+}
+
+impl Default for BlockControl {
+    fn default() -> Self {
+        Self {
+            request_seq: std::sync::atomic::AtomicU64::new(0),
+            done_seq: std::sync::atomic::AtomicU64::new(0),
+            input_frames: std::sync::atomic::AtomicU32::new(0),
+            output_frames: std::sync::atomic::AtomicU32::new(0),
+            input_event_count: std::sync::atomic::AtomicU32::new(0),
+            output_event_count: std::sync::atomic::AtomicU32::new(0),
+            status: std::sync::atomic::AtomicU32::new(0),
+            _reserved: [0; 24],
+        }
+    }
+}
+
+/// One word shared by a host process and the engine: the engine rings it for any of its
+/// instances, and the host rings it back when a block is finished.
+#[repr(C)]
+pub struct Doorbell {
+    pub word: std::sync::atomic::AtomicU32,
+    pub _reserved: [u8; 60],
+}
+
+impl Default for Doorbell {
+    fn default() -> Self {
+        Self {
+            word: std::sync::atomic::AtomicU32::new(0),
+            _reserved: [0; 60],
+        }
+    }
 }

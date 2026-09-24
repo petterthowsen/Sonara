@@ -19,6 +19,7 @@ pub struct PluginIpcHandle {
     process_manager: Arc<ProcessManager>,
     instance_id: InstanceId,
     device_name: String,
+    sample_rate: f32,
 }
 
 impl PluginIpcHandle {
@@ -27,11 +28,13 @@ impl PluginIpcHandle {
         process_manager: Arc<ProcessManager>,
         instance_id: InstanceId,
         device_name: String,
+        sample_rate: f32,
     ) -> Self {
         Self {
             process_manager,
             instance_id,
             device_name,
+            sample_rate,
         }
     }
 
@@ -46,12 +49,18 @@ impl PluginIpcHandle {
         self.connection()?.request(cmd, REQUEST_TIMEOUT)
     }
 
-    /// Activate the plugin and start processing.
-    pub fn activate(&self) -> Result<(), String> {
-        match self.request(PluginCommand::Activate)? {
-            PluginResponse::ActivateResult { success: true, .. } => {
+    /// Activate the plugin and start processing. Returns the plugin's latency in frames.
+    pub fn activate(&self) -> Result<u32, String> {
+        match self.request(PluginCommand::Activate {
+            sample_rate: self.sample_rate,
+        })? {
+            PluginResponse::ActivateResult {
+                success: true,
+                latency_frames,
+                ..
+            } => {
                 self.request(PluginCommand::StartProcessing)?;
-                Ok(())
+                Ok(latency_frames)
             }
             PluginResponse::ActivateResult { error, .. } => {
                 Err(error.unwrap_or_else(|| "Activation failed".to_string()))

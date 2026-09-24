@@ -1,4 +1,5 @@
 pub mod automation;
+pub mod block_clock;
 pub mod command_worker;
 pub mod commands;
 pub mod devices;

@@ -9,9 +9,10 @@
 ## Structure
 
 - `audio/ipc/` (format agnostic, used by both binaries):
-  - `process_manager.rs`: `ProcessManager` maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`. Each host has one control socket and a reader thread.
-  - `shared_memory.rs`/`platform_shm.rs`: Lock-free interleaved audio + MIDI ring buffers backed by `memfd` (Unix) or OS-specific shared memory.
-  - `protocol.rs`: The one protocol module: `HostRequest`/`HostMessage` envelopes, `PluginCommand`/`PluginResponse`/`PluginEvent`, shared-memory layout.
+  - `process_manager.rs`: `ProcessManager` maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`. Each host has one control socket, a reader thread, and one doorbell region.
+  - `shared_memory.rs`/`platform_shm.rs`: Per-instance block memory (planar audio + event arrays + `BlockControl`) and the per-host `HostSharedMemory` doorbell, both backed by `memfd` (Unix) or OS-specific shared memory.
+  - `futex.rs`: `wait`/`wake`/`ring` on a shared `u32`, used for the block handshake.
+  - `protocol.rs`: The one protocol module: `HostRequest`/`HostMessage` envelopes, `PluginCommand`/`PluginResponse`/`PluginEvent`, the shared-memory layout, `BlockEvent`.
   - `wire.rs`: Framing on the control socket: `u32` length prefix + bincode, file descriptors attached as `SCM_RIGHTS`.
 - `clap_host/subprocess_adapter/`:
   - `mod.rs`: Adapter entry point, implements `AudioDevice`, maintains cached state, and delegates.
@@ -21,42 +22,50 @@
   - `plugin_ipc.rs`: `PluginIpcHandle`, blocking requests that don't borrow the adapter, so the command thread can release the state lock first.
 - `plugin_host/` (subprocess crate):
   - `mod.rs`: Module wiring and re-exports for subprocess host.
-  - `event_loop.rs`: A reader thread decodes requests; the main loop interleaves them with audio processing, timers, GUI callbacks and parameter echo, and is the only writer on the socket.
-  - `commands.rs`: Command dispatcher; owns initialization/activation, shared memory setup, parameter/GUI commands.
+  - `event_loop.rs`: The **main thread**. A reader thread decodes requests; the main loop handles commands, GUI callbacks, timers and `params.flush`, and is the only writer on the socket.
+  - `audio_thread.rs`: The **audio thread**. Owns the plugin's `PluginAudioProcessor` and the instance's shared block, waits on the doorbell and calls `process()` for exactly the engine's block.
+  - `commands.rs`: Command dispatcher on the main thread; owns initialization/activation, shared-block mapping, parameter/GUI commands, and hands the processor to the audio thread on activation.
   - `operations.rs`: Higher-level helpers for loading CLAP bundles, creating GUI instances, and wiring parent windows.
-  - `host.rs`: CLAP host implementation (`SubprocessHost*`) including timer management and GUI resize notifications.
-  - `state.rs`: Runtime state container (`PluginState`), the `ParamMap` (engine index ↔ CLAP id, rebuilt after the plugin rescans), and helpers for audio processing and output event handling.
-- `bin/plugin_host.rs`: Thin entry point. Takes the control socket's descriptor number (3) as its only argument, sets close-on-exec on it so processes a plugin spawns don't inherit it, and calls `run_plugin_host()`.
+  - `host.rs`: CLAP host implementation (`SubprocessHost*`) including timer management, GUI resize notifications and the latency extension.
+  - `state.rs`: `PluginState` (main thread) and the `ParamMap` (engine index ↔ CLAP id, rebuilt after the plugin rescans and published to the audio thread).
+- `bin/plugin_host.rs`: Entry point. Takes the control socket's descriptor number (3) and maps the doorbell descriptor (4), setting close-on-exec on both so processes a plugin spawns don't inherit them.
 
 ## Lifecycle
 
 - Each adapter gets an `InstanceId` from `ProcessManager::allocate_instance_id()`. Every message carries it, so several instances can later share one host process (hosting modes) without a protocol change. For now the host key is `instance-<id>` ("Individually"), and a host rejects a second `Initialize`.
-- `spawn_loading_thread` loads the plugin asynchronously: `ProcessManager::spawn_instance` spawns the host (or reuses a live one for the host key), creates the shared memory and sends `Initialize` with the memfd attached; then Activate and GetParameterInfo, then `PluginLoad` is set ready.
-- `PluginLoad` is an atomic state plus a set-once shared-memory pointer, so the audio thread reads it without locking and passes audio through while the plugin is loading or failed.
+- `spawn_loading_thread` loads the plugin asynchronously: `ProcessManager::spawn_instance` spawns the host (or reuses a live one for the host key), creates the instance's shared block and sends `Initialize` with its memfd attached; then Activate, GetParameterInfo and StartProcessing, then `PluginLoad` is set ready with the block and the host doorbell.
+- `PluginLoad` is an atomic state plus a set-once `PluginShared` (block + doorbell) pointer, so the audio thread reads it without locking and passes audio through while the plugin is loading or failed. It also carries the plugin's reported latency.
 - Background loading threads may emit engine `AudioCommand`s (e.g., for transport sync); keep cross-thread communication through provided channels only.
 
 ## Audio + IPC Flow
 
-- Audio thread interaction:
-  - Read `PluginLoad::shared_memory()`. While loading or failed it is None: copy inputs to outputs and exit early.
-  - Once ready, write interleaved buffers via non-blocking ring-buffer APIs.
-  - Always check write/read counts; drop extra input frames and zero-fill outputs when the peer under-produces.
-  - MIDI arrives via `AudioDevice::send_midi_event(note, velocity, is_on, frame_offset)`; the adapter forwards it as CLAP `note_on/off` with `sample_offset = frame_offset` so plugins stay sample-accurate.
-- The control channel is a Unix socketpair created at spawn; the host gets its end as descriptor 3. Messages are length-prefixed bincode frames; the memfd travels with the `Initialize` frame as `SCM_RIGHTS`.
+- Processing is **synchronous per block** (Phase 3). The engine does not run ahead of the plugin.
+- Audio thread interaction, once `PluginLoad` is ready:
+  1. `SubprocessClapAdapter::process_block` finishes any request a previous block left outstanding (its output is discarded), writes the planewise input and the staged input events into the instance's shared block, stores `request_seq` and rings the host's doorbell (`futex_wake`).
+  2. The host's audio thread wakes on the doorbell, builds CLAP events from the input event array (sorted by `sample_offset`) and calls `process()` for exactly that block.
+  3. The host writes the output planes and its own output parameter events, stores `done_seq`, and rings the doorbell back.
+  4. The engine spins briefly, then `futex_wait`s until `done_seq` reaches its `request_seq` or the callback deadline passes.
+- A missed deadline passes dry input through, increments `deadline_misses` / `PLUGIN_UNDERRUNS`, and the late result is discarded by sequence number on the next block. Eight consecutive misses log a WARN.
+- The deadline is **one absolute time per callback**, published by the engine callback in `audio/block_clock.rs` (70% of the block, `SONARA_PLUGIN_DEADLINE_FRACTION` overrides it).
+- Notes and automation are staged in an adapter-local list and copied into the shared event array inside `process_block`, so the shared block is never written while the host may be reading it. `set_parameter_at`/`send_midi_event` therefore carry the engine's frame offset and reach the plugin sample-accurately.
+- When the plugin is loading, failed or disabled the adapter passes audio through without touching the block.
+- The control channel is a Unix socketpair created at spawn; the host gets its end as descriptor 3 and the host doorbell as descriptor 4. Messages are length-prefixed bincode frames; the instance's shared block travels with the `Initialize` frame as `SCM_RIGHTS`.
 - Engine side, a request registers a reply slot under a fresh `request_id`, writes its frame (holding the writer mutex only for the write) and waits with a timeout. The host's reader thread completes the slot when the matching `HostMessage::Response` arrives; a reply after the timeout is dropped. `request_id` 0 (`NO_REPLY`) is fire-and-forget; errors the host returns for such commands are logged as WARN. No lock is held while waiting, so a slow request (GUI open) never blocks other senders.
 - Unsolicited `HostMessage::Event`s (`ParameterValueChanged`, `GuiResizeRequest`) go to a per-instance channel. The command thread drains it every 20 ms (`CommandWorker::poll_devices`) and turns events into `EngineStatus`es.
-- Subprocess polls the shared-memory buffers inside its event loop; the engine can add signaling (eventfd) later without changing the adapter contract.
+- Parameter changes the plugin makes while **processing** don't use the socket: the host writes them into the block's output event array with the engine's parameter index, and the adapter hands them to the command thread from `process_block`.
 
 ## Audio Thread Contract
 
 - Never block, allocate, or take contended locks on the audio thread; prefer `try_lock()` and skip work if unavailable.
 - Treat IPC data defensively: stale responses or partial buffer availability must not panic or block.
-- Ring buffers encode stereo frames; keep writes/reads aligned to `sample_count * channels`.
+- The shared block is planewise (stereo) and only written inside `process_block`, while the host cannot be reading it. Never touch it from `send_midi_event`, `set_parameter_at` or the command thread.
 
 ## IPC Commands
 
-- Engine issues Initialize, Activate, StartProcessing, Shutdown, Reset, OpenGui/CloseGui.
-- `SetParameter`, `StartProcessing` and `Reset` are fire-and-forget; the host denormalizes parameter values and calls `params.flush()` immediately so edits apply even while audio is stopped. `Shutdown` exits the whole host process.
+- Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui.
+- `Activate` carries the sample rate and re-activates (deactivate → activate) when the rate changes; the reply reports the plugin's latency. `GetParameterInfo` rebuilds and republishes the parameter map.
+- `SetParameter` is fire-and-forget: while the plugin is processing the main thread queues it to the audio thread, which applies it at offset 0 of the next block; while stopped it is applied with `params.flush()`.
+- `Reset` is handled on the audio thread (CLAP requires it there) and clears queued events. `Shutdown` exits the whole host process.
 - Set `SONARA_IPC_TRACE=1` to log every frame on both sides, decoded as `Debug`.
 - `GetParameterInfo` and `GetParameter` expect responses; only non-audio threads should call them.
 
@@ -79,4 +88,4 @@
 - When a host exits, its reader thread sees the socket close, fails every waiting request at once and marks the host disconnected. The next command-thread tick marks the plugin failed (pass-through audio) and sends `failed:subprocess crashed` to Godot.
 - Removing a device shuts its host down: `Shutdown`, then `SIGKILL` if it hasn't exited within 1 s.
 - Shared-memory handles stay owned by `ProcessManager`; dropping the last `Arc` cleans up OS resources automatically.
-- When debugging, confirm the subprocess binary is alive and still holds the shared-memory FD (e.g., `/proc/<pid>/fd/3`).
+- When debugging, confirm the subprocess binary is alive and still holds its descriptors (`/proc/<pid>/fd/3` is the control socket, `/proc/<pid>/fd/4` the doorbell). A plugin that misses deadlines logs a WARN after 8 consecutive misses and shows up in `EngineStats::plugin_underruns`.

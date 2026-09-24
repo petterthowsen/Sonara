@@ -10,6 +10,7 @@ use super::{
     AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, DrumMachineDevice,
     LayerDevice, PolySynthDevice, PortFlow, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
 };
+use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
 use crate::audio::ipc::ProcessManager;
 use crate::audio::types::ChannelId;
@@ -21,6 +22,7 @@ pub struct DeviceFactory {
     max_buffer_size: usize,
     status_tx: Sender<EngineStatus>,
     command_tx: Sender<AudioCommand>,
+    block_clock: Arc<BlockClock>,
 }
 
 impl DeviceFactory {
@@ -32,6 +34,7 @@ impl DeviceFactory {
         max_buffer_size: usize,
         status_tx: Sender<EngineStatus>,
         command_tx: Sender<AudioCommand>,
+        block_clock: Arc<BlockClock>,
     ) -> Self {
         Self {
             process_manager,
@@ -39,6 +42,7 @@ impl DeviceFactory {
             max_buffer_size,
             status_tx,
             command_tx,
+            block_clock,
         }
     }
 
@@ -128,6 +132,7 @@ impl DeviceFactory {
             self.max_buffer_size,
             Some(self.command_tx.clone()),
             Some(self.status_tx.clone()),
+            Arc::clone(&self.block_clock),
         ) {
             Ok(adapter) => {
                 info!(

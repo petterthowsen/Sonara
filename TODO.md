@@ -43,8 +43,10 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 - [ ] Add support for enum parameter type for builtins
 - [x] Verify drag-to-reorder devices with builtin, CLAP and SFZ devices (engine + UI implemented)
 - [ ] In Engine: Simplify device advertisement to avoid creating temporary instances
+- [x?] CLAP processing is synchronous per block (per-block handshake over shared memory, sample-accurate notes/automation, one callback deadline). Verified live with 5 instances, 60 s playback: 0 dropouts, 0 xruns. Missing: audible null test and an end-to-end MIDI-offset check. See `docs/engine-stability-plan.md` Phase 3
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
+  - [ ] Host process exit is detected and turned into a per-host crashed state with a Reload action (stability plan Phase 4)
 - [ ] Plugin GUI windows should be forced to stay above Godot App
 - [ ] Sforzando CLAP GUI embeds but renders black
 - [ ] Improve logging of plugins

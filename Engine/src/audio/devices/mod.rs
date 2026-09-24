@@ -322,6 +322,12 @@ pub trait AudioDevice: Send {
         "1.0"
     }
 
+    /// Latency this device adds, in frames at the device sample rate. Zero for everything that
+    /// processes in place; plugin adapters report what the plugin told them (Phase 3).
+    fn latency_frames(&self) -> u32 {
+        0
+    }
+
     // === Lifecycle Management ===
 
     /// Check if device is active (buffers allocated, ready for processing)

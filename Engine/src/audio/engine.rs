@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+use super::block_clock::BlockClock;
 use super::command_worker::CommandWorker;
 pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::PLUGIN_UNDERRUNS;
@@ -177,6 +178,7 @@ impl AudioEngine {
 
         // Create shared state
         let state = Arc::new(Mutex::new(EngineState::default()));
+        let block_clock = state.lock().expect("fresh state lock").block_clock.clone();
 
         // Store the actual device sample rate and output devices
         {
@@ -193,6 +195,7 @@ impl AudioEngine {
             command_tx.clone(),
             sample_rate as f32,
             max_buffer_size,
+            block_clock.clone(),
         );
         let command_thread = thread::Builder::new()
             .name("engine-commands".to_string())
@@ -209,6 +212,7 @@ impl AudioEngine {
             state: state.clone(),
             counters,
             running: running.clone(),
+            block_clock,
         })?;
 
         Ok(Self {
@@ -311,6 +315,7 @@ struct StreamThread {
     state: Arc<Mutex<EngineState>>,
     counters: Arc<CallbackCounters>,
     running: Arc<AtomicBool>,
+    block_clock: Arc<BlockClock>,
 }
 
 /// Open a CPAL output stream, falling back from a fixed buffer to the device default.
@@ -320,6 +325,7 @@ fn open_output_stream(
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
     counters: Arc<CallbackCounters>,
+    block_clock: Arc<BlockClock>,
 ) -> Result<Stream> {
     match build_stream(
         device,
@@ -327,6 +333,7 @@ fn open_output_stream(
         status_tx.clone(),
         state.clone(),
         counters.clone(),
+        block_clock.clone(),
     ) {
         Ok(stream) => Ok(stream),
         Err(e) if matches!(config.buffer_size, BufferSize::Fixed(_)) => {
@@ -336,7 +343,7 @@ fn open_output_stream(
             );
             let mut fallback = config.clone();
             fallback.buffer_size = BufferSize::Default;
-            build_stream(device, &fallback, status_tx, state, counters)
+            build_stream(device, &fallback, status_tx, state, counters, block_clock)
         }
         Err(e) => Err(e),
     }
@@ -357,6 +364,7 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
                 ctx.status_tx.clone(),
                 ctx.state.clone(),
                 ctx.counters.clone(),
+                ctx.block_clock.clone(),
             ) {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -402,6 +410,7 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
                     ctx.status_tx.clone(),
                     ctx.state.clone(),
                     ctx.counters.clone(),
+                    ctx.block_clock.clone(),
                 ) {
                     Ok(new_stream) => match new_stream.play() {
                         Ok(()) => {
@@ -436,6 +445,7 @@ fn build_stream(
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
     counters: Arc<CallbackCounters>,
+    block_clock: Arc<BlockClock>,
 ) -> Result<Stream> {
     let sample_rate = config.sample_rate.0;
     let channels = config.channels as usize;
@@ -465,6 +475,9 @@ fn build_stream(
                 }
             }
             previous_block = Some((processing_start, block_duration));
+
+            // One absolute deadline for every subprocess plugin in this callback.
+            block_clock.publish(processing_start, block_duration);
 
             rt_debug::check_callback(|| {
                 let Some(mut state) = lock_state_for_callback(&state, processing_start) else {

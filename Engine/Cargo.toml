@@ -47,7 +47,7 @@ dirs = "5"          # Cross-platform user directory paths
 
 # CLAP plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "note-ports", "gui", "log", "params", "state", "timer"] }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "note-ports", "gui", "latency", "log", "params", "state", "timer"] }
 libloading = "0.8"
 
 # Serialization for plugin state

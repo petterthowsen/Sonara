@@ -2,12 +2,14 @@ use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
 
 use super::automation::{
     AutomationLane, AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
+use super::block_clock::BlockClock;
 use super::devices::DevicePath;
 use super::render_scratch::RenderScratch;
 use super::types::*;
@@ -592,6 +594,8 @@ pub struct EngineState {
     pub fractional_tick_accumulator: AtomicI64,
     /// When true, the next playing callback dispatches MIDI at the playhead tick (play/seek).
     pub dispatch_playhead_tick: AtomicBool,
+    /// One absolute plugin deadline per callback, shared with subprocess plugin adapters.
+    pub block_clock: Arc<BlockClock>,
 }
 
 impl EngineState {
@@ -679,6 +683,7 @@ impl Default for EngineState {
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
             dispatch_playhead_tick: AtomicBool::new(false),
+            block_clock: Arc::new(BlockClock::new()),
         }
     }
 }

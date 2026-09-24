@@ -9,7 +9,7 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 0: Measurement (load peaks, xruns, lock misses, an allocation checker). Baseline numbers still to record
 - [x] Phase 1: Audio thread hygiene (RT priority and memlock moved to Phase 8). Needs an `rt-debug` live run
 - [x] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module). Needs a live knob-move check
-- [ ] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
+- [x?] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
 - [ ] Phase 4: Plugin crash detection and recovery
 - [ ] Phase 5: Plugin hosting modes (within engine, together, by vendor, by plug-in, individually)
 - [ ] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper)
@@ -306,7 +306,8 @@ Design (settle the open details while implementing and record them here):
 - **Handshake**:
   1. The engine writes the instance's block and events, stores the instance's
      `request_seq += 1`, and rings the host's doorbell with `futex_wake`. eventfd would also
-     work; pick one and note it here.
+     work; **futex is used** (`audio/ipc/futex.rs`), because it needs no extra descriptor and
+     the host already maps the doorbell region.
   2. The host's audio thread wakes and processes every instance whose `request_seq` is ahead of
      its `done_seq`.
   3. The engine spins briefly, then `futex_wait`s until `done_seq == request_seq` or the
@@ -347,6 +348,77 @@ Verify:
 - Live: the benchmark project plays without crackles, overruns stay 0, and a clip playing through
   a plugin null-tests against the same audio with the plugin bypassed.
 - A MIDI note at a known offset shows up at the same sample in the output.
+
+As built (2026-09-25):
+- **Doors, not eventfd.** The engine rings a host with `futex_wake` on one `u32` in a per-host
+  `HostSharedMemory` region; eventfd would need another descriptor and an extra `read`. The
+  region is the host's descriptor 4 (`HOST_SHARED_MEMORY_FD`), passed at spawn next to the
+  control socket (3), so Phase 5's shared hosts already have their one doorbell.
+- **Shared block replaced the three ring buffers.** `SharedMemoryLayout` is now
+  `max_frames × max_channels` planar input, the same for output, an input and an output event
+  array (`MAX_BLOCK_EVENTS` = 256 `BlockEvent`s each, 16 bytes: `sample_offset`, `kind`, `note`,
+  `value`, `id`) and a `BlockControl`. `BlockControl` carries
+  `request_seq`/`done_seq`/`input_frames`/`output_frames`/event counts/`status`; the two sequence
+  numbers are the only `Release`/`Acquire` pair that orders everything else. `AudioRingBuffer`,
+  `MidiEventQueue`, `ControlData`, `RingBufferStats` and `MidiEvent` are gone.
+- **Handshake.** Engine: finish any outstanding request (discard its output), write input planes
+  and events, `request_seq += 1` (Release), ring. Host: wake, process exactly that block, write
+  output planes and output events, `done_seq = request_seq` (Release), ring back. Engine: spin
+  `HANDSHAKE_SPIN_ITERATIONS` = 400 times, then `futex_wait` with the doorbell word read before
+  the last `done_seq` check (no lost wakeup).
+- **Deadline.** `audio/block_clock.rs` publishes one absolute deadline per callback (the engine
+  callback calls `publish(processing_start, block_duration)`; default fraction 0.7, overridable
+  with `SONARA_PLUGIN_DEADLINE_FRACTION`, clamped to 0.1–0.95). All adapters read it, so a slow
+  plugin cannot borrow time from the next one.
+- **Late results.** On a deadline miss, audio passes through and `deadline_misses` /
+  `PLUGIN_UNDERRUNS` increase. The next block first waits for the outstanding request and
+  discards its output, then publishes its own; buffers are never reused while the host reads
+  them. Eight consecutive misses log a WARN (Phase 6 turns this into UI state).
+- **Events are staged, then published.** Deviation from the design above: `send_midi_event` and
+  `set_parameter_at` **do not** write the shared array directly. They append to an adapter-local
+  preallocated list, and `process_block` copies it into the shared array just before publishing.
+  Writing from the setters would race with the host reading the previous block's array, and would
+  replay stale events after a miss. Offsets are unchanged, so automation is still sample-accurate.
+- **Host threads.** `plugin_host/audio_thread.rs` runs the doorbell loop and owns the
+  `PluginAudioProcessor` and the block; `event_loop.rs` keeps the main thread for commands, GUI,
+  timers and `params.flush`. The processor moves between them over a command channel
+  (`SetProcessor`/`TakeProcessor`); `PluginInstance` stays on the main thread (it is `!Send`).
+  Activate builds the processor, hands it over and releases the main thread; Deactivate takes it
+  back and calls `instance.deactivate`.
+- **Parameter changes while processing** are queued to the audio thread (applied at offset 0 of
+  the next block) instead of `params.flush()` on the main thread; while stopped they still use
+  `flush` so edits apply immediately. The plugin's own output parameter changes come back in the
+  block's output event array (engine parameter index, normalized) and the command thread reports
+  them — no socket round trip.
+- **Latency**: `PluginLatency` is queried after activation and returned in
+  `PluginResponse::ActivateResult { latency_frames }`; `PluginLoad` caches it and
+  `AudioDevice::latency_frames()` (default 0) exposes it for Phase 8. `HostLatency` is registered
+  so plugins can report changes.
+- **Sample-rate change**: `PluginCommand::Activate { sample_rate }` deactivates first when the
+  rate differs, so Phase 7's `prepare` can reuse it. A block-size change still needs a new
+  `Initialize` because the shared block is sized there; Phase 7 step 2 owns that.
+- **`StartProcessing`/`StopProcessing`** remain as commands but no longer gate processing: the
+  audio thread processes exactly the blocks the engine publishes while the plugin is activated.
+  `Reset` moved to the audio thread (CLAP calls it there) and only clears state and queued events.
+- **Found beyond the plan:** the host main loop busy-spun at 100% CPU because servicing the
+  plugin side always marked the iteration busy; it now always blocks on the request channel for
+  1 ms. `StartProcessing` after `Activate` was already the case, so lifecycle's extra
+  `StartProcessing` is now redundant (kept for compatibility).
+- Tests: `subprocess_adapter` has three tests against an in-process fake host — block round trip
+  is sample-exact, a late host costs exactly one block and its result is discarded, and
+  notes/automation reach the host with their `sample_offset`. `shared_memory`, `futex` and
+  `block_clock` have their own unit tests.
+- Live check (2026-09-25, 1024-frame setting → 1488-frame graph quantum): 5 CLAP instances
+  (2 Dragonfly reverbs, LSP compressor, LSP limiter, LibreStrings) loaded into 5 hosts, 60 s of
+  playback: `load avg 4.0%, peak 17.4%, xruns 0, lock misses 0, plugin dropouts 0`, no WARN
+  lines. Each host logs `Using doorbell FD 4` and maps the instance block at fd 6; a parameter
+  change during playback was queued to the audio thread and echoed back.
+- **Not verified live:** the audible null test (no capture path on the dev machine), MIDI
+  sample-accuracy end to end (unit-tested at the block level only), sample-rate change (needs
+  Phase 7's UI), and the Phase 2 GUI knob → Godot check.
+- `./test_osc.sh` and `./test_plugin_osc.sh` still exit 0 without loading a plugin (stale
+  addresses and an `add_device` call without the `clap` type and file), so they prove only that
+  the engine survives them. The live checks above sent the current messages by hand.
 
 ## Phase 4: Crash detection and recovery
 
@@ -546,5 +618,6 @@ Fill in with the Phase 0 benchmark project. Buffer = frames, load in % of block 
 | Phase | Buffer / rate | Load avg | Load peak | Xruns / min | Lock misses / min | Plugin overruns / min |
 |---|---|---|---|---|---|---|
 | Baseline (not the benchmark project; one Dragonfly Hall, read from the panel) | 1024 / 48k | 19% | 29% | 0 | – | n/a |
+| Phase 3 (5 CLAP instances: 2 Dragonfly, LSP compressor, LSP limiter, LibreStrings; 60 s playback) | 1024 / 48k (1488-frame graph quantum) | 4.0% | 17.4% | 0 | 0 | 0 |
 
 Add a row per phase, and for Phase 5 one row per hosting mode.

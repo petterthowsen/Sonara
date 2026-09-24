@@ -3,6 +3,7 @@
 //! This module contains all the components for the plugin host subprocess,
 //! organized into logical units for better maintainability.
 
+pub mod audio_thread;
 pub mod commands;
 pub mod event_loop;
 pub mod host;
@@ -11,6 +12,7 @@ pub mod state;
 pub mod x11_error;
 
 // Re-export commonly used types
+pub use audio_thread::{AudioThreadHandle, HostAudioCommand};
 pub use commands::process_command;
 pub use event_loop::run_plugin_host;
 pub use host::{SubprocessHost, SubprocessHostMainThread, SubprocessHostShared};

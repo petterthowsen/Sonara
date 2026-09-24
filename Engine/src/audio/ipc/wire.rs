@@ -188,7 +188,17 @@ mod tests {
     #[test]
     fn frames_round_trip_in_order() {
         let (a, b) = UnixStream::pair().unwrap();
-        send_frame(&a, &request(1, PluginCommand::Activate), &[]).unwrap();
+        send_frame(
+            &a,
+            &request(
+                1,
+                PluginCommand::Activate {
+                    sample_rate: 48000.0,
+                },
+            ),
+            &[],
+        )
+        .unwrap();
         send_frame(
             &a,
             &request(
@@ -205,7 +215,10 @@ mod tests {
         let (first, fds) = recv_frame::<HostRequest>(&b).unwrap().unwrap();
         assert!(fds.is_empty());
         assert_eq!((first.instance_id, first.request_id), (7, 1));
-        assert!(matches!(first.command, PluginCommand::Activate));
+        assert!(matches!(
+            first.command,
+            PluginCommand::Activate { sample_rate } if sample_rate == 48000.0
+        ));
 
         let (second, _) = recv_frame::<HostRequest>(&b).unwrap().unwrap();
         assert!(matches!(
@@ -246,7 +259,17 @@ mod tests {
             max_buffer_size: 1024,
         };
         send_frame(&a, &request(1, init), &[file.as_raw_fd()]).unwrap();
-        send_frame(&a, &request(2, PluginCommand::Activate), &[]).unwrap();
+        send_frame(
+            &a,
+            &request(
+                2,
+                PluginCommand::Activate {
+                    sample_rate: 48000.0,
+                },
+            ),
+            &[],
+        )
+        .unwrap();
 
         let (_, mut fds) = recv_frame::<HostRequest>(&b).unwrap().unwrap();
         assert_eq!(fds.len(), 1);

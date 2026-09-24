@@ -10,7 +10,7 @@
 
 use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -24,7 +24,7 @@ use super::protocol::{
     HostMessage, HostRequest, InstanceId, PluginCommand, PluginEvent, PluginResponse, RequestId,
     SharedMemoryLayout, NO_REPLY,
 };
-use super::shared_memory::SharedMemory;
+use super::shared_memory::{HostSharedMemory, SharedMemory};
 use super::wire;
 
 /// Default wait for a blocking request's reply.
@@ -39,11 +39,30 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 /// The control socket's descriptor number in the host process.
 const HOST_SOCKET_FD: i32 = 3;
 
+/// The host doorbell region's descriptor number in the host process.
+const HOST_SHARED_MEMORY_FD: i32 = 4;
+
 /// Lock a mutex, recovering it if a panicking thread held it.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// `dup2` `fd` onto `target` in a freshly forked child, clearing close-on-exec so the descriptor
+/// survives `exec`. A no-op when the numbers already match.
+fn move_fd_to(fd: RawFd, target: RawFd) -> std::io::Result<()> {
+    if fd != target {
+        if unsafe { libc::dup2(fd, target) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        unsafe { libc::close(fd) };
+    }
+    let flags = unsafe { libc::fcntl(target, libc::F_GETFD) };
+    if flags >= 0 {
+        unsafe { libc::fcntl(target, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+    }
+    Ok(())
 }
 
 /// State shared between a host's `PluginProcess` and its reader thread.
@@ -134,6 +153,9 @@ pub struct PluginProcess {
     writer: Mutex<UnixStream>,
     routing: Arc<Routing>,
     next_request_id: AtomicU32,
+    /// One doorbell word shared with this host, used by the per-block audio handshake and by
+    /// every instance that will share this host in later phases.
+    host_shared: Arc<HostSharedMemory>,
 }
 
 impl PluginProcess {
@@ -145,6 +167,12 @@ impl PluginProcess {
             .map_err(|e| format!("Failed to create control socketpair: {}", e))?;
         let host_socket_fd = host_socket.as_raw_fd();
 
+        let host_shared = Arc::new(HostSharedMemory::new(&format!(
+            "sonara_host_{}",
+            host_key.replace(['/', '-'], "_")
+        ))?);
+        let host_shared_fd = host_shared.as_raw_fd();
+
         use std::os::unix::process::CommandExt;
         let child = unsafe {
             Command::new(&plugin_host_path)
@@ -152,18 +180,10 @@ impl PluginProcess {
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
                 .pre_exec(move || {
-                    // Move the host's end of the socketpair to the well-known descriptor. dup2
-                    // clears close-on-exec on the new descriptor, except when both are equal.
-                    if host_socket_fd != HOST_SOCKET_FD {
-                        if libc::dup2(host_socket_fd, HOST_SOCKET_FD) < 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                        libc::close(host_socket_fd);
-                    }
-                    let flags = libc::fcntl(HOST_SOCKET_FD, libc::F_GETFD);
-                    if flags >= 0 {
-                        libc::fcntl(HOST_SOCKET_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-                    }
+                    // Move both descriptors to their well-known numbers. dup2 clears
+                    // close-on-exec on the new descriptor, except when both are equal.
+                    move_fd_to(host_socket_fd, HOST_SOCKET_FD)?;
+                    move_fd_to(host_shared_fd, HOST_SHARED_MEMORY_FD)?;
                     Ok(())
                 })
                 .spawn()
@@ -179,7 +199,7 @@ impl PluginProcess {
 
         let pid = child.id();
         info!("Plugin host {} spawned: PID={}", host_key, pid);
-        Self::connect(host_key, pid, Some(child), engine_socket)
+        Self::connect(host_key, pid, Some(child), engine_socket, host_shared)
     }
 
     /// Start the reader thread for a host connected through `engine_socket`.
@@ -188,6 +208,7 @@ impl PluginProcess {
         pid: u32,
         child: Option<Child>,
         engine_socket: UnixStream,
+        host_shared: Arc<HostSharedMemory>,
     ) -> Result<Self, String> {
         let routing = Arc::new(Routing {
             pending: Mutex::new(HashMap::new()),
@@ -211,6 +232,7 @@ impl PluginProcess {
             writer: Mutex::new(engine_socket),
             routing,
             next_request_id: AtomicU32::new(1),
+            host_shared,
         })
     }
 
@@ -282,6 +304,11 @@ impl PluginProcess {
             },
             &[],
         )
+    }
+
+    /// This host's doorbell word, shared with every instance that runs in it.
+    pub fn host_shared(&self) -> &Arc<HostSharedMemory> {
+        &self.host_shared
     }
 
     /// False once the control socket has closed or the process has exited.
@@ -356,6 +383,7 @@ pub struct InstanceConnection {
     host: Arc<PluginProcess>,
     events: Receiver<PluginEvent>,
     shared_memory: Arc<SharedMemory>,
+    host_shared: Arc<HostSharedMemory>,
 }
 
 impl InstanceConnection {
@@ -385,6 +413,11 @@ impl InstanceConnection {
 
     pub fn shared_memory(&self) -> &Arc<SharedMemory> {
         &self.shared_memory
+    }
+
+    /// The host process's doorbell word, shared by every instance in that host.
+    pub fn host_shared(&self) -> &Arc<HostSharedMemory> {
+        &self.host_shared
     }
 
     pub fn host_pid(&self) -> u32 {
@@ -474,6 +507,7 @@ impl ProcessManager {
             plugin_id, instance_id, host_key
         );
         let host = self.host_for(host_key)?;
+        let connection_host_shared = Arc::clone(host.host_shared());
 
         let layout = SharedMemoryLayout::new(max_buffer_size);
         let shm_name = format!("sonara_plugin_{}_{}", host.pid, instance_id);
@@ -519,6 +553,7 @@ impl ProcessManager {
             host,
             events: events_rx,
             shared_memory,
+            host_shared: Arc::clone(&connection_host_shared),
         };
         lock(&self.instances).insert(instance_id, connection.clone());
         Ok(connection)
@@ -579,7 +614,11 @@ mod tests {
     /// A host process stood in for by the test: returns the engine side and the host's socket.
     fn fake_host() -> (PluginProcess, UnixStream) {
         let (engine_socket, host_socket) = UnixStream::pair().unwrap();
-        let process = PluginProcess::connect("test".to_string(), 0, None, engine_socket).unwrap();
+        let host_shared =
+            Arc::new(HostSharedMemory::new("sonara_test_fake_host").expect("doorbell"));
+        let process =
+            PluginProcess::connect("test".to_string(), 0, None, engine_socket, host_shared)
+                .unwrap();
         (process, host_socket)
     }
 
