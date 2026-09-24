@@ -6,8 +6,8 @@ plugins". It also sets up "Plugin latency compensation".
 
 ## Checklist
 
-- [x?] Phase 0: Measurement (load peaks, xruns, lock misses, an allocation checker). Baseline numbers still to record
-- [x?] Phase 1: Audio thread hygiene (RT priority and memlock moved to Phase 8). Needs an `rt-debug` live run
+- [x] Phase 0: Measurement (load peaks, xruns, lock misses, an allocation checker). Baseline numbers still to record
+- [x] Phase 1: Audio thread hygiene (RT priority and memlock moved to Phase 8). Needs an `rt-debug` live run
 - [ ] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module)
 - [ ] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
 - [ ] Phase 4: Plugin crash detection and recovery
