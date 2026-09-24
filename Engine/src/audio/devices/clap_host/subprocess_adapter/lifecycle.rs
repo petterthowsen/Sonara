@@ -11,7 +11,8 @@ use crate::audio::ipc::{
 };
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{error, info, warn};
 
 /// Maps a plugin's reported parameter metadata to the engine's `ParamInfo`.
@@ -52,6 +53,25 @@ pub fn plugin_param_to_info(p: &PluginParameterInfo) -> ParamInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::ipc::SharedMemoryLayout;
+
+    #[test]
+    fn plugin_load_exposes_shared_memory_only_when_ready() {
+        let load = PluginLoad::new();
+        assert!(load.shared_memory().is_none());
+        assert!(!load.is_ready());
+
+        let shm = SharedMemory::new("sonara_test_plugin_load", SharedMemoryLayout::new(64))
+            .expect("shared memory");
+        load.set_ready(Arc::new(shm));
+        assert!(load.is_ready());
+        assert!(load.shared_memory().is_some());
+
+        load.set_failed("crashed".to_string());
+        assert!(load.is_failed());
+        assert!(load.shared_memory().is_none());
+        assert_eq!(load.error().as_deref(), Some("crashed"));
+    }
 
     fn base_info() -> PluginParameterInfo {
         PluginParameterInfo {
@@ -134,15 +154,68 @@ mod tests {
     }
 }
 
-/// Loading state for async plugin initialization
-#[derive(Clone)]
-pub enum LoadingState {
-    /// Plugin is being loaded in background thread
-    Loading,
-    /// Plugin loaded and ready
-    Ready(Arc<SharedMemory>),
-    /// Plugin failed to load
-    Failed(String),
+const LOADING: u8 = 0;
+const READY: u8 = 1;
+const FAILED: u8 = 2;
+
+/// Load state of a subprocess plugin, shared by the loading thread, the command thread and the
+/// audio thread.
+///
+/// The audio thread only reads an atomic and a set-once pointer, so it never waits on the loading
+/// thread. The failure message sits behind a mutex that only non-audio threads touch.
+pub struct PluginLoad {
+    state: AtomicU8,
+    shared_memory: OnceLock<Arc<SharedMemory>>,
+    error: Mutex<Option<String>>,
+}
+
+impl PluginLoad {
+    pub fn new() -> Self {
+        Self {
+            state: AtomicU8::new(LOADING),
+            shared_memory: OnceLock::new(),
+            error: Mutex::new(None),
+        }
+    }
+
+    /// The plugin's shared memory once it is ready, else None. Lock-free.
+    pub fn shared_memory(&self) -> Option<&SharedMemory> {
+        if self.state.load(Ordering::Acquire) == READY {
+            self.shared_memory.get().map(|shm| shm.as_ref())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state.load(Ordering::Acquire) == READY
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == FAILED
+    }
+
+    /// The failure message, if loading failed or the subprocess died.
+    pub fn error(&self) -> Option<String> {
+        self.error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_ready(&self, shared_memory: Arc<SharedMemory>) {
+        let _ = self.shared_memory.set(shared_memory);
+        self.state.store(READY, Ordering::Release);
+    }
+
+    /// Mark the plugin failed. The audio thread passes audio through from its next block.
+    pub fn set_failed(&self, error: String) {
+        *self
+            .error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+        self.state.store(FAILED, Ordering::Release);
+    }
 }
 
 /// Spawn background thread to load plugin subprocess
@@ -153,7 +226,7 @@ pub fn spawn_loading_thread(
     plugin_id: String,
     sample_rate: f32,
     max_buffer_size: usize,
-    loading_state: Arc<Mutex<LoadingState>>,
+    load: Arc<PluginLoad>,
     param_cache: Arc<Mutex<Vec<ParamInfo>>>,
     channel_id: usize,
     device_path: DevicePath,
@@ -208,11 +281,9 @@ pub fn spawn_loading_thread(
                         } else {
                             info!("📥 Waiting for Activate response (with timeout)...");
 
-                            // Set a timeout on the socket to avoid blocking forever
-                            let _ = process_guard
-                                .set_read_timeout(Some(std::time::Duration::from_secs(5)));
-
-                            match process_guard.recv_response() {
+                            match process_guard
+                                .recv_response_timeout(std::time::Duration::from_secs(5))
+                            {
                                 Ok(PluginResponse::ActivateResult { success, error }) => {
                                     if success {
                                         info!("✅ Plugin activated successfully");
@@ -280,11 +351,7 @@ pub fn spawn_loading_thread(
                         *cache = param_info_cache.clone();
                     }
 
-                    // Update state to Ready
-                    {
-                        let mut state = loading_state.lock().unwrap();
-                        *state = LoadingState::Ready(shared_memory);
-                    }
+                    load.set_ready(shared_memory);
 
                     info!(
                         "✅ Plugin subprocess fully loaded and activated: {} ({} params)",
@@ -314,8 +381,7 @@ pub fn spawn_loading_thread(
                     }
                 } else {
                     let error_msg = "Failed to get process handle".to_string();
-                    let mut state = loading_state.lock().unwrap();
-                    *state = LoadingState::Failed(error_msg.clone());
+                    load.set_failed(error_msg.clone());
                     error!("❌ Failed to get process handle for {}", plugin_id);
 
                     // Send failed state
@@ -329,8 +395,7 @@ pub fn spawn_loading_thread(
                 }
             }
             Err(e) => {
-                let mut state = loading_state.lock().unwrap();
-                *state = LoadingState::Failed(e.clone());
+                load.set_failed(e.clone());
                 error!("❌ Failed to spawn plugin subprocess: {}", e);
 
                 // Send failed state

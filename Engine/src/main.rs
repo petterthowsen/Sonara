@@ -16,6 +16,11 @@ use log_forwarder::LogForwarder;
 use osc::OscServer;
 use window_manager::WindowManager;
 
+// Counts audio-thread (de)allocations; see `audio/rt_debug.rs`.
+#[cfg(feature = "rt-debug")]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 // Wrapper to make Arc<Mutex<File>> implement MakeWriter for tracing_subscriber
 struct RotatableWriter {
     file: Arc<Mutex<File>>,
@@ -80,7 +85,8 @@ fn main() -> Result<()> {
     };
 
     // Create status channel FIRST so we can pass it to both the log forwarder and the engine
-    let (status_tx, status_rx) = crossbeam::channel::unbounded();
+    let (status_tx, status_rx) =
+        crossbeam::channel::bounded(audio::engine::STATUS_CHANNEL_CAPACITY);
 
     // Set up logging with both file writer AND log forwarder to Godot
     use tracing::Level;

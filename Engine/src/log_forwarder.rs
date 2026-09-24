@@ -41,7 +41,9 @@ impl<S: Subscriber> Layer<S> for LogForwarder {
             };
 
             // Send to Godot via status channel
-            let _ = self.status_tx.send(EngineStatus::LogMessage {
+            // try_send: the status thread drains this channel and also logs, so a blocking send
+            // on a full channel could deadlock it. The line is still in the log files.
+            let _ = self.status_tx.try_send(EngineStatus::LogMessage {
                 level: level_str.to_string(),
                 message,
             });

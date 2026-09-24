@@ -63,6 +63,14 @@ libc = "0.2"
 winit = "0.30"
 raw-window-handle = "0.6"
 
+# Audio-thread allocation checker, only with `--features rt-debug`. Default features are off so it
+# counts violations in release builds too instead of aborting.
+assert_no_alloc = { version = "1.1.2", optional = true, default-features = false, features = ["warn_debug", "warn_release"] }
+
 # X11 bindings for error handling (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2.21", features = ["xlib"] }
+
+[features]
+# Log (de)allocations on the audio thread (`audio/rt_debug.rs`).
+rt-debug = ["dep:assert_no_alloc"]

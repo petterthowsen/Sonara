@@ -2,9 +2,10 @@ use crossbeam::channel::Sender;
 use std::collections::HashMap;
 
 use super::commands::{EngineState, EngineStatus};
-use super::devices::clap_host::{ClapDeviceAdapter, SubprocessClapAdapter};
-use super::devices::{container, AudioDevice, DevicePath, SfizzDevice};
+use super::devices::clap_host::ClapDeviceAdapter;
+use super::devices::{container, AudioDevice};
 use super::render_scratch::{RenderScratch, SoloRole};
+use super::rt_debug;
 use super::types::*;
 
 /// Master channel ID. Master never routes to another channel and is never silenced by solo.
@@ -331,12 +332,12 @@ fn finish_channel(
 
     if channel.mix.is_route_target {
         if !channel.mute {
-            let sleep_changes = if channel.mix.has_aux_source {
+            if channel.mix.has_aux_source {
                 channel.process_device_chain_from(1, frames)
             } else {
                 channel.process_device_chain(frames)
-            };
-            forward_device_events(channel, sleep_changes, status_tx);
+            }
+            forward_device_events(channel, status_tx);
             apply_pan(channel, frames);
         }
         if is_silenced(channel) {
@@ -372,8 +373,8 @@ fn process_aux_sources(
             if !channel.mix.has_aux_source {
                 continue;
             }
-            let sleep_changes = channel.process_aux_source(frames);
-            forward_device_events(channel, sleep_changes, status_tx);
+            channel.process_aux_source(frames);
+            forward_device_events(channel, status_tx);
             did_process = true;
         }
         if did_process {
@@ -430,81 +431,41 @@ fn deinterleave_extra(extra: &[f32], target: &mut Channel, frames: usize) {
     }
 }
 
-/// Send a channel's device events to Godot: sleep changes, plugin parameter changes, new SFZ
-/// parameter lists and device data streams.
-fn forward_device_events(
-    channel: &mut Channel,
-    sleep_changes: Vec<(DevicePath, bool)>,
-    status_tx: &Sender<EngineStatus>,
-) {
+/// Send a channel's device events to Godot: sleep changes and device data streams.
+///
+/// Uses `try_send` on the bounded status channel: when it's full the event is dropped rather
+/// than blocking the callback. Plugin parameter changes and SFZ parameter lists are forwarded by
+/// the command thread (`CommandWorker::poll_devices`), not here.
+fn forward_device_events(channel: &mut Channel, status_tx: &Sender<EngineStatus>) {
     let channel_id = channel.id;
 
-    for (device_path, is_sleeping) in sleep_changes {
-        let _ = status_tx.send(EngineStatus::DeviceSleepStatus {
-            channel_id,
-            device_path,
-            is_sleeping,
-        });
-    }
+    rt_debug::section("sleep status sends", || {
+        for (device_path, is_sleeping) in channel.sleep_changes.drain(..) {
+            let _ = status_tx.try_send(EngineStatus::DeviceSleepStatus {
+                channel_id,
+                device_path,
+                is_sleeping,
+            });
+        }
+    });
 
     container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
         if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<ClapDeviceAdapter>() {
             for (param_id, value) in clap_adapter.take_pending_param_changes() {
-                let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                let _ = status_tx.try_send(EngineStatus::PluginParameterValueChanged {
                     channel_id,
-                    device_path: device_path.clone(),
+                    device_path: *device_path,
                     param_id,
                     value,
                 });
             }
-        } else if let Some(subprocess_adapter) =
-            device.as_any_mut().downcast_mut::<SubprocessClapAdapter>()
-        {
-            if let Some(changes) = subprocess_adapter.poll_parameter_changes() {
-                for (param_id, value) in changes {
-                    let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
-                        channel_id,
-                        device_path: device_path.clone(),
-                        param_id,
-                        value,
-                    });
-                }
-            }
-        } else if let Some(sfizz_device) = device.as_any_mut().downcast_mut::<SfizzDevice>() {
-            if sfizz_device.take_parameters_changed() {
-                let params = sfizz_device.parameters();
-                if !params.is_empty() {
-                    let _ = status_tx.send(EngineStatus::PluginParameterCount {
-                        channel_id,
-                        device_path: device_path.clone(),
-                        count: params.len(),
-                    });
-                    for param in params.iter() {
-                        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
-                            channel_id,
-                            device_path: device_path.clone(),
-                            param_id: param.id,
-                            name: param.name.clone(),
-                            min: param.min,
-                            max: param.max,
-                            default: param.default,
-                            group: sfizz_device.parameter_group(param.id).to_string(),
-                            param_type: param.param_type,
-                            is_hidden: false,
-                            is_read_only: false,
-                            is_bypass: false,
-                            module: String::new(),
-                            enum_values: param.enum_values.clone(),
-                        });
-                    }
-                }
-            }
         }
 
-        if let Some((data_type, data)) = device.poll_device_data() {
+        let data = rt_debug::section("poll_device_data", || device.poll_device_data());
+        if let Some((data_type, data)) = data {
             let _ = status_tx.try_send(EngineStatus::DeviceData {
                 channel_id,
-                device_path: device_path.clone(),
+                device_path: *device_path,
                 data_type,
                 data,
             });
@@ -565,8 +526,8 @@ pub fn mix_and_output(
         if channel.mix.is_route_target {
             continue;
         }
-        let sleep_changes = channel.process_device_chain(frames);
-        forward_device_events(channel, sleep_changes, status_tx);
+        channel.process_device_chain(frames);
+        forward_device_events(channel, status_tx);
     }
 
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it

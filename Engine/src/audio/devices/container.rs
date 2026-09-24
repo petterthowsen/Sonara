@@ -3,68 +3,112 @@
 use super::{has_audio_signal, AudioDevice};
 use std::fmt;
 
+/// Deepest device nesting a `DevicePath` can address. Paths deeper than this are rejected when
+/// parsed and devices can't be inserted below it.
+pub const MAX_DEVICE_DEPTH: usize = 8;
+
 /// Ordered indices from a channel's top-level device list down to a nested child.
 ///
 /// `[0]` is the first device on the channel. `[0, 2]` is child 2 of that device.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct DevicePath(pub Vec<usize>);
+///
+/// Stored inline (no heap) so the audio thread can build and copy paths without allocating.
+/// Slots past `len` are always zero, so the derived `Eq` and `Hash` compare only the used part.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct DevicePath {
+    len: u8,
+    indices: [usize; MAX_DEVICE_DEPTH],
+}
 
 impl DevicePath {
     /// A path containing a single top-level index.
     pub fn root(index: usize) -> Self {
-        Self(vec![index])
+        Self::default().join(index)
     }
 
-    /// Build a path from an index list.
-    pub fn from_indices(indices: Vec<usize>) -> Self {
-        Self(indices)
+    /// Build a path from an index list, or None when it is deeper than `MAX_DEVICE_DEPTH`.
+    pub fn try_from_indices(indices: &[usize]) -> Option<Self> {
+        if indices.len() > MAX_DEVICE_DEPTH {
+            return None;
+        }
+        let mut path = Self::default();
+        path.indices[..indices.len()].copy_from_slice(indices);
+        path.len = indices.len() as u8;
+        Some(path)
+    }
+
+    /// Build a path from an index list. Panics when it is deeper than `MAX_DEVICE_DEPTH`; use
+    /// `try_from_indices` for untrusted input.
+    pub fn from_indices(indices: impl AsRef<[usize]>) -> Self {
+        let indices = indices.as_ref();
+        Self::try_from_indices(indices).unwrap_or_else(|| {
+            panic!(
+                "device path {:?} is deeper than {}",
+                indices, MAX_DEVICE_DEPTH
+            )
+        })
     }
 
     /// Indices from the channel root down to this device.
     pub fn indices(&self) -> &[usize] {
-        &self.0
+        &self.indices[..self.len as usize]
+    }
+
+    /// Number of indices (nesting depth).
+    pub fn depth(&self) -> usize {
+        self.len as usize
+    }
+
+    /// True when a child can still be joined below this path.
+    pub fn can_join(&self) -> bool {
+        self.depth() < MAX_DEVICE_DEPTH
     }
 
     /// True when this path addresses a top-level channel device (one index).
     pub fn is_root(&self) -> bool {
-        self.0.len() == 1
+        self.len == 1
     }
 
     /// True when this path is the channel itself (no device).
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.len == 0
     }
 
     /// Parent container path. Empty for a top-level device.
     pub fn parent(&self) -> DevicePath {
-        if self.0.is_empty() {
-            Self(Vec::new())
-        } else {
-            let mut parent = self.0.clone();
-            parent.pop();
-            Self(parent)
+        let mut parent = *self;
+        if parent.len > 0 {
+            parent.len -= 1;
+            parent.indices[parent.len as usize] = 0;
         }
+        parent
     }
 
     /// Last index in this path (position within the parent list).
     pub fn leaf_index(&self) -> Option<usize> {
-        self.0.last().copied()
+        self.indices().last().copied()
     }
 
-    /// Append `index` as a child of this path.
+    /// Append `index` as a child of this path. At `MAX_DEVICE_DEPTH` the path is returned
+    /// unchanged (debug builds panic); insertion checks `can_join` so this can't happen for
+    /// devices in a chain.
     pub fn join(&self, index: usize) -> DevicePath {
-        let mut next = self.0.clone();
-        next.push(index);
-        Self(next)
+        debug_assert!(self.can_join(), "device path {} is at max depth", self);
+        let mut next = *self;
+        if next.can_join() {
+            next.indices[next.len as usize] = index;
+            next.len += 1;
+        }
+        next
     }
 
     /// OSC address prefix `/channel/{id}/device/{i0}/child/{i1}` with no trailing action.
     pub fn to_osc_prefix(&self, channel_id: usize) -> String {
-        if self.0.is_empty() {
+        let indices = self.indices();
+        if indices.is_empty() {
             return format!("/channel/{}", channel_id);
         }
-        let mut addr = format!("/channel/{}/device/{}", channel_id, self.0[0]);
-        for index in self.0.iter().skip(1) {
+        let mut addr = format!("/channel/{}/device/{}", channel_id, indices[0]);
+        for index in indices.iter().skip(1) {
             addr.push_str(&format!("/child/{}", index));
         }
         addr
@@ -84,7 +128,7 @@ impl DevicePath {
         format!(
             "ch{}_dev{}",
             channel_id,
-            self.0
+            self.indices()
                 .iter()
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
@@ -97,7 +141,7 @@ impl DevicePath {
         format!(
             "plugin_{}_{}",
             channel_id,
-            self.0
+            self.indices()
                 .iter()
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
@@ -114,7 +158,7 @@ impl DevicePath {
         if indices.is_empty() {
             return None;
         }
-        Some((channel_id, Self(indices)))
+        Some((channel_id, Self::try_from_indices(&indices)?))
     }
 }
 
@@ -126,17 +170,22 @@ impl From<usize> for DevicePath {
 
 impl fmt::Display for DevicePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.is_empty() {
-            write!(f, "/")
-        } else {
-            let joined = self
-                .0
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join("/");
-            write!(f, "{}", joined)
+        if self.is_empty() {
+            return write!(f, "/");
         }
+        for (i, index) in self.indices().iter().enumerate() {
+            if i > 0 {
+                write!(f, "/")?;
+            }
+            write!(f, "{}", index)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for DevicePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DevicePath({:?})", self.indices())
     }
 }
 
@@ -155,7 +204,7 @@ pub fn parse_osc_device_addr(parts: &[&str]) -> Option<(usize, DevicePath, Vec<S
         i += 2;
     }
     let action = parts[i..].iter().map(|s| (*s).to_string()).collect();
-    Some((channel_id, DevicePath(indices), action))
+    Some((channel_id, DevicePath::try_from_indices(&indices)?, action))
 }
 
 /// Nested device list owned by a container (Chain, Layer, later Drum Machine).
@@ -230,6 +279,12 @@ pub fn insert_device(
     position: usize,
     device: Box<dyn AudioDevice>,
 ) -> Result<DevicePath, String> {
+    if !parent_path.can_join() {
+        return Err(format!(
+            "Cannot nest a device below {}: max depth is {}",
+            parent_path, MAX_DEVICE_DEPTH
+        ));
+    }
     if parent_path.is_empty() {
         let index = position.min(devices.len());
         devices.insert(index, device);
@@ -325,6 +380,10 @@ fn visit_children_of(
     let Some(container) = device.as_container_mut() else {
         return;
     };
+    // Built-in containers can come with children of their own; never address past the max.
+    if !path.can_join() {
+        return;
+    }
     let count = container.child_count();
     for i in 0..count {
         let child_path = path.join(i);
@@ -338,20 +397,21 @@ fn visit_children_of(
 /// Serial ping-pong processing of a device list on interleaved stereo buffers.
 ///
 /// `buf_a` must already hold the interleaved input. Returns `true` when the
-/// final output lives in `buf_b` (last processed index was even).
+/// final output lives in `buf_b` (last processed index was even). Calls
+/// `on_sleep_change(index, is_sleeping)` for each device whose sleep state changed.
 pub fn process_serial_chain(
     devices: &mut [Box<dyn AudioDevice>],
     buf_a: &mut [f32],
     buf_b: &mut [f32],
     sample_count: usize,
     has_input_activity: bool,
-) -> (bool, Vec<(usize, bool)>) {
+    mut on_sleep_change: impl FnMut(usize, bool),
+) -> bool {
     if devices.is_empty() {
-        return (false, Vec::new());
+        return false;
     }
 
     let interleaved_count = sample_count * 2;
-    let mut sleep_changes = Vec::new();
 
     for (idx, device) in devices.iter_mut().enumerate() {
         let (input, output) = if idx % 2 == 0 {
@@ -366,16 +426,17 @@ pub fn process_serial_chain(
             continue;
         }
 
-        device.process_block(input, output, sample_count);
+        crate::audio::rt_debug::section("device process_block", || {
+            device.process_block(input, output, sample_count)
+        });
 
         let has_output_activity = has_audio_signal(&output[..interleaved_count.min(output.len())]);
         if device.update_sleep_state(has_input_activity || has_output_activity) {
-            sleep_changes.push((idx, device.is_sleeping()));
+            on_sleep_change(idx, device.is_sleeping());
         }
     }
 
-    let result_in_b = (devices.len() - 1) % 2 == 0;
-    (result_in_b, sleep_changes)
+    (devices.len() - 1) % 2 == 0
 }
 
 /// Copy interleaved input to output (used for bypass / empty chain).
@@ -424,6 +485,59 @@ pub fn move_in_vec<T>(list: &mut Vec<T>, from: usize, to: usize) {
     }
     let item = list.remove(from);
     list.insert(to, item);
+}
+
+#[cfg(test)]
+mod device_path_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn join_and_parent_round_trip() {
+        let path = DevicePath::root(3).join(1).join(2);
+        assert_eq!(path.indices(), &[3, 1, 2]);
+        assert_eq!(path.to_string(), "3/1/2");
+        assert_eq!(path.parent().indices(), &[3, 1]);
+        assert_eq!(path.parent().parent().parent(), DevicePath::default());
+        assert_eq!(path.leaf_index(), Some(2));
+    }
+
+    #[test]
+    fn equal_paths_hash_equal_after_parent() {
+        // parent() must clear the dropped slot, or [1, 5] -> [1] != root(1)
+        let via_parent = DevicePath::from_indices([1, 5]).parent();
+        assert_eq!(via_parent, DevicePath::root(1));
+        let set: HashSet<DevicePath> = [via_parent, DevicePath::root(1)].into_iter().collect();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn depth_is_limited() {
+        let deepest = DevicePath::from_indices([0; MAX_DEVICE_DEPTH]);
+        assert!(!deepest.can_join());
+        assert!(DevicePath::try_from_indices(&[0; MAX_DEVICE_DEPTH + 1]).is_none());
+
+        let mut parts = vec!["channel", "2", "device", "0"];
+        for _ in 0..MAX_DEVICE_DEPTH {
+            parts.extend(["child", "0"]);
+        }
+        assert!(parse_osc_device_addr(&parts).is_none());
+    }
+
+    #[test]
+    fn insert_below_max_depth_is_rejected() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = Vec::new();
+        let parent = DevicePath::from_indices([0; MAX_DEVICE_DEPTH]);
+        let result = insert_device(
+            &mut devices,
+            &parent,
+            0,
+            Box::new(crate::audio::devices::delay::DelayDevice::new(
+                48_000.0, 100.0,
+            )),
+        );
+        assert!(result.is_err());
+    }
 }
 
 #[cfg(test)]
@@ -651,7 +765,8 @@ mod tests {
         ];
         let mut buf_a = vec![1.0f32; 8];
         let mut buf_b = vec![0.0f32; 8];
-        let (result_in_b, _) = process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 4, true);
+        let result_in_b =
+            process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 4, true, |_, _| {});
         let out = if result_in_b { &buf_b } else { &buf_a };
         for sample in &out[..8] {
             assert!((sample - 2.0).abs() < 1e-6, "got {}", sample);
@@ -663,10 +778,13 @@ mod tests {
         let mut devices: Vec<Box<dyn AudioDevice>> = Vec::new();
         let mut buf_a = vec![0.25f32; 4];
         let mut buf_b = vec![0.0f32; 4];
-        let (result_in_b, changes) =
-            process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 2, false);
+        let mut changes = 0;
+        let result_in_b =
+            process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 2, false, |_, _| {
+                changes += 1
+            });
         assert!(!result_in_b);
-        assert!(changes.is_empty());
+        assert_eq!(changes, 0);
         assert_eq!(buf_a[0], 0.25);
     }
 }

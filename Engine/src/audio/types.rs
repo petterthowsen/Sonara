@@ -345,6 +345,9 @@ pub type ClipId = String;
 /// Unique identifier for clip instances (GUID from Godot)
 pub type ClipInstanceId = String;
 
+/// Sleep changes one channel can report in a buffer without growing `Channel::sleep_changes`.
+const MAX_SLEEP_CHANGES: usize = 64;
+
 /// MIDI note stored in a Clip (relative to clip start)
 #[derive(Debug, Clone)]
 pub struct ClipNote {
@@ -428,6 +431,9 @@ pub struct ClipInstance {
     pub loop_enabled: bool,
     pub loop_start_ticks: Tick, // Relative to clip start
     pub loop_length_ticks: Tick,
+    /// Audio clips: fractional read position in the clip's samples while the playhead is inside
+    /// this instance. None until playback enters it; reset on seek, stop and edits.
+    pub playback_position: Option<f64>,
 }
 
 /// Send routing configuration
@@ -458,6 +464,7 @@ impl ClipInstance {
             loop_enabled: false,
             loop_start_ticks: 0,
             loop_length_ticks: 0,
+            playback_position: None,
         }
     }
 
@@ -528,6 +535,11 @@ pub struct Channel {
     /// Preallocated interleaved stereo extra-out buses (audio thread must not grow these).
     pub extra_out_buffers: Vec<Vec<f32>>,
 
+    /// `(device_path, is_sleeping)` for devices whose sleep state changed this buffer. Filled by
+    /// the device chain, drained by `mix_and_output`. Preallocated: only a buffer where more
+    /// than `MAX_SLEEP_CHANGES` devices change at once would grow it.
+    pub sleep_changes: Vec<(super::devices::DevicePath, bool)>,
+
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
 }
@@ -582,6 +594,7 @@ impl Channel {
             device_output_buffer: vec![0.0; buffer_size * 2],
             extra_out_targets: Vec::new(),
             extra_out_buffers: Vec::new(),
+            sleep_changes: Vec::with_capacity(MAX_SLEEP_CHANGES),
             mix: MixBuffers::new(buffer_size),
         }
     }
@@ -806,24 +819,18 @@ impl Channel {
         }
     }
 
-    /// Process channel audio through the top-level device chain.
-    /// Returns `(device_path, is_sleeping)` for devices whose sleep state changed.
-    pub fn process_device_chain(
-        &mut self,
-        sample_count: usize,
-    ) -> Vec<(super::devices::DevicePath, bool)> {
-        self.dispatch_scheduled_midi();
+    /// Process channel audio through the top-level device chain. Sleep state changes are
+    /// appended to `sleep_changes`.
+    pub fn process_device_chain(&mut self, sample_count: usize) {
+        super::rt_debug::section("device MIDI dispatch", || self.dispatch_scheduled_midi());
         self.process_device_chain_from(0, sample_count)
     }
 
     /// Process the first device into this channel plus extra-out buses (no remaining FX).
-    pub fn process_aux_source(
-        &mut self,
-        sample_count: usize,
-    ) -> Vec<(super::devices::DevicePath, bool)> {
+    pub fn process_aux_source(&mut self, sample_count: usize) {
         self.dispatch_scheduled_midi();
         if self.devices.is_empty() {
-            return vec![];
+            return;
         }
 
         let has_input_activity =
@@ -856,27 +863,21 @@ impl Channel {
             &mut self.buffer_right[..sample_count],
         );
 
-        let mut sleep_changes = Vec::new();
         let has_output_activity = super::devices::has_audio_signal(
             &self.device_output_buffer[..interleaved_count.min(self.device_output_buffer.len())],
         );
         if self.devices[0].update_sleep_state(has_input_activity || has_output_activity) {
-            sleep_changes.push((
+            self.sleep_changes.push((
                 super::devices::DevicePath::root(0),
                 self.devices[0].is_sleeping(),
             ));
         }
-        sleep_changes
     }
 
     /// Process devices starting at `start` (no MIDI dispatch). Used after aux children mix in.
-    pub fn process_device_chain_from(
-        &mut self,
-        start: usize,
-        sample_count: usize,
-    ) -> Vec<(super::devices::DevicePath, bool)> {
+    pub fn process_device_chain_from(&mut self, start: usize, sample_count: usize) {
         if start >= self.devices.len() {
-            return vec![];
+            return;
         }
 
         let has_input_activity =
@@ -893,12 +894,16 @@ impl Channel {
             &mut self.device_input_buffer[..sample_count * 2],
         );
 
-        let (result_in_output, sleep_changes) = super::devices::container::process_serial_chain(
+        let sleep_changes = &mut self.sleep_changes;
+        let result_in_output = super::devices::container::process_serial_chain(
             &mut self.devices[start..],
             &mut self.device_input_buffer,
             &mut self.device_output_buffer,
             sample_count,
             has_input_activity,
+            |idx, sleeping| {
+                sleep_changes.push((super::devices::DevicePath::root(start + idx), sleeping))
+            },
         );
 
         let final_output = if result_in_output {
@@ -912,11 +917,6 @@ impl Channel {
             &mut self.buffer_left[..sample_count],
             &mut self.buffer_right[..sample_count],
         );
-
-        sleep_changes
-            .into_iter()
-            .map(|(idx, sleeping)| (super::devices::DevicePath::root(start + idx), sleeping))
-            .collect()
     }
 
     /// Send MIDI event to the first device (instrument) only with a frame offset.
@@ -984,8 +984,6 @@ pub struct Track {
     pub channel_id: ChannelId,
     pub clip_instances: Vec<ClipInstance>,
     pub active_voices: HashMap<MidiNote, Voice>,
-    // Track fractional sample positions for audio playback (per clip instance)
-    pub audio_playback_positions: HashMap<ClipInstanceId, f64>,
     /// Automation lanes driving parameters on the track's linked channel.
     pub automation_lanes: Vec<super::automation::AutomationLane>,
 }
@@ -997,7 +995,6 @@ impl Track {
             channel_id,
             clip_instances: Vec::new(),
             active_voices: HashMap::new(),
-            audio_playback_positions: HashMap::new(),
             automation_lanes: Vec::new(),
         }
     }

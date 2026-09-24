@@ -19,6 +19,12 @@ use super::protocol::{PluginCommand, PluginResponse, SharedMemoryLayout};
 use super::shared_memory::SharedMemory;
 
 /// Plugin process handle
+/// How long a blocking request waits for the plugin's reply.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long `try_recv_response` waits for an unsolicited message.
+const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_micros(100);
+
 pub struct PluginProcess {
     /// Process ID
     pub pid: u32,
@@ -146,38 +152,34 @@ impl PluginProcess {
     /// Send a command to the plugin subprocess
     pub fn send_command(&mut self, cmd: PluginCommand) -> Result<(), String> {
         use std::io::Write;
-        use std::os::unix::io::AsRawFd;
-        use tracing::info;
 
         let json = serde_json::to_string(&cmd)
             .map_err(|e| format!("Failed to serialize command: {}", e))?;
+        debug!("[ProcessManager] Sending to {}: {}", self.plugin_id, json);
 
         let socket = self.socket.as_mut().ok_or("Socket not available")?;
-        let fd = socket.as_raw_fd();
-
-        info!(
-            "[ProcessManager] Sending to {} (socket fd={}): {:?}",
-            self.plugin_id, fd, cmd
-        );
-        info!("[ProcessManager] JSON ({} bytes): {}", json.len(), json);
-
-        // Write command + newline
         write!(socket, "{}\n", json).map_err(|e| format!("Failed to write command: {}", e))?;
-
-        info!("[ProcessManager] Wrote command to socket");
-
-        // Flush immediately to ensure data goes out
         socket
             .flush()
             .map_err(|e| format!("Failed to flush socket: {}", e))?;
-
-        info!("[ProcessManager] Socket flushed successfully");
-
         Ok(())
     }
 
-    /// Receive a response from the plugin subprocess
+    /// Receive a response from the plugin subprocess, waiting up to `REQUEST_TIMEOUT`.
     pub fn recv_response(&mut self) -> Result<PluginResponse, String> {
+        self.recv_response_timeout(REQUEST_TIMEOUT)
+    }
+
+    /// Receive a response from the plugin subprocess, waiting up to `timeout` for each read.
+    ///
+    /// Every receive sets its own timeout: the socket is shared with polling, which uses a very
+    /// short one.
+    pub fn recv_response_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<PluginResponse, String> {
+        self.set_read_timeout(Some(timeout))?;
+
         // First check if a synchronous response was buffered earlier
         let buffered_len = self.pending_async_responses.len();
         for _ in 0..buffered_len {
@@ -224,8 +226,11 @@ impl PluginProcess {
         }
     }
 
-    /// Try to receive a response without blocking (for polling unsolicited messages)
+    /// Try to receive an unsolicited message (e.g. a parameter change), waiting at most
+    /// `POLL_TIMEOUT`. A synchronous response read here is queued for `recv_response`.
     pub fn try_recv_response(&mut self) -> Result<PluginResponse, String> {
+        self.set_read_timeout(Some(POLL_TIMEOUT))?;
+
         // Return any buffered asynchronous response first
         let buffered_len = self.pending_async_responses.len();
         for _ in 0..buffered_len {
@@ -253,9 +258,10 @@ impl PluginProcess {
 
                     if Self::is_unsolicited_response(&response) {
                         return Ok(response);
-                    } else {
-                        return Err("No data available".to_string());
                     }
+                    // A late reply to a blocking request: keep it for `recv_response`.
+                    self.pending_async_responses.push_back(response);
+                    return Err("No data available".to_string());
                 }
                 None => return Err("No data available".to_string()),
             }

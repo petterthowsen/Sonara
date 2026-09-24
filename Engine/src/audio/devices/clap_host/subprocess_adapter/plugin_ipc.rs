@@ -1,8 +1,10 @@
 //! Blocking round-trips to a plugin subprocess that don't borrow the adapter.
 
 use super::gui;
+use crate::audio::devices::{ParamId, ParamValue};
 use crate::audio::ipc::{PluginCommand, PluginResponse, ProcessManager};
 use std::sync::Arc;
+use tracing::warn;
 
 /// Handle to one plugin subprocess for blocking IPC (GUI, activation).
 ///
@@ -80,5 +82,58 @@ impl PluginIpcHandle {
     /// Close the plugin GUI.
     pub fn close_gui(&self) -> Result<(), String> {
         gui::close_gui(&self.process_manager, &self.process_key, &self.device_name)
+    }
+
+    /// Plugin name, for logs.
+    pub fn device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    /// Read the parameter changes the plugin has reported (its GUI or internal modulation) as
+    /// `(param_id, normalized_value)`. Returns nothing if another request holds the process.
+    pub fn poll_parameter_changes(&self, out: &mut Vec<(u32, f32)>) {
+        let Some(process) = self.process_manager.get_process(&self.process_key) else {
+            return;
+        };
+        let Ok(mut process) = process.try_lock() else {
+            return;
+        };
+        while let Ok(response) = process.try_recv_response() {
+            if let PluginResponse::ParameterValueChanged { param_id, value } = response {
+                out.push((param_id, value));
+            }
+        }
+    }
+
+    /// Send parameter writes (fire-and-forget). Waits for the process if a request holds it.
+    pub fn set_parameters(&self, writes: &[(ParamId, ParamValue)]) {
+        let Some(process) = self.process_manager.get_process(&self.process_key) else {
+            return;
+        };
+        let mut process = process
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for &(param_id, value) in writes {
+            if let Err(e) = process.send_command(PluginCommand::SetParameter { param_id, value }) {
+                warn!(
+                    "Failed to send parameter {} to {}: {}",
+                    param_id, self.device_name, e
+                );
+                return;
+            }
+        }
+    }
+
+    /// False once the subprocess has exited (or is no longer registered). True when another
+    /// request holds the process, since it can't be checked without waiting.
+    pub fn is_alive(&self) -> bool {
+        let Some(process) = self.process_manager.get_process(&self.process_key) else {
+            return false;
+        };
+        let alive = match process.try_lock() {
+            Ok(mut process) => process.is_alive(),
+            Err(_) => true,
+        };
+        alive
     }
 }

@@ -4,7 +4,6 @@ use cpal::{
     BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize,
 };
 use crossbeam::channel::{Receiver, Sender};
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
@@ -13,16 +12,23 @@ use tracing::{info, warn};
 
 use super::command_worker::CommandWorker;
 pub use super::commands::{AudioCommand, CommandResponse, EngineState, EngineStatus};
+use super::devices::clap_host::subprocess_adapter::PLUGIN_UNDERRUNS;
 use super::mixing::mix_and_output;
 use super::processing::process_audio;
+use super::rt_debug;
 use super::types::*;
 
 /// Preferred device sample rate in Hz.
 const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 
-/// Preferred ALSA buffer size in frames (~21 ms at 48 kHz); cpal uses a quarter of it as the
-/// period size. Keep it at or above PipeWire's graph quantum or the stream will underrun.
-const PREFERRED_BUFFER_FRAMES: u32 = 1024;
+/// Preferred frames per callback (~21 ms at 48 kHz). This is the ALSA period, which PipeWire
+/// also adopts as the graph quantum (`node.latency`).
+const PREFERRED_PERIOD_FRAMES: u32 = 1024;
+
+/// cpal 0.15's ALSA backend sets the period to a quarter of `BufferSize::Fixed`, so ask for a
+/// buffer of four periods. The buffer must also stay at or above PipeWire's graph quantum or the
+/// stream underruns inside PipeWire, invisibly to the engine.
+const PREFERRED_BUFFER_FRAMES: u32 = PREFERRED_PERIOD_FRAMES * 4;
 
 /// How long the audio callback keeps retrying the state lock before outputting silence for the
 /// buffer. The command thread only holds the lock briefly, so this should rarely be reached.
@@ -33,6 +39,66 @@ const CALLBACK_STALL_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// How often the watchdog thread samples the callback counter.
 const WATCHDOG_POLL: Duration = Duration::from_millis(250);
+
+/// Capacity of the engine → OSC status channel (~1.6 MB preallocated at 200 bytes per status):
+/// several seconds of meters for 100 channels at 20 Hz. Bounded so sends never allocate. The
+/// audio callback uses `try_send` and drops statuses when it's full; other threads block.
+pub const STATUS_CHANNEL_CAPACITY: usize = 8_192;
+
+/// How often the callback sends `EngineStatus::EngineStats` (2 Hz).
+const STATS_INTERVAL: Duration = Duration::from_millis(500);
+
+/// A gap between callback starts longer than this many block durations counts as an xrun.
+/// cpal 0.15's ALSA backend recovers underruns without calling the error callback, so this is
+/// the main xrun signal.
+const XRUN_GAP_FACTOR: f64 = 1.5;
+
+/// Counters shared by every output stream the engine opens, so totals survive a watchdog restart.
+#[derive(Default)]
+struct CallbackCounters {
+    /// Incremented on every callback (including lock-miss silence) so the watchdog can tell
+    /// hardware is still waking this process.
+    callbacks: AtomicU64,
+    xruns: AtomicU64,
+    lock_misses: AtomicU64,
+}
+
+/// Per-stream load accounting for one `STATS_INTERVAL`. Lives in the callback closure.
+struct LoadWindow {
+    started: Instant,
+    processing: Duration,
+    block_time: Duration,
+    peak: f32,
+}
+
+impl LoadWindow {
+    fn new(now: Instant) -> Self {
+        Self {
+            started: now,
+            processing: Duration::ZERO,
+            block_time: Duration::ZERO,
+            peak: 0.0,
+        }
+    }
+
+    fn add(&mut self, processing: Duration, block: Duration) {
+        self.processing += processing;
+        self.block_time += block;
+        if !block.is_zero() {
+            self.peak = self
+                .peak
+                .max((processing.as_secs_f64() / block.as_secs_f64()) as f32);
+        }
+    }
+
+    fn average(&self) -> f32 {
+        if self.block_time.is_zero() {
+            0.0
+        } else {
+            (self.processing.as_secs_f64() / self.block_time.as_secs_f64()) as f32
+        }
+    }
+}
 
 /// Audio engine that manages the audio stream and processing
 pub struct AudioEngine {
@@ -133,7 +199,7 @@ impl AudioEngine {
             .spawn(move || worker.run(command_rx))
             .context("Failed to spawn command thread")?;
 
-        let callback_count = Arc::new(AtomicU64::new(0));
+        let counters = Arc::new(CallbackCounters::default());
         let running = Arc::new(AtomicBool::new(true));
 
         let stream_thread = spawn_stream_thread(StreamThread {
@@ -141,7 +207,7 @@ impl AudioEngine {
             config,
             status_tx: status_tx.clone(),
             state: state.clone(),
-            callback_count,
+            counters,
             running: running.clone(),
         })?;
 
@@ -158,7 +224,7 @@ impl AudioEngine {
 
     /// Create and initialize a new audio engine (convenience method)
     pub fn new() -> Result<Self> {
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let (status_tx, status_rx) = crossbeam::channel::bounded(STATUS_CHANNEL_CAPACITY);
         Self::with_status_channel(status_tx, status_rx)
     }
 
@@ -243,7 +309,7 @@ struct StreamThread {
     config: StreamConfig,
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
-    callback_count: Arc<AtomicU64>,
+    counters: Arc<CallbackCounters>,
     running: Arc<AtomicBool>,
 }
 
@@ -253,14 +319,14 @@ fn open_output_stream(
     config: &StreamConfig,
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
-    callback_count: Arc<AtomicU64>,
+    counters: Arc<CallbackCounters>,
 ) -> Result<Stream> {
     match build_stream(
         device,
         config,
         status_tx.clone(),
         state.clone(),
-        callback_count.clone(),
+        counters.clone(),
     ) {
         Ok(stream) => Ok(stream),
         Err(e) if matches!(config.buffer_size, BufferSize::Fixed(_)) => {
@@ -270,7 +336,7 @@ fn open_output_stream(
             );
             let mut fallback = config.clone();
             fallback.buffer_size = BufferSize::Default;
-            build_stream(device, &fallback, status_tx, state, callback_count)
+            build_stream(device, &fallback, status_tx, state, counters)
         }
         Err(e) => Err(e),
     }
@@ -290,7 +356,7 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
                 &ctx.config,
                 ctx.status_tx.clone(),
                 ctx.state.clone(),
-                ctx.callback_count.clone(),
+                ctx.counters.clone(),
             ) {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -305,14 +371,14 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
             info!("Audio stream started");
             let _ = ready_tx.send(Ok(()));
 
-            let mut last_count = ctx.callback_count.load(Ordering::Relaxed);
+            let mut last_count = ctx.counters.callbacks.load(Ordering::Relaxed);
             let mut stalled_since: Option<Instant> = None;
             let mut next_restart = Instant::now();
             let mut backoff = CALLBACK_STALL_TIMEOUT;
 
             while ctx.running.load(Ordering::Acquire) {
                 thread::sleep(WATCHDOG_POLL);
-                let count = ctx.callback_count.load(Ordering::Relaxed);
+                let count = ctx.counters.callbacks.load(Ordering::Relaxed);
                 if count != last_count {
                     last_count = count;
                     stalled_since = None;
@@ -335,14 +401,14 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
                     &ctx.config,
                     ctx.status_tx.clone(),
                     ctx.state.clone(),
-                    ctx.callback_count.clone(),
+                    ctx.counters.clone(),
                 ) {
                     Ok(new_stream) => match new_stream.play() {
                         Ok(()) => {
                             let old = std::mem::replace(&mut stream, new_stream);
                             std::mem::forget(old);
                             info!("Audio stream restarted");
-                            last_count = ctx.callback_count.load(Ordering::Relaxed);
+                            last_count = ctx.counters.callbacks.load(Ordering::Relaxed);
                             stalled_since = None;
                         }
                         Err(e) => warn!("Failed to play restarted audio stream: {}", e),
@@ -361,14 +427,15 @@ fn spawn_stream_thread(ctx: StreamThread) -> Result<thread::JoinHandle<()>> {
     }
 }
 
-/// Build the audio output stream. `callback_count` is incremented on every callback (including
-/// lock-fail silence) so the watchdog can tell hardware is still waking this process.
+/// Build the audio output stream. Every callback updates `counters` and, every
+/// `STATS_INTERVAL`, sends `EngineStatus::EngineStats` (also after a lock miss, so the UI can
+/// tell a busy engine from a stalled one).
 fn build_stream(
     device: &Device,
     config: &StreamConfig,
     status_tx: Sender<EngineStatus>,
     state: Arc<Mutex<EngineState>>,
-    callback_count: Arc<AtomicU64>,
+    counters: Arc<CallbackCounters>,
 ) -> Result<Stream> {
     let sample_rate = config.sample_rate.0;
     let channels = config.channels as usize;
@@ -376,85 +443,109 @@ fn build_stream(
     let mut samples_since_update = 0;
     let update_interval = sample_rate / 20;
 
-    let perf_metrics_start = RefCell::new(Instant::now());
-    let perf_metrics_interval = Duration::from_millis(500);
-    let cumulative_processing_time = RefCell::new(Duration::ZERO);
-    let cumulative_block_duration = RefCell::new(Duration::ZERO);
+    let mut load = LoadWindow::new(Instant::now());
+    // Start and expected duration of the previous callback, for gap (xrun) detection.
+    let mut previous_block: Option<(Instant, Duration)> = None;
+
+    let error_counters = counters.clone();
 
     let stream = device.build_output_stream(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            callback_count.fetch_add(1, Ordering::Relaxed);
             let processing_start = Instant::now();
-
-            let Some(mut state) = lock_state_for_callback(&state, processing_start) else {
-                data.fill(0.0);
-                return;
-            };
+            counters.callbacks.fetch_add(1, Ordering::Relaxed);
 
             let frames = data.len() / channels;
             let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
 
-            for channel in state.channels.values_mut() {
-                channel.clear_buffers();
-            }
-
-            process_audio(&mut state, frames, sample_rate as f32, processing_start);
-            mix_and_output(&mut state, data, channels, frames, &status_tx);
-
-            for channel in state.channels.values_mut() {
-                channel.update_peaks(frames, sample_rate as f32);
-            }
-
-            let processing_time = processing_start.elapsed();
-            *cumulative_processing_time.borrow_mut() += processing_time;
-            *cumulative_block_duration.borrow_mut() += block_duration;
-
-            if perf_metrics_start.borrow().elapsed() >= perf_metrics_interval {
-                let cum_proc = *cumulative_processing_time.borrow();
-                let cum_block = *cumulative_block_duration.borrow();
-                let avg_load = if cum_block.as_secs_f64() > 0.0 {
-                    (cum_proc.as_secs_f64() / cum_block.as_secs_f64()) as f32
-                } else {
-                    0.0
-                };
-                let _ = status_tx.send(EngineStatus::EngineLoad { load: avg_load });
-                *perf_metrics_start.borrow_mut() = Instant::now();
-                *cumulative_processing_time.borrow_mut() = Duration::ZERO;
-                *cumulative_block_duration.borrow_mut() = Duration::ZERO;
-            }
-
-            samples_since_update += frames;
-            if samples_since_update >= update_interval as usize {
-                // Subtract rather than reset: resetting discards the remainder, which makes
-                // the status cadence slower and less regular than the nominal rate.
-                samples_since_update -= update_interval as usize;
-
-                if state.get_is_playing() {
-                    let _ = status_tx.send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
+            if let Some((previous_start, previous_duration)) = previous_block {
+                let gap = processing_start.duration_since(previous_start);
+                if gap.as_secs_f64() > previous_duration.as_secs_f64() * XRUN_GAP_FACTOR {
+                    counters.xruns.fetch_add(1, Ordering::Relaxed);
                 }
+            }
+            previous_block = Some((processing_start, block_duration));
 
-                // Draining the peaks starts a fresh max for the next interval, so a transient
-                // in any block between sends still reaches the meter.
-                for channel in state.channels.values_mut() {
-                    let (peak_left, peak_right, rms_left, rms_right) = channel.take_meters();
-                    let _ = status_tx.send(EngineStatus::ChannelPeaks {
-                        id: channel.id,
-                        peak_left,
-                        peak_right,
-                        rms_left,
-                        rms_right,
+            rt_debug::check_callback(|| {
+                let Some(mut state) = lock_state_for_callback(&state, processing_start) else {
+                    counters.lock_misses.fetch_add(1, Ordering::Relaxed);
+                    data.fill(0.0);
+                    return;
+                };
+
+                rt_debug::section("clear buffers", || {
+                    for channel in state.channels.values_mut() {
+                        channel.clear_buffers();
+                    }
+                });
+
+                rt_debug::section("process_audio", || {
+                    process_audio(&mut state, frames, sample_rate as f32, processing_start)
+                });
+                rt_debug::section("mix_and_output", || {
+                    mix_and_output(&mut state, data, channels, frames, &status_tx)
+                });
+
+                rt_debug::section("update_peaks", || {
+                    for channel in state.channels.values_mut() {
+                        channel.update_peaks(frames, sample_rate as f32);
+                    }
+                });
+
+                samples_since_update += frames;
+                if samples_since_update >= update_interval as usize {
+                    // Subtract rather than reset: resetting discards the remainder, which makes
+                    // the status cadence slower and less regular than the nominal rate.
+                    samples_since_update -= update_interval as usize;
+                    rt_debug::section("playhead/meter sends", || {
+                        send_meters(&mut state, &status_tx)
                     });
                 }
+            });
+
+            load.add(processing_start.elapsed(), block_duration);
+            if load.started.elapsed() >= STATS_INTERVAL {
+                let _ = status_tx.try_send(EngineStatus::EngineStats {
+                    load_avg: load.average(),
+                    load_peak: load.peak,
+                    xruns: counters.xruns.load(Ordering::Relaxed),
+                    lock_misses: counters.lock_misses.load(Ordering::Relaxed),
+                    callbacks: counters.callbacks.load(Ordering::Relaxed),
+                    frames: frames as u32,
+                    plugin_underruns: PLUGIN_UNDERRUNS.load(Ordering::Relaxed),
+                });
+                load = LoadWindow::new(Instant::now());
+                rt_debug::report();
             }
         },
         move |err| {
+            error_counters.xruns.fetch_add(1, Ordering::Relaxed);
             tracing::warn!("Audio stream error: {}", err);
         },
         None,
     )?;
 
     Ok(stream)
+}
+
+/// Send the playhead (while playing) and every channel's meters.
+fn send_meters(state: &mut EngineState, status_tx: &Sender<EngineStatus>) {
+    if state.get_is_playing() {
+        let _ = status_tx.try_send(EngineStatus::PlayheadUpdate(state.get_current_tick()));
+    }
+
+    // Draining the peaks starts a fresh max for the next interval, so a transient
+    // in any block between sends still reaches the meter.
+    for channel in state.channels.values_mut() {
+        let (peak_left, peak_right, rms_left, rms_right) = channel.take_meters();
+        let _ = status_tx.try_send(EngineStatus::ChannelPeaks {
+            id: channel.id,
+            peak_left,
+            peak_right,
+            rms_left,
+            rms_right,
+        });
+    }
 }
 
 /// Lock the engine state from the audio callback without sleeping in the OS.

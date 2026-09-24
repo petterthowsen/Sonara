@@ -55,3 +55,21 @@ Sent once per plugin after `/plugin/scan`.
 | 7 | s | CLAP feature tags joined with `,` (e.g. `audio-effect,reverb,stereo`), may be empty |
 
 `/plugin/scan_complete [count:i]` follows the last one.
+
+### `/status/engine_stats`
+
+Sent by the audio callback at 2 Hz, also while the engine state lock is busy. Replaces
+`/status/engine_load`. Counters are running totals since the engine started (they survive a
+stream restart), so a dropped packet loses nothing. Rate = difference between two reports.
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | f | `load_avg`: processing time / block time over the last 0.5 s (1.0 = 100%) |
+| 1 | f | `load_peak`: worst single block in that interval, same unit |
+| 2 | i | `xruns`: cpal stream errors plus callback gaps longer than 1.5× the previous block |
+| 3 | i | `lock_misses`: callbacks that output silence because the state lock stayed busy |
+| 4 | i | `callbacks` |
+| 5 | i | `frames`: frames in the last block |
+| 6 | i | `plugin_underruns`: CLAP plugin blocks padded with silence because the plugin's output wasn't ready (audible dropouts) |
+
+Counters are clamped to int32.

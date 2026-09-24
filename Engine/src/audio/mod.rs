@@ -10,6 +10,7 @@ pub mod midi_types;
 pub mod mixing;
 pub mod processing;
 pub mod render_scratch;
+pub mod rt_debug;
 pub mod types;
 
 pub use automation::{

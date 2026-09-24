@@ -109,11 +109,28 @@ impl OscServer {
             use std::time::Instant;
             let mut last_heartbeat = Instant::now();
             let heartbeat_interval = Duration::from_secs(1);
+            let mut stats_summary = EngineStatsSummary::default();
 
             loop {
                 if let Ok(status) = status_rx.recv_timeout(Duration::from_millis(10)) {
                     // Forward GUI events to main loop
                     match &status {
+                        EngineStatus::EngineStats {
+                            load_avg,
+                            load_peak,
+                            xruns,
+                            lock_misses,
+                            frames,
+                            plugin_underruns,
+                            ..
+                        } => stats_summary.observe(
+                            *load_avg,
+                            *load_peak,
+                            *xruns,
+                            *lock_misses,
+                            *plugin_underruns,
+                            *frames,
+                        ),
                         EngineStatus::PluginGuiResizeRequest {
                             channel_id,
                             device_path,
@@ -1841,9 +1858,25 @@ impl OscServer {
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
             ),
-            EngineStatus::EngineLoad { load } => (
-                "/status/engine_load".to_string(),
-                vec![OscType::Float(load)],
+            EngineStatus::EngineStats {
+                load_avg,
+                load_peak,
+                xruns,
+                lock_misses,
+                callbacks,
+                frames,
+                plugin_underruns,
+            } => (
+                "/status/engine_stats".to_string(),
+                vec![
+                    OscType::Float(load_avg),
+                    OscType::Float(load_peak),
+                    OscType::Int(osc_count(xruns)),
+                    OscType::Int(osc_count(lock_misses)),
+                    OscType::Int(osc_count(callbacks)),
+                    OscType::Int(frames as i32),
+                    OscType::Int(osc_count(plugin_underruns)),
+                ],
             ),
             EngineStatus::DeviceData {
                 channel_id,
@@ -2345,4 +2378,72 @@ fn parse_automation_point(args: &[OscType]) -> Option<AutomationPoint> {
         CurveKind::parse(curve),
         tension,
     ))
+}
+
+/// Clamp a running counter into an OSC int32 argument.
+fn osc_count(count: u64) -> i32 {
+    count.min(i32::MAX as u64) as i32
+}
+
+/// How often `EngineStatsSummary` logs.
+const STATS_SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Folds the 2 Hz `EngineStats` into one info log line per minute, in the units of the
+/// Measurements table in `docs/engine-stability-plan.md`.
+#[derive(Default)]
+struct EngineStatsSummary {
+    started: Option<std::time::Instant>,
+    samples: u32,
+    load_sum: f32,
+    load_peak: f32,
+    xruns_at_start: u64,
+    lock_misses_at_start: u64,
+    plugin_underruns_at_start: u64,
+}
+
+impl EngineStatsSummary {
+    fn observe(
+        &mut self,
+        load_avg: f32,
+        load_peak: f32,
+        xruns: u64,
+        lock_misses: u64,
+        plugin_underruns: u64,
+        frames: u32,
+    ) {
+        let Some(started) = self.started else {
+            self.reset(xruns, lock_misses, plugin_underruns);
+            return;
+        };
+        self.samples += 1;
+        self.load_sum += load_avg;
+        self.load_peak = self.load_peak.max(load_peak);
+
+        let elapsed = started.elapsed();
+        if elapsed < STATS_SUMMARY_INTERVAL {
+            return;
+        }
+        let per_min = 60.0 / elapsed.as_secs_f32();
+        info!(
+            "Engine stats ({:.0}s, {} frames): load avg {:.1}%, load peak {:.1}%, xruns/min {:.1}, lock misses/min {:.1}, plugin dropouts/min {:.1}",
+            elapsed.as_secs_f32(),
+            frames,
+            self.load_sum / self.samples.max(1) as f32 * 100.0,
+            self.load_peak * 100.0,
+            xruns.saturating_sub(self.xruns_at_start) as f32 * per_min,
+            lock_misses.saturating_sub(self.lock_misses_at_start) as f32 * per_min,
+            plugin_underruns.saturating_sub(self.plugin_underruns_at_start) as f32 * per_min,
+        );
+        self.reset(xruns, lock_misses, plugin_underruns);
+    }
+
+    fn reset(&mut self, xruns: u64, lock_misses: u64, plugin_underruns: u64) {
+        *self = Self {
+            started: Some(std::time::Instant::now()),
+            xruns_at_start: xruns,
+            lock_misses_at_start: lock_misses,
+            plugin_underruns_at_start: plugin_underruns,
+            ..Self::default()
+        };
+    }
 }

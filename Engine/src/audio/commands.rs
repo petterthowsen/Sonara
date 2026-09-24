@@ -542,9 +542,15 @@ pub enum EngineStatus {
         message: String,
     },
 
-    // Performance metrics
-    EngineLoad {
-        load: f32, // CPU load as ratio (0.0-1.0+, where 1.0 = 100% utilization)
+    // Performance metrics, sent at 2 Hz from the audio callback.
+    EngineStats {
+        load_avg: f32,         // Processing time / block time over the interval (1.0 = 100%)
+        load_peak: f32,        // Worst single block in the interval, same unit
+        xruns: u64,            // Total since start: stream errors + callback gaps > 1.5x block time
+        lock_misses: u64,      // Total since start: callbacks that output silence (state lock busy)
+        callbacks: u64,        // Total since start
+        frames: u32,           // Frames in the last block
+        plugin_underruns: u64, // Total since start: plugin blocks padded with silence
     },
 
     // Device data subscriptions
@@ -771,7 +777,9 @@ pub fn process_command(
                 }
             }
             for track in state.tracks.values_mut() {
-                track.audio_playback_positions.clear();
+                for instance in &mut track.clip_instances {
+                    instance.playback_position = None;
+                }
             }
             info!("Playback stopped (was at {})", position);
             // Send both playing state change and playhead reset
@@ -792,7 +800,9 @@ pub fn process_command(
                 }
             }
             for track in state.tracks.values_mut() {
-                track.audio_playback_positions.clear();
+                for instance in &mut track.clip_instances {
+                    instance.playback_position = None;
+                }
             }
             info!("Seeked to tick {}", tick);
         }
@@ -1568,7 +1578,7 @@ pub fn process_command(
 
                     // Reset playback position when clip_offset changes
                     // (will be re-initialized with new offset on next playback)
-                    track.audio_playback_positions.remove(&instance_id);
+                    instance.playback_position = None;
 
                     info!(
                         "ClipInstance {} position updated: start={} dur={} offset={}",

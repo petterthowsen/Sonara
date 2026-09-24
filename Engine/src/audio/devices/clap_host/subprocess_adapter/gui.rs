@@ -20,13 +20,10 @@ pub fn open_gui(
 
     let mut process = process.lock().unwrap();
 
-    // Set a generous timeout for GUI operations (plugins can take time to open windows)
-    // GUI initialization may involve X11/Wayland connection, resource loading, etc.
-    process.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-
     process.send_command(PluginCommand::OpenGui { window_handle })?;
 
-    let result = match process.recv_response()? {
+    // Generous timeout: opening a GUI may connect to X11/Wayland and load resources
+    let result = match process.recv_response_timeout(std::time::Duration::from_secs(5))? {
         PluginResponse::GuiOpened {
             width,
             height,
@@ -41,9 +38,6 @@ pub fn open_gui(
         PluginResponse::GuiError { error } => Err(error),
         _ => Err("Unexpected response".to_string()),
     };
-
-    // Reset timeout to default (no timeout)
-    let _ = process.set_read_timeout(None);
 
     result
 }
@@ -60,12 +54,9 @@ pub fn close_gui(
 
     let mut process = process.lock().unwrap();
 
-    // Set a timeout for GUI close operations (plugins might take time to clean up)
-    process.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
-
     process.send_command(PluginCommand::CloseGui)?;
 
-    let result = match process.recv_response() {
+    let result = match process.recv_response_timeout(std::time::Duration::from_secs(2)) {
         Ok(PluginResponse::GuiClosed) => {
             info!("Closed GUI: {}", device_name);
             Ok(())
@@ -82,9 +73,6 @@ pub fn close_gui(
             Ok(())
         }
     };
-
-    // Reset timeout to default (no timeout)
-    let _ = process.set_read_timeout(None);
 
     result
 }

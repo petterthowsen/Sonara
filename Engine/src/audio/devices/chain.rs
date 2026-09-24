@@ -81,12 +81,13 @@ impl AudioDevice for ChainDevice {
         }
 
         self.buf_a[..interleaved].copy_from_slice(&inputs[..interleaved]);
-        let (result_in_b, _) = process_serial_chain(
+        let result_in_b = process_serial_chain(
             &mut self.children,
             &mut self.buf_a,
             &mut self.buf_b,
             sample_count,
             true,
+            |_, _| {},
         );
         let src = if result_in_b {
             &mut self.buf_b[..interleaved]

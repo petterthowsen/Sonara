@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use super::commands::EngineState;
+use super::rt_debug;
 use super::types::*;
 
 /// Drain each channel's live MIDI queue into `scheduled_midi_events` with frame offsets.
@@ -47,11 +48,15 @@ pub fn process_audio(
 
     // Always schedule incoming MIDI events (even when not playing)
     // This allows live MIDI input to play instruments without transport running
-    schedule_live_midi_events(state, callback_start, frames, sample_rate);
+    rt_debug::section("live MIDI scheduling", || {
+        schedule_live_midi_events(state, callback_start, frames, sample_rate)
+    });
 
     // Resolve automation before the transport check, so a seek while stopped still applies
     // (REQ-008). When the tick has not moved the per-lane dedup makes this nearly free.
-    super::automation::apply_automation(state, state.get_current_tick());
+    rt_debug::section("automation", || {
+        super::automation::apply_automation(state, state.get_current_tick())
+    });
 
     // Only advance playhead and process clips when playing
     if !state.get_is_playing() {
@@ -197,7 +202,7 @@ pub fn process_audio(
             // Tracks no longer hold active voices - they only route MIDI to channels
 
             // Process audio clips on this track
-            for instance in &track.clip_instances {
+            for instance in track.clip_instances.iter_mut() {
                 if instance.muted {
                     continue;
                 }
@@ -215,7 +220,7 @@ pub fn process_audio(
                             // Initialize playback position for this clip instance if not yet started
                             // Apply clip_offset: start reading from the offset position in the clip
                             // PLUS account for seeking into the middle of the instance
-                            if !track.audio_playback_positions.contains_key(&instance.id) {
+                            if instance.playback_position.is_none() {
                                 // Total offset = clip_offset (trim) + current position in instance (seek)
                                 let total_offset_ticks =
                                     instance.clip_offset + current_pos_in_instance;
@@ -225,16 +230,13 @@ pub fn process_audio(
                                     total_offset_ticks,
                                     clip.audio_sample_rate as f32,
                                 ) as f64;
-                                track
-                                    .audio_playback_positions
-                                    .insert(instance.id.clone(), offset_samples);
+                                instance.playback_position = Some(offset_samples);
                             }
 
                             // Get mutable reference to playback position
-                            let playback_pos = track
-                                .audio_playback_positions
-                                .get_mut(&instance.id)
-                                .unwrap();
+                            let Some(playback_pos) = instance.playback_position.as_mut() else {
+                                continue;
+                            };
 
                             // Calculate BPM stretch factor
                             let stretch_factor = AudioPlayback::calculate_stretch_factor(
@@ -329,10 +331,10 @@ pub fn process_audio(
                             }
                         } else if current_pos_in_instance < 0 {
                             // Not yet at clip start, ensure position is reset
-                            track.audio_playback_positions.remove(&instance.id);
+                            instance.playback_position = None;
                         } else {
                             // Past clip end, remove position tracking
-                            track.audio_playback_positions.remove(&instance.id);
+                            instance.playback_position = None;
                         }
                     }
                 }

@@ -178,7 +178,7 @@ pub struct PluginParameterInfo {
 /// Shared memory layout for audio and MIDI data
 ///
 /// Memory layout:
-/// ```
+/// ```text
 /// [AudioRingBuffer: input]   - Input audio from engine
 /// [AudioRingBuffer: output]  - Output audio to engine
 /// [MidiEventQueue]           - MIDI events from engine

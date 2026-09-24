@@ -5,17 +5,48 @@
 //! dropping devices, plugin subprocess round-trips) runs with the lock released. This is safe
 //! because the worker is the only thread that adds or removes channels and devices.
 
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use tracing::{info, warn};
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
 
 use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
-use super::devices::clap_host::subprocess_adapter::PluginIpcHandle;
+use super::devices::clap_host::subprocess_adapter::{
+    PluginBlockStats, PluginIpcHandle, PluginLoad,
+};
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
-use super::devices::{AudioDevice, DeviceCategory, DeviceFactory, DevicePath};
+use super::devices::{
+    container, AudioDevice, DeviceCategory, DeviceFactory, DevicePath, ParamId, ParamValue,
+    SfizzDevice,
+};
 use super::ipc::ProcessManager;
 use super::types::ChannelId;
+
+/// How often the command thread services devices between commands: plugin parameter changes,
+/// queued automation writes, plugin crash checks and SFZ parameter lists. This is work the audio
+/// callback must not do itself.
+const DEVICE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// How often per-plugin audio problems (dropouts, overflows, MIDI drops) are logged, if any.
+const PLUGIN_STATS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A subprocess plugin collected under the state lock for `poll_devices` to service without it.
+struct PolledPlugin {
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    handle: PluginIpcHandle,
+    load: Arc<PluginLoad>,
+    writes: Vec<(ParamId, ParamValue)>,
+    stats: PluginBlockStats,
+}
+
+/// Per-plugin audio problem counts since the last log.
+struct PluginStatsLog {
+    name: String,
+    stats: PluginBlockStats,
+}
 
 /// Owns the command thread's resources and applies commands to the shared engine state.
 pub struct CommandWorker {
@@ -24,6 +55,8 @@ pub struct CommandWorker {
     max_buffer_size: usize,
     device_factory: DeviceFactory,
     plugin_scanner: PluginScanner,
+    plugin_stats: HashMap<(ChannelId, DevicePath), PluginStatsLog>,
+    plugin_stats_since: Instant,
 }
 
 impl CommandWorker {
@@ -52,14 +85,163 @@ impl CommandWorker {
             max_buffer_size,
             device_factory,
             plugin_scanner: PluginScanner::new(),
+            plugin_stats: HashMap::new(),
+            plugin_stats_since: Instant::now(),
         }
     }
 
-    /// Apply commands until every sender has been dropped.
+    /// Apply commands until every sender has been dropped, servicing devices every
+    /// `DEVICE_POLL_INTERVAL` in between.
     pub fn run(mut self, command_rx: Receiver<AudioCommand>) {
-        while let Ok(cmd) = command_rx.recv() {
-            self.handle(cmd);
+        let mut next_poll = Instant::now() + DEVICE_POLL_INTERVAL;
+        loop {
+            match command_rx.recv_deadline(next_poll) {
+                Ok(cmd) => self.handle(cmd),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            if Instant::now() >= next_poll {
+                self.poll_devices();
+                next_poll = Instant::now() + DEVICE_POLL_INTERVAL;
+            }
         }
+    }
+
+    /// Service devices on behalf of the audio callback.
+    ///
+    /// Under the state lock: collect each ready subprocess plugin's IPC handle, queued
+    /// automation writes and audio-thread counters, and any new SFZ parameter lists. With the
+    /// lock released: send the writes, read parameter changes the plugins report, detect dead
+    /// subprocesses, and send statuses.
+    fn poll_devices(&mut self) {
+        let mut plugins: Vec<PolledPlugin> = Vec::new();
+        let mut statuses: Vec<EngineStatus> = Vec::new();
+        {
+            let mut state = self.lock_state();
+            for (&channel_id, channel) in state.channels.iter_mut() {
+                container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
+                    let any = device.as_any_mut();
+                    if let Some(plugin) = any.downcast_mut::<SubprocessClapAdapter>() {
+                        let load = plugin.load();
+                        if !load.is_ready() {
+                            return;
+                        }
+                        let mut writes = Vec::new();
+                        plugin.drain_queued_parameters(&mut writes);
+                        plugins.push(PolledPlugin {
+                            channel_id,
+                            device_path: *device_path,
+                            handle: plugin.ipc_handle(),
+                            load,
+                            writes,
+                            stats: plugin.take_stats(),
+                        });
+                    } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
+                        collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
+                    }
+                });
+            }
+        }
+
+        let mut reported: Vec<(ChannelId, DevicePath, u32, f32)> = Vec::new();
+        let mut changes = Vec::new();
+        for plugin in &plugins {
+            if !plugin.handle.is_alive() {
+                self.mark_plugin_crashed(plugin);
+                continue;
+            }
+            if !plugin.writes.is_empty() {
+                plugin.handle.set_parameters(&plugin.writes);
+            }
+            changes.clear();
+            plugin.handle.poll_parameter_changes(&mut changes);
+            for &(param_id, value) in &changes {
+                reported.push((plugin.channel_id, plugin.device_path, param_id, value));
+                statuses.push(EngineStatus::PluginParameterValueChanged {
+                    channel_id: plugin.channel_id,
+                    device_path: plugin.device_path,
+                    param_id,
+                    value,
+                });
+            }
+            self.record_plugin_stats(plugin);
+        }
+
+        if !reported.is_empty() {
+            let mut state = self.lock_state();
+            for (channel_id, device_path, param_id, value) in reported {
+                let plugin = state
+                    .channels
+                    .get_mut(&channel_id)
+                    .and_then(|channel| channel.device_at_path_mut(&device_path))
+                    .and_then(|device| device.as_any_mut().downcast_mut::<SubprocessClapAdapter>());
+                if let Some(plugin) = plugin {
+                    plugin.cache_parameter_value(param_id, value);
+                }
+            }
+        }
+
+        for status in statuses {
+            self.send_status(status);
+        }
+        self.log_plugin_stats();
+    }
+
+    /// The plugin's subprocess has exited: pass audio through from now on and tell Godot.
+    fn mark_plugin_crashed(&self, plugin: &PolledPlugin) {
+        let message = "Plugin subprocess crashed (process not alive)".to_string();
+        error!(
+            "Subprocess for plugin {} (channel {} device {}) is not running; bypassing it",
+            plugin.handle.device_name(),
+            plugin.channel_id,
+            plugin.device_path
+        );
+        plugin.load.set_failed(message);
+        self.send_status(EngineStatus::DeviceLoadingStateChanged {
+            channel_id: plugin.channel_id,
+            device_path: plugin.device_path,
+            state: "failed:subprocess crashed".to_string(),
+        });
+    }
+
+    /// Add a plugin's audio-thread counters to the running totals for the next log.
+    fn record_plugin_stats(&mut self, plugin: &PolledPlugin) {
+        let s = plugin.stats;
+        if s.input_overflows == 0 && s.output_underruns == 0 && s.midi_drops == 0 {
+            return;
+        }
+        let entry = self
+            .plugin_stats
+            .entry((plugin.channel_id, plugin.device_path))
+            .or_insert_with(|| PluginStatsLog {
+                name: plugin.handle.device_name().to_string(),
+                stats: PluginBlockStats::default(),
+            });
+        entry.stats.input_overflows += s.input_overflows;
+        entry.stats.output_underruns += s.output_underruns;
+        entry.stats.midi_drops += s.midi_drops;
+    }
+
+    /// Log and reset per-plugin problem counts every `PLUGIN_STATS_LOG_INTERVAL`.
+    fn log_plugin_stats(&mut self) {
+        let elapsed = self.plugin_stats_since.elapsed();
+        if elapsed < PLUGIN_STATS_LOG_INTERVAL {
+            return;
+        }
+        for ((channel_id, device_path), entry) in self.plugin_stats.drain() {
+            let s = entry.stats;
+            warn!(
+                "Plugin {} (channel {} device {}) in the last {:.0}s: {} dropout blocks (output not ready), {} input overflows, {} MIDI events dropped",
+                entry.name,
+                channel_id,
+                device_path,
+                elapsed.as_secs_f32(),
+                s.output_underruns,
+                s.input_overflows,
+                s.midi_drops
+            );
+        }
+        self.plugin_stats_since = Instant::now();
     }
 
     /// Lock the engine state, recovering it if an earlier command panicked while holding it.
@@ -220,6 +402,13 @@ impl CommandWorker {
         active: bool,
         enabled: bool,
     ) {
+        if !parent_path.can_join() {
+            warn!(
+                "Cannot add device {} below channel {} path {}: nesting is too deep",
+                device_id, channel_id, parent_path
+            );
+            return;
+        }
         let child_count = {
             let state = self.lock_state();
             let Some(channel) = state.channels.get(&channel_id) else {
@@ -288,6 +477,13 @@ impl CommandWorker {
     /// Detach a device under the lock and drop it afterwards: dropping a CLAP plugin closes its
     /// GUI and shuts down its subprocess.
     fn remove_device(&self, channel_id: ChannelId, parent_path: DevicePath, position: usize) {
+        if !parent_path.can_join() {
+            warn!(
+                "Invalid device parent path {} for channel {}",
+                parent_path, channel_id
+            );
+            return;
+        }
         let path = parent_path.join(position);
         let removed = {
             let mut state = self.lock_state();
@@ -501,6 +697,45 @@ impl CommandWorker {
         self.send_status(EngineStatus::PluginGuiClosed {
             channel_id,
             device_path,
+        });
+    }
+}
+
+/// Queue a status pair describing an SFZ device's parameters when its instrument changed them.
+fn collect_sfizz_parameters(
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    sfizz: &mut SfizzDevice,
+    statuses: &mut Vec<EngineStatus>,
+) {
+    if !sfizz.take_parameters_changed() {
+        return;
+    }
+    let params = sfizz.parameters();
+    if params.is_empty() {
+        return;
+    }
+    statuses.push(EngineStatus::PluginParameterCount {
+        channel_id,
+        device_path,
+        count: params.len(),
+    });
+    for param in params.iter() {
+        statuses.push(EngineStatus::PluginParameterInfo {
+            channel_id,
+            device_path,
+            param_id: param.id,
+            name: param.name.clone(),
+            min: param.min,
+            max: param.max,
+            default: param.default,
+            group: sfizz.parameter_group(param.id).to_string(),
+            param_type: param.param_type,
+            is_hidden: false,
+            is_read_only: false,
+            is_bypass: false,
+            module: String::new(),
+            enum_values: param.enum_values.clone(),
         });
     }
 }

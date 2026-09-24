@@ -8,7 +8,9 @@ use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::ipc::{MidiEvent, PluginCommand, ProcessManager, SharedMemory};
 use crossbeam::channel::Sender;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
@@ -17,8 +19,28 @@ mod lifecycle;
 mod parameter;
 mod plugin_ipc;
 
-pub use lifecycle::LoadingState;
+pub use lifecycle::PluginLoad;
 pub use plugin_ipc::PluginIpcHandle;
+
+/// Blocks, across all subprocess plugins, where the plugin's output ring buffer didn't hold a
+/// full block and the adapter padded it with silence (audible as a dropout). Reported in
+/// `EngineStats`.
+pub static PLUGIN_UNDERRUNS: AtomicU64 = AtomicU64::new(0);
+
+/// Parameter writes the audio thread can queue per plugin between command-thread ticks before
+/// the queue has to grow.
+const QUEUED_PARAM_CAPACITY: usize = 256;
+
+/// Audio-thread counters for one plugin since the last `take_stats`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PluginBlockStats {
+    /// Blocks whose input didn't fit in the input ring buffer (the subprocess isn't reading).
+    pub input_overflows: u64,
+    /// Blocks padded with silence because the plugin's output wasn't ready.
+    pub output_underruns: u64,
+    /// MIDI events dropped because the MIDI queue was full.
+    pub midi_drops: u64,
+}
 
 /// CLAP device adapter using subprocess isolation
 pub struct SubprocessClapAdapter {
@@ -32,7 +54,7 @@ pub struct SubprocessClapAdapter {
     // Process communication
     process_key: String,
     process_manager: Arc<ProcessManager>,
-    loading_state: Arc<Mutex<LoadingState>>, // Only locked during initialization, not audio processing
+    load: Arc<PluginLoad>,
 
     // Cached parameter info (shared with background loading thread)
     param_info_cache: Arc<Mutex<Vec<ParamInfo>>>,
@@ -50,7 +72,13 @@ pub struct SubprocessClapAdapter {
     is_active: bool,
     is_enabled: bool,
     gui_open: bool,
+    /// Parameter writes not yet sent to the subprocess: made before it was ready, or queued by
+    /// `set_parameter_at` (automation) for the command thread to send. Preallocated.
     pending_param_writes: Vec<(ParamId, ParamValue)>,
+    /// Last known value of each parameter, so `get_parameter` never waits on the subprocess.
+    /// Filled with defaults on ready, then updated by writes and by changes the plugin reports.
+    param_values: HashMap<ParamId, ParamValue>,
+    stats: PluginBlockStats,
 }
 
 impl SubprocessClapAdapter {
@@ -82,8 +110,7 @@ impl SubprocessClapAdapter {
         let category = DeviceCategory::Effect;
         let param_info_cache = Arc::new(Mutex::new(Vec::new()));
 
-        // Create loading state (starts as Loading)
-        let loading_state = Arc::new(Mutex::new(LoadingState::Loading));
+        let load = Arc::new(PluginLoad::new());
 
         // Spawn subprocess loading in background thread (non-blocking!)
         lifecycle::spawn_loading_thread(
@@ -93,7 +120,7 @@ impl SubprocessClapAdapter {
             plugin_id.to_string(),
             sample_rate,
             max_buffer_size,
-            Arc::clone(&loading_state),
+            Arc::clone(&load),
             Arc::clone(&param_info_cache),
             channel_id as usize,
             device_path.clone(),
@@ -109,7 +136,7 @@ impl SubprocessClapAdapter {
             category,
             process_key,
             process_manager,
-            loading_state,
+            load,
             param_info_cache,
             sample_rate,
             max_buffer_size,
@@ -119,7 +146,9 @@ impl SubprocessClapAdapter {
             is_active: false,
             is_enabled: true,
             gui_open: false,
-            pending_param_writes: Vec::new(),
+            pending_param_writes: Vec::with_capacity(QUEUED_PARAM_CAPACITY),
+            param_values: HashMap::new(),
+            stats: PluginBlockStats::default(),
         };
 
         info!(
@@ -151,130 +180,41 @@ impl SubprocessClapAdapter {
 }
 
 impl AudioDevice for SubprocessClapAdapter {
+    /// Audio thread. Never locks, logs or talks to the subprocess: problems are counted in
+    /// `stats` and reported by the command thread (`CommandWorker::poll_devices`).
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-        // Handle disabled state (for subprocess plugins, is_active is managed in the subprocess)
-        if !self.is_enabled {
-            // Pass through
-            let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-            return;
-        }
-
-        // CRITICAL: Check loading state with try_lock (non-blocking!)
-        // If we can't get the lock, just pass through audio (better than blocking)
-        let loading_state_result = self.loading_state.try_lock();
-        let shm: Arc<SharedMemory> = match loading_state_result {
-            Ok(state) => {
-                match &*state {
-                    LoadingState::Loading => {
-                        // Still loading, pass through audio
-                        let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
-                        outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-                        return;
-                    }
-                    LoadingState::Ready(shared_memory) => {
-                        // Plugin ready, use shared memory
-                        Arc::clone(shared_memory)
-                    }
-                    LoadingState::Failed(err) => {
-                        // Failed to load, pass through and log once
-                        warn!("Plugin failed to load: {}", err);
-                        let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
-                        outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-                        return;
-                    }
-                }
-            }
-            Err(_) => {
-                // Couldn't get lock (loading in progress), pass through
-                let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
+        let interleaved_samples = sample_count * 2; // stereo
+        let shm = match self.load.shared_memory() {
+            Some(shm) if self.is_enabled => shm,
+            // Disabled, loading or failed: pass through
+            _ => {
+                let copy_len = interleaved_samples.min(inputs.len()).min(outputs.len());
                 outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
                 return;
             }
         };
 
-        // Write input audio to shared memory ring buffer
-        // Input is interleaved stereo (L, R, L, R, ...), write as-is
-        let interleaved_samples = sample_count * 2; // stereo
+        // Input is interleaved stereo (L, R, L, R, ...), written as-is
         let input_slice = &inputs[..interleaved_samples.min(inputs.len())];
-
-        let mut input_buffer = shm.input_buffer();
-        let written = input_buffer.write(input_slice);
-
-        if written < input_slice.len() {
-            warn!(
-                "Input buffer overflow: wrote {}/{} samples",
-                written,
-                input_slice.len()
-            );
-
-            // Check if subprocess has crashed (buffer overflow is a symptom)
-            if let Some(process) = self.process_manager.get_process(&self.process_key) {
-                if let Ok(mut proc) = process.try_lock() {
-                    if !proc.is_alive() {
-                        error!(
-                            "Subprocess crashed for plugin {} (ch{}_dev{}), transitioning to failed state",
-                            self.device_id, self.channel_id, self.device_path
-                        );
-
-                        // Update loading state to Failed
-                        if let Ok(mut state) = self.loading_state.try_lock() {
-                            *state = LoadingState::Failed(format!(
-                                "Plugin subprocess crashed (process not alive)"
-                            ));
-
-                            // Notify UI of failure
-                            if let Some(ref tx) = self.status_tx {
-                                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                                    channel_id: self.channel_id as usize,
-                                    device_path: self.device_path.clone(),
-                                    state: "failed:subprocess crashed".to_string(),
-                                });
-                            }
-                        }
-
-                        // Pass through audio and return early
-                        let copy_len = (sample_count * 2).min(inputs.len()).min(outputs.len());
-                        outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-                        return;
-                    }
-                }
-            }
+        if shm.input_buffer().write(input_slice) < input_slice.len() {
+            self.stats.input_overflows += 1;
         }
 
-        // TODO: Signal subprocess that audio is available (eventfd)
-        // For now, the subprocess polls the ring buffer in its event loop
-
-        // Read output audio from shared memory ring buffer
-        // Output will be interleaved stereo (L, R, L, R, ...)
-        let mut output_buffer = shm.output_buffer();
+        // The subprocess polls the input ring and fills the output ring in its own time, so the
+        // output is whatever it has produced so far (Phase 3 makes this synchronous).
         let output_len = interleaved_samples.min(outputs.len());
         let output_slice = &mut outputs[..output_len];
-        let read = output_buffer.read(output_slice);
-
+        let read = shm.output_buffer().read(output_slice);
         if read < output_len {
-            // Fill remainder with silence if not enough data available
             output_slice[read..].fill(0.0);
+            self.stats.output_underruns += 1;
+            PLUGIN_UNDERRUNS.fetch_add(1, Ordering::Relaxed);
         }
-
-        // In a real implementation, we'd also:
-        // - Signal subprocess via eventfd when audio is available
-        // - Wait for subprocess to complete processing (with timeout)
-        // - Handle synchronization properly
-        // For now, this is fire-and-forget with ring buffer
     }
 
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        // Check if plugin is ready (non-blocking try_lock)
-        let loading_state_result = self.loading_state.try_lock();
-        let shm: Arc<SharedMemory> = match loading_state_result {
-            Ok(state) => {
-                match &*state {
-                    LoadingState::Ready(shared_memory) => Arc::clone(shared_memory),
-                    _ => return, // Not ready, drop MIDI event
-                }
-            }
-            Err(_) => return, // Couldn't get lock, drop MIDI event
+        let Some(shm) = self.load.shared_memory() else {
+            return; // Not ready: drop the event
         };
 
         let event = MidiEvent {
@@ -285,13 +225,14 @@ impl AudioDevice for SubprocessClapAdapter {
             _padding: 0,
         };
 
-        let mut midi_queue = shm.midi_queue();
-        if !midi_queue.write(event) {
-            warn!("MIDI queue full, dropping event");
+        if !shm.midi_queue().write(event) {
+            self.stats.midi_drops += 1;
         }
     }
 
+    /// Command thread: sends the value to the subprocess right away when it can.
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
+        self.param_values.insert(param_id, value);
         self.flush_pending_parameters();
 
         if !parameter::set_parameter_value(
@@ -300,19 +241,23 @@ impl AudioDevice for SubprocessClapAdapter {
             param_id,
             value,
         ) {
-            if let Some(existing) = self
-                .pending_param_writes
-                .iter()
-                .position(|(pending_id, _)| *pending_id == param_id)
-            {
-                self.pending_param_writes.remove(existing);
-            }
-            self.pending_param_writes.push((param_id, value));
+            self.queue_parameter(param_id, value);
         }
     }
 
+    /// Automation (audio thread, or the command thread on bypass/delete): queue the value for
+    /// the command thread to send, so the callback never touches the socket. Takes effect within
+    /// one command-thread tick; the frame offset is ignored until Phase 3.
+    fn set_parameter_at(&mut self, param_id: ParamId, value: ParamValue, _frame_offset: usize) {
+        if let Some(cached) = self.param_values.get_mut(&param_id) {
+            *cached = value;
+        }
+        self.queue_parameter(param_id, value);
+    }
+
+    /// Last known value (no IPC). None until the plugin has reported its parameters.
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
-        parameter::get_parameter_value(&self.process_manager, &self.process_key, param_id)
+        self.param_values.get(&param_id).copied()
     }
 
     fn device_id(&self) -> &str {
@@ -410,10 +355,19 @@ impl SubprocessClapAdapter {
             return false;
         }
 
-        if let Ok(state) = self.loading_state.lock() {
-            matches!(*state, LoadingState::Ready(_))
-        } else {
-            false
+        self.load.is_ready()
+    }
+
+    /// Replace a queued write to the same parameter, else append. Doesn't allocate unless more
+    /// than `QUEUED_PARAM_CAPACITY` distinct parameters are queued.
+    fn queue_parameter(&mut self, param_id: ParamId, value: ParamValue) {
+        match self
+            .pending_param_writes
+            .iter_mut()
+            .find(|(pending_id, _)| *pending_id == param_id)
+        {
+            Some(pending) => pending.1 = value,
+            None => self.pending_param_writes.push((param_id, value)),
         }
     }
 
@@ -443,8 +397,40 @@ impl SubprocessClapAdapter {
         }
     }
 
+    /// Command thread, once the subprocess is ready: seed the value cache with defaults (values
+    /// already written win) and send writes made while loading.
     pub fn on_device_ready(&mut self) {
+        let params = parameter::get_parameters(&self.param_info_cache);
+        self.param_values.reserve(params.len());
+        for param in &params {
+            self.param_values.entry(param.id).or_insert(param.default);
+        }
         self.flush_pending_parameters();
+    }
+
+    /// Shared load state, so the command thread can mark the plugin failed.
+    pub fn load(&self) -> Arc<PluginLoad> {
+        Arc::clone(&self.load)
+    }
+
+    /// Return and reset the audio-thread counters.
+    pub fn take_stats(&mut self) -> PluginBlockStats {
+        std::mem::take(&mut self.stats)
+    }
+
+    /// Move queued parameter writes into `out` (keeps this queue's capacity). Only once ready;
+    /// before that they stay queued for `on_device_ready`.
+    pub fn drain_queued_parameters(&mut self, out: &mut Vec<(ParamId, ParamValue)>) {
+        if self.load.is_ready() {
+            out.extend(self.pending_param_writes.drain(..));
+        }
+    }
+
+    /// Record a value the plugin reported (its GUI or internal modulation).
+    pub fn cache_parameter_value(&mut self, param_id: ParamId, value: ParamValue) {
+        if let Some(cached) = self.param_values.get_mut(&param_id) {
+            *cached = value;
+        }
     }
 
     /// Close plugin GUI
@@ -471,45 +457,6 @@ impl SubprocessClapAdapter {
     /// Check if GUI is open
     pub fn is_gui_open(&self) -> bool {
         self.gui_open
-    }
-
-    /// Poll for unsolicited parameter change messages from subprocess (non-blocking)
-    /// Returns parameter changes as (param_id, normalized_value) pairs
-    pub fn poll_parameter_changes(&mut self) -> Option<Vec<(u32, f32)>> {
-        use crate::audio::ipc::protocol::PluginResponse;
-
-        let process = self.process_manager.get_process(&self.process_key)?;
-        // try_lock: this runs on the audio thread, and GUI/activation round-trips can hold
-        // this lock for seconds
-        let mut process_guard = process.try_lock().ok()?;
-
-        // Try non-blocking read with very short timeout (don't block audio thread!)
-        let _ = process_guard.set_read_timeout(Some(std::time::Duration::from_micros(100)));
-
-        let mut changes = Vec::new();
-
-        // Keep reading while there are messages available (non-blocking)
-        loop {
-            match process_guard.try_recv_response() {
-                Ok(PluginResponse::ParameterValueChanged { param_id, value }) => {
-                    changes.push((param_id, value));
-                }
-                Ok(_) => {
-                    // Got some other response - ignore it (shouldn't happen for unsolicited messages)
-                    break;
-                }
-                Err(_) => {
-                    // No more messages available or error
-                    break;
-                }
-            }
-        }
-
-        if !changes.is_empty() {
-            Some(changes)
-        } else {
-            None
-        }
     }
 }
 
