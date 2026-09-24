@@ -3,6 +3,7 @@
 //! Handles all commands received from the main engine via IPC,
 //! including initialization, activation, parameter management, and GUI operations.
 
+use std::os::fd::{IntoRawFd, OwnedFd};
 use tracing::{error, info, warn};
 
 use clack_extensions::gui::{GuiSize, PluginGui};
@@ -14,21 +15,24 @@ use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 use clack_host::utils::Cookie;
 
-use crate::audio::ipc::{SharedMemory, SharedMemoryLayout};
+use crate::audio::ipc::{
+    HostMessage, InstanceId, PluginCommand, PluginParameterInfo, PluginResponse, SharedMemory,
+    SharedMemoryLayout,
+};
 
-use crate::plugin_host::ipc_utils::recv_fd_from_socket_raw;
 use crate::plugin_host::operations::{
     close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui,
 };
-use crate::plugin_host::protocol::{PluginCommand, PluginParameterInfo, PluginResponse};
-use crate::plugin_host::state::PluginState;
+use crate::plugin_host::state::{ParamMap, PluginState};
 
-/// Process a command and return response
+/// Process a command for `instance_id` and return the response, if it has one. `fds` are the
+/// file descriptors that came with the command.
 pub fn process_command(
     cmd: PluginCommand,
+    instance_id: InstanceId,
+    fds: Vec<OwnedFd>,
     plugin_state: &mut Option<PluginState>,
-    unix_socket_fd: i32,
-    unsolicited_tx: &std::sync::mpsc::Sender<PluginResponse>,
+    event_tx: &std::sync::mpsc::Sender<HostMessage>,
 ) -> Option<PluginResponse> {
     match cmd {
         PluginCommand::Initialize {
@@ -36,10 +40,37 @@ pub fn process_command(
             plugin_id,
             sample_rate,
             max_buffer_size,
-            shm_name,
         } => {
-            info!("Initializing plugin: {} from {:?}", plugin_id, plugin_path);
-            info!("Shared memory name: {}", shm_name);
+            if let Some(state) = plugin_state {
+                // One instance per host until hosting modes land (Phase 5)
+                return Some(PluginResponse::InitializeError {
+                    error: format!(
+                        "This host already holds instance {}; it can't load instance {}",
+                        state.instance_id, instance_id
+                    ),
+                });
+            }
+            info!(
+                "Initializing plugin: {} from {:?} as instance {}",
+                plugin_id, plugin_path, instance_id
+            );
+
+            // The instance's shared memory comes with the command
+            let Some(shm_fd) = fds.into_iter().next() else {
+                return Some(PluginResponse::InitializeError {
+                    error: "Initialize came without a shared memory descriptor".to_string(),
+                });
+            };
+            let layout = SharedMemoryLayout::new(max_buffer_size);
+            let shared_memory = match SharedMemory::from_fd(shm_fd.into_raw_fd(), layout) {
+                Ok(shm) => shm,
+                Err(e) => {
+                    error!("Failed to map shared memory: {}", e);
+                    return Some(PluginResponse::InitializeError {
+                        error: format!("Failed to map shared memory: {}", e),
+                    });
+                }
+            };
 
             info!("Step 1: Loading plugin from disk...");
             let (bundle, instance, shared) = match load_plugin(
@@ -47,10 +78,11 @@ pub fn process_command(
                 &plugin_id,
                 sample_rate,
                 max_buffer_size,
-                unsolicited_tx.clone(),
+                instance_id,
+                event_tx.clone(),
             ) {
                 Ok(result) => {
-                    info!("Step 2: Plugin loaded successfully, now creating shared memory...");
+                    info!("Step 2: Plugin loaded successfully");
                     result
                 }
                 Err(e) => {
@@ -59,66 +91,7 @@ pub fn process_command(
                 }
             };
 
-            // Create shared memory layout
-            info!(
-                "Step 3: Creating shared memory layout (max_buffer_size={})",
-                max_buffer_size
-            );
-            let layout = SharedMemoryLayout::new(max_buffer_size);
-
-            // Receive shared memory FD from parent process via Unix socket
-            info!(
-                "Step 4: Receiving shared memory FD from Unix socket (FD={})",
-                unix_socket_fd
-            );
-
-            // Call recv_fd_from_socket_raw directly with the raw FD to avoid UnixStream ownership issues
-            info!("Step 4.5: About to call recv_fd_from_socket_raw...");
-            let shared_memory = match recv_fd_from_socket_raw(unix_socket_fd) {
-                Ok(shm_fd) => {
-                    info!(
-                        "Step 5: Received shared memory FD={} (after dup), mapping it...",
-                        shm_fd
-                    );
-
-                    // CRITICAL: Close the Unix socket FD immediately after receiving the shared memory FD
-                    // This prevents IO Safety violations when the subprocess exits
-                    unsafe {
-                        libc::close(unix_socket_fd);
-                    }
-                    info!(
-                        "Step 5.5: Closed Unix socket FD={} (no longer needed)",
-                        unix_socket_fd
-                    );
-
-                    match SharedMemory::from_fd(shm_fd, layout) {
-                        Ok(shm) => {
-                            info!(
-                                "Step 6: ✅ Shared memory mapped successfully from FD={}!",
-                                shm_fd
-                            );
-                            Some(shm)
-                        }
-                        Err(e) => {
-                            error!("Step 6: ❌ Failed to map shared memory from FD={}: {}. Continuing without shared memory.", shm_fd, e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "Step 5: ❌ Failed to receive shared memory FD: {}. Continuing without shared memory.",
-                        e
-                    );
-                    // Close Unix socket even on error
-                    unsafe {
-                        libc::close(unix_socket_fd);
-                    }
-                    None
-                }
-            };
-
-            info!("Step 6: Preparing plugin state...");
+            info!("Step 3: Preparing plugin state...");
             // Get plugin metadata
             let device_name = plugin_id.clone();
             let device_vendor = "Unknown".to_string();
@@ -131,6 +104,7 @@ pub fn process_command(
 
             // Store plugin state
             *plugin_state = Some(PluginState {
+                instance_id,
                 bundle,
                 instance,
                 shared,
@@ -140,14 +114,15 @@ pub fn process_command(
                 sample_rate,
                 max_buffer_size,
                 audio_processor: None,
-                shared_memory,
+                shared_memory: Some(shared_memory),
                 input_buffers,
                 output_buffers,
                 output_event_buffer: EventBuffer::new(),
                 pending_param_changes: Vec::new(),
+                param_map: None,
             });
 
-            info!("Step 7: ✅ Plugin state stored, sending InitializeSuccess response");
+            info!("Step 4: ✅ Plugin state stored, sending InitializeSuccess response");
             Some(PluginResponse::InitializeSuccess {
                 device_name,
                 device_vendor,
@@ -561,6 +536,7 @@ pub fn process_command(
                     }
 
                     info!("✅ Queried {} parameters from plugin", param_infos.len());
+                    state.param_map = Some(ParamMap::build(&mut state.instance));
                     Some(PluginResponse::ParameterInfo {
                         params: param_infos,
                     })
@@ -577,124 +553,82 @@ pub fn process_command(
         }
 
         PluginCommand::GetParameter { param_id } => {
-            if let Some(ref mut state) = plugin_state {
-                // Get plugin handle
-                let mut handle = state.instance.plugin_handle();
-
-                // Try to get the params extension
-                let params_ext: Option<PluginParams> = handle.get_extension();
-
-                if let Some(params) = params_ext {
-                    // First, get parameter info to get the CLAP ID
-                    let mut buffer = ParamInfoBuffer::new();
-
-                    if let Some(clap_info) = params.get_info(&mut handle, param_id, &mut buffer) {
-                        let clap_id = clap_info.id;
-
-                        // Get the current value
-                        if let Some(value) = params.get_value(&mut handle, clap_id) {
-                            // Normalize value to 0.0-1.0 range
-                            let normalized = ((value - clap_info.min_value)
-                                / (clap_info.max_value - clap_info.min_value))
-                                as f32;
-
-                            Some(PluginResponse::ParameterValue {
-                                param_id,
-                                value: normalized.clamp(0.0, 1.0),
-                            })
-                        } else {
-                            Some(PluginResponse::Error {
-                                command: "GetParameter".to_string(),
-                                error: format!("Failed to get value for parameter {}", param_id),
-                            })
-                        }
-                    } else {
-                        Some(PluginResponse::Error {
-                            command: "GetParameter".to_string(),
-                            error: format!("Parameter {} not found", param_id),
-                        })
-                    }
-                } else {
-                    Some(PluginResponse::Error {
-                        command: "GetParameter".to_string(),
-                        error: "Plugin does not support params extension".to_string(),
-                    })
-                }
-            } else {
-                Some(PluginResponse::Error {
+            let Some(ref mut state) = plugin_state else {
+                return Some(PluginResponse::Error {
                     command: "GetParameter".to_string(),
                     error: "Plugin not initialized".to_string(),
-                })
+                });
+            };
+            let Some(entry) = state.param_map().get(param_id) else {
+                return Some(PluginResponse::Error {
+                    command: "GetParameter".to_string(),
+                    error: format!("Parameter {} not found", param_id),
+                });
+            };
+            let mut handle = state.instance.plugin_handle();
+            let value = handle
+                .get_extension::<PluginParams>()
+                .and_then(|params| params.get_value(&mut handle, entry.clap_id));
+            match value {
+                Some(value) => Some(PluginResponse::ParameterValue {
+                    param_id,
+                    value: entry.normalize(value),
+                }),
+                None => Some(PluginResponse::Error {
+                    command: "GetParameter".to_string(),
+                    error: format!("Failed to get value for parameter {}", param_id),
+                }),
             }
         }
 
         PluginCommand::SetParameter { param_id, value } => {
-            if let Some(ref mut state) = plugin_state {
-                // Get plugin handle
-                let mut handle = state.instance.plugin_handle();
-
-                // Try to get the params extension
-                let params_ext: Option<PluginParams> = handle.get_extension();
-
-                if let Some(params) = params_ext {
-                    // Get parameter info to denormalize the value
-                    let mut buffer = ParamInfoBuffer::new();
-
-                    if let Some(clap_info) = params.get_info(&mut handle, param_id, &mut buffer) {
-                        let clap_id = clap_info.id;
-
-                        // Denormalize from 0.0-1.0 to actual parameter range
-                        let denormalized = clap_info.min_value
-                            + (value as f64 * (clap_info.max_value - clap_info.min_value));
-
-                        info!(
-                            "Queuing parameter change: {} = {} (denormalized: {:.2})",
-                            param_id, value, denormalized
-                        );
-
-                        // Queue the parameter change to be applied in the next flush/process call
-                        state
-                            .pending_param_changes
-                            .push((param_id, clap_id, denormalized));
-
-                        // Immediately flush to the plugin if not processing
-                        // This ensures parameter changes are applied even when audio isn't running
-                        let mut input_events = EventBuffer::new();
-                        let event = ParamValueEvent::new(
-                            0, // Sample offset
-                            clap_id,
-                            Pckn::new(0u16, 0u16, 0u16, 0u32),
-                            denormalized,
-                            Cookie::empty(),
-                        );
-                        input_events.push(&event);
-
-                        let mut output_events = EventBuffer::new();
-                        let input_events_view = InputEvents::from_buffer(&input_events);
-                        let mut output_events_view = OutputEvents::from_buffer(&mut output_events);
-
-                        // Use flush to immediately apply parameter change
-                        params.flush(&mut handle, &input_events_view, &mut output_events_view);
-
-                        None // No response needed (fire-and-forget)
-                    } else {
-                        Some(PluginResponse::Error {
-                            command: "SetParameter".to_string(),
-                            error: format!("Parameter {} not found", param_id),
-                        })
-                    }
-                } else {
-                    Some(PluginResponse::Error {
-                        command: "SetParameter".to_string(),
-                        error: "Plugin does not support params extension".to_string(),
-                    })
-                }
-            } else {
-                Some(PluginResponse::Error {
+            let Some(ref mut state) = plugin_state else {
+                return Some(PluginResponse::Error {
                     command: "SetParameter".to_string(),
                     error: "Plugin not initialized".to_string(),
-                })
-            }
+                });
+            };
+            let Some(entry) = state.param_map().get(param_id) else {
+                return Some(PluginResponse::Error {
+                    command: "SetParameter".to_string(),
+                    error: format!("Parameter {} not found", param_id),
+                });
+            };
+            let denormalized = entry.denormalize(value);
+            info!(
+                "Queuing parameter change: {} = {} (denormalized: {:.2})",
+                param_id, value, denormalized
+            );
+
+            // Reported back to the engine by the event loop
+            state
+                .pending_param_changes
+                .push((entry.clap_id, denormalized));
+
+            // Flush right away so the change applies even while audio isn't running
+            let mut handle = state.instance.plugin_handle();
+            let Some(params) = handle.get_extension::<PluginParams>() else {
+                return Some(PluginResponse::Error {
+                    command: "SetParameter".to_string(),
+                    error: "Plugin does not support params extension".to_string(),
+                });
+            };
+            let mut input_events = EventBuffer::new();
+            input_events.push(&ParamValueEvent::new(
+                0, // Sample offset
+                entry.clap_id,
+                Pckn::new(0u16, 0u16, 0u16, 0u32),
+                denormalized,
+                Cookie::empty(),
+            ));
+            let mut output_events = EventBuffer::new();
+            params.flush(
+                &mut handle,
+                &InputEvents::from_buffer(&input_events),
+                &mut OutputEvents::from_buffer(&mut output_events),
+            );
+
+            None // No response needed (fire-and-forget)
         }
 
         _ => {

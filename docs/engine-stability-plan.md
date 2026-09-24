@@ -8,7 +8,7 @@ plugins". It also sets up "Plugin latency compensation".
 
 - [x] Phase 0: Measurement (load peaks, xruns, lock misses, an allocation checker). Baseline numbers still to record
 - [x] Phase 1: Audio thread hygiene (RT priority and memlock moved to Phase 8). Needs an `rt-debug` live run
-- [ ] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module)
+- [x] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module). Needs a live knob-move check
 - [ ] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
 - [ ] Phase 4: Plugin crash detection and recovery
 - [ ] Phase 5: Plugin hosting modes (within engine, together, by vendor, by plug-in, individually)
@@ -241,6 +241,51 @@ for seconds.
 
 Verify: `test_plugin_osc.sh` passes. Open a plugin GUI and move a knob: the value reaches Godot.
 Opening a GUI doesn't produce lock misses (Phase 0 counter).
+
+As built (2026-09-25):
+- **Protocol** is `audio/ipc/protocol.rs`; `plugin_host/protocol.rs` and `plugin_host/ipc_utils.rs`
+  are gone. Envelopes: `HostRequest { instance_id, request_id, command }` engine → host, and
+  `HostMessage::Response { instance_id, request_id, response }` / `HostMessage::Event { instance_id,
+  event }` host → engine. The unsolicited variants moved out of `PluginResponse` into
+  `PluginEvent`. `request_id` 0 (`NO_REPLY`) is fire-and-forget; the engine logs any `Error` the host
+  returns for one. `LoadState`/`StateSaved` carry `Vec<u8>` instead of base64 (neither is implemented
+  in the host yet).
+- **Wire** (`audio/ipc/wire.rs`): `u32` LE length + **bincode 1** (already a dependency, so no
+  `postcard`), 256 MB frame limit. File descriptors ride on a frame as `SCM_RIGHTS` via
+  `sendmsg`/`recvmsg`, so the memfd comes with `Initialize` instead of a separate handshake, and
+  readers never buffer past a frame. `SONARA_IPC_TRACE=1` logs every frame on both sides.
+- **Socket**: `UnixStream::pair()`; the host gets its end as descriptor 3 (its only argument) and
+  sets close-on-exec on it again, so processes a plugin spawns don't keep the socket open.
+- **Engine side**: `PluginProcess` has a reader thread that completes waiting requests by
+  `request_id` (reply slot is a `bounded(1)` channel; timeout removes the slot, a late reply is
+  dropped) and routes events to a per-instance channel that `CommandWorker::poll_devices` drains.
+  Writes hold a mutex only for the write. When the socket closes, every waiting request fails at
+  once and the next tick marks the plugin failed. The 5 s `start_monitoring` thread was removed.
+- Plugin GUI resize requests now reach the window (`PluginEvent::GuiResizeRequest` →
+  `EngineStatus::PluginGuiResizeRequest`); before, `poll_parameter_changes` dropped them.
+- **Host side**: a reader thread feeds requests to the main loop over a channel; the main loop is
+  the only writer and waits on that channel for 1 ms when idle instead of sleeping. The merged loop
+  otherwise stays until Phase 3.
+- **Parameter map** (`plugin_host/state.rs` `ParamMap`): engine index ↔ CLAP id and range, built on
+  `GetParameterInfo` (or first use) and used by echo, `SetParameter` and `GetParameter`. The host
+  now registers `HostParams`: `rescan` with INFO or ALL drops the map, and `request_flush` triggers a
+  flush while no GUI is open. The engine isn't told the parameter list changed; that needs its own
+  status.
+- **Instances**: `ProcessManager::allocate_instance_id()` per adapter, replacing the device-path
+  `process_key` (which could collide when devices moved). `ProcessManager` maps host key → host and
+  instance id → `InstanceConnection`; `spawn_instance` reuses a live host for its key. The key is
+  `instance-<id>` until Phase 5. A host rejects a second `Initialize`. A host counts as in use while
+  any instance's event route is registered, so one still loading keeps it alive.
+- Host shutdown is bounded (Phase 4 step 5, done early): `Shutdown`, then `SIGKILL` after 1 s.
+- Tests: `wire.rs` (framing, large frames, fd passing, EOF) and `process_manager.rs` (out-of-order
+  replies, timeout + late reply, event routing, host exit) against an in-process fake host.
+- Live check: Dragonfly Room loads over the new channel (spawn to ready ~8 ms, where the old path
+  slept 100 ms). Parameter set + echo, GUI open/close, device removal (host exits in ~10 ms) and
+  `kill -9` of the host (bypassed within one tick, engine keeps running) all work, with 0 lock
+  misses. **Still to check by hand:** move a knob in a plugin GUI and see the value in Godot.
+- `test_osc.sh` and `test_plugin_osc.sh` are stale: they use removed addresses (`/sine/*`), the old
+  `/project/init` arguments and `add_device` without the `clap` type and file, so they exit 0 without
+  loading a plugin. The live check above sent the current messages by hand.
 
 ## Phase 3: Synchronous plugin processing
 

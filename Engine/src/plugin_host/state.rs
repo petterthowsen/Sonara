@@ -3,8 +3,11 @@
 //! Manages the plugin instance state and handles audio processing
 //! from shared memory ring buffers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
@@ -12,12 +15,87 @@ use clack_host::events::{Pckn, UnknownEvent};
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 
-use crate::audio::ipc::SharedMemory;
+use crate::audio::ipc::{InstanceId, SharedMemory};
 
 use crate::plugin_host::host::{SubprocessHost, SubprocessHostShared};
 
+/// A parameter's CLAP id and range, found by the engine's index for it.
+#[derive(Debug, Clone, Copy)]
+pub struct ParamEntry {
+    pub clap_id: ClapId,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl ParamEntry {
+    /// Plugin value to the engine's 0.0-1.0.
+    pub fn normalize(&self, value: f64) -> f32 {
+        let range = self.max - self.min;
+        if range.abs() > f64::EPSILON {
+            ((value - self.min) / range).clamp(0.0, 1.0) as f32
+        } else {
+            0.5
+        }
+    }
+
+    /// The engine's 0.0-1.0 to a plugin value.
+    pub fn denormalize(&self, value: f32) -> f64 {
+        self.min + value as f64 * (self.max - self.min)
+    }
+}
+
+/// Maps between the engine's parameter indices and CLAP ids. Built once from the params
+/// extension, and rebuilt after the plugin rescans its parameter list.
+#[derive(Debug, Default)]
+pub struct ParamMap {
+    /// By CLAP parameter index, which is the engine's parameter id. None where the plugin
+    /// reported no info for an index.
+    entries: Vec<Option<ParamEntry>>,
+    index_by_id: HashMap<ClapId, u32>,
+}
+
+impl ParamMap {
+    pub fn build(instance: &mut PluginInstance<SubprocessHost>) -> Self {
+        let mut handle = instance.plugin_handle();
+        let Some(params) = handle.get_extension::<PluginParams>() else {
+            return Self::default();
+        };
+        let count = params.count(&mut handle);
+        let mut map = Self {
+            entries: Vec::with_capacity(count as usize),
+            index_by_id: HashMap::with_capacity(count as usize),
+        };
+        for index in 0..count {
+            let mut buffer = ParamInfoBuffer::new();
+            let entry = params
+                .get_info(&mut handle, index, &mut buffer)
+                .map(|info| ParamEntry {
+                    clap_id: info.id,
+                    min: info.min_value,
+                    max: info.max_value,
+                });
+            if let Some(entry) = entry {
+                map.index_by_id.insert(entry.clap_id, index);
+            }
+            map.entries.push(entry);
+        }
+        map
+    }
+
+    pub fn get(&self, index: u32) -> Option<ParamEntry> {
+        self.entries.get(index as usize).copied().flatten()
+    }
+
+    /// The engine's index for a CLAP parameter id, with its entry.
+    pub fn find(&self, clap_id: ClapId) -> Option<(u32, ParamEntry)> {
+        let index = *self.index_by_id.get(&clap_id)?;
+        Some((index, self.get(index)?))
+    }
+}
+
 /// Plugin state container
 pub struct PluginState {
+    pub instance_id: InstanceId,
     pub bundle: PluginBundle,
     pub instance: PluginInstance<SubprocessHost>,
     pub shared: Arc<SubprocessHostShared>,
@@ -36,8 +114,21 @@ pub struct PluginState {
     // Event buffer for plugin output events (parameter changes, etc.)
     pub output_event_buffer: EventBuffer,
 
-    // Pending parameter changes (param_id, clap_id, denormalized_value)
-    pub pending_param_changes: Vec<(u32, ClapId, f64)>,
+    // Parameter changes to report to the engine: (clap_id, plugin value)
+    pub pending_param_changes: Vec<(ClapId, f64)>,
+
+    /// None until first needed, and again after the plugin rescans its parameters
+    pub param_map: Option<ParamMap>,
+}
+
+impl PluginState {
+    /// The parameter map, built on first use.
+    pub fn param_map(&mut self) -> &ParamMap {
+        if self.param_map.is_none() {
+            self.param_map = Some(ParamMap::build(&mut self.instance));
+        }
+        self.param_map.as_ref().expect("built above")
+    }
 }
 
 /// Process output events from the plugin (parameter changes, etc.)
@@ -52,8 +143,7 @@ pub fn process_output_events(state: &mut PluginState) {
             let value = param_event.value();
 
             // Store for sending to main process
-            // (param_id, clap_id, denormalized_value)
-            state.pending_param_changes.push((u32::MAX, clap_id, value));
+            state.pending_param_changes.push((clap_id, value));
 
             info!(
                 "Plugin changed parameter (CLAP ID: {:?}) to {:.4}",

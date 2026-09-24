@@ -7,12 +7,14 @@ use crate::audio::devices::DevicePath;
 use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
 use crate::audio::ipc::{
-    PluginCommand, PluginParameterInfo, PluginResponse, ProcessManager, SharedMemory,
+    InstanceId, PluginCommand, PluginParameterInfo, PluginResponse, ProcessManager, SharedMemory,
+    REQUEST_TIMEOUT,
 };
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 /// Maps a plugin's reported parameter metadata to the engine's `ParamInfo`.
@@ -221,7 +223,7 @@ impl PluginLoad {
 /// Spawn background thread to load plugin subprocess
 pub fn spawn_loading_thread(
     process_manager: Arc<ProcessManager>,
-    process_key: String,
+    instance_id: InstanceId,
     plugin_path: PathBuf,
     plugin_id: String,
     sample_rate: f32,
@@ -236,177 +238,97 @@ pub fn spawn_loading_thread(
     std::thread::spawn(move || {
         info!("🔄 Background thread: Loading plugin subprocess...");
 
-        // Send loading state
-        if let Some(ref tx) = status_tx {
-            let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                channel_id,
-                device_path: device_path.clone(),
-                state: "loading".to_string(),
-            });
-        }
+        let send_state = |state: String| {
+            if let Some(ref tx) = status_tx {
+                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                    channel_id,
+                    device_path,
+                    state,
+                });
+            }
+        };
+        send_state("loading".to_string());
 
-        // Spawn plugin subprocess (blocking, but on background thread!)
-        let result = process_manager.spawn_plugin(
-            process_key.clone(),
+        // Blocking, but on this background thread
+        let connection = match process_manager.spawn_instance(
+            instance_id,
+            &ProcessManager::individual_host_key(instance_id),
             plugin_path,
             plugin_id.clone(),
             sample_rate,
             max_buffer_size,
-        );
-
-        match result {
-            Ok(_) => {
-                // Get shared memory reference and activate plugin
-                if let Some(process) = process_manager.get_process(&process_key) {
-                    // Get shared memory first (quick operation)
-                    let shared_memory = {
-                        let process_guard = process.lock().unwrap();
-                        Arc::clone(process_guard.shared_memory())
-                    };
-
-                    // Brief delay to let subprocess return to event loop after InitializeSuccess
-                    // This ensures the subprocess is ready to receive the next command
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-
-                    // Now send activation commands (in separate critical section)
-                    let param_info_cache = {
-                        info!("🔄 Activating plugin: {}", plugin_id);
-
-                        let mut process_guard = process.lock().unwrap();
-
-                        // Send Activate command
-                        info!("📤 Sending Activate command...");
-                        if let Err(e) = process_guard.send_command(PluginCommand::Activate) {
-                            error!("❌ Failed to send Activate command: {}", e);
-                        } else {
-                            info!("📥 Waiting for Activate response (with timeout)...");
-
-                            match process_guard
-                                .recv_response_timeout(std::time::Duration::from_secs(5))
-                            {
-                                Ok(PluginResponse::ActivateResult { success, error }) => {
-                                    if success {
-                                        info!("✅ Plugin activated successfully");
-                                    } else {
-                                        error!(
-                                            "❌ Failed to activate plugin: {}",
-                                            error.unwrap_or_default()
-                                        );
-                                    }
-                                }
-                                Ok(resp) => {
-                                    error!("❌ Unexpected response to Activate: {:?}", resp);
-                                }
-                                Err(e) => {
-                                    error!("❌ Failed to receive Activate response (timeout or error): {}", e);
-                                    warn!("Plugin will run in pass-through mode");
-                                }
-                            }
-                        }
-
-                        // Query parameter info BEFORE starting processing to avoid response buffering issues
-                        info!("🔄 Querying plugin parameters...");
-                        let param_info_cache = if let Err(e) =
-                            process_guard.send_command(PluginCommand::GetParameterInfo)
-                        {
-                            error!("❌ Failed to send GetParameterInfo command: {}", e);
-                            Vec::new()
-                        } else {
-                            match process_guard.recv_response() {
-                                Ok(PluginResponse::ParameterInfo { params }) => {
-                                    info!("✅ Plugin has {} parameters", params.len());
-
-                                    // Convert to ParamInfo format
-                                    params.iter().map(plugin_param_to_info).collect()
-                                }
-                                Ok(resp) => {
-                                    error!(
-                                        "❌ Unexpected response to GetParameterInfo: {:?}",
-                                        resp
-                                    );
-                                    Vec::new()
-                                }
-                                Err(e) => {
-                                    error!("❌ Failed to receive GetParameterInfo response: {}", e);
-                                    Vec::new()
-                                }
-                            }
-                        };
-
-                        // Now start processing (after querying parameters)
-                        info!("🔄 Starting audio processing...");
-                        if let Err(e) = process_guard.send_command(PluginCommand::StartProcessing) {
-                            error!("❌ Failed to send StartProcessing command: {}", e);
-                        } else {
-                            // Don't wait for ProcessingStarted response - it's fire-and-forget
-                            info!("✅ StartProcessing command sent");
-                        }
-
-                        param_info_cache
-                    };
-
-                    // Update parameter cache
-                    {
-                        let mut cache = param_cache.lock().unwrap();
-                        *cache = param_info_cache.clone();
-                    }
-
-                    load.set_ready(shared_memory);
-
-                    info!(
-                        "✅ Plugin subprocess fully loaded and activated: {} ({} params)",
-                        plugin_id,
-                        param_info_cache.len()
-                    );
-
-                    // Send ready state
-                    if let Some(ref tx) = status_tx {
-                        let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                            channel_id,
-                            device_path: device_path.clone(),
-                            state: "ready".to_string(),
-                        });
-                    }
-
-                    // Notify that device is ready (triggers parameter re-send)
-                    if let Some(ref cmd_tx) = command_tx {
-                        let _ = cmd_tx.send(AudioCommand::DeviceReady {
-                            channel_id,
-                            device_path: device_path.clone(),
-                        });
-                        info!(
-                            "📤 Sent DeviceReady notification for channel {} position {}",
-                            channel_id, device_path
-                        );
-                    }
-                } else {
-                    let error_msg = "Failed to get process handle".to_string();
-                    load.set_failed(error_msg.clone());
-                    error!("❌ Failed to get process handle for {}", plugin_id);
-
-                    // Send failed state
-                    if let Some(ref tx) = status_tx {
-                        let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                            channel_id,
-                            device_path: device_path.clone(),
-                            state: format!("failed:{}", error_msg),
-                        });
-                    }
-                }
-            }
+        ) {
+            Ok(connection) => connection,
             Err(e) => {
                 load.set_failed(e.clone());
                 error!("❌ Failed to spawn plugin subprocess: {}", e);
-
-                // Send failed state
-                if let Some(ref tx) = status_tx {
-                    let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                        channel_id,
-                        device_path: device_path.clone(),
-                        state: format!("failed:{}", e),
-                    });
-                }
+                send_state(format!("failed:{}", e));
+                return;
             }
+        };
+
+        info!("🔄 Activating plugin: {}", plugin_id);
+        match connection.request(PluginCommand::Activate, Duration::from_secs(5)) {
+            Ok(PluginResponse::ActivateResult { success: true, .. }) => {
+                info!("✅ Plugin activated successfully");
+            }
+            Ok(PluginResponse::ActivateResult { error, .. }) => {
+                error!(
+                    "❌ Failed to activate plugin: {}",
+                    error.unwrap_or_default()
+                );
+            }
+            Ok(resp) => error!("❌ Unexpected response to Activate: {:?}", resp),
+            Err(e) => {
+                error!("❌ Failed to activate plugin: {}", e);
+                warn!("Plugin will run in pass-through mode");
+            }
+        }
+
+        info!("🔄 Querying plugin parameters...");
+        let params: Vec<ParamInfo> =
+            match connection.request(PluginCommand::GetParameterInfo, REQUEST_TIMEOUT) {
+                Ok(PluginResponse::ParameterInfo { params }) => {
+                    info!("✅ Plugin has {} parameters", params.len());
+                    params.iter().map(plugin_param_to_info).collect()
+                }
+                Ok(resp) => {
+                    error!("❌ Unexpected response to GetParameterInfo: {:?}", resp);
+                    Vec::new()
+                }
+                Err(e) => {
+                    error!("❌ Failed to query plugin parameters: {}", e);
+                    Vec::new()
+                }
+            };
+
+        if let Err(e) = connection.send(PluginCommand::StartProcessing) {
+            error!("❌ Failed to send StartProcessing command: {}", e);
+        }
+
+        let param_count = params.len();
+        *param_cache.lock().unwrap() = params;
+        load.set_ready(Arc::clone(connection.shared_memory()));
+
+        info!(
+            "✅ Plugin fully loaded and activated: {} (instance {}, host pid {}, {} params)",
+            plugin_id,
+            instance_id,
+            connection.host_pid(),
+            param_count
+        );
+        send_state("ready".to_string());
+
+        // Notify that device is ready (triggers parameter re-send)
+        if let Some(ref cmd_tx) = command_tx {
+            let _ = cmd_tx.send(AudioCommand::DeviceReady {
+                channel_id,
+                device_path,
+            });
+            info!(
+                "📤 Sent DeviceReady notification for channel {} position {}",
+                channel_id, device_path
+            );
         }
     });
 }

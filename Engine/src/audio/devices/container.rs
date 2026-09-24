@@ -123,19 +123,6 @@ impl DevicePath {
         }
     }
 
-    /// Unique CLAP subprocess key so nested plugins do not collide.
-    pub fn to_process_key(&self, channel_id: u32) -> String {
-        format!(
-            "ch{}_dev{}",
-            channel_id,
-            self.indices()
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join("_")
-        )
-    }
-
     /// Window-manager key `plugin_{channel}_{i0}_{i1}`.
     pub fn to_window_key(&self, channel_id: usize) -> String {
         format!(

@@ -22,6 +22,11 @@ Godot also logs into `Godot/logs/last.log` (including engine warn and above via 
 - Xruns are mostly detected from callback gaps: cpal 0.15's ALSA backend recovers underruns without calling the error callback.
 - Crackling with 0 xruns and normal load usually means an underrun inside PipeWire, which the engine can't see. Run `timeout 6 pw-top -b -n 3`. A growing ERR count on the output sink, or a sink QUANT larger than the engine's buffer, confirms it. Check `pw-metadata -n settings 0` for a leftover `clock.force-quantum` and clear it with `pw-metadata -n settings 0 clock.force-quantum 0`.
 
+## Plugin host IPC
+- `SONARA_IPC_TRACE=1 ./run_release.sh` logs every control-channel frame as INFO, decoded as `Debug`: `[ipc] send …` / `[ipc] recv …` in the engine log (from the engine side) and on stderr from each `plugin_host` (inherited). Each line shows the frame size and how many file descriptors rode along.
+- Match a request to its reply by `request_id` (per host process). `request_id: 0` is fire-and-forget. A late reply after a timeout is dropped with a DEBUG line.
+- Every message names its `instance_id`; the engine log line `Plugin <id> initialized as instance <n> (host pid <pid>)` maps it to a plugin and process.
+
 ## Allocation checker (`rt-debug`)
 - `SONARA_FEATURES=rt-debug ./run_release.sh` (or `cargo build --release --features rt-debug`) installs `assert_no_alloc`'s counting allocator and wraps the callback body in `assert_no_alloc`. Violations are counted, not fatal.
 - Every 0.5 s the callback logs a WARN `rt-debug: audio thread (de)allocations since last report (<total> total): <section>: <count>, …`. Sections are named regions marked with `rt_debug::section(name, || …)` (`audio/rt_debug.rs`). Wrap a suspect region in a new section to narrow a violation down; allocations outside any inner section show as `callback (unattributed)`.

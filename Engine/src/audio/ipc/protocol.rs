@@ -1,30 +1,62 @@
-//! IPC Protocol for Plugin Subprocess Communication
+//! Protocol between the engine and `plugin_host` processes. Both binaries use this module.
 //!
-//! This module defines the message types for communication between the main
-//! Sonara engine process and individual plugin host subprocesses.
+//! **Communication model:**
+//! - Control channel: a Unix socketpair carrying length-prefixed bincode frames (`wire.rs`).
+//!   The engine sends `HostRequest`s; the host answers with `HostMessage::Response` (matched by
+//!   `request_id`) and sends `HostMessage::Event`s on its own (parameter changes from the plugin
+//!   GUI, GUI resize requests).
+//! - File descriptors (the shared-memory memfd) ride along with a frame as `SCM_RIGHTS`.
+//! - Audio and MIDI travel through shared memory, never over the socket.
 //!
-//! **Communication Model:**
-//! - Commands: Engine → Plugin (via Unix socket)
-//! - Responses: Plugin → Engine (via Unix socket)  
-//! - Audio: Bidirectional via shared memory ring buffers
-//! - MIDI: Engine → Plugin via shared memory event queue
-//! - Parameters: Bidirectional via Unix socket (not real-time critical)
+//! Every message addresses a plugin **instance**, not a process, so several instances can later
+//! share one host process (hosting modes) without a protocol change.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Commands sent from engine to plugin subprocess
+/// Identifies one plugin instance across all host processes. Allocated by `ProcessManager`.
+pub type InstanceId = u32;
+
+/// Matches a response to its request. Unique per host process.
+pub type RequestId = u32;
+
+/// `request_id` of a command that wants no reply. The host may still answer with an error,
+/// which the engine logs.
+pub const NO_REPLY: RequestId = 0;
+
+/// Engine → host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostRequest {
+    pub instance_id: InstanceId,
+    pub request_id: RequestId,
+    pub command: PluginCommand,
+}
+
+/// Host → engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HostMessage {
+    /// Reply to the `HostRequest` with the same `request_id`.
+    Response {
+        instance_id: InstanceId,
+        request_id: RequestId,
+        response: PluginResponse,
+    },
+    /// Sent by the host on its own.
+    Event {
+        instance_id: InstanceId,
+        event: PluginEvent,
+    },
+}
+
+/// Commands sent from engine to a plugin instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PluginCommand {
-    /// Initialize plugin (sent once at startup)
+    /// Load the plugin into a new instance. The frame carries the instance's shared-memory FD.
     Initialize {
         plugin_path: PathBuf,
         plugin_id: String,
         sample_rate: f32,
         max_buffer_size: usize,
-        /// Shared memory file descriptor (passed separately via Unix socket)
-        /// For now, we use a name-based approach where subprocess recreates the FD
-        shm_name: String,
     },
 
     /// Activate plugin for audio processing
@@ -64,16 +96,16 @@ pub enum PluginCommand {
     SaveState,
 
     /// Load plugin state
-    LoadState { state_base64: String },
+    LoadState { state: Vec<u8> },
 
     /// Reset plugin (clear buffers, stop voices)
     Reset,
 
-    /// Shutdown subprocess gracefully
+    /// Shut down the whole host process
     Shutdown,
 }
 
-/// Responses sent from plugin subprocess to engine
+/// Responses sent from a plugin instance to engine requests
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PluginResponse {
     /// Initialization successful
@@ -128,7 +160,7 @@ pub enum PluginResponse {
     GuiError { error: String },
 
     /// Plugin state saved
-    StateSaved { state_base64: String },
+    StateSaved { state: Vec<u8> },
 
     /// State load result
     StateLoadResult {
@@ -141,17 +173,19 @@ pub enum PluginResponse {
 
     /// Generic error response
     Error { command: String, error: String },
+}
 
-    /// Subprocess shutting down
-    ShutdownAck,
-
-    /// Parameter value changed (unsolicited, from plugin GUI/modulation)
+/// Messages a plugin instance sends without being asked
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PluginEvent {
+    /// Parameter value changed from the plugin GUI or internal modulation
     ParameterValueChanged {
         param_id: u32,
-        value: f32, // Normalized 0.0-1.0
+        /// Normalized 0.0-1.0
+        value: f32,
     },
 
-    /// GUI resize requested (unsolicited, from plugin)
+    /// The plugin asked for its GUI window to be resized
     GuiResizeRequest { width: u32, height: u32 },
 }
 

@@ -10,8 +10,8 @@ use tracing::{error, info, warn};
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, PluginGui, Window};
 use clack_host::prelude::*;
 
+use crate::audio::ipc::{HostMessage, InstanceId};
 use crate::plugin_host::host::{SubprocessHost, SubprocessHostMainThread, SubprocessHostShared};
-use crate::plugin_host::protocol::PluginResponse;
 
 /// Load a CLAP plugin
 pub fn load_plugin(
@@ -19,7 +19,8 @@ pub fn load_plugin(
     plugin_id: &str,
     _sample_rate: f32,
     _max_buffer_size: usize,
-    unsolicited_tx: std::sync::mpsc::Sender<PluginResponse>,
+    instance_id: InstanceId,
+    event_tx: std::sync::mpsc::Sender<HostMessage>,
 ) -> Result<
     (
         PluginBundle,
@@ -62,7 +63,7 @@ pub fn load_plugin(
         .ok_or_else(|| "Missing plugin ID".to_string())?;
 
     // Create shared state for timer and GUI support
-    let shared = Arc::new(SubprocessHostShared::new(unsolicited_tx));
+    let shared = Arc::new(SubprocessHostShared::new(instance_id, event_tx));
     let shared_for_instance = Arc::clone(&shared);
 
     // Create plugin instance
@@ -152,27 +153,12 @@ pub fn open_plugin_gui(
     })?;
     info!("✅ GUI created");
 
-    // Query the plugin's preferred size
+    // The engine sizes the window from the size in the `GuiOpened` response
     if let Some(size) = gui_ext.get_size(&mut handle) {
         info!(
             "🎨 Plugin reports preferred size: {}x{}",
             size.width, size.height
         );
-
-        // Send resize request to engine so it can create/resize window appropriately
-        // This happens before set_parent, so the window should be created at the right size
-        let resp = PluginResponse::GuiResizeRequest {
-            width: size.width,
-            height: size.height,
-        };
-        if let Ok(resp_json) = serde_json::to_string(&resp) {
-            // Note: We'd need access to the stream here to send it
-            // For now, the plugin will request resize after opening which works fine
-            info!(
-                "🎨 Would send initial size request: {}x{}",
-                size.width, size.height
-            );
-        }
     }
 
     // For embedded mode, use the provided window handle

@@ -6,9 +6,7 @@
 pub mod commands;
 pub mod event_loop;
 pub mod host;
-pub mod ipc_utils;
 pub mod operations;
-pub mod protocol;
 pub mod state;
 pub mod x11_error;
 
@@ -16,6 +14,5 @@ pub mod x11_error;
 pub use commands::process_command;
 pub use event_loop::run_plugin_host;
 pub use host::{SubprocessHost, SubprocessHostMainThread, SubprocessHostShared};
-pub use protocol::{PluginCommand, PluginParameterInfo, PluginResponse};
 pub use state::PluginState;
 pub use x11_error::install_x11_error_handler;

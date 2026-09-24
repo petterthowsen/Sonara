@@ -21,7 +21,7 @@ use super::devices::{
     container, AudioDevice, DeviceCategory, DeviceFactory, DevicePath, ParamId, ParamValue,
     SfizzDevice,
 };
-use super::ipc::ProcessManager;
+use super::ipc::{PluginEvent, ProcessManager};
 use super::types::ChannelId;
 
 /// How often the command thread services devices between commands: plugin parameter changes,
@@ -70,7 +70,6 @@ impl CommandWorker {
         max_buffer_size: usize,
     ) -> Self {
         let process_manager = Arc::new(ProcessManager::new());
-        process_manager.start_monitoring();
         let device_factory = DeviceFactory::new(
             process_manager,
             device_sample_rate,
@@ -111,8 +110,8 @@ impl CommandWorker {
     ///
     /// Under the state lock: collect each ready subprocess plugin's IPC handle, queued
     /// automation writes and audio-thread counters, and any new SFZ parameter lists. With the
-    /// lock released: send the writes, read parameter changes the plugins report, detect dead
-    /// subprocesses, and send statuses.
+    /// lock released: send the writes, drain the events the plugins sent (parameter changes, GUI
+    /// resize requests), detect dead subprocesses, and send statuses.
     fn poll_devices(&mut self) {
         let mut plugins: Vec<PolledPlugin> = Vec::new();
         let mut statuses: Vec<EngineStatus> = Vec::new();
@@ -144,7 +143,7 @@ impl CommandWorker {
         }
 
         let mut reported: Vec<(ChannelId, DevicePath, u32, f32)> = Vec::new();
-        let mut changes = Vec::new();
+        let mut events = Vec::new();
         for plugin in &plugins {
             if !plugin.handle.is_alive() {
                 self.mark_plugin_crashed(plugin);
@@ -153,16 +152,28 @@ impl CommandWorker {
             if !plugin.writes.is_empty() {
                 plugin.handle.set_parameters(&plugin.writes);
             }
-            changes.clear();
-            plugin.handle.poll_parameter_changes(&mut changes);
-            for &(param_id, value) in &changes {
-                reported.push((plugin.channel_id, plugin.device_path, param_id, value));
-                statuses.push(EngineStatus::PluginParameterValueChanged {
-                    channel_id: plugin.channel_id,
-                    device_path: plugin.device_path,
-                    param_id,
-                    value,
-                });
+            events.clear();
+            plugin.handle.poll_events(&mut events);
+            for event in events.drain(..) {
+                match event {
+                    PluginEvent::ParameterValueChanged { param_id, value } => {
+                        reported.push((plugin.channel_id, plugin.device_path, param_id, value));
+                        statuses.push(EngineStatus::PluginParameterValueChanged {
+                            channel_id: plugin.channel_id,
+                            device_path: plugin.device_path,
+                            param_id,
+                            value,
+                        });
+                    }
+                    PluginEvent::GuiResizeRequest { width, height } => {
+                        statuses.push(EngineStatus::PluginGuiResizeRequest {
+                            channel_id: plugin.channel_id,
+                            device_path: plugin.device_path,
+                            width,
+                            height,
+                        });
+                    }
+                }
             }
             self.record_plugin_stats(plugin);
         }

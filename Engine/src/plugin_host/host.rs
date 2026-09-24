@@ -4,16 +4,20 @@
 //! including timer support, GUI callbacks, and logging.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::info;
 
 use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
+use clack_extensions::params::{
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
+};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
 use clack_host::prelude::*;
 
-use crate::plugin_host::protocol::PluginResponse;
+use crate::audio::ipc::{HostMessage, InstanceId, PluginEvent};
 
 /// Host implementation for subprocess with GUI support
 pub struct SubprocessHost;
@@ -23,17 +27,44 @@ pub struct SubprocessHost;
 pub struct SubprocessHostShared {
     timers: Arc<Mutex<HashMap<TimerId, Timer>>>,
     next_timer_id: Arc<Mutex<u32>>,
-    /// Channel to send unsolicited responses (like GUI resize requests)
-    response_tx: std::sync::mpsc::Sender<PluginResponse>,
+    /// The instance this plugin is, for addressing the events it sends
+    instance_id: InstanceId,
+    /// Channel to send unsolicited events (like GUI resize requests) to the engine
+    event_tx: std::sync::mpsc::Sender<HostMessage>,
+    /// Set when the plugin's parameter list or ranges changed (`rescan` with INFO or ALL)
+    params_rescanned: Arc<AtomicBool>,
+    /// Set when the plugin asks for `params.flush()` while not processing
+    flush_requested: Arc<AtomicBool>,
 }
 
 impl SubprocessHostShared {
-    pub fn new(response_tx: std::sync::mpsc::Sender<PluginResponse>) -> Self {
+    pub fn new(instance_id: InstanceId, event_tx: std::sync::mpsc::Sender<HostMessage>) -> Self {
         Self {
             timers: Arc::new(Mutex::new(HashMap::new())),
             next_timer_id: Arc::new(Mutex::new(0)),
-            response_tx,
+            instance_id,
+            event_tx,
+            params_rescanned: Arc::new(AtomicBool::new(false)),
+            flush_requested: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Send an event to the engine, addressed to this instance.
+    fn send_event(&self, event: PluginEvent) {
+        let _ = self.event_tx.send(HostMessage::Event {
+            instance_id: self.instance_id,
+            event,
+        });
+    }
+
+    /// True once after the plugin's parameter list or ranges changed.
+    pub fn take_params_rescanned(&self) -> bool {
+        self.params_rescanned.swap(false, Ordering::AcqRel)
+    }
+
+    /// True once after the plugin asked for a parameter flush.
+    pub fn take_flush_requested(&self) -> bool {
+        self.flush_requested.swap(false, Ordering::AcqRel)
     }
 
     /// Tick all timers and return list of IDs that should fire
@@ -98,6 +129,7 @@ impl HostHandlers for SubprocessHost {
         builder.register::<HostLog>();
         builder.register::<HostGui>();
         builder.register::<HostTimer>();
+        builder.register::<HostParams>();
     }
 }
 
@@ -138,7 +170,7 @@ impl HostGuiImpl for SubprocessHostShared {
         );
 
         // Send resize request to main loop
-        let _ = self.response_tx.send(PluginResponse::GuiResizeRequest {
+        self.send_event(PluginEvent::GuiResizeRequest {
             width: new_size.width,
             height: new_size.height,
         });
@@ -196,6 +228,25 @@ impl HostTimerImpl for SubprocessHostMainThread<'_> {
         } else {
             Err(HostError::Message("Unknown timer ID"))
         }
+    }
+}
+
+impl HostParamsImplMainThread for SubprocessHostMainThread<'_> {
+    fn rescan(&mut self, flags: ParamRescanFlags) {
+        info!("Plugin requested parameter rescan ({:?})", flags);
+        if flags.intersects(ParamRescanFlags::INFO | ParamRescanFlags::ALL) {
+            self.shared.params_rescanned.store(true, Ordering::Release);
+        }
+    }
+
+    fn clear(&mut self, _param_id: ClapId, _flags: ParamClearFlags) {
+        // The engine holds no automation or modulation references to clear
+    }
+}
+
+impl HostParamsImplShared for SubprocessHostShared {
+    fn request_flush(&self) {
+        self.flush_requested.store(true, Ordering::Release);
     }
 }
 

@@ -1,381 +1,422 @@
 //! Plugin Process Manager
 //!
-//! Manages plugin host subprocesses: spawning, monitoring, communication, and cleanup.
+//! Spawns plugin host processes and routes messages to the plugin instances inside them.
+//!
+//! Each host process has one control socket (a Unix socketpair) and a reader thread. Requests
+//! carry a `request_id`; the reader thread completes the waiting request when the matching
+//! response arrives. Unsolicited events go to a per-instance channel that the command thread
+//! drains. Writes are serialized by a mutex that is only held while a frame is written, so a
+//! slow request never blocks other senders.
 
-use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
-use std::collections::{HashMap, VecDeque};
-use std::io::IoSlice;
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
+use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
+use std::collections::HashMap;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-use super::protocol::{PluginCommand, PluginResponse, SharedMemoryLayout};
+use super::protocol::{
+    HostMessage, HostRequest, InstanceId, PluginCommand, PluginEvent, PluginResponse, RequestId,
+    SharedMemoryLayout, NO_REPLY,
+};
 use super::shared_memory::SharedMemory;
+use super::wire;
 
-/// Plugin process handle
-/// How long a blocking request waits for the plugin's reply.
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Default wait for a blocking request's reply.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long `try_recv_response` waits for an unsolicited message.
-const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_micros(100);
+/// Wait for `Initialize`: loading a plugin can read large sample libraries.
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a host gets to exit after `Shutdown` before it is killed.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+
+/// The control socket's descriptor number in the host process.
+const HOST_SOCKET_FD: i32 = 3;
+
+/// Lock a mutex, recovering it if a panicking thread held it.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// State shared between a host's `PluginProcess` and its reader thread.
+struct Routing {
+    /// Requests waiting for a reply, by request id.
+    pending: Mutex<HashMap<RequestId, Sender<PluginResponse>>>,
+    /// Where each instance's unsolicited events go.
+    events: Mutex<HashMap<InstanceId, Sender<PluginEvent>>>,
+    /// False once the control socket has closed.
+    connected: AtomicBool,
+}
+
+impl Routing {
+    fn dispatch(&self, host: &str, msg: HostMessage) {
+        match msg {
+            HostMessage::Response {
+                instance_id,
+                request_id,
+                response,
+            } => {
+                let waiter = lock(&self.pending).remove(&request_id);
+                match waiter {
+                    Some(tx) => {
+                        let _ = tx.send(response);
+                    }
+                    None if request_id == NO_REPLY => {
+                        if let PluginResponse::Error { command, error } = response {
+                            warn!(
+                                "Plugin host {} instance {}: {} failed: {}",
+                                host, instance_id, command, error
+                            );
+                        }
+                    }
+                    None => debug!(
+                        "Plugin host {} instance {}: dropping late response to request {}: {:?}",
+                        host, instance_id, request_id, response
+                    ),
+                }
+            }
+            HostMessage::Event { instance_id, event } => {
+                let events = lock(&self.events);
+                match events.get(&instance_id) {
+                    Some(tx) => {
+                        let _ = tx.send(event);
+                    }
+                    None => debug!(
+                        "Plugin host {}: event for unknown instance {}: {:?}",
+                        host, instance_id, event
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The socket closed: fail every waiting request and disconnect the event channels.
+    fn disconnect(&self) {
+        self.connected.store(false, Ordering::Release);
+        lock(&self.pending).clear();
+        lock(&self.events).clear();
+    }
+}
+
+/// Reader thread: decode frames until the host closes the socket.
+fn run_reader(socket: UnixStream, routing: Arc<Routing>, host: String) {
+    loop {
+        match wire::recv_frame::<HostMessage>(&socket) {
+            Ok(Some((msg, _fds))) => routing.dispatch(&host, msg),
+            Ok(None) => {
+                info!("Plugin host {} closed its control socket", host);
+                break;
+            }
+            Err(e) => {
+                error!("Plugin host {} control socket failed: {}", host, e);
+                break;
+            }
+        }
+    }
+    routing.disconnect();
+}
+
+/// One plugin host process and its control socket.
 pub struct PluginProcess {
     /// Process ID
     pub pid: u32,
-
-    /// Child process handle (Option to safely handle ownership during shutdown)
-    child: Option<Child>,
-
-    /// Control socket (wrapped in Option for interior mutability pattern)
-    socket: Option<TcpStream>,
-
-    /// Buffer for partial responses received during non-blocking polls
-    partial_read_buffer: Vec<u8>,
-
-    /// Queue of unsolicited responses encountered during synchronous waits
-    pending_async_responses: VecDeque<PluginResponse>,
-
-    /// Shared memory for audio/MIDI (Arc for lock-free sharing with audio thread)
-    shared_memory: Arc<SharedMemory>,
-
-    /// Plugin metadata
-    plugin_id: String,
-    plugin_path: PathBuf,
-}
-
-/// Send a file descriptor over a Unix domain socket
-#[allow(dead_code)]
-fn send_fd(socket: &UnixStream, fd: RawFd) -> Result<(), String> {
-    let data = [0u8; 1]; // Dummy data
-    let iov = [IoSlice::new(&data)];
-    let fds = [fd];
-    let cmsg = ControlMessage::ScmRights(&fds);
-
-    sendmsg::<()>(socket.as_raw_fd(), &iov, &[cmsg], MsgFlags::empty(), None)
-        .map_err(|e| format!("Failed to send FD: {}", e))?;
-
-    Ok(())
-}
-
-/// Receive a file descriptor over a Unix domain socket
-#[allow(dead_code)]
-fn recv_fd(socket: &UnixStream) -> Result<RawFd, String> {
-    use nix::cmsg_space;
-    use nix::sys::socket::{recvmsg, ControlMessageOwned};
-    use std::io::IoSliceMut;
-
-    let mut data = [0u8; 1];
-    let mut iov = [IoSliceMut::new(&mut data)];
-    let mut cmsg_space = cmsg_space!([RawFd; 1]);
-
-    let msg = recvmsg::<()>(
-        socket.as_raw_fd(),
-        &mut iov,
-        Some(&mut cmsg_space),
-        MsgFlags::empty(),
-    )
-    .map_err(|e| format!("Failed to receive FD: {}", e))?;
-
-    // Parse control messages
-    for cmsg in msg
-        .cmsgs()
-        .map_err(|e| format!("Failed to parse control messages: {}", e))?
-    {
-        if let ControlMessageOwned::ScmRights(fds) = cmsg {
-            if let Some(&fd) = fds.first() {
-                return Ok(fd);
-            }
-        }
-    }
-
-    Err("No file descriptor received".to_string())
+    host_key: String,
+    child: Mutex<Option<Child>>,
+    /// Write side of the control socket. Held only while a frame is written.
+    writer: Mutex<UnixStream>,
+    routing: Arc<Routing>,
+    next_request_id: AtomicU32,
 }
 
 impl PluginProcess {
-    fn is_unsolicited_response(response: &PluginResponse) -> bool {
-        matches!(
-            response,
-            PluginResponse::ParameterValueChanged { .. }
-                | PluginResponse::GuiResizeRequest { .. }
-                | PluginResponse::ProcessingStarted
-                | PluginResponse::ProcessingStopped
-                | PluginResponse::GuiClosed
-                | PluginResponse::ShutdownAck
+    /// Spawn a `plugin_host` process and start its reader thread.
+    fn spawn(host_key: String) -> Result<Self, String> {
+        let plugin_host_path = ProcessManager::plugin_host_path()?;
+
+        let (engine_socket, host_socket) = UnixStream::pair()
+            .map_err(|e| format!("Failed to create control socketpair: {}", e))?;
+        let host_socket_fd = host_socket.as_raw_fd();
+
+        use std::os::unix::process::CommandExt;
+        let child = unsafe {
+            Command::new(&plugin_host_path)
+                .arg(HOST_SOCKET_FD.to_string())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
+                .pre_exec(move || {
+                    // Move the host's end of the socketpair to the well-known descriptor. dup2
+                    // clears close-on-exec on the new descriptor, except when both are equal.
+                    if host_socket_fd != HOST_SOCKET_FD {
+                        if libc::dup2(host_socket_fd, HOST_SOCKET_FD) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        libc::close(host_socket_fd);
+                    }
+                    let flags = libc::fcntl(HOST_SOCKET_FD, libc::F_GETFD);
+                    if flags >= 0 {
+                        libc::fcntl(HOST_SOCKET_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                    }
+                    Ok(())
+                })
+                .spawn()
+                .map_err(|e| {
+                    format!(
+                        "Failed to spawn plugin_host at {}: {}",
+                        plugin_host_path.display(),
+                        e
+                    )
+                })?
+        };
+        drop(host_socket);
+
+        let pid = child.id();
+        info!("Plugin host {} spawned: PID={}", host_key, pid);
+        Self::connect(host_key, pid, Some(child), engine_socket)
+    }
+
+    /// Start the reader thread for a host connected through `engine_socket`.
+    fn connect(
+        host_key: String,
+        pid: u32,
+        child: Option<Child>,
+        engine_socket: UnixStream,
+    ) -> Result<Self, String> {
+        let routing = Arc::new(Routing {
+            pending: Mutex::new(HashMap::new()),
+            events: Mutex::new(HashMap::new()),
+            connected: AtomicBool::new(true),
+        });
+        let reader_socket = engine_socket
+            .try_clone()
+            .map_err(|e| format!("Failed to clone control socket: {}", e))?;
+        let reader_routing = Arc::clone(&routing);
+        let reader_host = format!("{} (pid {})", host_key, pid);
+        thread::Builder::new()
+            .name(format!("plugin-ipc-{}", pid))
+            .spawn(move || run_reader(reader_socket, reader_routing, reader_host))
+            .map_err(|e| format!("Failed to start plugin host reader thread: {}", e))?;
+
+        Ok(Self {
+            pid,
+            host_key,
+            child: Mutex::new(child),
+            writer: Mutex::new(engine_socket),
+            routing,
+            next_request_id: AtomicU32::new(1),
+        })
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        loop {
+            let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+            if id != NO_REPLY {
+                return id;
+            }
+        }
+    }
+
+    fn write(&self, request: &HostRequest, fds: &[i32]) -> Result<(), String> {
+        if !self.routing.connected.load(Ordering::Acquire) {
+            return Err(format!("Plugin host {} is not running", self.host_key));
+        }
+        let writer = lock(&self.writer);
+        wire::send_frame(&writer, request, fds)
+            .map_err(|e| format!("Failed to send to plugin host {}: {}", self.host_key, e))
+    }
+
+    /// Send a command and wait up to `timeout` for its reply.
+    fn request_with_fds(
+        &self,
+        instance_id: InstanceId,
+        command: PluginCommand,
+        fds: &[i32],
+        timeout: Duration,
+    ) -> Result<PluginResponse, String> {
+        let request_id = self.next_request_id();
+        let (tx, rx) = channel::bounded(1);
+        lock(&self.routing.pending).insert(request_id, tx);
+
+        let request = HostRequest {
+            instance_id,
+            request_id,
+            command,
+        };
+        if let Err(e) = self.write(&request, fds) {
+            lock(&self.routing.pending).remove(&request_id);
+            return Err(e);
+        }
+
+        match rx.recv_timeout(timeout) {
+            Ok(response) => Ok(response),
+            Err(RecvTimeoutError::Timeout) => {
+                lock(&self.routing.pending).remove(&request_id);
+                Err(format!(
+                    "Plugin host {} didn't answer {:?} within {:.1}s",
+                    self.host_key,
+                    request.command,
+                    timeout.as_secs_f32()
+                ))
+            }
+            Err(RecvTimeoutError::Disconnected) => Err(format!(
+                "Plugin host {} exited before answering {:?}",
+                self.host_key, request.command
+            )),
+        }
+    }
+
+    /// Send a command without waiting for a reply.
+    fn send(&self, instance_id: InstanceId, command: PluginCommand) -> Result<(), String> {
+        self.write(
+            &HostRequest {
+                instance_id,
+                request_id: NO_REPLY,
+                command,
+            },
+            &[],
         )
     }
 
-    /// Try to read a full JSON line from the socket, optionally in non-blocking mode
-    fn read_response_line(&mut self, nonblocking: bool) -> Result<Option<String>, String> {
-        use std::io::{ErrorKind, Read};
+    /// False once the control socket has closed or the process has exited.
+    pub fn is_alive(&self) -> bool {
+        if !self.routing.connected.load(Ordering::Acquire) {
+            return false;
+        }
+        match lock(&self.child).as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
 
-        let socket = self.socket.as_mut().ok_or("Socket not available")?;
+    /// Ask the host to exit, then kill it if it hasn't within `SHUTDOWN_GRACE`.
+    pub fn shutdown(&self) {
+        info!("Shutting down plugin host {}", self.host_key);
+        if self.routing.connected.load(Ordering::Acquire) {
+            if let Err(e) = self.send(0, PluginCommand::Shutdown) {
+                warn!("{}", e);
+            }
+        }
+        let _ = lock(&self.writer).shutdown(std::net::Shutdown::Write);
 
+        let Some(mut child) = lock(&self.child).take() else {
+            return;
+        };
+        let deadline = Instant::now() + SHUTDOWN_GRACE;
         loop {
-            if let Some(pos) = self.partial_read_buffer.iter().position(|&b| b == b'\n') {
-                let mut line_bytes: Vec<u8> = self.partial_read_buffer.drain(..=pos).collect();
-                if let Some(b'\n') = line_bytes.last() {
-                    line_bytes.pop();
-                }
-                if let Some(b'\r') = line_bytes.last() {
-                    line_bytes.pop();
-                }
-                let line = String::from_utf8(line_bytes)
-                    .map_err(|e| format!("Failed to decode response as UTF-8: {}", e))?;
-                return Ok(Some(line));
-            }
-
-            let mut buf = [0u8; 512];
-            match socket.read(&mut buf) {
-                Ok(0) => return Err("Connection closed".to_string()),
-                Ok(n) => {
-                    self.partial_read_buffer.extend_from_slice(&buf[..n]);
-                    continue;
-                }
-                Err(ref e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                    if nonblocking {
-                        return Ok(None);
-                    } else {
-                        return Err(format!("Failed to read response: {}", e));
-                    }
-                }
-                Err(e) => return Err(format!("Failed to read response: {}", e)),
-            }
-        }
-    }
-
-    /// Send a command to the plugin subprocess
-    pub fn send_command(&mut self, cmd: PluginCommand) -> Result<(), String> {
-        use std::io::Write;
-
-        let json = serde_json::to_string(&cmd)
-            .map_err(|e| format!("Failed to serialize command: {}", e))?;
-        debug!("[ProcessManager] Sending to {}: {}", self.plugin_id, json);
-
-        let socket = self.socket.as_mut().ok_or("Socket not available")?;
-        write!(socket, "{}\n", json).map_err(|e| format!("Failed to write command: {}", e))?;
-        socket
-            .flush()
-            .map_err(|e| format!("Failed to flush socket: {}", e))?;
-        Ok(())
-    }
-
-    /// Receive a response from the plugin subprocess, waiting up to `REQUEST_TIMEOUT`.
-    pub fn recv_response(&mut self) -> Result<PluginResponse, String> {
-        self.recv_response_timeout(REQUEST_TIMEOUT)
-    }
-
-    /// Receive a response from the plugin subprocess, waiting up to `timeout` for each read.
-    ///
-    /// Every receive sets its own timeout: the socket is shared with polling, which uses a very
-    /// short one.
-    pub fn recv_response_timeout(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Result<PluginResponse, String> {
-        self.set_read_timeout(Some(timeout))?;
-
-        // First check if a synchronous response was buffered earlier
-        let buffered_len = self.pending_async_responses.len();
-        for _ in 0..buffered_len {
-            if let Some(resp) = self.pending_async_responses.pop_front() {
-                if Self::is_unsolicited_response(&resp) {
-                    // Keep asynchronous responses queued for polling
-                    self.pending_async_responses.push_back(resp);
-                } else {
-                    debug!(
-                        "[ProcessManager] returning buffered synchronous response {:?}",
-                        resp
-                    );
-                    return Ok(resp);
-                }
-            }
-        }
-
-        loop {
-            let line = match self.read_response_line(false)? {
-                Some(line) => line,
-                None => continue,
-            };
-
-            let trimmed = line.trim();
-            let response: PluginResponse = serde_json::from_str(trimmed)
-                .map_err(|e| format!("Failed to parse response '{}': {}", trimmed, e))?;
-
-            debug!(
-                "[ProcessManager] recv_response decoded {:?} (queued={})",
-                response,
-                self.pending_async_responses.len()
-            );
-
-            if Self::is_unsolicited_response(&response) {
-                debug!(
-                    "[ProcessManager] buffering unsolicited response {:?}",
-                    response
-                );
-                self.pending_async_responses.push_back(response);
-                continue;
-            }
-
-            return Ok(response);
-        }
-    }
-
-    /// Try to receive an unsolicited message (e.g. a parameter change), waiting at most
-    /// `POLL_TIMEOUT`. A synchronous response read here is queued for `recv_response`.
-    pub fn try_recv_response(&mut self) -> Result<PluginResponse, String> {
-        self.set_read_timeout(Some(POLL_TIMEOUT))?;
-
-        // Return any buffered asynchronous response first
-        let buffered_len = self.pending_async_responses.len();
-        for _ in 0..buffered_len {
-            if let Some(resp) = self.pending_async_responses.pop_front() {
-                if Self::is_unsolicited_response(&resp) {
-                    return Ok(resp);
-                } else {
-                    // Keep synchronous responses queued for blocking readers
-                    self.pending_async_responses.push_back(resp);
-                }
-            }
-        }
-
-        loop {
-            match self.read_response_line(true)? {
-                Some(line) => {
-                    let trimmed = line.trim();
-                    let response: PluginResponse = serde_json::from_str(trimmed)
-                        .map_err(|e| format!("Failed to parse response '{}': {}", trimmed, e))?;
-                    debug!(
-                        "[ProcessManager] try_recv_response decoded {:?} (queued={})",
-                        response,
-                        self.pending_async_responses.len()
-                    );
-
-                    if Self::is_unsolicited_response(&response) {
-                        return Ok(response);
-                    }
-                    // A late reply to a blocking request: keep it for `recv_response`.
-                    self.pending_async_responses.push_back(response);
-                    return Err("No data available".to_string());
-                }
-                None => return Err("No data available".to_string()),
-            }
-        }
-    }
-
-    /// Set read timeout for socket operations
-    pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> Result<(), String> {
-        let socket = self.socket.as_ref().ok_or("Socket not available")?;
-        socket
-            .set_read_timeout(timeout)
-            .map_err(|e| format!("Failed to set read timeout: {}", e))
-    }
-
-    /// Check if process is still alive
-    pub fn is_alive(&mut self) -> bool {
-        if let Some(ref mut child) = self.child {
             match child.try_wait() {
-                Ok(Some(_)) => false, // Process exited
-                Ok(None) => true,     // Still running
-                Err(_) => false,      // Error checking status
-            }
-        } else {
-            false // No child process
-        }
-    }
-
-    /// Get shared memory reference
-    pub fn shared_memory(&self) -> &Arc<SharedMemory> {
-        &self.shared_memory
-    }
-
-    /// Shutdown the subprocess gracefully
-    pub fn shutdown(&mut self) -> Result<(), String> {
-        info!("Shutting down plugin subprocess: {}", self.plugin_id);
-
-        // Send shutdown command
-        if let Err(e) = self.send_command(PluginCommand::Shutdown) {
-            warn!("Failed to send shutdown command: {}", e);
-        }
-
-        // Half-close write side to prevent EPIPE, then drop socket
-        if let Some(socket) = self.socket.take() {
-            use std::net::Shutdown;
-            let _ = socket.shutdown(Shutdown::Write); // Ignore errors - already closing
-            drop(socket);
-            info!("Closed control socket");
-        }
-
-        // Wait for process to exit - SAFE VERSION using Option<Child>
-        if let Some(mut child) = self.child.take() {
-            match child.wait() {
-                Ok(status) => {
-                    info!("Plugin subprocess exited: {}", status);
-                    Ok(())
+                Ok(Some(status)) => {
+                    info!("Plugin host {} exited: {}", self.host_key, status);
+                    return;
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    warn!(
+                        "Plugin host {} didn't exit within {:?}; killing it",
+                        self.host_key, SHUTDOWN_GRACE
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
                 }
                 Err(e) => {
-                    error!("Error waiting for subprocess: {}", e);
-                    Err(format!("Error waiting for subprocess: {}", e))
+                    error!("Error waiting for plugin host {}: {}", self.host_key, e);
+                    return;
                 }
             }
-        } else {
-            info!("Plugin subprocess already shut down");
-            Ok(())
         }
     }
 }
 
 impl Drop for PluginProcess {
     fn drop(&mut self) {
-        // Force kill if still running
-        if let Some(mut child) = self.child.take() {
-            // Check if still running using try_wait (non-blocking)
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Already exited
-                    info!(
-                        "Plugin subprocess already exited in Drop: {} (status: {})",
-                        self.plugin_id, status
-                    );
-                }
-                Ok(None) => {
-                    // Still running, force kill
-                    warn!(
-                        "Force killing plugin subprocess in Drop: {}",
-                        self.plugin_id
-                    );
-                    let _ = child.kill();
-                    let _ = child.wait(); // Reap the zombie process
-                }
-                Err(e) => {
-                    error!("Error checking subprocess status in Drop: {}", e);
-                }
+        if let Some(mut child) = lock(&self.child).take() {
+            if matches!(child.try_wait(), Ok(None)) {
+                warn!("Force killing plugin host {} in Drop", self.host_key);
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }
 }
 
-/// Plugin process manager
-pub struct ProcessManager {
-    /// Active plugin processes (keyed by channel_id + device_position)
-    processes: Arc<Mutex<HashMap<String, Arc<Mutex<PluginProcess>>>>>,
+/// Connection to one plugin instance: its host process, event channel and shared memory.
+/// Cheap to clone; every clone talks to the same instance.
+#[derive(Clone)]
+pub struct InstanceConnection {
+    instance_id: InstanceId,
+    host: Arc<PluginProcess>,
+    events: Receiver<PluginEvent>,
+    shared_memory: Arc<SharedMemory>,
+}
 
-    /// Port allocator for control sockets
-    next_port: Arc<Mutex<u16>>,
+impl InstanceConnection {
+    /// Send a command and wait up to `timeout` for the reply.
+    pub fn request(
+        &self,
+        command: PluginCommand,
+        timeout: Duration,
+    ) -> Result<PluginResponse, String> {
+        self.host
+            .request_with_fds(self.instance_id, command, &[], timeout)
+    }
+
+    /// Send a command without waiting. Errors the host reports are logged.
+    pub fn send(&self, command: PluginCommand) -> Result<(), String> {
+        self.host.send(self.instance_id, command)
+    }
+
+    /// Next unsolicited event from the instance, if any. Never blocks.
+    pub fn try_event(&self) -> Option<PluginEvent> {
+        self.events.try_recv().ok()
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.host.is_alive()
+    }
+
+    pub fn shared_memory(&self) -> &Arc<SharedMemory> {
+        &self.shared_memory
+    }
+
+    pub fn host_pid(&self) -> u32 {
+        self.host.pid
+    }
+}
+
+/// Plugin process manager: host key → host process, instance id → instance.
+pub struct ProcessManager {
+    hosts: Mutex<HashMap<String, Arc<PluginProcess>>>,
+    instances: Mutex<HashMap<InstanceId, InstanceConnection>>,
+    next_instance_id: AtomicU32,
 }
 
 impl ProcessManager {
     /// Create a new process manager
     pub fn new() -> Self {
         Self {
-            processes: Arc::new(Mutex::new(HashMap::new())),
-            next_port: Arc::new(Mutex::new(9000)), // Start at port 9000
+            hosts: Mutex::new(HashMap::new()),
+            instances: Mutex::new(HashMap::new()),
+            next_instance_id: AtomicU32::new(1),
         }
+    }
+
+    /// Allocate an id for a new plugin instance.
+    pub fn allocate_instance_id(&self) -> InstanceId {
+        self.next_instance_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Host key that gives an instance a host process of its own ("Individually" hosting).
+    pub fn individual_host_key(instance_id: InstanceId) -> String {
+        format!("instance-{}", instance_id)
     }
 
     /// Locate the `plugin_host` binary, which must sit next to the running engine executable.
@@ -403,241 +444,276 @@ impl ProcessManager {
         Ok(plugin_host_path)
     }
 
-    /// Spawn a new plugin host subprocess
-    pub fn spawn_plugin(
+    /// The live host for `host_key`, spawning one if there is none.
+    fn host_for(&self, host_key: &str) -> Result<Arc<PluginProcess>, String> {
+        let mut hosts = lock(&self.hosts);
+        if let Some(host) = hosts.get(host_key) {
+            if host.is_alive() {
+                return Ok(Arc::clone(host));
+            }
+            warn!("Plugin host {} is dead; spawning a new one", host_key);
+        }
+        let host = Arc::new(PluginProcess::spawn(host_key.to_string())?);
+        hosts.insert(host_key.to_string(), Arc::clone(&host));
+        Ok(host)
+    }
+
+    /// Load a plugin as instance `instance_id` in the host process for `host_key`. Blocks until
+    /// the plugin is loaded; call it off the audio and command threads.
+    pub fn spawn_instance(
         &self,
-        key: String,
+        instance_id: InstanceId,
+        host_key: &str,
         plugin_path: PathBuf,
         plugin_id: String,
         sample_rate: f32,
         max_buffer_size: usize,
-    ) -> Result<(), String> {
-        info!("Spawning plugin subprocess: {} ({})", plugin_id, key);
-
-        let plugin_host_path = Self::plugin_host_path()?;
-
-        // Allocate port for control socket
-        let port = {
-            let mut next_port = self.next_port.lock().unwrap();
-            let port = *next_port;
-            *next_port += 1;
-            port
-        };
-
-        // Create TCP listener for control socket
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .map_err(|e| format!("Failed to bind control socket: {}", e))?;
-
-        // Create a Unix socket pair BEFORE spawning for FD passing
-        let (unix_sock_parent, unix_sock_child) =
-            UnixStream::pair().map_err(|e| format!("Failed to create Unix socket pair: {}", e))?;
-        let unix_sock_child_fd = unix_sock_child.as_raw_fd();
-
-        // Spawn subprocess
-        use std::os::unix::io::AsRawFd;
-        use std::os::unix::process::CommandExt;
-        let target_fd = 3; // Well-known FD for the Unix socket
-
-        let child = unsafe {
-            Command::new(&plugin_host_path)
-                .arg(port.to_string())
-                .arg(target_fd.to_string()) // Pass FD 3 as arg
-                .stdout(std::process::Stdio::inherit()) // Show subprocess stdout
-                .stderr(std::process::Stdio::inherit()) // Show subprocess stderr
-                .pre_exec(move || {
-                    // Dup the Unix socket to FD 3 in the child process
-                    let result = libc::dup2(unix_sock_child_fd, target_fd);
-                    if result < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-
-                    // Clear close-on-exec flag for FD 3
-                    let flags = libc::fcntl(target_fd, libc::F_GETFD);
-                    if flags >= 0 {
-                        libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-                    }
-
-                    // Close the original Unix socket FD (we've duped it to FD 3)
-                    if unix_sock_child_fd != target_fd {
-                        libc::close(unix_sock_child_fd);
-                    }
-
-                    Ok(())
-                })
-                .spawn()
-                .map_err(|e| {
-                    format!(
-                        "Failed to spawn plugin_host at {}: {}",
-                        plugin_host_path.display(),
-                        e
-                    )
-                })?
-        };
-
-        let pid = child.id();
+    ) -> Result<InstanceConnection, String> {
         info!(
-            "Plugin subprocess spawned: PID={} with Unix socket FD={}",
-            pid, unix_sock_child_fd
+            "Loading plugin {} as instance {} in host {}",
+            plugin_id, instance_id, host_key
         );
+        let host = self.host_for(host_key)?;
 
-        // Wait for subprocess to connect
-        listener
-            .set_nonblocking(false)
-            .map_err(|e| format!("Failed to set listener blocking: {}", e))?;
-
-        // Accept connection with timeout (5 seconds)
-        let socket = match listener.accept() {
-            Ok((stream, addr)) => {
-                info!("Plugin subprocess connected from: {}", addr);
-                stream
-            }
-            Err(e) => {
-                error!("Failed to accept connection: {}", e);
-                return Err(format!("Subprocess failed to connect: {}", e));
-            }
-        };
-
-        // Create shared memory
         let layout = SharedMemoryLayout::new(max_buffer_size);
-        let shm_name = format!("sonara_plugin_{}_{}", pid, plugin_id.replace(".", "_"));
-        let shared_memory = SharedMemory::new(&shm_name, layout)
-            .map_err(|e| format!("Failed to create shared memory: {}", e))?;
-
-        // Get the shared memory FD
-        let shm_fd = shared_memory.as_raw_fd();
-
-        // Send the shared memory FD via the Unix socket using SCM_RIGHTS
-        info!(
-            "Sending shared memory FD={} to subprocess via Unix socket",
-            shm_fd
+        let shm_name = format!("sonara_plugin_{}_{}", host.pid, instance_id);
+        let shared_memory = Arc::new(
+            SharedMemory::new(&shm_name, layout)
+                .map_err(|e| format!("Failed to create shared memory: {}", e))?,
         );
-        send_fd(&unix_sock_parent, shm_fd)?;
 
-        // Drop both unix sockets - we're done with them
-        // The subprocess has its own copy of the FD (dup'd by the kernel during SCM_RIGHTS)
-        drop(unix_sock_parent);
-        drop(unix_sock_child);
+        let (events_tx, events_rx) = channel::unbounded();
+        lock(&host.routing.events).insert(instance_id, events_tx);
 
-        // Create process handle
-        let mut process = PluginProcess {
-            pid,
-            child: Some(child), // Wrap in Option for safe ownership handling
-            socket: Some(socket),
-            partial_read_buffer: Vec::new(),
-            pending_async_responses: VecDeque::new(),
-            shared_memory: Arc::new(shared_memory),
-            plugin_id: plugin_id.clone(),
-            plugin_path: plugin_path.clone(),
+        let result = host.request_with_fds(
+            instance_id,
+            PluginCommand::Initialize {
+                plugin_path,
+                plugin_id: plugin_id.clone(),
+                sample_rate,
+                max_buffer_size,
+            },
+            &[shared_memory.as_raw_fd()],
+            INITIALIZE_TIMEOUT,
+        );
+        let error = match result {
+            Ok(PluginResponse::InitializeSuccess { .. }) => None,
+            Ok(PluginResponse::InitializeError { error }) => {
+                Some(format!("Plugin initialization failed: {}", error))
+            }
+            Ok(other) => Some(format!("Unexpected response to Initialize: {:?}", other)),
+            Err(e) => Some(e),
         };
-
-        // Send initialization command
-        process.send_command(PluginCommand::Initialize {
-            plugin_path,
-            plugin_id: plugin_id.clone(),
-            sample_rate,
-            max_buffer_size,
-            shm_name: shm_name.clone(), // Not used anymore, but kept for compatibility
-        })?;
-
-        // Wait for initialization response
-        match process.recv_response()? {
-            PluginResponse::InitializeSuccess { .. } => {
-                info!("Plugin initialized successfully: {}", plugin_id);
-            }
-            PluginResponse::InitializeError { error } => {
-                return Err(format!("Plugin initialization failed: {}", error));
-            }
-            other => {
-                return Err(format!("Unexpected response: {:?}", other));
-            }
+        if let Some(error) = error {
+            lock(&host.routing.events).remove(&instance_id);
+            self.release_host_if_unused(&host);
+            return Err(error);
         }
 
-        // Store process wrapped in Arc<Mutex<>>
-        let process_arc = Arc::new(Mutex::new(process));
-        let mut processes = self.processes.lock().unwrap();
-        processes.insert(key, Arc::clone(&process_arc));
-
-        Ok(())
+        info!(
+            "Plugin {} initialized as instance {} (host pid {})",
+            plugin_id, instance_id, host.pid
+        );
+        let connection = InstanceConnection {
+            instance_id,
+            host,
+            events: events_rx,
+            shared_memory,
+        };
+        lock(&self.instances).insert(instance_id, connection.clone());
+        Ok(connection)
     }
 
-    /// Get a plugin process by key
-    pub fn get_process(&self, key: &str) -> Option<Arc<Mutex<PluginProcess>>> {
-        let processes = self.processes.lock().unwrap();
-        processes.get(key).map(|p| Arc::clone(p))
+    /// The connection to a loaded instance.
+    pub fn instance(&self, instance_id: InstanceId) -> Option<InstanceConnection> {
+        lock(&self.instances).get(&instance_id).cloned()
     }
 
-    /// Shutdown a plugin process
-    pub fn shutdown_plugin(&self, key: &str) -> Result<(), String> {
-        let mut processes = self.processes.lock().unwrap();
+    /// Forget an instance and shut its host down if no other instance uses it.
+    pub fn shutdown_instance(&self, instance_id: InstanceId) {
+        let Some(connection) = lock(&self.instances).remove(&instance_id) else {
+            return;
+        };
+        lock(&connection.host.routing.events).remove(&instance_id);
+        self.release_host_if_unused(&connection.host);
+    }
 
-        if let Some(process_arc) = processes.remove(key) {
-            let mut process = process_arc.lock().unwrap();
-            process.shutdown()
-        } else {
-            Err(format!("Plugin process not found: {}", key))
+    /// Shut `host` down if no instance lives in it. An instance counts from the moment its event
+    /// route is registered, so one that is still loading keeps the host alive.
+    fn release_host_if_unused(&self, host: &Arc<PluginProcess>) {
+        if host.is_alive() && !lock(&host.routing.events).is_empty() {
+            return;
         }
+        {
+            let mut hosts = lock(&self.hosts);
+            if hosts
+                .get(&host.host_key)
+                .is_some_and(|registered| Arc::ptr_eq(registered, host))
+            {
+                hosts.remove(&host.host_key);
+            }
+        }
+        host.shutdown();
     }
 
     /// Shutdown all plugin processes
-    pub fn shutdown_all(&self) -> Result<(), String> {
-        let mut processes = self.processes.lock().unwrap();
-
-        for (key, process_arc) in processes.drain() {
-            info!("Shutting down plugin: {}", key);
-            let mut process = process_arc.lock().unwrap();
-            if let Err(e) = process.shutdown() {
-                error!("Failed to shutdown {}: {}", key, e);
-            }
+    pub fn shutdown_all(&self) {
+        lock(&self.instances).clear();
+        let hosts: Vec<_> = lock(&self.hosts).drain().map(|(_, host)| host).collect();
+        for host in hosts {
+            host.shutdown();
         }
-
-        Ok(())
-    }
-
-    /// Monitor plugin processes and restart if crashed
-    pub fn start_monitoring(&self) {
-        let processes = Arc::clone(&self.processes);
-
-        thread::spawn(move || {
-            loop {
-                thread::sleep(std::time::Duration::from_secs(5)); // Check less frequently
-
-                // Collect process Arcs WITHOUT holding the HashMap lock
-                let process_arcs: Vec<(String, Arc<Mutex<PluginProcess>>)> = {
-                    let processes = processes.lock().unwrap();
-                    processes
-                        .iter()
-                        .map(|(k, v)| (k.clone(), Arc::clone(v)))
-                        .collect()
-                };
-
-                // Check each process (now we've released the HashMap lock!)
-                // Use try_lock to avoid blocking other threads!
-                let mut crashed = Vec::new();
-                for (key, process_arc) in process_arcs {
-                    if let Ok(mut process) = process_arc.try_lock() {
-                        if !process.is_alive() {
-                            warn!("Plugin process crashed: {}", key);
-                            crashed.push(key.clone());
-                        }
-                    }
-                    // If we can't get the lock, skip this check - process is being used
-                }
-
-                // Remove crashed processes
-                if !crashed.is_empty() {
-                    let mut processes = processes.lock().unwrap();
-                    for key in crashed {
-                        error!("Plugin {} needs restart (not implemented yet)", key);
-                        processes.remove(&key);
-                    }
-                }
-            }
-        });
     }
 }
 
 impl Default for ProcessManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host process stood in for by the test: returns the engine side and the host's socket.
+    fn fake_host() -> (PluginProcess, UnixStream) {
+        let (engine_socket, host_socket) = UnixStream::pair().unwrap();
+        let process = PluginProcess::connect("test".to_string(), 0, None, engine_socket).unwrap();
+        (process, host_socket)
+    }
+
+    fn recv_request(host: &UnixStream) -> HostRequest {
+        wire::recv_frame::<HostRequest>(host).unwrap().unwrap().0
+    }
+
+    fn reply(host: &UnixStream, request: &HostRequest, response: PluginResponse) {
+        let msg = HostMessage::Response {
+            instance_id: request.instance_id,
+            request_id: request.request_id,
+            response,
+        };
+        wire::send_frame(host, &msg, &[]).unwrap();
+    }
+
+    #[test]
+    fn responses_complete_their_own_request_even_out_of_order() {
+        let (process, host) = fake_host();
+        let process = Arc::new(process);
+
+        let first = {
+            let process = Arc::clone(&process);
+            thread::spawn(move || {
+                process.request_with_fds(1, PluginCommand::HasGui, &[], REQUEST_TIMEOUT)
+            })
+        };
+        let a = recv_request(&host);
+        let second = {
+            let process = Arc::clone(&process);
+            thread::spawn(move || {
+                process.request_with_fds(1, PluginCommand::GetParameterInfo, &[], REQUEST_TIMEOUT)
+            })
+        };
+        let b = recv_request(&host);
+        assert_ne!(a.request_id, b.request_id);
+
+        // Answer the second request first
+        reply(
+            &host,
+            &b,
+            PluginResponse::ParameterInfo { params: Vec::new() },
+        );
+        reply(
+            &host,
+            &a,
+            PluginResponse::HasGuiResponse { supported: true },
+        );
+
+        assert!(matches!(
+            first.join().unwrap(),
+            Ok(PluginResponse::HasGuiResponse { supported: true })
+        ));
+        assert!(matches!(
+            second.join().unwrap(),
+            Ok(PluginResponse::ParameterInfo { .. })
+        ));
+    }
+
+    #[test]
+    fn timeout_then_late_reply_is_dropped() {
+        let (process, host) = fake_host();
+        let result =
+            process.request_with_fds(1, PluginCommand::HasGui, &[], Duration::from_millis(20));
+        assert!(result.unwrap_err().contains("didn't answer"));
+
+        // The late reply must not complete the next request
+        let late = recv_request(&host);
+        reply(
+            &host,
+            &late,
+            PluginResponse::HasGuiResponse { supported: true },
+        );
+
+        let process = Arc::new(process);
+        let next = {
+            let process = Arc::clone(&process);
+            thread::spawn(move || {
+                process.request_with_fds(1, PluginCommand::CloseGui, &[], REQUEST_TIMEOUT)
+            })
+        };
+        let request = recv_request(&host);
+        reply(&host, &request, PluginResponse::GuiClosed);
+        assert!(matches!(
+            next.join().unwrap(),
+            Ok(PluginResponse::GuiClosed)
+        ));
+    }
+
+    #[test]
+    fn events_go_to_their_instance() {
+        let (process, host) = fake_host();
+        let (tx1, rx1) = channel::unbounded();
+        let (tx2, rx2) = channel::unbounded();
+        lock(&process.routing.events).insert(1, tx1);
+        lock(&process.routing.events).insert(2, tx2);
+
+        let event = HostMessage::Event {
+            instance_id: 2,
+            event: PluginEvent::GuiResizeRequest {
+                width: 640,
+                height: 480,
+            },
+        };
+        wire::send_frame(&host, &event, &[]).unwrap();
+
+        let received = rx2.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            received,
+            PluginEvent::GuiResizeRequest {
+                width: 640,
+                height: 480
+            }
+        ));
+        assert!(rx1.try_recv().is_err());
+    }
+
+    #[test]
+    fn host_exit_fails_pending_requests_and_later_sends() {
+        let (process, host) = fake_host();
+        let process = Arc::new(process);
+        let waiting = {
+            let process = Arc::clone(&process);
+            thread::spawn(move || {
+                process.request_with_fds(1, PluginCommand::HasGui, &[], REQUEST_TIMEOUT)
+            })
+        };
+        recv_request(&host);
+        let started = Instant::now();
+        drop(host);
+
+        assert!(waiting.join().unwrap().unwrap_err().contains("exited"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!process.is_alive());
+        assert!(process.send(1, PluginCommand::Reset).is_err());
     }
 }

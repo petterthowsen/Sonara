@@ -12,11 +12,12 @@ pub mod platform_shm;
 pub mod process_manager;
 pub mod protocol;
 pub mod shared_memory;
+pub mod wire;
 
 pub use platform_shm::PlatformSharedMemory;
-pub use process_manager::{PluginProcess, ProcessManager};
+pub use process_manager::{InstanceConnection, PluginProcess, ProcessManager, REQUEST_TIMEOUT};
 pub use protocol::{
-    ControlData, MidiEvent, PluginCommand, PluginParameterInfo, PluginResponse, RingBufferStats,
-    SharedMemoryLayout,
+    ControlData, HostMessage, HostRequest, InstanceId, MidiEvent, PluginCommand, PluginEvent,
+    PluginParameterInfo, PluginResponse, RequestId, RingBufferStats, SharedMemoryLayout, NO_REPLY,
 };
 pub use shared_memory::{AudioRingBuffer, MidiEventQueue, SharedMemory};

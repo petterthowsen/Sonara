@@ -6,13 +6,13 @@
 use super::super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
-use crate::audio::ipc::{MidiEvent, PluginCommand, ProcessManager, SharedMemory};
+use crate::audio::ipc::{InstanceId, MidiEvent, PluginCommand, ProcessManager};
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 mod gui;
 mod lifecycle;
@@ -52,7 +52,7 @@ pub struct SubprocessClapAdapter {
     category: DeviceCategory,
 
     // Process communication
-    process_key: String,
+    instance_id: InstanceId,
     process_manager: Arc<ProcessManager>,
     load: Arc<PluginLoad>,
 
@@ -100,8 +100,7 @@ impl SubprocessClapAdapter {
             plugin_id, sample_rate, max_buffer_size
         );
 
-        // Generate unique key for this plugin instance
-        let process_key = device_path.to_process_key(channel_id);
+        let instance_id = process_manager.allocate_instance_id();
 
         // Get plugin metadata (immediately available)
         let device_name = plugin_id.to_string();
@@ -115,7 +114,7 @@ impl SubprocessClapAdapter {
         // Spawn subprocess loading in background thread (non-blocking!)
         lifecycle::spawn_loading_thread(
             Arc::clone(&process_manager),
-            process_key.clone(),
+            instance_id,
             plugin_path,
             plugin_id.to_string(),
             sample_rate,
@@ -134,7 +133,7 @@ impl SubprocessClapAdapter {
             device_vendor,
             device_version,
             category,
-            process_key,
+            instance_id,
             process_manager,
             load,
             param_info_cache,
@@ -163,7 +162,7 @@ impl SubprocessClapAdapter {
     pub fn ipc_handle(&self) -> PluginIpcHandle {
         PluginIpcHandle::new(
             Arc::clone(&self.process_manager),
-            self.process_key.clone(),
+            self.instance_id,
             self.device_name.clone(),
         )
     }
@@ -235,12 +234,8 @@ impl AudioDevice for SubprocessClapAdapter {
         self.param_values.insert(param_id, value);
         self.flush_pending_parameters();
 
-        if !parameter::set_parameter_value(
-            &self.process_manager,
-            &self.process_key,
-            param_id,
-            value,
-        ) {
+        if !parameter::set_parameter_value(&self.process_manager, self.instance_id, param_id, value)
+        {
             self.queue_parameter(param_id, value);
         }
     }
@@ -280,30 +275,14 @@ impl AudioDevice for SubprocessClapAdapter {
         parameter::get_parameters(&self.param_info_cache)
     }
 
+    /// Command thread: fire-and-forget, the host answers asynchronously.
     fn reset(&mut self) {
-        // CRITICAL: Don't block the audio thread waiting for response!
-        // Just send the command and continue (fire-and-forget)
-        let process_arc = match self.process_manager.get_process(&self.process_key) {
-            Some(p) => p,
-            None => {
-                warn!("Plugin process not found for reset");
-                return;
-            }
+        let Some(connection) = self.process_manager.instance(self.instance_id) else {
+            return; // Not loaded yet
         };
-
-        // Use try_lock to avoid blocking if process is busy
-        match process_arc.try_lock() {
-            Ok(mut process_guard) => {
-                if let Err(e) = process_guard.send_command(PluginCommand::Reset) {
-                    error!("Failed to send reset command: {}", e);
-                }
-                // Don't wait for response - this would block the audio thread!
-            }
-            Err(_) => {
-                // Process is busy, skip reset (better than blocking)
-                warn!("Skipping reset - process is busy");
-            }
-        };
+        if let Err(e) = connection.send(PluginCommand::Reset) {
+            error!("Failed to send reset command: {}", e);
+        }
     }
 
     fn version(&self) -> &str {
@@ -347,15 +326,7 @@ impl AudioDevice for SubprocessClapAdapter {
 
 impl SubprocessClapAdapter {
     fn can_send_parameters(&self) -> bool {
-        if self
-            .process_manager
-            .get_process(&self.process_key)
-            .is_none()
-        {
-            return false;
-        }
-
-        self.load.is_ready()
+        self.load.is_ready() && self.process_manager.instance(self.instance_id).is_some()
     }
 
     /// Replace a queued write to the same parameter, else append. Doesn't allocate unless more
@@ -384,7 +355,7 @@ impl SubprocessClapAdapter {
         for (param_id, value) in self.pending_param_writes.drain(..) {
             if !parameter::set_parameter_value(
                 &self.process_manager,
-                &self.process_key,
+                self.instance_id,
                 param_id,
                 value,
             ) {
@@ -451,7 +422,7 @@ impl SubprocessClapAdapter {
 
     /// Check if GUI is supported
     pub fn has_gui(&mut self) -> bool {
-        gui::has_gui(&self.process_manager, &self.process_key)
+        self.ipc_handle().has_gui()
     }
 
     /// Check if GUI is open
@@ -481,9 +452,7 @@ impl Drop for SubprocessClapAdapter {
 
         // Shutdown subprocess
         info!("Shutting down plugin subprocess: {}", self.device_name);
-        if let Err(e) = self.process_manager.shutdown_plugin(&self.process_key) {
-            error!("Failed to shutdown plugin subprocess: {}", e);
-        }
+        self.process_manager.shutdown_instance(self.instance_id);
     }
 }
 

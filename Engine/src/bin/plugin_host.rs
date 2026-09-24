@@ -1,7 +1,7 @@
 //! Plugin Host Subprocess
 //!
 //! This is a separate executable that loads and hosts a single CLAP plugin.
-//! It communicates with the main Sonara engine via IPC (Unix sockets + shared memory).
+//! It communicates with the main Sonara engine via IPC (a Unix socketpair + shared memory).
 //!
 //! **Responsibilities:**
 //! - Load CLAP plugin library
@@ -17,7 +17,8 @@
 //! - Resource management: Can restart individual plugins
 //! - Security: Sandboxing between plugins and engine
 
-use std::net::TcpStream;
+use std::os::fd::FromRawFd;
+use std::os::unix::net::UnixStream;
 use tracing::{error, info};
 
 // Import the modular plugin_host modules
@@ -41,31 +42,28 @@ fn main() {
 
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
-        error!("Usage: plugin_host <control_socket_port> <unix_socket_fd>");
+    if args.len() < 2 {
+        error!("Usage: plugin_host <control_socket_fd>");
         std::process::exit(1);
     }
+    let socket_fd: i32 = args[1].parse().expect("Invalid control socket FD");
 
-    let port: u16 = args[1].parse().expect("Invalid port number");
-    let unix_socket_fd: i32 = args[2].parse().expect("Invalid Unix socket FD");
-
-    // Connect to control socket
-    let socket_addr = format!("127.0.0.1:{}", port);
-    info!("Connecting to control socket: {}", socket_addr);
-
-    let stream = match TcpStream::connect(&socket_addr) {
-        Ok(s) => {
-            info!("✅ Connected to control socket");
-            s
-        }
-        Err(e) => {
-            error!("Failed to connect to control socket: {}", e);
+    // The engine cleared close-on-exec so the descriptor survived exec. Set it again so processes
+    // a plugin spawns don't inherit the socket and keep it open after this host exits.
+    unsafe {
+        let flags = libc::fcntl(socket_fd, libc::F_GETFD);
+        if flags < 0 {
+            error!("Control socket FD {} is not open", socket_fd);
             std::process::exit(1);
         }
-    };
+        libc::fcntl(socket_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+    }
+    // SAFETY: the engine passes us this descriptor and nothing else in this process owns it
+    let socket = unsafe { UnixStream::from_raw_fd(socket_fd) };
+    info!("✅ Using control socket FD {}", socket_fd);
 
     // Run plugin host event loop
-    if let Err(e) = run_plugin_host(stream, unix_socket_fd) {
+    if let Err(e) = run_plugin_host(socket) {
         error!("Plugin host error: {}", e);
         // Use libc::_exit to avoid IO safety checks during error cleanup
         unsafe {

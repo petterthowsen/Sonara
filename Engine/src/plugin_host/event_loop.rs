@@ -1,161 +1,160 @@
 //! Main event loop for plugin host subprocess
 //!
-//! Handles command processing, audio processing, GUI callbacks, and timers
-//! in a non-blocking event loop on the main thread.
+//! A reader thread decodes requests from the control socket and hands them to the main thread,
+//! which handles commands, audio processing, GUI callbacks and timers in one loop and is the
+//! only thread that writes to the socket. (Phase 3 moves audio onto its own thread.)
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-use clack_extensions::params::{ParamInfoBuffer, PluginParams};
+use clack_extensions::params::PluginParams;
 use clack_extensions::timer::PluginTimer;
 use clack_host::events::io::{InputEvents, OutputEvents};
 
+use crate::audio::ipc::{
+    wire, HostMessage, HostRequest, PluginCommand, PluginEvent, PluginResponse,
+};
 use crate::plugin_host::commands::process_command;
-use crate::plugin_host::protocol::{PluginCommand, PluginResponse};
 use crate::plugin_host::state::{
     has_audio_to_process, process_audio, process_output_events, PluginState,
 };
 
+/// What the reader thread hands to the main loop.
+enum Incoming {
+    Request(HostRequest, Vec<OwnedFd>),
+    /// The engine closed the control socket (or it failed): time to exit.
+    Closed,
+}
+
+/// Reader thread: decode requests until the socket closes.
+fn read_requests(socket: UnixStream, tx: Sender<Incoming>) {
+    loop {
+        match wire::recv_frame::<HostRequest>(&socket) {
+            Ok(Some((request, fds))) => {
+                if tx.send(Incoming::Request(request, fds)).is_err() {
+                    return;
+                }
+            }
+            Ok(None) => {
+                info!("Control socket closed, shutting down");
+                break;
+            }
+            Err(e) => {
+                error!("Control socket read failed: {}", e);
+                break;
+            }
+        }
+    }
+    let _ = tx.send(Incoming::Closed);
+}
+
+/// Send a message to the engine. Exits the process if the engine has gone away.
+fn send(socket: &UnixStream, msg: &HostMessage) {
+    if let Err(e) = wire::send_frame(socket, msg, &[]) {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        ) {
+            info!("Engine closed the control socket, shutting down");
+            // SAFETY: exits without running destructors; the OS reclaims everything
+            unsafe { libc::_exit(0) };
+        }
+        warn!("Failed to send {:?}: {}", msg, e);
+    }
+}
+
+/// Handle one request. Returns false when the host should exit.
+fn handle_incoming(
+    incoming: Incoming,
+    socket: &UnixStream,
+    plugin_state: &mut Option<PluginState>,
+    event_tx: &Sender<HostMessage>,
+) -> bool {
+    let (request, fds) = match incoming {
+        Incoming::Request(request, fds) => (request, fds),
+        Incoming::Closed => return false,
+    };
+    let HostRequest {
+        instance_id,
+        request_id,
+        command,
+    } = request;
+
+    if matches!(command, PluginCommand::Shutdown) {
+        // Exit immediately without any logging or drops; the OS cleans up
+        // SAFETY: see above
+        unsafe { libc::_exit(0) };
+    }
+
+    info!(
+        "📥 Received command for instance {}: {:?}",
+        instance_id, command
+    );
+
+    let response = match plugin_state {
+        Some(state)
+            if state.instance_id != instance_id
+                && !matches!(command, PluginCommand::Initialize { .. }) =>
+        {
+            Some(PluginResponse::Error {
+                command: format!("{:?}", command),
+                error: format!(
+                    "Unknown instance {} (this host holds instance {})",
+                    instance_id, state.instance_id
+                ),
+            })
+        }
+        _ => process_command(command, instance_id, fds, plugin_state, event_tx),
+    };
+
+    if let Some(response) = response {
+        info!("📤 Sending response: {:?}", response);
+        send(
+            socket,
+            &HostMessage::Response {
+                instance_id,
+                request_id,
+                response,
+            },
+        );
+    }
+    true
+}
+
 /// Main plugin host event loop
 ///
-/// This runs on the main thread and handles both commands and GUI callbacks.
-/// We use non-blocking I/O to process commands while continuously calling
-/// the plugin's main thread callback for GUI responsiveness.
-pub fn run_plugin_host(
-    mut stream: TcpStream,
-    unix_socket_fd: i32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Set socket to non-blocking mode
-    stream.set_nonblocking(true)?;
+/// Runs on the main thread (CLAP's main thread) until the engine closes the control socket.
+pub fn run_plugin_host(socket: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
+    let (incoming_tx, incoming_rx): (Sender<Incoming>, Receiver<Incoming>) = mpsc::channel();
+    let reader_socket = socket.try_clone()?;
+    thread::Builder::new()
+        .name("ipc-reader".to_string())
+        .spawn(move || read_requests(reader_socket, incoming_tx))?;
 
     let mut plugin_state: Option<PluginState> = None;
 
-    // Channel for unsolicited responses (GUI resize, parameter changes, etc.)
-    let (unsolicited_tx, unsolicited_rx) = std::sync::mpsc::channel::<PluginResponse>();
+    // Unsolicited messages from plugin callbacks (GUI resize requests)
+    let (event_tx, event_rx) = mpsc::channel::<HostMessage>();
 
-    info!("📡 Listening for commands (non-blocking)...");
-
-    // Main event loop: process commands + GUI callbacks + audio processing
-    let mut line_buffer = String::new();
-    let mut byte_buffer = [0u8; 1];
+    info!("📡 Listening for commands...");
 
     loop {
-        // Try to read commands as fast as possible (prioritize command reading)
-        // Read in a tight loop until WouldBlock to minimize latency
+        // Handle every request that has arrived
         let mut command_received = false;
         loop {
-            match stream.read(&mut byte_buffer) {
-                Ok(0) => {
-                    // Connection closed
-                    info!("Control socket closed, shutting down");
-                    return Ok(());
-                }
-                Ok(1) => {
-                    let ch = byte_buffer[0] as char;
-                    if ch == '\n' {
-                        // Complete line received, process it
-                        let line = line_buffer.trim();
-
-                        if !line.is_empty() {
-                            info!("📨 Raw data received ({} bytes): '{}'", line.len(), line);
-
-                            // Parse command (JSON-encoded)
-                            let cmd: PluginCommand = match serde_json::from_str(line) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    warn!("Failed to parse command '{}': {}", line, e);
-                                    line_buffer.clear();
-                                    continue;
-                                }
-                            };
-
-                            // Check for shutdown BEFORE logging to avoid IO safety issues
-                            if matches!(cmd, PluginCommand::Shutdown) {
-                                // Exit immediately using libc::_exit without any logging or drops
-                                // The OS will clean up all file descriptors and resources
-                                unsafe {
-                                    libc::_exit(0);
-                                }
-                            }
-
-                            info!("📥 Received command: {:?}", cmd);
-
-                            // Process command
-                            let response = process_command(
-                                cmd,
-                                &mut plugin_state,
-                                unix_socket_fd,
-                                &unsolicited_tx,
-                            );
-
-                            if let Some(resp) = response {
-                                info!("📤 Sending response: {:?}", resp);
-                                let resp_json = serde_json::to_string(&resp)?;
-                                info!("📤 Response JSON: {}", resp_json);
-
-                                // Try to send response, but treat broken pipe as normal shutdown
-                                if let Err(e) = writeln!(stream, "{}", resp_json) {
-                                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                                    {
-                                        info!(
-                                            "Parent closed connection while sending response, shutting down"
-                                        );
-                                        unsafe {
-                                            libc::_exit(0);
-                                        }
-                                    }
-                                    return Err(Box::new(e));
-                                }
-                                if let Err(e) = stream.flush() {
-                                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                                    {
-                                        info!(
-                                            "Parent closed connection while flushing response, shutting down"
-                                        );
-                                        unsafe {
-                                            libc::_exit(0);
-                                        }
-                                    }
-                                    return Err(Box::new(e));
-                                }
-                                info!("📤 Response sent and flushed");
-                            }
-
-                            command_received = true;
-                        }
-
-                        // Clear buffer for next command
-                        line_buffer.clear();
-                        // Continue reading to check for more commands
-                    } else {
-                        // Accumulate characters
-                        line_buffer.push(ch);
+            match incoming_rx.try_recv() {
+                Ok(incoming) => {
+                    if !handle_incoming(incoming, &socket, &mut plugin_state, &event_tx) {
+                        return Ok(());
                     }
+                    command_received = true;
                 }
-                Ok(_) => unreachable!("read returned >1 for single byte buffer"),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No more data available right now, exit read loop
-                    break;
-                }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                        || e.kind() == std::io::ErrorKind::ConnectionReset =>
-                {
-                    // Parent process closed the connection, this is a normal shutdown
-                    info!("Control socket closed by parent ({}), shutting down", e);
-                    unsafe {
-                        libc::_exit(0);
-                    }
-                }
-                Err(e) => {
-                    error!("Socket read error: {}", e);
-                    return Err(Box::new(e));
-                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return Ok(()),
             }
         }
 
@@ -165,10 +164,8 @@ pub fn run_plugin_host(
             // Process audio if plugin is activated and processing
             // Keep processing in a loop until input buffer is empty
             if state.activated && state.processing {
-                // Process audio multiple times to keep up with real-time
-                // Process aggressively to minimize latency
+                // Process up to 8 chunks per iteration to keep up with real-time
                 for _ in 0..8 {
-                    // Process up to 8 chunks per iteration
                     if has_audio_to_process(state) {
                         process_audio(state);
                         processed_audio = true;
@@ -190,14 +187,20 @@ pub fn run_plugin_host(
                 }
             }
 
+            // Parameter list or ranges changed: rebuild the map on next use
+            if state.shared.take_params_rescanned() {
+                state.param_map = None;
+            }
+
             // Process GUI callbacks if plugin is open
             // This is the critical call that keeps plugin GUIs responsive
             if state.gui_open {
                 state.instance.call_on_main_thread_callback();
+            }
 
-                // Poll for parameter changes from the GUI even when not processing audio
-                // This is critical: GUI parameter changes are only visible through output events,
-                // but we only collect output events during process() or flush() calls
+            // GUI parameter changes are only visible through output events, which only come
+            // from process() or flush(). Flush while the GUI is open, or when the plugin asks.
+            if state.shared.take_flush_requested() || state.gui_open {
                 let mut handle = state.instance.plugin_handle();
                 if let Some(params_ext) = handle.get_extension::<PluginParams>() {
                     let input_events = InputEvents::empty();
@@ -213,135 +216,52 @@ pub fn run_plugin_host(
                 }
             }
 
-            // Send pending parameter changes back to main process
+            // Report parameter changes to the engine, by the engine's parameter index
             if !state.pending_param_changes.is_empty() {
-                // Get parameter extension to map CLAP IDs to sequential param_ids
-                let mut handle = state.instance.plugin_handle();
-                if let Some(params_ext) = handle.get_extension::<PluginParams>() {
-                    let param_count = params_ext.count(&mut handle);
-
-                    // Process each pending change
-                    for (_placeholder_id, clap_id, denormalized_value) in
-                        state.pending_param_changes.drain(..)
-                    {
-                        // Find sequential param_id by iterating through parameters
-                        let mut param_id_opt = None;
-                        let mut param_info_opt = None;
-
-                        for i in 0..param_count {
-                            let mut buffer = ParamInfoBuffer::new();
-                            if let Some(info) = params_ext.get_info(&mut handle, i, &mut buffer) {
-                                if info.id == clap_id {
-                                    param_id_opt = Some(i);
-                                    param_info_opt = Some((info.min_value, info.max_value));
-                                    break;
-                                }
-                            }
-                        }
-
-                        if let (Some(param_id), Some((min_val, max_val))) =
-                            (param_id_opt, param_info_opt)
-                        {
-                            // Normalize value from plugin's range to 0.0-1.0
-                            let range = max_val - min_val;
-                            let normalized = if range.abs() > f64::EPSILON {
-                                ((denormalized_value - min_val) / range).clamp(0.0, 1.0) as f32
-                            } else {
-                                0.5
-                            };
-
-                            // Send ParameterValueChanged response
-                            let resp = PluginResponse::ParameterValueChanged {
+                let changes = std::mem::take(&mut state.pending_param_changes);
+                for &(clap_id, value) in &changes {
+                    let Some((param_id, entry)) = state.param_map().find(clap_id) else {
+                        continue;
+                    };
+                    let normalized = entry.normalize(value);
+                    send(
+                        &socket,
+                        &HostMessage::Event {
+                            instance_id: state.instance_id,
+                            event: PluginEvent::ParameterValueChanged {
                                 param_id,
                                 value: normalized,
-                            };
-
-                            if let Ok(resp_json) = serde_json::to_string(&resp) {
-                                if let Err(e) = writeln!(stream, "{}", resp_json) {
-                                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                                    {
-                                        info!("Parent closed connection while sending parameter change, shutting down");
-                                        unsafe {
-                                            libc::_exit(0);
-                                        }
-                                    }
-                                    warn!("Failed to send parameter change: {}", e);
-                                } else if let Err(e) = stream.flush() {
-                                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                                    {
-                                        info!("Parent closed connection while flushing parameter change, shutting down");
-                                        unsafe {
-                                            libc::_exit(0);
-                                        }
-                                    }
-                                    warn!("Failed to flush parameter change: {}", e);
-                                } else {
-                                    info!(
-                                        "📤 Sent ParameterValueChanged: param_id={}, value={:.4}",
-                                        param_id, normalized
-                                    );
-                                }
-                            }
-                        }
-                    }
+                            },
+                        },
+                    );
+                    info!(
+                        "📤 Sent ParameterValueChanged: param_id={}, value={:.4}",
+                        param_id, normalized
+                    );
                 }
+                // Keep the allocation for the next round
+                state.pending_param_changes = changes;
+                state.pending_param_changes.clear();
             }
         }
 
-        // Check for unsolicited responses (GUI resize requests, etc.)
-        while let Ok(resp) = unsolicited_rx.try_recv() {
-            match resp {
-                PluginResponse::GuiResizeRequest { width, height } => {
-                    info!("📤 Sending GuiResizeRequest: {}x{}", width, height);
-                }
-                _ => {
-                    info!("📤 Sending unsolicited response: {:?}", resp);
-                }
-            }
-
-            if let Ok(resp_json) = serde_json::to_string(&resp) {
-                if let Err(e) = writeln!(stream, "{}", resp_json) {
-                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                    {
-                        info!(
-                            "Parent closed connection while sending unsolicited response, shutting down"
-                        );
-                        unsafe {
-                            libc::_exit(0);
-                        }
-                    }
-                    warn!("Failed to send unsolicited response: {}", e);
-                } else if let Err(e) = stream.flush() {
-                    if e.kind() == std::io::ErrorKind::BrokenPipe
-                        || e.kind() == std::io::ErrorKind::ConnectionReset
-                    {
-                        info!(
-                            "Parent closed connection while flushing unsolicited response, shutting down"
-                        );
-                        unsafe {
-                            libc::_exit(0);
-                        }
-                    }
-                    warn!("Failed to flush unsolicited response: {}", e);
-                }
-            }
+        // Forward unsolicited messages from plugin callbacks (GUI resize requests, etc.)
+        while let Ok(msg) = event_rx.try_recv() {
+            info!("📤 Sending event: {:?}", msg);
+            send(&socket, &msg);
         }
 
-        // Only sleep if we didn't process audio and no command was received
-        // This keeps latency low for audio processing
+        // Idle: wait briefly for the next request instead of spinning
         if !processed_audio && !command_received {
-            thread::sleep(Duration::from_millis(1)); // Short sleep (1ms) to avoid busy-waiting
+            match incoming_rx.recv_timeout(Duration::from_millis(1)) {
+                Ok(incoming) => {
+                    if !handle_incoming(incoming, &socket, &mut plugin_state, &event_tx) {
+                        return Ok(());
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
         }
-        // If we processed audio or a command, loop immediately
-    }
-
-    // Cleanup
-    #[allow(unreachable_code)]
-    {
-        info!("Cleaning up plugin host...");
-        Ok(())
     }
 }
