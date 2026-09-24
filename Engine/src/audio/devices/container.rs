@@ -426,7 +426,8 @@ pub fn process_serial_chain(
             continue;
         }
 
-        crate::audio::rt_debug::section("device process_block", || {
+        let section = crate::audio::rt_debug::device_name("process_block", device.device_id());
+        crate::audio::rt_debug::device_section(section, || {
             device.process_block(input, output, sample_count)
         });
 

@@ -12,7 +12,7 @@ use crossbeam::channel::Sender;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// MIDI CCs a host should always expose. Sfizz's `cc_labels()` only returns
 /// *named* CCs, which for most SFZs is just the GM Volume/Pan/Expression trio
@@ -47,6 +47,21 @@ struct ExposedCc {
 /// Wrapper around sfizz::Synth that implements Send
 /// Safety: sfizz is thread-safe when properly synchronized via Mutex
 struct SendSynth(sfizz::Synth);
+
+/// Render one stereo segment without allocating. `sfizz::Synth::render_block` collects its
+/// channel pointers into a `Vec` on every call, so call the C API with a stack array instead.
+fn render_stereo(synth: &mut sfizz::Synth, left: &mut [f32], right: &mut [f32]) {
+    let frames = left.len().min(right.len());
+    if frames == 0 {
+        return;
+    }
+    let mut channels = [left.as_mut_ptr(), right.as_mut_ptr()];
+    // SAFETY: `synth` is a live instance borrowed mutably, and both pointers are valid for
+    // `frames` samples for the duration of the call.
+    unsafe {
+        sfizz::sfizz_render_block(synth.as_raw(), channels.as_mut_ptr(), 2, frames as i32);
+    }
+}
 unsafe impl Send for SendSynth {}
 
 /// Loading state for async SFZ file loading
@@ -528,22 +543,21 @@ impl AudioDevice for SfizzDevice {
         self.left_buffer[..sample_count].fill(0.0);
         self.right_buffer[..sample_count].fill(0.0);
 
-        let mut events = std::mem::take(&mut self.queued_midi);
+        // Sort in place and clear afterwards so the queue keeps its preallocated capacity.
         // Same-frame events: note-off before note-on so a retrigger isn't killed by a later off.
-        events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.3.cmp(&b.3)));
+        self.queued_midi
+            .sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.3.cmp(&b.3)));
 
         let mut cursor = 0usize;
-        for (offset, note, velocity, is_on) in events.into_iter() {
+        for i in 0..self.queued_midi.len() {
+            let (offset, note, velocity, is_on) = self.queued_midi[i];
             let clamped_offset = std::cmp::min(offset, sample_count);
             if clamped_offset > cursor {
-                let mut seg_buffers: Vec<&mut [f32]> = vec![
+                render_stereo(
+                    &mut synth_guard.0,
                     &mut self.left_buffer[cursor..clamped_offset],
                     &mut self.right_buffer[cursor..clamped_offset],
-                ];
-                if let Err(e) = synth_guard.0.render_block(&mut seg_buffers) {
-                    warn!("Sfizz render error: {:?}", e);
-                    break;
-                }
+                );
                 cursor = clamped_offset;
             }
 
@@ -554,16 +568,15 @@ impl AudioDevice for SfizzDevice {
                 synth_guard.0.note_off(note, velocity);
             }
         }
+        self.queued_midi.clear();
 
         // Render the remainder of the buffer after the last event
         if cursor < sample_count {
-            let mut seg_buffers: Vec<&mut [f32]> = vec![
+            render_stereo(
+                &mut synth_guard.0,
                 &mut self.left_buffer[cursor..sample_count],
                 &mut self.right_buffer[cursor..sample_count],
-            ];
-            if let Err(e) = synth_guard.0.render_block(&mut seg_buffers) {
-                warn!("Sfizz render error: {:?}", e);
-            }
+            );
         }
 
         // Convert from planar to interleaved stereo

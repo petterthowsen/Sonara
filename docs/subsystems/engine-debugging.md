@@ -25,4 +25,5 @@ Godot also logs into `Godot/logs/last.log` (including engine warn and above via 
 ## Allocation checker (`rt-debug`)
 - `SONARA_FEATURES=rt-debug ./run_release.sh` (or `cargo build --release --features rt-debug`) installs `assert_no_alloc`'s counting allocator and wraps the callback body in `assert_no_alloc`. Violations are counted, not fatal.
 - Every 0.5 s the callback logs a WARN `rt-debug: audio thread (de)allocations since last report (<total> total): <section>: <count>, …`. Sections are named regions marked with `rt_debug::section(name, || …)` (`audio/rt_debug.rs`). Wrap a suspect region in a new section to narrow a violation down; allocations outside any inner section show as `callback (unattributed)`.
+- Confirming a clean run: the INFO log shows `rt-debug: audio thread allocation checker is active` once, then `rt-debug: N audio thread (de)allocations in the last minute` every minute, including when N is 0. If the first line is missing, the binary wasn't built with the feature.
 - The crate also prints `Tried to (de)allocate memory in a thread that forbids allocator calls!` to stderr once per offending callback.

@@ -272,7 +272,8 @@ impl AudioDevice for PolySynthDevice {
         // Clear output buffer
         outputs[..sample_count * 2].fill(0.0);
 
-        // Sort queued MIDI by offset
+        // Sort queued MIDI by offset. Taken so voices can be borrowed while iterating; put back
+        // (cleared) at the end so the queue keeps its preallocated capacity.
         let mut events = core::mem::take(&mut self.queued_midi);
         events.sort_unstable_by_key(|e| e.0);
 
@@ -379,8 +380,9 @@ impl AudioDevice for PolySynthDevice {
             }
         }
 
-        // Clear queued events
-        self.queued_midi.clear();
+        // Return the (cleared) queue so the next `send_midi_event` doesn't allocate
+        events.clear();
+        self.queued_midi = events;
         self.time_counter = self.time_counter.wrapping_add(1);
     }
 

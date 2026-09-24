@@ -849,12 +849,16 @@ impl Channel {
 
         let mut extras = std::mem::take(&mut self.extra_out_buffers);
         let extra_count = self.devices[0].extra_output_bus_count().min(extras.len());
-        self.devices[0].process_block_with_extra(
-            &self.device_input_buffer,
-            &mut self.device_output_buffer,
-            &mut extras[..extra_count],
-            sample_count,
-        );
+        let section =
+            super::rt_debug::device_name("process_block_with_extra", self.devices[0].device_id());
+        super::rt_debug::device_section(section, || {
+            self.devices[0].process_block_with_extra(
+                &self.device_input_buffer,
+                &mut self.device_output_buffer,
+                &mut extras[..extra_count],
+                sample_count,
+            )
+        });
         self.extra_out_buffers = extras;
 
         deinterleave_stereo(
@@ -930,7 +934,10 @@ impl Channel {
     ) {
         if let Some(device) = self.devices.first_mut() {
             device.mark_activity();
-            device.send_midi_event(note, velocity, is_note_on, frame_offset);
+            let section = super::rt_debug::device_name("send_midi_event", device.device_id());
+            super::rt_debug::device_section(section, || {
+                device.send_midi_event(note, velocity, is_note_on, frame_offset)
+            });
         }
     }
 
