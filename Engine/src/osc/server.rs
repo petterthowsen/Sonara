@@ -1488,6 +1488,19 @@ impl OscServer {
                 info!("Scan plugins: {} configured path(s)", paths.len());
                 command_tx.send(AudioCommand::ScanPlugins { paths })?;
             }
+            // /plugins/hosting <mode:s> [plugin_id:s mode:s]* — how plugins are grouped into
+            // host processes, plus per-plugin overrides (Phase 5).
+            ["plugins", "hosting"] => match parse_hosting_policy(args) {
+                Ok(policy) => {
+                    info!(
+                        "Plugin hosting: {} ({} override(s))",
+                        policy.mode.name(),
+                        policy.overrides.len()
+                    );
+                    command_tx.send(AudioCommand::SetPluginHosting { policy })?;
+                }
+                Err(e) => warn!("Ignoring /plugins/hosting: {}", e),
+            },
             ["builtin", "request"] => {
                 info!("Request builtin devices");
                 command_tx.send(AudioCommand::AdvertiseBuiltinDevices)?;
@@ -1694,6 +1707,20 @@ impl OscServer {
                 vec![
                     OscType::String(reason),
                     OscType::String(stderr),
+                    OscType::Int(pid as i32),
+                ],
+            ),
+            EngineStatus::PluginHost {
+                channel_id,
+                device_path,
+                mode,
+                host_key,
+                pid,
+            } => (
+                device_path.to_osc_addr(channel_id, "host"),
+                vec![
+                    OscType::String(mode),
+                    OscType::String(host_key),
                     OscType::Int(pid as i32),
                 ],
             ),
@@ -2401,6 +2428,38 @@ fn parse_automation_point(args: &[OscType]) -> Option<AutomationPoint> {
     ))
 }
 
+/// Parse `/plugins/hosting <mode:s> [plugin_id:s mode:s]*` into a hosting policy. An unknown
+/// override mode is skipped with a warning; an unknown global mode rejects the message.
+fn parse_hosting_policy(args: &[OscType]) -> Result<crate::audio::ipc::HostingPolicy, String> {
+    use crate::audio::ipc::{HostingMode, HostingPolicy};
+
+    let mode = match args.first() {
+        Some(OscType::String(name)) => {
+            HostingMode::parse(name).ok_or_else(|| format!("unknown hosting mode '{}'", name))?
+        }
+        _ => return Err("expected the hosting mode as the first argument".to_string()),
+    };
+    let mut policy = HostingPolicy {
+        mode,
+        ..Default::default()
+    };
+    for pair in args[1..].chunks(2) {
+        let [OscType::String(plugin_id), OscType::String(name)] = pair else {
+            return Err("overrides must be (plugin_id:s, mode:s) pairs".to_string());
+        };
+        match HostingMode::parse(name) {
+            Some(mode) => {
+                policy.overrides.insert(plugin_id.clone(), mode);
+            }
+            None => warn!(
+                "Ignoring hosting override for {}: unknown mode '{}'",
+                plugin_id, name
+            ),
+        }
+    }
+    Ok(policy)
+}
+
 /// Clamp a running counter into an OSC int32 argument.
 fn osc_count(count: u64) -> i32 {
     count.min(i32::MAX as u64) as i32
@@ -2466,5 +2525,40 @@ impl EngineStatsSummary {
             plugin_underruns_at_start: plugin_underruns,
             ..Self::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::ipc::HostingMode;
+
+    fn string(s: &str) -> OscType {
+        OscType::String(s.to_string())
+    }
+
+    #[test]
+    fn hosting_policy_parses_mode_and_overrides() {
+        let policy = parse_hosting_policy(&[
+            string("by_plugin"),
+            string("crashy.synth"),
+            string("individually"),
+            string("other.fx"),
+            string("bogus"),
+        ])
+        .unwrap();
+        assert_eq!(policy.mode, HostingMode::ByPlugin);
+        assert_eq!(
+            policy.overrides.get("crashy.synth"),
+            Some(&HostingMode::Individually)
+        );
+        assert!(!policy.overrides.contains_key("other.fx"));
+    }
+
+    #[test]
+    fn hosting_policy_rejects_bad_messages() {
+        assert!(parse_hosting_policy(&[]).is_err());
+        assert!(parse_hosting_policy(&[string("within_engine")]).is_err());
+        assert!(parse_hosting_policy(&[string("together"), string("dangling.id")]).is_err());
     }
 }

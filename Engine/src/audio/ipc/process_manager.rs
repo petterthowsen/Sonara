@@ -22,6 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
+use super::hosting::{HostAssignment, HostingPolicy};
 use super::protocol::{
     HostMessage, HostRequest, InstanceId, PluginCommand, PluginEvent, PluginResponse, RequestId,
     SharedMemoryLayout, NO_REPLY,
@@ -47,6 +48,9 @@ const STDERR_TAIL_LINES: usize = 20;
 
 /// Largest stderr chunk read at once, so a line the host never terminates can't grow the buffer.
 const STDERR_TAIL_BYTES_PER_READ: usize = 4096;
+
+/// How long a shared host gets to drop one of its instances (`Unload`).
+const UNLOAD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long `crash_info` waits for the watcher to record the exit status.
 const CRASH_STATUS_GRACE: Duration = Duration::from_millis(250);
@@ -219,6 +223,10 @@ struct Routing {
     stderr_tail: Mutex<VecDeque<String>>,
     /// Set when a blocking request timed out. The command thread kills a hung host (Phase 4).
     hung: AtomicBool,
+    /// `Initialize` requests in flight. Loading a plugin can keep a shared host's main thread
+    /// busy for many seconds, so while one runs, other requests timing out don't mean the host
+    /// is hung.
+    initializing: AtomicU32,
 }
 
 impl Routing {
@@ -331,7 +339,7 @@ impl PluginProcess {
 
         let host_shared = Arc::new(HostSharedMemory::new(&format!(
             "sonara_host_{}",
-            host_key.replace(['/', '-'], "_")
+            sanitize_name(&host_key)
         ))?);
         let host_shared_fd = host_shared.as_raw_fd();
 
@@ -387,6 +395,7 @@ impl PluginProcess {
             exit: Mutex::new(None),
             stderr_tail: Mutex::new(VecDeque::new()),
             hung: AtomicBool::new(false),
+            initializing: AtomicU32::new(0),
         });
         let reader_socket = engine_socket
             .try_clone()
@@ -503,8 +512,13 @@ impl PluginProcess {
             Err(RecvTimeoutError::Timeout) => {
                 lock(&self.routing.pending).remove(&request_id);
                 // A host that lets a request time out is unresponsive: the command thread kills
-                // it on its next tick and treats it as crashed.
-                self.routing.hung.store(true, Ordering::Release);
+                // it on its next tick and treats it as crashed. Not while another instance is
+                // loading in it, though: its main thread is busy, not stuck. An `Initialize` that
+                // times out itself always counts.
+                let initializing = matches!(request.command, PluginCommand::Initialize { .. });
+                if initializing || self.routing.initializing.load(Ordering::Acquire) == 0 {
+                    self.routing.hung.store(true, Ordering::Release);
+                }
                 Err(format!(
                     "Plugin host {} didn't answer {:?} within {:.1}s",
                     self.host_key,
@@ -702,6 +716,11 @@ impl InstanceConnection {
     pub fn host_pid(&self) -> u32 {
         self.host.pid
     }
+
+    /// The key of the host process this instance runs in.
+    pub fn host_key(&self) -> &str {
+        &self.host.host_key
+    }
 }
 
 /// Plugin process manager: host key → host process, instance id → instance.
@@ -709,6 +728,8 @@ pub struct ProcessManager {
     hosts: Mutex<HashMap<String, Arc<PluginProcess>>>,
     instances: Mutex<HashMap<InstanceId, InstanceConnection>>,
     next_instance_id: AtomicU32,
+    /// How instances are grouped into host processes (Phase 5).
+    hosting: Mutex<HostingPolicy>,
 }
 
 impl ProcessManager {
@@ -718,6 +739,7 @@ impl ProcessManager {
             hosts: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             next_instance_id: AtomicU32::new(1),
+            hosting: Mutex::new(HostingPolicy::default()),
         }
     }
 
@@ -726,9 +748,20 @@ impl ProcessManager {
         self.next_instance_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Host key that gives an instance a host process of its own ("Individually" hosting).
-    pub fn individual_host_key(instance_id: InstanceId) -> String {
-        format!("instance-{}", instance_id)
+    /// Replace the hosting policy. Instances already loaded keep their host until they are moved
+    /// (the command thread compares each one's assignment with `assign_host`).
+    pub fn set_hosting_policy(&self, policy: HostingPolicy) {
+        *lock(&self.hosting) = policy;
+    }
+
+    /// The host an instance of `plugin_id` from `vendor` belongs in under the current policy.
+    pub fn assign_host(
+        &self,
+        plugin_id: &str,
+        vendor: &str,
+        instance_id: InstanceId,
+    ) -> HostAssignment {
+        lock(&self.hosting).assign(plugin_id, vendor, instance_id)
     }
 
     /// Locate the `plugin_host` binary, which must sit next to the running engine executable.
@@ -756,17 +789,28 @@ impl ProcessManager {
         Ok(plugin_host_path)
     }
 
-    /// The live host for `host_key`, spawning one if there is none.
-    fn host_for(&self, host_key: &str) -> Result<Arc<PluginProcess>, String> {
+    /// The live host for `host_key`, spawning one if there is none, with `instance_id`'s event
+    /// route registered. Registering under the hosts lock keeps `release_host_if_unused` from
+    /// shutting the host down between finding it and claiming it.
+    fn host_for(
+        &self,
+        host_key: &str,
+        instance_id: InstanceId,
+        events: Sender<PluginEvent>,
+    ) -> Result<Arc<PluginProcess>, String> {
         let mut hosts = lock(&self.hosts);
-        if let Some(host) = hosts.get(host_key) {
-            if host.is_alive() {
-                return Ok(Arc::clone(host));
+        let host = match hosts.get(host_key) {
+            Some(host) if host.is_alive() => Arc::clone(host),
+            existing => {
+                if existing.is_some() {
+                    warn!("Plugin host {} is dead; spawning a new one", host_key);
+                }
+                let host = Arc::new(PluginProcess::spawn(host_key.to_string())?);
+                hosts.insert(host_key.to_string(), Arc::clone(&host));
+                host
             }
-            warn!("Plugin host {} is dead; spawning a new one", host_key);
-        }
-        let host = Arc::new(PluginProcess::spawn(host_key.to_string())?);
-        hosts.insert(host_key.to_string(), Arc::clone(&host));
+        };
+        lock(&host.routing.events).insert(instance_id, events);
         Ok(host)
     }
 
@@ -785,19 +829,22 @@ impl ProcessManager {
             "Loading plugin {} as instance {} in host {}",
             plugin_id, instance_id, host_key
         );
-        let host = self.host_for(host_key)?;
+        let (events_tx, events_rx) = channel::unbounded();
+        let host = self.host_for(host_key, instance_id, events_tx)?;
         let connection_host_shared = Arc::clone(host.host_shared());
 
         let layout = SharedMemoryLayout::new(max_buffer_size);
         let shm_name = format!("sonara_plugin_{}_{}", host.pid, instance_id);
-        let shared_memory = Arc::new(
-            SharedMemory::new(&shm_name, layout)
-                .map_err(|e| format!("Failed to create shared memory: {}", e))?,
-        );
+        let shared_memory = match SharedMemory::new(&shm_name, layout) {
+            Ok(shm) => Arc::new(shm),
+            Err(e) => {
+                lock(&host.routing.events).remove(&instance_id);
+                self.release_host_if_unused(&host);
+                return Err(format!("Failed to create shared memory: {}", e));
+            }
+        };
 
-        let (events_tx, events_rx) = channel::unbounded();
-        lock(&host.routing.events).insert(instance_id, events_tx);
-
+        host.routing.initializing.fetch_add(1, Ordering::AcqRel);
         let result = host.request_with_fds(
             instance_id,
             PluginCommand::Initialize {
@@ -809,6 +856,7 @@ impl ProcessManager {
             &[shared_memory.as_raw_fd()],
             INITIALIZE_TIMEOUT,
         );
+        host.routing.initializing.fetch_sub(1, Ordering::AcqRel);
         let error = match result {
             Ok(PluginResponse::InitializeSuccess { .. }) => None,
             Ok(PluginResponse::InitializeError { error }) => {
@@ -843,23 +891,46 @@ impl ProcessManager {
         lock(&self.instances).get(&instance_id).cloned()
     }
 
-    /// Forget an instance and shut its host down if no other instance uses it.
+    /// Forget an instance. A host other instances still use only unloads this one; otherwise the
+    /// host shuts down. Blocking; call it off the audio thread and without the state lock.
     pub fn shutdown_instance(&self, instance_id: InstanceId) {
         let Some(connection) = lock(&self.instances).remove(&instance_id) else {
             return;
         };
-        lock(&connection.host.routing.events).remove(&instance_id);
-        self.release_host_if_unused(&connection.host);
+        let host = &connection.host;
+        let shared = {
+            let mut events = lock(&host.routing.events);
+            events.remove(&instance_id);
+            !events.is_empty()
+        };
+        if shared && host.is_alive() {
+            info!(
+                "Unloading instance {} from shared plugin host {}",
+                instance_id, host.host_key
+            );
+            match host.request_with_fds(instance_id, PluginCommand::Unload, &[], UNLOAD_TIMEOUT) {
+                Ok(PluginResponse::Unloaded) => {}
+                Ok(other) => warn!(
+                    "Plugin host {} answered Unload of instance {} with {:?}",
+                    host.host_key, instance_id, other
+                ),
+                Err(e) => warn!("{}", e),
+            }
+            return;
+        }
+        self.release_host_if_unused(host);
     }
 
     /// Shut `host` down if no instance lives in it. An instance counts from the moment its event
     /// route is registered, so one that is still loading keeps the host alive.
     fn release_host_if_unused(&self, host: &Arc<PluginProcess>) {
-        if host.is_alive() && !lock(&host.routing.events).is_empty() {
-            return;
-        }
         {
+            // Under the hosts lock, so `host_for` can't hand the host to a new instance while
+            // it is being released.
             let mut hosts = lock(&self.hosts);
+            if host.is_alive() && !lock(&host.routing.events).is_empty() {
+                return;
+            }
             if hosts
                 .get(&host.host_key)
                 .is_some_and(|registered| Arc::ptr_eq(registered, host))
@@ -878,6 +949,13 @@ impl ProcessManager {
             host.shutdown();
         }
     }
+}
+
+/// A host key made safe for a memfd name.
+fn sanitize_name(key: &str) -> String {
+    key.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 impl Default for ProcessManager {
@@ -1043,6 +1121,83 @@ mod tests {
             process.request_with_fds(1, PluginCommand::HasGui, &[], Duration::from_millis(20));
         assert!(result.unwrap_err().contains("didn't answer"));
         assert!(process.is_hung());
+    }
+
+    /// Loading a plugin can keep a shared host's main thread busy for many seconds; another
+    /// instance's request timing out meanwhile doesn't make the host hung.
+    #[test]
+    fn a_timeout_while_another_instance_initializes_is_not_a_hang() {
+        let (process, _host) = fake_host();
+        process.routing.initializing.fetch_add(1, Ordering::AcqRel);
+        let result =
+            process.request_with_fds(2, PluginCommand::HasGui, &[], Duration::from_millis(20));
+        assert!(result.unwrap_err().contains("didn't answer"));
+        assert!(!process.is_hung());
+
+        process.routing.initializing.fetch_sub(1, Ordering::AcqRel);
+        let result =
+            process.request_with_fds(2, PluginCommand::HasGui, &[], Duration::from_millis(20));
+        assert!(result.is_err());
+        assert!(process.is_hung());
+    }
+
+    /// Register `instance_id` as living in `process`, as `spawn_instance` would.
+    fn register_instance(manager: &ProcessManager, process: &Arc<PluginProcess>, id: InstanceId) {
+        let (tx, rx) = channel::unbounded();
+        lock(&process.routing.events).insert(id, tx);
+        let shared_memory = Arc::new(
+            SharedMemory::new(
+                &format!("sonara_test_shared_host_{}", id),
+                SharedMemoryLayout::new(64),
+            )
+            .unwrap(),
+        );
+        lock(&manager.instances).insert(
+            id,
+            InstanceConnection {
+                instance_id: id,
+                host: Arc::clone(process),
+                events: rx,
+                shared_memory,
+                host_shared: Arc::clone(process.host_shared()),
+            },
+        );
+    }
+
+    /// Removing one instance of a shared host unloads just that instance; removing the last one
+    /// shuts the host down.
+    #[test]
+    fn a_shared_host_outlives_all_but_its_last_instance() {
+        let manager = ProcessManager::new();
+        let (process, host) = fake_host();
+        let process = Arc::new(process);
+        lock(&manager.hosts).insert(process.host_key.clone(), Arc::clone(&process));
+        register_instance(&manager, &process, 1);
+        register_instance(&manager, &process, 2);
+
+        let responder = thread::spawn(move || {
+            let request = recv_request(&host);
+            assert!(matches!(request.command, PluginCommand::Unload));
+            assert_eq!(request.instance_id, 1);
+            reply(&host, &request, PluginResponse::Unloaded);
+            host
+        });
+        manager.shutdown_instance(1);
+        let host = responder.join().unwrap();
+        assert!(manager.instance(1).is_none());
+        assert!(manager.instance(2).is_some());
+        assert!(
+            lock(&manager.hosts).contains_key(&process.host_key),
+            "host still in use"
+        );
+
+        manager.shutdown_instance(2);
+        assert!(
+            lock(&manager.hosts).is_empty(),
+            "last instance releases the host"
+        );
+        let request = recv_request(&host);
+        assert!(matches!(request.command, PluginCommand::Shutdown));
     }
 
     #[test]

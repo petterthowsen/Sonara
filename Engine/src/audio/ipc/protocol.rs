@@ -8,8 +8,9 @@
 //! - File descriptors (the shared-memory memfd) ride along with a frame as `SCM_RIGHTS`.
 //! - Audio and MIDI travel through shared memory, never over the socket.
 //!
-//! Every message addresses a plugin **instance**, not a process, so several instances can later
-//! share one host process (hosting modes) without a protocol change.
+//! Every message addresses a plugin **instance**, not a process, so several instances can share
+//! one host process (hosting modes, `hosting.rs`). `Shutdown` is the only command that addresses
+//! the whole process.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -102,6 +103,10 @@ pub enum PluginCommand {
     /// Reset plugin (clear buffers, stop voices)
     Reset,
 
+    /// Remove this instance from its host, which keeps running for its other instances: close
+    /// its GUI, deactivate it and drop it. Answered with `Unloaded`.
+    Unload,
+
     /// Shut down the whole host process
     Shutdown,
 }
@@ -173,6 +178,9 @@ pub enum PluginResponse {
 
     /// Plugin reset complete
     ResetComplete,
+
+    /// The instance was removed from its host (`Unload`)
+    Unloaded,
 
     /// Generic error response
     Error { command: String, error: String },

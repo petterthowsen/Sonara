@@ -9,12 +9,14 @@
 //! These components are plugin-format agnostic and can be used for CLAP, VST3, LV2, etc.
 
 pub mod futex;
+pub mod hosting;
 pub mod platform_shm;
 pub mod process_manager;
 pub mod protocol;
 pub mod shared_memory;
 pub mod wire;
 
+pub use hosting::{HostAssignment, HostingMode, HostingPolicy};
 pub use platform_shm::PlatformSharedMemory;
 pub use process_manager::{
     HostCrash, HostExit, InstanceConnection, PluginProcess, ProcessManager, REQUEST_TIMEOUT,

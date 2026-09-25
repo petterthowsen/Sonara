@@ -25,6 +25,9 @@ var _providers: Array[AssetProvider] = []
 ## Built-in and plugin Device types discovered from the engine.
 var device_registry: DeviceRegistry = DeviceRegistry.new()
 
+## How plugins are grouped into host processes (setting + per-plugin overrides).
+var plugin_hosting: PluginHosting = PluginHosting.new()
+
 # All discovered assets (keyed by path for fast lookup)
 var _assets_by_path: Dictionary[String, Asset] = {}
 
@@ -50,6 +53,7 @@ func _ready() -> void:
 	if Utils.is_test_mode():
 		return
 	logger.info("Initializing...")
+	plugin_hosting.start()
 	_load_asset_cache()
 	_initialize_providers()
 	

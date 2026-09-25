@@ -363,6 +363,11 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         device_path: DevicePath,
     },
+    /// How plugins are grouped into host processes: the global mode plus per-plugin overrides
+    /// (plugin id → mode). Loaded plugins whose host changes are moved live. Phase 5.
+    SetPluginHosting {
+        policy: crate::audio::ipc::HostingPolicy,
+    },
 
     // Plugin GUI
     OpenPluginGui {
@@ -468,6 +473,15 @@ pub enum EngineStatus {
         device_path: DevicePath,
         reason: String,
         stderr: String,
+        pid: u32,
+    },
+    /// A plugin finished loading into a host process: the hosting mode that chose the host, its
+    /// key and its pid. Sent on every load, reload and move. Phase 5.
+    PluginHost {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mode: String,
+        host_key: String,
         pid: u32,
     },
 
@@ -2388,6 +2402,7 @@ pub fn process_command(
         | AudioCommand::RemoveDeviceFromChannel { .. }
         | AudioCommand::ClearChannelDevices { .. }
         | AudioCommand::ReloadDevice { .. }
+        | AudioCommand::SetPluginHosting { .. }
         | AudioCommand::ScanPlugins { .. }
         | AudioCommand::AdvertiseBuiltinDevices) => {
             warn!("{:?} must be handled by CommandWorker, ignoring", other);

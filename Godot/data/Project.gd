@@ -137,7 +137,9 @@ func connect_to_engine() -> void:
 	# Register OSC listeners for clip/audiofile events
 	_register_clip_osc_listeners()
 
-	# Clear any previous project state in engine, then initialize
+	# Clear any previous project state in engine, then initialize. The hosting policy goes
+	# first so plugins load straight into the right host process.
+	AssetService.plugin_hosting.sync_to_engine()
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
 

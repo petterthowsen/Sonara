@@ -16,6 +16,7 @@ signal active_changed(active: bool)
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
 signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
+signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
 signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
@@ -102,6 +103,16 @@ var crash_reason: String = ""
 
 ## Tail of the crashed plugin host's stderr ("" if none/empty).
 var crash_stderr: String = ""
+
+## Plugin host process this (CLAP) device runs in: the hosting mode that chose it (engine name,
+## see PluginHosting.MODES), the host key and its pid. Empty / 0 until the plugin has loaded.
+var host_mode: String = ""
+var host_key: String = ""
+var host_pid: int = 0
+
+## Pid of the last crashed host that showed a popup. A shared host crash reports once per
+## device in it; one popup (with one Reload, which restores them all) is enough.
+static var _last_crash_popup_pid: int = -1
 
 ## Track expected parameter count when receiving parameter info
 var _expected_param_count: int = 0
@@ -454,6 +465,7 @@ func connect_to_engine() -> void:
 	var loading_state_addr = osc_addr("loading_state")
 	var gui_closed_addr = osc_addr("gui/closed")
 	var crashed_addr = osc_addr("crashed")
+	var host_addr = osc_addr("host")
 
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
@@ -462,6 +474,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
+	AudioEngineOSC.listen(host_addr, _on_host_received)
 
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
@@ -486,6 +499,7 @@ func disconnect_from_engine() -> void:
 	var loading_state_addr = osc_addr("loading_state")
 	var gui_closed_addr = osc_addr("gui/closed")
 	var crashed_addr = osc_addr("crashed")
+	var host_addr = osc_addr("host")
 
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
@@ -495,6 +509,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
+	AudioEngineOSC.unlisten(host_addr, _on_host_received)
 	for child in children:
 		child.disconnect_from_engine()
 
@@ -546,6 +561,7 @@ func _on_crashed_received(values: Array) -> void:
 	"""Handle a plugin-host crash: record it, surface it, and offer a Reload action."""
 	crash_reason = str(values[0]) if values.size() >= 1 else "unknown"
 	crash_stderr = str(values[1]) if values.size() >= 2 else ""
+	var pid: int = int(values[2]) if values.size() >= 3 else 0
 
 	var new_state := "crashed:" + crash_reason
 	if loading_state != new_state:
@@ -556,14 +572,36 @@ func _on_crashed_received(values: Array) -> void:
 
 	if Utils.is_test_mode():
 		return
+	if pid != 0 and pid == _last_crash_popup_pid:
+		return
+	_last_crash_popup_pid = pid
 	if Sonara and Sonara.editor:
 		var display_name := get_display_name()
 		var body := crash_reason + "\n\nDevice: " + display_name
+		if host_mode != "" and host_mode != "individually":
+			body += "\n\nThe host process was shared (%s): every plugin in it stopped. Reload restores all of them." % PluginHosting.MODE_LABELS.get(host_mode, host_mode)
 		if not crash_stderr.is_empty():
 			body += "\n\nHost stderr:\n" + crash_stderr
 		Sonara.editor.show_error("Plugin crashed: %s" % display_name, body, [
 			{"text": "Reload", "callback": reload},
 		])
+
+
+func _on_host_received(values: Array) -> void:
+	"""The plugin loaded into a host process (first load, reload, or a hosting-mode move)."""
+	if values.size() < 3:
+		return
+	host_mode = str(values[0])
+	host_key = str(values[1])
+	host_pid = int(values[2])
+	host_changed.emit()
+
+
+## One line about the plugin host process, for tooltips. "" before the plugin has loaded.
+func host_description() -> String:
+	if host_pid == 0:
+		return ""
+	return "Plugin host: %s (pid %d)" % [PluginHosting.MODE_LABELS.get(host_mode, host_mode), host_pid]
 
 
 func _on_parameter_value_received_wildcard(values: Array, address: String) -> void:

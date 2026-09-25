@@ -279,6 +279,27 @@ impl PluginScanner {
     }
 
     /// Get all discovered plugins
+    /// Vendor of plugin `id` in bundle `path`. Reads that one bundle when the plugin wasn't
+    /// scanned in this session (Godot caches its plugin list, so a project can load before any
+    /// scan), and remembers what it found. None when the bundle can't be read.
+    pub fn vendor_of(&mut self, id: &str, path: &Path) -> Option<String> {
+        if let Some(plugin) = self.discovered_plugins.get(id) {
+            return Some(plugin.vendor.clone());
+        }
+        match Self::load_plugin_metadata(path) {
+            Ok(descriptors) => {
+                for descriptor in descriptors {
+                    self.discovered_plugins
+                        .insert(descriptor.id.clone(), descriptor);
+                }
+            }
+            Err(e) => tracing::warn!("Could not read plugin metadata from {:?}: {}", path, e),
+        }
+        self.discovered_plugins
+            .get(id)
+            .map(|plugin| plugin.vendor.clone())
+    }
+
     pub fn all_plugins(&self) -> impl Iterator<Item = &PluginDescriptor> {
         self.discovered_plugins.values()
     }

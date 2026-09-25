@@ -9,7 +9,8 @@
 ## Structure
 
 - `audio/ipc/` (format agnostic, used by both binaries):
-  - `process_manager.rs`: `ProcessManager` maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`. Each host has one control socket, a reader thread, and one doorbell region.
+  - `process_manager.rs`: `ProcessManager` maps a host key to a host process (`PluginProcess`) and an `InstanceId` to its `InstanceConnection`. Each host has one control socket, a reader thread, and one doorbell region. It also holds the `HostingPolicy`.
+  - `hosting.rs`: Hosting modes (`HostingMode`: Together, ByVendor, ByPlugin, Individually) and `HostingPolicy` (global mode + per-plugin overrides), which turns (plugin id, vendor, instance id) into a `HostAssignment` (mode + host key).
   - `shared_memory.rs`/`platform_shm.rs`: Per-instance block memory (planar audio + event arrays + `BlockControl`) and the per-host `HostSharedMemory` doorbell, both backed by `memfd` (Unix) or OS-specific shared memory.
   - `futex.rs`: `wait`/`wake`/`ring` on a shared `u32`, used for the block handshake.
   - `protocol.rs`: The one protocol module: `HostRequest`/`HostMessage` envelopes, `PluginCommand`/`PluginResponse`/`PluginEvent`, the shared-memory layout, `BlockEvent`.
@@ -23,7 +24,7 @@
 - `plugin_host/` (subprocess crate):
   - `mod.rs`: Module wiring and re-exports for subprocess host.
   - `event_loop.rs`: The **main thread**. A reader thread decodes requests; the main loop handles commands, GUI callbacks, timers and `params.flush`, and is the only writer on the socket.
-  - `audio_thread.rs`: The **audio thread**. Owns the plugin's `PluginAudioProcessor` and the instance's shared block, waits on the doorbell and calls `process()` for exactly the engine's block.
+  - `audio_thread.rs`: The **audio thread**. Owns every instance's `PluginAudioProcessor` and shared block (one `InstanceSlot` each), waits on the doorbell and calls `process()` for exactly the engine's block of whichever instances have a request pending.
   - `commands.rs`: Command dispatcher on the main thread; owns initialization/activation, shared-block mapping, parameter/GUI commands, and hands the processor to the audio thread on activation.
   - `operations.rs`: Higher-level helpers for loading CLAP bundles, creating GUI instances, and wiring parent windows.
   - `host.rs`: CLAP host implementation (`SubprocessHost*`) including timer management, GUI resize notifications and the latency extension.
@@ -32,7 +33,11 @@
 
 ## Lifecycle
 
-- Each adapter gets an `InstanceId` from `ProcessManager::allocate_instance_id()`. Every message carries it, so several instances can later share one host process (hosting modes) without a protocol change. For now the host key is `instance-<id>` ("Individually"), and a host rejects a second `Initialize`.
+- Each adapter gets an `InstanceId` from `ProcessManager::allocate_instance_id()`. Every message carries it, so several instances can share one host process.
+- **Hosting modes** (Phase 5): the adapter asks `ProcessManager::assign_host(plugin_id, vendor, instance_id)` for its host key: `instance-<id>` (Individually, the default), `plugin:<id>` (By plug-in), `vendor:<vendor>` (By vendor) or `all` (Together). A per-plugin override wins over the global mode. The vendor comes from the plugin scanner, which reads the one bundle on demand when Godot loaded its plugin list from cache without scanning. Godot sends the policy with `/plugins/hosting`.
+- When the policy changes, `CommandWorker::poll_devices` sees ready plugins whose `desired_host()` differs from `host_assignment()` and moves each one (`move_plugin`): close its GUI, `SaveState`, then `begin_reload`, which respawns it under the new key and restores the blob. Loading plugins are moved once they are ready.
+- Removing an instance from a host other instances still use sends `PluginCommand::Unload` (the host closes its GUI, deactivates and drops it, and removes its audio slot); the last instance shuts the host down. Finding a host and registering an instance's route happen under the `hosts` lock, so a host can't be released while a new instance claims it.
+- While an `Initialize` runs in a shared host (loading can block its main thread for seconds), another request timing out does not mark the host hung.
 - `spawn_loading_thread` loads the plugin asynchronously: `ProcessManager::spawn_instance` spawns the host (or reuses a live one for the host key), creates the instance's shared block and sends `Initialize` with its memfd attached; then Activate, GetParameterInfo and StartProcessing, then `PluginLoad` is set ready with the block and the host doorbell.
 - `PluginLoad` is an atomic state plus a set-once `PluginShared` (block + doorbell) pointer, so the audio thread reads it without locking and passes audio through while the plugin is loading or failed. It also carries the plugin's reported latency.
 - Background loading threads may emit engine `AudioCommand`s (e.g., for transport sync); keep cross-thread communication through provided channels only.
@@ -41,7 +46,7 @@
 
 - Processing is **synchronous per block** (Phase 3). The engine does not run ahead of the plugin.
 - Audio thread interaction, once `PluginLoad` is ready:
-  1. `SubprocessClapAdapter::process_block` finishes any request a previous block left outstanding (its output is discarded), writes the planewise input and the staged input events into the instance's shared block, stores `request_seq` and rings the host's doorbell (`futex_wake`).
+  1. `SubprocessClapAdapter::process_block` finishes any request a previous block left outstanding (its output is discarded), writes the planewise input and the staged input events into the instance's shared block, stores `request_seq` and rings the host's doorbell (`ring`: bump the word, then `futex_wake`, so a host that just checked for work doesn't sleep through it; the host reads the word before checking).
   2. The host's audio thread wakes on the doorbell, builds CLAP events from the input event array (sorted by `sample_offset`) and calls `process()` for exactly that block.
   3. The host writes the output planes and its own output parameter events, stores `done_seq`, and rings the doorbell back.
   4. The engine spins briefly, then `futex_wait`s until `done_seq` reaches its `request_seq` or the callback deadline passes.
@@ -65,7 +70,7 @@
 - Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui, SaveState/LoadState.
 - `Activate` carries the sample rate and re-activates (deactivate → activate) when the rate changes; the reply reports the plugin's latency. `GetParameterInfo` rebuilds and republishes the parameter map.
 - `SetParameter` is fire-and-forget: while the plugin is processing the main thread queues it to the audio thread, which applies it at offset 0 of the next block; while stopped it is applied with `params.flush()`.
-- `Reset` is handled on the audio thread (CLAP requires it there) and clears queued events. `Shutdown` exits the whole host process.
+- `Reset` is handled on the audio thread (CLAP requires it there) and clears queued events. `Unload` removes one instance from a shared host. `Shutdown` exits the whole host process.
 - Set `SONARA_IPC_TRACE=1` to log every frame on both sides, decoded as `Debug`.
 - `GetParameterInfo` and `GetParameter` expect responses; only non-audio threads should call them.
 

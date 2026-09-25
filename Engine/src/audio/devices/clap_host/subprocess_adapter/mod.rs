@@ -8,7 +8,7 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::ipc::{
-    futex, BlockEvent, InstanceId, PluginCommand, ProcessManager, MAX_BLOCK_EVENTS,
+    futex, BlockEvent, HostAssignment, InstanceId, PluginCommand, ProcessManager, MAX_BLOCK_EVENTS,
 };
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
@@ -82,9 +82,11 @@ pub struct SubprocessClapAdapter {
     sample_rate: f32,
     max_buffer_size: usize,
 
-    /// Plugin bundle path and host key, kept for the reload path (Phase 4).
+    /// Plugin bundle path, kept for the reload path (Phase 4).
     plugin_path: PathBuf,
-    host_key: String,
+    /// The host process this instance runs in (or is loading into), and the hosting mode that
+    /// chose it. Compared with the current policy to move instances when it changes (Phase 5).
+    host: HostAssignment,
 
     // Plugin position (for sending GUI close notifications)
     channel_id: u32,
@@ -135,6 +137,7 @@ impl SubprocessClapAdapter {
         device_path: DevicePath,
         plugin_path: PathBuf,
         plugin_id: &str,
+        plugin_vendor: &str,
         sample_rate: f32,
         max_buffer_size: usize,
         command_tx: Option<Sender<AudioCommand>>,
@@ -147,12 +150,12 @@ impl SubprocessClapAdapter {
         );
 
         let instance_id = process_manager.allocate_instance_id();
-        let host_key = ProcessManager::individual_host_key(instance_id);
+        let host = process_manager.assign_host(plugin_id, plugin_vendor, instance_id);
         let alive = Arc::new(AtomicBool::new(true));
 
         // Get plugin metadata (immediately available)
         let device_name = plugin_id.to_string();
-        let device_vendor = "Unknown".to_string();
+        let device_vendor = plugin_vendor.to_string();
         let device_version = "1.0".to_string();
         let category = DeviceCategory::Effect;
         let param_info_cache = Arc::new(Mutex::new(Vec::new()));
@@ -163,7 +166,7 @@ impl SubprocessClapAdapter {
         PluginLoadRequest {
             process_manager: Arc::clone(&process_manager),
             instance_id,
-            host_key: host_key.clone(),
+            host: host.clone(),
             plugin_path: plugin_path.clone(),
             plugin_id: plugin_id.to_string(),
             sample_rate,
@@ -194,7 +197,7 @@ impl SubprocessClapAdapter {
             sample_rate,
             max_buffer_size,
             plugin_path,
-            host_key,
+            host,
             channel_id,
             device_path,
             status_tx,
@@ -316,7 +319,9 @@ impl AudioDevice for SubprocessClapAdapter {
         control.input_frames.store(frames as u32, Ordering::Relaxed);
         let seq = outstanding + 1;
         control.request_seq.store(seq, Ordering::Release);
-        futex::wake(shared.doorbell.doorbell(), i32::MAX);
+        // Bump the word as well as waking: a host that checked for work just before this store
+        // then sees the word changed and doesn't sleep through the request.
+        shared.doorbell.ring();
         // The events belong to this request now, whether or not it finishes in time.
         self.input_events.clear();
 
@@ -661,12 +666,29 @@ impl SubprocessClapAdapter {
         self.saved_state.lock().unwrap().clone()
     }
 
-    /// Build the request that respawns this plugin after a crash, and install a fresh load state
-    /// so the audio thread passes audio through until the new host is ready.
+    /// The host process this instance runs in, and the mode that chose it.
+    pub fn host_assignment(&self) -> &HostAssignment {
+        &self.host
+    }
+
+    /// The host this instance belongs in under the current hosting policy. When it differs from
+    /// `host_assignment`, the command thread moves the instance (Phase 5).
+    pub fn desired_host(&self) -> HostAssignment {
+        self.process_manager
+            .assign_host(&self.device_id, &self.device_vendor, self.instance_id)
+    }
+
+    /// Build the request that respawns this plugin, and install a fresh load state so the audio
+    /// thread passes audio through until the new host is ready. Used after a crash (Phase 4) and
+    /// to move the instance to another host when the hosting policy changed (Phase 5); either
+    /// way it lands in the host the current policy picks, and restores the last saved state.
     ///
     /// Runs on the command thread under the engine state lock, which is what makes replacing
     /// `self.load` safe: the audio callback touches the field under the same lock.
     pub fn begin_reload(&mut self) -> PluginLoadRequest {
+        self.host = self.desired_host();
+        // The old host closes this instance's GUI with it; Godot is told by the caller.
+        self.gui_open = false;
         let load = Arc::new(PluginLoad::new());
         self.load = Arc::clone(&load);
         self.state_dirty.store(false, Ordering::Release);
@@ -698,7 +720,7 @@ impl SubprocessClapAdapter {
         PluginLoadRequest {
             process_manager: Arc::clone(&self.process_manager),
             instance_id: self.instance_id,
-            host_key: self.host_key.clone(),
+            host: self.host.clone(),
             plugin_path: self.plugin_path.clone(),
             plugin_id: self.device_id.clone(),
             sample_rate: self.sample_rate,
@@ -817,7 +839,10 @@ impl SubprocessClapAdapter {
             sample_rate,
             max_buffer_size,
             plugin_path: PathBuf::from("/tmp/test.clap"),
-            host_key: "instance-1".to_string(),
+            host: HostAssignment {
+                mode: crate::audio::ipc::HostingMode::Individually,
+                key: "instance-1".to_string(),
+            },
             channel_id: 0,
             device_path: DevicePath::root(0),
             status_tx: None,
@@ -1058,7 +1083,37 @@ mod tests {
         assert!(request.replace_existing);
         assert!(request.alive.load(Ordering::Acquire));
         assert_eq!(request.instance_id, 1);
-        assert_eq!(request.host_key, "instance-1");
+        assert_eq!(request.host.key, "instance-1");
+    }
+
+    /// A reload lands in the host the current policy picks, which is how a hosting-mode change
+    /// moves an instance (Phase 5).
+    #[test]
+    fn begin_reload_follows_the_current_hosting_policy() {
+        use crate::audio::ipc::{HostingMode, HostingPolicy};
+
+        let (load, _memory, _doorbell) = ready_block("sonara_test_reload_policy", 64);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        assert_eq!(adapter.desired_host(), *adapter.host_assignment());
+
+        adapter.process_manager.set_hosting_policy(HostingPolicy {
+            mode: HostingMode::ByPlugin,
+            ..Default::default()
+        });
+        let desired = adapter.desired_host();
+        assert_ne!(
+            desired,
+            *adapter.host_assignment(),
+            "the instance is now stale"
+        );
+        assert_eq!(desired.key, "plugin:test.clap");
+
+        adapter.set_gui_open(true);
+        let request = adapter.begin_reload();
+        assert_eq!(request.host, desired);
+        assert_eq!(*adapter.host_assignment(), desired);
+        assert!(!adapter.is_gui_open(), "the old host takes the GUI with it");
     }
 
     /// A stale state blob is only refreshed once per `STATE_SAVE_INTERVAL`.

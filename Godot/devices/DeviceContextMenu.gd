@@ -4,6 +4,8 @@ class_name DeviceContextMenu extends PopupPanel
 
 @onready var label: SmartLineEdit = $VBoxContainer/Label
 @onready var remove: Button = $VBoxContainer/Remove
+## CLAP only: keep this plugin in a host process of its own whatever the hosting setting says.
+@onready var host_individually: CheckBox = $VBoxContainer/HostIndividually
 
 var device : DeviceInstance = null
 
@@ -19,6 +21,7 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	remove.pressed.connect(_on_remove_pressed)
 	label.value_changed.connect(_on_label_changed)
+	host_individually.toggled.connect(_on_host_individually_toggled)
 
 
 func bind_to_device(device_instance : DeviceInstance) -> void:
@@ -28,6 +31,15 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	device = device_instance
 	label.set_value(device.get_display_name())
 	remove.text = "Remove Pad" if _pad_return() else "Remove"
+	var is_plugin := device.device.device_type == Device.DeviceType.CLAP
+	host_individually.visible = is_plugin
+	if is_plugin:
+		host_individually.set_pressed_no_signal(
+			AssetService.plugin_hosting.is_hosted_individually(device.device.device_id))
+		host_individually.tooltip_text = "Run every instance of this plugin in a plugin host process of its own, whatever Settings › Audio › Plugin Hosting says. Useful for a plugin that crashes."
+		var host := device.host_description()
+		if not host.is_empty():
+			host_individually.tooltip_text += "\n\n" + host
 
 
 func unbind() -> void:
@@ -39,6 +51,12 @@ func _on_label_changed(value) -> void:
 	if device == null:
 		return
 	label.set_value(DeviceActions.rename(device, str(value)))
+
+
+func _on_host_individually_toggled(pressed: bool) -> void:
+	if device == null:
+		return
+	AssetService.plugin_hosting.set_hosted_individually(device.device.device_id, pressed)
 
 
 func _on_remove_pressed() -> void:

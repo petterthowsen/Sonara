@@ -7,7 +7,7 @@
 
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -22,7 +22,7 @@ use super::devices::{
     container, AudioDevice, DeviceCategory, DeviceFactory, DevicePath, ParamId, ParamValue,
     SfizzDevice,
 };
-use super::ipc::{PluginEvent, ProcessManager};
+use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::types::ChannelId;
 use base64::Engine as _;
 
@@ -48,6 +48,8 @@ struct PolledPlugin {
     save_state_due: bool,
     /// The host left a block unfinished for `HUNG_STALL_TIMEOUT`.
     stalled: bool,
+    /// The hosting policy now puts this instance in another host process (Phase 5).
+    host_changed: bool,
 }
 
 /// Per-plugin audio problem counts since the last log.
@@ -61,6 +63,7 @@ pub struct CommandWorker {
     state: Arc<Mutex<EngineState>>,
     status_tx: Sender<EngineStatus>,
     max_buffer_size: usize,
+    process_manager: Arc<ProcessManager>,
     device_factory: DeviceFactory,
     plugin_scanner: PluginScanner,
     plugin_stats: HashMap<(ChannelId, DevicePath), PluginStatsLog>,
@@ -80,7 +83,7 @@ impl CommandWorker {
     ) -> Self {
         let process_manager = Arc::new(ProcessManager::new());
         let device_factory = DeviceFactory::new(
-            process_manager,
+            Arc::clone(&process_manager),
             device_sample_rate,
             max_buffer_size,
             status_tx.clone(),
@@ -92,6 +95,7 @@ impl CommandWorker {
             state,
             status_tx,
             max_buffer_size,
+            process_manager,
             device_factory,
             plugin_scanner: PluginScanner::new(),
             plugin_stats: HashMap::new(),
@@ -150,6 +154,7 @@ impl CommandWorker {
                             stats: plugin.take_stats(),
                             save_state_due: plugin.take_state_save_due(),
                             stalled: plugin.is_host_stalled(now),
+                            host_changed: plugin.desired_host() != *plugin.host_assignment(),
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
                         collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
@@ -186,6 +191,12 @@ impl CommandWorker {
                     HUNG_STALL_TIMEOUT
                 );
                 plugin.handle.kill_host();
+                continue;
+            }
+            if plugin.host_changed {
+                // Moving respawns the instance, so its queued writes and events go with the
+                // state it saves on the way out.
+                self.move_plugin(plugin);
                 continue;
             }
             if plugin.save_state_due {
@@ -324,31 +335,124 @@ impl CommandWorker {
     }
 
     /// Respawn a crashed plugin's host and restore its state on a background thread.
+    ///
+    /// A crash takes down every instance in the host, so every device that was in the same host
+    /// process is reloaded with it: one Reload brings the whole host back (Phase 5).
     fn reload_device(&self, channel_id: ChannelId, device_path: DevicePath) {
         let state = self.with_plugin(channel_id, &device_path, |plugin| {
             let load = plugin.load();
-            load.is_crashed() || load.is_failed()
+            (load.is_crashed() || load.is_failed(), load.host_pid())
         });
-        match state {
-            None => warn!(
-                "Reload requested for channel {} device {}, which is not a subprocess plugin",
-                channel_id, device_path
-            ),
-            Some(false) => warn!(
-                "Reload requested for channel {} device {}, but it hasn't crashed",
-                channel_id, device_path
-            ),
-            Some(true) => {
-                let request =
-                    self.with_plugin(channel_id, &device_path, |plugin| plugin.begin_reload());
-                if let Some(request) = request {
-                    info!(
-                        "Reloading plugin at channel {} device {}",
-                        channel_id, device_path
-                    );
-                    request.spawn();
-                }
+        let host_pid = match state {
+            None => {
+                warn!(
+                    "Reload requested for channel {} device {}, which is not a subprocess plugin",
+                    channel_id, device_path
+                );
+                return;
             }
+            Some((false, _)) => {
+                warn!(
+                    "Reload requested for channel {} device {}, but it hasn't crashed",
+                    channel_id, device_path
+                );
+                return;
+            }
+            Some((true, pid)) => pid,
+        };
+
+        let mut requests = Vec::new();
+        {
+            let mut state = self.lock_state();
+            for (&id, channel) in state.channels.iter_mut() {
+                container::visit_devices_mut(&mut channel.devices, &mut |path, device| {
+                    let Some(plugin) = device.as_any_mut().downcast_mut::<SubprocessClapAdapter>()
+                    else {
+                        return;
+                    };
+                    let load = plugin.load();
+                    let requested = id == channel_id && *path == device_path;
+                    // Pid 0: the plugin never finished loading, so it shared no host.
+                    let same_host =
+                        host_pid != 0 && load.is_crashed() && load.host_pid() == host_pid;
+                    if requested || same_host {
+                        requests.push((id, *path, plugin.begin_reload()));
+                    }
+                });
+            }
+        }
+        for (id, path, request) in requests {
+            info!(
+                "Reloading plugin at channel {} device {} (host pid {} crashed)",
+                id, path, host_pid
+            );
+            request.spawn();
+        }
+    }
+
+    /// Replace the hosting policy and move every loaded plugin whose host changed.
+    fn set_plugin_hosting(&mut self, policy: HostingPolicy) {
+        self.process_manager.set_hosting_policy(policy);
+        // The next tick compares every ready plugin with the new policy and moves it; run it now
+        // rather than up to one interval later.
+        self.poll_devices();
+    }
+
+    /// Move a plugin to the host process the hosting policy now picks: save its state, close its
+    /// GUI, then respawn it there through the reload path, which restores the state (Phase 5).
+    /// Audio passes through the plugin until it is ready in its new host.
+    fn move_plugin(&self, plugin: &PolledPlugin) {
+        let (channel_id, device_path) = (plugin.channel_id, plugin.device_path);
+        let gui_open = self
+            .with_plugin(channel_id, &device_path, |plugin| plugin.is_gui_open())
+            .unwrap_or(false);
+        if gui_open {
+            if let Err(e) = plugin.handle.close_gui() {
+                warn!(
+                    "Failed to close the GUI of {} before moving it: {}",
+                    plugin.handle.device_name(),
+                    e
+                );
+            }
+            self.send_status(EngineStatus::PluginGuiClosed {
+                channel_id,
+                device_path,
+            });
+        }
+
+        // Without a state extension the reload re-sends the cached parameter values instead.
+        match plugin.handle.save_state() {
+            Ok(state) => {
+                self.with_plugin(channel_id, &device_path, |plugin| {
+                    plugin.set_saved_state(state)
+                });
+            }
+            Err(e) => info!(
+                "Moving {} without a state blob ({}); its parameter values are re-sent",
+                plugin.handle.device_name(),
+                e
+            ),
+        }
+
+        let request = self.with_plugin(channel_id, &device_path, |plugin| {
+            let from = plugin.host_assignment().key.clone();
+            let to = plugin.desired_host();
+            // The policy may have changed back while the state was saved.
+            if to == *plugin.host_assignment() || !plugin.load().is_ready() {
+                return None;
+            }
+            Some((from, to.key, plugin.begin_reload()))
+        });
+        if let Some(Some((from, to, request))) = request {
+            info!(
+                "Moving plugin {} (channel {} device {}) from host {} to host {}",
+                plugin.handle.device_name(),
+                channel_id,
+                device_path,
+                from,
+                to
+            );
+            request.spawn();
         }
     }
 
@@ -510,6 +614,7 @@ impl CommandWorker {
                 channel_id,
                 device_path,
             } => self.reload_device(channel_id, device_path),
+            AudioCommand::SetPluginHosting { policy } => self.set_plugin_hosting(policy),
             AudioCommand::SavePluginState {
                 channel_id,
                 device_path,
@@ -626,7 +731,7 @@ impl CommandWorker {
     /// Build a device with the lock released, then insert it into the parent list.
     #[allow(clippy::too_many_arguments)]
     fn add_device(
-        &self,
+        &mut self,
         channel_id: ChannelId,
         parent_path: DevicePath,
         device_id: &str,
@@ -675,10 +780,20 @@ impl CommandWorker {
         };
         let device_path = parent_path.join(insert_pos);
 
+        // The vendor picks the host process in "By vendor" hosting.
+        let vendor = if device_type == "clap" {
+            self.plugin_scanner
+                .vendor_of(device_id, Path::new(device_file))
+                .unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            String::new()
+        };
+
         let Some(mut device) = self.device_factory.create(
             device_type,
             device_id,
             device_file,
+            &vendor,
             channel_id,
             &device_path,
         ) else {

@@ -38,6 +38,11 @@ disabled = true
 layout_mode = 2
 theme_override_styles/separator = SubResource("StyleBoxLine_j6e1k")
 
+[node name="HostIndividually" type="CheckBox" parent="VBoxContainer"]
+visible = false
+layout_mode = 2
+text = "Always host individually"
+
 [node name="Remove" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 text = "Remove"

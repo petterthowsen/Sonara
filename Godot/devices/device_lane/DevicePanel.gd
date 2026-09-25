@@ -182,6 +182,8 @@ func _unbind() -> void:
 		device.name_changed.disconnect(_on_device_name_changed)
 	if device.loading_state_changed.is_connected(_on_device_loading_state_changed):
 		device.loading_state_changed.disconnect(_on_device_loading_state_changed)
+	if device.host_changed.is_connected(_update_header_tooltip):
+		device.host_changed.disconnect(_update_header_tooltip)
 	if reload_button:
 		reload_button.visible = false
 	if _channel and _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
@@ -209,6 +211,18 @@ func _update_reload_button_visibility() -> void:
 
 func _on_device_loading_state_changed(_state: String) -> void:
 	_update_reload_button_visibility()
+
+
+## Header tooltip: the device type, plus which plugin host process it runs in (CLAP).
+func _update_header_tooltip() -> void:
+	if header == null or device == null:
+		return
+	var text: String = device.device.name
+	var host := device.host_description()
+	if not host.is_empty():
+		text += "\n" + host
+	header.tooltip_text = text
+	name_label.tooltip_text = text
 
 
 func _on_reload_pressed() -> void:
@@ -243,7 +257,10 @@ func bind_to_device(dev : DeviceInstance):
 		dev.name_changed.connect(_on_device_name_changed)
 	if not dev.loading_state_changed.is_connected(_on_device_loading_state_changed):
 		dev.loading_state_changed.connect(_on_device_loading_state_changed)
+	if not dev.host_changed.is_connected(_update_header_tooltip):
+		dev.host_changed.connect(_update_header_tooltip)
 	_update_reload_button_visibility()
+	_update_header_tooltip()
 	# Listen for parameter list updates (when plugins load params asynchronously)
 	# Individual CompactParameterControls already listen to parameter value changes.
 	# Connected before any `await` below: the engine can advertise params

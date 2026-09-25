@@ -9,8 +9,8 @@ use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
 use crate::audio::devices::{ParamId, ParamValue};
 use crate::audio::ipc::{
-    HostSharedMemory, InstanceId, PluginCommand, PluginParameterInfo, PluginResponse,
-    ProcessManager, SharedMemory, REQUEST_TIMEOUT,
+    HostAssignment, HostSharedMemory, InstanceId, PluginCommand, PluginParameterInfo,
+    PluginResponse, ProcessManager, SharedMemory, REQUEST_TIMEOUT,
 };
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
@@ -213,6 +213,9 @@ pub struct PluginLoad {
     error: Mutex<Option<String>>,
     /// Frames the plugin reported at activation, for latency compensation (Phase 8).
     latency_frames: AtomicU32,
+    /// The host process the instance was loaded into (0 until ready). Kept after a crash, so
+    /// Reload can find every device that shared the dead host.
+    host_pid: AtomicU32,
 }
 
 impl PluginLoad {
@@ -222,6 +225,7 @@ impl PluginLoad {
             shared: OnceLock::new(),
             error: Mutex::new(None),
             latency_frames: AtomicU32::new(0),
+            host_pid: AtomicU32::new(0),
         }
     }
 
@@ -279,6 +283,15 @@ impl PluginLoad {
         self.latency_frames.store(frames, Ordering::Relaxed);
     }
 
+    /// The host process the instance was loaded into, 0 before it was.
+    pub fn host_pid(&self) -> u32 {
+        self.host_pid.load(Ordering::Relaxed)
+    }
+
+    pub fn set_host_pid(&self, pid: u32) {
+        self.host_pid.store(pid, Ordering::Relaxed);
+    }
+
     pub(crate) fn set_ready(&self, memory: Arc<SharedMemory>, doorbell: Arc<HostSharedMemory>) {
         let _ = self.shared.set(PluginShared { memory, doorbell });
         self.state.store(READY, Ordering::Release);
@@ -310,7 +323,8 @@ impl PluginLoad {
 pub struct PluginLoadRequest {
     pub process_manager: Arc<ProcessManager>,
     pub instance_id: InstanceId,
-    pub host_key: String,
+    /// The host process to load into, chosen by the hosting policy.
+    pub host: HostAssignment,
     pub plugin_path: PathBuf,
     pub plugin_id: String,
     pub sample_rate: f32,
@@ -344,7 +358,7 @@ fn run_load(request: PluginLoadRequest) {
     let PluginLoadRequest {
         process_manager,
         instance_id,
-        host_key,
+        host,
         plugin_path,
         plugin_id,
         sample_rate,
@@ -375,8 +389,8 @@ fn run_load(request: PluginLoadRequest) {
     send_state("loading".to_string());
 
     if replace_existing {
-        // Drop the crashed host and its instance binding. The socket is usually already closed;
-        // this also handles a host that stopped responding.
+        // Drop the old instance binding: after a crash its host is usually already gone; when
+        // moving to another host, a shared old host only unloads this instance.
         process_manager.shutdown_instance(instance_id);
     }
     if !alive.load(Ordering::Acquire) {
@@ -388,7 +402,7 @@ fn run_load(request: PluginLoadRequest) {
     // Blocking, but on this background thread
     let connection = match process_manager.spawn_instance(
         instance_id,
-        &host_key,
+        &host.key,
         plugin_path,
         plugin_id.clone(),
         sample_rate,
@@ -519,19 +533,30 @@ fn run_load(request: PluginLoadRequest) {
     let param_count = params.len();
     *param_cache.lock().unwrap() = params;
     load.set_latency_frames(latency_frames);
+    load.set_host_pid(connection.host_pid());
     load.set_ready(
         Arc::clone(connection.shared_memory()),
         Arc::clone(connection.host_shared()),
     );
 
     info!(
-        "✅ Plugin fully loaded and activated: {} (instance {}, host pid {}, {} params)",
+        "✅ Plugin fully loaded and activated: {} (instance {}, host {} pid {}, {} params)",
         plugin_id,
         instance_id,
+        host.key,
         connection.host_pid(),
         param_count
     );
     send_state("ready".to_string());
+    if let Some(ref tx) = status_tx {
+        let _ = tx.send(EngineStatus::PluginHost {
+            channel_id,
+            device_path,
+            mode: host.mode.name().to_string(),
+            host_key: host.key.clone(),
+            pid: connection.host_pid(),
+        });
+    }
 
     // Notify that device is ready (triggers parameter re-send)
     if let Some(ref cmd_tx) = command_tx {

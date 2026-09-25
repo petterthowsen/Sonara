@@ -47,6 +47,7 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
   - [x] Host process exit is detected and turned into a per-host crashed state with a Reload action (stability plan Phase 4). Verified live: `kill -SEGV` a playing host, engine keeps running, UI gets `crashed:<reason>` + the host's stderr, `/reload` restores the plugin and its parameters. A `PopupMessage` window renders the crash with a Copy button
+- [x?] Plugin hosting modes like Bitwig: Settings › Audio › Plugin Hosting (Individually, By plug-in, By vendor, Together) plus "Always host individually" per plugin in the device menu. Changes move loaded plugins live and keep their state; a shared host crash shows one popup and one Reload restores every plugin in it. See `docs/engine-stability-plan.md` Phase 5
 - [ ] Plugin GUI windows should be forced to stay above Godot App
 - [ ] Sforzando CLAP GUI embeds but renders black
 - [ ] Improve logging of plugins

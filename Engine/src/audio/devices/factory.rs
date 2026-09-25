@@ -46,19 +46,21 @@ impl DeviceFactory {
         }
     }
 
-    /// Create a device of `device_type` ("builtin" or "clap"). Logs and returns None for unknown
-    /// or failed devices.
+    /// Create a device of `device_type` ("builtin" or "clap"). `vendor` is the plugin's vendor
+    /// (CLAP only; it picks the host process in "By vendor" hosting). Logs and returns None for
+    /// unknown or failed devices.
     pub fn create(
         &self,
         device_type: &str,
         device_id: &str,
         device_file: &str,
+        vendor: &str,
         channel_id: ChannelId,
         device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
         match device_type {
             "builtin" => self.create_builtin(device_id, channel_id, device_path),
-            "clap" => self.create_clap(device_id, device_file, channel_id, device_path),
+            "clap" => self.create_clap(device_id, device_file, vendor, channel_id, device_path),
             _ => {
                 warn!(
                     "Unknown device type: {} (supported: builtin, clap)",
@@ -113,6 +115,7 @@ impl DeviceFactory {
         &self,
         device_id: &str,
         device_file: &str,
+        vendor: &str,
         channel_id: ChannelId,
         device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
@@ -128,6 +131,7 @@ impl DeviceFactory {
             device_path.clone(),
             PathBuf::from(device_file),
             device_id,
+            vendor,
             self.sample_rate,
             self.max_buffer_size,
             Some(self.command_tx.clone()),

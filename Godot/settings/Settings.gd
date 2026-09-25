@@ -241,7 +241,20 @@ func _register_all_settings() -> void:
 		"Row height, in pixels, for a newly created automation lane.",
 	)).sub("Arranger").range(20, 200, 1)
 
-	# --- Audio (placeholder — engine does not expose OSC config yet) ---
+	# --- Audio: plugin hosting (engine-stability-plan Phase 5) ---
+	_register(Setting.new(
+		"plugins/hosting_mode",
+		"Plugin Hosting",
+		Type.CHOICE,
+		"Individually",
+		CATEGORY_AUDIO,
+		"How CLAP plugins are grouped into plugin host processes. Plugins in one process crash together; fewer processes use less CPU.\n\n"
+		+ "Individually: every plugin instance gets its own process (safest).\n"
+		+ "By plug-in: all instances of one plugin share a process.\n"
+		+ "By vendor: all plugins from one vendor share a process.\n"
+		+ "Together: all plugins share one process.\n\n"
+		+ "Changes apply right away: loaded plugins are moved and keep their state. A plugin set to \"Always host individually\" in its device menu ignores this.",
+	)).sub("Plugins").choices(["Individually", "By plug-in", "By vendor", "Together"])
 
 	# --- AI / OpenRouter ---
 	_register(Setting.new(

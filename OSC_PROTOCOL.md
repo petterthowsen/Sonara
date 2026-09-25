@@ -85,7 +85,8 @@ audio through and the UI offers a Reload.
 ### `<device addr>/crashed`
 
 Sent once when a plugin's host process dies or stops responding. A crash belongs to the host
-process, so one host holding several instances (future hosting modes) sends one per instance.
+process, so a host shared by several instances (hosting modes) sends one per instance, all with the
+same `pid`.
 
 | # | Type | Meaning |
 |---|---|---|
@@ -96,7 +97,32 @@ process, so one host holding several instances (future hosting modes) sends one 
 ### `<device addr>/reload` (Godot → engine)
 
 No arguments. Respawning the host and restoring the plugin's state happens on the engine's command
-thread; the device reports `"loading"` and later `"ready"` on `<device addr>/loading_state`.
+thread; the device reports `"loading"` and later `"ready"` on `<device addr>/loading_state`. Every
+other crashed device that was in the same host process is reloaded with it.
+
+## Plugin hosting modes (Phase 5)
+
+### `/plugins/hosting [mode:s, (plugin_id:s, mode:s)*]` (Godot → engine)
+
+How CLAP plugins are grouped into `plugin_host` processes. `mode` is one of `individually` (one
+process per instance, the default), `by_plugin` (one per plugin), `by_vendor` (one per vendor) or
+`together` (one for all). Each following pair overrides the mode for one plugin id. The message
+replaces the whole policy, so Godot sends every override each time. An unknown global mode rejects
+the message; an unknown override mode is skipped.
+
+Plugins already loaded move live: the engine saves each affected plugin's state, closes its GUI
+(`<device addr>/gui/closed`), respawns it in its new host and restores the state. Audio passes
+through the plugin until it is `"ready"` again.
+
+### `<device addr>/host`
+
+Sent when a plugin has loaded into a host process (first load, reload or a move).
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | `mode`: the hosting mode that picked the host (the names above) |
+| 1 | s | `host_key`: `instance-<id>`, `plugin:<id>`, `vendor:<name>` or `all` |
+| 2 | i | `pid`: the host's process id |
 
 ### `/plugin/save_state [channel:i, device_position:i]` (Godot → engine)
 

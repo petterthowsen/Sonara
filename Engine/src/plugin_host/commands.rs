@@ -30,7 +30,8 @@ use crate::plugin_host::operations::{
 use crate::plugin_host::state::{ParamMap, PluginState};
 
 /// Process a command for `instance_id` and return the response, if it has one. `fds` are the
-/// file descriptors that came with the command.
+/// file descriptors that came with the command. `plugin_state` is that instance's slot: None
+/// until `Initialize` fills it, and set back to None by `Unload`.
 pub fn process_command(
     cmd: PluginCommand,
     instance_id: InstanceId,
@@ -46,13 +47,9 @@ pub fn process_command(
             sample_rate,
             max_buffer_size,
         } => {
-            if let Some(state) = plugin_state {
-                // One instance per host until hosting modes land (Phase 5)
+            if plugin_state.is_some() {
                 return Some(PluginResponse::InitializeError {
-                    error: format!(
-                        "This host already holds instance {}; it can't load instance {}",
-                        state.instance_id, instance_id
-                    ),
+                    error: format!("Instance {} is already loaded in this host", instance_id),
                 });
             }
             info!(
@@ -275,6 +272,7 @@ pub fn process_command(
 
             let param_map = Some(Arc::clone(state.param_map()));
             if let Err(e) = audio.set_processor(
+                instance_id,
                 PluginAudioProcessorEnum::Started(started),
                 Arc::clone(&state.shared_memory),
                 param_map,
@@ -365,9 +363,29 @@ pub fn process_command(
         PluginCommand::Reset => {
             // `reset()` belongs on the audio thread: hand it over and clear any queued events.
             if plugin_state.is_some() {
-                audio.reset();
+                audio.reset(instance_id);
             }
             Some(PluginResponse::ResetComplete)
+        }
+
+        PluginCommand::Unload => {
+            // The host keeps running for its other instances: tear this one down completely.
+            if let Some(state) = plugin_state.as_mut() {
+                if state.gui_open {
+                    if let Err(e) = close_plugin_gui(&mut state.instance) {
+                        warn!("Failed to close the GUI of instance {}: {}", instance_id, e);
+                    }
+                    state.gui_open = false;
+                }
+                if state.activated {
+                    deactivate_plugin(state, audio);
+                }
+            }
+            // Dropping the state drops the plugin instance on this (the main) thread.
+            *plugin_state = None;
+            audio.remove_instance(instance_id);
+            info!("Unloaded instance {}", instance_id);
+            Some(PluginResponse::Unloaded)
         }
 
         PluginCommand::SaveState => {
@@ -515,7 +533,10 @@ pub fn process_command(
                     info!("✅ Queried {} parameters from plugin", param_infos.len());
                     // Rebuild the map and publish it to the audio thread.
                     state.param_map = Some(Arc::new(ParamMap::build(&mut state.instance)));
-                    audio.set_param_map(Arc::clone(state.param_map.as_ref().expect("built above")));
+                    audio.set_param_map(
+                        instance_id,
+                        Arc::clone(state.param_map.as_ref().expect("built above")),
+                    );
                     Some(PluginResponse::ParameterInfo {
                         params: param_infos,
                     })
@@ -582,7 +603,7 @@ pub fn process_command(
                     "Queuing parameter change for the audio thread: {} = {} (denormalized: {:.2})",
                     param_id, value, denormalized
                 );
-                audio.set_parameter(entry.clap_id, denormalized);
+                audio.set_parameter(instance_id, entry.clap_id, denormalized);
             } else {
                 // Not processing: apply it directly so edits take effect while stopped.
                 info!(
@@ -634,7 +655,7 @@ pub fn process_command(
 
 /// Stop processing on the audio thread and deactivate the instance on the main thread.
 fn deactivate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) {
-    if let Some(stopped) = audio.take_processor() {
+    if let Some(stopped) = audio.take_processor(state.instance_id) {
         state.instance.deactivate(stopped);
     } else if state.instance.is_active() {
         // No processor to hand back (the audio thread wasn't holding one): deactivate directly.

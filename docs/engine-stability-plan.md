@@ -11,7 +11,7 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module). Needs a live knob-move check
 - [x] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
 - [x] Phase 4: Plugin crash detection and recovery
-- [ ] Phase 5: Plugin hosting modes (within engine, together, by vendor, by plug-in, individually)
+- [x] Phase 5: Plugin hosting modes (together, by vendor, by plug-in, individually; within engine skipped). Needs a Godot UI check
 - [ ] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper)
 - [ ] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI)
 - [ ] Phase 8: Later work (lock-free engine state, CPU affinity, latency compensation)
@@ -564,6 +564,85 @@ Verify:
 - Compare Phase 0 numbers between "Individually" and "Together" on the benchmark project and
   record them in **Measurements**.
 
+As built (2026-09-25):
+- **Policy** (`audio/ipc/hosting.rs`): `HostingMode` {Together, ByVendor, ByPlugin, Individually}
+  and `HostingPolicy` (global mode + overrides by plugin id). `assign(plugin_id, vendor,
+  instance_id)` returns a `HostAssignment` (mode + key): `all`, `vendor:<vendor>`, `plugin:<id>` or
+  `instance-<id>`. `ProcessManager` holds the policy; the adapter takes its assignment at
+  construction and keeps it.
+- **Vendor.** The adapter used to report "Unknown". `CommandWorker::add_device` now asks
+  `PluginScanner::vendor_of`, which reads the one bundle when the plugin wasn't scanned this session
+  (Godot loads its plugin list from `plugins.json`, so a project can load before any scan). Vendor
+  strings are taken literally: Dragonfly Room says "Michael Willis" but Dragonfly Hall says "Michael
+  Willis and Rob vd Berg", so By vendor puts them in different hosts.
+- **Multi-instance host.** The host's main thread keeps a `HashMap<InstanceId, PluginState>`; each
+  command runs against that instance's slot (so the per-command "not initialized" answers cover
+  unknown ids). The audio thread keeps one `InstanceSlot` per instance (processor, block, parameter
+  map, queued parameters, steady time) and processes every slot with a request pending; the event
+  scratch buffers are shared. clack caches bundle entries per library, so loading one `.clap` twice
+  in a process runs its `init` once.
+- **New command `Unload`.** Removing an instance from a host other instances still use sends
+  `Unload` (the host closes its GUI, deactivates it, drops it and removes its audio slot; answer
+  `Unloaded`). The last instance shuts the host down as before. `host_for` registers the new
+  instance's event route under the `hosts` lock and `release_host_if_unused` checks it under the
+  same lock, so a host can't be released while a new instance is claiming it.
+- **Live moves (step 4).** Godot sends the whole policy as `/plugins/hosting <mode> [plugin_id
+  mode]*`. The command thread stores it and runs a device tick at once; the tick flags every
+  ready plugin whose `desired_host()` differs from its assignment and `move_plugin` closes its GUI
+  (reporting `gui/closed`), takes a fresh `SaveState`, then calls `begin_reload`. `begin_reload`
+  now re-evaluates the policy, so the Phase 4 reload path does the respawn, the unload from the
+  old host and the restore. A plugin that is still loading is moved once it is ready. Audio passes
+  through a moving plugin until it is ready again (~20–40 ms per plugin live).
+- **Crashes in a shared host (Phase 4 follow-up).** `PluginLoad` remembers its host pid. A Reload
+  of one crashed device reloads every crashed device whose pid matches, so one click restores the
+  whole host. Godot shows one crash popup per dead pid (it says the host was shared) instead of
+  one per device.
+- **Hung detection.** Loading a plugin can keep a shared host's main thread busy for seconds, so
+  while an `Initialize` is in flight in a host, another request timing out no longer marks that
+  host hung (an `Initialize` that times out still does).
+- **Doorbell lost wakeup (found while making the audio thread multi-instance).** The engine's
+  publish only called `futex_wake`, without bumping the word, and the host read the word after
+  checking for work. A publish landing between the two left the host asleep for its 2 ms idle
+  timeout. The engine now `ring()`s (bump + wake) and the host reads the word before checking.
+- **Step 5, Within engine: skipped.** The other four modes cover the need, and this one would bring
+  back the crash-takes-the-engine-down failure Phases 3–4 removed. `clap_host/adapter.rs` stays
+  unused.
+- **Step 6.** New status `<device addr>/host [mode:s, host_key:s, pid:i]` after every load,
+  reload and move. `DeviceInstance` stores it (`host_mode`, `host_key`, `host_pid`,
+  `host_changed`) and `DevicePanel`'s header tooltip shows "Plugin host: By plug-in (pid N)".
+  Phase 6 adds the stats next to it.
+- **Godot.** Setting `plugins/hosting_mode` (Settings › Audio › Plugins; choices Individually, By
+  plug-in, By vendor, Together; default Individually). `data/PluginHosting.gd` (owned by
+  `AssetService`) maps the labels to engine names, keeps overrides in the `plugins/hosting_overrides`
+  config key and sends `/plugins/hosting` at start, on engine (re)connect, before `/project/init`
+  and on every change. The device context menu has an "Always host individually" check box for
+  CLAP devices. The default stays **Individually**: the measurements below show no CPU gain from
+  grouping at this quantum.
+- Tests: `hosting.rs` (keys per mode, overrides), `osc/server.rs` (`/plugins/hosting` parsing),
+  `process_manager.rs` (a shared host outlives all but its last instance and gets `Unload`; a
+  timeout during another instance's `Initialize` isn't a hang), `subprocess_adapter` (reload follows
+  the current policy and drops the GUI), Godot `tests/test_plugin_hosting.gd`.
+- **Live check (2026-09-25, engine only, messages sent by hand; 1024-frame setting → 1488-frame
+  graph quantum).** 2× Dragonfly Room, Dragonfly Hall, LSP Compressor Stereo and LSP Filter Stereo
+  on four channels, transport playing. Individually: 5 hosts. `by_plugin` during playback: 4 hosts
+  (both Rooms in one pid), each plugin restored its state blob, and the Rooms' parameter 4 values
+  set beforehand (0.123, 0.777) came back. `by_vendor`: 3 hosts (see the vendor strings above).
+  `together`: 1 host. Every move sent `<device>/host` with the new pid. `kill -SEGV` on the
+  `all` host: all 5 devices reported `crashed` with the same pid, and `/reload` on one device
+  brought all 5 back into one new host with their parameters. The 5 blocks each plugin missed
+  while the host was dying are the only deadline misses in the run. Together plus a
+  `michaelwillis.dragonfly.room individually` override: 3 hosts (each Room alone). Removing the LSP
+  Filter from the shared host sent `Unload` and the host kept running. Stopping the engine left no
+  `plugin_host` behind. 0 xruns and 0 lock misses throughout.
+- **Odd, not explained:** the first `kill -SEGV` on the shared host had no effect (the process
+  stayed in `Sl`, SIGSEGV neither caught, blocked nor ignored per `/proc/<pid>/status`); a second
+  one a minute later killed it. Worth watching when Phase 6 adds per-host logs.
+- **Not verified:** anything through the Godot UI (the setting, the context-menu check box, the
+  header tooltip, the single crash popup), a plugin GUI open during a move, and the benchmark
+  project numbers.
+- `./test_osc.sh` and `./test_plugin_osc.sh` weren't run: they are still stale (see Phase 2) and
+  prove only that the engine survives them. The live check above covers this phase.
+
 ## Phase 6: Debuggability
 
 1. Each host writes its own log file, `logs/plugins/<host-key>-<pid>.log`, with the plugin
@@ -699,5 +778,7 @@ Fill in with the Phase 0 benchmark project. Buffer = frames, load in % of block 
 |---|---|---|---|---|---|---|
 | Baseline (not the benchmark project; one Dragonfly Hall, read from the panel) | 1024 / 48k | 19% | 29% | 0 | – | n/a |
 | Phase 3 (5 CLAP instances: 2 Dragonfly, LSP compressor, LSP limiter, LibreStrings; 60 s playback) | 1024 / 48k (1488-frame graph quantum) | 4.0% | 17.4% | 0 | 0 | 0 |
+| Phase 5, Individually (4 CLAP effects: 2 Dragonfly Room, Dragonfly Hall, LSP compressor; no input; 60 s playback; 4 hosts) | 1024 / 48k (1488-frame graph quantum) | 8.1% | 12.6% | 0 | 0 | 0 |
+| Phase 5, Together (same 4 effects, 1 host) | 1024 / 48k (1488-frame graph quantum) | 8.0% | 14.8% | 0 | 0 | 0 |
 
 Add a row per phase, and for Phase 5 one row per hosting mode.

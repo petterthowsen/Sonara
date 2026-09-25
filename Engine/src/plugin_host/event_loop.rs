@@ -2,9 +2,13 @@
 //!
 //! A reader thread decodes requests from the control socket and hands them to the main thread,
 //! which handles commands, GUI callbacks and timers and is the only thread that writes to the
-//! socket. Audio runs on its own thread (`audio_thread.rs`), which owns the plugin's processor
-//! and the instance's shared block.
+//! socket. Audio runs on its own thread (`audio_thread.rs`), which owns every instance's processor
+//! and shared block.
+//!
+//! One host process can hold several plugin instances (hosting modes, Phase 5); every request
+//! names the instance it is for.
 
+use std::collections::HashMap;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -19,7 +23,7 @@ use clack_host::events::event_types::ParamValueEvent;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 
 use crate::audio::ipc::{
-    wire, HostMessage, HostRequest, HostSharedMemory, PluginCommand, PluginEvent, PluginResponse,
+    wire, HostMessage, HostRequest, HostSharedMemory, InstanceId, PluginCommand, PluginEvent,
 };
 use crate::plugin_host::audio_thread::{self, AudioThreadHandle};
 use crate::plugin_host::commands::process_command;
@@ -73,7 +77,7 @@ fn send(socket: &UnixStream, msg: &HostMessage) {
 fn handle_incoming(
     incoming: Incoming,
     socket: &UnixStream,
-    plugin_state: &mut Option<PluginState>,
+    instances: &mut HashMap<InstanceId, PluginState>,
     event_tx: &Sender<HostMessage>,
     audio: &AudioThreadHandle,
 ) -> bool {
@@ -99,21 +103,13 @@ fn handle_incoming(
         instance_id, command
     );
 
-    let response = match plugin_state {
-        Some(state)
-            if state.instance_id != instance_id
-                && !matches!(command, PluginCommand::Initialize { .. }) =>
-        {
-            Some(PluginResponse::Error {
-                command: format!("{:?}", command),
-                error: format!(
-                    "Unknown instance {} (this host holds instance {})",
-                    instance_id, state.instance_id
-                ),
-            })
-        }
-        _ => process_command(command, instance_id, fds, plugin_state, event_tx, audio),
-    };
+    // The instance's slot: None for an unknown instance, which every command but Initialize
+    // answers with "not initialized". Unload leaves it None.
+    let mut slot = instances.remove(&instance_id);
+    let response = process_command(command, instance_id, fds, &mut slot, event_tx, audio);
+    if let Some(state) = slot {
+        instances.insert(instance_id, state);
+    }
 
     if let Some(response) = response {
         send(
@@ -204,7 +200,7 @@ pub fn run_plugin_host(
         .name("ipc-reader".to_string())
         .spawn(move || read_requests(reader_socket, incoming_tx))?;
 
-    let mut plugin_state: Option<PluginState> = None;
+    let mut instances: HashMap<InstanceId, PluginState> = HashMap::new();
 
     // Unsolicited messages from plugin callbacks (GUI resize requests)
     let (event_tx, event_rx) = mpsc::channel::<HostMessage>();
@@ -221,7 +217,7 @@ pub fn run_plugin_host(
         loop {
             match incoming_rx.try_recv() {
                 Ok(incoming) => {
-                    if !handle_incoming(incoming, &socket, &mut plugin_state, &event_tx, &audio) {
+                    if !handle_incoming(incoming, &socket, &mut instances, &event_tx, &audio) {
                         return Ok(());
                     }
                 }
@@ -230,18 +226,20 @@ pub fn run_plugin_host(
             }
         }
 
-        // Parameter list or ranges changed: rebuild the map and publish it to the audio thread.
-        if let Some(state) = plugin_state.as_mut() {
+        for state in instances.values_mut() {
+            // Parameter list or ranges changed: rebuild the map and publish it to the audio
+            // thread.
             if state.shared.take_params_rescanned() {
                 state.param_map = None;
                 let map = Arc::clone(state.param_map());
-                audio.set_param_map(map);
-                info!("Parameter map rebuilt after rescan");
+                audio.set_param_map(state.instance_id, map);
+                info!(
+                    "Parameter map of instance {} rebuilt after rescan",
+                    state.instance_id
+                );
             }
-        }
 
-        // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
-        if let Some(state) = plugin_state.as_mut() {
+            // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
             service_plugin_side(&socket, state, &mut flush_events);
         }
 
@@ -255,7 +253,7 @@ pub fn run_plugin_host(
         // thread, so this loop only wakes for commands and timers.
         match incoming_rx.recv_timeout(Duration::from_millis(1)) {
             Ok(incoming) => {
-                if !handle_incoming(incoming, &socket, &mut plugin_state, &event_tx, &audio) {
+                if !handle_incoming(incoming, &socket, &mut instances, &event_tx, &audio) {
                     return Ok(());
                 }
             }
