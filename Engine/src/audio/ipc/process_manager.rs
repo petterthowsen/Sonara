@@ -24,8 +24,8 @@ use tracing::{debug, error, info, warn};
 
 use super::hosting::{HostAssignment, HostingPolicy};
 use super::protocol::{
-    HostMessage, HostRequest, InstanceId, PluginCommand, PluginEvent, PluginResponse, RequestId,
-    SharedMemoryLayout, NO_REPLY,
+    HostMessage, HostRequest, InstanceId, LogLevel, PluginCommand, PluginEvent, PluginResponse,
+    RequestId, SharedMemoryLayout, NO_REPLY,
 };
 use super::shared_memory::{HostSharedMemory, SharedMemory};
 use super::wire;
@@ -60,6 +60,130 @@ const HOST_SOCKET_FD: i32 = 3;
 
 /// The host doorbell region's descriptor number in the host process.
 const HOST_SHARED_MEMORY_FD: i32 = 4;
+
+/// Env var with a command prefix for spawning hosts, e.g. `gdb -q -batch -ex run -ex bt --args`
+/// or `valgrind`. Split like a shell would (quotes allowed, no expansion).
+pub const HOST_WRAPPER_ENV: &str = "SONARA_PLUGIN_HOST_WRAPPER";
+
+/// Env var that makes every host wait for a debugger before it reads a command. The host reads
+/// it too (the variable is inherited).
+pub const HOST_WAIT_ENV: &str = "SONARA_PLUGIN_HOST_WAIT";
+
+/// Request timeout while a host runs under a debugger or wrapper: it may sit at a breakpoint, or
+/// run tens of times slower under valgrind. Long, but still bounded.
+const DEBUG_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Plugin host logs kept in the log directory; older ones are deleted at engine start.
+pub const PLUGIN_LOGS_KEPT: usize = 50;
+
+/// Where plugin hosts write their logs: `logs/plugins` under the engine's working directory,
+/// next to the engine's own logs.
+pub fn plugin_log_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("logs")
+        .join("plugins")
+}
+
+/// Delete all but the newest `keep` `.log` files in `dir`. Missing directory is fine.
+pub fn prune_plugin_logs(dir: &Path, keep: usize) -> std::io::Result<usize> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+    if logs.len() <= keep {
+        return Ok(0);
+    }
+    logs.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut removed = 0;
+    for (_, path) in logs.drain(keep..) {
+        if std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// How host processes are launched: normally, or under a debugger or wrapper (Phase 6).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostLaunch {
+    /// Command prefix, e.g. `["gdb", "-q", "-batch", "-ex", "run", "-ex", "bt", "--args"]`.
+    pub wrapper: Vec<String>,
+    /// Hosts wait for a debugger to attach before they start.
+    pub wait_for_debugger: bool,
+}
+
+impl HostLaunch {
+    /// Read `SONARA_PLUGIN_HOST_WRAPPER` and `SONARA_PLUGIN_HOST_WAIT`.
+    pub fn from_env() -> Self {
+        let wrapper = std::env::var(HOST_WRAPPER_ENV)
+            .map(|value| split_command(&value))
+            .unwrap_or_default();
+        let wait_for_debugger =
+            std::env::var(HOST_WAIT_ENV).is_ok_and(|value| !value.is_empty() && value != "0");
+        Self {
+            wrapper,
+            wait_for_debugger,
+        }
+    }
+
+    /// True when hosts may stop for a debugger or run far slower than normal. Hung-host
+    /// detection is off and requests wait `DEBUG_REQUEST_TIMEOUT`, so a host sitting at a
+    /// breakpoint isn't killed.
+    pub fn is_debugging(&self) -> bool {
+        !self.wrapper.is_empty() || self.wait_for_debugger
+    }
+}
+
+/// Split a command line into words like a shell would: whitespace separates words, single and
+/// double quotes group, a backslash escapes the next character. No variable or glob expansion.
+pub fn split_command(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') | (None, '\\') => {
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                }
+                in_word = true;
+            }
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    words
+}
 
 /// How a host process ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,14 +229,26 @@ pub struct HostCrash {
     pub exit: Option<HostExit>,
     /// Last lines the host wrote to stderr, oldest first.
     pub stderr_tail: Vec<String>,
+    /// The host's own log file, when known (not under a wrapper, whose pid isn't the host's).
+    pub log_path: Option<PathBuf>,
+    /// The wrapper program the host ran under (`SONARA_PLUGIN_HOST_WRAPPER`), whose exit status
+    /// `exit` then is.
+    pub wrapper: Option<String>,
 }
 
 impl HostCrash {
     /// One-line reason, for the loading state and the log.
     pub fn describe(&self) -> String {
-        match &self.exit {
+        let reason = match &self.exit {
             Some(exit) => exit.describe(),
             None => "host process went away (control socket closed)".to_string(),
+        };
+        match &self.wrapper {
+            Some(wrapper) => format!(
+                "{} {} (the host ran under it; see its output in the engine's terminal)",
+                wrapper, reason
+            ),
+            None => reason,
         }
     }
 }
@@ -256,6 +392,24 @@ impl Routing {
                     ),
                 }
             }
+            HostMessage::Log {
+                instance_id,
+                plugin,
+                level,
+                message,
+            } => {
+                // Logged again here so the line reaches the engine log and, through the log
+                // forwarder, Godot's `/log`. The host's own log file has the full context.
+                let source = match (instance_id, plugin.is_empty()) {
+                    (0, _) => format!("Plugin host {}", host),
+                    (id, true) => format!("Plugin instance {} (host {})", id, host),
+                    (id, false) => format!("Plugin {} (instance {}, host {})", plugin, id, host),
+                };
+                match level {
+                    LogLevel::Warn => warn!("{}: {}", source, message),
+                    LogLevel::Error => error!("{}: {}", source, message),
+                }
+            }
             HostMessage::Event { instance_id, event } => {
                 let events = lock(&self.events);
                 match events.get(&instance_id) {
@@ -279,12 +433,14 @@ impl Routing {
     }
 
     /// Why the host stopped, as far as the watcher has seen.
-    fn crash(&self, host_key: &str, pid: u32) -> HostCrash {
+    fn crash(&self, process: &PluginProcess) -> HostCrash {
         HostCrash {
-            host_key: host_key.to_string(),
-            pid,
+            host_key: process.host_key.clone(),
+            pid: process.pid,
             exit: *lock(&self.exit),
             stderr_tail: lock(&self.stderr_tail).iter().cloned().collect(),
+            log_path: process.log_path.clone(),
+            wrapper: process.wrapper.clone(),
         }
     }
 }
@@ -321,18 +477,91 @@ pub struct PluginProcess {
     /// One doorbell word shared with this host, used by the per-block audio handshake and by
     /// every instance that will share this host in later phases.
     host_shared: Arc<HostSharedMemory>,
+    /// Runs under a debugger or wrapper: no hung detection, long request timeouts.
+    debugging: bool,
+    /// The host's log file, when its name is known.
+    log_path: Option<PathBuf>,
+    /// The wrapper program the host runs under, if any.
+    wrapper: Option<String>,
 }
 
 impl PluginProcess {
-    /// Spawn a `plugin_host` process and start its reader thread.
-    fn spawn(host_key: String) -> Result<Self, String> {
+    /// Spawn a `plugin_host` process (under `launch`'s wrapper, if any) and start its reader
+    /// thread.
+    fn spawn(host_key: String, launch: &HostLaunch) -> Result<Self, String> {
         let plugin_host_path = ProcessManager::plugin_host_path()?;
-        Self::spawn_program(host_key, &plugin_host_path, &[HOST_SOCKET_FD.to_string()])
+        let log_dir = plugin_log_dir();
+        let host_args = [
+            HOST_SOCKET_FD.to_string(),
+            "--host-key".to_string(),
+            host_key.clone(),
+            "--log-dir".to_string(),
+            log_dir.to_string_lossy().into_owned(),
+        ];
+
+        let mut process = if launch.wrapper.is_empty() {
+            Self::spawn_program(
+                host_key,
+                &plugin_host_path,
+                &host_args,
+                launch.is_debugging(),
+            )?
+        } else {
+            // wrapper[0] wrapper[1..] plugin_host <args>
+            let mut args: Vec<String> = launch.wrapper[1..].to_vec();
+            args.push(plugin_host_path.to_string_lossy().into_owned());
+            args.extend(host_args);
+            info!(
+                "Spawning plugin host {} under wrapper: {} {}",
+                host_key,
+                launch.wrapper[0],
+                args.join(" ")
+            );
+            let mut process =
+                Self::spawn_program(host_key, Path::new(&launch.wrapper[0]), &args, true)?;
+            process.wrapper = Some(launch.wrapper[0].clone());
+            process
+        };
+
+        // Under a wrapper the child is the wrapper (gdb forks the host), so its pid doesn't name
+        // the log file.
+        if launch.wrapper.is_empty() {
+            let name = super::protocol::log_file_name(&process.host_key, process.pid);
+            process.log_path = Some(log_dir.join(name));
+        }
+        match &process.log_path {
+            Some(path) => info!(
+                "Plugin host {} logs to {}",
+                process.host_key,
+                path.display()
+            ),
+            None => info!(
+                "Plugin host {} logs to {}/{}-<pid>.log",
+                process.host_key,
+                log_dir.display(),
+                process.host_key
+            ),
+        }
+        if launch.wait_for_debugger {
+            warn!(
+                "Plugin host {} (pid {}) is waiting for a debugger: gdb -p {}",
+                process.host_key, process.pid, process.pid
+            );
+        }
+        Ok(process)
     }
 
     /// Spawn `program` as a host process: a control socketpair, a doorbell region and a stderr
     /// pipe, with the socket and doorbell moved to their well-known descriptors in the child.
-    fn spawn_program(host_key: String, program: &Path, args: &[String]) -> Result<Self, String> {
+    ///
+    /// `debugging`: the host may stop at a breakpoint. Its stderr goes to the engine's terminal
+    /// (a debugger's or valgrind's report belongs there), and hung detection is off.
+    fn spawn_program(
+        host_key: String,
+        program: &Path,
+        args: &[String],
+        debugging: bool,
+    ) -> Result<Self, String> {
         let (engine_socket, host_socket) = UnixStream::pair()
             .map_err(|e| format!("Failed to create control socketpair: {}", e))?;
         let host_socket_fd = host_socket.as_raw_fd();
@@ -349,7 +578,11 @@ impl PluginProcess {
             .args(args)
             .stdout(Stdio::inherit())
             // Captured so a crash can report what the host printed before it died.
-            .stderr(Stdio::piped());
+            .stderr(if debugging {
+                Stdio::inherit()
+            } else {
+                Stdio::piped()
+            });
         let child = unsafe {
             command
                 .pre_exec(move || {
@@ -375,7 +608,8 @@ impl PluginProcess {
 
         let mut child = child;
         let stderr = child.stderr.take();
-        let process = Self::connect(host_key, pid, Some(child), engine_socket, host_shared)?;
+        let mut process = Self::connect(host_key, pid, Some(child), engine_socket, host_shared)?;
+        process.debugging = debugging;
         process.start_supervision(stderr);
         Ok(process)
     }
@@ -415,6 +649,9 @@ impl PluginProcess {
             routing,
             next_request_id: AtomicU32::new(1),
             host_shared,
+            debugging: false,
+            log_path: None,
+            wrapper: None,
         })
     }
 
@@ -493,6 +730,11 @@ impl PluginProcess {
         fds: &[i32],
         timeout: Duration,
     ) -> Result<PluginResponse, String> {
+        let timeout = if self.debugging {
+            timeout.max(DEBUG_REQUEST_TIMEOUT)
+        } else {
+            timeout
+        };
         let request_id = self.next_request_id();
         let (tx, rx) = channel::bounded(1);
         lock(&self.routing.pending).insert(request_id, tx);
@@ -511,14 +753,7 @@ impl PluginProcess {
             Ok(response) => Ok(response),
             Err(RecvTimeoutError::Timeout) => {
                 lock(&self.routing.pending).remove(&request_id);
-                // A host that lets a request time out is unresponsive: the command thread kills
-                // it on its next tick and treats it as crashed. Not while another instance is
-                // loading in it, though: its main thread is busy, not stuck. An `Initialize` that
-                // times out itself always counts.
-                let initializing = matches!(request.command, PluginCommand::Initialize { .. });
-                if initializing || self.routing.initializing.load(Ordering::Acquire) == 0 {
-                    self.routing.hung.store(true, Ordering::Release);
-                }
+                self.record_timeout(&request.command);
                 Err(format!(
                     "Plugin host {} didn't answer {:?} within {:.1}s",
                     self.host_key,
@@ -530,6 +765,22 @@ impl PluginProcess {
                 "Plugin host {} exited before answering {:?}",
                 self.host_key, request.command
             )),
+        }
+    }
+
+    /// A request timed out. A host that lets a request time out is unresponsive: the command
+    /// thread kills it on its next tick and treats it as crashed. Not while another instance is
+    /// loading in it, though (its main thread is busy, not stuck), nor under a debugger (it may
+    /// be stopped on purpose). An `Initialize` that times out itself always counts, unless
+    /// debugging.
+    fn record_timeout(&self, command: &PluginCommand) {
+        if self.debugging {
+            return;
+        }
+        let initializing = matches!(command, PluginCommand::Initialize { .. });
+        let loading_other = self.routing.initializing.load(Ordering::Acquire) > 0;
+        if initializing || !loading_other {
+            self.routing.hung.store(true, Ordering::Release);
         }
     }
 
@@ -570,18 +821,28 @@ impl PluginProcess {
         self.routing.hung.load(Ordering::Acquire)
     }
 
+    /// True when the host runs under a debugger or wrapper (no hung detection).
+    pub fn is_debugging(&self) -> bool {
+        self.debugging
+    }
+
+    /// The host's log file, when its name is known.
+    pub fn log_path(&self) -> Option<&Path> {
+        self.log_path.as_deref()
+    }
+
     /// Why this host stopped, or None while it is still running. Waits briefly for the watcher
     /// to record the exit status, so a crash report has the signal or exit code.
     pub fn crash_info(&self) -> Option<HostCrash> {
         let deadline = Instant::now() + CRASH_STATUS_GRACE;
         loop {
             if lock(&self.routing.exit).is_some() {
-                return Some(self.routing.crash(&self.host_key, self.pid));
+                return Some(self.routing.crash(self));
             }
             let suspicious = !self.routing.connected.load(Ordering::Acquire) || self.is_hung();
             if !suspicious || Instant::now() >= deadline {
                 if suspicious {
-                    return Some(self.routing.crash(&self.host_key, self.pid));
+                    return Some(self.routing.crash(self));
                 }
                 return None;
             }
@@ -699,6 +960,16 @@ impl InstanceConnection {
         self.host.crash_info()
     }
 
+    /// True when the host runs under a debugger or wrapper: don't kill it for being slow.
+    pub fn is_debugging(&self) -> bool {
+        self.host.is_debugging()
+    }
+
+    /// The host's log file, when its name is known.
+    pub fn log_path(&self) -> Option<&Path> {
+        self.host.log_path()
+    }
+
     /// Kill the host process (hung host handling).
     pub fn kill_host(&self) {
         self.host.kill()
@@ -730,6 +1001,8 @@ pub struct ProcessManager {
     next_instance_id: AtomicU32,
     /// How instances are grouped into host processes (Phase 5).
     hosting: Mutex<HostingPolicy>,
+    /// How hosts are launched (debugger wrapper, wait for a debugger), read from the env once.
+    launch: HostLaunch,
 }
 
 impl ProcessManager {
@@ -740,6 +1013,7 @@ impl ProcessManager {
             instances: Mutex::new(HashMap::new()),
             next_instance_id: AtomicU32::new(1),
             hosting: Mutex::new(HostingPolicy::default()),
+            launch: HostLaunch::from_env(),
         }
     }
 
@@ -805,7 +1079,7 @@ impl ProcessManager {
                 if existing.is_some() {
                     warn!("Plugin host {} is dead; spawning a new one", host_key);
                 }
-                let host = Arc::new(PluginProcess::spawn(host_key.to_string())?);
+                let host = Arc::new(PluginProcess::spawn(host_key.to_string(), &self.launch)?);
                 hosts.insert(host_key.to_string(), Arc::clone(&host));
                 host
             }
@@ -1201,6 +1475,24 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_under_a_wrapper_names_the_wrapper() {
+        let crash = HostCrash {
+            host_key: "instance-1".to_string(),
+            pid: 7,
+            exit: Some(HostExit {
+                exit_code: Some(0),
+                signal: None,
+            }),
+            stderr_tail: Vec::new(),
+            log_path: None,
+            wrapper: Some("gdb".to_string()),
+        };
+        assert!(crash
+            .describe()
+            .starts_with("gdb exited with code 0 (the host ran under it"));
+    }
+
+    #[test]
     fn host_exit_describes_signal_and_code() {
         assert_eq!(
             HostExit {
@@ -1231,6 +1523,7 @@ mod tests {
                 "-c".to_string(),
                 "printf 'first line\\nCHILD CRASH REASON\\n' >&2; exit 7".to_string(),
             ],
+            false,
         )
         .expect("spawn /bin/sh");
 
@@ -1277,6 +1570,7 @@ mod tests {
                     line_count
                 ),
             ],
+            false,
         )
         .expect("spawn /bin/sh");
 
@@ -1296,6 +1590,117 @@ mod tests {
                 .is_some_and(|line| line.contains(&format!("line-{}", line_count))),
             "tail should end with the last line, got {:?}",
             tail
+        );
+    }
+
+    #[test]
+    fn wrapper_commands_split_like_a_shell() {
+        assert_eq!(
+            split_command("gdb -q -batch -ex run -ex bt --args"),
+            vec!["gdb", "-q", "-batch", "-ex", "run", "-ex", "bt", "--args"]
+        );
+        assert_eq!(
+            split_command(r#"gdb -ex 'handle SIGPIPE nostop' -ex "set pagination off" --args"#),
+            vec![
+                "gdb",
+                "-ex",
+                "handle SIGPIPE nostop",
+                "-ex",
+                "set pagination off",
+                "--args"
+            ]
+        );
+        assert_eq!(
+            split_command(r"valgrind --log-file=a\ b.txt"),
+            vec!["valgrind", "--log-file=a b.txt"]
+        );
+        assert!(split_command("   ").is_empty());
+        assert_eq!(split_command("''"), vec![""]);
+    }
+
+    #[test]
+    fn debugging_follows_wrapper_and_wait() {
+        assert!(!HostLaunch::default().is_debugging());
+        assert!(HostLaunch {
+            wrapper: vec!["valgrind".to_string()],
+            wait_for_debugger: false
+        }
+        .is_debugging());
+        assert!(HostLaunch {
+            wrapper: Vec::new(),
+            wait_for_debugger: true
+        }
+        .is_debugging());
+    }
+
+    /// A host under a debugger may sit at a breakpoint: a timed-out request doesn't mark it hung.
+    #[test]
+    fn a_debugged_host_is_never_marked_hung() {
+        let (mut process, _host) = fake_host();
+        process.debugging = true;
+        process.record_timeout(&PluginCommand::HasGui);
+        process.record_timeout(&PluginCommand::Initialize {
+            plugin_path: PathBuf::from("/x.clap"),
+            plugin_id: "x".to_string(),
+            sample_rate: 48_000.0,
+            max_buffer_size: 64,
+        });
+        assert!(!process.is_hung());
+
+        process.debugging = false;
+        process.record_timeout(&PluginCommand::HasGui);
+        assert!(process.is_hung());
+    }
+
+    #[test]
+    fn forwarded_host_log_lines_are_not_routed_as_events() {
+        let (process, host) = fake_host();
+        let (tx, rx) = channel::unbounded();
+        lock(&process.routing.events).insert(3, tx);
+        let log = HostMessage::Log {
+            instance_id: 3,
+            plugin: "Test".to_string(),
+            level: LogLevel::Warn,
+            message: "careful".to_string(),
+        };
+        wire::send_frame(&host, &log, &[]).unwrap();
+        // Follow with an event so we know the log line was dispatched first.
+        let event = HostMessage::Event {
+            instance_id: 3,
+            event: PluginEvent::StateDirty,
+        };
+        wire::send_frame(&host, &event, &[]).unwrap();
+        let received = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(received, PluginEvent::StateDirty));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            let path = dir.path().join(format!("host-{}.log", i));
+            std::fs::write(&path, "x").unwrap();
+            let time = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000 + i);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("notes.txt"), "keep").unwrap();
+
+        assert_eq!(prune_plugin_logs(dir.path(), 2).unwrap(), 3);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["host-3.log", "host-4.log", "notes.txt"]);
+        assert_eq!(
+            prune_plugin_logs(&dir.path().join("missing"), 2).unwrap(),
+            0
         );
     }
 }

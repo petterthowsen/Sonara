@@ -10,6 +10,7 @@ use tracing::info;
 #[derive(Debug, Clone)]
 pub struct DelayDevice {
     sample_rate: f32,
+    max_delay_ms: f32,
 
     // Ring buffer for delay (stereo, interleaved)
     buffer: Vec<f32>,
@@ -34,6 +35,7 @@ impl DelayDevice {
 
         Self {
             sample_rate,
+            max_delay_ms,
             buffer: vec![0.0; buffer_size],
             write_pos: 0,
             delay_ms: 250.0,
@@ -254,6 +256,15 @@ impl AudioDevice for DelayDevice {
         self.write_pos = 0;
     }
 
+    /// Resize the ring for the same maximum delay time at the new rate (clears the tail).
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        let frames = ((self.max_delay_ms / 1000.0) * sample_rate).ceil() as usize;
+        self.sample_rate = sample_rate;
+        self.buffer = vec![0.0; frames * 2];
+        self.write_pos = 0;
+        self.set_delay_ms(self.delay_ms);
+    }
+
     // === Lifecycle Management ===
 
     fn is_active(&self) -> bool {
@@ -284,5 +295,27 @@ impl AudioDevice for DelayDevice {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_keeps_the_maximum_delay_time_at_the_new_rate() {
+        let mut delay = DelayDevice::new(48_000.0, 1000.0);
+        delay.set_delay_ms(200.0);
+        assert_eq!(delay.buffer.len(), 96_000);
+
+        delay.prepare(96_000.0, 1024);
+        assert_eq!(
+            delay.buffer.len(),
+            192_000,
+            "one second of stereo at 96 kHz"
+        );
+        assert_eq!(delay.sample_rate, 96_000.0);
+        assert!((delay.delay_ms - 200.0).abs() < 1e-3);
+        assert!(delay.buffer.iter().all(|&s| s == 0.0));
     }
 }

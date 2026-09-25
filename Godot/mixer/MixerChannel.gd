@@ -184,6 +184,8 @@ func _ready():
 	# output routing menu
 	if output_menu_buttton:
 		output_menu_buttton.get_popup().id_pressed.connect(_on_output_menu_selected)
+		# Master lists the running device's output pairs, which change with the audio settings.
+		output_menu_buttton.about_to_popup.connect(_rebuild_output_menu)
 
 	# Enable drag and drop of devices onto ourself plus headerr and device list.
 	for node in [self, device_list, big_meter, header]:
@@ -748,16 +750,19 @@ func _is_valid_route_target(target: Channel) -> bool:
 	return true
 
 
+## Master's choices: the stereo output pairs of the running audio device (AudioConfig). A saved
+## pair the device lacks stays listed, marked, and plays on 1/2 until a device has it.
 func _populate_device_outputs(popup: PopupMenu) -> void:
-	"""Populate popup with device output options (for master channel)."""
-	# For now, just show default output device
-	popup.add_item("Default Output (1000)", 1000)
-	if channel.device_output_id == 1000:
-		popup.set_item_checked(0, true)
-
-	# TODO: Add more device outputs when multi-device routing is supported
-	# for device_id in range(1001, 1010):
-	#     popup.add_item("Output %d" % (device_id - 1000), device_id)
+	var pairs := AudioConfig.output_pairs()
+	for pair in pairs:
+		var output_id := AudioConfig.HARDWARE_OUTPUT_BASE + pair
+		popup.add_check_item(AudioConfig.output_label(output_id), output_id)
+		if channel.device_output_id == output_id:
+			popup.set_item_checked(popup.get_item_count() - 1, true)
+	var current := channel.device_output_id
+	if current >= AudioConfig.HARDWARE_OUTPUT_BASE + pairs:
+		popup.add_check_item("%s (not on this device)" % AudioConfig.output_label(current), current)
+		popup.set_item_checked(popup.get_item_count() - 1, true)
 
 
 func _on_output_menu_selected(item_id: int) -> void:
@@ -769,7 +774,7 @@ func _on_output_menu_selected(item_id: int) -> void:
 
 	# Master channel: set device output
 	if channel.is_master:
-		channel.device_output_id = item_id
+		channel.set_device_output(item_id)
 		_update_output_button_text()
 		logger.info("Master routed to device %d" % item_id)
 	else:
@@ -794,10 +799,7 @@ func _get_output_label() -> String:
 
 	# Master channel: show device output
 	if channel.is_master:
-		if channel.device_output_id == 1000:
-			return "Default Output"
-		else:
-			return "Output %d" % (channel.device_output_id - 1000)
+		return AudioConfig.output_label(channel.device_output_id)
 
 	# Regular channel: show routing target
 	if channel.output_channel_id == 1:

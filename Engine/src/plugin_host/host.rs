@@ -39,11 +39,19 @@ pub struct SubprocessHostShared {
     flush_requested: Arc<AtomicBool>,
     /// Set when the plugin calls `mark_dirty` on the state extension
     state_dirty: Arc<AtomicBool>,
+    /// The instance's log span (`logging::instance_span`): plugin log callbacks can come from
+    /// any thread, so they enter it themselves.
+    span: tracing::Span,
 }
 
 impl SubprocessHostShared {
-    pub fn new(instance_id: InstanceId, event_tx: std::sync::mpsc::Sender<HostMessage>) -> Self {
+    pub fn new(
+        instance_id: InstanceId,
+        plugin_name: &str,
+        event_tx: std::sync::mpsc::Sender<HostMessage>,
+    ) -> Self {
         Self {
+            span: crate::plugin_host::logging::instance_span(instance_id, plugin_name),
             timers: Arc::new(Mutex::new(HashMap::new())),
             next_timer_id: Arc::new(Mutex::new(0)),
             instance_id,
@@ -52,6 +60,11 @@ impl SubprocessHostShared {
             flush_requested: Arc::new(AtomicBool::new(false)),
             state_dirty: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The instance's log span; enter it for work done on this instance's behalf.
+    pub fn span(&self) -> &tracing::Span {
+        &self.span
     }
 
     /// Send an event to the engine, addressed to this instance.
@@ -285,7 +298,8 @@ impl HostStateImpl for SubprocessHostMainThread<'_> {
 
 impl HostLogImpl for SubprocessHostShared {
     fn log(&self, severity: LogSeverity, message: &str) {
-        // Route plugin logs through tracing
+        // Route plugin logs through tracing, attributed to this instance
+        let _entered = self.span.enter();
         match severity {
             LogSeverity::Debug => tracing::debug!("[PLUGIN] {}", message),
             LogSeverity::Info => tracing::info!("[PLUGIN] {}", message),

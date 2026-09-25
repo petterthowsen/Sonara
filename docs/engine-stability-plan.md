@@ -12,8 +12,8 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
 - [x] Phase 4: Plugin crash detection and recovery
 - [x] Phase 5: Plugin hosting modes (together, by vendor, by plug-in, individually; within engine skipped). Needs a Godot UI check
-- [ ] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper)
-- [ ] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI)
+- [x] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper). Needs a Godot UI check
+- [x] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI). Needs a Godot UI check and a forced-quantum run
 - [ ] Phase 8: Later work (lock-free engine state, CPU affinity, latency compensation)
 
 Do the phases in order unless the dependency notes say otherwise. This plan is the design: no separate specs.
@@ -634,9 +634,11 @@ As built (2026-09-25):
   `michaelwillis.dragonfly.room individually` override: 3 hosts (each Room alone). Removing the LSP
   Filter from the shared host sent `Unload` and the host kept running. Stopping the engine left no
   `plugin_host` behind. 0 xruns and 0 lock misses throughout.
-- **Odd, not explained:** the first `kill -SEGV` on the shared host had no effect (the process
-  stayed in `Sl`, SIGSEGV neither caught, blocked nor ignored per `/proc/<pid>/status`); a second
-  one a minute later killed it. Worth watching when Phase 6 adds per-host logs.
+- **Odd, explained in Phase 6:** the first `kill -SEGV` on the shared host had no effect (the process
+  stayed in `Sl`); a second one a minute later killed it. Rust's runtime handles SIGSEGV for its
+  stack-overflow check and, for any other fault, resets the handler to the default and returns so
+  the fault repeats. A `kill` doesn't repeat, so only the second one kills (`SigCgt` bit 11 set
+  before, clear after the first). Not a Sonara bug; a real segfault dies at once.
 - **Not verified:** anything through the Godot UI (the setting, the context-menu check box, the
   header tooltip, the single crash popup), a plugin GUI open during a move, and the benchmark
   project numbers.
@@ -658,6 +660,69 @@ As built (2026-09-25):
    prints its descriptor, parameters, ports and latency, processes 1 s of silence plus a note,
    and reports timing. This isolates plugin bugs without the engine or Godot.
 5. Update `docs/subsystems/engine-plugin-architecture.md` and `engine-debugging.md`.
+
+As built (2026-09-25):
+- **Logs (step 1).** `plugin_host/logging.rs`. The engine starts hosts as `plugin_host 3
+  --host-key <key> --log-dir <Engine/logs/plugins>`; the host writes `<key>-<pid>.log` (key made
+  file-safe by `protocol::log_file_name`, shared by both binaries) at DEBUG and up through an
+  unbuffered file, so the lines before a crash survive. `SONARA_PLUGIN_LOG` overrides the file
+  filter. stderr stays at INFO for the crash tail, now without ANSI codes when piped (the tail used
+  to carry colour escapes into the crash popup). The engine logs the path on spawn, prunes
+  `logs/plugins` to the newest 50 at startup, and sends the path as a 4th `/crashed` argument that
+  the crash popup shows.
+- **Instance names.** One root `instance{id plugin}` tracing span per instance, owned by
+  `SubprocessHostShared` (so plugin `HostLog` callbacks from any thread enter it) and entered by the
+  main loop per command and per main-thread service call, and by the audio thread only when it logs.
+  `Initialize` runs in a provisional span named after the plugin id until the descriptor name is
+  known. The first version created the instance's span inside the provisional one, so every later
+  line showed both; `parent: None` fixed it.
+- **Forwarding.** New `HostMessage::Log { instance_id, plugin, level, message }`. A tracing layer
+  in the host turns WARN/ERROR into it (instance read from the span), rate-limited to 20 per second
+  with one "N more … not forwarded" line; the main loop sends it. The engine reader thread re-logs it
+  as `Plugin <name> (instance <n>, host <key> (pid <pid>)): …`, which the existing log forwarder
+  sends to `/log`. A failed send of a forwarded line logs at DEBUG so it can't loop.
+- **Stats (step 2).** Device-addressed `<device addr>/stats` (like `/host` and `/crashed`), not a
+  global `/status/device_stats`: `[load_avg, load_peak, process_avg_us, process_max_us, blocks,
+  deadline_misses, total_misses, struggling]`, once a second per plugin that processed (one zero
+  report when it stops). Process time is measured by the host around `process()` and stored in
+  `BlockControl::process_ns` (taken from `_reserved`), so it excludes IPC. `PluginBlockStats` gained
+  the sums, max, peak share and longest miss run; `struggling` = 8+ misses in a row
+  (`MISSES_BEFORE_WARNING`), which is the "flagged in the UI" Phase 3 promised. Godot:
+  `DeviceInstance.PluginStats` + `stats_changed`; the device header tooltip shows the numbers, the
+  device light gets an amber ring while struggling, and `EnginePanel` appends the three worst
+  (dropouts first, then peak share) with ten in its tooltip. A crash clears the device's stats.
+- **Debugger (step 3).** `SONARA_PLUGIN_HOST_WRAPPER` is split like a shell (quotes, backslash) and
+  prepended to the host command. `SONARA_PLUGIN_HOST_WAIT=1`: the host logs its pid, allows any
+  ptracer (`PR_SET_PTRACER_ANY`, because Yama's default scope blocks `gdb -p` from a non-parent) and
+  polls `TracerPid` until a debugger has attached **and continued** (a stopped process can't see the
+  attach). Deviation: while waiting it also polls the control socket for hang-up and exits, found
+  live: a host waiting when the engine was killed was orphaned. Either variable makes
+  `HostLaunch::is_debugging()` true: host stderr goes to the engine's terminal, request timeouts
+  become 2 minutes, and neither request timeouts nor stalled blocks mark the host hung. Under a
+  wrapper the child pid is the wrapper's, so the crash reason names it ("gdb exited with code 0
+  (the host ran under it; …)") and the log path isn't known exactly.
+- **Probe (step 4).** `plugin_host --probe <path.clap> [--id] [--rate] [--block]` (`probe.rs`),
+  reusing `load_plugin`. Beyond the plan it lists the bundle's plugins, the extensions in use, a
+  state save/load round trip (what crash recovery relies on), and a note when the plugin's ports
+  aren't the one stereo in / one stereo out the engine passes. Exit code 1 on any error.
+- Tests: `logging.rs` (instance attribution incl. the nesting case, rate limit), `protocol.rs`
+  (log file names), `process_manager.rs` (wrapper splitting, debug mode never hung, forwarded logs
+  aren't routed as events, log pruning, wrapper crash reason), `subprocess_adapter` (stats from the
+  host's `process_ns`, a miss run flagged across `take_stats`), Godot `tests/test_plugin_stats.gd`.
+- **Live check (2026-09-25, engine only, messages by hand; 1488-frame graph quantum).** Dragonfly
+  Room and LibreStrings in two hosts: both log files written with `instance{id=… plugin=…}` on each
+  instance line; `/stats` once a second (~32 blocks, Room ~2% avg / 4% peak, LibreStrings 2.6%
+  rising to 5% after a note-on); `kill -ABRT` → `/crashed` with the log path and a clean stderr
+  tail. `SONARA_PLUGIN_HOST_WAIT=1`: the engine and host both warned with the `gdb -p` line; after
+  `gdb -p <pid> -ex continue` the plugin became ready and the host's warning arrived on `/log` via
+  forwarding; killing the engine while a host waited left no host behind. `SONARA_PLUGIN_HOST_WRAPPER
+  ="gdb -q -batch -ex run -ex bt --args"`: plugin ran and reported stats under gdb, `kill -SEGV`
+  printed the backtrace in the engine's terminal and the device was marked crashed. Probe on
+  Dragonfly Room (effect: silent output, as expected with silent input) and LibreStrings (−26 dBFS
+  on the note).
+- **Not verified:** the Godot UI (header tooltip, amber ring, EnginePanel list, log path in the
+  popup) and valgrind as a wrapper (not installed). `./test_osc.sh`/`./test_plugin_osc.sh` weren't
+  run (still stale, see Phase 2); the live check above covers this phase.
 
 ## Phase 7: Audio device settings
 
@@ -736,9 +801,117 @@ version and feature set with Context7 first. The cpal upgrade from 0.15 may be a
 
 Verify: switch device, rate (44.1 ↔ 48 kHz) and buffer size during playback of the benchmark
 project. Audio resumes, clips play at the correct pitch, plugins keep their state, and the
-settings survive a restart. During playback, run `pw-metadata -n settings 0 clock.force-quantum 1488`
-(then `… 0` to undo): the engine warns, reopens with a big enough buffer, and `pw-top` shows no
-growing ERR count on the sink.
+settings survive a restart. During playback with a 256-frame buffer, run
+`pw-metadata -n settings 0 clock.force-quantum 1488` (then `… 0` to undo): the engine warns,
+reopens with a big enough buffer (512), and `pw-top` shows no growing ERR count on the engine's
+node. (At the default 1024 frames, a 1488 quantum fits the 4096-frame buffer and nothing happens;
+see As built.)
+
+As built (2026-09-25):
+- **Stream ownership (step 1).** `audio/stream.rs` holds the stream thread ("audio-stream"), which
+  owns the CPAL stream and the watchdog and takes `Resolve`/`Start`/`Stop` requests through
+  `StreamControl`; the callback, `LoadWindow`, `send_meters` and `lock_state_for_callback` moved
+  there from `engine.rs`. Deviation: no `reconfigure(device, rate, buffer)` in one call. The
+  command thread drives the steps, because it has to prepare devices between resolving a config
+  (which fixes the rate) and starting it. `Stop` drops a healthy stream so the device is freed for
+  reopening; the watchdog still leaks stalled ones (`mem::forget`). `list_output_devices` opens
+  every device to query it, so it runs on a throwaway thread.
+- **Config selection.** f32 configs only, as before. The period is clamped to 32–2048: cpal's ALSA
+  callback delivers all free space (up to 4 periods), and that must fit the 8192-frame
+  preallocation (`MAX_BLOCK_FRAMES`), so a buffer change never reallocates. A device that can't
+  run the requested rate opens at its default rate (and says so). Channels: every channel of a
+  device with a fixed set of counts (e.g. `hw:` of an interface), but the default count (2) on
+  plugin devices that accept any count (`pipewire`, `plughw`); cpal lists those as 1–32.
+- **`prepare` (step 2).** `AudioDevice::prepare(sample_rate, max_frames)`, default no-op. Delay
+  resizes its ring for the same maximum time; polysynth rebuilds its voices; sampler rebuilds its
+  voices (its sample keeps its own rate, which playback already compensates for); sfizz retunes a
+  loaded synth; spectrum analyzer updates its interval. Containers keep the no-op: the command
+  thread visits nested devices itself with `visit_devices_mut`. `Channel::set_sample_rate`
+  recomputes fader smoothing. CLAP: `prepare` stores the rate, and the command thread re-activates
+  every plugin whose `PluginLoad::activated_rate` differs (Phase 3's deactivate/activate path, same
+  host and instance, so the plugin keeps its state). A plugin still loading when the rate changes
+  finishes at the old rate; the device tick then re-activates it (`needs_reactivation`). Reloads and
+  new devices use the new rate (`DeviceFactory::set_sample_rate`).
+- **Sequence (step 3)** in `command_worker/audio_config.rs`: stop; resolve; prepare devices if the
+  resolved rate differs (the lock is uncontended with the stream stopped; plugin re-activation runs
+  with it released); start; report. Candidates, in order: the request; the default device with the
+  same rate and buffer; the default config (48 kHz, 1024). A request equal to the running one only
+  reports. The failure reasons go into `notice`.
+- **Clips (step 4). Deviation:** clips don't go silent. `processing.rs` already plays a clip at
+  `device_rate / clip.audio_sample_rate`, so PCM decoded at the old rate stays at the right pitch
+  (linearly interpolated) until it is reloaded. `/audio/config/changed` updates the decoder's target
+  rate (the status thread writes `AudioFileService`'s rate atomic before forwarding it) and Godot
+  re-sends `load_audio_file` for every audio clip, which is silent from `BeginLoadAudioClip` until
+  its new PCM arrives. Sampler and drum machine samples aren't reloaded: they already play through
+  `sample_rate_ratio`.
+- **OSC (step 5).** As planned, with more fields: `/audio/device [name, is_default, min_buffer,
+  max_buffer, channels, rate…]`, and `/audio/config` carries the running config, the output pair
+  count, the request, the graph quantum and rate, a `mismatch` text and a `notice` text (13
+  arguments; see `OSC_PROTOCOL.md`).
+- **Hardware outputs (step 6).** `OutputDevice` and the per-device enumeration in `engine.rs` are
+  gone. `mix_and_output` clears the whole CPAL buffer first (**found**: it never did, so channels
+  beyond master's pair, or all of them when master routed nowhere, replayed stale samples) and
+  writes master to pair `id − 1000`. A missing pair plays on 1/2, and the command thread warns
+  after a reconfigure or a master route change. Godot: `Channel.set_device_output` (**found**: the
+  mixer wrote `device_output_id` directly, so choosing an output never reached the engine), and
+  master's output menu lists `Outputs 1/2`, `3/4`, … from the running device, keeping a saved pair
+  the device lacks, marked "(not on this device)".
+- **PipeWire (step 7).** `audio/pipewire.rs`: a monitor thread runs `pw-top -b -n 2` every 3 s
+  (running quantum, rate and ERR of the engine's node and its driver), `pw-dump` to find the
+  engine's node (pipewire-alsa puts the process id on the **client** object; the node names it with
+  `client.id`) and `pw-metadata -n settings 0` for the forced values. It exits when the tools are
+  missing and pauses while PipeWire isn't running. ERR increases on the engine's node count as
+  xruns; the driver's ERR is not counted, because other clients cause most of it (the dev machine's
+  sink showed 3281). **Deviation in the rule:** the quantum is compared with the whole ALSA buffer
+  (4 periods), not the period. Both observations fit that: the Phase 0 crackles were a 1488 quantum
+  against a 256-frame period (1024-frame buffer), and a 2048 quantum against a 1024 period (4096
+  buffer) runs with 0 ERR. It also can't lock itself up. If the engine raised its period to the
+  quantum, its own `node.latency` would hold the quantum there after the forcing went away. The
+  adapted period is the smallest power of two whose buffer holds the quantum, which stays below
+  the quantum, so the engine returns to the requested period once the quantum drops. The quantum is
+  converted to engine frames first (`GraphInfo::quantum_at`), since PipeWire resamples a stream at
+  another rate. A graph at a different rate is reported (PipeWire resamples) but never followed.
+  The engine doesn't switch its own rate. `mismatch` also covers the harmless case (quantum > period:
+  latency follows the quantum), logged at INFO; an adapted buffer or a rate conflict is a WARN,
+  logged once per change.
+- **Xrun counting (found live).** At 44.1 kHz in a 48 kHz graph, PipeWire hands the engine blocks
+  of 1024, 1881 and 2739 frames, and the Phase 0 gap check (gap > 1.5 × previous block) counted 49
+  "xruns" in a minute while PipeWire's ERR for the node stayed 0. cpal's ALSA callback fills all
+  free space, so the ring is full after every callback and underruns only if the next callback is
+  later than the whole buffer lasts; the check now uses that (the 1.5× rule remains for
+  device-default buffers of unknown size).
+- **Godot.** `data/AudioConfig.gd` is an autoload (`AudioConfig`, after `Settings`): it owns the
+  device list and the last `/audio/config`, sends `/audio/config/set` at start, on every engine
+  (re)connect, before `/project/init` (from `Project.connect_to_engine`) and once per frame of
+  setting changes, and emits `devices_changed`, `config_changed`, `sample_rate_changed` (Project
+  reloads its audio clips) and `notice_raised` (Editor shows it in the shared popup; the saved
+  setting is kept for when the device is back). Settings › Audio › Output registers
+  `audio/output_device` ("" = system default), `audio/sample_rate` (48000) and `audio/buffer_size`
+  (1024), all with `settings/AudioSettingControl.tscn`: options from the engine's device list, the
+  running config, the PipeWire quantum, and the notice or mismatch in amber.
+- Tests: `stream.rs` (channel choice, 4-period buffer within the device range, output pairs and
+  latency), `pipewire.rs` (pw-top parsing, metadata, node lookup through the client, the buffer rule
+  incl. rate conversion, mismatch text), `mixing.rs` (output pair, missing pair → 1/2, silence
+  without a hardware route), `delay.rs` (prepare), `subprocess_adapter` (prepare marks an activated
+  plugin for re-activation; reload uses the new rate), `osc/server.rs` (`/audio/config/set` parsing,
+  `/audio/config` without a stream), Godot `tests/test_audio_config.gd`.
+- **Live check (2026-09-25, engine only, messages by hand; PipeWire with `clock.force-quantum
+  2048` and `clock.force-rate 48000` set on the machine).** Polysynth + delay on one channel,
+  Dragonfly Room on another, transport playing. 48 → 44.1 kHz: stop, prepare, re-activate and
+  restart took 23 ms; the host logged `Activate { sample_rate: 44100.0 }` on the same instance, the
+  plugin kept processing (24 blocks/s, 0 misses), `pw-top` showed the node at 44100 with 0 ERR, and
+  the rate conflict was reported and logged. 256 frames under the 2048 quantum opened a 512-frame
+  period (node latency 512, 0 ERR). 96 kHz at 512 frames opened 1024 (2048 graph frames = 4096
+  engine frames). A missing device fell back to the default with the notice "Couldn't use
+  hw:CARD=Nope: output device 'hw:CARD=Nope' not found."; switching to `pipewire` worked; master on
+  1001 warned and played on 1/2. 0 xruns and 0 lock misses throughout, and no `plugin_host` was
+  left behind.
+- **Not verified:** anything through the Godot UI (the Settings rows, the notice popup, clip reload
+  after a rate change, the output menu, settings surviving a restart), changing
+  `clock.force-quantum` during playback (not done: it's system-wide and wasn't cleared for this
+  check), a multi-channel interface, and the benchmark project.
+- `./test_osc.sh` and `./test_plugin_osc.sh` weren't run (still stale, see Phase 2); the live check
+  above covers this phase.
 
 ## Phase 8: Later work
 

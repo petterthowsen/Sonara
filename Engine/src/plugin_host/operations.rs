@@ -62,8 +62,19 @@ pub fn load_plugin(
         .id()
         .ok_or_else(|| "Missing plugin ID".to_string())?;
 
+    let plugin_name = descriptor
+        .name()
+        .and_then(|name| name.to_str().ok())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(plugin_id)
+        .to_string();
+
     // Create shared state for timer and GUI support
-    let shared = Arc::new(SubprocessHostShared::new(instance_id, event_tx));
+    let shared = Arc::new(SubprocessHostShared::new(
+        instance_id,
+        &plugin_name,
+        event_tx,
+    ));
     let shared_for_instance = Arc::clone(&shared);
 
     // Create plugin instance
@@ -76,7 +87,7 @@ pub fn load_plugin(
     )
     .map_err(|e| format!("Failed to create plugin instance: {:?}", e))?;
 
-    info!("Plugin loaded successfully");
+    info!("Plugin {} loaded successfully", plugin_name);
     Ok((bundle, instance, shared))
 }
 

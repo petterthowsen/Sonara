@@ -7,6 +7,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -61,12 +62,15 @@ pub struct AudioFileService {
     job_tx: Sender<AfsJob>,
     event_rx: Receiver<AfsEvent>,
     active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
-    project_sample_rate: u32,
+    /// Rate files are decoded to: the device rate. Read per job, so a rate change (Phase 7)
+    /// applies to the next load.
+    project_sample_rate: Arc<AtomicU32>,
 }
 
 impl AudioFileService {
     /// Create a new service with specified number of workers
     pub fn new(num_workers: usize, project_sample_rate: u32) -> Result<Self> {
+        let project_sample_rate = Arc::new(AtomicU32::new(project_sample_rate));
         let (job_tx, job_rx) = channel::unbounded();
         let (event_tx, event_rx) = channel::unbounded();
 
@@ -77,6 +81,7 @@ impl AudioFileService {
             let job_rx = job_rx.clone();
             let event_tx = event_tx.clone();
             let active_jobs_clone = active_jobs.clone();
+            let project_sample_rate = Arc::clone(&project_sample_rate);
 
             let handle = thread::spawn(move || {
                 Self::worker_loop(i, job_rx, event_tx, active_jobs_clone, project_sample_rate);
@@ -95,6 +100,12 @@ impl AudioFileService {
             active_jobs,
             project_sample_rate,
         })
+    }
+
+    /// Shared handle to the decode rate, so the OSC status thread can follow device rate
+    /// changes.
+    pub fn sample_rate_handle(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.project_sample_rate)
     }
 
     /// Submit a job to decode and generate waveform
@@ -139,7 +150,7 @@ impl AudioFileService {
         job_rx: Receiver<AfsJob>,
         event_tx: Sender<AfsEvent>,
         _active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
-        project_sample_rate: u32,
+        project_sample_rate: Arc<AtomicU32>,
     ) {
         tracing::info!("Worker {} started", worker_id);
 
@@ -161,7 +172,7 @@ impl AudioFileService {
                         &req_id,
                         &path,
                         min_block_size,
-                        project_sample_rate,
+                        project_sample_rate.load(Ordering::Relaxed),
                         &event_tx,
                     ) {
                         let _ = event_tx.send(AfsEvent::Error {

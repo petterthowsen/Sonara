@@ -94,6 +94,9 @@ impl ParamMap {
 /// Main-thread plugin state: the instance, its load/activation state and the shared block.
 pub struct PluginState {
     pub instance_id: InstanceId,
+    /// Log span naming this instance (`logging::instance_span`). Entered for every command and
+    /// main-thread service call, so each log line says which plugin it is about.
+    pub span: tracing::Span,
     pub bundle: PluginBundle,
     pub instance: PluginInstance<SubprocessHost>,
     pub shared: Arc<SubprocessHostShared>,

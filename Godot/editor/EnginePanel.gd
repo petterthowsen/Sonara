@@ -16,6 +16,19 @@ const AUDIO_STALL_MSEC := 2000
 const COUNTER_ALERT_MSEC := 5000
 const COLOR_WARN := "#e0b050"
 const COLOR_ALERT := "#e05a5a"
+## Plugins listed in the tooltip, worst first. The panel itself names only the worst one, and
+## only while it drops out or runs heavy.
+const WORST_PLUGINS_IN_TOOLTIP := 10
+## A plugin taking this share of the block time at its peak is shown as a warning.
+const PLUGIN_PEAK_WARN := 0.5
+const PERFORMANCE_TOOLTIP := (
+		"Load: average processing time of the last 0.5 s, as % of the block time.\n"
+		+ "Peak: worst single block in that interval (100% or more = missed deadline).\n"
+		+ "Xruns: audio dropouts since the engine started.\n"
+		+ "Lock misses: blocks output as silence because the engine state was busy.\n"
+		+ "Plugin dropouts: plugin blocks padded with silence because the plugin was late.\n"
+		+ "The panel shows these counters only once they are above zero, and names a plugin\n"
+		+ "only while it drops out or takes 50% or more of a block (PLUGIN_PEAK_WARN).")
 
 var _last_xruns: int = -1
 var _last_lock_misses: int = -1
@@ -35,12 +48,7 @@ func _ready() -> void:
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	
 	_engine_status.engine_stats_received.connect(_on_engine_stats_received)
-	performance_text.tooltip_text = (
-		"Load: average processing time of the last 0.5 s, as % of the block time.\n"
-		+ "Peak: worst single block in that interval (100% or more = missed deadline).\n"
-		+ "Xruns: audio dropouts since the engine started.\n"
-		+ "Lock misses: blocks output as silence because the engine state was busy.\n"
-		+ "Plugin dropouts: plugin blocks padded with silence because the plugin was late.")
+	performance_text.tooltip_text = PERFORMANCE_TOOLTIP
 	_engine_status.start()
 	
 	# Initialize UI state (no project active)
@@ -160,13 +168,75 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 		peak_text = _colored(peak_text, COLOR_ALERT)
 	elif stats.load_peak >= 0.8:
 		peak_text = _colored(peak_text, COLOR_WARN)
-	performance_text.text = "Load %.1f%%  Peak %s  Xruns %s  Lock misses %s  Plugin dropouts %s" % [
-		stats.load_avg * 100.0,
-		peak_text,
-		_counter_text(stats.xruns, _xrun_msec, now),
-		_counter_text(stats.lock_misses, _lock_miss_msec, now),
-		_counter_text(stats.plugin_underruns, _plugin_underrun_msec, now),
-	]
+	var parts: PackedStringArray = ["Load %.1f%% (peak %s)" % [stats.load_avg * 100.0, peak_text]]
+	# Problem counters only once they have something to say; the tooltip always has them.
+	for counter in [["Xruns", stats.xruns, _xrun_msec],
+			["Lock misses", stats.lock_misses, _lock_miss_msec],
+			["Dropouts", stats.plugin_underruns, _plugin_underrun_msec]]:
+		if counter[1] > 0:
+			parts.append("%s %s" % [counter[0], _counter_text(counter[1], counter[2], now)])
+	var project: Project = Sonara.editor.project if Sonara.editor else null
+	var ranked := rank_plugins(collect_devices(project.channels if project else []), now,
+			WORST_PLUGINS_IN_TOOLTIP)
+	if not ranked.is_empty() and _is_plugin_notable(ranked[0]):
+		parts.append(_plugin_text(ranked[0]))
+	performance_text.text = "  ".join(parts)
+	var totals := "\n\nXruns %d, lock misses %d, plugin dropouts %d since the engine started." % [
+		stats.xruns, stats.lock_misses, stats.plugin_underruns]
+	performance_text.tooltip_text = PERFORMANCE_TOOLTIP + totals + _plugins_tooltip(ranked)
+
+
+## Every device instance in `channels`, including those nested in containers.
+static func collect_devices(channels: Array) -> Array[DeviceInstance]:
+	var result: Array[DeviceInstance] = []
+	var stack: Array = []
+	for channel in channels:
+		stack.append_array(channel.devices)
+	while not stack.is_empty():
+		var dev: DeviceInstance = stack.pop_back()
+		result.append(dev)
+		stack.append_array(dev.children)
+	return result
+
+
+## Plugins with fresh stats, worst first: most dropouts in the last second, then highest peak
+## share of the block time. At most `limit`.
+static func rank_plugins(devices: Array[DeviceInstance], now_msec: int, limit: int) -> Array[DeviceInstance]:
+	var ranked: Array[DeviceInstance] = []
+	for dev in devices:
+		var s: DeviceInstance.PluginStats = dev.plugin_stats
+		if s != null and s.blocks > 0 and s.is_fresh(now_msec):
+			ranked.append(dev)
+	ranked.sort_custom(func(a: DeviceInstance, b: DeviceInstance) -> bool:
+		if a.plugin_stats.deadline_misses != b.plugin_stats.deadline_misses:
+			return a.plugin_stats.deadline_misses > b.plugin_stats.deadline_misses
+		return a.plugin_stats.load_peak > b.plugin_stats.load_peak)
+	return ranked.slice(0, limit)
+
+
+## Worth naming in the panel: dropping out, or taking a large share of the block.
+static func _is_plugin_notable(dev: DeviceInstance) -> bool:
+	var s: DeviceInstance.PluginStats = dev.plugin_stats
+	return s.deadline_misses > 0 or s.struggling or s.load_peak >= PLUGIN_PEAK_WARN
+
+
+func _plugin_text(dev: DeviceInstance) -> String:
+	var s: DeviceInstance.PluginStats = dev.plugin_stats
+	var text := "%s %.0f%%" % [dev.get_display_name(), s.load_peak * 100.0]
+	if s.deadline_misses > 0 or s.struggling:
+		return _colored(text, COLOR_ALERT)
+	if s.load_peak >= PLUGIN_PEAK_WARN:
+		return _colored(text, COLOR_WARN)
+	return text
+
+
+func _plugins_tooltip(ranked: Array[DeviceInstance]) -> String:
+	if ranked.is_empty():
+		return ""
+	var text := "\n"
+	for dev in ranked:
+		text += "\n%s (channel %d)\n%s\n" % [dev.get_display_name(), dev.channel_id, dev.plugin_stats.describe()]
+	return text
 
 
 func _counter_text(count: int, last_increase_msec: int, now: int) -> String:

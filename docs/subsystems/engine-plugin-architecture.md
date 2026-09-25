@@ -29,7 +29,9 @@
   - `operations.rs`: Higher-level helpers for loading CLAP bundles, creating GUI instances, and wiring parent windows.
   - `host.rs`: CLAP host implementation (`SubprocessHost*`) including timer management, GUI resize notifications and the latency extension.
   - `state.rs`: `PluginState` (main thread) and the `ParamMap` (engine index ↔ CLAP id, rebuilt after the plugin rescans and published to the audio thread).
-- `bin/plugin_host.rs`: Entry point. Takes the control socket's descriptor number (3) and maps the doorbell descriptor (4), setting close-on-exec on both so processes a plugin spawns don't inherit them.
+  - `logging.rs`: The host's logging (Phase 6): its own log file, stderr for the crash tail, WARN+ forwarded to the engine, and the per-instance `instance_span`.
+  - `probe.rs`: `plugin_host --probe`, which loads one plugin standalone and reports what it does.
+- `bin/plugin_host.rs`: Entry point. `plugin_host 3 --host-key <key> --log-dir <dir>` as the engine starts it: takes the control socket's descriptor number (3) and maps the doorbell descriptor (4), setting close-on-exec on both so processes a plugin spawns don't inherit them. `plugin_host --probe …` runs the probe instead.
 
 ## Lifecycle
 
@@ -95,13 +97,15 @@
   a stderr drain thread keeping the last 20 lines (bounded reads, so a host that never emits a
   newline can't grow the buffer).
 - A crash state is per **host process**, not per device: `HostCrash { host_key, pid, exit,
-  stderr_tail }`. `PluginLoad` gains a `CRASHED` state so the audio thread passes audio through
+  stderr_tail, log_path, wrapper }`. `PluginLoad` gains a `CRASHED` state so the audio thread passes audio through
   and the UI can offer a reload. `CommandWorker::poll_devices` sees `!is_alive()` (or `is_hung()`),
   marks the device crashed, sends `<device addr>/loading_state = "crashed:<reason>"` and
-  `<device addr>/crashed [reason, stderr, pid]`, and logs the host's stderr tail.
+  `<device addr>/crashed [reason, stderr, pid, log_path]`, and logs the host's stderr tail.
 - Hung hosts: a blocking request that exceeds `REQUEST_TIMEOUT` (5 s) sets a `hung` flag on the
-  host; 32 consecutive missed plugin deadlines (`HUNG_MISSES`) means the host isn't processing.
-  Either one makes the command thread kill the process and treat it as crashed.
+  host, and a published block the host leaves unfinished for `HUNG_STALL_TIMEOUT` (1 s of wall
+  time, `done_seq` not moving) means it isn't processing. Either one makes the command thread kill
+  the process and treat it as crashed. A plugin that is only slow (finishes every block late) just
+  drops out; it is never killed. Neither check applies to a host under a debugger (below).
 - Reload (`<device addr>/reload` → `AudioCommand::ReloadDevice`) shuts the crashed instance down,
   spawns a fresh host for the same instance id, restores the last saved state blob
   (`PluginCommand::LoadState`), re-activates, re-sends the engine's cached parameter values
@@ -121,3 +125,44 @@
   (`/proc/<pid>/fd/3` is the control socket, `/proc/<pid>/fd/4` the doorbell). A plugin that misses
   deadlines logs a WARN after 8 consecutive misses and shows up in `EngineStats::plugin_underruns`.
 
+## Debuggability (Phase 6)
+
+- **Per-host log files.** Each host writes `Engine/logs/plugins/<host key>-<pid>.log` (key made
+  file-safe by `protocol::log_file_name`): DEBUG and up, unbuffered, so the lines before a crash
+  are on disk. `SONARA_PLUGIN_LOG` (an `EnvFilter` directive) changes the file's filter. The engine
+  logs `Plugin host <key> logs to <path>` on spawn, keeps the newest `PLUGIN_LOGS_KEPT` (50) files
+  at startup, and puts the path in the crash status and popup.
+- **Instance in every line.** Work for an instance runs inside its `instance{id=… plugin=…}` span
+  (`logging::instance_span`, a root span created once per instance and stored in
+  `SubprocessHostShared`/`PluginState`). The main loop enters it per command and per
+  `service_plugin_side`, plugin log callbacks (`HostLog`, any thread) enter it themselves, and the
+  audio thread enters it only on the paths that log. Before a plugin has loaded, its `Initialize`
+  runs in a provisional span named after the plugin id.
+- **Forwarded warnings.** A tracing layer in the host turns WARN and ERROR events into
+  `HostMessage::Log { instance_id, plugin, level, message }` (instance and plugin read from the
+  enclosing span), at most 20 per second; the rest are counted and reported in one line. The main
+  loop sends them; the engine's reader thread logs them as `Plugin <name> (instance <n>, host <key>
+  (pid <pid>)): <message>`, so they reach `last_warn.log` and Godot's `/log`. INFO and DEBUG stay in
+  the host's file.
+- **Per-plugin stats.** The host times each `process()` call and stores it in
+  `BlockControl::process_ns`. The adapter adds it to `PluginBlockStats` (blocks, process time sum
+  and max, block time, peak share, longest miss run) on the audio thread; the command thread merges
+  a second's worth and sends `<device addr>/stats` (`EngineStatus::PluginStats`). `struggling` is 8+
+  consecutive misses (`MISSES_BEFORE_WARNING`). Godot shows it in the device header tooltip, an
+  amber ring on the device light, and a worst-plugins list in `EnginePanel`.
+- **Debugger support.** `SONARA_PLUGIN_HOST_WRAPPER` (shell-split, e.g. `gdb -q -batch -ex run -ex
+  bt --args` or `valgrind`) is prepended to the host command line. `SONARA_PLUGIN_HOST_WAIT=1` makes
+  each host log its pid, allow any process to ptrace it (`PR_SET_PTRACER_ANY`, since Yama's default
+  scope only lets a parent attach) and wait until a debugger is attached and continues; it exits if
+  the engine hangs up meanwhile. Either variable puts `ProcessManager` in debug mode
+  (`HostLaunch::is_debugging`): the host's stderr goes to the engine's terminal instead of the
+  tail pipe, requests wait up to 2 minutes, and neither a request timeout nor a stalled block marks
+  the host hung. Under a wrapper the child pid is the wrapper's, so the crash reason names the
+  wrapper and the log path is only known by pattern.
+- **Probe.** `plugin_host --probe <path.clap> [--id <plugin id>] [--rate <hz>] [--block
+  <frames>]` loads one plugin without the engine: prints the bundle's plugins, the descriptor, the
+  extensions the host uses, parameters, audio and note ports, a state save/load round trip and the
+  latency, then processes 1 s of silence and 1 s with a C3 note (held 0.5 s) through the same
+  stereo-in/stereo-out buffers the engine passes, reporting per-block time and output peak. Exit
+  code 1 on any error. It runs on one thread, so `gdb --args plugin_host --probe …` reproduces
+  plugin bugs directly.

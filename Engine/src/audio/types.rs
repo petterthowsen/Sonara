@@ -328,10 +328,12 @@ pub type Tick = i64;
 /// - 0: Null/no output (reserved, channels routing to 0 won't output anywhere)
 /// - 1: Master channel (always present, created by Godot on project init, routes to ID 1000)
 /// - 2-999: User mixer channels (created dynamically by user)
-/// - 1000+: Hardware output devices (enumerated by audio engine on startup)
-///   - 1000: Default output device (the one currently running the audio stream)
-///   - 1001+: Additional output devices (future support for multi-device routing)
+/// - 1000+: Stereo output pairs on the selected output device (`HARDWARE_OUTPUT_BASE`):
+///   1000 = outputs 1/2, 1001 = 3/4, and so on. A pair the device doesn't have plays on 1/2.
 pub type ChannelId = usize;
+
+/// First hardware output ID: outputs 1/2 of the selected device.
+pub const HARDWARE_OUTPUT_BASE: ChannelId = 1000;
 
 /// Track ID
 pub type TrackId = usize;
@@ -544,13 +546,16 @@ pub struct Channel {
     pub mix: MixBuffers,
 }
 
+/// Gain smoothing coefficient for a 5 ms one-pole filter: alpha = 1 - exp(-1 / (tau * rate)).
+/// 5 ms is a good balance between smoothness and responsiveness.
+fn gain_smoothing_alpha(sample_rate: f32) -> f32 {
+    let tau = 0.005;
+    1.0 - (-1.0 / (tau * sample_rate as f64)).exp() as f32
+}
+
 impl Channel {
     pub fn new(id: ChannelId, name: String, buffer_size: usize, sample_rate: f32) -> Self {
-        // Calculate smoothing coefficient for 5ms smoothing time
-        // One-pole filter: alpha = 1 - exp(-1 / (tau * sample_rate))
-        // tau = 0.005s (5ms) is a good balance between smoothness and responsiveness
-        let tau = 0.005;
-        let smoothing_alpha = 1.0 - (-1.0 / (tau * sample_rate as f64)).exp() as f32;
+        let smoothing_alpha = gain_smoothing_alpha(sample_rate);
 
         let initial_gain = if id == 1 {
             // Master channel defaults to 0 dB
@@ -597,6 +602,11 @@ impl Channel {
             sleep_changes: Vec::with_capacity(MAX_SLEEP_CHANGES),
             mix: MixBuffers::new(buffer_size),
         }
+    }
+
+    /// Adopt a new device sample rate (the stream is stopped while this runs).
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.smoothing_alpha = gain_smoothing_alpha(sample_rate);
     }
 
     /// Convert dB to linear gain (target value, not smoothed)
@@ -1154,24 +1164,6 @@ impl Voice {
         }
 
         output
-    }
-}
-
-/// Output device (hardware audio output)
-#[derive(Debug, Clone)]
-pub struct OutputDevice {
-    pub id: ChannelId,    // ID >= 1000
-    pub name: String,     // Device name from CPAL
-    pub is_default: bool, // Whether this is the default device
-}
-
-impl OutputDevice {
-    pub fn new(id: ChannelId, name: String, is_default: bool) -> Self {
-        Self {
-            id,
-            name,
-            is_default,
-        }
     }
 }
 

@@ -3,6 +3,7 @@ Engine/target/
 Engine/**/*.rs.bk
 Engine/*.pdb
 Engine/logs/*.log
+Engine/logs/plugins/
 
 # Godot 4+ specific ignores
 Godot/.godot/

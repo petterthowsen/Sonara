@@ -28,6 +28,21 @@ pub struct BuiltinParamInfo {
     pub enum_values: Vec<String>,
 }
 
+/// What `/audio/config` reports: the running stream, what was asked for, and the PipeWire graph.
+#[derive(Debug, Clone, Default)]
+pub struct AudioConfigReport {
+    /// None while no stream could be opened.
+    pub active: Option<super::stream::StreamInfo>,
+    pub requested: super::stream::StreamRequest,
+    /// The PipeWire graph quantum and rate (0 when unknown or not on PipeWire).
+    pub graph_quantum: u32,
+    pub graph_rate: u32,
+    /// Graph/stream conflict for Settings, "" when none.
+    pub mismatch: String,
+    /// Why the running config differs from the request (device missing, rate unsupported), "".
+    pub notice: String,
+}
+
 /// Commands that can be sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
@@ -369,6 +384,21 @@ pub enum AudioCommand {
         policy: crate::audio::ipc::HostingPolicy,
     },
 
+    // Audio device settings (Phase 7)
+    /// Reopen the output stream on `device` ("" = system default) at `sample_rate` with
+    /// `period_frames` per callback. Devices are prepared for a new rate while it is stopped.
+    SetAudioConfig {
+        device: String,
+        sample_rate: u32,
+        period_frames: u32,
+    },
+    /// Report the running config (`EngineStatus::AudioConfig`).
+    RequestAudioConfig,
+    /// List output devices (`AudioDeviceInfo` statuses, then `AudioDevicesComplete`).
+    RequestAudioDevices,
+    /// The PipeWire graph changed (from the monitor thread).
+    PipeWireGraph(super::pipewire::GraphInfo),
+
     // Plugin GUI
     OpenPluginGui {
         channel_id: ChannelId,
@@ -474,6 +504,24 @@ pub enum EngineStatus {
         reason: String,
         stderr: String,
         pid: u32,
+        /// The host's log file ("" when unknown).
+        log_path: String,
+    },
+    /// One second of a subprocess plugin's processing (Phase 6): its `process()` time as a share
+    /// of real time (average and worst block), the same in microseconds, the blocks it was
+    /// given and how many missed the callback deadline. `struggling` when it missed
+    /// `MISSES_BEFORE_WARNING` or more in a row. `total_misses` counts since the device loaded.
+    PluginStats {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        load_avg: f32,
+        load_peak: f32,
+        process_avg_us: f32,
+        process_max_us: f32,
+        blocks: u64,
+        deadline_misses: u64,
+        total_misses: u64,
+        struggling: bool,
     },
     /// A plugin finished loading into a host process: the hosting mode that chose the host, its
     /// key and its pid. Sent on every load, reload and move. Phase 5.
@@ -529,6 +577,19 @@ pub enum EngineStatus {
     },
     BuiltinDevicesComplete {
         count: usize,
+    },
+
+    // Audio device settings (Phase 7)
+    /// One output device, in answer to `RequestAudioDevices`.
+    AudioDeviceInfo(super::stream::OutputDeviceInfo),
+    AudioDevicesComplete {
+        count: usize,
+    },
+    /// The running output config, after every change and on request.
+    AudioConfig(AudioConfigReport),
+    /// The device sample rate changed: clips decoded at the old rate should be reloaded.
+    AudioConfigChanged {
+        sample_rate: u32,
     },
 
     // Plugin parameter responses
@@ -614,11 +675,12 @@ impl EngineStatus {
 /// Shared state between audio thread and command thread
 pub struct EngineState {
     pub settings: ProjectSettings,
-    pub device_sample_rate: f32, // Actual audio device sample rate (immutable)
+    /// Rate of the running output stream. Changed only by the command thread while the stream
+    /// is stopped (Phase 7).
+    pub device_sample_rate: f32,
     pub channels: HashMap<ChannelId, Channel>,
     pub tracks: HashMap<TrackId, Track>,
-    pub clips: HashMap<ClipId, Clip>,      // Global clip pool
-    pub output_devices: Vec<OutputDevice>, // Available hardware outputs (IDs 1000+)
+    pub clips: HashMap<ClipId, Clip>, // Global clip pool
     /// Preallocated scratch lists so the audio callback doesn't allocate
     pub render_scratch: RenderScratch,
     pub is_playing: AtomicBool,
@@ -710,7 +772,6 @@ impl Default for EngineState {
             channels: HashMap::new(),
             tracks: HashMap::new(),
             clips: HashMap::new(),
-            output_devices: Vec::new(),
             render_scratch: RenderScratch::default(),
             is_playing: AtomicBool::new(false),
             current_tick: AtomicI64::new(0),
@@ -2403,6 +2464,10 @@ pub fn process_command(
         | AudioCommand::ClearChannelDevices { .. }
         | AudioCommand::ReloadDevice { .. }
         | AudioCommand::SetPluginHosting { .. }
+        | AudioCommand::SetAudioConfig { .. }
+        | AudioCommand::RequestAudioConfig
+        | AudioCommand::RequestAudioDevices
+        | AudioCommand::PipeWireGraph(_)
         | AudioCommand::ScanPlugins { .. }
         | AudioCommand::AdvertiseBuiltinDevices) => {
             warn!("{:?} must be handled by CommandWorker, ignoring", other);

@@ -296,6 +296,12 @@ func _connect_audio_engine_signals():
 		AudioEngineOSC.listen("/status/playing", _on_playing_received)
 		AudioEngineOSC.engine_connected.connect(_on_audio_engine_connected)
 		logger.info("[Editor] Connected to audio engine OSC signals")
+	# The engine couldn't use the saved audio settings (device missing, rate unsupported).
+	AudioConfig.notice_raised.connect(_on_audio_notice)
+
+
+func _on_audio_notice(text: String) -> void:
+	show_error("Audio output", text + "\n\nChange it in Settings › Audio › Output.")
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Handle input actions."""

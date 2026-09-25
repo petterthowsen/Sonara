@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use clack_extensions::params::PluginParams;
 use clack_extensions::timer::PluginTimer;
@@ -27,6 +27,7 @@ use crate::audio::ipc::{
 };
 use crate::plugin_host::audio_thread::{self, AudioThreadHandle};
 use crate::plugin_host::commands::process_command;
+use crate::plugin_host::logging;
 use crate::plugin_host::state::PluginState;
 
 /// What the reader thread hands to the main loop.
@@ -69,7 +70,12 @@ fn send(socket: &UnixStream, msg: &HostMessage) {
             // SAFETY: exits without running destructors; the OS reclaims everything
             unsafe { libc::_exit(0) };
         }
-        warn!("Failed to send {:?}: {}", msg, e);
+        if matches!(msg, HostMessage::Log { .. }) {
+            // A warning here would be forwarded and fail again.
+            debug!("Failed to forward a log line: {}", e);
+        } else {
+            warn!("Failed to send {:?}: {}", msg, e);
+        }
     }
 }
 
@@ -97,6 +103,17 @@ fn handle_incoming(
         // SAFETY: see above
         unsafe { libc::_exit(0) };
     }
+
+    // Log everything done for this command under the instance's span, so each line names the
+    // plugin. A new instance gets a provisional span from its plugin id until it has loaded.
+    let span = match (instances.get(&instance_id), &command) {
+        (Some(state), _) => state.span.clone(),
+        (None, PluginCommand::Initialize { plugin_id, .. }) => {
+            logging::instance_span(instance_id, plugin_id)
+        }
+        (None, _) => logging::instance_span(instance_id, ""),
+    };
+    let _entered = span.enter();
 
     info!(
         "📥 Received command for instance {}: {:?}",
@@ -190,9 +207,12 @@ fn service_plugin_side(
 ///
 /// Runs on the main thread (CLAP's main thread) until the engine closes the control socket. Audio
 /// runs on a second thread that owns the plugin's audio processor and the shared block.
+///
+/// `log_rx` carries the WARN and ERROR lines `logging::init` forwards to the engine.
 pub fn run_plugin_host(
     socket: UnixStream,
     doorbell: Arc<HostSharedMemory>,
+    log_rx: Receiver<HostMessage>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (incoming_tx, incoming_rx): (Sender<Incoming>, Receiver<Incoming>) = mpsc::channel();
     let reader_socket = socket.try_clone()?;
@@ -240,12 +260,20 @@ pub fn run_plugin_host(
             }
 
             // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
+            let span = state.span.clone();
+            let _entered = span.enter();
             service_plugin_side(&socket, state, &mut flush_events);
         }
 
         // Forward unsolicited messages from plugin callbacks (GUI resize requests, etc.)
         while let Ok(msg) = event_rx.try_recv() {
             info!("📤 Sending event: {:?}", msg);
+            send(&socket, &msg);
+        }
+
+        // Forward warnings and errors to the engine (rate-limited by the logging layer). Not
+        // logged again here: that would forward the forwarding.
+        while let Ok(msg) = log_rx.try_recv() {
             send(&socket, &msg);
         }
 

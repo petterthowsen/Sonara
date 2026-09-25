@@ -328,6 +328,12 @@ pub trait AudioDevice: Send {
         0
     }
 
+    /// Adopt a new device sample rate. Runs on the command thread while the output stream is
+    /// stopped, so it may allocate. `max_frames` is the largest block `process_block` will get.
+    /// Devices whose processing doesn't depend on the rate keep the default no-op; containers
+    /// don't forward it, because the command thread visits nested devices itself.
+    fn prepare(&mut self, _sample_rate: f32, _max_frames: usize) {}
+
     // === Lifecycle Management ===
 
     /// Check if device is active (buffers allocated, ready for processing)

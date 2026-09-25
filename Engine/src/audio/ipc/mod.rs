@@ -19,11 +19,13 @@ pub mod wire;
 pub use hosting::{HostAssignment, HostingMode, HostingPolicy};
 pub use platform_shm::PlatformSharedMemory;
 pub use process_manager::{
-    HostCrash, HostExit, InstanceConnection, PluginProcess, ProcessManager, REQUEST_TIMEOUT,
+    plugin_log_dir, prune_plugin_logs, HostCrash, HostExit, HostLaunch, InstanceConnection,
+    PluginProcess, ProcessManager, PLUGIN_LOGS_KEPT, REQUEST_TIMEOUT,
 };
 pub use protocol::{
-    BlockControl, BlockEvent, Doorbell, HostMessage, HostRequest, InstanceId, PluginCommand,
-    PluginEvent, PluginParameterInfo, PluginResponse, RequestId, SharedMemoryLayout,
-    EVENT_NOTE_OFF, EVENT_NOTE_ON, EVENT_PARAM, MAX_BLOCK_EVENTS, MAX_PLUGIN_CHANNELS, NO_REPLY,
+    log_file_name, BlockControl, BlockEvent, Doorbell, HostMessage, HostRequest, InstanceId,
+    LogLevel, PluginCommand, PluginEvent, PluginParameterInfo, PluginResponse, RequestId,
+    SharedMemoryLayout, EVENT_NOTE_OFF, EVENT_NOTE_ON, EVENT_PARAM, MAX_BLOCK_EVENTS,
+    MAX_PLUGIN_CHANNELS, NO_REPLY,
 };
 pub use shared_memory::{HostSharedMemory, SharedMemory};

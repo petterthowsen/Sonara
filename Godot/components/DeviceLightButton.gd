@@ -113,6 +113,7 @@ var loading_state : String:
 			return device_instance.loading_state if device_instance else "idle"
 
 var _hovering := false
+var _struggling := false  # Last reported stats flagged repeated deadline misses
 var _loading_rotation := 0.0  # Rotation angle for loading animation
 
 func _get_minimum_size() -> Vector2:
@@ -123,6 +124,7 @@ func bind_to_device_instance(dev_inst : DeviceInstance):
 	device_instance.enabled_changed.connect(_on_device_enabled_changed)
 	device_instance.active_changed.connect(_on_device_active_changed)
 	device_instance.loading_state_changed.connect(_on_device_loading_state_changed)
+	device_instance.stats_changed.connect(_on_device_stats_changed)
 
 func _on_device_enabled_changed(_enabled : bool):
 	queue_redraw()
@@ -139,6 +141,19 @@ func _on_device_loading_state_changed(_state : String):
 	set_process(_state == "loading")
 
 
+## A plugin that keeps missing its deadline gets an amber ring; redraw when that changes.
+func _on_device_stats_changed() -> void:
+	var struggling := _is_struggling()
+	if struggling != _struggling:
+		_struggling = struggling
+		queue_redraw()
+		_update_tooltip()
+
+
+func _is_struggling() -> bool:
+	return device_instance != null and device_instance.is_struggling()
+
+
 func _update_tooltip() -> void:
 	# Loading/failed states take priority
 	if loading_state == "loading":
@@ -151,6 +166,9 @@ func _update_tooltip() -> void:
 	elif loading_state.begins_with("crashed:"):
 		var reason = loading_state.substr(8)
 		tooltip_text = "Crashed: %s — use Reload to bring it back" % reason
+		return
+	elif _struggling:
+		tooltip_text = "Missing its processing deadline: its audio drops out. The device header tooltip shows its load."
 		return
 	
 	# Normal active/enabled states
@@ -226,6 +244,8 @@ func _draw() -> void:
 		light_color = Color.DARK_RED  # Dark red for a crashed plugin host
 		border_color = Color.RED
 	else:
+		if _struggling:
+			border_color = Color.GOLD  # Missing its deadline (see _on_device_stats_changed)
 		# Normal active/enabled states
 		if not active and not enabled:
 			light_color = light_color_inactive_disabled

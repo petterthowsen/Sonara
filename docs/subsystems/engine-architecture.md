@@ -6,7 +6,9 @@ The Rust audio engine keeps slow work off the real-time path:
 
 - **Main Thread**: Owns `OscServer`, initializes systems, relays OSC commands to the command thread, and brokers GUI events.
 - **Command Thread** (`command_worker.rs`): `CommandWorker` applies `AudioCommand`s to the `EngineState` it shares with the audio callback through `Arc<Mutex<_>>`. It holds the lock only to read or swap state: plugin scans, device construction and teardown, and plugin subprocess IPC (GUI open/close, activation) run with the lock released. It is the only thread that adds or removes channels and devices, which is what makes releasing the lock mid-command safe. Fast commands go through `commands.rs::process_command` under the lock.
-- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations). Takes the state with `lock_state_for_callback` (`engine.rs`): spins on `try_lock` for up to `STATE_LOCK_BUDGET` (1 ms), then outputs silence for that buffer.
+- **Audio Callback Thread**: Real-time audio generation (high priority, no allocations). Takes the state with `lock_state_for_callback` (`stream.rs`): spins on `try_lock` for up to `STATE_LOCK_BUDGET` (1 ms), then outputs silence for that buffer.
+- **Stream Thread** (`stream.rs`, "audio-stream"): owns the CPAL output stream (`Stream` is `!Send`) and its watchdog, which reopens the stream when callbacks stall. The command thread drives it through `StreamControl` (`stop`, `resolve`, `start`) to change device, rate or buffer size (Phase 7, see below).
+- **PipeWire Monitor** (`pipewire.rs`): every 3 s reads the graph with `pw-top -b`, `pw-dump` and `pw-metadata`, reports quantum/rate changes to the command thread and adds PipeWire errors on the engine's node to the xrun counter. Exits when the tools aren't installed.
 - **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
 - **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and waveform generation off the real-time path.
 - **Communication**: Crossbeam unbounded MPMC channels carry commands (main → command thread) and statuses (command/audio threads → main), plus `std::sync::mpsc` channels from statuses → main loop → window thread. The command thread and audio callback share `EngineState` through a mutex.
@@ -55,8 +57,11 @@ Engine/src/
   plugin_host/         # Subprocess host implementation (see engine-plugin-architecture)
   audio/
     mod.rs             # Module declarations
-    engine.rs          # Core audio engine initialization (CPAL stream setup, audio callback, state locking)
+    engine.rs          # AudioEngine: builds the state, opens the default stream, starts the command thread
+    stream.rs          # Stream thread + watchdog, device enumeration, config selection, the audio callback
+    pipewire.rs        # PipeWire graph monitor (quantum, rate, errors) and the buffer-vs-quantum rule
     command_worker.rs  # Command thread: applies commands, slow work outside the state lock
+    command_worker/audio_config.rs # Reconfiguring the stream: stop, resolve, prepare devices, start
     commands.rs        # AudioCommand/EngineStatus definitions and fast command handling
     processing.rs      # Audio callback: MIDI scheduling, transport, rendering
     mixing.rs          # Audio mixing and routing logic
@@ -175,7 +180,7 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
    - A routing cycle is broken at the first unfinished channel; already finished targets receive nothing.
 
 4. **Master Output**
-   - Master buffer (ID 1) is copied to the interleaved CPAL output for device IDs ≥1000. Peaks are computed by the callback afterward.
+   - The CPAL buffer is cleared, then master (ID 1) is written to its output pair: 1000 = outputs 1/2, 1001 = 3/4, … on the running device. A pair the device lacks plays on 1/2. Peaks are computed by the callback afterward.
 
 **Invariants:**
 - Never allocate during any pass; all temporary buffers are pre-sized at initialization.
@@ -188,8 +193,14 @@ Audio clips automatically time-stretch and pitch-shift based on project BPM:
 **Routing Hierarchy:**
 - Tracks target channels via `Track.default_channel_id`.
 - Channels forward audio with `output_channel_id` (default = 1 = Master).  
-- Master channel (ID 1) routes to device outputs (ID ≥ 1000).  
-- ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels/buses, 1000+ = hardware devices.
+- Master channel (ID 1) routes to hardware outputs (ID ≥ 1000).  
+- ID allocation: 0 = null/no output, 1 = Master, 2-999 = user channels/buses, 1000+ = stereo output pairs on the selected output device (`HARDWARE_OUTPUT_BASE`).
+
+### Output device, sample rate and buffer size (Phase 7)
+- Godot sends `/audio/config/set <device> <rate> <buffer>` (Settings › Audio › Output). `CommandWorker::apply_audio_config` stops the stream, resolves the config on the stream thread (the device may not support the rate), prepares every device for a new rate with `AudioDevice::prepare(rate, max_frames)` while no callback runs, updates `device_sample_rate`, and starts the stream. A device that won't open falls back to the default device, then to 48 kHz/1024.
+- The buffer size is the ALSA **period** (frames per callback); cpal 0.15 sets the period to a quarter of `BufferSize::Fixed`, so the engine asks for `ALSA_PERIODS` (4) periods. cpal's callback can deliver the whole buffer at once, so the period is capped at 2048 to fit the 8192-frame preallocation (`MAX_BLOCK_FRAMES`). Buffer-only changes never reallocate.
+- CLAP plugins are re-activated at the new rate (the host deactivates first); a plugin that finishes loading at the old rate is caught by the device tick (`needs_reactivation`). Clips keep playing at the right pitch (playback compensates for `Clip::audio_sample_rate`); `/audio/config/changed` makes Godot reload them at the new rate.
+- PipeWire: when the graph quantum is larger than the ALSA buffer (4 periods), the engine reopens with the smallest power-of-two period whose buffer holds it, and goes back to the requested period when the quantum drops. It never writes PipeWire's settings.
 
 **Sends:**  
 - `Channel.send_channels` holds `Send { target_channel_id, amount_db, pre_fader, muted }`.  

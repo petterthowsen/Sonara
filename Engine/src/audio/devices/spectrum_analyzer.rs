@@ -444,6 +444,13 @@ impl AudioDevice for SpectrumAnalyzerDevice {
         v
     }
 
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        self.sample_rate = sample_rate;
+        self.fft_interval =
+            std::time::Duration::from_secs_f32(self.hop_size as f32 / self.sample_rate);
+        self.reset();
+    }
+
     fn reset(&mut self) {
         // Clear buffers
         self.input_buffer.fill(0.0);

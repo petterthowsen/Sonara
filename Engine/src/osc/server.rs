@@ -105,6 +105,7 @@ impl OscServer {
         // Spawn status sender thread
         let socket_clone = self.socket.try_clone()?;
         let client_port = self.client_port;
+        let decode_rate = self.audio_file_service.lock().unwrap().sample_rate_handle();
         thread::spawn(move || {
             use std::time::Instant;
             let mut last_heartbeat = Instant::now();
@@ -152,6 +153,11 @@ impl OscServer {
                                 channel_id: *channel_id,
                                 device_path: device_path.clone(),
                             });
+                        }
+                        // Decode at the new rate before Godot hears about it and reloads.
+                        EngineStatus::AudioConfigChanged { sample_rate } => {
+                            decode_rate.store(*sample_rate, std::sync::atomic::Ordering::Relaxed);
+                            info!("Audio files now decode to {} Hz", sample_rate);
                         }
                         _ => {}
                     }
@@ -1505,6 +1511,18 @@ impl OscServer {
                 info!("Request builtin devices");
                 command_tx.send(AudioCommand::AdvertiseBuiltinDevices)?;
             }
+            // Audio device settings (Phase 7)
+            ["audio", "devices", "request"] => {
+                command_tx.send(AudioCommand::RequestAudioDevices)?;
+            }
+            ["audio", "config", "request"] => {
+                command_tx.send(AudioCommand::RequestAudioConfig)?;
+            }
+            // /audio/config/set <device:s> <rate:i> <buffer:i> — device "" is the default.
+            ["audio", "config", "set"] => match parse_audio_config(args) {
+                Ok(command) => command_tx.send(command)?,
+                Err(e) => warn!("Ignoring /audio/config/set: {}", e),
+            },
             ["plugin", "get_parameters"] => {
                 if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
                     (args.get(0), args.get(1))
@@ -1702,12 +1720,38 @@ impl OscServer {
                 reason,
                 stderr,
                 pid,
+                log_path,
             } => (
                 device_path.to_osc_addr(channel_id, "crashed"),
                 vec![
                     OscType::String(reason),
                     OscType::String(stderr),
                     OscType::Int(pid as i32),
+                    OscType::String(log_path),
+                ],
+            ),
+            EngineStatus::PluginStats {
+                channel_id,
+                device_path,
+                load_avg,
+                load_peak,
+                process_avg_us,
+                process_max_us,
+                blocks,
+                deadline_misses,
+                total_misses,
+                struggling,
+            } => (
+                device_path.to_osc_addr(channel_id, "stats"),
+                vec![
+                    OscType::Float(load_avg),
+                    OscType::Float(load_peak),
+                    OscType::Float(process_avg_us),
+                    OscType::Float(process_max_us),
+                    OscType::Int(osc_count(blocks)),
+                    OscType::Int(osc_count(deadline_misses)),
+                    OscType::Int(osc_count(total_misses)),
+                    OscType::Int(struggling as i32),
                 ],
             ),
             EngineStatus::PluginHost {
@@ -1827,6 +1871,33 @@ impl OscServer {
             EngineStatus::BuiltinDevicesComplete { count } => (
                 "/builtin/complete".to_string(),
                 vec![OscType::Int(count as i32)],
+            ),
+            EngineStatus::AudioDeviceInfo(device) => {
+                let mut args = vec![
+                    OscType::String(device.name),
+                    OscType::Int(device.is_default as i32),
+                    OscType::Int(device.min_period as i32),
+                    OscType::Int(device.max_period as i32),
+                    OscType::Int(device.channels as i32),
+                ];
+                args.extend(
+                    device
+                        .sample_rates
+                        .iter()
+                        .map(|&rate| OscType::Int(rate as i32)),
+                );
+                ("/audio/device".to_string(), args)
+            }
+            EngineStatus::AudioDevicesComplete { count } => (
+                "/audio/devices/complete".to_string(),
+                vec![OscType::Int(count as i32)],
+            ),
+            EngineStatus::AudioConfig(report) => {
+                ("/audio/config".to_string(), audio_config_args(report))
+            }
+            EngineStatus::AudioConfigChanged { sample_rate } => (
+                "/audio/config/changed".to_string(),
+                vec![OscType::Int(sample_rate as i32)],
             ),
             EngineStatus::PluginParameterInfo {
                 channel_id,
@@ -2460,6 +2531,57 @@ fn parse_hosting_policy(args: &[OscType]) -> Result<crate::audio::ipc::HostingPo
     Ok(policy)
 }
 
+/// Parse `/audio/config/set <device:s> <rate:i> <buffer:i>`.
+fn parse_audio_config(args: &[OscType]) -> Result<AudioCommand, String> {
+    match args {
+        [OscType::String(device), OscType::Int(rate), OscType::Int(buffer), ..]
+            if *rate >= 0 && *buffer > 0 =>
+        {
+            Ok(AudioCommand::SetAudioConfig {
+                device: device.clone(),
+                sample_rate: *rate as u32,
+                period_frames: *buffer as u32,
+            })
+        }
+        _ => Err(format!(
+            "expected (device:s, rate:i, buffer:i), got {:?}",
+            args
+        )),
+    }
+}
+
+/// `/audio/config` arguments: the running stream (device "" and zeros when none could be
+/// opened), then the request, the PipeWire graph and the two warning texts.
+fn audio_config_args(report: crate::audio::commands::AudioConfigReport) -> Vec<OscType> {
+    let active = report.active;
+    let (device, is_default, rate, period, latency, pairs) = match &active {
+        Some(a) => (
+            a.device.clone(),
+            a.is_default_device,
+            a.sample_rate,
+            a.period_frames,
+            a.latency_ms(),
+            a.output_pairs(),
+        ),
+        None => (String::new(), false, 0, 0, 0.0, 0),
+    };
+    vec![
+        OscType::String(device),
+        OscType::Int(rate as i32),
+        OscType::Int(period as i32),
+        OscType::Float(latency),
+        OscType::Int(pairs as i32),
+        OscType::Int(is_default as i32),
+        OscType::String(report.requested.device),
+        OscType::Int(report.requested.sample_rate as i32),
+        OscType::Int(report.requested.period_frames as i32),
+        OscType::Int(report.graph_quantum as i32),
+        OscType::Int(report.graph_rate as i32),
+        OscType::String(report.mismatch),
+        OscType::String(report.notice),
+    ]
+}
+
 /// Clamp a running counter into an OSC int32 argument.
 fn osc_count(count: u64) -> i32 {
     count.min(i32::MAX as u64) as i32
@@ -2560,5 +2682,42 @@ mod tests {
         assert!(parse_hosting_policy(&[]).is_err());
         assert!(parse_hosting_policy(&[string("within_engine")]).is_err());
         assert!(parse_hosting_policy(&[string("together"), string("dangling.id")]).is_err());
+    }
+
+    #[test]
+    fn audio_config_set_parses_device_rate_and_buffer() {
+        match parse_audio_config(&[
+            string("hw:CARD=USB"),
+            OscType::Int(44_100),
+            OscType::Int(256),
+        ]) {
+            Ok(AudioCommand::SetAudioConfig {
+                device,
+                sample_rate,
+                period_frames,
+            }) => {
+                assert_eq!(device, "hw:CARD=USB");
+                assert_eq!(sample_rate, 44_100);
+                assert_eq!(period_frames, 256);
+            }
+            other => panic!("unexpected {:?}", other),
+        }
+        assert!(parse_audio_config(&[string(""), OscType::Int(48_000)]).is_err());
+        assert!(parse_audio_config(&[string(""), OscType::Int(48_000), OscType::Int(0)]).is_err());
+        assert!(parse_audio_config(&[OscType::Int(1), OscType::Int(2), OscType::Int(3)]).is_err());
+    }
+
+    #[test]
+    fn audio_config_reports_zeros_while_no_stream_runs() {
+        use crate::audio::commands::AudioConfigReport;
+        let args = audio_config_args(AudioConfigReport {
+            notice: "No audio output could be opened.".into(),
+            ..Default::default()
+        });
+        assert_eq!(args.len(), 13);
+        assert_eq!(args[0], string(""));
+        assert_eq!(args[1], OscType::Int(0));
+        assert_eq!(args[4], OscType::Int(0));
+        assert_eq!(args[12], string("No audio output could be opened."));
     }
 }

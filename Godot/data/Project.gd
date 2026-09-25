@@ -134,11 +134,17 @@ func connect_to_engine() -> void:
 	if not AudioEngineOSC.engine_disconnected.is_connected(_on_engine_disconnected):
 		AudioEngineOSC.engine_disconnected.connect(_on_engine_disconnected)
 
+	# Clips are decoded at the engine's rate: reload them when it changes.
+	if not AudioConfig.sample_rate_changed.is_connected(_on_engine_sample_rate_changed):
+		AudioConfig.sample_rate_changed.connect(_on_engine_sample_rate_changed)
+
 	# Register OSC listeners for clip/audiofile events
 	_register_clip_osc_listeners()
 
-	# Clear any previous project state in engine, then initialize. The hosting policy goes
-	# first so plugins load straight into the right host process.
+	# Clear any previous project state in engine, then initialize. The audio settings and the
+	# hosting policy go first, so devices are created at the right rate and plugins load
+	# straight into the right host process.
+	AudioConfig.sync_to_engine()
 	AssetService.plugin_hosting.sync_to_engine()
 	AudioEngineOSC.send("/project/clear", [])
 	AudioEngineOSC.send("/project/init", [tempo, time_numerator, time_denominator, ppq, sample_rate])
@@ -555,21 +561,45 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 	else:
 		# Sync audio data (if audio clip)
 		if not clip.audio_file_path.is_empty():
-			var sample_rate_hint: int = clip.audio_sample_rate if clip.audio_sample_rate > 0 else 0
-			var channel_hint: int = clip.audio_channels if clip.audio_channels > 0 else 0
-			logger.info("[Project] Requesting engine-side load for clip %s (%s)" % [clip.id, clip.audio_file_path])
-			clip.apply_load_state(Clip.LoadState.LOADING, "", "")
-			clip.load_progress = 0.0
-			var prev_req_id: String = _clip_request_lookup.get(clip.id, "")
-			if not prev_req_id.is_empty():
-				_clear_clip_request_by_req(prev_req_id)
-			AudioEngineOSC.send("/clip/%s/load_audio_file" % clip.id, [
-				clip.audio_file_path,
-				sample_rate_hint,
-				channel_hint
-			])
+			_request_clip_audio(clip)
 		else:
 			logger.warn("[Project] Audio clip %s has no audio_file_path!" % clip.id)
+
+
+## Ask the engine to decode an audio clip's file (a new req_id; older loads are ignored).
+func _request_clip_audio(clip: Clip) -> void:
+	var sample_rate_hint: int = clip.audio_sample_rate if clip.audio_sample_rate > 0 else 0
+	var channel_hint: int = clip.audio_channels if clip.audio_channels > 0 else 0
+	logger.info("[Project] Requesting engine-side load for clip %s (%s)" % [clip.id, clip.audio_file_path])
+	clip.apply_load_state(Clip.LoadState.LOADING, "", "")
+	clip.load_progress = 0.0
+	var prev_req_id: String = _clip_request_lookup.get(clip.id, "")
+	if not prev_req_id.is_empty():
+		_clear_clip_request_by_req(prev_req_id)
+	AudioEngineOSC.send("/clip/%s/load_audio_file" % clip.id, [
+		clip.audio_file_path,
+		sample_rate_hint,
+		channel_hint
+	])
+
+
+## The engine's device rate changed (audio settings): re-decode every audio clip at the new
+## rate. Until a clip's load finishes it plays silent.
+func reload_audio_clips() -> int:
+	if _connection_state != ConnectionState.CONNECTED:
+		return 0
+	var count := 0
+	for clip_id in clips.keys():
+		var clip: Clip = clips[clip_id]
+		if clip.type == Clip.ClipType.AUDIO and not clip.audio_file_path.is_empty():
+			_request_clip_audio(clip)
+			count += 1
+	return count
+
+
+func _on_engine_sample_rate_changed(sample_rate: int) -> void:
+	var count := reload_audio_clips()
+	logger.info("[Project] Engine runs at %d Hz; reloading %d audio clip(s)" % [sample_rate, count])
 
 
 # ============================================================================

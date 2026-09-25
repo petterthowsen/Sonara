@@ -72,7 +72,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Plugins load on a background thread behind a `LoadingState`. While it is Loading or Failed, the audio thread passes audio through.
 
 ### Godot UI (`Godot/`)
-- Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `AssetService` (browser asset providers) and `MidiManager` (MIDI input and virtual keyboard, routed to armed channels).
+- Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `AudioConfig` (output device, sample rate and buffer size: engine device list, running config, applies the settings live), `AssetService` (browser asset providers) and `MidiManager` (MIDI input and virtual keyboard, routed to armed channels).
 - `editor/Editor.gd` is the entry point. It wires up the self-contained systems: `arranger/`, `mixer/`, `clip_editor/`, `browser/` and `devices/`.
 - The `data/` models (`Project`, `Track`, `Channel`, `Clip`, `DeviceInstance`, …) sync themselves with the engine. The UI calls a setter such as `channel.set_volume()`. The model updates its state, sends OSC, and emits a signal, and the UI updates from that signal. To add a synced property, add the signal and setter and wire it into `sync_to_engine()`. UI code never sends OSC directly.
 - `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.

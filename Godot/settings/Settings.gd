@@ -241,6 +241,34 @@ func _register_all_settings() -> void:
 		"Row height, in pixels, for a newly created automation lane.",
 	)).sub("Arranger").range(20, 200, 1)
 
+	# --- Audio: output device (engine-stability-plan Phase 7). AudioConfig applies them live. ---
+	_register(Setting.new(
+		"audio/output_device",
+		"Output Device",
+		Type.STRING,
+		"",
+		CATEGORY_AUDIO,
+		"The audio device the engine plays through. System default follows the desktop's default output (PipeWire, when it runs).\n\n"
+		+ "If the saved device is missing, the engine uses the default and keeps this setting for when the device is back.",
+	)).sub("Output").scene("res://settings/AudioSettingControl.tscn")
+	_register(Setting.new(
+		"audio/sample_rate",
+		"Sample Rate",
+		Type.INT,
+		48000,
+		CATEGORY_AUDIO,
+		"Engine sample rate in Hz. Changing it prepares every device and plugin for the new rate and reloads audio clips.",
+	)).sub("Output").range(8000, 384000, 1).scene("res://settings/AudioSettingControl.tscn")
+	_register(Setting.new(
+		"audio/buffer_size",
+		"Buffer Size",
+		Type.INT,
+		1024,
+		CATEGORY_AUDIO,
+		"Frames the engine renders per block. Smaller buffers lower latency but cost more CPU and can crackle.\n\n"
+		+ "Under PipeWire the engine never runs a buffer that can't hold the graph's quantum: when the quantum is larger, it uses a bigger buffer and says so here.",
+	)).sub("Output").range(32, 2048, 1).scene("res://settings/AudioSettingControl.tscn")
+
 	# --- Audio: plugin hosting (engine-stability-plan Phase 5) ---
 	_register(Setting.new(
 		"plugins/hosting_mode",

@@ -724,6 +724,22 @@ impl AudioDevice for SfizzDevice {
             .unwrap_or(GROUP_PARAM)
     }
 
+    /// Command thread, stream stopped: retune a loaded synth to the new rate. An SFZ still
+    /// loading keeps the rate it started with; later `load_sfz_async` calls use the new one.
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        self.sample_rate = sample_rate;
+        let state = self
+            .loading_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let LoadingState::Ready(synth) = &*state {
+            let mut synth = synth
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            synth.0.set_sample_rate(sample_rate);
+        }
+    }
+
     fn reset(&mut self) {
         // Try to get loading state (non-blocking)
         let loading_state_result = self.loading_state.try_lock();

@@ -173,7 +173,7 @@ fn is_valid_route(
 ) -> bool {
     target_id != 0
         && target_id != source_id
-        && target_id < 1000
+        && target_id < HARDWARE_OUTPUT_BASE
         && channels.contains_key(&target_id)
 }
 
@@ -581,33 +581,47 @@ pub fn mix_and_output(
         }
     }
 
-    // Output the master channel (ID 1) to the audio hardware
-    // Master should route to an output device (ID >= 1000)
-    // NOTE: Currently we only support outputting to the default device (ID 1000, the one running this stream)
-    // In the future, we can support routing to other devices (ID 1001+) by managing multiple streams
-    if let Some(master) = channel_map.get(&MASTER_CHANNEL_ID) {
-        // Check if master routes to a device (ID >= 1000)
-        if let Some(output_device_id) = master.output_channel_id {
-            if output_device_id >= 1000 {
-                // Master's fader is applied when other channels mix into it, so its buffer is
-                // output directly without additional gain
-                let frames = data.len() / channels;
+    write_master_output(channel_map, data, channels);
+}
 
-                for frame_idx in 0..frames {
-                    if frame_idx < master.buffer_left.len() {
-                        let left = master.buffer_left[frame_idx].clamp(-1.0, 1.0);
-                        let right = master.buffer_right[frame_idx].clamp(-1.0, 1.0);
+/// Write master (ID 1) to its hardware output pair: 1000 is outputs 1/2, 1001 is 3/4, …
+/// Master's fader was applied when channels mixed into it, so its buffer goes out as is. The
+/// buffer is cleared first: CPAL reuses it, and channels master doesn't write must be silent.
+/// A pair the device doesn't have plays on 1/2 (the command thread warns about it).
+fn write_master_output(
+    channel_map: &HashMap<ChannelId, Channel>,
+    data: &mut [f32],
+    channels: usize,
+) {
+    data.fill(0.0);
+    if channels == 0 {
+        return;
+    }
+    let Some(master) = channel_map.get(&MASTER_CHANNEL_ID) else {
+        return;
+    };
+    let Some(output_id) = master
+        .output_channel_id
+        .filter(|&id| id >= HARDWARE_OUTPUT_BASE)
+    else {
+        return;
+    };
+    let pairs = (channels / 2).max(1);
+    let pair = output_id - HARDWARE_OUTPUT_BASE;
+    let first = if pair < pairs { pair * 2 } else { 0 };
 
-                        let output_idx = frame_idx * channels;
-                        if channels >= 2 {
-                            data[output_idx] = left;
-                            data[output_idx + 1] = right;
-                        } else {
-                            data[output_idx] = (left + right) * 0.5; // Mono mix
-                        }
-                    }
-                }
-            }
+    let frames = (data.len() / channels)
+        .min(master.buffer_left.len())
+        .min(master.buffer_right.len());
+    for frame_idx in 0..frames {
+        let left = master.buffer_left[frame_idx].clamp(-1.0, 1.0);
+        let right = master.buffer_right[frame_idx].clamp(-1.0, 1.0);
+        let base = frame_idx * channels;
+        if channels >= 2 {
+            data[base + first] = left;
+            data[base + first + 1] = right;
+        } else {
+            data[base] = (left + right) * 0.5; // Mono mix
         }
     }
 }
@@ -756,6 +770,50 @@ mod tests {
             state.channels[&1].buffer_left[0]
         );
         assert!(output[0].abs() > 0.2);
+    }
+
+    /// Mix one buffer into a device with `channels` outputs, starting from stale samples.
+    fn mix_to_device(state: &mut EngineState, channels: usize) -> Vec<f32> {
+        let (status_tx, _status_rx) = unbounded();
+        let mut output = vec![9.0f32; BUFFER_SIZE * channels];
+        mix_and_output(state, &mut output, channels, BUFFER_SIZE, &status_tx);
+        output
+    }
+
+    /// Master (0 dB) routed to `output`, fed 0.5 left / 0.25 right by a 0 dB track.
+    fn master_to(output: ChannelId) -> EngineState {
+        let mut track = test_channel(2, Some(1), 0.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.25);
+        state_with(vec![test_channel(1, Some(output), 0.0), track])
+    }
+
+    #[test]
+    fn master_plays_on_its_output_pair_and_other_channels_are_silent() {
+        // 1001 = outputs 3/4 of a 6-channel device.
+        let output = mix_to_device(&mut master_to(1001), 6);
+        for frame in output.chunks(6) {
+            assert!((frame[2] - 0.5).abs() < 1e-4, "{:?}", frame);
+            assert!((frame[3] - 0.25).abs() < 1e-4, "{:?}", frame);
+            for &i in &[0, 1, 4, 5] {
+                assert_eq!(frame[i], 0.0, "channel {} must be cleared: {:?}", i, frame);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_output_pair_falls_back_to_the_first() {
+        // 1002 = outputs 5/6, which a stereo device doesn't have.
+        let output = mix_to_device(&mut master_to(1002), 2);
+        assert!((output[0] - 0.5).abs() < 1e-4);
+        assert!((output[1] - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn master_without_a_hardware_output_leaves_silence() {
+        // CPAL reuses its buffer, so not writing it would replay old samples.
+        let output = mix_to_device(&mut master_to(0), 2);
+        assert!(output.iter().all(|&sample| sample == 0.0), "{:?}", output);
     }
 
     #[test]

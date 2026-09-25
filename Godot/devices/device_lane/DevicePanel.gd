@@ -184,6 +184,8 @@ func _unbind() -> void:
 		device.loading_state_changed.disconnect(_on_device_loading_state_changed)
 	if device.host_changed.is_connected(_update_header_tooltip):
 		device.host_changed.disconnect(_update_header_tooltip)
+	if device.stats_changed.is_connected(_update_header_tooltip):
+		device.stats_changed.disconnect(_update_header_tooltip)
 	if reload_button:
 		reload_button.visible = false
 	if _channel and _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
@@ -213,7 +215,8 @@ func _on_device_loading_state_changed(_state: String) -> void:
 	_update_reload_button_visibility()
 
 
-## Header tooltip: the device type, plus which plugin host process it runs in (CLAP).
+## Header tooltip: the device type, plus which plugin host process it runs in and how much
+## time it takes to process (CLAP).
 func _update_header_tooltip() -> void:
 	if header == null or device == null:
 		return
@@ -221,6 +224,8 @@ func _update_header_tooltip() -> void:
 	var host := device.host_description()
 	if not host.is_empty():
 		text += "\n" + host
+	if device.plugin_stats != null:
+		text += "\n" + device.plugin_stats.describe()
 	header.tooltip_text = text
 	name_label.tooltip_text = text
 
@@ -259,6 +264,8 @@ func bind_to_device(dev : DeviceInstance):
 		dev.loading_state_changed.connect(_on_device_loading_state_changed)
 	if not dev.host_changed.is_connected(_update_header_tooltip):
 		dev.host_changed.connect(_update_header_tooltip)
+	if not dev.stats_changed.is_connected(_update_header_tooltip):
+		dev.stats_changed.connect(_update_header_tooltip)
 	_update_reload_button_visibility()
 	_update_header_tooltip()
 	# Listen for parameter list updates (when plugins load params asynchronously)

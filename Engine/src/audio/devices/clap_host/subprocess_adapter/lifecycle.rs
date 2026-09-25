@@ -213,6 +213,9 @@ pub struct PluginLoad {
     error: Mutex<Option<String>>,
     /// Frames the plugin reported at activation, for latency compensation (Phase 8).
     latency_frames: AtomicU32,
+    /// Sample rate the plugin is activated at (`f32` bits; 0 while not activated). Compared with
+    /// the engine rate after a rate change (Phase 7).
+    activated_rate: AtomicU32,
     /// The host process the instance was loaded into (0 until ready). Kept after a crash, so
     /// Reload can find every device that shared the dead host.
     host_pid: AtomicU32,
@@ -225,6 +228,7 @@ impl PluginLoad {
             shared: OnceLock::new(),
             error: Mutex::new(None),
             latency_frames: AtomicU32::new(0),
+            activated_rate: AtomicU32::new(0),
             host_pid: AtomicU32::new(0),
         }
     }
@@ -281,6 +285,17 @@ impl PluginLoad {
 
     pub fn set_latency_frames(&self, frames: u32) {
         self.latency_frames.store(frames, Ordering::Relaxed);
+    }
+
+    /// Sample rate the plugin is activated at, 0.0 while it isn't.
+    pub fn activated_rate(&self) -> f32 {
+        f32::from_bits(self.activated_rate.load(Ordering::Relaxed))
+    }
+
+    /// Record the rate of a successful activation, or 0.0 after deactivation.
+    pub fn set_activated_rate(&self, sample_rate: f32) {
+        self.activated_rate
+            .store(sample_rate.to_bits(), Ordering::Relaxed);
     }
 
     /// The host process the instance was loaded into, 0 before it was.
@@ -458,6 +473,7 @@ fn run_load(request: PluginLoadRequest) {
             ..
         }) => {
             latency_frames = latency;
+            load.set_activated_rate(sample_rate);
             info!(
                 "✅ Plugin activated successfully (latency {} frames)",
                 latency

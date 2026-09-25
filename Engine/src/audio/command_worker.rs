@@ -23,8 +23,12 @@ use super::devices::{
     SfizzDevice,
 };
 use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
+use super::pipewire::GraphInfo;
+use super::stream::{StreamControl, StreamRequest};
 use super::types::ChannelId;
 use base64::Engine as _;
+
+mod audio_config;
 
 /// How often the command thread services devices between commands: plugin parameter changes,
 /// queued automation writes, plugin crash checks and SFZ parameter lists. This is work the audio
@@ -33,6 +37,9 @@ const DEVICE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How often per-plugin audio problems (dropouts, overflows, MIDI drops) are logged, if any.
 const PLUGIN_STATS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How often each plugin's processing stats are sent to Godot (`<device addr>/stats`).
+const PLUGIN_STATS_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A subprocess plugin collected under the state lock for `poll_devices` to service without it.
 struct PolledPlugin {
@@ -50,12 +57,41 @@ struct PolledPlugin {
     stalled: bool,
     /// The hosting policy now puts this instance in another host process (Phase 5).
     host_changed: bool,
+    /// Activated at a rate other than the engine's: it finished loading while the rate changed.
+    rate_stale: bool,
+}
+
+/// The output stream settings the command thread applies (Phase 7).
+struct AudioSettings {
+    /// What Godot asked for (`/audio/config/set`); kept when the running stream differs.
+    request: StreamRequest,
+    /// Period the running stream was opened with: the request's, or larger for PipeWire's
+    /// quantum. 0 while no stream runs.
+    opened_period: u32,
+    /// Last PipeWire graph the monitor reported.
+    graph: Option<GraphInfo>,
+    /// Why the running config differs from the request, for Settings.
+    notice: String,
+    /// Last graph/stream conflict reported, so each new one is logged once.
+    mismatch: String,
 }
 
 /// Per-plugin audio problem counts since the last log.
 struct PluginStatsLog {
     name: String,
     stats: PluginBlockStats,
+}
+
+/// A plugin's stats since the last report to Godot.
+#[derive(Default)]
+struct PluginStatsReport {
+    window: PluginBlockStats,
+    /// Deadline misses since the device was first seen.
+    total_misses: u64,
+    /// Blocks in the last report, so an idle plugin is reported once and then left alone.
+    last_blocks: u64,
+    /// Seen in this reporting interval; entries of removed devices are dropped.
+    seen: bool,
 }
 
 /// Owns the command thread's resources and applies commands to the shared engine state.
@@ -68,11 +104,15 @@ pub struct CommandWorker {
     plugin_scanner: PluginScanner,
     plugin_stats: HashMap<(ChannelId, DevicePath), PluginStatsLog>,
     plugin_stats_since: Instant,
+    plugin_reports: HashMap<(ChannelId, DevicePath), PluginStatsReport>,
+    plugin_reports_since: Instant,
+    stream: StreamControl,
+    audio: AudioSettings,
 }
 
 impl CommandWorker {
     /// Create a worker whose devices run at `device_sample_rate` with buffers of up to
-    /// `max_buffer_size` frames.
+    /// `max_buffer_size` frames. `stream` is running with `audio_request`.
     pub fn new(
         state: Arc<Mutex<EngineState>>,
         status_tx: Sender<EngineStatus>,
@@ -80,6 +120,8 @@ impl CommandWorker {
         device_sample_rate: f32,
         max_buffer_size: usize,
         block_clock: Arc<BlockClock>,
+        stream: StreamControl,
+        audio_request: StreamRequest,
     ) -> Self {
         let process_manager = Arc::new(ProcessManager::new());
         let device_factory = DeviceFactory::new(
@@ -100,6 +142,16 @@ impl CommandWorker {
             plugin_scanner: PluginScanner::new(),
             plugin_stats: HashMap::new(),
             plugin_stats_since: Instant::now(),
+            plugin_reports: HashMap::new(),
+            plugin_reports_since: Instant::now(),
+            stream,
+            audio: AudioSettings {
+                opened_period: audio_request.period_frames,
+                request: audio_request,
+                graph: None,
+                notice: String::new(),
+                mismatch: String::new(),
+            },
         }
     }
 
@@ -155,6 +207,7 @@ impl CommandWorker {
                             save_state_due: plugin.take_state_save_due(),
                             stalled: plugin.is_host_stalled(now),
                             host_changed: plugin.desired_host() != *plugin.host_assignment(),
+                            rate_stale: plugin.needs_reactivation(),
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
                         collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
@@ -182,7 +235,7 @@ impl CommandWorker {
                 plugin.handle.kill_host();
                 continue;
             }
-            if plugin.stalled {
+            if plugin.stalled && !plugin.handle.is_debugging() {
                 warn!(
                     "Plugin {} (channel {} device {}) hasn't finished a block in {:?}; killing its host",
                     plugin.handle.device_name(),
@@ -198,6 +251,9 @@ impl CommandWorker {
                 // state it saves on the way out.
                 self.move_plugin(plugin);
                 continue;
+            }
+            if plugin.rate_stale {
+                self.reactivate_plugin(plugin.channel_id, plugin.device_path, &plugin.handle);
             }
             if plugin.save_state_due {
                 match plugin.handle.save_state() {
@@ -286,6 +342,7 @@ impl CommandWorker {
             self.send_status(status);
         }
         self.log_plugin_stats();
+        self.report_plugin_stats();
     }
 
     /// The plugin's host process has exited or is hung: pass audio through from now on and tell
@@ -305,6 +362,11 @@ impl CommandWorker {
             .map(|crash| crash.pid)
             .or_else(|| plugin.handle.host_pid())
             .unwrap_or(0);
+        let log_path = crash
+            .as_ref()
+            .and_then(|crash| crash.log_path.as_ref())
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
 
         error!(
             "Plugin {} (channel {} device {}) crashed: {} (host {} pid {}). Bypassing it; Reload restores it.",
@@ -317,6 +379,9 @@ impl CommandWorker {
         );
         if !stderr.is_empty() {
             warn!("Last stderr from plugin host {}: {}", pid, stderr);
+        }
+        if !log_path.is_empty() {
+            info!("Full log of plugin host {}: {}", pid, log_path);
         }
 
         plugin.load.set_crashed(reason.clone());
@@ -331,6 +396,7 @@ impl CommandWorker {
             reason,
             stderr,
             pid,
+            log_path,
         });
     }
 
@@ -531,9 +597,18 @@ impl CommandWorker {
         }
     }
 
-    /// Add a plugin's audio-thread counters to the running totals for the next log.
+    /// Add a plugin's audio-thread counters to the running totals for the next log and the next
+    /// report to Godot.
     fn record_plugin_stats(&mut self, plugin: &PolledPlugin) {
         let s = plugin.stats;
+        let report = self
+            .plugin_reports
+            .entry((plugin.channel_id, plugin.device_path))
+            .or_default();
+        report.window.merge(&s);
+        report.total_misses += s.deadline_misses;
+        report.seen = true;
+
         if s.deadline_misses == 0 && s.event_drops == 0 {
             return;
         }
@@ -546,6 +621,47 @@ impl CommandWorker {
             });
         entry.stats.deadline_misses += s.deadline_misses;
         entry.stats.event_drops += s.event_drops;
+    }
+
+    /// Send each plugin's stats to Godot every `PLUGIN_STATS_REPORT_INTERVAL`. A plugin that
+    /// processed nothing (asleep, or the transport stopped and it has no tail) is reported once
+    /// with zeros and then skipped until it processes again.
+    fn report_plugin_stats(&mut self) {
+        if self.plugin_reports_since.elapsed() < PLUGIN_STATS_REPORT_INTERVAL {
+            return;
+        }
+        self.plugin_reports_since = Instant::now();
+        self.plugin_reports.retain(|_, report| report.seen);
+        let mut statuses = Vec::new();
+        for (&(channel_id, device_path), report) in self.plugin_reports.iter_mut() {
+            let window = std::mem::take(&mut report.window);
+            report.seen = false;
+            let blocks = window.blocks();
+            if blocks == 0 && report.last_blocks == 0 {
+                continue;
+            }
+            report.last_blocks = blocks;
+            let process_avg_us = if window.blocks_done == 0 {
+                0.0
+            } else {
+                window.process_ns_total as f32 / window.blocks_done as f32 / 1000.0
+            };
+            statuses.push(EngineStatus::PluginStats {
+                channel_id,
+                device_path,
+                load_avg: window.load_avg(),
+                load_peak: window.load_peak,
+                process_avg_us,
+                process_max_us: window.process_ns_max as f32 / 1000.0,
+                blocks,
+                deadline_misses: window.deadline_misses,
+                total_misses: report.total_misses,
+                struggling: window.is_struggling(),
+            });
+        }
+        for status in statuses {
+            self.send_status(status);
+        }
     }
 
     /// Log and reset per-plugin problem counts every `PLUGIN_STATS_LOG_INTERVAL`.
@@ -615,6 +731,22 @@ impl CommandWorker {
                 device_path,
             } => self.reload_device(channel_id, device_path),
             AudioCommand::SetPluginHosting { policy } => self.set_plugin_hosting(policy),
+            AudioCommand::SetAudioConfig {
+                device,
+                sample_rate,
+                period_frames,
+            } => self.set_audio_config(StreamRequest {
+                device,
+                sample_rate,
+                period_frames,
+            }),
+            AudioCommand::RequestAudioConfig => self.report_audio_config(),
+            AudioCommand::RequestAudioDevices => self.list_audio_devices(),
+            AudioCommand::PipeWireGraph(graph) => self.on_pipewire_graph(graph),
+            route @ AudioCommand::SetChannelRoute { id: 1, .. } => {
+                self.apply_locked(route);
+                self.check_master_output();
+            }
             AudioCommand::SavePluginState {
                 channel_id,
                 device_path,

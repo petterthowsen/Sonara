@@ -14,6 +14,7 @@
 - Keep local cached copies in sync by connecting to `Settings.setting_changed` instead of updating them alongside the write.
 - To add a setting: register it in `Settings.gd` (it then appears in the Settings dialog by category). To rename a key, add it to `_RENAMED_KEYS` so existing values migrate.
 - `Settings` is registered before other consumer autoloads in `project.godot` and builds its registry in `_init`.
+- Settings that the engine applies live have a model that listens to `Settings.setting_changed` and sends the OSC: `data/PluginHosting.gd` (`plugins/hosting_mode`) and the `AudioConfig` autoload (`audio/output_device`, `audio/sample_rate`, `audio/buffer_size`, with the custom control `settings/AudioSettingControl.tscn` filled from the engine's device list).
 
 ## Config Access (unregistered internal state)
 - Use `Sonara.get_config("section/key", default_value)` to read settings. Slash notation walks nested dictionaries and falls back to the provided default on missing keys.

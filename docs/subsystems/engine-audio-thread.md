@@ -25,7 +25,7 @@ let changed = self.parameters_changed.lock().unwrap();
 
 The audio engine processes each callback in this order:
 
-1. **Lock engine state** (`lock_state_for_callback` in `engine.rs`: bounded `try_lock`, silence if the command thread still holds it)
+1. **Lock engine state** (`lock_state_for_callback` in `stream.rs`: bounded `try_lock`, silence if the command thread still holds it)
 2. **Clear channel buffers** (zero L/R arrays for every channel)
 3. **Advance transport & schedule MIDI** (compute tick → `frame_offset` pairs using the real device sample rate, enqueue MIDI on channels)
 4. **Render audio** (tracks add clip audio per frame; channel devices consume queued MIDI when their `process_block` runs)
@@ -71,7 +71,7 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
 
 4. **Master Output & Metering**  
    - Channel buffers are mixed in place, so they already hold post-effect, post-pan audio for peak metering.  
-   - Copies master (ID 1) to the interleaved CPAL buffer for its bound hardware output (ID ≥1000).  
+   - Clears the interleaved CPAL buffer (CPAL reuses it), then writes master (ID 1) to its output pair (1000 = outputs 1/2, 1001 = 3/4, …; a missing pair plays on 1/2).  
    - Peak detection still scans both channels, and status updates are throttled to ~20 Hz outside the callback.
 
 ## Channel Routing Model
@@ -86,11 +86,11 @@ The mixer now runs five passes to support sends, SIMD-aware devices, and bus eff
 - 0 = null/no output
 - 1 = Master
 - 2-999 = user channels (INSTRUMENT, AUDIO, BUS)
-- 1000+ = hardware device outputs
+- 1000+ = stereo output pairs on the selected output device (1000 = outputs 1/2)
 
 **Routing stored as**:
 - Regular channels: `channel.output_channel_id` (points to Master by default)
-- Master channel: `channel.device_output_id` (points to hardware device, default 1000)
+- Master channel: `channel.device_output_id` (an output pair, default 1000; set with `Channel.set_device_output`)
 
 **Sends**:
 - `Channel.send_channels` holds `Send { target_channel_id, amount_db, pre_fader, muted }`.
@@ -147,6 +147,7 @@ dest.mix_in(&source_channel);  // Routed audio added to destination
 
 - `Engine/src/audio/mixing.rs`: Full mixing implementation (five-pass pipeline)
 - `Engine/src/audio/processing.rs`: Callback pipeline orchestration
-- `Engine/src/audio/engine.rs`: Engine initialization and types
+- `Engine/src/audio/engine.rs`: Engine initialization
+- `Engine/src/audio/stream.rs`: Output stream thread, watchdog, config selection and the callback
 - `Engine/src/audio/types.rs`: Channel, Track, Voice data structures
 - `engine-architecture.md`: High-level architecture overview

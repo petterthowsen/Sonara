@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
@@ -49,6 +49,8 @@ pub enum HostAudioCommand {
         processor: PluginAudioProcessorEnum<SubprocessHost>,
         memory: Arc<SharedMemory>,
         param_map: Option<Arc<ParamMap>>,
+        /// The instance's log span, entered when the audio thread logs about it.
+        span: tracing::Span,
         reply: SyncSender<Result<(), String>>,
     },
     /// Take the processor back so the main thread can deactivate the plugin.
@@ -102,6 +104,7 @@ impl AudioThreadHandle {
         processor: PluginAudioProcessorEnum<SubprocessHost>,
         memory: Arc<SharedMemory>,
         param_map: Option<Arc<ParamMap>>,
+        span: tracing::Span,
     ) -> Result<(), String> {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.send(HostAudioCommand::SetProcessor {
@@ -109,6 +112,7 @@ impl AudioThreadHandle {
             processor,
             memory,
             param_map,
+            span,
             reply: reply_tx,
         });
         reply_rx
@@ -199,6 +203,8 @@ struct InstanceSlot {
     queued_params: Vec<(ClapId, f64)>,
     reset_requested: bool,
     steady: u64,
+    /// Log span naming the instance; entered only on the (rare) paths that log.
+    span: tracing::Span,
 }
 
 impl InstanceSlot {
@@ -211,6 +217,7 @@ impl InstanceSlot {
             queued_params: Vec::with_capacity(64),
             reset_requested: false,
             steady: 0,
+            span: tracing::Span::none(),
         }
     }
 
@@ -280,6 +287,7 @@ impl AudioWorker {
                 processor,
                 memory,
                 param_map,
+                span,
                 reply,
             } => {
                 let index = self.slot_index(instance_id);
@@ -297,6 +305,7 @@ impl AudioWorker {
                 }
                 slot.processor = Some(processor);
                 slot.memory = Some(memory);
+                slot.span = span;
                 slot.steady = 0;
                 let _ = reply.send(Ok(()));
             }
@@ -427,6 +436,7 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
     let Some(PluginAudioProcessorEnum::Started(started)) = slot.processor.as_mut() else {
         control.output_frames.store(0, Ordering::Relaxed);
         control.output_event_count.store(0, Ordering::Relaxed);
+        control.process_ns.store(0, Ordering::Relaxed);
         control.done_seq.store(seq, Ordering::Release);
         doorbell.ring();
         return;
@@ -531,6 +541,7 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
     }]);
 
     scratch.output_events.clear();
+    let started_at = Instant::now();
     let result = {
         let mut output_events = OutputEvents::from_buffer(&mut scratch.output_events);
         started.process(
@@ -542,11 +553,13 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
             None,
         )
     };
+    let process_ns = started_at.elapsed().as_nanos().min(u32::MAX as u128) as u32;
     slot.steady = slot.steady.wrapping_add(frames as u64);
 
     match result {
         Ok(_) => control.status.store(0, Ordering::Relaxed),
         Err(e) => {
+            let _entered = slot.span.enter();
             warn!(
                 "Plugin instance {} processing error: {:?}",
                 slot.instance_id, e
@@ -586,6 +599,7 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
     control
         .output_event_count
         .store(written as u32, Ordering::Relaxed);
+    control.process_ns.store(process_ns, Ordering::Relaxed);
 
     control.done_seq.store(seq, Ordering::Release);
     doorbell.ring();

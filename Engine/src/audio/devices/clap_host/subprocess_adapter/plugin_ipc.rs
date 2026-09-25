@@ -99,6 +99,12 @@ impl PluginIpcHandle {
             .unwrap_or(false)
     }
 
+    /// Rate `activate` activates at.
+    #[allow(dead_code)] // read by tests
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+
     /// Plugin name, for logs.
     pub fn device_name(&self) -> &str {
         &self.device_name
@@ -164,6 +170,14 @@ impl PluginIpcHandle {
     pub fn is_hung(&self) -> bool {
         self.connection()
             .map(|connection| connection.is_hung())
+            .unwrap_or(false)
+    }
+
+    /// True when the host runs under a debugger or wrapper, so it must not be killed for being
+    /// slow or unresponsive.
+    pub fn is_debugging(&self) -> bool {
+        self.connection()
+            .map(|connection| connection.is_debugging())
             .unwrap_or(false)
     }
 

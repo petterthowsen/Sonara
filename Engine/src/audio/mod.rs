@@ -9,9 +9,11 @@ pub mod io;
 pub mod ipc;
 pub mod midi_types;
 pub mod mixing;
+pub mod pipewire;
 pub mod processing;
 pub mod render_scratch;
 pub mod rt_debug;
+pub mod stream;
 pub mod types;
 
 pub use automation::{

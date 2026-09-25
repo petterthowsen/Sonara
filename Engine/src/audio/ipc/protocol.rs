@@ -25,6 +25,22 @@ pub type RequestId = u32;
 /// which the engine logs.
 pub const NO_REPLY: RequestId = 0;
 
+/// File name of a plugin host's log (`<log dir>/<this>`): its host key made safe for a file
+/// name, then its pid. The host names its file this way and the engine reports the path.
+pub fn log_file_name(host_key: &str, pid: u32) -> String {
+    let key: String = host_key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{}-{}.log", key, pid)
+}
+
 /// Engine → host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRequest {
@@ -47,6 +63,22 @@ pub enum HostMessage {
         instance_id: InstanceId,
         event: PluginEvent,
     },
+    /// A WARN or ERROR line from the host's log, forwarded so it reaches the engine log and
+    /// Godot's `/log`. `instance_id` is 0 for a line that isn't about one instance; `plugin` is
+    /// the instance's plugin name ("" when unknown).
+    Log {
+        instance_id: InstanceId,
+        plugin: String,
+        level: LogLevel,
+        message: String,
+    },
+}
+
+/// Severity of a forwarded host log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogLevel {
+    Warn,
+    Error,
 }
 
 /// Commands sent from engine to a plugin instance
@@ -373,7 +405,10 @@ pub struct BlockControl {
     pub output_event_count: std::sync::atomic::AtomicU32,
     /// 0 = ok, 1 = the plugin's `process()` failed on the last block.
     pub status: std::sync::atomic::AtomicU32,
-    pub _reserved: [u8; 24],
+    /// Nanoseconds the plugin's `process()` took on the last block, measured by the host
+    /// (saturates at `u32::MAX`, about 4 s). Per-plugin stats (Phase 6).
+    pub process_ns: std::sync::atomic::AtomicU32,
+    pub _reserved: [u8; 20],
 }
 
 impl Default for BlockControl {
@@ -386,7 +421,8 @@ impl Default for BlockControl {
             input_event_count: std::sync::atomic::AtomicU32::new(0),
             output_event_count: std::sync::atomic::AtomicU32::new(0),
             status: std::sync::atomic::AtomicU32::new(0),
-            _reserved: [0; 24],
+            process_ns: std::sync::atomic::AtomicU32::new(0),
+            _reserved: [0; 20],
         }
     }
 }
@@ -405,5 +441,22 @@ impl Default for Doorbell {
             word: std::sync::atomic::AtomicU32::new(0),
             _reserved: [0; 60],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_file_names_are_safe() {
+        assert_eq!(
+            log_file_name("vendor:Michael Willis", 42),
+            "vendor_Michael_Willis-42.log"
+        );
+        assert_eq!(
+            log_file_name("plugin:com.lsp/comp", 7),
+            "plugin_com.lsp_comp-7.log"
+        );
     }
 }

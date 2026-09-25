@@ -59,6 +59,54 @@ pub struct PluginBlockStats {
     pub deadline_misses: u64,
     /// Input events dropped because the block's event array was full.
     pub event_drops: u64,
+    /// Blocks the host finished in time (the ones the process times below cover).
+    pub blocks_done: u64,
+    /// Sum and maximum of the plugin's `process()` time, as measured by the host.
+    pub process_ns_total: u64,
+    pub process_ns_max: u32,
+    /// Sum of the finished blocks' durations, so `process_ns_total / block_ns_total` is the
+    /// plugin's average share of real time.
+    pub block_ns_total: u64,
+    /// Worst single block's process time as a share of that block's duration.
+    pub load_peak: f32,
+    /// Longest run of consecutive deadline misses. `MISSES_BEFORE_WARNING` or more flags the
+    /// plugin in the UI.
+    pub max_consecutive_misses: u32,
+}
+
+impl PluginBlockStats {
+    /// Blocks published in the interval, finished in time or not.
+    pub fn blocks(&self) -> u64 {
+        self.blocks_done + self.deadline_misses
+    }
+
+    /// Average process time as a share of real time (0.0 when no block finished).
+    pub fn load_avg(&self) -> f32 {
+        if self.block_ns_total == 0 {
+            0.0
+        } else {
+            (self.process_ns_total as f64 / self.block_ns_total as f64) as f32
+        }
+    }
+
+    /// Fold in a later interval's counters.
+    pub fn merge(&mut self, other: &PluginBlockStats) {
+        self.deadline_misses += other.deadline_misses;
+        self.event_drops += other.event_drops;
+        self.blocks_done += other.blocks_done;
+        self.process_ns_total += other.process_ns_total;
+        self.process_ns_max = self.process_ns_max.max(other.process_ns_max);
+        self.block_ns_total += other.block_ns_total;
+        self.load_peak = self.load_peak.max(other.load_peak);
+        self.max_consecutive_misses = self
+            .max_consecutive_misses
+            .max(other.max_consecutive_misses);
+    }
+
+    /// True when the plugin missed `MISSES_BEFORE_WARNING` or more deadlines in a row.
+    pub fn is_struggling(&self) -> bool {
+        self.max_consecutive_misses >= MISSES_BEFORE_WARNING
+    }
 }
 
 /// CLAP device adapter using subprocess isolation
@@ -237,12 +285,24 @@ impl SubprocessClapAdapter {
         )
     }
 
-    /// Record the result of activating or deactivating through an `ipc_handle`.
+    /// Record the result of activating or deactivating through an `ipc_handle` (which
+    /// activates at this adapter's current rate).
     pub fn set_active_state(&mut self, active: bool, latency_frames: u32) {
         self.is_active = active;
         if active {
             self.load.set_latency_frames(latency_frames);
+            self.load.set_activated_rate(self.sample_rate);
+        } else {
+            self.load.set_activated_rate(0.0);
         }
+    }
+
+    /// Command thread: true when the plugin is activated at a rate other than the engine's,
+    /// because it finished loading (or was activated) before a rate change reached it. The
+    /// caller re-activates it through an `ipc_handle`, then calls `set_active_state`.
+    pub fn needs_reactivation(&self) -> bool {
+        let rate = self.load.activated_rate();
+        self.load.is_ready() && rate != 0.0 && rate != self.sample_rate
     }
 
     /// Record the result of opening or closing the GUI through an `ipc_handle`.
@@ -340,6 +400,7 @@ impl AudioDevice for SubprocessClapAdapter {
                 outputs[written..interleaved].fill(0.0);
             }
             self.read_output_events(shared);
+            self.record_block_done(control.process_ns.load(Ordering::Relaxed), sample_count);
             self.consecutive_misses = 0;
         } else {
             self.record_deadline_miss();
@@ -439,6 +500,14 @@ impl AudioDevice for SubprocessClapAdapter {
         self.load.latency_frames()
     }
 
+    /// Adopt the engine's new rate. The command thread then re-activates the plugin at it
+    /// (`needs_reactivation`); the host deactivates first. Loads and reloads started from now
+    /// on use it too. `max_frames` never exceeds the shared block, which is sized at the
+    /// engine's fixed maximum, so no new `Initialize` is needed.
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        self.sample_rate = sample_rate;
+    }
+
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -448,8 +517,7 @@ impl AudioDevice for SubprocessClapAdapter {
             return Ok(());
         }
         let latency = self.ipc_handle().activate()?;
-        self.load.set_latency_frames(latency);
-        self.is_active = true;
+        self.set_active_state(true, latency);
         Ok(())
     }
 
@@ -458,7 +526,7 @@ impl AudioDevice for SubprocessClapAdapter {
             return Ok(());
         }
         self.ipc_handle().deactivate()?;
-        self.is_active = false;
+        self.set_active_state(false, 0);
         Ok(())
     }
 
@@ -538,10 +606,27 @@ impl SubprocessClapAdapter {
         }
     }
 
+    /// A block finished in time: add the host's process time to the stats.
+    fn record_block_done(&mut self, process_ns: u32, sample_count: usize) {
+        let block_ns = (sample_count as f64 * 1e9 / self.sample_rate.max(1.0) as f64) as u64;
+        let stats = &mut self.stats;
+        stats.blocks_done += 1;
+        stats.process_ns_total += process_ns as u64;
+        stats.process_ns_max = stats.process_ns_max.max(process_ns);
+        stats.block_ns_total += block_ns;
+        if block_ns > 0 {
+            stats.load_peak = stats.load_peak.max(process_ns as f32 / block_ns as f32);
+        }
+    }
+
     fn record_deadline_miss(&mut self) {
         self.stats.deadline_misses += 1;
         PLUGIN_UNDERRUNS.fetch_add(1, Ordering::Relaxed);
         self.consecutive_misses += 1;
+        self.stats.max_consecutive_misses = self
+            .stats
+            .max_consecutive_misses
+            .max(self.consecutive_misses);
         if self.consecutive_misses == MISSES_BEFORE_WARNING {
             error!(
                 "Plugin {} (instance {}) missed its processing deadline {} blocks in a row; \
@@ -886,6 +971,9 @@ mod tests {
         (load, memory, doorbell)
     }
 
+    /// What the fake host reports as its `process()` time.
+    const FAKE_PROCESS_NS: u32 = 40_000;
+
     /// A stand-in host process: answers each request by doubling the input planes. While
     /// `release` is false it holds the request, standing in for a stuck plugin. When `observed`
     /// is given, the input events of every request are copied into it.
@@ -927,6 +1015,7 @@ mod tests {
                     .output_frames
                     .store(frames as u32, Ordering::Relaxed);
                 control.output_event_count.store(0, Ordering::Relaxed);
+                control.process_ns.store(FAKE_PROCESS_NS, Ordering::Relaxed);
                 control.done_seq.store(seq, Ordering::Release);
                 doorbell.ring();
             }
@@ -953,7 +1042,63 @@ mod tests {
                 input[i] * 2.0
             );
         }
-        assert_eq!(adapter.take_stats().deadline_misses, 0);
+        let stats = adapter.take_stats();
+        assert_eq!(stats.deadline_misses, 0);
+        assert_eq!(stats.blocks_done, 1);
+        assert_eq!(stats.process_ns_max, FAKE_PROCESS_NS);
+        // 64 frames at 48 kHz = 1.333 ms, of which the plugin took 40 µs = 3%.
+        assert!(
+            (stats.load_avg() - 0.03).abs() < 1e-3,
+            "{}",
+            stats.load_avg()
+        );
+        assert!((stats.load_peak - 0.03).abs() < 1e-3);
+        assert!(!stats.is_struggling());
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
+    }
+
+    /// A run of missed deadlines is remembered across `take_stats` until it ends, and flags the
+    /// plugin once it reaches `MISSES_BEFORE_WARNING`.
+    #[test]
+    fn consecutive_misses_flag_a_struggling_plugin() {
+        let (load, memory, doorbell) = ready_block("sonara_test_struggling", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let host = spawn_fake_host(
+            memory,
+            doorbell,
+            Arc::clone(&stop),
+            Arc::clone(&release),
+            None,
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter =
+            SubprocessClapAdapter::new_for_test(load, Arc::clone(&clock), 48_000.0, 64);
+        let input = vec![0.5f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+
+        for _ in 0..MISSES_BEFORE_WARNING - 1 {
+            clock.publish(Instant::now(), Duration::from_micros(100));
+            adapter.process_block(&input, &mut output, 64);
+        }
+        let stats = adapter.take_stats();
+        assert_eq!(stats.blocks(), (MISSES_BEFORE_WARNING - 1) as u64);
+        assert_eq!(stats.blocks_done, 0);
+        assert!(!stats.is_struggling());
+
+        clock.publish(Instant::now(), Duration::from_micros(100));
+        adapter.process_block(&input, &mut output, 64);
+        let stats = adapter.take_stats();
+        assert_eq!(stats.deadline_misses, 1);
+        assert!(stats.is_struggling(), "the run continued across take_stats");
+
+        let mut merged = PluginBlockStats::default();
+        merged.merge(&stats);
+        merged.merge(&PluginBlockStats::default());
+        assert!(merged.is_struggling());
+
+        release.store(true, Ordering::Release);
         stop.store(true, Ordering::Release);
         host.join().unwrap();
     }
@@ -1084,6 +1229,32 @@ mod tests {
         assert!(request.alive.load(Ordering::Acquire));
         assert_eq!(request.instance_id, 1);
         assert_eq!(request.host.key, "instance-1");
+    }
+
+    /// A rate change marks an activated plugin for re-activation, and a reload after it loads
+    /// at the new rate (Phase 7).
+    #[test]
+    fn prepare_marks_an_activated_plugin_for_reactivation() {
+        let (load, _memory, _doorbell) = ready_block("sonara_test_prepare_rate", 64);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        // Not activated (a user-deactivated plugin): nothing to re-activate.
+        adapter.prepare(44_100.0, 64);
+        assert!(!adapter.needs_reactivation());
+
+        adapter.prepare(48_000.0, 64);
+        adapter.set_active_state(true, 0);
+        assert!(
+            !adapter.needs_reactivation(),
+            "activated at the engine rate"
+        );
+        adapter.prepare(44_100.0, 64);
+        assert!(adapter.needs_reactivation());
+        assert_eq!(adapter.ipc_handle().sample_rate(), 44_100.0);
+        adapter.set_active_state(true, 0);
+        assert!(!adapter.needs_reactivation(), "re-activated at 44.1 kHz");
+
+        assert_eq!(adapter.begin_reload().sample_rate, 44_100.0);
     }
 
     /// A reload lands in the host the current policy picks, which is how a hosting-mode change

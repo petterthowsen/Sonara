@@ -869,6 +869,15 @@ impl AudioDevice for SamplerDevice {
         self.midi_scratch.clear();
     }
 
+    /// Adopt the new rate. The loaded sample keeps its own rate: playback already compensates
+    /// through `sample_rate_ratio`, so it doesn't need decoding again.
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        self.sample_rate = sample_rate.max(1.0);
+        self.voices = [Voice::idle(self.sample_rate); MAX_VOICES];
+        self.queued_midi.clear();
+        self.midi_scratch.clear();
+    }
+
     fn is_enabled(&self) -> bool {
         self.enabled
     }

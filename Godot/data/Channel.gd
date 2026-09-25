@@ -436,6 +436,21 @@ func set_route(output_id: int) -> void:
 	route_changed.emit(output_channel_id)
 
 
+## Master only: route to a hardware output pair on the selected audio device
+## (1000 = outputs 1/2, 1001 = 3/4, …). A pair the device lacks plays on 1/2 in the engine;
+## the setting is kept for devices that have it.
+func set_device_output(output_id: int) -> void:
+	if output_id < AudioConfig.HARDWARE_OUTPUT_BASE:
+		logger.warn("[%d] Not a hardware output: %d" % [id, output_id])
+		return
+	if output_id == device_output_id:
+		return
+	device_output_id = output_id
+	if _is_connected and is_master:
+		AudioEngineOSC.send("/channel/%d/route" % id, [device_output_id])
+	route_changed.emit(device_output_id)
+
+
 func set_midi_input_device(device_id: int):
 	## Assign MIDI input device to this channel.
 	## -3 = no MIDI, -2 = all devices, -1 = virtual keyboard, 0+ = specific device ID.

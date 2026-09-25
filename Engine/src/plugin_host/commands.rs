@@ -103,6 +103,7 @@ pub fn process_command(
             // Store plugin state (audio buffers live on the audio thread)
             *plugin_state = Some(PluginState {
                 instance_id,
+                span: shared.span().clone(),
                 bundle,
                 instance,
                 shared,
@@ -276,6 +277,7 @@ pub fn process_command(
                 PluginAudioProcessorEnum::Started(started),
                 Arc::clone(&state.shared_memory),
                 param_map,
+                state.span.clone(),
             ) {
                 error!("Failed to hand the processor to the audio thread: {}", e);
                 return Some(PluginResponse::ActivateResult {

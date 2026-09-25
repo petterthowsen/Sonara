@@ -124,6 +124,30 @@ fn main() -> Result<()> {
 
     info!("Starting DAW Audio Engine...");
 
+    // Each plugin host writes its own log there; keep the newest.
+    let plugin_logs = audio::ipc::plugin_log_dir();
+    match audio::ipc::prune_plugin_logs(&plugin_logs, audio::ipc::PLUGIN_LOGS_KEPT) {
+        Ok(0) => {}
+        Ok(removed) => info!(
+            "Removed {} old plugin host logs from {}",
+            removed,
+            plugin_logs.display()
+        ),
+        Err(e) => tracing::warn!(
+            "Can't prune plugin host logs in {}: {}",
+            plugin_logs.display(),
+            e
+        ),
+    }
+    let launch = audio::ipc::HostLaunch::from_env();
+    if launch.is_debugging() {
+        tracing::warn!(
+            "Plugin hosts run in debug mode (wrapper {:?}, wait for debugger: {}): hung hosts are not killed",
+            launch.wrapper,
+            launch.wait_for_debugger
+        );
+    }
+
     // Initialize audio engine with our status channel
     let engine = AudioEngine::with_status_channel(status_tx, status_rx)?;
     info!("Audio engine initialized");

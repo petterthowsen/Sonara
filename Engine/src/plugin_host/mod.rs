@@ -7,7 +7,9 @@ pub mod audio_thread;
 pub mod commands;
 pub mod event_loop;
 pub mod host;
+pub mod logging;
 pub mod operations;
+pub mod probe;
 pub mod state;
 pub mod x11_error;
 

@@ -46,6 +46,11 @@ impl DeviceFactory {
         }
     }
 
+    /// Rate for devices created from now on (Phase 7: the device rate changed).
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+    }
+
     /// Create a device of `device_type` ("builtin" or "clap"). `vendor` is the plugin's vendor
     /// (CLAP only; it picks the host process in "By vendor" hosting). Logs and returns None for
     /// unknown or failed devices.

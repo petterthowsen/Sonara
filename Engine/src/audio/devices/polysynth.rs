@@ -723,6 +723,15 @@ impl AudioDevice for PolySynthDevice {
         self.time_counter = 0;
     }
 
+    /// Rebuild the voices at the new rate (sounding notes stop); parameters are re-applied on
+    /// the next block.
+    fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
+        self.sample_rate = sample_rate;
+        self.voices = (0..MAX_VOICES).map(|_| Voice::new(sample_rate)).collect();
+        self.time_counter = 0;
+        self.params_dirty = true;
+    }
+
     fn is_active(&self) -> bool {
         self.is_active
     }

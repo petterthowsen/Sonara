@@ -17,6 +17,7 @@ signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ fi
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
 signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
+signal stats_changed()  # New processing stats for a CLAP plugin (1 Hz); see plugin_stats
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
 signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
@@ -104,11 +105,62 @@ var crash_reason: String = ""
 ## Tail of the crashed plugin host's stderr ("" if none/empty).
 var crash_stderr: String = ""
 
+## The crashed plugin host's own log file ("" if unknown).
+var crash_log_path: String = ""
+
 ## Plugin host process this (CLAP) device runs in: the hosting mode that chose it (engine name,
 ## see PluginHosting.MODES), the host key and its pid. Empty / 0 until the plugin has loaded.
 var host_mode: String = ""
 var host_key: String = ""
 var host_pid: int = 0
+
+## One second of a CLAP plugin's processing, from `<device addr>/stats`. Loads are the plugin's
+## process() time as a share of real time (1.0 = 100% of the block time).
+class PluginStats:
+	## A plugin that stops reporting (asleep, idle, removed) is stale after this long.
+	const FRESH_MSEC := 3000
+
+	var load_avg: float = 0.0
+	var load_peak: float = 0.0
+	var process_avg_us: float = 0.0
+	var process_max_us: float = 0.0
+	## Blocks the plugin was given in the interval, and how many missed the deadline (dropouts).
+	var blocks: int = 0
+	var deadline_misses: int = 0
+	var total_misses: int = 0
+	## Missed several deadlines in a row: its audio is dropping out.
+	var struggling: bool = false
+	## Time.get_ticks_msec() when it arrived.
+	var received_msec: int = 0
+
+	static func from_osc(values: Array, now_msec: int) -> PluginStats:
+		var stats := PluginStats.new()
+		stats.load_avg = float(values[0])
+		stats.load_peak = float(values[1])
+		stats.process_avg_us = float(values[2])
+		stats.process_max_us = float(values[3])
+		stats.blocks = int(values[4])
+		stats.deadline_misses = int(values[5])
+		stats.total_misses = int(values[6])
+		stats.struggling = int(values[7]) != 0
+		stats.received_msec = now_msec
+		return stats
+
+	func is_fresh(now_msec: int) -> bool:
+		return now_msec - received_msec <= FRESH_MSEC
+
+	## Tooltip lines.
+	func describe() -> String:
+		var text := "DSP: %.1f%% avg, %.1f%% peak (%.0f µs avg, %.0f µs max per block)" % [
+			load_avg * 100.0, load_peak * 100.0, process_avg_us, process_max_us]
+		text += "\nDropouts: %d in the last second, %d since loaded" % [deadline_misses, total_misses]
+		if struggling:
+			text += "\nMissing its processing deadline repeatedly: its audio drops out"
+		return text
+
+
+## Processing stats of a CLAP plugin (null until the engine reports them).
+var plugin_stats: PluginStats = null
 
 ## Pid of the last crashed host that showed a popup. A shared host crash reports once per
 ## device in it; one popup (with one Reload, which restores them all) is enough.
@@ -466,6 +518,7 @@ func connect_to_engine() -> void:
 	var gui_closed_addr = osc_addr("gui/closed")
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
+	var stats_addr = osc_addr("stats")
 
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
@@ -475,6 +528,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.listen(host_addr, _on_host_received)
+	AudioEngineOSC.listen(stats_addr, _on_stats_received)
 
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
@@ -500,6 +554,7 @@ func disconnect_from_engine() -> void:
 	var gui_closed_addr = osc_addr("gui/closed")
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
+	var stats_addr = osc_addr("stats")
 
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
@@ -510,6 +565,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.unlisten(host_addr, _on_host_received)
+	AudioEngineOSC.unlisten(stats_addr, _on_stats_received)
 	for child in children:
 		child.disconnect_from_engine()
 
@@ -562,6 +618,11 @@ func _on_crashed_received(values: Array) -> void:
 	crash_reason = str(values[0]) if values.size() >= 1 else "unknown"
 	crash_stderr = str(values[1]) if values.size() >= 2 else ""
 	var pid: int = int(values[2]) if values.size() >= 3 else 0
+	crash_log_path = str(values[3]) if values.size() >= 4 else ""
+	# A dead host reports nothing more; drop the last numbers rather than show them as current.
+	if plugin_stats != null:
+		plugin_stats = null
+		stats_changed.emit()
 
 	var new_state := "crashed:" + crash_reason
 	if loading_state != new_state:
@@ -582,6 +643,8 @@ func _on_crashed_received(values: Array) -> void:
 			body += "\n\nThe host process was shared (%s): every plugin in it stopped. Reload restores all of them." % PluginHosting.MODE_LABELS.get(host_mode, host_mode)
 		if not crash_stderr.is_empty():
 			body += "\n\nHost stderr:\n" + crash_stderr
+		if not crash_log_path.is_empty():
+			body += "\n\nFull host log: " + crash_log_path
 		Sonara.editor.show_error("Plugin crashed: %s" % display_name, body, [
 			{"text": "Reload", "callback": reload},
 		])
@@ -595,6 +658,19 @@ func _on_host_received(values: Array) -> void:
 	host_key = str(values[1])
 	host_pid = int(values[2])
 	host_changed.emit()
+
+
+func _on_stats_received(values: Array) -> void:
+	"""One second of the plugin's processing stats (CLAP devices, 1 Hz while processing)."""
+	if values.size() < 8:
+		return
+	plugin_stats = PluginStats.from_osc(values, Time.get_ticks_msec())
+	stats_changed.emit()
+
+
+## True when the plugin missed several processing deadlines in a row in its last report.
+func is_struggling() -> bool:
+	return plugin_stats != null and plugin_stats.struggling and plugin_stats.is_fresh(Time.get_ticks_msec())
 
 
 ## One line about the plugin host process, for tooltips. "" before the plugin has loaded.
