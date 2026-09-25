@@ -15,6 +15,7 @@ use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
 };
+use clack_extensions::state::{HostState, HostStateImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
 use clack_host::prelude::*;
 
@@ -36,6 +37,8 @@ pub struct SubprocessHostShared {
     params_rescanned: Arc<AtomicBool>,
     /// Set when the plugin asks for `params.flush()` while not processing
     flush_requested: Arc<AtomicBool>,
+    /// Set when the plugin calls `mark_dirty` on the state extension
+    state_dirty: Arc<AtomicBool>,
 }
 
 impl SubprocessHostShared {
@@ -47,6 +50,7 @@ impl SubprocessHostShared {
             event_tx,
             params_rescanned: Arc::new(AtomicBool::new(false)),
             flush_requested: Arc::new(AtomicBool::new(false)),
+            state_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -132,6 +136,9 @@ impl HostHandlers for SubprocessHost {
         builder.register::<HostTimer>();
         builder.register::<HostParams>();
         builder.register::<HostLatency>();
+        // Needed for plugins that implement the state extension: without it they can't tell the
+        // engine their state changed (mark_dirty), so crash recovery would save stale state.
+        builder.register::<HostState>();
     }
 }
 
@@ -256,6 +263,17 @@ impl HostParamsImplMainThread for SubprocessHostMainThread<'_> {
 impl HostParamsImplShared for SubprocessHostShared {
     fn request_flush(&self) {
         self.flush_requested.store(true, Ordering::Release);
+    }
+}
+
+impl HostStateImpl for SubprocessHostMainThread<'_> {
+    fn mark_dirty(&mut self) {
+        // Tell the engine so it refreshes its state blob for crash recovery and project save.
+        // One event per host is enough: the engine also marks its own state dirty whenever a
+        // parameter changes, and it re-asks for the blob at most once per save interval.
+        if !self.shared.state_dirty.swap(true, Ordering::AcqRel) {
+            self.shared.send_event(PluginEvent::StateDirty);
+        }
     }
 }
 

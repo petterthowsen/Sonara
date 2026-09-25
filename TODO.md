@@ -46,7 +46,7 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 - [x?] CLAP processing is synchronous per block (per-block handshake over shared memory, sample-accurate notes/automation, one callback deadline). Verified live with 5 instances, 60 s playback: 0 dropouts, 0 xruns. Missing: audible null test and an end-to-end MIDI-offset check. See `docs/engine-stability-plan.md` Phase 3
 - [ ] Crash / Error handling, send info to Godot for UI notifications
   - [x] Engine logs a warn and higher are sent over OSC
-  - [ ] Host process exit is detected and turned into a per-host crashed state with a Reload action (stability plan Phase 4)
+  - [x] Host process exit is detected and turned into a per-host crashed state with a Reload action (stability plan Phase 4). Verified live: `kill -SEGV` a playing host, engine keeps running, UI gets `crashed:<reason>` + the host's stderr, `/reload` restores the plugin and its parameters. A `PopupMessage` window renders the crash with a Copy button
 - [ ] Plugin GUI windows should be forced to stay above Godot App
 - [ ] Sforzando CLAP GUI embeds but renders black
 - [ ] Improve logging of plugins

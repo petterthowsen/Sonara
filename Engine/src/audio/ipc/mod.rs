@@ -16,7 +16,9 @@ pub mod shared_memory;
 pub mod wire;
 
 pub use platform_shm::PlatformSharedMemory;
-pub use process_manager::{InstanceConnection, PluginProcess, ProcessManager, REQUEST_TIMEOUT};
+pub use process_manager::{
+    HostCrash, HostExit, InstanceConnection, PluginProcess, ProcessManager, REQUEST_TIMEOUT,
+};
 pub use protocol::{
     BlockControl, BlockEvent, Doorbell, HostMessage, HostRequest, InstanceId, PluginCommand,
     PluginEvent, PluginParameterInfo, PluginResponse, RequestId, SharedMemoryLayout,

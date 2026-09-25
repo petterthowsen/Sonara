@@ -1,0 +1,64 @@
+[gd_scene format=3 uid="uid://dqpm2sagwx4tb"]
+
+[ext_resource type="Script" path="res://components/PopupMessage.gd" id="1_popup"]
+
+[node name="PopupMessage" type="Window" unique_id=2000000101]
+title = "Message"
+size = Vector2i(640, 420)
+visible = false
+transient = true
+force_native = false
+exclusive = false
+min_size = Vector2i(360, 240)
+script = ExtResource("1_popup")
+
+[node name="Background" type="PanelContainer" parent="." unique_id=2000000102]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_type_variation = &"PrimaryPanel"
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=2000000103]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=2000000104]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TitleLabel" type="Label" parent="MarginContainer/VBoxContainer" unique_id=2000000105]
+layout_mode = 2
+
+[node name="BodyScroll" type="ScrollContainer" parent="MarginContainer/VBoxContainer" unique_id=2000000106]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Body" type="RichTextLabel" parent="MarginContainer/VBoxContainer/BodyScroll" unique_id=2000000107]
+layout_mode = 2
+size_flags_horizontal = 3
+bbcode_enabled = false
+selection_enabled = true
+fit_content = false
+scroll_active = true
+autowrap_mode = 2
+
+[node name="Actions" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=2000000108]
+layout_mode = 2
+alignment = 2
+
+[node name="CopyButton" type="Button" parent="MarginContainer/VBoxContainer/Actions" unique_id=2000000109]
+layout_mode = 2
+text = "Copy"
+
+[node name="CloseButton" type="Button" parent="MarginContainer/VBoxContainer/Actions" unique_id=2000000110]
+layout_mode = 2
+text = "Close"

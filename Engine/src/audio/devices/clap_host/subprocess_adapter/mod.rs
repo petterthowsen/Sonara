@@ -13,7 +13,7 @@ use crate::audio::ipc::{
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{error, info};
@@ -23,7 +23,7 @@ mod lifecycle;
 mod parameter;
 mod plugin_ipc;
 
-pub use lifecycle::{PluginLoad, PluginShared};
+pub use lifecycle::{PluginLoad, PluginLoadRequest, PluginShared};
 pub use plugin_ipc::PluginIpcHandle;
 
 /// Blocks, across all subprocess plugins, where the plugin missed its callback deadline and the
@@ -44,6 +44,12 @@ const HANDSHAKE_SPIN_ITERATIONS: u32 = 400;
 /// Consecutive missed deadlines before the failure is logged at WARN.
 const MISSES_BEFORE_WARNING: u32 = 8;
 
+/// Consecutive missed deadlines after which the command thread kills the host as hung (Phase 4).
+pub const HUNG_MISSES: u32 = 32;
+
+/// How often a plugin whose state changed is asked to save it, so a crash doesn't lose edits.
+const STATE_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Audio-thread counters for one plugin since the last `take_stats`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PluginBlockStats {
@@ -51,6 +57,8 @@ pub struct PluginBlockStats {
     pub deadline_misses: u64,
     /// Input events dropped because the block's event array was full.
     pub event_drops: u64,
+    /// Missed deadlines in a row when this snapshot was taken: the host is stuck, not just slow.
+    pub consecutive_misses: u32,
 }
 
 /// CLAP device adapter using subprocess isolation
@@ -74,10 +82,23 @@ pub struct SubprocessClapAdapter {
     sample_rate: f32,
     max_buffer_size: usize,
 
+    /// Plugin bundle path and host key, kept for the reload path (Phase 4).
+    plugin_path: PathBuf,
+    host_key: String,
+
     // Plugin position (for sending GUI close notifications)
     channel_id: u32,
     device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
+    command_tx: Option<Sender<AudioCommand>>,
+    /// Last state blob the plugin saved, restored after a crash. Shared with the reload thread.
+    saved_state: Arc<Mutex<Option<Vec<u8>>>>,
+    /// True when the plugin (or a parameter change) made the saved state stale.
+    state_dirty: Arc<AtomicBool>,
+    /// When the state blob was last refreshed, so saves stay bounded to one per interval.
+    last_state_save: Instant,
+    /// False once the adapter is dropped. Stops an in-flight load from orphaning a host.
+    alive: Arc<AtomicBool>,
 
     // State
     is_active: bool,
@@ -123,6 +144,8 @@ impl SubprocessClapAdapter {
         );
 
         let instance_id = process_manager.allocate_instance_id();
+        let host_key = ProcessManager::individual_host_key(instance_id);
+        let alive = Arc::new(AtomicBool::new(true));
 
         // Get plugin metadata (immediately available)
         let device_name = plugin_id.to_string();
@@ -134,20 +157,26 @@ impl SubprocessClapAdapter {
         let load = Arc::new(PluginLoad::new());
 
         // Spawn subprocess loading in background thread (non-blocking!)
-        lifecycle::spawn_loading_thread(
-            Arc::clone(&process_manager),
+        PluginLoadRequest {
+            process_manager: Arc::clone(&process_manager),
             instance_id,
-            plugin_path,
-            plugin_id.to_string(),
+            host_key: host_key.clone(),
+            plugin_path: plugin_path.clone(),
+            plugin_id: plugin_id.to_string(),
             sample_rate,
             max_buffer_size,
-            Arc::clone(&load),
-            Arc::clone(&param_info_cache),
-            channel_id as usize,
-            device_path.clone(),
-            command_tx,
-            status_tx.clone(),
-        );
+            load: Arc::clone(&load),
+            param_cache: Arc::clone(&param_info_cache),
+            channel_id: channel_id as usize,
+            device_path: device_path.clone(),
+            command_tx: command_tx.clone(),
+            status_tx: status_tx.clone(),
+            restore_state: None,
+            restore_params: Vec::new(),
+            replace_existing: false,
+            alive: Arc::clone(&alive),
+        }
+        .spawn();
 
         let adapter = Self {
             device_id: plugin_id.to_string(),
@@ -161,9 +190,16 @@ impl SubprocessClapAdapter {
             param_info_cache,
             sample_rate,
             max_buffer_size,
+            plugin_path,
+            host_key,
             channel_id,
             device_path,
             status_tx,
+            command_tx,
+            saved_state: Arc::new(Mutex::new(None)),
+            state_dirty: Arc::new(AtomicBool::new(false)),
+            last_state_save: Instant::now(),
+            alive,
             is_active: false,
             is_enabled: true,
             gui_open: false,
@@ -295,6 +331,7 @@ impl AudioDevice for SubprocessClapAdapter {
                 outputs[written..interleaved].fill(0.0);
             }
             self.read_output_events(shared);
+            self.consecutive_misses = 0;
         } else {
             self.record_deadline_miss();
             outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
@@ -317,6 +354,7 @@ impl AudioDevice for SubprocessClapAdapter {
     /// Command thread: sends the value to the subprocess right away when it can.
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         self.param_values.insert(param_id, value);
+        self.set_state_dirty();
         self.flush_pending_parameters();
 
         if !parameter::set_parameter_value(&self.process_manager, self.instance_id, param_id, value)
@@ -333,6 +371,7 @@ impl AudioDevice for SubprocessClapAdapter {
         if let Some(cached) = self.param_values.get_mut(&param_id) {
             *cached = value;
         }
+        self.set_state_dirty();
 
         if !self.load.is_ready() {
             // Not processing yet: let the command thread apply it over the control channel.
@@ -564,7 +603,91 @@ impl SubprocessClapAdapter {
 
     /// Return and reset the audio-thread counters.
     pub fn take_stats(&mut self) -> PluginBlockStats {
-        std::mem::take(&mut self.stats)
+        let mut stats = std::mem::take(&mut self.stats);
+        stats.consecutive_misses = self.consecutive_misses;
+        stats
+    }
+
+    /// The plugin changed state (it called `mark_dirty`, or a parameter moved): the saved state
+    /// is stale.
+    pub fn set_state_dirty(&mut self) {
+        self.state_dirty.store(true, Ordering::Release);
+    }
+
+    /// True when the state blob is stale and hasn't been refreshed for `STATE_SAVE_INTERVAL`.
+    /// Also starts the interval, so one poll doesn't ask twice.
+    pub fn take_state_save_due(&mut self) -> bool {
+        if !self.state_dirty.load(Ordering::Acquire) {
+            return false;
+        }
+        if self.last_state_save.elapsed() < STATE_SAVE_INTERVAL {
+            return false;
+        }
+        self.last_state_save = Instant::now();
+        self.state_dirty.store(false, Ordering::Release);
+        true
+    }
+
+    pub fn set_saved_state(&mut self, state: Vec<u8>) {
+        *self.saved_state.lock().unwrap() = Some(state);
+    }
+
+    pub fn saved_state(&self) -> Option<Vec<u8>> {
+        self.saved_state.lock().unwrap().clone()
+    }
+
+    /// Build the request that respawns this plugin after a crash, and install a fresh load state
+    /// so the audio thread passes audio through until the new host is ready.
+    ///
+    /// Runs on the command thread under the engine state lock, which is what makes replacing
+    /// `self.load` safe: the audio callback touches the field under the same lock.
+    pub fn begin_reload(&mut self) -> PluginLoadRequest {
+        let load = Arc::new(PluginLoad::new());
+        self.load = Arc::clone(&load);
+        self.state_dirty.store(false, Ordering::Release);
+        self.last_state_save = Instant::now();
+        // The dead host's misses belong to the dead host: a fresh one must not inherit them, or
+        // the hung-host check would kill it on its first tick.
+        self.consecutive_misses = 0;
+        self.stats = PluginBlockStats::default();
+
+        let restore_params: Vec<(ParamId, ParamValue)> = self
+            .param_values
+            .iter()
+            .map(|(param_id, value)| (*param_id, *value))
+            .collect();
+
+        info!(
+            "Reloading plugin {} (instance {}): {} saved bytes, {} parameter values",
+            self.device_name,
+            self.instance_id,
+            self.saved_state
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, Vec::len),
+            restore_params.len()
+        );
+
+        PluginLoadRequest {
+            process_manager: Arc::clone(&self.process_manager),
+            instance_id: self.instance_id,
+            host_key: self.host_key.clone(),
+            plugin_path: self.plugin_path.clone(),
+            plugin_id: self.device_id.clone(),
+            sample_rate: self.sample_rate,
+            max_buffer_size: self.max_buffer_size,
+            load,
+            param_cache: Arc::clone(&self.param_info_cache),
+            channel_id: self.channel_id as usize,
+            device_path: self.device_path.clone(),
+            command_tx: self.command_tx.clone(),
+            status_tx: self.status_tx.clone(),
+            restore_state: self.saved_state(),
+            restore_params,
+            replace_existing: true,
+            alive: Arc::clone(&self.alive),
+        }
     }
 
     /// Move queued parameter writes into `out` (keeps this queue's capacity). Only once ready;
@@ -617,6 +740,9 @@ impl SubprocessClapAdapter {
 
 impl Drop for SubprocessClapAdapter {
     fn drop(&mut self) {
+        // Stop an in-flight load/reload from respawning a host behind a removed device.
+        self.alive.store(false, Ordering::Release);
+
         // Close GUI if open and notify window manager
         if self.gui_open {
             let _ = self.close_gui();
@@ -664,9 +790,16 @@ impl SubprocessClapAdapter {
             param_info_cache: Arc::new(Mutex::new(Vec::new())),
             sample_rate,
             max_buffer_size,
+            plugin_path: PathBuf::from("/tmp/test.clap"),
+            host_key: "instance-1".to_string(),
             channel_id: 0,
             device_path: DevicePath::root(0),
             status_tx: None,
+            command_tx: None,
+            saved_state: Arc::new(Mutex::new(None)),
+            state_dirty: Arc::new(AtomicBool::new(false)),
+            last_state_save: Instant::now(),
+            alive: Arc::new(AtomicBool::new(true)),
             is_active: true,
             is_enabled: true,
             gui_open: false,
@@ -813,6 +946,60 @@ mod tests {
         assert_eq!(adapter.take_stats().deadline_misses, 0);
         stop.store(true, Ordering::Release);
         host.join().unwrap();
+    }
+
+    #[test]
+    fn begin_reload_reinstalls_load_state_and_keeps_saved_state() {
+        let (load, _memory, _doorbell) = ready_block("sonara_test_reload", 64);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        adapter.set_saved_state(vec![1, 2, 3]);
+        adapter.set_parameter(4, 0.25);
+        // A host that hung before the reload leaves these behind; the new host must not inherit
+        // them or the hung-host check would kill it immediately.
+        adapter.consecutive_misses = HUNG_MISSES;
+        adapter.stats.deadline_misses = 99;
+
+        assert!(adapter.load().is_ready());
+        let request = adapter.begin_reload();
+
+        // A fresh load state means the audio thread passes audio through until the host is back.
+        assert!(adapter.load().is_loading());
+        assert!(!adapter.load().is_ready());
+        let stats = adapter.take_stats();
+        assert_eq!(
+            stats.consecutive_misses, 0,
+            "reload clears consecutive misses"
+        );
+        assert_eq!(stats.deadline_misses, 0, "reload clears the miss counter");
+        assert_eq!(request.restore_state, Some(vec![1, 2, 3]));
+        assert_eq!(request.restore_params, vec![(4, 0.25)]);
+        assert!(request.replace_existing);
+        assert!(request.alive.load(Ordering::Acquire));
+        assert_eq!(request.instance_id, 1);
+        assert_eq!(request.host_key, "instance-1");
+    }
+
+    /// A stale state blob is only refreshed once per `STATE_SAVE_INTERVAL`.
+    #[test]
+    fn state_save_is_throttled_and_needs_a_dirty_flag() {
+        let (load, _memory, _doorbell) = ready_block("sonara_test_state_save", 64);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+
+        assert!(!adapter.take_state_save_due(), "clean state needs no save");
+        adapter.set_state_dirty();
+        assert!(
+            !adapter.take_state_save_due(),
+            "a first save right after load waits for the interval"
+        );
+
+        adapter.last_state_save = Instant::now() - STATE_SAVE_INTERVAL;
+        assert!(adapter.take_state_save_due());
+        assert!(
+            !adapter.take_state_save_due(),
+            "the interval restarts after a save"
+        );
     }
 
     #[test]

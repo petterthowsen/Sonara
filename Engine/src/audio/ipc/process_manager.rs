@@ -9,11 +9,13 @@
 //! slow request never blocks other senders.
 
 use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::io::Read;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,8 +29,9 @@ use super::protocol::{
 use super::shared_memory::{HostSharedMemory, SharedMemory};
 use super::wire;
 
-/// Default wait for a blocking request's reply.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default wait for a blocking request's reply. A host that hasn't answered in this long is
+/// counted as unresponsive and killed by the command thread (Phase 4).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wait for `Initialize`: loading a plugin can read large sample libraries.
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,11 +39,148 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a host gets to exit after `Shutdown` before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
+/// How long the watcher waits for a killed host to be reaped before giving up on it.
+const KILL_REAP_GRACE: Duration = Duration::from_millis(500);
+
+/// Lines of the host's stderr kept for a crash report.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// Largest stderr chunk read at once, so a line the host never terminates can't grow the buffer.
+const STDERR_TAIL_BYTES_PER_READ: usize = 4096;
+
+/// How long `crash_info` waits for the watcher to record the exit status.
+const CRASH_STATUS_GRACE: Duration = Duration::from_millis(250);
+
 /// The control socket's descriptor number in the host process.
 const HOST_SOCKET_FD: i32 = 3;
 
 /// The host doorbell region's descriptor number in the host process.
 const HOST_SHARED_MEMORY_FD: i32 = 4;
+
+/// How a host process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostExit {
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+impl HostExit {
+    /// One-line description for logs and the UI.
+    pub fn describe(&self) -> String {
+        match (self.signal, self.exit_code) {
+            (Some(signal), _) => format!("killed by signal {} ({})", signal, signal_name(signal)),
+            (None, Some(code)) => format!("exited with code {}", code),
+            (None, None) => "exited with an unknown status".to_string(),
+        }
+    }
+}
+
+/// Name of the signals a crashing plugin usually dies from.
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGILL => "SIGILL",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGINT => "SIGINT",
+        libc::SIGPIPE => "SIGPIPE",
+        _ => "unknown signal",
+    }
+}
+
+/// Why a host process stopped: what the crash status Godot shows is built from this. A crash
+/// belongs to the host, not the instance, because every instance in a host goes down with it.
+#[derive(Debug, Clone)]
+pub struct HostCrash {
+    pub host_key: String,
+    pub pid: u32,
+    /// None when the process went away before it could be reaped (the socket closed first).
+    pub exit: Option<HostExit>,
+    /// Last lines the host wrote to stderr, oldest first.
+    pub stderr_tail: Vec<String>,
+}
+
+impl HostCrash {
+    /// One-line reason, for the loading state and the log.
+    pub fn describe(&self) -> String {
+        match &self.exit {
+            Some(exit) => exit.describe(),
+            None => "host process went away (control socket closed)".to_string(),
+        }
+    }
+}
+
+/// `pidfd_open(2)`, or -1 when the syscall isn't available (older kernels, non-Linux).
+fn open_pidfd(pid: u32) -> RawFd {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) } as RawFd;
+    if fd < 0 {
+        -1
+    } else {
+        fd
+    }
+}
+
+/// Block until `pidfd` reports the process exited, or a short interval passes. Falls back to
+/// sleeping when no pidfd is available.
+fn wait_for_exit(pidfd: RawFd) {
+    if pidfd < 0 {
+        thread::sleep(Duration::from_millis(20));
+        return;
+    }
+    let mut fds = [libc::pollfd {
+        fd: pidfd,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    let result = unsafe { libc::poll(fds.as_mut_ptr(), 1, 250) };
+    if result < 0 {
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Keep the last `text` as one line of the host's stderr tail.
+fn push_stderr_line(routing: &Routing, text: &str) {
+    let text = text.trim_end();
+    if text.is_empty() {
+        return;
+    }
+    let mut tail = lock(&routing.stderr_tail);
+    if tail.len() >= STDERR_TAIL_LINES {
+        tail.pop_front();
+    }
+    tail.push_back(text.to_string());
+}
+
+/// Drain the host's stderr into a bounded tail buffer, so a host that dies can report why.
+fn drain_stderr(stderr: ChildStderr, routing: Arc<Routing>) {
+    let mut reader = stderr;
+    let mut buffer = Vec::with_capacity(STDERR_TAIL_BYTES_PER_READ);
+    let mut carry = String::new();
+    loop {
+        buffer.clear();
+        let read = reader
+            .by_ref()
+            .take(STDERR_TAIL_BYTES_PER_READ as u64)
+            .read_to_end(&mut buffer)
+            .unwrap_or(0);
+        if read == 0 {
+            break;
+        }
+        carry.push_str(&String::from_utf8_lossy(&buffer));
+        while let Some(newline) = carry.find('\n') {
+            let line: String = carry.drain(..=newline).collect();
+            push_stderr_line(&routing, &line);
+        }
+        if carry.len() > STDERR_TAIL_BYTES_PER_READ {
+            let excess = carry.len() - STDERR_TAIL_BYTES_PER_READ;
+            carry.drain(..excess);
+        }
+    }
+    push_stderr_line(&routing, &carry);
+}
 
 /// Lock a mutex, recovering it if a panicking thread held it.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -73,6 +213,12 @@ struct Routing {
     events: Mutex<HashMap<InstanceId, Sender<PluginEvent>>>,
     /// False once the control socket has closed.
     connected: AtomicBool,
+    /// Set by the watcher thread once the host process has been reaped.
+    exit: Mutex<Option<HostExit>>,
+    /// Last lines of the host's stderr, oldest first.
+    stderr_tail: Mutex<VecDeque<String>>,
+    /// Set when a blocking request timed out. The command thread kills a hung host (Phase 4).
+    hung: AtomicBool,
 }
 
 impl Routing {
@@ -123,6 +269,16 @@ impl Routing {
         lock(&self.pending).clear();
         lock(&self.events).clear();
     }
+
+    /// Why the host stopped, as far as the watcher has seen.
+    fn crash(&self, host_key: &str, pid: u32) -> HostCrash {
+        HostCrash {
+            host_key: host_key.to_string(),
+            pid,
+            exit: *lock(&self.exit),
+            stderr_tail: lock(&self.stderr_tail).iter().cloned().collect(),
+        }
+    }
 }
 
 /// Reader thread: decode frames until the host closes the socket.
@@ -148,7 +304,8 @@ pub struct PluginProcess {
     /// Process ID
     pub pid: u32,
     host_key: String,
-    child: Mutex<Option<Child>>,
+    /// The child handle, shared with the watcher thread that reaps it.
+    child: Arc<Mutex<Option<Child>>>,
     /// Write side of the control socket. Held only while a frame is written.
     writer: Mutex<UnixStream>,
     routing: Arc<Routing>,
@@ -162,7 +319,12 @@ impl PluginProcess {
     /// Spawn a `plugin_host` process and start its reader thread.
     fn spawn(host_key: String) -> Result<Self, String> {
         let plugin_host_path = ProcessManager::plugin_host_path()?;
+        Self::spawn_program(host_key, &plugin_host_path, &[HOST_SOCKET_FD.to_string()])
+    }
 
+    /// Spawn `program` as a host process: a control socketpair, a doorbell region and a stderr
+    /// pipe, with the socket and doorbell moved to their well-known descriptors in the child.
+    fn spawn_program(host_key: String, program: &Path, args: &[String]) -> Result<Self, String> {
         let (engine_socket, host_socket) = UnixStream::pair()
             .map_err(|e| format!("Failed to create control socketpair: {}", e))?;
         let host_socket_fd = host_socket.as_raw_fd();
@@ -174,11 +336,14 @@ impl PluginProcess {
         let host_shared_fd = host_shared.as_raw_fd();
 
         use std::os::unix::process::CommandExt;
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdout(Stdio::inherit())
+            // Captured so a crash can report what the host printed before it died.
+            .stderr(Stdio::piped());
         let child = unsafe {
-            Command::new(&plugin_host_path)
-                .arg(HOST_SOCKET_FD.to_string())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
+            command
                 .pre_exec(move || {
                     // Move both descriptors to their well-known numbers. dup2 clears
                     // close-on-exec on the new descriptor, except when both are equal.
@@ -190,7 +355,7 @@ impl PluginProcess {
                 .map_err(|e| {
                     format!(
                         "Failed to spawn plugin_host at {}: {}",
-                        plugin_host_path.display(),
+                        program.display(),
                         e
                     )
                 })?
@@ -199,7 +364,12 @@ impl PluginProcess {
 
         let pid = child.id();
         info!("Plugin host {} spawned: PID={}", host_key, pid);
-        Self::connect(host_key, pid, Some(child), engine_socket, host_shared)
+
+        let mut child = child;
+        let stderr = child.stderr.take();
+        let process = Self::connect(host_key, pid, Some(child), engine_socket, host_shared)?;
+        process.start_supervision(stderr);
+        Ok(process)
     }
 
     /// Start the reader thread for a host connected through `engine_socket`.
@@ -214,6 +384,9 @@ impl PluginProcess {
             pending: Mutex::new(HashMap::new()),
             events: Mutex::new(HashMap::new()),
             connected: AtomicBool::new(true),
+            exit: Mutex::new(None),
+            stderr_tail: Mutex::new(VecDeque::new()),
+            hung: AtomicBool::new(false),
         });
         let reader_socket = engine_socket
             .try_clone()
@@ -228,12 +401,61 @@ impl PluginProcess {
         Ok(Self {
             pid,
             host_key,
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
             writer: Mutex::new(engine_socket),
             routing,
             next_request_id: AtomicU32::new(1),
             host_shared,
         })
+    }
+
+    /// Watch the child process: drain its stderr into a tail buffer and reap it when it exits,
+    /// recording the signal or exit code. A watcher per host makes a crash visible immediately
+    /// and keeps its stderr for the crash report (Phase 4).
+    fn start_supervision(&self, stderr: Option<ChildStderr>) {
+        let child = Arc::clone(&self.child);
+        let pid = self.pid;
+        let host_key = self.host_key.clone();
+
+        if let Some(stderr) = stderr {
+            let routing = Arc::clone(&self.routing);
+            let _ = thread::Builder::new()
+                .name(format!("plugin-stderr-{}", pid))
+                .spawn(move || drain_stderr(stderr, routing));
+        }
+
+        let routing = Arc::clone(&self.routing);
+        let _ = thread::Builder::new()
+            .name(format!("plugin-watch-{}", pid))
+            .spawn(move || {
+                let pidfd = open_pidfd(pid);
+                loop {
+                    {
+                        let mut slot = lock(&child);
+                        let Some(process) = slot.as_mut() else { break };
+                        match process.try_wait() {
+                            Ok(Some(status)) => {
+                                *lock(&routing.exit) = Some(HostExit {
+                                    exit_code: status.code(),
+                                    signal: status.signal(),
+                                });
+                                slot.take();
+                                break;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!("Failed to reap plugin host {}: {}", host_key, e);
+                                slot.take();
+                                break;
+                            }
+                        }
+                    }
+                    wait_for_exit(pidfd);
+                }
+                if pidfd >= 0 {
+                    unsafe { libc::close(pidfd) };
+                }
+            });
     }
 
     fn next_request_id(&self) -> RequestId {
@@ -280,6 +502,9 @@ impl PluginProcess {
             Ok(response) => Ok(response),
             Err(RecvTimeoutError::Timeout) => {
                 lock(&self.routing.pending).remove(&request_id);
+                // A host that lets a request time out is unresponsive: the command thread kills
+                // it on its next tick and treats it as crashed.
+                self.routing.hung.store(true, Ordering::Release);
                 Err(format!(
                     "Plugin host {} didn't answer {:?} within {:.1}s",
                     self.host_key,
@@ -316,13 +541,55 @@ impl PluginProcess {
         if !self.routing.connected.load(Ordering::Acquire) {
             return false;
         }
+        if lock(&self.routing.exit).is_some() {
+            return false;
+        }
+        // No child handle means an in-process stand-in (tests): trust the socket.
         match lock(&self.child).as_mut() {
             Some(child) => matches!(child.try_wait(), Ok(None)),
-            None => false,
+            None => true,
         }
     }
 
-    /// Ask the host to exit, then kill it if it hasn't within `SHUTDOWN_GRACE`.
+    /// True when a blocking request timed out and the host hasn't answered since.
+    pub fn is_hung(&self) -> bool {
+        self.routing.hung.load(Ordering::Acquire)
+    }
+
+    /// Why this host stopped, or None while it is still running. Waits briefly for the watcher
+    /// to record the exit status, so a crash report has the signal or exit code.
+    pub fn crash_info(&self) -> Option<HostCrash> {
+        let deadline = Instant::now() + CRASH_STATUS_GRACE;
+        loop {
+            if lock(&self.routing.exit).is_some() {
+                return Some(self.routing.crash(&self.host_key, self.pid));
+            }
+            let suspicious = !self.routing.connected.load(Ordering::Acquire) || self.is_hung();
+            if !suspicious || Instant::now() >= deadline {
+                if suspicious {
+                    return Some(self.routing.crash(&self.host_key, self.pid));
+                }
+                return None;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Kill the host process now, for a host that stopped responding. The watcher reaps it.
+    pub fn kill(&self) {
+        warn!("Killing plugin host {} (pid {})", self.host_key, self.pid);
+        if let Some(child) = lock(&self.child).as_mut() {
+            if let Err(e) = child.kill() {
+                warn!("Failed to kill plugin host {}: {}", self.host_key, e);
+            }
+        }
+        // The socket reader sees the close and fails pending requests; the watcher records the
+        // exit status. Nothing here waits, so the command thread isn't held up.
+        let _ = lock(&self.writer).shutdown(std::net::Shutdown::Both);
+    }
+
+    /// Ask the host to exit, then kill it if it hasn't within `SHUTDOWN_GRACE`. The watcher
+    /// thread reaps the process; this waits for it to record the exit status.
     pub fn shutdown(&self) {
         info!("Shutting down plugin host {}", self.host_key);
         if self.routing.connected.load(Ordering::Acquire) {
@@ -332,44 +599,41 @@ impl PluginProcess {
         }
         let _ = lock(&self.writer).shutdown(std::net::Shutdown::Write);
 
-        let Some(mut child) = lock(&self.child).take() else {
-            return;
-        };
         let deadline = Instant::now() + SHUTDOWN_GRACE;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    info!("Plugin host {} exited: {}", self.host_key, status);
-                    return;
-                }
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    warn!(
-                        "Plugin host {} didn't exit within {:?}; killing it",
-                        self.host_key, SHUTDOWN_GRACE
-                    );
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return;
-                }
-                Err(e) => {
-                    error!("Error waiting for plugin host {}: {}", self.host_key, e);
-                    return;
-                }
-            }
+        while lock(&self.routing.exit).is_none()
+            && lock(&self.child).is_some()
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if lock(&self.routing.exit).is_some() || lock(&self.child).is_none() {
+            debug!("Plugin host {} exited", self.host_key);
+            return;
+        }
+
+        warn!(
+            "Plugin host {} didn't exit within {:?}; killing it",
+            self.host_key, SHUTDOWN_GRACE
+        );
+        if let Some(child) = lock(&self.child).as_mut() {
+            let _ = child.kill();
+        }
+        let deadline = Instant::now() + KILL_REAP_GRACE;
+        while lock(&self.routing.exit).is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
         }
     }
 }
 
 impl Drop for PluginProcess {
     fn drop(&mut self) {
-        if let Some(mut child) = lock(&self.child).take() {
-            if matches!(child.try_wait(), Ok(None)) {
-                warn!("Force killing plugin host {} in Drop", self.host_key);
+        // Kill without waiting for the grace period: Drop runs when the host is being thrown
+        // away anyway (device removed, engine shutting down). The watcher reaps it.
+        let alive = self.is_alive();
+        if alive {
+            warn!("Force killing plugin host {} in Drop", self.host_key);
+            if let Some(child) = lock(&self.child).as_mut() {
                 let _ = child.kill();
-                let _ = child.wait();
             }
         }
     }
@@ -409,6 +673,21 @@ impl InstanceConnection {
 
     pub fn is_alive(&self) -> bool {
         self.host.is_alive()
+    }
+
+    /// True when a blocking request timed out and the host hasn't answered since.
+    pub fn is_hung(&self) -> bool {
+        self.host.is_hung()
+    }
+
+    /// Why this host stopped, or None while it is running.
+    pub fn crash_info(&self) -> Option<HostCrash> {
+        self.host.crash_info()
+    }
+
+    /// Kill the host process (hung host handling).
+    pub fn kill_host(&self) {
+        self.host.kill()
     }
 
     pub fn shared_memory(&self) -> &Arc<SharedMemory> {
@@ -754,5 +1033,114 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(!process.is_alive());
         assert!(process.send(1, PluginCommand::Reset).is_err());
+    }
+
+    #[test]
+    fn request_timeout_marks_the_host_hung() {
+        let (process, _host) = fake_host();
+        assert!(!process.is_hung());
+        let result =
+            process.request_with_fds(1, PluginCommand::HasGui, &[], Duration::from_millis(20));
+        assert!(result.unwrap_err().contains("didn't answer"));
+        assert!(process.is_hung());
+    }
+
+    #[test]
+    fn host_exit_describes_signal_and_code() {
+        assert_eq!(
+            HostExit {
+                exit_code: None,
+                signal: Some(libc::SIGSEGV)
+            }
+            .describe(),
+            "killed by signal 11 (SIGSEGV)"
+        );
+        assert_eq!(
+            HostExit {
+                exit_code: Some(7),
+                signal: None
+            }
+            .describe(),
+            "exited with code 7"
+        );
+    }
+
+    /// A real child process, watched by the same code that supervises plugin hosts. Its exit
+    /// status and stderr tail must both survive the crash.
+    #[test]
+    fn watcher_records_exit_code_and_stderr() {
+        let process = PluginProcess::spawn_program(
+            "test-exit".to_string(),
+            Path::new("/bin/sh"),
+            &[
+                "-c".to_string(),
+                "printf 'first line\\nCHILD CRASH REASON\\n' >&2; exit 7".to_string(),
+            ],
+        )
+        .expect("spawn /bin/sh");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process.is_alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process.is_alive(), "child should have exited");
+
+        let crash = process.crash_info().expect("crash info for an exited host");
+        assert_eq!(crash.pid, process.pid);
+        assert_eq!(
+            crash.exit,
+            Some(HostExit {
+                exit_code: Some(7),
+                signal: None
+            })
+        );
+        // The stderr drain thread may need a moment to flush the pipe.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut tail = crash.stderr_tail.clone();
+        while !tail.iter().any(|l| l.contains("CHILD CRASH REASON")) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+            tail = process.crash_info().expect("crash info").stderr_tail;
+        }
+        assert!(
+            tail.iter().any(|line| line.contains("CHILD CRASH REASON")),
+            "stderr tail should keep the child's last line, got {:?}",
+            tail
+        );
+    }
+
+    /// The stderr tail is bounded, so a host that prints forever can't grow it.
+    #[test]
+    fn stderr_tail_keeps_only_the_last_lines() {
+        let line_count = STDERR_TAIL_LINES + 25;
+        let process = PluginProcess::spawn_program(
+            "test-lines".to_string(),
+            Path::new("/bin/sh"),
+            &[
+                "-c".to_string(),
+                format!(
+                    "for i in $(seq 1 {}); do echo line-$i >&2; done",
+                    line_count
+                ),
+            ],
+        )
+        .expect("spawn /bin/sh");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process.is_alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut tail = process.crash_info().expect("crash info").stderr_tail;
+        while tail.len() < STDERR_TAIL_LINES && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+            tail = process.crash_info().expect("crash info").stderr_tail;
+        }
+        assert!(tail.len() <= STDERR_TAIL_LINES, "tail must stay bounded");
+        assert!(
+            tail.last()
+                .is_some_and(|line| line.contains(&format!("line-{}", line_count))),
+            "tail should end with the last line, got {:?}",
+            tail
+        );
     }
 }

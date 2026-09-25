@@ -14,6 +14,9 @@ const ICON_FOLDOUT_OPEN: Texture2D = preload("res://assets/icons/chevron-left.sv
 @onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
 @onready var folder_button: Button = $VBox/TopHeader/HBox/FoldoutToggle
 
+## Shown only while the bound device is crashed/failed; reloads the plugin host.
+@onready var reload_button: Button = $VBox/TopHeader/HBox/Reload
+
 # Left header: View and Window toggles, then the Parameters/CCs/File tabs (one ButtonGroup)
 @onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/TabButtons
 @onready var view_button: Button = $VBox/HBox/LeftHeader/TabButtons/View
@@ -85,6 +88,7 @@ func _ready() -> void:
 	window_button.toggled.connect(_on_window_toggled)
 	simple_button.toggled.connect(_on_simple_toggled)
 	folder_button.toggled.connect(_on_folder_toggled)
+	reload_button.pressed.connect(_on_reload_pressed)
 
 	# Connect file loading
 	file_load_button.pressed.connect(_on_load_file_pressed)
@@ -176,6 +180,10 @@ func _unbind() -> void:
 		device.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
 	if device.name_changed.is_connected(_on_device_name_changed):
 		device.name_changed.disconnect(_on_device_name_changed)
+	if device.loading_state_changed.is_connected(_on_device_loading_state_changed):
+		device.loading_state_changed.disconnect(_on_device_loading_state_changed)
+	if reload_button:
+		reload_button.visible = false
 	if _channel and _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
 		_channel.device_parameters_updated.disconnect(_on_device_parameters_updated)
 	_channel = null
@@ -189,6 +197,23 @@ func _unbind() -> void:
 		folder_button.visible = false
 		_set_foldout_pressed(false)
 	device = null
+
+
+## Show the Reload button only while the bound device needs a respawn.
+func _update_reload_button_visibility() -> void:
+	if reload_button == null:
+		return
+	var state: String = device.loading_state if device else ""
+	reload_button.visible = state.begins_with("crashed:") or state.begins_with("failed:")
+
+
+func _on_device_loading_state_changed(_state: String) -> void:
+	_update_reload_button_visibility()
+
+
+func _on_reload_pressed() -> void:
+	if device:
+		device.reload()
 
 
 ## Refresh the header when the instance is renamed.
@@ -216,6 +241,9 @@ func bind_to_device(dev : DeviceInstance):
 	name_label.set_value(dev.get_display_name())
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)
+	if not dev.loading_state_changed.is_connected(_on_device_loading_state_changed):
+		dev.loading_state_changed.connect(_on_device_loading_state_changed)
+	_update_reload_button_visibility()
 	# Listen for parameter list updates (when plugins load params asynchronously)
 	# Individual CompactParameterControls already listen to parameter value changes.
 	# Connected before any `await` below: the engine can advertise params

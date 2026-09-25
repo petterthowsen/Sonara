@@ -62,7 +62,7 @@
 
 ## IPC Commands
 
-- Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui.
+- Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui, SaveState/LoadState.
 - `Activate` carries the sample rate and re-activates (deactivate → activate) when the rate changes; the reply reports the plugin's latency. `GetParameterInfo` rebuilds and republishes the parameter map.
 - `SetParameter` is fire-and-forget: while the plugin is processing the main thread queues it to the audio thread, which applies it at offset 0 of the next block; while stopped it is applied with `params.flush()`.
 - `Reset` is handled on the audio thread (CLAP requires it there) and clears queued events. `Shutdown` exits the whole host process.
@@ -85,7 +85,34 @@
 
 ## Failure Handling
 
-- When a host exits, its reader thread sees the socket close, fails every waiting request at once and marks the host disconnected. The next command-thread tick marks the plugin failed (pass-through audio) and sends `failed:subprocess crashed` to Godot.
-- Removing a device shuts its host down: `Shutdown`, then `SIGKILL` if it hasn't exited within 1 s.
-- Shared-memory handles stay owned by `ProcessManager`; dropping the last `Arc` cleans up OS resources automatically.
-- When debugging, confirm the subprocess binary is alive and still holds its descriptors (`/proc/<pid>/fd/3` is the control socket, `/proc/<pid>/fd/4` the doorbell). A plugin that misses deadlines logs a WARN after 8 consecutive misses and shows up in `EngineStats::plugin_underruns`.
+- Every host gets a watcher thread: a `pidfd` poll loop (`SYS_pidfd_open`, falling back to a 20 ms
+  sleep where unavailable) that reaps the child and records `HostExit { signal, exit_code }`, plus
+  a stderr drain thread keeping the last 20 lines (bounded reads, so a host that never emits a
+  newline can't grow the buffer).
+- A crash state is per **host process**, not per device: `HostCrash { host_key, pid, exit,
+  stderr_tail }`. `PluginLoad` gains a `CRASHED` state so the audio thread passes audio through
+  and the UI can offer a reload. `CommandWorker::poll_devices` sees `!is_alive()` (or `is_hung()`),
+  marks the device crashed, sends `<device addr>/loading_state = "crashed:<reason>"` and
+  `<device addr>/crashed [reason, stderr, pid]`, and logs the host's stderr tail.
+- Hung hosts: a blocking request that exceeds `REQUEST_TIMEOUT` (5 s) sets a `hung` flag on the
+  host; 32 consecutive missed plugin deadlines (`HUNG_MISSES`) means the host isn't processing.
+  Either one makes the command thread kill the process and treat it as crashed.
+- Reload (`<device addr>/reload` → `AudioCommand::ReloadDevice`) shuts the crashed instance down,
+  spawns a fresh host for the same instance id, restores the last saved state blob
+  (`PluginCommand::LoadState`), re-activates, re-sends the engine's cached parameter values
+  (covers plugins without a state extension) and waits for `DeviceReady` to re-advertise the
+  parameters. It runs on a background thread (`PluginLoadRequest::spawn`) with a fresh
+  `PluginLoad`, so the audio thread keeps passing audio through until the new host is ready.
+- State blobs: the host implements CLAP's state extension (`save`/`load` on the main thread).
+  `mark_dirty` (HostState registered) or any parameter change sets the adapter's dirty flag; the
+  command thread refreshes the blob at most once per 30 s while dirty, and on `/plugin/save_state`.
+  Each request carries an `alive` flag cleared by the adapter's `Drop`, so a load in flight for a
+  removed device cleans its host up instead of orphaning it.
+- Removing a device shuts its host down: `Shutdown`, then `SIGKILL` if it hasn't exited within 1 s
+  (the watcher reaps it; nothing waits on a zombie).
+- Shared-memory handles stay owned by `ProcessManager`; dropping the last `Arc` cleans up OS
+  resources automatically.
+- When debugging, confirm the subprocess binary is alive and still holds its descriptors
+  (`/proc/<pid>/fd/3` is the control socket, `/proc/<pid>/fd/4` the doorbell). A plugin that misses
+  deadlines logs a WARN after 8 consecutive misses and shows up in `EngineStats::plugin_underruns`.
+

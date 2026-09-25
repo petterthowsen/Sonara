@@ -162,6 +162,12 @@ toggle_mode = true
 icon = ExtResource("4_n5ici")
 icon_alignment = 1
 
+[node name="Reload" type="Button" parent="VBox/TopHeader/HBox" unique_id=2000000301]
+visible = false
+layout_mode = 2
+tooltip_text = "Reload the crashed plugin and restore its state"
+text = "Reload"
+
 [node name="HBox" type="HBoxContainer" parent="VBox" unique_id=701909924]
 layout_mode = 2
 size_flags_vertical = 3

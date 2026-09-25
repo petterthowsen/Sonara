@@ -3,8 +3,8 @@
 use super::gui;
 use crate::audio::devices::{ParamId, ParamValue};
 use crate::audio::ipc::{
-    InstanceConnection, InstanceId, PluginCommand, PluginEvent, PluginResponse, ProcessManager,
-    REQUEST_TIMEOUT,
+    HostCrash, InstanceConnection, InstanceId, PluginCommand, PluginEvent, PluginResponse,
+    ProcessManager, REQUEST_TIMEOUT,
 };
 use std::sync::Arc;
 use tracing::warn;
@@ -131,10 +131,60 @@ impl PluginIpcHandle {
         }
     }
 
+    /// Ask the plugin to serialize its state. Blocking; call it with the engine state lock
+    /// released.
+    pub fn save_state(&self) -> Result<Vec<u8>, String> {
+        match self.request(PluginCommand::SaveState)? {
+            PluginResponse::StateSaved { state } => Ok(state),
+            PluginResponse::Error { error, .. } => Err(error),
+            other => Err(format!("Unexpected response to SaveState: {:?}", other)),
+        }
+    }
+
+    /// Hand the plugin a state blob to restore. Blocking; call it with the engine state lock
+    /// released.
+    pub fn load_state(&self, state: Vec<u8>) -> Result<(), String> {
+        match self.request(PluginCommand::LoadState { state })? {
+            PluginResponse::StateLoadResult { success: true, .. } => Ok(()),
+            PluginResponse::StateLoadResult { error, .. } => {
+                Err(error.unwrap_or_else(|| "Plugin failed to load its state".to_string()))
+            }
+            other => Err(format!("Unexpected response to LoadState: {:?}", other)),
+        }
+    }
+
     /// False once the host process has exited (or the instance is no longer registered).
     pub fn is_alive(&self) -> bool {
         self.connection()
             .map(|connection| connection.is_alive())
             .unwrap_or(false)
+    }
+
+    /// True when a blocking request timed out and the host hasn't answered since.
+    pub fn is_hung(&self) -> bool {
+        self.connection()
+            .map(|connection| connection.is_hung())
+            .unwrap_or(false)
+    }
+
+    /// Why the host process stopped, or None while it is still running.
+    pub fn crash_info(&self) -> Option<HostCrash> {
+        self.connection()
+            .ok()
+            .and_then(|connection| connection.crash_info())
+    }
+
+    /// Kill a host that stopped responding. The next tick marks the device crashed.
+    pub fn kill_host(&self) {
+        if let Ok(connection) = self.connection() {
+            connection.kill_host();
+        }
+    }
+
+    /// The host process this instance runs in, if any.
+    pub fn host_pid(&self) -> Option<u32> {
+        self.connection()
+            .ok()
+            .map(|connection| connection.host_pid())
     }
 }

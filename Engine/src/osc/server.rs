@@ -511,6 +511,13 @@ impl OscServer {
                     device_path,
                 })?;
             }
+            // Reload a crashed plugin: respawn its host and restore its state (Phase 4).
+            ["reload"] => {
+                command_tx.send(AudioCommand::ReloadDevice {
+                    channel_id,
+                    device_path,
+                })?;
+            }
             ["slot", slot_str, "volume"] => {
                 if let (Ok(slot), Some(OscType::Float(volume))) =
                     (slot_str.parse::<usize>(), args.first())
@@ -1675,6 +1682,20 @@ impl OscServer {
             } => (
                 device_path.to_osc_addr(channel_id, "loading_state"),
                 vec![OscType::String(state)],
+            ),
+            EngineStatus::DeviceCrashed {
+                channel_id,
+                device_path,
+                reason,
+                stderr,
+                pid,
+            } => (
+                device_path.to_osc_addr(channel_id, "crashed"),
+                vec![
+                    OscType::String(reason),
+                    OscType::String(stderr),
+                    OscType::Int(pid as i32),
+                ],
             ),
             EngineStatus::PluginGuiResizeRequest { .. } => {
                 // GUI resize is handled by the main loop with access to WindowManager

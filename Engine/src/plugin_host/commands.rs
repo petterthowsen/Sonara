@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 use clack_extensions::gui::{GuiSize, PluginGui};
 use clack_extensions::latency::PluginLatency;
 use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
+use clack_extensions::state::PluginState as ClapState;
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::Pckn;
@@ -367,6 +368,63 @@ pub fn process_command(
                 audio.reset();
             }
             Some(PluginResponse::ResetComplete)
+        }
+
+        PluginCommand::SaveState => {
+            let Some(state) = plugin_state else {
+                return Some(PluginResponse::Error {
+                    command: "SaveState".to_string(),
+                    error: "Plugin not initialized".to_string(),
+                });
+            };
+            let mut handle = state.instance.plugin_handle();
+            let Some(state_ext) = handle.get_extension::<ClapState>() else {
+                return Some(PluginResponse::Error {
+                    command: "SaveState".to_string(),
+                    error: "Plugin has no state extension".to_string(),
+                });
+            };
+            let mut buffer = Vec::new();
+            match state_ext.save(&mut handle, &mut buffer) {
+                Ok(()) => {
+                    info!("Saved {} bytes of plugin state", buffer.len());
+                    Some(PluginResponse::StateSaved { state: buffer })
+                }
+                Err(e) => Some(PluginResponse::Error {
+                    command: "SaveState".to_string(),
+                    error: format!("Plugin failed to save its state: {}", e),
+                }),
+            }
+        }
+
+        PluginCommand::LoadState { state: bytes } => {
+            let Some(state) = plugin_state else {
+                return Some(PluginResponse::Error {
+                    command: "LoadState".to_string(),
+                    error: "Plugin not initialized".to_string(),
+                });
+            };
+            let mut handle = state.instance.plugin_handle();
+            let Some(state_ext) = handle.get_extension::<ClapState>() else {
+                return Some(PluginResponse::StateLoadResult {
+                    success: false,
+                    error: Some("Plugin has no state extension".to_string()),
+                });
+            };
+            let mut reader = std::io::Cursor::new(bytes);
+            match state_ext.load(&mut handle, &mut reader) {
+                Ok(()) => {
+                    info!("Restored plugin state");
+                    Some(PluginResponse::StateLoadResult {
+                        success: true,
+                        error: None,
+                    })
+                }
+                Err(e) => Some(PluginResponse::StateLoadResult {
+                    success: false,
+                    error: Some(format!("Plugin failed to load its state: {}", e)),
+                }),
+            }
         }
 
         PluginCommand::GetParameterInfo => {

@@ -354,6 +354,11 @@ pub enum AudioCommand {
         device_path: DevicePath,
         state_base64: String,
     },
+    /// Respawn a crashed (or hung) plugin host and restore the plugin's state. Phase 4.
+    ReloadDevice {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+    },
 
     // Plugin GUI
     OpenPluginGui {
@@ -449,7 +454,17 @@ pub enum EngineStatus {
     DeviceLoadingStateChanged {
         channel_id: ChannelId,
         device_path: DevicePath,
-        state: String, // "idle", "loading", "ready", "failed:{error}"
+        state: String, // "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
+    },
+    /// A plugin host process died or stopped responding. `reason` is one line (signal or exit
+    /// code), `stderr` is the tail of what the host printed, `pid` is the host's process id.
+    /// Sent once per host, so several devices in one host each get it.
+    DeviceCrashed {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        reason: String,
+        stderr: String,
+        pid: u32,
     },
 
     // Plugin GUI events
@@ -2355,6 +2370,7 @@ pub fn process_command(
         | AudioCommand::AddDeviceToChannel { .. }
         | AudioCommand::RemoveDeviceFromChannel { .. }
         | AudioCommand::ClearChannelDevices { .. }
+        | AudioCommand::ReloadDevice { .. }
         | AudioCommand::ScanPlugins { .. }
         | AudioCommand::AdvertiseBuiltinDevices) => {
             warn!("{:?} must be handled by CommandWorker, ignoring", other);

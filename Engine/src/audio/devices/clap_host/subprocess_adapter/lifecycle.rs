@@ -2,17 +2,19 @@
 //!
 //! Handles async plugin loading, initialization, and state management.
 
+use super::parameter;
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::devices::ParamInfo;
 use crate::audio::devices::ParamType;
+use crate::audio::devices::{ParamId, ParamValue};
 use crate::audio::ipc::{
     HostSharedMemory, InstanceId, PluginCommand, PluginParameterInfo, PluginResponse,
     ProcessManager, SharedMemory, REQUEST_TIMEOUT,
 };
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -80,6 +82,29 @@ mod tests {
         assert!(load.is_failed());
         assert!(load.shared().is_none());
         assert_eq!(load.error().as_deref(), Some("crashed"));
+    }
+
+    #[test]
+    fn plugin_load_crashed_state_passes_audio_through() {
+        let load = PluginLoad::new();
+        let shm = SharedMemory::new("sonara_test_plugin_crash", SharedMemoryLayout::new(64))
+            .expect("shared memory");
+        let doorbell =
+            HostSharedMemory::new("sonara_test_plugin_crash_doorbell").expect("doorbell");
+        load.set_ready(Arc::new(shm), Arc::new(doorbell));
+        assert!(load.is_ready());
+
+        load.set_crashed("killed by signal 11 (SIGSEGV)".to_string());
+
+        assert!(load.is_crashed());
+        assert!(!load.is_ready());
+        assert!(!load.is_failed());
+        // The audio thread must not touch the crashed host's block.
+        assert!(load.shared().is_none());
+        assert_eq!(
+            load.error().as_deref(),
+            Some("killed by signal 11 (SIGSEGV)")
+        );
     }
 
     fn base_info() -> PluginParameterInfo {
@@ -166,6 +191,9 @@ mod tests {
 const LOADING: u8 = 0;
 const READY: u8 = 1;
 const FAILED: u8 = 2;
+/// The host process died (or stopped responding) after the plugin was loaded. Distinct from
+/// `FAILED` (loading never finished) because a crashed device can be reloaded.
+const CRASHED: u8 = 3;
 
 /// Everything the audio thread needs to run the per-block handshake with one plugin instance:
 /// its shared block and its host's doorbell.
@@ -221,6 +249,17 @@ impl PluginLoad {
         self.state.load(Ordering::Acquire) == FAILED
     }
 
+    /// True once the host process died. The audio thread passes audio through, and the device
+    /// UI offers a reload.
+    pub fn is_crashed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == CRASHED
+    }
+
+    /// True before the plugin has become ready, i.e. nothing can be sent to it yet.
+    pub fn is_loading(&self) -> bool {
+        self.state.load(Ordering::Acquire) == LOADING
+    }
+
     /// The failure message, if loading failed or the subprocess died.
     #[allow(dead_code)] // Phase 4 sends the reason with the crashed state
     pub fn error(&self) -> Option<String> {
@@ -247,139 +286,233 @@ impl PluginLoad {
 
     /// Mark the plugin failed. The audio thread passes audio through from its next block.
     pub fn set_failed(&self, error: String) {
+        self.set_error(error, FAILED);
+    }
+
+    /// Mark the plugin crashed: its host process died. The audio thread passes audio through
+    /// from its next block and the device UI can reload it.
+    pub fn set_crashed(&self, error: String) {
+        self.set_error(error, CRASHED);
+    }
+
+    fn set_error(&self, error: String, state: u8) {
         *self
             .error
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
-        self.state.store(FAILED, Ordering::Release);
+        self.state.store(state, Ordering::Release);
     }
 }
 
-/// Spawn background thread to load plugin subprocess
-pub fn spawn_loading_thread(
-    process_manager: Arc<ProcessManager>,
-    instance_id: InstanceId,
-    plugin_path: PathBuf,
-    plugin_id: String,
-    sample_rate: f32,
-    max_buffer_size: usize,
-    load: Arc<PluginLoad>,
-    param_cache: Arc<Mutex<Vec<ParamInfo>>>,
-    channel_id: usize,
-    device_path: DevicePath,
-    command_tx: Option<Sender<AudioCommand>>,
-    status_tx: Option<Sender<EngineStatus>>,
-) {
-    std::thread::spawn(move || {
-        info!("🔄 Background thread: Loading plugin subprocess...");
+/// Everything a background plugin load or reload needs. Built by the adapter at construction,
+/// and again when a crashed device is reloaded (Phase 4) with the saved state and parameter
+/// values restored.
+pub struct PluginLoadRequest {
+    pub process_manager: Arc<ProcessManager>,
+    pub instance_id: InstanceId,
+    pub host_key: String,
+    pub plugin_path: PathBuf,
+    pub plugin_id: String,
+    pub sample_rate: f32,
+    pub max_buffer_size: usize,
+    pub load: Arc<PluginLoad>,
+    pub param_cache: Arc<Mutex<Vec<ParamInfo>>>,
+    pub channel_id: usize,
+    pub device_path: DevicePath,
+    pub command_tx: Option<Sender<AudioCommand>>,
+    pub status_tx: Option<Sender<EngineStatus>>,
+    /// Plugin state saved before the host died, restored right after Initialize.
+    pub restore_state: Option<Vec<u8>>,
+    /// Parameter values to re-send after activation, for plugins without a state extension.
+    pub restore_params: Vec<(ParamId, ParamValue)>,
+    /// Shut the previous instance's host down first (a reload, not a first load).
+    pub replace_existing: bool,
+    /// Cleared when the adapter is dropped. A load in flight then stops and cleans up instead of
+    /// leaving an orphan host behind.
+    pub alive: Arc<AtomicBool>,
+}
 
-        let send_state = |state: String| {
-            if let Some(ref tx) = status_tx {
-                let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
-                    channel_id,
-                    device_path,
-                    state,
-                });
-            }
-        };
-        send_state("loading".to_string());
+impl PluginLoadRequest {
+    /// Load the plugin on a background thread, so the command thread is never blocked.
+    pub fn spawn(self) {
+        std::thread::spawn(move || run_load(self));
+    }
+}
 
-        // Blocking, but on this background thread
-        let connection = match process_manager.spawn_instance(
-            instance_id,
-            &ProcessManager::individual_host_key(instance_id),
-            plugin_path,
-            plugin_id.clone(),
-            sample_rate,
-            max_buffer_size,
-        ) {
-            Ok(connection) => connection,
-            Err(e) => {
-                load.set_failed(e.clone());
-                error!("❌ Failed to spawn plugin subprocess: {}", e);
-                send_state(format!("failed:{}", e));
-                return;
-            }
-        };
+/// Load (or reload) one plugin instance and publish it to the audio thread.
+fn run_load(request: PluginLoadRequest) {
+    let PluginLoadRequest {
+        process_manager,
+        instance_id,
+        host_key,
+        plugin_path,
+        plugin_id,
+        sample_rate,
+        max_buffer_size,
+        load,
+        param_cache,
+        channel_id,
+        device_path,
+        command_tx,
+        status_tx,
+        restore_state,
+        restore_params,
+        replace_existing,
+        alive,
+    } = request;
 
-        info!("🔄 Activating plugin: {}", plugin_id);
-        let mut latency_frames = 0;
-        match connection.request(
-            PluginCommand::Activate { sample_rate },
-            Duration::from_secs(5),
-        ) {
-            Ok(PluginResponse::ActivateResult {
-                success: true,
-                latency_frames: latency,
-                ..
-            }) => {
-                latency_frames = latency;
-                info!(
-                    "✅ Plugin activated successfully (latency {} frames)",
-                    latency
-                );
+    info!("🔄 Background thread: Loading plugin subprocess...");
+
+    let send_state = |state: String| {
+        if let Some(ref tx) = status_tx {
+            let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
+                channel_id,
+                device_path,
+                state,
+            });
+        }
+    };
+    send_state("loading".to_string());
+
+    if replace_existing {
+        // Drop the crashed host and its instance binding. The socket is usually already closed;
+        // this also handles a host that stopped responding.
+        process_manager.shutdown_instance(instance_id);
+    }
+    if !alive.load(Ordering::Acquire) {
+        // The device was removed while this reload was starting: nothing to load.
+        info!("Plugin load abandoned: the device was removed");
+        return;
+    }
+
+    // Blocking, but on this background thread
+    let connection = match process_manager.spawn_instance(
+        instance_id,
+        &host_key,
+        plugin_path,
+        plugin_id.clone(),
+        sample_rate,
+        max_buffer_size,
+    ) {
+        Ok(connection) => connection,
+        Err(e) => {
+            load.set_failed(e.clone());
+            error!("❌ Failed to spawn plugin subprocess: {}", e);
+            send_state(format!("failed:{}", e));
+            return;
+        }
+    };
+
+    if !alive.load(Ordering::Acquire) {
+        // Dropping the adapter during the spawn may have run before the instance was registered;
+        // shut the fresh host down rather than leave it running with no device behind it.
+        info!("Plugin load abandoned after spawn: the device was removed");
+        process_manager.shutdown_instance(instance_id);
+        return;
+    }
+
+    // Restore the plugin's own state before activation, so presets and non-parameter state are
+    // in place when the plugin starts processing.
+    if let Some(state) = restore_state {
+        let state_len = state.len();
+        match connection.request(PluginCommand::LoadState { state }, REQUEST_TIMEOUT) {
+            Ok(PluginResponse::StateLoadResult { success: true, .. }) => {
+                info!("✅ Restored {} bytes of plugin state", state_len);
             }
-            Ok(PluginResponse::ActivateResult { error, .. }) => {
-                error!(
-                    "❌ Failed to activate plugin: {}",
+            Ok(PluginResponse::StateLoadResult { error, .. }) => {
+                warn!(
+                    "Plugin didn't restore its state ({}); re-sending parameters instead",
                     error.unwrap_or_default()
                 );
             }
-            Ok(resp) => error!("❌ Unexpected response to Activate: {:?}", resp),
-            Err(e) => {
-                error!("❌ Failed to activate plugin: {}", e);
-                warn!("Plugin will run in pass-through mode");
-            }
+            Ok(resp) => warn!("Unexpected response to LoadState: {:?}", resp),
+            Err(e) => warn!("Failed to restore plugin state: {}", e),
         }
+    }
 
-        info!("🔄 Querying plugin parameters...");
-        let params: Vec<ParamInfo> =
-            match connection.request(PluginCommand::GetParameterInfo, REQUEST_TIMEOUT) {
-                Ok(PluginResponse::ParameterInfo { params }) => {
-                    info!("✅ Plugin has {} parameters", params.len());
-                    params.iter().map(plugin_param_to_info).collect()
-                }
-                Ok(resp) => {
-                    error!("❌ Unexpected response to GetParameterInfo: {:?}", resp);
-                    Vec::new()
-                }
-                Err(e) => {
-                    error!("❌ Failed to query plugin parameters: {}", e);
-                    Vec::new()
-                }
-            };
-
-        if let Err(e) = connection.send(PluginCommand::StartProcessing) {
-            error!("❌ Failed to send StartProcessing command: {}", e);
-        }
-
-        let param_count = params.len();
-        *param_cache.lock().unwrap() = params;
-        load.set_latency_frames(latency_frames);
-        load.set_ready(
-            Arc::clone(connection.shared_memory()),
-            Arc::clone(connection.host_shared()),
-        );
-
-        info!(
-            "✅ Plugin fully loaded and activated: {} (instance {}, host pid {}, {} params)",
-            plugin_id,
-            instance_id,
-            connection.host_pid(),
-            param_count
-        );
-        send_state("ready".to_string());
-
-        // Notify that device is ready (triggers parameter re-send)
-        if let Some(ref cmd_tx) = command_tx {
-            let _ = cmd_tx.send(AudioCommand::DeviceReady {
-                channel_id,
-                device_path,
-            });
+    info!("🔄 Activating plugin: {}", plugin_id);
+    let mut latency_frames = 0;
+    match connection.request(
+        PluginCommand::Activate { sample_rate },
+        Duration::from_secs(5),
+    ) {
+        Ok(PluginResponse::ActivateResult {
+            success: true,
+            latency_frames: latency,
+            ..
+        }) => {
+            latency_frames = latency;
             info!(
-                "📤 Sent DeviceReady notification for channel {} position {}",
-                channel_id, device_path
+                "✅ Plugin activated successfully (latency {} frames)",
+                latency
             );
         }
-    });
+        Ok(PluginResponse::ActivateResult { error, .. }) => {
+            error!(
+                "❌ Failed to activate plugin: {}",
+                error.unwrap_or_default()
+            );
+        }
+        Ok(resp) => error!("❌ Unexpected response to Activate: {:?}", resp),
+        Err(e) => {
+            error!("❌ Failed to activate plugin: {}", e);
+            warn!("Plugin will run in pass-through mode");
+        }
+    }
+
+    // A reload restores the engine's parameter values even when the plugin has no state
+    // extension (LoadState then failed above).
+    for (param_id, value) in &restore_params {
+        parameter::set_parameter_value(&process_manager, instance_id, *param_id, *value);
+    }
+
+    info!("🔄 Querying plugin parameters...");
+    let params: Vec<ParamInfo> =
+        match connection.request(PluginCommand::GetParameterInfo, REQUEST_TIMEOUT) {
+            Ok(PluginResponse::ParameterInfo { params }) => {
+                info!("✅ Plugin has {} parameters", params.len());
+                params.iter().map(plugin_param_to_info).collect()
+            }
+            Ok(resp) => {
+                error!("❌ Unexpected response to GetParameterInfo: {:?}", resp);
+                Vec::new()
+            }
+            Err(e) => {
+                error!("❌ Failed to query plugin parameters: {}", e);
+                Vec::new()
+            }
+        };
+
+    if let Err(e) = connection.send(PluginCommand::StartProcessing) {
+        error!("❌ Failed to send StartProcessing command: {}", e);
+    }
+
+    let param_count = params.len();
+    *param_cache.lock().unwrap() = params;
+    load.set_latency_frames(latency_frames);
+    load.set_ready(
+        Arc::clone(connection.shared_memory()),
+        Arc::clone(connection.host_shared()),
+    );
+
+    info!(
+        "✅ Plugin fully loaded and activated: {} (instance {}, host pid {}, {} params)",
+        plugin_id,
+        instance_id,
+        connection.host_pid(),
+        param_count
+    );
+    send_state("ready".to_string());
+
+    // Notify that device is ready (triggers parameter re-send)
+    if let Some(ref cmd_tx) = command_tx {
+        let _ = cmd_tx.send(AudioCommand::DeviceReady {
+            channel_id,
+            device_path,
+        });
+        info!(
+            "📤 Sent DeviceReady notification for channel {} position {}",
+            channel_id, device_path
+        );
+    }
 }

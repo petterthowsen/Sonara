@@ -14,7 +14,8 @@ signal parameter_changed(param_id: int, value: float)
 signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
-signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}"
+signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
+signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
 signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
@@ -93,8 +94,14 @@ var parameters: Array[DeviceParameter] = []
 ## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
 var loaded_file_path: String = ""
 
-## Loading state: "idle", "loading", "ready", "failed:{error}"
+## Loading state: "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
 var loading_state: String = "idle"
+
+## Why the plugin host last crashed ("" if it has not). See `crashed` signal.
+var crash_reason: String = ""
+
+## Tail of the crashed plugin host's stderr ("" if none/empty).
+var crash_stderr: String = ""
 
 ## Track expected parameter count when receiving parameter info
 var _expected_param_count: int = 0
@@ -423,6 +430,13 @@ func close_gui() -> void:
 	AudioEngineOSC.send(osc_addr("gui/close"), [])
 
 
+## Ask the engine to respawn this device's crashed plugin host and restore its state.
+## Safe to call for a non-crashed device (the engine ignores it) but intended for a
+## device whose `loading_state` begins with "crashed:".
+func reload() -> void:
+	AudioEngineOSC.send(osc_addr("reload"), [])
+
+
 ## Connect to audio engine and listen for state updates.
 ## Registers OSC listeners only; the file (if any) is loaded with a proper
 ## req_id by Channel.sync_to_engine()/_sync_device_tree_to_engine(), which
@@ -439,6 +453,7 @@ func connect_to_engine() -> void:
 	var param_info_addr = osc_addr("param/info")
 	var loading_state_addr = osc_addr("loading_state")
 	var gui_closed_addr = osc_addr("gui/closed")
+	var crashed_addr = osc_addr("crashed")
 
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
@@ -446,6 +461,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
+	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
 
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
@@ -469,6 +485,7 @@ func disconnect_from_engine() -> void:
 	var param_pattern = osc_addr("param/*/value")
 	var loading_state_addr = osc_addr("loading_state")
 	var gui_closed_addr = osc_addr("gui/closed")
+	var crashed_addr = osc_addr("crashed")
 
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
@@ -477,6 +494,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
+	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
 	for child in children:
 		child.disconnect_from_engine()
 
@@ -522,6 +540,30 @@ func _on_gui_closed_received(_values: Array) -> void:
 	"""Handle GUI closed notification from engine."""
 	logger.info("[%s] Plugin GUI closed by engine" % device.name)
 	plugin_gui_closed.emit()
+
+
+func _on_crashed_received(values: Array) -> void:
+	"""Handle a plugin-host crash: record it, surface it, and offer a Reload action."""
+	crash_reason = str(values[0]) if values.size() >= 1 else "unknown"
+	crash_stderr = str(values[1]) if values.size() >= 2 else ""
+
+	var new_state := "crashed:" + crash_reason
+	if loading_state != new_state:
+		loading_state = new_state
+		loading_state_changed.emit(loading_state)
+	logger.warn("[%s] Plugin crashed: %s" % [device.name, crash_reason])
+	crashed.emit(crash_reason, crash_stderr)
+
+	if Utils.is_test_mode():
+		return
+	if Sonara and Sonara.editor:
+		var display_name := get_display_name()
+		var body := crash_reason + "\n\nDevice: " + display_name
+		if not crash_stderr.is_empty():
+			body += "\n\nHost stderr:\n" + crash_stderr
+		Sonara.editor.show_error("Plugin crashed: %s" % display_name, body, [
+			{"text": "Reload", "callback": reload},
+		])
 
 
 func _on_parameter_value_received_wildcard(values: Array, address: String) -> void:

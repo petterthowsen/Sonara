@@ -68,6 +68,8 @@ signal view_changed(view: int)  # Editor.View
 
 @onready var settings_dialog: SettingsDialog = $SettingsDialog
 
+@onready var popup_message: PopupMessage = $PopupMessage
+
 @onready var transport_position_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Position
 @onready var transport_time_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Time
 
@@ -168,6 +170,13 @@ func _ready():
 	new_project.project_name = "Untitled"
 	new_project.created_date = Time.get_unix_time_from_system()
 	open_project(new_project)
+
+
+## Show an error/message in the shared PopupMessage window. `actions` entries are
+## {"text": String, "callback": Callable} and appear before Copy/Close.
+func show_error(title: String, body: String, actions: Array = []) -> void:
+	if popup_message:
+		popup_message.show_message(title, body, actions)
 
 
 func _connect_ui_signals():

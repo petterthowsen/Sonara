@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 use super::block_clock::BlockClock;
 use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::{
-    PluginBlockStats, PluginIpcHandle, PluginLoad,
+    PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_MISSES,
 };
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
 use super::devices::{
@@ -24,6 +24,7 @@ use super::devices::{
 };
 use super::ipc::{PluginEvent, ProcessManager};
 use super::types::ChannelId;
+use base64::Engine as _;
 
 /// How often the command thread services devices between commands: plugin parameter changes,
 /// queued automation writes, plugin crash checks and SFZ parameter lists. This is work the audio
@@ -43,6 +44,8 @@ struct PolledPlugin {
     /// Parameter changes the plugin made while processing (from its output events).
     output_events: Vec<(ParamId, ParamValue)>,
     stats: PluginBlockStats,
+    /// The plugin's saved state is stale and its interval has passed, so ask for a fresh blob.
+    save_state_due: bool,
 }
 
 /// Per-plugin audio problem counts since the last log.
@@ -142,6 +145,7 @@ impl CommandWorker {
                             writes,
                             output_events,
                             stats: plugin.take_stats(),
+                            save_state_due: plugin.take_state_save_due(),
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
                         collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
@@ -156,6 +160,49 @@ impl CommandWorker {
             if !plugin.handle.is_alive() {
                 self.mark_plugin_crashed(plugin);
                 continue;
+            }
+            // A host that stopped answering a request, or that keeps missing deadlines, is hung:
+            // kill it. The next tick sees it dead and marks the device crashed.
+            if plugin.handle.is_hung() {
+                warn!(
+                    "Plugin host for {} (channel {} device {}) stopped responding; killing it",
+                    plugin.handle.device_name(),
+                    plugin.channel_id,
+                    plugin.device_path
+                );
+                plugin.handle.kill_host();
+                continue;
+            }
+            if plugin.stats.consecutive_misses >= HUNG_MISSES {
+                warn!(
+                    "Plugin {} (channel {} device {}) missed {} deadlines in a row; killing its host",
+                    plugin.handle.device_name(),
+                    plugin.channel_id,
+                    plugin.device_path,
+                    plugin.stats.consecutive_misses
+                );
+                plugin.handle.kill_host();
+                continue;
+            }
+            if plugin.save_state_due {
+                match plugin.handle.save_state() {
+                    Ok(state) => {
+                        let len = state.len();
+                        self.with_plugin(plugin.channel_id, &plugin.device_path, |plugin| {
+                            plugin.set_saved_state(state)
+                        });
+                        info!(
+                            "Refreshed saved state of plugin {} ({} bytes)",
+                            plugin.handle.device_name(),
+                            len
+                        );
+                    }
+                    Err(e) => warn!(
+                        "Could not refresh the saved state of plugin {}: {}",
+                        plugin.handle.device_name(),
+                        e
+                    ),
+                }
             }
             if !plugin.writes.is_empty() {
                 plugin.handle.set_parameters(&plugin.writes);
@@ -190,7 +237,18 @@ impl CommandWorker {
                             height,
                         });
                     }
+                    PluginEvent::StateDirty => {
+                        self.with_plugin(plugin.channel_id, &plugin.device_path, |plugin| {
+                            plugin.set_state_dirty()
+                        });
+                    }
                 }
+            }
+            if !plugin.output_events.is_empty() {
+                // The plugin changed its own parameter values, so its saved state is stale.
+                self.with_plugin(plugin.channel_id, &plugin.device_path, |plugin| {
+                    plugin.set_state_dirty()
+                });
             }
             self.record_plugin_stats(plugin);
         }
@@ -215,21 +273,154 @@ impl CommandWorker {
         self.log_plugin_stats();
     }
 
-    /// The plugin's subprocess has exited: pass audio through from now on and tell Godot.
+    /// The plugin's host process has exited or is hung: pass audio through from now on and tell
+    /// Godot why, with the host's stderr tail. The device UI offers a Reload.
     fn mark_plugin_crashed(&self, plugin: &PolledPlugin) {
-        let message = "Plugin subprocess crashed (process not alive)".to_string();
+        let crash = plugin.handle.crash_info();
+        let reason = crash
+            .as_ref()
+            .map(|crash| crash.describe())
+            .unwrap_or_else(|| "host process stopped responding".to_string());
+        let stderr = crash
+            .as_ref()
+            .map(|crash| crash.stderr_tail.join("\n"))
+            .unwrap_or_default();
+        let pid = crash
+            .as_ref()
+            .map(|crash| crash.pid)
+            .or_else(|| plugin.handle.host_pid())
+            .unwrap_or(0);
+
         error!(
-            "Subprocess for plugin {} (channel {} device {}) is not running; bypassing it",
+            "Plugin {} (channel {} device {}) crashed: {} (host {} pid {}). Bypassing it; Reload restores it.",
             plugin.handle.device_name(),
             plugin.channel_id,
-            plugin.device_path
+            plugin.device_path,
+            reason,
+            crash.as_ref().map(|crash| crash.host_key.as_str()).unwrap_or("unknown"),
+            pid
         );
-        plugin.load.set_failed(message);
+        if !stderr.is_empty() {
+            warn!("Last stderr from plugin host {}: {}", pid, stderr);
+        }
+
+        plugin.load.set_crashed(reason.clone());
         self.send_status(EngineStatus::DeviceLoadingStateChanged {
             channel_id: plugin.channel_id,
             device_path: plugin.device_path,
-            state: "failed:subprocess crashed".to_string(),
+            state: format!("crashed:{}", reason),
         });
+        self.send_status(EngineStatus::DeviceCrashed {
+            channel_id: plugin.channel_id,
+            device_path: plugin.device_path,
+            reason,
+            stderr,
+            pid,
+        });
+    }
+
+    /// Respawn a crashed plugin's host and restore its state on a background thread.
+    fn reload_device(&self, channel_id: ChannelId, device_path: DevicePath) {
+        let state = self.with_plugin(channel_id, &device_path, |plugin| {
+            let load = plugin.load();
+            load.is_crashed() || load.is_failed()
+        });
+        match state {
+            None => warn!(
+                "Reload requested for channel {} device {}, which is not a subprocess plugin",
+                channel_id, device_path
+            ),
+            Some(false) => warn!(
+                "Reload requested for channel {} device {}, but it hasn't crashed",
+                channel_id, device_path
+            ),
+            Some(true) => {
+                let request =
+                    self.with_plugin(channel_id, &device_path, |plugin| plugin.begin_reload());
+                if let Some(request) = request {
+                    info!(
+                        "Reloading plugin at channel {} device {}",
+                        channel_id, device_path
+                    );
+                    request.spawn();
+                }
+            }
+        }
+    }
+
+    /// Ask a plugin for its state blob and report it (project save path).
+    fn save_plugin_state(&self, channel_id: ChannelId, device_path: DevicePath) {
+        let Some(handle) = self.plugin_handle(channel_id, &device_path) else {
+            // Not a subprocess plugin: keep the old locked behavior (logs and reports empty).
+            self.apply_locked(AudioCommand::SavePluginState {
+                channel_id,
+                device_path,
+            });
+            return;
+        };
+
+        match handle.save_state() {
+            Ok(state) => {
+                let len = state.len();
+                self.with_plugin(channel_id, &device_path, |plugin| {
+                    plugin.set_saved_state(state.clone())
+                });
+                self.send_status(EngineStatus::PluginStateSaved {
+                    channel_id,
+                    device_path,
+                    state_base64: base64::engine::general_purpose::STANDARD.encode(&state),
+                });
+                info!(
+                    "Saved {} bytes of plugin state (channel {} device {})",
+                    len, channel_id, device_path
+                );
+            }
+            Err(e) => warn!(
+                "Failed to save plugin state (channel {} device {}): {}",
+                channel_id, device_path, e
+            ),
+        }
+    }
+
+    /// Hand a base64 state blob back to a plugin (project load path).
+    fn load_plugin_state(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        state_base64: &str,
+    ) {
+        let Some(handle) = self.plugin_handle(channel_id, &device_path) else {
+            self.apply_locked(AudioCommand::LoadPluginState {
+                channel_id,
+                device_path,
+                state_base64: state_base64.to_string(),
+            });
+            return;
+        };
+
+        let state = match base64::engine::general_purpose::STANDARD.decode(state_base64) {
+            Ok(state) => state,
+            Err(e) => {
+                warn!(
+                    "Invalid plugin state for channel {} device {}: {}",
+                    channel_id, device_path, e
+                );
+                return;
+            }
+        };
+        match handle.load_state(state) {
+            Ok(()) => {
+                self.with_plugin(channel_id, &device_path, |plugin| plugin.set_state_dirty());
+                info!(
+                    "Restored plugin state (channel {} device {})",
+                    channel_id, device_path
+                );
+            }
+            Err(e) => warn!(
+                "Failed to load plugin state (channel {} device {}): {}",
+                channel_id, device_path, e
+            ),
+        }
     }
 
     /// Add a plugin's audio-thread counters to the running totals for the next log.
@@ -311,6 +502,19 @@ impl CommandWorker {
                 parent_path,
                 position,
             } => self.remove_device(channel_id, parent_path, position),
+            AudioCommand::ReloadDevice {
+                channel_id,
+                device_path,
+            } => self.reload_device(channel_id, device_path),
+            AudioCommand::SavePluginState {
+                channel_id,
+                device_path,
+            } => self.save_plugin_state(channel_id, device_path),
+            AudioCommand::LoadPluginState {
+                channel_id,
+                device_path,
+                state_base64,
+            } => self.load_plugin_state(channel_id, device_path, &state_base64),
             AudioCommand::ClearChannelDevices { channel_id } => self.clear_devices(channel_id),
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),

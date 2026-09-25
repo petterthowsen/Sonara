@@ -9,8 +9,8 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 0: Measurement (load peaks, xruns, lock misses, an allocation checker). Baseline numbers still to record
 - [x] Phase 1: Audio thread hygiene (RT priority and memlock moved to Phase 8). Needs an `rt-debug` live run
 - [x] Phase 2: Plugin host control channel (Unix socket, reader thread, one protocol module). Needs a live knob-move check
-- [x?] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
-- [ ] Phase 4: Plugin crash detection and recovery
+- [x] Phase 3: Synchronous plugin processing (per-block handshake over shared memory)
+- [x] Phase 4: Plugin crash detection and recovery
 - [ ] Phase 5: Plugin hosting modes (within engine, together, by vendor, by plug-in, individually)
 - [ ] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper)
 - [ ] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI)
@@ -439,6 +439,79 @@ As built (2026-09-25):
 
 Verify: `kill -SEGV` a running host during playback. The engine keeps playing, the UI shows the
 crash, and Reload brings the plugin back with its parameters.
+
+As built (2026-09-25):
+- **Crash state is per host process**, as the plan asks. `HostCrash { host_key, pid, exit,
+  stderr_tail }` lives on `PluginProcess`; `PluginLoad` gained a `CRASHED` variant, distinct from
+  `FAILED`, so the audio thread passes audio through (it only touches the block while `READY`) and
+  the device can be reloaded. `CommandWorker::poll_devices` is the only reporter, so the crash
+  status is sent once per device.
+- **Watching (step 1).** One watcher thread per host polls a `pidfd` (`SYS_pidfd_open`, falling
+  back to a 20 ms sleep when the syscall is unavailable) and reaps the child with `try_wait`, so
+  `HostExit` carries both the signal and the exit code. A second thread drains stderr into a
+  bounded 20-line ring (reads capped at 4 KiB, so an unterminated line can't grow the buffer). The
+  command thread never calls `wait()`; `PluginProcess::shutdown` waits on the watcher's recorded
+  exit instead.
+- **Status (step 1).** New OSC `<device addr>/crashed [reason:s, stderr:s, pid:i]` next to the
+  existing `<device addr>/loading_state`, which now carries `"crashed:<reason>"`. **Deviation:**
+  reload is the device-addressed action `<device addr>/reload`, not the plan's global
+  `/device/reload`, because every other device command is addressed that way. The engine also
+  logs the reason and the host's stderr tail.
+- **Reload (step 3).** `PluginCommand::SaveState`/`LoadState` are now implemented in the host
+  (CLAP's state extension, main thread) and the `HostState` extension is registered so `mark_dirty`
+  reaches the engine. `PluginLoadRequest` is shared by the first load and the reload: the reload
+  shuts the crashed instance down, spawns a host for the same instance id, restores the last blob,
+  activates, **re-sends the engine's cached parameter values** (so plugins without a state
+  extension still come back with their parameters) and sends `DeviceReady` to re-advertise the
+  parameter list. A fresh `PluginLoad` is installed under the state lock, so the audio thread keeps
+  passing audio through until the new host is ready. It runs on a background thread.
+- **State blobs (step 3).** The adapter marks its blob dirty on `mark_dirty` or any parameter
+  change and the command thread refreshes it at most once per 30 s; `/plugin/save_state` and
+  `/plugin/load_state` are implemented too (they were empty stubs). `PluginLoadRequest.alive` is
+  cleared by the adapter's `Drop`, so a load or reload in flight for a removed device shuts its
+  host down instead of orphaning it.
+- **Timeouts (step 4).** `REQUEST_TIMEOUT` is now 5 s (10 s before). A request that times out
+  marks the host hung, and 32 consecutive missed plugin deadlines (`HUNG_MISSES`, ~0.7 s of audio)
+  counts as hung too; either makes the command thread `SIGKILL` the host and treat it as crashed
+  on the next tick.
+- **Shutdown (step 5).** Unchanged in shape: `Shutdown`, 1 s grace, `SIGKILL`; the watcher reaps,
+  and `Drop` kills without waiting (no zombie, no orphan). The host still exits when the control
+  socket closes.
+- **For Phase 5:** the reload path (and `mark_plugin_crashed`) already talks about host processes,
+  but one host holds exactly one instance until Phase 5, so `shutdown_instance` may shut the whole
+  host down. When hosts are shared, reload has to re-initialise only the crashed instance (the
+  protocol already addresses instances, so no wire change is needed).
+- Engine tests: crash exit code + stderr tail from a real `/bin/sh` child, bounded stderr ring,
+  hung flag on request timeout, `PluginLoad::CRASHED` passing audio through, `begin_reload`'s
+  request contents and the 30 s state-save throttle.
+- Godot: `PopupMessage.tscn` (title, scrollable body, Copy, Close, caller-supplied action buttons)
+  instanced in `Editor.tscn`; `DeviceInstance` gains a `crashed` signal, a `reload()` that sends
+  `<device addr>/reload`, and shows the popup with a Reload button; `DevicePanel` shows a Reload
+  button while crashed; `DeviceLightButton` draws the crashed state red.
+- **Live check (2026-09-25).** Dragonfly Room Reverb loaded into its own host on channel 2 and
+  playing (`/transport/play`): `kill -SEGV <host pid>` while playing. The engine stayed up
+  (playhead kept advancing, `load avg` fell from ~12% to ~2.7% as the plugin was bypassed, 4
+  plugin dropouts, 0 xruns, 0 lock misses), logged the crash 5 ms after the socket closed, and
+  sent `/log` + `loading_state "crashed:killed by signal 11 (SIGSEGV)"` +
+  `/crashed "killed by signal 11 (SIGSEGV)" "" 1036847`. Sending `/channel/2/device/0/reload`
+  spawned a new host (new pid), reported `loading` → `ready`, re-advertised all 17 parameters and
+  re-sent `param/4/value 0.5` — the value the user had set before the crash. Stopping the engine
+  left no `plugin_host` process behind.
+- **Live check: hung host (2026-09-25).** Same setup, but `kill -STOP <host pid>` instead: the
+  plugin missed 8 deadlines (WARN), then 32 in a row → the command thread logged
+  `missed 32 deadlines in a row; killing its host`, `SIGKILL`ed it and marked the device crashed
+  (`killed by signal 9 (SIGKILL)`). `/reload` brought it back on a new pid with all 17 parameters.
+  The first attempt exposed a real bug this check caught: the new host inherited the dead host's
+  `consecutive_misses`, so the hung-host check killed it 20 ms after it came up. `begin_reload`
+  now clears the miss counters (asserted in the reload unit test).
+- **Live check: full state round trip (2026-09-25).** Loaded the same plugin, changed `Size`, waited
+  past the 30 s interval → `Refreshed saved state of plugin ... (350 bytes)`. After `kill -SEGV`
+  the reload logged `Restored 350 bytes of plugin state`, activated on a new pid and stayed up.
+- **Not verified:** nothing in Godot calls `/plugin/save_state` or `/plugin/load_state` yet (the
+  project file doesn't persist plugin state), and the plugin GUI knob → Godot check from Phase 2 is
+  still open.
+- `./test_osc.sh` and `./test_plugin_osc.sh` still exit 0 without loading a plugin (the staleness
+  noted in Phase 2), so they only prove the engine survives them.
 
 ## Phase 5: Plugin hosting modes
 

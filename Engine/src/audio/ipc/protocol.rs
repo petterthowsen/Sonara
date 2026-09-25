@@ -190,6 +190,10 @@ pub enum PluginEvent {
 
     /// The plugin asked for its GUI window to be resized
     GuiResizeRequest { width: u32, height: u32 },
+
+    /// The plugin called `mark_dirty`: its saved state no longer matches what was loaded. The
+    /// engine refreshes its state blob from this (crash recovery, project save).
+    StateDirty,
 }
 
 /// Parameter metadata

@@ -73,3 +73,37 @@ stream restart), so a dropped packet loses nothing. Rate = difference between tw
 | 6 | i | `plugin_underruns`: CLAP plugin blocks padded with silence because the plugin's output wasn't ready (audible dropouts) |
 
 Counters are clamped to int32.
+
+## Plugin crash and reload (Phase 4)
+
+### `<device addr>/loading_state`
+
+Sent on every load transition: `"idle"`, `"loading"`, `"ready"`, `"failed:<error>"` (loading never
+finished) or `"crashed:<reason>"` (the host process died after loading). A crashed device passes
+audio through and the UI offers a Reload.
+
+### `<device addr>/crashed`
+
+Sent once when a plugin's host process dies or stops responding. A crash belongs to the host
+process, so one host holding several instances (future hosting modes) sends one per instance.
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | `reason`: one line, e.g. `killed by signal 11 (SIGSEGV)` or `exited with code 7` |
+| 1 | s | `stderr`: the last lines the host printed before it died, newline-separated, may be empty |
+| 2 | i | `pid`: the dead host's process id |
+
+### `<device addr>/reload` (Godot → engine)
+
+No arguments. Respawning the host and restoring the plugin's state happens on the engine's command
+thread; the device reports `"loading"` and later `"ready"` on `<device addr>/loading_state`.
+
+### `/plugin/save_state [channel:i, device_position:i]` (Godot → engine)
+
+Asks the plugin to serialize its state. The engine replies with `/plugin/state/saved
+[channel:i, device_path:s, state_base64:s]`.
+
+### `/plugin/load_state [channel:i, device_position:i, state_base64:s]` (Godot → engine)
+
+Restores a state blob into a loaded plugin.
+

@@ -148,6 +148,10 @@ func _update_tooltip() -> void:
 		var error = loading_state.substr(7)
 		tooltip_text = "Failed to load: " + error
 		return
+	elif loading_state.begins_with("crashed:"):
+		var reason = loading_state.substr(8)
+		tooltip_text = "Crashed: %s — use Reload to bring it back" % reason
+		return
 	
 	# Normal active/enabled states
 	if not active and not enabled:
@@ -217,6 +221,9 @@ func _draw() -> void:
 		border_color = Color.DODGER_BLUE
 	elif loading_state.begins_with("failed:"):
 		light_color = Color.DARK_RED  # Dark red for failed
+		border_color = Color.RED
+	elif loading_state.begins_with("crashed:"):
+		light_color = Color.DARK_RED  # Dark red for a crashed plugin host
 		border_color = Color.RED
 	else:
 		# Normal active/enabled states
