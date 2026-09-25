@@ -196,11 +196,15 @@ pub fn open_plugin_gui(
         let title = std::ffi::CString::new("Plugin - Sonara").unwrap();
         gui_ext.suggest_title(&mut handle, &title);
 
+        // show() is advisory for embedded GUIs: the plugin's child window already exists after
+        // set_parent. nih-plug always returns false here, and hosts such as Bitwig ignore it.
         info!("🎨 Step 8: Showing GUI window...");
-        gui_ext.show(&mut handle).map_err(|e| {
-            error!("❌ Failed to show GUI: {}", e);
-            format!("Failed to show GUI: {}", e)
-        })?;
+        if let Err(e) = gui_ext.show(&mut handle) {
+            warn!(
+                "⚠️ Plugin returned false from gui.show() ({}); continuing, as embedded GUIs are already mapped by set_parent",
+                e
+            );
+        }
 
         info!("✅ Plugin GUI opened successfully (embedded mode)");
 

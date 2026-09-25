@@ -14,7 +14,8 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 5: Plugin hosting modes (together, by vendor, by plug-in, individually; within engine skipped). Needs a Godot UI check
 - [x] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper). Needs a Godot UI check
 - [x] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI). Needs a Godot UI check and a forced-quantum run
-- [ ] Phase 8: Later work (lock-free engine state, CPU affinity, latency compensation)
+- [ ] Phase 8: Later work, in this order: 8a parallel plugin dispatch (designed), 8b RT priority, then CPU affinity, latency compensation and lock-free state as the numbers call for them
+  - [ ] Phase 8a: Parallel plugin dispatch (begin/finish per plugin block, parked chains in mixer passes 1 and 3)
 
 Do the phases in order unless the dependency notes say otherwise. This plan is the design: no separate specs.
 When a phase has to deviate from it, update this file first. Phase 3 must already implement the
@@ -35,6 +36,9 @@ check.
 
 Phase 5 needs Phase 4: changing the hosting mode respawns plugins and restores their state
 through the same reload path that crash recovery uses.
+
+Phase 8a needs Phase 3 (separate start and wait steps) and Phase 5 (hosting modes decide how
+many host processes can run at once). 8b is most useful after 8a.
 
 Phase 0 comes first because everything after it needs before-and-after numbers. Phase 7 can
 start after Phase 1 if the settings UI is more urgent. In that case, CLAP plugins are respawned
@@ -915,21 +919,232 @@ As built (2026-09-25):
 
 ## Phase 8: Later work
 
-Drive these by Phase 0 numbers, not by default:
+Drive these by Phase 0 numbers, not by default. They are listed in the order to do them.
+
+- **8a: Parallel plugin dispatch.** Designed in full below. Do it first: it is the only item
+  that raises how much plugin CPU fits in a block.
+- **8b: RT priority and memory locking** (moved from Phase 1). Give the engine callback and every
+  `plugin_host` audio thread `SCHED_FIFO`, with rtkit as the fallback. Call `mlockall`. Report
+  both in `EngineStats`. See the Phase 1 notes for what the dev machine allows. This matters
+  most after 8a, when several host threads compete with the rest of the system for cores at once.
+- **CPU affinity** for the audio thread and plugin audio threads, as a setting. Only if 8b
+  measurements still show migration jitter.
+- **Plugin latency compensation**, using `latency_frames()` from Phase 3 and the routing graph in
+  `mixing.rs`. This is about timing correctness, not CPU: it doesn't reduce dropouts.
 - **Lock-free engine state** (TODO.md "phase 2"). The audio thread owns `EngineState` and drains
   a lock-free command queue. Removed objects are sent back to be dropped off-thread. Worth doing
-  if `lock_misses` stays above zero after Phase 1.
-- **RT priority and memory locking** (moved from Phase 1): `SCHED_FIFO` with rtkit fallback for
-  the callback thread, `mlockall`, report both in `EngineStats`. See the Phase 1 notes for what
-  the dev machine allows.
-- **CPU affinity** for the audio thread and plugin audio threads, as a setting.
-- **Plugin latency compensation**, using `latency_frames()` from Phase 3 and the routing graph in
-  `mixing.rs`.
-- **Parallel plugin dispatch.** Plugins run in other processes, so the engine can start the
-  first plugin of every independent channel at once and wait for them together. That gives
-  multi-core processing almost for free. It relies on Phase 3's separate start and wait steps.
+  if `lock_misses` stays above zero. It has been 0 in every measurement since Phase 3.
 - **Parallel channel processing** of built-in devices across a worker pool, only if single-core
-  load is still the bottleneck after parallel plugin dispatch.
+  load is still the bottleneck after 8a.
+
+### Phase 8a: Parallel plugin dispatch
+
+Goal: independent plugins process at the same time, one per host process, so plugin CPU scales
+with cores instead of adding up on one.
+
+**The problem.** `SubprocessClapAdapter::process_block` rings the host and then waits for
+`done_seq` before it returns. Every plugin in the callback therefore runs after the previous
+one finished. All of them share one deadline (70% of the block), so the plugins' process times
+add up against it. Example: 5 LibreStrings instances at 2048 frames / 48 kHz get about 30 ms
+between them. At about 7 ms each, the last ones miss the deadline and drop a block, even though
+each runs in its own process and 4 cores sit idle.
+
+**Idea.** Split each plugin block into *begin* (write the input and events, ring the doorbell)
+and *finish* (wait, then copy the output). The mixer begins every plugin whose input is ready,
+runs built-in devices while the plugins work, and only then waits. Each plugin gets close to the
+whole deadline on its own core.
+
+#### 1. `AudioDevice`: begin and finish
+
+Add two default methods in `audio/devices/mod.rs`:
+
+```rust
+/// Audio thread. Start processing a block without waiting for the result. Returns false when
+/// the device can't split a block; the caller then uses `process_block`. `inputs` must stay
+/// unchanged until `finish_block`.
+fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool { false }
+
+/// Audio thread. Complete a block started by `begin_block`: wait (bounded by the callback
+/// deadline) and write `outputs`. On a miss, write dry input (effect) or silence (instrument).
+fn finish_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+```
+
+Only `SubprocessClapAdapter` overrides them. Built-in devices and containers (`Chain`, `Layer`,
+`DrumMachine`) keep the default and run inline. A plugin *inside* a container therefore stays
+serial for now (see Deferred).
+
+#### 2. Adapter: split `process_block`
+
+Today `process_block` has several early returns that write the output directly: not loaded,
+block too big, previous request still outstanding, disabled. `begin_block` has no output, so it
+records what `finish_block` should do instead:
+
+```rust
+enum PendingBlock { None, Dry, Request(u64) }
+```
+
+- `begin_block`:
+  - Load not ready, or block too big: set `Dry` and return true.
+  - Disabled: set `Dry` and return true.
+  - Otherwise fill the input planes and the event array, store `request_seq`, ring the
+    doorbell, clear `input_events`, set `Request(seq)` and return true.
+- `finish_block`:
+  - `Dry` copies the input to the output.
+  - `Request(seq)` runs today's `wait_for_done` and success/miss paths unchanged.
+  - Either way, it resets the pending state to `None`.
+- `process_block` becomes `begin_block` followed by `finish_block`, so every caller outside the
+  mixer (containers, tests, offline use) behaves exactly as before.
+- **Previous request still outstanding** (the last block missed and the host is still working):
+  today this waits for it up to the deadline. `begin_block` must **not** wait, because waiting
+  there serializes everything behind a late plugin. Check `done_seq` once. If the request is
+  still running, count a deadline miss, set `Dry` and return. The late result is discarded by
+  sequence number, as it is now.
+- Debug-assert that `finish_block` is never called with `None`, and that `begin_block` is never
+  called while a block is pending.
+
+#### 3. Chain runner that can park
+
+`container::process_serial_chain` ping-pongs between `buf_a` and `buf_b` by device index, and
+checks sleep and activity after each device. Replace its loop with a resumable runner so a chain
+can stop at a begun plugin and continue later from the same place:
+
+```rust
+pub struct ChainCursor { next: usize, has_input_activity: bool, parked: bool }
+
+pub enum ChainStep { Parked, Done { result_in_output: bool } }
+
+/// Run devices from `cursor.next` until one begins asynchronously (Parked) or the chain ends.
+pub fn run_chain(devices, buf_a, buf_b, sample_count, cursor, on_sleep_change) -> ChainStep;
+
+/// Finish the parked device, check its sleep state, then continue like `run_chain`.
+pub fn resume_chain(devices, buf_a, buf_b, sample_count, cursor, on_sleep_change) -> ChainStep;
+```
+
+- Buffer parity stays tied to the device's absolute index, as now. The runner works on
+  `devices[start..]`, so the index is relative to `start`.
+- Sleeping devices are skipped before `begin_block`, as now. `update_sleep_state` runs after
+  `finish_block`.
+- `process_serial_chain` becomes a thin wrapper: `run_chain`, then `resume_chain` until `Done`.
+  Containers keep using it unchanged.
+- `Channel` gets a `ChainCursor` in `mix`, plus methods that split `process_device_chain_from`
+  into its halves:
+  - `begin_device_chain(start, frames)`: MIDI dispatch when `start == 0`, activity check,
+    interleave, then `run_chain`.
+  - `resume_device_chain(frames)`: `resume_chain`, then deinterleave on `Done`.
+
+  `process_device_chain` and `process_device_chain_from` keep their behavior by running both.
+
+#### 4. Mixer pass 1 (the device pre-pass)
+
+This pass covers instrument and audio tracks, which is where heavy synths like LibreStrings
+live. Replace the loop in `mix_and_output` with two stages:
+
+1. **Begin.** For every channel that isn't a route target, call `begin_device_chain(0, frames)`.
+   A `Parked` channel goes into `render_scratch.parked`, a preallocated `Vec<ChannelId>` sized
+   for the channel limit. A `Done` channel is finished (`forward_device_events`).
+   Chains of only built-in devices complete here. That runs them on the engine thread while
+   the plugin hosts work.
+2. **Drain.** Pop channels from `parked` in the order they parked. `resume_device_chain` waits
+   on that channel's plugin, then runs the rest of its chain. If the chain parks again at a
+   later plugin, push the channel to the back of the queue. Otherwise it's done.
+
+Wait in park order instead of on whichever plugin finishes first: a futex can only wait on one
+doorbell, each host has its own, and plugins begun together finish at about the same time. A
+shared "any host finished" word would need a protocol change, and isn't worth it until
+measurements say so.
+
+Mixing results don't depend on the order channels finish, because pass 1 only writes each
+channel's own buffers.
+
+#### 5. Mixer pass 3 (buses and master)
+
+`finish_channel` runs one route target at a time. Change each sweep of the dependency loop to
+batch its work:
+
+1. Collect every channel that is ready (`!done && pending_inputs == 0`) into a preallocated list.
+2. Begin the device chains of the ready route targets. Park them as in pass 1.
+3. Drain the parked chains.
+4. Pan, then run `route_channel` for each channel in the list, in list order.
+
+Channels ready in the same sweep can't feed each other, because a feed would keep the target's
+`pending_inputs` above zero. Channels that become ready during a sweep wait for the next sweep,
+which gives the same result. The routing-cycle fallback stays serial.
+
+Two reverb buses on sends then process in parallel, but master still waits for everything
+before it.
+
+#### 6. Aux sources
+
+`process_aux_sources` (the first device's extra outputs feeding child channels) stays serial.
+It goes through `process_block_with_extra`, which has no begin/finish pair, and it's rare. Leave
+it until a multi-out plugin shows up in the measurements.
+
+#### 7. Hosting modes
+
+Parallelism only happens across host processes. Each host has one audio thread that processes
+its ready instances one after another. The result per mode:
+
+- **Individually:** the most parallelism.
+- **By plug-in:** 5 LibreStrings in one host are serial again.
+- **Together:** everything in the host is serial.
+
+The default stays Individually. Add a note to the `plugins/hosting_mode` setting's description:
+"Individually runs plugins on separate cores; grouped modes run each group on one core." Several
+audio threads per host is possible later, but it touches the CLAP threading model and needs its
+own design.
+
+#### Real-time rules
+
+- No allocation: `parked` and the ready list are preallocated in `RenderScratch`. `ChainCursor`
+  is plain data in `ChannelMix`.
+- Nothing waits except `finish_block`, which uses the existing spin-then-futex bounded by the
+  callback deadline.
+- The deadline stays one absolute value per callback. With plugins in parallel, 70% now means
+  per plugin wall time rather than a sum, so don't raise it.
+- Add `rt_debug` sections `begin_block <device>` and `finish_block <device>`, so waits show up
+  per plugin.
+
+#### Tests
+
+In `mixing.rs`, with a fake async device that logs `Begin(id)` and `Finish(id)` to a shared
+list and copies input to output with a gain:
+
+- Three instrument channels, each with the fake plugin as its first device: all three `Begin`s
+  come before the first `Finish`.
+- A chain `[fake plugin, built-in, fake plugin]`: the output equals running the same chain with
+  `process_serial_chain`. This checks buffer parity across a park.
+- A chain whose only plugin is last, next to a channel with a plugin first: both begin before
+  either finishes.
+- Sleeping and disabled plugins: the output matches the serial path, and sleep changes are
+  reported.
+- Two buses on sends, each with a fake plugin: both begin before either finishes, and master
+  still receives both.
+- All existing `mixing.rs` routing and solo tests pass unchanged.
+
+In the adapter tests, using the existing held-request fixture:
+
+- `begin_block` followed by `finish_block` produces the same output and stats as
+  `process_block`.
+- With the previous request held, `begin_block` returns at once (well under the deadline),
+  counts one miss, and outputs dry input.
+
+#### Verify
+
+- `cargo test`. Run `./test_osc.sh` and `./test_plugin_osc.sh` against a release build.
+- Run with `rt-debug`: zero allocations.
+- Live, Individually mode: 5 LibreStrings instances playing at 2048 / 48 kHz. Record rows before
+  and after in **Measurements**, with the plugin deadline misses from the Phase 6 stats. `top`
+  should show the `plugin_host` processes busy at the same time, not taking turns.
+- The same project in By plug-in mode: the misses come back. This confirms the hosting-mode
+  note.
+
+#### Deferred
+
+- Beginning plugins nested in containers. `Layer` could begin all its children and then finish
+  them. `Chain` gains nothing.
+- One shared completion word, so the engine wakes for whichever plugin finishes first.
+- Several audio threads per host process.
+- Begin/finish for `process_block_with_extra` (aux sources).
 
 ## Decisions
 

@@ -13,7 +13,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use tracing::{error, info, warn};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::EventLoopBuilder;
+use winit::event_loop::{EventLoopBuilder, EventLoopProxy};
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
 
@@ -43,6 +43,10 @@ pub struct WindowManager {
     /// Sender for window commands
     command_tx: Sender<WindowCommand>,
 
+    /// Wakes the winit loop after a command is queued. Without it, the loop (ControlFlow::Wait)
+    /// only reads commands when X happens to deliver an event, which delayed GUI opens by seconds.
+    wake_proxy: Option<EventLoopProxy<()>>,
+
     /// Receiver for window close events (when user clicks X)
     pub close_event_rx: std::sync::mpsc::Receiver<String>,
 
@@ -57,17 +61,33 @@ impl WindowManager {
 
         let (command_tx, command_rx) = channel();
         let (close_event_tx, close_event_rx) = std::sync::mpsc::channel();
+        let (proxy_tx, proxy_rx) = sync_channel(1);
 
         // Spawn background thread for winit event loop
         let thread_handle = thread::spawn(move || {
-            run_window_thread(command_rx, close_event_tx);
+            run_window_thread(command_rx, close_event_tx, proxy_tx);
         });
+
+        // None if the event loop failed to build; commands then go nowhere, as before.
+        let wake_proxy = proxy_rx.recv().ok().flatten();
 
         Self {
             command_tx,
+            wake_proxy,
             close_event_rx,
             _thread_handle: Some(thread_handle),
         }
+    }
+
+    /// Queue a command for the winit thread and wake its event loop.
+    fn send(&self, cmd: WindowCommand) -> bool {
+        if self.command_tx.send(cmd).is_err() {
+            return false;
+        }
+        if let Some(proxy) = &self.wake_proxy {
+            let _ = proxy.send_event(());
+        }
+        true
     }
 
     /// Create a window and return its X11 handle
@@ -80,14 +100,14 @@ impl WindowManager {
 
         let (response_tx, response_rx) = sync_channel(1);
 
-        self.command_tx
-            .send(WindowCommand::Create {
-                process_key: process_key.clone(),
-                width,
-                height,
-                response: response_tx,
-            })
-            .ok()?;
+        if !self.send(WindowCommand::Create {
+            process_key: process_key.clone(),
+            width,
+            height,
+            response: response_tx,
+        }) {
+            return None;
+        }
 
         // Wait for response from winit thread
         match response_rx.recv() {
@@ -116,7 +136,7 @@ impl WindowManager {
             process_key, width, height
         );
 
-        let _ = self.command_tx.send(WindowCommand::Resize {
+        self.send(WindowCommand::Resize {
             process_key: process_key.to_string(),
             width,
             height,
@@ -127,7 +147,7 @@ impl WindowManager {
     pub fn show_window(&mut self, process_key: &str) {
         info!("Requesting window show for process: {}", process_key);
 
-        let _ = self.command_tx.send(WindowCommand::Show {
+        self.send(WindowCommand::Show {
             process_key: process_key.to_string(),
         });
     }
@@ -136,7 +156,7 @@ impl WindowManager {
     pub fn destroy_window(&mut self, process_key: &str) {
         info!("Requesting window destruction for process: {}", process_key);
 
-        let _ = self.command_tx.send(WindowCommand::Destroy {
+        self.send(WindowCommand::Destroy {
             process_key: process_key.to_string(),
         });
     }
@@ -186,6 +206,7 @@ fn create_window(
 fn run_window_thread(
     command_rx: Receiver<WindowCommand>,
     close_event_tx: std::sync::mpsc::Sender<String>,
+    proxy_tx: SyncSender<Option<EventLoopProxy<()>>>,
 ) {
     info!("🧵 Window thread starting");
 
@@ -194,9 +215,11 @@ fn run_window_thread(
         Ok(el) => el,
         Err(e) => {
             error!("Failed to create EventLoop in window thread: {}", e);
+            let _ = proxy_tx.send(None);
             return;
         }
     };
+    let _ = proxy_tx.send(Some(event_loop.create_proxy()));
 
     let mut windows: HashMap<String, WindowHolder> = HashMap::new();
     let mut pending_creates: Vec<(String, u32, u32, SyncSender<Option<u64>>)> = Vec::new();
@@ -237,7 +260,9 @@ fn run_window_thread(
         }
 
         match event {
-            Event::NewEvents(_) => {
+            // UserEvent is the wakeup from WindowManager::send; handle it like NewEvents so a
+            // command drained mid-iteration is still applied without waiting for another event.
+            Event::NewEvents(_) | Event::UserEvent(()) => {
                 // Create pending windows
                 for (process_key, width, height, response) in pending_creates.drain(..) {
                     // Check if window already exists (e.g., close failed and window wasn't destroyed)

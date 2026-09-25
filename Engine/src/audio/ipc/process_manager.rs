@@ -43,8 +43,9 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 /// How long the watcher waits for a killed host to be reaped before giving up on it.
 const KILL_REAP_GRACE: Duration = Duration::from_millis(500);
 
-/// Lines of the host's stderr kept for a crash report.
-const STDERR_TAIL_LINES: usize = 20;
+/// Lines of the host's stderr kept for a crash report. Enough for a Rust panic message plus
+/// its backtrace, which otherwise pushes the message out.
+const STDERR_TAIL_LINES: usize = 80;
 
 /// Largest stderr chunk read at once, so a line the host never terminates can't grow the buffer.
 const STDERR_TAIL_BYTES_PER_READ: usize = 4096;

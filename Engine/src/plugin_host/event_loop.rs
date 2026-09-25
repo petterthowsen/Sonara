@@ -147,6 +147,7 @@ fn handle_incoming(
 fn service_plugin_side(
     socket: &UnixStream,
     state: &mut PluginState,
+    audio: &AudioThreadHandle,
     flush_events: &mut EventBuffer,
 ) {
     // Process timers - check which ones need to fire
@@ -166,8 +167,17 @@ fn service_plugin_side(
     }
 
     // GUI parameter changes are only visible through output events, which only come from
-    // process() or flush(). Flush while the GUI is open, or when the plugin asks.
-    if state.shared.take_flush_requested() || state.gui_open {
+    // process() or flush(). CLAP forbids flush concurrently with process(), and requires it on
+    // the audio thread while the plugin is active, so an active plugin is flushed there, between
+    // blocks, when it asks. nih-plug aborts on a concurrent flush (its event queue is borrowed
+    // by process()). An inactive plugin is flushed here, also while its GUI is open.
+    let flush_requested = state.shared.take_flush_requested();
+    let changes: Vec<(u32, f32)> = if state.activated {
+        if !flush_requested {
+            return;
+        }
+        audio.flush(state.instance_id)
+    } else if flush_requested || state.gui_open {
         flush_events.clear();
         {
             let mut handle = state.instance.plugin_handle();
@@ -177,29 +187,27 @@ fn service_plugin_side(
                 params_ext.flush(&mut handle, &input_events, &mut output_events);
             }
         }
+        let param_map = Arc::clone(state.param_map());
+        flush_events
+            .iter()
+            .filter_map(|event| {
+                let param_event = event.as_event::<ParamValueEvent>()?;
+                let (param_id, entry) = param_map.find(param_event.param_id()?)?;
+                Some((param_id, entry.normalize(param_event.value())))
+            })
+            .collect()
+    } else {
+        return;
+    };
 
-        for event in flush_events.iter() {
-            let Some(param_event) = event.as_event::<ParamValueEvent>() else {
-                continue;
-            };
-            let Some(clap_id) = param_event.param_id() else {
-                continue;
-            };
-            let Some((param_id, entry)) = state.param_map().find(clap_id) else {
-                continue;
-            };
-            let normalized = entry.normalize(param_event.value());
-            send(
-                socket,
-                &HostMessage::Event {
-                    instance_id: state.instance_id,
-                    event: PluginEvent::ParameterValueChanged {
-                        param_id,
-                        value: normalized,
-                    },
-                },
-            );
-        }
+    for (param_id, value) in changes {
+        send(
+            socket,
+            &HostMessage::Event {
+                instance_id: state.instance_id,
+                event: PluginEvent::ParameterValueChanged { param_id, value },
+            },
+        );
     }
 }
 
@@ -262,7 +270,7 @@ pub fn run_plugin_host(
             // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
             let span = state.span.clone();
             let _entered = span.enter();
-            service_plugin_side(&socket, state, &mut flush_events);
+            service_plugin_side(&socket, state, &audio, &mut flush_events);
         }
 
         // Forward unsolicited messages from plugin callbacks (GUI resize requests, etc.)

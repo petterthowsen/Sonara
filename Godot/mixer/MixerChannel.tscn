@@ -142,11 +142,10 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
-custom_minimum_size = Vector2(108, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_top = 1.0
-offset_right = 111.0
+offset_right = 115.0
 grow_vertical = 2
 size_flags_horizontal = 0
 focus_mode = 2
@@ -225,6 +224,7 @@ custom_minimum_size = Vector2(108, 0)
 layout_mode = 2
 
 [node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
+visible = false
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_stretch_ratio = 1.5
@@ -252,12 +252,15 @@ split_offsets = PackedInt32Array(35)
 split_offset = 35
 
 [node name="DeviceList" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2101730065 instance=ExtResource("8_xa46q")]
+custom_minimum_size = Vector2(0, 48)
 layout_mode = 2
+size_flags_vertical = 1
 size_flags_stretch_ratio = 2.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
 hide_parameters = true
 
 [node name="Sends" type="ScrollContainer" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=1983758220 groups=["mixer_channel_sends"]]
+visible = false
 custom_minimum_size = Vector2(0, 70)
 layout_mode = 2
 size_flags_vertical = 3
@@ -380,6 +383,7 @@ item_1/id = 1
 
 [node name="Volume" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=450510557]
 custom_minimum_size = Vector2(0, 100)
+custom_maximum_size = Vector2(-1, 300)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")

@@ -84,8 +84,8 @@ var _header_fill: StyleBoxFlat = null
 ## Base strip width. Narrow has no floor (shrink to content); medium and wide are fixed floors.
 enum SizeMode {NARROW, MEDIUM, WIDE}
 const NARROW_WIDTH := 0
-const MEDIUM_BASE_WIDTH := 108
-const WIDE_WIDTH := 138
+const MEDIUM_BASE_WIDTH := 80
+const WIDE_WIDTH := 108
 
 ## Tall keeps DeviceList/Sends in the main column. Compact moves them into the SidePane,
 ## which only shows (and slides out) while this strip is selected.

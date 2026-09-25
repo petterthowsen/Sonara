@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use clack_extensions::params::PluginParams;
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{Pckn, UnknownEvent};
@@ -68,6 +69,13 @@ pub enum HostAudioCommand {
         instance_id: InstanceId,
         clap_id: ClapId,
         value: f64,
+    },
+    /// Run `params.flush` between blocks. CLAP requires flush on the audio thread while the
+    /// plugin is active, and never concurrently with `process()`. Replies with the plugin's
+    /// parameter changes as (engine index, normalized value).
+    Flush {
+        instance_id: InstanceId,
+        reply: SyncSender<Vec<(u32, f32)>>,
     },
     /// Clear the plugin's processing state and any queued events.
     Reset {
@@ -152,6 +160,19 @@ impl AudioThreadHandle {
             clap_id,
             value,
         });
+    }
+
+    /// Flush an active instance's parameters on the audio thread and return its changes.
+    pub fn flush(&self, instance_id: InstanceId) -> Vec<(u32, f32)> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.send(HostAudioCommand::Flush {
+            instance_id,
+            reply: reply_tx,
+        });
+        reply_rx.recv_timeout(HANDOFF_TIMEOUT).unwrap_or_else(|e| {
+            warn!("Audio thread didn't answer the parameter flush: {}", e);
+            Vec::new()
+        })
     }
 
     pub fn reset(&self, instance_id: InstanceId) {
@@ -340,6 +361,20 @@ impl AudioWorker {
                     slot.queued_params.push((clap_id, value));
                 }
             }
+            HostAudioCommand::Flush { instance_id, reply } => {
+                let changes = match self
+                    .slots
+                    .iter_mut()
+                    .find(|slot| slot.instance_id == instance_id)
+                {
+                    Some(slot) => {
+                        finish_pending(slot, &mut self.scratch, &self.doorbell);
+                        flush_params(slot, &mut self.scratch)
+                    }
+                    None => Vec::new(),
+                };
+                let _ = reply.send(changes);
+            }
             HostAudioCommand::Reset { instance_id } => {
                 let slot = self.slot(instance_id);
                 slot.reset_requested = true;
@@ -417,6 +452,31 @@ fn finish_pending(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Hos
     if slot.processor.is_some() && slot.has_request() {
         process_request(slot, scratch, doorbell);
     }
+}
+
+/// Call `params.flush` on the slot's processor and collect the plugin's parameter changes.
+fn flush_params(slot: &mut InstanceSlot, scratch: &mut Scratch) -> Vec<(u32, f32)> {
+    let Some(processor) = slot.processor.as_mut() else {
+        return Vec::new();
+    };
+    let mut handle = processor.plugin_handle();
+    let Some(params) = handle.get_extension::<PluginParams>() else {
+        return Vec::new();
+    };
+    scratch.output_events.clear();
+    {
+        let mut output_events = OutputEvents::from_buffer(&mut scratch.output_events);
+        params.flush_active(&mut handle, &InputEvents::empty(), &mut output_events);
+    }
+    scratch
+        .output_events
+        .iter()
+        .filter_map(|event| {
+            let param_event = event.as_event::<ParamValueEvent>()?;
+            let (index, entry) = slot.param_map.find(param_event.param_id()?)?;
+            Some((index, entry.normalize(param_event.value())))
+        })
+        .collect()
 }
 
 /// Process the block the engine published in `slot`'s shared memory.
