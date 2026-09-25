@@ -461,19 +461,26 @@ As built (2026-09-25):
   (CLAP's state extension, main thread) and the `HostState` extension is registered so `mark_dirty`
   reaches the engine. `PluginLoadRequest` is shared by the first load and the reload: the reload
   shuts the crashed instance down, spawns a host for the same instance id, restores the last blob,
-  activates, **re-sends the engine's cached parameter values** (so plugins without a state
-  extension still come back with their parameters) and sends `DeviceReady` to re-advertise the
-  parameter list. A fresh `PluginLoad` is installed under the state lock, so the audio thread keeps
+  activates, and sends `DeviceReady` to re-advertise the parameter list. When the blob restored,
+  it is authoritative: the host reads every parameter back (`GetParameter`) and `DeviceReady`
+  carries the values, which the engine caches and reports to Godot after the list (Godot resets
+  values to defaults when a list arrives). Only without a blob, or when `LoadState` fails, does
+  it **re-send the engine's cached parameter values**, so plugins without a state extension still
+  come back with their parameters. The first version always re-sent the cache, which overwrote
+  changes the plugin made without reporting them (a preset loaded in its GUI). A fresh `PluginLoad` is installed under the state lock, so the audio thread keeps
   passing audio through until the new host is ready. It runs on a background thread.
 - **State blobs (step 3).** The adapter marks its blob dirty on `mark_dirty` or any parameter
-  change and the command thread refreshes it at most once per 30 s; `/plugin/save_state` and
+  change (the host reports `mark_dirty` once per saved blob; `SaveState` re-arms it) and the command thread refreshes it at most once per 30 s; `/plugin/save_state` and
   `/plugin/load_state` are implemented too (they were empty stubs). `PluginLoadRequest.alive` is
   cleared by the adapter's `Drop`, so a load or reload in flight for a removed device shuts its
   host down instead of orphaning it.
 - **Timeouts (step 4).** `REQUEST_TIMEOUT` is now 5 s (10 s before). A request that times out
-  marks the host hung, and 32 consecutive missed plugin deadlines (`HUNG_MISSES`, ~0.7 s of audio)
-  counts as hung too; either makes the command thread `SIGKILL` the host and treat it as crashed
-  on the next tick.
+  marks the host hung, and so does a published block that stays unfinished (`done_seq` doesn't
+  move while a request is outstanding) for `HUNG_STALL_TIMEOUT` = 1 s of wall time; either makes
+  the command thread `SIGKILL` the host and treat it as crashed on the next tick. The first
+  version counted 32 consecutive missed deadlines instead, which also killed plugins that were
+  only slower than their share of the shared deadline (they miss every block but finish each one
+  late) and scaled with the buffer size (43 ms at 64 frames). A slow plugin now only drops out.
 - **Shutdown (step 5).** Unchanged in shape: `Shutdown`, 1 s grace, `SIGKILL`; the watcher reaps,
   and `Drop` kills without waiting (no zombie, no orphan). The host still exits when the control
   socket closes.
@@ -499,7 +506,7 @@ As built (2026-09-25):
   left no `plugin_host` process behind.
 - **Live check: hung host (2026-09-25).** Same setup, but `kill -STOP <host pid>` instead: the
   plugin missed 8 deadlines (WARN), then 32 in a row → the command thread logged
-  `missed 32 deadlines in a row; killing its host`, `SIGKILL`ed it and marked the device crashed
+  `missed 32 deadlines in a row; killing its host` (now: `hasn't finished a block in 1s`), `SIGKILL`ed it and marked the device crashed
   (`killed by signal 9 (SIGKILL)`). `/reload` brought it back on a new pid with all 17 parameters.
   The first attempt exposed a real bug this check caught: the new host inherited the dead host's
   `consecutive_misses`, so the hung-host check killed it 20 ms after it came up. `begin_reload`

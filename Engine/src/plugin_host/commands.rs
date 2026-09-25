@@ -377,6 +377,9 @@ pub fn process_command(
                     error: "Plugin not initialized".to_string(),
                 });
             };
+            // Clear before saving: a `mark_dirty` during or after the save is a newer change
+            // than this blob and must be reported again.
+            state.shared.clear_state_dirty();
             let mut handle = state.instance.plugin_handle();
             let Some(state_ext) = handle.get_extension::<ClapState>() else {
                 return Some(PluginResponse::Error {

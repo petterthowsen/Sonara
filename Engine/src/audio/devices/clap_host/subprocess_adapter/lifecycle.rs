@@ -413,11 +413,13 @@ fn run_load(request: PluginLoadRequest) {
 
     // Restore the plugin's own state before activation, so presets and non-parameter state are
     // in place when the plugin starts processing.
+    let mut state_restored = false;
     if let Some(state) = restore_state {
         let state_len = state.len();
         match connection.request(PluginCommand::LoadState { state }, REQUEST_TIMEOUT) {
             Ok(PluginResponse::StateLoadResult { success: true, .. }) => {
                 info!("✅ Restored {} bytes of plugin state", state_len);
+                state_restored = true;
             }
             Ok(PluginResponse::StateLoadResult { error, .. }) => {
                 warn!(
@@ -460,10 +462,14 @@ fn run_load(request: PluginLoadRequest) {
         }
     }
 
-    // A reload restores the engine's parameter values even when the plugin has no state
-    // extension (LoadState then failed above).
-    for (param_id, value) in &restore_params {
-        parameter::set_parameter_value(&process_manager, instance_id, *param_id, *value);
+    // Without a restored blob (no state extension, or LoadState failed), fall back to the
+    // engine's cached parameter values. With one, the blob is authoritative: the cache can miss
+    // changes the plugin made without reporting them (a preset loaded in its GUI), and re-sending
+    // it would overwrite the restored values.
+    if !state_restored {
+        for (param_id, value) in &restore_params {
+            parameter::set_parameter_value(&process_manager, instance_id, *param_id, *value);
+        }
     }
 
     info!("🔄 Querying plugin parameters...");
@@ -482,6 +488,29 @@ fn run_load(request: PluginLoadRequest) {
                 Vec::new()
             }
         };
+
+    // Read the restored values back so the engine's cache and Godot show what the plugin has.
+    let mut restored_values = Vec::new();
+    if state_restored {
+        for param in &params {
+            match connection.request(
+                PluginCommand::GetParameter { param_id: param.id },
+                REQUEST_TIMEOUT,
+            ) {
+                Ok(PluginResponse::ParameterValue { param_id, value }) => {
+                    restored_values.push((param_id, value))
+                }
+                Ok(resp) => warn!(
+                    "Unexpected response reading parameter {}: {:?}",
+                    param.id, resp
+                ),
+                Err(e) => {
+                    warn!("Could not read restored parameter values: {}", e);
+                    break;
+                }
+            }
+        }
+    }
 
     if let Err(e) = connection.send(PluginCommand::StartProcessing) {
         error!("❌ Failed to send StartProcessing command: {}", e);
@@ -509,6 +538,7 @@ fn run_load(request: PluginLoadRequest) {
         let _ = cmd_tx.send(AudioCommand::DeviceReady {
             channel_id,
             device_path,
+            restored_values,
         });
         info!(
             "📤 Sent DeviceReady notification for channel {} position {}",

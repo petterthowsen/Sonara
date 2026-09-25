@@ -334,6 +334,10 @@ pub enum AudioCommand {
     DeviceReady {
         channel_id: ChannelId,
         device_path: DevicePath,
+        /// Parameter values read back from the plugin after a reload restored its state
+        /// (Phase 4). Cached and reported to Godot after the parameter list is re-advertised,
+        /// because Godot resets values to defaults when the list arrives. Empty on a first load.
+        restored_values: Vec<(u32, f32)>,
     },
 
     // Plugin management
@@ -2033,6 +2037,7 @@ pub fn process_command(
         AudioCommand::DeviceReady {
             channel_id,
             device_path,
+            restored_values,
         } => {
             info!(
                 "Device ready notification for channel {} path {}, re-sending parameters",
@@ -2046,6 +2051,9 @@ pub fn process_command(
                             .downcast_mut::<super::devices::clap_host::SubprocessClapAdapter>()
                     {
                         subprocess_device.on_device_ready();
+                        for &(param_id, value) in &restored_values {
+                            subprocess_device.cache_parameter_value(param_id, value);
+                        }
                     }
                     let params = device.parameters();
                     if !params.is_empty() {
@@ -2072,6 +2080,15 @@ pub fn process_command(
                                 enum_values: param.enum_values.clone(),
                             });
                         }
+                    }
+                    // After the parameter list, so Godot doesn't reset them to defaults.
+                    for (param_id, value) in restored_values {
+                        let _ = status_tx.send(EngineStatus::PluginParameterValueChanged {
+                            channel_id,
+                            device_path,
+                            param_id,
+                            value,
+                        });
                     }
                 }
             }

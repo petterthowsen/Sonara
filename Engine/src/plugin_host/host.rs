@@ -67,6 +67,12 @@ impl SubprocessHostShared {
         self.params_rescanned.swap(false, Ordering::AcqRel)
     }
 
+    /// Re-arm `mark_dirty` reporting: the engine is about to take a fresh state blob, so the
+    /// plugin's next `mark_dirty` after it is a new change and must reach the engine again.
+    pub fn clear_state_dirty(&self) {
+        self.state_dirty.store(false, Ordering::Release);
+    }
+
     /// True once after the plugin asked for a parameter flush.
     pub fn take_flush_requested(&self) -> bool {
         self.flush_requested.swap(false, Ordering::AcqRel)
@@ -269,8 +275,8 @@ impl HostParamsImplShared for SubprocessHostShared {
 impl HostStateImpl for SubprocessHostMainThread<'_> {
     fn mark_dirty(&mut self) {
         // Tell the engine so it refreshes its state blob for crash recovery and project save.
-        // One event per host is enough: the engine also marks its own state dirty whenever a
-        // parameter changes, and it re-asks for the blob at most once per save interval.
+        // One event per saved blob is enough: the engine re-asks for the blob at most once per
+        // save interval, and `SaveState` re-arms the flag (`clear_state_dirty`).
         if !self.shared.state_dirty.swap(true, Ordering::AcqRel) {
             self.shared.send_event(PluginEvent::StateDirty);
         }

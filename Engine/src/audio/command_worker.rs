@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 use super::block_clock::BlockClock;
 use super::commands::{process_command, AudioCommand, EngineState, EngineStatus};
 use super::devices::clap_host::subprocess_adapter::{
-    PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_MISSES,
+    PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_STALL_TIMEOUT,
 };
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
 use super::devices::{
@@ -46,6 +46,8 @@ struct PolledPlugin {
     stats: PluginBlockStats,
     /// The plugin's saved state is stale and its interval has passed, so ask for a fresh blob.
     save_state_due: bool,
+    /// The host left a block unfinished for `HUNG_STALL_TIMEOUT`.
+    stalled: bool,
 }
 
 /// Per-plugin audio problem counts since the last log.
@@ -123,6 +125,7 @@ impl CommandWorker {
     fn poll_devices(&mut self) {
         let mut plugins: Vec<PolledPlugin> = Vec::new();
         let mut statuses: Vec<EngineStatus> = Vec::new();
+        let now = Instant::now();
         {
             let mut state = self.lock_state();
             for (&channel_id, channel) in state.channels.iter_mut() {
@@ -146,6 +149,7 @@ impl CommandWorker {
                             output_events,
                             stats: plugin.take_stats(),
                             save_state_due: plugin.take_state_save_due(),
+                            stalled: plugin.is_host_stalled(now),
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
                         collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
@@ -161,7 +165,7 @@ impl CommandWorker {
                 self.mark_plugin_crashed(plugin);
                 continue;
             }
-            // A host that stopped answering a request, or that keeps missing deadlines, is hung:
+            // A host that stopped answering a request, or that stopped finishing blocks, is hung:
             // kill it. The next tick sees it dead and marks the device crashed.
             if plugin.handle.is_hung() {
                 warn!(
@@ -173,13 +177,13 @@ impl CommandWorker {
                 plugin.handle.kill_host();
                 continue;
             }
-            if plugin.stats.consecutive_misses >= HUNG_MISSES {
+            if plugin.stalled {
                 warn!(
-                    "Plugin {} (channel {} device {}) missed {} deadlines in a row; killing its host",
+                    "Plugin {} (channel {} device {}) hasn't finished a block in {:?}; killing its host",
                     plugin.handle.device_name(),
                     plugin.channel_id,
                     plugin.device_path,
-                    plugin.stats.consecutive_misses
+                    HUNG_STALL_TIMEOUT
                 );
                 plugin.handle.kill_host();
                 continue;

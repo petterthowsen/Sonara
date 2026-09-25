@@ -44,8 +44,10 @@ const HANDSHAKE_SPIN_ITERATIONS: u32 = 400;
 /// Consecutive missed deadlines before the failure is logged at WARN.
 const MISSES_BEFORE_WARNING: u32 = 8;
 
-/// Consecutive missed deadlines after which the command thread kills the host as hung (Phase 4).
-pub const HUNG_MISSES: u32 = 32;
+/// How long a published block may stay unfinished before the command thread kills the host as
+/// hung (Phase 4). Measured in wall time and by progress, not by missed deadlines: a plugin that
+/// is merely slower than its deadline still finishes every block late, and must only drop out.
+pub const HUNG_STALL_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How often a plugin whose state changed is asked to save it, so a crash doesn't lose edits.
 const STATE_SAVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -57,8 +59,6 @@ pub struct PluginBlockStats {
     pub deadline_misses: u64,
     /// Input events dropped because the block's event array was full.
     pub event_drops: u64,
-    /// Missed deadlines in a row when this snapshot was taken: the host is stuck, not just slow.
-    pub consecutive_misses: u32,
 }
 
 /// CLAP device adapter using subprocess isolation
@@ -119,6 +119,9 @@ pub struct SubprocessClapAdapter {
     stats: PluginBlockStats,
     /// Consecutive blocks that missed the deadline, for rate-limited logging.
     consecutive_misses: u32,
+    /// Command thread: the `done_seq` seen while a request was outstanding, and since when. The
+    /// host is hung once that stays unchanged for `HUNG_STALL_TIMEOUT`.
+    stall: Option<(u64, Instant)>,
     /// One absolute plugin deadline per callback, published by the engine.
     block_clock: Arc<BlockClock>,
 }
@@ -209,6 +212,7 @@ impl SubprocessClapAdapter {
             input_events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             stats: PluginBlockStats::default(),
             consecutive_misses: 0,
+            stall: None,
             block_clock,
         };
 
@@ -603,9 +607,30 @@ impl SubprocessClapAdapter {
 
     /// Return and reset the audio-thread counters.
     pub fn take_stats(&mut self) -> PluginBlockStats {
-        let mut stats = std::mem::take(&mut self.stats);
-        stats.consecutive_misses = self.consecutive_misses;
-        stats
+        std::mem::take(&mut self.stats)
+    }
+
+    /// Command thread: true once the host has left a published block unfinished for
+    /// `HUNG_STALL_TIMEOUT`. A slow host that finishes its blocks late keeps advancing
+    /// `done_seq`, so it is never counted as hung, whatever the buffer size.
+    pub fn is_host_stalled(&mut self, now: Instant) -> bool {
+        let Some(shared) = self.load.shared() else {
+            self.stall = None;
+            return false;
+        };
+        let control = shared.memory.control();
+        let done = control.done_seq.load(Ordering::Acquire);
+        if control.request_seq.load(Ordering::Acquire) == done {
+            self.stall = None;
+            return false;
+        }
+        match self.stall {
+            Some((seen, since)) if seen == done => now.duration_since(since) >= HUNG_STALL_TIMEOUT,
+            _ => {
+                self.stall = Some((done, now));
+                false
+            }
+        }
     }
 
     /// The plugin changed state (it called `mark_dirty`, or a parameter moved): the saved state
@@ -649,6 +674,7 @@ impl SubprocessClapAdapter {
         // The dead host's misses belong to the dead host: a fresh one must not inherit them, or
         // the hung-host check would kill it on its first tick.
         self.consecutive_misses = 0;
+        self.stall = None;
         self.stats = PluginBlockStats::default();
 
         let restore_params: Vec<(ParamId, ParamValue)> = self
@@ -809,6 +835,7 @@ impl SubprocessClapAdapter {
             input_events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             stats: PluginBlockStats::default(),
             consecutive_misses: 0,
+            stall: None,
             block_clock,
         }
     }
@@ -948,6 +975,58 @@ mod tests {
         host.join().unwrap();
     }
 
+    /// Missing deadlines doesn't make a host hung while it keeps finishing blocks late; a block
+    /// left unfinished for `HUNG_STALL_TIMEOUT` does.
+    #[test]
+    fn only_a_host_that_stops_finishing_blocks_counts_as_stalled() {
+        let (load, memory, doorbell) = ready_block("sonara_test_stall", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let host = spawn_fake_host(
+            Arc::clone(&memory),
+            doorbell,
+            Arc::clone(&stop),
+            Arc::clone(&release),
+            None,
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter =
+            SubprocessClapAdapter::new_for_test(load, Arc::clone(&clock), 48_000.0, 64);
+        let input = vec![0.5f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        let t0 = Instant::now();
+
+        assert!(!adapter.is_host_stalled(t0), "nothing outstanding");
+
+        // Block 1 misses its deadline; the tracker starts timing it.
+        clock.publish(Instant::now(), Duration::from_micros(200));
+        adapter.process_block(&input, &mut output, 64);
+        assert!(!adapter.is_host_stalled(t0));
+
+        // The host finishes block 1 late, then holds block 2: a slow host, not a stuck one.
+        release.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while memory.control().done_seq.load(Ordering::Acquire) < 1 && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        release.store(false, Ordering::Release);
+        clock.publish(Instant::now(), Duration::from_micros(200));
+        adapter.process_block(&input, &mut output, 64);
+        assert_eq!(adapter.consecutive_misses, 2, "both blocks missed");
+        let t1 = t0 + HUNG_STALL_TIMEOUT * 2;
+        assert!(
+            !adapter.is_host_stalled(t1),
+            "done_seq advanced since the last check, so the host is making progress"
+        );
+
+        // Block 2 is never finished: stalled once the timeout passes without progress.
+        assert!(!adapter.is_host_stalled(t1 + HUNG_STALL_TIMEOUT / 2));
+        assert!(adapter.is_host_stalled(t1 + HUNG_STALL_TIMEOUT));
+
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
+    }
+
     #[test]
     fn begin_reload_reinstalls_load_state_and_keeps_saved_state() {
         let (load, _memory, _doorbell) = ready_block("sonara_test_reload", 64);
@@ -957,7 +1036,8 @@ mod tests {
         adapter.set_parameter(4, 0.25);
         // A host that hung before the reload leaves these behind; the new host must not inherit
         // them or the hung-host check would kill it immediately.
-        adapter.consecutive_misses = HUNG_MISSES;
+        adapter.consecutive_misses = 32;
+        adapter.stall = Some((0, Instant::now() - HUNG_STALL_TIMEOUT));
         adapter.stats.deadline_misses = 99;
 
         assert!(adapter.load().is_ready());
@@ -966,11 +1046,12 @@ mod tests {
         // A fresh load state means the audio thread passes audio through until the host is back.
         assert!(adapter.load().is_loading());
         assert!(!adapter.load().is_ready());
-        let stats = adapter.take_stats();
         assert_eq!(
-            stats.consecutive_misses, 0,
+            adapter.consecutive_misses, 0,
             "reload clears consecutive misses"
         );
+        assert!(adapter.stall.is_none(), "reload clears the stall tracker");
+        let stats = adapter.take_stats();
         assert_eq!(stats.deadline_misses, 0, "reload clears the miss counter");
         assert_eq!(request.restore_state, Some(vec![1, 2, 3]));
         assert_eq!(request.restore_params, vec![(4, 0.25)]);
