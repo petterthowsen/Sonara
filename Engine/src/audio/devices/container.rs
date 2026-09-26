@@ -381,11 +381,169 @@ fn visit_children_of(
     }
 }
 
+/// Diagnostic switch (`SONARA_SERIAL_PLUGIN_DISPATCH=1`, read once at startup): chains never
+/// park, so plugins process one after another as before Phase 8a. For A/B measurements.
+pub static SERIAL_PLUGIN_DISPATCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Where a device chain stopped: the next device to run, and whether that device has begun a
+/// block it hasn't finished (it is parked). Plain data, so it can live in per-channel mix state.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ChainCursor {
+    /// Index of the next device, relative to the slice the chain runs on.
+    pub next: usize,
+    /// The chain's input had signal, which keeps every device in it awake.
+    pub has_input_activity: bool,
+    /// `devices[next]` began a block and is waiting for `resume_chain`.
+    pub parked: bool,
+}
+
+impl ChainCursor {
+    /// Cursor at the start of a chain.
+    pub fn start(has_input_activity: bool) -> Self {
+        Self {
+            next: 0,
+            has_input_activity,
+            parked: false,
+        }
+    }
+}
+
+/// How far `run_chain` or `resume_chain` got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStep {
+    /// A device began a block asynchronously; call `resume_chain` to finish it and go on.
+    Parked,
+    /// Every device ran. The result is in `buf_b` when `result_in_output` is true.
+    Done { result_in_output: bool },
+}
+
+/// The input and output buffers of the device at `idx`: devices ping-pong between the two.
+fn chain_buffers<'a>(
+    idx: usize,
+    buf_a: &'a mut [f32],
+    buf_b: &'a mut [f32],
+) -> (&'a [f32], &'a mut [f32]) {
+    if idx % 2 == 0 {
+        (buf_a, buf_b)
+    } else {
+        (buf_b, buf_a)
+    }
+}
+
+/// Update a device's sleep state from the chain's input and its own output.
+fn after_device(
+    device: &mut dyn AudioDevice,
+    idx: usize,
+    output: &[f32],
+    interleaved_count: usize,
+    has_input_activity: bool,
+    on_sleep_change: &mut impl FnMut(usize, bool),
+) {
+    let has_output_activity = has_audio_signal(&output[..interleaved_count.min(output.len())]);
+    if device.update_sleep_state(has_input_activity || has_output_activity) {
+        on_sleep_change(idx, device.is_sleeping());
+    }
+}
+
+/// Run devices from `cursor.next` on interleaved stereo buffers until one begins a block
+/// asynchronously (`Parked`) or the chain ends.
+///
+/// `buf_a` must hold the interleaved input when the chain starts. Calls
+/// `on_sleep_change(index, is_sleeping)` for each device whose sleep state changed.
+pub fn run_chain(
+    devices: &mut [Box<dyn AudioDevice>],
+    buf_a: &mut [f32],
+    buf_b: &mut [f32],
+    sample_count: usize,
+    cursor: &mut ChainCursor,
+    on_sleep_change: &mut impl FnMut(usize, bool),
+) -> ChainStep {
+    debug_assert!(!cursor.parked, "run_chain on a parked chain");
+    let interleaved_count = sample_count * 2;
+    let serial = SERIAL_PLUGIN_DISPATCH.load(std::sync::atomic::Ordering::Relaxed);
+
+    while cursor.next < devices.len() {
+        let idx = cursor.next;
+        let device = &mut devices[idx];
+        let (input, output) = chain_buffers(idx, buf_a, buf_b);
+
+        if device.is_sleeping() {
+            let copy_len = interleaved_count.min(input.len()).min(output.len());
+            output[..copy_len].copy_from_slice(&input[..copy_len]);
+            cursor.next += 1;
+            continue;
+        }
+
+        let begun = !serial && {
+            let section = crate::audio::rt_debug::device_name("begin_block", device.device_id());
+            crate::audio::rt_debug::device_section(section, || {
+                device.begin_block(input, sample_count)
+            })
+        };
+        if begun {
+            cursor.parked = true;
+            return ChainStep::Parked;
+        }
+
+        let section = crate::audio::rt_debug::device_name("process_block", device.device_id());
+        crate::audio::rt_debug::device_section(section, || {
+            device.process_block(input, output, sample_count)
+        });
+        after_device(
+            device.as_mut(),
+            idx,
+            output,
+            interleaved_count,
+            cursor.has_input_activity,
+            on_sleep_change,
+        );
+        cursor.next += 1;
+    }
+
+    ChainStep::Done {
+        result_in_output: !devices.is_empty() && (devices.len() - 1) % 2 == 0,
+    }
+}
+
+/// Finish the parked device (waiting for it), check its sleep state, then continue like
+/// `run_chain`.
+pub fn resume_chain(
+    devices: &mut [Box<dyn AudioDevice>],
+    buf_a: &mut [f32],
+    buf_b: &mut [f32],
+    sample_count: usize,
+    cursor: &mut ChainCursor,
+    on_sleep_change: &mut impl FnMut(usize, bool),
+) -> ChainStep {
+    debug_assert!(cursor.parked, "resume_chain on a chain that isn't parked");
+    let idx = cursor.next;
+    if let Some(device) = devices.get_mut(idx) {
+        let (input, output) = chain_buffers(idx, buf_a, buf_b);
+        let section = crate::audio::rt_debug::device_name("finish_block", device.device_id());
+        crate::audio::rt_debug::device_section(section, || {
+            device.finish_block(input, output, sample_count)
+        });
+        after_device(
+            device.as_mut(),
+            idx,
+            output,
+            sample_count * 2,
+            cursor.has_input_activity,
+            on_sleep_change,
+        );
+    }
+    cursor.parked = false;
+    cursor.next = idx + 1;
+    run_chain(devices, buf_a, buf_b, sample_count, cursor, on_sleep_change)
+}
+
 /// Serial ping-pong processing of a device list on interleaved stereo buffers.
 ///
 /// `buf_a` must already hold the interleaved input. Returns `true` when the
 /// final output lives in `buf_b` (last processed index was even). Calls
 /// `on_sleep_change(index, is_sleeping)` for each device whose sleep state changed.
+/// A device that begins a block asynchronously is finished right away.
 pub fn process_serial_chain(
     devices: &mut [Box<dyn AudioDevice>],
     buf_a: &mut [f32],
@@ -394,37 +552,30 @@ pub fn process_serial_chain(
     has_input_activity: bool,
     mut on_sleep_change: impl FnMut(usize, bool),
 ) -> bool {
-    if devices.is_empty() {
-        return false;
-    }
-
-    let interleaved_count = sample_count * 2;
-
-    for (idx, device) in devices.iter_mut().enumerate() {
-        let (input, output) = if idx % 2 == 0 {
-            (&buf_a[..], &mut buf_b[..])
-        } else {
-            (&buf_b[..], &mut buf_a[..])
-        };
-
-        if device.is_sleeping() {
-            let copy_len = interleaved_count.min(input.len()).min(output.len());
-            output[..copy_len].copy_from_slice(&input[..copy_len]);
-            continue;
-        }
-
-        let section = crate::audio::rt_debug::device_name("process_block", device.device_id());
-        crate::audio::rt_debug::device_section(section, || {
-            device.process_block(input, output, sample_count)
-        });
-
-        let has_output_activity = has_audio_signal(&output[..interleaved_count.min(output.len())]);
-        if device.update_sleep_state(has_input_activity || has_output_activity) {
-            on_sleep_change(idx, device.is_sleeping());
+    let mut cursor = ChainCursor::start(has_input_activity);
+    let mut step = run_chain(
+        devices,
+        buf_a,
+        buf_b,
+        sample_count,
+        &mut cursor,
+        &mut on_sleep_change,
+    );
+    loop {
+        match step {
+            ChainStep::Done { result_in_output } => return result_in_output,
+            ChainStep::Parked => {
+                step = resume_chain(
+                    devices,
+                    buf_a,
+                    buf_b,
+                    sample_count,
+                    &mut cursor,
+                    &mut on_sleep_change,
+                )
+            }
         }
     }
-
-    (devices.len() - 1) % 2 == 0
 }
 
 /// Copy interleaved input to output (used for bypass / empty chain).

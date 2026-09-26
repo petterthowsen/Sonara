@@ -212,6 +212,17 @@ pub trait AudioDevice: Send {
     /// For stereo devices: inputs/outputs are interleaved [L, R, L, R, ...]
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize);
 
+    /// Audio thread. Start processing a block without waiting for the result. Returns false when
+    /// the device can't split a block; the caller then uses `process_block`. `inputs` must stay
+    /// unchanged until `finish_block`.
+    fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
+        false
+    }
+
+    /// Audio thread. Complete a block started by `begin_block`: wait (bounded by the callback
+    /// deadline) and write `outputs`. On a miss, write dry input (effect) or silence (instrument).
+    fn finish_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+
     /// Extra stereo output buses beyond the main stereo pair (drum pads, plugin extra outs).
     fn extra_output_bus_count(&self) -> usize {
         0

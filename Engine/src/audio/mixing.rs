@@ -1,9 +1,10 @@
 use crossbeam::channel::Sender;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use super::commands::{EngineState, EngineStatus};
 use super::devices::clap_host::ClapDeviceAdapter;
-use super::devices::{container, AudioDevice};
+use super::devices::container::{self, ChainStep};
+use super::devices::AudioDevice;
 use super::render_scratch::{RenderScratch, SoloRole};
 use super::rt_debug;
 use super::types::*;
@@ -315,37 +316,69 @@ fn route_channel(
     }
 }
 
-/// Finish a channel once all its inputs have mixed in, then route it onward.
+/// Start finishing a channel whose inputs have all mixed in: mark it done and begin its device
+/// chain. A chain that parks at a plugin goes into `parked`; drain it before `route_finished`.
 ///
 /// Route targets run their devices even without input, so reverb and delay tails keep ringing
-/// (device sleep keeps idle chains cheap), then apply their pan. Silenced targets are cleared.
-fn finish_channel(
+/// (device sleep keeps idle chains cheap).
+fn begin_finish(
     channel_map: &mut HashMap<ChannelId, Channel>,
     id: ChannelId,
     frames: usize,
+    parked: &mut VecDeque<ChannelId>,
     status_tx: &Sender<EngineStatus>,
 ) {
     let Some(channel) = channel_map.get_mut(&id) else {
         return;
     };
     channel.mix.done = true;
+    if !channel.mix.is_route_target || channel.mute {
+        return;
+    }
+    let start = if channel.mix.has_aux_source { 1 } else { 0 };
+    match channel.begin_device_chain(start, frames) {
+        ChainStep::Parked => parked.push_back(id),
+        ChainStep::Done { .. } => forward_device_events(channel, status_tx),
+    }
+}
 
+/// Complete a channel after its device chain finished: route targets apply their pan (silenced
+/// ones are cleared), then the channel routes onward.
+fn route_finished(channel_map: &mut HashMap<ChannelId, Channel>, id: ChannelId, frames: usize) {
+    let Some(channel) = channel_map.get_mut(&id) else {
+        return;
+    };
     if channel.mix.is_route_target {
         if !channel.mute {
-            if channel.mix.has_aux_source {
-                channel.process_device_chain_from(1, frames)
-            } else {
-                channel.process_device_chain(frames)
-            }
-            forward_device_events(channel, status_tx);
             apply_pan(channel, frames);
         }
         if is_silenced(channel) {
             channel.clear_buffers();
         }
     }
-
     route_channel(channel_map, id, frames);
+}
+
+/// Finish the parked device chains, waiting on each channel's plugin in the order they parked.
+/// A chain that parks again at a later plugin goes to the back of the queue.
+///
+/// Waiting in park order rather than on whichever plugin finishes first: each host has its own
+/// doorbell, and plugins begun together finish at about the same time.
+fn drain_parked(
+    channel_map: &mut HashMap<ChannelId, Channel>,
+    parked: &mut VecDeque<ChannelId>,
+    frames: usize,
+    status_tx: &Sender<EngineStatus>,
+) {
+    while let Some(id) = parked.pop_front() {
+        let Some(channel) = channel_map.get_mut(&id) else {
+            continue;
+        };
+        match channel.resume_device_chain(frames) {
+            ChainStep::Parked => parked.push_back(id),
+            ChainStep::Done { .. } => forward_device_events(channel, status_tx),
+        }
+    }
 }
 
 /// Mark channels whose first device writes extra buses into nested child channels.
@@ -490,7 +523,12 @@ pub fn mix_and_output(
         render_scratch,
         ..
     } = state;
-    let RenderScratch { channel_ids, .. } = render_scratch;
+    let RenderScratch {
+        channel_ids,
+        parked,
+        ready,
+        ..
+    } = render_scratch;
 
     let has_solo = channel_map.values().any(|c| c.solo);
     channel_ids.clear();
@@ -522,13 +560,23 @@ pub fn mix_and_output(
 
     // First pass: process device chains (instruments and effects) before the fader.
     // Route targets are skipped; they run in the routing pass after their inputs mix in.
-    for channel in channel_map.values_mut() {
+    // Every chain starts first; a chain that reaches a plugin parks there while the plugin
+    // processes in its host, so plugins on different channels (and hosts) run in parallel and
+    // built-in-only chains run on this thread meanwhile. Then the parked chains are finished.
+    parked.clear();
+    for &id in channel_ids.iter() {
+        let Some(channel) = channel_map.get_mut(&id) else {
+            continue;
+        };
         if channel.mix.is_route_target {
             continue;
         }
-        channel.process_device_chain(frames);
-        forward_device_events(channel, status_tx);
+        match channel.begin_device_chain(0, frames) {
+            ChainStep::Parked => parked.push_back(id),
+            ChainStep::Done { .. } => forward_device_events(channel, status_tx),
+        }
     }
+    drain_parked(channel_map, parked, frames, status_tx);
 
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
@@ -553,21 +601,19 @@ pub fn mix_and_output(
 
     // Third pass: routing in dependency order (Track → Bus → Master). A channel finishes once
     // every route and send into it has mixed in, so each channel processes exactly once.
+    // Each sweep batches the channels that are ready: their chains begin together (so plugins on
+    // parallel buses process at the same time), then drain, then pan and route in list order.
+    // Channels ready in one sweep can't feed each other: a feed would keep the target pending.
     let mut remaining = channel_ids.len();
     while remaining > 0 {
-        let mut progressed = false;
-        for &id in channel_ids.iter() {
-            let ready = channel_map
-                .get(&id)
-                .is_some_and(|c| !c.mix.done && c.mix.pending_inputs == 0);
-            if ready {
-                finish_channel(channel_map, id, frames, status_tx);
-                remaining -= 1;
-                progressed = true;
-            }
-        }
+        ready.clear();
+        ready.extend(channel_ids.iter().copied().filter(|id| {
+            channel_map
+                .get(id)
+                .is_some_and(|c| !c.mix.done && c.mix.pending_inputs == 0)
+        }));
 
-        if !progressed {
+        if ready.is_empty() {
             // Routing cycle: break it at the first unfinished channel
             let unfinished = channel_ids
                 .iter()
@@ -576,9 +622,18 @@ pub fn mix_and_output(
             let Some(id) = unfinished else {
                 break;
             };
-            finish_channel(channel_map, id, frames, status_tx);
-            remaining -= 1;
+            ready.push(id);
         }
+
+        parked.clear();
+        for &id in ready.iter() {
+            begin_finish(channel_map, id, frames, parked, status_tx);
+        }
+        drain_parked(channel_map, parked, frames, status_tx);
+        for &id in ready.iter() {
+            route_finished(channel_map, id, frames);
+        }
+        remaining = remaining.saturating_sub(ready.len());
     }
 
     write_master_output(channel_map, data, channels);
@@ -1122,5 +1177,338 @@ mod tests {
             "parent should mix child extra-out, got {}",
             state.channels[&2].buffer_left[0]
         );
+    }
+
+    /// What the fake plugins did, in order.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum AsyncEvent {
+        Begin(ChannelId),
+        Finish(ChannelId),
+    }
+
+    type AsyncLog = Arc<std::sync::Mutex<Vec<AsyncEvent>>>;
+
+    /// Stand-in for a subprocess plugin: begins blocks asynchronously, logs `Begin`/`Finish`,
+    /// and outputs its input times `gain`. Disabled, it passes dry input like the adapter. With
+    /// `sleep_on_silence`, it goes to sleep after a block without activity.
+    struct FakePlugin {
+        id: ChannelId,
+        gain: f32,
+        log: AsyncLog,
+        enabled: bool,
+        sleeping: bool,
+        sleep_on_silence: bool,
+    }
+
+    impl FakePlugin {
+        fn new(id: ChannelId, gain: f32, log: &AsyncLog) -> Self {
+            Self {
+                id,
+                gain,
+                log: Arc::clone(log),
+                enabled: true,
+                sleeping: false,
+                sleep_on_silence: false,
+            }
+        }
+    }
+
+    impl AudioDevice for FakePlugin {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            assert!(self.begin_block(inputs, sample_count));
+            self.finish_block(inputs, outputs, sample_count);
+        }
+        fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
+            self.log.lock().unwrap().push(AsyncEvent::Begin(self.id));
+            true
+        }
+        fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            self.log.lock().unwrap().push(AsyncEvent::Finish(self.id));
+            let gain = if self.enabled { self.gain } else { 1.0 };
+            for i in 0..sample_count * 2 {
+                outputs[i] = inputs[i] * gain;
+            }
+        }
+        fn is_sleeping(&self) -> bool {
+            self.sleeping
+        }
+        fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
+            let sleeping = self.sleep_on_silence && !has_audio_activity;
+            let changed = sleeping != self.sleeping;
+            self.sleeping = sleeping;
+            changed
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.fake_plugin"
+        }
+        fn device_name(&self) -> &str {
+            "Fake Plugin"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn is_enabled(&self) -> bool {
+            self.enabled
+        }
+        fn set_enabled(&mut self, enabled: bool) {
+            self.enabled = enabled;
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// 0 dB track routed to master, fed 0.5 left / 0.25 right.
+    fn source_track(id: ChannelId, output: ChannelId) -> Channel {
+        let mut track = test_channel(id, Some(output), 0.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.25);
+        track
+    }
+
+    /// Index of the first `Finish` in the log.
+    fn first_finish(log: &AsyncLog) -> usize {
+        let log = log.lock().unwrap();
+        log.iter()
+            .position(|e| matches!(e, AsyncEvent::Finish(_)))
+            .expect("no plugin finished")
+    }
+
+    /// True if `event` appears in the log before index `limit`.
+    fn logged_before(log: &AsyncLog, event: AsyncEvent, limit: usize) -> bool {
+        log.lock().unwrap()[..limit].contains(&event)
+    }
+
+    /// The given devices run serially over the `source_track` input, as interleaved stereo.
+    fn serial_output(mut devices: Vec<Box<dyn AudioDevice>>) -> Vec<f32> {
+        let mut buf_a: Vec<f32> = (0..BUFFER_SIZE).flat_map(|_| [0.5f32, 0.25]).collect();
+        let mut buf_b = vec![0.0f32; BUFFER_SIZE * 2];
+        let in_b = container::process_serial_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            BUFFER_SIZE,
+            true,
+            |_, _| {},
+        );
+        if in_b {
+            buf_b
+        } else {
+            buf_a
+        }
+    }
+
+    /// Mix one buffer and return master's interleaved buffer, before the output clamp.
+    fn mix_master(state: &mut EngineState) -> Vec<f32> {
+        mix(state);
+        let master = &state.channels[&1];
+        (0..BUFFER_SIZE)
+            .flat_map(|i| [master.buffer_left[i], master.buffer_right[i]])
+            .collect()
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-4,
+                "sample {i}: {a} != {e} ({actual:?} vs {expected:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn plugins_on_separate_channels_all_begin_before_any_finishes() {
+        let log = AsyncLog::default();
+        let mut channels = vec![test_channel(1, Some(1000), 0.0)];
+        for id in 2..5 {
+            let mut track = source_track(id, 1);
+            track.devices.push(Box::new(FakePlugin::new(id, 1.0, &log)));
+            channels.push(track);
+        }
+        let mut state = state_with(channels);
+        let output = mix_master(&mut state);
+
+        let finish = first_finish(&log);
+        for id in 2..5 {
+            assert!(
+                logged_before(&log, AsyncEvent::Begin(id), finish),
+                "{:?}",
+                log
+            );
+        }
+        assert_eq!(log.lock().unwrap().len(), 6);
+        assert!(
+            (output[0] - 1.5).abs() < 1e-4,
+            "three tracks sum on master: {output:?}"
+        );
+    }
+
+    #[test]
+    fn a_chain_parked_at_plugins_matches_the_serial_chain() {
+        let log = AsyncLog::default();
+        let chains: [fn(&AsyncLog) -> Vec<Box<dyn AudioDevice>>; 2] = [
+            |log| {
+                vec![
+                    Box::new(FakePlugin::new(1, 2.0, log)),
+                    Box::new(TestDevice {
+                        level: 0.1,
+                        calls: Arc::default(),
+                    }),
+                    Box::new(FakePlugin::new(2, 3.0, log)),
+                ]
+            },
+            |log| {
+                vec![
+                    Box::new(TestDevice {
+                        level: 0.1,
+                        calls: Arc::default(),
+                    }),
+                    Box::new(FakePlugin::new(1, 2.0, log)),
+                    Box::new(TestDevice {
+                        level: -0.05,
+                        calls: Arc::default(),
+                    }),
+                    Box::new(FakePlugin::new(2, 3.0, log)),
+                ]
+            },
+        ];
+        for make in chains {
+            let expected = serial_output(make(&log));
+            let mut track = source_track(2, 1);
+            track.devices = make(&log);
+            let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), track]);
+            assert_close(&mix_master(&mut state), &expected);
+        }
+    }
+
+    #[test]
+    fn a_plugin_at_the_end_of_a_chain_begins_alongside_one_at_the_start() {
+        let log = AsyncLog::default();
+        let mut late = source_track(2, 1);
+        add_test_device(&mut late, 0.1);
+        add_test_device(&mut late, 0.1);
+        late.devices.push(Box::new(FakePlugin::new(2, 1.0, &log)));
+        let mut early = source_track(3, 1);
+        early.devices.push(Box::new(FakePlugin::new(3, 1.0, &log)));
+        add_test_device(&mut early, 0.1);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), late, early]);
+        mix(&mut state);
+
+        let finish = first_finish(&log);
+        assert!(
+            logged_before(&log, AsyncEvent::Begin(2), finish),
+            "{:?}",
+            log
+        );
+        assert!(
+            logged_before(&log, AsyncEvent::Begin(3), finish),
+            "{:?}",
+            log
+        );
+    }
+
+    #[test]
+    fn sleeping_and_disabled_plugins_match_the_serial_chain() {
+        let log = AsyncLog::default();
+        let make = |log: &AsyncLog| -> Vec<Box<dyn AudioDevice>> {
+            let mut disabled = FakePlugin::new(1, 2.0, log);
+            disabled.enabled = false;
+            let mut asleep = FakePlugin::new(2, 3.0, log);
+            asleep.sleeping = true;
+            vec![
+                Box::new(disabled),
+                Box::new(TestDevice {
+                    level: 0.1,
+                    calls: Arc::default(),
+                }),
+                Box::new(asleep),
+                Box::new(FakePlugin::new(3, 0.5, log)),
+            ]
+        };
+        let expected = serial_output(make(&log));
+        let mut track = source_track(2, 1);
+        track.devices = make(&log);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), track]);
+        assert_close(&mix_master(&mut state), &expected);
+
+        // A plugin that falls asleep after a silent block reports it, with its chain index.
+        let mut silent = test_channel(2, Some(1), 0.0);
+        silent.devices.push(Box::new(TestDevice {
+            level: 0.0,
+            calls: Arc::default(),
+        }));
+        let mut dozing = FakePlugin::new(4, 1.0, &log);
+        dozing.sleep_on_silence = true;
+        silent.devices.push(Box::new(dozing));
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), silent]);
+        let (status_tx, status_rx) = unbounded();
+        let mut output = vec![0.0f32; BUFFER_SIZE * 2];
+        mix_and_output(&mut state, &mut output, 2, BUFFER_SIZE, &status_tx);
+        let sleeps: Vec<_> = status_rx
+            .try_iter()
+            .filter_map(|status| match status {
+                EngineStatus::DeviceSleepStatus {
+                    channel_id,
+                    device_path,
+                    is_sleeping,
+                } => Some((channel_id, device_path, is_sleeping)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sleeps,
+            vec![(2, crate::audio::devices::DevicePath::root(1), true)]
+        );
+    }
+
+    #[test]
+    fn plugins_on_parallel_send_buses_begin_together_and_reach_master() {
+        let log = AsyncLog::default();
+        let mut source = source_track(4, 1);
+        for bus in [2, 3] {
+            source.send_channels.push(Send {
+                target_channel_id: bus,
+                amount_db: 0.0,
+                pre_fader: false,
+                muted: false,
+            });
+        }
+        let mut buses = Vec::new();
+        for (id, gain) in [(2, 2.0), (3, 3.0)] {
+            let mut bus = test_channel(id, Some(1), 0.0);
+            bus.devices.push(Box::new(FakePlugin::new(id, gain, &log)));
+            buses.push(bus);
+        }
+        let mut channels = vec![test_channel(1, Some(1000), 0.0), source];
+        channels.extend(buses);
+        let mut state = state_with(channels);
+        let output = mix_master(&mut state);
+
+        let finish = first_finish(&log);
+        assert!(
+            logged_before(&log, AsyncEvent::Begin(2), finish),
+            "{:?}",
+            log
+        );
+        assert!(
+            logged_before(&log, AsyncEvent::Begin(3), finish),
+            "{:?}",
+            log
+        );
+        // Dry 0.5 + bus 2 (0.5 × 2) + bus 3 (0.5 × 3).
+        assert!((output[0] - 3.0).abs() < 1e-4, "{output:?}");
+        assert!((output[1] - 1.5).abs() < 1e-4, "{output:?}");
     }
 }

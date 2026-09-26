@@ -122,6 +122,12 @@ fn main() -> Result<()> {
         .with(log_forwarder)
         .init();
 
+    if std::env::var("SONARA_SERIAL_PLUGIN_DISPATCH").is_ok_and(|v| v == "1") {
+        audio::devices::container::SERIAL_PLUGIN_DISPATCH
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        tracing::info!("SONARA_SERIAL_PLUGIN_DISPATCH=1: plugins process one after another");
+    }
+
     info!("Starting DAW Audio Engine...");
 
     // Each plugin host writes its own log there; keep the newest.

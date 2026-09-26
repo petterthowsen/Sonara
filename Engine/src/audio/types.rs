@@ -1,3 +1,4 @@
+use super::devices::container::{ChainCursor, ChainStep};
 use super::devices::AudioDevice;
 use super::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use super::render_scratch::MixBuffers;
@@ -832,8 +833,10 @@ impl Channel {
     /// Process channel audio through the top-level device chain. Sleep state changes are
     /// appended to `sleep_changes`.
     pub fn process_device_chain(&mut self, sample_count: usize) {
-        super::rt_debug::section("device MIDI dispatch", || self.dispatch_scheduled_midi());
-        self.process_device_chain_from(0, sample_count)
+        let mut step = self.begin_device_chain(0, sample_count);
+        while step == ChainStep::Parked {
+            step = self.resume_device_chain(sample_count);
+        }
     }
 
     /// Process the first device into this channel plus extra-out buses (no remaining FX).
@@ -890,8 +893,28 @@ impl Channel {
 
     /// Process devices starting at `start` (no MIDI dispatch). Used after aux children mix in.
     pub fn process_device_chain_from(&mut self, start: usize, sample_count: usize) {
+        let mut step = self.begin_chain_from(start, sample_count);
+        while step == ChainStep::Parked {
+            step = self.resume_device_chain(sample_count);
+        }
+    }
+
+    /// Start the device chain from `start`, running devices until one begins a block
+    /// asynchronously (`Parked`; finish with `resume_device_chain`) or the chain ends. Scheduled
+    /// MIDI is dispatched when `start` is 0. The channel buffers hold the result once `Done`.
+    pub fn begin_device_chain(&mut self, start: usize, sample_count: usize) -> ChainStep {
+        if start == 0 {
+            super::rt_debug::section("device MIDI dispatch", || self.dispatch_scheduled_midi());
+        }
+        self.begin_chain_from(start, sample_count)
+    }
+
+    /// `begin_device_chain` without MIDI dispatch.
+    fn begin_chain_from(&mut self, start: usize, sample_count: usize) -> ChainStep {
         if start >= self.devices.len() {
-            return;
+            return ChainStep::Done {
+                result_in_output: false,
+            };
         }
 
         let has_input_activity =
@@ -908,29 +931,56 @@ impl Channel {
             &mut self.device_input_buffer[..sample_count * 2],
         );
 
+        self.mix.chain_start = start;
+        self.mix.cursor = ChainCursor::start(has_input_activity);
         let sleep_changes = &mut self.sleep_changes;
-        let result_in_output = super::devices::container::process_serial_chain(
+        let step = super::devices::container::run_chain(
             &mut self.devices[start..],
             &mut self.device_input_buffer,
             &mut self.device_output_buffer,
             sample_count,
-            has_input_activity,
-            |idx, sleeping| {
+            &mut self.mix.cursor,
+            &mut |idx, sleeping| {
                 sleep_changes.push((super::devices::DevicePath::root(start + idx), sleeping))
             },
         );
+        self.complete_chain_step(step, sample_count)
+    }
 
-        let final_output = if result_in_output {
-            &self.device_output_buffer
-        } else {
-            &self.device_input_buffer
-        };
-
-        deinterleave_stereo(
-            &final_output[..sample_count * 2],
-            &mut self.buffer_left[..sample_count],
-            &mut self.buffer_right[..sample_count],
+    /// Finish the plugin this channel's chain parked at (waiting for it), then run the rest of
+    /// the chain until it parks again or ends.
+    pub fn resume_device_chain(&mut self, sample_count: usize) -> ChainStep {
+        let start = self.mix.chain_start;
+        let sleep_changes = &mut self.sleep_changes;
+        let step = super::devices::container::resume_chain(
+            &mut self.devices[start..],
+            &mut self.device_input_buffer,
+            &mut self.device_output_buffer,
+            sample_count,
+            &mut self.mix.cursor,
+            &mut |idx, sleeping| {
+                sleep_changes.push((super::devices::DevicePath::root(start + idx), sleeping))
+            },
         );
+        self.complete_chain_step(step, sample_count)
+    }
+
+    /// Copy a finished chain's result back into the channel buffers.
+    fn complete_chain_step(&mut self, step: ChainStep, sample_count: usize) -> ChainStep {
+        if let ChainStep::Done { result_in_output } = step {
+            let final_output = if result_in_output {
+                &self.device_output_buffer
+            } else {
+                &self.device_input_buffer
+            };
+
+            deinterleave_stereo(
+                &final_output[..sample_count * 2],
+                &mut self.buffer_left[..sample_count],
+                &mut self.buffer_right[..sample_count],
+            );
+        }
+        step
     }
 
     /// Send MIDI event to the first device (instrument) only with a frame offset.

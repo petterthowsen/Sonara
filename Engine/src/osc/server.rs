@@ -123,6 +123,9 @@ impl OscServer {
                             lock_misses,
                             frames,
                             plugin_underruns,
+                            frames_min,
+                            frames_max,
+                            peak_frames,
                             ..
                         } => stats_summary.observe(
                             *load_avg,
@@ -131,6 +134,7 @@ impl OscServer {
                             *lock_misses,
                             *plugin_underruns,
                             *frames,
+                            (*frames_min, *frames_max, *peak_frames),
                         ),
                         EngineStatus::PluginGuiResizeRequest {
                             channel_id,
@@ -1985,6 +1989,7 @@ impl OscServer {
                 callbacks,
                 frames,
                 plugin_underruns,
+                ..
             } => (
                 "/status/engine_stats".to_string(),
                 vec![
@@ -2598,6 +2603,10 @@ struct EngineStatsSummary {
     samples: u32,
     load_sum: f32,
     load_peak: f32,
+    /// Frames in the block that set `load_peak`.
+    peak_frames: u32,
+    frames_min: u32,
+    frames_max: u32,
     xruns_at_start: u64,
     lock_misses_at_start: u64,
     plugin_underruns_at_start: u64,
@@ -2612,6 +2621,7 @@ impl EngineStatsSummary {
         lock_misses: u64,
         plugin_underruns: u64,
         frames: u32,
+        (frames_min, frames_max, peak_frames): (u32, u32, u32),
     ) {
         let Some(started) = self.started else {
             self.reset(xruns, lock_misses, plugin_underruns);
@@ -2619,7 +2629,16 @@ impl EngineStatsSummary {
         };
         self.samples += 1;
         self.load_sum += load_avg;
-        self.load_peak = self.load_peak.max(load_peak);
+        if load_peak > self.load_peak {
+            self.load_peak = load_peak;
+            self.peak_frames = peak_frames;
+        }
+        self.frames_min = if self.samples == 1 {
+            frames_min
+        } else {
+            self.frames_min.min(frames_min)
+        };
+        self.frames_max = self.frames_max.max(frames_max);
 
         let elapsed = started.elapsed();
         if elapsed < STATS_SUMMARY_INTERVAL {
@@ -2627,11 +2646,14 @@ impl EngineStatsSummary {
         }
         let per_min = 60.0 / elapsed.as_secs_f32();
         info!(
-            "Engine stats ({:.0}s, {} frames): load avg {:.1}%, load peak {:.1}%, xruns/min {:.1}, lock misses/min {:.1}, plugin dropouts/min {:.1}",
+            "Engine stats ({:.0}s, {} frames, blocks {}-{}): load avg {:.1}%, load peak {:.1}% (in a {}-frame block), xruns/min {:.1}, lock misses/min {:.1}, plugin dropouts/min {:.1}",
             elapsed.as_secs_f32(),
             frames,
+            self.frames_min,
+            self.frames_max,
             self.load_sum / self.samples.max(1) as f32 * 100.0,
             self.load_peak * 100.0,
+            self.peak_frames,
             xruns.saturating_sub(self.xruns_at_start) as f32 * per_min,
             lock_misses.saturating_sub(self.lock_misses_at_start) as f32 * per_min,
             plugin_underruns.saturating_sub(self.plugin_underruns_at_start) as f32 * per_min,

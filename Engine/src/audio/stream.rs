@@ -595,6 +595,10 @@ struct LoadWindow {
     processing: Duration,
     block_time: Duration,
     peak: f32,
+    /// Frames in the block that set `peak`.
+    peak_frames: u32,
+    frames_min: u32,
+    frames_max: u32,
 }
 
 impl LoadWindow {
@@ -604,16 +608,23 @@ impl LoadWindow {
             processing: Duration::ZERO,
             block_time: Duration::ZERO,
             peak: 0.0,
+            peak_frames: 0,
+            frames_min: u32::MAX,
+            frames_max: 0,
         }
     }
 
-    fn add(&mut self, processing: Duration, block: Duration) {
+    fn add(&mut self, processing: Duration, block: Duration, frames: u32) {
         self.processing += processing;
         self.block_time += block;
+        self.frames_min = self.frames_min.min(frames);
+        self.frames_max = self.frames_max.max(frames);
         if !block.is_zero() {
-            self.peak = self
-                .peak
-                .max((processing.as_secs_f64() / block.as_secs_f64()) as f32);
+            let load = (processing.as_secs_f64() / block.as_secs_f64()) as f32;
+            if load > self.peak {
+                self.peak = load;
+                self.peak_frames = frames;
+            }
         }
     }
 
@@ -717,7 +728,7 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
                 }
             });
 
-            load.add(processing_start.elapsed(), block_duration);
+            load.add(processing_start.elapsed(), block_duration, frames as u32);
             if load.started.elapsed() >= STATS_INTERVAL {
                 let _ = status_tx.try_send(EngineStatus::EngineStats {
                     load_avg: load.average(),
@@ -727,6 +738,9 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
                     callbacks: counters.callbacks.load(Ordering::Relaxed),
                     frames: frames as u32,
                     plugin_underruns: PLUGIN_UNDERRUNS.load(Ordering::Relaxed),
+                    frames_min: load.frames_min.min(load.frames_max),
+                    frames_max: load.frames_max,
+                    peak_frames: load.peak_frames,
                 });
                 load = LoadWindow::new(Instant::now());
                 rt_debug::report();

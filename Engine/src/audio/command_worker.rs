@@ -609,9 +609,7 @@ impl CommandWorker {
         report.total_misses += s.deadline_misses;
         report.seen = true;
 
-        if s.deadline_misses == 0 && s.event_drops == 0 {
-            return;
-        }
+        // Keep the whole window, so the log can show process times next to the misses.
         let entry = self
             .plugin_stats
             .entry((plugin.channel_id, plugin.device_path))
@@ -619,8 +617,7 @@ impl CommandWorker {
                 name: plugin.handle.device_name().to_string(),
                 stats: PluginBlockStats::default(),
             });
-        entry.stats.deadline_misses += s.deadline_misses;
-        entry.stats.event_drops += s.event_drops;
+        entry.stats.merge(&s);
     }
 
     /// Send each plugin's stats to Godot every `PLUGIN_STATS_REPORT_INTERVAL`. A plugin that
@@ -672,14 +669,23 @@ impl CommandWorker {
         }
         for ((channel_id, device_path), entry) in self.plugin_stats.drain() {
             let s = entry.stats;
+            if s.deadline_misses == 0 && s.event_drops == 0 {
+                continue;
+            }
             warn!(
-                "Plugin {} (channel {} device {}) in the last {:.0}s: {} blocks missed the processing deadline, {} input events dropped",
+                "Plugin {} (channel {} device {}) in the last {:.0}s: {} of {} blocks missed the processing deadline ({} dropped because the previous block was still running), {} input events dropped; process avg {:.2} ms, max {:.2} ms, load peak {:.0}%; longest engine wait {:.2} ms",
                 entry.name,
                 channel_id,
                 device_path,
                 elapsed.as_secs_f32(),
                 s.deadline_misses,
-                s.event_drops
+                s.blocks(),
+                s.late_drops,
+                s.event_drops,
+                s.process_ns_total as f64 / s.blocks_done.max(1) as f64 / 1e6,
+                s.process_ns_max as f64 / 1e6,
+                s.load_peak * 100.0,
+                s.wait_ns_max as f64 / 1e6,
             );
         }
         self.plugin_stats_since = Instant::now();

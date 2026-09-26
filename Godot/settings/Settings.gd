@@ -281,6 +281,7 @@ func _register_all_settings() -> void:
 		+ "By plug-in: all instances of one plugin share a process.\n"
 		+ "By vendor: all plugins from one vendor share a process.\n"
 		+ "Together: all plugins share one process.\n\n"
+		+ "Individually runs plugins on separate cores; grouped modes run each group on one core.\n\n"
 		+ "Changes apply right away: loaded plugins are moved and keep their state. A plugin set to \"Always host individually\" in its device menu ignores this.",
 	)).sub("Plugins").choices(["Individually", "By plug-in", "By vendor", "Together"])
 

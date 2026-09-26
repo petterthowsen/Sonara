@@ -15,7 +15,7 @@ plugins". It also sets up "Plugin latency compensation".
 - [x] Phase 6: Plugin debuggability (logs, stats, probe mode, debugger wrapper). Needs a Godot UI check
 - [x] Phase 7: Audio device settings (device, sample rate, buffer size, from the UI). Needs a Godot UI check and a forced-quantum run
 - [ ] Phase 8: Later work, in this order: 8a parallel plugin dispatch (designed), 8b RT priority, then CPU affinity, latency compensation and lock-free state as the numbers call for them
-  - [ ] Phase 8a: Parallel plugin dispatch (begin/finish per plugin block, parked chains in mixer passes 1 and 3)
+  - [x] Phase 8a: Parallel plugin dispatch (begin/finish per plugin block, parked chains in mixer passes 1 and 3). Needs `rt-debug`, OSC smoke tests and the live LibreStrings measurement
 
 Do the phases in order unless the dependency notes say otherwise. This plan is the design: no separate specs.
 When a phase has to deviate from it, update this file first. Phase 3 must already implement the
@@ -1137,6 +1137,18 @@ In the adapter tests, using the existing held-request fixture:
   should show the `plugin_host` processes busy at the same time, not taking turns.
 - The same project in By plug-in mode: the misses come back. This confirms the hosting-mode
   note.
+
+#### Implementation notes
+
+- `MixBuffers` holds the `ChainCursor` plus `chain_start`, the first device index of the chain it
+  runs on (0, or 1 after an aux source), so sleep changes keep their absolute device path.
+- `RenderScratch.parked` is a `VecDeque` with capacity for the channel limit. A channel is in it
+  at most once, so re-parking at a later plugin never grows it.
+- `finish_channel` is split into `begin_finish` (mark done, begin the chain) and
+  `route_finished` (pan, clear if silenced, route). The routing-cycle fallback runs the same
+  steps on a one-channel batch.
+- The adapter test `a_late_host_costs_one_block_and_its_result_is_discarded` now waits for the
+  late request to finish before the next block, since `begin_block` no longer waits for it.
 
 #### Deferred
 

@@ -69,6 +69,11 @@ pub struct PluginBlockStats {
     pub block_ns_total: u64,
     /// Worst single block's process time as a share of that block's duration.
     pub load_peak: f32,
+    /// Deadline misses where the block wasn't published at all, because the previous request
+    /// was still running when the block began (a subset of `deadline_misses`).
+    pub late_drops: u64,
+    /// Longest time the engine waited for this plugin in `finish_block`.
+    pub wait_ns_max: u32,
     /// Longest run of consecutive deadline misses. `MISSES_BEFORE_WARNING` or more flags the
     /// plugin in the UI.
     pub max_consecutive_misses: u32,
@@ -98,6 +103,8 @@ impl PluginBlockStats {
         self.process_ns_max = self.process_ns_max.max(other.process_ns_max);
         self.block_ns_total += other.block_ns_total;
         self.load_peak = self.load_peak.max(other.load_peak);
+        self.late_drops += other.late_drops;
+        self.wait_ns_max = self.wait_ns_max.max(other.wait_ns_max);
         self.max_consecutive_misses = self
             .max_consecutive_misses
             .max(other.max_consecutive_misses);
@@ -174,6 +181,19 @@ pub struct SubprocessClapAdapter {
     stall: Option<(u64, Instant)>,
     /// One absolute plugin deadline per callback, published by the engine.
     block_clock: Arc<BlockClock>,
+    /// What `finish_block` owes for the block `begin_block` started.
+    pending: PendingBlock,
+}
+
+/// The block between `begin_block` and `finish_block`.
+#[derive(Debug, Clone, Copy)]
+enum PendingBlock {
+    /// No block started.
+    None,
+    /// No request was published: pass the input through.
+    Dry,
+    /// Request `seq` was published to the host.
+    Request(u64),
 }
 
 impl SubprocessClapAdapter {
@@ -265,6 +285,7 @@ impl SubprocessClapAdapter {
             consecutive_misses: 0,
             stall: None,
             block_clock,
+            pending: PendingBlock::None,
         };
 
         info!(
@@ -312,45 +333,51 @@ impl SubprocessClapAdapter {
 }
 
 impl AudioDevice for SubprocessClapAdapter {
-    /// Audio thread. Runs the per-block handshake: fill the instance's shared input planes and
-    /// event array, ring the host's doorbell, then wait for the host to finish — bounded by the
-    /// callback's absolute deadline. A missed deadline costs this plugin one block (dry input or
-    /// silence); the late result is discarded by sequence number on the next block.
+    /// Audio thread. Runs the per-block handshake: `begin_block` then `finish_block`. Callers
+    /// that can do other work while the plugin processes (the mixer) call the two halves.
     fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
-        let interleaved = (sample_count * 2).min(outputs.len());
-        let copy_len = interleaved.min(inputs.len());
+        let begun = self.begin_block(inputs, sample_count);
+        debug_assert!(begun);
+        self.finish_block(inputs, outputs, sample_count);
+    }
+
+    /// Audio thread. Fill the instance's shared input planes and event array and ring the host's
+    /// doorbell, without waiting. Anything that stops a request (not loaded, block too big,
+    /// previous request still running, bypassed) leaves a dry block for `finish_block`.
+    fn begin_block(&mut self, inputs: &[f32], sample_count: usize) -> bool {
+        debug_assert!(
+            matches!(self.pending, PendingBlock::None),
+            "begin_block called while a block is pending"
+        );
+        self.pending = PendingBlock::Dry;
 
         // Clone the load handle so `shared` doesn't borrow `self` while counters are updated.
         let load = Arc::clone(&self.load);
         let Some(shared) = load.shared() else {
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-            return;
+            return true;
         };
 
         let layout = *shared.memory.layout();
         if sample_count > layout.max_frames {
             // Bigger block than the shared region: can't be published.
             self.record_event_drops(1);
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-            return;
+            return true;
         }
         let channels = layout.max_channels.min(2);
         let control = shared.memory.control();
 
-        // Finish a request that timed out on an earlier block before the buffers are reused, even
-        // if the plugin has since been bypassed.
+        // A request that missed an earlier deadline still owns the buffers, even if the plugin
+        // has since been bypassed. Don't wait for it: that would hold up every plugin begun
+        // after this one. This block drops out and the late result is discarded by sequence.
         let outstanding = control.request_seq.load(Ordering::Acquire);
-        if outstanding != control.done_seq.load(Ordering::Acquire)
-            && !self.wait_for_done(shared, outstanding, sample_count)
-        {
+        if outstanding != control.done_seq.load(Ordering::Acquire) {
+            self.stats.late_drops += 1;
             self.record_deadline_miss();
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-            return;
+            return true;
         }
 
         if !self.is_enabled {
-            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
-            return;
+            return true;
         }
 
         // Fill the planar input planes (interleaved stereo in, planar out).
@@ -384,8 +411,41 @@ impl AudioDevice for SubprocessClapAdapter {
         shared.doorbell.ring();
         // The events belong to this request now, whether or not it finishes in time.
         self.input_events.clear();
+        self.pending = PendingBlock::Request(seq);
+        true
+    }
 
-        if self.wait_for_done(shared, seq, sample_count) {
+    /// Audio thread. Wait for the request `begin_block` published, bounded by the callback's
+    /// absolute deadline, and copy its output. A missed deadline costs this plugin one block (dry
+    /// input); the late result is discarded by sequence number.
+    fn finish_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+        let pending = std::mem::replace(&mut self.pending, PendingBlock::None);
+        debug_assert!(
+            !matches!(pending, PendingBlock::None),
+            "finish_block called without begin_block"
+        );
+        let interleaved = (sample_count * 2).min(outputs.len());
+        let copy_len = interleaved.min(inputs.len());
+
+        let PendingBlock::Request(seq) = pending else {
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            return;
+        };
+        let load = Arc::clone(&self.load);
+        let Some(shared) = load.shared() else {
+            outputs[..copy_len].copy_from_slice(&inputs[..copy_len]);
+            return;
+        };
+        let layout = *shared.memory.layout();
+        let channels = layout.max_channels.min(2);
+        let control = shared.memory.control();
+        let frames = sample_count;
+
+        let wait_started = Instant::now();
+        let done = self.wait_for_done(shared, seq, sample_count);
+        let waited = wait_started.elapsed().as_nanos().min(u32::MAX as u128) as u32;
+        self.stats.wait_ns_max = self.stats.wait_ns_max.max(waited);
+        if done {
             let out_frames = (control.output_frames.load(Ordering::Acquire) as usize).min(frames);
             {
                 let plane = shared.memory.output();
@@ -947,6 +1007,7 @@ impl SubprocessClapAdapter {
             consecutive_misses: 0,
             stall: None,
             block_clock,
+            pending: PendingBlock::None,
         }
     }
 }
@@ -1129,8 +1190,12 @@ mod tests {
         assert_eq!(memory.control().request_seq.load(Ordering::Acquire), 1);
         assert_eq!(memory.control().done_seq.load(Ordering::Acquire), 0);
 
-        // Release the host: the late result is discarded, the next block succeeds.
+        // Release the host and let the late request finish, as it would before the next
+        // callback. Its result is discarded and the next block succeeds.
         release.store(true, Ordering::Release);
+        while memory.control().done_seq.load(Ordering::Acquire) != 1 {
+            std::hint::spin_loop();
+        }
         clock.publish(Instant::now(), Duration::from_secs(1));
         let mut output = vec![0.0f32; 64 * 2];
         adapter.process_block(&input, &mut output, 64);
@@ -1141,6 +1206,76 @@ mod tests {
             );
         }
         assert_eq!(adapter.take_stats().deadline_misses, 0);
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
+    }
+
+    #[test]
+    fn begin_then_finish_matches_process_block() {
+        let (load, memory, doorbell) = ready_block("sonara_test_begin_finish", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(true));
+        let host = spawn_fake_host(memory, doorbell, Arc::clone(&stop), release, None);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        clock.publish(Instant::now(), Duration::from_millis(500));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        let input: Vec<f32> = (0..64 * 2).map(|i| i as f32 * 0.001).collect();
+
+        let mut processed = vec![0.0f32; 64 * 2];
+        adapter.process_block(&input, &mut processed, 64);
+        let process_stats = adapter.take_stats();
+
+        let mut split = vec![0.0f32; 64 * 2];
+        assert!(adapter.begin_block(&input, 64));
+        adapter.finish_block(&input, &mut split, 64);
+        let split_stats = adapter.take_stats();
+
+        assert_eq!(split, processed);
+        assert_eq!(split_stats.blocks_done, process_stats.blocks_done);
+        assert_eq!(split_stats.deadline_misses, process_stats.deadline_misses);
+        assert_eq!(split_stats.process_ns_max, process_stats.process_ns_max);
+        stop.store(true, Ordering::Release);
+        host.join().unwrap();
+    }
+
+    /// With the previous request still running, `begin_block` doesn't wait for it: the block
+    /// drops out at once, so plugins begun after this one keep their share of the deadline.
+    #[test]
+    fn begin_block_does_not_wait_for_a_late_request() {
+        let (load, memory, doorbell) = ready_block("sonara_test_begin_late", 64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let host = spawn_fake_host(
+            memory,
+            doorbell,
+            Arc::clone(&stop),
+            Arc::clone(&release),
+            None,
+        );
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter =
+            SubprocessClapAdapter::new_for_test(load, Arc::clone(&clock), 48_000.0, 64);
+        let input = vec![0.5f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+
+        clock.publish(Instant::now(), Duration::from_micros(200));
+        adapter.process_block(&input, &mut output, 64);
+        assert_eq!(adapter.take_stats().deadline_misses, 1);
+
+        // A long deadline: waiting for the held request would take all of it.
+        clock.publish(Instant::now(), Duration::from_secs(1));
+        let started = Instant::now();
+        assert!(adapter.begin_block(&input, 64));
+        assert!(started.elapsed() < Duration::from_millis(50));
+        let mut output = vec![0.0f32; 64 * 2];
+        adapter.finish_block(&input, &mut output, 64);
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert_eq!(output, input, "the dropped block passes dry input through");
+        let stats = adapter.take_stats();
+        assert_eq!(stats.deadline_misses, 1);
+        assert_eq!(stats.blocks_done, 0);
+
+        release.store(true, Ordering::Release);
         stop.store(true, Ordering::Release);
         host.join().unwrap();
     }

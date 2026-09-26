@@ -1,5 +1,8 @@
 //! Preallocated scratch storage for the audio callback, so rendering and mixing don't allocate.
 
+use std::collections::VecDeque;
+
+use super::devices::container::ChainCursor;
 use super::types::{ChannelId, MidiNote, MidiVelocity, Tick, TrackId};
 
 /// Most tick boundaries one buffer can cross at 8192 frames (one per frame, plus the start tick).
@@ -22,6 +25,11 @@ pub struct RenderScratch {
     pub note_events: Vec<NoteEvent>,
     /// Channel IDs for the current buffer, so mixing passes can look channels up by ID.
     pub channel_ids: Vec<ChannelId>,
+    /// Channels whose device chain is waiting on a plugin that began a block, in park order.
+    /// A channel is in it at most once, so it never grows past the channel count.
+    pub parked: VecDeque<ChannelId>,
+    /// Route targets ready in the current routing sweep.
+    pub ready: Vec<ChannelId>,
 }
 
 impl Default for RenderScratch {
@@ -30,6 +38,8 @@ impl Default for RenderScratch {
             tick_events: Vec::with_capacity(MAX_TICK_EVENTS),
             note_events: Vec::with_capacity(MAX_NOTE_EVENTS),
             channel_ids: Vec::with_capacity(MAX_CHANNELS),
+            parked: VecDeque::with_capacity(MAX_CHANNELS),
+            ready: Vec::with_capacity(MAX_CHANNELS),
         }
     }
 }
@@ -66,6 +76,10 @@ pub struct MixBuffers {
     pub solo_role: SoloRole,
     /// First device writes extra buses into child channels this buffer.
     pub has_aux_source: bool,
+    /// Where this channel's device chain stopped when it parked at a plugin.
+    pub cursor: ChainCursor,
+    /// First device index of the chain the cursor runs on.
+    pub chain_start: usize,
 }
 
 impl MixBuffers {

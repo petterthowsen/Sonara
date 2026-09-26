@@ -647,6 +647,9 @@ pub enum EngineStatus {
         callbacks: u64,        // Total since start
         frames: u32,           // Frames in the last block
         plugin_underruns: u64, // Total since start: plugin blocks padded with silence
+        frames_min: u32,       // Smallest block in the interval
+        frames_max: u32,       // Largest block in the interval
+        peak_frames: u32,      // Frames in the block that set `load_peak`
     },
 
     // Device data subscriptions
