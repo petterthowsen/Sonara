@@ -15,6 +15,10 @@ var selection_end_x: float = 0.0
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	focus_mode = Control.FOCUS_NONE
+	# Markers are positioned in this control's space, which follows horizontal scroll but
+	# not the ScrollContainer's clipping. Without this, a selection start scrolled left of
+	# the note area paints over the piano keys / outside the editor.
+	clip_contents = true
 	set_process(false)
 
 

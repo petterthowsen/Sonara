@@ -96,6 +96,10 @@ var target_track_height: float = 0.0     # Vertical zoom target (average height)
 # Active zoom flags (to prevent interference with manual resizing)
 var _is_zooming_vertically: bool = false
 
+## Ctrl+A twice within this window promotes the selection from the active track to all tracks.
+const SELECT_ALL_DOUBLE_TAP_MS := 400
+var _last_select_all_msec := 0
+
 # Current project reference
 var current_project: Project = null
 
@@ -465,6 +469,9 @@ func _handle_input(event: InputEvent) -> void:
 			# Automation points only: clips are still deleted through their context menu.
 			if timeline.delete_automation_selection():
 				accept_event()
+		elif event.is_command_or_control_pressed() and event.keycode == KEY_A:
+			_select_all_clips()
+			accept_event()
 		elif timeline.clip_selection_manager.has_selection():
 			if event.is_action_pressed("ui_left"):
 				timeline.move_selection_by_ticks(-timeline.get_move_step_ticks())
@@ -478,6 +485,18 @@ func _handle_input(event: InputEvent) -> void:
 			elif (event.keycode == KEY_DOWN or event.is_action_pressed("ui_down")):
 				timeline.move_selection_by_tracks(1)
 				accept_event()
+
+
+## Ctrl+A: select every clip on the active track. Pressing it again within
+## SELECT_ALL_DOUBLE_TAP_MS selects every track instead. With no active track, all tracks.
+func _select_all_clips() -> void:
+	var now := Time.get_ticks_msec()
+	var all_tracks := now - _last_select_all_msec <= SELECT_ALL_DOUBLE_TAP_MS
+	_last_select_all_msec = 0 if all_tracks else now
+	var track: Track = null
+	if not all_tracks and Sonara and Sonara.editor:
+		track = Sonara.editor.focused_track
+	timeline.select_all_clips(track)
 
 
 ## Zoom tracks vertically by adjusting their heights (smoothly). The row under the

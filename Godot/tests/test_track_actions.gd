@@ -182,6 +182,14 @@ func _test_menu_layout() -> void:
 	_assert(menu.delete_button.text == "Delete Track" and menu.delete_with_channel_button.visible, "both delete variants")
 	_assert(menu.duplicate_button.visible and menu.duplicate_with_channel_button.visible, "both duplicate variants")
 
+	# Destructive actions sit below the duplicates.
+	var buttons: Node = menu.delete_button.get_parent()
+	_assert(buttons.get_child_count() == 4, "four action buttons: %d" % buttons.get_child_count())
+	_assert(buttons.get_child(0) == menu.duplicate_button, "Duplicate Track first")
+	_assert(buttons.get_child(1) == menu.duplicate_with_channel_button, "Duplicate Track & Channel second")
+	_assert(buttons.get_child(2) == menu.delete_button, "Delete Track third")
+	_assert(buttons.get_child(3) == menu.delete_with_channel_button, "Delete Track & Channel last")
+
 	menu.bind_tracks(_typed_tracks([bare]), bare, project)
 	_assert(not menu.delete_with_channel_button.visible and not menu.duplicate_with_channel_button.visible, "channel variants hidden without a channel")
 
@@ -192,4 +200,11 @@ func _test_menu_layout() -> void:
 	_assert(not menu.channel_route_option.visible, "routing dropdown hidden for several tracks")
 	menu._on_name_changed("Renamed")
 	_assert(a.track.name == "A" and bare.name == "Bare", "renaming does nothing with several tracks")
+
+	# The empty-area menu offers no bare "New Track" (a track needs a channel).
+	var list_menu: Object = track_list.context_menu
+	_assert(list_menu.get_item_count() == 4, "four create options: %d" % list_menu.get_item_count())
+	_assert(list_menu.get_item_text(0) == "New Instrument Track", "menu starts at New Instrument Track")
+	for i in range(list_menu.get_item_count()):
+		_assert(list_menu.get_item_text(i) != "New Track", "no bare New Track at %d" % i)
 	track_list.queue_free()

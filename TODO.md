@@ -77,9 +77,7 @@ Done:
 
 ### Mixer & Tracks
 
-- MixerChannel: Sync MainPane/VSplit's offset between all mixerchannels. Adjusting one > applies to all others.
-
-- [ ] Master track doesn't accept device drops on its device lane and compact device list. Master track should accept devices.
+- [ ] Master track doesn't accept device drops on its device lane and compact device list. Master track should accept devices.
 
 
 ### Arranger & Timeline
@@ -90,10 +88,10 @@ Done:
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
 - [x] Resizing a TrackItem's height by dragging its bottom edge is finicky: the grab area is too hard to hit. `TrackItem.RESIZE_GUTTER = 6.0` (was a hardcoded 4 in three places), and the cursor is no longer derived in `_gui_input`: inner controls with `MOUSE_FILTER_STOP` swallow motion, so the trailing 2px `empty` spacer owned the outermost pixels (no VSIZE cursor *and* no resize press there) while everywhere else the shape went stale on whatever it last was. The cursor now follows the real pointer position from `_input`, and the spacer is `MOUSE_FILTER_IGNORE`. `AutomationLaneHeader` had the same pattern and got the same treatment. Confirmed working live.
 - [x?] Ctrl+scroll vertical zoom should zoom around the mouse cursor, adjusting the vertical scroll so the track under the cursor stays put. `_zoom_tracks_vertically` now re-derives `target_scroll_vertical` from the zoom ratio (`int(target_track_height) / avg_height`, the realized ratio, since `_apply_track_heights` casts to int) and the cursor's viewport y; scroll and heights interpolate to the same target. Live-checked in a 24-track project (cursor on row T9, 1.4x zoom-in from 48 to 67 px): T9 stayed under the cursor, where leaving the scroll alone would have put T6 there. The `int()` refinement above was added after that run; feel check still pending.
-- [ ] Ctrl+A selects all clips on the active track; Ctrl+double-tap A selects all clips on all tracks
+- [x?] Ctrl+A selects all clips on the active track; pressing it again within 400 ms selects all clips on all tracks. `Arranger._select_all_clips()` reads `Sonara.editor.focused_track`; `Timeline.select_all_clips()` asks `ClipSelectionManager.select_all_on_track(s)`; no active track selects all tracks.
 - [ ] Double-clicking a clip opens it in the MIDI editor (clip mode), scrolled horizontally to the clip start and vertically to the notes (e.g. median pitch of the notes in view). See also the header/body split under Clips › Maybe
-- [ ] Tracklist context menu (`TrackListContextMenu.gd`): remove the bare "New Track" option — a track with no instrument/audio channel makes no sense. Alternative: make this a popup that can create several tracks in one go.
-- [ ] TrackItem context menu (`TrackItemContextMenu.gd`): move Delete to the bottom, below the duplicate actions.
+- [x?] Tracklist context menu (`TrackListContextMenu.gd`): removed the bare "New Track" item; the menu starts at "New Instrument Track".
+- [x?] TrackItem context menu (`TrackItemContextMenu.gd`): duplicate actions are added first, Delete (and Delete & Channel) last.
 
 ### Clips
 
@@ -148,8 +146,8 @@ Done:
   - [ ] In track mode, the track list should be ordered the same as the timeline
   - [ ] In track mode, draw a track-colored overlay on the ruler for clip start/end. Unfocused clips as gray/white below; clips of the active/focused tracks above
 - [ ] Modifier+right-click to open context menu in NoteEditor
-- [ ] Ctrl+A selects all notes: in clip mode, every note in the clip; in track mode, every note on the active track
-- [ ] Bug: the blue vertical range line at the start of the clip renders off-screen
+- [x?] Ctrl+A selects all notes: in clip mode, every note in the clip; in track mode, every note on the active track. `NoteEditor.handle_key_input` gathers its own `VisualNote` children (`NoteContainer.get_all_visual_notes`) and calls `NoteSelectionManager.select_all`, which sets the selection range too.
+- [x?] Bug: the blue vertical range line at the start of the clip renders off-screen. The markers track content X correctly (projected note position == marker X), but `MidiEditorOverlays` had no clipping, so a marker scrolled left of the note area painted over the piano keys / outside the editor. Fixed with `clip_contents = true` in `_ready()`.
 - [ ] Unify the ruler between the arranger and the note editor: share a set of ruler components so the note editor also gets real-time display, range interaction, selection and start position
 - [ ] Incoming MIDI events (live input and playback) should depress keys on the vertical piano roll the same way clicking does, in blue. Change the hover color to a lighter gray/white and prioritize key press over hover
 

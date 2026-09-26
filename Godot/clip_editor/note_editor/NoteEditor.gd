@@ -184,7 +184,13 @@ func start_place_and_drag(note: VisualNote) -> void:
 
 func handle_key_input(event: InputEventKey) -> void:
 	"""Handle keyboard input."""
-	if event.is_action_pressed("ui_copy"):
+	if event.pressed and event.is_command_or_control_pressed() and event.keycode == KEY_A:
+		# Clip mode: every note in the clip. Track mode: every note on the active track
+		# (the active editor is the one bound to it).
+		selection_manager.select_all(get_all_visual_notes())
+		accept_event()
+
+	elif event.is_action_pressed("ui_copy"):
 		selection_manager.copy_selection()
 		accept_event()
 

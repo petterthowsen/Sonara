@@ -10,16 +10,22 @@ Effort scale: **XS** <2 h · **S** ≤1 d · **M** 2–4 d · **L** 1–2 w · *
 
 ## XS — localized, single file
 
-| Task | Category / file |
-|---|---|
-| TrackItem context menu: move Delete below duplicate actions | `arranger/tracklist/TrackItemContextMenu.gd` |
-| Tracklist context menu: remove bare "New Track" | `arranger/tracklist/TrackListContextMenu.gd` |
-| NoteEditor: modifier+right-click opens context menu | `clip_editor/note_editor/NoteEditor.gd` |
-| Ctrl+A selects all notes (clip/track mode) | `note_editor/NoteSelectionManager.gd` |
-| Ctrl+A clips on active track; Ctrl+double-A all tracks | `arranger/timeline/Timeline.gd` (54.8 KB), `ClipSelectionManager.gd` |
-| Bug: blue vertical range line renders off-screen | `note_editor/NoteEditor.gd` (`_draw`) |
-| Settings: scroll-zoom sensitivity Slow/Normal/Fast | `settings/Settings.gd` + zoom consumers |
-| Mixer split offset across strips — **already implemented** | `mixer/MixerChannel.gd:124` `_shared_vsplit_offset`, `_on_vsplit_dragged`, `_apply_shared_vsplit_offset`; TODO line is stale → verify only |
+| Task | Category / file | Status |
+|---|---|---|
+| NoteEditor: modifier+right-click opens context menu | `clip_editor/note_editor/NoteEditor.gd` | deferred |
+| Settings: scroll-zoom sensitivity Slow/Normal/Fast | `settings/Settings.gd` + zoom consumers | deferred |
+
+Shipped (see `TODO.md` for the implementation notes):
+
+- TrackItem context menu: Delete moved below the duplicate actions.
+- Tracklist context menu: bare "New Track" removed.
+- Ctrl+A selects all notes (clip mode: the clip; track mode: the active track).
+- Ctrl+A clips on the active track; Ctrl+double-A within 400 ms selects all tracks.
+- Bug: the blue selection-range line no longer paints outside the note area
+  (`MidiEditorOverlays` clips its drawing; the marker X math was verified against the
+  projected note position).
+- Mixer split offset across strips — confirmed implemented (`_shared_vsplit_offset`,
+  `_on_vsplit_dragged`, `_apply_shared_vsplit_offset`); stale `TODO.md` line deleted.
 
 ## S — self-contained feature, existing patterns
 
@@ -86,8 +92,6 @@ zoom feel, Simple View panel integration (T-013), device rename, device drag-reo
 
 ## Notes / risks
 
-- Stale TODO: the `MixerChannel` split-sync item is already implemented
-  (`_shared_vsplit_offset`); it should be deleted from `TODO.md`, not scheduled.
 - Dependency edge: instance-count badge (S) and "Select All Instances" (S) are gated on
   instance-count observable state (M) — do the M item first.
 - Dual-nature: export/bounce/stem items are ranked L for the UI half alone; engine work dominates

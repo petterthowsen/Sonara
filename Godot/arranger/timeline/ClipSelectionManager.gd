@@ -174,6 +174,25 @@ func select_instances(instances: Array[ClipInstance]) -> void:
 	selection.set_from(instances)
 
 
+## Select every clip on `track` (Ctrl+A with that track active).
+func select_all_on_track(track: Track) -> void:
+	if track == null:
+		return
+	select_instances(track.clip_instances)
+
+
+## Select every clip on every track in `tracks` (Ctrl+A twice).
+func select_all_on_tracks(tracks: Array[Track]) -> void:
+	var instances: Array[ClipInstance] = []
+	for track in tracks:
+		if track == null:
+			continue
+		for instance in track.clip_instances:
+			if instance:
+				instances.append(instance)
+	select_instances(instances)
+
+
 func get_selected_instances() -> Array[ClipInstance]:
 	return selection.get_sorted_by_start()
 

@@ -617,6 +617,8 @@ func _gui_input(event: InputEvent):
 		var active_editor = get_active_note_editor()
 		if active_editor:
 			active_editor.handle_key_input(event)
+			# Selection may have changed (Ctrl+A); keep the range markers in step.
+			_update_selection_overlays()
 
 
 # ============================================================================

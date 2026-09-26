@@ -558,6 +558,16 @@ func get_snap_interval() -> int:
 	return grid_helper.get_snap_interval()
 
 
+## Ctrl+A: select every clip on `track`, or on every track when `track` is null.
+func select_all_clips(track: Track = null) -> void:
+	if not project or not clip_selection_manager:
+		return
+	if track != null:
+		clip_selection_manager.select_all_on_track(track)
+	else:
+		clip_selection_manager.select_all_on_tracks(project.tracks)
+
+
 func _update_timeline_width() -> void:
 	"""Update the minimum width of the timeline based on content length and scroll position."""
 	if not project or not grid_helper:

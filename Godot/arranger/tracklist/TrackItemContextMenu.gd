@@ -44,6 +44,7 @@ func _ready() -> void:
 
 
 ## Add Delete & Channel and the duplicate buttons next to the scene's Delete button.
+## Duplicate actions come first, destructive Delete actions last.
 func _ensure_action_buttons() -> void:
 	if duplicate_button or delete_button == null:
 		return
@@ -51,6 +52,9 @@ func _ensure_action_buttons() -> void:
 	delete_with_channel_button = _make_button(buttons, _on_delete_pressed.bind(true))
 	duplicate_button = _make_button(buttons, _on_duplicate_pressed.bind(false))
 	duplicate_with_channel_button = _make_button(buttons, _on_duplicate_pressed.bind(true))
+	# Scene order is [Delete], then the three above: move the two duplicate buttons to the top.
+	buttons.move_child(duplicate_button, 0)
+	buttons.move_child(duplicate_with_channel_button, 1)
 
 
 func _make_button(parent: Node, on_pressed: Callable) -> Button:

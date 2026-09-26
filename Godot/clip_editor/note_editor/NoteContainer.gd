@@ -284,6 +284,16 @@ func _update_note_positions() -> void:
 			_update_single_note_position(note)
 
 
+## Every visual note in this editor, in child order (clip mode: the clip's notes;
+## track mode: the track's notes from all bound instances).
+func get_all_visual_notes() -> Array[VisualNote]:
+	var notes: Array[VisualNote] = []
+	for child in get_children():
+		if child is VisualNote and child.midi_note_data:
+			notes.append(child)
+	return notes
+
+
 func _update_single_note_position(note: VisualNote) -> void:
 	"""Update the position and size of a single visual note."""
 	if not note.midi_note_data:

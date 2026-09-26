@@ -204,6 +204,13 @@ func clear_selection() -> void:
 	#container.queue_redraw()
 
 
+## Select every note in `notes` at once (Ctrl+A). The range covers them all.
+func select_all(notes: Array[VisualNote]) -> void:
+	_set_selected_notes(notes)
+	_update_selection_range()
+	selection_changed.emit(selected_notes)
+
+
 func select_note(note: VisualNote) -> void:
 	"""Select a single note (clears previous selection)."""
 	# Clear all previous selections
