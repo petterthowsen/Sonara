@@ -30,16 +30,17 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 @export var active_outline_color := Color(1, 1, 1, 0.9)
 
 # UI References
+## Inner layout; its combined minimum size bounds how small a resize can go.
+@export var content_box: Control
 @export var volumeter: Volumeter
 @export var label: SmartLineEdit
 @export var arm_toggle: Button
-@export var solo_toggle: Button 
+@export var solo_toggle: Button
 @export var mute_toggle: Button
 @export var automation_toggle: Button
 @export var automation_menu_button: Button
-
 ## Folder/group fold button (hidden for tracks without children).
-@onready var foldout_toggle: Button = get_node_or_null("VBoxContainer/HBox/MarginContainer/HBox/FoldoutToggle")
+@export var foldout_toggle: Button
 
 # Data binding
 var track: Track = null
@@ -192,10 +193,9 @@ func _input(event: InputEvent) -> void:
 
 ## Minimum height from inner controls, ignoring the current custom_minimum_size (which would ratchet).
 func _content_min_height() -> int:
-	var inner := get_node_or_null("VBoxContainer") as Control
 	var content_min := 30
-	if inner:
-		content_min = max(content_min, int(inner.get_combined_minimum_size().y))
+	if content_box:
+		content_min = max(content_min, int(content_box.get_combined_minimum_size().y))
 	var stylebox := get_theme_stylebox("panel") as StyleBox
 	if stylebox:
 		content_min += int(stylebox.get_minimum_size().y)

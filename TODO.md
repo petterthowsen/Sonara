@@ -88,6 +88,10 @@ Done:
 - [ ] Chord track: Implement chord track with visual notations
 - [x] Marking track: Add marking/marker tracks (section labels, etc.)
 - [ ] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself.
+- [ ] Resizing a TrackItem's height by dragging its bottom edge is finicky: the grab area is too hard to hit
+- [ ] Ctrl+scroll vertical zoom should zoom around the mouse cursor, adjusting the vertical scroll so the track under the cursor stays put
+- [ ] Ctrl+A selects all clips on the active track; Ctrl+double-tap A selects all clips on all tracks
+- [ ] Double-clicking a clip opens it in the MIDI editor (clip mode), scrolled horizontally to the clip start and vertically to the notes (e.g. median pitch of the notes in view). See also the header/body split under Clips › Maybe
 
 ### Clips
 
@@ -141,6 +145,7 @@ Done:
   - [ ] In track mode, the track list should be ordered the same as the timeline
   - [ ] In track mode, draw a track-colored overlay on the ruler for clip start/end. Unfocused clips as gray/white below; clips of the active/focused tracks above
 - [ ] Modifier+right-click to open context menu in NoteEditor
+- [ ] Ctrl+A selects all notes: in clip mode, every note in the clip; in track mode, every note on the active track
 - [ ] Bug: the blue vertical range line at the start of the clip renders off-screen
 - [ ] Unify the ruler between the arranger and the note editor: share a set of ruler components so the note editor also gets real-time display, range interaction, selection and start position
 - [ ] Incoming MIDI events (live input and playback) should depress keys on the vertical piano roll the same way clicking does, in blue. Change the hover color to a lighter gray/white and prioritize key press over hover
@@ -213,6 +218,7 @@ Done:
   - [ ] Sub-category renders as a large-font label with margins between sub-categories
   - [ ] Table-like layout with the controls aligned on the right for readability
 - [ ] Searchable settings: fuzzy search bar at the top, with a little debounce
+- [ ] Scroll zoom sensitivity setting (applies to horizontal and vertical zoom): Slow / Normal / Fast, where Normal is twice the current speed
 - [] Move asset related settings to a top-level Assets category and include paths to search for Clap plugins. Default values should point to common clap paths on linux.
 
 #### Asset Browser
