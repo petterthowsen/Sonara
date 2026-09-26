@@ -14,6 +14,9 @@ var _pads: Array[DrumPad] = []
 var _base_note: int = FIRST_NOTE
 var _selected: DeviceInstance = null
 var _sounding_notes: Dictionary = {}
+## Children whose slot_changed/loading_state_changed are connected. Kept so a child
+## removed from the machine gets disconnected instead of dangling (see _sync_child_signals).
+var _tracked_children: Array[DeviceInstance] = []
 
 
 ## Keep the pad grid usable beside the parameter list.
@@ -58,11 +61,12 @@ func _on_unbind() -> void:
 		device.child_removed.disconnect(_on_children_changed)
 	if device.child_moved.is_connected(_on_children_changed):
 		device.child_moved.disconnect(_on_children_changed)
-	for child in device.children:
+	for child in _tracked_children:
 		if child.slot_changed.is_connected(_on_children_changed):
 			child.slot_changed.disconnect(_on_children_changed)
 		if child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.disconnect(_on_children_changed)
+	_tracked_children.clear()
 
 
 ## Release any pads still held when the view is hidden.
@@ -91,6 +95,7 @@ func _on_page(delta: int) -> void:
 
 ## Bind each scene pad to the MIDI note and child for the current page.
 func _rebuild() -> void:
+	_sync_child_signals()
 	if _pads.is_empty():
 		return
 	var by_note := {}
@@ -106,12 +111,29 @@ func _rebuild() -> void:
 		var from_bottom := (COLS - 1) - row
 		var note := _base_note + from_bottom * COLS + col
 		var child: DeviceInstance = by_note.get(note, null)
-		if child and not child.slot_changed.is_connected(_on_children_changed):
-			child.slot_changed.connect(_on_children_changed)
-		if child and not child.loading_state_changed.is_connected(_on_children_changed):
-			child.loading_state_changed.connect(_on_children_changed)
 		_pads[i].setup(note, child, device)
 		_pads[i].set_selected(child != null and child == _selected)
+
+
+## Keep slot/loading subscriptions exactly on the machine's current children, so a
+## child that is removed (or whose instance is replaced) stops driving this view.
+func _sync_child_signals() -> void:
+	var current: Array[DeviceInstance] = device.children if device else []
+	for child in _tracked_children:
+		if child in current:
+			continue
+		if is_instance_valid(child):
+			if child.slot_changed.is_connected(_on_children_changed):
+				child.slot_changed.disconnect(_on_children_changed)
+			if child.loading_state_changed.is_connected(_on_children_changed):
+				child.loading_state_changed.disconnect(_on_children_changed)
+	_tracked_children.clear()
+	for child in current:
+		_tracked_children.append(child)
+		if not child.slot_changed.is_connected(_on_children_changed):
+			child.slot_changed.connect(_on_children_changed)
+		if not child.loading_state_changed.is_connected(_on_children_changed):
+			child.loading_state_changed.connect(_on_children_changed)
 
 
 ## Focus the occupied pad and open its child in the device folder.

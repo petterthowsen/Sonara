@@ -4,13 +4,15 @@
 # - ArrangeTop header containing the header panel of both tracks and the timeline
 #   - TracklistHeader contains tools/buttons for track and/or timeline functions
 #   - TimelineHeader contains musical ruler, time ruler, loop region, playback start position (arrow icon), chord track etc.
-# - ScrollContainer with a HSplit (tracks on the left, timeline on the right)
-# - ArrangerBottom with auxiliary tools/buttons/status
+# - ArrangeBody
+#   - VScroll: ScrollContainer with a HSplit (tracks on the left, timeline on the right)
+#   - ArrangeBottom: TracksPanelFooter + TimelineScrollBar, pinned below VScroll so they never scroll away
+# - ArrangerFooter with auxiliary tools/buttons/status
 # 
 # Notes:
 # TracksPanel width
 #   The width of the TracksPanel is customizable (via HSplit)
-#   Width of TracksPanel is synced to the TracklistHeader
+#   Width of TracksPanel is synced to the TracklistHeader and the TracksPanelFooter
 #
 # Track Height
 #  Tracks can have independently varying heights, these must be synced to the height of visual track grid in the timeline (and midi/audio clips)
@@ -25,23 +27,27 @@ var logger : Log = Log.make("Arranger")
 @onready var tracklist_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TracklistHeader
 @onready var timeline_header: PanelContainer = $VSplitContainer/ArrangeTop/HBox/TimelineHeader
 
-@onready var add_track_button: Button = $VSplitContainer/VScroll/HSplit/TracksPanel/VBox/TracksPanelFooter/Buttons/AddTrackButton
-@onready var add_folder_button: Button = $VSplitContainer/VScroll/HSplit/TracksPanel/VBox/TracksPanelFooter/Buttons/AddFolderButton
+# ArrangeBottom: pinned below the vertical scroll, columns aligned to the panels above
+@onready var tracks_panel_footer: PanelContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter
+@onready var add_track_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
+@onready var add_folder_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddFolderButton
+@onready var timeline_scroll_bar_margin: MarginContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin
+@onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin/TimelineScrollBar
 
 @onready var v_split : VSplitContainer = $VSplitContainer
 
 # Vertical scrolling container
-@onready var v_scroll: ScrollContainer = $VSplitContainer/VScroll
-@onready var h_split: HSplitContainer = $VSplitContainer/VScroll/HSplit
-@onready var tracks_panel: PanelContainer = $VSplitContainer/VScroll/HSplit/TracksPanel
-@onready var track_list: VBoxContainer = $VSplitContainer/VScroll/HSplit/TracksPanel/VBox/TrackList
+@onready var v_scroll: ScrollContainer = $VSplitContainer/ArrangeBody/VScroll
+@onready var h_split: HSplitContainer = $VSplitContainer/ArrangeBody/VScroll/HSplit
+@onready var tracks_panel: PanelContainer = $VSplitContainer/ArrangeBody/VScroll/HSplit/TracksPanel
+@onready var track_list: VBoxContainer = $VSplitContainer/ArrangeBody/VScroll/HSplit/TracksPanel/VBox/TrackList
 
 # Syncing flag to prevent feedback loops
 var _syncing_split: bool = false
 
-@onready var timeline_panel: PanelContainer = $VSplitContainer/VScroll/HSplit/TimelinePanel
-@onready var h_scroll: ScrollContainer = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll
-@onready var timeline: Timeline = $VSplitContainer/VScroll/HSplit/TimelinePanel/HScroll/Timeline
+@onready var timeline_panel: PanelContainer = $VSplitContainer/ArrangeBody/VScroll/HSplit/TimelinePanel
+@onready var h_scroll: ScrollContainer = $VSplitContainer/ArrangeBody/VScroll/HSplit/TimelinePanel/HScroll
+@onready var timeline: Timeline = $VSplitContainer/ArrangeBody/VScroll/HSplit/TimelinePanel/HScroll/Timeline
 
 @onready var real_ruler: RealTimeRuler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/RealTimeRuler
 @onready var ruler: Ruler = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/Ruler
@@ -52,12 +58,11 @@ var _syncing_split: bool = false
 
 @onready var marker_track: MarkerTrack = $VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox/MarkerTrack
 
-@onready var overlay: Control = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay
-@onready var playhead: PlayheadLine = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/Playhead
-@onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/VScroll/HSplit/TimelinePanel/Overlay/TimelineScrollBar
+@onready var overlay: Control = $VSplitContainer/ArrangeBody/VScroll/HSplit/TimelinePanel/Overlay
+@onready var playhead: PlayheadLine = $VSplitContainer/ArrangeBody/VScroll/HSplit/TimelinePanel/Overlay/Playhead
 
-# ArrangerBottom
-@onready var arranger_bottom: PanelContainer = $ArrangerBottom
+# ArrangerFooter
+@onready var arranger_footer: PanelContainer = $ArrangerFooter
 
 # Panning state
 var is_panning: bool = false
@@ -140,6 +145,12 @@ func _ready():
 	# Connect HSplit dragging to sync with TracklistHeader width
 	h_split.dragged.connect(_on_h_split_dragged)
 	_on_h_split_dragged(h_split.split_offset)
+
+	# Keep the pinned bottom row's columns aligned with the scrolling panels above it
+	tracks_panel.resized.connect(_sync_arrange_bottom_columns)
+	v_scroll.get_v_scroll_bar().visibility_changed.connect(_sync_arrange_bottom_columns)
+	v_scroll.get_v_scroll_bar().resized.connect(_sync_arrange_bottom_columns)
+	_sync_arrange_bottom_columns()
 
 	# Connect to Timeline signals
 	timeline.clips_selected.connect(_on_timeline_clips_selected)
@@ -255,15 +266,19 @@ func _process(delta: float) -> void:
 				total_height += track.height
 			var current_avg_height = total_height / current_project.tracks.size()
 
-			# Lerp to target
-			var new_avg_height = lerp(current_avg_height, target_track_height, lerp_factor)
-
-			# Only update if difference is significant
-			if abs(new_avg_height - target_track_height) > 0.5:
-				_apply_track_heights(int(new_avg_height))
-			else:
-				# Stop zooming when we've reached the target
+			# Lerp to target. Heights are integers, so round the step away from the current
+			# average: truncation would stall short of the target and leave the zoom running
+			# forever, re-applying heights every frame and fighting manual resizes.
+			var new_avg_height: float = lerp(current_avg_height, target_track_height, lerp_factor)
+			if abs(new_avg_height - target_track_height) < 1.0:
+				_apply_track_heights(int(target_track_height))
 				_is_zooming_vertically = false
+			else:
+				var step: int = ceili(new_avg_height) if target_track_height > current_avg_height else floori(new_avg_height)
+				_apply_track_heights(step)
+				# Stop if layout floors (TrackItem content minimums) kept heights from moving.
+				if absf(_average_track_height() - current_avg_height) < 0.01:
+					_is_zooming_vertically = false
 	else:
 		# Instant scrolling/zooming when smoothing is disabled
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
@@ -282,8 +297,7 @@ func _process(delta: float) -> void:
 			var current_avg_height = total_height / current_project.tracks.size()
 			if abs(current_avg_height - target_track_height) > 0.5:
 				_apply_track_heights(int(target_track_height))
-			else:
-				_is_zooming_vertically = false
+			_is_zooming_vertically = false
 
 	_update_ruler()
 	_update_playhead_position()
@@ -466,8 +480,10 @@ func _handle_input(event: InputEvent) -> void:
 				accept_event()
 
 
+## Zoom tracks vertically by adjusting their heights (smoothly). The row under the
+## cursor stays put: content y scales with the same ratio the heights do, so the
+## vertical scroll is re-derived from it (mirrors the horizontal Ctrl/Shift zoom).
 func _zoom_tracks_vertically(zoom_in: bool) -> void:
-	"""Zoom tracks vertically by adjusting their heights (smoothly)."""
 	if not current_project or current_project.tracks.size() == 0:
 		return
 
@@ -490,17 +506,34 @@ func _zoom_tracks_vertically(zoom_in: bool) -> void:
 				break
 
 	# Clamp to reasonable bounds and set as target
-	target_track_height = clamp(new_height, min_height, 200.0)
-	
+	# Heights are integers, so keep the target integral: the lerp can then land on it exactly.
+	target_track_height = roundf(clamp(new_height, min_height, 200.0))
+
+	if avg_height > 0.0 and v_scroll:
+		var applied_height := target_track_height
+		var viewport_y := clampf(v_scroll.get_local_mouse_position().y, 0.0, v_scroll.size.y)
+		var zoom_point_y := float(v_scroll.scroll_vertical) + viewport_y
+		var zoom_ratio: float = applied_height / avg_height
+		target_scroll_vertical = maxf(0.0, zoom_point_y * zoom_ratio - viewport_y)
+
 	# Enable vertical zoom interpolation
 	_is_zooming_vertically = true
+
+
+func _average_track_height() -> float:
+	if not current_project or current_project.tracks.is_empty():
+		return 0.0
+	var total := 0.0
+	for track in current_project.tracks:
+		total += track.height
+	return total / current_project.tracks.size()
 
 
 func _apply_track_heights(new_height: int) -> void:
 	"""Apply the given height to all tracks (called during smooth zoom interpolation)."""
 	if not current_project:
 		return
-	
+
 	# Update all tracks to the new height
 	for track in current_project.tracks:
 		track.height = new_height
@@ -807,6 +840,16 @@ func _on_h_split_dragged(offset: int) -> void:
 	# Sync TracklistHeader width to match the split offset, accounting for the draggable area
 	tracklist_header.custom_minimum_size.x = offset + 7
 	_syncing_split = false
+
+
+## Align ArrangeBottom with the HSplit inside VScroll: the footer spans the TracksPanel, the
+## row's separation matches the HSplit's, and the right margin skips VScroll's own
+## scrollbar, so the TimelineScrollBar sits exactly under the TimelinePanel.
+func _sync_arrange_bottom_columns() -> void:
+	tracks_panel_footer.custom_minimum_size.x = tracks_panel.size.x
+	var vbar := v_scroll.get_v_scroll_bar()
+	var vbar_width := int(vbar.size.x) if vbar.visible else 0
+	timeline_scroll_bar_margin.add_theme_constant_override("margin_right", vbar_width)
 
 
 func _on_start_position_changed(ticks: int) -> void:

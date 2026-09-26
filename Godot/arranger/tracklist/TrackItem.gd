@@ -5,6 +5,11 @@ class_name TrackItem extends PanelContainer
 
 static var logger := Log.make("TrackItem")
 
+## Height of the bottom-edge resize band, in pixels. Kept wide enough to hit
+## comfortably on short rows; AutomationLaneHeader uses a narrower band because
+## its rows can shrink to 20px.
+const RESIZE_GUTTER := 6.0
+
 # Emitted when the track item is right-clicked
 signal right_clicked(track: Track, mouse_position: Vector2)
 ## Request that TrackList update selection. additive = Ctrl/Cmd, range_select = Shift.
@@ -59,13 +64,27 @@ var resize_start_y: float = 0.0
 var resize_start_height: int = 0
 var resize_min_height: int = 30
 
+## track.height before the header's content first forced it taller, or -1 when it has not.
+## Layout-driven growth is pushed into the model (the shared row height for both arranger
+## columns); this remembers what to restore once wrapping stops.
+var _pre_layout_height: int = -1
+## True while _apply_layout_height() writes track.height, so the signal callback does not
+## mistake it for an external height change.
+var _applying_layout_height: bool = false
+
 func _ready():
 	# Enable focus so TrackItem can receive input events properly
 	focus_mode = Control.FOCUS_CLICK
 	# Keep height at custom_minimum_size so extra space in the list does not
 	# stretch tracks (that stretch fights separator-drag when the list scrolls).
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	
+
+	# A narrow TracksPanel makes the flow container wrap its controls, which raises this
+	# node's minimum height above track.height. Follow that here so the row can never be
+	# taller than the lane it labels.
+	if content_box:
+		content_box.minimum_size_changed.connect(_sync_layout_height)
+
 	# Connect UI signals
 	if not Engine.is_editor_hint():
 
@@ -102,6 +121,7 @@ func _ready():
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		queue_redraw()
+		_sync_layout_height()
 	elif what == NOTIFICATION_PREDELETE:
 		_unbind()
 
@@ -130,8 +150,6 @@ func _draw() -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	var mouse = get_local_mouse_position()
-	
 	# Handle right-click for context menu
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		if track and not Engine.is_editor_hint():
@@ -142,7 +160,7 @@ func _gui_input(event: InputEvent) -> void:
 	# Left-click selects this header (Ctrl/Cmd = toggle, Shift = range).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		# Ignore if we're clicking the resize gutter (handled below)
-		if mouse.y < size.y - 4:
+		if not _is_in_resize_gutter():
 			if track and not Engine.is_editor_hint():
 				var mouse_event := event as InputEventMouseButton
 				var additive := mouse_event.ctrl_pressed or mouse_event.meta_pressed
@@ -151,11 +169,8 @@ func _gui_input(event: InputEvent) -> void:
 				accept_event()
 				return
 
-	# Detect resize area at bottom edge
-	if mouse.y >= size.y - 4:
-		mouse_default_cursor_shape = Control.CURSOR_VSIZE
-
-		# Handle mouse down to start resizing
+	# Handle mouse down in the bottom gutter to start resizing
+	if _is_in_resize_gutter():
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and not is_resizing:
 				is_resizing = true
@@ -166,28 +181,51 @@ func _gui_input(event: InputEvent) -> void:
 			elif event.is_released() and is_resizing:
 				is_resizing = false
 				accept_event()
+
+
+## True while the pointer sits in the bottom-edge resize band.
+func _is_in_resize_gutter() -> bool:
+	return get_local_mouse_position().y >= size.y - RESIZE_GUTTER
+
+
+## Keep the resize cursor truthful for the whole band. Inner controls with MOUSE_FILTER_STOP
+## swallow motion, so deriving the shape in _gui_input left it stuck on whatever it last was
+## (and never VSIZE in the few pixels the trailing spacer owned).
+func _update_resize_cursor() -> void:
+	if _is_in_resize_gutter() and get_global_rect().has_point(get_global_mouse_position()):
+		mouse_default_cursor_shape = Control.CURSOR_VSIZE
 	else:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 
 
 func _input(event: InputEvent) -> void:
-	"""Handle resizing while dragging."""
-	if is_resizing and event is InputEventMouseMotion:
-		var current_y = get_global_mouse_position().y
-		var delta_y = current_y - resize_start_y
-		var new_height = max(resize_min_height, resize_start_height + int(delta_y))
+	"""Handle resizing while dragging, and track the pointer for the resize cursor."""
+	if event is InputEventMouseMotion:
+		if is_resizing:
+			var current_y = get_global_mouse_position().y
+			var delta_y = current_y - resize_start_y
+			var new_height = max(resize_min_height, resize_start_height + int(delta_y))
 
-		if track:
-			track.height = new_height
+			# TEMP DIAG
+			logger.info("[resize] mouse_y=%.1f start_y=%.1f delta=%.1f start_h=%d min=%d new=%d before=%d" % [
+				current_y, resize_start_y, delta_y, resize_start_height, resize_min_height,
+				new_height, track.height if track else int(custom_minimum_size.y)
+			])
+
+			if track:
+				track.height = new_height
+			else:
+				custom_minimum_size.y = new_height
+
+			accept_event()
 		else:
-			custom_minimum_size.y = new_height
-
-		accept_event()
+			_update_resize_cursor()
 
 	# Stop resizing if mouse is released
 	if is_resizing and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.is_released():
 			is_resizing = false
+			_update_resize_cursor()
 			accept_event()
 
 
@@ -202,6 +240,42 @@ func _content_min_height() -> int:
 	return content_min
 
 
+## Reconcile this node's realized height with Track.height. The timeline sizes its lanes and
+## clips from Track.height, so when a narrow TracksPanel makes the header's controls wrap and
+## this node cannot fit (its minimum grows past Track.height), push the height into the model;
+## when wrapping stops, put the user's height back. Skips rows the fold animation is clipping
+## and nodes that are not laid out yet.
+func _sync_layout_height() -> void:
+	if track == null or _applying_layout_height:
+		return
+	if has_meta(&"fold_clip"):
+		return
+	if not is_inside_tree() or not is_visible_in_tree() or size.x <= 0.0:
+		return
+	var floor := _content_min_height()
+	if floor > track.height:
+		if _pre_layout_height < 0:
+			_pre_layout_height = track.height
+		# TEMP DIAG
+		logger.info("[layout] grow floor=%d track_h=%d size=%s" % [floor, track.height, size])
+		_apply_layout_height(floor)
+	elif _pre_layout_height >= 0 and floor <= _pre_layout_height:
+		var restore := _pre_layout_height
+		_pre_layout_height = -1
+		# TEMP DIAG
+		logger.info("[layout] restore %d (floor=%d size=%s)" % [restore, floor, size])
+		_apply_layout_height(restore)
+
+
+## Write a layout-driven height through the model, without clearing the restore memory.
+func _apply_layout_height(new_height: int) -> void:
+	if track == null or new_height <= 0 or new_height == track.height:
+		return
+	_applying_layout_height = true
+	track.height = new_height
+	_applying_layout_height = false
+
+
 func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 	"""Bind this UI element to a Track data object and its associated channel."""
 	logger.info("bind_to_track called: track=", t.name if t else "null", " project=", project)
@@ -211,6 +285,7 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 	track = t
 	track_index = idx
 	current_project = project
+	_pre_layout_height = -1
 
 	# Connect to track signals
 	if track:
@@ -323,6 +398,7 @@ func _unbind() -> void:
 			track.folder_expanded_changed.disconnect(_on_track_folder_expanded_changed)
 	track = null
 	current_project = null
+	_pre_layout_height = -1
 
 
 func _unbind_from_channel() -> void:
@@ -403,6 +479,10 @@ func _on_track_height_changed(new_height: int) -> void:
 	"""React to track height changes (synced from other sources like TimelineTrack resize)."""
 	custom_minimum_size.y = new_height
 	size.y = new_height
+	if not _applying_layout_height:
+		# A drag, vertical zoom or undo set this height explicitly: it supersedes any
+		# height remembered from layout-driven growth.
+		_pre_layout_height = -1
 
 
 func _on_track_channel_id_changed(new_channel_id: int) -> void:
@@ -603,7 +683,7 @@ func _on_channel_record_armed_changed(armed: bool) -> void:
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	if not track or Engine.is_editor_hint() or is_resizing:
 		return null
-	if get_local_mouse_position().y >= size.y - 4:
+	if _is_in_resize_gutter():
 		return null
 
 	var track_list := _get_track_list()

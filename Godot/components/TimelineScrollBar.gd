@@ -77,6 +77,7 @@ var _scroll_position: float = 0.0  # Backing variable for scroll_position
 var _dragging: bool = false
 var _drag_start_value: float = 0.0
 var _drag_start_mouse_x: float = 0.0
+var _drag_value_per_pixel: float = 1.0
 var _hovering: bool = false
 
 
@@ -191,39 +192,39 @@ func _start_drag(mouse_x: float) -> void:
 	_dragging = true
 	_drag_start_value = _scroll_position
 	_drag_start_mouse_x = mouse_x
+	# Freeze the scale for the whole drag: the effective range grows as we scroll
+	# past the end, which would otherwise change the drag speed mid-gesture
+	_drag_value_per_pixel = _get_value_per_pixel()
 	queue_redraw()
+
+
+func _get_value_per_pixel() -> float:
+	## Scroll units per pixel of grabber travel - the inverse of the mapping in _draw(),
+	## so the grabber stays under the mouse while dragging
+	var effective_max = _get_effective_max()
+	var range = effective_max - _min_value
+	if range <= 0:
+		return 1.0
+	var grabber_width = clamp((_page / range) * size.x, 20.0, size.x)
+	var usable_width = size.x - grabber_width
+	var scrollable = range - _page
+	# When grabber is full width, use a fixed scroll sensitivity (1px = 1 unit of scroll)
+	if usable_width <= 1.0 or scrollable <= 0.0:
+		return 1.0
+	return scrollable / usable_width
 
 
 func _update_drag(mouse_x: float) -> void:
 	## Update scroll value during drag
 	var delta_x = mouse_x - _drag_start_mouse_x
-	var effective_max = _get_effective_max()
-	var range = effective_max - _min_value
-	var grabber_width = (_page / range) * size.x
-	grabber_width = clamp(grabber_width, 20.0, size.x)
-	var usable_width = size.x - grabber_width
+	var new_value = _drag_start_value + delta_x * _drag_value_per_pixel
 
-	# When grabber is full width, use a fixed scroll sensitivity
-	if usable_width <= 1.0:
-		# Map pixels to scroll units directly (1px = 1 unit of scroll)
-		var delta_value = delta_x
-		var new_value = _drag_start_value + delta_value
+	# Apply step
+	if step > 0:
+		new_value = round(new_value / step) * step
 
-		# Apply step
-		if step > 0:
-			new_value = round(new_value / step) * step
-
-		scroll_position = new_value
-	else:
-		var delta_value = (delta_x / usable_width) * range
-		var new_value = _drag_start_value + delta_value
-
-		# Apply step
-		if step > 0:
-			new_value = round(new_value / step) * step
-
-		# Set value (will emit signal and redraw)
-		scroll_position = new_value
+	# Set value (will emit signal and redraw)
+	scroll_position = new_value
 
 
 func _end_drag() -> void:
@@ -245,7 +246,7 @@ func _jump_to_position(mouse_x: float) -> void:
 
 	if usable_width > 0:
 		var ratio = clamp(target_x / usable_width, 0.0, 1.0)
-		var new_value = _min_value + (ratio * range)
+		var new_value = _min_value + (ratio * (range - _page))
 
 		# Apply step
 		if step > 0:

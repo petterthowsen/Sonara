@@ -105,8 +105,11 @@ func setup(p_device_instance: DeviceInstance, position: int) -> void:
 	logger.info("setup() called for device: %s at position %d" % [p_device_instance.get_display_name(), position])
 	_unbind()
 	device_instance = p_device_instance
-	
-	await ready
+
+	# Not `await ready`: setup() also runs on panels already in the tree (re-bind),
+	# where awaiting an already-emitted `ready` would hang forever.
+	if not is_node_ready():
+		await ready
 
 	# Set panel title to instance name
 	_refresh_name_label()

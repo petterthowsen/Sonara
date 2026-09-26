@@ -53,6 +53,7 @@ Spec: `docs/specs/002-note-maps/`.
 
 - `components/GridHelper.gd` centralizes tempo/PPQ/zoom/scroll state and exposes ticks↔pixels conversions, snapping, and grid-line generation consumed by Timeline, Ruler, and Midi editors.
 - `components/Ruler.gd` draws bar/beat/subdivision lines using a shared `GridHelper` and emits `start_position_requested(ticks)` to update playhead/cursor logic; `offset_x` shifts drawing only (no change to snapping/emit positions) so rulers line up with gutters like the piano keyboard.
+- `Track.height` is the single arranger row height: `TrackList` headers and `Timeline` lanes/clips both size from it. A header's controls can force it taller than the user set (a narrow TracksPanel makes `CollapsingFlowContainer` wrap), so `TrackItem._sync_layout_height()` pushes the realized height through `Track.height` and restores the user's height when wrapping stops. Never size only one column from a layout-derived height.
 
 ## Utilities
 

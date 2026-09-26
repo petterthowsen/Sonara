@@ -5,6 +5,9 @@ const DevicePanelScene : PackedScene = preload("res://devices/device_lane/Device
 ## Space between device panels, in pixels.
 const PANEL_GAP := 16
 
+## Gap between the parent header and the channel header, in pixels.
+const PARENT_HEADER_GAP := 4
+
 var logger : Log = Log.make("DeviceLane")
 
 @onready var header: Panel = $Header
@@ -19,6 +22,8 @@ var channel : Channel
 var _parent_channel: Channel = null
 var _parent_header: Panel = null
 var _parent_header_label: VerticalLabel = null
+## Spacer between the parent header and the channel header; visible with the parent header.
+var _parent_header_gap: Control = null
 ## Device row drop rules; DeviceDropTarget resolves drops for this lane and its nested folders.
 var drop_host := DeviceChainDropHost.new()
 ## Glowing drop overlay (top-level, so it never takes layout space), created on first use.
@@ -254,6 +259,15 @@ func _create_parent_header() -> void:
 	add_child(_parent_header)
 	move_child(_parent_header, header.get_index())
 
+	# Separate the two headers so the parent doesn't read as part of the channel header.
+	_parent_header_gap = Control.new()
+	_parent_header_gap.name = "ParentHeaderGap"
+	_parent_header_gap.custom_minimum_size.x = PARENT_HEADER_GAP
+	_parent_header_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_parent_header_gap.visible = false
+	add_child(_parent_header_gap)
+	move_child(_parent_header_gap, header.get_index())
+
 
 ## Show the bound channel's mixer parent, or hide the header for a top-level channel.
 func _refresh_parent_header() -> void:
@@ -274,6 +288,8 @@ func _bind_parent_header(parent: Channel) -> void:
 		_parent_channel.color_changed.disconnect(_on_parent_color_changed)
 	_parent_channel = parent
 	_parent_header.visible = parent != null
+	if _parent_header_gap:
+		_parent_header_gap.visible = parent != null
 	if parent == null:
 		return
 	parent.name_changed.connect(_on_parent_name_changed)

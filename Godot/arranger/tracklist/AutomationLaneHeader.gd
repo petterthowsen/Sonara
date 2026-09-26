@@ -176,10 +176,7 @@ func _update_style() -> void:
 # ============================================================================
 
 func _gui_input(event: InputEvent) -> void:
-	var mouse := get_local_mouse_position()
-
-	if mouse.y >= size.y - RESIZE_GUTTER:
-		mouse_default_cursor_shape = Control.CURSOR_VSIZE
+	if _is_in_resize_gutter():
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and not _is_resizing:
 				_is_resizing = true
@@ -189,11 +186,26 @@ func _gui_input(event: InputEvent) -> void:
 			elif event.is_released() and _is_resizing:
 				_is_resizing = false
 				accept_event()
+
+
+## True while the pointer sits in the bottom-edge resize band.
+func _is_in_resize_gutter() -> bool:
+	return get_local_mouse_position().y >= size.y - RESIZE_GUTTER
+
+
+## Keep the resize cursor truthful for the whole band (the buttons swallow motion, so deriving
+## the shape in _gui_input alone left it stuck on the last value).
+func _update_resize_cursor() -> void:
+	if _is_in_resize_gutter() and get_global_rect().has_point(get_global_mouse_position()):
+		mouse_default_cursor_shape = Control.CURSOR_VSIZE
 	else:
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and not _is_resizing:
+		_update_resize_cursor()
+
 	if not _is_resizing:
 		return
 	if event is InputEventMouseMotion:
@@ -206,6 +218,7 @@ func _input(event: InputEvent) -> void:
 		accept_event()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
 		_is_resizing = false
+		_update_resize_cursor()
 		accept_event()
 
 

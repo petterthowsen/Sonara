@@ -87,11 +87,13 @@ Done:
 - [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
 - [ ] Chord track: Implement chord track with visual notations
 - [x] Marking track: Add marking/marker tracks (section labels, etc.)
-- [ ] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself.
-- [ ] Resizing a TrackItem's height by dragging its bottom edge is finicky: the grab area is too hard to hit
-- [ ] Ctrl+scroll vertical zoom should zoom around the mouse cursor, adjusting the vertical scroll so the track under the cursor stays put
+- [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
+- [x] Resizing a TrackItem's height by dragging its bottom edge is finicky: the grab area is too hard to hit. `TrackItem.RESIZE_GUTTER = 6.0` (was a hardcoded 4 in three places), and the cursor is no longer derived in `_gui_input`: inner controls with `MOUSE_FILTER_STOP` swallow motion, so the trailing 2px `empty` spacer owned the outermost pixels (no VSIZE cursor *and* no resize press there) while everywhere else the shape went stale on whatever it last was. The cursor now follows the real pointer position from `_input`, and the spacer is `MOUSE_FILTER_IGNORE`. `AutomationLaneHeader` had the same pattern and got the same treatment. Confirmed working live.
+- [x?] Ctrl+scroll vertical zoom should zoom around the mouse cursor, adjusting the vertical scroll so the track under the cursor stays put. `_zoom_tracks_vertically` now re-derives `target_scroll_vertical` from the zoom ratio (`int(target_track_height) / avg_height`, the realized ratio, since `_apply_track_heights` casts to int) and the cursor's viewport y; scroll and heights interpolate to the same target. Live-checked in a 24-track project (cursor on row T9, 1.4x zoom-in from 48 to 67 px): T9 stayed under the cursor, where leaving the scroll alone would have put T6 there. The `int()` refinement above was added after that run; feel check still pending.
 - [ ] Ctrl+A selects all clips on the active track; Ctrl+double-tap A selects all clips on all tracks
 - [ ] Double-clicking a clip opens it in the MIDI editor (clip mode), scrolled horizontally to the clip start and vertically to the notes (e.g. median pitch of the notes in view). See also the header/body split under Clips › Maybe
+- [ ] Tracklist context menu (`TrackListContextMenu.gd`): remove the bare "New Track" option — a track with no instrument/audio channel makes no sense. Alternative: make this a popup that can create several tracks in one go.
+- [ ] TrackItem context menu (`TrackItemContextMenu.gd`): move Delete to the bottom, below the duplicate actions.
 
 ### Clips
 
@@ -106,6 +108,7 @@ Done:
 3. `Select All Instances` in the clip context menu
    - [ ] Selects every instance of the clicked clip(s) through `ClipSelectionManager`, across tracks.
    - [ ] Disabled when no other instances exist (same check as Make Unique).
+   - [ ] Add `Select Tracks` to the clip instance context menu: selects every track that the selected clip instance(s) sit on.
 4. Rename clips that lose their last instance
    - [ ] When the count reaches 0, rename: strip the number suffix (`Clip.uniqueness_base`), append `_unused`, then re-suffix so names stay unique among unused clips too.
    - [ ] When an instance comes back (undo, or later placing from the asset browser), restore the original name. Store it on the clip so undo doesn't depend on reversing the string.
@@ -164,9 +167,9 @@ Done:
   - [ ] Edit mode, part 2 (T-015): context menu (rename control or group title, pick a display unit, remove) and an "Add parameter" list of visible parameters missing from the layout
   - [ ] Full live run (T-018) once edit mode is done
 - [x] SamplerDefaultView, DrumMachineDefaultView etc should have their static layout in the scene rather than generated in code
-- [ ] `DrumMachineDefaultView._rebuild` connects `slot_changed` / `loading_state_changed` on child devices but never disconnects them when a child is removed from the drum machine
-- [ ] `CompactDevicePanel.setup()` does `await ready` unconditionally, so it hangs if the panel is already in the tree (use `if not is_node_ready(): await ready`)
-- [ ] Device lane: add slight spacing between header and parent header
+- [x?] `DrumMachineDefaultView._rebuild` connects `slot_changed` / `loading_state_changed` on child devices but never disconnects them when a child is removed from the drum machine. Now tracked in `_tracked_children` and reconciled by `_sync_child_signals()` on every rebuild; `_on_unbind` clears the tracked list. Verified headless (throwaway): a removed pad's signals are disconnected and the other pads stay connected.
+- [x?] `CompactDevicePanel.setup()` does `await ready` unconditionally, so it hangs if the panel is already in the tree (use `if not is_node_ready(): await ready`). Done; covered by `Godot/tests/test_compact_device_panel.gd`, which fails against the old code.
+- [x?] Device lane: add slight spacing between header and parent header. `DeviceLane` inserts a 4px `ParentHeaderGap` spacer between them, visible only with the parent header. Verified headless: order and 4px layout width.
 - [ ] Device lane: for each device, add an animated signal icon on its left side that flashes black then green on audio and blue on MIDI
 - [ ] All devices should have their own volume control
 - [x?] Devices should be freely renamable, with uniqueness enforced per-channel (auto-suffix on collision, like track/channel names above). Inline SmartLineEdit (double-click) on the device lane and compact panels, plus the context menu, all through `DeviceActions.rename`. Uniqueness is per host (siblings in a container), which is what `Channel/Device/Child` paths need
