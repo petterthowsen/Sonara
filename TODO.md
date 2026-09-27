@@ -2,6 +2,11 @@
 
 [ ] is open, [x?] implemented but not verified, [x] is verified, [/] is mixed status.
 
+## Codebase Audit
+
+- [ ] Full audit of `Godot/` for file structure and code organization issues: folder layout and naming, misplaced or oversized scripts, duplicated logic, dead code, and code that breaks the data-model/UI split
+- [ ] Full audit of `Engine/` for the same: module layout, oversized files (e.g. `osc/server.rs`), duplicated logic, dead code and unused dependencies
+- [ ] migrate TODO.md to gh issues.
 ## Audio Engine
 
 ### Mixing & Playback

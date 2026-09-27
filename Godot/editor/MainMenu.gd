@@ -4,7 +4,7 @@ class_name MainMenu extends MenuBar
 
 var logger : Log = Log.make("MainMenu")
 
-enum  MENU { File, Edit, AI }
+enum  MENU { File, Edit, View, AI }
 
 enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
@@ -19,6 +19,7 @@ signal item_pressed(menu_id : int, id : int)
 
 var _current_dialog_mode: DialogMode
 var _file_dialog: FileDialog
+var _view_menu: PopupMenu
 var _ai_menu: PopupMenu
 var _ai_client: OpenRouterClient
 
@@ -42,6 +43,13 @@ func _ready() -> void:
 	edit.add_separator("", EDIT.Sep2)
 	edit.add_item("Preferences", EDIT.Preferences)
 
+	# View menu: one check item per dock panel, rebuilt on open so it tracks
+	# visibility changes made elsewhere (shortcuts, AI menu).
+	_view_menu = PopupMenu.new()
+	_view_menu.name = "View"
+	add_child(_view_menu)
+	_view_menu.about_to_popup.connect(_rebuild_view_menu)
+
 	_ai_menu = PopupMenu.new()
 	_ai_menu.name = "AI"
 	add_child(_ai_menu)
@@ -55,6 +63,7 @@ func _ready() -> void:
 	# setup listeners
 	file.id_pressed.connect(_on_item_pressed.bind(MENU.File))
 	edit.id_pressed.connect(_on_item_pressed.bind(MENU.Edit))
+	_view_menu.id_pressed.connect(_on_view_item_pressed)
 	_ai_menu.id_pressed.connect(_on_item_pressed.bind(MENU.AI))
 	
 	# connect to editor signals
@@ -152,6 +161,39 @@ func _update_undo_redo_menu() -> void:
 		edit.set_item_text(redo_idx, "Redo %s" % hist.redo_name())
 	else:
 		edit.set_item_text(redo_idx, "Redo")
+
+
+# ============================================================================
+# VIEW MENU
+# ============================================================================
+
+## Repopulate View with a check item per dock panel, reflecting current visibility.
+func _rebuild_view_menu() -> void:
+	_view_menu.clear()
+	var dock_host := _get_dock_host()
+	if dock_host == null:
+		return
+	var ids := dock_host.get_panel_ids()
+	for i in ids.size():
+		_view_menu.add_check_item(DockHost.title_for_id(ids[i]), i)
+		_view_menu.set_item_metadata(i, ids[i])
+		_view_menu.set_item_checked(i, dock_host.is_panel_visible(ids[i]))
+
+
+## Toggle the dock panel behind the pressed View item.
+func _on_view_item_pressed(item_id: int) -> void:
+	item_pressed.emit(MENU.View, item_id)
+	var dock_host := _get_dock_host()
+	if dock_host == null:
+		return
+	var index := _view_menu.get_item_index(item_id)
+	var panel_id := str(_view_menu.get_item_metadata(index))
+	dock_host.toggle_panel_visible(panel_id)
+	_view_menu.set_item_checked(index, dock_host.is_panel_visible(panel_id))
+
+
+func _get_dock_host() -> DockHost:
+	return Sonara.editor.dock_host if Sonara.editor else null
 
 
 # ============================================================================

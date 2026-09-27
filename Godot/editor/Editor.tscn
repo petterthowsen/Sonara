@@ -17,7 +17,7 @@
 [ext_resource type="PackedScene" uid="uid://clpf2lap035t1" path="res://settings/SettingsDialog.tscn" id="12_10umj"]
 [ext_resource type="PackedScene" uid="uid://b7xa8h62aocl5" path="res://ai/ui/AssistantPanel.tscn" id="12_cnodj"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
-[ext_resource type="PackedScene" path="res://components/PopupMessage.tscn" id="14_popup"]
+[ext_resource type="PackedScene" uid="uid://dqpm2sagwx4tb" path="res://components/PopupMessage.tscn" id="14_popup"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
 content_margin_left = 4.0

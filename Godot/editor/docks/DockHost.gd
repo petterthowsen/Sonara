@@ -80,6 +80,18 @@ func toggle_panel_visible(id: String) -> void:
 	set_panel_visible(id, panel.get_parent_dock() == null)
 
 
+## Registered panel ids in stable menu order (known panels first).
+func get_panel_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for id in _TITLES:
+		if _panels.has(id):
+			ids.append(id)
+	for id in _panels:
+		if not ids.has(id):
+			ids.append(id)
+	return ids
+
+
 ## True when the panel is currently stacked in a side dock.
 func is_panel_visible(id: String) -> bool:
 	var panel := _panels.get(id) as DockPanel
