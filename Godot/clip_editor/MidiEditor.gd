@@ -41,6 +41,12 @@ var current_track: Track = null:  # Active track in track-mode
 			# Labels and colours come from the focused track's map (REQ-024).
 			if is_inside_tree():
 				call_deferred("refresh_note_map")
+				# The active editor is the one keyboard shortcuts apply to (the track
+				# list isn't focusable), so hand it the focus when the track changes.
+				if track_mode and is_visible_in_tree():
+					var active := get_active_note_editor()
+					if active:
+						active.call_deferred("grab_focus")
 
 # Primary note editor (backwards compatibility, first in note_editors array)
 var note_editor: NoteEditor:
@@ -613,7 +619,9 @@ func _gui_input(event: InputEvent):
 			_handle_note_editing_mouse_motion(event)
 
 	elif event is InputEventKey:
-		# Delegate keyboard input to active note editor
+		# Only reached while MidiEditor itself holds focus (e.g. after using its
+		# scrollbars). Normally the focused NoteEditor handles keys in its own
+		# _gui_input and MidiEditor only sees the resulting key_input_handled.
 		var active_editor = get_active_note_editor()
 		if active_editor:
 			active_editor.handle_key_input(event)
@@ -933,6 +941,10 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.layout = lane_layout
 	if not editor.notes_changed.is_connected(queue_row_rebuild):
 		editor.notes_changed.connect(queue_row_rebuild)
+	# The focused note editor handles keys itself (see NoteEditor._gui_input); the
+	# range overlays are ours, so refresh them when that changed the selection.
+	if not editor.key_input_handled.is_connected(_update_selection_overlays):
+		editor.key_input_handled.connect(_update_selection_overlays)
 	editor.note_height = note_height
 	editor.cursor_position_ticks = cursor_position_ticks
 	if grid_helper:

@@ -3,6 +3,10 @@
 
 class_name NoteEditor extends NoteContainer
 
+## Emitted after `_gui_input` handled a key that changed the selection or note
+## positions, so MidiEditor (which owns the range overlays) can refresh them.
+signal key_input_handled
+
 # Selection manager
 var selection_manager: NoteSelectionManager
 
@@ -53,6 +57,12 @@ var default_note_length_ticks: int = 960:
 
 
 func _ready():
+	# This is the control that holds keyboard focus for the note area
+	# (MidiEditor delegates mouse input, ClipEditor focuses the note editor), so it has
+	# to be focusable. Set here as well as in the scene so track-mode editors created
+	# at runtime behave the same.
+	focus_mode = Control.FOCUS_CLICK
+
 	# Create selection manager (grid_helper will be set via override below)
 	selection_manager = NoteSelectionManager.new(grid_helper)
 	selection_manager.selection_changed.connect(_on_selection_changed)
@@ -180,6 +190,19 @@ func erase_note(note: VisualNote) -> void:
 func start_place_and_drag(note: VisualNote) -> void:
 	"""Start dragging a newly placed note (public API for MidiEditor)."""
 	_start_place_and_drag(note)
+
+
+func _gui_input(event: InputEvent) -> void:
+	"""Keyboard input for the note area.
+
+	The focused control is the only one whose `_gui_input` runs, and ClipEditor
+	focuses this node (see ClipEditor._on_visibility_changed), so keys land here
+	rather than on MidiEditor's own `_gui_input`.
+	"""
+	if event is InputEventKey:
+		handle_key_input(event)
+		if get_viewport().is_input_handled():
+			key_input_handled.emit()
 
 
 func handle_key_input(event: InputEventKey) -> void:

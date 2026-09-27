@@ -83,6 +83,8 @@ Done:
 ### Arranger & Timeline
 
 - [x] Ruler: Add secondary marker/ruler lanes (real-time ruler)
+- [ ] Bug: changing tempo does not update real time ruler track
+- [ ] Bug: visibility of ruler tracks (marker, etc.) is not saved with the project
 - [ ] Chord track: Implement chord track with visual notations
 - [x] Marking track: Add marking/marker tracks (section labels, etc.)
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
@@ -94,6 +96,9 @@ Done:
 - [x?] TrackItem context menu (`TrackItemContextMenu.gd`): duplicate actions are added first, Delete (and Delete & Channel) last.
 
 ### Clips
+
+- [ ] UX: moving timeline clips around needs improvement. Dragging a clip to another track should move it there live during the drag, not just on drop.
+- [ ] Shift+click while dragging a clip should bypass grid snap.
 
 #### Phase 1: Clip instance awareness and unused clips (complex)
 
@@ -146,6 +151,8 @@ Done:
   - [ ] In track mode, the track list should be ordered the same as the timeline
   - [ ] In track mode, draw a track-colored overlay on the ruler for clip start/end. Unfocused clips as gray/white below; clips of the active/focused tracks above
 - [ ] Modifier+right-click to open context menu in NoteEditor
+- [ ] Bug: Note Editor playhead draws under notes, should draw above them
+- [ ] VisualNote: allow note labels to remain visible at smaller note heights by scaling the label or font size down (pick whichever is most performant)
 - [x?] Ctrl+A selects all notes: in clip mode, every note in the clip; in track mode, every note on the active track. `NoteEditor.handle_key_input` gathers its own `VisualNote` children (`NoteContainer.get_all_visual_notes`) and calls `NoteSelectionManager.select_all`, which sets the selection range too.
 - [x?] Bug: the blue vertical range line at the start of the clip renders off-screen. The markers track content X correctly (projected note position == marker X), but `MidiEditorOverlays` had no clipping, so a marker scrolled left of the note area painted over the piano keys / outside the editor. Fixed with `clip_contents = true` in `_ready()`.
 - [ ] Unify the ruler between the arranger and the note editor: share a set of ruler components so the note editor also gets real-time display, range interaction, selection and start position
@@ -215,6 +222,8 @@ Done:
 
 ### Settings
 
+- [ ] Timeline: major grid lines are pure black, too harsh; make more subtle and add a customizable grid color under Settings › Appearance.
+- [ ] Timeline: tertiary subdivision grid lines are hard to read
 - [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type / input control type, and build the UI from that registry (rendered when the settings window opens), we may allow custom controls linking to a packed scene perhaps for certain settings (maybe for assets path definitions).
   - [ ] Sub-category renders as a large-font label with margins between sub-categories
   - [ ] Table-like layout with the controls aligned on the right for readability

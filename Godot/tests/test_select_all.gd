@@ -1,7 +1,8 @@
 # test_select_all.gd
 # Headless tests for the Ctrl+A selections: every note in the active note editor
 # (clip mode: the clip; track mode: the active track) and every clip on the active
-# track / on all tracks in the arranger.
+# track / on all tracks in the arranger. The note tests push the key through the
+# viewport, because that is where the focused-control routing matters.
 #
 # Timeline and the data models reference autoloads by bare name, so they are loaded with
 # load() inside run_tests() instead of being named by class.
@@ -32,6 +33,8 @@ func run_tests() -> void:
 	_clip_manager_script = load("res://arranger/timeline/ClipSelectionManager.gd")
 	_timeline_script = load("res://arranger/timeline/Timeline.gd")
 	await _test_ctrl_a_selects_all_notes()
+	await _test_ctrl_a_through_viewport()
+	await _test_ctrl_a_track_mode_focus()
 	_test_select_all_on_one_track()
 	_test_select_all_across_tracks()
 	_test_timeline_select_all_clips()
@@ -84,6 +87,100 @@ func _test_ctrl_a_selects_all_notes() -> void:
 	_assert(manager.selected_notes.size() == 2, "Ctrl+A selects every note: %d" % manager.selected_notes.size())
 	_assert(manager.box_selection_start_tick == 0, "range starts at the first note: %d" % manager.box_selection_start_tick)
 	_assert(manager.box_selection_end_tick == 720, "range ends at the last note: %d" % manager.box_selection_end_tick)
+
+	editor.queue_free()
+	await process_frame
+
+
+## The real input path. Only the focused Control's `_gui_input` runs, and the
+## ClipEditor focuses the note editor, so keys land on NoteEditor._gui_input — not
+## on MidiEditor's (an ancestor). Regression: Ctrl+A used to reach nothing at all.
+func _test_ctrl_a_through_viewport() -> void:
+	var scene: PackedScene = load("res://clip_editor/ClipEditor.tscn")
+	var editor: Control = scene.instantiate()
+	root.add_child(editor)
+	await process_frame
+	await process_frame
+
+	var project: Object = _project_script.new()
+	var pair: Dictionary = project.create_instrument_track("Synth")
+	var clip: Object = project.create_clip("Riff")
+	project.add_clip(clip)
+	var inst: Object = pair.track.create_clip_instance(clip, 0, 3840)
+	clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
+	clip.add_midi_note(project.allocate_note_id(), 64, 100, 480, 240)
+
+	var midi: Object = editor.midi_editor
+	var note_editor: Object = midi.note_editor
+	midi.bind_to_clip_instance(inst)
+	await process_frame
+	await process_frame
+
+	# ClipEditor does this when the view becomes visible.
+	note_editor.grab_focus()
+	await process_frame
+	_assert(note_editor.has_focus(), "the note editor holds keyboard focus")
+
+	root.push_input(_ctrl_a())
+	await process_frame
+	_assert(note_editor.selection_manager.selected_notes.size() == 2,
+		"Ctrl+A through the viewport selects every note: %d" % note_editor.selection_manager.selected_notes.size())
+	_assert(midi.overlays.show_selection_markers, "the selection range markers follow the keyboard selection")
+
+	editor.queue_free()
+	await process_frame
+
+
+## Track mode: picking another track must move keyboard focus to that track's editor,
+## otherwise Ctrl+A acts on the previously focused track.
+func _test_ctrl_a_track_mode_focus() -> void:
+	var scene: PackedScene = load("res://clip_editor/ClipEditor.tscn")
+	var editor: Control = scene.instantiate()
+	root.add_child(editor)
+	await process_frame
+	await process_frame
+
+	var project: Object = _project_script.new()
+	var a: Dictionary = project.create_instrument_track("A")
+	var b: Dictionary = project.create_instrument_track("B")
+
+	var clip_a: Object = project.create_clip("Ca")
+	project.add_clip(clip_a)
+	clip_a.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
+	var inst_a: Object = a.track.create_clip_instance(clip_a, 0, 3840)
+
+	var clip_b: Object = project.create_clip("Cb")
+	project.add_clip(clip_b)
+	clip_b.add_midi_note(project.allocate_note_id(), 67, 100, 0, 240)
+	clip_b.add_midi_note(project.allocate_note_id(), 69, 100, 480, 240)
+	var inst_b: Object = b.track.create_clip_instance(clip_b, 0, 3840)
+
+	editor._on_editor_clips_selected(_typed_instances([inst_a, inst_b]), true)
+	editor.visible = true
+	await process_frame
+	await process_frame
+
+	var midi: Object = editor.midi_editor
+	_assert(midi.track_mode and midi.note_editors.size() == 2, "track mode: one editor per track")
+	if midi.note_editors.size() != 2:
+		editor.queue_free()
+		return
+
+	var editor_a: Object = midi.note_editors[0]
+	var editor_b: Object = midi.note_editors[1]
+	editor_a.selection_manager.clear_selection()
+	editor_b.selection_manager.clear_selection()
+
+	midi.current_track = b.track
+	await process_frame
+	await process_frame
+	_assert(editor_b.has_focus(), "the active track's editor takes keyboard focus")
+
+	root.push_input(_ctrl_a())
+	await process_frame
+	_assert(editor_b.selection_manager.selected_notes.size() == 2,
+		"Ctrl+A selects every note on the active track: %d" % editor_b.selection_manager.selected_notes.size())
+	_assert(editor_a.selection_manager.selected_notes.is_empty(), "the other track's notes are untouched")
 
 	editor.queue_free()
 	await process_frame
