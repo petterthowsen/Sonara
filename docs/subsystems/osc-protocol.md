@@ -6,6 +6,14 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 - Godot sends to: `127.0.0.1:7000` (Rust listens)
 - Rust sends to: `127.0.0.1:7001` (Godot listens)
 
+Parameter values cross as normalized 0.0–1.0 floats. The source of truth is `Engine/src/osc/server.rs`:
+when you add or change a message, update the handler there, the command in `audio/commands.rs`, and
+this file.
+
+**Device addresses.** `{device}` below is short for `/channel/{id}/device/{path}`, built by
+`DevicePath::to_osc_addr` (`Engine/src/audio/devices/container.rs`). `{path}` is `{position}` at the
+channel root, or `{position}/child/{i}/child/{j}/...` for devices nested in containers.
+
 ## Message Types
 
 ### Transport Control (Godot -> Rust)
@@ -27,12 +35,32 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/status/playing` | `i:0_or_1` | Playback state (0=stopped, 1=playing) |
 | `/status/connected` | `i:1` | Engine ready confirmation (sent after `/project/init`) |
 | `/status/heartbeat` | `i:1` | Periodic heartbeat (sent every 1 second to detect disconnection) |
+| `/status/engine_stats` | see below | Audio callback load and dropout counters (2 Hz) |
+
+#### `/status/engine_stats`
+
+Sent by the audio callback at 2 Hz, also while the engine state lock is busy. Counters are running
+totals since the engine started (they survive a stream restart), so a dropped packet loses nothing.
+Rate = difference between two reports. Counters are clamped to int32.
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | f | `load_avg`: processing time / block time over the last 0.5 s (1.0 = 100%) |
+| 1 | f | `load_peak`: worst single block in that interval, same unit |
+| 2 | i | `xruns`: cpal stream errors plus callback gaps longer than 1.5× the previous block |
+| 3 | i | `lock_misses`: callbacks that output silence because the state lock stayed busy |
+| 4 | i | `callbacks` |
+| 5 | i | `frames`: frames in the last block |
+| 6 | i | `plugin_underruns`: CLAP plugin blocks padded with silence because the plugin's output wasn't ready (audible dropouts) |
 
 ### Engine Logging (Rust -> Godot)
 
 | Address | Args | Description |
 |---------|------|-------------|
 | `/log` | `s:level, s:message` | Warning/error logs from engine (level: "warn" or "error") |
+
+WARN and ERROR lines a plugin host logs arrive on `/log` like the engine's own, prefixed with the
+plugin and host (`Plugin Dragonfly Room Reverb (instance 3, host instance-3 (pid 1234)): …`).
 
 ### Project Setup (Godot -> Rust)
 
@@ -48,16 +76,22 @@ Communication between Godot (UI) and Rust (Audio Engine) over UDP on localhost.
 | `/channel/{id}/create` | `s:name` | Create channel with ID |
 | `/channel/{id}/remove` | - | Remove channel by ID |
 | `/channel/{id}/volume` | `f:db` | Set channel volume in dB |
-| `/channel/{id}/pan` | `f:pan` | Set pan (-1.0 to 1.0) |
+| `/channel/{id}/pan` | `f:pan, f:pan_right?` | Set pan (-1.0 to 1.0). The second value is the right pan in `STEREO_DUAL` mode |
+| `/channel/{id}/pan_mode` | `i:mode` | 0 = stereo combined (default), 1 = stereo dual (separate L/R), 2 = stereo balance, 3 = mono |
 | `/channel/{id}/mute` | `i:0_or_1` | Set mute state |
 | `/channel/{id}/solo` | `i:0_or_1` | Set solo state |
-| `/channel/{id}/route` | `i:output_channel_id` | Set output routing (-1 for none) |
+| `/channel/{id}/route` | `i:output_channel_id` | Set output routing (-1 for none; 1000+ = hardware outputs, see below) |
 | `/channel/{id}/aux_out` | `i:bus_index, i:target_channel_id` | Map extra device bus `bus_index` to a child channel (0 clears) |
 | `/channel/{id}/send/{target_id}/add` | `f:amount_db, i:pre_fader` | Add send to BUS channel (default: -12 dB, post-fader) |
 | `/channel/{id}/send/{target_id}/remove` | - | Remove send to target channel |
 | `/channel/{id}/send/{target_id}/amount` | `f:amount_db` | Set send level in dB (-60 to +12) |
 | `/channel/{id}/send/{target_id}/pre_fader` | `i:0_or_1` | Set pre/post fader (1=pre, 0=post) |
 | `/channel/{id}/send/{target_id}/mute` | `i:0_or_1` | Mute/unmute send |
+
+**Hardware outputs.** IDs 1000 and up are stereo output pairs on the running device: 1000 is
+outputs 1/2, 1001 is 3/4, and so on (`/channel/1/route [1001]` puts master on outputs 3/4). A pair
+the device doesn't have plays on 1/2, and the engine logs a warning; the route is kept for a device
+that has it.
 
 ### Channel Metering (Rust -> Godot)
 
@@ -82,7 +116,27 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 |---------|------|-------------|
 | `/track/{id}/create` | `i:channel_id` | Create track with ID, routed to channel |
 | `/track/{id}/route` | `i:channel_id` | Update track output routing to channel (-1 for none) |
-| `/track/{id}/clear_midi` | - | Clear all MIDI notes for track |
+
+### Automation (Godot -> Rust)
+
+| Address | Args | Description |
+|---------|------|-------------|
+| `/track/{id}/automation/create` | `s:lane_id, s:target` | Create a lane on the track. An unparseable target is ignored with a warning |
+| `/track/{id}/automation/{lane_id}/delete` | - | Delete the lane |
+| `/track/{id}/automation/{lane_id}/bypass` | `i:0_or_1` | Bypass the lane (the target keeps its manual value) |
+| `/track/{id}/automation/{lane_id}/add_point` | `i:point_id, i:tick, f:value, s:curve, f:tension?` | Add a point |
+| `/track/{id}/automation/{lane_id}/update_point` | `i:point_id, i:tick, f:value, s:curve, f:tension?` | Replace the point with the same id |
+| `/track/{id}/automation/{lane_id}/remove_point` | `i:point_id` | Remove a point |
+| `/track/{id}/automation/{lane_id}/clear` | - | Remove every point in the lane |
+
+- `value` is normalized 0.0–1.0.
+- `curve` is the shape of the segment starting at the point: `linear` or `step` (unknown names fall back to `linear`).
+- `tension` is -1.0 to 1.0, default 0.0 (an exactly linear ramp).
+- `target` is relative to the track's channel (`AutomationTarget::parse` in `audio/automation.rs`):
+  - `channel/volume`
+  - `channel/pan`
+  - `channel/send/{index}`: index into the channel's sends, not the target channel ID
+  - `device/{i0}[/{i1}…]/param/{param_id}`: device path indices, then the parameter
 
 ### Clip Management (Godot -> Rust)
 
@@ -138,6 +192,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
 | `/channel/{id}/device/{path}/slot/{n}/note` | `i:midi` | Drum Machine: MIDI note that triggers child `n` |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
+| `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
 
 `{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
 
@@ -150,11 +205,12 @@ Examples:
 
 Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`, `/param/{id}/value`, `/data`).
 
-**Loading States:**
+**Loading States** (`{device}/loading_state [s:state]`, sent on every transition):
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
 - **`loading`**: Device is loading in background thread (e.g., loading large SFZ file or initializing plugin subprocess)
 - **`ready`**: Device fully loaded and ready to process audio
-- **`failed:{error}`**: Loading failed with error message (e.g., "failed:File not found")
+- **`failed:{error}`**: Loading never finished (e.g., "failed:File not found")
+- **`crashed:{reason}`**: The plugin's host process died after loading. A crashed device passes audio through and the UI offers a Reload
 
 Loading state updates are sent automatically during:
 - CLAP plugin subprocess initialization (typically 100-500ms for complex plugins)
@@ -265,12 +321,21 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 ```
 Scans standard CLAP plugin directories and discovers available plugins.
 
-**Response:**
-```
-/plugin/scan_complete [i:count]
-/plugin/info [s:id, s:name, s:vendor, s:version, s:category, s:description, s:path]
-```
-Each discovered plugin sends a `/plugin/info` message with its metadata and file path. Godot caches these to avoid scanning on every startup.
+**Response:** one `/plugin/info` per discovered plugin, then `/plugin/scan_complete [i:count]`.
+Godot caches these to avoid scanning on every startup.
+
+`/plugin/info`:
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | Plugin id |
+| 1 | s | Name |
+| 2 | s | Vendor |
+| 3 | s | Version |
+| 4 | s | Category |
+| 5 | s | Description, empty if none |
+| 6 | s | Path to the `.clap` bundle |
+| 7 | s | CLAP feature tags joined with `,` (e.g. `audio-effect,reverb,stereo`), may be empty |
 
 **Adding Devices**
 ```
@@ -303,7 +368,8 @@ Examples:
 /plugin/save_state [i:channel_id, i:device_position]
 /plugin/load_state [i:channel_id, i:device_position, s:state_base64]
 ```
-Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
+- `save_state` asks the plugin to serialize its state. Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
+- `load_state` restores a state blob into a loaded plugin.
 
 **Device Lifecycle Control**
 ```
@@ -322,6 +388,7 @@ Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
 - Only works for CLAP plugins that support the GUI extension
 - Can be called while plugin is activated and processing audio
 - GUI state is managed by the plugin, not the host
+- The engine sends `{device}/gui/closed` (no args) when a GUI window closes on the engine side (user closed it, or a hosting-mode move)
 
 **Query Parameters** (built-in and plugins)
 ```
@@ -329,10 +396,85 @@ Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
 /plugin/get_parameters [i:channel_id, i:device_position]
 ```
 Responses:
-- `/channel/{id}/device/{path}/param/count [i:count]`
-- `/channel/{id}/device/{path}/param/info [i:param_id, s:name, f:min, f:max, f:default, s:group]` (`group` is `"param"` or `"cc"`)
-- `/channel/{id}/device/{path}/param/{param_id}/value [f:normalized]` when the plugin or SFZ CC changes
-- `/channel/{id}/device/{path}/sleep [i:0_or_1]` when the device sleeps or wakes
+- `{device}/param/count [i:count]`, followed by one `param/info` per parameter
+- `{device}/param/info`, see the table below
+- `{device}/param/{param_id}/value [f:normalized]` when the plugin or SFZ CC changes
+- `{device}/sleep [i:0_or_1]` when the device sleeps or wakes
+
+`{device}/param/info`:
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | i | Parameter id |
+| 1 | s | Name |
+| 2 | f | Min (real value) |
+| 3 | f | Max (real value) |
+| 4 | f | Default (real value) |
+| 5 | s | Group: `"param"` or `"cc"` |
+| 6 | s | `param_type`: `"float"`, `"bool"` or `"enum"` |
+| 7 | i | `flags` bitmask: 1 = hidden, 2 = read-only, 4 = bypass |
+| 8 | s | CLAP module path (`/`-separated), empty if none |
+| 9 | i | `enum_count` |
+| 10… | s | `enum_count` enum value labels; the index matches the engine value |
+
+Args 6 onward were added later. Godot treats a missing trailing arg as its default (`float`, no
+flags, no module, no enum values).
+
+**Plugin Crash and Reload**
+
+`{device}/crashed [s:reason, s:stderr, i:pid, s:log_path]` is sent once when a plugin's host process
+dies or stops responding.
+- `reason` is one line, e.g. `killed by signal 11 (SIGSEGV)` or `exited with code 7`.
+- `stderr` holds the last lines the host printed before it died, newline-separated. It may be empty.
+- `log_path` is the host's own log file. It is empty when unknown (e.g. under a debugger wrapper).
+- A crash belongs to the host process, so a host shared by several instances (hosting modes) sends
+  one per instance, all with the same `pid`.
+
+`{device}/reload` (Godot → Rust, no args) respawns the host and restores the plugin's state on the
+command thread. The device reports `loading` and later `ready` on `{device}/loading_state`. Every
+other crashed device that was in the same host process is reloaded with it.
+
+**Plugin Hosting Modes**
+
+```
+/plugins/hosting [s:mode, (s:plugin_id, s:mode)*]
+```
+How CLAP plugins are grouped into `plugin_host` processes. `mode` is one of:
+- `individually`: one process per instance (the default)
+- `by_plugin`: one per plugin
+- `by_vendor`: one per vendor
+- `together`: one for all
+
+Each following pair overrides the mode for one plugin id. The message replaces the whole policy, so
+Godot sends every override each time. An unknown global mode rejects the message; an unknown
+override mode is skipped.
+
+Plugins already loaded move live. The engine saves each affected plugin's state, closes its GUI
+(`{device}/gui/closed`), respawns it in its new host and restores the state. Audio passes through
+the plugin until it is `ready` again.
+
+`{device}/host [s:mode, s:host_key, i:pid]` is sent when a plugin has loaded into a host process
+(first load, reload or a move).
+- `mode` is the hosting mode that picked the host.
+- `host_key` is `instance-<id>`, `plugin:<id>`, `vendor:<name>` or `all`.
+
+**Plugin Stats**
+
+`{device}/stats` reports a CLAP plugin's processing over the last second, sent once a second while
+it processes. A plugin that stops processing (asleep, or idle) gets one report with zeros and then
+none until it processes again. The times cover the plugin's own `process()` call as measured inside
+its host, so they exclude the IPC handshake.
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | f | `load_avg`: process time / block time over the blocks it finished (1.0 = 100%) |
+| 1 | f | `load_peak`: worst single block, same unit |
+| 2 | f | `process_avg_us`: average `process()` time per block, µs |
+| 3 | f | `process_max_us`: longest `process()` call, µs |
+| 4 | i | `blocks`: blocks the engine gave it (finished or not) |
+| 5 | i | `deadline_misses`: blocks it didn't finish before the callback deadline (dropouts) |
+| 6 | i | `total_misses`: deadline misses since the device loaded |
+| 7 | i | `struggling`: 1 when it missed 8 or more deadlines in a row in this interval |
 
 ### Device Data Subscriptions
 
@@ -462,7 +604,7 @@ The AudioFileService provides async audio decoding and multi-resolution waveform
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/audiofile/decode` | `s:req_id, s:abs_path` | Request audio file decode (metadata only) |
+| `/audiofile/decode` | `s:req_id, s:abs_path` | Decode + waveform generation with the default `min_block_size` of 128 |
 | `/audiofile/waveform/start` | `s:req_id, s:abs_path, i:min_block_size` | Request decode + waveform generation (min_block_size=64-128 recommended) |
 | `/audiofile/waveform/cancel` | `s:req_id` | Cancel ongoing decode/waveform request |
 
@@ -483,3 +625,68 @@ Waveforms are cached as binary files (`$XDG_CACHE_HOME/sonara/waveforms/<hash>.s
 - Little-endian binary format with header + directory + contiguous data
 
 Godot reads waveform data directly from cache files using the `byte_offset`/`byte_len` provided in `/audiofile/waveform/level` messages. Each block contains `[min, max, rms]` f32 values for each channel.
+
+## Audio Device Settings (Godot <-> Rust)
+
+### `/audio/devices/request` (Godot -> Rust)
+
+No arguments. The engine lists its output devices on a background thread (it opens each one to
+query it, which takes a moment). It answers with one `/audio/device` per device, then
+`/audio/devices/complete [i:count]`.
+
+### `/audio/device` (Rust -> Godot)
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | `name`: the device name, as `/audio/config/set` expects it |
+| 1 | i | `is_default`: 1 for the system default device |
+| 2 | i | `min_buffer`: smallest buffer size (frames per callback) the device takes |
+| 3 | i | `max_buffer`: largest, at most 2048 |
+| 4 | i | `channels`: output channels the engine would open (0 when it couldn't query the device) |
+| 5… | i | the sample rates it supports; none when the device is busy or has no f32 output |
+
+### `/audio/config/set [s:device, i:rate, i:buffer]` (Godot -> Rust)
+
+Run the output stream on `device` (`""` is the system default) at `rate` Hz with `buffer` frames
+per callback (clamped to 32–2048).
+- The engine stops the stream, prepares every device and plugin for the new rate, and starts it
+  again, then sends `/audio/config`.
+- A request equal to the running one only sends `/audio/config`.
+- If the device is missing or won't open, the engine falls back to the default device, then to the
+  default config (48 kHz, 1024 frames), and says so in `notice`.
+- Godot sends this at start, on every engine (re)connect and before `/project/init`.
+
+### `/audio/config/request` (Godot -> Rust)
+
+No arguments. The engine answers with `/audio/config`.
+
+### `/audio/config` (Rust -> Godot)
+
+The running output configuration. Sent after every change (including PipeWire graph changes) and
+on request.
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | `device`: the running device; `""` when no stream could be opened |
+| 1 | i | `rate`: its sample rate in Hz (0 without a stream) |
+| 2 | i | `buffer`: frames per callback it was opened with; 0 when it only opened with its own default |
+| 3 | f | `latency_ms`: one buffer in milliseconds |
+| 4 | i | `output_pairs`: stereo output pairs (hardware outputs 1000 … 1000 + pairs − 1) |
+| 5 | i | `is_default_device`: 1 when the running device is the system default |
+| 6 | s | `requested_device`: what `/audio/config/set` asked for |
+| 7 | i | `requested_rate` |
+| 8 | i | `requested_buffer` |
+| 9 | i | `graph_quantum`: PipeWire's running quantum (0 when unknown or not on PipeWire) |
+| 10 | i | `graph_rate`: PipeWire's graph rate |
+| 11 | s | `mismatch`: warning when the graph and the stream conflict (quantum larger than the buffer, other rate), with the `pw-metadata` command that forced it; `""` if none |
+| 12 | s | `notice`: why the running config differs from the request (device missing, rate unsupported, no fixed buffer); `""` if none |
+
+The buffer can be larger than requested. When PipeWire's quantum is larger than the ALSA buffer
+(four buffers of the requested size), the engine reopens with a buffer that holds a whole graph
+cycle. It returns to the requested size once the quantum drops.
+
+### `/audio/config/changed [i:rate]` (Rust -> Godot)
+
+The device sample rate changed. Audio clips were decoded at the old rate. They keep playing at the
+right pitch (playback compensates for the clip's rate), and Godot re-sends `load_audio_file` for
+each one so they're resampled properly. Files decode at the new rate from this message on.

@@ -26,8 +26,11 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 ## Devices
 
 - **AudioDevice** — a processing unit in a channel's ordered chain (`Engine/src/audio/devices/`). MIDI goes only to the first device.
-- **Built-in device** — first-party device advertised to Godot at runtime via `/builtin/request` → `/builtin/info` (`sonara.builtin.polysynth|delay|sfizz|spectrum_analyzer`).
+- **Built-in device** — first-party device advertised to Godot at runtime via `/builtin/request` → `/builtin/info` (`sonara.builtin.polysynth|delay|sfizz|sampler|spectrum_analyzer|chain|layer|drum_machine`).
+- **Container** — a built-in device that owns child devices (`is_container`): **Chain** (serial), **Layer** (parallel mix) and **Drum Machine** (parallel, MIDI routed per pad). Nested devices are addressed by a **device path** (`{position}/child/{i}/…`).
+- **Slot** — one child of a Layer or Drum Machine, with its own volume/mute/solo; a Drum Machine slot (a **pad**) also has a trigger note.
 - **CLAP plugin** — third-party plugin hosted out-of-process in the `plugin_host` binary (see ADR-0001).
+- **Host process** / **hosting mode** — a running `plugin_host` and the rule that picks which plugin instances share one: `individually` (default), `by_plugin`, `by_vendor`, `together`. A crash belongs to the host process and hits every instance in it (see ADR-0009).
 - **DeviceSleepState** — a device sleeps after ~3 s of silence and no MIDI/parameter activity; its processing is skipped until woken by input.
 - **Device data stream** — binary payloads (`subscribe_data`/`poll_device_data`) that visualization devices emit only while Godot holds a subscription (e.g. `"spectrum"`).
 - **Normalized parameter** — all parameter values cross the OSC/IPC boundary as 0.0–1.0; min/max live in metadata (see ADR-0005).
@@ -39,7 +42,12 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **EngineStatus** — the command/status channel payload type; statuses flow audio/command threads → main thread → OSC → Godot at ~20 Hz.
 - **AudioCommand** — the command type; OSC server → command thread, which applies it to `EngineState` (slow work with the lock released).
 - **`req_id`** — request token correlating async audio-file jobs (decode, waveform) with their completions. Stale completions must be ignored.
-- **LoadState** — lifecycle of a clip or plugin: Idle → Loading → Ready/Failed. While Loading or Failed, the audio thread passes audio through (or outputs silence for instruments).
+- **LoadState** — lifecycle of a clip or device: Idle → Loading → Ready/Failed; plugins can also go Ready → **Crashed** when their host process dies, and come back through a **Reload**. While Loading, Failed or Crashed, the audio thread passes audio through (or outputs silence for instruments).
+
+## Automation
+
+- **Automation lane** — a list of points on a track that drives one **target** relative to the track's channel (`channel/volume`, `channel/pan`, `channel/send/{index}`, `device/{path}/param/{id}`). Values are normalized 0.0–1.0.
+- **Automation override** — the resolved lane value applied alongside the target's **base value** (the user's manual setting), never written into it (see ADR-0010).
 
 ## Godot data model
 
@@ -53,5 +61,5 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 
 ## Conventions not covered elsewhere
 
-- Engine logs: `Engine/logs/last_{info,warn,combined}.log`, rotated by `/project/init` into `session_<timestamp>_*>` keeping the 5 newest.
+- Engine logs: `Engine/logs/last_{info,warn,combined}.log`, rotated by `/project/init` into `session_<timestamp>_*.log` keeping the 5 newest.
 - Undo/redo: mutations go through `Sonara.editor.history` (`HistoryUtil.execute`/`record`); data-object setters never push history themselves.

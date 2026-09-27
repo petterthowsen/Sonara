@@ -13,7 +13,7 @@ Each device carries a `DeviceSleepState`: after `DEFAULT_SLEEP_TIMEOUT` (3 s) wi
 signal above `SLEEP_THRESHOLD` and no MIDI/parameter activity, it sleeps and
 `Channel::process_device_chain` skips its processing. MIDI input (or any activity) wakes
 it immediately via `mark_activity`. Sleep transitions are reported to Godot as
-`/channel/{id}/device/{pos}/sleep`.
+`/channel/{id}/device/{path}/sleep` (nested devices sleep too).
 
 ## Consequences
 

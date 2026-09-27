@@ -32,8 +32,8 @@ Implements [requirements.md](./requirements.md).
 ## Data and protocol changes
 
 <!-- OSC messages: address, argument types, direction, and the exact places that must change
-     (handler in `osc/server.rs`, command in `audio/commands.rs`, `OSC_PROTOCOL.md`,
-     `PLUGIN_OSC_PROTOCOL.md` for the subprocess).
+     (handler in `osc/server.rs`, command in `audio/commands.rs`, `docs/subsystems/osc-protocol.md`,
+     and `docs/subsystems/engine-plugin-architecture.md` if the plugin subprocess IPC changes).
      Godot models: which signal and setter are added, and how `sync_to_engine()` sends it.
      Persisted key: the `Settings.gd` registration and the default. -->
 

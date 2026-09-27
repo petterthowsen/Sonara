@@ -21,7 +21,7 @@ into `AudioCommand`s for the command thread; engine-side events flow back as `En
   `sync_to_engine()`, and `req_id` tokens correlate async audio-file jobs whose late
   completions must be ignored.
 - Adding a message means touching `osc/server.rs`, `audio/commands.rs`, and
-  `OSC_PROTOCOL.md` together.
+  `docs/subsystems/osc-protocol.md` together.
 - 20 Hz status means Godot interpolates the playhead locally for smoothness.
 - Text/binary payloads (waveform levels, device data streams) travel as OSC blobs.
 

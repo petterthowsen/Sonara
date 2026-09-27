@@ -69,7 +69,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - `audio/ipc/` holds `ProcessManager`, the shared-memory ring buffers and the command protocol.
 - `audio/devices/clap_host/subprocess_adapter/` implements `AudioDevice` for plugins.
 - `plugin_host/` is the code that runs inside the subprocess.
-- Plugins load on a background thread behind a `LoadingState`. While it is Loading or Failed, the audio thread passes audio through.
+- Plugins load on a background thread behind an atomic `PluginLoad` state. While it is Loading, Failed or Crashed, the audio thread passes audio through. A crashed plugin can be reloaded with its last saved state.
 
 ### Godot UI (`Godot/`)
 - Autoloads: `Sonara` (global editor reference and JSON config in `~/.config/sonara/`, accessed via `get_config`/`set_config`/`save_config`), `AudioEngineOSC` (OSC transport), `AudioConfig` (output device, sample rate and buffer size: engine device list, running config, applies the settings live), `AssetService` (browser asset providers) and `MidiManager` (MIDI input and virtual keyboard, routed to armed channels).
@@ -78,7 +78,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - `components/GridHelper.gd` handles tempo, zoom, scroll and snapping, and converts between ticks and pixels. Views share one instance.
 - Device visuals extend `devices/DeviceView.gd`. Subscribe to device data streams in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
 
-The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_PROTOCOL.md`. When you add an OSC message, update the handler in `osc/server.rs`, the command in `audio/commands.rs`, and the doc.
+The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you add an OSC message, update the handler in `osc/server.rs`, the command in `audio/commands.rs`, and the doc.
 
 ## Subsystem references
 
@@ -104,24 +104,16 @@ The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_
 - WARN and ERROR messages are also forwarded to Godot over `/log`. Godot writes its own log to `Godot/logs/last.log`.
 - When debugging, add plenty of logging and ask the user to reproduce the problem and report back.
 
-## Agent skills
+## Domain docs and issues
 
-### Issue tracker
-
-Issues live in GitHub Issues (petterthowsen/Sonara); use the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default canonical labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- `CONTEXT.md` is the domain glossary and `docs/adr/` holds the decision records. Read the ADRs that touch the area you're working in. Use the glossary's terms in issues, proposals and test names. If your change contradicts an ADR, say so explicitly instead of silently overriding it.
+- Issues live in GitHub Issues (petterthowsen/Sonara); use the `gh` CLI (`gh issue list/view/create/comment/edit/close`).
+- Triage labels: `needs-triage`, `needs-info`, `ready-for-agent` (fully specified, ready for an AFK agent), `ready-for-human`, `wontfix`. Area labels: `engine`, `godot`, `device`, `builtins`, `arranger`, `editor`, `mixer`, `ai`, `export`.
 
 ## Project tracking
 
 - `STATUS.md` is a scratchpad for the current complex investigation, with "Working" and "Not Working" sections.
-- `TODO.md` is the checkbox backlog. Mark an item `[x?]` after implementing a fix, and ´[x]` when verified.
+- `TODO.md` is the checkbox backlog. Mark an item `[x?]` after implementing a fix, and `[x]` when verified.
 
 ## Library docs (Context7 IDs)
 

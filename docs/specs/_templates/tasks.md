@@ -41,8 +41,8 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 4 — docs
 
-- [ ] **T-005** [REQ-all] Update `OSC_PROTOCOL.md` for every new or changed message.
-  - _Files_: `OSC_PROTOCOL.md`
+- [ ] **T-005** [REQ-all] Update `docs/subsystems/osc-protocol.md` for every new or changed message.
+  - _Files_: `docs/subsystems/osc-protocol.md`
   - _Output_: address, argument types and direction documented
   - _Verify_: every message added by this spec appears in the doc
   - _Depends on_: T-001
