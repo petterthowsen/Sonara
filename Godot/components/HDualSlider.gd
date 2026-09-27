@@ -14,6 +14,7 @@ signal drag_ended
 
 enum DragMode { NONE, A_VALUE, B_VALUE }
 var _drag_mode := DragMode.NONE
+var _fine_drag := FineDrag.new()
 
 @export var min_value := -1.0:
 	set(mv):
@@ -126,14 +127,14 @@ func _gui_input(event: InputEvent):
 					_drag_mode = DragMode.B_VALUE
 
 				drag_started.emit()
-				_update_value_from_mouse(event.position)
+				_update_value_from_mouse(_fine_drag.begin(event.position))
 			else:
 				if _drag_mode != DragMode.NONE:
 					_drag_mode = DragMode.NONE
 					drag_ended.emit()
 	elif event is InputEventMouseMotion:
 		if _drag_mode != DragMode.NONE:
-			_update_value_from_mouse(event.position)
+			_update_value_from_mouse(_fine_drag.update(event.position, event.shift_pressed, Rect2(Vector2.ZERO, size)))
 
 
 func _update_value_from_mouse(mouse_pos: Vector2):

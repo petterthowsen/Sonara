@@ -42,6 +42,9 @@ func _ready():
 	_pad_lane.changed.connect(_on_pad_lane_changed)
 	clear()
 	
+	# No editor in headless tests: the lane is bound directly.
+	if Sonara.editor == null:
+		return
 	# Connect to the Mixer's channel_focused signal via Sonara.editor
 	Sonara.editor.channel_focused.connect(_on_channel_focused)
 	
@@ -209,19 +212,15 @@ func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
 	return null
 
 
-func _on_channel_device_remmoved(d_position : int, device_id : String):
+## Drop the panel of every device that left the root chain. `device_removed` carries the device
+## type id, not the instance, and a move into a container or another channel removes it too.
+func _on_channel_device_remmoved(_position : int, _device_id : String):
 	if _pad_lane.active():
 		return
-	var dp: DevicePanel = null
 	for child in devices.get_children():
-		if child is DevicePanel and child.device and child.device.id == device_id:
-			dp = child
-			break
-	if dp == null:
-		logger.error("[DeviceLane] Device panel not found for device instance %s at position %d" % [device_id, d_position])
-		return
-	devices.remove_child(dp)
-	dp.queue_free()
+		if child is DevicePanel and not channel.devices.has(child.device):
+			devices.remove_child(child)
+			child.queue_free()
 
 
 func _on_channel_device_moved(from_position: int, to_position: int):

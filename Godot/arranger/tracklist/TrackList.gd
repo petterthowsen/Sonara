@@ -78,10 +78,11 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
-## Track the drop indicator only while a track drag is in progress.
+## Track the drop indicator only while a track or device drag is in progress.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_DRAG_BEGIN:
-		set_process(DragDrop.current_drag(self) is TrackDrag)
+		var data: Variant = DragDrop.current_drag(self)
+		set_process(data is TrackDrag or TrackDeviceDropTarget.accepts(data))
 	elif what == NOTIFICATION_DRAG_END:
 		set_process(false)
 		DropIndicator.hide_indicator(_drop_indicator)
@@ -94,14 +95,11 @@ func _input(event: InputEvent) -> void:
 		accept_event()
 
 
-## Show where a track drag lands.
+## Show where a track or device drag lands.
 func _process(_delta: float) -> void:
 	var data: Variant = DragDrop.current_drag(self)
-	if not data is TrackDrag:
-		DropIndicator.hide_indicator(_drop_indicator)
-		return
-	var target := TrackDropTarget.resolve(self, data as TrackDrag, get_global_mouse_position())
-	if not target.is_valid():
+	var target: RefCounted = _resolve_drop(data) if current_project else null
+	if target == null or not target.is_valid():
 		DropIndicator.hide_indicator(_drop_indicator)
 		return
 	_drop_indicator = DropIndicator.place(self, _drop_indicator, target.indicator_rect, target.is_nest(), drop_indicator_color)
@@ -487,85 +485,35 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	return null
 
 
-## Accept a track drag (resolved from the pointer) or device/SFZ asset drops.
+## Accept a track drag or a device drop (Device/SFZ assets, DeviceDrag), resolved from the pointer.
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	if not current_project:
 		return false
-
-	if data is TrackDrag:
-		return can_drop_track_drag(data as TrackDrag)
-
-	# Check if data is a single asset
-	if data is Asset:
-		if data.type == Asset.TYPE.Device or data.type == Asset.TYPE.SFZ:
-			return true
-	
-	# Check if data is an array of assets
-	if data is Array:
-		for item in data:
-			if not item is Asset:
-				return false
-			if item.type != Asset.TYPE.Device and item.type != Asset.TYPE.SFZ:
-				return false
-		return data.size() > 0
-
-	return false
+	var target: RefCounted = _resolve_drop(data)
+	return target != null and target.is_valid()
 
 
-## Handle dropping a reordered track or device/SFZ assets on the tracklist.
+## Commit a track drag or device drop at the pointer.
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if not current_project:
 		return
-
 	if data is TrackDrag:
 		drop_track_drag(data as TrackDrag)
 		return
-	
-	# Handle array of assets
-	if data is Array:
-		logger.info("Dropping %d assets" % data.size())
-		for asset in data:
-			if asset is Asset:
-				_handle_single_asset_drop(asset)
-		return
-	
-	# Handle single asset
-	if data is Asset:
-		_handle_single_asset_drop(data)
+	var target := TrackDeviceDropTarget.resolve(self, data, get_global_mouse_position())
+	DropIndicator.hide_indicator(_drop_indicator)
+	if target.commit(data):
+		logger.info("Device drop committed on the tracklist (kind %d)" % target.kind)
 
 
-## Instruments and SFZ files get a new instrument track; effects go on the active (or first) track.
-func _handle_single_asset_drop(asset: Asset) -> void:
-	if DeviceDropUtil.creates_instrument_track(asset):
-		DeviceDropUtil.create_instrument_track_for_asset(current_project, asset)
-		return
-	if asset.type != Asset.TYPE.Device:
-		return
-	var device := AssetService.get_device(asset.path)
-	if device == null:
-		push_error("[TrackList] Failed to get device: ", asset.path)
-		return
-	if device.category == Device.DeviceCategory.Effect or device.category == Device.DeviceCategory.Utility:
-		_add_effect_to_track(asset)
-	else:
-		push_warning("[TrackList] No drop handler for %s (%s)" % [device.name, device.get_category_string()])
-
-
-## Add an effect to the active (or first) track's channel, or to a new bus when there is none.
-func _add_effect_to_track(asset: Asset) -> void:
-	var target_track: Track = active_track
-	if target_track == null and current_project.tracks.size() > 0:
-		target_track = current_project.tracks[0] as Track
-	var target_channel: Channel = null
-	if target_track:
-		target_channel = current_project.get_channel_by_id(target_track.default_channel_id)
-	if target_channel == null:
-		target_channel = current_project.create_bus_channel(asset.get_display_name())
-		if target_channel == null:
-			push_error("[TrackList] Failed to create bus channel")
-			return
-	if DeviceDropUtil.can_drop_asset_on_channel(target_channel, asset):
-		DeviceDropUtil.drop_asset(target_channel, asset, -1, null)
+## TrackDropTarget for a track drag, TrackDeviceDropTarget for a device drop, else null.
+func _resolve_drop(data: Variant) -> RefCounted:
+	var mouse := get_global_mouse_position()
+	if data is TrackDrag:
+		return TrackDropTarget.resolve(self, data as TrackDrag, mouse)
+	if TrackDeviceDropTarget.accepts(data):
+		return TrackDeviceDropTarget.resolve(self, data, mouse)
+	return null
 
 
 # ============================================================================
@@ -635,11 +583,6 @@ func _on_track_drag_completed(_drag: TrackDrag) -> void:
 	for child in get_children():
 		if child is TrackItem:
 			(child as TrackItem).modulate.a = 1.0
-
-
-## True when a track drag would move something at the pointer.
-func can_drop_track_drag(drag: TrackDrag) -> bool:
-	return TrackDropTarget.resolve(self, drag, get_global_mouse_position()).is_valid()
 
 
 ## Apply a track drag at the pointer through history.

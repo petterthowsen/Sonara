@@ -1,13 +1,24 @@
-[gd_scene load_steps=3 format=3 uid="uid://cyvwigrev1rtt"]
+[gd_scene format=3 uid="uid://cyvwigrev1rtt"]
 
 [ext_resource type="Script" uid="uid://cq71m8rwhg5gm" path="res://arranger/timeline/Timeline.gd" id="1_khs34"]
 [ext_resource type="PackedScene" uid="uid://cmelbeop37p10" path="res://arranger/timeline/ClipContextMenu.tscn" id="2_3iuqr"]
+[ext_resource type="PackedScene" uid="uid://bgufua4orq6jp" path="res://arranger/timeline/TimelineTrack.tscn" id="3_idtn6"]
 
-[node name="TimelineVBox" type="VBoxContainer"]
+[node name="TimelineVBox" type="VBoxContainer" unique_id=1321641361]
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 60.0
+grow_horizontal = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 1
 script = ExtResource("1_khs34")
 
-[node name="ClipContextMenu" parent="." instance=ExtResource("2_3iuqr")]
+[node name="TimelineTrack" parent="." unique_id=1794739747 instance=ExtResource("3_idtn6")]
+layout_mode = 2
+grid_color_bar = Color(1, 1, 1, 0.24313726)
+grid_color_beat = Color(0.7575665, 0.7575665, 0.7575665, 0.5176471)
+grid_color_tick = Color(0.39215687, 0.39215687, 0.39215687, 0.39215687)
+
+[node name="ClipContextMenu" parent="." unique_id=442140180 instance=ExtResource("2_3iuqr")]
 visible = false

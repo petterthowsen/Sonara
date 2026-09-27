@@ -1,7 +1,8 @@
 # DeviceDropTarget.gd
 # Where a device or asset drag lands under the pointer: insert between panels of a device row, or
-# drop onto a device (into a container, or load a file). Nothing moves while dragging; drop handlers
-# and the drop indicator both resolve through here so the indicator shows what releasing does.
+# drop onto a device (into a container, or load a file). A container takes drops over its header or
+# body; near its ends the drop inserts beside it. Nothing moves while dragging; drop handlers and
+# the drop indicator both resolve through here so the indicator shows what releasing does.
 class_name DeviceDropTarget extends RefCounted
 
 enum Kind { NONE, INSERT, ONTO }
@@ -12,7 +13,8 @@ const ROOT_GROUP := &"device_drop_root"
 ## Controls that take device drops themselves (drum pads); no insert target over them.
 const OWN_DROPS_GROUP := &"device_drop_self"
 
-## Near a panel's ends (along the row), a file drop inserts beside the panel instead of loading.
+## Near a panel's ends (along the row), a drop inserts beside the panel instead of loading a file or
+## going into a container.
 const EDGE := 24.0
 
 var kind: Kind = Kind.NONE
@@ -70,8 +72,11 @@ static func resolve(root: Control, data: Variant, mouse: Vector2) -> DeviceDropT
 		var length := rect.size.y if row_host.vertical else rect.size.x
 		var edge := minf(EDGE, length * 0.25)
 		var payload: Variant = DeviceDrag.unwrap(data)
-		if payload is Asset and along > start + edge and along < start + length - edge:
-			if DeviceDropUtil.can_drop_file_on_device(inst, payload) and target._try_onto(p, inst, data, header):
+		if along > start + edge and along < start + length - edge:
+			# Away from the ends, a container's body takes the drop as a child (its header glows).
+			if inst.is_container() and target._try_onto(p, inst, data, header):
+				return target
+			if payload is Asset and DeviceDropUtil.can_drop_file_on_device(inst, payload) and target._try_onto(p, inst, data, header):
 				return target
 		target._try_insert(row_host, list, i + 1 if along > start + length * 0.5 else i, data)
 		return target

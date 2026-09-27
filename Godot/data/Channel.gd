@@ -30,6 +30,9 @@ enum PanMode {
 # ============================================================================
 
 signal name_changed(name : String)
+## A live note was sent to this channel (MIDI input, virtual keyboard or a preview),
+## so views can show it held, e.g. the note editor's piano keys.
+signal live_note(pitch: int, velocity: int, is_on: bool)
 signal color_changed(color : Color)
 signal volume_changed(value: float)
 signal pan_changed(pan_left: float, pan_right: float)
@@ -586,6 +589,9 @@ func send_midi_event(message: int, midi_channel: int, pitch: int, velocity: int)
 	AudioEngineOSC.send("/channel/%d/midi_event" % id, [
 		id, message, midi_channel, pitch, velocity, Time.get_ticks_usec()
 	])
+	if message == MIDI_MESSAGE_NOTE_ON or message == MIDI_MESSAGE_NOTE_OFF:
+		# A note-on with velocity 0 is a note-off by MIDI convention.
+		live_note.emit(pitch, velocity, message == MIDI_MESSAGE_NOTE_ON and velocity > 0)
 
 
 ## Send a live MIDI control change to this channel's first device.

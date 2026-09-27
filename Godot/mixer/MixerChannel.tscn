@@ -203,7 +203,7 @@ display_format = "%s"
 label_settings = SubResource("LabelSettings_xv6e8")
 autowrap_mode = 3
 clip_text = true
-text_overrun_behavior = 4
+text_overrun_behavior = 3
 
 [node name="LineEdit" parent="HBox/VBox/Header/VBox/SmartLineEdit" index="1" unique_id=1087718571]
 anchors_preset = 14

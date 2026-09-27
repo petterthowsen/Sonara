@@ -52,6 +52,29 @@ static func resolve(list: TrackList, drag: TrackDrag, mouse: Vector2) -> TrackDr
 	return target
 
 
+## Where a new track would land at global `mouse` (nothing is dragged): same gaps, folder nesting
+## and indent rules as a track drag. Used by TrackDeviceDropTarget.
+static func resolve_new_track(list: TrackList, mouse: Vector2) -> TrackDropTarget:
+	var target := TrackDropTarget.new()
+	if list == null or list.current_project == null or not DragDrop.is_point_visible(list, mouse):
+		return target
+	target._list = list
+	target._project = list.current_project
+	target._resolve(mouse)
+	if not target.is_valid() and _has_no_tracks(list):
+		# Empty list: the new track goes first, marked by a line at the top.
+		target.kind = Kind.INSERT
+		target.indicator_rect = target._insert_line_rect()
+	return target
+
+
+static func _has_no_tracks(list: TrackList) -> bool:
+	for child in list.get_children():
+		if child is TrackItem and (child as TrackItem).visible:
+			return false
+	return true
+
+
 ## Apply this target through history. Returns true when the layout changed.
 func commit(_drag: TrackDrag = null) -> bool:
 	if not is_valid():

@@ -7,27 +7,32 @@ class_name TimelineTrack extends Control
 var logger : Log = Log.make("TimelineTrack")
 
 
+## Vertical line at the start of each bar (drawn 2px wide).
 @export var grid_color_bar: Color = "#000":
 	set(value):
 		grid_color_bar = value
 		queue_redraw()
 
+## Vertical line on each beat that isn't a bar line. Hidden when beats are closer than GridHelper.min_line_spacing.
 @export var grid_color_beat: Color = "#151515":
 	set(value):
 		grid_color_beat = value
 		queue_redraw()
 
+## Subdivision lines between beats (1/2, 1/4 or 1/8 beat): the finest level at least GridHelper.min_line_spacing apart.
 @export var grid_color_tick: Color = "#353535":
 	set(value):
 		grid_color_tick = value
 		queue_redraw()
 
+## Lane fill. When tinting by track color, only its value (brightness) is used.
 @export var bg_color: Color = "#555":
 	set(value):
 		bg_color = value
 		_refresh_lane_color()
 
 @export_group("Border")
+## Horizontal line along the bottom edge that separates this lane from the next.
 @export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3):
 	set(value):
 		border_color = value
@@ -37,6 +42,19 @@ var logger : Log = Log.make("TimelineTrack")
 	set(value):
 		border_thickness = value
 		queue_redraw()
+
+@export_group("Editor Preview")
+## Zoom of the mock grid drawn in the Godot editor only (no Timeline there).
+@export var preview_pixels_per_beat: float = 64.0:
+	set(value):
+		preview_pixels_per_beat = value
+		_sync_preview_grid_helper()
+
+## Preview-only mirror of GridHelper.min_line_spacing: minimum pixel gap between grid lines.
+@export var preview_min_line_spacing: float = 10.0:
+	set(value):
+		preview_min_line_spacing = value
+		_sync_preview_grid_helper()
 
 @export_group("")
 
@@ -51,6 +69,8 @@ var timeline: Timeline = null
 const TimelineClipScene = preload("res://arranger/timeline/clip/TimelineClip.tscn")
 var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
 var _lane_bg: ColorRect = null
+# Stand-in for timeline.grid_helper so the grid renders in the Godot editor
+var _preview_grid_helper: GridHelper = null
 
 # ============================================================================
 # SIGNALS
@@ -262,29 +282,53 @@ func _update_clip_track_colors() -> void:
 func _draw():
 	if _lane_bg == null:
 		draw_rect(Rect2(Vector2.ZERO, size), _get_lane_color(), true, -1.0, false)
-	if timeline and Sonara and Sonara.editor and Sonara.editor.project:
-		_draw_grid()
 	
+	if Engine.is_editor_hint() or (timeline and Sonara and Sonara.editor and Sonara.editor.project):
+		_draw_grid()
+
 	# Draw bottom border
 	if border_thickness > 0:
 		var border_y = size.y - border_thickness
 		draw_rect(Rect2(0, border_y, size.x, border_thickness), border_color, true)
-	
+
+
+func _get_grid_helper() -> GridHelper:
+	"""The timeline's shared GridHelper, or a default 4/4 mock when previewing in the editor."""
+	if timeline and timeline.grid_helper:
+		return timeline.grid_helper
+	if not Engine.is_editor_hint():
+		return null
+	if _preview_grid_helper == null:
+		_preview_grid_helper = GridHelper.new()
+		_sync_preview_grid_helper()
+	return _preview_grid_helper
+
+
+func _sync_preview_grid_helper() -> void:
+	"""Copy the preview exports onto the editor mock GridHelper and redraw."""
+	if _preview_grid_helper:
+		_preview_grid_helper.pixels_per_beat = preview_pixels_per_beat
+		_preview_grid_helper.min_line_spacing = preview_min_line_spacing
+	queue_redraw()
+
 
 func _draw_grid() -> void:
 	"""Draw vertical grid lines using GridHelper, clipped to the visible scroll range."""
-	if not timeline or not timeline.grid_helper:
+	var helper := _get_grid_helper()
+	if helper == null:
 		return
-
-	var helper := timeline.grid_helper
 
 	# TimelineTrack is sized to the full (scrollable) content width, not just
 	# the visible viewport, so drawing start_x=0..size.x draws the whole grid
 	# on every track on every redraw (e.g. on every zoom change). Clip to the
-	# currently visible scroll range instead.
-	var viewport_width = timeline.get_viewport_width()
-	var start_x = clampf(helper.scroll_position, 0.0, size.x)
-	var end_x = clampf(helper.scroll_position + viewport_width, 0.0, size.x)
+	# currently visible scroll range instead. The editor preview has no
+	# timeline, so it just draws the whole width.
+	var start_x := 0.0
+	var end_x := size.x
+	if timeline:
+		var viewport_width = timeline.get_viewport_width()
+		start_x = clampf(helper.scroll_position, 0.0, size.x)
+		end_x = clampf(helper.scroll_position + viewport_width, 0.0, size.x)
 	if end_x <= start_x:
 		return
 

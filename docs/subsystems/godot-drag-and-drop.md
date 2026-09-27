@@ -13,7 +13,23 @@ Implementations (payload, resolver, owner, test):
 - Arranger tracks: `arranger/tracklist/TrackDrag.gd`, `arranger/tracklist/TrackDropTarget.gd`,
   `arranger/tracklist/TrackList.gd`, `tests/test_track_drop.gd`
 - Devices (DeviceLane, nested container folders, mixer compact lists): `devices/DeviceDrag.gd`,
-  `devices/DeviceDropTarget.gd`, `devices/DeviceChainDropHost.gd`, `tests/test_device_drop.gd`
+  `devices/DeviceDropTarget.gd`, `devices/DeviceChainDropHost.gd`, `tests/test_device_drop.gd`,
+  `tests/test_device_drop_channels.gd`
+  - A device can move to another channel's row (`DeviceTransferCommand`) unless it owns aux return
+    channels (Drum Machine, multi-out plugin) or is a drum pad (`DeviceDropUtil.can_leave_channel`).
+    Instruments only land on instrument channels; master takes effects.
+  - Devices or Device/SFZ assets dropped on empty mixer space create a channel
+    (`Mixer.new_channel_side` / `DeviceDropUtil.new_channel_kind`): on the left pane an instrument
+    track for instruments and containers, an audio track for effects; on the right pane a bus for
+    effects. The indicator is a line after the pane's last strip.
+- Devices on the arranger tracklist (Device/SFZ assets, asset arrays, `DeviceDrag`):
+  `arranger/tracklist/TrackDeviceDropTarget.gd`, `arranger/tracklist/TrackList.gd`,
+  `tests/test_track_device_drop.gd`
+  - The middle of a track header adds the device to that track's channel (header outline) when it
+    fits. The header's top/bottom edges, gaps, empty space and channel-less folder headers create a
+    new track (`DeviceDropUtil.create_channel_for` with a parent/after-sibling) at the position a
+    track drag would use (`TrackDropTarget.resolve_new_track`). A device dropped on its own track is
+    a no-op.
 
 ## Rules
 
@@ -45,7 +61,9 @@ Implementations (payload, resolver, owner, test):
    dragged item itself, not raw child indices. Dropping into the item's current slot is valid but
    `commit()` returns false (no-op, no history entry).
 8. **Nest targets are explicit.** Nesting happens only over a container's header (or its
-   fold-out header bar). Anywhere else on the item means "insert beside it".
+   fold-out header bar). Anywhere else on the item means "insert beside it". Device containers
+   (Chain, Layer, Drum Machine) are the exception: their body takes the drop too, except near the
+   panel's ends, which insert beside it. The header still glows.
 9. **Only valid targets glow.** Show the indicator only when the resolver returns a valid target for
    the drag in progress. Never light up zones on `NOTIFICATION_DRAG_BEGIN` regardless of drag type.
    Owners that do per-frame work can `set_process()` on DRAG_BEGIN only when the drag data is theirs.

@@ -1,28 +1,49 @@
+## Envelope editor for an `Envelope` resource: any subset of attack, decay, sustain and release
+## (`Envelope.stages`).
+##
+## Layout, left to right: attack rises to the peak, decay falls to the sustain level, a sustain
+## plateau stands in for the held note, and release falls to zero. Stages are drawn end to end.
+## Every time stage gets an equal slot, and its length within the slot is
+## `((t - min) / (max - min)) ^ time_curve`, so short times stay visible and equal times look
+## equal. Without a decay stage, attack rises straight to the sustain level.
+##
+## Handles: attack (x), decay (x = time, y = sustain), sustain (y, only without a decay stage),
+## and release (x). Shift drags finely. Hovering or dragging a handle shows its value.
+## Everything is drawn inside the control: the curve is inset by the handle radius.
 @tool
 class_name EnvelopeControl extends Control
 
-# ========================================================
-# Styling properties
-# ========================================================
+enum Handle { NONE = -1, ATTACK, DECAY, SUSTAIN, RELEASE }
 
-@export var bg_color := Color.BLACK:
+## Share of the width the sustain plateau takes when a release stage follows it.
+const SUSTAIN_WIDTH := 0.2
+const LEVEL_GRID := [0.25, 0.5, 0.75]
+const STAGE_LABEL_FONT_SIZE := 10
+## Height below which the stage letters are left out.
+const MIN_HEIGHT_FOR_LABELS := 48.0
+
+@export var bg_color := Color("#111111"):
 	set(c):
 		bg_color = c
-		if is_inside_tree():
-			queue_redraw()
+		queue_redraw()
 
-@export var line_color := Color.WHITE:
+@export var line_color := Color(0.73, 0.73, 0.73):
 	set(c):
 		line_color = c
-		if is_inside_tree():
-			queue_redraw()
+		queue_redraw()
 
-@export var line_width := 2.0:
+@export var line_width := 1.5:
 	set(w):
 		line_width = w
 		queue_redraw()
-	
-@export var grid_color := Color.GRAY:
+
+## Opacity of the area under the curve (in line_color).
+@export_range(0.0, 1.0) var fill_alpha := 0.12:
+	set(a):
+		fill_alpha = a
+		queue_redraw()
+
+@export var grid_color := Color(1, 1, 1, 0.06):
 	set(c):
 		grid_color = c
 		queue_redraw()
@@ -32,7 +53,7 @@ class_name EnvelopeControl extends Control
 		grid_width = w
 		queue_redraw()
 
-@export var handle_color := Color.LIGHT_GRAY:
+@export var handle_color := Color(0.83, 0.83, 0.83, 0.6):
 	set(c):
 		handle_color = c
 		queue_redraw()
@@ -42,222 +63,382 @@ class_name EnvelopeControl extends Control
 		handle_color_hover = c
 		queue_redraw()
 
-@export var handle_radius := 8.0:
+@export var handle_radius := 4.0:
 	set(r):
 		handle_radius = r
+		queue_redraw()
+
+## Exponent applied to a stage's 0–1 time before it becomes a length. Below 1 gives short
+## times more room; 1 is linear.
+@export_range(0.1, 1.0) var time_curve := 0.5:
+	set(c):
+		time_curve = c
 		queue_redraw()
 
 @export var envelope: Envelope:
 	set(value):
 		if envelope == value:
 			return
-		if envelope != null and envelope.changed.is_connected(queue_redraw):
-			envelope.changed.disconnect(queue_redraw)
+		if envelope != null and envelope.changed.is_connected(_on_envelope_changed):
+			envelope.changed.disconnect(_on_envelope_changed)
 		envelope = value
-		if envelope != null and not envelope.changed.is_connected(queue_redraw):
-			envelope.changed.connect(queue_redraw)
+		if envelope != null:
+			envelope.changed.connect(_on_envelope_changed)
 		queue_redraw()
 
-@export var attack_enabled := true
-@export var decay_enabled := true
-@export var sustain_enabled := true
-@export var release_enabled := true
+var _hover := Handle.NONE
+var _drag := Handle.NONE
+var _fine_drag := FineDrag.new()
+var _tooltip: ValueTooltip = null
+
 
 func _ready() -> void:
-	if envelope and not envelope.changed.is_connected(queue_redraw):
-		envelope.changed.connect(queue_redraw)
+	mouse_exited.connect(_on_mouse_exited)
+
 
 func _get_minimum_size() -> Vector2:
-	return Vector2(100, 30)
+	return Vector2(60, 30)
 
 
-func pixel_to_secoonds(pixels : float) -> float:
-	var pixels_per_second = size.x / get_duration()
-	return pixels / pixels_per_second
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
+		if not is_visible_in_tree():
+			_drag = Handle.NONE
+			_hover = Handle.NONE
+			_refresh_tooltip()
 
 
-func seconds_to_pixels(seconds : float) -> float:
-	var pixels_per_second = size.x / get_duration()
-	return seconds * pixels_per_second
+func _on_envelope_changed() -> void:
+	queue_redraw()
+	_refresh_tooltip()
 
 
-func get_duration() -> float:
-	# the total maximum length of the envelope in seconds
-	var duration = 0.0
-	if attack_enabled:
-		duration += envelope.max_attack
-	
-	if decay_enabled:
-		duration += envelope.max_decay
-	
-	if release_enabled:
-		duration += envelope.max_release
-	
-	return duration
+## ============================================================================
+## GEOMETRY
+## ============================================================================
 
-func get_attack_length_seconds() -> float:
-	# attack and release get 33% of the total width each
-	return get_duration() * 0.33
-
-func get_attack_length_pixels() -> float:
-	return seconds_to_pixels(get_attack_length_seconds())
-
-func get_decay_length_seconds() -> float:
-	# decay gets 33% of the total width
-	return get_duration() * 0.33
-
-func get_decay_length_pixels() -> float:
-	return seconds_to_pixels(get_decay_length_seconds())
-
-func get_release_length_seconds() -> float:
-	# release gets 33% of the total width
-	return get_duration() * 0.33
-
-func get_release_length_pixels() -> float:
-	return seconds_to_pixels(get_release_length_seconds())
+## The area the curve and handle centers live in, inset so handles never leave the control.
+func get_inner_rect() -> Rect2:
+	var pad := handle_radius + 1.0
+	return Rect2(Vector2(pad, pad), (size - Vector2(pad, pad) * 2.0).max(Vector2.ONE))
 
 
-func get_attack_area() -> Rect2:
-	return Rect2(0, 0, get_attack_length_pixels(), size.y)
+func _has(stage: Envelope.Stage) -> bool:
+	return envelope != null and envelope.has_stage(stage)
 
 
-func get_decay_sustain_area() -> Rect2:
-	return Rect2(get_attack_length_pixels(), 0, get_decay_length_pixels(), size.y)
+## True when the curve holds at the sustain level (the note is held until release).
+func _has_plateau() -> bool:
+	return _has(Envelope.Stage.SUSTAIN) or _has(Envelope.Stage.RELEASE)
 
 
-func get_release_area() -> Rect2:
-	return Rect2(get_attack_length_pixels() + get_decay_length_pixels(), 0, get_release_length_pixels(), size.y)
+## Width of one time stage's slot.
+func _slot_width() -> float:
+	var inner := get_inner_rect()
+	var count := 0
+	for stage in Envelope.TIME_STAGES:
+		if _has(stage):
+			count += 1
+	var free := inner.size.x * (1.0 - SUSTAIN_WIDTH) if _has_plateau() else inner.size.x
+	return free / maxf(count, 1)
 
 
-func get_attack_handle_pos() -> Vector2:
-	var attack_area = get_attack_area()
-	return Vector2(envelope.attack_normalized * attack_area.end.x, 0)
+## Level the curve holds after decay (or after attack without a decay stage), 0–1.
+func sustain_level() -> float:
+	if _has(Envelope.Stage.SUSTAIN):
+		return clampf(envelope.sustain, 0.0, 1.0)
+	return 0.0 if _has(Envelope.Stage.DECAY) else 1.0
 
 
-func get_decay_handle_pos() -> Vector2:
-	var decay_area = get_decay_sustain_area()
-	var y = size.y - (size.y * envelope.sustain)
-	return Vector2(decay_area.position.x + (envelope.decay_normalized * decay_area.size.x), y)
+## Time stage value → 0–1 share of its slot.
+func _stage_fraction(stage: Envelope.Stage) -> float:
+	var lo := envelope.get_stage_min(stage)
+	var hi := envelope.get_stage_max(stage)
+	if hi <= lo:
+		return 0.0
+	return pow(clampf((envelope.get_stage_value(stage) - lo) / (hi - lo), 0.0, 1.0), time_curve)
 
 
-func get_release_handle_pos() -> Vector2:
-	var release_area = get_release_area()
-	var y = size.y - (size.y * envelope.sustain)
-	return Vector2(release_area.end.x - (envelope.release_normalized * release_area.size.x), y)
+## Inverse of `_stage_fraction`: share of the slot → stage value.
+func _fraction_to_value(stage: Envelope.Stage, fraction: float) -> float:
+	var lo := envelope.get_stage_min(stage)
+	var hi := envelope.get_stage_max(stage)
+	return lerpf(lo, hi, pow(clampf(fraction, 0.0, 1.0), 1.0 / time_curve))
 
-func _is_mouse_in_handle(handle : Vector2, threshold: float = handle_radius) -> bool:
-	return handle.distance_to(get_local_mouse_position()) < threshold
 
-enum DragType {NONE, ATTACK, DECAY, RELEASE}
+func _level_to_y(level: float) -> float:
+	var inner := get_inner_rect()
+	return inner.end.y - clampf(level, 0.0, 1.0) * inner.size.y
 
-var drag_type: DragType = DragType.NONE
 
-var is_dragging: bool:
-	get:
-		return drag_type != DragType.NONE
+## Key x positions: attack end, decay end, sustain end, release end.
+func _stage_ends() -> Dictionary:
+	var inner := get_inner_rect()
+	var slot := _slot_width()
+	var x := inner.position.x
+	var ends := {}
+	if _has(Envelope.Stage.ATTACK):
+		x += _stage_fraction(Envelope.Stage.ATTACK) * slot
+	ends[Handle.ATTACK] = x
+	if _has(Envelope.Stage.DECAY):
+		x += _stage_fraction(Envelope.Stage.DECAY) * slot
+	ends[Handle.DECAY] = x
+	if _has(Envelope.Stage.RELEASE):
+		x += inner.size.x * SUSTAIN_WIDTH
+	elif _has(Envelope.Stage.SUSTAIN):
+		x = inner.end.x
+	ends[Handle.SUSTAIN] = x
+	if _has(Envelope.Stage.RELEASE):
+		x += _stage_fraction(Envelope.Stage.RELEASE) * slot
+	ends[Handle.RELEASE] = x
+	return ends
+
+
+## The envelope as a polyline, in local coordinates.
+func get_curve_points() -> PackedVector2Array:
+	var points := PackedVector2Array()
+	if envelope == null:
+		return points
+	var inner := get_inner_rect()
+	var ends := _stage_ends()
+	var bottom := inner.end.y
+	var sus_y := _level_to_y(sustain_level())
+	var peak_y := _level_to_y(1.0) if _has(Envelope.Stage.DECAY) else sus_y
+	points.append(Vector2(inner.position.x, bottom))
+	points.append(Vector2(ends[Handle.ATTACK], peak_y))
+	if _has(Envelope.Stage.DECAY):
+		points.append(Vector2(ends[Handle.DECAY], sus_y))
+	if _has_plateau():
+		points.append(Vector2(ends[Handle.SUSTAIN], sus_y))
+	if _has(Envelope.Stage.RELEASE):
+		points.append(Vector2(ends[Handle.RELEASE], bottom))
+	return points
+
+
+## Handles present for the envelope's stages.
+func get_handles() -> Array[Handle]:
+	var handles: Array[Handle] = []
+	if _has(Envelope.Stage.ATTACK):
+		handles.append(Handle.ATTACK)
+	if _has(Envelope.Stage.DECAY):
+		handles.append(Handle.DECAY)
+	elif _has(Envelope.Stage.SUSTAIN):
+		handles.append(Handle.SUSTAIN)
+	if _has(Envelope.Stage.RELEASE):
+		handles.append(Handle.RELEASE)
+	return handles
+
+
+func get_handle_position(handle: Handle) -> Vector2:
+	var ends := _stage_ends()
+	var sus_y := _level_to_y(sustain_level())
+	match handle:
+		Handle.ATTACK:
+			return Vector2(ends[Handle.ATTACK], _level_to_y(1.0) if _has(Envelope.Stage.DECAY) else sus_y)
+		Handle.DECAY:
+			return Vector2(ends[Handle.DECAY], sus_y)
+		Handle.SUSTAIN:
+			return Vector2((ends[Handle.DECAY] + ends[Handle.SUSTAIN]) * 0.5, sus_y)
+		Handle.RELEASE:
+			return Vector2(ends[Handle.RELEASE], get_inner_rect().end.y)
+	return Vector2.ZERO
+
+
+## Handle under `pos` (the nearest within reach), or NONE.
+func handle_at(pos: Vector2) -> Handle:
+	var best := Handle.NONE
+	var best_dist := maxf(handle_radius * 2.5, 8.0)
+	for handle in get_handles():
+		var dist := get_handle_position(handle).distance_to(pos)
+		if dist <= best_dist:
+			best = handle
+			best_dist = dist
+	return best
+
+
+## ============================================================================
+## INPUT
+## ============================================================================
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if not is_dragging and event.pressed:
-				var attack_handle = get_attack_handle_pos()
-				var decay_handle = get_decay_handle_pos()
-				var release_handle = get_release_handle_pos()
-
-				if _is_mouse_in_handle(attack_handle, handle_radius * 2):
-					drag_type = DragType.ATTACK
-				elif _is_mouse_in_handle(decay_handle, handle_radius * 2):
-					drag_type = DragType.DECAY
-				elif _is_mouse_in_handle(release_handle, handle_radius * 2):
-					drag_type = DragType.RELEASE
-				else:
-					drag_type = DragType.NONE
-			elif is_dragging and event.is_released():
-				_stop_drag()
+	if envelope == null:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			var handle := handle_at(event.position)
+			if handle != Handle.NONE:
+				_drag = handle
+				_fine_drag.begin_at(get_handle_position(handle), event.position)
+				queue_redraw()
+				_refresh_tooltip()
+				accept_event()
+		elif _drag != Handle.NONE:
+			_drag = Handle.NONE
+			_set_hover(handle_at(event.position))
+			queue_redraw()
+			_refresh_tooltip()
+			accept_event()
 	elif event is InputEventMouseMotion:
-		if is_dragging:
-			_drag(event.position)
-		queue_redraw()
+		if _drag != Handle.NONE:
+			_drag_to(_fine_drag.update(event.position, event.shift_pressed, get_inner_rect()))
+			accept_event()
+		else:
+			_set_hover(handle_at(event.position))
 
 
-func _start_drag(dt: DragType) -> void:
-	drag_type = dt
-	accept_event()
+func _set_hover(handle: Handle) -> void:
+	if handle == _hover:
+		return
+	_hover = handle
+	mouse_default_cursor_shape = Control.CURSOR_ARROW if handle == Handle.NONE else Control.CURSOR_POINTING_HAND
+	queue_redraw()
+	_refresh_tooltip()
 
-func _stop_drag() -> void:
-	drag_type = DragType.NONE
-	accept_event()
 
-func _drag(mouse: Vector2) -> void:
-	match drag_type:
-		DragType.ATTACK:
-			var attack_area = get_attack_area()
-			mouse.x = clamp(mouse.x, attack_area.position.x, attack_area.end.x)
-			mouse.y = 0
+func _on_mouse_exited() -> void:
+	if _drag == Handle.NONE:
+		_set_hover(Handle.NONE)
 
-			envelope.attack_normalized = remap(mouse.x, attack_area.position.x, attack_area.end.x, 0, 1)
-		
-		DragType.DECAY:
-			var decay_area = get_decay_sustain_area()
-			mouse.x = clamp(mouse.x, decay_area.position.x, decay_area.end.x)
-			mouse.y = clamp(mouse.y, 0, size.y)
 
-			envelope.decay_normalized = remap(mouse.x, decay_area.position.x, decay_area.end.x, 0, 1)
-			envelope.sustain = remap(mouse.y, 0, size.y, 1, 0)
-		
-		DragType.RELEASE:
-			var release_area = get_release_area()
-			mouse.x = clamp(mouse.x, release_area.position.x, release_area.end.x)
-			mouse.y = clamp(mouse.y, 0, size.y)
+## Apply a dragged handle position to the envelope.
+func _drag_to(point: Vector2) -> void:
+	var inner := get_inner_rect()
+	var ends := _stage_ends()
+	var slot := _slot_width()
+	var level := clampf((inner.end.y - point.y) / inner.size.y, 0.0, 1.0)
+	match _drag:
+		Handle.ATTACK:
+			envelope.attack = _fraction_to_value(Envelope.Stage.ATTACK, (point.x - inner.position.x) / slot)
+			if not _has(Envelope.Stage.DECAY) and _has(Envelope.Stage.SUSTAIN):
+				envelope.sustain = level
+		Handle.DECAY:
+			envelope.decay = _fraction_to_value(Envelope.Stage.DECAY, (point.x - ends[Handle.ATTACK]) / slot)
+			if _has(Envelope.Stage.SUSTAIN):
+				envelope.sustain = level
+		Handle.SUSTAIN:
+			envelope.sustain = level
+		Handle.RELEASE:
+			var release_start: float = ends[Handle.SUSTAIN]
+			envelope.release = _fraction_to_value(Envelope.Stage.RELEASE, (point.x - release_start) / slot)
 
-			envelope.release_normalized = remap(mouse.x, release_area.position.x, release_area.end.x, 1, 0)
-			envelope.sustain = remap(mouse.y, 0, size.y, 1, 0)
-		_:
-			pass
 
+## ============================================================================
+## TOOLTIP
+## ============================================================================
+
+## Readout for `handle`, e.g. "Decay 120 ms · Sustain 70%".
+func get_handle_text(handle: Handle) -> String:
+	match handle:
+		Handle.ATTACK:
+			if not _has(Envelope.Stage.DECAY) and _has(Envelope.Stage.SUSTAIN):
+				return "Attack %s · Sustain %s" % [format_time(envelope.attack), format_level(envelope.sustain)]
+			return "Attack %s" % format_time(envelope.attack)
+		Handle.DECAY:
+			if _has(Envelope.Stage.SUSTAIN):
+				return "Decay %s · Sustain %s" % [format_time(envelope.decay), format_level(envelope.sustain)]
+			return "Decay %s" % format_time(envelope.decay)
+		Handle.SUSTAIN:
+			return "Sustain %s" % format_level(envelope.sustain)
+		Handle.RELEASE:
+			return "Release %s" % format_time(envelope.release)
+	return ""
+
+
+static func format_time(seconds: float) -> String:
+	if seconds < 0.01:
+		return "%.1f ms" % (seconds * 1000.0)
+	if seconds < 1.0:
+		return "%d ms" % roundi(seconds * 1000.0)
+	return "%.2f s" % seconds
+
+
+static func format_level(level: float) -> String:
+	return "%d%%" % roundi(level * 100.0)
+
+
+func _refresh_tooltip() -> void:
+	if Engine.is_editor_hint():
+		return
+	var handle := _drag if _drag != Handle.NONE else _hover
+	if handle == Handle.NONE or envelope == null or not is_visible_in_tree():
+		if _tooltip:
+			_tooltip.visible = false
+		return
+	if _tooltip == null:
+		_tooltip = ValueTooltip.attach(self)
+		_tooltip.gap = handle_radius + 6.0
+	_tooltip.set_text(get_handle_text(handle))
+	_tooltip.visible = true
+	var at := get_global_transform() * get_handle_position(handle)
+	_tooltip.place_above(Rect2(at, Vector2.ZERO))
+
+
+## ============================================================================
+## DRAWING
+## ============================================================================
 
 func _draw() -> void:
-	# draw the background
-	draw_rect(Rect2(0, 0, size.x, size.y), bg_color, true, -1.0, true)
-	
-	# draw grid lines every second
-	for i in range(1, floor(get_duration())):
-		var x = seconds_to_pixels(i)
-		draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color, grid_width, true)
+	draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
+	if envelope == null:
+		return
+	var inner := get_inner_rect()
 
-	
-	# draw the envelope line
-	var points = [
-		Vector2(0, size.y),
-		get_attack_handle_pos(),
-		get_decay_handle_pos(),
-		get_release_handle_pos(),
-		Vector2(size.x, size.y),
-	]
-	draw_polyline(points, line_color, line_width, true if line_width >= 1.0 else false)
+	for level in LEVEL_GRID:
+		var y := roundf(_level_to_y(level)) + 0.5
+		draw_line(Vector2(inner.position.x, y), Vector2(inner.end.x, y), grid_color, grid_width)
 
-	var attack_handle = get_attack_handle_pos()
-	var decay_handle = get_decay_handle_pos()
-	var release_handle = get_release_handle_pos()
+	var points := get_curve_points()
+	# stage boundaries, so each stage's length reads at a glance
+	for i in range(1, points.size() - 1):
+		var x := roundf(points[i].x) + 0.5
+		draw_line(Vector2(x, inner.position.y), Vector2(x, inner.end.y), grid_color, grid_width)
 
-	# attack attack handle
-	if _is_mouse_in_handle(attack_handle):
-		_draw_handle(attack_handle, handle_color_hover)
-	else:
-		_draw_handle(attack_handle, handle_color)
+	_draw_fill(points, inner.end.y)
+	if points.size() >= 2:
+		draw_polyline(points, line_color, line_width, true)
+	_draw_stage_labels()
 
-	# decay handle
-	if _is_mouse_in_handle(decay_handle):
-		_draw_handle(decay_handle, handle_color_hover)
-	else:
-		_draw_handle(decay_handle, handle_color)
-
-	# release handle
-	if _is_mouse_in_handle(release_handle):
-		_draw_handle(release_handle, handle_color_hover)
-	else:
-		_draw_handle(release_handle, handle_color)
+	for handle in get_handles():
+		var active := handle == _drag or (handle == _hover and _drag == Handle.NONE)
+		var pos := get_handle_position(handle)
+		draw_circle(pos, handle_radius, handle_color_hover if active else handle_color, true, -1.0, true)
+		if active:
+			draw_circle(pos, handle_radius + 2.0, Color(handle_color_hover, 0.35), false, 1.0, true)
 
 
-func _draw_handle(pos: Vector2, color: Color) -> void:
-	draw_circle(pos, handle_radius, color, true, -1.0, true)
+## Fill under the curve, one quad per segment (sidesteps triangulating a self-touching polygon).
+func _draw_fill(points: PackedVector2Array, bottom: float) -> void:
+	if fill_alpha <= 0.0:
+		return
+	var fill := Color(line_color, line_color.a * fill_alpha)
+	for i in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		if b.x - a.x < 0.5:
+			continue
+		draw_colored_polygon(PackedVector2Array([a, b, Vector2(b.x, bottom), Vector2(a.x, bottom)]), fill)
+
+
+## Faint stage letters along the bottom, centered in each stage that has room.
+func _draw_stage_labels() -> void:
+	if get_inner_rect().size.y < MIN_HEIGHT_FOR_LABELS:
+		return
+	var font := get_theme_default_font()
+	var ends := _stage_ends()
+	var inner := get_inner_rect()
+	var spans := {
+		"A": [inner.position.x, ends[Handle.ATTACK], Envelope.Stage.ATTACK],
+		"D": [ends[Handle.ATTACK], ends[Handle.DECAY], Envelope.Stage.DECAY],
+		"S": [ends[Handle.DECAY], ends[Handle.SUSTAIN], Envelope.Stage.SUSTAIN],
+		"R": [ends[Handle.SUSTAIN], ends[Handle.RELEASE], Envelope.Stage.RELEASE],
+	}
+	var color := Color(line_color, 0.35)
+	for letter in spans:
+		var span: Array = spans[letter]
+		if not _has(span[2]):
+			continue
+		var text_width := font.get_string_size(letter, HORIZONTAL_ALIGNMENT_LEFT, -1, STAGE_LABEL_FONT_SIZE).x
+		if span[1] - span[0] < text_width + 4.0:
+			continue
+		var x: float = (span[0] + span[1] - text_width) * 0.5
+		draw_string(font, Vector2(x, inner.end.y - 3.0), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, STAGE_LABEL_FONT_SIZE, color)

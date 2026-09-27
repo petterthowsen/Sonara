@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
-[ext_resource type="Script" uid="uid://chkmbgsnitbmn" path="res://components/Ruler.gd" id="2_q0vl8"]
+[ext_resource type="Script" path="res://components/RulerStack.gd" id="2_q0vl8"]
 [ext_resource type="PackedScene" uid="uid://bnyr34msk4b3r" path="res://clip_editor/tracklist/ClipEditorTrackList.tscn" id="2_ytm0k"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
 [ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
@@ -91,6 +91,7 @@ metadata/_edit_lock_ = true
 
 [node name="PanelContainer" type="HBoxContainer" parent="HSplit/MainPanel/VBox"]
 layout_mode = 2
+theme_override_constants/separation = 0
 
 [node name="MainHeader" type="PanelContainer" parent="HSplit/MainPanel/VBox/PanelContainer"]
 custom_minimum_size = Vector2(100, 0)
@@ -110,14 +111,10 @@ text = "Clip Mode"
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Ruler" type="Control" parent="HSplit/MainPanel/VBox/PanelContainer/VBox"]
-custom_minimum_size = Vector2(0, 32)
+[node name="Ruler" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/VBox"]
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("2_q0vl8")
-bg_color = Color(0.10747979, 0.107479714, 0.10747973, 1)
-text_color = Color(0.699654, 0.6996533, 0.699653, 1)
-start_position_color = Color(0.32846358, 0.3815926, 1, 1)
 
 [node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox"]
 layout_mode = 2
@@ -204,6 +201,7 @@ focus_mode = 1
 script = ExtResource("1_4hncn")
 
 [node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+z_index = 2
 custom_minimum_size = Vector2(3, 0)
 layout_mode = 1
 anchors_preset = 9
@@ -214,6 +212,7 @@ mouse_filter = 2
 texture = SubResource("GradientTexture1D_ytm0k")
 
 [node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+z_index = 2
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

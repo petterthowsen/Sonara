@@ -1,7 +1,9 @@
 ## CompoundDetector.gd
 ## Merges parameters whose names share a stem into compound controls (REQ-005):
 ## `x`/`y` → xy, attack/decay/sustain/release → envelope, freq/gain/q → eq_band.
-## Incomplete patterns stay single controls.
+## Incomplete patterns stay single controls, except envelopes: any two or more of A/D/S/R make
+## one (its `stages` says which, e.g. "ads"), but attack + release alone don't, since that's
+## a compressor or gate far more often than an envelope.
 
 class_name CompoundDetector extends RefCounted
 
@@ -20,6 +22,8 @@ const TIME_UNITS := ["s", "ms", "sec"]
 const MAX_UNITLESS_SECONDS := 60.0
 ## Envelope parts (by index) that must look like times; sustain is a level.
 const ENVELOPE_TIME_PARTS := [0, 1, 3]
+## Envelope part index → stage letter (see `Envelope.stages`).
+const ENVELOPE_STAGE_LETTERS := "adsr"
 
 
 ## Turn classified entries (see `ParamClassifier.classify`) into generated items, keeping order.
@@ -51,16 +55,25 @@ static func detect(entries: Array[Dictionary]) -> Array[Dictionary]:
 		var pattern: Dictionary = PATTERNS[p]
 		for stem in found[p]:
 			var by_part: Dictionary = found[p][stem]
-			if by_part.size() != pattern.parts.size():
+			var is_envelope: bool = pattern.kind == SimpleControlKinds.ENVELOPE
+			if is_envelope:
+				if not _is_envelope_subset(by_part):
+					continue
+			elif by_part.size() != pattern.parts.size():
 				continue
 			var members: Array[Dictionary] = []
+			var stages := ""
 			for part in range(pattern.parts.size()):
-				members.append(by_part[part])
+				if by_part.has(part):
+					members.append(by_part[part])
+					stages += ENVELOPE_STAGE_LETTERS[part] if is_envelope else ""
 			if _any_consumed(members, consumed):
 				continue
-			if pattern.kind == SimpleControlKinds.ENVELOPE and not _looks_like_envelope(members):
+			if is_envelope and not _looks_like_envelope(by_part):
 				continue
 			var item := _compound_item(pattern, stem, members)
+			if is_envelope and stages != ENVELOPE_STAGE_LETTERS:
+				item["stages"] = stages
 			for m in members:
 				consumed[m.index] = true
 			compound_at[item.index] = item
@@ -105,10 +118,19 @@ static func _any_consumed(members: Array[Dictionary], consumed: Dictionary) -> b
 	return false
 
 
-## Attack, decay and release must be times: a time unit, or no unit and a 0–60 range.
-static func _looks_like_envelope(members: Array[Dictionary]) -> bool:
+## Two or more envelope parts, but not attack + release alone.
+static func _is_envelope_subset(by_part: Dictionary) -> bool:
+	if by_part.size() < 2:
+		return false
+	return by_part.size() > 2 or not (by_part.has(0) and by_part.has(3))
+
+
+## Attack, decay and release (those present) must be times: a time unit, or no unit and a 0–60 range.
+static func _looks_like_envelope(by_part: Dictionary) -> bool:
 	for i in ENVELOPE_TIME_PARTS:
-		var param: DeviceParameter = members[i].param
+		if not by_part.has(i):
+			continue
+		var param: DeviceParameter = by_part[i].param
 		if param.unit in TIME_UNITS:
 			continue
 		if not param.unit.is_empty() or param.min_value < 0.0 or param.max_value > MAX_UNITLESS_SECONDS:

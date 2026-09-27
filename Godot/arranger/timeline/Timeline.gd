@@ -15,6 +15,8 @@ var _is_rebuilding: bool = false
 
 # Minimum timeline length (in bars) when empty
 const MIN_TIMELINE_BARS: int = 32  # Show at least 32 bars
+# Instanced (not TimelineTrack.new()) so the colors/border set on the scene apply
+const TimelineTrackScene = preload("res://arranger/timeline/TimelineTrack.tscn")
 
 # Grid helper for consistent snapping (set by Arranger)
 var grid_helper: GridHelper:
@@ -53,19 +55,28 @@ var _fold_rows: Array = []
 # Signal emitted when clip selection changes
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
+## Clip move drag. The Timeline tracks it in _input because a cross-track move frees the clip UI
+## that was pressed.
 var _drag_active: bool = false
-var _drag_cross_track: bool = false
 var _drag_anchor_instance: ClipInstance = null
+var _drag_origin_clip_ui: TimelineClip = null  # Holds mouse focus while alive and gets the release
+var _drag_press_global: Vector2 = Vector2.ZERO
 var _drag_initial_positions: Dictionary = {}  # ClipInstance -> int
 var _drag_initial_track_indices: Dictionary = {}  # ClipInstance -> int
 var _drag_selected_instances: Array[ClipInstance] = []
 var _drag_current_tick_delta: int = 0
-var _drag_pending_track_delta: int = 0
+var _drag_current_track_delta: int = 0
 var clip_clipboard: ClipSelection = null
 
 @export var selection_boundary_color: Color = Color(0.4, 0.8, 1.0, 0.6)
 
 func _ready():
+	# remove any tracks
+	for child in get_children():
+		if child is TimelineTrack:
+			remove_child(child)
+			child.queue_free()
+	
 	clip_selection_manager.set_context(self, grid_helper)
 	clip_selection_manager.selection_changed.connect(_on_clip_selection_changed)
 	clip_selection_manager.box_selection_changed.connect(func(_rect): queue_redraw())
@@ -163,7 +174,7 @@ func _on_track_added(track: Track) -> void:
 		return
 
 	# Instantiate TimelineTrack
-	var timeline_track := TimelineTrack.new()
+	var timeline_track: TimelineTrack = TimelineTrackScene.instantiate()
 
 	# Append; visual order is applied from the folder hierarchy after add/rebuild.
 	add_child(timeline_track)
@@ -437,14 +448,7 @@ func _clear_all_tracks() -> void:
 		_drop_lane_row(lane)
 	_lane_rows.clear()
 	automation_selection_manager.clear_selection()
-	_drag_active = false
-	_drag_cross_track = false
-	_drag_anchor_instance = null
-	_drag_initial_positions.clear()
-	_drag_initial_track_indices.clear()
-	_drag_selected_instances.clear()
-	_drag_current_tick_delta = 0
-	_drag_pending_track_delta = 0
+	_reset_drag_state()
 
 	if clip_selection_manager:
 		clip_selection_manager.clear_selection()
@@ -491,6 +495,9 @@ func _gui_input(event: InputEvent) -> void:
 
 ## Keep Ctrl/Cmd click-or-drag tracking the mouse even when it travels over clips.
 func _input(event: InputEvent) -> void:
+	if _drag_active:
+		_handle_clip_drag_input(event)
+		return
 	if not clip_selection_manager:
 		return
 	if not clip_selection_manager.is_box_selecting and not clip_selection_manager.is_additive_pending:
@@ -640,20 +647,14 @@ func register_clip_ui(clip_ui: TimelineClip) -> void:
 		clip_selection_manager.register_clip_ui(clip_ui)
 	if not clip_ui:
 		return
-	if not clip_ui.clip_move_requested.is_connected(_on_clip_move_requested):
-		clip_ui.clip_move_requested.connect(_on_clip_move_requested)
-
-	if not clip_ui.drag_started.is_connected(_on_clip_drag_started):
-		clip_ui.drag_started.connect(_on_clip_drag_started)
-
-	if not clip_ui.drag_moved.is_connected(_on_clip_drag_moved):
-		clip_ui.drag_moved.connect(_on_clip_drag_moved)
-
-	if not clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
-		clip_ui.drag_ended.connect(_on_clip_drag_ended)
+	if not clip_ui.drag_begin_requested.is_connected(_on_clip_drag_begin_requested):
+		clip_ui.drag_begin_requested.connect(_on_clip_drag_begin_requested)
 
 	if not clip_ui.context_menu_requested.is_connected(_on_clip_context_menu_requested):
 		clip_ui.context_menu_requested.connect(_on_clip_context_menu_requested)
+
+	if not clip_ui.open_in_editor_requested.is_connected(_on_clip_open_in_editor_requested):
+		clip_ui.open_in_editor_requested.connect(_on_clip_open_in_editor_requested)
 
 
 func unregister_clip_ui(clip_ui: TimelineClip) -> void:
@@ -663,17 +664,8 @@ func unregister_clip_ui(clip_ui: TimelineClip) -> void:
 	if not clip_ui:
 		return
 	
-	if clip_ui.clip_move_requested.is_connected(_on_clip_move_requested):
-		clip_ui.clip_move_requested.disconnect(_on_clip_move_requested)
-	
-	if clip_ui.drag_started.is_connected(_on_clip_drag_started):
-		clip_ui.drag_started.disconnect(_on_clip_drag_started)
-	
-	if clip_ui.drag_moved.is_connected(_on_clip_drag_moved):
-		clip_ui.drag_moved.disconnect(_on_clip_drag_moved)
-	
-	if clip_ui.drag_ended.is_connected(_on_clip_drag_ended):
-		clip_ui.drag_ended.disconnect(_on_clip_drag_ended)
+	if clip_ui.drag_begin_requested.is_connected(_on_clip_drag_begin_requested):
+		clip_ui.drag_begin_requested.disconnect(_on_clip_drag_begin_requested)
 
 	if clip_ui.context_menu_requested.is_connected(_on_clip_context_menu_requested):
 		clip_ui.context_menu_requested.disconnect(_on_clip_context_menu_requested)
@@ -734,12 +726,13 @@ func _clamp_instances_tick_delta(instances: Array[ClipInstance], requested_tick_
 		if not inst or not inst.track:
 			continue
 		
-		# Determine which track to check (current or target after vertical move)
+		# Determine which track to check (current or target after vertical move).
+		# A drag moves clips live, so it measures from the track each clip started on.
 		var check_track: Track = inst.track
-		if track_delta != 0:
-			var current_index = _get_track_index_for_instance(inst)
-			var target_index = current_index + track_delta
-			if target_index >= 0 and target_index < timeline_tracks.size():
+		if track_delta != 0 or use_initial_positions:
+			var base_index: int = _drag_initial_track_indices.get(inst, -1) if use_initial_positions else _get_track_index_for_instance(inst)
+			var target_index = base_index + track_delta
+			if base_index >= 0 and target_index >= 0 and target_index < timeline_tracks.size():
 				var target_track_node: TimelineTrack = timeline_tracks[target_index]
 				if target_track_node and target_track_node.track:
 					check_track = target_track_node.track
@@ -797,103 +790,113 @@ func _clamp_instances_tick_delta(instances: Array[ClipInstance], requested_tick_
 	return max_delta
 
 
-func _ensure_drag_initialized(instance: ClipInstance, cross_track: bool) -> void:
-	if not instance:
+## Take over a clip move once the press on `clip_ui` passes the drag threshold.
+func _on_clip_drag_begin_requested(clip_ui: TimelineClip, press_global: Vector2) -> void:
+	if not clip_ui or not clip_ui.clip_instance:
 		return
-	if not _drag_active:
-		_drag_active = true
-		_drag_cross_track = cross_track
-		_drag_anchor_instance = instance
-		_drag_initial_positions.clear()
-		_drag_initial_track_indices.clear()
-		_drag_selected_instances = clip_selection_manager.get_selected_instances()
-		if _drag_selected_instances.is_empty():
-			_drag_selected_instances = [instance]
-		for inst in _drag_selected_instances:
-			if not inst:
-				continue
-			_drag_initial_positions[inst] = inst.start_ticks
-			_drag_initial_track_indices[inst] = _get_track_index_for_instance(inst)
-		_drag_current_tick_delta = 0
-		_drag_pending_track_delta = 0
-	elif cross_track:
-		_drag_cross_track = true
-
-
-func _apply_horizontal_drag(delta_ticks: int) -> void:
-	if not _drag_active:
-		return
-	
-	# Clamp the delta to avoid collisions (use initial positions for stable calculation)
-	var clamped_delta = _clamp_instances_tick_delta(_drag_selected_instances, delta_ticks, 0, true)
-	
-	if clamped_delta == _drag_current_tick_delta:
-		return
-	
-	_drag_current_tick_delta = clamped_delta
-	var tracks_to_refresh: Array[TimelineTrack] = []
-	for inst in _drag_initial_positions.keys():
-		var base_start: int = _drag_initial_positions[inst]
-		var new_start = max(0, base_start + clamped_delta)
-		if inst.start_ticks == new_start:
-			continue
-		inst.set_position(new_start)
-		var track_ui = _get_timeline_track_for_instance(inst)
-		if track_ui and not tracks_to_refresh.has(track_ui):
-			tracks_to_refresh.append(track_ui)
-	for track_ui in tracks_to_refresh:
-		if track_ui:
-			track_ui._update_clip_positions()
-			track_ui.queue_redraw()
-	queue_redraw()
-
-
-func _apply_vertical_drag(delta_tracks: int) -> void:
-	if not _drag_active or delta_tracks == 0:
-		return
-	var allowed_delta = _clamp_track_delta(delta_tracks)
-	if allowed_delta == 0:
-		return
-
-	# Clamp horizontal position to avoid collisions on target tracks (use initial positions)
-	var clamped_tick_delta = _clamp_instances_tick_delta(_drag_selected_instances, _drag_current_tick_delta, allowed_delta, true)
-	
-	# If horizontal position needs adjustment, apply it
-	if clamped_tick_delta != _drag_current_tick_delta:
-		_drag_current_tick_delta = clamped_tick_delta
-		# Update positions with clamped delta
-		for inst in _drag_initial_positions.keys():
-			var base_start: int = _drag_initial_positions[inst]
-			var new_start = max(0, base_start + clamped_tick_delta)
-			inst.set_position(new_start)
-
-	var target_instances: Array[ClipInstance] = []
-	target_instances.assign(_drag_selected_instances)
-
-	for inst in target_instances:
+	_drag_active = true
+	_drag_anchor_instance = clip_ui.clip_instance
+	_drag_origin_clip_ui = clip_ui
+	_drag_press_global = press_global
+	_drag_initial_positions.clear()
+	_drag_initial_track_indices.clear()
+	_drag_selected_instances = clip_selection_manager.get_selected_instances()
+	if not _drag_selected_instances.has(_drag_anchor_instance):
+		_drag_selected_instances = [_drag_anchor_instance]
+	for inst in _drag_selected_instances:
 		if not inst:
 			continue
-		var origin_index = _drag_initial_track_indices.get(inst, _get_track_index_for_instance(inst))
-		if origin_index == -1:
-			continue
-		var target_index = origin_index + allowed_delta
-		if target_index < 0 or target_index >= timeline_tracks.size():
-			continue
-		var target_track_node: TimelineTrack = timeline_tracks[target_index]
-		if not target_track_node or not target_track_node.track:
-			continue
-		if not target_track_node.track.has_clips():
-			continue
-		var current_track: Track = inst.track
-		if current_track == target_track_node.track:
-			continue
-		current_track.remove_clip_instance(inst)
-		target_track_node.track.add_clip_instance(inst)
+		_drag_initial_positions[inst] = inst.start_ticks
+		_drag_initial_track_indices[inst] = _get_track_index_for_instance(inst)
+	_drag_current_tick_delta = 0
+	_drag_current_track_delta = 0
+	_update_clip_drag(get_global_mouse_position(), Input.is_key_pressed(KEY_SHIFT))
 
-	_drag_pending_track_delta = allowed_delta
-	if not target_instances.is_empty():
-		clip_selection_manager.select_instances(target_instances)
-	queue_redraw()
+
+## Mouse motion moves the clips, the release commits the move, and Shift toggles grid snap live.
+func _handle_clip_drag_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		_update_clip_drag(get_global_mouse_position(), event.shift_pressed)
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		var origin := _drag_origin_clip_ui
+		_finish_drag()
+		# The pressed clip UI swallows its own release. If a cross-track move freed it, the
+		# release would land on whatever is under the mouse, so stop it here.
+		if not is_instance_valid(origin) or origin.is_queued_for_deletion():
+			get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.keycode == KEY_SHIFT and not event.echo:
+		_update_clip_drag(get_global_mouse_position(), event.pressed)
+
+
+## Move the dragged clips to follow the mouse, onto the hovered track too. `free_move` skips snap.
+func _update_clip_drag(mouse_global: Vector2, free_move: bool) -> void:
+	if not _drag_active or not _drag_initial_positions.has(_drag_anchor_instance):
+		return
+	var anchor_start: int = _drag_initial_positions[_drag_anchor_instance]
+	var new_start := anchor_start + pixels_to_ticks(mouse_global.x - _drag_press_global.x)
+	if not free_move and grid_helper:
+		new_start = grid_helper.snap_ticks(new_start)
+	# Off the ends of the track list the clips stay on their current track.
+	var track_delta := _drag_current_track_delta
+	var anchor_index: int = _drag_initial_track_indices.get(_drag_anchor_instance, -1)
+	var hover_index := _find_track_index_at_global_position(mouse_global)
+	if anchor_index >= 0 and hover_index >= 0:
+		track_delta = hover_index - anchor_index
+	_drag_to(maxi(0, new_start) - anchor_start, track_delta)
+
+
+## Place the dragged clips `requested_tick_delta` / `requested_track_delta` from where they started,
+## as close as collisions and clip-capable tracks allow.
+func _drag_to(requested_tick_delta: int, requested_track_delta: int) -> void:
+	var track_delta := _clamp_track_delta(requested_track_delta)
+	var tick_delta := _clamp_instances_tick_delta(_drag_selected_instances, requested_tick_delta, track_delta, true)
+	if not _drag_placement_is_free(tick_delta, track_delta) and track_delta != _drag_current_track_delta:
+		# Clips already sit where the hovered track would put them; slide along the current one.
+		track_delta = _drag_current_track_delta
+		tick_delta = _clamp_instances_tick_delta(_drag_selected_instances, requested_tick_delta, track_delta, true)
+	if not _drag_placement_is_free(tick_delta, track_delta):
+		return
+	_apply_clip_drag(tick_delta, track_delta)
+
+
+## True when every dragged clip, offset from where it started, lands on empty space.
+func _drag_placement_is_free(tick_delta: int, track_delta: int) -> bool:
+	for inst in _drag_selected_instances:
+		var origin_index: int = _drag_initial_track_indices.get(inst, -1)
+		if not inst or origin_index < 0:
+			continue
+		var target_index := origin_index + track_delta
+		if target_index < 0 or target_index >= timeline_tracks.size():
+			return false
+		var target: Track = timeline_tracks[target_index].track
+		var start := maxi(0, int(_drag_initial_positions[inst]) + tick_delta)
+		if target.has_clip_overlap(start, inst.duration_ticks, _drag_selected_instances):
+			return false
+	return true
+
+
+func _apply_clip_drag(tick_delta: int, track_delta: int) -> void:
+	if tick_delta == _drag_current_tick_delta and track_delta == _drag_current_track_delta:
+		return
+	var changes_track := track_delta != _drag_current_track_delta
+	_drag_current_tick_delta = tick_delta
+	_drag_current_track_delta = track_delta
+	for inst in _drag_selected_instances:
+		var origin_index: int = _drag_initial_track_indices.get(inst, -1)
+		if not inst or origin_index < 0:
+			continue
+		var new_start := maxi(0, int(_drag_initial_positions[inst]) + tick_delta)
+		if inst.start_ticks != new_start:
+			inst.set_position(new_start)
+		var target: Track = timeline_tracks[origin_index + track_delta].track
+		if inst.track != target:
+			inst.track.remove_clip_instance(inst)
+			target.add_clip_instance(inst)
+	if changes_track:
+		# Removing an instance from its track drops it from the selection.
+		clip_selection_manager.select_instances(_drag_selected_instances)
+	_redraw_all_tracks()
 
 
 func _finish_drag() -> void:
@@ -922,16 +925,20 @@ func _finish_drag() -> void:
 			))
 	HistoryUtil.record_many("Move Clips", cmds)
 
+	_reset_drag_state()
+	clip_selection_manager.refresh_after_modification()
+	queue_redraw()
+
+
+func _reset_drag_state() -> void:
 	_drag_active = false
-	_drag_cross_track = false
 	_drag_anchor_instance = null
+	_drag_origin_clip_ui = null
 	_drag_initial_positions.clear()
 	_drag_initial_track_indices.clear()
 	_drag_selected_instances.clear()
 	_drag_current_tick_delta = 0
-	_drag_pending_track_delta = 0
-	clip_selection_manager.refresh_after_modification()
-	queue_redraw()
+	_drag_current_track_delta = 0
 
 
 func _clamp_track_delta(requested_delta: int) -> int:
@@ -1413,42 +1420,6 @@ func _refresh_tracks_for_instances(instances: Array[ClipInstance]) -> void:
 			track_ui.queue_redraw()
 
 
-func _on_clip_move_requested(clip_ui: TimelineClip, new_start_ticks: int) -> void:
-	if not clip_ui or not clip_ui.clip_instance:
-		return
-	_ensure_drag_initialized(clip_ui.clip_instance, false)
-	var original_start: int = _drag_initial_positions.get(clip_ui.clip_instance, clip_ui.clip_instance.start_ticks)
-	var delta = new_start_ticks - original_start
-	_apply_horizontal_drag(delta)
-
-
-func _on_clip_drag_started(clip_ui: TimelineClip, _instance: ClipInstance) -> void:
-	if not clip_ui or not clip_ui.clip_instance:
-		return
-	_ensure_drag_initialized(clip_ui.clip_instance, true)
-
-
-func _on_clip_drag_moved(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
-	if not clip_ui or not clip_ui.clip_instance:
-		return
-	_ensure_drag_initialized(clip_ui.clip_instance, true)
-	var anchor_index = _drag_initial_track_indices.get(clip_ui.clip_instance, _get_track_index_for_instance(clip_ui.clip_instance))
-	var target_index = _find_track_index_at_global_position(mouse_pos_global)
-	if anchor_index == -1 or target_index == -1:
-		return
-	_drag_pending_track_delta = target_index - anchor_index
-
-
-func _on_clip_drag_ended(clip_ui: TimelineClip, _global_position: Vector2) -> void:
-	if not clip_ui or not clip_ui.clip_instance:
-		_finish_drag()
-		return
-	if _drag_cross_track and _drag_pending_track_delta != 0:
-		_apply_vertical_drag(_drag_pending_track_delta)
-	_finish_drag()
-
-
-
 ## True when `local_pos` (Timeline space) hits a clip UI.
 func is_local_position_on_clip(local_pos: Vector2) -> bool:
 	for track in timeline_tracks:
@@ -1462,6 +1433,17 @@ func is_local_position_on_clip(local_pos: Vector2) -> bool:
 
 
 ## Bind the clip menu to the clicked instance (or current selection) and popup at the cursor.
+## Double-click on a MIDI clip: select only it and open it in the clip editor.
+func _on_clip_open_in_editor_requested(clip_ui: TimelineClip) -> void:
+	var instance := clip_ui.clip_instance if clip_ui else null
+	if not instance or not instance.clip or instance.clip.type != Clip.ClipType.MIDI:
+		return
+	if clip_selection_manager:
+		clip_selection_manager.select_only(instance)
+	if Sonara.editor:
+		Sonara.editor.show_clip_editor()
+
+
 func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Vector2) -> void:
 	if not clip_ui or not clip_ui.clip_instance or not is_instance_valid(clip_ctx_menu):
 		return

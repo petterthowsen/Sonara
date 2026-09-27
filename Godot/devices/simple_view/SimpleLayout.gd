@@ -1,7 +1,7 @@
 ## SimpleLayout.gd
 ## Saved description of a Simple View: grid size, pages, groups and controls.
 ## Pages are plain dictionaries in the on-disk JSON shape (see docs/specs/004-simple-view/design.md):
-## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group?, label?, unit?}]}`
+## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group?, label?, unit?, stages?}]}`
 ## with `rect` = `[col, row, w, h]` in cells.
 
 class_name SimpleLayout extends RefCounted
@@ -92,7 +92,7 @@ static func _page_from_dict(raw: Variant) -> Dictionary:
 				return {}
 			params.append(int(p))
 		var control := {"kind": str(c.get("kind", "")), "params": params, "rect": _int_array(c.rect)}
-		for key in ["group", "label", "unit"]:
+		for key in ["group", "label", "unit", "stages"]:
 			if c.has(key):
 				control[key] = str(c[key])
 		page.controls.append(control)
@@ -129,8 +129,8 @@ func validate() -> Array[String]:
 			var where := "page %d control %s at %s" % [page_index, control.params, control.rect]
 			if not SimpleControlKinds.is_valid(control.kind):
 				problems.append("%s: unknown kind '%s'" % [where, control.kind])
-			elif control.params.size() != SimpleControlKinds.param_count(control.kind):
-				problems.append("%s: %s needs %d params" % [where, control.kind, SimpleControlKinds.param_count(control.kind)])
+			elif control.params.size() != SimpleControlKinds.control_param_count(control):
+				problems.append("%s: %s needs %d params" % [where, control.kind, SimpleControlKinds.control_param_count(control)])
 			if rect.size.x < 1 or rect.size.y < 1 or rect.position.x < 0 or rect.position.y < 0 \
 					or rect.end.x > columns or rect.end.y > rows:
 				problems.append("%s: outside the %d×%d grid" % [where, columns, rows])

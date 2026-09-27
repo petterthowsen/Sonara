@@ -93,6 +93,7 @@ The full OSC address reference is in `OSC_PROTOCOL.md` (engine) and `PLUGIN_OSC_
 | Godot structure, clip/MIDI editor, GridHelper | `godot-architecture.md` |
 | OSC sync pattern, device data streams, clip loading | `godot-osc.md` |
 | Device views and parameter types | `godot-device-views.md` |
+| UI components: design principles, knobs, sliders, meters, tooltips | `godot-ui-components.md` |
 | Asset browser and providers | `godot-asset-system.md` |
 | Config system | `godot-config-system.md` |
 | Drag and drop | `godot-drag-and-drop.md` |

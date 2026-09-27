@@ -1,9 +1,9 @@
 # Code Style & Rules
 
-1. Files should never be more than 1000 lines.
+1. Files should ideally be less than 1000 lines.
 2. DRY: Extract common logic into utility functions
 3. Encapsulate behavior inside classes/structs, expose intent via methods, and keep collaborators explicit.
-4. KISS: Prefer simple boring solutions over clever tricks - especially hacky workarounds.
+4. KISS: Prefer simple boring solutions over clever tricks or workarounds.
 6. Fail fast and ensure transparency (logging etc).
 
 ## Gathering Documentation

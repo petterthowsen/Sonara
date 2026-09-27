@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3 uid="uid://5xix36ox2gu4"]
+[gd_scene format=3 uid="uid://5xix36ox2gu4"]
 
 [ext_resource type="Script" uid="uid://dsqohehuqnchw" path="res://arranger/timeline/clip/TimelineClip.gd" id="1_timeline_clip"]
 [ext_resource type="Script" uid="uid://crj36c8i65ql" path="res://arranger/timeline/clip/MidiclipRenderer.gd" id="2_c74fi"]
@@ -67,7 +67,7 @@ border_color = Color(0.3366075, 0.33660766, 0.33660755, 1)
 font_size = 14
 font_color = Color(0.86328125, 0.86328125, 0.86328125, 1)
 
-[node name="Clip" type="Control"]
+[node name="Clip" type="Control" unique_id=247024982]
 layout_mode = 3
 anchors_preset = 0
 offset_right = 214.0
@@ -79,7 +79,7 @@ style_normal = SubResource("StyleBoxFlat_hpdcv")
 style_hovered = SubResource("StyleBoxFlat_c74fi")
 style_selected = SubResource("StyleBoxFlat_ehbcd")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=285986600]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -88,20 +88,22 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 0
 
-[node name="Header" type="PanelContainer" parent="VBoxContainer"]
+[node name="Header" type="PanelContainer" parent="VBoxContainer" unique_id=1972394042]
 show_behind_parent = true
 layout_mode = 2
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")
 
-[node name="Label" type="Label" parent="VBoxContainer/Header"]
+[node name="Label" type="Label" parent="VBoxContainer/Header" unique_id=1258780357]
 layout_mode = 2
 text = "Clip Name"
 label_settings = SubResource("LabelSettings_c74fi")
 text_overrun_behavior = 3
 
-[node name="ClipRenderer" type="Control" parent="VBoxContainer"]
+[node name="ClipRenderer" type="Control" parent="VBoxContainer" unique_id=1859425417]
+texture_filter = 1
 layout_mode = 2
 size_flags_vertical = 3
 mouse_filter = 2
 script = ExtResource("2_c74fi")
+min_pitch_range = 6

@@ -111,7 +111,7 @@ func _ready():
 			label.tab_requested.connect(_on_label_tab_requested)
 		
 		# Buttons/label/meter sit on top of the header; Godot asks them about
-		# drops, so they must forward TrackDrag or a release over Mute cancels.
+		# drops, so they must forward track/device drags or a release over Mute cancels.
 		_forward_track_drops_from(self)
 
 	queue_redraw()
@@ -710,21 +710,20 @@ func _forward_track_drops_from(node: Node) -> void:
 		_forward_track_drops_from(child)
 
 
-## Track drags resolve from the pointer in TrackList (see TrackDropTarget).
-func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	if not data is TrackDrag or not track:
+## Track and device drags resolve from the pointer in TrackList (see TrackDropTarget,
+## TrackDeviceDropTarget).
+func _can_drop_data(at_position: Vector2, data: Variant) -> bool:
+	if not track:
 		return false
 	var track_list := _get_track_list()
-	return track_list != null and track_list.can_drop_track_drag(data as TrackDrag)
+	return track_list != null and track_list._can_drop_data(at_position, data)
 
 
-## Commit a track drag through TrackList.
-func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	if not data is TrackDrag:
-		return
+## Commit the drop through TrackList.
+func _drop_data(at_position: Vector2, data: Variant) -> void:
 	var track_list := _get_track_list()
 	if track_list:
-		track_list.drop_track_drag(data as TrackDrag)
+		track_list._drop_data(at_position, data)
 
 
 ## Create a compact ghost that follows the cursor; the headers stay put until the drop.

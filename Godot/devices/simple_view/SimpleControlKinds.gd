@@ -45,3 +45,11 @@ static func footprint(kind: String) -> Vector2i:
 ## Parameter count a control of `kind` expects (1 for single-parameter kinds).
 static func param_count(kind: String) -> int:
 	return PARAM_COUNT.get(kind, 1)
+
+
+## Parameter count a layout control expects. An envelope binds one parameter per letter of its
+## optional `stages` ("adsr" when absent), so it can be any subset of ADSR.
+static func control_param_count(control: Dictionary) -> int:
+	if control.get("kind", "") == ENVELOPE:
+		return String(control.get("stages", "adsr")).length()
+	return param_count(String(control.get("kind", "")))

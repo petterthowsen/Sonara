@@ -120,6 +120,7 @@ var _x := 0.0
 var _y := 0.0
 
 var _dragging := false
+var _fine_drag := FineDrag.new()
 
 signal x_changed(new_x: float)
 signal y_changed(new_y: float)
@@ -171,12 +172,12 @@ func _gui_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and not _dragging:
 				_dragging = true
-				_update_value_from_mouse(event.position)
+				_update_value_from_mouse(_fine_drag.begin(event.position))
 			elif event.is_released():
 				_dragging = false
 	elif event is InputEventMouseMotion:
 		if _dragging:
-			_update_value_from_mouse(event.position)
+			_update_value_from_mouse(_fine_drag.update(event.position, event.shift_pressed, Rect2(Vector2.ZERO, size)))
 
 
 func _update_value_from_mouse(mouse_pos: Vector2):

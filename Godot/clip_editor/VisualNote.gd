@@ -23,6 +23,13 @@ const RESIZE_HANDLE_WIDTH: float = 8.0
 ## still shrinks it to fit the grid step and the note's own length.
 const DRUM_MARKER_WIDTH: float = 12.0
 
+## A Ctrl+drag duplicate that isn't in any clip yet: drawn translucent, ignored by
+## hit-testing, selection and playback until the drag commits it.
+var is_pending: bool = false:
+	set(p):
+		is_pending = p
+		modulate.a = 0.6 if p else 1.0
+
 ## True while the note is drawn as a Drum View hit marker rather than a bar.
 ## The stored duration is untouched either way (REQ-022).
 var drum_mode: bool = false
@@ -128,8 +135,23 @@ func _update_visual() -> void:
 		label.text = note_name
 		Utils.apply_label_font_color(label, Utils.contrasting_text_color(display_color))
 
+## Label font size at full row height, and the smallest size still worth drawing.
+const LABEL_FONT_SIZE_MAX: int = 16
+const LABEL_FONT_SIZE_MIN: int = 7
+
+## Font size that fits a row of the given height, or 0 when the row is too short
+## for any readable label.
+static func label_font_size_for(row_height: float) -> int:
+	var fs := mini(LABEL_FONT_SIZE_MAX, int(row_height * 0.6))
+	return fs if fs >= LABEL_FONT_SIZE_MIN else 0
+
+
 func update_label_visibility(target_height: float) -> void:
-	"""Update label visibility based on target note height from MidiEditor."""
+	"""Show the label at a font size that fits the row, hiding it once too small.
+
+	Every note shares the scene's one LabelSettings resource, and every note in the
+	editor has the same row height, so writing its font size here resizes all labels
+	together through a single resource change instead of per-note theme overrides."""
 	if not label:
 		return
 
@@ -137,10 +159,10 @@ func update_label_visibility(target_height: float) -> void:
 		label.visible = false
 		return
 
-	if target_height < 26.0:
-		label.visible = false
-	else:
-		label.visible = true
+	var fs := label_font_size_for(target_height)
+	label.visible = fs > 0
+	if fs > 0 and label.label_settings and label.label_settings.font_size != fs:
+		label.label_settings.font_size = fs
 
 
 func _is_over_resize_handle(pos: Vector2) -> bool:

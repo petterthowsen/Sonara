@@ -162,10 +162,12 @@ func _ready():
 	if timeline_panel:
 		timeline_panel.gui_input.connect(_on_timeline_panel_gui_input)
 
-	if ruler:
-		ruler.enable_time_range_gestures = true
-		ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
-		ruler.box_select_started.connect(_on_ruler_box_select_started)
+	# Both ruler rows share BaseRuler's gestures: click-drag scrubs, Ctrl/Cmd sets a range.
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r:
+			r.enable_time_range_gestures = true
+			r.selection_start_requested.connect(_on_ruler_selection_start_requested)
+			r.box_select_started.connect(_on_ruler_box_select_started)
 
 	if marker_track:
 		marker_track.selection_start_requested.connect(_on_ruler_selection_start_requested)
@@ -173,12 +175,15 @@ func _ready():
 		marker_track.selection_manager = timeline.clip_selection_manager
 
 	_ensure_selection_bounds_overlay()
+	if timeline and timeline.clip_selection_manager:
+		timeline.clip_selection_manager.range_changed.connect(_sync_ruler_selection)
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
 	Sonara.editor.project_closed.connect(_on_project_closed)
 	Sonara.editor.playhead_moved.connect(_on_playhead_moved)
 	Sonara.editor.time_signature_changed.connect(_on_time_signature_changed)
+	Sonara.editor.tempo_changed.connect(_on_tempo_changed)
 	Sonara.editor.playback_started.connect(_on_editor_playback_started)
 	Sonara.editor.playback_stopped.connect(_on_editor_playback_stopped)
 	
@@ -394,6 +399,11 @@ func _on_time_signature_changed(numerator: int, denominator: int) -> void:
 	
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
+
+
+## Keep the shared GridHelper's tempo current so the real-time ruler redraws.
+func _on_tempo_changed(tempo: float) -> void:
+	grid_helper.tempo = tempo
 
 
 func _on_editor_playback_started():
@@ -669,8 +679,13 @@ func _on_time_ruler_toggled(_pressed: bool) -> void:
 	_apply_ruler_row_visibility()
 
 
-## Keep timeline header ruler rows in sync with the tracklist header toggles.
+## Keep timeline header ruler rows in sync with the tracklist header toggles,
+## and record the state on the project so it is saved with it.
 func _apply_ruler_row_visibility() -> void:
+	if current_project:
+		current_project.ruler_lanes["beats"] = beats_ruler_toggle.button_pressed
+		current_project.ruler_lanes["time"] = time_ruler_toggle.button_pressed
+		current_project.ruler_lanes["markers"] = markers_toggle.button_pressed
 	if ruler:
 		ruler.visible = beats_ruler_toggle.button_pressed
 	if real_ruler:
@@ -699,7 +714,14 @@ func _on_project_activated(project: Project) -> void:
 	grid_helper.ppq = project.ppq
 	grid_helper.time_numerator = project.time_numerator
 	grid_helper.time_denominator = project.time_denominator
+	grid_helper.tempo = project.tempo
 	
+	# Restore ruler lane visibility saved with the project
+	beats_ruler_toggle.set_pressed_no_signal(project.ruler_lanes.get("beats", true))
+	time_ruler_toggle.set_pressed_no_signal(project.ruler_lanes.get("time", true))
+	markers_toggle.set_pressed_no_signal(project.ruler_lanes.get("markers", true))
+	_apply_ruler_row_visibility()
+
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper
 	real_ruler.set_grid_helper(grid_helper)  # Use setter to connect signals
@@ -729,9 +751,10 @@ func _on_project_activated(project: Project) -> void:
 		_on_track_added(track)
 
 	# Connect ruler signals and initialize with current start position
-	if ruler:
-		ruler.start_position_requested.connect(_on_ruler_start_position_requested)
-		ruler.set_start_position(project.start_position_ticks)
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r:
+			r.start_position_requested.connect(_on_ruler_start_position_requested)
+			r.set_start_position(project.start_position_ticks)
 
 	logger.info("Project activated: ", project.project_name)
 
@@ -753,8 +776,9 @@ func _unbind_from_project() -> void:
 		if current_project.start_position_changed.is_connected(_on_start_position_changed):
 			current_project.start_position_changed.disconnect(_on_start_position_changed)
 
-	if ruler and ruler.start_position_requested.is_connected(_on_ruler_start_position_requested):
-		ruler.start_position_requested.disconnect(_on_ruler_start_position_requested)
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r and r.start_position_requested.is_connected(_on_ruler_start_position_requested):
+			r.start_position_requested.disconnect(_on_ruler_start_position_requested)
 
 	if marker_track:
 		marker_track.bind_project(null)
@@ -773,6 +797,16 @@ func _unbind_from_project() -> void:
 # ============================================================================
 # HELPERS
 # ============================================================================
+
+## Mirror the arranger time range onto both ruler rows as a band.
+func _sync_ruler_selection() -> void:
+	var m := timeline.clip_selection_manager
+	var start := m.range_start_tick if m.range_visible else -1
+	var end := m.range_end_tick if (m.range_visible and m.range_has_end) else -1
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r:
+			r.set_selection_range(start, end)
+
 
 ## Draw time-range boundaries on the timeline overlay so they sit with the playhead.
 func _ensure_selection_bounds_overlay() -> void:
@@ -873,8 +907,9 @@ func _sync_arrange_bottom_columns() -> void:
 
 func _on_start_position_changed(ticks: int) -> void:
 	"""Update ruler when start position changes."""
-	if ruler:
-		ruler.set_start_position(ticks)
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r:
+			r.set_start_position(ticks)
 
 
 ## Handle ruler click/drag: move start position and seek the playhead together.

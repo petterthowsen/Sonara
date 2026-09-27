@@ -60,6 +60,11 @@ var _drop_indicator: DropIndicator = null
 # ============================================================================
 enum LeftAddItem { INSTRUMENT_CHANNEL, GROUP_TRACK }
 
+## Mixer pane a device drop on empty space adds a channel to (see new_channel_side).
+const SIDE_NONE := -1
+const SIDE_TRACKS := 0
+const SIDE_BUSES := 1
+
 var selection : Array[Channel] = []
 var focused_channel : Channel = null
 
@@ -93,15 +98,11 @@ func _ready():
 	channel_ctx_menu.delete_requested.connect(_on_channel_delete_requested)
 	channel_ctx_menu.unnest_requested.connect(_on_channel_unnest_requested)
 	
-	# Enable drag and drop on left pane for devices, SFZ files, and un-nesting
-	left_pane.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	# Strip drags (un-nest, reorder) and devices dropped on empty space (new channel) on both panes.
 	var left_hbox := left_pane.get_node_or_null("HBox") as Control
-	if left_hbox:
-		left_hbox.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
-	left_channels.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
-	# Bus reorder drops on the right pane.
-	for node: Control in [right_pane, right_pane_hbox, right_channels]:
-		node.set_drag_forwarding(Callable(), _can_drop_strip, _drop_strip)
+	for node: Control in [left_pane, left_hbox, left_channels, right_pane, right_pane_hbox, right_channels]:
+		if node:
+			node.set_drag_forwarding(Callable(), _can_drop_data, _drop_data)
 
 # ============================================================================
 # EDITOR/PROJECT SIGNAL CALLBACKS
@@ -542,7 +543,7 @@ func _on_channel_request_context_menu(channel : Channel):
 
 
 # ============================================================================
-# DRAG AND DROP (LEFT PANE ONLY - for creating instrument channels)
+# DRAG AND DROP (strips, and devices dropped on empty space to create a channel)
 # ============================================================================
 
 ## True when a strip drag would nest, insert, un-nest, or reorder at the pointer.
@@ -587,17 +588,23 @@ func place_root_strip(ch: Channel, after: Channel) -> bool:
 # DROP INDICATOR
 # ============================================================================
 
-## Show where a strip drag lands; hidden whenever no strip drag is in progress.
+## Show where a strip drag lands, or where the strip for a new channel appears; hidden otherwise.
 func _process(_delta: float) -> void:
 	var data: Variant = DragDrop.current_drag(self)
-	if not data is MixerChannelDrag or current_project == null:
+	var mouse := get_global_mouse_position()
+	if current_project == null or data == null:
 		_hide_drop_indicator()
-		return
-	var target := MixerChannelDropTarget.resolve(self, data as MixerChannelDrag, get_global_mouse_position())
-	if not target.is_valid():
+	elif data is MixerChannelDrag:
+		var target := MixerChannelDropTarget.resolve(self, data as MixerChannelDrag, mouse)
+		if target.is_valid():
+			_drop_indicator = DropIndicator.place(self, _drop_indicator, target.indicator_rect, target.is_nest(), drop_indicator_color)
+		else:
+			_hide_drop_indicator()
+	elif can_drop_new_channel(data, mouse):
+		var rect := _new_channel_line_rect(new_channel_side(mouse) == SIDE_BUSES)
+		_drop_indicator = DropIndicator.place(self, _drop_indicator, rect, false, drop_indicator_color)
+	else:
 		_hide_drop_indicator()
-		return
-	_drop_indicator = DropIndicator.place(self, _drop_indicator, target.indicator_rect, target.is_nest(), drop_indicator_color)
 
 
 ## Unbind on free (not _exit_tree: DockHost reparents the mixer); drop the indicator on drag end.
@@ -612,71 +619,73 @@ func _hide_drop_indicator() -> void:
 	DropIndicator.hide_indicator(_drop_indicator)
 
 
-## Right pane: only strip drags (bus reorder), never assets.
-func _can_drop_strip(_at_position: Vector2, data: Variant) -> bool:
-	return data is MixerChannelDrag and can_drop_channel_drag(data as MixerChannelDrag)
+## Pane under `mouse` that a device drop would add a channel to: SIDE_TRACKS (left),
+## SIDE_BUSES (right), or SIDE_NONE over a strip (strips take device drops themselves) or elsewhere.
+func new_channel_side(mouse: Vector2) -> int:
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		if node is MixerChannel and is_ancestor_of(node) and DragDrop.is_point_visible(node as Control, mouse):
+			return SIDE_NONE
+	if DragDrop.is_point_visible(left_pane, mouse):
+		return SIDE_TRACKS
+	if DragDrop.is_point_visible(right_pane, mouse):
+		return SIDE_BUSES
+	return SIDE_NONE
 
 
-func _drop_strip(_at_position: Vector2, data: Variant) -> void:
-	if data is MixerChannelDrag:
-		drop_channel_drag(data as MixerChannelDrag)
+## True when `data` (a device drag, Device/SFZ asset, or an array of assets) dropped at `mouse`
+## creates a channel: instruments make instrument tracks and effects audio tracks on the left,
+## effects make buses on the right.
+func can_drop_new_channel(data: Variant, mouse: Vector2) -> bool:
+	var side := new_channel_side(mouse)
+	if current_project == null or side == SIDE_NONE:
+		return false
+	var items: Array = data if data is Array else [data]
+	if items.is_empty():
+		return false
+	for item in items:
+		if DeviceDropUtil.new_channel_kind(item, side == SIDE_BUSES).is_empty():
+			return false
+	return true
 
 
-func _get_drag_data(_at_position: Vector2) -> Variant:
-	"""Return drag data (not used for mixer)."""
-	return null
+## Create a channel per dropped item on the pane under `mouse`. Returns the channels created.
+func drop_new_channel(data: Variant, mouse: Vector2) -> Array[Channel]:
+	var created: Array[Channel] = []
+	if not can_drop_new_channel(data, mouse):
+		return created
+	var buses := new_channel_side(mouse) == SIDE_BUSES
+	for item in (data if data is Array else [data]):
+		var channel := DeviceDropUtil.create_channel_for(current_project, item, buses)
+		if channel:
+			created.append(channel)
+	if data is DeviceDrag and not created.is_empty():
+		(data as DeviceDrag).did_commit = true
+	return created
+
+
+## Vertical line after the last strip of the pane where a new channel's strip will appear.
+func _new_channel_line_rect(buses: bool) -> Rect2:
+	var box: Control = right_channels if buses else left_channels
+	var box_rect := box.get_global_rect()
+	var x := box_rect.position.x
+	for child in box.get_children():
+		if child is MixerChannel and child.visible and not child.is_queued_for_deletion():
+			x = maxf(x, (child as MixerChannel).get_global_rect().end.x)
+	var clip := DragDrop.visible_rect(right_pane if buses else left_pane)
+	var half := DropIndicator.LINE_WIDTH * 0.5
+	x = clampf(x, clip.position.x + half, clip.end.x - half)
+	return DropIndicator.line_rect(x, box_rect, true)
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	"""Accept a strip drag (un-nest / reorder), or device/SFZ assets that create channels."""
-	if not current_project:
-		return false
-
 	if data is MixerChannelDrag:
 		return can_drop_channel_drag(data as MixerChannelDrag)
-
-	# Check if data is a single asset
-	if data is Asset:
-		if data.type == Asset.TYPE.Device or data.type == Asset.TYPE.SFZ:
-			return true
-	
-	# Check if data is an array of assets
-	if data is Array:
-		for item in data:
-			if not item is Asset:
-				return false
-			if item.type != Asset.TYPE.Device and item.type != Asset.TYPE.SFZ:
-				return false
-		return data.size() > 0
-
-	return false
+	return can_drop_new_channel(data, get_global_mouse_position())
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	"""Handle dropping a nested strip (un-nest) or device/SFZ assets on the left pane."""
-	if not current_project:
-		return
-
 	if data is MixerChannelDrag:
 		drop_channel_drag(data as MixerChannelDrag)
 		return
-	
-	# Handle array of assets
-	if data is Array:
-		logger.info("Dropping %d assets" % data.size())
-		for asset in data:
-			if asset is Asset:
-				_handle_single_asset_drop(asset)
-		return
-	
-	# Handle single asset
-	if data is Asset:
-		_handle_single_asset_drop(data)
-
-
-## Instruments and SFZ files dropped on empty mixer space get their own instrument channel.
-func _handle_single_asset_drop(asset: Asset) -> void:
-	if DeviceDropUtil.creates_instrument_track(asset):
-		DeviceDropUtil.create_instrument_track_for_asset(current_project, asset)
-	elif asset.type == Asset.TYPE.Device:
-		push_warning("[Mixer] Cannot drop %s on empty area. Drop on an existing channel instead." % asset.get_display_name())
+	_hide_drop_indicator()
+	drop_new_channel(data, get_global_mouse_position())

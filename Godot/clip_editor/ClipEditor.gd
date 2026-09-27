@@ -16,7 +16,9 @@ signal track_mode_track_selected(track: Track)
 @onready var main_header_options: HBoxContainer = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions
 @onready var track_mode_toggle: Button = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions/TrackModeToggle
 
-@onready var ruler: Ruler = $HSplit/MainPanel/VBox/PanelContainer/VBox/Ruler
+## Same ruler rows and gestures as the arranger. Its ticks are the note editor's:
+## clip-content ticks in clip mode, song ticks in track mode (see _ruler_to_song_ticks).
+@onready var ruler: RulerStack = $HSplit/MainPanel/VBox/PanelContainer/VBox/Ruler
 
 @onready var midi_editor = $HSplit/MainPanel/VBox/MidiEditor
 
@@ -91,8 +93,11 @@ func _ready():
 	# Connect to visibility changes
 	visibility_changed.connect(_on_visibility_changed)
 	
-	# Connect to Ruler's click event to update cursor position
+	# Ruler: click-drag moves start position + playhead, Ctrl/Cmd sets a time range
 	ruler.start_position_requested.connect(_on_ruler_position_requested)
+	ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
+	ruler.box_select_started.connect(_on_ruler_box_select_started)
+	midi_editor.current_track_changed.connect(_mark_ruler_context_dirty)
 	
 	# Wire up Track/Clip mode toggle
 	if track_mode_toggle:
@@ -106,6 +111,10 @@ func _ready():
 	
 	_setup_note_map_toolbar()
 
+	_editor = Sonara.editor
+	if _editor:
+		_editor.playback_started.connect(func(): midi_editor.transport_playing = true)
+		_editor.playback_stopped.connect(func(): midi_editor.transport_playing = false)
 	if Sonara.editor:
 		Sonara.editor.clips_selected.connect(_on_editor_clips_selected)
 		Sonara.editor.time_signature_changed.connect(_on_editor_time_signature_changed)
@@ -258,6 +267,7 @@ func _bind_track_mode():
 		midi_editor.current_track = selected_tracks[0] if not selected_tracks.is_empty() else null
 	log.info("  - Active track set to: '%s'" % [midi_editor.current_track.name if midi_editor and midi_editor.current_track else "null"])
 	call_deferred("_apply_drum_view_preference")
+	_mark_ruler_context_dirty()
 
 
 func _bind_clip_mode():
@@ -274,6 +284,7 @@ func _bind_clip_mode():
 		midi_editor.bind_to_clip_instance(clip_inst)
 		bound_clip_instance = clip_inst
 	call_deferred("_apply_drum_view_preference")
+	_mark_ruler_context_dirty()
 
 
 # ============================================================================
@@ -504,12 +515,158 @@ func _on_grid_helper_changed():
 	pass
 
 
+# ============================================================================
+# RULER: coordinates, start position, time range and context regions
+# ============================================================================
+
+## Ruler/editor ticks -> song ticks. Track mode is already song-relative; clip mode is
+## clip-content ticks, placed where the bound instance plays them.
+func _ruler_to_song_ticks(ticks: int) -> int:
+	if track_mode or not bound_clip_instance:
+		return ticks
+	return bound_clip_instance.clip_to_song_ticks(ticks)
+
+
+func _song_to_ruler_ticks(ticks: int) -> int:
+	if track_mode or not bound_clip_instance:
+		return ticks
+	return bound_clip_instance.song_to_clip_ticks(ticks)
+
+
+## Ruler click/drag: same as the arranger's ruler (start position + playhead), plus the
+## editor's own paste cursor.
 func _on_ruler_position_requested(ticks: int):
-	"""Handle ruler clicks - set cursor position."""
-	# In track-mode, ticks are already song-relative
-	# In clip-mode, ticks are clip-local
 	cursor_position_ticks = ticks
-	log.info("Cursor position set to tick %d (%s)" % [ticks, "song-relative" if track_mode else "clip-local"])
+	_ruler_range_start = -1
+	var song_ticks := maxi(0, _ruler_to_song_ticks(ticks))
+	var project: Project = _editor.project if _editor else null
+	if project:
+		project.set_start_position(song_ticks)
+	if _editor:
+		_editor.set_playhead(song_ticks)
+
+
+## Ctrl/Cmd click: drop the note selection and mark a range start, which is also where
+## the next paste lands (like the arranger's range start).
+func _on_ruler_selection_start_requested(ticks: int) -> void:
+	var active = midi_editor.get_active_note_editor()
+	if active and active.selection_manager:
+		active.selection_manager.clear_selection()
+		active.selection_manager.selection_changed.emit(active.selection_manager.selected_notes)
+	cursor_position_ticks = ticks
+	_ruler_range_start = ticks
+	midi_editor._update_selection_overlays()
+
+
+## Ctrl/Cmd drag: a time-range box select spanning every pitch.
+func _on_ruler_box_select_started(content_x: float) -> void:
+	_ruler_range_start = -1
+	midi_editor.begin_time_range_selection(content_x)
+
+
+## Cached at _ready: Sonara.editor is looked up per frame here, and the getter errors
+## when there is no Editor (headless tests).
+var _editor: Editor = null
+
+## Range start set by a Ctrl/Cmd click, shown until a real range or a plain click replaces it.
+var _ruler_range_start := -1
+
+## Set when the clips or tracks the ruler regions come from changed.
+var _ruler_context_dirty := true
+## [signal, callable] pairs connected for region refreshes, so they can be undone.
+var _ruler_watch: Array = []
+
+
+func _process(_delta: float) -> void:
+	if not is_visible_in_tree():
+		return
+	# Line the ruler up with the note grid whatever sits to its left: the offset is the
+	# distance from the ruler's left edge to the note area's.
+	ruler.offset_x = midi_editor.note_area.global_position.x - ruler.global_position.x
+
+	var project: Project = _editor.project if _editor else null
+	var has_binding := track_mode or bound_clip_instance != null
+	ruler.set_start_position_visible(project != null and has_binding)
+	if project and has_binding:
+		ruler.set_start_position(_song_to_ruler_ticks(project.start_position_ticks))
+
+	_sync_ruler_selection()
+
+	if _ruler_context_dirty:
+		_ruler_context_dirty = false
+		_rebuild_ruler_regions()
+
+
+## Mirror the active note selection's range (or a pending range start) onto the ruler.
+func _sync_ruler_selection() -> void:
+	var active = midi_editor.get_active_note_editor()
+	var sm: NoteSelectionManager = active.selection_manager if active else null
+	if sm and sm.box_selection_end_tick > sm.box_selection_start_tick:
+		_ruler_range_start = -1
+		ruler.set_selection_range(sm.box_selection_start_tick, sm.box_selection_end_tick)
+	elif _ruler_range_start >= 0:
+		ruler.set_selection_range(_ruler_range_start, _ruler_range_start)
+	else:
+		ruler.set_selection_range(-1, -1)
+
+
+func _mark_ruler_context_dirty() -> void:
+	_ruler_context_dirty = true
+
+
+## Track-coloured spans behind the ruler: in clip mode the bound instance's played window
+## (with edges); in track mode every clip of the active track, over fainter clips of the
+## other tracks on screen. Gaps between clips stay plain.
+func _rebuild_ruler_regions() -> void:
+	_unwatch_ruler_context()
+	var regions: Array = []
+	if track_mode:
+		var active_track: Track = midi_editor.current_track
+		var others: Array = []
+		var mine: Array = []
+		for t in selected_tracks:
+			if not is_instance_valid(t):
+				continue
+			_watch_ruler(t.color_changed, _mark_ruler_context_dirty.unbind(1))
+			_watch_ruler(t.clip_instance_added, _mark_ruler_context_dirty.unbind(1))
+			_watch_ruler(t.clip_instance_removed, _mark_ruler_context_dirty.unbind(1))
+			var is_active := t == active_track
+			for ci in t.clip_instances:
+				if not ci:
+					continue
+				_watch_ruler(ci.instance_modified, _mark_ruler_context_dirty)
+				var c := Utils.display_color(t.color)
+				c.a = 0.38 if is_active else 0.12
+				var region := {"start": ci.start_ticks, "end": ci.get_end_ticks(), "color": c, "edges": is_active}
+				(mine if is_active else others).append(region)
+		regions = others + mine
+	elif bound_clip_instance and is_instance_valid(bound_clip_instance):
+		var ci := bound_clip_instance
+		_watch_ruler(ci.instance_modified, _mark_ruler_context_dirty)
+		var c := Utils.display_color(ci.track.color) if ci.track else Color(0.4, 0.6, 0.9)
+		if ci.track:
+			_watch_ruler(ci.track.color_changed, _mark_ruler_context_dirty.unbind(1))
+		c.a = 0.38
+		regions.append({"start": ci.clip_offset, "end": ci.clip_offset + ci.duration_ticks, "color": c, "edges": true})
+	ruler.set_regions(regions)
+
+
+func _watch_ruler(sig: Signal, cb: Callable) -> void:
+	sig.connect(cb)
+	_ruler_watch.append([sig, cb])
+
+
+func _unwatch_ruler_context() -> void:
+	for pair in _ruler_watch:
+		var sig: Signal = pair[0]
+		if is_instance_valid(sig.get_object()) and sig.is_connected(pair[1]):
+			sig.disconnect(pair[1])
+	_ruler_watch.clear()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unwatch_ruler_context()
 
 
 func _on_editor_playhead_moved(global_playhead_ticks: int):
@@ -519,10 +676,9 @@ func _on_editor_playhead_moved(global_playhead_ticks: int):
 	if track_mode:
 		# TRACK-MODE: Use song-relative ticks (global position)
 		playhead_ticks = global_playhead_ticks
-	else:
-		# CLIP-MODE: Convert to clip-local ticks (relative to clip instance start)
-		if bound_clip_instance:
-			playhead_ticks = global_playhead_ticks - bound_clip_instance.start_ticks
+	elif bound_clip_instance:
+		# CLIP-MODE: clip-content ticks, where the bound instance plays that moment
+		playhead_ticks = bound_clip_instance.song_to_clip_ticks(global_playhead_ticks)
 	
 	# Pass to MidiEditor
 	if midi_editor:

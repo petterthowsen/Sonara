@@ -111,7 +111,7 @@ func is_noop(data: Variant, position: int = -1) -> bool:
 	var inst := data as DeviceInstance
 	if parent == null and PadLane.is_pad_lane(channel):
 		return not PadLane.can_drop(channel, inst, position)
-	if inst.get_parent_device() != parent:
+	if inst.get_channel() != channel or inst.get_parent_device() != parent:
 		return false
 	var count := parent.children.size() if parent else channel.devices.size()
 	var at := count if position < 0 or position > count else position

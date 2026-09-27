@@ -38,6 +38,7 @@ var current_track: Track = null:  # Active track in track-mode
 		if current_track != value:
 			current_track = value
 			_update_note_editor_states()
+			current_track_changed.emit()
 			# Labels and colours come from the focused track's map (REQ-024).
 			if is_inside_tree():
 				call_deferred("refresh_note_map")
@@ -148,6 +149,9 @@ var _rows_dirty := false
 ## Set while a rebuild is already queued for the end of this frame, so a clip
 ## edit touching many notes still costs one rebuild.
 var _rebuild_queued := false
+
+## The focused track (track mode) changed.
+signal current_track_changed
 
 ## Emitted whenever the row set or the effective map changed, so ClipEditor can
 ## refresh the toolbar and the empty-view hint.
@@ -263,23 +267,27 @@ func _process(delta: float):
 		# Lerp horizontal scroll
 		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
 		h_scroll.scroll_horizontal = int(new_h_scroll)
-		grid_helper.scroll_position = new_h_scroll
+		# The notes scroll by whole pixels, so grid and ruler must use the same value
+		# or they drift up to a pixel apart from the notes mid-scroll.
+		grid_helper.scroll_position = h_scroll.scroll_horizontal
 
 	else:
 		# Instant scrolling when smoothing is disabled
 		scroll_vertical = int(target_scroll_vertical)
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-		grid_helper.scroll_position = target_scroll_horizontal
+		grid_helper.scroll_position = h_scroll.scroll_horizontal
 
 
 	# Update playhead position based on scroll/zoom
 	_update_playhead_position()
 	_update_hovered_key()
+	_update_active_keys()
 
 
 func unbind():
 	"""Unbind all clip instances and clear note editors."""
 	_stop_preview_note()
+	_stop_chord_preview()
 	clip = null
 	clip_instance = null
 	track_mode = false
@@ -320,7 +328,7 @@ func bind_to_clip_instance(ci : ClipInstance):
 		note_editor.position_offset_ticks = 0
 	
 	call_deferred("refresh_note_map")
-	call_deferred("scroll_to_note")
+	call_deferred("frame_clip_instance")
 
 
 func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
@@ -415,6 +423,27 @@ func scroll_to_note(note: int = -1):
 	target_scroll_vertical = max(0, y - (size.y * 0.5))
 
 
+## Clip-mode: scroll to the start of the instance's visible content and centre vertically on
+## the median pitch of the notes it plays (C3 if none).
+func frame_clip_instance() -> void:
+	if track_mode or not clip_instance or not grid_helper:
+		return
+	var range_start := clip_instance.clip_offset
+	var range_end := range_start + clip_instance.duration_ticks
+	var pitches: Array[int] = []
+	if clip:
+		for n in clip.midi_notes:
+			if n.start_tick < range_end and n.start_tick + n.duration_ticks > range_start:
+				pitches.append(n.note)
+	var note := 60
+	if not pitches.is_empty():
+		pitches.sort()
+		@warning_ignore("integer_division")
+		note = pitches[pitches.size() / 2]
+	scroll_to_note(note)
+	target_scroll_horizontal = max(0.0, grid_helper.ticks_to_pixels(range_start))
+
+
 func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	"""Set horizontal zoom level while maintaining the visual position under the mouse cursor."""
 	if not grid_helper:
@@ -506,6 +535,7 @@ func _unhandled_input(event: InputEvent):
 
 		# Always catch right mouse release to exit erase mode (safety handler)
 		if mevent.button_index == MOUSE_BUTTON_RIGHT and mevent.is_released():
+			_stop_chord_preview()
 			var active_editor = get_active_note_editor()
 			if active_editor and (active_editor.erasing_mode or active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING):
 				logger.info("Right mouse released - forcing erase mode exit (safety handler)")
@@ -650,10 +680,24 @@ func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 
 	# Right mouse button - erase mode
 	elif mevent.button_index == MOUSE_BUTTON_RIGHT:
-		if mevent.is_pressed():
+		if mevent.is_pressed() and mevent.alt_pressed:
+			# Alt+right-click: hear everything at this moment, for as long as it's held.
+			_start_chord_preview(active_editor.pixels_to_ticks(note_editor_pos.x))
+			accept_event()
+		elif mevent.is_pressed():
 			_handle_right_mouse_press(note_editor_pos, mevent)
 		elif mevent.is_released():
-			_handle_right_mouse_release()
+			if _chord_preview_notes.is_empty():
+				_handle_right_mouse_release()
+			else:
+				_stop_chord_preview()
+				accept_event()
+
+
+## Note under a Ctrl+press, until the mouse either moves (duplicate) or is released
+## (toggle selection).
+var _ctrl_press_note: VisualNote = null
+var _ctrl_press_pos: Vector2 = Vector2.ZERO
 
 
 func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
@@ -669,7 +713,9 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 		if not mevent.ctrl_pressed:
 			_audition_visual_note(clicked_note)
 		if mevent.ctrl_pressed:
-			active_editor.selection_manager.toggle_note_selection(clicked_note)
+			# Ctrl+click toggles selection on release; Ctrl+drag duplicates instead.
+			_ctrl_press_note = clicked_note
+			_ctrl_press_pos = mevent.global_position
 			accept_event()
 		elif clicked_note._is_over_resize_handle(clicked_note.get_local_mouse_position()):
 			active_editor._on_resize_started(clicked_note, note_editor_pos)
@@ -700,7 +746,20 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 	if not active_editor:
 		return
 
-	if active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
+	if _ctrl_press_note:
+		# Ctrl+click without a drag: plain selection toggle.
+		if is_instance_valid(_ctrl_press_note):
+			active_editor.selection_manager.toggle_note_selection(_ctrl_press_note)
+		_ctrl_press_note = null
+		accept_event()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.DUPLICATING:
+		_stop_preview_note()
+		active_editor.finish_duplicate_drag()
+		on_interaction_finished()
+		accept_event()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
 		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
 		active_editor.selection_manager.end_box_selection(notes_in_box)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
@@ -789,8 +848,28 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 			_update_selection_overlays()
 			return
 
+	# Ctrl held on a note and dragged past the threshold: start duplicating.
+	if _ctrl_press_note:
+		if not is_instance_valid(_ctrl_press_note):
+			_ctrl_press_note = null
+		elif get_global_mouse_position().distance_to(_ctrl_press_pos) >= active_editor.DRAG_THRESHOLD:
+			var grabbed := _ctrl_press_note
+			_ctrl_press_note = null
+			var start_pos: Vector2 = active_editor.make_canvas_position_local(_ctrl_press_pos)
+			if active_editor.start_duplicate_drag(grabbed, start_pos):
+				_audition_visual_note(active_editor.dup_anchor)
+				active_editor.update_duplicate_drag(note_editor_pos)
+			accept_event()
+			_update_selection_overlays()
+			return
+
 	# Handle active interactions
-	if active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
+	if active_editor.interaction_mode == NoteEditor.InteractionMode.DUPLICATING:
+		active_editor.update_duplicate_drag(note_editor_pos)
+		_retrigger_audition_on_pitch_change(active_editor.dup_anchor)
+		accept_event()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.BOX_SELECTING:
 		active_editor.selection_manager.update_box_selection(note_editor_pos)
 		var notes_in_box = active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect)
 		active_editor.selection_manager._set_selected_notes(notes_in_box)
@@ -816,6 +895,54 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 			active_editor.erase_note(note_to_erase)
 			accept_event()
 			_update_selection_overlays()
+
+
+# ============================================================================
+# TIME-RANGE SELECTION FROM THE RULER (Ctrl/Cmd drag)
+# ============================================================================
+
+## True while a Ctrl/Cmd drag that started on the ruler is box-selecting. The ruler
+## keeps the mouse, so motion and release are followed in _input.
+var _ruler_box_selecting := false
+
+
+## Start a box select at note-editor content X that spans every row, so it picks
+## notes purely by time.
+func begin_time_range_selection(content_x: float) -> void:
+	var active_editor := get_active_note_editor()
+	if not active_editor:
+		return
+	active_editor.selection_manager.start_box_selection(Vector2(content_x, 0.0))
+	active_editor.interaction_mode = NoteEditor.InteractionMode.BOX_SELECTING
+	_ruler_box_selecting = true
+	_update_ruler_box_selection()
+
+
+func _update_ruler_box_selection() -> void:
+	var active_editor := get_active_note_editor()
+	if not active_editor:
+		return
+	var x := active_editor.get_local_mouse_position().x
+	active_editor.selection_manager.update_box_selection(Vector2(x, lane_layout.total_height()))
+	active_editor.selection_manager._set_selected_notes(active_editor.get_notes_in_box(active_editor.selection_manager.box_selection_rect))
+	_update_selection_overlays()
+
+
+func _input(event: InputEvent) -> void:
+	if not _ruler_box_selecting:
+		return
+	if event is InputEventMouseMotion:
+		_update_ruler_box_selection()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_ruler_box_selecting = false
+		var active_editor := get_active_note_editor()
+		if active_editor:
+			var sm := active_editor.selection_manager
+			sm.end_box_selection(active_editor.get_notes_in_box(sm.box_selection_rect))
+			active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
+			on_interaction_finished()
+			_update_selection_overlays()
+			get_viewport().set_input_as_handled()
 
 
 # ============================================================================
@@ -880,14 +1007,15 @@ func _update_playhead_position() -> void:
 		playhead.visible = false
 		return
 
-	playhead.visible = true
-
 	# Convert ticks to pixels in content space
 	var playhead_x_content = grid_helper.ticks_to_pixels(playhead_ticks)
 
 	# Position relative to note_area, accounting for h_scroll offset
-	playhead.position.x = playhead_x_content - h_scroll.scroll_horizontal + h_scroll.position.x
-	playhead.position.x -= 3 # offset to center the playhead on the pixel, it's 3px wide.
+	var x: float = playhead_x_content - h_scroll.scroll_horizontal + h_scroll.position.x
+	playhead.position.x = x - 3 # offset to center the playhead on the pixel, it's 3px wide.
+	# It draws above the notes (z_index), so it must also stay off the piano keys when
+	# scrolled out of the note area.
+	playhead.visible = x >= 0.0 and x <= note_area.size.x
 
 
 func _update_note_editor_states() -> void:
@@ -957,6 +1085,7 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 func _on_visibility_changed() -> void:
 	if not is_visible_in_tree():
 		_stop_preview_note()
+		_stop_chord_preview()
 		v_piano.hovered_note = -1
 		drum_row_header.hovered_note = -1
 
@@ -1002,6 +1131,7 @@ func refresh_note_map() -> void:
 	if channel != _watched_channel:
 		_watched_channel = channel
 		_note_map_watcher.bind(channel)
+	_bind_live_channel(channel)
 	note_map = NoteMapResolver.effective_map(channel)
 	v_piano.note_map = note_map
 	note_lanes.note_map = note_map
@@ -1163,6 +1293,83 @@ func _stop_preview_note() -> void:
 	MidiManager.send_note_to_channel(_preview_channel_id, _preview_note, 0, false)
 	_preview_note = -1
 	_preview_channel_id = -1
+
+
+# ============================================================================
+# CHORD PREVIEW (Alt + right mouse button)
+# ============================================================================
+
+## Pitches currently sounding from an Alt+right-click, with the channel they went to.
+var _chord_preview_notes: Array[int] = []
+var _chord_preview_channel_id := -1
+
+
+## Play every note of the active editor that sounds at `tick`, until released.
+func _start_chord_preview(tick: int) -> void:
+	_stop_chord_preview()
+	var active_editor := get_active_note_editor()
+	var channel_id := _get_preview_channel_id()
+	if not active_editor or channel_id < 0:
+		return
+	# Trimmed-away content still previews: the click is about what is drawn there.
+	var chord := active_editor.pitches_sounding_at(tick, false)
+	_chord_preview_channel_id = channel_id
+	for pitch in chord:
+		_chord_preview_notes.append(pitch)
+		MidiManager.send_note_to_channel(channel_id, pitch, chord[pitch], true)
+
+
+func _stop_chord_preview() -> void:
+	for pitch in _chord_preview_notes:
+		MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, 0, false)
+	_chord_preview_notes.clear()
+	_chord_preview_channel_id = -1
+
+
+# ============================================================================
+# HELD KEYS: live MIDI on the active channel, and notes under the playhead
+# ============================================================================
+
+## Set by ClipEditor from the editor's playback signals; while true, the notes under
+## the playhead show as held keys.
+var transport_playing := false
+
+## Pitch -> true for notes held live on the active channel (MIDI input, virtual
+## keyboard, previews), from Channel.live_note.
+var _live_notes: Dictionary = {}
+var _live_channel: Channel = null
+
+
+## Follow live notes on the channel now in focus.
+func _bind_live_channel(channel: Channel) -> void:
+	if channel == _live_channel:
+		return
+	if _live_channel and is_instance_valid(_live_channel) and _live_channel.live_note.is_connected(_on_live_note):
+		_live_channel.live_note.disconnect(_on_live_note)
+	_live_channel = channel
+	_live_notes.clear()
+	if _live_channel:
+		_live_channel.live_note.connect(_on_live_note)
+
+
+func _on_live_note(pitch: int, _velocity: int, is_on: bool) -> void:
+	if is_on:
+		_live_notes[pitch] = true
+	else:
+		_live_notes.erase(pitch)
+
+
+## Show held keys on the header: live notes, plus whatever the active editor has under
+## the playhead while the transport runs.
+func _update_active_keys() -> void:
+	var held := _live_notes
+	if transport_playing and playhead_ticks >= 0:
+		var active_editor := get_active_note_editor()
+		if active_editor:
+			held = active_editor.pitches_sounding_at(playhead_ticks)
+			held.merge(_live_notes)
+	var header = drum_row_header if drum_view else v_piano
+	header.set_active_notes(held)
 
 
 func _on_piano_key_pressed(note: int, velocity: int) -> void:

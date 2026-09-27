@@ -21,6 +21,8 @@ var control_data: Dictionary = {}
 var _param_ids: Array[int] = []
 var _inner: Control = null
 var _envelope: Envelope = null
+## Full title on hover when it's trimmed; created on the first bind.
+var _title_overlay: LabelOverlay = null
 ## True while pushing device values into the inner control(s), so their signals don't loop back.
 var _updating := false
 
@@ -37,7 +39,8 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	clip_contents = true
 	_body.custom_minimum_size = Vector2.ZERO
 	_title.text = _title_text()
-	_title.tooltip_text = _title.text
+	if _title_overlay == null:
+		_title_overlay = LabelOverlay.attach(_title)
 	_title.clip_text = false
 	_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_title.custom_minimum_size.x = 0.0
@@ -136,6 +139,9 @@ func _build_inner() -> void:
 		_inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_body.add_child(_inner)
 		_inner.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		# Single-parameter controls reveal their full title while hovered, like the title itself.
+		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER]:
+			_title_overlay.add_hover_source(_inner)
 
 
 func _build_knob() -> RotaryKnob:
@@ -144,6 +150,8 @@ func _build_knob() -> RotaryKnob:
 	knob.max_value = 1.0
 	knob.value_default = _param(0).value_to_normalized(_param(0).default_value) if _param(0) else 0.5
 	knob.value_text_callback = _format_value
+	# the title sits above, so keep the value readout from covering it
+	knob.tooltip_side = RotaryKnob.TooltipSide.BELOW
 	knob.value_changed.connect(func(v): _commit(0, v))
 	return knob
 
@@ -227,28 +235,49 @@ func _build_xy() -> XYSlider:
 	return xy
 
 
-## Attack/decay/sustain/release, real seconds on the resource, ranges from the parameters.
+## Any subset of attack/decay/sustain/release (`stages`, default "adsr"). Times are real seconds
+## with the parameters' ranges; sustain is the parameter's normalized value (plugins use 0–1,
+## percent or dB), shown as a 0–1 level.
 func _build_envelope() -> EnvelopeControl:
 	var control := EnvelopeControl.new()
 	_envelope = Envelope.new()
-	var attack := _param(0)
-	var decay := _param(1)
-	var release := _param(3)
-	if attack:
-		_envelope.min_attack = maxf(0.001, attack.min_value)
-		_envelope.max_attack = maxf(_envelope.min_attack + 0.001, attack.max_value)
-	if decay:
-		_envelope.min_decay = maxf(0.001, decay.min_value)
-		_envelope.max_decay = maxf(_envelope.min_decay + 0.001, decay.max_value)
-	if release:
-		_envelope.min_release = maxf(0.001, release.min_value)
-		_envelope.max_release = maxf(_envelope.min_release + 0.001, release.max_value)
+	_envelope.stages = _envelope_stages()
+	for stage in 4:
+		var param := _envelope_param(stage)
+		if param == null or stage == Envelope.Stage.SUSTAIN:
+			continue
+		var lo := maxf(0.0, param.min_value)
+		_envelope.set_stage_range(stage, lo, maxf(lo + 0.001, param.max_value))
 	control.envelope = _envelope
-	_envelope.attack_changed.connect(func(v): _commit_real(0, v))
-	_envelope.decay_changed.connect(func(v): _commit_real(1, v))
-	_envelope.sustain_changed.connect(func(v): _commit_real(2, v))
-	_envelope.release_changed.connect(func(v): _commit_real(3, v))
+	_envelope.attack_changed.connect(_commit_envelope.bind(Envelope.Stage.ATTACK))
+	_envelope.decay_changed.connect(_commit_envelope.bind(Envelope.Stage.DECAY))
+	_envelope.sustain_changed.connect(_commit_envelope.bind(Envelope.Stage.SUSTAIN))
+	_envelope.release_changed.connect(_commit_envelope.bind(Envelope.Stage.RELEASE))
 	return control
+
+
+func _envelope_stages() -> String:
+	return String(control_data.get("stages", "adsr"))
+
+
+## Index into the bound params for an envelope stage, or -1 when the envelope lacks it.
+func _envelope_index(stage: int) -> int:
+	return _envelope_stages().find(Envelope.STAGE_LETTERS[stage])
+
+
+func _envelope_param(stage: int) -> DeviceParameter:
+	var index := _envelope_index(stage)
+	return _param(index) if index >= 0 else null
+
+
+func _commit_envelope(value: float, stage: int) -> void:
+	var index := _envelope_index(stage)
+	if index < 0:
+		return
+	if stage == Envelope.Stage.SUSTAIN:
+		_commit(index, value)
+	else:
+		_commit_real(index, value)
 
 
 ## Three small knobs (freq, gain, q) in a row. `EQ_BAND`'s 2×1 footprint is too tight for the
@@ -298,12 +327,17 @@ func _refresh_choice(node: Control) -> void:
 func _refresh_envelope() -> void:
 	if _envelope == null:
 		return
-	_envelope.set_adsr(
-		_param(0).normalized_to_value(_normalized(0)) if _param(0) else _envelope.attack,
-		_param(1).normalized_to_value(_normalized(1)) if _param(1) else _envelope.decay,
-		_param(2).normalized_to_value(_normalized(2)) if _param(2) else _envelope.sustain,
-		_param(3).normalized_to_value(_normalized(3)) if _param(3) else _envelope.release
-	)
+	var values: Array[float] = []
+	for stage in 4:
+		var index := _envelope_index(stage)
+		var param := _param(index) if index >= 0 else null
+		if param == null:
+			values.append(_envelope.get_stage_value(stage))
+		elif stage == Envelope.Stage.SUSTAIN:
+			values.append(_normalized(index))
+		else:
+			values.append(param.normalized_to_value(_normalized(index)))
+	_envelope.set_adsr(values[0], values[1], values[2], values[3])
 
 
 func _refresh_eq_band() -> void:

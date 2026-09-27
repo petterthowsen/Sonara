@@ -10,8 +10,8 @@ var _value := 0.0  # Internal backing field
 var _mouse_hovered := false
 var _last_click_time := 0.0
 var _double_click_threshold := 0.4  # 400ms
-var _last_drag_mouse_pos := Vector2.ZERO
-@export var fine_drag_scale := 0.15
+@export var fine_drag_scale := FineDrag.DEFAULT_SCALE
+var _fine_drag := FineDrag.new()
 
 @export var min_value := -60.0:
 	set(mv):
@@ -116,18 +116,14 @@ func _gui_input(event: InputEvent):
 				else:
 					# Single click - start dragging
 					_dragging = true
-					_last_drag_mouse_pos = event.position
-					_update_value_from_mouse(event.position)
+					_update_value_from_mouse(_fine_drag.begin(event.position))
 				_last_click_time = current_time
 			else:
 				_dragging = false
 	elif event is InputEventMouseMotion:
 		if _dragging:
-			if event.shift_pressed:
-				_update_value_from_mouse_relative(event.position)
-			else:
-				_update_value_from_mouse(event.position)
-			_last_drag_mouse_pos = event.position
+			_fine_drag.scale = fine_drag_scale
+			_update_value_from_mouse(_fine_drag.update(event.position, event.shift_pressed, Rect2(Vector2.ZERO, size)))
 
 
 func _update_value_from_mouse(mouse_pos: Vector2):
@@ -137,17 +133,6 @@ func _update_value_from_mouse(mouse_pos: Vector2):
 	var normalized: float = clamp(1.0 - (mouse_pos.y / rect.size.y), 0.0, 1.0)
 
 	# Map from [0, 1] to [min_value, max_value]
-	value = remap(normalized, 0, 1, min_value, max_value)
-
-
-## Fine adjustment: scale the mouse movement instead of jumping to its position.
-func _update_value_from_mouse_relative(mouse_pos: Vector2):
-	var rect := get_rect()
-
-	var delta_normalized: float = -(mouse_pos.y - _last_drag_mouse_pos.y) / rect.size.y * fine_drag_scale
-	var current_normalized: float = (value - min_value) / (max_value - min_value)
-	var normalized: float = clamp(current_normalized + delta_normalized, 0.0, 1.0)
-
 	value = remap(normalized, 0, 1, min_value, max_value)
 
 

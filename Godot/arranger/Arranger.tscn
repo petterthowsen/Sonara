@@ -117,14 +117,14 @@ size_flags_horizontal = 8
 
 [node name="BeatsToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons" unique_id=1717755110]
 layout_mode = 2
-tooltip_text = "Marker Track"
+tooltip_text = "Bar/Beat Ruler"
 toggle_mode = true
 button_pressed = true
 icon = ExtResource("2_rl012")
 
 [node name="TimeToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons" unique_id=1643856450]
 layout_mode = 2
-tooltip_text = "Marker Track"
+tooltip_text = "Time Ruler"
 toggle_mode = true
 button_pressed = true
 icon = ExtResource("3_8wvub")

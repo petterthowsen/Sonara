@@ -71,7 +71,9 @@ leave it out of the generated layout.
 The Simple View generator shall combine parameters into a compound control when their names
 share a stem and together match a known pattern: `x`/`y` → XY pad; attack/decay/sustain/release
 → envelope; freq/gain/q → EQ band. IF only some parts of a pattern are found, THEN it shall use
-single controls for them instead.
+single controls for them instead. Exception: two or more envelope parts form an envelope over
+that subset (e.g. ADS, ASR, AD), except attack + release alone, which is usually a compressor
+or gate.
 
 - **Acceptance:** Headless test: `position_x` + `position_y` → one XY pad; `band1_freq` +
   `band1_gain` + `band1_q` → one EQ band; `pan_x` alone → one knob.

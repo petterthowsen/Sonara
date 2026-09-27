@@ -119,6 +119,9 @@ func _ensure_projects_dir() -> void:
 
 ## Save the current configuration to disk (mode 0600, set before writing)
 func save_config():
+	# Test mode never loads the real config, so saving would clobber it with test state.
+	if Utils.is_test_mode():
+		return
 	var config_path = get_config_path()
 	var file = FileAccess.open(config_path, FileAccess.WRITE)
 	if file:

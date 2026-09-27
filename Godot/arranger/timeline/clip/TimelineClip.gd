@@ -7,11 +7,9 @@ static var logger := Log.make("TimelineClip")
 # Signals
 signal select_requested(clip_ui: TimelineClip, add_to_selection: bool)  # Request to select this clip; add_to_selection = shift held
 signal exclusive_click_requested(clip_ui: TimelineClip)  # Plain click finished without a drag
-signal clip_move_requested(clip_instance: TimelineClip, new_start_ticks: int)
-signal drag_started(clip_ui: TimelineClip, clip_instance: ClipInstance)  # Drag between tracks initiated
-signal drag_moved(clip_ui: TimelineClip, global_position: Vector2)  # Drag position update
-signal drag_ended(clip_ui: TimelineClip, global_position: Vector2)  # Drag ended
+signal drag_begin_requested(clip_ui: TimelineClip, press_global_position: Vector2)  # Move drag passed the threshold; Timeline takes over
 signal context_menu_requested(clip_ui: TimelineClip, global_position: Vector2)
+signal open_in_editor_requested(clip_ui: TimelineClip)  # Double-click on the clip body
 
 @onready var header: PanelContainer = $VBoxContainer/Header
 @onready var label: Label = $VBoxContainer/Header/Label
@@ -41,10 +39,8 @@ var is_hovered: bool = false
 var is_dragging: bool = false
 var _press_was_additive: bool = false
 var drag_start_pos: Vector2 = Vector2.ZERO
-var drag_start_ticks: int = 0
 var drag_threshold: float = 10.0  # pixels before drag activates
-var drag_activated: bool = false  # true when threshold crossed
-var is_cross_track_drag: bool = false  # true if dragging vertically between tracks
+var _drag_handed_off: bool = false  # Timeline runs the move; this node only swallows the release
 
 # Resize state
 var is_resizing: bool = false
@@ -103,6 +99,8 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 	"""
 	if clip_instance and clip_instance.clip_changed.is_connected(_on_instance_clip_changed):
 		clip_instance.clip_changed.disconnect(_on_instance_clip_changed)
+	if clip_instance and clip_instance.instance_modified.is_connected(_on_instance_modified):
+		clip_instance.instance_modified.disconnect(_on_instance_modified)
 	_unbind_source_clip()
 
 	clip_instance = inst
@@ -111,6 +109,8 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 
 	if clip_instance and not clip_instance.clip_changed.is_connected(_on_instance_clip_changed):
 		clip_instance.clip_changed.connect(_on_instance_clip_changed)
+	if clip_instance and not clip_instance.instance_modified.is_connected(_on_instance_modified):
+		clip_instance.instance_modified.connect(_on_instance_modified)
 	_bind_source_clip(clip_instance.clip if clip_instance else null)
 
 	# Update UI from clip instance data
@@ -123,6 +123,17 @@ func _on_instance_clip_changed(new_clip: Clip) -> void:
 	_bind_source_clip(new_clip)
 	if is_inside_tree():
 		_update_from_clip_instance()
+
+
+## Follow model changes that bypass this view (undo/redo, other views) to the new position and width.
+func _on_instance_modified() -> void:
+	if clip_instance == null or timeline == null:
+		return
+	var width = timeline.ticks_to_pixels(clip_instance.duration_ticks)
+	position.x = timeline.ticks_to_pixels(clip_instance.start_ticks)
+	custom_minimum_size.x = width
+	size.x = width
+	queue_redraw()
 
 
 ## Listen to the current source clip for rename and content updates.
@@ -339,6 +350,10 @@ func _gui_input(event: InputEvent) -> void:
 						resize_start_duration = clip_instance.duration_ticks
 						resize_start_offset = clip_instance.clip_offset
 					accept_event()
+				elif event.double_click and not (event.ctrl_pressed or event.meta_pressed or event.shift_pressed):
+					# The first click already selected this clip; open it instead of starting a drag.
+					open_in_editor_requested.emit(self)
+					accept_event()
 				else:
 					grab_focus()
 					# Ctrl/Cmd: toggle immediately; a drag starts a box-select instead of moving the clip.
@@ -353,11 +368,8 @@ func _gui_input(event: InputEvent) -> void:
 					select_requested.emit(self, additive)
 					# Prepare for drag (don't start yet - wait for threshold)
 					is_dragging = true
-					drag_activated = false
-					is_cross_track_drag = false
+					_drag_handed_off = false
 					drag_start_pos = get_global_mouse_position()
-					if clip_instance:
-						drag_start_ticks = clip_instance.start_ticks
 					accept_event()
 			else:
 				# End resize or drag
@@ -377,15 +389,14 @@ func _gui_input(event: InputEvent) -> void:
 							clip_instance.start_ticks, clip_instance.duration_ticks, clip_instance.clip_offset
 						))
 					accept_event()
+				elif _drag_handed_off:
+					# Timeline already finished the move in its _input.
+					_drag_handed_off = false
+					accept_event()
 				elif is_dragging:
-					if drag_activated and clip_instance:
-						# Emit drag ended for both horizontal and cross-track drags
-						drag_ended.emit(self, get_global_mouse_position())
-					elif not drag_activated and not _press_was_additive:
+					if not _press_was_additive:
 						exclusive_click_requested.emit(self)
 					is_dragging = false
-					drag_activated = false
-					is_cross_track_drag = false
 					accept_event()
 
 	elif event is InputEventMouseMotion and is_resizing and clip_instance and timeline:
@@ -393,14 +404,17 @@ func _gui_input(event: InputEvent) -> void:
 		var mouse_pos = get_global_mouse_position()
 		var pixel_delta = (mouse_pos - resize_start_pos).x
 		var tick_delta = timeline.pixels_to_ticks(pixel_delta)
+		# Shift bypasses grid snap
+		var free_move: bool = event.shift_pressed
 
 		if resize_edge == "left":
 			# Resize from left: adjust start_ticks, duration, and clip_offset
 			var new_start_ticks = resize_start_ticks + tick_delta
 
 			# Snap to grid
-			var snap_interval = timeline.get_snap_interval()
-			new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
+			var snap_interval = 0 if free_move else timeline.get_snap_interval()
+			if not free_move:
+				new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
 
 			# Clamp to positive values
 			new_start_ticks = max(0, new_start_ticks)
@@ -448,8 +462,9 @@ func _gui_input(event: InputEvent) -> void:
 			var new_duration = resize_start_duration + tick_delta
 
 			# Snap to grid (snap the end point)
-			var snap_interval = timeline.get_snap_interval()
-			new_duration = timeline.grid_helper.snap_ticks(resize_start_ticks + new_duration) - resize_start_ticks
+			var snap_interval = 0 if free_move else timeline.get_snap_interval()
+			if not free_move:
+				new_duration = timeline.grid_helper.snap_ticks(resize_start_ticks + new_duration) - resize_start_ticks
 
 			# Minimum duration of 1 snap interval (or 1 tick if no snap)
 			var min_duration = snap_interval if snap_interval > 0 else 1
@@ -470,41 +485,12 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 	elif event is InputEventMouseMotion and is_dragging and clip_instance and timeline:
-		var mouse_pos = get_global_mouse_position()
-		var mouse_delta = mouse_pos - drag_start_pos
-		var delta_magnitude = mouse_delta.length()
-
-		# Check if drag threshold crossed
-		if not drag_activated and delta_magnitude > drag_threshold:
-			# Determine drag type based on dominant axis
-			is_cross_track_drag = abs(mouse_delta.y) > abs(mouse_delta.x)
-			drag_activated = true
-
-			if is_cross_track_drag:
-				# Cross-track drag: emit drag_started
-				drag_started.emit(self, clip_instance)
-				accept_event()
-
-		# Handle active drag
-		if drag_activated:
-			if is_cross_track_drag:
-				# Cross-track drag: emit position updates
-				drag_moved.emit(self, mouse_pos)
-			
-			# Horizontal drag component
-			var pixel_delta = mouse_delta.x
-			var tick_delta = timeline.pixels_to_ticks(pixel_delta)
-			var new_start_ticks = drag_start_ticks + tick_delta
-
-			# Snap to grid
-			new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
-
-			# Clamp to positive values
-			new_start_ticks = max(0, new_start_ticks)
-
-			# Emit move request - Timeline will handle collision detection for multi-clip selection
-			clip_move_requested.emit(self, new_start_ticks)
-			accept_event()
+		if (get_global_mouse_position() - drag_start_pos).length() > drag_threshold:
+			# Hand the move to the Timeline: a cross-track move frees this node mid-drag.
+			is_dragging = false
+			_drag_handed_off = true
+			drag_begin_requested.emit(self, drag_start_pos)
+		accept_event()
 
 
 func _on_mouse_entered() -> void:

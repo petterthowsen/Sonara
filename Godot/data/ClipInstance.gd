@@ -153,6 +153,28 @@ func get_end_ticks() -> int:
 	return start_ticks + duration_ticks
 
 
+## Song tick where clip-content tick 0 would land. Content before clip_offset is
+## trimmed away, so this can be before start_ticks (even negative).
+func content_origin_ticks() -> int:
+	return start_ticks - clip_offset
+
+
+## Clip-content tick -> song tick for this instance.
+func clip_to_song_ticks(clip_ticks: int) -> int:
+	return clip_ticks + content_origin_ticks()
+
+
+## Song tick -> clip-content tick for this instance.
+func song_to_clip_ticks(song_ticks: int) -> int:
+	return song_ticks - content_origin_ticks()
+
+
+## True when a clip-content span [start, end) is at least partly inside the played
+## window [clip_offset, clip_offset + duration_ticks).
+func plays_clip_span(start: int, end: int) -> bool:
+	return start < clip_offset + duration_ticks and end > clip_offset
+
+
 func get_effective_color() -> Color:
 	"""Get the color to display (override or clip's color)."""
 	if color_override.a > 0.0:

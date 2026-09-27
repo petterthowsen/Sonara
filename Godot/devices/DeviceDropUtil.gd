@@ -22,12 +22,17 @@ static func can_drop_asset_on_channel(channel: Channel, asset: Asset) -> bool:
 		return false
 	if asset.type != Asset.TYPE.Device:
 		return false
-	var device := AssetService.get_device(asset.path)
-	if device == null:
+	return device_fits_channel(AssetService.get_device(asset.path), channel)
+
+
+## Instruments only go on instrument channels (master keeps the default INSTRUMENT type, so it is
+## excluded by id); effects and containers go anywhere, master included.
+static func device_fits_channel(device: Device, channel: Channel) -> bool:
+	if device == null or channel == null:
 		return false
 	if device.category == Device.DeviceCategory.Instrument:
-		return channel.channel_type == Channel.ChannelType.INSTRUMENT
-	return not channel.is_master
+		return channel.channel_type == Channel.ChannelType.INSTRUMENT and not channel.is_master
+	return true
 
 
 ## Whether `inst` can be inserted into `host_parent` (null = channel root).
@@ -38,7 +43,7 @@ static func can_drop_instance_on_host(
 ) -> bool:
 	if channel == null or inst == null:
 		return false
-	if inst.channel_id != channel.id:
+	if inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
 		return false
 	if host_parent == null:
 		return true
@@ -47,6 +52,33 @@ static func can_drop_instance_on_host(
 	if inst.contains_device(host_parent):
 		return false
 	return true
+
+
+## Whether `inst` can move from its channel to `channel`. Devices that own aux return channels
+## (Drum Machine, multi-out plugins) and drum pads stay put: removing them detaches their returns.
+static func can_transfer_to_channel(inst: DeviceInstance, channel: Channel) -> bool:
+	if channel == null or not can_leave_channel(inst) or inst.get_channel() == channel:
+		return false
+	return device_fits_channel(inst.device, channel)
+
+
+## Whether `inst` may be moved off its channel at all (see can_transfer_to_channel).
+static func can_leave_channel(inst: DeviceInstance) -> bool:
+	if inst == null or inst.get_channel() == null:
+		return false
+	if PadLane.is_pad_lane(inst.get_channel()) or AuxReturnSync.is_drum_machine(inst.get_parent_device()):
+		return false
+	return not _owns_aux_returns(inst)
+
+
+## True when `inst` or a descendant is a Drum Machine or has plugin return channels.
+static func _owns_aux_returns(inst: DeviceInstance) -> bool:
+	if AuxReturnSync.is_drum_machine(inst) or not inst.return_channel_ids.is_empty():
+		return true
+	for child in inst.children:
+		if _owns_aux_returns(child):
+			return true
+	return false
 
 
 ## Add a device or sfizz+SFZ asset into `parent` (null = channel root).
@@ -88,36 +120,79 @@ static func instance_for_asset(asset: Asset, channel_id: int, position: int = -1
 	return device_instance
 
 
-## Whether a Device or SFZ asset dropped on empty track/mixer space gets its own instrument track.
-static func creates_instrument_track(asset: Asset) -> bool:
-	if asset == null:
-		return false
-	if asset.type == Asset.TYPE.SFZ:
-		return true
-	if asset.type != Asset.TYPE.Device:
-		return false
-	var device := AssetService.get_device(asset.path)
-	return device != null and device.creates_instrument_track()
+## Kind of channel a device drop on empty mixer space creates: "instrument" or "audio" track on the
+## track side, "bus" on the bus side, or "" when `data` can't start a channel there. Instruments
+## and containers (and SFZ files) make instrument tracks; effects make audio tracks or buses.
+static func new_channel_kind(data: Variant, bus_side: bool) -> String:
+	data = DeviceDrag.unwrap(data)
+	var device: Device = null
+	if data is DeviceInstance:
+		if not can_leave_channel(data):
+			return ""
+		device = (data as DeviceInstance).device
+	elif data is Asset:
+		var asset := data as Asset
+		if asset.type == Asset.TYPE.SFZ:
+			return "" if bus_side else "instrument"
+		if asset.type == Asset.TYPE.Device:
+			device = AssetService.get_device(asset.path)
+	if device == null:
+		return ""
+	if device.creates_instrument_track():
+		return "" if bus_side else "instrument"
+	return "bus" if bus_side else "audio"
 
 
-## Create an instrument track named after `asset` with its device (sfizz for SFZ) on the channel.
-static func create_instrument_track_for_asset(project: Project, asset: Asset) -> Channel:
-	if project == null or not creates_instrument_track(asset):
+## Create the channel `new_channel_kind` names (track or bus, named after the device) and add the
+## asset's device to it, or move the dragged device there. One undo step. Returns the channel.
+## `parent_id` >= -1 places the new track under that parent (-1 = root) after `after_sibling`
+## (null = first); the default -2 leaves it where the project puts new tracks.
+static func create_channel_for(
+	project: Project,
+	data: Variant,
+	bus_side: bool,
+	parent_id: int = -2,
+	after_sibling: Track = null
+) -> Channel:
+	var kind := new_channel_kind(data, bus_side)
+	if project == null or kind.is_empty():
 		return null
-	var track_cmd := TrackCreateCommand.new(project, "instrument", _track_name_for(asset))
-	track_cmd.do()
-	var channel := track_cmd.channel
+	data = DeviceDrag.unwrap(data)
+	var channel_name := _channel_name_for(data)
+	var create: Command
+	if kind == "bus":
+		create = BusCreateCommand.new(project, channel_name)
+	else:
+		create = TrackCreateCommand.new(project, kind, channel_name)
+	create.do()
+	var channel: Channel = create.get("channel")
 	if channel == null:
-		push_error("[DeviceDropUtil] Failed to create instrument track for %s" % asset.path)
+		push_error("[DeviceDropUtil] Failed to create a %s channel for %s" % [kind, channel_name])
 		return null
-	var cmds: Array[Command] = [track_cmd]
-	var device_instance := instance_for_asset(asset, channel.id, 0)
-	if device_instance:
-		var add_cmd := DeviceAddCommand.new(channel, device_instance, -1)
-		add_cmd.do()
-		cmds.append(add_cmd)
-	HistoryUtil.record_many(track_cmd.name, cmds)
+	var cmds: Array[Command] = [create]
+	var track: Track = create.get("track") if kind != "bus" else null
+	if track and parent_id >= -1:
+		var before := TrackReorderCommand.capture_layout(project)
+		if project.place_track(track, parent_id, after_sibling):
+			cmds.append(TrackReorderCommand.new(project, before, TrackReorderCommand.capture_layout(project)))
+	var place: Command = null
+	if data is DeviceInstance:
+		place = DeviceTransferCommand.new(data, channel, null, -1)
+	else:
+		var device_instance := instance_for_asset(data, channel.id, 0)
+		if device_instance:
+			place = DeviceAddCommand.new(channel, device_instance, -1)
+	if place:
+		place.do()
+		cmds.append(place)
+	HistoryUtil.record_many(create.name, cmds)
 	return channel
+
+
+static func _channel_name_for(data: Variant) -> String:
+	if data is DeviceInstance:
+		return (data as DeviceInstance).get_display_name()
+	return _track_name_for(data)
 
 
 ## Device name for a Device asset, file name for an SFZ.
@@ -129,7 +204,8 @@ static func _track_name_for(asset: Asset) -> String:
 	return asset.name
 
 
-## Reorder within `to_parent`, or relocate from another parent on the same channel.
+## Reorder within `to_parent`, relocate from another parent on the same channel, or move from
+## another channel.
 static func drop_instance(
 	channel: Channel,
 	inst: DeviceInstance,
@@ -137,6 +213,9 @@ static func drop_instance(
 	to_position: int
 ) -> void:
 	if not can_drop_instance_on_host(channel, inst, to_parent):
+		return
+	if inst.get_channel() != channel:
+		HistoryUtil.execute(DeviceTransferCommand.new(inst, channel, to_parent, to_position))
 		return
 	var from_parent := inst.get_parent_device()
 	var from_position := inst.position

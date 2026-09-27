@@ -104,8 +104,6 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 script = ExtResource("2_shsim")
 min_width = 12
-bg_color = Color(0, 0, 0, 0.5019608)
-bar_color = Color(0.83, 0.83, 0.83, 0.49411765)
 peak = 0.655
 volume_db = -60.0
 

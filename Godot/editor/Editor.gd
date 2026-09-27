@@ -645,6 +645,14 @@ func switch_extra_view() -> void:
 	logger.info("[Editor] Switched to ", View.keys()[current_view], " view")
 
 
+## Switch to the clip editor, which binds the current clip selection when shown.
+func show_clip_editor() -> void:
+	if current_view == View.EDITOR:
+		return
+	current_view = View.EDITOR
+	_update_view_visibility()
+
+
 ## Show or hide the AI Chat dock panel without affecting other docked panels.
 func toggle_assistant() -> void:
 	if dock_host == null:

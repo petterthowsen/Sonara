@@ -155,6 +155,8 @@ static func make_control(item: Dictionary, rect: Rect2i, group_id: String) -> Di
 		control["group"] = group_id
 	if not String(item.get("label", "")).is_empty():
 		control["label"] = item.label
+	if item.has("stages"):
+		control["stages"] = item.stages
 	return control
 
 

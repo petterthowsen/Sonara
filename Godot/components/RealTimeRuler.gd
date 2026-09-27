@@ -213,47 +213,24 @@ func _draw_ruler() -> void:
 
 		current_time += scale.major_interval
 
-func _gui_input(event: InputEvent) -> void:
-	"""Handle ruler clicks to set start position (snapped to major grid lines)."""
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if not grid_helper:
-			return
-
-		# Get click position relative to ruler (includes offset_x area)
-		var click_x = event.position.x
-
-		# Adjust for offset_x to get position in timeline coordinates
-		var timeline_screen_x = click_x - offset_x
-
-		# Convert from screen coordinates to timeline pixels (accounting for scroll)
-		var timeline_pixel_x = grid_helper.scroll_position + timeline_screen_x
-
-		# Convert timeline pixel position to ticks
-		var clicked_ticks = grid_helper.pixels_to_ticks(timeline_pixel_x)
-
-		# Get current scale and snap to major intervals
-		var scale = _determine_best_scale()
-		var snapped_ticks: int
-
-		match scale.unit:
-			TimeUnit.MILLISECONDS:
-				var clicked_ms = grid_helper.ticks_to_seconds(clicked_ticks) * 1000.0
-				var snapped_ms = round(clicked_ms / scale.major_interval) * scale.major_interval
-				snapped_ticks = grid_helper.seconds_to_ticks(snapped_ms / 1000.0)
-			TimeUnit.SECONDS:
-				var clicked_seconds = grid_helper.ticks_to_seconds(clicked_ticks)
-				var snapped_seconds = round(clicked_seconds / scale.major_interval) * scale.major_interval
-				snapped_ticks = grid_helper.seconds_to_ticks(snapped_seconds)
-			TimeUnit.MINUTES:
-				var clicked_minutes = grid_helper.ticks_to_minutes(clicked_ticks)
-				var snapped_minutes = round(clicked_minutes / scale.major_interval) * scale.major_interval
-				snapped_ticks = grid_helper.minutes_to_ticks(snapped_minutes)
-			TimeUnit.HOURS:
-				var clicked_hours = grid_helper.ticks_to_hours(clicked_ticks)
-				var snapped_hours = round(clicked_hours / scale.major_interval) * scale.major_interval
-				snapped_ticks = grid_helper.hours_to_ticks(snapped_hours)
-
-		# Emit signal to request start position change
-		start_position_requested.emit(snapped_ticks)
-		get_tree().root.set_input_as_handled()
-
+## Snap a ruler-local X to the nearest major time interval at the current zoom.
+func _snapped_ticks_from_local(local_x: float) -> int:
+	if not grid_helper:
+		return 0
+	var clicked_ticks := grid_helper.pixels_to_ticks(_content_x_from_local(local_x))
+	var scale := _determine_best_scale()
+	var snapped_ticks: int
+	match scale.unit:
+		TimeUnit.MILLISECONDS:
+			var clicked_ms := grid_helper.ticks_to_seconds(clicked_ticks) * 1000.0
+			snapped_ticks = grid_helper.seconds_to_ticks(roundf(clicked_ms / scale.major_interval) * scale.major_interval / 1000.0)
+		TimeUnit.SECONDS:
+			var clicked_seconds := grid_helper.ticks_to_seconds(clicked_ticks)
+			snapped_ticks = grid_helper.seconds_to_ticks(roundf(clicked_seconds / scale.major_interval) * scale.major_interval)
+		TimeUnit.MINUTES:
+			var clicked_minutes := grid_helper.ticks_to_minutes(clicked_ticks)
+			snapped_ticks = grid_helper.minutes_to_ticks(roundf(clicked_minutes / scale.major_interval) * scale.major_interval)
+		TimeUnit.HOURS:
+			var clicked_hours := grid_helper.ticks_to_hours(clicked_ticks)
+			snapped_ticks = grid_helper.hours_to_ticks(roundf(clicked_hours / scale.major_interval) * scale.major_interval)
+	return maxi(snapped_ticks, 0)

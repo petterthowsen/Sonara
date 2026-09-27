@@ -76,9 +76,15 @@ var note_map: NoteMap = null:
 		queue_redraw()
 
 ## Tint applied to the key under the mouse in the note area (or on the piano).
-@export var hover_color := Color(0.45, 0.55, 1.0, 0.35):
+@export var hover_color := Color(1.0, 1.0, 1.0, 0.22):
 	set(hc):
 		hover_color = hc
+		queue_redraw()
+
+## Tint of a held key: clicked with the mouse, played live or sounding in playback.
+@export var press_color := Color(0.25, 0.45, 1.0, 0.6):
+	set(pc):
+		press_color = pc
 		queue_redraw()
 
 ## Fraction of the key width at each end that clamps to min/max velocity.
@@ -95,6 +101,18 @@ var hovered_note := -1:
 		if hovered_note != hn:
 			hovered_note = hn
 			queue_redraw()
+
+## Pitches held by incoming MIDI (live input, playback), drawn like a mouse press.
+## Set by the owner through set_active_notes().
+var active_notes: Dictionary = {}
+
+
+## Replace the externally held pitches; redraws only when the set changed.
+func set_active_notes(notes: Dictionary) -> void:
+	if notes != active_notes:
+		active_notes = notes.duplicate()
+		queue_redraw()
+
 
 ## Key currently held down by the mouse, -1 for none.
 var pressed_note := -1:
@@ -245,7 +263,7 @@ func _draw_key(note : int):
 		color = color.lerp(Color(entry_color.r, entry_color.g, entry_color.b, 1.0), map_tint_strength)
 	
 	var note_rect: Rect2 = get_note_rect(note)
-	var is_pressed := note == pressed_note
+	var is_pressed := note == pressed_note or active_notes.has(note)
 	
 	if is_pressed:
 		# Depressed: the key sinks back (shorter), darkens, and its front edge casts a shadow.
@@ -256,11 +274,11 @@ func _draw_key(note : int):
 	# draw key
 	draw_rect(note_rect, color, true, -1.0, true)
 	
-	if note == hovered_note or is_pressed:
-		var hc := hover_color
-		if is_pressed:
-			hc.a = minf(1.0, hover_color.a * 1.6)
-		draw_rect(note_rect, hc, true, -1.0, true)
+	if is_pressed:
+		draw_rect(note_rect, press_color, true, -1.0, true)
+	# Hover goes over the press so the key under the mouse always reads as hovered.
+	if note == hovered_note:
+		draw_rect(note_rect, hover_color, true, -1.0, true)
 	
 	if is_pressed:
 		var shadow := Color(0, 0, 0, 0.35)

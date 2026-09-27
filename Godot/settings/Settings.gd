@@ -240,6 +240,14 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Row height, in pixels, for a newly created automation lane.",
 	)).sub("Arranger").range(20, 200, 1)
+	_register(Setting.new(
+		"appearance/grid_min_line_spacing",
+		"Minimum Grid Line Spacing",
+		Type.INT,
+		10,
+		CATEGORY_APPEARANCE,
+		"Smallest gap, in pixels, between grid lines in the arranger and clip editor. Beats and finer subdivisions appear only once zoomed in far enough to keep this gap. Snapping follows the finest visible line.",
+	)).sub("Grid").range(4, 64, 1)
 
 	# --- Audio: output device (engine-stability-plan Phase 7). AudioConfig applies them live. ---
 	_register(Setting.new(

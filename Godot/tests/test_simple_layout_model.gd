@@ -17,6 +17,7 @@ func run_tests() -> void:
 	_test_roundtrip_json()
 	_test_unknown_version_rejected()
 	_test_validate_finds_overlap_and_bounds()
+	_test_envelope_stages()
 	_test_find_free_rect()
 	_test_resize_grid_reflows()
 	_test_reconcile_param_changes()
@@ -88,6 +89,20 @@ func _test_validate_finds_overlap_and_bounds() -> void:
 	layout.pages[0].controls.append(_control("xy", [12], [0, 3, 2, 1]))
 	var problems := layout.validate()
 	_assert(problems.size() == 3, "overlap, out of bounds and param count reported: %s" % [problems])
+
+
+## A partial envelope stores its `stages`, binds one param per stage and survives a round trip.
+func _test_envelope_stages() -> void:
+	var layout := SimpleLayout.new()
+	layout.device_id = "test.synth"
+	var ads := _control("envelope", [1, 2, 3], [0, 0, 3, 2])
+	ads["stages"] = "ads"
+	var wrong := _control("envelope", [4, 5, 6], [3, 0, 3, 2])
+	layout.pages = [{"title": "Main", "groups": [], "controls": [ads, wrong]}]
+	var problems := layout.validate()
+	_assert(problems.size() == 1 and "needs 4 params" in problems[0], "3 params without stages is a full ADSR missing one: %s" % [problems])
+	var back := SimpleLayout.from_dict(JSON.parse_string(JSON.stringify(layout.to_dict())))
+	_assert(back != null and back.pages[0].controls[0].get("stages") == "ads", "stages survives a JSON round trip")
 
 
 func _test_find_free_rect() -> void:

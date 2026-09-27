@@ -46,6 +46,8 @@ var channels: Array[Channel] = []
 var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
+## Arranger header lane visibility (view state, saved with the project but not undoable).
+var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true}
 
 var next_marker_id: int = 1
 
@@ -906,6 +908,8 @@ func add_clip(clip: Clip) -> void:
 	if clips.has(clip.id):
 		push_warning("[Project] Clip with ID %s already exists, replacing" % clip.id)
 
+	_adopt_clip_note_ids(clip)
+
 	clips[clip.id] = clip
 	logger.info("[Project] Added clip to pool: %s (total clips: %d)" % [clip.id, clips.size()])
 
@@ -921,6 +925,15 @@ func allocate_note_id() -> int:
 	var note_id := next_note_id
 	next_note_id += 1
 	return note_id
+
+
+## Make the clip draw note ids from this project's counter, and number any notes it
+## brought without one. The counter is first raised past the clip's own ids so a
+## clip saved elsewhere can never be handed an id it already uses.
+func _adopt_clip_note_ids(clip: Clip) -> void:
+	next_note_id = maxi(next_note_id, clip.max_note_id() + 1)
+	clip.note_id_allocator = allocate_note_id
+	clip.ensure_note_ids()
 
 
 func get_clip(clip_id: String) -> Clip:
@@ -1676,6 +1689,7 @@ func to_json() -> Dictionary:
 		"next_note_id": next_note_id,
 		"next_marker_id": next_marker_id,
 		"markers": markers.map(func(m): return m.to_json()),
+		"ruler_lanes": ruler_lanes.duplicate(),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
 		"tracks": tracks.map(func(t): return t.to_json())
@@ -1700,6 +1714,10 @@ static func from_json(data: Dictionary) -> Project:
 	project.next_note_id = data.get("next_note_id", 1)
 	project.next_marker_id = data.get("next_marker_id", 1)
 
+	var saved_lanes: Dictionary = data.get("ruler_lanes", {})
+	for lane in project.ruler_lanes:
+		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, true))
+
 	project.markers.clear()
 	for marker_data in data.get("markers", []):
 		project.markers.append(SongMarker.from_json(marker_data))
@@ -1709,6 +1727,7 @@ static func from_json(data: Dictionary) -> Project:
 	for clip_data in data.get("clips", []):
 		var clip = Clip.from_json(clip_data)
 		project.clips[clip.id] = clip
+		project._adopt_clip_note_ids(clip)
 
 	# Clear default master and load channels
 	project.channels.clear()

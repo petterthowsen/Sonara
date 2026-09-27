@@ -155,24 +155,18 @@ func _add_device_panel(device_instance: DeviceInstance, position: int) -> void:
 		drop_host.sort_panels_by_position()
 
 
-## Remove a panel for a device
-func _remove_device_panel_at(position: int) -> void:
-	"""Remove the panel for a device instance.
-
-	Args:
-		device_id: position
-	"""
-	for panel:CompactDevicePanel in device_panels.values():
-		if panel.device_instance.position == position:
-			device_panels.erase(panel.device_instance.id)
-			var parent := panel.get_parent()
-			if parent:
-				parent.remove_child(panel)
+## Remove the panel of every device that left the root chain. Positions are reindexed before
+## `device_removed` fires, so the removed device can share its position with a remaining one.
+func _remove_stale_device_panels() -> void:
+	for instance_id in device_panels.keys():
+		var panel := device_panels[instance_id]
+		if is_instance_valid(panel) and channel.devices.has(panel.device_instance):
+			continue
+		device_panels.erase(instance_id)
+		if is_instance_valid(panel):
+			if panel.get_parent():
+				panel.get_parent().remove_child(panel)
 			panel.queue_free()
-			return
-	
-	logger.error("[ChannelDeviceList] Device panel not found at position %d" % position)
-	
 
 
 # ============================================================================
@@ -191,7 +185,7 @@ func _on_device_removed(position: int, _device_id: String) -> void:
 	"""Handle device removed from channel."""
 	if _pad_lane.active():
 		return
-	_remove_device_panel_at(position)
+	_remove_stale_device_panels()
 	logger.info("Device removed from position %d" % position)
 
 

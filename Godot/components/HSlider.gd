@@ -7,6 +7,7 @@ signal drag_started
 signal drag_ended
 
 var _dragging := false
+var _fine_drag := FineDrag.new()
 
 @export var min_value := 0.0:
 	set(mv):
@@ -88,8 +89,36 @@ func set_value_no_signal(val: float) -> void:
 			queue_redraw()
 
 
+## Draw the handle only while hovered or dragged; the fill alone shows the value otherwise.
+@export var handle_on_hover_only := true:
+	set(h):
+		handle_on_hover_only = h
+		if is_inside_tree():
+			queue_redraw()
+
+var _hovered := false
+
+
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	mouse_entered.connect(_set_hovered.bind(true))
+	mouse_exited.connect(_set_hovered.bind(false))
+
+
+## True when the handle is drawn: always, or only while hovered or dragged.
+func is_handle_visible() -> bool:
+	return not handle_on_hover_only or _hovered or _dragging
+
+
+func _set_hovered(hovered: bool) -> void:
+	_hovered = hovered
+	if handle_on_hover_only:
+		queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
+		_hovered = false
 
 
 func _draw() -> void:
@@ -98,23 +127,30 @@ func _draw() -> void:
 	# draw background
 	draw_rect(Rect2(0, 0, size.x, size.y), bg_color, true, -1.0, true)
 	
-	var value_normalized = value / max_value
-	
 	# draw filled bar
 	var value_x: float
 	if bidirectional:
 		# fill from center to either edge
 		var h = rect.size.y
-		var w = value_normalized * rect.size.x / 2
+		var w = (value / max_value if max_value != 0.0 else 0.0) * rect.size.x / 2
 		draw_rect(Rect2(rect.size.x / 2, 0, w, h), fill_color, true, -1.0, true)
 		value_x = rect.size.x / 2 + w
 	else:
 		# fill from left to right
 		var h = rect.size.y
-		var w = value_normalized * rect.size.x
+		var span := max_value - min_value
+		var w = (clampf((value - min_value) / span, 0.0, 1.0) if span != 0.0 else 0.0) * rect.size.x
 		draw_rect(Rect2(0, 0, w, h), fill_color, true, -1.0, true)
 		value_x = w
 	
+	if bidirectional:
+		# faint center tick, so a centered value still reads while the handle is hidden
+		var cx := roundf(rect.size.x / 2.0)
+		draw_rect(Rect2(cx - 0.5, 0, 1, rect.size.y), Color(handle_color, handle_color.a * 0.3), true)
+
+	if not is_handle_visible():
+		return
+
 	# Draw handle at value position (clamped to stay within bounds)
 	var handle_half := handle_width / 2.0
 	var handle_x: float = clamp(value_x - handle_half, 0, rect.size.x - handle_width)
@@ -132,14 +168,15 @@ func _gui_input(event: InputEvent) -> void:
 					return
 				_dragging = true
 				drag_started.emit()
-				_update_value_from_mouse(event.position)
+				_update_value_from_mouse(_fine_drag.begin(event.position))
 			else:
 				if _dragging:
 					_dragging = false
 					drag_ended.emit()
+					queue_redraw()
 	elif event is InputEventMouseMotion:
 		if _dragging:
-			_update_value_from_mouse(event.position)
+			_update_value_from_mouse(_fine_drag.update(event.position, event.shift_pressed, Rect2(Vector2.ZERO, size)))
 
 
 ## Map a mouse x position onto the slider range.

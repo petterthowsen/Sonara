@@ -8,42 +8,34 @@ var logger : Log = Log.make("SendsPanel")
 ## allowing the user to send audio from the bound channel to those buses.
 ## Handles all send-related UI interactions and syncs with the Channel data model.
 
-## One send slot: amount knob plus a label that tracks the target bus name.
-class SendControl extends VBoxContainer:
+## One send slot: amount knob plus a caption that tracks the target bus name.
+## Long bus names end in an ellipsis so they never widen the strip; hovering shows the full name.
+class SendControl extends LabeledKnob:
 	var target_channel_id: int = -1
-	var knob: RotaryKnob
-	var bus_label: Label
+	var bus_label: Label:
+		get: return label
 
 
 	## Build a send control for `target_id` showing `bus_name` and `normalized` amount.
 	func _init(target_id: int, bus_name: String, normalized: float, dimmed: bool) -> void:
+		super()
 		target_channel_id = target_id
 		set_meta("target_channel_id", target_id)
 
-		knob = RotaryKnob.new()
-		knob.name = "RotaryKnob"
-		knob.custom_minimum_size = Vector2(32, 32)
-		knob.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		knob.knob_color = Color(0.26171875, 0.26171875, 0.26171875)
 		knob.shadow_color = Color(0, 0, 0, 0.47843137)
 		knob.min_rotation_deg = -140.0
 		knob.max_rotation_deg = 140.0
 		# Set before anyone connects so the default 0.5 does not create a send.
 		knob.value = normalized
-		add_child(knob)
 
-		bus_label = Label.new()
-		bus_label.name = "Label"
-		bus_label.text = bus_name
-		bus_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		bus_label.modulate.a = 0.5 if dimmed else 1.0
-		add_child(bus_label)
+		text = bus_name
+		label.modulate.a = 0.5 if dimmed else 1.0
 
 
 	## Update the bus name shown under the knob.
 	func set_bus_name(new_name: String) -> void:
-		if bus_label:
-			bus_label.text = new_name
+		text = new_name
 
 
 	## Update knob position and label dimming from the data model.

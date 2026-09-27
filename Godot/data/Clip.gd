@@ -181,8 +181,41 @@ func _generate_uuid() -> String:
 # MIDI NOTE MANAGEMENT
 # ============================================================================
 
+## Source of project-wide note ids, wired by the Project that owns this clip. A clip
+## outside a project leaves it unset and numbers its own notes instead.
+var note_id_allocator: Callable = Callable()
+
+
+## A fresh note id: the project's counter when this clip belongs to one, otherwise
+## one above every id already in the clip.
+func allocate_note_id() -> int:
+	if note_id_allocator.is_valid():
+		return note_id_allocator.call()
+	var next := 1
+	for n in midi_notes:
+		if n and n.id >= next:
+			next = n.id + 1
+	return next
+
+
+## Give every note that has no id yet (older files, hand-built data) a fresh one.
+func ensure_note_ids() -> void:
+	for n in midi_notes:
+		if n and n.id < 0:
+			n.id = allocate_note_id()
+
+
+## Largest note id in this clip, or 0 when it has none.
+func max_note_id() -> int:
+	var mx := 0
+	for n in midi_notes:
+		if n:
+			mx = maxi(mx, n.id)
+	return mx
+
+
 func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, duration: int) -> MidiNoteData:
-	"""Add a MIDI note to the clip. note_id must be unique (assigned by Project)."""
+	"""Add a MIDI note to the clip. note_id must be unique (see allocate_note_id)."""
 	var end_tick = start_tick + duration
 	
 	# Check for overlapping notes at the same pitch
@@ -296,7 +329,7 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		pitch: MIDI note number to check
 		new_start_tick: Start tick of the new/moved note
 		new_end_tick: End tick of the new/moved note
-		allocate_note_id: Returns a fresh note ID for split notes (Project.allocate_note_id)
+		allocate_note_id: Returns a fresh note ID for split notes (usually this clip's allocate_note_id)
 		exclude_note_id: Note ID to exclude from comparison (to avoid comparing a note against itself)
 	
 	Logic:

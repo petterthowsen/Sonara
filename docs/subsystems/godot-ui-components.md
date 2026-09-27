@@ -1,0 +1,112 @@
+# Godot UI components
+
+Design rules for the small reusable controls in `Godot/components/` (knobs, sliders, faders,
+meters, the envelope editor) and the views built from them. Read this before you add a control
+or change how one looks or behaves.
+
+## Principles
+
+### 1. Progressive visibility
+Show the value at rest and reveal the rest on demand, in this order:
+
+1. **At rest:** only what reads the value: the fill, arc, level bar or curve. No handles, no numbers.
+2. **Hover:** the handle, the exact value in a `ValueTooltip`, and the full text of any trimmed caption.
+3. **Drag:** the same as hover, and it stays visible even when the pointer leaves the control.
+4. **Double-click:** type an exact value in a `FloatingValueEditor`.
+
+Examples: `HorSlider.handle_on_hover_only` (on by default), the Volumeter handle, the
+EnvelopeControl handle highlight and tooltip, and `LabelOverlay` for captions. When hiding the
+handle leaves nothing on screen at a common value, add a faint marker so the value still reads.
+For example, a two-sided HorSlider draws a center tick so a centered pan doesn't look empty.
+
+Things that always stay visible:
+- Warnings: clip lines and clip lights. The Volumeter holds its clip line for 10 s.
+- Controls where the handles *are* the value, such as the dual pan slider's two handles.
+
+### 2. Conserve space; overlays never shift layout
+Mixer strips, track headers and Simple View cells are tight. Anything that shows up on
+interaction is a **top-level, click-through overlay**: `top_level = true`,
+`mouse_filter = MOUSE_FILTER_IGNORE`, added as an internal child
+(`add_child(node, false, Node.INTERNAL_MODE_BACK)`). This covers tooltips, full-caption
+overlays and drop indicators (see `godot-drag-and-drop.md`).
+
+- Captions have a fixed width and trim with `TextServer.OVERRUN_TRIM_ELLIPSIS`. Never let a long
+  name widen a strip.
+- Place a value tooltip on the side away from the caption. Captions go above in Simple View and
+  below in the sends panel, so the readout never covers the name (`RotaryKnob.tooltip_side`).
+- Keep everything inside the control's rect. The EnvelopeControl insets its curve by the
+  handle radius, so handles at min or max don't draw outside.
+
+### 3. Consistent interaction
+Every value control should behave the same way, so users learn it once:
+
+| Gesture | Meaning | Where it exists today |
+|---|---|---|
+| Drag | Change the value | all |
+| Shift + drag | Fine adjustment (0.15×), with no jump when Shift is pressed or released mid-drag | all (knob via relative motion, the rest via `FineDrag`) |
+| Double-click | Type an exact value | RotaryKnob, VSlider, Meter fader, Volumeter |
+| Ctrl/Cmd + click | Reset to default | RotaryKnob, HorSlider |
+| Right-click | Context menu (mode, options) | PanControl, send knobs |
+
+A new control should support the whole row, not just drag. Gaps in the right-hand column are
+backlog, not intent.
+
+- **Absolute sliders:** the press jumps to the pointer, then motion goes through
+  `FineDrag.update(mouse, event.shift_pressed, bounds)`.
+- **Handle grabs** (envelope points): use `FineDrag.begin_at(handle_pos, mouse)` so the handle
+  doesn't jump on press.
+- **Drag events:** handle drags in `_gui_input` motion events. Don't poll `Input` in `_process`.
+- **Signals:** emit the change signal only when the value actually changes.
+
+### 4. Modular and reusable
+Build controls from the shared pieces below instead of copying their logic. When two controls
+start copying the same behavior, extract it into a component. That's how `ValueTooltip`,
+`FineDrag` and `LabelOverlay` came about.
+
+- A component owns presentation and input only. It gets data through setters and
+  `set_value_no_signal`/`set_*_no_signal`, and reports changes through signals. It never sends OSC
+  or touches `Project` data; the view that binds it does that (see the data-model rule in
+  `AGENTS.md`).
+- Expose look and behavior as `@export`s with sensible defaults: colors, sizes, sides,
+  `handle_on_hover_only`, `time_curve`. A view overrides only what differs.
+- Data that describes a domain object belongs in a resource, not in the control. For example,
+  `Envelope` holds the stage values, ranges and `stages` subset, and `EnvelopeControl` only
+  draws and edits it.
+
+### 5. One visual system
+- Level meters use the mixer strip's colors everywhere (a Volumeter or any new meter matches
+  `Meter` in `MixerChannel.tscn`): low `(0.728, 0.8, 0.08)`, high `(0.8, 0.416, 0.08)`, clip
+  `(0.8, 0.08, 0.08)`, dark background, white-smoke handle.
+- Volume controls share the -60 to +6 dB range of the mixer fader.
+- Editor backgrounds are near-black (`#111`), not pure black. Grid lines are faint white
+  (`Color(1, 1, 1, 0.06)`).
+- Floating panels (tooltips, overlays) use the dark rounded style in `ValueTooltip` and
+  `LabelOverlay`: `Color(0.08, 0.08, 0.1, 0.94)`, 3 px corners.
+
+## Shared pieces
+
+| Component | Use it for |
+|---|---|
+| `FineDrag.gd` | Pointer tracking with Shift precision for any drag control |
+| `ValueTooltip.gd` | Floating value readout: `ValueTooltip.attach(host)`, then `place_above` / `place_below` / `place_right_of` |
+| `LabelOverlay.gd` | Full text of a trimmed Label on hover: `LabelOverlay.attach(label, [hover sources])` |
+| `FloatingValueEditor.gd` | Double-click value entry |
+| `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
+| `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
+
+Controls built on them: `RotaryKnob`, `HorSlider` (single) and `HDualSlider` (pan),
+`VolumeSlider` (`VSlider.gd`), `Meter` (mixer strip, optional fader), `Volumeter` (track header
+meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
+ADSR).
+
+## Checklist for a new or changed control
+
+- [ ] Value readable at rest; handle and exact value on hover or drag; typed entry on double-click
+- [ ] Shift fine drag through `FineDrag`; Ctrl/Cmd-click reset where a default exists
+- [ ] Overlays are top-level and click-through; nothing shifts layout or draws outside the rect
+- [ ] Captions trim with an ellipsis and use `LabelOverlay`
+- [ ] Colors and ranges match the existing system; looks exposed as `@export`s
+- [ ] `*_no_signal` setters for syncing from data; signals only on real changes
+- [ ] Headless test for the behavior (see `tests/test_value_controls.gd`,
+      `tests/test_envelope_control.gd`). The headless pointer sits at (0, 0), so place test
+      controls elsewhere to avoid spurious hovers.

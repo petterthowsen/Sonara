@@ -181,6 +181,17 @@ func _instances_of_clip(c: Clip) -> Array[ClipInstance]:
 	return out
 
 
+## Track mode: follow an instance being moved, trimmed or resized in the arranger.
+func _watch_instance(ci: ClipInstance) -> void:
+	if ci and not ci.instance_modified.is_connected(_on_instance_modified):
+		ci.instance_modified.connect(_on_instance_modified)
+
+
+func _on_instance_modified() -> void:
+	_update_note_positions()
+	update_container_width()
+
+
 func unbind():
 	# Disconnect from clip signals (single-clip mode)
 	if clip:
@@ -190,6 +201,8 @@ func unbind():
 	for ci in clip_instances:
 		if ci and ci.clip:
 			_disconnect_clip_signals(ci.clip)
+		if ci and ci.instance_modified.is_connected(_on_instance_modified):
+			ci.instance_modified.disconnect(_on_instance_modified)
 
 	# Keep grid_helper connected. Unbind only clears clip data; zoom/scroll
 	# still need to relayout this editor when it is reused (the scene editor).
@@ -255,6 +268,7 @@ func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
 	for ci in clip_instances:
 		if ci and ci.clip:
 			_connect_clip_signals(ci.clip)
+		_watch_instance(ci)
 
 	_load_clip_notes()
 	queue_sort()
@@ -284,12 +298,12 @@ func _update_note_positions() -> void:
 			_update_single_note_position(note)
 
 
-## Every visual note in this editor, in child order (clip mode: the clip's notes;
-## track mode: the track's notes from all bound instances).
+## Every shown visual note in this editor, in child order (clip mode: the clip's notes;
+## track mode: the notes the track's instances actually play).
 func get_all_visual_notes() -> Array[VisualNote]:
 	var notes: Array[VisualNote] = []
 	for child in get_children():
-		if child is VisualNote and child.midi_note_data:
+		if child is VisualNote and child.midi_note_data and child.visible and not child.is_pending:
 			notes.append(child)
 	return notes
 
@@ -304,11 +318,14 @@ func _update_single_note_position(note: VisualNote) -> void:
 	# Calculate position offset based on mode
 	var offset_ticks = 0
 	if multi_clip_mode:
-		# MULTI-CLIP MODE: Get clip instance for this note and use its start_ticks
-		# MULTI-CLIP MODE: get clip instance directly from visual note metadata
+		# MULTI-CLIP MODE: place the note where its instance plays it, and hide the
+		# trimmed-away content outside the instance window, as the arranger does.
 		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
 		if ci:
-			offset_ticks = ci.start_ticks
+			offset_ticks = ci.content_origin_ticks()
+			if not ci.plays_clip_span(note_data.start_tick, note_data.start_tick + note_data.duration_ticks):
+				note.visible = false
+				return
 	else:
 		# SINGLE-CLIP MODE: Use position_offset_ticks (usually 0 in clip-mode)
 		offset_ticks = position_offset_ticks
@@ -351,14 +368,10 @@ func get_note_song_position(note: VisualNote) -> Dictionary:
 	var offset_ticks = 0
 	
 	if multi_clip_mode:
-		# MULTI-CLIP MODE: Get clip instance for this note and use its start_ticks
-		var ci: ClipInstance = null
-		if multi_clip_mode:
-			ci = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
-		else:
-			ci = null
+		# MULTI-CLIP MODE: song position is where the note's instance plays it
+		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
 		if ci:
-			offset_ticks = ci.start_ticks
+			offset_ticks = ci.content_origin_ticks()
 	else:
 		# SINGLE-CLIP MODE: Use position_offset_ticks (0 in clip-mode, set in track-mode)
 		offset_ticks = position_offset_ticks
@@ -430,42 +443,13 @@ func _load_clip_notes() -> void:
 	update_container_width()
 
 
-## Source of fresh note ids: the project's allocator when there is an editor, and
-## the bound clips' own ids otherwise, so binding and placing notes work headless
-## instead of crashing on a null project.
-func _note_id_allocator() -> Callable:
-	var editor = Sonara.editor
-	if editor and editor.project:
-		return editor.project.allocate_note_id
-	return _local_note_id
-
-
-## Next id above every note in the clips this editor is bound to.
-func _local_note_id() -> int:
-	var next := 1
-	var clips: Array = [clip] if not multi_clip_mode else clip_instances.map(func(ci): return ci.clip if ci else null)
-	for c in clips:
-		if c == null:
-			continue
-		for n in c.midi_notes:
-			if n and n.id >= next:
-				next = n.id + 1
-	return next
-
-
 func _load_notes_from_single_clip() -> void:
 	"""Load notes from single clip instance (clip-mode)."""
 	if not clip:
 		logger.error("No clip to load!")
 		return
 
-	var allocate := _note_id_allocator()
-
 	for note_data in clip.midi_notes:
-		# Assign note ID if not already assigned
-		if note_data.id < 0:
-			note_data.id = allocate.call()
-
 		# Create visual note instance
 		var note_instance = visual_note_scene.instantiate()
 		add_child(note_instance)
@@ -485,7 +469,6 @@ func _load_notes_from_multiple_clips() -> void:
 		logger.warn("No clip instances to load!")
 		return
 
-	var allocate := _note_id_allocator()
 	var total_notes = 0
 
 	for ci in clip_instances:
@@ -497,10 +480,6 @@ func _load_notes_from_multiple_clips() -> void:
 		logger.info("  - clip instance id=%s start=%d end=%d notes=%d" % [str(ci.id), ci.start_ticks, ci.get_end_ticks(), clip_note_count])
 
 		for note_data in ci.clip.midi_notes:
-			# Assign note ID if not already assigned
-			if note_data.id < 0:
-				note_data.id = allocate.call()
-
 			# Create visual note instance
 			var note_instance = visual_note_scene.instantiate()
 			add_child(note_instance)
@@ -621,6 +600,33 @@ func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	notes_changed.emit()
 
 
+## Pitches (-> velocity) of the shown notes sounding at `tick`, in this editor's ticks
+## (clip-content in clip mode, song in track mode). With `only_played`, clip mode also
+## requires the tick to fall inside the bound instance's played window, so this matches
+## what playback actually sounds.
+func pitches_sounding_at(tick: int, only_played: bool = true) -> Dictionary:
+	var out := {}
+	if only_played and not multi_clip_mode and clip_instance:
+		if tick < clip_instance.clip_offset or tick >= clip_instance.clip_offset + clip_instance.duration_ticks:
+			return out
+	for child in get_children():
+		if not (child is VisualNote and child.visible and child.midi_note_data) or child.is_pending:
+			continue
+		var nd: MidiNoteData = child.midi_note_data
+		var start := nd.start_tick + _note_offset_ticks(child)
+		if tick >= start and tick < start + nd.duration_ticks:
+			out[nd.note] = maxi(out.get(nd.note, 0), nd.velocity)
+	return out
+
+
+## Ticks added to a note's clip-content start to place it in this editor's space.
+func _note_offset_ticks(note: VisualNote) -> int:
+	if multi_clip_mode:
+		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
+		return ci.content_origin_ticks() if ci else 0
+	return position_offset_ticks
+
+
 # ============================================================================
 # COORDINATE CONVERSION
 # ============================================================================
@@ -704,7 +710,7 @@ func _get_note_at_position(pos: Vector2) -> VisualNote:
 	var children = get_children()
 	for i in range(children.size() - 1, -1, -1):
 		var child = children[i]
-		if child is VisualNote:
+		if child is VisualNote and child.visible and not child.is_pending:
 			var rect = Rect2(child.position, child.size)
 			if rect.has_point(pos):
 				return child
@@ -837,6 +843,7 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 	# Connect to new clip's signals for reactive updates
 	if new_clip:
 		_connect_clip_signals(new_clip)
+	_watch_instance(new_clip_instance)
 	
 	# Refresh container width to account for new clip
 	update_container_width()

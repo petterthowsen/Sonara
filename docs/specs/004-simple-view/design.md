@@ -175,7 +175,8 @@ different ids can never map to the same file.
 - `rect` is `[col, row, w, h]` in cells.
 - `params` holds parameter ids, and their order has a meaning for each control kind:
   - xy: `[x, y]`
-  - envelope: `[a, d, s, r]`
+  - envelope: `[a, d, s, r]`, or only the stages named by the optional `stages` key (e.g.
+    `"stages": "ads"` with `[a, d, s]`). A missing `stages` means `"adsr"`.
   - eq_band: `[freq, gain, q]`
 - `group` (optional) is the id of the group a control belongs to. Group rects are recomputed from
   their controls after a grid resize or reconcile.

@@ -7,8 +7,7 @@ signal value_changed(new_value: float)
 var _value := 0.5
 var _dragging := false
 var _hovering := false
-var _tooltip: PanelContainer = null
-var _tooltip_label: Label = null
+var _tooltip: ValueTooltip = null
 
 @export var min_value := 0.0:
 	set(mv):
@@ -40,6 +39,14 @@ var _tooltip_label: Label = null
 			queue_redraw()
 
 @export var show_value_tooltip := true
+
+enum TooltipSide { ABOVE, BELOW }
+
+## Where the value tooltip sits. Put it on the side away from the knob's caption.
+@export var tooltip_side := TooltipSide.ABOVE
+
+## Gap in pixels between the knob and the value tooltip.
+@export var tooltip_gap := 10.0
 
 ## Used when `value_text_callback` is empty. `unit` is appended when set.
 @export var value_format := "%.2f"
@@ -264,51 +271,20 @@ func _refresh_tooltip() -> void:
 			_tooltip.visible = false
 		set_process(false)
 		return
-	_ensure_tooltip()
-	_tooltip_label.text = get_value_text()
+	if _tooltip == null:
+		_tooltip = ValueTooltip.attach(self)
+	_tooltip.gap = tooltip_gap
+	_tooltip.set_text(get_value_text())
 	_tooltip.visible = true
-	_tooltip.reset_size()
 	_position_tooltip()
 	set_process(true)
 
 
-## Create the floating value label once, as an unsaved internal child.
-func _ensure_tooltip() -> void:
-	if _tooltip != null:
-		return
-	_tooltip = PanelContainer.new()
-	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_tooltip.top_level = true
-	_tooltip.z_index = 128
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.08, 0.1, 0.94)
-	style.border_color = Color(1, 1, 1, 0.12)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 6
-	style.content_margin_right = 6
-	style.content_margin_top = 2
-	style.content_margin_bottom = 2
-	_tooltip.add_theme_stylebox_override("panel", style)
-	_tooltip_label = Label.new()
-	_tooltip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_tooltip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_tooltip_label.add_theme_font_size_override("font_size", 12)
-	_tooltip.add_child(_tooltip_label)
-	add_child(_tooltip, false, Node.INTERNAL_MODE_BACK)
-	_tooltip.visible = false
-
-
-## Center the tooltip just above the knob in viewport space.
+## Keep the tooltip above or below the knob in viewport space.
 func _position_tooltip() -> void:
 	if _tooltip == null or not _tooltip.visible:
 		return
-	var tip_size := _tooltip.get_combined_minimum_size()
-	_tooltip.size = tip_size
-	var top_center := global_position + Vector2(size.x * 0.5, 0.0)
-	var pos := top_center - Vector2(tip_size.x * 0.5, tip_size.y + 4.0)
-	if pos.y < 0.0:
-		pos.y = global_position.y + size.y + 4.0
-	var view_size := get_viewport_rect().size
-	pos.x = clampf(pos.x, 0.0, maxf(view_size.x - tip_size.x, 0.0))
-	_tooltip.global_position = pos
+	if tooltip_side == TooltipSide.BELOW:
+		_tooltip.place_below(get_global_rect())
+	else:
+		_tooltip.place_above(get_global_rect())

@@ -125,6 +125,11 @@ var _children_tween: Tween
 ## Dragging it on one strip applies to all others. -1 means "use the scene default".
 static var _shared_vsplit_offset := -1
 
+## Sends list scroll position, shared across every strip so the same bus row lines up.
+static var _shared_sends_scroll := 0
+## True while strips adopt the shared scroll, so a strip clamping it doesn't propagate back.
+static var _applying_sends_scroll := false
+
 var _peak_readout: Label
 
 func _ready():
@@ -163,6 +168,10 @@ func _ready():
 	if side_vsplit:
 		side_vsplit.dragged.connect(_on_vsplit_dragged)
 	_apply_shared_vsplit_offset()
+	if sends:
+		sends.get_v_scroll_bar().value_changed.connect(_on_sends_scrolled)
+		# Adopt the shared position once the sends have content to scroll.
+		sends.get_v_scroll_bar().changed.connect(_apply_shared_sends_scroll)
 
 	if header:
 		header.gui_input.connect(_on_header_gui_input)
@@ -580,6 +589,23 @@ func _apply_shared_vsplit_offset() -> void:
 		side_vsplit.split_offset = _shared_vsplit_offset
 
 
+## Propagate a sends scroll on this strip to every mixer strip.
+func _on_sends_scrolled(value: float) -> void:
+	if _applying_sends_scroll or int(value) == _shared_sends_scroll:
+		return
+	_shared_sends_scroll = int(value)
+	get_tree().call_group("mixer_channel", "_apply_shared_sends_scroll")
+
+
+## Scroll this strip's sends to the shared position (clamped by the scroll bar).
+func _apply_shared_sends_scroll() -> void:
+	if sends == null or sends.scroll_vertical == _shared_sends_scroll:
+		return
+	_applying_sends_scroll = true
+	sends.scroll_vertical = _shared_sends_scroll
+	_applying_sends_scroll = false
+
+
 ## Move DeviceList/Sends between MainPane and SidePane to match the current layout mode.
 func _apply_layout_mode() -> void:
 	if Engine.is_editor_hint() or not is_inside_tree():
@@ -939,7 +965,9 @@ func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 		return mixer != null and mixer.can_drop_channel_drag(data as MixerChannelDrag)
 	if device_list and DeviceDropTarget.resolve_for(device_list, data).is_valid():
 		return true
-	return channel != null and data is Asset and DeviceDropUtil.can_drop_asset_on_channel(channel, data)
+	# Anywhere else on the strip appends to the chain (devices from other channels too).
+	var host := device_list.drop_host if device_list else null
+	return host != null and host.can_drop(data) and not host.is_noop(data)
 
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
@@ -954,8 +982,8 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		if target.is_valid():
 			target.commit(data)
 			return
-	if channel and data is Asset:
-		DeviceDropUtil.drop_asset(channel, data, -1, null)
+		if device_list.drop_host.drop(data) and data is DeviceDrag:
+			(data as DeviceDrag).did_commit = true
 
 
 ## Shrink the header by every enclosing fold-out's top offset so header bottoms line up.

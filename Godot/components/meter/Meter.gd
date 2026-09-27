@@ -170,8 +170,8 @@ var _clip_left := false
 var _clip_right := false
 
 var _is_dragging_fader := false
-var _last_fader_mouse_pos := Vector2.ZERO
-@export var fader_fine_drag_scale := 0.15 ## Multiplier applied to mouse movement during shift-held fine fader drags
+@export var fader_fine_drag_scale := FineDrag.DEFAULT_SCALE ## Multiplier applied to mouse movement during shift-held fine fader drags
+var _fine_drag := FineDrag.new()
 var mouse_hovered := false
 
 var peak_combined: float:
@@ -315,7 +315,7 @@ func _is_settled() -> bool:
 func _gui_input(event: InputEvent) -> void:
 	# clicking the bars (not the fader) clears the clip lights and max peak
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
-			and not (show_fader and _is_mouse_in_fader(event.position)):
+			and not (show_fader and _is_mouse_on_fader(event.position)):
 		peak_memory_reset_requested.emit()
 		reset_peak_memory()
 		accept_event()
@@ -328,15 +328,14 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_event = event as InputEventMouseButton
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
-			if _is_mouse_in_fader(mouse_event.position):
+			if _is_mouse_on_fader(mouse_event.position) or _is_dragging_fader:
 				if mouse_event.pressed:
 					if mouse_event.double_click:
 						_start_value_edit()
 					else:
 						# start dragging
 						_is_dragging_fader = true
-						_last_fader_mouse_pos = mouse_event.position
-						_handle_fader_drag(mouse_event.position)
+						_handle_fader_drag(_fine_drag.begin(mouse_event.position))
 					accept_event()
 				else:
 					# stop dragging
@@ -346,12 +345,11 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		var mouse_event = event as InputEventMouseMotion
 		_update_cursor_for_fader()
-		if mouse_event.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			if _is_mouse_over_fader_handle(mouse_event.position) or _is_dragging_fader:
-				# dragging the fader
-				_handle_fader_drag(mouse_event.position, mouse_event.shift_pressed)
-				accept_event()
-				queue_redraw()
+		if _is_dragging_fader:
+			_fine_drag.scale = fader_fine_drag_scale
+			_handle_fader_drag(_fine_drag.update(mouse_event.position, mouse_event.shift_pressed, Rect2(Vector2.ZERO, size)))
+			accept_event()
+			queue_redraw()
 
 
 ## Open a floating LineEdit above the fader to type a new volume directly.
@@ -369,6 +367,11 @@ func _on_edit_committed(text: String) -> void:
 	if trimmed.is_valid_float():
 		volume_db = clamp(float(trimmed), db_bottom, db_top)
 		volume_changed.emit(volume_db)
+
+
+## The fader column or its handle (which is wider than the column).
+func _is_mouse_on_fader(pos: Vector2) -> bool:
+	return _is_mouse_in_fader(pos) or _is_mouse_over_fader_handle(pos)
 
 
 func _is_mouse_in_fader(pos : Vector2) -> bool:
@@ -429,17 +432,10 @@ func _is_mouse_over_fader_handle(mouse_pos: Vector2) -> bool:
 	return handle_pos.distance_to(mouse_pos) <= handle_radius * 1.5
 
 
-func _handle_fader_drag(mouse_pos: Vector2, fine: bool = false) -> void:
-	# 0 at top, 1 at bottom of the fader's screen-space (post-warp) range
-	var y_normalized: float
-	if fine:
-		# Fine adjustment: scale the mouse movement instead of jumping to its position.
-		var last_y_normalized: float = clamp(1.0 - (_last_fader_mouse_pos.y / size.y), 0.0, 1.0)
-		var new_y_normalized: float = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)
-		var delta: float = (new_y_normalized - last_y_normalized) * fader_fine_drag_scale
-		y_normalized = clamp(_db_to_norm(volume_db) + delta, 0.0, 1.0)
-	else:
-		y_normalized = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)
+## Set the volume from a fader point (FineDrag already applied Shift precision).
+func _handle_fader_drag(mouse_pos: Vector2) -> void:
+	# 0 at bottom, 1 at top of the fader's screen-space (post-warp) range
+	var y_normalized: float = clamp(1.0 - (mouse_pos.y / size.y), 0.0, 1.0)
 
 	# apply inverse gamma warp
 	var n_unwarp = y_normalized
@@ -452,8 +448,6 @@ func _handle_fader_drag(mouse_pos: Vector2, fine: bool = false) -> void:
 	if new_volume_db != volume_db:
 		volume_db = clamp(new_volume_db, db_bottom, db_top)
 		volume_changed.emit(volume_db)
-
-	_last_fader_mouse_pos = mouse_pos
 
 
 func _update_cursor_for_fader() -> void:

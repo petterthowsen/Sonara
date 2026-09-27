@@ -35,11 +35,40 @@ class_name GridHelper extends Resource
 			scroll_position = s
 			changed.emit()
 
+## Minimum on-screen gap in pixels between adjacent grid lines. Beat lines, then
+## 1/2, 1/4 and 1/8 beat subdivisions, appear (and become snap targets) only
+## once their spacing reaches this. Bar lines always show. At runtime this
+## follows the "appearance/grid_min_line_spacing" setting.
+@export var min_line_spacing: float = 10.0:
+	set(v):
+		if min_line_spacing != v:
+			min_line_spacing = v
+			changed.emit()
+
 func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4, tempo_val : float = 120.0):
 	ppq = ppq_val
 	time_numerator = time_num
 	time_denominator = time_denom
 	tempo = tempo_val
+	_follow_spacing_setting()
+
+const SPACING_SETTING := "appearance/grid_min_line_spacing"
+
+func _follow_spacing_setting() -> void:
+	"""Take min_line_spacing from Settings and track live changes (not in the Godot editor)."""
+	if Engine.is_editor_hint():
+		return
+	# Looked up via the tree: this @tool script can be parsed before autoloads resolve by name.
+	var tree := Engine.get_main_loop() as SceneTree
+	var settings: Node = tree.root.get_node_or_null("Settings") if tree else null
+	if settings == null:
+		return
+	min_line_spacing = float(settings.get_value(SPACING_SETTING))
+	settings.setting_changed.connect(_on_setting_changed)
+
+func _on_setting_changed(key: String, value) -> void:
+	if key == SPACING_SETTING:
+		min_line_spacing = float(value)
 
 static func from_project(p : Project) -> GridHelper:
 	return new(p.ppq, p.time_numerator, p.time_denominator, p.tempo)
@@ -91,26 +120,25 @@ func get_snap_interval() -> int:
 	if subdivision_interval > 0:
 		# If subdivisions are visible, snap to them
 		return subdivision_interval
-	elif pixels_per_beat >= 32.0:
+	elif beat_lines_visible():
 		# If beats are visible, snap to beats
 		return get_ticks_per_beat()
 	else:
 		# Otherwise snap to bars
 		return get_ticks_per_bar()
 
+## True when beats are at least min_line_spacing apart on screen.
+func beat_lines_visible() -> bool:
+	return ticks_to_pixels(get_ticks_per_beat()) >= min_line_spacing
+
+## Finest 1/2, 1/4 or 1/8 beat subdivision that keeps lines min_line_spacing apart, or 0 for none.
 func get_subdivision_interval() -> int:
-	"""Get subdivision grid interval (finer grid lines shown at higher zoom levels)."""
-	if pixels_per_beat < 64.0:
-		# Don't show subdivisions when zoomed out
-		return 0
-	elif pixels_per_beat < 256.0:
-		# Show quarter beat subdivisions
+	for div in [8, 4, 2]:
 		@warning_ignore("integer_division")
-		return ppq / 4
-	else:
-		# Show eighth beat subdivisions
-		@warning_ignore("integer_division")
-		return ppq / 8
+		var interval: int = maxi(1, ppq / div)
+		if interval < get_ticks_per_beat() and ticks_to_pixels(interval) >= min_line_spacing:
+			return interval
+	return 0
 
 # ============================================================================
 # SNAPPING
@@ -247,7 +275,7 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 		bar_number += 1
 	
 	# Generate beat lines (skip bars)
-	if pixels_per_beat >= 32.0:  # Only show beats if zoomed in enough
+	if beat_lines_visible():
 		@warning_ignore("integer_division")
 		var first_beat_tick = (start_ticks / ticks_per_beat) * ticks_per_beat
 		tick = first_beat_tick

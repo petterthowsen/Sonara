@@ -151,9 +151,21 @@ func _test_compounds() -> void:
 		_float(2, "Amp Sustain"), _float(3, "Amp Release", "ms", 0, 5000), _float(4, "Cutoff")])
 	_assert(adsr.size() == 2 and adsr[0].kind == "envelope" and adsr[0].params == [0, 1, 2, 3], "full ADSR → envelope")
 
-	var partial := _items([_float(0, "Attack", "s"), _float(1, "Decay", "s"), _float(2, "Sustain")])
-	var kinds := partial.map(func(i): return i.kind)
-	_assert(kinds == ["knob", "knob", "knob"], "ADSR missing release → 3 knobs: %s" % [kinds])
+	_assert(not adsr[0].has("stages"), "full ADSR leaves stages at the default")
+
+	var ads := _items([_float(0, "Attack", "s"), _float(1, "Decay", "s"), _float(2, "Sustain")])
+	_assert(ads.size() == 1 and ads[0].kind == "envelope" and ads[0].params == [0, 1, 2] and ads[0].stages == "ads",
+		"ADS (no release) → envelope with stages 'ads'")
+
+	var asr := _items([_float(0, "Env Attack", "s"), _float(1, "Env Sustain"), _float(2, "Env Release", "s")])
+	_assert(asr.size() == 1 and asr[0].stages == "asr" and asr[0].params == [0, 1, 2], "ASR → envelope with stages 'asr'")
+
+	var ad := _items([_float(0, "Attack", "s"), _float(1, "Decay", "s")])
+	_assert(ad.size() == 1 and ad[0].stages == "ad", "AD → envelope with stages 'ad'")
+
+	var comp := _items([_float(0, "Attack", "ms", 0, 100), _float(1, "Release", "ms", 0, 1000)])
+	var kinds := comp.map(func(i): return i.kind)
+	_assert(kinds == ["knob", "knob"], "attack + release alone (compressor) → 2 knobs: %s" % [kinds])
 
 	var not_time := _items([_float(0, "Attack", "dB", -60, 0), _float(1, "Decay", "s"), _float(2, "Sustain"), _float(3, "Release", "s")])
 	_assert(not_time.size() == 4, "ADSR with a non-time attack stays single controls")

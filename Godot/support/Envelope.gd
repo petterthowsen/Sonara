@@ -1,174 +1,176 @@
 # Envelope.gd
-# Represents an ADSR envelope for audio synthesis.
-# Attack, decay, sustain, and release times are in seconds.
-# Values are clamped to 0.001-2.0 seconds.
+# ADSR envelope data for EnvelopeControl: attack, decay and release times in seconds,
+# sustain as a level (0–1), each clamped to its own range. `stages` says which parts the
+# device actually has ("adsr", "ads", "ad", "asr", ...), so an envelope can be any subset.
+#
+# Setting a stage property emits its `*_changed` signal (with the clamped value) when the
+# value changes, which is how edits reach the device. `set_adsr()` is for syncing from the
+# device: it only emits `changed`, so it never echoes back.
 
 @tool
 class_name Envelope extends Resource
 
-var _attack: float = 0.01
-var _decay: float = 0.1
-var _sustain: float = 0.7
-var _release: float = 0.3
+enum Stage { ATTACK, DECAY, SUSTAIN, RELEASE }
 
-var min_attack: float = 0.001:
-	set(value):
-		min_attack = clamp(value, 0.0, 9.9)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return min_attack
-
-var max_attack: float = 2.0:
-	set(value):
-		max_attack = clamp(value, 0.01, 10)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return max_attack
-var min_decay: float = 0.001:
-	set(value):
-		min_decay = clamp(value, 0.0, 9.9)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return min_decay
-
-var max_decay: float = 2.0:
-	set(value):
-		max_decay = clamp(value, 0.1, 10.0)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return max_decay
-
-var min_sustain: float = 0.0:
-	set(value):
-		min_sustain = clamp(value, 0.0, 1.0)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return min_sustain
-
-var max_sustain: float = 1.0:
-	set(value):
-		max_sustain = clamp(value, 0.0, 1.0)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return max_sustain
-
-var min_release: float = 0.001:
-	set(value):
-		min_release = clamp(value, 0.0, 9.9)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return min_release
-
-var max_release: float = 2.0:
-	set(value):
-		max_release = clamp(value, 0.01, 10.0)
-		limits_changed.emit()
-		emit_changed()
-	get:
-		return max_release
-
-@export var attack: float:
-	set(value):
-		_attack = clamp(value, min_attack, max_attack)
-		attack_changed.emit(value)
-		emit_changed()
-	get:
-		return _attack
-
-@export var decay: float:
-	set(value):
-		_decay = clamp(value, min_decay, max_decay)
-		decay_changed.emit(value)
-		emit_changed()
-	get:
-		return _decay
-
-@export var sustain: float:
-	set(value):
-		_sustain = clamp(value, min_sustain, max_sustain)
-		sustain_changed.emit(value)
-		emit_changed()
-	get:
-		return _sustain
-
-@export var release: float:
-	set(value):
-		_release = clamp(value, min_release, max_release)
-		release_changed.emit(value)
-		emit_changed()
-	get:
-		return _release
-
-var attack_normalized: float:
-	set(value):
-		attack = remap(value, 0, 1, min_attack, max_attack)
-	get:
-		return attack / max_attack
-
-var decay_normalized: float:
-	set(value):
-		decay = remap(value, 0, 1, min_decay, max_decay)
-	get:
-		return decay / max_decay
-
-var sustain_normalized: float:
-	set(value):
-		sustain = remap(value, 0, 1, min_sustain, max_sustain)
-	get:
-		return sustain / max_sustain
-
-var release_normalized: float:
-	set(value):
-		release = remap(value, 0, 1, min_release, max_release)
-	get:
-		return release / max_release
+## Stage letters in `stages`, indexed by Stage.
+const STAGE_LETTERS := "adsr"
+const TIME_STAGES: Array[Stage] = [Stage.ATTACK, Stage.DECAY, Stage.RELEASE]
 
 signal attack_changed(value: float)
 signal decay_changed(value: float)
 signal sustain_changed(value: float)
 signal release_changed(value: float)
-signal limits_changed()
 
-var adr_max_length: float:
+## Which stages exist, as letters in ADSR order. Unknown letters are dropped.
+@export var stages := "adsr":
+	set(v):
+		var cleaned := ""
+		for letter in STAGE_LETTERS:
+			if letter in v.to_lower():
+				cleaned += letter
+		if cleaned != stages:
+			stages = cleaned
+			emit_changed()
+
+# Ranges. Times in seconds, sustain as a level.
+@export var min_attack := 0.001:
+	set(v):
+		min_attack = maxf(v, 0.0)
+		_reclamp()
+@export var max_attack := 2.0:
+	set(v):
+		max_attack = maxf(v, 0.001)
+		_reclamp()
+@export var min_decay := 0.001:
+	set(v):
+		min_decay = maxf(v, 0.0)
+		_reclamp()
+@export var max_decay := 2.0:
+	set(v):
+		max_decay = maxf(v, 0.001)
+		_reclamp()
+@export var min_sustain := 0.0:
+	set(v):
+		min_sustain = clampf(v, 0.0, 1.0)
+		_reclamp()
+@export var max_sustain := 1.0:
+	set(v):
+		max_sustain = clampf(v, 0.0, 1.0)
+		_reclamp()
+@export var min_release := 0.001:
+	set(v):
+		min_release = maxf(v, 0.0)
+		_reclamp()
+@export var max_release := 2.0:
+	set(v):
+		max_release = maxf(v, 0.001)
+		_reclamp()
+
+var _values: Array[float] = [0.01, 0.1, 0.7, 0.3]
+
+@export var attack: float:
+	set(v):
+		set_stage_value(Stage.ATTACK, v)
 	get:
-		return max_attack + max_decay + max_release
+		return _values[Stage.ATTACK]
+
+@export var decay: float:
+	set(v):
+		set_stage_value(Stage.DECAY, v)
+	get:
+		return _values[Stage.DECAY]
+
+@export var sustain: float:
+	set(v):
+		set_stage_value(Stage.SUSTAIN, v)
+	get:
+		return _values[Stage.SUSTAIN]
+
+@export var release: float:
+	set(v):
+		set_stage_value(Stage.RELEASE, v)
+	get:
+		return _values[Stage.RELEASE]
 
 
-func reset() -> void:
-	_attack = 0.01
-	_decay = 0.1
-	_sustain = 0.7
-	_release = 0.3
-	
-	attack_changed.emit(_attack)
-	decay_changed.emit(_decay)
-	sustain_changed.emit(_sustain)
-	release_changed.emit(_release)
+func has_stage(stage: Stage) -> bool:
+	return STAGE_LETTERS[stage] in stages
+
+
+func get_stage_value(stage: Stage) -> float:
+	return _values[stage]
+
+
+func get_stage_min(stage: Stage) -> float:
+	match stage:
+		Stage.ATTACK: return min_attack
+		Stage.DECAY: return min_decay
+		Stage.SUSTAIN: return min_sustain
+		_: return min_release
+
+
+func get_stage_max(stage: Stage) -> float:
+	match stage:
+		Stage.ATTACK: return maxf(max_attack, min_attack)
+		Stage.DECAY: return maxf(max_decay, min_decay)
+		Stage.SUSTAIN: return maxf(max_sustain, min_sustain)
+		_: return maxf(max_release, min_release)
+
+
+## Set the range of `stage` in one go.
+func set_stage_range(stage: Stage, lo: float, hi: float) -> void:
+	match stage:
+		Stage.ATTACK:
+			min_attack = lo
+			max_attack = hi
+		Stage.DECAY:
+			min_decay = lo
+			max_decay = hi
+		Stage.SUSTAIN:
+			min_sustain = lo
+			max_sustain = hi
+		Stage.RELEASE:
+			min_release = lo
+			max_release = hi
+
+
+## Clamp and store `value`; emits the stage's signal and `changed` when it actually changes.
+func set_stage_value(stage: Stage, value: float) -> void:
+	var clamped := clampf(value, get_stage_min(stage), get_stage_max(stage))
+	if is_equal_approx(clamped, _values[stage]):
+		return
+	_values[stage] = clamped
+	_stage_signal(stage).emit(clamped)
 	emit_changed()
 
 
-func set_adsr(attack: float, decay: float, sustain: float, release: float) -> void:
-	_attack = attack
-	_decay = decay
-	_sustain = sustain
-	_release = release
-	attack_changed.emit(_attack)
-	decay_changed.emit(_decay)
-	sustain_changed.emit(_sustain)
-	release_changed.emit(_release)
+## Set all four values from the device without emitting the stage signals.
+func set_adsr(p_attack: float, p_decay: float, p_sustain: float, p_release: float) -> void:
+	var incoming := [p_attack, p_decay, p_sustain, p_release]
+	for stage in 4:
+		_values[stage] = clampf(incoming[stage], get_stage_min(stage), get_stage_max(stage))
 	emit_changed()
 
 
-## Serialize envelope to JSON dictionary
+func _stage_signal(stage: Stage) -> Signal:
+	match stage:
+		Stage.ATTACK: return attack_changed
+		Stage.DECAY: return decay_changed
+		Stage.SUSTAIN: return sustain_changed
+		_: return release_changed
+
+
+## Keep values inside changed ranges, without emitting stage signals.
+func _reclamp() -> void:
+	for stage in 4:
+		_values[stage] = clampf(_values[stage], get_stage_min(stage), get_stage_max(stage))
+	emit_changed()
+
+
+## Serialize to a JSON dictionary.
 func to_json() -> Dictionary:
 	return {
+		"stages": stages,
 		"attack": attack,
 		"decay": decay,
 		"sustain": sustain,
@@ -180,13 +182,14 @@ func to_json() -> Dictionary:
 		"min_sustain": min_sustain,
 		"max_sustain": max_sustain,
 		"min_release": min_release,
-		"max_release": max_release
+		"max_release": max_release,
 	}
 
 
-## Deserialize envelope from JSON dictionary
+## Deserialize from a JSON dictionary.
 static func from_json(data: Dictionary) -> Envelope:
-	var envelope = Envelope.new()
+	var envelope := Envelope.new()
+	envelope.stages = str(data.get("stages", "adsr"))
 	envelope.min_attack = data.get("min_attack", 0.001)
 	envelope.max_attack = data.get("max_attack", 2.0)
 	envelope.min_decay = data.get("min_decay", 0.001)
@@ -195,8 +198,5 @@ static func from_json(data: Dictionary) -> Envelope:
 	envelope.max_sustain = data.get("max_sustain", 1.0)
 	envelope.min_release = data.get("min_release", 0.001)
 	envelope.max_release = data.get("max_release", 2.0)
-	envelope.attack = data.get("attack", 0.01)
-	envelope.decay = data.get("decay", 0.1)
-	envelope.sustain = data.get("sustain", 0.7)
-	envelope.release = data.get("release", 0.3)
+	envelope.set_adsr(data.get("attack", 0.01), data.get("decay", 0.1), data.get("sustain", 0.7), data.get("release", 0.3))
 	return envelope
