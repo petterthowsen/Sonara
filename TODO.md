@@ -135,16 +135,14 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] tracks could have a checkbox to show/hide their notes
 - [ ] by default, show all tracks
 
-- [ ] Note editor: dragging the end of a note to adjust its length seems to floor the drag instead of rounding it, so it doesn't "feel right".
-- [ ] Piano roll: black keys use a white background, so the note-hover overlay is barely visible on them
-- [ ] Consider Modifier+right-click to open context menu in NoteEditor?
+- [x?] Note editor: dragging the end of a note to adjust its length seems to floor the drag instead of rounding it, so it doesn't "feel right". `_snapped_duration` now rounds to the nearest grid step (still min one step).
+- [x?] Piano roll: black keys use a white background, so the note-hover overlay is barely visible on them. `VPiano` now darkens light keys on hover instead of lightening them.
 - [x?] Bug: the blue vertical range line at the start of the clip renders off-screen. The markers track content X correctly (projected note position == marker X), but `MidiEditorOverlays` had no clipping, so a marker scrolled left of the note area painted over the piano keys / outside the editor. Fixed with `clip_contents = true` in `_ready()`.
   - bug still present: issue is that it isn't visible. maybe fix is draw +1 px to the right?
+  - Markers are now inset by half their width (start drawn right of the edge, end left of it), so a start marker at x = 0 is no longer half-clipped.
 
+- [ ] Consider Modifier+right-click to open context menu in NoteEditor?
 - [x?] should probably add a gray line between E/F and between B/C
-- [x?] note audition mode, a toggle at the bottom (use one of our icons) when on, clicking a note plays it on that instrument, at the velocity of the note.
-- [x?] piano roll (the piano keys on the left) should allow clicking to play the notes. low velocity on their left-most edge and higher velocity on the right (20% padding on velocity mapping) maybe style it so it looks like it depresses
-- [x?] the hovered note lane should highlight the key on the piano roll on the left
 
 ### Devices
 
@@ -163,7 +161,6 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 #### Plugins
 
-- [x?] Subfolders aren't scanned: the engine only looks at the top level of each plugin folder. The CLAP spec says to search subfolders, so a plugin at ~/.clap/<vendor>/Foo.clap isn't found today. `PluginScanner::find_plugin_files` now walks subfolders for `.clap` files (symlinks followed, loops guarded, depth capped at 16); `.so` files are still only taken from the top level. Covered by unit tests in `discovery.rs`; not yet verified with a real vendor folder.
 
 ### Save / Load / Export
 
@@ -183,26 +180,13 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 ### UI / Quality of Life
 
 - [ ] Investigate overall frontend architecture: deviations from code style / best practices, and organization improvements — prioritize low-risk, high-ROI
-- [x?] All meters/faders and knobs allow precision editing while holding Shift. Shared `FineDrag` helper in RotaryKnob (already relative), VSlider, Meter fader, Volumeter, HorSlider (pan, compact params), HDualSlider, XYSlider and EnvelopeControl; pressing or releasing Shift mid-drag no longer makes the value jump
-- [x?] Improve Volumeter: mixer meter colors (level-colored bar, same background and handle), handle only on hover/drag, value tooltip beside the handle, red clip line at the top held 10 s (extended by new clips), double-click value input. Range is now -60..+6 dB like the mixer fader (the handle couldn't reach the top before)
-- [ ] Knob component
-  - [x?] Improve modularity/adjustability: `LabeledKnob` (knob + caption, `label_width`, `knob_size`, `text`); value tooltip extracted to `ValueTooltip` with a `tooltip_gap` export
-  - [x?] Label clips with an ellipsis (MixerChannel sends panel uses `LabeledKnob`)
-  - [x?] Hovering the knob or caption draws the full caption on top of everything at the caption's position, without affecting layout (only when trimmed). Shared `LabelOverlay`, also on Simple View titles (hovering a knob or slider reveals its title). `LabeledKnob.label_position` puts the caption on top or bottom; the value tooltip moves to the other side
-  - [x?] The value readout sits higher (gap 4 → 10 px)
-- [x?] Envelope editor rework (`EnvelopeControl`, `Envelope`): stages drawn end to end with a sustain plateau, lengths follow the values (sqrt-scaled per stage), any subset of ADSR (`Envelope.stages`, Simple View `stages` key), #111 background, handles inset so nothing draws outside, value tooltip on hover/drag, Shift fine drag
 - [ ] Complete the value-control gesture set (see `docs/subsystems/godot-ui-components.md`, "Consistent interaction")
   - [ ] Double-click value entry (`FloatingValueEditor`) on HorSlider, XYSlider and EnvelopeControl (per handle)
   - [ ] Ctrl/Cmd-click reset to default on VSlider, the Meter fader, Volumeter (0 dB? or the channel default) and EnvelopeControl (per handle)
-- [ ] Unify the drag and drop system around the Mixer view's approach (glowing blue insertion line)
-  - [x?] Dragging a device into empty mixer space creates a channel: left side adds an instrument or audio channel, right side adds a bus. Works for browser assets and for devices dragged off a channel (moved, one undo step). A glowing line shows where the new strip appears. Not done for the arranger's empty track area, which still only takes instruments/SFZ
-  - [x?] Dragging a device from the browser can't drop directly into a chain or layer; it should. A container panel's body now takes the drop (header glows); near the panel's ends still inserts beside it
-  - [x?] Moving devices from a MixerChannel's compact device list to another channel doesn't work. Cross-channel moves go through `DeviceTransferCommand`; dropping anywhere on a strip appends. Devices owning aux returns (Drum Machine, multi-out plugins) and drum pads stay on their channel. Like container moves, the engine re-creates the device and only parameters are restored, so plugin state outside parameters is lost
 - [x?] SmartLineEdit: clicking outside (or losing focus) commits the edit, like Enter
 
 ### Settings
 
--
 - [ ] Data-driven settings system: register a setting with name, category, optional sub-category, description/help, default value, data type / input control type, and build the UI from that registry (rendered when the settings window opens), we may allow custom controls linking to a packed scene perhaps for certain settings (maybe for assets path definitions).
   - [ ] Sub-category renders as a large-font label with margins between sub-categories
   - [ ] Table-like layout with the controls aligned on the right for readability

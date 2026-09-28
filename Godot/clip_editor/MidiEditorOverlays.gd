@@ -35,18 +35,14 @@ func _draw() -> void:
 		var line_width = 2.0
 		var height = size.y
 
+		# Inset each line by half its width so it sits inside the selected range.
+		# Centred on the edge, a start marker at the clip start (x = 0) lost half
+		# its width to clip_contents and the rest vanished against the grid line.
+		var start_x = selection_start_x + line_width * 0.5
+		var end_x = selection_end_x - line_width * 0.5
+
 		# Draw start marker
-		draw_line(
-			Vector2(selection_start_x, 0),
-			Vector2(selection_start_x, height),
-			line_color,
-			line_width
-		)
+		draw_line(Vector2(start_x, 0), Vector2(start_x, height), line_color, line_width)
 
 		# Draw end marker
-		draw_line(
-			Vector2(selection_end_x, 0),
-			Vector2(selection_end_x, height),
-			line_color,
-			line_width
-		)
+		draw_line(Vector2(end_x, 0), Vector2(end_x, height), line_color, line_width)

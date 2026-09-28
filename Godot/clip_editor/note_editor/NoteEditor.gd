@@ -626,11 +626,11 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 	_history_begin_selection()
 
 
-## Note length floored to the grid, never shorter than one grid step.
+## Note length rounded to the nearest grid step, never shorter than one grid step.
 func _snapped_duration(ticks: int) -> int:
 	var snap_interval := get_snap_interval()
 	if grid_helper:
-		ticks = grid_helper.floor_ticks(ticks)
+		ticks = grid_helper.snap_ticks(ticks)
 	return maxi(snap_interval, ticks)
 
 

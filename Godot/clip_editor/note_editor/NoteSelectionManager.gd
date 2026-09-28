@@ -67,9 +67,9 @@ func update_box_selection(pos: Vector2) -> void:
 
 	box_selection_current = pos
 
-	# Snap selection box boundaries to grid (X only)
-	var snapped_start_x = _snap_x_to_grid(box_selection_start.x)
-	var snapped_current_x = _snap_x_to_grid(pos.x)
+	# Snap selection box boundaries to grid (X only), clamped so nothing selects before tick 0
+	var snapped_start_x = maxf(0.0, _snap_x_to_grid(box_selection_start.x))
+	var snapped_current_x = maxf(0.0, _snap_x_to_grid(pos.x))
 
 	# Create rect from snapped positions
 	box_selection_rect = Rect2(
@@ -147,8 +147,9 @@ func _set_selected_notes(notes: Array[VisualNote]) -> void:
 func _update_box_selection(pos: Vector2) -> void:
 	"""Internal helper to update box selection (called by start_box_selection)."""
 	box_selection_current = pos
-	var snapped_start = box_selection_start
-	var snapped_current = box_selection_current
+	# Clamp X so the selection never starts before tick 0.
+	var snapped_start = Vector2(maxf(0.0, box_selection_start.x), box_selection_start.y)
+	var snapped_current = Vector2(maxf(0.0, box_selection_current.x), box_selection_current.y)
 	box_selection_rect = Rect2(snapped_start, Vector2.ZERO)
 	box_selection_rect = box_selection_rect.expand(snapped_current)
 

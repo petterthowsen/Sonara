@@ -277,8 +277,12 @@ func _draw_key(note : int):
 	if is_pressed:
 		draw_rect(note_rect, press_color, true, -1.0, true)
 	# Hover goes over the press so the key under the mouse always reads as hovered.
+	# A light overlay vanishes on light keys (e.g. inverted black keys), so darken those instead.
 	if note == hovered_note:
-		draw_rect(note_rect, hover_color, true, -1.0, true)
+		var hc := hover_color
+		if color.get_luminance() > 0.5:
+			hc = Color(0.0, 0.0, 0.0, hover_color.a)
+		draw_rect(note_rect, hc, true, -1.0, true)
 	
 	if is_pressed:
 		var shadow := Color(0, 0, 0, 0.35)
