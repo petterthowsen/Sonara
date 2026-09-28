@@ -30,6 +30,7 @@ var logger : Log = Log.make("CompactDevicePanel")
 
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null
+var _hovered := false
 
 # ============================================================================
 # SIGNALS
@@ -45,6 +46,10 @@ func _ready() -> void:
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
 	collapse_button.set_state(not collapsed)
 	name_label.value_changed.connect(_on_name_edited)
+	# Fires for children too (Godot 4.2+), so the whole panel counts as hovered.
+	mouse_entered.connect(_set_hovered.bind(true))
+	mouse_exited.connect(_set_hovered.bind(false))
+	set_process(false)
 
 	# Apply initial state
 	_update_ui_visibility()
@@ -155,15 +160,45 @@ func _ensure_param_list() -> void:
 			child.queue_free()
 	_param_list = ParameterList.new()
 	parameters_box.add_child(_param_list)
+	_param_list.controls_changed.connect(func(_count): _update_ui_visibility())
 
 
 ## Update UI visibility based on collapsed and hide_parameters states
 func _update_ui_visibility() -> void:
 	"""Update visibility of parameters panel and collapse button based on state."""
-	# The collapse toggle stays visible regardless of selection; only the parameters
-	# panel itself is forced hidden when hide_parameters is set (channel not selected).
-	collapse_button.visible = true
-	parameters.visible = not hide_parameters and not collapsed
+	# The chevron only shows on hover, and only for devices with parameters. Hidden, it
+	# takes no space, so the name gets the full header width.
+	var has_params := _has_parameters()
+	collapse_button.visible = has_params and _hovered
+	# Only the parameters panel itself is forced hidden when hide_parameters is set
+	# (channel not selected).
+	parameters.visible = has_params and not hide_parameters and not collapsed
+
+
+func _has_parameters() -> bool:
+	return _param_list != null and _param_list.get_control_count() > 0
+
+
+func _set_hovered(hovered: bool) -> void:
+	# A child with MOUSE_FILTER_STOP (e.g. a plugin's own control) cuts the panel out of the
+	# hover chain while the pointer is still over it. Poll until the pointer really leaves.
+	if not hovered and _pointer_inside():
+		set_process(true)
+		return
+	set_process(false)
+	if _hovered == hovered:
+		return
+	_hovered = hovered
+	_update_ui_visibility()
+
+
+func _process(_delta: float) -> void:
+	if not _pointer_inside():
+		_set_hovered(false)
+
+
+func _pointer_inside() -> bool:
+	return is_visible_in_tree() and get_global_rect().has_point(get_global_mouse_position())
 
 
 # ============================================================================
@@ -173,9 +208,10 @@ func _update_ui_visibility() -> void:
 func _on_collapse_button_toggled(button_pressed: bool) -> void:
 	"""Handle collapse button toggle."""
 	collapsed = not button_pressed
-	
-	# Update parameters panel visibility
-	parameters.visible = not collapsed
+	# Parameters only show on the selected channel, so expanding selects it.
+	if not collapsed and hide_parameters:
+		_select_channel()
+	_update_ui_visibility()
 	logger.info("Collapsed state changed to: %s" % collapsed)
 
 

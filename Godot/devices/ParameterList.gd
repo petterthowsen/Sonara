@@ -7,11 +7,15 @@ const CompactParameterControlScene = preload("res://devices/compact/CompactParam
 
 var _logger := Log.make("ParameterList")
 
+## Emitted after the controls are rebuilt or cleared.
+signal controls_changed(count: int)
+
 ## Parameter group to render (`"param"` or `"cc"`).
 @export var group: String = "param"
 
 var device: DeviceInstance = null
 var _channel: Channel = null
+var _control_count := 0
 
 
 func _ready() -> void:
@@ -54,12 +58,23 @@ func refresh() -> void:
 		var control: CompactParameterControl = CompactParameterControlScene.instantiate()
 		control.setup(device, param.id)
 		add_child(control)
+	_control_count = found.size()
+	controls_changed.emit(_control_count)
+
+
+## Number of parameter controls shown. Children freed by `clear()` linger until the
+## end of the frame, so don't count children.
+func get_control_count() -> int:
+	return _control_count
 
 
 ## Remove all parameter controls.
 func clear() -> void:
 	for child in get_children():
 		child.queue_free()
+	if _control_count != 0:
+		_control_count = 0
+		controls_changed.emit(0)
 
 
 func _listen_for_parameter_updates() -> void:

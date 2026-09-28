@@ -227,7 +227,7 @@ layout_mode = 2
 visible = false
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
-size_flags_stretch_ratio = 1.5
+size_flags_stretch_ratio = 2.0
 peak_left = 0.0
 peak_right = 0.0
 rms_left = 0.0
@@ -247,7 +247,6 @@ fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
 layout_mode = 2
 size_flags_vertical = 3
-size_flags_stretch_ratio = 1.5
 split_offsets = PackedInt32Array(35)
 split_offset = 35
 
@@ -386,6 +385,7 @@ custom_minimum_size = Vector2(0, 100)
 custom_maximum_size = Vector2(-1, 300)
 layout_mode = 2
 size_flags_vertical = 3
+size_flags_stretch_ratio = 0.7
 theme_override_styles/panel = SubResource("StyleBoxFlat_1hr2l")
 
 [node name="CompactMeter" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1247433210 groups=["mixer_channel_compact_meter"] instance=ExtResource("1_nssln")]

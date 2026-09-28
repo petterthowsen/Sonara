@@ -32,6 +32,10 @@ overlays and drop indicators (see `godot-drag-and-drop.md`).
 
 - Captions have a fixed width and trim with `TextServer.OVERRUN_TRIM_ELLIPSIS`. Never let a long
   name widen a strip.
+- When a caption and a value readout share a row, show the value only while both fit. Otherwise
+  hide it and show it while the value control is hovered or dragged; the caption trims to make
+  room and the row never widens (`CompactParameterControl`). Dropdowns set
+  `fit_to_longest_item = false` and trim the selected item.
 - Place a value tooltip on the side away from the caption. Captions go above in Simple View and
   below in the sends panel, so the readout never covers the name (`RotaryKnob.tooltip_side`).
 - Keep everything inside the control's rect. The EnvelopeControl insets its curve by the
@@ -94,7 +98,8 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
 | `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
 
-Controls built on them: `RotaryKnob`, `HorSlider` (single) and `HDualSlider` (pan),
+Controls built on them: `RotaryKnob` (fills its rect, or set `radius`; `value_font_size` for its
+tooltip), `HorSlider` (single) and `HDualSlider` (pan),
 `VolumeSlider` (`VSlider.gd`), `Meter` (mixer strip, optional fader), `Volumeter` (track header
 meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
 ADSR).

@@ -39,6 +39,12 @@ static func attach(host: Control) -> ValueTooltip:
 	return tip
 
 
+func set_font_size(font_size: int) -> void:
+	if _label.get_theme_font_size("font_size") != font_size:
+		_label.add_theme_font_size_override("font_size", font_size)
+		reset_size()
+
+
 func set_text(text: String) -> void:
 	if _label.text != text:
 		_label.text = text

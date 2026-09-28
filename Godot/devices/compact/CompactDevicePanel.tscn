@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://dul180dx6ngl4"]
+[gd_scene format=3 uid="uid://dul180dx6ngl4"]
 
 [ext_resource type="Script" uid="uid://dnb0judqvs27u" path="res://devices/compact/CompactDevicePanel.gd" id="1_6d71u"]
 [ext_resource type="PackedScene" uid="uid://q0m43fo1g33u" path="res://devices/compact/CompactParameterControl.tscn" id="1_o5nab"]
@@ -9,7 +9,7 @@
 [ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="6_chevron_down"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6d71u"]
-content_margin_left = 0.0
+content_margin_left = 2.0
 content_margin_top = 0.0
 content_margin_right = 0.0
 content_margin_bottom = 0.0
@@ -31,9 +31,6 @@ fill = 1
 fill_from = Vector2(0.4957265, 0.5)
 fill_to = Vector2(0.14529915, 0.14102565)
 
-[sub_resource type="LabelSettings" id="LabelSettings_6d71u"]
-font_size = 14
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_o5nab"]
 content_margin_left = 2.0
 content_margin_top = 4.0
@@ -47,28 +44,26 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[node name="CompactDevicePanel" type="VBoxContainer"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_right = -1022.0
-grow_horizontal = 2
-grow_vertical = 2
+[node name="CompactDevicePanel" type="VBoxContainer" unique_id=401728466]
+offset_right = 56.0
+offset_bottom = 128.0
 script = ExtResource("1_6d71u")
 collapsed = true
 
-[node name="Header" type="PanelContainer" parent="."]
+[node name="Header" type="PanelContainer" parent="." unique_id=997467900]
 layout_mode = 2
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_6d71u")
 
-[node name="HBoxContainer" type="HBoxContainer" parent="Header"]
+[node name="HBoxContainer" type="HBoxContainer" parent="Header" unique_id=1737818139]
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 2
 
-[node name="DeviceLight" type="Control" parent="Header/HBoxContainer"]
+[node name="DeviceLight" type="Control" parent="Header/HBoxContainer" unique_id=1505394947]
 layout_mode = 2
 size_flags_vertical = 4
+tooltip_text = "Enabled (Audio is processed. Ctrl-click to deactivate and save RAM)"
 script = ExtResource("2_jx3fc")
 diameter = 18.0
 light_color_inactive_disabled = Color(0.2, 0.2, 0.2, 0)
@@ -81,46 +76,44 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Name" parent="Header/HBoxContainer" instance=ExtResource("3_smle")]
+[node name="Name" parent="Header/HBoxContainer" unique_id=1029266992 instance=ExtResource("3_smle")]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
-[node name="Label" parent="Header/HBoxContainer/Name" index="0"]
-text = "PolySynth"
-label_settings = SubResource("LabelSettings_6d71u")
+[node name="Label" parent="Header/HBoxContainer/Name" index="0" unique_id=448001948]
+text = "testsets tset set"
 horizontal_alignment = 0
+autowrap_mode = 1
 clip_text = true
 
-[node name="LineEdit" parent="Header/HBoxContainer/Name" index="1"]
-max_length = 0
-theme_override_font_sizes/font_size = 14
-alignment = 0
-
-[node name="CollapseToggle" type="Button" parent="Header/HBoxContainer"]
+[node name="CollapseToggle" type="Button" parent="Header/HBoxContainer" unique_id=517518463]
 custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
 size_flags_horizontal = 8
 focus_mode = 0
 toggle_mode = true
-flat = true
 icon = ExtResource("5_chevron_right")
+flat = true
 script = ExtResource("4_toggle")
 icon_default = ExtResource("5_chevron_right")
 icon_pressed = ExtResource("6_chevron_down")
 
-[node name="Parameters" type="PanelContainer" parent="."]
+[node name="Parameters" type="PanelContainer" parent="." unique_id=942853079]
 layout_mode = 2
+mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_o5nab")
 
-[node name="VBox" type="VBoxContainer" parent="Parameters"]
+[node name="VBox" type="VBoxContainer" parent="Parameters" unique_id=762984356]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="Parameter" parent="Parameters/VBox" instance=ExtResource("1_o5nab")]
+[node name="Parameter" parent="Parameters/VBox" unique_id=1356010699 instance=ExtResource("1_o5nab")]
 layout_mode = 2
 
-[node name="Parameter2" parent="Parameters/VBox" instance=ExtResource("1_o5nab")]
+[node name="Parameter2" parent="Parameters/VBox" unique_id=139159913 instance=ExtResource("1_o5nab")]
 layout_mode = 2
+
+[editable path="Header/HBoxContainer/Name"]

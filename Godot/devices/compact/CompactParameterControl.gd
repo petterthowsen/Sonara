@@ -1,7 +1,11 @@
 # CompactParameterControl.gd
 #
-# Compact parameter slider for a single device parameter.
-# Shows parameter name, slider (0-1), and value display.
+# Compact parameter control for a single device parameter.
+# Floats: a "Name  Value" header over a slider. The value shows only while it fits
+# next to the name, or while the slider is hovered or dragged (the name trims
+# instead). Hovering a trimmed name shows it in full via LabelOverlay.
+# Enums: the name over a dropdown that never widens the strip.
+# Bools: a single "Name  [toggle]" row.
 # For use in CompactDevicePanel.
 class_name CompactParameterControl extends VBoxContainer
 
@@ -29,8 +33,12 @@ var parameter_id: int = -1
 @onready var slider_node: HorSlider = $HorSlider
 
 # Dynamically created based on param_type
-var checkbox_node: CheckBox = null
+var checkbox_node: CheckButton = null
 var option_node: OptionButton = null
+
+## Value control under the pointer or being dragged; forces the value visible.
+var _value_hovered := false
+var _dragging := false
 
 
 # ============================================================================
@@ -44,7 +52,15 @@ func _ready() -> void:
 		slider_node.min_value = 0.0
 		slider_node.max_value = 1.0
 		slider_node.value_changed.connect(_on_slider_changed)
+		slider_node.mouse_entered.connect(_set_value_hovered.bind(true))
+		slider_node.mouse_exited.connect(_set_value_hovered.bind(false))
+		slider_node.drag_started.connect(_set_dragging.bind(true))
+		slider_node.drag_ended.connect(_set_dragging.bind(false))
 		_apply_slider_defaults()
+
+	if label_node:
+		LabelOverlay.attach(label_node)
+	$Header/HBox.resized.connect(_update_value_visibility)
 
 	# If already set up with device, update UI now that nodes are ready
 	if device_instance and parameter:
@@ -105,8 +121,6 @@ func _update_ui() -> void:
 			checkbox_node.visible = true
 			var is_on: bool = normalized_value >= 0.5
 			checkbox_node.set_pressed_no_signal(is_on)
-		if value_label_node and show_value:
-			value_label_node.text = parameter.format_value(1.0 if normalized_value >= 0.5 else 0.0)
 
 	elif parameter.param_type == "enum":
 		if slider_node:
@@ -121,9 +135,6 @@ func _update_ui() -> void:
 			var idx: int = int(round(normalized_value * float(n - 1)))
 			idx = clamp(idx, 0, n - 1)
 			option_node.select(idx)
-		if value_label_node and show_value:
-			var real_value = parameter.normalized_to_value(normalized_value)
-			value_label_node.text = parameter.format_value(real_value)
 
 	else:
 		# float
@@ -138,6 +149,8 @@ func _update_ui() -> void:
 			var real_value = device_instance.get_parameter_real(parameter_id)
 			value_label_node.text = parameter.format_value(real_value)
 
+	_update_value_visibility()
+
 
 ## Copy the parameter's default onto the slider (normalized 0–1).
 func _apply_slider_defaults() -> void:
@@ -149,6 +162,45 @@ func _apply_slider_defaults() -> void:
 # ============================================================================
 # PRIVATE METHODS
 # ============================================================================
+
+## True for float parameters, the only kind with a value readout (the toggle and
+## the dropdown already show their value).
+func _has_value_readout() -> bool:
+	return show_value and parameter != null and parameter.param_type != "bool" \
+		and parameter.param_type != "enum"
+
+
+## True when the full name and the value fit side by side in the header.
+func _value_fits() -> bool:
+	var hbox: HBoxContainer = label_node.get_parent()
+	var font := label_node.get_theme_font("font")
+	var name_size := label_node.label_settings.font_size if label_node.label_settings \
+		else label_node.get_theme_font_size("font_size")
+	var value_size := value_label_node.label_settings.font_size if value_label_node.label_settings \
+		else value_label_node.get_theme_font_size("font_size")
+	var needed := font.get_string_size(label_node.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_size).x \
+		+ hbox.get_theme_constant("separation") \
+		+ font.get_string_size(value_label_node.text, HORIZONTAL_ALIGNMENT_LEFT, -1, value_size).x
+	return needed <= hbox.size.x
+
+
+## Show the value when it fits next to the name, or while its control is hovered or dragged.
+## The header keeps its width either way; only the name's trim point moves.
+func _update_value_visibility() -> void:
+	if value_label_node == null or label_node == null:
+		return
+	value_label_node.visible = _has_value_readout() \
+		and (_value_hovered or _dragging or _value_fits())
+
+
+func _set_value_hovered(hovered: bool) -> void:
+	_value_hovered = hovered
+	_update_value_visibility()
+
+
+func _set_dragging(dragging: bool) -> void:
+	_dragging = dragging
+	_update_value_visibility()
 
 
 # ============================================================================
@@ -183,6 +235,7 @@ func _on_slider_changed(value: float) -> void:
 	if value_label_node and show_value:
 		var real_value = device_instance.get_parameter_real(parameter_id)
 		value_label_node.text = parameter.format_value(real_value)
+		_update_value_visibility()
 
 
 func _on_parameter_changed(param_id: int, _value: float) -> void:
@@ -199,14 +252,24 @@ func _ensure_control_for_param_type() -> void:
 	elif parameter.param_type == "enum" and not option_node:
 		_create_option_button()
 
+## Bools are one row: the toggle sits at the end of the header, in place of the value.
 func _create_checkbox() -> void:
-	checkbox_node = CheckBox.new()
+	checkbox_node = CheckButton.new()
 	checkbox_node.text = ""
-	add_child(checkbox_node)
+	checkbox_node.focus_mode = Control.FOCUS_NONE
+	checkbox_node.size_flags_horizontal = Control.SIZE_SHRINK_END
+	checkbox_node.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	label_node.get_parent().add_child(checkbox_node)
 	checkbox_node.toggled.connect(_on_checkbox_toggled)
 
+## The dropdown takes the strip's width and trims the selected item; it never
+## grows to fit the longest one.
 func _create_option_button() -> void:
 	option_node = OptionButton.new()
+	option_node.fit_to_longest_item = false
+	option_node.clip_text = true
+	option_node.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	option_node.focus_mode = Control.FOCUS_NONE
 	# Populate with enum labels
 	for i in range(parameter.enum_values.size()):
 		option_node.add_item(parameter.enum_values[i], i)

@@ -38,7 +38,20 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
+## Knob radius in pixels, arc included. At 0 the knob fills its rect; above 0 it also sets the
+## minimum size to fit, and draws centered in any larger rect.
+@export var radius := 0.0:
+	set(r):
+		radius = maxf(r, 0.0)
+		if radius > 0.0:
+			custom_minimum_size = Vector2.ONE * radius * 2.0
+		if is_inside_tree():
+			queue_redraw()
+
 @export var show_value_tooltip := true
+
+## Font size of the value tooltip text.
+@export var value_font_size := 12
 
 enum TooltipSide { ABOVE, BELOW }
 
@@ -161,8 +174,9 @@ func _set_value(v: float, emit_change: bool) -> void:
 
 func _draw() -> void:
 	var center := size / 2.0
-	var radius: float = minf(size.x, size.y) / 2.0
-	var arc_radius: float = radius - arc_width / 2.0
+	var fit: float = minf(size.x, size.y) / 2.0
+	var outer: float = minf(radius, fit) if radius > 0.0 else fit
+	var arc_radius: float = outer - arc_width / 2.0
 	var knob_radius: float = arc_radius - arc_width - arc_offset
 	var min_rotation_rad: float = deg_to_rad(min_rotation_deg - 90.0)
 	var max_rotation_rad: float = deg_to_rad(max_rotation_deg - 90.0)
@@ -274,6 +288,7 @@ func _refresh_tooltip() -> void:
 	if _tooltip == null:
 		_tooltip = ValueTooltip.attach(self)
 	_tooltip.gap = tooltip_gap
+	_tooltip.set_font_size(value_font_size)
 	_tooltip.set_text(get_value_text())
 	_tooltip.visible = true
 	_position_tooltip()
