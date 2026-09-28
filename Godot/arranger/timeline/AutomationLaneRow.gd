@@ -1,8 +1,9 @@
 # AutomationLaneRow.gd
 # The timeline-side row for one automation lane: draws the grid the way TimelineTrack does, draws
-# the lane's curve and points, and owns the direct-manipulation input - double-click to insert,
-# drag to move, ctrl-click and box-select, right-click for the point menu
-# (REQ-013, REQ-018, REQ-019, REQ-020).
+# the lane's curve and points, and owns the direct-manipulation input - double-click to insert
+# (and keep dragging the new point), drag to move, shift-click / shift-drag to add or remove
+# points, drag on empty space to box-select, ctrl-drag to select a grid-snapped time range,
+# right-click for the point menu (REQ-013, REQ-018, REQ-019, REQ-020).
 #
 # Built in code rather than from a .tscn, like TimelineTrack, which Timeline also instantiates
 # with `.new()`.
@@ -47,9 +48,19 @@ var _drag_anchor_tick: int = 0
 var _drag_anchor_value: float = 0.0
 
 # --- box select state ---
+enum BoxMode {
+	FREE,    ## Plain drag: select the points inside the rectangle.
+	RANGE,   ## Ctrl-drag: full-height, grid-snapped time range, like the clip range gesture.
+	TOGGLE,  ## Shift-drag: flip the points inside the rectangle in the existing selection.
+}
 var _box_active: bool = false
+var _box_mode: BoxMode = BoxMode.FREE
 var _box_start: Vector2 = Vector2.ZERO
 var _box_current: Vector2 = Vector2.ZERO
+var _box_base_ids: Array = []              # TOGGLE: the selection when the gesture began
+var _box_click_point_id: int = -1          # RANGE: point under a ctrl-press, toggled if it never moves
+
+var _hover_point_id: int = -1
 
 
 func _ready() -> void:
@@ -62,6 +73,8 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		queue_redraw()
+	elif what == NOTIFICATION_MOUSE_EXIT:
+		_set_hover(-1)
 	elif what == NOTIFICATION_PREDELETE:
 		_unbind()
 
@@ -183,13 +196,14 @@ func _draw() -> void:
 	_draw_grid()
 
 	if lane:
+		_draw_range()
 		_draw_curve()
 		_draw_points()
 		if not lane.resolved:
 			_draw_unresolved_overlay()
 
-	if _box_active:
-		var box := Rect2(_box_start, Vector2.ZERO).expand(_box_current).abs()
+	if _box_active and _box_moved():
+		var box := _box_rect()
 		draw_rect(box, Color(0.4, 0.8, 1.0, 0.15), true)
 		draw_rect(box, Color(0.4, 0.8, 1.0, 0.6), false, 1.0)
 
@@ -278,6 +292,20 @@ func _draw_segment(left: AutomationPoint, right: AutomationPoint, colour: Color,
 		previous = next
 
 
+## The committed time range from a ctrl-drag, while it belongs to this lane.
+func _draw_range() -> void:
+	if selection_manager == null or selection_manager.lane != lane or _box_active:
+		return
+	var full := selection_manager.get_full_range()
+	if full == Vector2i.ZERO:
+		return
+	var x0 := tick_to_x(full.x)
+	var x1 := tick_to_x(full.y)
+	draw_rect(Rect2(x0, 0.0, x1 - x0, size.y), Color(0.4, 0.8, 1.0, 0.08), true)
+	draw_line(Vector2(x0, 0.0), Vector2(x0, size.y), Color(0.4, 0.8, 1.0, 0.5), 1.0)
+	draw_line(Vector2(x1, 0.0), Vector2(x1, size.y), Color(0.4, 0.8, 1.0, 0.5), 1.0)
+
+
 func _draw_points() -> void:
 	var visible_range := _visible_x_range()
 	for point in lane.points:
@@ -286,10 +314,13 @@ func _draw_points() -> void:
 			continue
 		var centre := Vector2(x, value_to_y(point.value))
 		var selected := selection_manager != null and selection_manager.is_selected(lane, point.id)
+		var hovered := point.id == _hover_point_id
 		var fill := Color.WHITE if selected else lane.color
+		if hovered and not selected:
+			fill = fill.lightened(0.4)
 		if lane.bypassed:
 			fill.a = 0.45
-		draw_circle(centre, POINT_RADIUS, fill)
+		draw_circle(centre, POINT_RADIUS + (1.0 if hovered else 0.0), fill)
 		if selected:
 			draw_arc(centre, POINT_RADIUS + 2.0, 0.0, TAU, 12, Color(0.4, 0.8, 1.0), 1.5)
 
@@ -336,27 +367,38 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		return
 
 	if event.pressed:
-		if selection_manager:
-			selection_manager.set_anchor(_snap_tick(x_to_tick(pos.x)))
-
+		_on_lane_pressed(pos)
 		var hit := _point_at(pos)
 
 		if event.double_click:
-			# A double-click on empty space inserts; on a point it does nothing extra (the press
-			# already selected it), so it can't accidentally stack two points on one spot.
+			# Empty space inserts a point and keeps it under the cursor for dragging; on a point it
+			# only re-arms the drag, so it can't stack two points on one spot.
 			if hit == null:
-				_insert_point_at(pos)
+				hit = _insert_point_at(pos)
+			if hit != null:
+				_begin_point_drag(hit, pos)
 			accept_event()
 			return
 
-		if hit != null:
-			_begin_point_drag(hit, pos, event.ctrl_pressed or event.meta_pressed)
+		if event.ctrl_pressed or event.meta_pressed:
+			_begin_box(pos, BoxMode.RANGE)
+			_box_click_point_id = hit.id if hit else -1
+		elif event.shift_pressed:
+			if hit != null:
+				if selection_manager:
+					selection_manager.toggle(lane, hit.id)
+				# Drag what is still selected, but never a point the click just dropped.
+				if selection_manager == null or selection_manager.is_selected(lane, hit.id):
+					_begin_point_drag(hit, pos)
+				queue_redraw()
+			else:
+				_begin_box(pos, BoxMode.TOGGLE)
+		elif hit != null:
+			if selection_manager and not selection_manager.is_selected(lane, hit.id):
+				selection_manager.select_only(lane, hit.id)
+			_begin_point_drag(hit, pos)
 		else:
-			# Empty space: start a box select. A press that never moves clears the selection.
-			_box_active = true
-			_box_start = pos
-			_box_current = pos
-			queue_redraw()
+			_begin_box(pos, BoxMode.FREE)
 		accept_event()
 		return
 
@@ -373,7 +415,8 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	var pos: Vector2 = event.position
 	if _box_active:
 		_box_current = pos
-		_apply_box_select()
+		if _box_moved():
+			_apply_box_select()
 		queue_redraw()
 		return
 	if _drag_pending and pos.distance_to(_drag_start_pos) > DRAG_THRESHOLD:
@@ -381,10 +424,31 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_drag_active = true
 	if _drag_active:
 		_apply_point_drag(pos)
+		return
+	var hover := _point_at(pos)
+	_set_hover(hover.id if hover else -1)
 
 
-## Double-click insert: snapped tick, value straight off the cursor (REQ-018).
-func _insert_point_at(pos: Vector2) -> void:
+func _set_hover(point_id: int) -> void:
+	if point_id == _hover_point_id:
+		return
+	_hover_point_id = point_id
+	queue_redraw()
+
+
+## Any press in the row makes this lane the target for paste and takes the clip selection away,
+## so the keyboard shortcuts act on exactly one of the two.
+func _on_lane_pressed(pos: Vector2) -> void:
+	if selection_manager:
+		selection_manager.focus(lane)
+		selection_manager.set_anchor(_snap_tick(x_to_tick(pos.x)))
+	if timeline and timeline.clip_selection_manager:
+		timeline.clip_selection_manager.clear_selection()
+
+
+## Double-click insert: snapped tick, value straight off the cursor (REQ-018). The new point
+## becomes the only selected one.
+func _insert_point_at(pos: Vector2) -> AutomationPoint:
 	var tick := maxi(0, _snap_tick(x_to_tick(pos.x)))
 	var value := y_to_value(pos.y)
 	var point: Object = AutomationActions.add_point(lane, tick, value)
@@ -392,26 +456,17 @@ func _insert_point_at(pos: Vector2) -> void:
 		selection_manager.select_only(lane, point.id)
 	logger.info("Inserted point at tick %d value %.3f on lane %s" % [tick, value, lane.id])
 	queue_redraw()
+	return point as AutomationPoint
 
 
 # ---------------------------------------------------------------------------
 # Point drag
 # ---------------------------------------------------------------------------
 
-## Press on a point: update the selection, then arm a drag. The drag only becomes real past
+## Arm a drag of `point` (and the rest of the selection). The drag only becomes real past
 ## DRAG_THRESHOLD so a plain click stays a click.
-func _begin_point_drag(point: AutomationPoint, pos: Vector2, additive: bool) -> void:
-	if selection_manager:
-		if additive:
-			selection_manager.toggle(lane, point.id)
-		elif not selection_manager.is_selected(lane, point.id):
-			selection_manager.select_only(lane, point.id)
-
-	# A ctrl-click that deselected the point must not then drag it.
-	if selection_manager and not selection_manager.is_selected(lane, point.id):
-		queue_redraw()
-		return
-
+func _begin_point_drag(point: AutomationPoint, pos: Vector2) -> void:
+	_set_hover(-1)
 	_drag_pending = true
 	_drag_active = false
 	_drag_point_id = point.id
@@ -483,6 +538,9 @@ func _finish_point_drag() -> void:
 				moved.append(point)
 		if not moved.is_empty():
 			AutomationActions.move_points(lane, moved, _drag_before.duplicate(), true)
+		# A range the points were picked with no longer describes where they are.
+		if selection_manager:
+			selection_manager.hide_range()
 
 	_drag_before.clear()
 	_drag_point_id = -1
@@ -493,32 +551,86 @@ func _finish_point_drag() -> void:
 # Box select
 # ---------------------------------------------------------------------------
 
-func _apply_box_select() -> void:
-	if selection_manager == null:
-		return
-	var box := Rect2(_box_start, Vector2.ZERO).expand(_box_current).abs()
+func _begin_box(pos: Vector2, mode: BoxMode) -> void:
+	_box_active = true
+	_box_mode = mode
+	_box_start = pos
+	_box_current = pos
+	_box_click_point_id = -1
+	_box_base_ids = []
+	if mode == BoxMode.TOGGLE and selection_manager and selection_manager.lane == lane:
+		_box_base_ids = selection_manager.get_selected_ids()
+	_set_hover(-1)
+	queue_redraw()
+
+
+func _box_moved() -> bool:
+	return _box_current.distance_to(_box_start) > DRAG_THRESHOLD
+
+
+## (start, end) ticks of a RANGE box, both snapped to the grid.
+func _range_ticks() -> Vector2i:
+	var a := maxi(0, _snap_tick(x_to_tick(_box_start.x)))
+	var b := maxi(0, _snap_tick(x_to_tick(_box_current.x)))
+	return Vector2i(mini(a, b), maxi(a, b))
+
+
+## The rectangle the box gesture covers: the raw drag for FREE/TOGGLE, and the snapped time span
+## at full row height for RANGE.
+func _box_rect() -> Rect2:
+	if _box_mode == BoxMode.RANGE:
+		var ticks := _range_ticks()
+		var x0 := tick_to_x(ticks.x)
+		return Rect2(x0, 0.0, tick_to_x(ticks.y) - x0, size.y)
+	return Rect2(_box_start, Vector2.ZERO).expand(_box_current).abs()
+
+
+## Ids of the points the box currently covers. RANGE uses the same half-open [start, end) tick
+## test as `AutomationPointSelectionManager.get_operand()`, so what is highlighted is what a
+## copy takes.
+func _box_hit_ids() -> Array:
 	var ids: Array = []
+	if _box_mode == BoxMode.RANGE:
+		var ticks := _range_ticks()
+		for point in lane.points:
+			if point.tick >= ticks.x and point.tick < ticks.y:
+				ids.append(point.id)
+		return ids
+	var box := _box_rect()
 	for point in lane.points:
 		if box.has_point(Vector2(tick_to_x(point.tick), value_to_y(point.value))):
 			ids.append(point.id)
-	selection_manager.select_ids(lane, ids)
+	return ids
 
 
-## A box that never really moved is a click on empty space: clear the selection. Otherwise keep
-## what the box caught and remember its grid-snapped span as the active time range (REQ-021).
+func _apply_box_select() -> void:
+	if selection_manager == null:
+		return
+	if _box_mode == BoxMode.TOGGLE:
+		selection_manager.select_toggled(lane, _box_base_ids, _box_hit_ids())
+	else:
+		selection_manager.select_ids(lane, _box_hit_ids())
+
+
+## A box that never really moved is a click: on empty space it clears the selection (shift keeps
+## it), and a ctrl-click on a point toggles it. A ctrl-drag also keeps its snapped span as the
+## active time range (REQ-021).
 func _finish_box_select(pos: Vector2) -> void:
 	_box_active = false
-	var moved := pos.distance_to(_box_start) > DRAG_THRESHOLD
+	_box_current = pos
 	if selection_manager:
-		if not moved:
-			selection_manager.clear_selection()
-			selection_manager.set_anchor(_snap_tick(x_to_tick(pos.x)))
+		if not _box_moved():
+			if _box_mode == BoxMode.RANGE and _box_click_point_id >= 0:
+				selection_manager.toggle(lane, _box_click_point_id)
+			elif _box_mode != BoxMode.TOGGLE:
+				selection_manager.clear_selection()
 		else:
 			_apply_box_select()
-			selection_manager.set_range(
-				_snap_tick(x_to_tick(minf(_box_start.x, pos.x))),
-				_snap_tick(x_to_tick(maxf(_box_start.x, pos.x)))
-			)
+			if _box_mode == BoxMode.RANGE:
+				var ticks := _range_ticks()
+				selection_manager.set_range(ticks.x, ticks.y)
+	_box_click_point_id = -1
+	_box_base_ids = []
 	queue_redraw()
 
 

@@ -13,6 +13,7 @@ static var logger := Log.make("AutomationPointSelectionManager")
 
 signal selection_changed(lane: AutomationLane, point_ids: Array)
 signal clipboard_changed()
+signal range_changed()
 
 var grid_helper: GridHelper = null
 
@@ -21,6 +22,10 @@ var lane: AutomationLane = null
 
 ## Selected point ids within `lane`, as an ordered set (id -> true).
 var _selected: Dictionary = {}
+
+## The lane row the user last pressed in, kept after the selection is cleared so a paste still
+## knows where to go. Timeline drops it (`release()`) when the user moves on to the clip lanes.
+var focus_lane: AutomationLane = null
 
 ## Last clicked tick in a lane row. Paste targets it, matching ClipSelectionManager.anchor_tick.
 var anchor_tick: int = -1
@@ -71,26 +76,44 @@ func is_selected(p_lane: AutomationLane, point_id: int) -> bool:
 
 
 func clear_selection() -> void:
+	hide_range()
 	if lane == null and _selected.is_empty():
 		return
 	lane = null
 	_selected.clear()
-	hide_range()
 	_emit()
 
 
+## Drop the selection, the range and the lane focus: the user is working with clips now, so
+## cut/copy/paste/duplicate must stop routing to automation.
+func release() -> void:
+	focus_lane = null
+	anchor_tick = -1
+	clear_selection()
+
+
+## Mark `p_lane` as the lane the user is working in.
+func focus(p_lane: AutomationLane) -> void:
+	focus_lane = p_lane
+
+
+## Every direct selection edit drops the time range: a range only describes the selection that
+## a range gesture made, and would otherwise win over the new selection in `get_operand()`.
 func select_only(p_lane: AutomationLane, point_id: int) -> void:
+	hide_range()
 	lane = p_lane
+	focus_lane = p_lane
 	_selected.clear()
 	_selected[point_id] = true
 	_emit()
 
 
-## Ctrl-click: add or drop one point, switching lanes if the click landed in a different row.
+## Shift-click: add or drop one point, switching lanes if the click landed in a different row.
 func toggle(p_lane: AutomationLane, point_id: int) -> void:
 	if p_lane != lane:
 		select_only(p_lane, point_id)
 		return
+	hide_range()
 	if _selected.has(point_id):
 		_selected.erase(point_id)
 	else:
@@ -99,11 +122,26 @@ func toggle(p_lane: AutomationLane, point_id: int) -> void:
 
 
 func select_ids(p_lane: AutomationLane, ids: Array) -> void:
+	hide_range()
 	lane = p_lane
+	focus_lane = p_lane
 	_selected.clear()
 	for id in ids:
 		_selected[id] = true
 	_emit()
+
+
+## Shift-box: `base_ids` with every id in `toggled_ids` flipped (added if absent, removed if present).
+func select_toggled(p_lane: AutomationLane, base_ids: Array, toggled_ids: Array) -> void:
+	var result: Dictionary = {}
+	for id in base_ids:
+		result[id] = true
+	for id in toggled_ids:
+		if result.has(id):
+			result.erase(id)
+		else:
+			result[id] = true
+	select_ids(p_lane, result.keys())
 
 
 ## Drop a point that no longer exists (deleted, or undone) from the selection.
@@ -116,6 +154,8 @@ func forget_point(p_lane: AutomationLane, point_id: int) -> void:
 
 ## Drop the whole selection when its lane goes away.
 func forget_lane(p_lane: AutomationLane) -> void:
+	if p_lane == focus_lane:
+		focus_lane = null
 	if p_lane == lane:
 		clear_selection()
 
@@ -134,9 +174,12 @@ func set_anchor(tick: int) -> void:
 
 
 func hide_range() -> void:
+	if not range_visible:
+		return
 	range_visible = false
 	range_start_tick = 0
 	range_end_tick = 0
+	range_changed.emit()
 
 
 ## Store a grid-snapped range. An empty span (start == end) only sets the anchor.
@@ -150,6 +193,7 @@ func set_range(start_tick: int, end_tick: int) -> void:
 	range_visible = true
 	range_start_tick = lo
 	range_end_tick = hi
+	range_changed.emit()
 
 
 ## (start, end) of the current range, or ZERO when there is none.
@@ -195,6 +239,11 @@ func get_selection_bounds() -> Vector2i:
 # ============================================================================
 # CLIPBOARD (REQ-021)
 # ============================================================================
+
+## The lane a paste lands in: the selection's lane, else the last lane pressed in.
+func get_target_lane() -> AutomationLane:
+	return lane if lane else focus_lane
+
 
 ## The points a range/selection operation applies to, and the tick they are measured from.
 ## Prefers the active time range, matching the clip conventions; falls back to the selection.

@@ -96,6 +96,7 @@ func _ready():
 
 	automation_selection_manager.grid_helper = grid_helper
 	automation_selection_manager.selection_changed.connect(_on_automation_selection_changed)
+	automation_selection_manager.range_changed.connect(_redraw_lane_rows)
 
 
 func _on_grid_helper_changed() -> void:
@@ -415,6 +416,15 @@ func _on_automation_selection_changed(_lane: AutomationLane, _point_ids: Array) 
 	if automation_selection_manager.has_selection() and clip_selection_manager.has_selection():
 		clip_selection_manager.clear_selection()
 	queue_redraw()
+	_redraw_lane_rows()
+
+
+## Selection and range highlights are drawn by the rows, and a change in one lane can clear
+## another lane's, so every row redraws.
+func _redraw_lane_rows() -> void:
+	for lane_row in _lane_rows.values():
+		if is_instance_valid(lane_row):
+			lane_row.queue_redraw()
 
 
 func _find_timeline_track(track: Track) -> TimelineTrack:
@@ -475,6 +485,7 @@ func _gui_input(event: InputEvent) -> void:
 	if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
 		return
 
+	automation_selection_manager.release()
 	var local_pos = get_local_mouse_position()
 	var additive = event.ctrl_pressed or event.meta_pressed or Input.is_action_pressed("ui_select")
 	if additive and clip_selection_manager:
@@ -1009,10 +1020,12 @@ func _find_track_index_at_global_position(mouse_pos_global: Vector2) -> int:
 # The four clipboard operations are shared between clips and automation points. The automation
 # path wins whenever points are the active selection; otherwise nothing changes for clips.
 
-## True when cut/copy/paste/duplicate should act on automation points rather than clips.
+## True when cut/copy/paste/duplicate should act on automation points rather than clips: the
+## user last worked in a lane row. Any clip interaction calls `release()`, which ends this.
 func _automation_is_active() -> bool:
 	return automation_selection_manager != null and (
-		automation_selection_manager.has_selection()
+		automation_selection_manager.focus_lane != null
+		or automation_selection_manager.has_selection()
 		or automation_selection_manager.get_full_range() != Vector2i.ZERO
 	)
 
@@ -1040,7 +1053,7 @@ func _automation_paste() -> void:
 	if not automation_selection_manager.has_clipboard():
 		logger.warn("Paste skipped - automation clipboard empty")
 		return
-	var lane := automation_selection_manager.lane
+	var lane := automation_selection_manager.get_target_lane()
 	if lane == null:
 		logger.warn("Paste skipped - no automation lane is active")
 		return
@@ -1130,7 +1143,7 @@ func cut_selection_to_clipboard() -> void:
 ## Paste clipboard clips at the last clicked location (range start, clicked tick, or playhead)
 ## onto the last clicked track. Refuses if they would overlap or run past the last track.
 func paste_clipboard() -> void:
-	if _automation_is_active() or (automation_selection_manager and automation_selection_manager.has_clipboard() and not clip_selection_manager.has_selection()):
+	if _automation_is_active():
 		_automation_paste()
 		return
 	var playhead_ticks := Sonara.editor.playhead_ticks if Sonara and Sonara.editor else 0
@@ -1520,6 +1533,9 @@ func _draw() -> void:
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:
+	# Selecting clips hands the clipboard shortcuts back to the clips (see `_automation_is_active`).
+	if not instances.is_empty():
+		automation_selection_manager.release()
 	# Emit Timeline's own signal with selection data and multi-track flag
 	clips_selected.emit(instances, _selection_has_multiple_tracks(instances))
 

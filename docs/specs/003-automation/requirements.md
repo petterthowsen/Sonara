@@ -231,11 +231,13 @@ The arranger shall let the user set a selected point's curve shape to linear or 
 
 ### REQ-020 — Multi-select uses the same modifiers as clips
 
-The arranger shall extend a point selection on ctrl-click and support a box-select gesture within
-a lane row, mirroring the clip selection modifiers.
+The arranger shall add or remove points on shift-click and shift-drag, support a box-select
+gesture within a lane row, and select a grid-snapped, full-height time range on ctrl-drag,
+mirroring the clip selection modifiers.
 
-- **Acceptance:** live — ctrl-click three points and drag them together as one group; box-select
-  a span and confirm only points inside it are selected.
+- **Acceptance:** live — shift-click three points and drag them together as one group; box-select
+  a span and confirm only points inside it are selected; ctrl-drag and confirm the range snaps to
+  the grid and takes every point in it regardless of value.
 
 ### REQ-021 — Points support range-aware cut, copy, paste and duplicate
 

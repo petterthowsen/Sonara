@@ -20,6 +20,8 @@ const MIN_HEIGHT := 20
 var lane: AutomationLane = null
 var track: Track = null
 var current_project: Project = null
+## The track's enclosing folders/groups, outermost first; drawn as the left-edge inset stripes.
+var _ancestors: Array[Track] = []
 
 var _label: Label = null
 var _bypass_button: Button = null
@@ -35,6 +37,11 @@ func _ready() -> void:
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_build_ui()
 	_refresh()
+
+
+## Paint the enclosing folders' inset stripes, same as the TrackItem above this row.
+func _draw() -> void:
+	NestingStripes.draw(self, _ancestors, size.y)
 
 
 ## Release the lane/track signal connections when the row is freed. NOTIFICATION_PREDELETE rather
@@ -125,6 +132,7 @@ func _unbind() -> void:
 			track.color_changed.disconnect(_on_track_color_changed)
 		if track.parent_changed.is_connected(_on_track_parent_changed):
 			track.parent_changed.disconnect(_on_track_parent_changed)
+	_set_ancestors([])
 	lane = null
 	track = null
 	current_project = null
@@ -154,7 +162,8 @@ func _refresh() -> void:
 
 
 ## Tint the row from the track color (a shade darker than the track header) and indent it one
-## level deeper so a lane reads as belonging to the track above it.
+## level deeper so a lane reads as belonging to the track above it: the ancestors' stripes
+## (drawn in _draw), then a narrower band in the track's own color.
 func _update_style() -> void:
 	var style := get_theme_stylebox("panel") as StyleBoxFlat
 	if style == null or track == null:
@@ -166,9 +175,16 @@ func _update_style() -> void:
 		c = c.lerp(Color(0.35, 0.1, 0.1), 0.5)
 	style.bg_color = c
 
-	var nesting := track.get_nesting_level(current_project) if current_project else 0
-	style.border_width_left = nesting * 12 + 10
+	_set_ancestors(NestingStripes.ancestors_of(track, current_project))
+	style.border_width_left = _ancestors.size() * NestingStripes.WIDTH + 10
 	style.border_color = Utils.display_color(track.color)
+	queue_redraw()
+
+
+## Track the ancestor chain so a color change or reparent anywhere above restyles this row.
+func _set_ancestors(chain: Array[Track]) -> void:
+	NestingStripes.rebind(_ancestors, chain, _on_ancestor_changed)
+	_ancestors = chain
 
 
 # ============================================================================
@@ -254,4 +270,8 @@ func _on_track_color_changed(_c: Color) -> void:
 
 
 func _on_track_parent_changed(_parent_id: int) -> void:
+	_update_style()
+
+
+func _on_ancestor_changed(_value) -> void:
 	_update_style()

@@ -35,6 +35,7 @@ func run_tests() -> void:
 	_test_past_last_lane_is_empty()
 	_test_no_anchor_keeps_source_tracks()
 	_test_overlap_on_anchor_track_blocks()
+	_test_clip_selection_takes_shortcuts_from_automation()
 
 
 ## Timeline with one lane per entry in `types` (Track.TrackType values), in visual order.
@@ -163,4 +164,26 @@ func _test_overlap_on_anchor_track_blocks() -> void:
 	var selection := _selection([inst])
 	_assert(timeline._clipboard_placement_blocked(selection, 960, _lane_track(timeline, 1)), "overlap on anchor track blocks paste")
 	_assert(not timeline._clipboard_placement_blocked(selection, 1920, _lane_track(timeline, 1)), "free space on anchor track allows paste")
+	_free(timeline)
+
+
+## Regression: with an automation point selected, selecting a clip must route Ctrl+C/V/D back to
+## the clips instead of leaving them stuck on the stale point selection.
+func _test_clip_selection_takes_shortcuts_from_automation() -> void:
+	var timeline := _timeline([_track_script.TrackType.INSTRUMENT])
+	var target: Object = load("res://data/AutomationTarget.gd").channel_volume()
+	var lane: Object = load("res://data/AutomationLane.gd").new("lane1", target)
+	_lane_track(timeline, 0).add_automation_lane(lane)
+	var point: Object = lane.add_point(0, 0.5)
+	var points: Object = timeline.automation_selection_manager
+	points.select_only(lane, point.id)
+	points.copy()
+	_assert(timeline._automation_is_active(), "a selected point routes the shortcuts to automation")
+
+	var inst := _clip_on(_lane_track(timeline, 0), 0)
+	var typed := Array([], TYPE_OBJECT, &"RefCounted", _instance_script)
+	typed.assign([inst])
+	timeline._on_clip_selection_changed(typed)
+	_assert(not timeline._automation_is_active(), "selecting a clip hands the shortcuts back to the clips")
+	_assert(points.has_clipboard(), "the point clipboard survives for a later paste into a lane")
 	_free(timeline)

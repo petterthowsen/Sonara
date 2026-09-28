@@ -52,7 +52,8 @@ var track: Track = null
 var track_index: int = -1
 var channel: Channel = null  # Channel that this track routes to
 var current_project: Project = null  # Reference to project for channel lookup
-var _parent_color_track: Track = null
+## Enclosing folders/groups, outermost first; drawn as the left-edge inset stripes.
+var _ancestors: Array[Track] = []
 
 # Selection visuals (owned by TrackList; this node only renders them)
 var is_selected: bool = false
@@ -130,10 +131,11 @@ func _enter_tree() -> void:
 	queue_redraw()
 
 
-## Draw selected/active outlines on top of the panel stylebox.
+## Draw folder inset stripes and selected/active outlines on top of the panel stylebox.
 func _draw() -> void:
 	if Engine.is_editor_hint():
 		return
+	NestingStripes.draw(self, _ancestors, size.y)
 	if not is_selected and not is_active:
 		return
 	var inset_left := 1.0
@@ -377,10 +379,10 @@ func _bind_to_track_channel() -> void:
 		solo_toggle.set_pressed_no_signal(track.solo)
 
 
-## Disconnect from the bound track, its channel and its parent's color. Idempotent.
+## Disconnect from the bound track, its channel and its ancestors. Idempotent.
 func _unbind() -> void:
 	_unbind_from_channel()
-	_bind_parent_color(null)
+	_set_ancestors([])
 	if track:
 		if track.name_changed.is_connected(_on_track_name_changed):
 			track.name_changed.disconnect(_on_track_name_changed)
@@ -514,41 +516,27 @@ func _on_channel_color_changed(_c: Color) -> void:
 
 
 func _update_nesting_indent() -> void:
-	"""Apply left margin based on track's nesting level by modifying StyleBox."""
+	"""Reserve one inset stripe per enclosing folder/group; _draw paints them."""
 	if track == null or current_project == null:
 		return
-
-	var nesting_level = track.get_nesting_level(current_project)
-	var indent_pixels = nesting_level * 12
-	
-	# Get the panel stylebox and modify its left margin
+	_set_ancestors(NestingStripes.ancestors_of(track, current_project))
 	var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
-	
-	# Set the left content margin for indentation
-	stylebox.border_width_left = indent_pixels
-	
-	# color the border = to parent track color
-	var parent_track = current_project.get_track_by_id(track.parent_track_id)
-	_bind_parent_color(parent_track)
-	if parent_track:
-		stylebox.border_color = Utils.display_color(parent_track.color)
-	
-	logger.info("Track '", track.name, "' nesting level: ", nesting_level, " indent: ", indent_pixels, "px")
+	var inset := _ancestors.size() * NestingStripes.WIDTH
+	stylebox.border_width_left = inset
+	# A folder/group leaves one stripe of its own background left of the meter, lining up with
+	# the stripe its children draw for it, so the header reads as flowing down into them.
+	# -1 falls back to the border width.
+	stylebox.content_margin_left = inset + NestingStripes.WIDTH if track.can_contain_tracks() else -1
+	queue_redraw()
 
 
-## Keep the folder indent border in sync when the parent track color changes.
-func _bind_parent_color(parent_track: Track) -> void:
-	if _parent_color_track == parent_track:
-		return
-	if _parent_color_track and _parent_color_track.color_changed.is_connected(_on_parent_color_changed):
-		_parent_color_track.color_changed.disconnect(_on_parent_color_changed)
-	_parent_color_track = parent_track
-	if _parent_color_track and not _parent_color_track.color_changed.is_connected(_on_parent_color_changed):
-		_parent_color_track.color_changed.connect(_on_parent_color_changed)
+## Track the ancestor chain so a color change or reparent anywhere above redraws the insets.
+func _set_ancestors(chain: Array[Track]) -> void:
+	NestingStripes.rebind(_ancestors, chain, _on_ancestor_changed)
+	_ancestors = chain
 
 
-## Redraw indent when the parent folder/group color changes.
-func _on_parent_color_changed(_c: Color) -> void:
+func _on_ancestor_changed(_value) -> void:
 	_update_nesting_indent()
 
 

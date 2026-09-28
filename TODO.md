@@ -88,7 +88,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] Increase the maximum horizontal zoom in the timeline
 - [ ] Arranger track list: wire up the IO routing menu button on `TrackItem`
 - [ ] Chord track: design & implement chord track with visual notations
-- [ ] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
+- [x] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
 - [x?] Ctrl+scroll vertical zoom should zoom around the mouse cursor, I.E if mouse is at a track near bottom, should also scroll down. Still broken.
 
