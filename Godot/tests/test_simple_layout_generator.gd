@@ -6,6 +6,8 @@ extends TestBase
 
 const DRAGONFLY_FIXTURE := "res://tests/fixtures/simple_view/dragonfly_hall_params.json"
 const APRICOT_FIXTURE := "res://tests/fixtures/simple_view/apricot_params.json"
+const EXTRABOLD_FIXTURE := "res://tests/fixtures/simple_view/extrabold_params.json"
+const LIBRESTRINGS_FIXTURE := "res://tests/fixtures/simple_view/librestrings_params.json"
 
 
 func suite_name() -> String:
@@ -23,10 +25,13 @@ func run_tests() -> void:
 	_test_main_page_importance()
 	_test_pages_grow_sideways()
 	_test_group_blocks_and_columns()
+	_test_families_share_a_page()
 	_test_no_overlap_in_bounds()
 	_test_generate_500_params_under_100ms()
 	_test_dragonfly_hall_fixture()
 	_test_apricot_fixture()
+	_test_extrabold_fixture()
+	_test_librestrings_fixture()
 
 
 ## ----------------------------------------------------------------------------
@@ -530,3 +535,96 @@ func _test_apricot_fixture() -> void:
 	var first := order.find("Oscillator 1")
 	_assert(first >= 0 and order.slice(first, first + 3) == ["Oscillator 1", "Oscillator 2", "Oscillator 3"],
 		"oscillator sections stay together %s" % [order])
+
+
+## A family of groups that doesn't fit beside what's on a page starts a new page, titled after the
+## family, instead of leaving its last group on a page of its own; a family too big for any page
+## still fills the page it starts on.
+func _test_families_share_a_page() -> void:
+	var knobs := func(n: int) -> Array:
+		var items := []
+		for i in n:
+			items.append({"kind": SimpleControlKinds.KNOB, "params": [i]})
+		return items
+	var groups := [{"id": "big", "title": "Big", "page": "Main", "items": knobs.call(20)}]
+	for i in 3:
+		groups.append({"id": "slot_%d" % (i + 1), "title": "Slot %d" % (i + 1), "page": "Main",
+			"family": "slot", "family_title": "Slot", "items": knobs.call(6)})
+	# Big is 5×4 and each slot 3×2 on a 10-column page: two slots fit beside Big, the third doesn't.
+	var pages := GridPacker.pack_pages(groups, 4, 10)
+	var titles: Array = pages.map(func(p): return p.title)
+	_assert(titles == ["Main", "Slot"], "slot family moves to its own page %s" % [titles])
+	_assert(pages[1].groups.size() == 3, "all three slots on one page")
+
+	var many := []
+	for i in 12:
+		many.append({"id": "part_%d" % i, "title": "Part %d" % i, "page": "Main", "family": "part",
+			"items": knobs.call(8)})
+	pages = GridPacker.pack_pages([groups[1]] + many, 4, 10)
+	_assert(pages[0].groups.size() > 1, "a family too big for a page starts beside what's there (%d groups on Main)" % pages[0].groups.size())
+
+
+## Generate a layout from a probe-dumped fixture whose params carry `stepped` (see
+## extrabold_params.json). Returns `{layout, params, by_name}`, or {} when it doesn't load.
+func _generate_from_probe_fixture(path: String) -> Dictionary:
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	_assert(data is Dictionary, "%s loads" % path.get_file())
+	if not data is Dictionary:
+		return {}
+	var features: Array[String] = []
+	features.assign(data.device.features)
+	var device := _device(data.device.id, data.device.name, Device.DeviceCategory.Instrument, features)
+	var params: Array = []
+	var by_name := {}
+	for p in data.params:
+		var param: DeviceParameter
+		if not p.stepped:
+			param = _float(int(p.id), p.name, "", p.min, p.max)
+		elif p.min == 0.0 and p.max == 1.0:
+			param = _float(int(p.id), p.name)
+			param.param_type = "bool"
+		else:
+			param = _enum(int(p.id), p.name, int(p.max - p.min) + 1)
+		param.default_value = p.default
+		params.append(param)
+		by_name[p.name] = param.id
+	var layout := SimpleLayoutGenerator.generate(device, params)
+	_check_layout(layout, params, data.device.name)
+	_check_page_widths(layout, data.device.name)
+	return {"layout": layout, "params": params, "by_name": by_name}
+
+
+func _test_extrabold_fixture() -> void:
+	var generated := _generate_from_probe_fixture(EXTRABOLD_FIXTURE)
+	if generated.is_empty():
+		return
+	var layout: SimpleLayout = generated.layout
+	var by_name: Dictionary = generated.by_name
+	var titles: Array = layout.pages.map(func(p): return p.title)
+	_assert(titles == ["Main", "Modulation", "Effects"], "ExtraBold pages %s" % [titles])
+
+	var at := func(name: String) -> Dictionary: return _find(layout, by_name[name])
+	var slot1: Dictionary = at.call("Effect Slot 1 Amount")
+	_assert(layout.pages[slot1.page].title == "Effects" and slot1.group_title == "Effect Slot 1",
+		"Effect Slot 1 in its own group on Effects (%s)" % [slot1])
+	for n in ["Effect Slot 2 Type", "Effect Slot 3 Type", "Effect Slot 3 Multiply by Mod Wheel", "Bypass FX"]:
+		_assert(at.call(n).page == slot1.page, "%s on the Effects page with Effect Slot 1" % n)
+	for n in ["Oscillator 1 Volume", "Oscillator 3 FM Amount", "Filter Cutoff", "Master Volume", "Legato"]:
+		_assert(at.call(n).page == 0, "%s on Main" % n)
+
+
+## A flat instrument: Vibrato alone would make a one-knob Modulation page, so it stays on Main and
+## joins Controls beside Dynamics and Pressure.
+func _test_librestrings_fixture() -> void:
+	var generated := _generate_from_probe_fixture(LIBRESTRINGS_FIXTURE)
+	if generated.is_empty():
+		return
+	var layout: SimpleLayout = generated.layout
+	var titles: Array = layout.pages.map(func(p): return p.title)
+	_assert(titles == ["Main"], "LibreStrings has only a Main page %s" % [titles])
+	var at := func(name: String) -> Dictionary: return _find(layout, generated.by_name[name])
+	var vibrato: Dictionary = at.call("Vibrato")
+	_assert(vibrato.group == at.call("Dynamics").group and vibrato.group == at.call("Pressure").group,
+		"Vibrato shares a group with Dynamics and Pressure (%s)" % vibrato.group_title)
+	var group_ids: Array = layout.pages[0].groups.map(func(g): return g.id)
+	_assert(not "modulation" in group_ids, "no one-knob Modulation group %s" % [group_ids])

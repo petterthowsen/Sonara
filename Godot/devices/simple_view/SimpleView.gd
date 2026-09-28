@@ -1,9 +1,9 @@
 ## SimpleView.gd
 ## The Panel view generated from a device's parameters (REQ-001, REQ-009). Loads (or generates)
 ## the device's `SimpleLayout` through `SimpleLayoutStore`, lays out one `SimpleControl` per
-## layout control on a grid of fixed-size cells (as wide as the widest page), and shows page tabs
-## when there is more than one page. The view never scrolls: its root is a VBoxContainer (tabs
-## above the grid) whose minimum size is the tabs plus the grid.
+## layout control on a grid of fixed-size cells, and shows page tabs when there is more than one
+## page. The view never scrolls: its root is a VBoxContainer (tabs above the grid) whose minimum
+## size is the tabs plus the current page, so it grows and shrinks as pages are switched.
 ## Edit mode (move/resize/rename/add/remove controls) is Phase 4 (T-014/T-015), not implemented here.
 
 class_name SimpleView extends DeviceView
@@ -36,8 +36,6 @@ var _group_boxes: Array[Control] = []
 ## down by the group title strips above it. Grid cells stay square in the layout model; only
 ## the pixel placement makes room for group titles.
 var _row_y: PackedFloat32Array = []
-## Pixel x where the current page's grid starts: narrower pages are centered in the view.
-var _x_offset := 0.0
 ## Group id → `{rect, box}` on the current page: the group's saved cell rect and the cell rect
 ## its box is drawn over after growing into the free space to its right and below.
 var _group_fit := {}
@@ -116,14 +114,13 @@ func _build_page(index: int) -> void:
 	var page: Dictionary = layout.pages[index]
 	_compute_row_y(page)
 	var page_columns := _page_columns(page)
-	_x_offset = (_widest_page_columns() - page_columns) * cell_size.x * 0.5
 	_group_fit = fit_groups(page, page_columns, _used_rows(page))
-	# As wide as the widest page, so switching pages doesn't shift the devices beside this one,
-	# and only as tall as the rows this page uses, so a sparse page leaves no empty rows below.
-	# The view (a VBoxContainer) takes its minimum size from this, so the DevicePanel grows to
-	# fit instead of scrolling; pages split content that doesn't fit. The page tabs clip and
-	# scroll with arrow buttons, so they only need room for one tab plus the arrows.
-	_grid.custom_minimum_size = Vector2(_widest_page_columns() * cell_size.x, _row_y[_used_rows(page)])
+	# Only as big as this page, so a sparse page doesn't leave a wide empty area (the devices
+	# beside this one move over when pages are switched). The view (a VBoxContainer) takes its
+	# minimum size from this, so the DevicePanel grows and shrinks to fit instead of scrolling;
+	# pages split content that doesn't fit. The page tabs clip and scroll with arrow buttons, so
+	# they only need room for one tab plus the arrows.
+	_grid.custom_minimum_size = Vector2(page_columns * cell_size.x, _row_y[_used_rows(page)])
 	for group in page.get("groups", []):
 		_add_group_box(group)
 	for control_data in page.get("controls", []):
@@ -147,14 +144,6 @@ func _add_control(data: Dictionary) -> void:
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
 	control.bind(device, data)
 	_controls.append(control)
-
-
-## Columns the widest page occupies (the right edge of its rightmost control or group), at least 1.
-func _widest_page_columns() -> int:
-	var right := 1
-	for page in layout.pages:
-		right = maxi(right, _page_columns(page))
-	return right
 
 
 ## Columns `page` occupies (the right edge of its rightmost control or group), at least 1.
@@ -248,7 +237,7 @@ func _compute_row_y(page: Dictionary) -> void:
 func _pixel_rect(rect: Rect2i) -> Rect2:
 	var top: float = _row_y[clampi(rect.position.y, 0, layout.rows)]
 	var bottom: float = _row_y[clampi(rect.end.y - 1, 0, layout.rows)] + cell_size.y
-	return Rect2(_x_offset + rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
+	return Rect2(rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
 
 
 ## A background panel with a title strip on top, covering a group's controls.

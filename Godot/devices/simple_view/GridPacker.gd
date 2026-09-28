@@ -57,13 +57,18 @@ class Columns:
 
 	## Right edge a block of `size` would reach if placed next.
 	func right_edge_for(size: Vector2i) -> int:
+		return copy().place(size).x + size.x
+
+
+	## An independent copy, for trying placements without committing them.
+	func copy() -> Columns:
 		var probe := Columns.new(rows)
 		probe.column_x = column_x
 		probe.column_w = column_w
 		probe.shelf_y = shelf_y
 		probe.shelf_h = shelf_h
 		probe.shelf_used = shelf_used
-		return probe.place(size).x + size.x
+		return probe
 
 
 ## Cell occupancy for one page. A bounded grid (`columns` > 0) is scanned row by row; an
@@ -251,7 +256,8 @@ static func _block_is_better(count: int, size: Vector2i, best: Dictionary) -> bo
 ## Pack `groups` onto pages `rows` tall. Each group is `{id, title, page, items: [{kind, params,
 ## label?}]}`; groups with the same `page` title share a page, in order of first appearance.
 ## A page grows to the right up to `max_columns`, then continues on a new page titled after the
-## first group on it. A group is only split when it's wider than `max_columns` on its own.
+## first group (or family of groups) on it. A group is only split when it's wider than
+## `max_columns` on its own; groups may carry `family` and `family_title` to be kept together.
 ## Page titles are made unique ("Controls", "Controls 2"). Returns layout pages
 ## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group, label?}]}`.
 static func pack_pages(groups: Array, rows: int, max_columns: int) -> Array[Dictionary]:
@@ -271,24 +277,36 @@ static func pack_pages(groups: Array, rows: int, max_columns: int) -> Array[Dict
 
 
 ## Pages for one section: its groups in columns, in order, spilling onto more pages past
-## `max_columns`.
+## `max_columns`. The groups of one family ("Effect Slot 1", "Effect Slot 2", …) stay on one page:
+## a family that doesn't fit beside what's already on the page starts a new one, titled after the
+## family, unless it's too big for a page of its own anyway.
 static func _pack_section(groups: Array, title: String, rows: int, max_columns: int) -> Array[Dictionary]:
 	var pages: Array[Dictionary] = []
 	var page: Dictionary = {}
 	var columns: Columns = null
-	for group in groups:
+	var family_end := 0
+	for g in range(groups.size()):
+		var group: Dictionary = groups[g]
+		var page_title := String(group.title)
+		if g >= family_end:
+			family_end = _family_end(groups, g)
+			var family := groups.slice(g, family_end)
+			if family.size() > 1:
+				page_title = String(group.get("family_title", group.title))
+				if columns != null and not columns.is_empty() \
+						and not _groups_fit(family, columns.copy(), rows, max_columns) \
+						and _groups_fit(family, Columns.new(rows), rows, max_columns):
+					columns = null  # start the family on a fresh page
 		var items: Array = group.items
-		var sizes: Array[Vector2i] = []
-		for item in items:
-			sizes.append(clamp_size(SimpleControlKinds.footprint(item.kind), max_columns, rows))
+		var sizes := _item_sizes(items, rows, max_columns)
 		var start := 0
 		while start < items.size():
 			var block := group_block(sizes.slice(start), rows, max_columns)
 			if block.count == 0:
 				break  # unreachable: sizes are clamped to the grid
 			if columns == null or columns.right_edge_for(block.size) > max_columns:
-				var page_title: String = title if pages.is_empty() or title.is_empty() else String(group.title)
-				page = {"title": page_title, "groups": [], "controls": []}
+				page = {"title": title if pages.is_empty() or title.is_empty() else page_title,
+					"groups": [], "controls": []}
 				pages.append(page)
 				columns = Columns.new(rows)
 			var origin := Rect2i(columns.place(block.size), block.size)
@@ -300,7 +318,36 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 			if page.title.is_empty():
 				page.title = group.title
 			start += block.count
+			page_title = String(group.title)
 	return pages
+
+
+## Index just past the run of groups starting at `start` that share its family (a group without
+## one is its own family).
+static func _family_end(groups: Array, start: int) -> int:
+	var family: String = groups[start].get("family", groups[start].id)
+	var end := start + 1
+	while end < groups.size() and groups[end].get("family", groups[end].id) == family:
+		end += 1
+	return end
+
+
+## True when every group in `groups` fits, whole, on the page `columns` is filling.
+static func _groups_fit(groups: Array, columns: Columns, rows: int, max_columns: int) -> bool:
+	for group in groups:
+		var sizes := _item_sizes(group.items, rows, max_columns)
+		var block := group_block(sizes, rows, max_columns)
+		if block.count < sizes.size() or columns.right_edge_for(block.size) > max_columns:
+			return false
+		columns.place(block.size)
+	return true
+
+
+static func _item_sizes(items: Array, rows: int, max_columns: int) -> Array[Vector2i]:
+	var sizes: Array[Vector2i] = []
+	for item in items:
+		sizes.append(clamp_size(SimpleControlKinds.footprint(item.kind), max_columns, rows))
+	return sizes
 
 
 ## Suffix repeated page titles with a number: "Controls", "Controls 2", "Controls 3".

@@ -2,7 +2,7 @@
 # Simple View rendering in a DevicePanel: integer enums render as a SpinBox bound to the enum
 # index, the view widens to its grid instead of scrolling sideways, and the DevicePanel opens
 # its Parameters tab only for a device without a view. Group boxes grow into free space and spread
-# their controls evenly; narrower pages are centered.
+# their controls evenly; pages sit at the left and the view takes each page's width.
 # Run: godot --headless --path Godot -s tests/test_simple_view_render.gd -- --test
 extends TestBase
 
@@ -184,7 +184,7 @@ func _knob_control(param_id: int, rect: Array, group: String) -> Dictionary:
 
 
 ## Group boxes grow right and down into free space (never over another group), their controls
-## spread evenly inside, and a page narrower than the widest one is centered.
+## spread evenly inside, and a narrower page sits at the left of a view that shrinks to fit it.
 func _test_groups_fill_and_spread() -> void:
 	var page := {"title": "Main", "groups": [
 		{"id": "a", "title": "A", "rect": [0, 0, 4, 1]},
@@ -233,9 +233,12 @@ func _test_groups_fill_and_spread() -> void:
 	_assert(knob_title.get_theme_color("font_color").a < title.get_theme_color("font_color").a,
 		"control titles are dimmer than group titles")
 
+	_assert(is_equal_approx(view._grid.custom_minimum_size.x, 6 * view.cell_size.x),
+		"a 6-column page makes the grid 6 columns wide (%.0f)" % view._grid.custom_minimum_size.x)
 	view._build_page(1)
 	await process_frame
 	var left: float = view._controls[0].position.x
-	_assert(absf(left - (2 * view.cell_size.x + view.cell_margin * 0.5)) < 1.0,
-		"a 2-column page is centered in a 6-column view (first knob at %.0f)" % left)
+	_assert(absf(left - view.cell_margin * 0.5) < 1.0, "a 2-column page starts at the left (first knob at %.0f)" % left)
+	_assert(is_equal_approx(view._grid.custom_minimum_size.x, 2 * view.cell_size.x),
+		"the grid shrinks to a 2-column page (%.0f)" % view._grid.custom_minimum_size.x)
 	panel.queue_free()

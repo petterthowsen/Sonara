@@ -16,7 +16,7 @@ func role_keywords() -> Dictionary:
 		"modulation": ["lfo", "rate", "depth", "mod", "modul*", "matrix", "vibrato", "speed"],
 		"oscillator": ["osc*", "wave*", "shape", "pitch", "tune", "detune", "octave", "oct", "semi*", "fine", "coarse", "unison", "voices", "pw", "pulse", "sub", "noise", "sampl*"],
 		"envelope": ["attack", "decay", "sustain", "release", "env*", "adsr", "hold"],
-		"effects": ["chorus", "delay", "reverb", "fx", "dist*", "phaser", "flanger", "eq"],
+		"effects": ["effect*", "chorus", "delay", "reverb", "fx", "dist*", "phaser", "flanger", "eq"],
 		"performance": ["glide", "portamento", "porta", "bend", "legato", "poly*", "mono", "velocity", "vel"],
 		"output": ["volume", "vol", "master", "output", "gain", "amp", "level", "pan"],
 	}

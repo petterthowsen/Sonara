@@ -20,10 +20,11 @@ static var _glued := RegEx.create_from_string("^([A-Za-z]+)([0-9]+)$")
 static var _leading_separators := RegEx.create_from_string("^[\\s:/|._-]+")
 
 
-## Section per item index: `{index: {id, title, label, family}}`, or {} when fewer than
-## `MIN_COVERAGE` of the items would get one. `label` is the name without its section; `family`
+## Section per item index: `{index: {id, title, label, family, family_title?}}`, or {} when fewer
+## than `MIN_COVERAGE` of the items would get one. `label` is the name without its section; `family`
 ## is shared by the instance sections of one family ("Oscillator 1", "Oscillator 2") so they can
-## stay together. Items without a section are left out.
+## stay together, and those sections also carry the family's name (`family_title`, "Oscillator").
+## Items without a section are left out.
 static func find(items: Array[Dictionary]) -> Dictionary:
 	var families := {}  # family key → Array of member descriptions
 	var buckets := {}  # first word → Array of member descriptions
@@ -121,7 +122,7 @@ static func _assign_family(key: String, members: Array, result: Dictionary) -> v
 		var label := _label(m, m.label)
 		if split:
 			result[m.index] = {"id": "%s_%d" % [family_id, m.instance], "title": instances[m.instance],
-				"label": label, "family": family_id}
+				"label": label, "family": family_id, "family_title": members[0].family_title}
 		else:
 			result[m.index] = {"id": family_id, "title": members[0].family_title,
 				"label": "%s %d" % [label, m.instance], "family": family_id}

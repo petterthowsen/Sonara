@@ -1,0 +1,127 @@
+{
+	"_comment": "Dumped from `plugin_host --probe ~/.clap/LibreStrings.clap` (LibreStrings 0.3.0). No module paths. `stepped` parameters arrive as enums (bools when 0 .. 1); the fixture loader gives them one placeholder label per step.",
+	"device": {
+		"id": "io.github.petterthowsen.librestrings",
+		"name": "LibreStrings",
+		"category": "Instrument",
+		"device_type": "CLAP",
+		"features": [
+			"instrument",
+			"synthesizer",
+			"stereo",
+			"mono"
+		]
+	},
+	"params": [
+		{
+			"id": 1395483623,
+			"name": "Instrument",
+			"min": 0.0,
+			"max": 3.0,
+			"default": 0.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 1443276820,
+			"name": "Dynamics",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"stepped": false,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 451310969,
+			"name": "Vibrato",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"stepped": false,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 871241285,
+			"name": "Pressure",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"stepped": false,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 29647150,
+			"name": "Bow lift",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 243901750,
+			"name": "Polyphony",
+			"min": 0.0,
+			"max": 2.0,
+			"default": 0.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 521465817,
+			"name": "Fingering",
+			"min": 0.0,
+			"max": 2.0,
+			"default": 0.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 1336600346,
+			"name": "Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"stepped": false,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 1653916082,
+			"name": "Players",
+			"min": 0.0,
+			"max": 11.0,
+			"default": 0.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 109757182,
+			"name": "Stage",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 540937479,
+			"name": "Humanize",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"stepped": true,
+			"module": "",
+			"read_only": false
+		}
+	]
+}
