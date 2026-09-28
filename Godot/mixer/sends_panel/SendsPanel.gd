@@ -20,8 +20,9 @@ class SendControl extends LabeledKnob:
 		get: return label
 
 
-	## Build a send control for `target_id` showing `bus_name` and `normalized` amount.
-	func _init(target_id: int, bus_name: String, normalized: float, dimmed: bool) -> void:
+	## Build a send control for `target_id` showing `bus_name` at `amount_db`.
+	## The knob works in dB, so its tooltip and double-click entry are in dB too.
+	func _init(target_id: int, bus_name: String, amount_db: float, dimmed: bool) -> void:
 		super()
 		target_channel_id = target_id
 		set_meta("target_channel_id", target_id)
@@ -30,8 +31,13 @@ class SendControl extends LabeledKnob:
 		knob.shadow_color = Color(0, 0, 0, 0.47843137)
 		knob.min_rotation_deg = -140.0
 		knob.max_rotation_deg = 140.0
-		# Set before anyone connects so the default 0.5 does not create a send.
-		knob.value = normalized
+		knob.min_value = MIN_SEND_DB
+		knob.max_value = MAX_SEND_DB
+		knob.value_default = MIN_SEND_DB
+		knob.value_format = "%.1f"
+		knob.value_text_callback = SendsPanel.format_send_db
+		# Set before anyone connects so the default value does not create a send.
+		knob.value = amount_db
 
 		text = bus_name
 		label.modulate.a = 0.5 if dimmed else 1.0
@@ -44,9 +50,9 @@ class SendControl extends LabeledKnob:
 
 
 	## Update knob position and label dimming from the data model.
-	func set_amount_display(normalized: float, dimmed: bool) -> void:
+	func set_amount_display(amount_db: float, dimmed: bool) -> void:
 		if knob:
-			knob.set_value_no_signal(normalized)
+			knob.set_value_no_signal(amount_db)
 		if bus_label:
 			bus_label.modulate.a = 0.5 if dimmed else 1.0
 
@@ -56,6 +62,10 @@ class SendControl extends LabeledKnob:
 		knob.value_arc_color = PRE_FADER_ARC_COLOR if pre_fader else _post_fader_arc_color
 		knob.queue_redraw()
 
+
+## Send level range in dB. The bottom of the range is silence (-inf).
+const MIN_SEND_DB := -60.0
+const MAX_SEND_DB := 12.0
 
 @onready var flow_container: FlowContainer = $FlowContainer
 
@@ -123,7 +133,7 @@ func bind_to_channel(ch: Channel, proj: Project) -> void:
 func _on_channel_send_added(target_channel_id: int, send_config: SendConfig) -> void:
 	var control := _find_send_control(target_channel_id)
 	if control:
-		control.set_amount_display(_db_to_normalized(send_config.amount), send_config.amount <= -60.0)
+		control.set_amount_display(send_config.amount, send_config.amount <= MIN_SEND_DB)
 		control.set_pre_fader_display(send_config.pre_fader)
 		return
 	_rebuild_sends_ui()
@@ -133,7 +143,7 @@ func _on_channel_send_added(target_channel_id: int, send_config: SendConfig) -> 
 func _on_channel_send_removed(target_channel_id: int) -> void:
 	var control := _find_send_control(target_channel_id)
 	if control:
-		control.set_amount_display(_db_to_normalized(-60.0), true)
+		control.set_amount_display(MIN_SEND_DB, true)
 		control.set_pre_fader_display(false)
 		return
 	_rebuild_sends_ui()
@@ -143,7 +153,7 @@ func _on_channel_send_removed(target_channel_id: int) -> void:
 func _on_channel_send_changed(target_channel_id: int, send_config: SendConfig) -> void:
 	var control := _find_send_control(target_channel_id)
 	if control:
-		control.set_amount_display(_db_to_normalized(send_config.amount), send_config.amount <= -60.0)
+		control.set_amount_display(send_config.amount, send_config.amount <= MIN_SEND_DB)
 		control.set_pre_fader_display(send_config.pre_fader)
 
 
@@ -182,12 +192,12 @@ func _rebuild_sends_ui() -> void:
 
 ## Create a send control UI element for a BUS channel.
 func _create_send_control(bus_channel: Channel, send_config: SendConfig) -> void:
-	var send_amount: float = send_config.amount if send_config else -60.0
+	var send_amount: float = send_config.amount if send_config else MIN_SEND_DB
 	var control := SendControl.new(
 		bus_channel.id,
 		bus_channel.name,
-		_db_to_normalized(send_amount),
-		send_amount <= -60.0
+		send_amount,
+		send_amount <= MIN_SEND_DB
 	)
 	control.set_pre_fader_display(send_config != null and send_config.pre_fader)
 
@@ -209,11 +219,11 @@ func _on_send_knob_changed(value: float, target_channel_id: int) -> void:
 	if not channel:
 		return
 
-	var amount_db := _normalized_to_db(value)
+	var amount_db := value
 
 	var control := _find_send_control(target_channel_id)
 	if control and control.bus_label:
-		control.bus_label.modulate.a = 0.5 if amount_db <= -60.0 else 1.0
+		control.bus_label.modulate.a = 0.5 if amount_db <= MIN_SEND_DB else 1.0
 
 	var send_config = channel.get_send(target_channel_id)
 	if not send_config:
@@ -265,14 +275,11 @@ func _on_send_menu_id_pressed(id: int) -> void:
 	HistoryUtil.execute(cmd)
 
 
-## Convert dB value (-60 to +12) to normalized 0-1 range.
-func _db_to_normalized(db: float) -> float:
-	return (db + 60.0) / 72.0
-
-
-## Convert normalized 0-1 range to dB value (-60 to +12).
-func _normalized_to_db(value: float) -> float:
-	return value * 72.0 - 60.0
+## Send level text for the knob tooltip: "-inf dB" at the bottom of the range.
+static func format_send_db(amount_db: float) -> String:
+	if amount_db <= MIN_SEND_DB:
+		return "-inf dB"
+	return "%.1f dB" % amount_db
 
 
 ## Find the live send control for a bus.

@@ -1,14 +1,14 @@
-# test_sends_panel_pre_fader.gd
-# Right-clicking a send knob offers a Pre-Fader toggle: disabled until the send exists,
+# test_sends_panel.gd
+# Send knobs work in dB. Right-clicking one offers a Pre-Fader toggle: disabled until the send exists,
 # checked to match the send, and toggling it updates the channel's send and the knob arc.
-# Run: godot --headless --path Godot -s tests/test_sends_panel_pre_fader.gd -- --test
+# Run: godot --headless --path Godot -s tests/test_sends_panel.gd -- --test
 extends TestBase
 
 const PANEL_SCENE := "res://mixer/sends_panel/SendsPanel.tscn"
 
 
 func suite_name() -> String:
-	return "Sends panel pre-fader tests"
+	return "Sends panel tests"
 
 
 func run_tests() -> void:
@@ -50,6 +50,15 @@ func run_tests() -> void:
 	panel._on_send_menu_id_pressed(pre_fader_id)
 	_assert(not channel.get_send(bus.id).pre_fader, "toggling again makes it post-fader")
 	_assert(control.knob.value_arc_color == post_color, "a post-fader send restores the arc color")
+
+	# The knob works in dB: its value is the send level and its readout says dB
+	channel.set_send_amount(bus.id, -6.0)
+	_assert(is_equal_approx(control.knob.value, -6.0), "the knob value is the send level in dB")
+	_assert(control.knob.get_value_text() == "-6.0 dB", "the readout is in dB (got '%s')" % control.knob.get_value_text())
+	control.knob.value = 3.0
+	_assert(is_equal_approx(channel.get_send(bus.id).amount, 3.0), "turning the knob sets the send in dB")
+	control.knob.value = -60.0
+	_assert(control.knob.get_value_text() == "-inf dB", "the bottom of the range reads -inf dB")
 
 	channel.remove_send(bus.id)
 	panel.queue_free()
