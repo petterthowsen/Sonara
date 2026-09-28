@@ -2,7 +2,6 @@ use super::devices::container::{ChainCursor, ChainStep};
 use super::devices::AudioDevice;
 use super::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
 use super::render_scratch::MixBuffers;
-use std::collections::HashMap;
 /// Value kind for setting device parameters
 #[derive(Debug, Clone, Copy)]
 pub enum ParamSetValue {
@@ -517,8 +516,9 @@ pub struct Channel {
     // Device chain for processing (instruments or effects)
     pub devices: Vec<Box<dyn AudioDevice>>,
 
-    // Active voices for INSTRUMENT channels only
-    pub active_voices: HashMap<MidiNote, Voice>,
+    /// Clip notes sounding on this channel, counted per MIDI note. Stop, pause and seek
+    /// release them with note-offs instead of resetting devices, so releases and tails ring out.
+    pub held_clip_notes: [u8; 128],
 
     // MIDI routing configuration
     pub midi_routing: MidiRouting,
@@ -591,7 +591,7 @@ impl Channel {
             current_gain: initial_gain,
             smoothing_alpha,
             devices: Vec::new(),
-            active_voices: HashMap::new(),
+            held_clip_notes: [0; 128],
             midi_routing: MidiRouting::default(),
             midi_queue: create_midi_queue(),
             // Preallocated so the audio thread doesn't allocate while scheduling
@@ -983,6 +983,36 @@ impl Channel {
         step
     }
 
+    /// Send a note from clip playback, counting it so `release_clip_notes` can end it.
+    pub fn send_clip_note(
+        &mut self,
+        note: u8,
+        velocity: u8,
+        is_note_on: bool,
+        frame_offset: usize,
+    ) {
+        let held = &mut self.held_clip_notes[(note & 0x7f) as usize];
+        if is_note_on {
+            *held = held.saturating_add(1);
+        } else if *held == 0 {
+            return; // Already released by stop or seek
+        } else {
+            *held -= 1;
+        }
+        self.send_midi_event_to_devices(note, velocity, is_note_on, frame_offset);
+    }
+
+    /// Send a note-off for every clip note still sounding (once per overlapping note-on).
+    /// Live MIDI isn't touched, so keys held on a controller keep playing.
+    pub fn release_clip_notes(&mut self) {
+        for note in 0..128u8 {
+            let held = std::mem::take(&mut self.held_clip_notes[note as usize]);
+            for _ in 0..held {
+                self.send_midi_event_to_devices(note, 0, false, 0);
+            }
+        }
+    }
+
     /// Send MIDI event to the first device (instrument) only with a frame offset.
     /// Effects in the chain don't receive MIDI.
     pub fn send_midi_event_to_devices(
@@ -1050,7 +1080,6 @@ pub struct Track {
     pub id: TrackId,
     pub channel_id: ChannelId,
     pub clip_instances: Vec<ClipInstance>,
-    pub active_voices: HashMap<MidiNote, Voice>,
     /// Automation lanes driving parameters on the track's linked channel.
     pub automation_lanes: Vec<super::automation::AutomationLane>,
 }
@@ -1061,7 +1090,6 @@ impl Track {
             id,
             channel_id,
             clip_instances: Vec::new(),
-            active_voices: HashMap::new(),
             automation_lanes: Vec::new(),
         }
     }
@@ -1161,59 +1189,6 @@ impl AudioPlayback {
     /// Linear interpolation helper
     fn lerp(a: f32, b: f32, t: f32) -> f32 {
         a + (b - a) * t
-    }
-}
-
-/// Voice for MIDI note playback (sine wave generator)
-/// TODO: remove this?
-#[derive(Debug, Clone)]
-pub struct Voice {
-    pub note: MidiNote,
-    pub velocity: MidiVelocity,
-    pub phase: f32,
-    pub sample_rate: f32,
-}
-
-impl Voice {
-    pub fn new(note: MidiNote, velocity: MidiVelocity, sample_rate: f32) -> Self {
-        Self {
-            note,
-            velocity,
-            phase: 0.0,
-            sample_rate,
-        }
-    }
-
-    /// Get frequency for MIDI note (A4 = 440Hz)
-    pub fn get_frequency(&self) -> f32 {
-        440.0 * 2.0_f32.powf((self.note as f32 - 69.0) / 12.0)
-    }
-
-    /// Get amplitude from velocity
-    pub fn get_amplitude(&self) -> f32 {
-        (self.velocity as f32 / 127.0) * 0.3 // Scale down to prevent clipping
-    }
-
-    /// Generate next sample
-    pub fn process(&mut self) -> f32 {
-        let freq = self.get_frequency();
-        let amp = self.get_amplitude();
-
-        // Calculate sine wave output
-        // Phase is in range [0, 1), convert to radians [0, 2π)
-        let phase_radians = self.phase * 2.0 * std::f32::consts::PI;
-        let output = amp * phase_radians.sin();
-
-        // Increment phase by frequency/sample_rate (cycles per sample)
-        let phase_increment = freq / self.sample_rate;
-        self.phase += phase_increment;
-
-        // Wrap phase to keep it in [0, 1) range
-        while self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
-
-        output
     }
 }
 

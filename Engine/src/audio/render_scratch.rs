@@ -50,7 +50,7 @@ pub enum SoloRole {
     /// Main output and every send stay in the mix.
     #[default]
     Full,
-    /// Only sends that reach a soloed bus stay in the mix; the dry output is muted.
+    /// Only the output and sends that lead to a soloed channel stay in the mix.
     SendOnly,
     /// This channel contributes no audio this buffer.
     Silent,
@@ -74,6 +74,11 @@ pub struct MixBuffers {
     pub done: bool,
     /// Solo participation for this buffer (`Full` when nothing is soloed).
     pub solo_role: SoloRole,
+    /// Soloed audio flows through this channel: it is soloed, routes into a soloed channel
+    /// (group solo), or is fed by such a channel. Everything it outputs stays in the mix.
+    pub solo_up: bool,
+    /// This channel leads to a soloed channel by routes or sends, so what feeds it stays.
+    pub solo_down: bool,
     /// First device writes extra buses into child channels this buffer.
     pub has_aux_source: bool,
     /// Where this channel's device chain stopped when it parked at a plugin.

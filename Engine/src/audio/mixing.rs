@@ -29,30 +29,6 @@ fn is_silenced(channel: &Channel) -> bool {
     channel.mix.solo_role == SoloRole::Silent
 }
 
-/// Walk `start_id`'s output chain and return true if `target_id` is on it (including itself).
-fn output_reaches(
-    channel_map: &HashMap<ChannelId, Channel>,
-    mut id: ChannelId,
-    target_id: ChannelId,
-) -> bool {
-    for _ in 0..SOLO_WALK_LIMIT {
-        if id == target_id {
-            return true;
-        }
-        let Some(channel) = channel_map.get(&id) else {
-            return false;
-        };
-        let Some(next) = output_target(channel) else {
-            return false;
-        };
-        if next == id {
-            return false;
-        }
-        id = next;
-    }
-    false
-}
-
 /// True if this channel or anything it routes into is soloed.
 fn output_reaches_soloed(channel_map: &HashMap<ChannelId, Channel>, mut id: ChannelId) -> bool {
     for _ in 0..SOLO_WALK_LIMIT {
@@ -73,84 +49,119 @@ fn output_reaches_soloed(channel_map: &HashMap<ChannelId, Channel>, mut id: Chan
     false
 }
 
-/// True if an unmuted send from `source` reaches `target_id` (the send target or its output chain).
-fn send_reaches(
+/// True if `source` has a route or unmuted send into a channel for which `pred` holds.
+fn any_output(
     channel_map: &HashMap<ChannelId, Channel>,
     source: &Channel,
-    target_id: ChannelId,
+    pred: impl Fn(&Channel) -> bool,
 ) -> bool {
-    source.send_channels.iter().any(|send| {
-        !send.muted
-            && is_valid_route(channel_map, source.id, send.target_channel_id)
-            && output_reaches(channel_map, send.target_channel_id, target_id)
-    })
-}
-
-/// True if `source` has an unmuted send whose target is soloed or routes into a soloed bus.
-fn send_reaches_soloed(channel_map: &HashMap<ChannelId, Channel>, source: &Channel) -> bool {
-    source.send_channels.iter().any(|send| {
-        !send.muted
-            && is_valid_route(channel_map, source.id, send.target_channel_id)
-            && output_reaches_soloed(channel_map, send.target_channel_id)
-    })
-}
-
-/// True if a fully-audible (group or self-solo) source routes its output through `target_id`.
-fn group_output_reaches(channel_map: &HashMap<ChannelId, Channel>, target_id: ChannelId) -> bool {
-    channel_map.values().any(|source| {
-        !source.mute
-            && output_reaches_soloed(channel_map, source.id)
-            && output_reaches(channel_map, source.id, target_id)
-    })
-}
-
-/// True if a fully-audible source sends into `target_id` or a bus that routes there.
-fn group_send_reaches(channel_map: &HashMap<ChannelId, Channel>, target_id: ChannelId) -> bool {
-    channel_map.values().any(|source| {
-        !source.mute
-            && output_reaches_soloed(channel_map, source.id)
-            && send_reaches(channel_map, source, target_id)
-    })
-}
-
-/// Decide how this channel participates when solo is active.
-///
-/// Sources that route into a soloed bus stay fully audible (group solo). Sources that only send
-/// to a soloed bus keep those sends and mute their dry output. Buses stay open when a soloed
-/// source reaches them by route or send, so nested buses and FX returns still reach master.
-fn solo_role(channel_map: &HashMap<ChannelId, Channel>, id: ChannelId, has_solo: bool) -> SoloRole {
-    let Some(channel) = channel_map.get(&id) else {
-        return SoloRole::Silent;
+    let target_holds = |target_id: ChannelId| {
+        is_valid_route(channel_map, source.id, target_id)
+            && channel_map.get(&target_id).is_some_and(&pred)
     };
-    if channel.mute {
-        return SoloRole::Silent;
-    }
-    if !has_solo {
-        return SoloRole::Full;
-    }
-    if channel.mix.is_route_target {
-        if group_output_reaches(channel_map, id) || group_send_reaches(channel_map, id) {
-            SoloRole::Full
-        } else {
-            SoloRole::Silent
-        }
-    } else if output_reaches_soloed(channel_map, id) {
-        SoloRole::Full
-    } else if send_reaches_soloed(channel_map, channel) {
-        SoloRole::SendOnly
-    } else {
-        SoloRole::Silent
-    }
+    output_target(source).is_some_and(|id| target_holds(id))
+        || source
+            .send_channels
+            .iter()
+            .any(|send| !send.muted && target_holds(send.target_channel_id))
 }
 
-/// Store each channel's solo role for this buffer. Must run after `count_route_inputs`.
+/// Mark the unmuted targets of `source`'s route and unmuted sends as carrying soloed audio.
+/// Returns true if any target changed.
+fn spread_solo_up(channel_map: &mut HashMap<ChannelId, Channel>, source_id: ChannelId) -> bool {
+    let Some(source) = channel_map.get_mut(&source_id) else {
+        return false;
+    };
+    // Move the sends out (no allocation) so targets can be borrowed mutably
+    let sends = std::mem::take(&mut source.send_channels);
+    let output = output_target(source);
+    let targets = output.into_iter().chain(
+        sends
+            .iter()
+            .filter(|send| !send.muted)
+            .map(|send| send.target_channel_id),
+    );
+    let mut changed = false;
+    for target_id in targets {
+        if !is_valid_route(channel_map, source_id, target_id) {
+            continue;
+        }
+        if let Some(target) = channel_map.get_mut(&target_id) {
+            if !target.mute && !target.mix.solo_up {
+                target.mix.solo_up = true;
+                changed = true;
+            }
+        }
+    }
+    if let Some(source) = channel_map.get_mut(&source_id) {
+        source.send_channels = sends;
+    }
+    changed
+}
+
+/// Set each channel's solo flags and role for this buffer.
+///
+/// A route or send stays in the mix when its source carries soloed audio (`solo_up`) or its
+/// target leads to a soloed channel (`solo_down`). So soloing a bus keeps what feeds it, even
+/// through another bus's send, and soloing a channel keeps everything downstream of it.
+/// Both flags spread one hop per sweep until nothing changes; no allocation.
 fn assign_solo_roles(
     channel_map: &mut HashMap<ChannelId, Channel>,
     channel_ids: &[ChannelId],
     has_solo: bool,
 ) {
     for &id in channel_ids {
-        let role = solo_role(channel_map, id, has_solo);
+        let up = has_solo
+            && channel_map
+                .get(&id)
+                .is_some_and(|c| !c.mute && output_reaches_soloed(channel_map, id));
+        if let Some(channel) = channel_map.get_mut(&id) {
+            channel.mix.solo_up = up;
+            channel.mix.solo_down = has_solo && !channel.mute && channel.solo;
+        }
+    }
+
+    if has_solo {
+        // Each sweep settles at least one more hop, so the channel count bounds the sweeps
+        for _ in 0..=channel_ids.len() {
+            let mut changed = false;
+            for &id in channel_ids {
+                let Some(channel) = channel_map.get(&id) else {
+                    continue;
+                };
+                if channel.mute {
+                    continue;
+                }
+                let push_up = channel.mix.solo_up;
+                let down =
+                    !channel.mix.solo_down && any_output(channel_map, channel, |t| t.mix.solo_down);
+                if down {
+                    channel_map.get_mut(&id).unwrap().mix.solo_down = true;
+                    changed = true;
+                }
+                if push_up {
+                    changed |= spread_solo_up(channel_map, id);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    for &id in channel_ids {
+        let Some(channel) = channel_map.get(&id) else {
+            continue;
+        };
+        let role = if channel.mute {
+            SoloRole::Silent
+        } else if !has_solo || id == MASTER_CHANNEL_ID || channel.mix.solo_up {
+            SoloRole::Full
+        } else if any_output(channel_map, channel, |t| t.mix.solo_down) {
+            SoloRole::SendOnly
+        } else {
+            SoloRole::Silent
+        };
         if let Some(channel) = channel_map.get_mut(&id) {
             channel.mix.solo_role = role;
         }
@@ -250,8 +261,7 @@ fn route_channel(
         return;
     };
     let role = source.mix.solo_role;
-    let route_output = frames > 0 && role == SoloRole::Full;
-    let allow_sends = frames > 0 && role != SoloRole::Silent;
+    let audible = frames > 0 && role != SoloRole::Silent;
     let send_only = role == SoloRole::SendOnly;
     let output = output_target(source);
     let has_pre_fader_copy = source.mix.has_pre_fader_copy;
@@ -267,7 +277,7 @@ fn route_channel(
     if let Some(target_id) = output.filter(|&id| is_valid_route(channel_map, source_id, id)) {
         if let Some(target) = channel_map.get_mut(&target_id) {
             target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
-            if route_output && !target.mix.done {
+            if audible && (!send_only || target.mix.solo_down) && !target.mix.done {
                 let gain = target.get_gain();
                 add_scaled(target, &left, &right, frames, gain);
             }
@@ -278,13 +288,11 @@ fn route_channel(
         if !is_valid_route(channel_map, source_id, send.target_channel_id) {
             continue;
         }
-        let send_allowed = allow_sends
-            && !send.muted
-            && (!send_only || output_reaches_soloed(channel_map, send.target_channel_id));
         let Some(target) = channel_map.get_mut(&send.target_channel_id) else {
             continue;
         };
         target.mix.pending_inputs = target.mix.pending_inputs.saturating_sub(1);
+        let send_allowed = audible && !send.muted && (!send_only || target.mix.solo_down);
         if !send_allowed || target.mix.done {
             continue;
         }
@@ -313,6 +321,23 @@ fn route_channel(
         source.buffer_right = right;
         source.mix.pre_fader_left = pre_left;
         source.mix.pre_fader_right = pre_right;
+    }
+}
+
+/// Copy the channel's buffer for its pre-fader sends, if it has any. Call after its devices run.
+///
+/// Route targets have their fader applied as inputs mix in, so their copy is post-fader and
+/// pre-pan.
+fn copy_pre_fader(channel: &mut Channel, frames: usize) {
+    let mix = &mut channel.mix;
+    mix.has_pre_fader_copy = frames > 0
+        && channel
+            .send_channels
+            .iter()
+            .any(|send| send.pre_fader && !send.muted);
+    if mix.has_pre_fader_copy {
+        mix.pre_fader_left[..frames].copy_from_slice(&channel.buffer_left[..frames]);
+        mix.pre_fader_right[..frames].copy_from_slice(&channel.buffer_right[..frames]);
     }
 }
 
@@ -349,6 +374,7 @@ fn route_finished(channel_map: &mut HashMap<ChannelId, Channel>, id: ChannelId, 
         return;
     };
     if channel.mix.is_route_target {
+        copy_pre_fader(channel, frames);
         if !channel.mute {
             apply_pan(channel, frames);
         }
@@ -538,21 +564,6 @@ pub fn mix_and_output(
     assign_solo_roles(channel_map, channel_ids, has_solo);
     mark_aux_sources(channel_map, channel_ids);
 
-    // Copy pre-fader audio for pre-fader sends.
-    // NOTE: the copy is taken before device processing, as it always has been.
-    for channel in channel_map.values_mut() {
-        let mix = &mut channel.mix;
-        mix.has_pre_fader_copy = frames > 0
-            && channel
-                .send_channels
-                .iter()
-                .any(|send| send.pre_fader && !send.muted);
-        if mix.has_pre_fader_copy {
-            mix.pre_fader_left[..frames].copy_from_slice(&channel.buffer_left[..frames]);
-            mix.pre_fader_right[..frames].copy_from_slice(&channel.buffer_right[..frames]);
-        }
-    }
-
     // Aux source pass: generate extra device buses into child channel buffers before
     // those children run their own device chains. Route-target parents skip the
     // normal pre-pass so remaining FX wait until children mix back in.
@@ -577,6 +588,14 @@ pub fn mix_and_output(
         }
     }
     drain_parked(channel_map, parked, frames, status_tx);
+
+    // Pre-fader sends take the device output before the fader. Route targets copy theirs in
+    // the routing pass, once their inputs have mixed in and their devices have run.
+    for channel in channel_map.values_mut() {
+        if !channel.mix.is_route_target {
+            copy_pre_fader(channel, frames);
+        }
+    }
 
     // Second pass: apply each channel's smoothed fader gain and pan to its own buffer, making it
     // "post-fader" for metering. Buses have no local audio yet; they pan in the routing pass.
@@ -1510,5 +1529,146 @@ mod tests {
         // Dry 0.5 + bus 2 (0.5 × 2) + bus 3 (0.5 × 3).
         assert!((output[0] - 3.0).abs() < 1e-4, "{output:?}");
         assert!((output[1] - 1.5).abs() < 1e-4, "{output:?}");
+    }
+
+    /// Post-fader send from `source` into `target` at 0 dB.
+    fn send_to(target_channel_id: ChannelId, pre_fader: bool) -> Send {
+        Send {
+            target_channel_id,
+            amount_db: 0.0,
+            pre_fader,
+            muted: false,
+        }
+    }
+
+    #[test]
+    fn pre_fader_send_carries_instrument_output() {
+        // The instrument's device generates the signal; its buffer is empty before devices run
+        let mut instrument = test_channel(3, Some(1), -60.0);
+        add_test_device(&mut instrument, 0.25);
+        instrument.send_channels.push(send_to(2, true));
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(2, Some(1), 0.0),
+            instrument,
+        ]);
+        let output = mix(&mut state);
+
+        assert!((state.channels[&2].buffer_left[0] - 0.25).abs() < 1e-4);
+        assert!((output[0] - 0.25).abs() < 1e-3, "{output:?}");
+    }
+
+    #[test]
+    fn bus_pre_fader_send_carries_bus_device_output() {
+        // Track → bus 2 (device adds 0.1, pre-fader send to bus 4) → master
+        let mut track = test_channel(3, Some(2), 0.0);
+        track.buffer_left.fill(0.2);
+        track.buffer_right.fill(0.2);
+        let mut bus = test_channel(2, Some(1), 0.0);
+        add_test_device(&mut bus, 0.1);
+        bus.send_channels.push(send_to(4, true));
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            bus,
+            track,
+            test_channel(4, Some(1), 0.0),
+        ]);
+        let output = mix(&mut state);
+
+        assert!((state.channels[&4].buffer_left[0] - 0.3).abs() < 1e-4);
+        assert!((output[0] - 0.6).abs() < 1e-4, "{output:?}");
+    }
+
+    #[test]
+    fn bus_sends_to_another_bus() {
+        // Track → bus 2 → master, and bus 2 sends post-fader into bus 4 → master
+        let mut track = test_channel(3, Some(2), 0.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.5);
+        let mut bus = test_channel(2, Some(1), 0.0);
+        bus.send_channels.push(send_to(4, false));
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            test_channel(4, Some(1), 0.0),
+            bus,
+            track,
+        ]);
+        let output = mix(&mut state);
+
+        assert!((state.channels[&2].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((state.channels[&4].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((output[0] - 1.0).abs() < 1e-4, "{output:?}");
+    }
+
+    #[test]
+    fn bus_send_to_bus_runs_target_devices_once() {
+        let mut track = test_channel(3, Some(2), 0.0);
+        track.buffer_left.fill(0.5);
+        track.buffer_right.fill(0.5);
+        let mut bus = test_channel(2, Some(1), 0.0);
+        bus.send_channels.push(send_to(4, false));
+        let mut fx = test_channel(4, Some(1), 0.0);
+        let fx_calls = add_test_device(&mut fx, 0.0);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), fx, bus, track]);
+        mix(&mut state);
+
+        assert_eq!(fx_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn soloed_reverb_keeps_instrument_sending_into_it() {
+        // Drums (instrument device) → master, sending into Reverb; soloing Reverb must keep the
+        // drums running so the send carries signal, while the dry drums are muted
+        let mut drums = test_channel(3, Some(1), 0.0);
+        let drum_calls = add_test_device(&mut drums, 0.25);
+        drums.send_channels.push(send_to(2, false));
+        let mut reverb = test_channel(2, Some(1), 0.0);
+        reverb.solo = true;
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), reverb, drums]);
+        let output = mix(&mut state);
+
+        assert_eq!(drum_calls.load(Ordering::Relaxed), 1);
+        assert!((state.channels[&2].buffer_left[0] - 0.25).abs() < 1e-4);
+        assert!((output[0] - 0.25).abs() < 1e-4, "{output:?}");
+    }
+
+    #[test]
+    fn soloed_reverb_keeps_pre_fader_send_from_instrument() {
+        let mut drums = test_channel(3, Some(1), -60.0);
+        add_test_device(&mut drums, 0.25);
+        drums.send_channels.push(send_to(2, true));
+        let mut reverb = test_channel(2, Some(1), 0.0);
+        reverb.solo = true;
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), reverb, drums]);
+        let output = mix(&mut state);
+
+        assert!((output[0] - 0.25).abs() < 1e-3, "{output:?}");
+    }
+
+    #[test]
+    fn soloed_reverb_keeps_group_bus_sending_into_it() {
+        // Drums → Drum Bus → master; Drum Bus sends into Reverb. Soloing Reverb plays only the
+        // reverb return: the drums feed the bus, whose dry output is muted but whose send stays
+        let mut drums = test_channel(3, Some(2), 0.0);
+        drums.buffer_left.fill(0.5);
+        drums.buffer_right.fill(0.5);
+        let mut drum_bus = test_channel(2, Some(1), 0.0);
+        drum_bus.send_channels.push(send_to(4, false));
+        let mut reverb = test_channel(4, Some(1), 0.0);
+        reverb.solo = true;
+        let mut other = test_channel(5, Some(1), 0.0);
+        other.buffer_left.fill(0.9);
+        other.buffer_right.fill(0.9);
+        let mut state = state_with(vec![
+            test_channel(1, Some(1000), 0.0),
+            drum_bus,
+            drums,
+            reverb,
+            other,
+        ]);
+        let output = mix(&mut state);
+
+        assert!((state.channels[&4].buffer_left[0] - 0.5).abs() < 1e-4);
+        assert!((output[0] - 0.5).abs() < 1e-4, "{output:?}");
     }
 }

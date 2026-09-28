@@ -11,7 +11,11 @@ var logger : Log = Log.make("SendsPanel")
 ## One send slot: amount knob plus a caption that tracks the target bus name.
 ## Long bus names end in an ellipsis so they never widen the strip; hovering shows the full name.
 class SendControl extends LabeledKnob:
+	## Arc color for pre-fader sends, so they stand out from the default post-fader ones.
+	const PRE_FADER_ARC_COLOR := Color(0.35, 0.65, 1.0)
+
 	var target_channel_id: int = -1
+	var _post_fader_arc_color: Color
 	var bus_label: Label:
 		get: return label
 
@@ -31,6 +35,7 @@ class SendControl extends LabeledKnob:
 
 		text = bus_name
 		label.modulate.a = 0.5 if dimmed else 1.0
+		_post_fader_arc_color = knob.value_arc_color
 
 
 	## Update the bus name shown under the knob.
@@ -46,6 +51,12 @@ class SendControl extends LabeledKnob:
 			bus_label.modulate.a = 0.5 if dimmed else 1.0
 
 
+	## Color the knob arc by whether the send taps the signal before the fader.
+	func set_pre_fader_display(pre_fader: bool) -> void:
+		knob.value_arc_color = PRE_FADER_ARC_COLOR if pre_fader else _post_fader_arc_color
+		knob.queue_redraw()
+
+
 @onready var flow_container: FlowContainer = $FlowContainer
 
 # Data binding
@@ -54,6 +65,11 @@ var project: Project = null
 
 # Track signal connections to bus channels for cleanup
 var _bus_signal_connections: Dictionary = {}  # bus_id -> Callable
+
+## Right-click menu for one send knob.
+enum SendMenuItem { PRE_FADER }
+var _send_menu: PopupMenu = null
+var _menu_target_channel_id: int = -1
 
 
 ## Strip scene placeholders, then build sends if this panel was bound early.
@@ -108,6 +124,7 @@ func _on_channel_send_added(target_channel_id: int, send_config: SendConfig) -> 
 	var control := _find_send_control(target_channel_id)
 	if control:
 		control.set_amount_display(_db_to_normalized(send_config.amount), send_config.amount <= -60.0)
+		control.set_pre_fader_display(send_config.pre_fader)
 		return
 	_rebuild_sends_ui()
 
@@ -117,6 +134,7 @@ func _on_channel_send_removed(target_channel_id: int) -> void:
 	var control := _find_send_control(target_channel_id)
 	if control:
 		control.set_amount_display(_db_to_normalized(-60.0), true)
+		control.set_pre_fader_display(false)
 		return
 	_rebuild_sends_ui()
 
@@ -126,6 +144,7 @@ func _on_channel_send_changed(target_channel_id: int, send_config: SendConfig) -
 	var control := _find_send_control(target_channel_id)
 	if control:
 		control.set_amount_display(_db_to_normalized(send_config.amount), send_config.amount <= -60.0)
+		control.set_pre_fader_display(send_config.pre_fader)
 
 
 ## Rebuild send knobs when a bus is added to the project.
@@ -170,6 +189,7 @@ func _create_send_control(bus_channel: Channel, send_config: SendConfig) -> void
 		_db_to_normalized(send_amount),
 		send_amount <= -60.0
 	)
+	control.set_pre_fader_display(send_config != null and send_config.pre_fader)
 
 	control.knob.value_changed.connect(_on_send_knob_changed.bind(bus_channel.id))
 	control.knob.gui_input.connect(_on_send_knob_gui_input.bind(bus_channel.id, control.knob))
@@ -202,16 +222,47 @@ func _on_send_knob_changed(value: float, target_channel_id: int) -> void:
 		channel.set_send_amount(target_channel_id, amount_db)
 
 
-## Handle right-click on send knob to show options menu.
+## Right-click on a send knob opens its options menu.
 func _on_send_knob_gui_input(event: InputEvent, target_channel_id: int, _knob: Control) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.is_pressed():
-		# TODO: Show context menu with options:
-		# - Remove send
-		# - Pre/post fader toggle
-		# - Mute send
-		var send_config = channel.get_send(target_channel_id)
-		if send_config:
-			logger.info("Right-clicked send to channel %d (%.1f dB)" % [target_channel_id, send_config.amount])
+		_show_send_menu(target_channel_id)
+		accept_event()
+
+
+## Show the options for the send to `target_channel_id` at the mouse.
+## Pre-Fader is disabled until the send exists (its knob has been turned up).
+func _show_send_menu(target_channel_id: int) -> void:
+	if not channel:
+		return
+	if _send_menu == null:
+		_send_menu = PopupMenu.new()
+		_send_menu.add_check_item("Pre-Fader", SendMenuItem.PRE_FADER)
+		_send_menu.id_pressed.connect(_on_send_menu_id_pressed)
+		add_child(_send_menu)
+
+	var send_config: SendConfig = channel.get_send(target_channel_id)
+	var index := _send_menu.get_item_index(SendMenuItem.PRE_FADER)
+	_send_menu.set_item_checked(index, send_config != null and send_config.pre_fader)
+	_send_menu.set_item_disabled(index, send_config == null)
+	_send_menu.set_item_tooltip(index, "" if send_config else "Turn the send up first")
+
+	_menu_target_channel_id = target_channel_id
+	_send_menu.popup(Rect2i(Vector2i(get_screen_position() + get_local_mouse_position()), Vector2i.ZERO))
+
+
+func _on_send_menu_id_pressed(id: int) -> void:
+	if id != SendMenuItem.PRE_FADER or not channel:
+		return
+	var send_config: SendConfig = channel.get_send(_menu_target_channel_id)
+	if not send_config:
+		return
+	var target_id := _menu_target_channel_id
+	var ch := channel
+	var cmd := PropertyCommand.new(
+		"Send Pre-Fader", ch, "", send_config.pre_fader, not send_config.pre_fader
+	)
+	cmd.set_callable(func(pre_fader: bool) -> void: ch.set_send_pre_fader(target_id, pre_fader))
+	HistoryUtil.execute(cmd)
 
 
 ## Convert dB value (-60 to +12) to normalized 0-1 range.

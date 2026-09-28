@@ -12,12 +12,14 @@
 ### Mixing & Playback
 
 - [ ] Plugin latency compensation
-- [ ] Send amount curve is wrong: with Dragonfly Hall Reverb (100% wet) on a bus at 0 dB and a send of 0.5 from Drums, almost no signal reaches the reverb; past 0.5 it ramps up very steeply. Send amount should be in dB (-inf to 0 dB) like Bitwig, not a raw linear 0-1 factor
-- [ ] Bug (`city_pop_5` project): soloing the Reverb channel appears to stop processing the Drum channel even though Drums sends into it. Closing and reopening the project doesn't fix it. Solo logic should keep channels alive that feed a soloed route target
+- [x?] Send knobs: right-click opens a menu with a Pre-Fader toggle (undoable, disabled until the send exists); pre-fader sends draw their knob arc in blue. `Godot/tests/test_sends_panel_pre_fader.gd`
+- [ ] Send knobs should show their value in dB (the engine already takes send amounts in dB and the curve sounds right; only the UI readout is missing)
+- [x] Bug (`city_pop_5` project): soloing the Reverb channel appears to stop processing the Drum channel even though Drums sends into it. Solo now uses reach flags per channel (`solo_up`: carries soloed audio, `solo_down`: leads to a soloed channel); a route or send stays when its source is up or its target is down. Fixes a group bus that sends into a soloed reverb (it and its feeders were muted). Covered by `soloed_reverb_*` tests in `mixing.rs`
   - [ ] Optional, no longer jitter-related: OSC receive runs in `OSCServer._process()` on the main thread, so every message is delayed up to a frame. Affects parameter changes and meters too. Note `AudioEngineOSC.gd:70` claims a polling thread that doesn't exist
-- [ ] Bug: a bus can't send to another bus. The UI allows it, but no audio arrives
+- [ ] Bug: a bus can't send to another bus. The UI allows it, but no audio arrives. The engine mixes bus → bus sends correctly (`bus_sends_to_another_bus`, `bus_pre_fader_send_carries_bus_device_output` tests), so if this still happens the cause is on the Godot/OSC side
   - [ ] Decide the constraints: can a delay bus and a reverb bus send to each other? Check how other DAWs handle feedback loops (reject cycles, or allow with a one-buffer delay) and what it means for routing latency
-- [ ] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent
+- [x] Mixing: pre-fader send audio is copied before the device pre-pass, so pre-fader sends from instrument channels are silent. The copy is now taken after each channel's devices run (`copy_pre_fader`); route targets copy it in the routing pass, after their fader (applied as inputs mix in) and before pan
+- [x] Stop, pause and seek no longer reset every device, which cut off instrument releases and effect tails (delay buffers, CLAP `Reset`). Clip notes are counted per channel (`Channel::held_clip_notes`) and released with note-offs; live MIDI keeps playing. Idle chains still sleep after ~3 s of silence via `DeviceSleepState`
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [x?] Make sample rate and buffer size configurable: Settings › Audio › Output (device, sample rate, buffer size) applies live; the engine prepares devices and re-activates plugins for a new rate, reloads clips, lists the device's output pairs for master (1000 = 1/2, 1001 = 3/4, …) and grows its buffer when PipeWire's quantum doesn't fit. See `docs/engine-stability-plan.md` Phase 7
   - [ ] Live check through the Godot UI: switch device, 44.1 ↔ 48 kHz and buffer size during playback; clips at the right pitch, plugins keep their state, settings survive a restart
@@ -84,6 +86,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 
 - [ ] Increase the maximum horizontal zoom in the timeline
+- [ ] Arranger track list: wire up the IO routing menu button on `TrackItem`
 - [ ] Chord track: design & implement chord track with visual notations
 - [ ] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
@@ -153,6 +156,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [x?] `DrumMachineDefaultView._rebuild` connects `slot_changed` / `loading_state_changed` on child devices but never disconnects them when a child is removed from the drum machine. Now tracked in `_tracked_children` and reconciled by `_sync_child_signals()` on every rebuild; `_on_unbind` clears the tracked list. Verified headless (throwaway): a removed pad's signals are disconnected and the other pads stay connected.
 - [x?] `CompactDevicePanel.setup()` does `await ready` unconditionally, so it hangs if the panel is already in the tree (use `if not is_node_ready(): await ready`). Done; covered by `Godot/tests/test_compact_device_panel.gd`, which fails against the old code.
 - [x?] Device lane: add slight spacing between header and parent header. `DeviceLane` inserts a 4px `ParentHeaderGap` spacer between them, visible only with the parent header. Verified headless: order and 4px layout width.
+- [ ] Bug: clicking the light (enable/bypass) button on `DevicePanel` in the device lane doesn't seem to work.
 - [ ] Device lane: for each device, add an animated signal icon on its left side that flashes black then green on audio and blue on MIDI
 - [ ] All devices should have their own volume control
 - [x?] Devices should be freely renamable, with uniqueness enforced per-channel (auto-suffix on collision, like track/channel names above). Inline SmartLineEdit (double-click) on the device lane and compact panels, plus the context menu, all through `DeviceActions.rename`. Uniqueness is per host (siblings in a container), which is what `Channel/Device/Child` paths need

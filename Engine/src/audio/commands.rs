@@ -852,12 +852,9 @@ pub fn process_command(
             let position = state
                 .settings
                 .format_tick_position(state.get_current_tick());
-            // Reset all devices to stop any playing notes/voices
+            // Release clip notes; devices keep running so releases and effect tails ring out
             for channel in state.channels.values_mut() {
-                channel.active_voices.clear();
-                for device in &mut channel.devices {
-                    device.reset();
-                }
+                channel.release_clip_notes();
             }
             info!("Playback paused at {}", position);
             return Some(EngineStatus::PlayingStateChanged(false));
@@ -870,13 +867,9 @@ pub fn process_command(
             state.set_current_tick(0);
             state.set_fractional_tick_accumulator(0.0);
             state.dispatch_playhead_tick.store(false, Ordering::Release);
-            // Reset all channels and tracks
+            // Release clip notes; devices keep running so releases and effect tails ring out
             for channel in state.channels.values_mut() {
-                channel.active_voices.clear();
-                channel.scheduled_midi_events.clear();
-                for device in &mut channel.devices {
-                    device.reset();
-                }
+                channel.release_clip_notes();
             }
             for track in state.tracks.values_mut() {
                 for instance in &mut track.clip_instances {
@@ -894,12 +887,9 @@ pub fn process_command(
             state.set_current_tick(tick);
             state.set_fractional_tick_accumulator(0.0);
             state.request_playhead_midi_dispatch();
-            // Reset all channels and tracks on seek
+            // Release clip notes from the old position; tails keep ringing
             for channel in state.channels.values_mut() {
-                channel.active_voices.clear();
-                for device in &mut channel.devices {
-                    device.reset();
-                }
+                channel.release_clip_notes();
             }
             for track in state.tracks.values_mut() {
                 for instance in &mut track.clip_instances {

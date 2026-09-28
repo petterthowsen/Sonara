@@ -178,7 +178,7 @@ pub fn process_audio(
             for &(track_id, note, velocity, is_on) in &note_events {
                 if let Some(track) = state.tracks.get_mut(&track_id) {
                     if let Some(channel) = state.channels.get_mut(&track.channel_id) {
-                        channel.send_midi_event_to_devices(note, velocity, is_on, frame_offset);
+                        channel.send_clip_note(note, velocity, is_on, frame_offset);
                     }
                 }
             }
@@ -400,6 +400,7 @@ fn collect_tick_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
     use crate::audio::midi_types::MidiEvent;
     use std::time::Duration;
 
@@ -475,5 +476,67 @@ mod tests {
 
         collect_tick_events(7680, 0.0, 1, 0.04, true, &mut events);
         assert_eq!(events[0], (7680, 0));
+    }
+
+    /// Instrument that records the notes it receives as (note, is_note_on).
+    struct NoteRecorder {
+        notes: std::sync::Arc<std::sync::Mutex<Vec<(u8, bool)>>>,
+    }
+
+    impl crate::audio::devices::AudioDevice for NoteRecorder {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_midi_event(&mut self, note: u8, _velocity: u8, is_note_on: bool, _offset: usize) {
+            self.notes.lock().unwrap().push((note, is_note_on));
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.recorder"
+        }
+        fn device_name(&self) -> &str {
+            "Recorder"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {
+            panic!("stopping must release notes, not reset devices");
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn releasing_clip_notes_sends_one_note_off_per_held_note() {
+        let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut channel = Channel::new(2, "Synth".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(NoteRecorder {
+            notes: notes.clone(),
+        }));
+
+        // Two overlapping instances of note 60, one of 64 that already ended
+        channel.send_clip_note(60, 100, true, 0);
+        channel.send_clip_note(60, 100, true, 0);
+        channel.send_clip_note(64, 100, true, 0);
+        channel.send_clip_note(64, 100, false, 0);
+        notes.lock().unwrap().clear();
+
+        channel.release_clip_notes();
+        assert_eq!(*notes.lock().unwrap(), vec![(60, false), (60, false)]);
+
+        // The clip's own note-off after a stop is dropped, and a second release sends nothing
+        notes.lock().unwrap().clear();
+        channel.send_clip_note(60, 100, false, 0);
+        channel.release_clip_notes();
+        assert!(notes.lock().unwrap().is_empty());
     }
 }
