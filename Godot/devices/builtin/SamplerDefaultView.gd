@@ -5,6 +5,7 @@ const ENVELOPE_HEIGHT := 56.0
 const KNOB_ROW_HEIGHT := 52.0
 
 @onready var _waveform_area: Control = $Waveform
+@onready var _waveform_view: WaveformView = $Waveform/WaveformView
 @onready var _envelope_control: EnvelopeControl = $EnvelopeControl
 @onready var _knob_attack: RotaryKnob = $KnobRow/Attack/Knob
 @onready var _knob_decay: RotaryKnob = $KnobRow/Decay/Knob
@@ -25,8 +26,9 @@ var _syncing_envelope := false
 func _ready() -> void:
 	_setup_envelope()
 	_setup_knobs()
-	if _waveform_area and not _waveform_area.resized.is_connected(queue_redraw):
-		_waveform_area.resized.connect(queue_redraw)
+	# The view's own resize: it is laid out after its slot, so its width is current here.
+	if _waveform_view and not _waveform_view.resized.is_connected(_on_waveform_area_resized):
+		_waveform_view.resized.connect(_on_waveform_area_resized)
 
 
 ## Leave room below the waveform for the ADSR graph and knobs.
@@ -52,15 +54,15 @@ func _on_bind() -> void:
 	queue_redraw()
 
 
-## Stop listening to the bound instance's waveform.
+## Stop listening to the bound instance's audio source.
 func _on_unbind() -> void:
-	var wf: WaveformPyramid = device.sample_waveform
-	if wf == null:
+	var src: AudioSourceInfo = device.sample_source
+	if src == null:
 		return
-	if wf.waveform_level_updated.is_connected(_on_waveform_changed):
-		wf.waveform_level_updated.disconnect(_on_waveform_changed)
-	if wf.metadata_changed.is_connected(_on_waveform_changed):
-		wf.metadata_changed.disconnect(_on_waveform_changed)
+	if src.waveform_ready.is_connected(_on_waveform_changed):
+		src.waveform_ready.disconnect(_on_waveform_changed)
+	if src.metadata_changed.is_connected(_on_waveform_changed):
+		src.metadata_changed.disconnect(_on_waveform_changed)
 
 
 ## Reconnect waveform listeners and refresh the envelope when the panel is shown.
@@ -76,27 +78,45 @@ func _on_device_parameter_changed(_param_id: int, _value: float) -> void:
 	queue_redraw()
 
 
-## Create a WaveformPyramid on the instance if the engine has not supplied one yet.
+## Create an AudioSourceInfo on the instance if the engine has not supplied one yet.
 func _ensure_waveform() -> void:
-	if device and device.sample_waveform == null:
-		device.sample_waveform = WaveformPyramid.new()
+	if device and device.sample_source == null:
+		device.sample_source = AudioSourceInfo.new()
 
 
-## Listen for waveform metadata/level updates so the panel redraws.
+## Listen for metadata and peak data so the panel redraws.
 func _connect_waveform() -> void:
 	_ensure_waveform()
-	if device == null or device.sample_waveform == null:
+	if device == null or device.sample_source == null:
 		return
-	var wf: WaveformPyramid = device.sample_waveform
-	if not wf.waveform_level_updated.is_connected(_on_waveform_changed):
-		wf.waveform_level_updated.connect(_on_waveform_changed)
-	if not wf.metadata_changed.is_connected(_on_waveform_changed):
-		wf.metadata_changed.connect(_on_waveform_changed)
+	var src: AudioSourceInfo = device.sample_source
+	if not src.waveform_ready.is_connected(_on_waveform_changed):
+		src.waveform_ready.connect(_on_waveform_changed)
+	if not src.metadata_changed.is_connected(_on_waveform_changed):
+		src.metadata_changed.connect(_on_waveform_changed)
+	_update_waveform_view()
 
 
-## Redraw when a new waveform level arrives.
-func _on_waveform_changed(_level: int = 0) -> void:
+## Refresh the waveform view and the region overlay.
+func _on_waveform_changed() -> void:
+	_update_waveform_view()
 	queue_redraw()
+
+
+func _on_waveform_area_resized() -> void:
+	_update_waveform_view()
+	queue_redraw()
+
+
+## Show the whole sample: frame 0 at the left edge, the last frame at the right.
+func _update_waveform_view() -> void:
+	if _waveform_view == null:
+		return
+	var src: AudioSourceInfo = device.sample_source if device else null
+	_waveform_view.data = src.data if src else null
+	if _waveform_view.is_data_ready() and _waveform_view.size.x > 0.0:
+		_waveform_view.start_frame = 0.0
+		_waveform_view.frames_per_pixel = float(src.data.frames) / _waveform_view.size.x
 
 
 ## Configure the scene envelope resource and listen for handle edits.
@@ -254,12 +274,10 @@ func _on_release_knob_changed(value: float) -> void:
 		_envelope.release = value
 
 
-## Draw the waveform and start/end region in the waveform slot.
+## Draw the empty/loading message and the start/end region over the WaveformView.
 func _draw() -> void:
 	var rect := _waveform_rect()
-	draw_rect(rect, Color(0.08, 0.08, 0.1, 1.0), true)
-	var waveform := _ready_waveform()
-	if waveform == null:
+	if _waveform_view == null or not _waveform_view.is_data_ready():
 		var msg := "Drop an audio file" if device == null or device.loaded_file_path.is_empty() else "Loading…"
 		draw_string(
 			ThemeDB.fallback_font,
@@ -273,7 +291,6 @@ func _draw() -> void:
 		return
 	var start_n := device.get_parameter_normalized(_start_id) if _start_id >= 0 else 0.0
 	var end_n := device.get_parameter_normalized(_end_id) if _end_id >= 0 else 1.0
-	_draw_peaks(waveform, rect)
 	var x0 := rect.position.x + rect.size.x * start_n
 	var x1 := rect.position.x + rect.size.x * end_n
 	if start_n > 0.001:
@@ -289,30 +306,3 @@ func _waveform_rect() -> Rect2:
 	if _waveform_area:
 		return Rect2(_waveform_area.position, _waveform_area.size)
 	return Rect2(Vector2.ZERO, Vector2(size.x, maxf(size.y - _adsr_stack_height(), 1.0)))
-
-
-## Return the highest ready waveform level, or null while loading/empty.
-func _ready_waveform() -> Waveform:
-	if device == null or device.sample_waveform == null:
-		return null
-	return device.sample_waveform.get_ready_level()
-
-
-## Draw left-channel min/max peaks as a filled polygon in `rect`.
-func _draw_peaks(waveform: Waveform, rect: Rect2) -> void:
-	var peaks := waveform.peak_data_left
-	if peaks.is_empty():
-		return
-	var n := peaks.size()
-	var mid := rect.position.y + rect.size.y * 0.5
-	var amp := rect.size.y * 0.45
-	var fill := Color(0.35, 0.7, 0.95, 0.55)
-	var pts: PackedVector2Array = PackedVector2Array()
-	for i in range(n):
-		var x := rect.position.x + rect.size.x * (float(i) / float(maxi(n - 1, 1)))
-		pts.append(Vector2(x, mid - peaks[i].y * amp))
-	for i in range(n - 1, -1, -1):
-		var x := rect.position.x + rect.size.x * (float(i) / float(maxi(n - 1, 1)))
-		pts.append(Vector2(x, mid - peaks[i].x * amp))
-	if pts.size() >= 3:
-		draw_colored_polygon(pts, fill)

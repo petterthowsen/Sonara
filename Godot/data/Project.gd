@@ -56,7 +56,6 @@ var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
 var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
 var _request_device_lookup: Dictionary = {}  # req_id -> DeviceInstance
 var _osc_listener_registry: Array = []
-var _pending_waveform_retries: Dictionary = {}
 
 # Unique ID management
 # ID Allocation Scheme:
@@ -208,7 +207,7 @@ func _register_clip_osc_listeners() -> void:
 	_unregister_osc_listeners()
 	_register_osc_listener("/clip/*/load_state", _on_clip_load_state_received)
 	_register_osc_listener("/audiofile/decode/ready", _on_audiofile_decode_ready)
-	_register_osc_listener("/audiofile/waveform/level", _on_audiofile_waveform_level)
+	_register_osc_listener("/audiofile/waveform/ready", _on_audiofile_waveform_ready)
 	_register_osc_listener("/audiofile/progress", _on_audiofile_progress)
 	_register_osc_listener("/audiofile/error", _on_audiofile_error)
 
@@ -329,54 +328,46 @@ func _on_clip_load_state_received(args: Array, address: String) -> void:
 
 
 func _on_audiofile_decode_ready(args: Array) -> void:
-	"""Handle OSC /audiofile/decode/ready: decoded metadata and the waveform cache key.
+	"""Handle OSC /audiofile/decode/ready: decoded metadata and the engine cache key.
 
-	Waveform levels follow as /audiofile/waveform/level events and render progressively.
+	/audiofile/waveform/ready follows with the peak file.
 	OSC args: [req_id, cache_key, channels, frames, sample_rate, duration_s, sample_count?]
 	"""
 	if args.is_empty():
 		return
 	var req_id := str(args[0])
-	var pyramid := _waveform_for_req(req_id)
-	if pyramid == null or not pyramid.apply_decode_ready(args):
+	var source := _waveform_for_req(req_id)
+	if source == null or not source.apply_decode_ready(args):
 		return
 	var clip := _get_clip_by_req_id(req_id)
 	if clip:
 		clip.update_content_length_from_metadata(tempo, ppq)
 
 
-## Waveform pyramid for an AudioFileService request: the clip's, or the device's (created on demand).
-func _waveform_for_req(req_id: String) -> WaveformPyramid:
+## Audio source for an AudioFileService request: the clip's, or the device's (created on demand).
+func _waveform_for_req(req_id: String) -> AudioSourceInfo:
 	var clip := _get_clip_by_req_id(req_id)
 	if clip:
-		return clip.waveform
+		return clip.audio_source
 	var inst := _get_device_by_req_id(req_id)
 	if inst == null:
 		return null
-	if inst.sample_waveform == null:
-		inst.sample_waveform = WaveformPyramid.new()
-	return inst.sample_waveform
+	if inst.sample_source == null:
+		inst.sample_source = AudioSourceInfo.new()
+	return inst.sample_source
 
 
-func _on_audiofile_waveform_level(args: Array) -> void:
-	"""Handle OSC /audiofile/waveform/level: ingest one resolution level from the cache file.
+func _on_audiofile_waveform_ready(args: Array) -> void:
+	"""Handle OSC /audiofile/waveform/ready: the peak file is complete; load it.
 
-	OSC args: [req_id, level, block_size, num_blocks?, file_path?, byte_offset?, byte_len?]
-	Clip levels that fail to ingest are retried with backoff.
+	OSC args: [req_id, peak_file_path]
 	"""
-	if args.size() < 3:
-		push_error("[Project] Waveform level: Insufficient arguments (got %d, need 3)" % args.size())
+	if args.size() < 2:
+		push_error("[Project] Waveform ready: need 2 args, got %d" % args.size())
 		return
-	var req_id := str(args[0])
-	var pyramid := _waveform_for_req(req_id)
-	if pyramid == null:
-		return
-	if pyramid.apply_waveform_level(args):
-		return
-	if _get_clip_by_req_id(req_id):
-		var num_blocks := int(args[3]) if args.size() >= 4 else 0
-		var file_path := str(args[4]) if args.size() >= 5 else ""
-		_schedule_waveform_retry(req_id, int(args[1]), int(args[2]), num_blocks, file_path)
+	var source := _waveform_for_req(str(args[0]))
+	if source:
+		source.apply_waveform_ready(args)
 
 
 func _on_audiofile_progress(args: Array) -> void:
@@ -418,81 +409,6 @@ func _on_audiofile_error(args: Array) -> void:
 	_clear_clip_request_by_req(req_id)
 
 
-func _schedule_waveform_retry(req_id: String, level: int, block_size: int, num_blocks: int, file_path: String, attempt: int = 1) -> void:
-	"""Schedule a retry attempt for failed waveform level ingestion.
-
-	Implements exponential backoff: delay = 0.25s * attempt_number (capped at 3 attempts).
-	Useful for handling transient cache file access issues.
-
-	Args:
-		req_id: Audio file service request ID
-		level: Waveform resolution level
-		block_size: Samples per block
-		num_blocks: Number of blocks in this level
-		file_path: Optional cache file path
-		attempt: Current attempt number (1-based)
-	"""
-	var key := "%s:%d" % [req_id, level]
-	var info: Dictionary = _pending_waveform_retries.get(key, {})
-	var current_attempt: int = int(info.get("attempt", 0))
-
-	# Cap at 3 attempts
-	if current_attempt >= 3:
-		push_warning("[Project] Waveform retry: Max attempts reached for level %d" % level)
-		return
-
-	var next_attempt: int = int(max(attempt, current_attempt + 1))
-	_pending_waveform_retries[key] = {
-		"attempt": next_attempt,
-		"block_size": block_size,
-		"num_blocks": num_blocks,
-		"file_path": file_path
-	}
-
-	# Exponential backoff: 0.25s * attempt number
-	var delay: float = 0.25 * float(next_attempt)
-	var scene_tree := _get_scene_tree()
-	if scene_tree == null:
-		return
-
-	var timer = scene_tree.create_timer(delay)
-	timer.timeout.connect(_on_waveform_retry_timeout.bind(req_id, level))
-
-
-func _on_waveform_retry_timeout(req_id: String, level: int) -> void:
-	"""Timeout callback for waveform retry attempt.
-
-	Re-attempts waveform level ingestion after delay. Reads num_blocks from
-	cache if not available, and schedules another retry if still failing.
-	"""
-	var key := "%s:%d" % [req_id, level]
-
-	if not _pending_waveform_retries.has(key):
-		return
-
-	var info: Dictionary = _pending_waveform_retries[key]
-	var clip := _get_clip_by_req_id(req_id)
-
-	if clip == null:
-		_pending_waveform_retries.erase(key)
-		return
-
-	var block_size := int(info.get("block_size", 0))
-	var num_blocks := int(info.get("num_blocks", 0))
-
-	# Retry ingestion
-	if clip.waveform.retry_waveform_level(level, block_size, num_blocks):
-		_pending_waveform_retries.erase(key)
-	else:
-		# Check if we should retry again
-		var attempt := int(info.get("attempt", 1))
-		if attempt >= 3:
-			_pending_waveform_retries.erase(key)
-			push_error("[Project] Waveform retry: Failed after %d attempts for level %d" % [attempt, level])
-		else:
-			_schedule_waveform_retry(req_id, level, block_size, num_blocks, "", attempt + 1)
-
-
 func disconnect_from_engine() -> void:
 	"""Disconnect project and all data from audio engine."""
 	# Always unregister listeners, even if the connection state already
@@ -508,7 +424,6 @@ func disconnect_from_engine() -> void:
 	_unregister_osc_listeners()
 	_clip_request_lookup.clear()
 	_request_clip_lookup.clear()
-	_pending_waveform_retries.clear()
 	for clip in clips.values():
 		if clip and clip.type == Clip.ClipType.AUDIO:
 			clip.apply_load_state(Clip.LoadState.UNLOADED, "", "Disconnected")
@@ -955,7 +870,6 @@ func create_clip_from_asset(asset: Asset, default_color: Color = Color.WHITE) ->
 		clip.audio_frames = 0
 		clip.audio_duration_seconds = 0.0
 		clip.waveform_cache_key = ""
-		clip.waveform_cache_path = ""
 		clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
 		clip.load_progress = 0.0
 		clip.content_length_ticks = ppq * 4  # Placeholder until engine provides length

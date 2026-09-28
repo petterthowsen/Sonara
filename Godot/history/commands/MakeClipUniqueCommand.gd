@@ -76,14 +76,9 @@ func _duplicate_clip(source: Clip) -> Clip:
 			new_clip.midi_events.append(nev)
 	else:
 		new_clip.audio_file_path = source.audio_file_path
-		new_clip.audio_sample_rate = source.audio_sample_rate
-		new_clip.audio_channels = source.audio_channels
-		new_clip.audio_frames = source.audio_frames
-		new_clip.audio_duration_seconds = source.audio_duration_seconds
 		new_clip.recorded_bpm = source.recorded_bpm
-		new_clip.waveform_cache_key = source.waveform_cache_key
-		new_clip.waveform_cache_path = source.waveform_cache_path
-		new_clip.audio_waveform = source.audio_waveform
+		# Metadata plus the shared peak data (WaveformRegistry keeps one copy per file).
+		new_clip.audio_source.share_from(source.audio_source)
 		new_clip.apply_load_state(Clip.LoadState.UNLOADED, "", "")
 		new_clip.load_progress = 0.0
 	return new_clip

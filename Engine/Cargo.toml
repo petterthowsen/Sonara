@@ -65,6 +65,7 @@ raw-window-handle = "0.6"
 # Audio-thread allocation checker, only with `--features rt-debug`. Default features are off so it
 # counts violations in release builds too instead of aborting.
 assert_no_alloc = { version = "1.1.2", optional = true, default-features = false, features = ["warn_debug", "warn_release"] }
+half = "2.7.1"
 
 # X11 bindings for error handling (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -17,13 +17,31 @@ pub struct DecodedInfo {
     pub frames: u64,
     pub sample_rate: u32,
     pub duration_s: f32,
+    /// The file's own sample rate, before resampling.
+    pub source_sample_rate: u32,
+    /// Native frames actually decoded.
+    pub source_frames: u64,
+}
+
+/// Stream facts known before the first chunk arrives.
+#[derive(Debug, Clone, Copy)]
+pub struct SourceInfo {
+    pub channels: u16,
+    pub sample_rate: u32,
+    /// Estimated native frame count (`codec_params.n_frames`), when the container reports it.
+    pub n_frames: Option<u64>,
 }
 
 /// Trait for audio decoding with streaming callback
 pub trait AudioDecoder {
+    /// `on_source` is called once, before any chunk. `on_native_chunk` receives each decoded
+    /// planar chunk at the file's own rate, before resampling; `on_chunk` receives the chunks
+    /// resampled to `target_sr`.
     fn decode_to_f32_stream(
         &mut self,
         target_sr: u32,
+        on_source: &mut dyn FnMut(SourceInfo) -> Result<()>,
+        on_native_chunk: &mut dyn FnMut(&[Vec<f32>]) -> Result<()>,
         on_chunk: &mut dyn FnMut(&[Vec<f32>]) -> Result<()>,
     ) -> Result<DecodedInfo>;
 }
@@ -43,6 +61,8 @@ impl AudioDecoder for SymphoniaDecoder {
     fn decode_to_f32_stream(
         &mut self,
         target_sr: u32,
+        on_source: &mut dyn FnMut(SourceInfo) -> Result<()>,
+        on_native_chunk: &mut dyn FnMut(&[Vec<f32>]) -> Result<()>,
         on_chunk: &mut dyn FnMut(&[Vec<f32>]) -> Result<()>,
     ) -> Result<DecodedInfo> {
         // Open the file and create a media source
@@ -81,6 +101,13 @@ impl AudioDecoder for SymphoniaDecoder {
             .channels
             .ok_or_else(|| anyhow!("Unknown channel layout"))?
             .count() as u16;
+        let n_frames = track.codec_params.n_frames;
+
+        on_source(SourceInfo {
+            channels,
+            sample_rate,
+            n_frames,
+        })?;
 
         tracing::info!(
             "Symphonia decoder: original sample_rate={}, target_sr={}, channels={}",
@@ -94,6 +121,7 @@ impl AudioDecoder for SymphoniaDecoder {
         let mut decoder = registry.make(&track.codec_params, &DecoderOptions::default())?;
 
         let mut total_frames = 0u64;
+        let mut source_frames = 0u64;
         let mut resampler: Option<FftFixedIn<f32>> = None;
         let mut input_buffer: Vec<Vec<f32>> = Vec::new(); // Buffer for accumulating chunks
         let resampler_chunk_size = 4096usize;
@@ -163,6 +191,8 @@ impl AudioDecoder for SymphoniaDecoder {
             if planar_data.is_empty() || planar_data[0].is_empty() {
                 continue;
             }
+            source_frames += planar_data[0].len() as u64;
+            on_native_chunk(&planar_data)?;
 
             // Resample if needed
             let processed_data = if let Some(ref mut resamp) = resampler {
@@ -319,6 +349,8 @@ impl AudioDecoder for SymphoniaDecoder {
             frames: total_frames,
             sample_rate: target_sr,
             duration_s,
+            source_sample_rate: sample_rate,
+            source_frames,
         })
     }
 }
@@ -356,22 +388,27 @@ pub fn load_audio_file(file_path: &str) -> Result<Vec<f32>> {
     let mut all_samples = Vec::new();
     let mut channels = 0;
 
-    let decoded_info = decoder.decode_to_f32_stream(44100, &mut |chunk: &[Vec<f32>]| {
-        // Convert planar to interleaved
-        if channels == 0 {
-            channels = chunk.len();
-        }
-
-        // Interleave samples: [L, R, L, R, ...]
-        let frames_in_chunk = chunk[0].len();
-        for frame in 0..frames_in_chunk {
-            for ch in 0..channels {
-                all_samples.push(chunk[ch][frame]);
+    let decoded_info = decoder.decode_to_f32_stream(
+        44100,
+        &mut |_| Ok(()),
+        &mut |_| Ok(()),
+        &mut |chunk: &[Vec<f32>]| {
+            // Convert planar to interleaved
+            if channels == 0 {
+                channels = chunk.len();
             }
-        }
 
-        Ok(())
-    })?;
+            // Interleave samples: [L, R, L, R, ...]
+            let frames_in_chunk = chunk[0].len();
+            for frame in 0..frames_in_chunk {
+                for ch in 0..channels {
+                    all_samples.push(chunk[ch][frame]);
+                }
+            }
+
+            Ok(())
+        },
+    )?;
 
     tracing::info!(
         "Loaded audio file: {} samples, {} Hz, {} channels, {:.2}s duration",

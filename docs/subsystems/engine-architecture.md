@@ -10,7 +10,7 @@ The Rust audio engine keeps slow work off the real-time path:
 - **Stream Thread** (`stream.rs`, "audio-stream"): owns the CPAL output stream (`Stream` is `!Send`) and its watchdog, which reopens the stream when callbacks stall. The command thread drives it through `StreamControl` (`stop`, `resolve`, `start`) to change device, rate or buffer size (Phase 7, see below).
 - **PipeWire Monitor** (`pipewire.rs`): every 3 s reads the graph with `pw-top -b`, `pw-dump` and `pw-metadata`, reports quantum/rate changes to the command thread and adds PipeWire errors on the engine's node to the xrun counter. Exits when the tools aren't installed.
 - **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
-- **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and waveform generation off the real-time path.
+- **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and peak-file generation off the real-time path. Each job decodes once: native-rate chunks feed `PeakBuilder` (`io/peaks.rs`, peaks in source-sample space) and resampled chunks fill the interleaved playback buffer, the only full copy of the audio. It sends `DecodeReady` with the PCM, then writes the peak file atomically (temp file + rename) and sends `WaveformReady`. A valid cached peak file (`waveform_cache.rs`, keyed by path, size and mtime) skips the peak work. Format: `osc-protocol.md` › Waveform Cache Format. A separate sample thread answers `/audiofile/samples` (raw native-rate samples for deep zoom) from `io/sample_reader.rs`, which seeks in the source file and caches the last decoded window per file; decode jobs register `cache_key → path` for it.
 - **Communication**: Crossbeam unbounded MPMC channels carry commands (main → command thread) and statuses (command/audio threads → main), plus `std::sync::mpsc` channels from statuses → main loop → window thread. The command thread and audio callback share `EngineState` through a mutex.
 
 Commands flow: OSC → Main thread → Command thread → `EngineState` → Audio thread.
@@ -35,14 +35,14 @@ Uses **resource-based paths** where IDs are embedded in the OSC address (RESTful
 - Transport: `/transport/play`, `/transport/stop`, `/transport/seek [ticks]`
 - Channels: `/channel/{id}/create [name]`, `/channel/{id}/volume [db]`, `/channel/{id}/mute [0|1]`
 - Tracks & clips: `/clip/create`, `/clip/delete`, `/clip/{id}/add_note`, `/clip/{id}/load_audio_file`
-- Audio file jobs: `/audiofile/decode`, `/audiofile/waveform/start`, `/audiofile/waveform/cancel`
+- Audio file jobs: `/audiofile/decode`, `/audiofile/waveform/start`, `/audiofile/waveform/cancel`, `/audiofile/samples`
 - Clip instances: `/track/{id}/add_instance`, `/track/{id}/instance/{instance_id}/set_position`, etc.
 
 **Rust → Godot (port 7001)**:
 - Transport status: `/status/playhead [ticks]`, `/status/sample_position [samples]`, `/status/playing [0|1]`
 - Meter updates: `/channel/{id}/peak [peak_left, peak_right]`
 - Clip lifecycle: `/clip/{id}/load_state [state, req_id, source_path, cache_key, sample_rate, channels, message]`
-- Audio file service: `/audiofile/decode/ready`, `/audiofile/waveform/level`, `/audiofile/progress`, `/audiofile/error`
+- Audio file service: `/audiofile/decode/ready`, `/audiofile/waveform/ready`, `/audiofile/samples/data`, `/audiofile/progress`, `/audiofile/error`
 
 Full message catalog: `docs/subsystems/osc-protocol.md`.
 
@@ -89,9 +89,11 @@ Engine/src/
       platform_shm.rs
     io/
       mod.rs                 # IO module declarations
-      audio_file_service.rs  # Async decode + waveform generation coordinator
-      decoder.rs             # Symphonia-based streaming decoder + resampler
-      waveform_cache.rs      # Progressive multi-resolution waveform cache
+      audio_file_service.rs  # Async decode + peak file coordinator
+      decoder.rs             # Symphonia-based streaming decoder + resampler (native and resampled chunk callbacks)
+      peaks.rs               # Streaming PeakBuilder: min/max/RMS + 3 band energies per block, nested levels
+      waveform_cache.rs      # Peak file format v2 (texture-shaped RGBA16F planes), cache key, validation
+      sample_reader.rs       # Raw native-rate sample windows for deep-zoom waveforms
   osc/
     mod.rs           # Module declarations
     server.rs        # OSC server/client, path-based message routing

@@ -111,7 +111,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
    - [ ] Make the rename part of `ClipInstanceDeleteCommand` (and multi-delete) so a single undo step restores both the instance and the name.
    - [ ] Tests for rename, suffix collisions and undo.
 5. Waveforms (investigation, open-ended)
-   - [ ] Profile generation (`AudioFileService` waveform caches) and drawing on long audio clips; write findings to STATUS.md before choosing fixes (e.g. multi-resolution peaks, min/max + RMS drawing, caching per zoom level).
+   - [x?] Profile generation (`AudioFileService` waveform caches) and drawing on long audio clips; write findings to STATUS.md before choosing fixes (e.g. multi-resolution peaks, min/max + RMS drawing, caching per zoom level).
 
 #### Maybe
 

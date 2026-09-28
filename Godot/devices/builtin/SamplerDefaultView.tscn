@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://qb4ghav5fn1h" path="res://devices/builtin/SamplerDefaultView.gd" id="1_pimo6"]
 [ext_resource type="PackedScene" uid="uid://cj6bkxh40g8w4" path="res://components/EnvelopeControl.tscn" id="2_xw6mb"]
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="3_pcbfh"]
+[ext_resource type="Script" uid="uid://bvaxpf1lup534" path="res://support/waveform/WaveformView.gd" id="4_wfview"]
 
 [node name="SamplerDefaultView" type="VBoxContainer" unique_id=1044416401]
 custom_minimum_size = Vector2(220, 180)
@@ -13,12 +14,25 @@ size_flags_vertical = 3
 theme_override_constants/separation = 0
 script = ExtResource("1_pimo6")
 
-[node name="Waveform" type="Control" parent="." unique_id=1297213988]
+[node name="Waveform" type="ColorRect" parent="." unique_id=1297213988]
+show_behind_parent = true
 custom_minimum_size = Vector2(0, 72)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 mouse_filter = 2
+color = Color(0.08, 0.08, 0.1, 1)
+
+[node name="WaveformView" type="Control" parent="Waveform" unique_id=640187312]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("4_wfview")
+placeholder_text = ""
 
 [node name="EnvelopeControl" parent="." unique_id=209855624 instance=ExtResource("2_xw6mb")]
 custom_minimum_size = Vector2(0, 56)

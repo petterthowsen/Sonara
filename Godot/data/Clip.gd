@@ -19,7 +19,7 @@ signal midi_note_removed(note: MidiNoteData)
 signal midi_note_changed(note: MidiNoteData)
 signal clip_modified()  # Any change to clip data
 signal load_state_changed(state: LoadState, clip: Clip)
-signal waveform_level_updated(level: int, clip: Clip)
+signal waveform_ready(clip: Clip)  # Peak data for the audio file is loaded
 signal load_progress_changed(progress_0_1: float, clip: Clip)
 
 # ============================================================================
@@ -46,31 +46,25 @@ var midi_events: Array[MidiEvent] = []  # CC, program change, etc.
 var audio_file_path: String = ""
 var recorded_bpm: float = 120.0  # BPM this audio clip was originally recorded at
 
-## Decoded audio metadata and multi-resolution waveform (shared ingest with Sampler devices).
-var waveform: WaveformPyramid = WaveformPyramid.new()
+## Decoded audio metadata and peak data (shared ingest with Sampler devices).
+var audio_source: AudioSourceInfo = AudioSourceInfo.new()
 
-# Forwarded to `waveform` so callers and serialization keep using the clip fields.
+# Forwarded to `audio_source` so callers and serialization keep using the clip fields.
 var audio_sample_rate: int:
-	get: return waveform.audio_sample_rate
-	set(value): waveform.audio_sample_rate = value
+	get: return audio_source.audio_sample_rate
+	set(value): audio_source.audio_sample_rate = value
 var audio_channels: int:
-	get: return waveform.audio_channels
-	set(value): waveform.audio_channels = value
+	get: return audio_source.audio_channels
+	set(value): audio_source.audio_channels = value
 var audio_frames: int:  # Total frame count (per channel)
-	get: return waveform.audio_frames
-	set(value): waveform.audio_frames = value
+	get: return audio_source.audio_frames
+	set(value): audio_source.audio_frames = value
 var audio_duration_seconds: float:
-	get: return waveform.audio_duration_seconds
-	set(value): waveform.audio_duration_seconds = value
-var waveform_cache_key: String:  # Cache file identifier/key
-	get: return waveform.waveform_cache_key
-	set(value): waveform.waveform_cache_key = value
-var waveform_cache_path: String:  # Full filesystem path to waveform cache file
-	get: return waveform.waveform_cache_path
-	set(value): waveform.waveform_cache_path = value
-var audio_waveform: MultiResWaveform:  # Cached multi-resolution waveforms
-	get: return waveform.audio_waveform
-	set(value): waveform.audio_waveform = value
+	get: return audio_source.audio_duration_seconds
+	set(value): audio_source.audio_duration_seconds = value
+var waveform_cache_key: String:  # Engine cache key (runtime only, not saved)
+	get: return audio_source.cache_key
+	set(value): audio_source.cache_key = value
 
 # Async load tracking
 var load_state: LoadState = LoadState.UNLOADED
@@ -114,12 +108,8 @@ func update_load_progress(value: float) -> void:
 	load_progress_changed.emit(load_progress, self)
 
 
-func set_waveform_cache(path: String, cache_key: String) -> void:
-	waveform.set_waveform_cache(path, cache_key)
-
-
 func set_audio_metadata(sample_rate: int, channels: int, frames: int, duration_seconds: float = -1.0) -> void:
-	waveform.set_audio_metadata(sample_rate, channels, frames, duration_seconds)
+	audio_source.set_audio_metadata(sample_rate, channels, frames, duration_seconds)
 
 
 func update_content_length_from_metadata(project_tempo: float, project_ppq: int) -> void:
@@ -132,15 +122,6 @@ func update_content_length_from_metadata(project_tempo: float, project_ppq: int)
 		duration_seconds = float(audio_frames) / float(audio_sample_rate)
 	var beats: float = duration_seconds * (tempo / 60.0)
 	content_length_ticks = int(beats * float(ppq_value))
-
-
-func ensure_audio_waveform() -> void:
-	waveform.ensure_audio_waveform()
-
-
-## Read one pyramid level from the engine cache file. False lets Project retry.
-func ingest_waveform_level_from_cache(level: int, block_size: int, num_blocks: int) -> bool:
-	return waveform.ingest_waveform_level_from_cache(level, block_size, num_blocks)
 
 
 # ============================================================================
@@ -158,15 +139,15 @@ func _init(clip_id: String = ""):
 	created_date = Time.get_unix_time_from_system()
 	modified_date = created_date
 	# Bound methods, not lambdas: a lambda would hold a strong ref back to this clip.
-	waveform.waveform_level_updated.connect(_on_waveform_level_updated)
-	waveform.metadata_changed.connect(_on_waveform_metadata_changed)
+	audio_source.waveform_ready.connect(_on_waveform_ready)
+	audio_source.metadata_changed.connect(_on_audio_metadata_changed)
 
 
-func _on_waveform_level_updated(level: int) -> void:
-	waveform_level_updated.emit(level, self)
+func _on_waveform_ready() -> void:
+	waveform_ready.emit(self)
 
 
-func _on_waveform_metadata_changed() -> void:
+func _on_audio_metadata_changed() -> void:
 	clip_modified.emit()
 
 
@@ -526,10 +507,12 @@ func to_json() -> Dictionary:
 	return data
 
 
-## Plain fields copied by JsonFields; defaults come from the initializers.
+## Plain fields copied by JsonFields; defaults come from the initializers. Keys not listed are
+## ignored on read, which drops `waveform_cache_key` from older project files: the engine
+## recomputes the key when the clip loads.
 const JSON_FIELDS: Array[String] = [
 	"name", "content_length_ticks", "audio_file_path", "audio_sample_rate", "audio_channels",
-	"audio_frames", "audio_duration_seconds", "waveform_cache_key", "recorded_bpm",
+	"audio_frames", "audio_duration_seconds", "recorded_bpm",
 	"created_date", "modified_date",
 ]
 

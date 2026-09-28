@@ -248,6 +248,42 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Smallest gap, in pixels, between grid lines in the arranger and clip editor. Beats and finer subdivisions appear only once zoomed in far enough to keep this gap. Snapping follows the finest visible line.",
 	)).sub("Grid").range(4, 64, 1)
+	_register(Setting.new(
+		"appearance/waveform_style",
+		"Waveform Style",
+		Type.CHOICE,
+		"Peaks + RMS",
+		CATEGORY_APPEARANCE,
+		"Peaks: one solid shape from each moment's lowest to highest sample.\n\n"
+		+ "Peaks + RMS: the average level (RMS) drawn solid inside a lighter peak shape, so loud, dense passages stand out from short transients.",
+	)).sub("Waveforms").choices(["Peaks", "Peaks + RMS"])
+	_register(Setting.new(
+		"appearance/waveform_color_mode",
+		"Waveform Color",
+		Type.CHOICE,
+		"Clip color",
+		CATEGORY_APPEARANCE,
+		"Clip color: waveforms use the clip's color.\n\n"
+		+ "Spectral: each moment is tinted by its frequency content: red for bass (below 200 Hz), green for mids, blue for highs (above 2 kHz). Kicks look red, hi-hats blue.",
+	)).sub("Waveforms").choices(["Clip color", "Spectral (low/mid/high)"])
+	_register(Setting.new(
+		"appearance/waveform_channels",
+		"Waveform Channels",
+		Type.CHOICE,
+		"Stereo split",
+		CATEGORY_APPEARANCE,
+		"Stereo split: left channel on top, right channel below.\n\n"
+		+ "Mono sum: one waveform combining both channels, drawn twice as tall.",
+	)).sub("Waveforms").choices(["Stereo split", "Mono sum"])
+	_register(Setting.new(
+		"appearance/waveform_scale",
+		"Waveform Scale",
+		Type.CHOICE,
+		"Linear",
+		CATEGORY_APPEARANCE,
+		"Linear: height follows the sample value, so quiet parts look small.\n\n"
+		+ "Logarithmic (dB): height follows loudness from -60 dB to 0 dB, so quiet parts and tails are easy to see.",
+	)).sub("Waveforms").choices(["Linear", "Logarithmic (dB)"])
 
 	# --- Audio: output device (engine-stability-plan Phase 7). AudioConfig applies them live. ---
 	_register(Setting.new(

@@ -598,33 +598,60 @@ AudioEngineOSC.send("/channel/2/device/1/param/1", [0.5])
 
 ## Audio File Service (Godot <-> Rust)
 
-The AudioFileService provides async audio decoding and multi-resolution waveform generation. Files are decoded to f32 planar format at project sample rate with optional resampling. Waveforms are cached on disk with progressive generation (coarse → fine levels).
+The AudioFileService decodes audio files to interleaved f32 PCM at the project sample rate (for playback) and builds a peak file for waveform display. Peaks are computed in source-sample space, at the file's own rate, so changing the project rate keeps every cached peak file. A cache hit skips the peak work but still decodes the PCM.
 
 ### Audio File Requests (Godot -> Rust)
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/audiofile/decode` | `s:req_id, s:abs_path` | Decode + waveform generation with the default `min_block_size` of 128 |
-| `/audiofile/waveform/start` | `s:req_id, s:abs_path, i:min_block_size` | Request decode + waveform generation (min_block_size=64-128 recommended) |
+| `/audiofile/decode` | `s:req_id, s:abs_path` | Decode + peak file |
+| `/audiofile/waveform/start` | `s:req_id, s:abs_path` | Same as `/audiofile/decode` |
 | `/audiofile/waveform/cancel` | `s:req_id` | Cancel ongoing decode/waveform request |
+| `/audiofile/samples` | `s:req_id, s:cache_key, i:channel, i:start_frame, i:count` | Raw samples at the file's own rate, for drawing at deep zoom. `cache_key` is the one from `/audiofile/decode/ready` (the peak file's name without `.swp`); the file must have been decoded in this engine session. `start_frame` is in native frames (`i` or `h`); `count` is capped at 4096 |
 
 ### Audio File Responses (Rust -> Godot)
 
 | Address | Args | Description |
 |---------|------|-------------|
-| `/audiofile/decode/ready` | `s:req_id, s:cache_key, i:channels, h:frames, i:sample_rate, f:duration_s` | Decode complete with file metadata |
-| `/audiofile/waveform/level` | `s:req_id, i:level, i:block_size, h:num_blocks, s:file_path, h:byte_offset, h:byte_len` | Waveform level ready - Godot reads min/max/rms data from cache file |
-| `/audiofile/progress` | `s:req_id, f:progress_0_1` | Decode/waveform progress (0.0-1.0) |
-| `/audiofile/error` | `s:req_id, i:code, s:message` | Error occurred during processing |
+| `/audiofile/decode/ready` | `s:req_id, s:cache_key, i:channels, h:frames, i:sample_rate, f:duration_s, i:sample_count` | PCM decoded. `frames` and `sample_rate` are at the project (playback) rate. Always sent before `/audiofile/waveform/ready` |
+| `/audiofile/waveform/ready` | `s:req_id, s:peak_file_path` | The peak file is complete and valid. Sent once per request |
+| `/audiofile/progress` | `s:req_id, f:progress_0_1` | Real decode progress (native frames decoded / estimated total), at most every 100 ms, only when the container reports a frame count |
+| `/audiofile/samples/data` | `s:req_id, i:channel, h:start_frame, b:samples` | Answer to `/audiofile/samples`: little-endian f32 samples of one channel (≤ 16 KB, one UDP packet). Shorter than requested at the end of the file, empty past it |
+| `/audiofile/error` | `s:req_id, i:code, s:message` | Error occurred during processing. Code `-2`: a `/audiofile/samples` request failed (unknown cache key, bad channel, read error) |
+
+Sample requests run on their own AudioFileService thread, so they never wait behind a decode. The engine re-reads the source file (seek plus a short decode) and keeps the last 64k-frame window per file, so neighbouring chunks and the other channel come from memory. Godot's UDP peer buffers about 64 KB per frame, so `WaveformSampleWindow` keeps at most two requests in flight.
 
 ### Waveform Cache Format
 
-Waveforms are cached as binary files (`$XDG_CACHE_HOME/sonara/waveforms/<hash>.swf`) containing:
-- Multi-resolution min/max/rms data (f32 triplets per block)
-- Progressive levels from coarse to fine
-- Little-endian binary format with header + directory + contiguous data
+Peak files live in `$XDG_CACHE_HOME/sonara/waveforms/<key>.swp` (`~/.cache/...` without XDG). `<key>` is a 64-bit FNV-1a hash (16 hex digits) over the absolute path, the source file size, its mtime in nanoseconds and the format version. Files are written to `<key>.<pid>.<req_id>.tmp`, fsynced and renamed, so a partial file is never used. Stale `*.tmp` files older than an hour are deleted at startup. A cached file is used only if its magic, version and `complete` flag are right and its `src_size`/`src_mtime_ns` match the file on disk.
 
-Godot reads waveform data directly from cache files using the `byte_offset`/`byte_len` provided in `/audiofile/waveform/level` messages. Each block contains `[min, max, rms]` f32 values for each channel.
+All values little-endian (`Engine/src/audio/io/waveform_cache.rs`):
+
+```
+Header (64 bytes)
+  0  magic        [u8; 8] = "SONAPK02"
+  8  version      u16 = 2
+  10 channels     u16
+  12 source_sr    u32     file's own sample rate
+  16 frames       u64     native frames
+  24 base_block   u32 = 64
+  28 levels       u16
+  30 tex_width    u16 = 4096
+  32 src_size     u64
+  40 src_mtime_ns u64
+  48 complete     u8      written last
+  49 reserved     (zero, to 64)
+
+Level table (levels × 16 bytes)
+  num_blocks u64, row_offset u32, rows u32
+
+Planes, for each channel: plane A then plane B,
+each total_rows × tex_width RGBA16F texels (8 bytes)
+  plane A: (min, max, rms, 0)
+  plane B: (low, mid, high, 0)   band RMS: <200 Hz, 200 Hz–2 kHz, >2 kHz
+```
+
+Level 0 has 64-frame blocks aligned to frame 0; each level merges two blocks of the level below (min of mins, max of maxes, frame-weighted mean of squares), so `num_blocks[L+1] = ceil(num_blocks[L] / 2)`. Levels stop when a level has one block or the block size would exceed 2^20 frames. All levels of a channel are stacked in one plane: each level starts on a new row and is zero-padded to a full row, so the texel for block `b` of level `L` is `(b % tex_width, row_offset[L] + b / tex_width)`. `total_rows` is capped at 16384 (the GPU texture height limit); longer files fail with `/audiofile/error`. Godot passes each plane's bytes straight to `Image.create_from_data(tex_width, total_rows, false, Image.FORMAT_RGBAH, bytes)`.
 
 ## Audio Device Settings (Godot <-> Rust)
 

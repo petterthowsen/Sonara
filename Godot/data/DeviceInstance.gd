@@ -78,8 +78,8 @@ var return_channel_ids: Array[int] = []
 ## instance (undo, move) restores them with their settings. Not persisted. See AuxReturnSync.
 var detached_returns: Dictionary[int, Channel] = {}
 
-## Waveform pyramid when this instance is a Sampler (or other sample-loading device).
-var sample_waveform: WaveformPyramid = null
+## Decoded metadata and peak data when this instance is a Sampler (or other sample-loading device).
+var sample_source: AudioSourceInfo = null
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
@@ -845,10 +845,10 @@ func load_file(file_path: String) -> void:
 
 	logger.info("Loading file into %s: %s" % [device.name, file_path])
 	loaded_file_path = file_path
-	if sample_waveform == null:
-		sample_waveform = WaveformPyramid.new()
+	if sample_source == null:
+		sample_source = AudioSourceInfo.new()
 	else:
-		sample_waveform.reset()
+		sample_source.reset()
 	var req_id := "device:%s:%d" % [id, Time.get_ticks_usec()]
 	var channel := get_channel()
 	var project := channel.get_project() if channel else null

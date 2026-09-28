@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dsqohehuqnchw" path="res://arranger/timeline/clip/TimelineClip.gd" id="1_timeline_clip"]
 [ext_resource type="Script" uid="uid://crj36c8i65ql" path="res://arranger/timeline/clip/MidiclipRenderer.gd" id="2_c74fi"]
+[ext_resource type="Script" uid="uid://bvaxpf1lup534" path="res://support/waveform/WaveformView.gd" id="3_wfview"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hpdcv"]
 content_margin_left = 0.0
@@ -107,3 +108,14 @@ size_flags_vertical = 3
 mouse_filter = 2
 script = ExtResource("2_c74fi")
 min_pitch_range = 6
+
+[node name="Waveform" type="Control" parent="VBoxContainer/ClipRenderer" unique_id=1418093527]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_wfview")

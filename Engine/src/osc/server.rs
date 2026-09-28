@@ -1215,11 +1215,9 @@ impl OscServer {
 
                     match self.audio_file_service.lock() {
                         Ok(service) => {
-                            if let Err(err) = service.submit_decode_and_waveform(
-                                req_id.clone(),
-                                file_path.clone(),
-                                128,
-                            ) {
+                            if let Err(err) = service
+                                .submit_decode_and_waveform(req_id.clone(), file_path.clone())
+                            {
                                 warn!(
                                     "Failed to submit decode request for clip {} (req_id={}): {}",
                                     id_str, req_id, err
@@ -1583,29 +1581,59 @@ impl OscServer {
                 {
                     info!("AudioFile decode request: {} for {}", req_id, abs_path);
                     if let Ok(mut afs) = self.audio_file_service.lock() {
-                        let _ =
-                            afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone(), 128);
+                        let _ = afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone());
                     }
                 }
             }
             ["audiofile", "waveform", "start"] => {
+                if let (Some(OscType::String(req_id)), Some(OscType::String(abs_path))) =
+                    (args.get(0), args.get(1))
+                {
+                    info!("AudioFile waveform request: {} for {}", req_id, abs_path);
+                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                        let _ = afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone());
+                    }
+                }
+            }
+            ["audiofile", "samples"] => {
+                // s:req_id s:cache_key i:channel i|h:start_frame i:count
+                let as_u64 = |a: Option<&OscType>| match a {
+                    Some(OscType::Int(v)) if *v >= 0 => Some(*v as u64),
+                    Some(OscType::Long(v)) if *v >= 0 => Some(*v as u64),
+                    _ => None,
+                };
                 if let (
                     Some(OscType::String(req_id)),
-                    Some(OscType::String(abs_path)),
-                    Some(OscType::Int(min_block_size)),
-                ) = (args.get(0), args.get(1), args.get(2))
-                {
-                    info!(
-                        "AudioFile waveform request: {} for {} (min_block={})",
-                        req_id, abs_path, min_block_size
+                    Some(OscType::String(cache_key)),
+                    Some(channel),
+                    Some(start_frame),
+                    Some(count),
+                ) = (
+                    args.get(0),
+                    args.get(1),
+                    as_u64(args.get(2)),
+                    as_u64(args.get(3)),
+                    as_u64(args.get(4)),
+                ) {
+                    debug!(
+                        request_id = %req_id,
+                        cache_key = %cache_key,
+                        channel,
+                        start_frame,
+                        count,
+                        "AudioFile samples request"
                     );
-                    if let Ok(mut afs) = self.audio_file_service.lock() {
-                        let _ = afs.submit_decode_and_waveform(
+                    if let Ok(afs) = self.audio_file_service.lock() {
+                        let _ = afs.request_samples(
                             req_id.clone(),
-                            abs_path.clone(),
-                            *min_block_size as usize,
+                            cache_key.clone(),
+                            channel as u16,
+                            start_frame,
+                            count as usize,
                         );
                     }
+                } else {
+                    warn!("/audiofile/samples: bad arguments {:?}", args);
                 }
             }
             ["audiofile", "waveform", "cancel"] => {
@@ -2063,26 +2091,30 @@ impl OscServer {
                     OscType::Int(samples.len() as i32), // Send sample count for verification
                 ],
             ),
-            AfsEvent::WaveformLevel {
+            AfsEvent::WaveformReady {
                 req_id,
-                level,
-                block_size,
-                num_blocks,
-                file_path,
-                byte_offset,
-                byte_len,
+                peak_file_path,
             } => (
-                "/audiofile/waveform/level".to_string(),
-                vec![
-                    OscType::String(req_id),
-                    OscType::Int(level as i32),
-                    OscType::Int(block_size as i32),
-                    OscType::Long(num_blocks as i64),
-                    OscType::String(file_path),
-                    OscType::Long(byte_offset as i64),
-                    OscType::Long(byte_len as i64),
-                ],
+                "/audiofile/waveform/ready".to_string(),
+                vec![OscType::String(req_id), OscType::String(peak_file_path)],
             ),
+            AfsEvent::SamplesData {
+                req_id,
+                channel,
+                start_frame,
+                samples,
+            } => {
+                let blob: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
+                (
+                    "/audiofile/samples/data".to_string(),
+                    vec![
+                        OscType::String(req_id),
+                        OscType::Int(channel as i32),
+                        OscType::Long(start_frame as i64),
+                        OscType::Blob(blob),
+                    ],
+                )
+            }
             AfsEvent::Progress {
                 req_id,
                 progress_0_1,
@@ -2121,19 +2153,12 @@ impl OscServer {
                     );
                 }
             }
-            "/audiofile/waveform/level" => {
-                if let [OscType::String(req_id), OscType::Int(level), OscType::Int(block_size), OscType::Long(num_blocks), OscType::String(file_path), OscType::Long(byte_offset), OscType::Long(byte_len)] =
-                    &args[..]
-                {
+            "/audiofile/waveform/ready" => {
+                if let [OscType::String(req_id), OscType::String(peak_file_path)] = &args[..] {
                     info!(
                         request_id = %req_id,
-                        level,
-                        block_size,
-                        num_blocks,
-                        file_path = %file_path,
-                        byte_offset,
-                        byte_len,
-                        "OSC → Godot waveform level"
+                        peak_file_path = %peak_file_path,
+                        "OSC → Godot waveform ready"
                     );
                 }
             }
@@ -2211,7 +2236,7 @@ impl OscServer {
         match self.audio_file_service.lock() {
             Ok(service) => {
                 if let Err(err) =
-                    service.submit_decode_and_waveform(req_id.clone(), file_path.clone(), 128)
+                    service.submit_decode_and_waveform(req_id.clone(), file_path.clone())
                 {
                     warn!(
                         "Failed to submit sample decode (req_id={}): {}",
@@ -2311,19 +2336,14 @@ impl OscServer {
                     self.pending_device_loads.lock().unwrap().remove(&req_id);
                 }
             }
-            AfsEvent::WaveformLevel {
+            AfsEvent::WaveformReady {
                 req_id,
-                level,
-                block_size,
-                num_blocks,
-                ..
+                peak_file_path,
             } => {
                 debug!(
                     request_id = %req_id,
-                    level,
-                    block_size,
-                    num_blocks,
-                    "AudioFileService waveform level ready"
+                    peak_file_path = %peak_file_path,
+                    "AudioFileService waveform ready"
                 );
             }
             AfsEvent::Progress {

@@ -14,6 +14,7 @@ signal open_in_editor_requested(clip_ui: TimelineClip)  # Double-click on the cl
 @onready var header: PanelContainer = $VBoxContainer/Header
 @onready var label: Label = $VBoxContainer/Header/Label
 @onready var clip_renderer: MidiclipRenderer = $VBoxContainer/ClipRenderer
+@onready var waveform_view: WaveformView = $VBoxContainer/ClipRenderer/Waveform
 
 # Data binding
 var clip_instance: ClipInstance = null:  # The instance we're displaying
@@ -25,6 +26,7 @@ var clip_instance: ClipInstance = null:  # The instance we're displaying
 
 var timeline = null
 var _bound_source_clip: Clip = null
+var _bound_grid_helper: GridHelper = null
 var track_color: Color = Color.WHITE:
 	set(tc):
 		if track_color != tc:
@@ -81,6 +83,12 @@ func _ready() -> void:
 	
 	clip_renderer.clip_instance = clip_instance
 	_apply_note_color()
+	_bind_grid_helper()
+	_update_waveform()
+
+
+func _exit_tree() -> void:
+	_unbind_grid_helper()
 
 
 ## Paint MIDI notes with the stored track color; only clamp for drawing.
@@ -89,6 +97,8 @@ func _apply_note_color() -> void:
 		return
 	clip_renderer.note_color = Utils.display_color(track_color)
 	clip_renderer.queue_redraw()
+	if waveform_view:
+		waveform_view.color = Utils.display_color(track_color)
 
 
 func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE) -> void:
@@ -115,6 +125,7 @@ func bind_to_clip_instance(inst: ClipInstance, tl, t_color: Color = Color.WHITE)
 
 	# Update UI from clip instance data
 	if is_inside_tree():
+		_bind_grid_helper()
 		_update_from_clip_instance()
 
 
@@ -133,7 +144,47 @@ func _on_instance_modified() -> void:
 	position.x = timeline.ticks_to_pixels(clip_instance.start_ticks)
 	custom_minimum_size.x = width
 	size.x = width
+	_update_waveform()
 	queue_redraw()
+
+
+## Follow zoom changes so the waveform's frames-per-pixel stays in step.
+func _bind_grid_helper() -> void:
+	var gh: GridHelper = timeline.grid_helper if timeline else null
+	if gh == _bound_grid_helper:
+		return
+	_unbind_grid_helper()
+	_bound_grid_helper = gh
+	if gh:
+		gh.changed.connect(_update_waveform)
+
+
+func _unbind_grid_helper() -> void:
+	if _bound_grid_helper and _bound_grid_helper.changed.is_connected(_update_waveform):
+		_bound_grid_helper.changed.disconnect(_update_waveform)
+	_bound_grid_helper = null
+
+
+## Point the WaveformView at the clip's peak data and map timeline ticks to source frames.
+## Matches the engine's constant stretch (AudioPlayback::calculate_stretch_factor): one tick
+## covers 60 / (recorded_bpm × ppq) seconds of the source file.
+func _update_waveform() -> void:
+	if waveform_view == null:
+		return
+	var clip: Clip = clip_instance.clip if clip_instance else null
+	var is_audio := clip != null and clip.type == Clip.ClipType.AUDIO
+	waveform_view.visible = is_audio
+	if not is_audio:
+		waveform_view.data = null
+		return
+	waveform_view.data = clip.audio_source.data
+	var gh: GridHelper = timeline.grid_helper if timeline else null
+	if gh == null or not waveform_view.is_data_ready() or gh.pixels_per_beat <= 0.0:
+		return
+	var bpm: float = clip.recorded_bpm if clip.recorded_bpm > 0.0 else gh.tempo
+	var frames_per_tick := float(waveform_view.source_sample_rate()) * 60.0 / (bpm * float(gh.ppq))
+	waveform_view.start_frame = float(clip_instance.clip_offset) * frames_per_tick
+	waveform_view.frames_per_pixel = float(gh.ppq) / gh.pixels_per_beat * frames_per_tick
 
 
 ## Listen to the current source clip for rename and content updates.
@@ -144,8 +195,8 @@ func _bind_source_clip(c: Clip) -> void:
 	_bound_source_clip = c
 	if _bound_source_clip == null:
 		return
-	if not _bound_source_clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
-		_bound_source_clip.waveform_level_updated.connect(_on_clip_waveform_level_loaded)
+	if not _bound_source_clip.waveform_ready.is_connected(_on_clip_waveform_ready):
+		_bound_source_clip.waveform_ready.connect(_on_clip_waveform_ready)
 	if not _bound_source_clip.clip_modified.is_connected(_on_source_clip_modified):
 		_bound_source_clip.clip_modified.connect(_on_source_clip_modified)
 
@@ -154,8 +205,8 @@ func _bind_source_clip(c: Clip) -> void:
 func _unbind_source_clip() -> void:
 	if _bound_source_clip == null:
 		return
-	if _bound_source_clip.waveform_level_updated.is_connected(_on_clip_waveform_level_loaded):
-		_bound_source_clip.waveform_level_updated.disconnect(_on_clip_waveform_level_loaded)
+	if _bound_source_clip.waveform_ready.is_connected(_on_clip_waveform_ready):
+		_bound_source_clip.waveform_ready.disconnect(_on_clip_waveform_ready)
 	if _bound_source_clip.clip_modified.is_connected(_on_source_clip_modified):
 		_bound_source_clip.clip_modified.disconnect(_on_source_clip_modified)
 	_bound_source_clip = null
@@ -205,18 +256,9 @@ func _on_source_clip_modified() -> void:
 		_update_from_clip_instance()
 
 
-func _on_clip_waveform_level_loaded(level: int, clip: Clip) -> void:
-	"""Handle progressive waveform level loaded event.
-
-	Called by Clip.waveform_level_updated signal when a new resolution level
-	becomes available. Triggers renderer redraw to progressively display waveforms.
-
-	Args:
-		level: Resolution level index that just loaded
-		clip: The Clip object that was updated
-	"""
-	logger.debug("Waveform level %d loaded, queuing redraw" % level)
-	clip_renderer.queue_redraw()
+## Peak data arrived (or was shared): show it.
+func _on_clip_waveform_ready(_clip: Clip) -> void:
+	_update_waveform()
 
 
 func set_selected(selected: bool) -> void:
@@ -253,6 +295,7 @@ func _update_from_clip_instance() -> void:
 	position.x = start_x
 	custom_minimum_size.x = width
 	size.x = width
+	_update_waveform()
 
 	# Apply initial style
 	_update_style()

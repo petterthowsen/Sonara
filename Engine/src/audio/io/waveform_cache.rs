@@ -1,428 +1,237 @@
-use anyhow::{anyhow, Result};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+//! Peak cache file format v2 (`<key>.swp`).
+//!
+//! All values little-endian. A fixed 64-byte header, a level table (16 bytes per level), then
+//! for each channel two texture-shaped planes of `total_rows × TEX_WIDTH` RGBA16F texels:
+//! plane A holds `(min, max, rms, 0)` and plane B holds `(low, mid, high, 0)`. All levels of a
+//! channel are stacked into one plane; each level starts on a new row and is zero-padded to a
+//! full row. Godot hands each plane straight to `Image.create_from_data(..., FORMAT_RGBAH, ...)`.
+
+use super::peaks::Peaks;
+use anyhow::{anyhow, bail, Result};
+use half::f16;
+use std::fs::{self, File};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-/// Waveform cache file magic number
-const MAGIC: &[u8; 8] = b"SONAWRM1";
-const VERSION: u16 = 1;
+pub const MAGIC: &[u8; 8] = b"SONAPK02";
+pub const VERSION: u16 = 2;
+pub const HEADER_SIZE: usize = 64;
+pub const LEVEL_ENTRY_SIZE: usize = 16;
+pub const TEX_WIDTH: u32 = 4096;
+/// GPU texture height limit.
+pub const MAX_ROWS: u64 = 16384;
+pub const CACHE_EXT: &str = "swp";
+const TEXEL_BYTES: u64 = 8;
+const COMPLETE_OFFSET: u64 = 48;
 
-/// Header for the waveform cache file
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelEntry {
+    pub num_blocks: u64,
+    pub row_offset: u32,
+    pub rows: u32,
+}
+
 #[derive(Debug, Clone)]
-pub struct CacheHeader {
+pub struct PeakHeader {
     pub version: u16,
     pub channels: u16,
-    pub sample_rate: u32,
+    pub source_sample_rate: u32,
     pub frames: u64,
-    pub levels: u16,
-    pub dir_offset: u64,
+    pub base_block: u32,
+    pub tex_width: u16,
+    pub src_size: u64,
+    pub src_mtime_ns: u64,
+    pub complete: bool,
+    pub levels: Vec<LevelEntry>,
 }
 
-/// Directory entry for each level
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LevelMetadata {
-    pub level: u16,
-    pub block_size: u32,
-    pub num_blocks: u64,
-    pub channel_offsets: Vec<u64>, // Offset for each channel's data in the file
+impl PeakHeader {
+    pub fn total_rows(&self) -> u64 {
+        self.levels.iter().map(|l| l.rows as u64).sum()
+    }
+
+    fn plane_bytes(&self) -> u64 {
+        self.total_rows() * self.tex_width as u64 * TEXEL_BYTES
+    }
+
+    fn data_offset(&self) -> u64 {
+        (HEADER_SIZE + self.levels.len() * LEVEL_ENTRY_SIZE) as u64
+    }
 }
 
-/// Waveform cache writer for progressive writing
-pub struct WaveformCacheWriter {
-    file: File,
-    header: CacheHeader,
-    pub(crate) level_metadata: Vec<LevelMetadata>,
-    current_offset: u64,
-}
-
-/// Fixed metadata directory size: supports up to 16 levels
-/// Each level needs: 2 + 4 + 8 + 8 + (2 channels * 8) = 38 bytes minimum
-/// With 16 levels: 16 * 64 = 1024 bytes (allocate generously)
-const METADATA_DIRECTORY_SIZE: u64 = 1024;
-const METADATA_DIRECTORY_OFFSET: u64 = 34; // Right after 34-byte header
-
-impl WaveformCacheWriter {
-    /// Create a new cache writer
-    pub fn create<P: AsRef<Path>>(
-        path: P,
-        channels: u16,
-        sample_rate: u32,
-        frames: u64,
-        levels: u16,
-    ) -> Result<Self> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
-
-        let header = CacheHeader {
-            version: VERSION,
-            channels,
-            sample_rate,
-            frames,
-            levels,
-            dir_offset: METADATA_DIRECTORY_OFFSET, // Known upfront
-        };
-
-        let mut writer = Self {
-            file,
-            header,
-            level_metadata: Vec::with_capacity(levels as usize),
-            current_offset: 0,
-        };
-
-        // Write header and reserve space for metadata directory
-        writer.write_header_and_reserve_metadata()?;
-
-        Ok(writer)
-    }
-
-    /// Write header and reserve space for metadata directory
-    fn write_header_and_reserve_metadata(&mut self) -> Result<()> {
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(MAGIC)?; // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.version)?; // 2 bytes
-        self.file.write_u16::<LittleEndian>(self.header.channels)?; // 2 bytes
-        self.file
-            .write_u32::<LittleEndian>(self.header.sample_rate)?; // 4 bytes
-        self.file.write_u64::<LittleEndian>(self.header.frames)?; // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.levels)?; // 2 bytes
-        self.file
-            .write_u64::<LittleEndian>(self.header.dir_offset)?; // 8 bytes
-                                                                 // Total: 8+2+2+4+8+2+8 = 34 bytes
-
-        // Reserve space for metadata directory (1024 bytes after header)
-        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
-        let zeros = vec![0u8; METADATA_DIRECTORY_SIZE as usize];
-        self.file.write_all(&zeros)?;
-
-        // Waveform data starts after the reserved metadata space
-        self.current_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
-        Ok(())
-    }
-
-    /// Write header to file (for updates only)
-    fn write_header(&mut self) -> Result<()> {
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(MAGIC)?; // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.version)?; // 2 bytes
-        self.file.write_u16::<LittleEndian>(self.header.channels)?; // 2 bytes
-        self.file
-            .write_u32::<LittleEndian>(self.header.sample_rate)?; // 4 bytes
-        self.file.write_u64::<LittleEndian>(self.header.frames)?; // 8 bytes
-        self.file.write_u16::<LittleEndian>(self.header.levels)?; // 2 bytes
-        self.file
-            .write_u64::<LittleEndian>(self.header.dir_offset)?; // 8 bytes
-        Ok(())
-    }
-
-    /// Pre-calculate and write metadata directory with predicted offsets
-    /// Call this before writing any level data to enable progressive reading
-    pub fn write_metadata_directory(
-        &mut self,
-        level_specs: &[(u16, u32, u64)], // [(level, block_size, num_blocks), ...]
-    ) -> Result<()> {
-        // Calculate predicted offsets for each level
-        let mut predicted_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
-
-        self.level_metadata.clear();
-        self.level_metadata.reserve(level_specs.len());
-
-        for &(level, block_size, num_blocks) in level_specs {
-            let mut channel_offsets = Vec::with_capacity(self.header.channels as usize);
-
-            // Predict offsets for each channel
-            for _ch in 0..self.header.channels {
-                channel_offsets.push(predicted_offset);
-                // Each channel: num_blocks * 3 values * 4 bytes per f32
-                predicted_offset += num_blocks * 3 * 4;
-            }
-
-            self.level_metadata.push(LevelMetadata {
-                level,
-                block_size,
-                num_blocks,
-                channel_offsets,
-            });
-        }
-
-        // Write metadata directory
-        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
-        let mut metadata_pos = METADATA_DIRECTORY_OFFSET;
-
-        for metadata in &self.level_metadata {
-            self.file.write_u16::<LittleEndian>(metadata.level)?;
-            self.file.write_u32::<LittleEndian>(metadata.block_size)?;
-            self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
-            self.file
-                .write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
-
-            for &offset in &metadata.channel_offsets {
-                self.file.write_u64::<LittleEndian>(offset)?;
-            }
-
-            metadata_pos += 2 + 4 + 8 + 8 + (metadata.channel_offsets.len() as u64 * 8);
-
-            if metadata_pos > METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE {
-                return Err(anyhow!(
-                    "Metadata directory exceeded reserved space ({} > {})",
-                    metadata_pos,
-                    METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE
-                ));
-            }
-        }
-
-        // Flush to ensure metadata is on disk before data writes
-        self.file.flush()?;
-
-        // Position file pointer at start of data region
-        self.current_offset = METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE;
-        self.file.seek(SeekFrom::Start(self.current_offset))?;
-
-        Ok(())
-    }
-
-    /// Add a level with its metadata and data
-    pub fn add_level(
-        &mut self,
-        level: u16,
-        block_size: u32,
-        channel_data: &[Vec<f32>], // [channel][min, max, rms, min, max, rms, ...]
-    ) -> Result<LevelMetadata> {
-        let num_blocks = channel_data[0].len() as u64 / 3; // 3 values per block (min, max, rms)
-        let mut channel_offsets = Vec::with_capacity(self.header.channels as usize);
-
-        // Write data for each channel
-        for ch_data in channel_data {
-            channel_offsets.push(self.current_offset);
-            // Write as little-endian f32
-            for &sample in ch_data {
-                self.file.write_f32::<LittleEndian>(sample)?;
-                self.current_offset += 4;
-            }
-        }
-
-        let metadata = LevelMetadata {
-            level,
-            block_size,
+fn level_table(peaks: &Peaks) -> Result<Vec<LevelEntry>> {
+    let mut row = 0u64;
+    let mut table = Vec::with_capacity(peaks.levels.len());
+    for level in &peaks.levels {
+        let num_blocks = level.num_blocks();
+        let rows = num_blocks.div_ceil(TEX_WIDTH as u64).max(1);
+        table.push(LevelEntry {
             num_blocks,
-            channel_offsets,
-        };
-
-        self.level_metadata.push(metadata.clone());
-        Ok(metadata)
+            row_offset: row as u32,
+            rows: rows as u32,
+        });
+        row += rows;
     }
+    if row > MAX_ROWS {
+        bail!(
+            "peak data needs {} texture rows, limit is {} (file too long)",
+            row,
+            MAX_ROWS
+        );
+    }
+    Ok(table)
+}
 
-    /// Write only the data for a level (metadata must already be written via write_metadata_directory)
-    pub fn write_level_data(
-        &mut self,
-        level_idx: usize,
-        channel_data: &[Vec<f32>], // [channel][min, max, rms, min, max, rms, ...]
-    ) -> Result<()> {
-        if level_idx >= self.level_metadata.len() {
-            return Err(anyhow!("Invalid level index: {}", level_idx));
-        }
+pub struct PeakFile;
 
-        let metadata = &self.level_metadata[level_idx];
-        let expected_num_blocks = metadata.num_blocks;
-        let actual_num_blocks = channel_data[0].len() as u64 / 3;
+impl PeakFile {
+    /// Write `peaks` to `path`. The `complete` flag is written last, after the data is flushed.
+    pub fn write(path: &Path, peaks: &Peaks, src_size: u64, src_mtime_ns: u64) -> Result<()> {
+        let table = level_table(peaks)?;
+        let mut file = File::create(path)?;
+        {
+            let mut w = BufWriter::with_capacity(1 << 20, &mut file);
 
-        if actual_num_blocks != expected_num_blocks {
-            return Err(anyhow!(
-                "Level {} block count mismatch: expected {}, got {}",
-                level_idx,
-                expected_num_blocks,
-                actual_num_blocks
-            ));
-        }
+            let mut header = [0u8; HEADER_SIZE];
+            header[0..8].copy_from_slice(MAGIC);
+            header[8..10].copy_from_slice(&VERSION.to_le_bytes());
+            header[10..12].copy_from_slice(&peaks.channels.to_le_bytes());
+            header[12..16].copy_from_slice(&peaks.source_sample_rate.to_le_bytes());
+            header[16..24].copy_from_slice(&peaks.frames.to_le_bytes());
+            header[24..28].copy_from_slice(&peaks.base_block.to_le_bytes());
+            header[28..30].copy_from_slice(&(peaks.levels.len() as u16).to_le_bytes());
+            header[30..32].copy_from_slice(&(TEX_WIDTH as u16).to_le_bytes());
+            header[32..40].copy_from_slice(&src_size.to_le_bytes());
+            header[40..48].copy_from_slice(&src_mtime_ns.to_le_bytes());
+            header[COMPLETE_OFFSET as usize] = 0;
+            w.write_all(&header)?;
 
-        // Verify we're at the expected offset for first channel
-        let expected_offset = metadata.channel_offsets[0];
-        if self.current_offset != expected_offset {
-            return Err(anyhow!(
-                "Level {} offset mismatch: expected {}, at {}",
-                level_idx,
-                expected_offset,
-                self.current_offset
-            ));
-        }
-
-        // Write data for each channel
-        for ch_data in channel_data {
-            for &sample in ch_data {
-                self.file.write_f32::<LittleEndian>(sample)?;
-                self.current_offset += 4;
+            for entry in &table {
+                w.write_all(&entry.num_blocks.to_le_bytes())?;
+                w.write_all(&entry.row_offset.to_le_bytes())?;
+                w.write_all(&entry.rows.to_le_bytes())?;
             }
+
+            let texel = |a: f32, b: f32, c: f32| -> [u8; 8] {
+                let mut t = [0u8; 8];
+                t[0..2].copy_from_slice(&f16::from_f32(a).to_le_bytes());
+                t[2..4].copy_from_slice(&f16::from_f32(b).to_le_bytes());
+                t[4..6].copy_from_slice(&f16::from_f32(c).to_le_bytes());
+                t
+            };
+            for ch in 0..peaks.channels as usize {
+                for plane_b in [false, true] {
+                    for (level, entry) in peaks.levels.iter().zip(&table) {
+                        for block in &level.blocks[ch] {
+                            let t = if plane_b {
+                                texel(block[3].sqrt(), block[4].sqrt(), block[5].sqrt())
+                            } else {
+                                texel(block[0], block[1], block[2].sqrt())
+                            };
+                            w.write_all(&t)?;
+                        }
+                        let pad = entry.rows as u64 * TEX_WIDTH as u64 - entry.num_blocks;
+                        let zeros = [0u8; 8 * 256];
+                        let mut left = pad * TEXEL_BYTES;
+                        while left > 0 {
+                            let n = left.min(zeros.len() as u64) as usize;
+                            w.write_all(&zeros[..n])?;
+                            left -= n as u64;
+                        }
+                    }
+                }
+            }
+            w.flush()?;
         }
-
-        // Flush after each level for progressive availability
-        self.file.flush()?;
-
+        file.seek(SeekFrom::Start(COMPLETE_OFFSET))?;
+        file.write_all(&[1])?;
+        file.sync_all()?;
         Ok(())
     }
 
-    /// Finalize the cache by writing the metadata directory
-    pub fn finalize(&mut self) -> Result<()> {
-        // Metadata directory is at fixed METADATA_DIRECTORY_OFFSET (known upfront)
-        // dir_offset was already set in header during create()
-        self.file.seek(SeekFrom::Start(METADATA_DIRECTORY_OFFSET))?;
-
-        // Write directory entries in simple binary format (NOT bincode)
-        // so that Godot can read it without a bincode library
-        let mut metadata_pos = METADATA_DIRECTORY_OFFSET;
-        for metadata in &self.level_metadata {
-            self.file.write_u16::<LittleEndian>(metadata.level)?;
-            self.file.write_u32::<LittleEndian>(metadata.block_size)?;
-            self.file.write_u64::<LittleEndian>(metadata.num_blocks)?;
-            // Write number of channel offsets
-            self.file
-                .write_u64::<LittleEndian>(metadata.channel_offsets.len() as u64)?;
-            // Write each channel offset
-            for &offset in &metadata.channel_offsets {
-                self.file.write_u64::<LittleEndian>(offset)?;
-            }
-            metadata_pos += 2 + 4 + 8 + 8 + (metadata.channel_offsets.len() as u64 * 8);
-
-            // Safety check: don't overflow reserved metadata space
-            if metadata_pos > METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE {
-                return Err(anyhow!(
-                    "Metadata directory exceeded reserved space ({} > {})",
-                    metadata_pos,
-                    METADATA_DIRECTORY_OFFSET + METADATA_DIRECTORY_SIZE
-                ));
-            }
-        }
-
-        self.file.flush()?;
-        Ok(())
-    }
-}
-
-/// Waveform cache reader
-pub struct WaveformCacheReader {
-    file: File,
-    header: CacheHeader,
-    level_metadata: Vec<LevelMetadata>,
-}
-
-impl WaveformCacheReader {
-    /// Open an existing cache file
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn read_header(path: &Path) -> Result<PeakHeader> {
         let mut file = File::open(path)?;
-        let header = Self::read_header(&mut file)?;
-
-        // Read directory
-        file.seek(SeekFrom::Start(header.dir_offset))?;
-        let mut level_metadata = Vec::with_capacity(header.levels as usize);
-
-        for _ in 0..header.levels {
-            let metadata = Self::read_level_metadata(&mut file)?;
-            level_metadata.push(metadata);
+        let mut h = [0u8; HEADER_SIZE];
+        file.read_exact(&mut h)?;
+        if &h[0..8] != MAGIC {
+            bail!("bad magic");
         }
-
-        Ok(Self {
-            file,
-            header,
-            level_metadata,
-        })
-    }
-
-    /// Read header from file
-    fn read_header(file: &mut File) -> Result<CacheHeader> {
-        let mut magic = [0u8; 8];
-        file.read_exact(&mut magic)?;
-        if magic != *MAGIC {
-            return Err(anyhow!("Invalid cache file magic"));
-        }
-
-        let version = file.read_u16::<LittleEndian>()?;
-        if version != VERSION {
-            return Err(anyhow!("Unsupported cache version: {}", version));
-        }
-
-        let channels = file.read_u16::<LittleEndian>()?;
-        let sample_rate = file.read_u32::<LittleEndian>()?;
-        let frames = file.read_u64::<LittleEndian>()?;
-        let levels = file.read_u16::<LittleEndian>()?;
-        let dir_offset = file.read_u64::<LittleEndian>()?;
-
-        Ok(CacheHeader {
-            version,
-            channels,
-            sample_rate,
-            frames,
+        let u16_at = |o: usize| u16::from_le_bytes([h[o], h[o + 1]]);
+        let u32_at = |o: usize| u32::from_le_bytes(h[o..o + 4].try_into().unwrap());
+        let u64_at = |o: usize| u64::from_le_bytes(h[o..o + 8].try_into().unwrap());
+        let num_levels = u16_at(28) as usize;
+        let mut table = vec![0u8; num_levels * LEVEL_ENTRY_SIZE];
+        file.read_exact(&mut table)?;
+        let levels = table
+            .chunks_exact(LEVEL_ENTRY_SIZE)
+            .map(|e| LevelEntry {
+                num_blocks: u64::from_le_bytes(e[0..8].try_into().unwrap()),
+                row_offset: u32::from_le_bytes(e[8..12].try_into().unwrap()),
+                rows: u32::from_le_bytes(e[12..16].try_into().unwrap()),
+            })
+            .collect();
+        Ok(PeakHeader {
+            version: u16_at(8),
+            channels: u16_at(10),
+            source_sample_rate: u32_at(12),
+            frames: u64_at(16),
+            base_block: u32_at(24),
+            tex_width: u16_at(30),
+            src_size: u64_at(32),
+            src_mtime_ns: u64_at(40),
+            complete: h[COMPLETE_OFFSET as usize] == 1,
             levels,
-            dir_offset,
         })
     }
 
-    /// Read level metadata from file (plain binary format, matching writer)
-    fn read_level_metadata(file: &mut File) -> Result<LevelMetadata> {
-        let level = file.read_u16::<LittleEndian>()?;
-        let block_size = file.read_u32::<LittleEndian>()?;
-        let num_blocks = file.read_u64::<LittleEndian>()?;
-        let vec_len = file.read_u64::<LittleEndian>()?;
-
-        if vec_len < 0 || vec_len > 100 {
-            return Err(anyhow!("Invalid channel offset count: {}", vec_len));
-        }
-
-        let mut channel_offsets = Vec::with_capacity(vec_len as usize);
-        for _ in 0..vec_len {
-            channel_offsets.push(file.read_u64::<LittleEndian>()?);
-        }
-
-        Ok(LevelMetadata {
-            level,
-            block_size,
-            num_blocks,
-            channel_offsets,
-        })
+    /// Read one texel as f32 RGBA. `plane` is 0 (min/max/rms) or 1 (low/mid/high).
+    pub fn read_texel(
+        path: &Path,
+        header: &PeakHeader,
+        channel: usize,
+        plane: usize,
+        level: usize,
+        block: u64,
+    ) -> Result<[f32; 4]> {
+        let entry = header
+            .levels
+            .get(level)
+            .ok_or_else(|| anyhow!("no level {}", level))?;
+        let w = header.tex_width as u64;
+        let row = entry.row_offset as u64 + block / w;
+        let texel = row * w + block % w;
+        let offset = header.data_offset()
+            + (channel as u64 * 2 + plane as u64) * header.plane_bytes()
+            + texel * TEXEL_BYTES;
+        let mut file = File::open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut t = [0u8; 8];
+        file.read_exact(&mut t)?;
+        Ok([0, 2, 4, 6].map(|i| f16::from_le_bytes([t[i], t[i + 1]]).to_f32()))
     }
 
-    /// Get header information
-    pub fn header(&self) -> &CacheHeader {
-        &self.header
-    }
-
-    /// Get level metadata
-    pub fn level_metadata(&self) -> &[LevelMetadata] {
-        &self.level_metadata
-    }
-
-    /// Read waveform data for a specific level and channel
-    pub fn read_level_channel(&mut self, level: u16, channel: usize) -> Result<Vec<f32>> {
-        let metadata = self
-            .level_metadata
-            .get(level as usize)
-            .ok_or_else(|| anyhow!("Level {} not found", level))?;
-
-        if channel >= self.header.channels as usize {
-            return Err(anyhow!("Channel {} out of range", channel));
+    /// A cached file is usable only if it is complete, matches this format and was built from
+    /// the source file as it is now on disk.
+    pub fn is_valid(path: &Path, src_size: u64, src_mtime_ns: u64) -> bool {
+        match Self::read_header(path) {
+            Ok(h) => {
+                h.version == VERSION
+                    && h.complete
+                    && h.src_size == src_size
+                    && h.src_mtime_ns == src_mtime_ns
+                    && fs::metadata(path)
+                        .map(|m| {
+                            m.len() >= h.data_offset() + h.plane_bytes() * 2 * h.channels as u64
+                        })
+                        .unwrap_or(false)
+            }
+            Err(_) => false,
         }
-
-        let offset = metadata.channel_offsets[channel];
-        let data_size = (metadata.num_blocks * 3 * 4) as usize; // 3 f32 per block
-        let mut data = vec![0u8; data_size];
-
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.read_exact(&mut data)?;
-
-        // Convert bytes to f32
-        let mut result = Vec::with_capacity(data_size / 4);
-        let mut reader = std::io::Cursor::new(data);
-        while reader.position() < data_size as u64 {
-            result.push(reader.read_f32::<LittleEndian>()?);
-        }
-
-        Ok(result)
     }
 }
 
-/// Get the cache directory path
+/// Get the waveform cache directory (`$XDG_CACHE_HOME/sonara/waveforms/`).
 pub fn get_cache_dir() -> Result<PathBuf> {
     if let Ok(cache_dir) = std::env::var("XDG_CACHE_HOME") {
         Ok(PathBuf::from(cache_dir).join("sonara").join("waveforms"))
@@ -433,42 +242,135 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     }
 }
 
-/// Generate cache key from file metadata
-pub fn generate_cache_key(
-    abs_path: &str,
-    size: u64,
-    mtime: u64,
-    project_sr: u32,
-    decoder_version: &str,
-) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    abs_path.hash(&mut hasher);
-    size.hash(&mut hasher);
-    mtime.hash(&mut hasher);
-    project_sr.hash(&mut hasher);
-    decoder_version.hash(&mut hasher);
-
-    format!("{:x}.swf", hasher.finish())
+/// Stable 64-bit FNV-1a cache key over the source identity and the format version.
+pub fn generate_cache_key(abs_path: &str, src_size: u64, src_mtime_ns: u64) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET;
+    let mut feed = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(PRIME);
+        }
+    };
+    feed(abs_path.as_bytes());
+    feed(&[0]);
+    feed(&src_size.to_le_bytes());
+    feed(&src_mtime_ns.to_le_bytes());
+    feed(&VERSION.to_le_bytes());
+    format!("{:016x}", h)
 }
 
-/// Check if cache is valid for a file
-pub fn is_cache_valid<P: AsRef<Path>>(
-    cache_path: P,
-    abs_path: &str,
-    size: u64,
-    mtime: u64,
-    project_sr: u32,
-    decoder_version: &str,
-) -> bool {
-    let expected_key = generate_cache_key(abs_path, size, mtime, project_sr, decoder_version);
-    let cache_filename = cache_path
-        .as_ref()
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+/// Delete leftover `*.tmp` files older than an hour (from crashed or killed writers).
+pub fn cleanup_stale_temp_files(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = SystemTime::now() - Duration::from_secs(3600);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| t < cutoff)
+            .unwrap_or(false);
+        if old {
+            if let Err(e) = fs::remove_file(&path) {
+                tracing::warn!(
+                    "Failed to remove stale peak temp file {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+}
 
-    expected_key == cache_filename
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::io::peaks::PeakBuilder;
+
+    #[test]
+    fn cache_key_is_stable_and_sensitive() {
+        let k1 = generate_cache_key("/a.wav", 10, 20);
+        assert_eq!(k1, generate_cache_key("/a.wav", 10, 20));
+        assert_ne!(k1, generate_cache_key("/a.wav", 11, 20));
+        assert_ne!(k1, generate_cache_key("/a.wav", 10, 21));
+        assert_ne!(k1, generate_cache_key("/b.wav", 10, 20));
+        assert_eq!(k1.len(), 16);
+    }
+
+    #[test]
+    fn round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.swp");
+        let frames = 64 * 5000 + 7;
+        let left: Vec<f32> = (0..frames)
+            .map(|i| if i == 64 * 4500 + 3 { 0.75 } else { 0.0 })
+            .collect();
+        let right = vec![-0.25f32; frames];
+        let mut b = PeakBuilder::new(2, 44100);
+        b.push(&[left, right]);
+        let peaks = b.finish();
+        PeakFile::write(&path, &peaks, 1234, 5678).unwrap();
+
+        let h = PeakFile::read_header(&path).unwrap();
+        assert!(h.complete);
+        assert_eq!(h.version, VERSION);
+        assert_eq!(h.channels, 2);
+        assert_eq!(h.source_sample_rate, 44100);
+        assert_eq!(h.frames, frames as u64);
+        assert_eq!(h.base_block, 64);
+        assert_eq!(h.tex_width as u32, TEX_WIDTH);
+        assert_eq!(h.levels.len(), peaks.levels.len());
+        assert_eq!(
+            h.levels[0],
+            LevelEntry {
+                num_blocks: 5001,
+                row_offset: 0,
+                rows: 2
+            }
+        );
+        assert_eq!(
+            h.levels[1],
+            LevelEntry {
+                num_blocks: 2501,
+                row_offset: 2,
+                rows: 1
+            }
+        );
+        assert_eq!(h.levels[2].row_offset, 3);
+
+        // Block 4500 of level 0 is on the second row.
+        let t = PeakFile::read_texel(&path, &h, 0, 0, 0, 4500).unwrap();
+        assert_eq!(t[0], 0.0);
+        assert_eq!(t[1], 0.75);
+        let t = PeakFile::read_texel(&path, &h, 1, 0, 1, 10).unwrap();
+        assert_eq!(t[0], -0.25);
+        assert_eq!(t[1], -0.25);
+        assert!((t[2] - 0.25).abs() < 1e-3);
+        let top = h.levels.len() - 1;
+        let t = PeakFile::read_texel(&path, &h, 0, 0, top, 0).unwrap();
+        assert_eq!(t[1], 0.75);
+
+        assert!(PeakFile::is_valid(&path, 1234, 5678));
+        assert!(!PeakFile::is_valid(&path, 1234, 5679));
+    }
+
+    #[test]
+    fn incomplete_file_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.swp");
+        let mut b = PeakBuilder::new(1, 48000);
+        b.push(&[vec![0.1; 1000]]);
+        PeakFile::write(&path, &b.finish(), 1, 2).unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[COMPLETE_OFFSET as usize] = 0;
+        fs::write(&path, &bytes).unwrap();
+        assert!(!PeakFile::is_valid(&path, 1, 2));
+    }
 }

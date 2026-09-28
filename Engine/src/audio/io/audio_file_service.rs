@@ -1,28 +1,35 @@
-use super::decoder::{AudioDecoder, DecodedInfo, SymphoniaDecoder};
+use super::decoder::{AudioDecoder, SymphoniaDecoder};
+use super::peaks::PeakBuilder;
+use super::sample_reader::{SampleReader, MAX_REQUEST_FRAMES};
 use super::waveform_cache::{
-    generate_cache_key, get_cache_dir, is_cache_valid, WaveformCacheReader, WaveformCacheWriter,
+    cleanup_stale_temp_files, generate_cache_key, get_cache_dir, PeakFile, CACHE_EXT,
 };
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use crossbeam::channel::{self, Receiver, Sender};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Job types for the worker pool
 #[derive(Debug, Clone)]
 pub enum AfsJob {
-    DecodeAndWaveform {
-        req_id: String,
-        path: String,
-        min_block_size: usize,
-    },
-    Cancel {
-        req_id: String,
-    },
+    DecodeAndWaveform { req_id: String, path: String },
+    Cancel { req_id: String },
+}
+
+/// A raw-sample request, served by the dedicated sample thread (not the decode workers), so
+/// deep-zoom drawing never waits behind a long decode.
+#[derive(Debug, Clone)]
+struct SamplesJob {
+    req_id: String,
+    cache_key: String,
+    channel: u16,
+    start_frame: u64,
+    count: usize,
 }
 
 /// Events emitted by the service
@@ -37,14 +44,18 @@ pub enum AfsEvent {
         duration_s: f32,
         samples: Vec<f32>, // Interleaved PCM samples for engine playback
     },
-    WaveformLevel {
+    /// The peak file for `req_id` is complete and valid.
+    WaveformReady {
         req_id: String,
-        level: u16,
-        block_size: u32,
-        num_blocks: u64,
-        file_path: String,
-        byte_offset: u64,
-        byte_len: u64,
+        peak_file_path: String,
+    },
+    /// Raw native-rate samples of one channel, answering `request_samples`. `samples` may be
+    /// shorter than requested (end of file).
+    SamplesData {
+        req_id: String,
+        channel: u16,
+        start_frame: u64,
+        samples: Vec<f32>,
     },
     Progress {
         req_id: String,
@@ -60,6 +71,7 @@ pub enum AfsEvent {
 /// Audio File Service with worker pool
 pub struct AudioFileService {
     job_tx: Sender<AfsJob>,
+    samples_tx: Sender<SamplesJob>,
     event_rx: Receiver<AfsEvent>,
     active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
     /// Rate files are decoded to: the device rate. Read per job, so a rate change (Phase 7)
@@ -75,6 +87,13 @@ impl AudioFileService {
         let (event_tx, event_rx) = channel::unbounded();
 
         let active_jobs = Arc::new(Mutex::new(HashMap::new()));
+        // cache_key -> source path, filled by decode jobs so sample requests can name a file
+        // by the key Godot already has.
+        let known_files: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        if let Ok(dir) = get_cache_dir() {
+            cleanup_stale_temp_files(&dir);
+        }
 
         // Start worker threads
         for i in 0..num_workers {
@@ -82,9 +101,17 @@ impl AudioFileService {
             let event_tx = event_tx.clone();
             let active_jobs_clone = active_jobs.clone();
             let project_sample_rate = Arc::clone(&project_sample_rate);
+            let known_files = Arc::clone(&known_files);
 
             let handle = thread::spawn(move || {
-                Self::worker_loop(i, job_rx, event_tx, active_jobs_clone, project_sample_rate);
+                Self::worker_loop(
+                    i,
+                    job_rx,
+                    event_tx,
+                    active_jobs_clone,
+                    project_sample_rate,
+                    known_files,
+                );
             });
 
             // Store worker handles (though we don't use them directly)
@@ -94,8 +121,16 @@ impl AudioFileService {
                 .insert(format!("worker_{}", i), handle);
         }
 
+        let (samples_tx, samples_rx) = channel::unbounded();
+        {
+            let event_tx = event_tx.clone();
+            let known_files = Arc::clone(&known_files);
+            thread::spawn(move || Self::samples_loop(samples_rx, event_tx, known_files));
+        }
+
         Ok(Self {
             job_tx,
+            samples_tx,
             event_rx,
             active_jobs,
             project_sample_rate,
@@ -109,22 +144,30 @@ impl AudioFileService {
     }
 
     /// Submit a job to decode and generate waveform
-    pub fn submit_decode_and_waveform(
+    pub fn submit_decode_and_waveform(&self, req_id: String, path: String) -> Result<()> {
+        tracing::info!(request_id = %req_id, file = %path, "AFS enqueue decode job");
+        self.job_tx
+            .send(AfsJob::DecodeAndWaveform { req_id, path })?;
+        Ok(())
+    }
+
+    /// Request `count` (at most 4096) native-rate samples of `channel` from frame
+    /// `start_frame` of the file decoded under `cache_key`. Answered with
+    /// `AfsEvent::SamplesData`, or `AfsEvent::Error` if the key is unknown.
+    pub fn request_samples(
         &self,
         req_id: String,
-        path: String,
-        min_block_size: usize,
+        cache_key: String,
+        channel: u16,
+        start_frame: u64,
+        count: usize,
     ) -> Result<()> {
-        tracing::info!(
-            request_id = %req_id,
-            file = %path,
-            min_block_size = min_block_size,
-            "AFS enqueue decode job"
-        );
-        self.job_tx.send(AfsJob::DecodeAndWaveform {
+        self.samples_tx.send(SamplesJob {
             req_id,
-            path,
-            min_block_size,
+            cache_key,
+            channel,
+            start_frame,
+            count: count.min(MAX_REQUEST_FRAMES),
         })?;
         Ok(())
     }
@@ -151,28 +194,24 @@ impl AudioFileService {
         event_tx: Sender<AfsEvent>,
         _active_jobs: Arc<Mutex<HashMap<String, thread::JoinHandle<()>>>>,
         project_sample_rate: Arc<AtomicU32>,
+        known_files: Arc<Mutex<HashMap<String, String>>>,
     ) {
         tracing::info!("Worker {} started", worker_id);
 
         loop {
             match job_rx.recv() {
-                Ok(AfsJob::DecodeAndWaveform {
-                    req_id,
-                    path,
-                    min_block_size,
-                }) => {
+                Ok(AfsJob::DecodeAndWaveform { req_id, path }) => {
                     tracing::debug!(
                         worker = worker_id,
                         request_id = %req_id,
                         file = %path,
-                        min_block_size = min_block_size,
                         "AFS worker processing job"
                     );
                     if let Err(e) = Self::process_decode_and_waveform(
                         &req_id,
                         &path,
-                        min_block_size,
                         project_sample_rate.load(Ordering::Relaxed),
+                        &known_files,
                         &event_tx,
                     ) {
                         let _ = event_tx.send(AfsEvent::Error {
@@ -196,454 +235,181 @@ impl AudioFileService {
         tracing::info!("Worker {} stopped", worker_id);
     }
 
-    /// Process decode and waveform generation job
+    /// Sample thread: serves raw-sample requests in order from a per-file window cache.
+    fn samples_loop(
+        rx: Receiver<SamplesJob>,
+        event_tx: Sender<AfsEvent>,
+        known_files: Arc<Mutex<HashMap<String, String>>>,
+    ) {
+        let mut reader = SampleReader::new();
+        while let Ok(job) = rx.recv() {
+            let path = known_files.lock().unwrap().get(&job.cache_key).cloned();
+            let result = match path {
+                Some(path) => reader.read(
+                    &job.cache_key,
+                    &path,
+                    job.channel as usize,
+                    job.start_frame,
+                    job.count,
+                ),
+                None => Err(anyhow::anyhow!("unknown cache key {}", job.cache_key)),
+            };
+            let event = match result {
+                Ok(samples) => AfsEvent::SamplesData {
+                    req_id: job.req_id,
+                    channel: job.channel,
+                    start_frame: job.start_frame,
+                    samples,
+                },
+                Err(e) => AfsEvent::Error {
+                    req_id: job.req_id,
+                    code: -2,
+                    message: e.to_string(),
+                },
+            };
+            if event_tx.send(event).is_err() {
+                break;
+            }
+        }
+    }
+
+    /// Decode the file for playback and make sure a valid peak file exists for it.
+    ///
+    /// Cache hit: decode PCM only. Cache miss: decode once, feeding native chunks to the
+    /// `PeakBuilder` and resampled chunks to the playback buffer, then write the peak file
+    /// atomically. Either way `DecodeReady` is sent first, then `WaveformReady`.
     fn process_decode_and_waveform(
         req_id: &str,
         path: &str,
-        min_block_size: usize,
         project_sample_rate: u32,
+        known_files: &Mutex<HashMap<String, String>>,
         event_tx: &Sender<AfsEvent>,
     ) -> Result<()> {
-        // Get file metadata for cache key
         let metadata = fs::metadata(path)?;
-        let size = metadata.len();
-        let mtime = metadata
+        let src_size = metadata.len();
+        let src_mtime_ns = metadata
             .modified()?
             .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_secs();
+            .as_nanos() as u64;
 
         let cache_dir = get_cache_dir()?;
         fs::create_dir_all(&cache_dir)?;
 
-        let decoder_version = "symphonia-0.5";
-        let cache_key = generate_cache_key(path, size, mtime, project_sample_rate, decoder_version);
-        let cache_path = cache_dir.join(&cache_key);
-
-        // Check if cache is valid
-        let use_cache = cache_path.exists()
-            && is_cache_valid(
-                &cache_path,
-                path,
-                size,
-                mtime,
-                project_sample_rate,
-                decoder_version,
-            );
+        let cache_key = generate_cache_key(path, src_size, src_mtime_ns);
+        let cache_path = cache_dir.join(format!("{}.{}", cache_key, CACHE_EXT));
+        let cache_hit = PeakFile::is_valid(&cache_path, src_size, src_mtime_ns);
+        known_files
+            .lock()
+            .unwrap()
+            .insert(cache_key.clone(), path.to_string());
 
         tracing::info!(
             request_id = %req_id,
             file = %path,
-            min_block_size = min_block_size,
-            cache_hit = use_cache,
+            cache_key = %cache_key,
+            cache_hit,
             "AFS job metadata resolved"
         );
 
-        if use_cache {
-            // Load from cache - still need to decode PCM for engine playback
-            let reader = WaveformCacheReader::open(&cache_path)?;
-            let header = reader.header();
+        // The three decoder callbacks share this state; they never run concurrently.
+        let builder: RefCell<Option<PeakBuilder>> = RefCell::new(None);
+        let n_frames: Cell<Option<u64>> = Cell::new(None);
+        let samples: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+        let mut last_progress = Instant::now();
+        let mut native_frames = 0u64;
 
-            tracing::info!(
-                request_id = %req_id,
-                cache_key = %cache_key,
-                cache_path = %cache_path.display(),
-                channels = header.channels,
-                frames = header.frames,
-                "AFS using cached waveform, re-decoding PCM"
-            );
-
-            // Decode PCM samples (cache only stores waveform, not full audio)
-            let mut decoder = SymphoniaDecoder::new(path);
-            let mut interleaved_samples = Vec::new();
-
-            let decoded_info =
-                decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<
-                    f32,
-                >]| {
-                    // Convert planar to interleaved
-                    let num_frames = chunk[0].len();
-                    let num_channels = chunk.len();
-
-                    // Debug: Log chunk info and first few samples
-                    if interleaved_samples.is_empty() {
-                        tracing::info!(
-                            request_id = %req_id,
-                            num_channels = num_channels,
-                            num_frames = num_frames,
-                            "AFS cached path: chunk structure"
-                        );
-                        if num_channels > 0 && num_frames > 0 {
-                            let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
-                            let first_right = chunk
-                                .get(1)
-                                .and_then(|ch| ch.get(0))
-                                .copied()
-                                .unwrap_or(0.0);
-                            tracing::info!(
-                                request_id = %req_id,
-                                first_left = first_left,
-                                first_right = first_right,
-                                "AFS cached path: first planar samples"
-                            );
-                        }
-                    }
-
-                    for frame_idx in 0..num_frames {
-                        for ch in 0..num_channels {
-                            interleaved_samples.push(chunk[ch][frame_idx]);
-                        }
-                    }
-                    Ok(())
-                })?;
-
-            tracing::info!(
-                request_id = %req_id,
-                decoded_samples = interleaved_samples.len(),
-                "AFS PCM decode complete"
-            );
-
-            // Emit decode ready event with samples
-            event_tx.send(AfsEvent::DecodeReady {
-                req_id: req_id.to_string(),
-                cache_key: cache_key.clone(),
-                channels: header.channels,
-                frames: header.frames,
-                sample_rate: header.sample_rate,
-                duration_s: header.frames as f32 / header.sample_rate as f32,
-                samples: interleaved_samples,
-            })?;
-
-            // Emit all waveform levels
-            for (level_idx, level_meta) in reader.level_metadata().iter().enumerate() {
-                let total_bytes = level_meta
-                    .channel_offsets
-                    .iter()
-                    .map(|&offset| {
-                        // Calculate bytes per channel: num_blocks * 3 * 4 (f32)
-                        (level_meta.num_blocks * 12) as u64
-                    })
-                    .sum::<u64>();
-
-                event_tx.send(AfsEvent::WaveformLevel {
-                    req_id: req_id.to_string(),
-                    level: level_idx as u16,
-                    block_size: level_meta.block_size,
-                    num_blocks: level_meta.num_blocks,
-                    file_path: cache_path.to_string_lossy().to_string(),
-                    byte_offset: level_meta.channel_offsets[0], // First channel offset
-                    byte_len: total_bytes,
-                })?;
-
-                tracing::debug!(
-                    request_id = %req_id,
-                    level = level_idx,
-                    block_size = level_meta.block_size,
-                    num_blocks = level_meta.num_blocks,
-                    byte_len = total_bytes,
-                    "AFS emitted cached waveform level"
-                );
-            }
-
-            return Ok(());
-        }
-
-        // Decode and generate new cache
-        tracing::info!(
-            request_id = %req_id,
-            file = %path,
-            project_sample_rate = project_sample_rate,
-            min_block_size = min_block_size,
-            "AFS decoding source audio"
-        );
-
-        Self::decode_and_generate_cache(
-            req_id,
-            path,
-            min_block_size,
-            project_sample_rate,
-            &cache_path,
-            event_tx,
-        )
-    }
-
-    /// Decode audio and generate waveform cache
-    fn decode_and_generate_cache(
-        req_id: &str,
-        path: &str,
-        min_block_size: usize,
-        project_sample_rate: u32,
-        cache_path: &Path,
-        event_tx: &Sender<AfsEvent>,
-    ) -> Result<()> {
         let mut decoder = SymphoniaDecoder::new(path);
-        let mut all_chunks = Vec::new();
-        let mut interleaved_samples = Vec::new();
-        let mut total_frames = 0u64;
-
-        // Decode in chunks to build pyramid progressively
-        let decoded_info =
-            decoder.decode_to_f32_stream(project_sample_rate, &mut |chunk: &[Vec<f32>]| {
-                // Store planar chunks for waveform generation
-                let planar_chunk: Vec<Vec<f32>> = chunk.to_vec();
-
-                // Convert to interleaved for engine playback
-                let num_frames = chunk[0].len();
-                let num_channels = chunk.len();
-
-                // Debug: Log chunk info and first few samples
-                if interleaved_samples.is_empty() {
-                    tracing::info!(
-                        request_id = %req_id,
-                        num_channels = num_channels,
-                        num_frames = num_frames,
-                        "AFS new decode path: chunk structure"
-                    );
-                    if num_channels > 0 && num_frames > 0 {
-                        let first_left = chunk[0].get(0).copied().unwrap_or(0.0);
-                        let first_right = chunk
-                            .get(1)
-                            .and_then(|ch| ch.get(0))
-                            .copied()
-                            .unwrap_or(0.0);
-                        tracing::info!(
-                            request_id = %req_id,
-                            first_left = first_left,
-                            first_right = first_right,
-                            "AFS new decode path: first planar samples"
-                        );
-                    }
+        let decoded_info = decoder.decode_to_f32_stream(
+            project_sample_rate,
+            &mut |info| {
+                n_frames.set(info.n_frames);
+                if !cache_hit {
+                    *builder.borrow_mut() = Some(PeakBuilder::new(info.channels, info.sample_rate));
                 }
-
-                for frame_idx in 0..num_frames {
-                    for ch in 0..num_channels {
-                        interleaved_samples.push(chunk[ch][frame_idx]);
-                    }
+                if let Some(n) = info.n_frames {
+                    let resampled =
+                        n as f64 * project_sample_rate as f64 / info.sample_rate.max(1) as f64;
+                    samples
+                        .borrow_mut()
+                        .reserve((resampled as usize + 8192) * info.channels as usize);
                 }
-
-                all_chunks.push(planar_chunk);
-                total_frames += chunk[0].len() as u64;
-
-                // Emit progress (rough estimate)
-                let _ = event_tx.send(AfsEvent::Progress {
-                    req_id: req_id.to_string(),
-                    progress_0_1: 0.5, // Placeholder progress
-                });
-
                 Ok(())
-            })?;
+            },
+            &mut |chunk| {
+                if let Some(b) = builder.borrow_mut().as_mut() {
+                    b.push(chunk);
+                }
+                native_frames += chunk.first().map(|c| c.len()).unwrap_or(0) as u64;
+                if let Some(total) = n_frames.get().filter(|&n| n > 0) {
+                    if last_progress.elapsed() >= Duration::from_millis(100) {
+                        last_progress = Instant::now();
+                        let _ = event_tx.send(AfsEvent::Progress {
+                            req_id: req_id.to_string(),
+                            progress_0_1: (native_frames as f64 / total as f64).min(1.0) as f32,
+                        });
+                    }
+                }
+                Ok(())
+            },
+            &mut |chunk| {
+                let num_frames = chunk[0].len();
+                let mut samples = samples.borrow_mut();
+                for frame_idx in 0..num_frames {
+                    for ch in chunk {
+                        samples.push(ch[frame_idx]);
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        let samples = samples.into_inner();
+        let builder = builder.into_inner();
 
         tracing::info!(
             request_id = %req_id,
-            file = %path,
             frames = decoded_info.frames,
             channels = decoded_info.channels,
-            sample_rate = decoded_info.sample_rate,
-            decoded_samples = interleaved_samples.len(),
+            source_sample_rate = decoded_info.source_sample_rate,
+            decoded_samples = samples.len(),
             "AFS decode completed"
         );
 
-        // Emit decode ready with samples
         event_tx.send(AfsEvent::DecodeReady {
             req_id: req_id.to_string(),
-            cache_key: cache_path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string(),
+            cache_key: cache_key.clone(),
             channels: decoded_info.channels,
             frames: decoded_info.frames,
             sample_rate: decoded_info.sample_rate,
             duration_s: decoded_info.duration_s,
-            samples: interleaved_samples,
+            samples,
         })?;
 
-        // Build multi-resolution waveform
-        Self::build_waveform_pyramid(
-            req_id,
-            &all_chunks,
-            min_block_size,
-            decoded_info.channels as usize,
-            decoded_info.sample_rate,
-            cache_path,
-            event_tx,
-        )?;
-
-        Ok(())
-    }
-
-    /// Build multi-resolution waveform pyramid
-    fn build_waveform_pyramid(
-        req_id: &str,
-        chunks: &[Vec<Vec<f32>>],
-        min_block_size: usize,
-        channels: usize,
-        sample_rate: u32,
-        cache_path: &Path,
-        event_tx: &Sender<AfsEvent>,
-    ) -> Result<()> {
-        if channels == 0 {
-            tracing::warn!(request_id = %req_id, "AFS no channels provided for waveform build");
-            return Ok(());
-        }
-
-        let min_block_size = min_block_size.max(1);
-
-        // Concatenate decoded chunks into a single planar buffer per channel once.
-        let mut concatenated = vec![Vec::new(); channels];
-        for chunk in chunks {
-            for ch in 0..channels {
-                if let Some(channel_samples) = chunk.get(ch) {
-                    concatenated[ch].extend_from_slice(channel_samples);
-                }
+        if let Some(builder) = builder {
+            let peaks = builder.finish();
+            let tmp_path = cache_dir.join(format!(
+                "{}.{}.{}.tmp",
+                cache_key,
+                std::process::id(),
+                sanitize_for_filename(req_id)
+            ));
+            let written = PeakFile::write(&tmp_path, &peaks, src_size, src_mtime_ns)
+                .and_then(|_| fs::rename(&tmp_path, &cache_path).map_err(Into::into));
+            if let Err(e) = written {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(e);
             }
-        }
-
-        let total_frames = concatenated
-            .first()
-            .map(|channel| channel.len())
-            .unwrap_or(0);
-
-        let min_block_size_u32 = min_block_size as u32;
-        let mut levels = Vec::new();
-
-        // Start with a coarse block size for zoomed-out views
-        // For short audio, ensure we have at least 256-512 blocks in the coarsest level
-        let coarse_target_blocks = 512;
-        let coarse_block_size = (total_frames / coarse_target_blocks)
-            .max(min_block_size * 8)
-            .max(2048) as u32;
-
-        // Generate LOD pyramid by halving block_size until reaching min_block_size
-        // Example: 2048 -> 1024 -> 512 -> 256 -> 128 (if min_block_size=128)
-        let mut block_size = coarse_block_size;
-
-        loop {
-            levels.push(block_size);
-            if block_size <= min_block_size_u32 {
-                break;
-            }
-            let next_block_size = (block_size / 2).max(min_block_size_u32);
-            if next_block_size == block_size {
-                break;
-            }
-            block_size = next_block_size;
-        }
-
-        tracing::debug!(
-            request_id = %req_id,
-            total_frames = total_frames,
-            channels = channels,
-            level_count = levels.len(),
-            min_block_size = min_block_size,
-            sample_rate = sample_rate,
-            "AFS building waveform pyramid"
-        );
-
-        let mut writer = WaveformCacheWriter::create(
-            cache_path,
-            channels as u16,
-            sample_rate,
-            total_frames as u64,
-            levels.len() as u16,
-        )?;
-
-        const BYTES_PER_SAMPLE: u64 = 4;
-
-        // Pre-calculate num_blocks for all levels
-        let level_specs: Vec<(u16, u32, u64)> = levels
-            .iter()
-            .enumerate()
-            .map(|(level_idx, &block_sz)| {
-                let block_len = block_sz as usize;
-                let num_blocks = if total_frames > 0 {
-                    (total_frames + block_len - 1) / block_len
-                } else {
-                    0
-                };
-                (level_idx as u16, block_sz, num_blocks as u64)
-            })
-            .collect();
-
-        // Write metadata directory upfront with predicted offsets
-        writer.write_metadata_directory(&level_specs)?;
-
-        tracing::info!(
-            request_id = %req_id,
-            level_count = level_specs.len(),
-            "AFS wrote metadata directory, starting progressive data writes"
-        );
-
-        // Now write data progressively and send OSC events immediately
-        for (level_idx, &block_sz) in levels.iter().enumerate() {
-            let mut channel_data = vec![Vec::new(); channels];
-
-            for ch in 0..channels {
-                let data = &concatenated[ch];
-                if data.is_empty() {
-                    continue;
-                }
-
-                let block_len = block_sz as usize;
-                let num_blocks = (data.len() + block_len - 1) / block_len;
-
-                for block in 0..num_blocks {
-                    let start = block * block_len;
-                    let end = (start + block_len).min(data.len());
-                    let block_data = &data[start..end];
-
-                    if block_data.is_empty() {
-                        continue;
-                    }
-
-                    let (min_val, max_val) = block_data.iter().fold(
-                        (f32::INFINITY, f32::NEG_INFINITY),
-                        |(min_acc, max_acc), &sample| (min_acc.min(sample), max_acc.max(sample)),
-                    );
-
-                    let sum_squares: f32 = block_data.iter().map(|&x| x * x).sum();
-                    let rms = (sum_squares / block_data.len() as f32).sqrt();
-
-                    channel_data[ch].extend_from_slice(&[min_val, max_val, rms]);
-                }
-            }
-
-            // Write level data (flushes automatically)
-            writer.write_level_data(level_idx, &channel_data)?;
-
-            // Get metadata for OSC message
-            let metadata = &writer.level_metadata[level_idx];
-            let total_blocks = metadata.num_blocks;
-            let byte_offset = metadata.channel_offsets.first().copied().unwrap_or(0);
-            let byte_len = total_blocks * 3 * BYTES_PER_SAMPLE * channels as u64;
-
-            // Send OSC event immediately - data is flushed to disk
-            event_tx.send(AfsEvent::WaveformLevel {
-                req_id: req_id.to_string(),
-                level: level_idx as u16,
-                block_size: block_sz,
-                num_blocks: total_blocks,
-                file_path: cache_path.to_string_lossy().to_string(),
-                byte_offset,
-                byte_len,
-            })?;
-
-            tracing::debug!(
+            tracing::info!(
                 request_id = %req_id,
-                level = level_idx,
-                block_size = block_sz,
-                num_blocks = total_blocks,
-                byte_offset,
-                byte_len,
-                "AFS wrote and emitted waveform level (progressive)"
+                cache_path = %cache_path.display(),
+                levels = peaks.levels.len(),
+                "AFS peak file written"
             );
         }
 
-        tracing::info!(
-            request_id = %req_id,
-            cache_path = %cache_path.display(),
-            level_count = levels.len(),
-            "AFS cache generation complete"
-        );
+        event_tx.send(AfsEvent::WaveformReady {
+            req_id: req_id.to_string(),
+            peak_file_path: cache_path.to_string_lossy().to_string(),
+        })?;
 
         Ok(())
     }
@@ -666,28 +432,32 @@ impl AudioFileService {
     }
 }
 
+/// Request IDs look like `clip:<id>:<nanos>`; keep temp file names to safe characters.
+fn sanitize_for_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Tests that point XDG_CACHE_HOME at a temp dir hold this, since the env is process-wide.
+    static CACHE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Test that AudioFileService can be created
     #[test]
     fn test_audio_file_service_creation() {
         let service = AudioFileService::new(2, 44100);
         assert!(service.is_ok());
-    }
-
-    /// Test waveform cache key generation
-    #[test]
-    fn test_cache_key_generation() {
-        let key1 = generate_cache_key("/home/test.wav", 12345, 1000, 44100, "symphonia-0.5");
-        let key2 = generate_cache_key("/home/test.wav", 12345, 1000, 44100, "symphonia-0.5");
-        let key3 = generate_cache_key("/home/test.wav", 12346, 1000, 44100, "symphonia-0.5");
-
-        assert_eq!(key1, key2, "Same inputs should produce same key");
-        assert_ne!(key1, key3, "Different inputs should produce different keys");
-        assert!(key1.ends_with(".swf"), "Key should end with .swf extension");
     }
 
     /// Test cache directory resolution
@@ -709,46 +479,161 @@ mod tests {
         }
     }
 
-    /// Integration test: test decode and waveform generation (requires test audio file)
-    #[test]
-    #[ignore] // Skip by default as it requires external test file
-    fn test_decode_and_waveform_integration() {
-        // This test requires a test audio file to be present
-        let test_file = PathBuf::from("test_audio.wav");
-        if !test_file.exists() {
-            println!("Skipping integration test - test_audio.wav not found");
-            return;
+    /// Write a 1 s stereo 16-bit WAV at 48 kHz.
+    fn write_test_wav(path: &std::path::Path) {
+        let sr = 48000u32;
+        let frames = sr as usize;
+        let mut data = Vec::with_capacity(frames * 4);
+        for i in 0..frames {
+            let v = ((i as f32 * 0.05).sin() * 16000.0) as i16;
+            data.extend_from_slice(&v.to_le_bytes());
+            data.extend_from_slice(&(-v).to_le_bytes());
         }
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&sr.to_le_bytes());
+        wav.extend_from_slice(&(sr * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data);
+        fs::write(path, wav).unwrap();
+    }
+
+    /// Collect events until `WaveformReady` or `Error` arrives.
+    fn run_job(service: &AudioFileService, req_id: &str, path: &str) -> Vec<AfsEvent> {
+        service
+            .submit_decode_and_waveform(req_id.to_string(), path.to_string())
+            .unwrap();
+        let mut events = Vec::new();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(20) {
+            events.extend(service.poll_events());
+            if events
+                .iter()
+                .any(|e| matches!(e, AfsEvent::WaveformReady { .. } | AfsEvent::Error { .. }))
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        events
+    }
+
+    /// Decode (at a different project rate) and build peaks, then check the second run is a
+    /// cache hit that reuses the same file. Uses a private XDG_CACHE_HOME.
+    #[test]
+    fn test_decode_and_waveform_integration() {
+        let _env = CACHE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", dir.path().join("cache"));
+        let wav = dir.path().join("test.wav");
+        write_test_wav(&wav);
+        let wav = wav.to_string_lossy().to_string();
 
         let service = AudioFileService::new(1, 44100).unwrap();
-        let req_id = "test_integration".to_string();
+        let events = run_job(&service, "req1", &wav);
+        let decode_idx = events
+            .iter()
+            .position(|e| matches!(e, AfsEvent::DecodeReady { .. }))
+            .expect("DecodeReady");
+        let (ready_idx, peak_path) = events
+            .iter()
+            .enumerate()
+            .find_map(|(i, e)| match e {
+                AfsEvent::WaveformReady { peak_file_path, .. } => Some((i, peak_file_path.clone())),
+                _ => None,
+            })
+            .expect("WaveformReady");
+        assert!(decode_idx < ready_idx);
+        if let AfsEvent::DecodeReady {
+            sample_rate,
+            channels,
+            ..
+        } = &events[decode_idx]
+        {
+            assert_eq!(*sample_rate, 44100);
+            assert_eq!(*channels, 2);
+        }
 
-        // Submit decode and waveform job
+        let header = PeakFile::read_header(std::path::Path::new(&peak_path)).unwrap();
+        assert!(header.complete);
+        assert_eq!(header.source_sample_rate, 48000);
+        assert_eq!(header.frames, 48000);
+        let mtime = fs::metadata(&peak_path).unwrap().modified().unwrap();
+
+        thread::sleep(Duration::from_millis(20));
+        let events = run_job(&service, "req2", &wav);
+        let second_path = events
+            .iter()
+            .find_map(|e| match e {
+                AfsEvent::WaveformReady { peak_file_path, .. } => Some(peak_file_path.clone()),
+                _ => None,
+            })
+            .expect("WaveformReady on second run");
+        assert_eq!(second_path, peak_path);
+        assert_eq!(
+            fs::metadata(&peak_path).unwrap().modified().unwrap(),
+            mtime,
+            "second run should be a cache hit and not rewrite the peak file"
+        );
+    }
+
+    /// After a decode registers the file, sample requests return native-rate frames by
+    /// cache key; unknown keys answer with an error.
+    #[test]
+    fn test_request_samples() {
+        let _env = CACHE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", dir.path().join("cache"));
+        let wav = dir.path().join("samples.wav");
+        write_test_wav(&wav);
+        let wav = wav.to_string_lossy().to_string();
+
+        let service = AudioFileService::new(1, 44100).unwrap();
+        let events = run_job(&service, "load", &wav);
+        let key = events
+            .iter()
+            .find_map(|e| match e {
+                AfsEvent::DecodeReady { cache_key, .. } => Some(cache_key.clone()),
+                _ => None,
+            })
+            .expect("DecodeReady");
+
         service
-            .submit_decode_and_waveform(
-                req_id.clone(),
-                test_file.to_string_lossy().to_string(),
-                128,
-            )
+            .request_samples("s1".into(), key.clone(), 1, 1000, 8)
             .unwrap();
-
-        // Wait for events
-        let events = service.wait_for_events(10000); // 10 second timeout
-
-        assert!(!events.is_empty(), "Should receive at least one event");
-
-        // Check for expected event types
-        let has_decode_ready = events
-            .iter()
-            .any(|e| matches!(e, AfsEvent::DecodeReady { .. }));
-        let has_waveform_level = events
-            .iter()
-            .any(|e| matches!(e, AfsEvent::WaveformLevel { .. }));
-
-        assert!(has_decode_ready, "Should receive DecodeReady event");
-        assert!(has_waveform_level, "Should receive WaveformLevel event");
-
-        println!("Integration test passed - received {} events", events.len());
+        service
+            .request_samples("s2".into(), "nope".into(), 0, 0, 8)
+            .unwrap();
+        let mut events = Vec::new();
+        let start = Instant::now();
+        while events.len() < 2 && start.elapsed() < Duration::from_secs(10) {
+            events.extend(service.poll_events());
+            thread::sleep(Duration::from_millis(5));
+        }
+        match &events[0] {
+            AfsEvent::SamplesData {
+                req_id,
+                channel,
+                start_frame,
+                samples,
+            } => {
+                assert_eq!((req_id.as_str(), *channel, *start_frame), ("s1", 1, 1000));
+                assert_eq!(samples.len(), 8);
+                // Right channel is the negated sine at 48 kHz (native rate, not 44.1 kHz).
+                let expected = -(((1000.0f32 * 0.05).sin() * 16000.0) as i16) as f32 / 32768.0;
+                assert!((samples[0] - expected).abs() < 1e-4);
+            }
+            other => panic!("expected SamplesData, got {:?}", other),
+        }
+        assert!(matches!(&events[1], AfsEvent::Error { req_id, .. } if req_id == "s2"));
     }
 
     /// Test error handling for non-existent file
@@ -759,7 +644,7 @@ mod tests {
 
         // Submit job for non-existent file
         service
-            .submit_decode_and_waveform(req_id.clone(), "/nonexistent/file.wav".to_string(), 128)
+            .submit_decode_and_waveform(req_id.clone(), "/nonexistent/file.wav".to_string())
             .unwrap();
 
         // Wait for events
