@@ -71,7 +71,7 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle")]
+[node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
 custom_minimum_size = Vector2(100, 36)
 offset_right = 272.0
 offset_bottom = 36.0
@@ -89,6 +89,7 @@ mute_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContain
 automation_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/AutomationToggle")
 automation_menu_button = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/AutomationMenuButton")
 foldout_toggle = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/FoldoutToggle")
+io_button = NodePath("VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/IOButton")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=883583283]
 layout_mode = 2
@@ -223,12 +224,15 @@ script = ExtResource("5_mscrg")
 icon_default = ExtResource("9_ru4rj")
 icon_pressed = ExtResource("7_ru4rj")
 
-[node name="IOButton" type="OptionButton" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=2048027707]
+[node name="IOButton" type="MenuButton" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=2048027707]
+custom_minimum_size = Vector2(64, 32)
 layout_mode = 2
-selected = 0
-item_count = 1
-popup/item_0/text = "Test"
-popup/item_0/id = 0
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+text = "Master"
+flat = false
+text_overrun_behavior = 3
+clip_text = true
 
 [node name="empty" type="Control" parent="VBoxContainer" unique_id=1616882018]
 custom_minimum_size = Vector2(0, 2)

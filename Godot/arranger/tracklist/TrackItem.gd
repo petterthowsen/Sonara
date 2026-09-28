@@ -46,11 +46,15 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 @export var automation_menu_button: Button
 ## Folder/group fold button (hidden for tracks without children).
 @export var foldout_toggle: Button
+## Output routing of the track's channel (hidden when the track has no channel).
+@export var io_button: MenuButton
 
 # Data binding
 var track: Track = null
 var track_index: int = -1
 var channel: Channel = null  # Channel that this track routes to
+## The channel's route target, watched so the IO button follows its renames.
+var _route_target: Channel = null
 var current_project: Project = null  # Reference to project for channel lookup
 ## Enclosing folders/groups, outermost first; drawn as the left-edge inset stripes.
 var _ancestors: Array[Track] = []
@@ -101,6 +105,10 @@ func _ready():
 			automation_menu_button.pressed.connect(_on_automation_menu_pressed)
 		if foldout_toggle:
 			foldout_toggle.toggled.connect(_on_foldout_toggled)
+		if io_button:
+			io_button.get_popup().id_pressed.connect(_on_io_menu_selected)
+			# Targets come and go (buses added, renamed, regrouped): list them fresh on open.
+			io_button.about_to_popup.connect(_rebuild_io_menu)
 
 		# Connect volumeter signal for volume changes
 		if volumeter:
@@ -357,7 +365,10 @@ func _bind_to_track_channel() -> void:
 			solo_toggle.set_pressed_no_signal(channel.solo)
 		if not channel.color_changed.is_connected(_on_channel_color_changed):
 			channel.color_changed.connect(_on_channel_color_changed)
+		channel.route_changed.connect(_on_channel_route_changed)
+		channel.hierarchy_changed.connect(_update_io_button)
 		_update_volumeter_from_channel()
+		_update_io_button()
 		if arm_toggle:
 			arm_toggle.set_pressed_no_signal(channel.record_armed)
 		if volumeter:
@@ -372,6 +383,7 @@ func _bind_to_track_channel() -> void:
 	channel = null
 	if volumeter:
 		volumeter.visible = false
+	_update_io_button()
 	# Unrouted: the track holds its own mute/solo (kept from its last strip).
 	if mute_toggle:
 		mute_toggle.set_pressed_no_signal(track.muted)
@@ -420,8 +432,63 @@ func _unbind_from_channel() -> void:
 		channel.solo_changed.disconnect(_on_channel_solo_changed)
 	if channel.color_changed.is_connected(_on_channel_color_changed):
 		channel.color_changed.disconnect(_on_channel_color_changed)
+	if channel.route_changed.is_connected(_on_channel_route_changed):
+		channel.route_changed.disconnect(_on_channel_route_changed)
+	if channel.hierarchy_changed.is_connected(_update_io_button):
+		channel.hierarchy_changed.disconnect(_update_io_button)
 
 	channel = null
+	_set_route_target(null)
+
+
+# ============================================================================
+# IO (OUTPUT ROUTING) BUTTON
+# ============================================================================
+
+## Show the channel's current output on the IO button. Unrouted tracks get a disabled
+## button rather than a hidden one: the flow container owns its children's visibility.
+func _update_io_button() -> void:
+	if io_button == null:
+		return
+	if channel == null or current_project == null:
+		_set_route_target(null)
+		io_button.text = "No output"
+		io_button.tooltip_text = "This track has no mixer channel"
+		io_button.disabled = true
+		return
+	_set_route_target(null if channel.is_master else current_project.get_channel_by_id(channel.output_channel_id))
+	io_button.text = ChannelOutputMenu.label(channel, current_project)
+	io_button.tooltip_text = "Output: %s" % io_button.text
+	# Folder/group members route to their bus; the grouping owns that route.
+	io_button.disabled = channel.route_locked()
+
+
+func _rebuild_io_menu() -> void:
+	if io_button and channel and current_project:
+		ChannelOutputMenu.populate(io_button.get_popup(), channel, current_project)
+
+
+func _on_io_menu_selected(item_id: int) -> void:
+	ChannelOutputMenu.apply(channel, item_id)
+
+
+func _on_channel_route_changed(_output_id: int) -> void:
+	_update_io_button()
+
+
+## Watch the route target's name so the IO button label stays current.
+func _set_route_target(target: Channel) -> void:
+	if _route_target == target:
+		return
+	if _route_target and _route_target.name_changed.is_connected(_on_route_target_renamed):
+		_route_target.name_changed.disconnect(_on_route_target_renamed)
+	_route_target = target
+	if _route_target:
+		_route_target.name_changed.connect(_on_route_target_renamed)
+
+
+func _on_route_target_renamed(_new_name: String) -> void:
+	_update_io_button()
 
 
 func _update_volumeter_from_channel() -> void:

@@ -85,8 +85,8 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 ### Arranger & Timeline
 
 
-- [ ] Increase the maximum horizontal zoom in the timeline
-- [ ] Arranger track list: wire up the IO routing menu button on `TrackItem`
+- [x?] Increase the maximum horizontal zoom in the timeline. Arranger max is now 16384 px/beat (was 4096), about 1.5 samples per pixel at 120 BPM / 48 kHz. The grid still stops at 1/8-beat lines, so at full zoom snapping is coarse relative to the view.
+- [x?] Arranger track list: wire up the IO routing menu button on `TrackItem`. It sets the track channel's output route (Master or a bus/group) and shares its list with the mixer strip's output button via `mixer/ChannelOutputMenu.gd`. Locked while the channel sits in a folder/group; disabled on unrouted tracks. Covered by `Godot/tests/test_track_io_button.gd`.
 - [ ] Chord track: design & implement chord track with visual notations
 - [x] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.

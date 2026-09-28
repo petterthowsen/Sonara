@@ -732,110 +732,25 @@ func _rebuild_output_menu() -> void:
 	if not output_menu_buttton or not project or not channel:
 		return
 
-	var popup = output_menu_buttton.get_popup()
-	popup.clear()
-	output_menu_buttton.disabled = false
-
-	# Master channel: show only device outputs
-	if channel.is_master:
-		_populate_device_outputs(popup)
-		_update_output_button_text()
-		return
-
-	# Regular channels: show buses and master
-
-	# Add master channel (ID 1)
-	popup.add_item("Master", 1)
-	if channel.output_channel_id == 1:
-		popup.set_item_checked(popup.item_count - 1, true)
-
-	# Add separator
-	popup.add_separator()
-
-	# Route to BUS and GROUP (not instrument/audio, not self, not a descendant)
-	for ch in project.channels:
-		if _is_valid_route_target(ch):
-			popup.add_item(ch.name, ch.id)
-			if channel.output_channel_id == ch.id:
-				popup.set_item_checked(popup.item_count - 1, true)
-
+	ChannelOutputMenu.populate(output_menu_buttton.get_popup(), channel, project)
 	output_menu_buttton.disabled = channel.route_locked()
 	_update_output_button_text()
-
-
-## True when this strip may route to `target` (BUS or GROUP, no cycles).
-func _is_valid_route_target(target: Channel) -> bool:
-	if target == null or channel == null or project == null:
-		return false
-	if target.id == channel.id or target.is_master:
-		return false
-	if target.channel_type != Channel.ChannelType.BUS and target.channel_type != Channel.ChannelType.GROUP:
-		return false
-	if project.channel_is_in_subtree(target.id, channel):
-		return false
-	return true
-
-
-## Master's choices: the stereo output pairs of the running audio device (AudioConfig). A saved
-## pair the device lacks stays listed, marked, and plays on 1/2 until a device has it.
-func _populate_device_outputs(popup: PopupMenu) -> void:
-	var pairs := AudioConfig.output_pairs()
-	for pair in pairs:
-		var output_id := AudioConfig.HARDWARE_OUTPUT_BASE + pair
-		popup.add_check_item(AudioConfig.output_label(output_id), output_id)
-		if channel.device_output_id == output_id:
-			popup.set_item_checked(popup.get_item_count() - 1, true)
-	var current := channel.device_output_id
-	if current >= AudioConfig.HARDWARE_OUTPUT_BASE + pairs:
-		popup.add_check_item("%s (not on this device)" % AudioConfig.output_label(current), current)
-		popup.set_item_checked(popup.get_item_count() - 1, true)
 
 
 func _on_output_menu_selected(item_id: int) -> void:
 	"""Handle output menu selection."""
 	if not channel or not project:
 		return
-	if channel.route_locked():
-		return
-
-	# Master channel: set device output
-	if channel.is_master:
-		channel.set_device_output(item_id)
-		_update_output_button_text()
-		logger.info("Master routed to device %d" % item_id)
-	else:
-		# Regular channel: set channel routing
-		channel.set_route(item_id)
-		logger.info("Channel %d routed to %d" % [channel.id, item_id])
+	ChannelOutputMenu.apply(channel, item_id)
+	_update_output_button_text()
+	logger.info("Channel %d routed to %d" % [channel.id, item_id])
 
 
 func _update_output_button_text() -> void:
 	"""Update the output menu button text to show current routing."""
 	if not output_menu_buttton or not channel:
 		return
-
-	var label = _get_output_label()
-	output_menu_buttton.text = label
-
-
-func _get_output_label() -> String:
-	"""Get the label for the current output routing."""
-	if not channel or not project:
-		return "Output"
-
-	# Master channel: show device output
-	if channel.is_master:
-		return AudioConfig.output_label(channel.device_output_id)
-
-	# Regular channel: show routing target
-	if channel.output_channel_id == 1:
-		return "Master"
-	else:
-		# Find channel by ID
-		var target_channel = project.get_channel_by_id(channel.output_channel_id)
-		if target_channel:
-			return target_channel.name
-		return "Unknown"
+	output_menu_buttton.text = ChannelOutputMenu.label(channel, project)
 
 
 func _on_channel_route_changed(output_id: int) -> void:
