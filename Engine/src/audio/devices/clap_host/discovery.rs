@@ -121,32 +121,78 @@ impl PluginScanner {
         Ok(total_plugins)
     }
 
-    /// Scan a single directory for .clap files
+    /// Scan a directory and its subfolders for plugin files
     fn scan_directory(path: &Path) -> Result<Vec<PluginDescriptor>, PluginError> {
         let mut plugins = Vec::new();
 
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| PluginError::Other(format!("Failed to read directory: {}", e)))?;
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            // Check for .clap extension or .so files that might be CLAP plugins
-            if let Some(ext) = path.extension() {
-                if ext == "clap" || ext == "so" {
-                    match Self::load_plugin_metadata(&path) {
-                        Ok(mut discovered) => {
-                            plugins.append(&mut discovered);
-                        }
-                        Err(e) => {
-                            tracing::debug!("Skipping {:?}: {}", path, e);
-                        }
-                    }
+        for file in Self::find_plugin_files(path)? {
+            match Self::load_plugin_metadata(&file) {
+                Ok(mut discovered) => {
+                    plugins.append(&mut discovered);
+                }
+                Err(e) => {
+                    tracing::debug!("Skipping {:?}: {}", file, e);
                 }
             }
         }
 
         Ok(plugins)
+    }
+
+    /// Maximum folder depth below a scan root that `find_plugin_files` descends into.
+    const MAX_SCAN_DEPTH: usize = 16;
+
+    /// Find plugin files under `root`, sorted. `.clap` files are found in any subfolder, as
+    /// the CLAP spec asks. `.so` files are only taken from the top level of `root`: deeper
+    /// down they are usually a plugin's own support libraries, which must not be loaded.
+    /// Symlinked folders are followed, each real folder is visited once.
+    fn find_plugin_files(root: &Path) -> Result<Vec<PathBuf>, PluginError> {
+        let mut files = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut pending = vec![(root.to_path_buf(), 0usize)];
+
+        while let Some((dir, depth)) = pending.pop() {
+            let canonical = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            if !visited.insert(canonical) {
+                continue;
+            }
+
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(e) if depth == 0 => {
+                    return Err(PluginError::Other(format!(
+                        "Failed to read directory: {}",
+                        e
+                    )));
+                }
+                Err(e) => {
+                    tracing::debug!("Skipping unreadable folder {:?}: {}", dir, e);
+                    continue;
+                }
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // `is_dir`/`is_file` follow symlinks
+                if path.is_dir() {
+                    if depth < Self::MAX_SCAN_DEPTH {
+                        pending.push((path, depth + 1));
+                    }
+                } else if path.is_file() {
+                    let is_plugin = match path.extension() {
+                        Some(ext) if ext == "clap" => true,
+                        Some(ext) if ext == "so" => depth == 0,
+                        _ => false,
+                    };
+                    if is_plugin {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+
+        files.sort();
+        Ok(files)
     }
 
     /// Load metadata from a plugin bundle without fully initializing it
@@ -364,6 +410,57 @@ mod tests {
                 PathBuf::from("/from/env/b"),
             ]
         );
+    }
+
+    #[test]
+    fn test_find_plugin_files_searches_subfolders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("vendor/deep")).unwrap();
+        std::fs::write(root.join("Top.clap"), b"").unwrap();
+        std::fs::write(root.join("vendor/Foo.clap"), b"").unwrap();
+        std::fs::write(root.join("vendor/deep/Bar.clap"), b"").unwrap();
+        std::fs::write(root.join("vendor/readme.txt"), b"").unwrap();
+
+        let found = PluginScanner::find_plugin_files(root).unwrap();
+        assert_eq!(
+            found,
+            vec![
+                root.join("Top.clap"),
+                root.join("vendor/Foo.clap"),
+                root.join("vendor/deep/Bar.clap"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_find_plugin_files_takes_so_only_at_top_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("vendor/lib")).unwrap();
+        std::fs::write(root.join("Legacy.so"), b"").unwrap();
+        std::fs::write(root.join("vendor/lib/libsupport.so"), b"").unwrap();
+
+        let found = PluginScanner::find_plugin_files(root).unwrap();
+        assert_eq!(found, vec![root.join("Legacy.so")]);
+    }
+
+    #[test]
+    fn test_find_plugin_files_survives_symlink_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("vendor/Foo.clap"), b"").unwrap();
+        std::os::unix::fs::symlink(root, root.join("vendor/loop")).unwrap();
+
+        let found = PluginScanner::find_plugin_files(root).unwrap();
+        assert_eq!(found, vec![root.join("vendor/Foo.clap")]);
+    }
+
+    #[test]
+    fn test_find_plugin_files_missing_root_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(PluginScanner::find_plugin_files(&dir.path().join("nope")).is_err());
     }
 
     #[test]

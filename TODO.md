@@ -85,6 +85,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 - [ ] Increase the maximum horizontal zoom in the timeline
 - [ ] Chord track: design & implement chord track with visual notations
+- [ ] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
 - [x?] Ctrl+scroll vertical zoom should zoom around the mouse cursor, I.E if mouse is at a track near bottom, should also scroll down. Still broken.
 
@@ -131,6 +132,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] tracks could have a checkbox to show/hide their notes
 - [ ] by default, show all tracks
 
+- [ ] Note editor: dragging the end of a note to adjust its length seems to floor the drag instead of rounding it, so it doesn't "feel right".
 - [ ] Piano roll: black keys use a white background, so the note-hover overlay is barely visible on them
 - [ ] Consider Modifier+right-click to open context menu in NoteEditor?
 - [x?] Bug: the blue vertical range line at the start of the clip renders off-screen. The markers track content X correctly (projected note position == marker X), but `MidiEditorOverlays` had no clipping, so a marker scrolled left of the note area painted over the piano keys / outside the editor. Fixed with `clip_contents = true` in `_ready()`.
@@ -157,7 +159,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 #### Plugins
 
-- [ ] Subfolders aren't scanned: the engine only looks at the top level of each plugin folder. The CLAP spec says to search subfolders, so a plugin at ~/.clap/<vendor>/Foo.clap isn't found today.
+- [x?] Subfolders aren't scanned: the engine only looks at the top level of each plugin folder. The CLAP spec says to search subfolders, so a plugin at ~/.clap/<vendor>/Foo.clap isn't found today. `PluginScanner::find_plugin_files` now walks subfolders for `.clap` files (symlinks followed, loops guarded, depth capped at 16); `.so` files are still only taken from the top level. Covered by unit tests in `discovery.rs`; not yet verified with a real vendor folder.
 
 ### Save / Load / Export
 
