@@ -1,5 +1,6 @@
 ## SimpleLayout.gd
-## Saved description of a Simple View: grid size, pages, groups and controls.
+## Saved description of a Simple View: row count, pages, groups and controls. Pages are `rows`
+## tall and as wide as their controls need.
 ## Pages are plain dictionaries in the on-disk JSON shape (see docs/specs/004-simple-view/design.md):
 ## `{title, groups: [{id, title, rect}], controls: [{kind, params, rect, group?, label?, unit?, stages?}]}`
 ## with `rect` = `[col, row, w, h]` in cells.
@@ -7,8 +8,10 @@
 class_name SimpleLayout extends RefCounted
 
 const VERSION := 1
-const DEFAULT_COLUMNS := 6
 const DEFAULT_ROWS := 4
+## Widest a generated page gets, in cells, before its groups continue on another page. Also
+## where parameters added to an existing layout stop filling the last page.
+const MAX_PAGE_COLUMNS := 24
 ## Title of pages added for parameters the layout didn't mention.
 const OVERFLOW_PAGE_TITLE := "More"
 
@@ -18,7 +21,8 @@ var device_id: String = ""
 var kind: String = "generic"
 ## False once a user edit has been saved.
 var generated: bool = true
-var columns: int = DEFAULT_COLUMNS
+## `SimpleLayoutGenerator.VERSION` that generated the layout (1 for files from before it was saved).
+var generator_version: int = 1
 var rows: int = DEFAULT_ROWS
 var pages: Array[Dictionary] = []
 
@@ -34,7 +38,8 @@ static func from_dict(data: Variant) -> SimpleLayout:
 	if not _is_number(data.get("version")) or int(data.version) != VERSION:
 		return null
 	var grid: Variant = data.get("grid")
-	if not grid is Dictionary or not _is_number(grid.get("columns")) or not _is_number(grid.get("rows")):
+	# Files from before pages grew sideways also carry `grid.columns`; it's ignored.
+	if not grid is Dictionary or not _is_number(grid.get("rows")):
 		return null
 	var raw_pages: Variant = data.get("pages")
 	if not raw_pages is Array:
@@ -44,7 +49,7 @@ static func from_dict(data: Variant) -> SimpleLayout:
 	layout.device_id = str(data.get("device_id", ""))
 	layout.kind = str(data.get("kind", "generic"))
 	layout.generated = bool(data.get("generated", true))
-	layout.columns = maxi(1, int(grid.columns))
+	layout.generator_version = int(data.generator) if _is_number(data.get("generator")) else 1
 	layout.rows = maxi(1, int(grid.rows))
 	for raw_page in raw_pages:
 		var page := _page_from_dict(raw_page)
@@ -61,7 +66,8 @@ func to_dict() -> Dictionary:
 		"device_id": device_id,
 		"kind": kind,
 		"generated": generated,
-		"grid": {"columns": columns, "rows": rows},
+		"generator": generator_version,
+		"grid": {"rows": rows},
 		"pages": pages.duplicate(true),
 	}
 
@@ -123,7 +129,7 @@ static func _int_array(a: Array) -> Array:
 func validate() -> Array[String]:
 	var problems: Array[String] = []
 	for page_index in range(pages.size()):
-		var occ := GridPacker.Occupancy.new(columns, rows)
+		var occ := GridPacker.Occupancy.new(0, rows)
 		for control in pages[page_index].controls:
 			var rect := GridPacker.rect_from_array(control.rect)
 			var where := "page %d control %s at %s" % [page_index, control.params, control.rect]
@@ -132,8 +138,8 @@ func validate() -> Array[String]:
 			elif control.params.size() != SimpleControlKinds.control_param_count(control):
 				problems.append("%s: %s needs %d params" % [where, control.kind, SimpleControlKinds.control_param_count(control)])
 			if rect.size.x < 1 or rect.size.y < 1 or rect.position.x < 0 or rect.position.y < 0 \
-					or rect.end.x > columns or rect.end.y > rows:
-				problems.append("%s: outside the %d×%d grid" % [where, columns, rows])
+					or rect.end.y > rows:
+				problems.append("%s: outside the %d-row grid" % [where, rows])
 			elif not occ.is_free(rect):
 				problems.append("%s: overlaps another control" % where)
 			else:
@@ -155,12 +161,12 @@ func param_ids() -> Array[int]:
 func find_free_rect(page_index: int, w: int, h: int) -> Array:
 	if page_index < 0 or page_index >= pages.size():
 		return []
-	var rect := _occupancy(pages[page_index]).find_free(GridPacker.clamp_size(Vector2i(w, h), columns, rows))
+	var rect := _occupancy(pages[page_index]).find_free(GridPacker.clamp_size(Vector2i(w, h), 0, rows))
 	return [] if rect == GridPacker.NONE else GridPacker.rect_to_array(rect)
 
 
 func _occupancy(page: Dictionary) -> GridPacker.Occupancy:
-	var occ := GridPacker.Occupancy.new(columns, rows)
+	var occ := GridPacker.Occupancy.new(0, rows)
 	for control in page.controls:
 		occ.mark(GridPacker.rect_from_array(control.rect))
 	return occ
@@ -170,19 +176,18 @@ func _occupancy(page: Dictionary) -> GridPacker.Occupancy:
 ## EDITS
 ## ============================================================================
 
-## Change the grid size (REQ-010). Controls that still fit stay put; the rest move to the next
-## free space on their page or a later one, with pages added at the end as needed.
-func resize_grid(new_columns: int, new_rows: int) -> void:
-	columns = maxi(1, new_columns)
+## Change the row count (REQ-010). Controls that still fit stay put; the rest (and controls
+## taller than the new row count, which shrink to it) move to the next free space on their page,
+## which grows sideways as needed.
+func set_rows(new_rows: int) -> void:
 	rows = maxi(1, new_rows)
-	var pending: Array[Dictionary] = []
 	for page in pages:
-		var occ := GridPacker.Occupancy.new(columns, rows)
+		var occ := GridPacker.Occupancy.new(0, rows)
 		var kept: Array = []
 		var overflow: Array[Dictionary] = []
 		for control in page.controls:
 			var rect := GridPacker.rect_from_array(control.rect)
-			rect.size = GridPacker.clamp_size(rect.size, columns, rows)
+			rect.size = GridPacker.clamp_size(rect.size, 0, rows)
 			control.rect = GridPacker.rect_to_array(rect)
 			if occ.is_free(rect):
 				occ.mark(rect)
@@ -190,30 +195,18 @@ func resize_grid(new_columns: int, new_rows: int) -> void:
 			else:
 				overflow.append(control)
 		page.controls = kept
-		pending.append_array(overflow)
-		pending = _place_where_free(page, occ, pending)
-	while not pending.is_empty():
-		var page := _append_page(pages[-1].title if not pages.is_empty() else OVERFLOW_PAGE_TITLE)
-		var before := pending.size()
-		pending = _place_where_free(page, _occupancy(page), pending)
-		if pending.size() == before:
-			break  # unreachable: sizes are clamped to the grid
+		_place_where_free(page, occ, overflow)
 	refresh_groups()
 
 
-## Place `controls` first-fit on `page`; returns the ones that didn't fit.
-func _place_where_free(page: Dictionary, occ: GridPacker.Occupancy, controls: Array[Dictionary]) -> Array[Dictionary]:
-	var left: Array[Dictionary] = []
+## Place `controls` first-fit on `page` (whose occupancy is `occ`).
+func _place_where_free(page: Dictionary, occ: GridPacker.Occupancy, controls: Array[Dictionary]) -> void:
 	for control in controls:
-		var size := GridPacker.clamp_size(Vector2i(control.rect[2], control.rect[3]), columns, rows)
+		var size := GridPacker.clamp_size(Vector2i(control.rect[2], control.rect[3]), 0, rows)
 		var rect := occ.find_free(size)
-		if rect == GridPacker.NONE:
-			left.append(control)
-			continue
 		occ.mark(rect)
 		control.rect = GridPacker.rect_to_array(rect)
 		page.controls.append(control)
-	return left
 
 
 func _append_page(title: String) -> Dictionary:
@@ -223,7 +216,7 @@ func _append_page(title: String) -> Dictionary:
 
 
 ## Recompute each page's group rects as the bounds of the controls in that group. Groups with no
-## controls on a page are kept when they still fit the grid; groups that controls moved onto a
+## controls on a page are kept when they still fit the rows; groups that controls moved onto a
 ## page are added with their existing title.
 func refresh_groups() -> void:
 	var titles := {}
@@ -246,7 +239,7 @@ func refresh_groups() -> void:
 				groups.append(group)
 			else:
 				var rect := GridPacker.rect_from_array(group.rect)
-				if rect.end.x <= columns and rect.end.y <= rows:
+				if rect.end.y <= rows:
 					groups.append(group)
 		for gid in bounds:
 			groups.append({"id": gid, "title": titles.get(gid, gid), "rect": GridPacker.rect_to_array(bounds[gid])})
@@ -300,13 +293,14 @@ func reconcile(params: Array) -> Dictionary:
 	return {"removed": removed, "added": added}
 
 
-## Put a generated `{kind, params}` item on the last page, or a new one when it's full.
+## Put a generated `{kind, params}` item on the last page, or a new one when the last page is
+## already `MAX_PAGE_COLUMNS` wide.
 func _place_on_last_page(item: Dictionary) -> void:
-	var size := GridPacker.clamp_size(SimpleControlKinds.footprint(item.kind), columns, rows)
+	var size := GridPacker.clamp_size(SimpleControlKinds.footprint(item.kind), MAX_PAGE_COLUMNS, rows)
 	var page: Dictionary = pages[-1] if not pages.is_empty() else _append_page(OVERFLOW_PAGE_TITLE)
 	var occ := _occupancy(page)
 	var rect := occ.find_free(size)
-	if rect == GridPacker.NONE:
+	if rect.end.x > MAX_PAGE_COLUMNS and not occ.is_empty():
 		page = _append_page(OVERFLOW_PAGE_TITLE)
 		rect = Rect2i(Vector2i.ZERO, size)
 	page.controls.append(GridPacker.make_control(item, rect, ""))

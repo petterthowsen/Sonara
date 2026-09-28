@@ -5,6 +5,7 @@ extends TestBase
 
 
 const DRAGONFLY_FIXTURE := "res://tests/fixtures/simple_view/dragonfly_hall_params.json"
+const APRICOT_FIXTURE := "res://tests/fixtures/simple_view/apricot_params.json"
 
 
 func suite_name() -> String:
@@ -14,13 +15,18 @@ func suite_name() -> String:
 func run_tests() -> void:
 	_test_kind_inference()
 	_test_control_kinds()
+	_test_integer_enum_spinbox()
 	_test_hidden_readonly_excluded()
 	_test_compounds()
 	_test_grouping_module_and_role()
+	_test_name_sections()
 	_test_main_page_importance()
+	_test_pages_grow_sideways()
+	_test_group_blocks_and_columns()
 	_test_no_overlap_in_bounds()
 	_test_generate_500_params_under_100ms()
 	_test_dragonfly_hall_fixture()
+	_test_apricot_fixture()
 
 
 ## ----------------------------------------------------------------------------
@@ -122,6 +128,25 @@ func _test_control_kinds() -> void:
 	_assert(kinds == ["toggle", "segmented", "dropdown", "knob", "toggle"], "bool/4-enum/12-enum/float/2-enum kinds: %s" % [kinds])
 
 
+func _labels_enum(id: int, name: String, labels: Array[String]) -> DeviceParameter:
+	var p := DeviceParameter.new(id, name)
+	p.param_type = "enum"
+	p.enum_values = labels
+	return p
+
+
+func _test_integer_enum_spinbox() -> void:
+	var octave := _labels_enum(0, "Osc A Octave", ["-2", "-1", "0", "+1", "+2"])
+	_assert(ParamClassifier.is_integer_enum(octave), "-2…+2 labels are an integer enum")
+	_assert(ParamClassifier.control_kind(octave) == SimpleControlKinds.SPINBOX, "an integer enum gets a spin box")
+	_assert(not ParamClassifier.is_integer_enum(_labels_enum(1, "Gap", ["1", "2", "4"])),
+		"non-consecutive numbers are not an integer enum")
+	_assert(not ParamClassifier.is_integer_enum(_labels_enum(2, "Mixed", ["1", "2", "Three"])),
+		"a non-numeric label is not an integer enum")
+	_assert(ParamClassifier.control_kind(_labels_enum(3, "Bit", ["0", "1"])) == SimpleControlKinds.TOGGLE,
+		"a two-value integer enum stays a toggle")
+
+
 func _test_hidden_readonly_excluded() -> void:
 	var hidden := _float(1, "Hidden")
 	hidden.is_hidden = true
@@ -205,6 +230,55 @@ func _test_grouping_module_and_role() -> void:
 	_assert(not SimpleLayoutGenerator.modules_group_parameters(_items(flat)), "one flat module per parameter isn't grouping")
 
 
+## Section title and label NameSections gives each item, keyed by the item's first param id.
+func _sections(params: Array, kind := DeviceKind.GENERIC) -> Dictionary:
+	var items := _items(params, kind)
+	var found := NameSections.find(items)
+	var out := {}
+	for item in items:
+		if found.has(item.index):
+			out[item.params[0]] = [found[item.index].title, found[item.index].label]
+	return out
+
+
+func _test_name_sections() -> void:
+	var osc := _sections([_float(0, "Oscillator 1 Volume"), _float(1, "Oscillator 2 Volume"),
+		_float(2, "Oscillator 1 Fine Pitch"), _float(3, "Oscillator 2 Fine Pitch")])
+	_assert(osc.get(0) == ["Oscillator 1", "Volume"] and osc.get(2) == ["Oscillator 1", "Fine Pitch"]
+		and osc.get(3) == ["Oscillator 2", "Fine Pitch"], "numbered family: one section per instance, short labels %s" % [osc])
+
+	var glued := _sections([_float(0, "Osc1 Level"), _float(1, "Osc1 Tune"), _float(2, "Osc2 Level"), _float(3, "Osc2 Tune")])
+	_assert(glued.get(1) == ["Osc1", "Tune"] and glued.get(2) == ["Osc2", "Level"], "glued numbers split too %s" % [glued])
+
+	var steps: Array = []
+	for i in range(16):
+		steps.append(_float(i, "Step %d Pitch" % (i + 1)))
+	var seq := _sections(steps)
+	_assert(seq.get(2) == ["Step", "Pitch 3"], "many thin instances: one section, numbered labels %s" % [seq.get(2)])
+
+	var words := _sections([_float(0, "Filter Cutoff"), _float(1, "Filter Key Track"), _float(2, "Matrix Amount 1"),
+		_float(3, "Matrix Amount 2"), _float(4, "Pitch Bend Up"), _float(5, "Pitch Bend Down")])
+	_assert(words.get(1) == ["Filter", "Key Track"], "shared first word forms a section %s" % [words.get(1)])
+	_assert(words.get(3) == ["Matrix", "Amount 2"], "a numbered list keeps a word in its label %s" % [words.get(3)])
+	_assert(words.get(5) == ["Pitch Bend", "Down"], "the longest shared prefix is the section %s" % [words.get(5)])
+
+	var knobs: Array = []
+	for i in range(10):
+		knobs.append(_float(i, "Knob %d" % i))
+	_assert(_sections(knobs).is_empty(), "'Knob N' alone isn't a section")
+	_assert(_sections([_float(0, "Dry Level"), _float(1, "Wet Level"), _float(2, "Low Cut"), _float(3, "Size")]).is_empty(),
+		"names that mostly don't share sections leave grouping to the strategy")
+
+	var amp := [_float(0, "Amp Attack Time"), _float(1, "Amp Decay Time"), _float(2, "Amp Sustain Level"),
+		_float(3, "Amp Release Time"), _float(4, "Amp Gain")]
+	var amp_items := _items(amp, DeviceKind.SYNTH)
+	_assert(amp_items.size() == 2 and amp_items[0].kind == SimpleControlKinds.ENVELOPE,
+		"Attack Time … Sustain Level form an envelope")
+	_assert(_sections(amp, DeviceKind.SYNTH).get(0) == ["Amp", "Envelope"], "a compound in its section is labelled by kind")
+	var lfo := _items([_float(0, "LFO 1 Attack"), _float(1, "LFO 1 Decay"), _float(2, "LFO 1 Sustain")])
+	_assert(lfo[0].label == "LFO 1", "compound labels keep the name's spelling (%s)" % lfo[0].label)
+
+
 func _test_main_page_importance() -> void:
 	var params: Array = []
 	var id := 0
@@ -217,22 +291,99 @@ func _test_main_page_importance() -> void:
 	var reverb := _device("x.rev", "Big Reverb", Device.DeviceCategory.Effect, ["reverb"])
 	var layout := SimpleLayoutGenerator.generate(reverb, params)
 	_check_layout(layout, params, "30+ param reverb")
-	_assert(layout.pages.size() > 1, "reverb spans several pages")
+	_assert(layout.pages.size() == 1, "a 37-param reverb fits on one page that grows sideways (%d pages)" % layout.pages.size())
 	_assert(layout.pages[0].title == "Main", "first page is Main")
 	for n in ["Mix", "Decay", "Size"]:
 		var p := params.filter(func(x): return x.name == n)[0] as DeviceParameter
 		_assert(_find(layout, p.id).get("page", -1) == 0, "reverb %s on page 1" % n)
-	_assert(_find(layout, 0).get("page", -1) != 0, "unimportant parameter not on Main")
+	var mix_x := int(_find(layout, params.filter(func(x): return x.name == "Mix")[0].id).control.rect[0])
+	var extra_x := int(_find(layout, 0).control.rect[0])
+	_assert(mix_x < extra_x, "the important Mix group sits left of the unimportant extras (%d vs %d)" % [mix_x, extra_x])
 
 	var synth_params: Array = []
 	for i in range(100):
 		synth_params.append(_float(i, ["Cutoff", "Osc Wave", "LFO Rate", "Volume", "Thing"][i % 5] + " %d" % i))
 	var synth := SimpleLayoutGenerator.generate(_device("x.syn", "Syn", Device.DeviceCategory.Instrument), synth_params)
 	_check_layout(synth, synth_params, "100-param synth")
-	var cells := 0
-	for c in synth.pages[0].controls:
-		cells += int(c.rect[2]) * int(c.rect[3])
-	_assert(cells <= synth.columns * synth.rows, "synth page 1 holds at most one grid of cells (%d)" % cells)
+	_assert(synth.pages[0].title == "Main", "synth starts on Main")
+	_assert(_find(synth, 0).get("page", -1) == 0, "cutoff on Main")
+	var lfo_page: int = _find(synth, 2).get("page", -1)
+	_assert(lfo_page > 0 and synth.pages[lfo_page].title == "Modulation", "LFO rate on the Modulation page")
+	_assert(_find(synth, 1).get("page", -1) == 0, "oscillator on Main")
+	_check_page_widths(synth, "100-param synth")
+
+
+## Pages are at most `MAX_PAGE_COLUMNS` wide and have distinct titles.
+func _check_page_widths(layout: SimpleLayout, what: String) -> void:
+	var titles := {}
+	for page in layout.pages:
+		var right := 0
+		for c in page.controls:
+			right = maxi(right, int(c.rect[0]) + int(c.rect[2]))
+		_assert(right <= SimpleLayout.MAX_PAGE_COLUMNS, "%s: page '%s' is %d columns wide" % [what, page.title, right])
+		_assert(not titles.has(page.title), "%s: page title '%s' used once" % [what, page.title])
+		titles[page.title] = true
+
+
+## Small groups share a page side by side; a group too big for one page continues on the next,
+## with a distinct title.
+func _test_pages_grow_sideways() -> void:
+	var small := [_float(0, "Mix"), _float(1, "Output"), _float(2, "Freq"), _float(3, "Reso"),
+		_float(4, "Time"), _float(5, "Rate"), _float(6, "Thing")]
+	var layout := SimpleLayoutGenerator.generate(_device("x.small", "Small Groups"), small)
+	_check_layout(layout, small, "small groups")
+	_assert(layout.pages.size() == 1, "five small groups share one page (%d pages)" % layout.pages.size())
+	_assert(layout.pages[0].groups.size() == 5, "every group keeps its own box (%d)" % layout.pages[0].groups.size())
+
+	var many: Array = []
+	for i in range(150):
+		many.append(_float(i, "Knob %d" % i))
+	var big := SimpleLayoutGenerator.generate(_device("x.big", "Big Generic"), many)
+	_check_layout(big, many, "150-knob group")
+	_assert(big.pages.size() == 2, "150 knobs need two 24×4 pages (%d)" % big.pages.size())
+	_assert(big.pages[0].title == "Main" and big.pages[1].title == "Controls",
+		"the continuation is titled after its group: %s" % [big.pages.map(func(p): return p.title)])
+	_check_page_widths(big, "150-knob group")
+
+	var huge: Array = []
+	for i in range(300):
+		huge.append(_float(i, "Knob %d" % i))
+	var three := SimpleLayoutGenerator.generate(_device("x.huge", "Huge Generic"), huge)
+	_check_page_widths(three, "300-knob group")
+	_assert(three.pages.size() == 4 and three.pages[2].title == "Controls 2",
+		"repeated continuation titles are numbered: %s" % [three.pages.map(func(p): return p.title)])
+
+
+func _knob_sizes(n: int) -> Array[Vector2i]:
+	var sizes: Array[Vector2i] = []
+	for i in range(n):
+		sizes.append(Vector2i(1, 1))
+	return sizes
+
+
+## Group blocks: a few knobs take one row, more take two rows, big groups the full height; blocks
+## stack in columns in order.
+func _test_group_blocks_and_columns() -> void:
+	_assert(GridPacker.group_block(_knob_sizes(4), 4, 24).size == Vector2i(4, 1), "4 knobs → one row")
+	_assert(GridPacker.group_block(_knob_sizes(8), 4, 24).size == Vector2i(4, 2), "8 knobs → 4×2")
+	_assert(GridPacker.group_block(_knob_sizes(32), 4, 24).size == Vector2i(8, 4), "32 knobs → 8×4")
+	var env: Array[Vector2i] = [Vector2i(3, 2), Vector2i(1, 1)]
+	_assert(GridPacker.group_block(env, 4, 24).size == Vector2i(4, 2), "envelope + knob → 4×2")
+	_assert(GridPacker.group_block(_knob_sizes(6), 1, 24).size == Vector2i(6, 1), "a one-row page gets one-row blocks")
+
+	var groups: Array = []
+	for g in [["A", 8], ["B", 8], ["C", 2], ["D", 2], ["E", 2]]:
+		var items: Array = []
+		for i in range(g[1]):
+			items.append({"kind": SimpleControlKinds.KNOB, "params": [groups.size() * 100 + i]})
+		groups.append({"id": g[0], "title": g[0], "page": "", "items": items})
+	var page: Dictionary = GridPacker.pack_pages(groups, 4, 24)[0]
+	var rects := {}
+	for g in page.groups:
+		rects[g.id] = g.rect
+	_assert(rects.A == [0, 0, 4, 2] and rects.B == [0, 2, 4, 2], "A and B stack in the first column %s" % [rects])
+	_assert(rects.C == [4, 0, 2, 1] and rects.D == [4, 1, 2, 1] and rects.E == [4, 2, 2, 1],
+		"small groups stack in the next column, in order %s" % [rects])
 
 
 func _test_no_overlap_in_bounds() -> void:
@@ -259,13 +410,12 @@ func _test_no_overlap_in_bounds() -> void:
 			params.append(p)
 		var kind: String = kinds[iteration % kinds.size()]
 		var device := _device("x.rand", kind, Device.DeviceCategory.Effect, [])
-		var cols := rng.randi_range(2, 8)
-		var rows := rng.randi_range(2, 6)
-		var layout := SimpleLayoutGenerator.generate(device, params, cols, rows)
+		var rows := rng.randi_range(1, 6)
+		var layout := SimpleLayoutGenerator.generate(device, params, rows)
 		_assert(layout.kind == kind, "random set %d: generated as %s" % [iteration, kind])
 		var problems := layout.validate()
 		if not problems.is_empty() or iteration % 10 == 0:
-			_check_layout(layout, params, "random set %d (%d params, %d×%d)" % [iteration, params.size(), cols, rows])
+			_check_layout(layout, params, "random set %d (%d params, %d rows)" % [iteration, params.size(), rows])
 		else:
 			var ids := layout.param_ids()
 			var visible := params.filter(func(p): return ParamClassifier.is_visible(p)).size()
@@ -273,7 +423,7 @@ func _test_no_overlap_in_bounds() -> void:
 		for page in layout.pages:
 			for g in page.groups:
 				var r := GridPacker.rect_from_array(g.rect)
-				_assert(r.position.x >= 0 and r.position.y >= 0 and r.end.x <= cols and r.end.y <= rows,
+				_assert(r.position.x >= 0 and r.position.y >= 0 and r.end.x <= SimpleLayout.MAX_PAGE_COLUMNS and r.end.y <= rows,
 					"random set %d: group rect in bounds" % iteration)
 	# Each strategy on the same random-ish names.
 	for kind in kinds:
@@ -283,7 +433,7 @@ func _test_no_overlap_in_bounds() -> void:
 		var strategy := SimpleLayoutGenerator.strategy_for(kind)
 		var items := CompoundDetector.detect(ParamClassifier.classify(params, strategy))
 		var layout := SimpleLayout.new()
-		layout.pages = SimpleLayoutGenerator.build_pages(items, strategy, 6, 4)
+		layout.pages = SimpleLayoutGenerator.build_pages(items, strategy, 4)
 		_check_layout(layout, params, "%s strategy" % kind)
 
 
@@ -329,3 +479,54 @@ func _test_dragonfly_hall_fixture() -> void:
 	for n in ["Dry Level", "Decay", "Size"]:
 		_assert(by_name[n].page == 0, "%s on the Main page" % n)
 	_assert(layout.pages[0].title == "Main", "first page titled Main")
+
+
+func _test_apricot_fixture() -> void:
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(APRICOT_FIXTURE))
+	_assert(data is Dictionary, "Apricot fixture loads")
+	if not data is Dictionary:
+		return
+	var features: Array[String] = []
+	features.assign(data.device.features)
+	var device := _device(data.device.id, data.device.name, Device.DeviceCategory.Instrument, features)
+	var params: Array = []
+	var by_id := {}
+	for p in data.params:
+		var param := _float(int(p.id), p.name, "", p.min, p.max)
+		param.default_value = p.default
+		param.is_read_only = p.read_only
+		params.append(param)
+		by_id[p.name] = param.id
+	var layout := SimpleLayoutGenerator.generate(device, params)
+	_check_layout(layout, params, "Apricot")
+	_check_page_widths(layout, "Apricot")
+	var titles: Array = layout.pages.map(func(p): return p.title)
+	_assert(titles == ["Main", "Modulation", "Effects", "Arp"], "Apricot pages %s" % [titles])
+
+	var at := func(name: String) -> Dictionary: return _find(layout, by_id[name])
+	var osc1: Dictionary = at.call("Oscillator 1 Volume")
+	_assert(osc1.group_title == "Oscillator 1" and osc1.control.get("label") == "Volume" and osc1.page == 0,
+		"Oscillator 1 Volume → 'Volume' in Oscillator 1 on Main (%s)" % [osc1])
+	_assert(at.call("Oscillator 2 Unison Voices").group_title == "Oscillator 2", "oscillators get a group each")
+	_assert(at.call("Filter Cutoff").control.get("label") == "Cutoff", "Filter Cutoff → 'Cutoff'")
+	var amp: Dictionary = at.call("Amp Attack Time")
+	_assert(amp.control.kind == SimpleControlKinds.ENVELOPE and amp.group_title == "Amp", "amp ADSR is an envelope in Amp")
+	var env2: Dictionary = at.call("Mod Env 2 Decay Time")
+	_assert(env2.group_title == "Mod Env 2" and layout.pages[env2.page].title == "Modulation", "Mod Env 2 on Modulation")
+	_assert(at.call("LFO 1 Rate").group_title == "LFO 1", "LFO 1 group")
+	_assert(at.call("Matrix Amount 3").control.get("label") == "Amount 3", "matrix amounts keep their number")
+	var delay: Dictionary = at.call("Delay Feedback")
+	_assert(delay.group_title == "Delay" and layout.pages[delay.page].title == "Effects", "Delay group on Effects")
+	_assert(at.call("EQ Low Gain").group_title == "EQ", "EQ group")
+
+	var osc1_rect: Array = layout.pages[0].groups.filter(func(g): return g.title == "Oscillator 1")[0].rect
+	var osc2_rect: Array = layout.pages[0].groups.filter(func(g): return g.title == "Oscillator 2")[0].rect
+	_assert(osc1_rect[2] == 4 and osc1_rect[3] == 2 and osc2_rect[0] == osc1_rect[0] and osc2_rect[1] == osc1_rect[1] + 2,
+		"Oscillator 2 sits right under Oscillator 1, both 4×2 (%s, %s)" % [osc1_rect, osc2_rect])
+
+	# Oscillator 1, 2, 3 sit together, in order.
+	var main: Dictionary = layout.pages[0]
+	var order: Array = main.groups.map(func(g): return g.title)
+	var first := order.find("Oscillator 1")
+	_assert(first >= 0 and order.slice(first, first + 3) == ["Oscillator 1", "Oscillator 2", "Oscillator 3"],
+		"oscillator sections stay together %s" % [order])

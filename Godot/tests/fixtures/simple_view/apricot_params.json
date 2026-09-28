@@ -1,0 +1,1866 @@
+{
+	"_comment": "Dumped from `plugin_host --probe ~/.clap/nakst/Apricot.clap` (Apricot 1.1.34). No module paths; many switches are flagged read-only by the plugin.",
+	"device": {
+		"id": "nakst.Apricot",
+		"name": "Apricot",
+		"category": "Instrument",
+		"device_type": "CLAP",
+		"features": [
+			"instrument",
+			"synthesizer",
+			"stereo"
+		]
+	},
+	"params": [
+		{
+			"id": 0,
+			"name": "Master Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.65,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 1,
+			"name": "Master Mono",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 2,
+			"name": "Master Octave",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.25,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 3,
+			"name": "Maximum Polyphonic Voices",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 4,
+			"name": "Bypass FX",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 5,
+			"name": "Velocity to Amp",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 6,
+			"name": "Portamento Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 7,
+			"name": "Always Glide",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 8,
+			"name": "Legato",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 9,
+			"name": "Unused",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 10,
+			"name": "Oscillator 1 Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 11,
+			"name": "Oscillator 2 Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 12,
+			"name": "Oscillator 3 Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 13,
+			"name": "Sampler Volume",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 14,
+			"name": "Oscillator 1 Coarse Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 15,
+			"name": "Oscillator 2 Coarse Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 16,
+			"name": "Oscillator 3 Coarse Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 17,
+			"name": "Sampler Coarse Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 18,
+			"name": "Oscillator 1 Waveform",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 19,
+			"name": "Oscillator 2 Waveform",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 20,
+			"name": "Oscillator 3 Waveform",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 21,
+			"name": "Oscillator 1 Pan",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 22,
+			"name": "Oscillator 2 Pan",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 23,
+			"name": "Oscillator 1 Phase",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 24,
+			"name": "Oscillator 2 Phase",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 25,
+			"name": "Oscillator 1 Fine Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 26,
+			"name": "Oscillator 2 Fine Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 27,
+			"name": "Oscillator 1 Unison Detune",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 28,
+			"name": "Oscillator 2 Unison Detune",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 29,
+			"name": "Oscillator 1 Unison Stereo",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 30,
+			"name": "Oscillator 2 Unison Stereo",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 31,
+			"name": "Oscillator 1 Unison Voices",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 32,
+			"name": "Oscillator 2 Unison Voices",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 33,
+			"name": "Oscillator 1 Invert",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 34,
+			"name": "Oscillator 2 Invert",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 35,
+			"name": "Oscillator 1 Retrigger",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 36,
+			"name": "Oscillator 2 Retrigger",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 37,
+			"name": "Sampler Key Track",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 38,
+			"name": "Sampler One-Shot",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 39,
+			"name": "Filter Cutoff",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 40,
+			"name": "Filter Resonance",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 41,
+			"name": "Filter Drive",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 42,
+			"name": "Filter Key Track",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 43,
+			"name": "Filter Mode",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 44,
+			"name": "Filter 24dB/oct",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 45,
+			"name": "Filter Warm",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 46,
+			"name": "Filter Input 1",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 47,
+			"name": "Filter Input 2",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 48,
+			"name": "Filter Input 3",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 49,
+			"name": "Filter Input S",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 50,
+			"name": "Amp Attack Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.145,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 51,
+			"name": "Amp Decay Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 52,
+			"name": "Amp Release Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.175,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 53,
+			"name": "Amp Sustain Level",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 54,
+			"name": "Amp Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.65,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 55,
+			"name": "Unused1",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 56,
+			"name": "Unused2",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 57,
+			"name": "Unused3",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 58,
+			"name": "Mod Env 1 Attack Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 59,
+			"name": "Mod Env 1 Decay Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 60,
+			"name": "Mod Env 1 Release Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.8,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 61,
+			"name": "Mod Env 1 Sustain Level",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 62,
+			"name": "Mod Env 1 Assignment 1 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 63,
+			"name": "Mod Env 1 Assignment 2 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 64,
+			"name": "Mod Env 1 Assignment 1 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 65,
+			"name": "Mod Env 1 Assignment 2 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 66,
+			"name": "Mod Env 2 Attack Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 67,
+			"name": "Mod Env 2 Decay Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 68,
+			"name": "Mod Env 2 Release Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.8,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 69,
+			"name": "Mod Env 2 Sustain Level",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 70,
+			"name": "Mod Env 2 Assignment 1 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 71,
+			"name": "Mod Env 2 Assignment 2 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 72,
+			"name": "Mod Env 2 Assignment 1 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 73,
+			"name": "Mod Env 2 Assignment 2 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 74,
+			"name": "LFO 1 Rate",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5926,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 75,
+			"name": "LFO 1 Fade In Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 76,
+			"name": "LFO 1 Wave",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 77,
+			"name": "LFO 1 Rate Tempo Sync",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 78,
+			"name": "LFO 1 Free",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 79,
+			"name": "LFO 1 Assignment 1 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 80,
+			"name": "LFO 1 Assignment 2 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 81,
+			"name": "LFO 1 Assignment 1 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 82,
+			"name": "LFO 1 Assignment 2 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 83,
+			"name": "LFO 2 Rate",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5926,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 84,
+			"name": "LFO 2 Fade In Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 85,
+			"name": "LFO 2 Wave",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 86,
+			"name": "LFO 2 Rate Tempo Sync",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 87,
+			"name": "LFO 2 Free",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 88,
+			"name": "LFO 2 Assignment 1 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 89,
+			"name": "LFO 2 Assignment 2 Destination",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 90,
+			"name": "LFO 2 Assignment 1 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 91,
+			"name": "LFO 2 Assignment 2 Amount",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 92,
+			"name": "Matrix Source 1",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 93,
+			"name": "Matrix Source 2",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 94,
+			"name": "Matrix Source 3",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 95,
+			"name": "Matrix Source 4",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 96,
+			"name": "Matrix Destination 1",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 97,
+			"name": "Matrix Destination 2",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 98,
+			"name": "Matrix Destination 3",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 99,
+			"name": "Matrix Destination 4",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 100,
+			"name": "Matrix Destination 5",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 101,
+			"name": "Matrix Destination 6",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 102,
+			"name": "Matrix Destination 7",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 103,
+			"name": "Matrix Destination 8",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 104,
+			"name": "Matrix Amount 1",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 105,
+			"name": "Matrix Amount 2",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 106,
+			"name": "Matrix Amount 3",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 107,
+			"name": "Matrix Amount 4",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 108,
+			"name": "Matrix Amount 5",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 109,
+			"name": "Matrix Amount 6",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 110,
+			"name": "Matrix Amount 7",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 111,
+			"name": "Matrix Amount 8",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 112,
+			"name": "Delay Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 113,
+			"name": "Delay Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.48,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 114,
+			"name": "Delay Mix",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.33,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 115,
+			"name": "Delay Feedback",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 116,
+			"name": "Delay Damp",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.23,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 117,
+			"name": "Delay High Pass",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.15,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 118,
+			"name": "Delay Ping-Pong Ratio",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 119,
+			"name": "Delay Modulate",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 120,
+			"name": "Phaser Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 121,
+			"name": "Phaser Steps",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 122,
+			"name": "Phaser Feedback",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.8889,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 123,
+			"name": "Phaser Mix",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 124,
+			"name": "Phaser Base Frequency",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.41,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 125,
+			"name": "Phaser LFO Rate",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.2,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 126,
+			"name": "Phaser LFO Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.56,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 127,
+			"name": "Phaser Stereo",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.2,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 128,
+			"name": "EQ Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 129,
+			"name": "EQ Mid Frequency",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 130,
+			"name": "EQ Mid Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 131,
+			"name": "EQ Mid Band Width",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 132,
+			"name": "EQ Low Frequency",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 133,
+			"name": "EQ Low Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 134,
+			"name": "EQ High Frequency",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 135,
+			"name": "EQ High Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 136,
+			"name": "Reverb Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 137,
+			"name": "Reverb Mix",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.13,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 138,
+			"name": "Reverb Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.66,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 139,
+			"name": "Reverb Algorithm",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 140,
+			"name": "Reverb Predelay",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 141,
+			"name": "Distortion Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 142,
+			"name": "Distortion Pre Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 143,
+			"name": "Distortion Post Gain",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 144,
+			"name": "Distortion Algorithm",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 145,
+			"name": "Arp Enable",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 146,
+			"name": "Arp Mode",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.25,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 147,
+			"name": "Arp Gate",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.75,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 148,
+			"name": "Arp Time",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0001,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 149,
+			"name": "Arp Range",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.25,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 150,
+			"name": "Arp Retrigger Envelopes",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 1.0,
+			"type": "float",
+			"module": "",
+			"read_only": true
+		},
+		{
+			"id": 151,
+			"name": "Sequence Step 1 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 152,
+			"name": "Sequence Step 2 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 153,
+			"name": "Sequence Step 3 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 154,
+			"name": "Sequence Step 4 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 155,
+			"name": "Sequence Step 5 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 156,
+			"name": "Sequence Step 6 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 157,
+			"name": "Sequence Step 7 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 158,
+			"name": "Sequence Step 8 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 159,
+			"name": "Sequence Step 9 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 160,
+			"name": "Sequence Step 10 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 161,
+			"name": "Sequence Step 11 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 162,
+			"name": "Sequence Step 12 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 163,
+			"name": "Sequence Step 13 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 164,
+			"name": "Sequence Step 14 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 165,
+			"name": "Sequence Step 15 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 166,
+			"name": "Sequence Step 16 Pitch",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.5,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 167,
+			"name": "Sequence Step 1 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 168,
+			"name": "Sequence Step 2 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 169,
+			"name": "Sequence Step 3 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 170,
+			"name": "Sequence Step 4 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 171,
+			"name": "Sequence Step 5 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 172,
+			"name": "Sequence Step 6 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 173,
+			"name": "Sequence Step 7 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 174,
+			"name": "Sequence Step 8 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 175,
+			"name": "Sequence Step 9 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 176,
+			"name": "Sequence Step 10 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 177,
+			"name": "Sequence Step 11 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 178,
+			"name": "Sequence Step 12 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 179,
+			"name": "Sequence Step 13 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 180,
+			"name": "Sequence Step 14 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 181,
+			"name": "Sequence Step 15 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 182,
+			"name": "Sequence Step 16 Style",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.4,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 183,
+			"name": "Pitch Bend Up Range",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0417,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		},
+		{
+			"id": 184,
+			"name": "Pitch Bend Down Range",
+			"min": 0.0,
+			"max": 1.0,
+			"default": 0.0417,
+			"type": "float",
+			"module": "",
+			"read_only": false
+		}
+	]
+}

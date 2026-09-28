@@ -70,6 +70,9 @@ var _cc_list: ParameterList
 
 ## Container children slide-out (to the right of params + custom UI)
 var folder: ContainerFolder
+## True while the Parameters tab is open only because the device has no view to show, so it
+## closes again once a view arrives. Any tab click by the user clears it.
+var _params_auto_opened := false
 var _folder_focus: DeviceInstance = null
 
 signal request_context_menu()
@@ -84,6 +87,8 @@ func _ready() -> void:
 	params_button.toggled.connect(_on_tab_toggled.unbind(1))
 	cc_button.toggled.connect(_on_tab_toggled.unbind(1))
 	file_button.toggled.connect(_on_tab_toggled.unbind(1))
+	for tab in [params_button, cc_button, file_button]:
+		tab.pressed.connect(func(): _params_auto_opened = false)
 	view_button.toggled.connect(_on_view_toggled)
 	window_button.toggled.connect(_on_window_toggled)
 	simple_button.toggled.connect(_on_simple_toggled)
@@ -97,9 +102,9 @@ func _ready() -> void:
 	# Inline rename of the device instance via the header's SmartLineEdit
 	name_label.value_changed.connect(_on_name_edited)
 
-	# Initial state: View and Parameters open; panes resolve when binding to a device
+	# Initial state: only the View open. The Parameters tab opens by itself only for a device
+	# with no view (`_apply_default_tab`).
 	view_button.set_pressed_no_signal(true)
-	params_button.set_pressed_no_signal(true)
 	folder_button.visible = false
 	_update_tab_panes()
 
@@ -304,6 +309,7 @@ func bind_to_device(dev : DeviceInstance):
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
 	_update_left_pane_visibility()
+	_apply_default_tab()
 
 
 ## Bind the universal parameter lists (same API for builtins and plugins).
@@ -350,6 +356,23 @@ func _refresh_panel_view_for_params() -> void:
 		await _load_panel_view(device)
 		_show_right_pane_current()
 	_update_view_pane_visibility()
+	_apply_default_tab()
+
+
+## The View is what a device normally shows, so the Parameters tab stays closed. A device with
+## no view (and no tab open) gets its Parameters instead, until a view shows up.
+func _apply_default_tab() -> void:
+	if device == null:
+		return
+	var has_view := _panel_view != null or _companion_view != null
+	if has_view:
+		if _params_auto_opened and params_button.button_pressed:
+			params_button.set_pressed_no_signal(false)
+		_params_auto_opened = false
+	elif params_button.button_group.get_pressed_button() == null and params_button.visible:
+		params_button.set_pressed_no_signal(true)
+		_params_auto_opened = true
+	_update_tab_panes()
 
 
 ## Show/hide the View toggle (any custom or Simple view exists) and the Simple toggle (only when

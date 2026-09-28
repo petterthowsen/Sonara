@@ -17,6 +17,8 @@ const PATTERNS: Array[Dictionary] = [
 
 ## Trailing unit words ignored when finding a parameter's part token ("Attack (ms)").
 const UNIT_TOKENS := ["ms", "s", "sec", "hz", "khz", "db", "pct", "percent"]
+## Trailing words ignored after the unit ("Attack Time", "Sustain Level").
+const SUFFIX_TOKENS := ["time", "level"]
 const TIME_UNITS := ["s", "ms", "sec"]
 ## Envelope time parts without a unit need a range that looks like seconds.
 const MAX_UNITLESS_SECONDS := 60.0
@@ -101,10 +103,13 @@ static func single_item(entry: Dictionary) -> Dictionary:
 	}
 
 
-## `{stem, part}` for a name: the last non-unit token is the part, the tokens before it the stem.
+## `{stem, part}` for a name: the last token that isn't a unit or suffix is the part, the tokens
+## before it the stem.
 static func _stem_and_part(param_name: String) -> Dictionary:
 	var tokens := ParamClassifier.name_tokens(param_name)
 	if tokens.size() > 1 and tokens[-1] in UNIT_TOKENS:
+		tokens.remove_at(tokens.size() - 1)
+	if tokens.size() > 1 and tokens[-1] in SUFFIX_TOKENS:
 		tokens.remove_at(tokens.size() - 1)
 	if tokens.is_empty():
 		return {}
@@ -147,14 +152,22 @@ static func _compound_item(pattern: Dictionary, stem: String, members: Array[Dic
 		importance = maxf(importance, m.importance)
 		if m.index < first.index:
 			first = m
-	var label: String = pattern.label if stem.is_empty() else stem.capitalize()
+	var label: String = pattern.label if stem.is_empty() else _original_stem(first.param.name, stem)
 	return {
 		"kind": pattern.kind,
 		"params": params,
 		"label": label,
 		"name": label,
+		"kind_label": pattern.label,
 		"role": members[0].role,
 		"importance": importance,
 		"module": first.module,
 		"index": first.index,
 	}
+
+
+## `stem` as spelled in `param_name` ("LFO 1 Rate", "lfo 1" → "LFO 1"); all-lowercase names
+## are capitalized instead ("position_x" → "Position").
+static func _original_stem(param_name: String, stem: String) -> String:
+	var original: String = NameSections.prefix(param_name, NameSections.words(param_name), stem.split(" ").size())
+	return original if original != original.to_lower() else stem.capitalize()

@@ -79,6 +79,7 @@ static func save(layout: SimpleLayout) -> bool:
 
 
 ## The layout for `device`: from the cache, else its file, else newly generated and saved.
+## A file the user never edited that older generation rules made is generated again and saved.
 ## A broken file is left untouched and a generated layout is used instead (REQ-017).
 ## Loaded layouts are reconciled with `params` (REQ-016) unless `params` is empty.
 static func load_or_generate(device: Device, params: Array) -> SimpleLayout:
@@ -89,7 +90,13 @@ static func load_or_generate(device: Device, params: Array) -> SimpleLayout:
 		match result.status:
 			LoadStatus.OK:
 				layout = result.layout
-				logger.info("loaded layout for %s from %s" % [device_id, path_for(device_id)])
+				if layout.generated and layout.generator_version < SimpleLayoutGenerator.VERSION:
+					# Never edited, and made by older rules: nothing of the user's to keep.
+					layout = SimpleLayoutGenerator.generate(device, params)
+					if save(layout):
+						logger.info("regenerated outdated layout for %s at %s" % [device_id, path_for(device_id)])
+				else:
+					logger.info("loaded layout for %s from %s" % [device_id, path_for(device_id)])
 			LoadStatus.INVALID:
 				layout = SimpleLayoutGenerator.generate(device, params)
 				logger.warning("Using a generated layout for %s; the broken file was not overwritten" % device_id)

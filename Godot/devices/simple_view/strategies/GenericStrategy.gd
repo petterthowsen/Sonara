@@ -16,7 +16,7 @@ func role_keywords() -> Dictionary:
 		"frequency": ["freq*", "cutoff", "tone", "hz"],
 		"resonance": ["res", "reso", "resonance", "q"],
 		"time": ["time", "attack", "decay", "sustain", "release", "hold", "length"],
-		"modulation": ["rate", "depth", "lfo", "mod*", "speed"],
+		"modulation": ["rate", "depth", "lfo", "mod", "modul*", "speed"],
 	}
 
 
@@ -33,7 +33,8 @@ func role_weights() -> Dictionary:
 	}
 
 
-## Groups in display order: `{id, title, roles}`. Roles not listed go to `OTHER_GROUP`.
+## Groups in display order: `{id, title, roles, page?}`. Roles not listed go to `OTHER_GROUP`.
+## A group with a `page` title goes on that page instead of Main (keep these to broad sections).
 func groups() -> Array[Dictionary]:
 	return [
 		{"id": "output", "title": "Output", "roles": ["mix", "output"]},
@@ -71,3 +72,13 @@ func group_for_role(role: String) -> Dictionary:
 ## device has no module paths. Override for kinds that group by something other than role.
 func group_for_item(item: Dictionary) -> Dictionary:
 	return group_for_role(item.role)
+
+
+## Page title for a generated item: the `page` of the strategy group its role belongs to, or ""
+## for Main.
+func page_for_item(item: Dictionary) -> String:
+	var id: String = group_for_item(item).id
+	for group in groups():
+		if group.id == id:
+			return String(group.get("page", ""))
+	return ""

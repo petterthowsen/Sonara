@@ -1,5 +1,6 @@
 # test_simple_layout_model.gd
-# Headless tests for the Simple View layout model and store (REQ-010, REQ-016, REQ-017).
+# Headless tests for the Simple View layout model and store (REQ-010, REQ-016, REQ-017, and
+# regenerating outdated generated layouts).
 # Run: godot --headless --path Godot -s tests/test_simple_layout_model.gd -- --test
 extends TestBase
 
@@ -19,10 +20,12 @@ func run_tests() -> void:
 	_test_validate_finds_overlap_and_bounds()
 	_test_envelope_stages()
 	_test_find_free_rect()
-	_test_resize_grid_reflows()
+	_test_set_rows_reflows()
+	_test_old_file_with_columns_loads()
 	_test_reconcile_param_changes()
 	_test_corrupt_file_not_overwritten()
 	_test_missing_file_generated_and_saved()
+	_test_outdated_generated_layout_regenerated()
 	_test_path_for_distinct_ids()
 	_test_simple_units()
 	_cleanup()
@@ -85,7 +88,8 @@ func _test_unknown_version_rejected() -> void:
 func _test_validate_finds_overlap_and_bounds() -> void:
 	var layout := _sample_layout()
 	layout.pages[0].controls.append(_control("knob", [10], [0, 0, 1, 1]))
-	layout.pages[0].controls.append(_control("knob", [11], [6, 0, 1, 1]))
+	layout.pages[0].controls.append(_control("knob", [11], [0, 4, 1, 1]))
+	layout.pages[0].controls.append(_control("knob", [13], [40, 0, 1, 1]))  # any width is fine
 	layout.pages[0].controls.append(_control("xy", [12], [0, 3, 2, 1]))
 	var problems := layout.validate()
 	_assert(problems.size() == 3, "overlap, out of bounds and param count reported: %s" % [problems])
@@ -107,31 +111,44 @@ func _test_envelope_stages() -> void:
 
 func _test_find_free_rect() -> void:
 	var layout := _sample_layout()
-	_assert(layout.find_free_rect(0, 1, 1) == [2, 0, 1, 1], "first free 1×1 is after the two knobs")
+	_assert(layout.find_free_rect(0, 1, 1) == [0, 1, 1, 1], "first free 1×1 is below the first knob (pages fill down, then right)")
 	_assert(layout.find_free_rect(0, 3, 2) == [0, 1, 3, 2], "first free 3×2 is below the knobs")
-	_assert(layout.find_free_rect(0, 6, 4) == [], "no room for a full page")
+	_assert(layout.find_free_rect(0, 6, 4) == [6, 0, 6, 4], "a full-height block goes right of everything")
+	_assert(layout.find_free_rect(0, 1, 5) == [2, 0, 1, 4], "a size taller than the rows is clamped to them (the empty column 2)")
 	_assert(layout.find_free_rect(5, 1, 1) == [], "missing page gives []")
 
 
-func _test_resize_grid_reflows() -> void:
+func _test_set_rows_reflows() -> void:
 	var layout := _sample_layout()
 	var before := layout.param_ids()
 	before.sort()
-	layout.resize_grid(4, 4)
+	layout.set_rows(2)
 	var after := layout.param_ids()
 	after.sort()
-	_assert(after == before, "every control kept after 6×4 → 4×4: %s" % [after])
+	_assert(after == before, "every control kept after 4 → 2 rows: %s" % [after])
 	_assert(layout.validate().is_empty(), "no overlaps or out-of-bounds after shrink: %s" % [layout.validate()])
 	_assert(layout.pages[0].controls[0].rect == [0, 0, 1, 1], "a control that still fits stays put")
+	_assert(layout.pages.size() == 1, "the page grows sideways instead of adding pages")
 
 	var tiny := _sample_layout()
-	tiny.resize_grid(2, 2)
-	_assert(tiny.validate().is_empty(), "2×2 shrink is valid: %s" % [tiny.validate()])
-	_assert(tiny.pages.size() >= 2, "overflow adds pages")
+	tiny.set_rows(1)
+	_assert(tiny.validate().is_empty(), "1-row shrink is valid: %s" % [tiny.validate()])
+	_assert(tiny.pages.size() == 1, "still one page")
 	for page in tiny.pages:
 		for g in page.groups:
 			var r := GridPacker.rect_from_array(g.rect)
-			_assert(r.end.x <= 2 and r.end.y <= 2, "group rect inside the 2×2 grid: %s" % [g.rect])
+			_assert(r.end.y <= 1, "group rect inside the one row: %s" % [g.rect])
+
+
+## A file from before pages grew sideways has `grid.columns`; it still loads.
+func _test_old_file_with_columns_loads() -> void:
+	var d := _sample_layout().to_dict()
+	d.grid = {"columns": 6, "rows": 4}
+	d.erase("generator")
+	var back := SimpleLayout.from_dict(d)
+	_assert(back != null and back.rows == 4, "a layout with grid.columns loads")
+	_assert(back != null and back.generator_version == 1, "a layout without a generator version counts as version 1")
+	_assert(not JSON.stringify(_sample_layout().to_dict()).contains("columns"), "columns are no longer saved")
 
 
 func _test_reconcile_param_changes() -> void:
@@ -227,6 +244,35 @@ func _test_missing_file_generated_and_saved() -> void:
 	_assert(loaded.status == SimpleLayoutStore.LoadStatus.OK, "saved file loads")
 	if loaded.layout != null:
 		_assert(JSON.stringify(loaded.layout.to_dict()) == JSON.stringify(layout.to_dict()), "loaded layout matches saved")
+	SimpleLayoutStore.clear_cache()
+
+
+## A never-edited layout from older generation rules is generated again and saved; an edited
+## one is kept as it is.
+func _test_outdated_generated_layout_regenerated() -> void:
+	SimpleLayoutStore.clear_cache()
+	var device := Device.new("test.outdated", "Old Delay", Device.DeviceCategory.Effect)
+	var params := [_param(1, "Time"), _param(2, "Feedback")]
+	var old := _sample_layout()
+	old.device_id = device.device_id
+	old.generator_version = 1
+	var path := SimpleLayoutStore.path_for(device.device_id)
+	_write(path, JSON.stringify(old.to_dict()))
+	var layout := SimpleLayoutStore.load_or_generate(device, params)
+	_assert(layout.generator_version == SimpleLayoutGenerator.VERSION, "outdated generated layout regenerated")
+	var ids := layout.param_ids()
+	ids.sort()
+	_assert(ids == [1, 2], "regenerated from the current parameters: %s" % [ids])
+	var saved := SimpleLayoutStore.load_layout(device.device_id)
+	_assert(saved.layout != null and saved.layout.generator_version == SimpleLayoutGenerator.VERSION, "regenerated layout saved")
+
+	SimpleLayoutStore.clear_cache()
+	old.generated = false
+	var edited_text := JSON.stringify(old.to_dict())
+	_write(path, edited_text)
+	var kept := SimpleLayoutStore.load_or_generate(device, [])
+	_assert(kept.generator_version == 1 and not kept.generated, "an edited layout is kept even when outdated")
+	_assert(FileAccess.get_file_as_string(path) == edited_text, "edited layout file left unchanged")
 	SimpleLayoutStore.clear_cache()
 
 

@@ -52,7 +52,8 @@ back to generic when nothing matches.
 ### REQ-003 — Control kind per parameter
 
 The Simple View generator shall pick a control for each parameter from its type and metadata:
-a toggle for 2-step parameters, a segmented control for 3–5 steps, a dropdown for more than
+a toggle for 2-step parameters, a spin box for 3 or more steps whose labels are consecutive
+integers (e.g. an octave, -2…+2), a segmented control for 3–5 steps, a dropdown for more than
 5 steps, and a knob or slider for continuous parameters.
 
 - **Acceptance:** Headless test with a bool, a 4-value enum, a 12-value enum and a float parameter
@@ -91,21 +92,27 @@ of the device kind.
 ### REQ-007 — Importance and main page
 
 The Simple View generator shall rank parameters by importance using the device kind's rules. The
-first page shall hold the most important parameters, and the other groups shall follow on later pages.
+first page ("Main") shall hold every group except the few broad sections the device kind gives a
+page of its own (for synths: Modulation and Effects), ordered by importance from the left. Pages
+are for categories, not for running out of room.
 
-- **Acceptance:** Headless test: for a reverb, mix, decay and size are on page 1. For a synth with
-  100 parameters, page 1 holds at most one grid's worth of cells.
+- **Acceptance:** Headless test: for a reverb, mix, decay and size are on page 1, left of the less
+  important controls. For a synth with 100 parameters, cutoff and oscillators are on Main and LFO
+  controls are on a Modulation page.
 
 ### Grid and pages
 
 ### REQ-008 — Grid placement
 
-The Simple View shall place controls on a grid of fixed-size cells (default 6 columns × 4 rows
-per page). Each control takes a footprint that depends on its control kind (for example, knob
-1×1, XY pad 2×2), and no two controls on a page overlap.
+The Simple View shall place controls on a grid of fixed-size cells, a fixed number of rows tall
+(default 4) and as wide as the page needs. Each control takes a footprint that depends on its
+control kind (for example, knob 1×1, XY pad 2×2), and no two controls on a page overlap. A
+generated page is at most 24 columns wide; groups past that continue on a new page titled after
+its first group, and a single group is only split when it's wider than that on its own. Page
+titles are unique.
 
-- **Acceptance:** Headless test: a generated layout has no overlapping cells, and no cell sits
-  outside the grid.
+- **Acceptance:** Headless test: a generated layout has no overlapping cells, no cell sits outside
+  the rows, no generated page is wider than 24 columns, and small groups share a page.
 
 ### REQ-009 — Pages
 
@@ -115,13 +122,13 @@ shall show which page is active.
 - **Acceptance:** Live: a device with more parameters than fit on one page shows page controls,
   and switching pages shows the other controls.
 
-### REQ-010 — Grid size is adjustable
+### REQ-010 — Row count is adjustable
 
-The Simple View shall let the user change a layout's columns and rows. Controls that no longer fit
-on their page shall move onto the next free space, without overlapping.
+The Simple View shall let the user change a layout's row count. Controls that no longer fit shall
+move onto the next free space on their page, which grows sideways, without overlapping.
 
-- **Acceptance:** Headless test: shrinking a 6×4 layout to 4×4 keeps every control and has no
-  overlaps.
+- **Acceptance:** Headless test: shrinking a 4-row layout to 2 rows keeps every control on the same
+  page and has no overlaps.
 
 ### Persistence and editing
 

@@ -1,7 +1,9 @@
 ## SimpleView.gd
 ## The Panel view generated from a device's parameters (REQ-001, REQ-009). Loads (or generates)
 ## the device's `SimpleLayout` through `SimpleLayoutStore`, lays out one `SimpleControl` per
-## layout control on a fixed-size grid, and shows page tabs when there is more than one page.
+## layout control on a grid of fixed-size cells (as wide as the widest page), and shows page tabs
+## when there is more than one page. The view never scrolls: its root is a VBoxContainer (tabs
+## above the grid) whose minimum size is the tabs plus the grid.
 ## Edit mode (move/resize/rename/add/remove controls) is Phase 4 (T-014/T-015), not implemented here.
 
 class_name SimpleView extends DeviceView
@@ -9,17 +11,22 @@ class_name SimpleView extends DeviceView
 const SimpleControlScene := preload("res://devices/simple_view/SimpleControl.tscn")
 
 ## Pixel size of one grid cell, including the margin below.
-@export var cell_size := Vector2(60, 60)
+@export var cell_size := Vector2(76, 68)
 ## Gap between adjacent cells.
 @export var cell_margin := 6.0
 ## Height of the title strip inserted above every row where a titled group starts.
-@export var group_header_height := 14.0
+@export var group_header_height := 18.0
+## Font size of group titles.
+@export var group_title_font_size := 12
+## Color of group titles.
+@export var group_title_color := Color.WHITE
+## Space kept clear around each group box, so neighbouring groups are separated by twice this.
+@export var group_margin := 2.0
 
 static var logger := Log.make("SimpleView")
 
-@onready var _page_tabs: TabBar = $VBox/PageTabs
-@onready var _scroll: ScrollContainer = $VBox/Scroll
-@onready var _grid: Control = $VBox/Scroll/Grid
+@onready var _page_tabs: TabBar = $PageTabs
+@onready var _grid: Control = $Grid
 
 var layout: SimpleLayout = null
 var _current_page: int = 0
@@ -29,6 +36,11 @@ var _group_boxes: Array[Control] = []
 ## down by the group title strips above it. Grid cells stay square in the layout model; only
 ## the pixel placement makes room for group titles.
 var _row_y: PackedFloat32Array = []
+## Pixel x where the current page's grid starts: narrower pages are centered in the view.
+var _x_offset := 0.0
+## Group id → `{rect, box}` on the current page: the group's saved cell rect and the cell rect
+## its box is drawn over after growing into the free space to its right and below.
+var _group_fit := {}
 
 
 func _ready() -> void:
@@ -103,7 +115,15 @@ func _build_page(index: int) -> void:
 		return
 	var page: Dictionary = layout.pages[index]
 	_compute_row_y(page)
-	_grid.custom_minimum_size = Vector2(layout.columns * cell_size.x, _row_y[layout.rows])
+	var page_columns := _page_columns(page)
+	_x_offset = (_widest_page_columns() - page_columns) * cell_size.x * 0.5
+	_group_fit = fit_groups(page, page_columns, _used_rows(page))
+	# As wide as the widest page, so switching pages doesn't shift the devices beside this one,
+	# and only as tall as the rows this page uses, so a sparse page leaves no empty rows below.
+	# The view (a VBoxContainer) takes its minimum size from this, so the DevicePanel grows to
+	# fit instead of scrolling; pages split content that doesn't fit. The page tabs clip and
+	# scroll with arrow buttons, so they only need room for one tab plus the arrows.
+	_grid.custom_minimum_size = Vector2(_widest_page_columns() * cell_size.x, _row_y[_used_rows(page)])
 	for group in page.get("groups", []):
 		_add_group_box(group)
 	for control_data in page.get("controls", []):
@@ -122,11 +142,91 @@ func _clear_page() -> void:
 func _add_control(data: Dictionary) -> void:
 	var control := SimpleControlScene.instantiate() as SimpleControl
 	_grid.add_child(control)
-	var pixel_rect := _pixel_rect(GridPacker.rect_from_array(data.rect))
+	var pixel_rect := _control_pixel_rect(GridPacker.rect_from_array(data.rect), String(data.get("group", "")))
 	control.position = pixel_rect.position + Vector2(cell_margin, cell_margin) * 0.5
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
 	control.bind(device, data)
 	_controls.append(control)
+
+
+## Columns the widest page occupies (the right edge of its rightmost control or group), at least 1.
+func _widest_page_columns() -> int:
+	var right := 1
+	for page in layout.pages:
+		right = maxi(right, _page_columns(page))
+	return right
+
+
+## Columns `page` occupies (the right edge of its rightmost control or group), at least 1.
+static func _page_columns(page: Dictionary) -> int:
+	var right := 1
+	for entry in page.get("controls", []) + page.get("groups", []):
+		right = maxi(right, GridPacker.rect_from_array(entry.rect).end.x)
+	return right
+
+
+## Group id → `{rect, box}` for `page` (see `_group_fit`): each group box grows down, then
+## right (down first, since generated pages are packed in columns), until it meets another group, an ungrouped control, or the page edge (`columns` ×
+## `rows`). Its controls are then spread evenly over the box, so a column of groups lines up
+## instead of leaving gaps beside the narrow ones.
+static func fit_groups(page: Dictionary, columns: int, rows: int) -> Dictionary:
+	var fit := {}
+	var obstacles: Array[Rect2i] = []
+	for control in page.get("controls", []):
+		if String(control.get("group", "")).is_empty():
+			obstacles.append(GridPacker.rect_from_array(control.rect))
+	for group in page.get("groups", []):
+		var rect := GridPacker.rect_from_array(group.rect)
+		fit[group.id] = {"rect": rect, "box": rect}
+	for id in fit:
+		var box: Rect2i = fit[id].box
+		var bottom := rows
+		for other in _other_boxes(fit, id, obstacles):
+			if other.position.x < box.end.x and other.end.x > box.position.x and other.position.y >= box.end.y:
+				bottom = mini(bottom, other.position.y)
+		box.size.y = maxi(box.size.y, bottom - box.position.y)
+		fit[id].box = box
+	for id in fit:
+		var box: Rect2i = fit[id].box
+		var right := columns
+		for other in _other_boxes(fit, id, obstacles):
+			if other.position.y < box.end.y and other.end.y > box.position.y and other.position.x >= box.end.x:
+				right = mini(right, other.position.x)
+		box.size.x = maxi(box.size.x, right - box.position.x)
+		fit[id].box = box
+	return fit
+
+
+static func _other_boxes(fit: Dictionary, id: Variant, obstacles: Array[Rect2i]) -> Array[Rect2i]:
+	var out := obstacles.duplicate()
+	for other_id in fit:
+		if other_id != id:
+			out.append(fit[other_id].box)
+	return out
+
+
+## Pixel rect of a control: its grid cell, spread out inside its group's grown box so the gaps
+## between (and around) its columns and rows are equal.
+func _control_pixel_rect(rect: Rect2i, group_id: String) -> Rect2:
+	var pixels := _pixel_rect(rect)
+	var fit: Dictionary = _group_fit.get(group_id, {})
+	if fit.is_empty():
+		return pixels
+	var saved: Rect2i = fit.rect
+	var saved_pixels := _pixel_rect(saved)
+	var box_pixels := _pixel_rect(fit.box)
+	var gap := (box_pixels.size - saved_pixels.size) / Vector2(saved.size.x + 1, saved.size.y + 1)
+	var cell := rect.position - saved.position
+	return Rect2(pixels.position + gap * Vector2(cell.x + 1, cell.y + 1),
+		pixels.size + gap * Vector2(rect.size.x - 1, rect.size.y - 1))
+
+
+## Number of grid rows `page` occupies (the bottom edge of its lowest control or group), at least 1.
+func _used_rows(page: Dictionary) -> int:
+	var bottom := 1
+	for entry in page.get("controls", []) + page.get("groups", []):
+		bottom = maxi(bottom, GridPacker.rect_from_array(entry.rect).end.y)
+	return mini(bottom, layout.rows)
 
 
 ## Fill `_row_y` for `page`: every row where a titled group starts gets a header strip above it.
@@ -148,17 +248,18 @@ func _compute_row_y(page: Dictionary) -> void:
 func _pixel_rect(rect: Rect2i) -> Rect2:
 	var top: float = _row_y[clampi(rect.position.y, 0, layout.rows)]
 	var bottom: float = _row_y[clampi(rect.end.y - 1, 0, layout.rows)] + cell_size.y
-	return Rect2(rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
+	return Rect2(_x_offset + rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
 
 
 ## A background panel with a title strip on top, covering a group's controls.
 func _add_group_box(group: Dictionary) -> void:
-	var pixel_rect := _pixel_rect(GridPacker.rect_from_array(group.rect))
+	var cells: Rect2i = _group_fit[group.id].box if _group_fit.has(group.id) else GridPacker.rect_from_array(group.rect)
+	var pixel_rect := _pixel_rect(cells)
 	var title_text := String(group.get("title", ""))
 	var header := 0.0 if title_text.is_empty() else group_header_height
 	var box := Panel.new()
-	box.position = pixel_rect.position - Vector2(0, header)
-	box.size = pixel_rect.size + Vector2(0, header)
+	box.position = pixel_rect.position - Vector2(0, header) + Vector2(group_margin, group_margin)
+	box.size = pixel_rect.size + Vector2(0, header) - Vector2(group_margin, group_margin) * 2.0
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(1, 1, 1, 0.03)
@@ -169,8 +270,9 @@ func _add_group_box(group: Dictionary) -> void:
 	if header > 0.0:
 		var title := Label.new()
 		title.text = title_text
-		title.add_theme_font_size_override("font_size", 10)
-		title.modulate = Color(1, 1, 1, 0.6)
+		title.add_theme_font_size_override("font_size", group_title_font_size)
+		title.add_theme_color_override("font_color", group_title_color)
+		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		title.position = Vector2(cell_margin, -1)
 		title.size = Vector2(box.size.x - cell_margin * 2.0, header)

@@ -41,9 +41,9 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified · `[-]
 - [x] **T-006** [REQ-008, REQ-010, REQ-016, REQ-017] Layout model and store.
   - _Files_: `Godot/devices/simple_view/SimpleLayout.gd`, `Godot/devices/simple_view/SimpleLayoutStore.gd`, `Godot/devices/simple_view/SimpleControlKinds.gd`, `Godot/tests/test_simple_layout_model.gd`
   - _Output_:
-    - `SimpleLayout`: `from_dict`/`to_dict`, `validate`, `find_free_rect`, `resize_grid`, `reconcile`
+    - `SimpleLayout`: `from_dict`/`to_dict`, `validate`, `find_free_rect`, `set_rows` (was `resize_grid` before pages grew sideways), `reconcile`
     - `SimpleLayoutStore`: `path_for` (sanitized id plus hash), load, save, a parse failure that doesn't overwrite the file, an unknown `version` treated as a parse failure, a base dir that tests can override
-  - _Verify_: `godot --headless --path Godot -s tests/test_simple_layout_model.gd -- --test` passes `test_roundtrip_json`, `test_resize_grid_reflows`, `test_reconcile_param_changes`, `test_corrupt_file_not_overwritten` and `test_path_for_distinct_ids`
+  - _Verify_: `godot --headless --path Godot -s tests/test_simple_layout_model.gd -- --test` passes `test_roundtrip_json`, `test_set_rows_reflows`, `test_reconcile_param_changes`, `test_corrupt_file_not_overwritten` and `test_path_for_distinct_ids`
   - _Depends on_: —
 
 - [x] **T-007** [REQ-002] Device kind inference.
@@ -92,7 +92,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified · `[-]
 
 - [-] **T-014** _Deferred to `TODO.md` (Simple View edit mode)._ [REQ-010, REQ-012, REQ-015] Edit mode: move, resize, pages, grid size, reset.
   - _Files_: `Godot/devices/simple_view/SimpleEditOverlay.gd`, `Godot/devices/simple_view/SimpleView.gd`, `Godot/devices/simple_view/SimpleView.tscn`
-  - _Output_: an edit toggle, drag to move and corner drag to resize (snapped, with overlap rejected), move to page, add or remove page, column and row spinners, and Reset with a confirmation. Leaving edit mode saves and sets `generated: false`
+  - _Output_: an edit toggle, drag to move and corner drag to resize (snapped, with overlap rejected), move to page, add or remove page, a row spinner, and Reset with a confirmation. Leaving edit mode saves and sets `generated: false`
   - _Verify_: Live: move a knob, leave edit mode, reopen the device, and it's still moved. Shrink the grid to 4×4, and nothing overlaps or is lost. Reset and confirm, and the generated layout returns and the file is overwritten
   - _Depends on_: T-013
 

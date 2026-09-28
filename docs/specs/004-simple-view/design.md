@@ -59,9 +59,17 @@ generator, and nothing new runs on the engine's real-time path.
    for the device kind supplies role keywords and importance weights, and `GenericStrategy` is the
    base class every other strategy extends.
 3. `CompoundDetector` merges matching parameters into XY, envelope and EQ-band controls.
-4. Parameters are grouped: by module path if there is one, otherwise by the strategy's role groups.
-5. `GridPacker` places the groups: a "Main" page with the top-importance controls, then one page
-   (or more) per group, first-fit, with no overlaps.
+4. Parameters are grouped: by module path if there is one, otherwise by the sections their names
+   share (`NameSections`: "Oscillator 1 …", "Filter …"; controls are labelled with the rest of the
+   name) when those cover at least half the parameters, and the rest by the strategy's role groups.
+5. Each group gets a page: the strategy can name one per group (`groups()` entries with `page`,
+   e.g. a synth's Modulation and Effects); everything else goes on "Main". A module-path group
+   takes the page most of its items' role groups point to.
+6. `GridPacker` places the groups page by page as blocks, in order: a few one-row controls take a
+   single row, larger groups a 2-row block (full height when that's wider than 8 columns). Blocks
+   stack down a column and a new column starts when one doesn't fit, so a page reads top to
+   bottom, then left to right, with no overlaps. Past `SimpleLayout.MAX_PAGE_COLUMNS`
+   (24) the rest continues on a new page titled after its first group; titles are made unique.
 
 Each step takes and returns plain data, so each one can be tested headless.
 
@@ -157,7 +165,8 @@ different ids can never map to the same file.
   "device_id": "clap:com.michaelwillis.dragonfly.hall",
   "kind": "reverb",
   "generated": true,
-  "grid": { "columns": 6, "rows": 4 },
+  "generator": 2,
+  "grid": { "rows": 4 },
   "pages": [
     {
       "title": "Main",
@@ -172,21 +181,24 @@ different ids can never map to the same file.
 }
 ```
 
-- `rect` is `[col, row, w, h]` in cells.
+- `rect` is `[col, row, w, h]` in cells. Pages have no column limit; `grid.rows` is their height.
+- `generator` is the `SimpleLayoutGenerator.VERSION` that made the layout (missing = 1). A layout
+  still marked `generated` from an older version is generated again on load and saved; an edited
+  one is kept. Files from version 1 also carry `grid.columns`, which is ignored.
 - `params` holds parameter ids, and their order has a meaning for each control kind:
   - xy: `[x, y]`
   - envelope: `[a, d, s, r]`, or only the stages named by the optional `stages` key (e.g.
     `"stages": "ads"` with `[a, d, s]`). A missing `stages` means `"adsr"`.
   - eq_band: `[freq, gain, q]`
 - `group` (optional) is the id of the group a control belongs to. Group rects are recomputed from
-  their controls after a grid resize or reconcile.
+  their controls after a row change or reconcile.
 - `label` and `unit` are optional overrides; when they're missing the view uses the parameter's own
   name and unit.
-- A group's `rect` covers its controls. The view draws its background and title in a 14px strip
+- A group's `rect` covers its controls. The view draws its background and title in an 18px strip
   inserted above every row where a titled group starts (pixel spacing only; grid rects are unchanged).
-- Control kinds: `knob`, `slider`, `toggle`, `segmented`, `dropdown`, `xy`, `envelope`, `eq_band`.
+- Control kinds: `knob`, `slider`, `toggle`, `segmented`, `dropdown`, `spinbox`, `xy`, `envelope`, `eq_band`.
 - Footprints come from `SimpleControlKinds.FOOTPRINT`:
-  - 1×1: knob, toggle, dropdown
+  - 1×1: knob, toggle, dropdown, spinbox
   - 2×1: slider, segmented
   - 2×2: xy
   - 3×2: envelope
@@ -223,18 +235,18 @@ A unit only changes how the value is shown. The value sent to the engine is alwa
 | `Godot/data/DeviceInstance.gd` | `_on_param_info_received`: parse the optional trailing args |
 | `Godot/data/Device.gd` | `features`; `uses_simple_view()` |
 | `Godot/data/DeviceRegistry.gd` | Parse `features` from `/plugin/info`; store and load them in `plugins.json` |
-| `Godot/devices/simple_view/SimpleLayout.gd` (new) | Layout model: `from_dict`/`to_dict`, `validate()` (overlaps, bounds), `find_free_rect(page, w, h)`, `resize_grid(cols, rows)`, `reconcile(params)` (REQ-016) |
+| `Godot/devices/simple_view/SimpleLayout.gd` (new) | Layout model: `from_dict`/`to_dict`, `validate()` (overlaps, bounds), `find_free_rect(page, w, h)`, `set_rows(rows)`, `reconcile(params)` (REQ-016) |
 | `Godot/devices/simple_view/SimpleLayoutStore.gd` (new) | `path_for`, `load_or_generate(instance)`, `save(layout)`, a parse-failure path that doesn't overwrite (REQ-017), an in-memory cache keyed by device id |
 | `Godot/devices/simple_view/SimpleLayoutGenerator.gd` (new) | `generate(device, params) -> SimpleLayout`: runs the pipeline |
 | `Godot/devices/simple_view/DeviceKind.gd` (new) | `infer(device) -> String` |
 | `Godot/devices/simple_view/ParamClassifier.gd` (new) | Control kind from type and steps (REQ-003); leaves out hidden and read-only parameters (REQ-004) |
 | `Godot/devices/simple_view/CompoundDetector.gd` (new) | Stem matching for xy, envelope and eq_band (REQ-005) |
-| `Godot/devices/simple_view/GridPacker.gd` (new) | First-fit packing into pages; Main page (REQ-007, REQ-008) |
+| `Godot/devices/simple_view/GridPacker.gd` (new) | First-fit packing into pages that grow sideways up to 24 columns (REQ-007, REQ-008) |
 | `Godot/devices/simple_view/SimpleControlKinds.gd` (new) | Kind constants, `FOOTPRINT` |
 | `Godot/devices/simple_view/SimpleUnits.gd` (new) | Unit formatters (REQ-013) |
 | `Godot/devices/simple_view/strategies/GenericStrategy.gd` (new) | Base: `role_for(param)`, `importance(role)`, `groups()`; name-keyword defaults |
 | `Godot/devices/simple_view/strategies/SynthStrategy.gd`, `ReverbStrategy.gd`, `DelayStrategy.gd`, `CompressorStrategy.gd`, `EqStrategy.gd` (new) | Keyword tables and weights for each kind |
-| `Godot/devices/simple_view/SimpleView.gd` + `.tscn` (new) | `DeviceView`. Page tabs; renders controls; two-way param binding through `set_parameter_normalized` / `_on_device_parameter_changed`; rebuilds on `parameters_updated`; edit-mode toggle, grid-size spinners, Reset (with a `ConfirmationDialog`) |
+| `Godot/devices/simple_view/SimpleView.gd` + `.tscn` (new) | `DeviceView`. Page tabs; renders controls; two-way param binding through `set_parameter_normalized` / `_on_device_parameter_changed`; rebuilds on `parameters_updated`; edit-mode toggle, row-count spinner, Reset (with a `ConfirmationDialog`) |
 | `Godot/devices/simple_view/SimpleControl.gd` (new) | Cell wrapper: label plus the inner control (`RotaryKnob`, `HSlider`, `CheckButton`, button row, `OptionButton`, `XYSlider`, `EnvelopeControl`, eq_band = three small knobs for freq, gain and q, since the 2×1 footprint has no room for an XY pad) |
 | `Godot/devices/simple_view/SimpleEditOverlay.gd` (new) | Grid lines, drag to move, corner drag to resize, snapping to cells, invalid-drop highlight, a context menu (rename, unit, remove, move to page) and an "Add parameter" list (REQ-012–014) |
 | `Godot/devices/DeviceViewFactory.gd` | `_scene_for`: for `ViewType.Panel`, return the SimpleView scene when `device.uses_simple_view()`, or when the instance has Simple mode on |
@@ -268,12 +280,14 @@ A unit only changes how the value is shown. The value sent to the engine is alwa
   - `test_hidden_readonly_excluded` (REQ-004)
   - `test_compounds`: xy, eq_band, a partial pair falls back (REQ-005)
   - `test_grouping_module_and_role` (REQ-006)
-  - `test_main_page_importance`: reverb mix/decay/size on page 0; 100-parameter synth (REQ-007)
+  - `test_main_page_importance`: reverb mix/decay/size on page 0; 100-parameter synth's LFOs on Modulation (REQ-007)
+  - `test_pages_grow_sideways`: small groups share a page, big groups continue with unique titles (REQ-008)
   - `test_no_overlap_in_bounds`: random parameter sets (REQ-008)
   - `test_generate_500_params_under_100ms` (performance NFR)
 - **Godot:** `godot --headless --path Godot -s tests/test_simple_layout_model.gd -- --test`
   - `test_roundtrip_json`
-  - `test_resize_grid_reflows` (REQ-010)
+  - `test_set_rows_reflows` (REQ-010)
+  - `test_outdated_generated_layout_regenerated`
   - `test_reconcile_param_changes` (REQ-016)
   - `test_corrupt_file_not_overwritten`: writes to a temp dir through an overridable base path (REQ-017)
 - **Live** (the engine running with `./run_release.sh`, plus `godot --path Godot`):

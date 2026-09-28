@@ -27,11 +27,33 @@ static func control_kind(param: DeviceParameter) -> String:
 			var n := param.enum_values.size()
 			if n == 2:
 				return SimpleControlKinds.TOGGLE
+			if n >= 3 and is_integer_enum(param):
+				return SimpleControlKinds.SPINBOX
 			if n >= 3 and n <= MAX_SEGMENTS:
 				return SimpleControlKinds.SEGMENTED
 			return SimpleControlKinds.DROPDOWN
 		_:
 			return SimpleControlKinds.KNOB
+
+
+## True when an enum's labels are consecutive integers ("-2", "-1", "0", "+1", "+2"), so it
+## reads better as a number than as a list of choices.
+static func is_integer_enum(param: DeviceParameter) -> bool:
+	if param.param_type != "enum" or param.enum_values.is_empty():
+		return false
+	var first: Variant = integer_label_value(param.enum_values[0])
+	if first == null:
+		return false
+	for i in range(param.enum_values.size()):
+		if integer_label_value(param.enum_values[i]) != int(first) + i:
+			return false
+	return true
+
+
+## The integer an enum label spells ("+1" → 1, " -2 " → -2), or null when it isn't one.
+static func integer_label_value(label: String) -> Variant:
+	var text := label.strip_edges().trim_prefix("+")
+	return int(text) if text.is_valid_int() else null
 
 
 ## Classify the visible parameters, keeping their order.

@@ -8,6 +8,7 @@ const SLIDER := "slider"
 const TOGGLE := "toggle"
 const SEGMENTED := "segmented"
 const DROPDOWN := "dropdown"
+const SPINBOX := "spinbox"
 const XY := "xy"
 const ENVELOPE := "envelope"
 const EQ_BAND := "eq_band"
@@ -17,6 +18,7 @@ const FOOTPRINT: Dictionary[String, Vector2i] = {
 	KNOB: Vector2i(1, 1),
 	TOGGLE: Vector2i(1, 1),
 	DROPDOWN: Vector2i(1, 1),
+	SPINBOX: Vector2i(1, 1),
 	SLIDER: Vector2i(2, 1),
 	SEGMENTED: Vector2i(2, 1),
 	XY: Vector2i(2, 2),

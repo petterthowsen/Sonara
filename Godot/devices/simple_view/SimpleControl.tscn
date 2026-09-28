@@ -10,7 +10,7 @@ script = ExtResource("1_6l8wj")
 
 [node name="Title" type="Label" parent="." unique_id=2046778451]
 layout_mode = 2
-theme_override_font_sizes/font_size = 11
+theme_override_font_sizes/font_size = 13
 text = "Parameter"
 horizontal_alignment = 1
 clip_text = true

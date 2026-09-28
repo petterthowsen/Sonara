@@ -8,9 +8,14 @@ class_name SimpleControl extends VBoxContainer
 
 static var logger := Log.make("SimpleControl")
 
-const SEGMENT_FONT_SIZE := 11
+const SEGMENT_FONT_SIZE := 13
 ## Horizontal space a segment button needs beyond its label (stylebox margins + separation).
 const SEGMENT_PADDING := 10.0
+## Font size of the value readout (knob tooltip, spin box).
+const VALUE_FONT_SIZE := 13
+
+## Color of the control's title (dimmer than group titles, so groups read first).
+@export var title_color := Color(1, 1, 1, 0.6)
 
 @onready var _title: Label = $Title
 @onready var _body: Control = $Body
@@ -39,6 +44,7 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	clip_contents = true
 	_body.custom_minimum_size = Vector2.ZERO
 	_title.text = _title_text()
+	_title.add_theme_color_override("font_color", title_color)
 	if _title_overlay == null:
 		_title_overlay = LabelOverlay.attach(_title)
 	_title.clip_text = false
@@ -66,6 +72,8 @@ func refresh() -> void:
 			(_inner as CheckButton).set_pressed_no_signal(_normalized(0) >= 0.5)
 		SimpleControlKinds.SEGMENTED, SimpleControlKinds.DROPDOWN:
 			_refresh_choice(_inner)
+		SimpleControlKinds.SPINBOX:
+			_refresh_spinbox()
 		SimpleControlKinds.XY:
 			(_inner as XYSlider).set_values_no_signal(_normalized(0), _normalized(1))
 		SimpleControlKinds.ENVELOPE:
@@ -126,6 +134,8 @@ func _build_inner() -> void:
 			_inner = _build_segmented()
 		SimpleControlKinds.DROPDOWN:
 			_inner = _build_dropdown()
+		SimpleControlKinds.SPINBOX:
+			_inner = _build_spinbox()
 		SimpleControlKinds.XY:
 			_inner = _build_xy()
 		SimpleControlKinds.ENVELOPE:
@@ -152,6 +162,7 @@ func _build_knob() -> RotaryKnob:
 	knob.value_text_callback = _format_value
 	# the title sits above, so keep the value readout from covering it
 	knob.tooltip_side = RotaryKnob.TooltipSide.BELOW
+	knob.value_font_size = VALUE_FONT_SIZE
 	knob.value_changed.connect(func(v): _commit(0, v))
 	return knob
 
@@ -219,6 +230,36 @@ func _build_dropdown() -> OptionButton:
 		var n: int = maxi(1, values.size())
 		_commit(0, 0.0 if n <= 1 else float(index) / float(n - 1)))
 	return dropdown
+
+
+## An enum whose labels are consecutive integers (e.g. an octave, -2…+2), shown as the number.
+## The spin box counts in label values; the enum index is `value - first`.
+func _build_spinbox() -> SpinBox:
+	var spin := SpinBox.new()
+	var param := _param(0)
+	var first := _spinbox_first()
+	spin.min_value = first
+	spin.max_value = first + maxi(0, param.enum_values.size() - 1) if param else first
+	spin.step = 1.0
+	spin.rounded = true
+	spin.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	spin.select_all_on_focus = true
+	spin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	spin.get_line_edit().add_theme_font_size_override("font_size", VALUE_FONT_SIZE)
+	spin.value_changed.connect(func(v):
+		var n: int = maxi(1, param.enum_values.size()) if param else 1
+		var index := int(round(v)) - first
+		_commit(0, 0.0 if n <= 1 else float(index) / float(n - 1)))
+	return spin
+
+
+## Value of the first label of an integer enum (0 when it isn't one).
+func _spinbox_first() -> int:
+	var param := _param(0)
+	if param == null or param.enum_values.is_empty():
+		return 0
+	var first: Variant = ParamClassifier.integer_label_value(param.enum_values[0])
+	return int(first) if first != null else 0
 
 
 func _build_xy() -> XYSlider:
@@ -322,6 +363,16 @@ func _refresh_choice(node: Control) -> void:
 		var children := (node as HBoxContainer).get_children()
 		if idx < children.size():
 			(children[idx] as Button).set_pressed_no_signal(true)
+
+
+func _refresh_spinbox() -> void:
+	var param := _param(0)
+	if param == null:
+		return
+	var n := maxi(1, param.enum_values.size())
+	var idx := clampi(int(round(_normalized(0) * float(n - 1))), 0, n - 1)
+	# Not set_value_no_signal: that leaves the spin box text stale. `_updating` stops the echo.
+	(_inner as SpinBox).value = _spinbox_first() + idx
 
 
 func _refresh_envelope() -> void:
