@@ -73,7 +73,7 @@ corner_radius_bottom_left = 4
 
 [node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle")]
 custom_minimum_size = Vector2(100, 36)
-offset_right = 300.0
+offset_right = 272.0
 offset_bottom = 36.0
 size_flags_vertical = 0
 focus_mode = 1
@@ -143,11 +143,11 @@ custom_minimum_size = Vector2(50, 24)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 4
+size_flags_stretch_ratio = 1.5
 mouse_filter = 1
 value_type = 1
 
 [node name="Label" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Label" index="0" unique_id=448001948]
-text = "Test for a very long"
 horizontal_alignment = 0
 autowrap_mode = 1
 clip_text = true
