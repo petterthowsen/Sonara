@@ -320,8 +320,21 @@ pub trait AudioDevice: Send {
         "param"
     }
 
+    /// True when the parameter list comes from loaded content (an SFZ file, a CLAP plugin)
+    /// instead of being fixed, so Godot learns it from `param/info` rather than its registry.
+    fn has_dynamic_parameters(&self) -> bool {
+        false
+    }
+
     /// Describe file loading capabilities, if any
     fn file_loading_support(&self) -> Option<FileLoadingSupport> {
+        None
+    }
+
+    /// Current `{device}/loading_state` value (`loading`, `ready`, `failed:{error}`, ...), or None
+    /// for a device without a load lifecycle. Lets Godot recover a transition it missed
+    /// (`{device}/state/get`). Called on the command thread, so it must be cheap.
+    fn loading_state(&self) -> Option<String> {
         None
     }
 

@@ -113,6 +113,8 @@ pub struct SamplerDevice {
     device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
     current_req_id: String,
+    /// Last state sent on `loading_state`, re-sent when Godot asks (`state/get`).
+    loading_state: String,
     time_counter: u64,
 }
 
@@ -284,6 +286,7 @@ impl SamplerDevice {
             device_path,
             status_tx,
             current_req_id: String::new(),
+            loading_state: "idle".to_string(),
             time_counter: 0,
         }
     }
@@ -347,7 +350,8 @@ impl SamplerDevice {
         self.emit_loading(&format!("failed:{}", message), req_id);
     }
 
-    fn emit_loading(&self, state: &str, req_id: &str) {
+    fn emit_loading(&mut self, state: &str, req_id: &str) {
+        self.loading_state = state.to_string();
         if let Some(tx) = &self.status_tx {
             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                 channel_id: self.channel_id,
@@ -618,6 +622,10 @@ impl AudioDevice for SamplerDevice {
             name: "MIDI In".to_string(),
             flow: PortFlow::Input,
         }]
+    }
+
+    fn loading_state(&self) -> Option<String> {
+        Some(self.loading_state.clone())
     }
 
     fn file_loading_support(&self) -> Option<FileLoadingSupport> {

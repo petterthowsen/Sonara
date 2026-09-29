@@ -188,6 +188,29 @@ func _on_engine_confirmed_connected() -> void:
 		track.connect_to_engine()
 
 	logger.info("[Project] Connected to audio engine")
+	_schedule_device_state_resync()
+
+
+## Seconds after connecting before every device re-requests its state.
+const DEVICE_RESYNC_DELAY_SEC := 1.0
+
+
+func _schedule_device_state_resync() -> void:
+	var tree := _get_scene_tree()
+	if tree == null:
+		return
+	tree.create_timer(DEVICE_RESYNC_DELAY_SEC).timeout.connect(_resync_device_states)
+
+
+## Building a large project stalls Godot's frame loop while the engine is already answering, and
+## the OS drops the UDP packets it has no room for. Once things settle, ask every device for its
+## state again so a missed loading_state or param list doesn't leave it stuck.
+func _resync_device_states() -> void:
+	if _connection_state != ConnectionState.CONNECTED:
+		return
+	for channel in channels:
+		for device in channel.devices:
+			device.request_state()
 
 
 func _on_engine_disconnected() -> void:

@@ -110,6 +110,12 @@ var loaded_file_path: String = ""
 ## Loading state: "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
 var loading_state: String = "idle"
 
+## Seconds between state/get retries while the device is "loading" (see request_state()).
+const LOADING_RECHECK_SEC := 2.0
+
+## A loading re-check timer is running (at most one per instance).
+var _loading_recheck_pending: bool = false
+
 ## Why the plugin host last crashed ("" if it has not). See `crashed` signal.
 var crash_reason: String = ""
 
@@ -715,6 +721,45 @@ func reload() -> void:
 	AudioEngineOSC.send(osc_addr("reload"), [])
 
 
+## Ask the engine to re-send the loading state and (for SFZ/CLAP) the parameter list of this
+## device and its children. OSC runs over UDP, which drops packets when Godot stalls (e.g. while
+## building a large project), and a missed loading_state or param/info leaves a device stuck.
+func request_state() -> void:
+	if not _is_connected:
+		return
+	AudioEngineOSC.send(osc_addr("state/get"), [])
+	for child in children:
+		child.request_state()
+
+
+## Keep asking for the state while the device is "loading", in case "ready" was dropped.
+func _schedule_loading_recheck() -> void:
+	if _loading_recheck_pending:
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	_loading_recheck_pending = true
+	tree.create_timer(LOADING_RECHECK_SEC).timeout.connect(_on_loading_recheck)
+
+
+func _on_loading_recheck() -> void:
+	_loading_recheck_pending = false
+	if not _is_connected or loading_state != "loading":
+		return
+	request_state()
+	_schedule_loading_recheck()
+
+
+func _set_loading_state(new_state: String) -> void:
+	if new_state == "loading":
+		_schedule_loading_recheck()
+	if loading_state == new_state:
+		return
+	loading_state = new_state
+	loading_state_changed.emit(loading_state)
+
+
 ## Connect to audio engine and listen for state updates.
 ## Registers OSC listeners only; the file (if any) is loaded with a proper
 ## req_id by Channel.sync_to_engine()/_sync_device_tree_to_engine(), which
@@ -812,8 +857,7 @@ func _on_loading_state_received(values: Array) -> void:
 	if values.size() >= 1:
 		var new_state = str(values[0])
 		if loading_state != new_state:
-			loading_state = new_state
-			loading_state_changed.emit(loading_state)
+			_set_loading_state(new_state)
 
 			# Log state changes for debugging
 			if loading_state.begins_with("failed:"):
@@ -839,10 +883,7 @@ func _on_crashed_received(values: Array) -> void:
 		plugin_stats = null
 		stats_changed.emit()
 
-	var new_state := "crashed:" + crash_reason
-	if loading_state != new_state:
-		loading_state = new_state
-		loading_state_changed.emit(loading_state)
+	_set_loading_state("crashed:" + crash_reason)
 	logger.warn("[%s] Plugin crashed: %s" % [device.name, crash_reason])
 	crashed.emit(crash_reason, crash_stderr)
 
@@ -938,7 +979,13 @@ func _on_param_count_received(args: Array) -> void:
 	
 	var count: int = args[0]
 	_expected_param_count = count
-	
+
+	# A re-advertised list (state/get resync, plugin reload, new SFZ) keeps the current values
+	# instead of resetting them to defaults; they are sent back once the list is complete.
+	for param_id in parameter_values:
+		if param_id not in _restored_parameter_values:
+			_restored_parameter_values[param_id] = parameter_values[param_id]
+
 	# Clear existing parameters when we receive a new count
 	# This handles cases where parameters change (e.g., SFZ file loaded)
 	parameters.clear()
@@ -1072,6 +1119,8 @@ func load_file(file_path: String) -> void:
 	else:
 		logger.warn("load_file on %s before it is on a project channel; waveform won't be tracked" % name)
 	AudioEngineOSC.send(osc_addr("load_file"), [file_path, req_id])
+	# Also set locally: if the engine's own "loading" is dropped, the re-check still runs.
+	_set_loading_state("loading")
 
 
 ## Remember `file_path` for an instance that is not on a channel yet. Channel.add_device()

@@ -521,6 +521,12 @@ impl OscServer {
                     device_path,
                 })?;
             }
+            ["state", "get"] => {
+                command_tx.send(AudioCommand::GetDeviceState {
+                    channel_id,
+                    device_path,
+                })?;
+            }
             // Reload a crashed plugin: respawn its host and restore its state (Phase 4).
             ["reload"] => {
                 command_tx.send(AudioCommand::ReloadDevice {

@@ -368,6 +368,11 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         device_path: DevicePath,
     },
+    /// Re-send a device's loading state and (dynamic) parameter list, for a Godot that missed them.
+    GetDeviceState {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+    },
     SavePluginState {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -867,6 +872,39 @@ fn with_layer(
             "Layer slot {} not found at channel {} path {}",
             slot, channel_id, device_path
         );
+    }
+}
+
+/// Send `params` (from `device.parameters()`) to Godot: `param/count`, then one `param/info` each.
+fn send_parameter_list(
+    status_tx: &Sender<EngineStatus>,
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    device: &dyn super::devices::AudioDevice,
+    params: Vec<super::devices::ParamInfo>,
+) {
+    let _ = status_tx.send(EngineStatus::PluginParameterCount {
+        channel_id,
+        device_path,
+        count: params.len(),
+    });
+    for param in params {
+        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
+            channel_id,
+            device_path,
+            param_id: param.id,
+            name: param.name,
+            min: param.min,
+            max: param.max,
+            default: param.default,
+            group: device.parameter_group(param.id).to_string(),
+            param_type: param.param_type,
+            is_hidden: param.is_hidden,
+            is_read_only: param.is_read_only,
+            is_bypass: param.is_bypass,
+            module: param.module,
+            enum_values: param.enum_values,
+        });
     }
 }
 
@@ -2135,29 +2173,7 @@ pub fn process_command(
                         channel_id,
                         device_path
                     );
-                    let _ = status_tx.send(EngineStatus::PluginParameterCount {
-                        channel_id,
-                        device_path: device_path.clone(),
-                        count: params.len(),
-                    });
-                    for param in params.iter() {
-                        let _ = status_tx.send(EngineStatus::PluginParameterInfo {
-                            channel_id,
-                            device_path: device_path.clone(),
-                            param_id: param.id,
-                            name: param.name.clone(),
-                            min: param.min,
-                            max: param.max,
-                            default: param.default,
-                            group: device.parameter_group(param.id).to_string(),
-                            param_type: param.param_type,
-                            is_hidden: param.is_hidden,
-                            is_read_only: param.is_read_only,
-                            is_bypass: param.is_bypass,
-                            module: param.module.clone(),
-                            enum_values: param.enum_values.clone(),
-                        });
-                    }
+                    send_parameter_list(status_tx, channel_id, device_path, device, params);
                 } else {
                     warn!(
                         "Device not found at channel {} path {}",
@@ -2166,6 +2182,37 @@ pub fn process_command(
                 }
             } else {
                 warn!("Channel {} not found for get plugin parameters", channel_id);
+            }
+        }
+        AudioCommand::GetDeviceState {
+            channel_id,
+            device_path,
+        } => {
+            // Godot missed a status (UDP drops under load): re-send what it can't recompute.
+            let Some(device) = state
+                .channels
+                .get(&channel_id)
+                .and_then(|channel| channel.device_at_path(&device_path))
+            else {
+                warn!(
+                    "Device state requested for missing device at channel {} path {}",
+                    channel_id, device_path
+                );
+                return None;
+            };
+            if let Some(loading_state) = device.loading_state() {
+                let _ = status_tx.send(EngineStatus::DeviceLoadingStateChanged {
+                    channel_id,
+                    device_path,
+                    state: loading_state,
+                });
+            }
+            if device.has_dynamic_parameters() {
+                let params = device.parameters();
+                // Still loading: the list follows the load, as it normally does.
+                if !params.is_empty() {
+                    send_parameter_list(status_tx, channel_id, device_path, device, params);
+                }
             }
         }
         AudioCommand::DeviceReady {
@@ -2191,29 +2238,7 @@ pub fn process_command(
                     }
                     let params = device.parameters();
                     if !params.is_empty() {
-                        let _ = status_tx.send(EngineStatus::PluginParameterCount {
-                            channel_id,
-                            device_path: device_path.clone(),
-                            count: params.len(),
-                        });
-                        for param in params.iter() {
-                            let _ = status_tx.send(EngineStatus::PluginParameterInfo {
-                                channel_id,
-                                device_path: device_path.clone(),
-                                param_id: param.id,
-                                name: param.name.clone(),
-                                min: param.min,
-                                max: param.max,
-                                default: param.default,
-                                group: device.parameter_group(param.id).to_string(),
-                                param_type: param.param_type,
-                                is_hidden: param.is_hidden,
-                                is_read_only: param.is_read_only,
-                                is_bypass: param.is_bypass,
-                                module: param.module.clone(),
-                                enum_values: param.enum_values.clone(),
-                            });
-                        }
+                        send_parameter_list(status_tx, channel_id, device_path, device, params);
                     }
                     // After the parameter list, so Godot doesn't reset them to defaults.
                     for (param_id, value) in restored_values {
@@ -2592,5 +2617,64 @@ mod tests {
             );
             assert_eq!(state.channels[&2].pan_width, expected);
         }
+    }
+
+    /// A channel 2 whose only device is `device`, plus the status receiver for `GetDeviceState`.
+    fn device_state_replies(
+        device: Box<dyn super::super::devices::AudioDevice>,
+    ) -> Vec<EngineStatus> {
+        let mut state = EngineState::default();
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        state.channels.get_mut(&2).unwrap().devices.push(device);
+        while status_rx.try_recv().is_ok() {}
+        process_command(
+            &mut state,
+            AudioCommand::GetDeviceState {
+                channel_id: 2,
+                device_path: DevicePath::root(0),
+            },
+            128,
+            &status_tx,
+        );
+        status_rx.try_iter().collect()
+    }
+
+    #[test]
+    fn get_device_state_resends_loading_state() {
+        let mut sampler = super::super::devices::SamplerDevice::new_for_metadata();
+        sampler.begin_sample_load("req".to_string());
+        let replies = device_state_replies(Box::new(sampler));
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            &replies[0],
+            EngineStatus::DeviceLoadingStateChanged { channel_id: 2, state, .. } if state == "loading"
+        ));
+    }
+
+    #[test]
+    fn get_device_state_skips_empty_dynamic_parameter_list() {
+        // An SFZ device with nothing loaded has no parameters to advertise yet.
+        let sfizz = super::super::devices::SfizzDevice::new_for_metadata(48_000.0);
+        let replies = device_state_replies(Box::new(sfizz));
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            &replies[0],
+            EngineStatus::DeviceLoadingStateChanged { state, .. } if state == "idle"
+        ));
+    }
+
+    #[test]
+    fn get_device_state_is_silent_for_fixed_devices() {
+        let synth = super::super::devices::PolySynthDevice::new(48_000.0);
+        assert!(device_state_replies(Box::new(synth)).is_empty());
     }
 }

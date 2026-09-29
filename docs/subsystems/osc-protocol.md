@@ -196,6 +196,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 | `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
+| `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state` and, for SFZ/CLAP devices, its parameter list (see Recovering missed state) |
 
 `{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
 
@@ -222,6 +223,18 @@ Loading state updates are sent automatically during:
 - Device activation/deactivation that requires loading/unloading resources
 
 Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinners or error messages in the UI.
+
+**Recovering missed state** (`{device}/state/get`, no args). OSC runs over UDP, and the OS drops
+packets when Godot stops polling for a while (e.g. building a large project while the engine
+answers dozens of device loads). The engine replies with:
+- `{device}/loading_state [s:state]`, for devices with a load lifecycle (Sfizz, Sampler, CLAP)
+- `{device}/param/count` + `param/info`, only for devices whose parameters come from loaded
+  content (Sfizz, CLAP) and only once that list is non-empty. Built-ins with fixed parameters
+  keep Godot's registry metadata and get nothing.
+
+Godot asks for every device once, 1 s after the project connects (`Project._resync_device_states`),
+and every 2 s for a device that stays `loading` (`DeviceInstance._schedule_loading_recheck`).
+A re-advertised parameter list keeps Godot's current values and sends them back to the engine.
 
 #### Built-In Devices
 

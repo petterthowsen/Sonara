@@ -541,6 +541,14 @@ impl AudioDevice for SubprocessClapAdapter {
         parameter::get_parameters(&self.param_info_cache)
     }
 
+    fn has_dynamic_parameters(&self) -> bool {
+        true
+    }
+
+    fn loading_state(&self) -> Option<String> {
+        Some(self.load.state_label())
+    }
+
     /// Command thread: fire-and-forget, the host answers asynchronously.
     fn reset(&mut self) {
         let Some(connection) = self.process_manager.instance(self.instance_id) else {

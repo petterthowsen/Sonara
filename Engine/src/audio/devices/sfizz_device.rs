@@ -435,24 +435,6 @@ impl SfizzDevice {
             }
         });
     }
-
-    /// Get current loading state (for status reporting)
-    pub fn get_loading_state_description(&self) -> String {
-        let state = self.loading_state.lock().unwrap();
-        match &*state {
-            LoadingState::Idle => "No SFZ loaded".to_string(),
-            LoadingState::Loading => "Loading...".to_string(),
-            LoadingState::Ready(_) => {
-                let path = self.sfz_path.lock().unwrap();
-                if let Some(p) = &*path {
-                    format!("Ready: {}", p.display())
-                } else {
-                    "Ready".to_string()
-                }
-            }
-            LoadingState::Failed(err) => format!("Failed: {}", err),
-        }
-    }
 }
 
 impl AudioDevice for SfizzDevice {
@@ -675,6 +657,20 @@ impl AudioDevice for SfizzDevice {
         Some(FileLoadingSupport {
             description: "SFZ Sample Files".to_string(),
             extensions: vec![".sfz".to_string(), ".SFZ".to_string()],
+        })
+    }
+
+    fn has_dynamic_parameters(&self) -> bool {
+        true
+    }
+
+    fn loading_state(&self) -> Option<String> {
+        let state = self.loading_state.lock().unwrap();
+        Some(match &*state {
+            LoadingState::Idle => "idle".to_string(),
+            LoadingState::Loading => "loading".to_string(),
+            LoadingState::Ready(_) => "ready".to_string(),
+            LoadingState::Failed(err) => format!("failed:{}", err),
         })
     }
 

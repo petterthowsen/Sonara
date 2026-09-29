@@ -60,6 +60,18 @@ mod tests {
     use crate::audio::ipc::SharedMemoryLayout;
 
     #[test]
+    fn plugin_load_state_label_matches_loading_state_messages() {
+        let load = PluginLoad::new();
+        assert_eq!(load.state_label(), "loading");
+        load.set_failed("no such file".to_string());
+        assert_eq!(load.state_label(), "failed:no such file");
+
+        let load = PluginLoad::new();
+        load.set_crashed("host died".to_string());
+        assert_eq!(load.state_label(), "crashed:host died");
+    }
+
+    #[test]
     fn plugin_load_exposes_shared_memory_only_when_ready() {
         let load = PluginLoad::new();
         assert!(load.shared_memory().is_none());
@@ -269,12 +281,22 @@ impl PluginLoad {
     }
 
     /// The failure message, if loading failed or the subprocess died.
-    #[allow(dead_code)] // Phase 4 sends the reason with the crashed state
     pub fn error(&self) -> Option<String> {
         self.error
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// The state as `{device}/loading_state` reports it: `loading`, `ready`, `failed:{error}` or
+    /// `crashed:{reason}`.
+    pub fn state_label(&self) -> String {
+        match self.state.load(Ordering::Acquire) {
+            READY => "ready".to_string(),
+            FAILED => format!("failed:{}", self.error().unwrap_or_default()),
+            CRASHED => format!("crashed:{}", self.error().unwrap_or_default()),
+            _ => "loading".to_string(),
+        }
     }
 
     /// Frame latency the plugin reported at activation.
