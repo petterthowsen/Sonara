@@ -1,23 +1,53 @@
-[gd_scene load_steps=3 format=3 uid="uid://b7lrguwu6rrj7"]
+[gd_scene load_steps=6 format=3 uid="uid://b7lrguwu6rrj7"]
 
 [ext_resource type="Script" uid="uid://cskinljgd88nm" path="res://clip_editor/tracklist/ClipEditorTrackListItem.gd" id="1_vgqjk"]
+[ext_resource type="Texture2D" path="res://assets/icons/eye.svg" id="2_eye"]
+[ext_resource type="Texture2D" path="res://assets/icons/pencil.svg" id="3_pencil"]
 
 [sub_resource type="LabelSettings" id="LabelSettings_vgqjk"]
 resource_local_to_scene = true
 font_size = 12
 
-[node name="ClipEditorTrackListItem" type="BoxContainer"]
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_btn"]
+
+[node name="ClipEditorTrackListItem" type="PanelContainer"]
 custom_minimum_size = Vector2(0, 24)
 offset_right = 100.0
 offset_bottom = 26.0
 size_flags_horizontal = 3
 script = ExtResource("1_vgqjk")
 
-[node name="Label" type="Label" parent="."]
+[node name="HBox" type="HBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Label" type="Label" parent="HBox"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Double Basses and stuff "
+text = "Track"
 label_settings = SubResource("LabelSettings_vgqjk")
 vertical_alignment = 1
 text_overrun_behavior = 3
+
+[node name="VisibleToggle" type="Button" parent="HBox"]
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+size_flags_vertical = 4
+focus_mode = 0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_btn")
+icon = ExtResource("2_eye")
+flat = true
+icon_alignment = 1
+expand_icon = true
+
+[node name="EditToggle" type="Button" parent="HBox"]
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+size_flags_vertical = 4
+focus_mode = 0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_btn")
+icon = ExtResource("3_pencil")
+flat = true
+icon_alignment = 1
+expand_icon = true

@@ -1,12 +1,15 @@
-[gd_scene load_steps=18 format=3 uid="uid://v2yhv0y6irr0"]
+[gd_scene format=3 uid="uid://v2yhv0y6irr0"]
 
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
-[ext_resource type="Script" path="res://components/RulerStack.gd" id="2_q0vl8"]
+[ext_resource type="Script" uid="uid://cbkvqmm63yl6a" path="res://components/RulerStack.gd" id="2_q0vl8"]
+[ext_resource type="Texture2D" path="res://assets/icons/layers.svg" id="layers_icon"]
+[ext_resource type="Texture2D" path="res://assets/icons/eye.svg" id="eye_icon"]
+[ext_resource type="Texture2D" path="res://assets/icons/pencil.svg" id="pencil_icon"]
 [ext_resource type="PackedScene" uid="uid://bnyr34msk4b3r" path="res://clip_editor/tracklist/ClipEditorTrackList.tscn" id="2_ytm0k"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
-[ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://cbm1a7m6w8hij" path="res://clip_editor/DrumRowHeader.gd" id="4_drumhd"]
+[ext_resource type="Script" uid="uid://sd63b4m32xxr" path="res://components/VPiano.gd" id="4_pgn5n"]
 [ext_resource type="Script" uid="uid://c1mppril77wc7" path="res://clip_editor/NoteLanes.gd" id="5_akhqx"]
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
@@ -48,7 +51,7 @@ colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
 gradient = SubResource("Gradient_aar7r")
 width = 3
 
-[node name="ClipEditor" type="VBoxContainer"]
+[node name="ClipEditor" type="VBoxContainer" unique_id=1678526830]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -58,65 +61,112 @@ theme_override_constants/separation = 0
 script = ExtResource("1_lqnrn")
 metadata/_edit_lock_ = true
 
-[node name="HSplit" type="HSplitContainer" parent="."]
+[node name="HSplit" type="HSplitContainer" parent="." unique_id=455988426]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 6
 
-[node name="LeftPanel" type="PanelContainer" parent="HSplit"]
+[node name="LeftPanel" type="PanelContainer" parent="HSplit" unique_id=170358349]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_1nvnf")
 
-[node name="VBox" type="VBoxContainer" parent="HSplit/LeftPanel"]
+[node name="VBox" type="VBoxContainer" parent="HSplit/LeftPanel" unique_id=1192773891]
 layout_mode = 2
 
-[node name="Header" type="PanelContainer" parent="HSplit/LeftPanel/VBox"]
+[node name="Header" type="PanelContainer" parent="HSplit/LeftPanel/VBox" unique_id=537651789]
 custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_4hncn")
 
-[node name="ClipEditorTrackList" parent="HSplit/LeftPanel/VBox" instance=ExtResource("2_ytm0k")]
+[node name="HeaderMargin" type="MarginContainer" parent="HSplit/LeftPanel/VBox/Header"]
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_right = 8
+
+[node name="HeaderRow" type="HBoxContainer" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="TracksLabel" type="Label" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Tracks"
+vertical_alignment = 1
+
+[node name="AllVisibleToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+size_flags_vertical = 4
+focus_mode = 0
+tooltip_text = "Show or hide all tracks"
+icon = ExtResource("eye_icon")
+flat = true
+icon_alignment = 1
+expand_icon = true
+
+[node name="AllEditableToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+custom_minimum_size = Vector2(26, 26)
+layout_mode = 2
+size_flags_vertical = 4
+focus_mode = 0
+tooltip_text = "Make all tracks editable or not"
+icon = ExtResource("pencil_icon")
+flat = true
+icon_alignment = 1
+expand_icon = true
+
+[node name="ClipEditorTrackList" parent="HSplit/LeftPanel/VBox" unique_id=1225202406 instance=ExtResource("2_ytm0k")]
 custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
+size_flags_vertical = 3
 
-[node name="MainPanel" type="PanelContainer" parent="HSplit"]
+[node name="MainPanel" type="PanelContainer" parent="HSplit" unique_id=167773264]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_akhqx")
 
-[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel"]
+[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel" unique_id=504862989]
 layout_mode = 2
 theme_override_constants/separation = 2
 metadata/_edit_lock_ = true
 
-[node name="PanelContainer" type="HBoxContainer" parent="HSplit/MainPanel/VBox"]
+[node name="PanelContainer" type="HBoxContainer" parent="HSplit/MainPanel/VBox" unique_id=321385408]
 layout_mode = 2
 theme_override_constants/separation = 0
 
-[node name="MainHeader" type="PanelContainer" parent="HSplit/MainPanel/VBox/PanelContainer"]
+[node name="MainHeader" type="PanelContainer" parent="HSplit/MainPanel/VBox/PanelContainer" unique_id=1071228883]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_ytm0k")
 
-[node name="MainOptions" type="HBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader"]
+[node name="MainOptions" type="HBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader" unique_id=1318110066]
 layout_mode = 2
 
-[node name="TrackModeToggle" type="Button" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions"]
+[node name="TrackModeToggle" type="Button" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions" unique_id=1168193401]
 layout_mode = 2
-size_flags_horizontal = 3
+tooltip_text = "Switch to Track Mode"
 toggle_mode = true
-text = "Clip Mode"
+icon = ExtResource("layers_icon")
+flat = true
 
-[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer"]
+[node name="ClipNameLabel" type="Label" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions"]
+layout_mode = 2
+size_flags_horizontal = 3
+vertical_alignment = 1
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="VBox" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer" unique_id=201886406]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Ruler" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/VBox"]
+[node name="Ruler" type="VBoxContainer" parent="HSplit/MainPanel/VBox/PanelContainer/VBox" unique_id=1730314856]
 layout_mode = 2
 size_flags_horizontal = 3
+theme_override_constants/separation = 0
 script = ExtResource("2_q0vl8")
 
-[node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox"]
+[node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox" unique_id=700905690]
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
@@ -126,16 +176,17 @@ note_height = 30
 zoom_sensitivity_v = 3
 scroll_smoothing = 0.41
 
-[node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/MidiEditor"]
+[node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/MidiEditor" unique_id=1568231527]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 metadata/_edit_lock_ = true
 
-[node name="VPiano" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox"]
+[node name="VPiano" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1490754119]
 z_index = 1
 layout_mode = 2
+mouse_filter = 1
 script = ExtResource("4_pgn5n")
 key_color_white = Color(0.69921875, 0.69921875, 0.69921875, 1)
 key_color_black = Color(0.16015625, 0.16015625, 0.16015625, 1)
@@ -144,18 +195,19 @@ key_color_border = Color(0.08235294, 0.08235294, 0.08235294, 1)
 border_width = 3.0
 border_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
 
-[node name="DrumRowHeader" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox"]
-z_index = 1
+[node name="DrumRowHeader" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1671283626]
 visible = false
+z_index = 1
 layout_mode = 2
+mouse_filter = 1
 script = ExtResource("4_drumhd")
 
-[node name="NoteArea" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox"]
+[node name="NoteArea" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1239250274]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 
-[node name="NoteLanes" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="NoteLanes" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1649689557]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -169,7 +221,7 @@ note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
 
-[node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1240778112]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -182,7 +234,7 @@ bar_line_color = Color(0.25, 0.25, 0.25, 1)
 beat_line_color = Color(0.1875, 0.1875, 0.1875, 1)
 subdivision_line_color = Color(0.14453125, 0.14453125, 0.14453125, 1)
 
-[node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=291536170]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -193,14 +245,14 @@ mouse_filter = 2
 horizontal_scroll_mode = 3
 vertical_scroll_mode = 0
 
-[node name="NoteEditor" type="Container" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea/HScroll"]
+[node name="NoteEditor" type="Container" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea/HScroll" unique_id=1955060567]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 focus_mode = 1
 script = ExtResource("1_4hncn")
 
-[node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1376379667]
 z_index = 2
 custom_minimum_size = Vector2(3, 0)
 layout_mode = 1
@@ -211,7 +263,7 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("GradientTexture1D_ytm0k")
 
-[node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea"]
+[node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=386059293]
 z_index = 2
 layout_mode = 1
 anchors_preset = 15
@@ -222,49 +274,49 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("9_ytm0k")
 
-[node name="BottomPanel" type="PanelContainer" parent="."]
+[node name="BottomPanel" type="PanelContainer" parent="." unique_id=1605161909]
 layout_mode = 2
 theme_type_variation = &"PrimaryPanel"
 
-[node name="Toolbar" type="HBoxContainer" parent="BottomPanel"]
+[node name="Toolbar" type="HBoxContainer" parent="BottomPanel" unique_id=910585644]
 layout_mode = 2
 
-[node name="ModeSwitch" type="Button" parent="BottomPanel/Toolbar"]
+[node name="ModeSwitch" type="Button" parent="BottomPanel/Toolbar" unique_id=205584489]
 layout_mode = 2
 tooltip_text = "Switch between the piano roll and Drum View"
 toggle_mode = true
 text = "Drum View"
 
-[node name="NoteMapButton" type="Button" parent="BottomPanel/Toolbar"]
+[node name="NoteMapButton" type="Button" parent="BottomPanel/Toolbar" unique_id=1858930092]
 layout_mode = 2
 tooltip_text = "Note map for this channel"
 text = "Note Map"
 
-[node name="NoteMapPopup" type="PopupMenu" parent="BottomPanel/Toolbar/NoteMapButton"]
+[node name="NoteMapPopup" type="PopupMenu" parent="BottomPanel/Toolbar/NoteMapButton" unique_id=1658372459]
 
-[node name="NoteMapLoad" type="Button" parent="BottomPanel/Toolbar"]
+[node name="NoteMapLoad" type="Button" parent="BottomPanel/Toolbar" unique_id=1947069938]
 layout_mode = 2
 tooltip_text = "Load a note map from the library"
 text = "Load"
 
-[node name="NoteMapEdit" type="Button" parent="BottomPanel/Toolbar"]
+[node name="NoteMapEdit" type="Button" parent="BottomPanel/Toolbar" unique_id=1663129122]
 layout_mode = 2
 tooltip_text = "Edit this channel's note map"
 text = "Edit"
 
-[node name="NoteMapSave" type="Button" parent="BottomPanel/Toolbar"]
+[node name="NoteMapSave" type="Button" parent="BottomPanel/Toolbar" unique_id=220212741]
 layout_mode = 2
 tooltip_text = "Save this note map to the library"
 text = "Save"
 
-[node name="ToolbarSeparator" type="VSeparator" parent="BottomPanel/Toolbar"]
+[node name="ToolbarSeparator" type="VSeparator" parent="BottomPanel/Toolbar" unique_id=1790789765]
 layout_mode = 2
 
-[node name="Quantize" type="Button" parent="BottomPanel/Toolbar"]
+[node name="Quantize" type="Button" parent="BottomPanel/Toolbar" unique_id=910359271]
 layout_mode = 2
 text = "Quantize"
 
-[node name="AuditionToggle" type="Button" parent="BottomPanel/Toolbar"]
+[node name="AuditionToggle" type="Button" parent="BottomPanel/Toolbar" unique_id=1767014579]
 layout_mode = 2
 tooltip_text = "Audition notes: clicking a note plays it on the track's instrument"
 toggle_mode = true

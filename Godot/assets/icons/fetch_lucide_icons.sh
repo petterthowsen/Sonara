@@ -23,6 +23,8 @@ names=(
   monitor-up gallery-horizontal-end copy-plus
   # arranger view toggles (automation lanes, routing)
   spline route
+  # clip editor track list (editability toggle, track-mode switch)
+  pencil pencil-off layers
 )
 
 for n in "${names[@]}"; do

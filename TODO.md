@@ -149,6 +149,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 - [ ] Consider Modifier+right-click to open context menu in NoteEditor?
 - [x?] should probably add a gray line between E/F and between B/C
+- [x?] Clip editor track list: every instrument track is listed with an eye and a pencil toggle (drag to paint, Shift+click solo, revert), hidden tracks aren't drawn, clicking another editable track's note switches to that track, right-click erases across tracks, and the header shows the clip name in clip mode with an icon mode toggle. Spec `docs/specs/007-clip-editor-track-list/`. Implemented and covered headless; needs the live pass (T-012 in tasks.md)
 
 ### Devices
 

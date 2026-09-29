@@ -15,6 +15,9 @@ signal track_mode_track_selected(track: Track)
 @onready var main_header: PanelContainer = $HSplit/MainPanel/VBox/PanelContainer/MainHeader
 @onready var main_header_options: HBoxContainer = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions
 @onready var track_mode_toggle: Button = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions/TrackModeToggle
+@onready var all_visible_toggle: Button = $HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow/AllVisibleToggle
+@onready var all_editable_toggle: Button = $HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow/AllEditableToggle
+@onready var clip_name_label: Label = $HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions/ClipNameLabel
 
 ## Same ruler rows and gestures as the arranger. Its ticks are the note editor's:
 ## clip-content ticks in clip mode, song ticks in track mode (see _ruler_to_song_ticks).
@@ -73,6 +76,12 @@ var last_track_mode_tracks: Array[Track] = []
 var last_track_mode_selected_track: Track = null
 var last_active_clip_by_track := {}  # Track -> ClipInstance
 
+## Visibility, editability and solo of every listed track. Lives for the whole session so the
+## states survive rebinds and clip/track mode switches; never persisted.
+var track_toggles := TrackToggleState.new()
+## Set while the toggle state is being changed in bulk, so _apply_track_toggles runs once.
+var _suppress_toggle_apply := false
+
 # Selected clips and tracks (for track-mode)
 var selected_clips: Array[ClipInstance] = []
 var selected_tracks: Array[Track] = []
@@ -83,6 +92,8 @@ var pending_multi_track: bool = false
 
 # Track the currently bound clip instance for playhead conversion (single-clip mode)
 var bound_clip_instance: ClipInstance = null
+## Clip whose clip_modified the header name follows.
+var _named_clip: Clip = null
 
 func _ready():
 	grid_helper = GridHelper.new()
@@ -98,6 +109,14 @@ func _ready():
 	ruler.selection_start_requested.connect(_on_ruler_selection_start_requested)
 	ruler.box_select_started.connect(_on_ruler_box_select_started)
 	midi_editor.current_track_changed.connect(_mark_ruler_context_dirty)
+	midi_editor.note_track_picked.connect(_on_note_track_picked)
+	track_toggles.changed.connect(_on_track_toggles_changed)
+	track_selector.track_selected.connect(_on_track_selector_track_selected)
+	track_selector.tracks_changed.connect(_on_track_list_changed)
+	all_visible_toggle.pressed.connect(_on_all_toggle_pressed.bind(TrackToggleState.Kind.VISIBLE))
+	all_editable_toggle.pressed.connect(_on_all_toggle_pressed.bind(TrackToggleState.Kind.EDITABLE))
+	track_toggles.changed.connect(_refresh_all_toggles)
+	track_selector.tracks_changed.connect(_refresh_all_toggles)
 	
 	# Wire up Track/Clip mode toggle
 	if track_mode_toggle:
@@ -215,8 +234,9 @@ func _bind_pending_clips():
 	log.info("  - Binding %d clips, track_mode=%s, tracks=%d" % [selected_clips.size(), track_mode, selected_tracks.size()])
 	
 	if track_mode:
-		# TRACK-MODE: Multiple clips across different tracks
-		_bind_track_mode()
+		# TRACK-MODE: Multiple clips across different tracks. A new selection resets the
+		# visibility/editability of every track (REQ-021).
+		_bind_track_mode(true)
 	else:
 		# CLIP-MODE: Single clip or multiple clips on same track
 		_bind_clip_mode()
@@ -226,48 +246,139 @@ func _bind_pending_clips():
 	pending_multi_track = false
 
 
-func _bind_track_mode():
-	"""Bind to track-mode: multiple clips across different tracks with song-relative ruler."""
+## `from_selection`: entered from a new arranger selection, so the toggles are reset from it.
+## Otherwise (re-entry) the toggle states of the previous track-mode session are kept (REQ-021).
+func _bind_track_mode(from_selection: bool = false):
+	"""Bind to track-mode: every instrument track listed, the visible ones drawn."""
 	log.info("  - Entering TRACK-MODE (song-relative positioning)")
 	_update_mode_ui()
 	log.info("  - Track-mode tracks: %d" % [selected_tracks.size()])
-	
-	# Populate track selector with selected tracks
-	if track_selector:
-		# Disconnect previous signal if connected
-		if track_selector.track_selected.is_connected(_on_track_selector_track_selected):
-			track_selector.track_selected.disconnect(_on_track_selector_track_selected)
-		
-		track_selector.set_tracks(selected_tracks)
-		
-		# Connect to track selection signal
-		track_selector.track_selected.connect(_on_track_selector_track_selected)
-		
-		# Select the first track by default
-		if not selected_tracks.is_empty():
-			var initial_track = last_track_mode_selected_track if last_track_mode_selected_track and selected_tracks.has(last_track_mode_selected_track) else selected_tracks[0]
-			track_selector.select_track_no_signal(initial_track)
-			log.info("  - TrackList initial track: '%s'" % [initial_track.name if initial_track else "null"])
-	
+
+	_suppress_toggle_apply = true
+	track_selector.set_toggle_state(track_toggles)
+	track_selector.set_project(_project())
+	track_selector.rebuild_now()
+	var listed := _listed_tracks()
+	if from_selection:
+		track_toggles.init_from_selection(listed, selected_tracks)
+	else:
+		track_toggles.set_tracks(listed)
+	_suppress_toggle_apply = false
+
 	# In track-mode, the ruler and grid show song-relative positions
 	# The playhead conversion in _on_editor_playhead_moved will NOT subtract clip offset
 	# This means tick 0 = song start, not clip start
-	
+
 	# Bind MidiEditor to track-mode
 	# NOTE: MidiEditor now fetches ALL clips from each track internally
-	midi_editor.bind_to_clips(selected_clips, selected_tracks)
+	midi_editor.bind_to_clips(selected_clips, _visible_tracks())
 	# Keep bound_clip_instance for reference, but track_mode flag determines playhead behavior
 	if not selected_clips.is_empty():
 		bound_clip_instance = selected_clips[0]
 
-	# Restore or set active track
-	if last_track_mode_selected_track and selected_tracks.has(last_track_mode_selected_track):
-		midi_editor.current_track = last_track_mode_selected_track
-	else:
-		midi_editor.current_track = selected_tracks[0] if not selected_tracks.is_empty() else null
+	# Restore the remembered active track when it is still editable, else the first editable one
+	var preferred: Track = last_track_mode_selected_track if listed.has(last_track_mode_selected_track) else null
+	_apply_track_toggles(preferred)
+	_refresh_all_toggles()
 	log.info("  - Active track set to: '%s'" % [midi_editor.current_track.name if midi_editor and midi_editor.current_track else "null"])
 	call_deferred("_apply_drum_view_preference")
 	_mark_ruler_context_dirty()
+
+
+## The project the listed tracks come from.
+func _project() -> Project:
+	if _editor and _editor.project:
+		return _editor.project
+	for t in selected_tracks + last_track_mode_tracks:
+		if t and t.get_project_ref():
+			return t.get_project_ref()
+	return null
+
+
+func _listed_tracks() -> Array[Track]:
+	return track_selector.listed_tracks()
+
+
+func _visible_tracks() -> Array[Track]:
+	var out: Array[Track] = []
+	for t in _listed_tracks():
+		if track_toggles.is_on(t, TrackToggleState.Kind.VISIBLE):
+			out.append(t)
+	return out
+
+
+## Header toggles: turn every listed track on, or off when they all already are.
+func _on_all_toggle_pressed(kind: int) -> void:
+	var listed := _listed_tracks()
+	track_toggles.set_all(listed, kind, not track_toggles.all_on(listed, kind))
+
+
+func _refresh_all_toggles() -> void:
+	var listed := _listed_tracks()
+	var vis := track_toggles.all_on(listed, TrackToggleState.Kind.VISIBLE)
+	var edit := track_toggles.all_on(listed, TrackToggleState.Kind.EDITABLE)
+	all_visible_toggle.icon = ClipEditorTrackListItem.EYE_ON if vis else ClipEditorTrackListItem.EYE_OFF
+	all_editable_toggle.icon = ClipEditorTrackListItem.PENCIL_ON if edit else ClipEditorTrackListItem.PENCIL_OFF
+	# Mixed states (some tracks on) read as dimmed rather than as "off".
+	all_visible_toggle.modulate.a = 1.0 if vis or not _any_on(listed, TrackToggleState.Kind.VISIBLE) else 0.6
+	all_editable_toggle.modulate.a = 1.0 if edit or not _any_on(listed, TrackToggleState.Kind.EDITABLE) else 0.6
+
+
+func _any_on(tracks: Array[Track], kind: int) -> bool:
+	for t in tracks:
+		if track_toggles.is_on(t, kind):
+			return true
+	return false
+
+
+func _on_track_toggles_changed() -> void:
+	if not _suppress_toggle_apply and track_mode:
+		_apply_track_toggles()
+
+
+func _on_track_list_changed() -> void:
+	# Tracks were added, removed or reordered in the project.
+	if track_mode and not _suppress_toggle_apply:
+		track_toggles.set_tracks(_listed_tracks())
+		_apply_track_toggles()
+
+
+## Pushes the toggle state to the note editor and repairs the selection (REQ-022, 031, 032).
+## `preferred` is selected when it is editable.
+func _apply_track_toggles(preferred: Track = null) -> void:
+	if not track_mode:
+		return
+	var listed := _listed_tracks()
+	var editable: Array[Track] = []
+	for t in listed:
+		if track_toggles.is_editable(t):
+			editable.append(t)
+	midi_editor.set_track_views(_visible_tracks(), selected_clips)
+	midi_editor.editable_tracks = editable
+	_ensure_valid_selection(preferred)
+	_mark_ruler_context_dirty()
+
+
+## Keeps the selected track effectively editable: the current one if it is, else `preferred`,
+## else the first editable track in list order, else none (REQ-031).
+func _ensure_valid_selection(preferred: Track = null) -> void:
+	var listed := _listed_tracks()
+	var current: Track = midi_editor.current_track
+	var target: Track = null
+	if preferred and track_toggles.is_editable(preferred):
+		target = preferred
+	elif current and listed.has(current) and track_toggles.is_editable(current):
+		target = current
+	else:
+		target = track_toggles.first_editable(listed)
+	var changed: bool = target != current
+	if changed:
+		midi_editor.current_track = target
+	track_selector.select_track_no_signal(target)
+	if target:
+		last_track_mode_selected_track = target
+		if changed:
+			track_mode_track_selected.emit(target)
 
 
 func _bind_clip_mode():
@@ -283,6 +394,7 @@ func _bind_clip_mode():
 			log.info("  - Clip's track: '%s'" % [clip_inst.track.name])
 		midi_editor.bind_to_clip_instance(clip_inst)
 		bound_clip_instance = clip_inst
+		_update_clip_name()
 	call_deferred("_apply_drum_view_preference")
 	_mark_ruler_context_dirty()
 
@@ -631,7 +743,7 @@ func _rebuild_ruler_regions() -> void:
 		var active_track: Track = midi_editor.current_track
 		var others: Array = []
 		var mine: Array = []
-		for t in selected_tracks:
+		for t in _visible_tracks():
 			if not is_instance_valid(t):
 				continue
 			_watch_ruler(t.color_changed, _mark_ruler_context_dirty.unbind(1))
@@ -699,10 +811,25 @@ func _update_mode_ui():
 	if track_mode_toggle:
 		# Avoid feedback loop when syncing pressed state
 		track_mode_toggle.set_pressed_no_signal(track_mode)
-		track_mode_toggle.text = "Track Mode" if track_mode else "Clip Mode"
+		track_mode_toggle.tooltip_text = "Switch to Clip Mode" if track_mode else "Switch to Track Mode"
 		# Disable only when neither a selection nor remembered tracks exist
 		track_mode_toggle.disabled = selected_clips.is_empty() and pending_clips.is_empty() and last_track_mode_tracks.is_empty()
+	if clip_name_label:
+		clip_name_label.visible = not track_mode
+		_update_clip_name()
 	log.info("  - UI mode: %s, left_panel=%s, toggle_disabled=%s" % ["TRACK" if track_mode else "CLIP", str(left_panel.visible if left_panel else false), str(track_mode_toggle.disabled if track_mode_toggle else false)])
+
+
+## Header label: the bound clip's name in clip mode, kept current when it is renamed.
+func _update_clip_name() -> void:
+	var clip: Clip = bound_clip_instance.clip if bound_clip_instance and not track_mode else null
+	if clip != _named_clip:
+		if _named_clip and is_instance_valid(_named_clip) and _named_clip.clip_modified.is_connected(_update_clip_name):
+			_named_clip.clip_modified.disconnect(_update_clip_name)
+		_named_clip = clip
+		if _named_clip:
+			_named_clip.clip_modified.connect(_update_clip_name)
+	clip_name_label.text = clip.name if clip else ""
 
 
 func _on_track_mode_toggle_toggled(pressed: bool):
@@ -755,9 +882,20 @@ func _on_track_selector_track_selected(track: Track):
 	"""Handle track selection from track selector - update active track in MidiEditor."""
 	log.info("Track selected from selector: %s" % track.name)
 	if midi_editor and track_mode:
-		midi_editor.current_track = track
-		last_track_mode_selected_track = track
+		# The selected track is always visible and editable (REQ-030).
+		_suppress_toggle_apply = true
+		track_toggles.set_on(track, TrackToggleState.Kind.VISIBLE, true)
+		track_toggles.set_on(track, TrackToggleState.Kind.EDITABLE, true)
+		_suppress_toggle_apply = false
+		_apply_track_toggles(track)
 		log.info("  - Active track changed to: '%s'" % [track.name])
+	track_mode_track_selected.emit(track)
+
+
+## A note of another track was clicked in the note editor: mirror the switch in the list.
+func _on_note_track_picked(track: Track) -> void:
+	track_selector.select_track_no_signal(track)
+	last_track_mode_selected_track = track
 	track_mode_track_selected.emit(track)
 
 
