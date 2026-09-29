@@ -701,6 +701,9 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 	device_instance.set_channel(self)
 	device_instance.set_parent_device(parent)
 	_reindex_host(host)
+	# A new slot chain (see SlotChain) arrives holding its device.
+	for child in device_instance.children:
+		_wire_loaded_device(child, device_instance)
 
 	var relay := _on_device_parameter_changed.bind(device_instance)
 	if not device_instance.parameter_changed.is_connected(relay):
@@ -890,6 +893,19 @@ func _find_device_by_id_in(host: Array[DeviceInstance], instance_id: String) -> 
 	return null
 
 
+## Device paths (as in AutomationTarget.device_path) of devices that were wrapped into slot chains
+## on load. Project.from_json uses them to fix automation paths, then clears them.
+var migrated_slot_paths: Array = []
+
+
+func _collect_migrated_slot_paths(inst: DeviceInstance, path: Array) -> void:
+	for i in inst.migrated_slot_positions:
+		migrated_slot_paths.append(path + [i])
+	inst.migrated_slot_positions.clear()
+	for i in inst.children.size():
+		_collect_migrated_slot_paths(inst.children[i], path + [i])
+
+
 func _wire_loaded_device(device_instance: DeviceInstance, parent: DeviceInstance) -> void:
 	## Restore parent links, positions, and channel ids after project load.
 	device_instance.channel_id = id
@@ -980,6 +996,7 @@ static func from_json(data: Dictionary) -> Channel:
 			if device_instance:
 				channel.devices.append(device_instance)
 				channel._wire_loaded_device(device_instance, null)
+				channel._collect_migrated_slot_paths(device_instance, [channel.devices.size() - 1])
 				device_instance.parameter_changed.connect(
 					channel._on_device_parameter_changed.bind(device_instance)
 				)

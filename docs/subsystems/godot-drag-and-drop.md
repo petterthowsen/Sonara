@@ -12,7 +12,7 @@ Implementations (payload, resolver, owner, test):
   `tests/test_mixer_channel_drop.gd`
 - Arranger tracks: `arranger/tracklist/TrackDrag.gd`, `arranger/tracklist/TrackDropTarget.gd`,
   `arranger/tracklist/TrackList.gd`, `tests/test_track_drop.gd`
-- Devices (DeviceLane, nested container folders, mixer compact lists): `devices/DeviceDrag.gd`,
+- Devices (DeviceLane and its open container slots, mixer compact lists): `devices/DeviceDrag.gd`,
   `devices/DeviceDropTarget.gd`, `devices/DeviceChainDropHost.gd`, `tests/test_device_drop.gd`,
   `tests/test_device_drop_channels.gd`
   - A device can move to another channel's row (`DeviceTransferCommand`) unless it owns aux return
@@ -48,6 +48,8 @@ Implementations (payload, resolver, owner, test):
    - *Drop onto / into a container* (group header, folder, slot): a glowing outline of that header
      with a faint fill. Outline only the header, not the whole item and its children.
    Use `DropIndicator` instead of drawing a new style.
+   Exception: device rows glow in the color of the slot the drop lands in, or the channel color
+   at a channel's root chain (`DeviceChainDropHost.indicator_color`).
 5. **One resolver.** Put "what happens if dropped at this point" in a single
    static `resolve(owner, drag, global_mouse) -> Target` returning a `kind`, the model arguments
    (parent, after-sibling …) and `indicator_rect`. `_can_drop_data`, `_drop_data` and the indicator

@@ -1,9 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://drvull75p327n"]
+[gd_scene format=3 uid="uid://drvull75p327n"]
 
 [ext_resource type="Script" uid="uid://btvk585a1oian" path="res://devices/builtin/ChainDefaultView.gd" id="1_3lmch"]
 
 [node name="ChainDefaultView" type="Control"]
-visible = false
-custom_minimum_size = Vector2(0, 0)
+custom_minimum_size = Vector2(168, 200)
 layout_mode = 3
+size_flags_horizontal = 3
+size_flags_vertical = 3
 script = ExtResource("1_3lmch")

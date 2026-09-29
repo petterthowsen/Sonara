@@ -1,7 +1,7 @@
 # DeviceDropUtil.gd
 # Shared drop rules for adding/reordering devices on a channel or inside a container.
 # Drag data may be a DeviceDrag, a DeviceInstance or an Asset; DeviceDrag is unwrapped here.
-# Every drop target (device lane, mixer strip, compact list, container folder, drum pad,
+# Every drop target (device lane, mixer strip, compact list, container slot, drum pad,
 # AI tools) goes through these so they accept and do the same thing.
 # Drops are synchronous: files for new devices are queued on the instance and loaded by
 # Channel.add_device() right after the engine is told to create the device.
@@ -214,6 +214,9 @@ static func drop_instance(
 ) -> void:
 	if not can_drop_instance_on_host(channel, inst, to_parent):
 		return
+	if SlotChain.is_slot_parent(to_parent) and inst.get_parent_device() != to_parent and not SlotChain.is_chain(inst):
+		HistoryUtil.execute_many("Move Device", _new_slot_commands(channel, inst, to_parent, to_position))
+		return
 	if inst.get_channel() != channel:
 		HistoryUtil.execute(DeviceTransferCommand.new(inst, channel, to_parent, to_position))
 		return
@@ -230,6 +233,28 @@ static func drop_instance(
 			HistoryUtil.execute(DeviceMoveCommand.new(channel, from_position, dest, to_parent))
 		return
 	HistoryUtil.execute(DeviceRelocateCommand.new(channel, inst, to_parent, to_position))
+
+
+## Commands that move `inst` into Layer or Drum Machine `parent` as a new slot at `position` (on
+## pad `note` for a Drum Machine, -1 = next free): an empty slot chain, then the device into it.
+static func _new_slot_commands(
+	channel: Channel,
+	inst: DeviceInstance,
+	parent: DeviceInstance,
+	position: int,
+	note: int = -1
+) -> Array[Command]:
+	var cmds: Array[Command] = []
+	var chain := SlotChain.empty(channel.id, inst.get_display_name())
+	if chain == null:
+		return cmds
+	chain.slot_note = note
+	cmds.append(DeviceAddCommand.new(channel, chain, position, parent))
+	if inst.get_channel() != channel:
+		cmds.append(DeviceTransferCommand.new(inst, channel, chain, 0))
+	else:
+		cmds.append(DeviceRelocateCommand.new(channel, inst, chain, 0))
+	return cmds
 
 
 ## True when `path`'s extension is in the device's advertised file-loading list.
@@ -346,8 +371,10 @@ static func can_drop_on_drum_pad(
 		return false
 	var asset := data as Asset
 	if occupied:
-		var target := find_file_loading_descendant(occupied)
-		return can_drop_file_on_device(target, asset)
+		# A file loads into the pad's sampler; anything else joins the pad's chain.
+		if can_drop_file_on_device(find_file_loading_descendant(occupied), asset):
+			return true
+		return occupied.is_container() and (asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device)
 	if asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device:
 		return true
 	return false
@@ -374,6 +401,10 @@ static func drop_on_drum_pad(
 		var target := find_file_loading_descendant(occupied)
 		if can_drop_file_on_device(target, asset):
 			target.load_file(asset.path)
+		elif occupied.is_container():
+			var added := _sampler_for(asset, channel.id) if asset.type == Asset.TYPE.Audio else instance_for_asset(asset, channel.id)
+			if added:
+				HistoryUtil.execute(DeviceAddCommand.new(channel, added, -1, occupied))
 		return
 	var device_instance: DeviceInstance = null
 	if asset.type == Asset.TYPE.Audio:
@@ -386,7 +417,8 @@ static func drop_on_drum_pad(
 	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1, container))
 
 
-## Move `inst` onto `note`, swapping with `occupied` when that pad already has a child.
+## Move `inst` onto `note`. A pad moved onto another pad swaps notes with it; a device joins the
+## chain of an occupied pad, or becomes a new slot on an empty one.
 static func _drop_instance_on_drum_pad(
 	channel: Channel,
 	container: DeviceInstance,
@@ -406,6 +438,11 @@ static func _drop_instance_on_drum_pad(
 			HistoryUtil.execute_property("Move Drum Pad", inst, "set_slot_note", inst.slot_note, note)
 		return
 	if occupied:
+		if occupied.is_container():
+			drop_instance(channel, inst, occupied, -1)
+		return
+	if not SlotChain.is_chain(inst):
+		HistoryUtil.execute_many("Move Device", _new_slot_commands(channel, inst, container, -1, note))
 		return
 	inst.slot_note = note
 	drop_instance(channel, inst, container, -1)

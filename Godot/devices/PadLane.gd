@@ -1,9 +1,10 @@
 # PadLane.gd
 # Device chain of a drum pad's return channel, as the device lane and mixer strip show it:
-# [pad device][return channel devices...]. The pad device is the Drum Machine child on the pad's
-# note (it gets the MIDI, like the first device of any instrument channel); the rest live on the
-# return channel. Edits are expressed as a target lane and turned into undoable device commands.
-# See docs/specs/001-multi-out-devices (REQ-015–019).
+# [pad chain][return channel devices...]. The pad chain is the Drum Machine's slot chain on the
+# pad's note (see SlotChain); it gets the MIDI, and the device lane shows its devices in its open
+# slot. It stays first: devices go into it through its slot, not by being dropped before it. The
+# rest live on the return channel. Edits are expressed as a target lane and turned into undoable
+# device commands. See docs/specs/001-multi-out-devices (REQ-015–019).
 class_name PadLane extends RefCounted
 
 
@@ -12,7 +13,7 @@ static func is_pad_lane(channel: Channel) -> bool:
 	return channel != null and AuxReturnSync.get_pad_drum(channel) != null
 
 
-## Devices in lane order: the pad device (if any), then the return channel's own devices.
+## Devices in lane order: the pad chain (if any), then the return channel's own devices.
 static func devices(channel: Channel) -> Array[DeviceInstance]:
 	var out: Array[DeviceInstance] = []
 	var pad := AuxReturnSync.get_pad_device(channel)
@@ -22,48 +23,60 @@ static func devices(channel: Channel) -> Array[DeviceInstance]:
 	return out
 
 
-## Whether dropping `data` at lane index `index` (-1 = end) does something.
+## Whether `data` may be dropped at lane index `index` (-1 = end). Dropping a device back where it
+## is counts; `changes` tells it apart. Nothing lands before the pad chain or moves it; on an empty
+## pad, an asset at the front becomes the pad's first device.
 static func can_drop(channel: Channel, data: Variant, index: int) -> bool:
 	if not is_pad_lane(channel):
 		return false
 	var lane := devices(channel)
 	var at := _clamp_index(lane, index)
+	var has_pad := AuxReturnSync.get_pad_device(channel) != null
+	if has_pad and at == 0:
+		return false
 	if data is DeviceInstance:
 		var from := lane.find(data)
-		return from >= 0 and _moved(lane, from, at) != lane
+		return from >= 0 and not (has_pad and from == 0) and not (not has_pad and at == 0)
 	if not data is Asset:
 		return false
 	var asset := data as Asset
-	if at == 0:  # Whatever lands first becomes the pad device.
+	if at == 0:
 		return asset.type == Asset.TYPE.Device or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Audio
 	return DeviceDropUtil.can_drop_asset_on_channel(channel, asset)
 
 
-## Add an asset or move a lane device to lane index `index` (-1 = end), as one undo step.
-static func drop(channel: Channel, data: Variant, index: int) -> void:
+## Whether dropping `data` at lane index `index` (-1 = end) changes anything.
+static func changes(channel: Channel, data: Variant, index: int) -> bool:
 	if not can_drop(channel, data, index):
+		return false
+	if not data is DeviceInstance:
+		return true
+	var lane := devices(channel)
+	return _moved(lane, lane.find(data), _clamp_index(lane, index)) != lane
+
+
+## Add an asset or move a return channel device to lane index `index` (-1 = end), as one undo step.
+static func drop(channel: Channel, data: Variant, index: int) -> void:
+	if not changes(channel, data, index):
 		return
 	var lane := devices(channel)
 	var at := _clamp_index(lane, index)
 	var has_pad := AuxReturnSync.get_pad_device(channel) != null
 	if data is DeviceInstance:
-		# Moving the pad device behind another device makes that device the pad device.
-		HistoryUtil.execute_many("Move Device", commands(channel, _moved(lane, lane.find(data), at), has_pad or at == 0))
+		HistoryUtil.execute_many("Move Device", commands(channel, _moved(lane, lane.find(data), at), has_pad))
 		return
 	var asset := data as Asset
 	var drum := AuxReturnSync.get_pad_drum(channel)
-	var becomes_pad := at == 0
-	var host_id := drum.get_channel().id if becomes_pad else channel.id
-	var inst: DeviceInstance = null
-	if asset.type == Asset.TYPE.Audio:
-		inst = DeviceDropUtil._sampler_for(asset, host_id)
-	else:
-		inst = DeviceDropUtil.instance_for_asset(asset, host_id)
+	if at == 0:
+		# Empty pad: the device goes into a new slot chain on the pad's note, which adopts this return.
+		DeviceDropUtil.drop_on_drum_pad(drum.get_channel(), drum, channel.aux_pad_note, asset)
+		return
+	var inst: DeviceInstance = DeviceDropUtil.instance_for_asset(asset, channel.id)
 	if inst == null:
 		return
 	var target := lane.duplicate()
 	target.insert(at, inst)
-	HistoryUtil.execute_many("Add Device", commands(channel, target, has_pad or becomes_pad))
+	HistoryUtil.execute_many("Add Device", commands(channel, target, has_pad))
 
 
 ## Commands that turn the current lane into `target`. When `has_pad`, target[0] is the pad

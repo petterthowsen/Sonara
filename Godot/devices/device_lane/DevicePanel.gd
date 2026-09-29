@@ -3,16 +3,12 @@ class_name DevicePanel extends PanelContainer
 
 var logger : Log = Log.make("DevicePanel")
 
-const ICON_FOLDOUT_CLOSED: Texture2D = preload("res://assets/icons/chevron-right.svg")
-const ICON_FOLDOUT_OPEN: Texture2D = preload("res://assets/icons/chevron-left.svg")
-
-## Top header: light, name, children foldout. Drops onto it go onto the device.
+## Top header: light and name. Drops onto it go onto the device.
 @onready var header : PanelContainer = $VBox/TopHeader
 
 # light button toggles inactive/active and enabled/disabled
 @onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
 @onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
-@onready var folder_button: Button = $VBox/TopHeader/HBox/FoldoutToggle
 
 ## Shown only while the bound device is crashed/failed; reloads the plugin host.
 @onready var reload_button: Button = $VBox/TopHeader/HBox/Reload
@@ -33,7 +29,7 @@ var ccs_pane: Control
 var ccs_scroll: ScrollContainer
 var ccs_box: VBoxContainer
 
-# Content row: [Parameters | CCs | File] [View] [children folder]
+# Content row: [Parameters | CCs | File] [View]
 @onready var content_hbox: HBoxContainer = $VBox/HBox/Content/HBox
 @onready var parameters_pane: Control = $VBox/HBox/Content/HBox/Parameters
 @onready var parameters_scroll : ScrollContainer = $VBox/HBox/Content/HBox/Parameters/Scroll
@@ -68,19 +64,17 @@ var _window_open: bool = false
 var _param_list: ParameterList
 var _cc_list: ParameterList
 
-## Container children slide-out (to the right of params + custom UI)
-var folder: ContainerFolder
 ## True while the Parameters tab is open only because the device has no view to show, so it
 ## closes again once a view arrives. Any tab click by the user clears it.
 var _params_auto_opened := false
-var _folder_focus: DeviceInstance = null
 
 signal request_context_menu()
+## The Panel view asked for the context menu of one of the device's slot chains.
+signal request_child_context_menu(child: DeviceInstance)
 
 func _ready() -> void:
 	_create_cc_tab()
 	_create_parameter_lists()
-	_create_container_folder()
 
 	# Parameters/CCs/File share a ButtonGroup; clicking the active tab collapses its pane.
 	params_button.button_group.allow_unpress = true
@@ -92,7 +86,6 @@ func _ready() -> void:
 	view_button.toggled.connect(_on_view_toggled)
 	window_button.toggled.connect(_on_window_toggled)
 	simple_button.toggled.connect(_on_simple_toggled)
-	folder_button.toggled.connect(_on_folder_toggled)
 	reload_button.pressed.connect(_on_reload_pressed)
 
 	# Connect file loading
@@ -105,7 +98,6 @@ func _ready() -> void:
 	# Initial state: only the View open. The Parameters tab opens by itself only for a device
 	# with no view (`_apply_default_tab`).
 	view_button.set_pressed_no_signal(true)
-	folder_button.visible = false
 	_update_tab_panes()
 
 	# Drag the device from the header and content areas; drops resolve through DeviceDropTarget.
@@ -149,14 +141,6 @@ func _create_parameter_lists() -> void:
 		ccs_box.add_child(_cc_list)
 
 
-## Slide-out children pane after the custom UI (toggled by the header's FoldoutToggle).
-func _create_container_folder() -> void:
-	folder_button.tooltip_text = "Show contained devices"
-	folder = ContainerFolder.new()
-	folder.name = "ContentFolder"
-	content_hbox.add_child(folder)
-
-
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -198,13 +182,6 @@ func _unbind() -> void:
 	_channel = null
 	_clear_parameter_controls()
 	_clear_panel_and_companion()
-	_folder_focus = null
-	if folder:
-		folder.set_open(false, false)
-		folder.bind_to_container(null)
-	if folder_button:
-		folder_button.visible = false
-		_set_foldout_pressed(false)
 	device = null
 
 
@@ -295,8 +272,6 @@ func bind_to_device(dev : DeviceInstance):
 		_clear_panel_and_companion()
 	_update_view_toggle_visibility()
 	_update_view_pane_visibility()
-
-	_configure_container_folder(dev)
 
 	# Window toggle visibility (native GUI or Window view scene)
 	window_button.visible = dev.device.has_gui() or dev.device.has_window_view()
@@ -546,12 +521,14 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	after_drop_onto(DeviceDropUtil.drop_on_device(device, data))
 
 
-## After a drop onto this panel: reveal a child added to a container, or show a loaded file.
+## After a drop onto this panel: open the slot of a child added to a container (the last child),
+## or show a loaded file.
 func after_drop_onto(added_child: bool) -> void:
 	if device == null:
 		return
 	if added_child:
-		_open_folder_after_drop()
+		if device.is_container() and not device.children.is_empty():
+			device.reveal_child(device.children[device.children.size() - 1])
 	elif not device.loaded_file_path.is_empty():
 		loaded_file_path = device.loaded_file_path
 		file_status_label.text = loaded_file_path.get_file()
@@ -567,8 +544,7 @@ func _load_panel_view(dev: DeviceInstance) -> void:
 	if _panel_view:
 		# Bind first so view has device context before any show/subscription
 		_panel_view.bind_to_device(dev)
-		if not _panel_view.container_child_requested.is_connected(open_container_folder):
-			_panel_view.container_child_requested.connect(open_container_folder)
+		_panel_view.child_context_menu_requested.connect(request_child_context_menu.emit)
 		view_pane.add_child(_panel_view)
 		_panel_view.visible = true
 		if not _panel_view.is_node_ready():
@@ -780,66 +756,3 @@ func _apply_window_state() -> void:
 		_hide_companion_show_panel()
 
 	window_button.set_pressed_no_signal(_window_open)
-
-
-## ============================================================================
-## CONTAINER FOLDER
-## ============================================================================
-
-## Show the folder toggle for container devices and bind the slide-out list.
-func _configure_container_folder(dev: DeviceInstance) -> void:
-	_folder_focus = null
-	if folder_button:
-		folder_button.visible = dev.is_container()
-		_set_foldout_pressed(false)
-	if folder:
-		if dev.is_container():
-			await folder.bind_to_container(dev)
-			await folder.set_focus_child(null)
-			folder.set_open(false, false)
-		else:
-			await folder.bind_to_container(null)
-			folder.set_open(false, false)
-
-
-## Open the children pane, optionally focused on one Layer/Drum slot.
-func open_container_folder(child: DeviceInstance = null) -> void:
-	if device == null or not device.is_container() or folder == null:
-		return
-	_folder_focus = child
-	var single := device.device.container_focuses_one_child()
-	if single and _folder_focus == null and not device.children.is_empty():
-		_folder_focus = device.children[0]
-	await folder.set_focus_child(_folder_focus if single else null)
-	folder.set_open(true)
-	if folder_button:
-		_set_foldout_pressed(true)
-	if _panel_view and _panel_view.has_method("set_focused_child"):
-		_panel_view.set_focused_child(_folder_focus)
-
-
-## Toggle the children pane from the folder header button.
-func _on_folder_toggled(pressed: bool) -> void:
-	if folder == null or device == null or not device.is_container():
-		return
-	if pressed:
-		open_container_folder(_folder_focus)
-	else:
-		folder.set_open(false)
-		_set_foldout_pressed(false)
-
-
-## Sync the FoldoutToggle's pressed state and chevron without re-triggering it.
-func _set_foldout_pressed(pressed: bool) -> void:
-	folder_button.set_pressed_no_signal(pressed)
-	folder_button.icon = ICON_FOLDOUT_OPEN if pressed else ICON_FOLDOUT_CLOSED
-
-
-## After a drop into this container, reveal the new child.
-func _open_folder_after_drop() -> void:
-	if device == null or not device.is_container():
-		return
-	if device.device.container_focuses_one_child() and not device.children.is_empty():
-		open_container_folder(device.children[device.children.size() - 1])
-	else:
-		open_container_folder(null)

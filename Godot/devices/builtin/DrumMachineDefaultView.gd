@@ -1,5 +1,8 @@
-## Drum Machine panel: 4x4 pad grid paged in steps of 16, focusing one child at a time.
+## Drum Machine panel: 4x4 pad grid paged in steps of 16. Clicking a pad, empty or not, opens its
+## slot in the device lane (one at a time); the pager's hide button closes it.
 class_name DrumMachineDefaultView extends DeviceView
+
+const ICON_HIDE_SLOT: Texture2D = preload("res://assets/icons/chevron-left.svg")
 
 const PAGE_SIZE := 16
 const COLS := 4
@@ -12,7 +15,8 @@ const FIRST_NOTE := 36
 
 var _pads: Array[DrumPad] = []
 var _base_note: int = FIRST_NOTE
-var _selected: DeviceInstance = null
+## Hides the open pad slot; visible while one is open.
+var _hide_slot_button: Button = null
 var _sounding_notes: Dictionary = {}
 ## Children whose slot_changed/loading_state_changed are connected. Kept so a child
 ## removed from the machine gets disconnected instead of dangling (see _sync_child_signals).
@@ -28,6 +32,13 @@ func _get_minimum_size() -> Vector2:
 func _ready() -> void:
 	_prev_button.pressed.connect(_on_page.bind(-PAGE_SIZE))
 	_next_button.pressed.connect(_on_page.bind(PAGE_SIZE))
+	_hide_slot_button = Button.new()
+	_hide_slot_button.icon = ICON_HIDE_SLOT
+	_hide_slot_button.flat = true
+	_hide_slot_button.tooltip_text = "Hide the pad's devices"
+	_hide_slot_button.visible = false
+	_hide_slot_button.pressed.connect(_on_hide_slot_pressed)
+	$Pager.add_child(_hide_slot_button)
 	for child in _grid.get_children():
 		var pad := child as DrumPad
 		if pad == null:
@@ -36,6 +47,7 @@ func _ready() -> void:
 		pad.triggered.connect(_on_pad_triggered)
 		pad.released.connect(_on_pad_released)
 		pad.drop_requested.connect(_on_pad_drop)
+		pad.context_requested.connect(_on_pad_context)
 		_pads.append(pad)
 
 
@@ -50,6 +62,8 @@ func _on_bind() -> void:
 			device.child_removed.connect(_on_children_changed)
 		if not device.child_moved.is_connected(_on_children_changed):
 			device.child_moved.connect(_on_children_changed)
+		if not device.slots_changed.is_connected(_on_children_changed):
+			device.slots_changed.connect(_on_children_changed)
 	_rebuild()
 
 
@@ -61,6 +75,8 @@ func _on_unbind() -> void:
 		device.child_removed.disconnect(_on_children_changed)
 	if device.child_moved.is_connected(_on_children_changed):
 		device.child_moved.disconnect(_on_children_changed)
+	if device.slots_changed.is_connected(_on_children_changed):
+		device.slots_changed.disconnect(_on_children_changed)
 	for child in _tracked_children:
 		if child.slot_changed.is_connected(_on_children_changed):
 			child.slot_changed.disconnect(_on_children_changed)
@@ -76,10 +92,18 @@ func _on_view_hidden() -> void:
 	_release_all_sounding()
 
 
-## Highlight the pad whose child is shown in the folder.
-func set_focused_child(child: DeviceInstance) -> void:
-	_selected = child
-	_rebuild()
+## Note of the pad whose slot is open in the device lane (occupied or empty), or -1.
+func _open_note() -> int:
+	if device == null:
+		return -1
+	var keys: PackedStringArray = device.open_slot_keys()
+	return DeviceInstance.pad_slot_note(keys[0]) if not keys.is_empty() else -1
+
+
+func _on_hide_slot_pressed() -> void:
+	var note := _open_note()
+	if note >= 0:
+		device.set_slot_open(DeviceInstance.pad_slot_key(note), false)
 
 
 ## Rebuild pads when children are added, removed, or reordered.
@@ -102,6 +126,9 @@ func _rebuild() -> void:
 	if device:
 		for child in device.children:
 			by_note[child.slot_note] = child
+	var open_note := _open_note()
+	if _hide_slot_button:
+		_hide_slot_button.visible = open_note >= 0
 	var end_note := mini(_base_note + PAGE_SIZE - 1, 127)
 	if _page_label:
 		_page_label.text = "%s – %s" % [Midi.midi_to_note_name(_base_note), Midi.midi_to_note_name(end_note)]
@@ -112,7 +139,7 @@ func _rebuild() -> void:
 		var note := _base_note + from_bottom * COLS + col
 		var child: DeviceInstance = by_note.get(note, null)
 		_pads[i].setup(note, child, device)
-		_pads[i].set_selected(child != null and child == _selected)
+		_pads[i].set_selected(note == open_note)
 
 
 ## Keep slot/loading subscriptions exactly on the machine's current children, so a
@@ -136,14 +163,16 @@ func _sync_child_signals() -> void:
 			child.loading_state_changed.connect(_on_children_changed)
 
 
-## Focus the occupied pad and open its child in the device folder.
+## Open the pad's slot in the device lane; an empty pad's slot takes drops onto its note.
 func _on_pad_activated(note: int) -> void:
+	if device:
+		device.set_slot_open(DeviceInstance.pad_slot_key(note), true)
+
+
+func _on_pad_context(note: int) -> void:
 	var child := _child_for_note(note)
-	if child == null:
-		return
-	_selected = child
-	set_focused_child(child)
-	container_child_requested.emit(child)
+	if child:
+		child_context_menu_requested.emit(child)
 
 
 ## Send a note-on to this drum machine's channel at the pad's click velocity.
@@ -176,8 +205,7 @@ func _on_pad_drop(note: int, data: Variant) -> void:
 	DeviceDropUtil.drop_on_drum_pad(device.get_channel(), device, note, data)
 	var child := _child_for_note(note)
 	if child:
-		_selected = child
-		container_child_requested.emit(child)
+		device.reveal_child(child)
 	_rebuild()
 
 

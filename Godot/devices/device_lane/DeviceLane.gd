@@ -1,10 +1,5 @@
 class_name DeviceLane extends HBoxContainer
 
-const DevicePanelScene : PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
-
-## Space between device panels, in pixels.
-const PANEL_GAP := 16
-
 ## Gap between the parent header and the channel header, in pixels.
 const PARENT_HEADER_GAP := 4
 
@@ -13,7 +8,8 @@ var logger : Log = Log.make("DeviceLane")
 @onready var header: Panel = $Header
 @onready var header_label: VerticalLabel = $Header/Label
 
-@onready var devices: HBoxContainer = $Content/ScrollContainer/Devices
+## The channel's devices; open container slots sit beside their container (DeviceLaneItem).
+@onready var devices: DeviceRow = $Content/ScrollContainer/Devices
 
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
 
@@ -24,7 +20,7 @@ var _parent_header: Panel = null
 var _parent_header_label: VerticalLabel = null
 ## Spacer between the parent header and the channel header; visible with the parent header.
 var _parent_header_gap: Control = null
-## Device row drop rules; DeviceDropTarget resolves drops for this lane and its nested folders.
+## Device row drop rules; DeviceDropTarget resolves drops for this lane and its open slots.
 var drop_host := DeviceChainDropHost.new()
 ## Glowing drop overlay (top-level, so it never takes layout space), created on first use.
 var _drop_indicator: DropIndicator = null
@@ -33,9 +29,11 @@ var _pad_lane := PadLaneWatcher.new()
 var current_project: Project = null  # Track which project we're listening to
 
 func _ready():
-	if devices:
-		devices.add_theme_constant_override("separation", PANEL_GAP)
+	# Root panels start below the color strip of the slots beside them, so the two line up.
+	devices.panel_top_inset = DeviceSlotGroup.STRIP_HEIGHT
+	devices.context_menu_requested.connect(_on_device_context_menu_requested)
 	drop_host.attach(self, devices, false)
+	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
 	set_process(false)
 	_create_parent_header()
@@ -132,24 +130,19 @@ func clear():
 
 
 func _clear_devices() -> void:
-	for node in devices.get_children():
-		devices.remove_child(node)
-		node.queue_free()
+	devices.clear()
 
 
-## Recreate every panel in lane order (pad lanes only; plain channels update incrementally).
-func _rebuild_devices() -> void:
+## Show the channel's devices (a pad return's pad lane) in order, keeping panels that stay.
+func _sync_devices() -> void:
 	if channel == null:
 		return
-	_clear_devices()
-	var lane: Array[DeviceInstance] = PadLane.devices(channel) if _pad_lane.active() else channel.devices
-	for device_inst in lane:
-		_add_device_panel(device_inst)
+	devices.sync(PadLane.devices(channel) if _pad_lane.active() else channel.devices)
 
 
 func _on_pad_lane_changed() -> void:
 	if _pad_lane.active():
-		_rebuild_devices()
+		_sync_devices()
 
 
 func bind_to_channel(channel : Channel):
@@ -175,7 +168,7 @@ func bind_to_channel(channel : Channel):
 	sb.bg_color = channel.color
 	
 	# set up all devices
-	_rebuild_devices()
+	_sync_devices()
 	
 	# connect to channel events
 	channel.hierarchy_changed.connect(_refresh_parent_header)
@@ -187,47 +180,25 @@ func bind_to_channel(channel : Channel):
 	channel.device_moved.connect(_on_channel_device_moved)
 
 
-func _add_device(device_instance : DeviceInstance, _position : int):
-	if _pad_lane.active():
-		return
-	_add_device_panel(device_instance)
-	drop_host.sort_panels_by_position()
-
-
-func _add_device_panel(device_instance: DeviceInstance) -> void:
-	var dp:DevicePanel = DevicePanelScene.instantiate()
-	dp.bind_to_device(device_instance)
-	
-	dp.request_context_menu.connect(_on_device_panel_request_context_menu.bind(device_instance))
-	
-	devices.add_child(dp)
-
-
-func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
-	for dp in devices.get_children():
-		if dp is DevicePanel:
-			if dp.device == device_instance:
-				return dp
-	
-	return null
-
-
-## Drop the panel of every device that left the root chain. `device_removed` carries the device
-## type id, not the instance, and a move into a container or another channel removes it too.
-func _on_channel_device_remmoved(_position : int, _device_id : String):
-	if _pad_lane.active():
-		return
-	for child in devices.get_children():
-		if child is DevicePanel and not channel.devices.has(child.device):
-			devices.remove_child(child)
-			child.queue_free()
-
-
-func _on_channel_device_moved(from_position: int, to_position: int):
-	"""Handle device moved signal - reorder DevicePanel nodes."""
+func _add_device(_device_instance : DeviceInstance, _position : int):
 	if not _pad_lane.active():
-		drop_host.sort_panels_by_position()
-	logger.info("[DeviceLane] DevicePanel reordered from position %d to %d" % [from_position, to_position])
+		_sync_devices()
+
+
+## Panel showing `device_instance`, at the root or inside an open container slot.
+func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
+	return devices.find_panel(device_instance)
+
+
+## A device left the root chain (removed, nested into a container or moved to another channel).
+func _on_channel_device_remmoved(_position : int, _device_id : String):
+	if not _pad_lane.active():
+		_sync_devices()
+
+
+func _on_channel_device_moved(_from_position: int, _to_position: int):
+	if not _pad_lane.active():
+		_sync_devices()
 
 
 func _on_channel_name_changed(ch_name : String):
@@ -319,7 +290,10 @@ func _on_parent_header_gui_input(event: InputEvent) -> void:
 # SIGNAL HANDLERS
 # ============================================================================
 
-func _on_device_panel_request_context_menu(device_instance : DeviceInstance) -> void:
+## A Drum Machine pad's slot chain, asked for from its pad (`in_slot`), offers Remove Pad (the pad
+## and its return); in the pad's own lane Remove only empties the pad.
+func _on_device_context_menu_requested(device_instance : DeviceInstance, in_slot: bool) -> void:
+	device_context_menu.removes_drum_pad = in_slot
 	device_context_menu.bind_to_device(device_instance)
 	var c_pos = get_global_mouse_position()
 	var c_size = device_context_menu.get_contents_minimum_size()

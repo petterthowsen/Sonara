@@ -194,7 +194,9 @@ func _test_container_body_takes_drops() -> void:
 	_assert(move.kind == _drop_target.Kind.ONTO, "a dragged device over the body goes in too")
 	_assert(move.commit(drag) and chain.children.has(loose), "commit nests the device")
 	await process_frame
-	_assert(lane.find_device_panel(loose) == null or lane.find_device_panel(loose).get_parent() != lane.devices, "the nested device's root panel is gone")
+	var root_devices: Array = lane.devices.items().map(func(item): return item.device)
+	_assert(root_devices == [chain], "the nested device left the root row: %s" % str(root_devices))
+	_assert(chain.is_slot_open(chain.slot_key_for(loose)) and lane.find_device_panel(loose) != null, "and shows in the chain's opened slot")
 
 
 func _test_lists_drop_panels_of_moved_devices() -> void:

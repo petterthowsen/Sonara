@@ -9,6 +9,8 @@ signal activated(note: int)
 signal triggered(note: int, velocity: int)
 signal released(note: int)
 signal drop_requested(note: int, data: Variant)
+## Right-click on an occupied pad: its slot chain's context menu.
+signal context_requested(note: int)
 
 var note: int = 36
 var child: DeviceInstance = null
@@ -61,9 +63,11 @@ func _refresh() -> void:
 		_note_label.text = Midi.midi_to_note_name(note)
 	if _name_label:
 		if child:
+			# The pad's slot chain is named after its first device; a loaded sample says more.
 			var label := child.get_display_name()
-			if not child.loaded_file_path.is_empty():
-				label = child.loaded_file_path.get_file().get_basename()
+			var loader := DeviceDropUtil.find_file_loading_descendant(child)
+			if loader and not loader.loaded_file_path.is_empty():
+				label = loader.loaded_file_path.get_file().get_basename()
 			_name_label.text = label
 		else:
 			_name_label.text = ""
@@ -106,6 +110,10 @@ static func velocity_from_y(local_y: float, height: float) -> int:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and child:
+			context_requested.emit(note)
+			accept_event()
+			return
 		if mb.button_index != MOUSE_BUTTON_LEFT:
 			return
 		if mb.pressed:

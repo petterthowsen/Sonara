@@ -1671,11 +1671,31 @@ static func from_json(data: Dictionary) -> Project:
 		project.tracks.append(track)
 
 	_relink_folder_buses(project)
+	_migrate_slot_automation(project)
 	project._rebuild_channel_child_ids_from_parents()
 	# Before ensure_all, so pad returns re-syncing their names see an already unique namespace.
 	project.dedupe_names()
 	AuxReturnSync.ensure_all(project)
 	return project
+
+
+## Devices wrapped into slot chains on load (see SlotChain) sit one level deeper: point automation
+## lanes that drove them, or anything inside them, through the new slot chain.
+static func _migrate_slot_automation(project: Project) -> void:
+	for track in project.tracks:
+		var ch: Channel = track.get_linked_channel() if track else null
+		if ch == null or ch.migrated_slot_paths.is_empty():
+			continue
+		for lane in track.automation_lanes:
+			var target: AutomationTarget = lane.target
+			if target == null or target.kind != AutomationTarget.Kind.DEVICE_PARAM:
+				continue
+			for wrapped in ch.migrated_slot_paths:
+				if target.device_path.size() >= wrapped.size() and target.device_path.slice(0, wrapped.size()) == wrapped:
+					target.device_path.insert(wrapped.size(), 0)
+					break
+	for ch in project.channels:
+		ch.migrated_slot_paths.clear()
 
 
 ## Re-bind folder and group tracks to their mixer channels after load.

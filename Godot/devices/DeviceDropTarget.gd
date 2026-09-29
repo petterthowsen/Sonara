@@ -35,6 +35,9 @@ var indicator_rect: Rect2 = Rect2()
 ## True when the indicator outlines a rect (a device header or an empty row).
 var outline: bool = false
 
+## Indicator color: the color of the slot the drop lands in, or the channel's at the root.
+var color: Color = DropIndicator.DEFAULT_COLOR
+
 
 ## True when a drop here would do something.
 func is_valid() -> bool:
@@ -56,6 +59,7 @@ static func resolve(root: Control, data: Variant, mouse: Vector2) -> DeviceDropT
 	var row_host := _deepest_host_at(root, mouse)
 	if row_host == null or row_host.channel == null:
 		return target
+	target.color = row_host.indicator_color()
 
 	var list := row_host.panels()
 	var along := mouse.y if row_host.vertical else mouse.x
@@ -67,7 +71,7 @@ static func resolve(root: Control, data: Variant, mouse: Vector2) -> DeviceDropT
 		var header := DeviceChainDropHost.panel_header_rect(p)
 		if header.has_point(mouse) and target._try_onto(p, inst, data, header):
 			return target
-		var rect := p.get_global_rect()
+		var rect := DeviceChainDropHost.panel_body_rect(p)
 		var start := rect.position.y if row_host.vertical else rect.position.x
 		var length := rect.size.y if row_host.vertical else rect.size.x
 		var edge := minf(EDGE, length * 0.25)
@@ -131,7 +135,7 @@ static func update_indicator(root: Control, indicator: DropIndicator) -> DropInd
 	if not target.is_valid():
 		DropIndicator.hide_indicator(indicator)
 		return indicator
-	return DropIndicator.place(root, indicator, target.indicator_rect, target.outline)
+	return DropIndicator.place(root, indicator, target.indicator_rect, target.outline, target.color)
 
 
 ## Drop onto `inst` (child into a container, or a file to load); `header` is outlined.
@@ -140,7 +144,7 @@ func _try_onto(p: Control, inst: DeviceInstance, data: Variant, header: Rect2) -
 		return false
 	kind = Kind.ONTO
 	device = inst
-	panel = p
+	panel = (p as DeviceLaneItem).panel if p is DeviceLaneItem else p
 	indicator_rect = header
 	outline = true
 	return true
@@ -165,22 +169,26 @@ func _try_insert(row_host: DeviceChainDropHost, list: Array[Control], index: int
 static func _insert_line_rect(row_host: DeviceChainDropHost, list: Array[Control], index: int, clip: Rect2) -> Rect2:
 	var vertical := row_host.vertical
 	var gap := float(row_host.row.get_theme_constant("separation"))
+	var margin := row_host.trailing_margin
 	var at: float
 	if index <= 0:
 		var first := list[0].get_global_rect()
 		at = (first.position.y if vertical else first.position.x) - gap * 0.5
 	elif index >= list.size():
 		var last := list[list.size() - 1].get_global_rect()
-		at = (last.end.y if vertical else last.end.x) + gap * 0.5
+		at = (last.end.y if vertical else last.end.x) - margin + (margin + gap) * 0.5
 	else:
 		var prev := list[index - 1].get_global_rect()
 		var next := list[index].get_global_rect()
-		at = ((prev.end.y + next.position.y) if vertical else (prev.end.x + next.position.x)) * 0.5
+		at = ((prev.end.y if vertical else prev.end.x) - margin + (next.position.y if vertical else next.position.x)) * 0.5
+	# Along the row, the owner's visible area bounds the line (it includes the lane's margin and a
+	# slot's lead-in gap, so a line before the first panel isn't pushed onto it).
+	var bounds := DragDrop.visible_rect(row_host.owner) if row_host.owner else clip
 	var half := DropIndicator.LINE_WIDTH * 0.5
 	if vertical:
-		at = clampf(at, clip.position.y + half, clip.end.y - half)
+		at = clampf(at, bounds.position.y + half, bounds.end.y - half)
 	else:
-		at = clampf(at, clip.position.x + half, clip.end.x - half)
+		at = clampf(at, bounds.position.x + half, bounds.end.x - half)
 	# A left-to-right lane gets a vertical line; a stacked list gets a horizontal one.
 	return DropIndicator.line_rect(at, clip, not vertical)
 

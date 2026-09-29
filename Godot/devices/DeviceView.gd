@@ -5,8 +5,9 @@
 
 @abstract class_name DeviceView extends Control
 
-## Layer (and similar) custom UIs emit this to open the parent DevicePanel folder on one child.
-signal container_child_requested(child: DeviceInstance)
+## A container view asks for the device context menu of one of its slot chains (a Layer row or a
+## Drum Machine pad), e.g. to remove the slot.
+signal child_context_menu_requested(child: DeviceInstance)
 
 var device : DeviceInstance
 var channel_id: int

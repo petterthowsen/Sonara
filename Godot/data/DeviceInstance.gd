@@ -23,6 +23,8 @@ signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
 signal child_moved(from_position: int, to_position: int)
 signal slot_changed()
+## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
+signal slots_changed()
 signal name_changed(new_name: String)
 
 
@@ -67,6 +69,11 @@ var slot_solo: bool = false
 
 ## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
 var slot_note: int = -1
+
+## Container slots: color per slot key (random on first use) and the keys shown in the device lane.
+## Saved with the project; see "CONTAINER SLOTS".
+var _slot_colors: Dictionary = {}  # slot key -> Color
+var _open_slots: PackedStringArray = []
 
 ## Mixer channel that receives this pad's extra-out bus (-1 = none).
 var return_channel_id: int = -1
@@ -389,6 +396,210 @@ func contains_device(other: DeviceInstance) -> bool:
 		if child.contains_device(other):
 			return true
 	return false
+
+
+## ============================================================================
+## CONTAINER SLOTS
+## ============================================================================
+## A slot is a chain of devices that the device lane shows beside its container. A Chain has one
+## slot: its own children. Each Layer or Drum Machine child is a slot chain (see SlotChain) whose
+## children are the slot's devices; only one of those slots is open at a time. Drum Machine slots
+## are keyed by pad note ("pad:36"), so an empty pad has a slot too.
+
+## Key of a Chain's single slot.
+const CHAIN_SLOT := "chain"
+
+const PAD_SLOT_PREFIX := "pad:"
+
+
+## Key of the Drum Machine slot on MIDI `note`.
+static func pad_slot_key(note: int) -> String:
+	return PAD_SLOT_PREFIX + str(note)
+
+
+## MIDI note of Drum Machine slot `key`, or -1 for another kind of key.
+static func pad_slot_note(key: String) -> int:
+	if not key.begins_with(PAD_SLOT_PREFIX) or not key.substr(PAD_SLOT_PREFIX.length()).is_valid_int():
+		return -1
+	var note := int(key.substr(PAD_SLOT_PREFIX.length()))
+	return note if note >= 0 and note <= 127 else -1
+
+
+func _is_drum_machine() -> bool:
+	return device != null and device.device_id == "sonara.builtin.drum_machine"
+
+
+## Slot keys of existing slots in display order (empty for a non-container).
+func slot_keys() -> PackedStringArray:
+	var keys := PackedStringArray()
+	if not is_container():
+		return keys
+	if not device.container_focuses_one_child():
+		keys.append(CHAIN_SLOT)
+		return keys
+	for child in children:
+		keys.append(pad_slot_key(child.slot_note) if _is_drum_machine() else child.id)
+	return keys
+
+
+## True when `key` names a slot of this container: an existing one, or any pad of a Drum Machine.
+func has_slot(key: String) -> bool:
+	if _is_drum_machine():
+		return pad_slot_note(key) >= 0
+	return slot_keys().has(key)
+
+
+## The Chain holding slot `key`'s devices: this Chain itself, a Layer's or Drum Machine's slot
+## chain, or null for an empty pad.
+func slot_chain(key: String) -> DeviceInstance:
+	if key == CHAIN_SLOT and is_container() and not device.container_focuses_one_child():
+		return self
+	var note := pad_slot_note(key) if _is_drum_machine() else -1
+	for child in children:
+		if (note >= 0 and child.slot_note == note) or (note < 0 and child.id == key):
+			return child
+	return null
+
+
+## Devices shown in slot `key`. A child that isn't a Chain (never wrapped) is its own slot's device.
+func slot_devices(key: String) -> Array[DeviceInstance]:
+	var out: Array[DeviceInstance] = []
+	var chain := slot_chain(key)
+	if chain == null:
+		return out
+	if chain == self or chain.is_container():
+		out.assign(chain.children)
+	else:
+		out.append(chain)
+	return out
+
+
+## Key of the slot holding `inst` (a slot chain or any device inside it), or "".
+func slot_key_for(inst: DeviceInstance) -> String:
+	if inst == null or inst == self or not contains_device(inst):
+		return ""
+	if not device.container_focuses_one_child():
+		return CHAIN_SLOT
+	for child in children:
+		if child.contains_device(inst):
+			return pad_slot_key(child.slot_note) if _is_drum_machine() else child.id
+	return ""
+
+
+## Slot caption: "Chain" for a Chain's slot, the slot chain's name for a Layer or Drum Machine
+## slot, or the note name of an empty pad.
+func slot_title(key: String) -> String:
+	if key == CHAIN_SLOT:
+		return "Chain"
+	var chain := slot_chain(key)
+	if chain:
+		return chain.get_display_name()
+	var note := pad_slot_note(key)
+	return Midi.midi_to_note_name(note) if note >= 0 else ""
+
+
+## Color of slot `key`. A slot without one gets a random color that is kept from then on.
+func slot_color(key: String) -> Color:
+	if not _slot_colors.has(key):
+		_slot_colors[key] = Color.from_hsv(randf(), 0.6, 0.72)
+	return _slot_colors[key]
+
+
+func set_slot_color(key: String, color: Color) -> void:
+	_slot_colors[key] = color
+	slots_changed.emit()
+
+
+func is_slot_open(key: String) -> bool:
+	return _open_slots.has(key) and has_slot(key)
+
+
+## Open slots in display order (keys of removed children are skipped).
+func open_slot_keys() -> PackedStringArray:
+	var out := PackedStringArray()
+	if _is_drum_machine():
+		for key in _open_slots:
+			if has_slot(key):
+				out.append(key)
+		return out
+	for key in slot_keys():
+		if _open_slots.has(key):
+			out.append(key)
+	return out
+
+
+## Show or hide slot `key` in the device lane. Opening a Layer or Drum Machine slot closes the other.
+func set_slot_open(key: String, open: bool) -> void:
+	if open == is_slot_open(key) or not has_slot(key):
+		return
+	if open and device.container_focuses_one_child():
+		_open_slots = PackedStringArray([key])
+	elif open:
+		_open_slots.append(key)
+	else:
+		_open_slots.remove_at(_open_slots.find(key))
+	slots_changed.emit()
+
+
+func toggle_slot(key: String) -> void:
+	set_slot_open(key, not is_slot_open(key))
+
+
+## Open the slot holding `inst` (after a device lands in this container).
+func reveal_child(inst: DeviceInstance) -> void:
+	set_slot_open(slot_key_for(inst), true)
+
+
+## Slot colors and open slots for the project file, keeping only slots that still exist.
+func _slots_to_json() -> Dictionary:
+	var colors := {}
+	for key in _slot_colors:
+		if has_slot(key):
+			colors[key] = (_slot_colors[key] as Color).to_html(false)
+	return {"colors": colors, "open": Array(open_slot_keys())}
+
+
+func _slots_from_json(data: Variant) -> void:
+	if not data is Dictionary:
+		return
+	var colors: Variant = data.get("colors", {})
+	if colors is Dictionary:
+		for key in colors:
+			_slot_colors[str(key)] = Color.from_string(str(colors[key]), Color.GRAY)
+	var open: Variant = data.get("open", [])
+	if open is Array:
+		_open_slots = PackedStringArray(open.map(func(k): return str(k)))
+
+
+## Positions of children wrapped into slot chains while loading (see `_wrap_slot_children`), so
+## the channel can fix automation paths that pointed into them. Empty after load.
+var migrated_slot_positions: Array[int] = []
+
+
+## Projects saved before slot chains hold Layer and Drum Machine devices directly: wrap each one in
+## a slot chain, and move its slot color and open state from the device's key to the slot's.
+func _wrap_slot_children() -> void:
+	if not SlotChain.is_slot_parent(self):
+		return
+	for i in children.size():
+		var child := children[i]
+		if SlotChain.is_chain(child):
+			continue
+		var old_key := child.id
+		var chain := SlotChain.wrap_device(child)
+		if chain == child:
+			return
+		chain.position = i
+		chain.set_parent_device(self)
+		children[i] = chain
+		migrated_slot_positions.append(i)
+		var new_key := pad_slot_key(chain.slot_note) if _is_drum_machine() else chain.id
+		if _slot_colors.has(old_key):
+			_slot_colors[new_key] = _slot_colors[old_key]
+			_slot_colors.erase(old_key)
+		var open_at := _open_slots.find(old_key)
+		if open_at >= 0:
+			_open_slots[open_at] = new_key
 
 
 ## Parent container, or null at the channel root.
@@ -948,6 +1159,7 @@ func to_json() -> Dictionary:
 		"slot_note": slot_note,
 		"return_channel_id": return_channel_id,
 		"return_channel_ids": return_channel_ids.duplicate(),
+		"slots": _slots_to_json(),
 	}
 
 
@@ -1001,6 +1213,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 			if child:
 				child.set_parent_device(instance)
 				instance.children.append(child)
+	instance._slots_from_json(data.get("slots", {}))
+	instance._wrap_slot_children()
 
 	return instance
 

@@ -1,6 +1,6 @@
 # DeviceChainDropHost.gd
 # One row of device panels that accepts drops: a channel's root chain (DeviceLane,
-# ChannelDeviceList) or a container's children (NestedDeviceList). Knows the row's panels, their
+# ChannelDeviceList) or an open container slot (DeviceSlotGroup). Knows the row's panels, their
 # insert indices and the accept/drop rules. DeviceDropTarget picks the row under the pointer.
 class_name DeviceChainDropHost extends RefCounted
 
@@ -12,6 +12,16 @@ var channel: Channel = null
 
 ## Container whose children the row shows, or null for the channel root.
 var parent: DeviceInstance = null
+
+## Container whose slot the row shows (colors the drop indicator), or null at the channel root.
+## `parent` is the slot's Chain: the container itself for a Chain, else its slot chain.
+var slot_owner: DeviceInstance = null
+
+## Slot of `slot_owner` the row shows ("" at the channel root).
+var slot_key := ""
+
+## MIDI note of an empty Drum Machine pad the row shows (-1 otherwise): drops go onto that pad.
+var pad_note := -1
 
 ## Control whose visible area accepts drops for this row.
 var owner: Control = null
@@ -25,6 +35,10 @@ var vertical: bool = false
 ## Maps a visible panel index (0..panel count) to the host insert index. Defaults to identity.
 var index_for_panel: Callable = Callable()
 
+## Empty space after each panel inside its row entry (DeviceRow.PANEL_MARGIN in the device lane).
+## Insert lines center on the visible gap between panels, not on the entries' edges.
+var trailing_margin := 0.0
+
 
 ## Register `p_owner` (which must expose this host as `drop_host`) with its panel `p_row`.
 func attach(p_owner: Control, p_row: BoxContainer, p_vertical: bool, p_index_for_panel: Callable = Callable()) -> void:
@@ -36,11 +50,32 @@ func attach(p_owner: Control, p_row: BoxContainer, p_vertical: bool, p_index_for
 		owner.add_to_group(GROUP)
 
 
-## Point the row at `p_channel`'s root chain, or at `p_parent`'s children. A drum pad return's
-## root chain is its pad lane (see PadLane): positions are lane indices.
+## Point the row at `p_channel`'s root chain, or at the children of container `p_parent`. A drum
+## pad return's root chain is its pad lane (see PadLane): positions are lane indices.
 func bind(p_channel: Channel, p_parent: DeviceInstance = null) -> void:
 	channel = p_channel
 	parent = p_parent
+	slot_owner = null
+	slot_key = ""
+	pad_note = -1
+
+
+## Point the row at slot `key` of `owner`: its slot chain's children, or an empty pad.
+func bind_slot(p_channel: Channel, owner: DeviceInstance, key: String) -> void:
+	bind(p_channel, owner.slot_chain(key))
+	slot_owner = owner
+	slot_key = key
+	if parent == null:
+		pad_note = DeviceInstance.pad_slot_note(key)
+
+
+## Drop indicator color for this row: the slot's color inside a container, else the channel's.
+func indicator_color() -> Color:
+	if slot_owner:
+		return slot_owner.slot_color(slot_key)
+	if channel:
+		return channel.color
+	return DropIndicator.DEFAULT_COLOR
 
 
 ## Device panels in the row, in display order.
@@ -71,6 +106,8 @@ func insert_index(i: int) -> int:
 
 ## The DeviceInstance a panel shows, or null for other nodes.
 static func panel_device(panel: Node) -> DeviceInstance:
+	if panel is DeviceLaneItem:
+		return (panel as DeviceLaneItem).device
 	if panel is DevicePanel:
 		return (panel as DevicePanel).device
 	if panel is CompactDevicePanel:
@@ -84,15 +121,25 @@ static func panel_header_rect(panel: Control) -> Rect2:
 	return header.get_global_rect() if header else Rect2()
 
 
+## Global rect of the device's own panel. A lane item also spans its container's open slots; the
+## insert and body zones follow the panel alone.
+static func panel_body_rect(panel: Control) -> Rect2:
+	if panel is DeviceLaneItem and (panel as DeviceLaneItem).panel:
+		return (panel as DeviceLaneItem).panel.get_global_rect()
+	return panel.get_global_rect()
+
+
 ## Whether `data` (a DeviceDrag, DeviceInstance or Asset) can be inserted at `position` (-1 = append).
 ## Dropping a device back into its own slot is accepted; `is_noop` tells it apart.
 func can_drop(data: Variant, position: int = -1) -> bool:
 	data = DeviceDrag.unwrap(data)
 	if channel == null:
 		return false
+	if pad_note >= 0:
+		return DeviceDropUtil.can_drop_on_drum_pad(data, null, channel, slot_owner)
+	if slot_owner and parent == null:
+		return false
 	if parent == null and PadLane.is_pad_lane(channel):
-		if data is DeviceInstance:
-			return PadLane.devices(channel).has(data)
 		return PadLane.can_drop(channel, data, position)
 	if data is DeviceInstance:
 		return DeviceDropUtil.can_drop_instance_on_host(channel, data, parent)
@@ -109,8 +156,10 @@ func is_noop(data: Variant, position: int = -1) -> bool:
 	if not data is DeviceInstance:
 		return false
 	var inst := data as DeviceInstance
+	if pad_note >= 0:
+		return false
 	if parent == null and PadLane.is_pad_lane(channel):
-		return not PadLane.can_drop(channel, inst, position)
+		return not PadLane.changes(channel, inst, position)
 	if inst.get_channel() != channel or inst.get_parent_device() != parent:
 		return false
 	var count := parent.children.size() if parent else channel.devices.size()
@@ -123,7 +172,9 @@ func drop(data: Variant, position: int = -1) -> bool:
 	if not can_drop(data, position) or is_noop(data, position):
 		return false
 	data = DeviceDrag.unwrap(data)
-	if parent == null and PadLane.is_pad_lane(channel):
+	if pad_note >= 0:
+		DeviceDropUtil.drop_on_drum_pad(channel, slot_owner, pad_note, data)
+	elif parent == null and PadLane.is_pad_lane(channel):
 		PadLane.drop(channel, data, position)
 	elif data is DeviceInstance:
 		DeviceDropUtil.drop_instance(channel, data, parent, position)

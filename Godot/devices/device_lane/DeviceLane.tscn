@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://devices/device_lane/DeviceLane.gd" id="1_2f6nw"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="2_oh1x1"]
+[ext_resource type="Script" path="res://devices/device_lane/DeviceRow.gd" id="4_row"]
 [ext_resource type="PackedScene" uid="uid://brth8uue4ow8b" path="res://devices/device_lane/DevicePanel.tscn" id="3_m4540"]
 [ext_resource type="PackedScene" uid="uid://boiwqcg0flbqw" path="res://devices/DeviceContextMenu.tscn" id="3_oh1x1"]
 
@@ -38,7 +39,7 @@ font_size = 20
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 8
+theme_override_constants/margin_top = 4
 theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 0
 
@@ -55,6 +56,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 16
+script = ExtResource("4_row")
 
 [node name="Device" parent="Content/ScrollContainer/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
 layout_mode = 2

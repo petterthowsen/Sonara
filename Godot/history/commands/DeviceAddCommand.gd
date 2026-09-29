@@ -1,5 +1,7 @@
 # DeviceAddCommand.gd
-# Undoable addition of a DeviceInstance to a Channel (keeps instance identity).
+# Undoable addition of a DeviceInstance to a Channel (keeps instance identity). A device added
+# straight into a Layer or Drum Machine goes in wrapped in a new slot chain (SlotChain.for_parent);
+# `device_instance` is then that slot chain.
 class_name DeviceAddCommand extends Command
 
 ## Channel that receives the device.
@@ -24,7 +26,7 @@ func _init(
 ) -> void:
 	name = "Add Device"
 	channel = p_channel
-	device_instance = p_device
+	device_instance = SlotChain.for_parent(p_parent, p_device)
 	position = p_position
 	parent = p_parent
 
