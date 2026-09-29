@@ -12,6 +12,7 @@
 ### Mixing & Playback
 
 - [ ] Plugin latency compensation
+- [ ] Pan modes: Stereo Balance (default), Cubase-style Stereo Combined (position + width), Stereo Dual and Mono. Covers the mixer UI for all four modes, undoable mode switches, migrating old Combined projects to Balance, and AI `set_mixer` pan-mode support. Spec: `docs/specs/005-pan-modes/`
 - [x?] Send knobs: right-click opens a menu with a Pre-Fader toggle (undoable, disabled until the send exists); pre-fader sends draw their knob arc in blue. `Godot/tests/test_sends_panel.gd`
 - [x?] Send knobs work in dB (-inf to +12 dB): the tooltip reads dB ("-inf dB" at the bottom), double-click takes a dB value, Ctrl+click resets to -inf
 - [x] Bug (`city_pop_5` project): soloing the Reverb channel appears to stop processing the Drum channel even though Drums sends into it. Solo now uses reach flags per channel (`solo_up`: carries soloed audio, `solo_down`: leads to a soloed channel); a route or send stays when its source is up or its target is down. Fixes a group bus that sends into a soloed reverb (it and its feeders were muted). Covered by `soloed_reverb_*` tests in `mixing.rs`
