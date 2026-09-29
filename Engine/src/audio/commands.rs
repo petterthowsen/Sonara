@@ -79,6 +79,10 @@ pub enum AudioCommand {
         id: ChannelId,
         mode: i32,
     },
+    SetChannelPanWidth {
+        id: ChannelId,
+        width: f32,
+    },
     SetChannelMute {
         id: ChannelId,
         mute: bool,
@@ -941,6 +945,11 @@ pub fn process_command(
         AudioCommand::SetChannelPanMode { id, mode } => {
             if let Some(channel) = state.channels.get_mut(&id) {
                 channel.pan_mode = mode.into();
+            }
+        }
+        AudioCommand::SetChannelPanWidth { id, width } => {
+            if let Some(channel) = state.channels.get_mut(&id) {
+                channel.pan_width = width.clamp(-1.0, 1.0);
             }
         }
         AudioCommand::SetChannelMute { id, mute } => {
@@ -2468,4 +2477,36 @@ pub fn process_command(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pan_width_command_clamps() {
+        let mut state = EngineState::default();
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        for (input, expected) in [(3.0, 1.0), (-3.0, -1.0), (0.4, 0.4)] {
+            process_command(
+                &mut state,
+                AudioCommand::SetChannelPanWidth {
+                    id: 2,
+                    width: input,
+                },
+                128,
+                &status_tx,
+            );
+            assert_eq!(state.channels[&2].pan_width, expected);
+        }
+    }
 }

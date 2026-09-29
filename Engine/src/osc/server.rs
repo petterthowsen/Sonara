@@ -751,6 +751,13 @@ impl OscServer {
                     command_tx.send(AudioCommand::SetChannelPanMode { id, mode: *mode })?;
                 }
             }
+            ["channel", id_str, "pan_width"] => {
+                if let (Ok(id), Some(OscType::Float(width))) =
+                    (id_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetChannelPanWidth { id, width: *width })?;
+                }
+            }
             ["channel", id_str, "mute"] => {
                 if let (Ok(id), Some(OscType::Int(mute))) = (id_str.parse::<usize>(), args.first())
                 {

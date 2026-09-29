@@ -149,8 +149,8 @@ func _channels() -> String:
 		for s in c.send_channels:
 			if s is SendConfig:
 				sends.append("%s@%.1fdB" % [AiTool.describe_route_target(p, s.target_channel_id), s.amount])
-		lines.append("| %s | %s | %.1f | %.2f | %s | %s | %s | %s |" % [
-			_md_cell(c.name), AiTool.channel_kind(c), c.volume, c.pan,
+		lines.append("| %s | %s | %.1f | %s | %s | %s | %s | %s |" % [
+			_md_cell(c.name), AiTool.channel_kind(c), c.volume, AiTool.describe_pan(c),
 			"Y" if c.mute else "", "Y" if c.solo else "",
 			AiTool.describe_route_target(p, c.output_channel_id), ", ".join(sends) if not sends.is_empty() else "—"
 		])

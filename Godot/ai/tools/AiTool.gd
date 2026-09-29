@@ -206,13 +206,31 @@ static func compact_channel(project: Project, c: Channel) -> Dictionary:
 		"name": c.name,
 		"type": channel_kind(c),
 		"volume_db": c.volume,
-		"pan": c.pan,
+		"pan_mode": pan_mode_name(c),
+		"pan": describe_pan(c),
 		"mute": c.mute,
 		"solo": c.solo,
 		"output": describe_route_target(project, c.output_channel_id),
 		"sends": sends,
 		"devices": device_names,
 	}
+
+
+## Lowercase pan mode name used by tools: balance, combined, dual or mono.
+static func pan_mode_name(c: Channel) -> String:
+	return Channel.PanMode.keys()[c.pan_mode].trim_prefix("STEREO_").to_lower()
+
+
+## One-line pan text for the active mode: `balance 0.30`, `combined 0.00 w1.00`,
+## `dual L-1.00 R0.20`, `mono 0.00`.
+static func describe_pan(c: Channel) -> String:
+	var mode := pan_mode_name(c)
+	match c.pan_mode:
+		Channel.PanMode.STEREO_COMBINED:
+			return "%s %.2f w%.2f" % [mode, c.pan, c.pan_width]
+		Channel.PanMode.STEREO_DUAL:
+			return "%s L%.2f R%.2f" % [mode, c.pan_left, c.pan_right]
+	return "%s %.2f" % [mode, c.pan]
 
 
 ## Compact type string for tools and prompts: group, folder_bus, folder, audio, or instrument.

@@ -6,7 +6,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 1 — Engine: pan math and width end to end
 
-- [ ] **T-001** [REQ-001, REQ-002, REQ-003, REQ-004, REQ-005] Pan matrix per mode.
+- [x?] **T-001** [REQ-001, REQ-002, REQ-003, REQ-004, REQ-005] Pan matrix per mode.
   - _Files_: `Engine/src/audio/types.rs`
   - _Output_:
     - `PanMode::default()` returns `StereoBalance`, and each variant has a doc comment.
@@ -19,7 +19,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     (new `mod tests` in `types.rs`), with the REQ examples as asserts.
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-012] Automation drives the Combined position, and the existing test is updated.
+- [x?] **T-002** [REQ-012] Automation drives the Combined position, and the existing test is updated.
   - _Files_: `Engine/src/audio/types.rs`, `Engine/src/audio/automation.rs`
   - _Output_:
     - `pan_combined_automation_moves_position` test: override 1.0 with width 0.5 gives handles
@@ -29,7 +29,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: `cargo test automation` and `cargo test pan_` pass.
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-003, REQ-006] `/channel/{id}/pan_width` OSC message.
+- [x?] **T-003** [REQ-003, REQ-006] `/channel/{id}/pan_width` OSC message.
   - _Files_: `Engine/src/audio/commands.rs`, `Engine/src/osc/server.rs`
   - _Output_:
     - `AudioCommand::SetChannelPanWidth { id, width }`, applied with a clamp to −1..1.
@@ -41,7 +41,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 2 — Godot model
 
-- [ ] **T-004** [REQ-001, REQ-006, REQ-007] Pan state API on `Channel`.
+- [x?] **T-004** [REQ-001, REQ-006, REQ-007] Pan state API on `Channel`.
   - _Files_: `Godot/data/Channel.gd`
   - _Output_:
     - `pan_width = 1.0`, and `pan_mode` defaults to `STEREO_BALANCE`.
@@ -54,14 +54,14 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     round trip.
   - _Depends on_: T-003
 
-- [ ] **T-005** [REQ-008] Undo through `set_pan_state` snapshots.
+- [x?] **T-005** [REQ-008] Undo through `set_pan_state` snapshots.
   - _Files_: `Godot/tests/test_channel_pan.gd`
   - _Output_: Test cases: a `PropertyCommand` on `set_pan_state` undoes and redoes a mode change
     exactly, and a mergeable drag command doesn't merge into a mode-change command.
   - _Verify_: the same test script passes the undo cases.
   - _Depends on_: T-004
 
-- [ ] **T-006** [REQ-010, REQ-011] Persistence and migration.
+- [x?] **T-006** [REQ-010, REQ-011] Persistence and migration.
   - _Files_: `Godot/data/Channel.gd`, `Godot/tests/test_channel_pan.gd`
   - _Output_:
     - `pan_width` is in `JSON_FIELDS`.
@@ -73,7 +73,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 3 — Mixer UI
 
-- [ ] **T-007** [REQ-009] `HDualSlider` pair drag.
+- [x?] **T-007** [REQ-009] `HDualSlider` pair drag.
   - _Files_: `Godot/components/HDualSlider.gd`, `Godot/tests/test_hdual_slider.gd`
   - _Output_:
     - `DragMode.BOTH`, grab radius, and the overlap and Alt rule.
@@ -85,7 +85,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     - an overlap drag goes to `BOTH`, and Alt picks a handle
   - _Depends on_: —
 
-- [ ] **T-008** [REQ-001, REQ-008, REQ-009] `PanControl` for four modes.
+- [x?] **T-008** [REQ-001, REQ-008, REQ-009] `PanControl` for four modes.
   - _Files_: `Godot/mixer/PanControl.gd`, `Godot/mixer/MixerChannel.tscn`
   - _Output_:
     - `PanModePopup` has four items with ids equal to the `PanMode` values.
@@ -100,7 +100,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 4 — AI assistant
 
-- [ ] **T-009** [REQ-013] Pan in AI channel summaries.
+- [x?] **T-009** [REQ-013] Pan in AI channel summaries.
   - _Files_: `Godot/ai/tools/AiTool.gd`, `Godot/ai/prompt/PromptContext.gd`,
     `Godot/ai/chat/SelectionContext.gd`, `Godot/ai/tests/test_set_mixer_pan.gd`
   - _Output_:
@@ -111,7 +111,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     the summary cases for all four modes.
   - _Depends on_: T-004
 
-- [ ] **T-010** [REQ-014] `set_mixer` pan mode and values.
+- [x?] **T-010** [REQ-014] `set_mixer` pan mode and values.
   - _Files_: `Godot/ai/tools/SetMixerTool.gd`, `Godot/ai/tests/test_set_mixer_pan.gd`
   - _Output_:
     - The `pan_mode`/`pan`/`pan_width`/`pan_left`/`pan_right` parameters.

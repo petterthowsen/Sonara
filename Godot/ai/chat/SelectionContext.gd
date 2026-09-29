@@ -196,8 +196,8 @@ static func _channel_item(project: Project, channels: Array) -> Dictionary:
 		for d in c.devices:
 			if d is DeviceInstance and d.device:
 				devices.append(d.address_path(project))
-		descs.append("\"%s\" (%s, %.1f dB, pan %.2f, output %s; devices: %s)" % [
-			c.name, AiTool.channel_kind(c), c.volume, c.pan,
+		descs.append("\"%s\" (%s, %.1f dB, pan %s, output %s; devices: %s)" % [
+			c.name, AiTool.channel_kind(c), c.volume, AiTool.describe_pan(c),
 			AiTool.describe_route_target(project, c.output_channel_id),
 			", ".join(devices) if not devices.is_empty() else "none",
 		])

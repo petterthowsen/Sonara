@@ -17,12 +17,12 @@ enum NoteMapMode {
 	NAMED,  # A user map, embedded in the project as `note_map`
 }
 
-# Pan modes (Cubase-style)
+# Pan modes. The numbers are the OSC values and match the engine's PanMode.
 enum PanMode {
-	STEREO_COMBINED,  # Single pan knob controls stereo balance (Cubase default)
-	STEREO_DUAL,      # Separate L/R pan controls
-	STEREO_BALANCE,   # Balance between L and R channels
-	MONO              # Mono panner (single channel)
+	STEREO_COMBINED,  # Cubase-style: position moves the L/R handles together, width spreads them
+	STEREO_DUAL,      # Separate L/R handles
+	STEREO_BALANCE,   # Position attenuates the opposite side (default)
+	MONO              # Sums to mono, then pans the sum
 }
 
 # ============================================================================
@@ -77,10 +77,11 @@ var order: int = 0  # Display order in mixer (lower = left, higher = right)
 
 # Audio properties
 var volume: float = 0.0  # dB (-60 to +12), initialized in _init() based on channel ID
-var pan: float = 0.0     # -1.0 (L) to +1.0 (R) for STEREO_COMBINED/MONO
-var pan_left: float = 0.0   # For STEREO_DUAL mode
-var pan_right: float = 0.0  # For STEREO_DUAL mode
-var pan_mode: PanMode = PanMode.STEREO_COMBINED
+var pan: float = 0.0     # Position, -1.0 (L) to +1.0 (R), in every mode but STEREO_DUAL
+var pan_width: float = 1.0  # -1.0..1.0, STEREO_COMBINED only (negative swaps the sides)
+var pan_left: float = 0.0   # STEREO_DUAL handles
+var pan_right: float = 0.0
+var pan_mode: PanMode = PanMode.STEREO_BALANCE
 
 var mute: bool = false
 var solo: bool = false
@@ -258,11 +259,7 @@ func sync_to_engine() -> void:
 	"""Sync current channel state to audio engine."""
 	AudioEngineOSC.send("/channel/%d/create" % id, [name])
 	AudioEngineOSC.send("/channel/%d/volume" % id, [volume])
-	AudioEngineOSC.send("/channel/%d/pan_mode" % id, [pan_mode])
-	if pan_mode == PanMode.STEREO_DUAL:
-		AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
-	else:
-		AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
+	_send_pan_to_engine()
 	AudioEngineOSC.send("/channel/%d/mute" % id, [1 if mute else 0])
 	AudioEngineOSC.send("/channel/%d/solo" % id, [1 if solo else 0])
 
@@ -364,42 +361,83 @@ func set_volume(value: float) -> void:
 	volume_changed.emit(volume)
 
 
-func set_pan_mode(mode : PanMode) -> void:
-	pan_mode = mode
+## Snapshot of the whole pan setup: `{mode, pan, width, left, right}`. Undo restores one exactly.
+func get_pan_state() -> Dictionary:
+	return {"mode": pan_mode, "pan": pan, "width": pan_width, "left": pan_left, "right": pan_right}
 
-	# When switching to STEREO_DUAL mode, initialize pan_left and pan_right to default values
-	if mode == PanMode.STEREO_DUAL:
-		pan_left = -1.0
-		pan_right = 1.0
 
+## Apply a snapshot from get_pan_state() or convert_pan_state().
+func set_pan_state(state: Dictionary) -> void:
+	var mode_changed: bool = state.get("mode", pan_mode) != pan_mode
+	pan_mode = state.get("mode", pan_mode)
+	pan = clampf(state.get("pan", pan), -1.0, 1.0)
+	pan_width = clampf(state.get("width", pan_width), -1.0, 1.0)
+	pan_left = clampf(state.get("left", pan_left), -1.0, 1.0)
+	pan_right = clampf(state.get("right", pan_right), -1.0, 1.0)
 	if _is_connected:
-		AudioEngineOSC.send("/channel/%d/pan_mode" % id, [pan_mode])
-		# Also sync pan values when switching modes
-		if mode == PanMode.STEREO_DUAL:
-			AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
-		else:
-			AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
-
-	pan_mode_changed.emit(pan_mode)
-	# Emit pan_changed to update UI with the new pan values
+		_send_pan_to_engine()
+	if mode_changed:
+		pan_mode_changed.emit(pan_mode)
 	pan_changed.emit(pan_left, pan_right)
 
 
-func set_pan(pan_l: float, pan_r : float = 0.0) -> void:
-	"""Set pan and sync to audio engine."""
-	if pan_mode == PanMode.STEREO_COMBINED:
-		pan = clamp(pan_l, -1.0, 1.0)
-		pan_left = pan
-		if _is_connected:
-			logger.debug("[%d] sending channel pan to " % id, pan)
-			AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
-	elif pan_mode == PanMode.STEREO_DUAL:
-		pan_left = clamp(pan_l, -1.0, 1.0)
-		pan_right = clamp(pan_r, -1.0, 1.0)
-		if _is_connected:
-			AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
-	
+## `state` re-expressed in `mode`, keeping the placement (REQ-007). Dual handles are the Combined
+## handles `pan -/+ width` (width 1.0 from Balance and Mono); leaving Dual takes the midpoint.
+static func convert_pan_state(state: Dictionary, mode: PanMode) -> Dictionary:
+	var out := state.duplicate()
+	var from_mode: int = state.get("mode", PanMode.STEREO_BALANCE)
+	out["mode"] = mode
+	if from_mode == mode:
+		return out
+	if from_mode == PanMode.STEREO_DUAL:
+		var l: float = state.get("left", -1.0)
+		var r: float = state.get("right", 1.0)
+		out["pan"] = (l + r) / 2.0
+		if mode == PanMode.STEREO_COMBINED:
+			out["width"] = (r - l) / 2.0
+	elif mode == PanMode.STEREO_DUAL:
+		var pos: float = state.get("pan", 0.0)
+		var width: float = state.get("width", 1.0) if from_mode == PanMode.STEREO_COMBINED else 1.0
+		out["left"] = clampf(pos - width, -1.0, 1.0)
+		out["right"] = clampf(pos + width, -1.0, 1.0)
+	return out
+
+
+func set_pan_mode(mode : PanMode) -> void:
+	set_pan_state(convert_pan_state(get_pan_state(), mode))
+
+
+## Position for Balance, Combined and Mono.
+func set_pan(position: float) -> void:
+	pan = clampf(position, -1.0, 1.0)
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
 	pan_changed.emit(pan_left, pan_right)
+
+
+## Combined width, -1.0..1.0.
+func set_pan_width(width: float) -> void:
+	pan_width = clampf(width, -1.0, 1.0)
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/pan_width" % id, [pan_width])
+	pan_changed.emit(pan_left, pan_right)
+
+
+## Dual handles.
+func set_pan_dual(left: float, right: float) -> void:
+	pan_left = clampf(left, -1.0, 1.0)
+	pan_right = clampf(right, -1.0, 1.0)
+	if _is_connected:
+		AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
+	pan_changed.emit(pan_left, pan_right)
+
+
+## The engine keeps every pan field whatever the mode, so send them all.
+func _send_pan_to_engine() -> void:
+	AudioEngineOSC.send("/channel/%d/pan_mode" % id, [pan_mode])
+	AudioEngineOSC.send("/channel/%d/pan" % id, [pan])
+	AudioEngineOSC.send("/channel/%d/pan" % id, [pan_left, pan_right])
+	AudioEngineOSC.send("/channel/%d/pan_width" % id, [pan_width])
 
 
 func set_mute(value: bool) -> void:
@@ -960,7 +998,7 @@ func to_json() -> Dictionary:
 
 ## Plain fields copied by JsonFields; defaults come from the initializers and _init().
 const JSON_FIELDS: Array[String] = [
-	"name", "order", "device_output_id", "volume", "pan", "pan_left", "pan_right",
+	"name", "order", "device_output_id", "volume", "pan", "pan_width", "pan_left", "pan_right",
 	"mute", "solo", "phase_invert", "output_channel_id", "parent_channel_id",
 	"is_children_expanded", "aux_bus_index", "aux_pad_note", "midi_input_device", "record_armed",
 	"drum_view",
@@ -976,6 +1014,10 @@ static func from_json(data: Dictionary) -> Channel:
 	channel.color = Utils.color_from_json(data.get("color"), channel.color)
 	channel.channel_type = ChannelType.get(str(data.get("channel_type", "")), channel.channel_type)
 	channel.pan_mode = PanMode.get(str(data.get("pan_mode", "")), channel.pan_mode)
+	# Before pan modes were reworked, "combined" was a plain balance panner (REQ-010). Only
+	# those projects lack `pan_width`, which every newer save writes.
+	if channel.pan_mode == PanMode.STEREO_COMBINED and not data.has("pan_width"):
+		channel.pan_mode = PanMode.STEREO_BALANCE
 	# A project saved before note maps existed has no key, so it lands on AUTO (REQ-012).
 	channel.note_map_mode = NoteMapMode.get(str(data.get("note_map_mode", "")), channel.note_map_mode)
 	if data.get("note_map") is Dictionary:

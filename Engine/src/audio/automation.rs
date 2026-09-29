@@ -872,7 +872,7 @@ mod tests {
         let mut channel = Channel::new(2, "Synth".to_string(), 128, 48_000.0);
         channel.volume_db = 0.0;
         channel.pan = 0.0;
-        channel.pan_mode = PanMode::StereoCombined;
+        channel.pan_mode = PanMode::StereoBalance;
         let base_gain = channel.get_gain();
         assert!((base_gain - 1.0).abs() < 1e-6);
         let base_coefficients = channel.get_pan_coefficients();
@@ -906,7 +906,7 @@ mod tests {
         // Pan behaves the same way: the override wins, `pan` is untouched.
         channel.automation_pan = Some(1.0);
         let panned = channel.get_pan_coefficients();
-        assert!(panned.right_to_right > base_coefficients.right_to_right);
+        assert!(panned.left_to_left < base_coefficients.left_to_left);
         assert_eq!(channel.pan, 0.0, "the base pan must not be written");
         channel.automation_pan = None;
         assert!(
