@@ -31,6 +31,8 @@ var logger : Log = Log.make("Arranger")
 @onready var tracks_panel_footer: PanelContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter
 @onready var add_track_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddTrackButton
 @onready var add_folder_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddFolderButton
+@onready var automation_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationViewToggle
+@onready var routing_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/RoutingViewToggle
 @onready var timeline_scroll_bar_margin: MarginContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin
 @onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin/TimelineScrollBar
 
@@ -121,6 +123,8 @@ func _ready():
 	# Connect add track button
 	add_track_button.pressed.connect(_on_add_track_pressed)
 	add_folder_button.pressed.connect(_on_add_folder_pressed)
+	automation_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation"))
+	routing_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("routing"))
 
 	beats_ruler_toggle.toggled.connect(_on_beats_ruler_toggled)
 	time_ruler_toggle.toggled.connect(_on_time_ruler_toggled)
@@ -694,6 +698,13 @@ func _apply_ruler_row_visibility() -> void:
 		marker_track.visible = markers_toggle.button_pressed
 
 
+## Footer toggles: show/hide automation lanes and buttons, or the routing button, on every
+## track. TrackList, Timeline and TrackItem follow the project's arranger_view.
+func _on_arranger_view_toggled(pressed: bool, key: String) -> void:
+	if current_project:
+		current_project.set_arranger_view(key, pressed)
+
+
 ## Show or hide the marker lane from the markers toggle.
 func _on_markers_track_toggled(_pressed: bool) -> void:
 	_apply_ruler_row_visibility()
@@ -721,6 +732,8 @@ func _on_project_activated(project: Project) -> void:
 	time_ruler_toggle.set_pressed_no_signal(project.ruler_lanes.get("time", true))
 	markers_toggle.set_pressed_no_signal(project.ruler_lanes.get("markers", true))
 	_apply_ruler_row_visibility()
+	automation_view_toggle.set_pressed_no_signal(project.get_arranger_view("automation"))
+	routing_view_toggle.set_pressed_no_signal(project.get_arranger_view("routing"))
 
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper

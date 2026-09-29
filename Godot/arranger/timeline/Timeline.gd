@@ -516,7 +516,8 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		clip_selection_manager.finish_additive_gesture(get_local_mouse_position())
-		accept_event()
+		# Let the release reach the GUI: swallowing it leaves the pressed clip holding mouse
+		# focus, so it keeps every later motion event and other clips never update their cursor.
 		return
 
 	if not is_visible_in_tree():
@@ -822,6 +823,16 @@ func _on_clip_drag_begin_requested(clip_ui: TimelineClip, press_global: Vector2)
 	_drag_current_tick_delta = 0
 	_drag_current_track_delta = 0
 	_update_clip_drag(get_global_mouse_position(), Input.is_key_pressed(KEY_SHIFT))
+
+
+## Select a just-placed clip and start moving it while the placing press is still held, so the
+## user can drag it into place; the release commits the move like any clip drag.
+func begin_placement_drag(instance: ClipInstance) -> void:
+	var clip_ui := clip_selection_manager.get_clip_ui(instance)
+	if clip_ui == null:
+		return
+	clip_selection_manager.select_only(instance)
+	_on_clip_drag_begin_requested(clip_ui, get_global_mouse_position())
 
 
 ## Mouse motion moves the clips, the release commits the move, and Shift toggles grid snap live.

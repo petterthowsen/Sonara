@@ -28,6 +28,8 @@ signal marker_removed(marker: SongMarker)
 signal connection_state_changed(state: ConnectionState)
 ## Fired once after a batched parent/order change so TrackList and Timeline can rebuild together.
 signal tracks_layout_changed
+## An arranger_view flag changed (see set_arranger_view).
+signal arranger_view_changed(key: String, value: bool)
 
 # ============================================================================
 # PROPERTIES
@@ -48,6 +50,10 @@ var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global cl
 var markers: Array[SongMarker] = []
 ## Arranger header lane visibility (view state, saved with the project but not undoable).
 var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true}
+## Arranger track list display toggles (view state, saved with the project but not undoable):
+## "automation" shows automation lanes and the header automation buttons, "routing" the header
+## IO button.
+var arranger_view: Dictionary = {"automation": true, "routing": true}
 
 var next_marker_id: int = 1
 
@@ -1210,6 +1216,22 @@ func end_track_layout_batch() -> void:
 	tracks_layout_changed.emit()
 
 
+## Set an arranger_view flag. Toggling automation changes which rows exist, so both arranger
+## columns rebuild through tracks_layout_changed.
+func set_arranger_view(key: String, value: bool) -> void:
+	if arranger_view.get(key, true) == value:
+		return
+	arranger_view[key] = value
+	arranger_view_changed.emit(key, value)
+	if key == "automation":
+		tracks_layout_changed.emit()
+
+
+## Current arranger_view flag; unknown keys read as shown.
+func get_arranger_view(key: String) -> bool:
+	return bool(arranger_view.get(key, true))
+
+
 ## True when `track` may live under `new_parent_id` (-1 = root): not inside its own subtree, the
 ## parent holds tracks, and an aux return stays under its source.
 func can_place_track(track: Track, new_parent_id: int) -> bool:
@@ -1604,6 +1626,7 @@ func to_json() -> Dictionary:
 		"next_marker_id": next_marker_id,
 		"markers": markers.map(func(m): return m.to_json()),
 		"ruler_lanes": ruler_lanes.duplicate(),
+		"arranger_view": arranger_view.duplicate(),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
 		"tracks": tracks.map(func(t): return t.to_json())
@@ -1631,6 +1654,9 @@ static func from_json(data: Dictionary) -> Project:
 	var saved_lanes: Dictionary = data.get("ruler_lanes", {})
 	for lane in project.ruler_lanes:
 		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, true))
+	var saved_view: Dictionary = data.get("arranger_view", {})
+	for key in project.arranger_view:
+		project.arranger_view[key] = bool(saved_view.get(key, true))
 
 	project.markers.clear()
 	for marker_data in data.get("markers", []):

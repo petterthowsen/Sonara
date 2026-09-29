@@ -14,15 +14,19 @@ class_name AutomationRowOrder extends RefCounted
 ## Flat top-to-bottom row order for `project`, matching the folder hierarchy that
 ## `Project.get_visual_track_list()` produces and inserting each track's visible lane rows
 ## directly beneath it. Children of a collapsed folder are left out, except while that folder's
-## fold animation is still sliding them.
+## fold animation is still sliding them. The arranger's automation toggle off leaves out every
+## lane row.
 static func build(project: Object) -> Array:
 	var rows: Array = []
 	if project == null:
 		return rows
+	var show_lanes: bool = project.get_arranger_view("automation")
 	for track in project.get_visual_track_list():
 		if _folded_away(project, track):
 			continue
 		rows.append({"track": track, "lane": null})
+		if not show_lanes:
+			continue
 		for lane in visible_lanes(track):
 			rows.append({"track": track, "lane": lane})
 	return rows

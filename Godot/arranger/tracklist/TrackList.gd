@@ -36,6 +36,9 @@ var selected_tracks: Array[Track] = []
 var active_track: Track = null
 var _selection_anchor: Track = null
 var _is_rebuilding: bool = false
+## Plain-clicked header that was already part of a multi-selection. The selection is kept on
+## press so a drag moves the whole block; releasing without dragging selects only this track.
+var _pending_single_select: Track = null
 
 ## Color of the track drag insert line and folder header glow.
 @export var drop_indicator_color := DropIndicator.DEFAULT_COLOR
@@ -191,6 +194,7 @@ func _on_track_added(track: Track) -> void:
 	# Connect to track item signals
 	track_item.right_clicked.connect(_on_track_item_right_clicked)
 	track_item.select_requested.connect(_on_track_item_select_requested)
+	track_item.select_released.connect(_on_track_item_select_released)
 	track_item.rename_tab_requested.connect(_on_track_item_rename_tab_requested)
 	track_item.automation_disclosure_toggled.connect(_on_automation_disclosure_toggled)
 	track_item.automation_menu_requested.connect(_on_automation_menu_requested)
@@ -275,7 +279,19 @@ func _on_tracks_layout_changed() -> void:
 
 func _on_track_item_select_requested(track: Track, additive: bool, range_select: bool) -> void:
 	"""Handle Ctrl/Shift/plain clicks on a TrackItem header."""
+	var keeps_block := not additive and not range_select and selected_tracks.has(track) and selected_tracks.size() > 1
+	_pending_single_select = track if keeps_block else null
 	_select_track(track, additive, range_select)
+
+
+## Mouse released on a header: a plain click inside a multi-selection that did not turn into a
+## drag selects just that track.
+func _on_track_item_select_released(track: Track) -> void:
+	if track == null or track != _pending_single_select:
+		return
+	_pending_single_select = null
+	selected_tracks.clear()
+	_select_track(track, false, false)
 
 
 ## After a rename Tab, select the adjacent track and start editing its name.
@@ -566,6 +582,7 @@ func _has_selected_ancestor(track: Track, selected_ids: Dictionary) -> bool:
 func begin_track_drag(drag: TrackDrag) -> void:
 	if drag == null or current_project == null:
 		return
+	_pending_single_select = null
 	var ids: Dictionary = {}
 	for root in drag.tracks:
 		ids[root.id] = true

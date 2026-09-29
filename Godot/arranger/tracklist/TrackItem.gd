@@ -14,6 +14,8 @@ const RESIZE_GUTTER := 6.0
 signal right_clicked(track: Track, mouse_position: Vector2)
 ## Request that TrackList update selection. additive = Ctrl/Cmd, range_select = Shift.
 signal select_requested(track: Track, additive: bool, range_select: bool)
+## Left button released after a select_requested press (not emitted once a drag has started).
+signal select_released(track: Track)
 ## Tab/Shift+Tab while renaming: apply the name and continue on the adjacent track.
 signal rename_tab_requested(track: Track, reverse: bool)
 ## Disclosure arrow toggled: TrackList shows or hides this track's automation lane rows (REQ-014).
@@ -179,6 +181,10 @@ func _gui_input(event: InputEvent) -> void:
 				accept_event()
 				return
 
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.is_released():
+		if track and not is_resizing and not Engine.is_editor_hint():
+			select_released.emit(track)
+
 	# Handle mouse down in the bottom gutter to start resizing
 	if _is_in_resize_gutter():
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -307,6 +313,9 @@ func bind_to_track(t: Track, idx: int, project: Project = null) -> void:
 		track.automation_expanded_changed.connect(_on_track_automation_expanded_changed)
 		track.folder_expanded_changed.connect(_on_track_folder_expanded_changed)
 
+	if current_project:
+		current_project.arranger_view_changed.connect(_on_arranger_view_changed)
+
 	# Look up and bind to the track's channel
 	_bind_to_track_channel()
 
@@ -336,6 +345,7 @@ func _update_from_track() -> void:
 		mute_toggle.set_pressed_no_signal(track.muted)
 	_update_automation_controls()
 	_update_foldout_toggle()
+	_apply_arranger_view()
 
 	# Apply track color, selection styling, and nesting indent
 	_update_header_style()
@@ -410,6 +420,8 @@ func _unbind() -> void:
 			track.automation_expanded_changed.disconnect(_on_track_automation_expanded_changed)
 		if track.folder_expanded_changed.is_connected(_on_track_folder_expanded_changed):
 			track.folder_expanded_changed.disconnect(_on_track_folder_expanded_changed)
+	if current_project and current_project.arranger_view_changed.is_connected(_on_arranger_view_changed):
+		current_project.arranger_view_changed.disconnect(_on_arranger_view_changed)
 	track = null
 	current_project = null
 	_pre_layout_height = -1
@@ -665,6 +677,22 @@ func _update_automation_controls() -> void:
 		automation_toggle.tooltip_text = (
 			"Show/hide automation lanes (%d)" % track.automation_lanes.size()
 		)
+
+
+## Show or hide the automation and routing buttons from the track list's footer toggles.
+func _apply_arranger_view() -> void:
+	if current_project == null:
+		return
+	var show_automation := current_project.get_arranger_view("automation")
+	for button: Control in [automation_toggle, automation_menu_button]:
+		if button:
+			CollapsingContainer.set_child_hidden(button, not show_automation)
+	if io_button:
+		CollapsingContainer.set_child_hidden(io_button, not current_project.get_arranger_view("routing"))
+
+
+func _on_arranger_view_changed(_key: String, _value: bool) -> void:
+	_apply_arranger_view()
 
 
 func _on_label_value_changed(new_value: String) -> void:

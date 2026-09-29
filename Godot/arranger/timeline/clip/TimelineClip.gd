@@ -52,6 +52,9 @@ var resize_start_ticks: int = 0
 var resize_start_duration: int = 0
 var resize_start_offset: int = 0  # Initial clip_offset when resize started
 var resize_padding_added: int = 0  # Track total padding added during this resize
+## Clips resized together with this grabbed one (itself included): the whole selection when
+## this clip is part of a multi-selection.
+var _resize_group: Array[TimelineClip] = []
 @export var resize_edge_size: float = 8.0  # pixel width of resize edge zones
 
 # Exported StyleBoxes for different states
@@ -385,13 +388,10 @@ func _gui_input(event: InputEvent) -> void:
 				if edge != "":
 					# Start resize
 					is_resizing = true
-					resize_edge = edge
 					resize_start_pos = get_global_mouse_position()
-					resize_padding_added = 0  # Reset padding tracker
-					if clip_instance:
-						resize_start_ticks = clip_instance.start_ticks
-						resize_start_duration = clip_instance.duration_ticks
-						resize_start_offset = clip_instance.clip_offset
+					_resize_group = _find_resize_group()
+					for clip_ui in _resize_group:
+						clip_ui._begin_resize(edge)
 					accept_event()
 				elif event.double_click and not (event.ctrl_pressed or event.meta_pressed or event.shift_pressed):
 					# The first click already selected this clip; open it instead of starting a drag.
@@ -418,19 +418,7 @@ func _gui_input(event: InputEvent) -> void:
 				# End resize or drag
 				if is_resizing:
 					is_resizing = false
-					resize_edge = ""
-					# Record resize as one undo step
-					if clip_instance and (
-						clip_instance.start_ticks != resize_start_ticks
-						or clip_instance.duration_ticks != resize_start_duration
-						or clip_instance.clip_offset != resize_start_offset
-					):
-						HistoryUtil.record(ClipInstanceTransformCommand.new(
-							"Resize Clip",
-							clip_instance,
-							resize_start_ticks, resize_start_duration, resize_start_offset,
-							clip_instance.start_ticks, clip_instance.duration_ticks, clip_instance.clip_offset
-						))
+					_finish_resize()
 					accept_event()
 				elif _drag_handed_off:
 					# Timeline already finished the move in its _input.
@@ -443,87 +431,18 @@ func _gui_input(event: InputEvent) -> void:
 					accept_event()
 
 	elif event is InputEventMouseMotion and is_resizing and clip_instance and timeline:
-		# Handle resize dragging
-		var mouse_pos = get_global_mouse_position()
-		var pixel_delta = (mouse_pos - resize_start_pos).x
+		# Handle resize dragging: this clip's snapped edge sets the delta for the whole group
+		var pixel_delta = (get_global_mouse_position() - resize_start_pos).x
 		var tick_delta = timeline.pixels_to_ticks(pixel_delta)
 		# Shift bypasses grid snap
 		var free_move: bool = event.shift_pressed
-
-		if resize_edge == "left":
-			# Resize from left: adjust start_ticks, duration, and clip_offset
-			var new_start_ticks = resize_start_ticks + tick_delta
-
-			# Snap to grid
-			var snap_interval = 0 if free_move else timeline.get_snap_interval()
-			if not free_move:
-				new_start_ticks = timeline.grid_helper.snap_ticks(new_start_ticks)
-
-			# Clamp to positive values
-			new_start_ticks = max(0, new_start_ticks)
-
-			# Calculate new duration (original end point stays fixed)
-			var original_end_ticks = resize_start_ticks + resize_start_duration
-			var new_duration = original_end_ticks - new_start_ticks
-
-			# Minimum duration of 1 snap interval (or 1 tick if no snap)
-			var min_duration = snap_interval if snap_interval > 0 else 1
-			new_duration = max(min_duration, new_duration)
-			
-			# Clamp to avoid collisions - find the nearest clip on the left
-			# Use the original resize start position as reference
-			var left_limit = _find_nearest_clip_left(resize_start_ticks)
-			new_start_ticks = max(left_limit, new_start_ticks)
-			
-			# Recalculate duration after clamping
-			new_duration = original_end_ticks - new_start_ticks
-			new_duration = max(min_duration, new_duration)
-			
-			# Calculate how much we moved the left edge (accounting for any padding already added)
-			var left_edge_delta = new_start_ticks - resize_start_ticks
-			
-			# Update clip_offset: skip the trimmed portion of the clip
-			# If we moved right (+delta), we need to increase the offset to skip that content
-			# Account for padding we've already added during this resize
-			var new_clip_offset = resize_start_offset + left_edge_delta + resize_padding_added
-			
-			# Handle negative offset: add padding to the beginning of the clip
-			if new_clip_offset < 0:
-				var padding_needed = -new_clip_offset
-				_add_padding_to_clip(padding_needed)
-				resize_padding_added += padding_needed  # Track cumulative padding
-				new_clip_offset = 0  # Reset offset after adding padding
-			
-			# Update clip instance (this will sync to engine via OSC)
-			clip_instance.set_clip_offset(new_clip_offset)
-			clip_instance.set_position(new_start_ticks)
-			clip_instance.set_duration(new_duration)
-			_update_from_clip_instance()
-
-		elif resize_edge == "right":
-			# Resize from right: adjust duration only
-			var new_duration = resize_start_duration + tick_delta
-
-			# Snap to grid (snap the end point)
-			var snap_interval = 0 if free_move else timeline.get_snap_interval()
-			if not free_move:
-				new_duration = timeline.grid_helper.snap_ticks(resize_start_ticks + new_duration) - resize_start_ticks
-
-			# Minimum duration of 1 snap interval (or 1 tick if no snap)
-			var min_duration = snap_interval if snap_interval > 0 else 1
-			new_duration = max(min_duration, new_duration)
-
-			# Clamp to avoid collisions - find the nearest clip on the right
-			# Use the original resize end position as reference
-			var original_end = resize_start_ticks + resize_start_duration
-			var right_limit = _find_nearest_clip_right(original_end)
-			var max_duration = right_limit - resize_start_ticks
-			new_duration = min(new_duration, max_duration)
-			new_duration = max(min_duration, new_duration)
-
-			# Update clip instance
-			clip_instance.set_duration(new_duration)
-			_update_from_clip_instance()
+		var snap_interval = 0 if free_move else timeline.get_snap_interval()
+		# Minimum duration of 1 snap interval (or 1 tick if no snap)
+		var min_duration = snap_interval if snap_interval > 0 else 1
+		var delta := _snapped_resize_delta(tick_delta, free_move)
+		for clip_ui in _resize_group:
+			if is_instance_valid(clip_ui):
+				clip_ui._resize_by(delta, min_duration)
 
 		accept_event()
 
@@ -534,6 +453,122 @@ func _gui_input(event: InputEvent) -> void:
 			_drag_handed_off = true
 			drag_begin_requested.emit(self, drag_start_pos)
 		accept_event()
+
+
+## Every selected clip when this one is part of a multi-selection, else just this clip.
+func _find_resize_group() -> Array[TimelineClip]:
+	var group: Array[TimelineClip] = [self]
+	var manager = timeline.clip_selection_manager if timeline else null
+	if manager == null or not clip_instance:
+		return group
+	var selected: Array[ClipInstance] = manager.get_selected_instances()
+	if selected.size() < 2 or not selected.has(clip_instance):
+		return group
+	for instance in selected:
+		var clip_ui: TimelineClip = manager.get_clip_ui(instance)
+		if clip_ui and clip_ui != self:
+			group.append(clip_ui)
+	return group
+
+
+## Remember this clip's placement before a resize of `edge` ("left" or "right").
+func _begin_resize(edge: String) -> void:
+	resize_edge = edge
+	resize_padding_added = 0
+	if clip_instance:
+		resize_start_ticks = clip_instance.start_ticks
+		resize_start_duration = clip_instance.duration_ticks
+		resize_start_offset = clip_instance.clip_offset
+
+
+## Pointer movement of `tick_delta` as an edge delta, snapped so this clip's edge lands on the grid.
+func _snapped_resize_delta(tick_delta: int, free_move: bool) -> int:
+	var edge_ticks := resize_start_ticks
+	if resize_edge == "right":
+		edge_ticks += resize_start_duration
+	var new_edge := edge_ticks + tick_delta
+	if not free_move:
+		new_edge = timeline.grid_helper.snap_ticks(new_edge)
+	return new_edge - edge_ticks
+
+
+## Move this clip's resize edge `delta` ticks from where it started, clamped to its neighbours
+## and to `min_duration`.
+func _resize_by(delta: int, min_duration: int) -> void:
+	if not clip_instance:
+		return
+	if resize_edge == "left":
+		# Resize from left: adjust start_ticks, duration, and clip_offset
+		var new_start_ticks = max(0, resize_start_ticks + delta)
+
+		# Clamp to avoid collisions - find the nearest clip on the left
+		# Use the original resize start position as reference
+		var left_limit = _find_nearest_clip_left(resize_start_ticks)
+		new_start_ticks = max(left_limit, new_start_ticks)
+
+		# The original end point stays fixed
+		var original_end_ticks = resize_start_ticks + resize_start_duration
+		var new_duration = max(min_duration, original_end_ticks - new_start_ticks)
+
+		# Calculate how much we moved the left edge (accounting for any padding already added)
+		var left_edge_delta = new_start_ticks - resize_start_ticks
+
+		# Update clip_offset: skip the trimmed portion of the clip
+		# If we moved right (+delta), we need to increase the offset to skip that content
+		# Account for padding we've already added during this resize
+		var new_clip_offset = resize_start_offset + left_edge_delta + resize_padding_added
+
+		# Handle negative offset: add padding to the beginning of the clip
+		if new_clip_offset < 0:
+			var padding_needed = -new_clip_offset
+			_add_padding_to_clip(padding_needed)
+			resize_padding_added += padding_needed  # Track cumulative padding
+			new_clip_offset = 0  # Reset offset after adding padding
+
+		# Update clip instance (this will sync to engine via OSC)
+		clip_instance.set_clip_offset(new_clip_offset)
+		clip_instance.set_position(new_start_ticks)
+		clip_instance.set_duration(new_duration)
+		_update_from_clip_instance()
+
+	elif resize_edge == "right":
+		# Resize from right: adjust duration only
+		var new_duration = max(min_duration, resize_start_duration + delta)
+
+		# Clamp to avoid collisions - find the nearest clip on the right
+		# Use the original resize end position as reference
+		var original_end = resize_start_ticks + resize_start_duration
+		var right_limit = _find_nearest_clip_right(original_end)
+		var max_duration = right_limit - resize_start_ticks
+		new_duration = min(new_duration, max_duration)
+		new_duration = max(min_duration, new_duration)
+
+		# Update clip instance
+		clip_instance.set_duration(new_duration)
+		_update_from_clip_instance()
+
+
+## Record the group's resize as one undo step and clear the resize state.
+func _finish_resize() -> void:
+	var cmds: Array[Command] = []
+	for clip_ui in _resize_group:
+		if not is_instance_valid(clip_ui):
+			continue
+		var inst: ClipInstance = clip_ui.clip_instance
+		clip_ui.resize_edge = ""
+		if inst and (
+			inst.start_ticks != clip_ui.resize_start_ticks
+			or inst.duration_ticks != clip_ui.resize_start_duration
+			or inst.clip_offset != clip_ui.resize_start_offset
+		):
+			cmds.append(ClipInstanceTransformCommand.new(
+				"Resize Clip",
+				inst,
+				clip_ui.resize_start_ticks, clip_ui.resize_start_duration, clip_ui.resize_start_offset,
+				inst.start_ticks, inst.duration_ticks, inst.clip_offset
+			))
+	_resize_group.clear()
+	HistoryUtil.record_many("Resize Clips", cmds)
 
 
 func _on_mouse_entered() -> void:

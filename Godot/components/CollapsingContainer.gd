@@ -15,7 +15,7 @@
 # Hiding uses `visible`. The container remembers which children it hid, so a child you
 # hide yourself stays hidden. Limitation: setting `visible = false` on a child that is
 # currently collapsed emits no signal, so the container will show it again when there
-# is room. Remove it from the container or pin/unpin it instead if that matters.
+# is room. Use set_child_hidden() when that matters.
 #
 # Subclasses implement _get_minimum_size() and _sort(), and call _set_collapsed().
 @tool
@@ -69,6 +69,16 @@ static func set_child_priority(child: Control, priority: int) -> void:
 
 static func set_child_pinned(child: Control, pinned: bool) -> void:
 	child.set_meta(META_PINNED, pinned)
+	_requeue_parent(child)
+
+
+## Hide or show `child` yourself. Unlike writing `visible`, this also works while the
+## container has the child collapsed: a hidden child stays hidden when room frees up.
+static func set_child_hidden(child: Control, is_hidden: bool) -> void:
+	var parent := child.get_parent() as CollapsingContainer
+	if parent:
+		parent._collapsed.erase(child)
+	child.visible = not is_hidden
 	_requeue_parent(child)
 
 

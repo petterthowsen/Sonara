@@ -91,11 +91,16 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [x] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`). Covered headlessly by `Godot/tests/test_track_item_height_sync.gd`; live check of narrowing/widening the TracksPanel pending.
 - [x?] Ctrl+scroll vertical zoom should zoom around the mouse cursor, I.E if mouse is at a track near bottom, should also scroll down. Still broken.
+- [x] Arranger track list footer: right-aligned toggles for automation (hides every automation lane row in both columns and the header automation buttons) and routing (hides the header IO button). Stored in `Project.arranger_view` and saved with the project. Covered by `Godot/tests/test_arranger_view_toggles.gd`.
+- [x] Bug: clicking a track header did not deselect the other tracks when the clicked track was already part of a multi-selection. The block is still kept on press so it can be dragged; releasing without a drag now selects only the clicked track. Covered by `Godot/tests/test_arranger_view_toggles.gd`.
+- [x] Bug: changing track color does not update the timeline background color. Not a bug: the lane tint does follow the color; it is just faint (`TimelineTrack` keeps the track color's hue/saturation at `bg_color` brightness and 50% alpha).
 
 ### Clips
 
 - [x?] UX: moving timeline clips around needs improvement. Dragging a clip to another track should move it there live during the drag, not just on drop.
 - [x?] Shift+click while dragging a clip should bypass grid snap.
+- [x] Double-clicking to place a clip starts moving it straight away: keep the button held and drag it into place; the release records the move (a separate undo step from the creation). Covered by `Godot/tests/test_clip_placement_drag.gd`.
+- [x] Resize several clips at once: dragging an edge of a clip in a multi-selection moves that edge on every selected clip by the same snapped delta, each clamped to its own neighbours, as one undo step. Covered by `Godot/tests/test_clip_group_resize.gd`.
 
 #### Phase 1: Clip instance awareness and unused clips (complex)
 

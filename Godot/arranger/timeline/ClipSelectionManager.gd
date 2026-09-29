@@ -197,6 +197,12 @@ func get_selected_instances() -> Array[ClipInstance]:
 	return selection.get_sorted_by_start()
 
 
+## The live TimelineClip showing `instance`, or null when it has none.
+func get_clip_ui(instance: ClipInstance) -> TimelineClip:
+	var clip_ref: WeakRef = _clip_ui_by_instance.get(instance)
+	return clip_ref.get_ref() as TimelineClip if clip_ref else null
+
+
 func has_selection() -> bool:
 	return not selection.is_empty()
 
