@@ -49,6 +49,11 @@ var last_erased_note: VisualNote = null
 # Local cursor position (for paste operations)
 var cursor_position_ticks: int = 0
 
+## The clip instances the user opened in the editor that this editor shows (track mode:
+## the selected clips on this track; clip mode: unused, the bound instance is the one).
+## Ctrl+C with nothing selected copies these whole.
+var edited_clip_instances: Array[ClipInstance] = []
+
 
 # Default note length for new notes
 var default_note_length_ticks: int = 960:
@@ -221,7 +226,7 @@ func handle_key_input(event: InputEventKey) -> void:
 		accept_event()
 
 	elif event.is_action_pressed("ui_copy"):
-		selection_manager.copy_selection()
+		copy_to_clipboard()
 		accept_event()
 
 	elif event.is_action_pressed("ui_cut"):
@@ -229,7 +234,7 @@ func handle_key_input(event: InputEventKey) -> void:
 		accept_event()
 
 	elif event.is_action_pressed("ui_paste"):
-		_paste_at_position(cursor_position_ticks)
+		paste_clipboard()
 		accept_event()
 
 	elif event.is_action_pressed("ui_duplicate"):
@@ -792,44 +797,109 @@ func _cut_selection() -> void:
 	logger.info("Cut %d notes" % selection_manager.clipboard.notes.size())
 
 
+## Ctrl+C: the selected notes over the selection range. With nothing selected and no range,
+## the edited clips instead: their notes are selected and the range becomes their span, so
+## the range can carry over to another track and the paste lands at the same position.
+func copy_to_clipboard() -> void:
+	if selection_manager.selected_notes.is_empty() and not selection_manager.has_range():
+		select_edited_clips()
+	selection_manager.copy_selection()
+
+
+## Select every shown note of the edited clips and set the range to their span. Clip mode
+## uses the bound instance's played window (clip-content ticks); track mode the song span
+## of `edited_clip_instances` that this editor shows. Returns false when there is no clip.
+func select_edited_clips() -> bool:
+	var start_tick := 0
+	var end_tick := 0
+	var notes: Array[VisualNote] = []
+	if multi_clip_mode:
+		var instances: Array[ClipInstance] = []
+		for ci in edited_clip_instances:
+			if is_instance_valid(ci) and clip_instances.has(ci):
+				instances.append(ci)
+		if instances.is_empty():
+			return false
+		start_tick = instances[0].start_ticks
+		end_tick = instances[0].get_end_ticks()
+		for ci in instances:
+			start_tick = mini(start_tick, ci.start_ticks)
+			end_tick = maxi(end_tick, ci.get_end_ticks())
+		for vn in get_all_visual_notes():
+			if vn.has_meta("clip_instance") and instances.has(vn.get_meta("clip_instance")):
+				notes.append(vn)
+	else:
+		if not clip_instance:
+			return false
+		start_tick = clip_instance.clip_offset
+		end_tick = clip_instance.clip_offset + clip_instance.duration_ticks
+		for vn in get_all_visual_notes():
+			var nd: MidiNoteData = vn.midi_note_data
+			if nd.start_tick >= start_tick and nd.start_tick < end_tick:
+				notes.append(vn)
+	selection_manager._set_selected_notes(notes)
+	selection_manager.box_selection_start_tick = start_tick
+	selection_manager.box_selection_end_tick = end_tick
+	selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	return true
+
+
+## Where Ctrl+V lands: the range start when a range is set with no notes selected (a range
+## carried over from another track, or a ruler range over empty space), else the cursor.
+## With notes selected the range is theirs, and pasting onto them would only replace them.
+func get_paste_tick() -> int:
+	if selection_manager.selected_notes.is_empty() and selection_manager.has_range():
+		return selection_manager.box_selection_start_tick
+	return cursor_position_ticks
+
+
+## Ctrl+V: paste the shared note clipboard at get_paste_tick().
+func paste_clipboard() -> void:
+	_paste_at_position(get_paste_tick())
+
+
 func _paste_at_position(tick_position: int) -> void:
-	"""Paste clipboard contents at the specified tick position."""
-	if not selection_manager.clipboard or selection_manager.clipboard.is_empty():
+	"""Paste clipboard contents at the specified tick position (this editor's ticks)."""
+	var source: NoteSelection = selection_manager.clipboard
+	if not source or source.is_empty():
 		logger.warn("Clipboard is empty")
 		return
-
-	# Determine target clip
-	var target_clip: Clip
-	var clip_local_position: int = tick_position
-
-	if multi_clip_mode:
-		# MULTI-CLIP MODE: Find or create clip at cursor position
-		var target_clip_instance = get_or_create_clip_at_position(tick_position)
-		if not target_clip_instance:
-			logger.warn("Cannot paste - no clip at position")
-			return
-		target_clip = target_clip_instance.clip
-		# Convert to clip-local position
-		clip_local_position = target_clip_instance.song_to_clip_ticks(tick_position)
-	else:
-		# SINGLE-CLIP MODE: Use bound clip
-		if not clip:
-			logger.warn("No clip loaded")
-			return
-		target_clip = clip
-		clip_local_position = tick_position
+	if not multi_clip_mode and not clip:
+		logger.warn("No clip loaded")
+		return
 
 	# Snap to grid
 	if grid_helper:
-		clip_local_position = grid_helper.floor_ticks(clip_local_position)
+		tick_position = grid_helper.floor_ticks(tick_position)
+	var span_end := tick_position + source.duration_ticks
 
-	# Get notes positioned at paste location
-	var notes_to_paste = selection_manager.clipboard.get_notes_at_position(clip_local_position)
+	# Pick each note's clip. Track mode: the clip playing at the note's song position, or a
+	# new clip covering the pasted span when there is none, so a range copied across several
+	# clips lands in the matching clips of the target track (notes stay visible).
+	var targets: Array = []  # [MidiNoteData in clip-content ticks, Clip]
+	var target_clips: Array = []
+	for note_data in source.get_notes_at_position(tick_position):
+		var target_clip: Clip = clip
+		if multi_clip_mode:
+			var ci := get_or_create_clip_at_position(note_data.start_tick, span_end)
+			if not ci:
+				logger.warn("Cannot paste note at tick %d - no clip there" % note_data.start_tick)
+				continue
+			note_data.start_tick = ci.song_to_clip_ticks(note_data.start_tick)
+			target_clip = ci.clip
+		targets.append([note_data, target_clip])
+		if not target_clips.has(target_clip):
+			target_clips.append(target_clip)
+	if targets.is_empty():
+		logger.warn("Cannot paste - no clip at position")
+		return
 
-	_history_begin_clips([target_clip])
+	_history_begin_clips(target_clips)
 	# Cut overlapping notes
 	var total_affected = 0
-	for note_data in notes_to_paste:
+	for target in targets:
+		var note_data: MidiNoteData = target[0]
+		var target_clip: Clip = target[1]
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 		var affected = target_clip.cut_overlapping_notes_at_pitch(note_data.note, note_data.start_tick, end_tick, target_clip.allocate_note_id)
 		total_affected += affected.size()
@@ -839,17 +909,16 @@ func _paste_at_position(tick_position: int) -> void:
 
 	selection_manager.clear_selection()
 
-	# Add notes to clip
+	# Add notes to clips
 	var pasted_note_ids: Array[int] = []
-
-	for note_data in notes_to_paste:
+	for target in targets:
+		var note_data: MidiNoteData = target[0]
+		var target_clip: Clip = target[1]
 		note_data.id = target_clip.allocate_note_id()
-
 		var added = target_clip.add_midi_note_data(note_data)
 		if added == null:
 			push_warning("[NoteEditor] Failed to paste note at pitch=%d, start=%d" % [note_data.note, note_data.start_tick])
 			continue
-
 		pasted_note_ids.append(note_data.id)
 
 	# Select newly pasted notes
@@ -860,13 +929,11 @@ func _paste_at_position(tick_position: int) -> void:
 			pasted_notes.append(note_instance)
 
 	selection_manager._set_selected_notes(pasted_notes)
-	if selection_manager.selected_notes.size() > 0:
-		selection_manager.selected_note = selection_manager.selected_notes[0]
 
 	# Set selection range
 	if not selection_manager.selected_notes.is_empty():
 		selection_manager.box_selection_start_tick = tick_position
-		selection_manager.box_selection_end_tick = tick_position + selection_manager.clipboard.duration_ticks
+		selection_manager.box_selection_end_tick = span_end
 		queue_redraw()
 
 	selection_manager.selection_changed.emit(selection_manager.selected_notes)
@@ -884,20 +951,10 @@ func _duplicate_selection() -> void:
 		logger.warn("No notes selected to duplicate")
 		return
 
-	var selection_length = selection_manager.box_selection_end_tick - selection_manager.box_selection_start_tick
-	if selection_length <= 0:
+	var selection := selection_manager.snapshot_selection()
+	if selection == null:
 		logger.warn("Cannot duplicate - invalid selection range")
 		return
-
-	var selection: NoteSelection
-	if selection_manager.box_selection_start_tick > 0 or selection_manager.box_selection_end_tick > 0:
-		selection = NoteSelection.from_visual_notes_with_range(
-			selection_manager.selected_notes,
-			selection_manager.box_selection_start_tick,
-			selection_manager.box_selection_end_tick
-		)
-	else:
-		selection = NoteSelection.from_visual_notes(selection_manager.selected_notes)
 
 	var duplicate_position = selection.end_tick
 

@@ -222,6 +222,31 @@ func _register_all_settings() -> void:
 		CATEGORY_BEHAVIOR,
 		"When enabled, selecting a track in the MIDI editor's track list (Track Mode) also selects that track in the arranger and mixer. Useful for quickly adjusting a track's devices via the device lane while in Track Mode.",
 	)).sub("Selection")
+	_register(Setting.new(
+		"selection/range_select_selects_tracks",
+		"Range Select Selects Tracks",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, a range select (Ctrl/Cmd drag in the arranger timeline or on a ruler) also selects the tracks of the clips it selects. Needs Track Selection Follows Clip Selection.",
+	)).sub("Selection")
+	_register(Setting.new(
+		"selection/ruler_range_select_selects_clips",
+		"Ruler Range Select Selects Clips",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, a range select made on the ruler (Ctrl/Cmd drag) also selects every clip it overlaps, on all tracks. When disabled, it only sets the time range.",
+	)).sub("Selection")
+	_register(Setting.new(
+		"selection/ruler_range_select_snaps_to_clips",
+		"Ruler Range Select Snaps to Clip Boundaries",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, a ruler range select grows to cover the start and end of the clips it selects. When disabled, the range stays where you dragged it.\n\n"
+		+ "Only applies when Ruler Range Select Selects Clips is on.",
+	)).sub("Selection")
 
 	# --- Appearance ---
 	_register(Setting.new(

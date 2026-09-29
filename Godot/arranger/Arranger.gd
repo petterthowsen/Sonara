@@ -949,11 +949,12 @@ func _on_ruler_selection_start_requested(ticks: int) -> void:
 		logger.info("Ruler set selection start to tick %d" % ticks)
 
 
-## Ctrl/Cmd drag on the ruler starts a box select that spans every track lane.
+## Ctrl/Cmd drag on the ruler starts a range select that spans every track lane. Whether it
+## selects clips and snaps to their edges follows the `selection/ruler_range_select_*` settings.
 func _on_ruler_box_select_started(content_x: float) -> void:
 	if not timeline or not timeline.clip_selection_manager:
 		return
-	timeline.clip_selection_manager.start_box_selection(Vector2(content_x, 0.0), true)
+	timeline.clip_selection_manager.start_box_selection(Vector2(content_x, 0.0), true, true)
 	var current_x := timeline.get_local_mouse_position().x
 	timeline.clip_selection_manager.update_box_selection(Vector2(current_x, 0.0))
 	logger.info("Ruler box-select started at x=%.1f" % content_x)

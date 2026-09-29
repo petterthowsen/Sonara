@@ -755,8 +755,12 @@ func get_clip_at_position(tick: int) -> ClipInstance:
 	return null
 
 
-func get_or_create_clip_at_position(tick: int) -> ClipInstance:
-	"""Get clip at position, or create a new one if empty space (multi-clip mode)."""
+func get_or_create_clip_at_position(tick: int, min_end_tick: int = -1) -> ClipInstance:
+	"""Get clip at position, or create a new one if empty space (multi-clip mode).
+
+	A new clip is at least four bars long, extended in whole bars to reach `min_end_tick`
+	(a paste passes its span end) as far as the next clip allows.
+	"""
 	# First try to find existing clip
 	var existing = get_clip_at_position(tick)
 	if existing:
@@ -802,6 +806,10 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 
 	# Calculate clip length
 	var default_length = ticks_per_bar * 4  # Default: 4 bars
+	if min_end_tick > clip_start_ticks:
+		@warning_ignore("integer_division")
+		var bars_needed: int = (min_end_tick - clip_start_ticks + ticks_per_bar - 1) / ticks_per_bar
+		default_length = maxi(default_length, bars_needed * ticks_per_bar)
 	var clip_length_ticks: int
 	
 	if next_clip_start != -1:
@@ -819,8 +827,10 @@ func get_or_create_clip_at_position(tick: int) -> ClipInstance:
 		# No next clip, use default length
 		clip_length_ticks = default_length
 
-	# Create clip in project
-	var project = Sonara.editor.project
+	# Create clip in project (the track's own project first: no Editor in headless tests)
+	var project: Project = track.get_project_ref()
+	if not project and Sonara.editor:
+		project = Sonara.editor.project
 	if not project:
 		logger.error("Cannot create clip: no project available")
 		return null

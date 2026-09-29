@@ -36,8 +36,12 @@ var track_mode: bool = false  # True when displaying multiple clips across track
 var current_track: Track = null:  # Active track in track-mode
 	set(value):
 		if current_track != value:
+			# The time range is shared by the tracks: carry it to the new track's editor.
+			var carried := get_selection_range_song() if track_mode else NO_RANGE
 			current_track = value
 			_update_note_editor_states()
+			if track_mode and value:
+				apply_selection_range_song(carried)
 			current_track_changed.emit()
 			# Labels and colours come from the focused track's map (REQ-024).
 			if is_inside_tree():
@@ -55,6 +59,48 @@ var note_editor: NoteEditor:
 		if note_editors.is_empty():
 			return null
 		return note_editors[0]
+
+
+const NO_RANGE := Vector2i(-1, -1)
+
+
+## The active editor's time range in song ticks, or NO_RANGE. Clip mode converts from the
+## bound instance's clip-content ticks.
+func get_selection_range_song() -> Vector2i:
+	var active := get_active_note_editor()
+	if not active or not active.selection_manager or not active.selection_manager.has_range():
+		return NO_RANGE
+	var sm := active.selection_manager
+	return Vector2i(_editor_to_song_ticks(active, sm.box_selection_start_tick),
+		_editor_to_song_ticks(active, sm.box_selection_end_tick))
+
+
+## Put a song-tick range on the active editor as a bare range (no notes selected), so it
+## survives switching tracks and clips. NO_RANGE clears the range.
+func apply_selection_range_song(song_range: Vector2i) -> void:
+	var active := get_active_note_editor()
+	if not active or not active.selection_manager:
+		return
+	var start := -1
+	var end := -1
+	if song_range != NO_RANGE:
+		start = maxi(0, _song_to_editor_ticks(active, song_range.x))
+		end = _song_to_editor_ticks(active, song_range.y)
+	active.selection_manager.set_range(start, end)
+	if is_inside_tree():
+		_update_selection_overlays()
+
+
+func _editor_to_song_ticks(editor: NoteEditor, ticks: int) -> int:
+	if editor.multi_clip_mode or not editor.clip_instance:
+		return ticks
+	return editor.clip_instance.clip_to_song_ticks(ticks)
+
+
+func _song_to_editor_ticks(editor: NoteEditor, ticks: int) -> int:
+	if editor.multi_clip_mode or not editor.clip_instance:
+		return ticks
+	return editor.clip_instance.song_to_clip_ticks(ticks)
 
 
 func get_active_note_editor() -> NoteEditor:
@@ -311,7 +357,8 @@ func bind_to_clip_instance(ci : ClipInstance):
 	logger.info("  - clip_instance: ", ci)
 	logger.info("  - clip_id: ", ci.clip_id if ci else "null")
 	logger.info("  - clip: ", ci.clip if ci else "null")
-	
+
+	var carried := get_selection_range_song()
 	if clip_instance or track_mode:
 		unbind()
 	
@@ -326,6 +373,9 @@ func bind_to_clip_instance(ci : ClipInstance):
 		note_editor.bind(clip_instance)
 		# Clip-mode: no position offset (notes show at clip-local positions)
 		note_editor.position_offset_ticks = 0
+		note_editor.edited_clip_instances.clear()
+		# The time range survives opening another clip (same song position).
+		apply_selection_range_song(carried)
 	
 	call_deferred("refresh_note_map")
 	call_deferred("frame_clip_instance")
@@ -340,6 +390,7 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	logger.info("[MidiEditor] bind_to_clips called (track-mode)")
 	logger.info("  - %d clips across %d tracks" % [clips.size(), tracks.size()])
 
+	var carried := get_selection_range_song()
 	# Unbind previous state
 	if clip_instance or track_mode:
 		unbind()
@@ -368,6 +419,14 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 
 		# Bind to ALL clips on this track (multi-clip mode)
 		editor.bind_to_clips(all_track_clips, track)
+		# The opened clips on this track are what Ctrl+C copies when nothing is selected.
+		editor.edited_clip_instances.clear()
+		for ci in clips:
+			if ci and ci.track == track:
+				editor.edited_clip_instances.append(ci)
+		# Rebinding drops the notes but not the range, which only the active editor keeps.
+		if editor.selection_manager:
+			editor.selection_manager.clear_selection()
 
 		# Set color from track (and keep following it)
 		_bind_track_color(editor, track)
@@ -381,6 +440,8 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	# Set first track as active by default
 	if not tracks.is_empty():
 		current_track = tracks[0]
+	# The time range survives rebinding (same song ticks in track mode).
+	apply_selection_range_song(carried)
 
 	call_deferred("refresh_note_map")
 	call_deferred("scroll_to_note")

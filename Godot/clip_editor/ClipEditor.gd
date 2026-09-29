@@ -538,6 +538,13 @@ func _song_to_ruler_ticks(ticks: int) -> int:
 func _on_ruler_position_requested(ticks: int):
 	cursor_position_ticks = ticks
 	_ruler_range_start = -1
+	# A bare time range (no notes) would win over the cursor as the paste target, so a
+	# plain click drops it, like it drops a pending range start.
+	var active = midi_editor.get_active_note_editor()
+	if active and active.selection_manager and active.selection_manager.selected_notes.is_empty() \
+			and active.selection_manager.has_range():
+		active.selection_manager.set_range(-1, -1)
+		midi_editor._update_selection_overlays()
 	var song_ticks := maxi(0, _ruler_to_song_ticks(ticks))
 	var project: Project = _editor.project if _editor else null
 	if project:

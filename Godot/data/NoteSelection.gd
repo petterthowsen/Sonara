@@ -85,6 +85,27 @@ static func from_visual_notes_with_range(visual_notes: Array[VisualNote], p_star
 	return NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
 
 
+## Create a NoteSelection over [p_start_tick, p_end_tick] where each note's start comes from
+## `position_of(visual_note) -> {"start_tick", "end_tick"}` instead of its clip-local data.
+## Track mode needs this: the range is in song ticks but every clip stores notes in its own
+## content ticks, so subtracting the range start from `midi_note_data.start_tick` would be wrong.
+static func from_positioned_notes(visual_notes: Array[VisualNote], p_start_tick: int, p_end_tick: int, position_of: Callable) -> NoteSelection:
+	var relative_notes: Array[MidiNoteData] = []
+	for visual_note in visual_notes:
+		if not is_instance_valid(visual_note) or not visual_note.midi_note_data:
+			continue
+		var note_data = visual_note.midi_note_data
+		var pos: Dictionary = position_of.call(visual_note)
+		var relative_note = MidiNoteData.new()
+		relative_note.id = -1  # Will be assigned when pasted
+		relative_note.note = note_data.note
+		relative_note.velocity = note_data.velocity
+		relative_note.start_tick = int(pos["start_tick"]) - p_start_tick
+		relative_note.duration_ticks = note_data.duration_ticks
+		relative_notes.append(relative_note)
+	return NoteSelection.new(p_start_tick, p_end_tick, relative_notes)
+
+
 ## Create a NoteSelection from an array of MidiNoteData instances
 static func from_midi_notes(midi_notes: Array[MidiNoteData]) -> NoteSelection:
 	if midi_notes.is_empty():

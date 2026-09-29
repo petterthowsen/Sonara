@@ -722,13 +722,21 @@ func _on_arranger_clips_selected(clips: Array[ClipInstance], multi_track: bool) 
 	# Emit new multi-clip signal
 	clips_selected.emit(clips, multi_track)
 
-	if not clips.is_empty() and Settings and Settings.get_value("selection/track_follows_clip_selection"):
+	if not clips.is_empty() and _clip_selection_selects_tracks():
 		var tracks: Array[Track] = []
 		for c in clips:
 			if c.track and not tracks.has(c.track):
 				tracks.append(c.track)
 		if not tracks.is_empty():
 			_select_track_externally(tracks, clips.back().track)
+
+
+## Whether an arranger clip selection should also select its tracks. A range select
+## (Ctrl/Cmd drag) only does so when `selection/range_select_selects_tracks` is on.
+func _clip_selection_selects_tracks() -> bool:
+	if arranger and arranger.timeline and arranger.timeline.clip_selection_manager:
+		return arranger.timeline.clip_selection_manager.clip_selection_selects_tracks()
+	return Settings.get_value("selection/track_follows_clip_selection")
 
 
 ## Handle a track pick in the MIDI editor's Track-Mode track list.

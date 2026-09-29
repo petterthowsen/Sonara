@@ -14,8 +14,14 @@ var selected_note: VisualNote = null  # Currently selected note (legacy single s
 var selected_notes: Array[VisualNote] = []  # Multiple selected notes
 
 
-# Clipboard for copy/paste operations
-var clipboard: NoteSelection
+# Clipboard for copy/paste operations. One clipboard for every note editor (track mode
+# builds one editor per track), so notes copied on one track paste onto another.
+static var _shared_clipboard: NoteSelection = null
+var clipboard: NoteSelection:
+	get:
+		return _shared_clipboard
+	set(value):
+		_shared_clipboard = value
 
 
 # Box selection state
@@ -265,25 +271,49 @@ func _update_selection_range() -> void:
 # ============================================================================
 func copy_selection() -> void:
 	"""Copy selected notes to clipboard."""
-	if selected_notes.is_empty():
+	var selection := snapshot_selection()
+	if selection == null:
 		logger.info("No notes selected to copy")
 		return
-
-	var selection_length = box_selection_end_tick - box_selection_start_tick
-	if selection_length <= 0:
-		logger.warn("Cannot copy - invalid selection range")
-		return
-
-	if box_selection_start_tick > 0 or box_selection_end_tick > 0:
-		clipboard = NoteSelection.from_visual_notes_with_range(
-			selected_notes,
-			box_selection_start_tick,
-			box_selection_end_tick
-		)
-	else:
-		clipboard = NoteSelection.from_visual_notes(selected_notes)
-
+	clipboard = selection
 	logger.info("Copied %d notes (duration: %d ticks)" % [clipboard.notes.size(), clipboard.duration_ticks])
+
+
+## True when a time range is set (a box/ruler range, or the span of the selected notes).
+func has_range() -> bool:
+	return box_selection_end_tick > box_selection_start_tick
+
+
+## Replace the selection with a bare time range and no notes, e.g. a range carried over
+## from another track or clip. A range with end <= start clears it.
+func set_range(start_tick: int, end_tick: int) -> void:
+	clear_selection()
+	if end_tick > start_tick:
+		box_selection_start_tick = start_tick
+		box_selection_end_tick = end_tick
+	selection_changed.emit(selected_notes)
+
+
+## The selected notes as a NoteSelection over the selection range, positioned in this
+## editor's ticks (song ticks in track mode). Null when nothing is selected.
+func snapshot_selection() -> NoteSelection:
+	if selected_notes.is_empty():
+		return null
+	var start_tick := box_selection_start_tick
+	var end_tick := box_selection_end_tick
+	if end_tick <= start_tick:
+		# No explicit range: use the notes' bounds in this editor's space.
+		var first := true
+		for n in selected_notes:
+			if not is_instance_valid(n) or not n.midi_note_data:
+				continue
+			var pos: Dictionary = get_note_song_position.call(n)
+			start_tick = pos["start_tick"] if first else mini(start_tick, pos["start_tick"])
+			end_tick = pos["end_tick"] if first else maxi(end_tick, pos["end_tick"])
+			first = false
+		if first or end_tick <= start_tick:
+			return null
+	return NoteSelection.from_positioned_notes(selected_notes, start_tick, end_tick, get_note_song_position)
 
 
 # Drawing removed - now handled by MidiEditor._draw()

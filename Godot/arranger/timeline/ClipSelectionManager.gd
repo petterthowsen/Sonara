@@ -38,6 +38,8 @@ var anchor_track: Track = null
 var anchor_tick: int = -1
 
 var _box_span_all_tracks: bool = false
+## The active box select came from a ruler (Ctrl/Cmd drag on a ruler row or the marker lane).
+var _box_from_ruler: bool = false
 var _preserve_range: bool = false
 var _additive_start_pos: Vector2 = Vector2.ZERO
 var _pending_additive_clip: ClipInstance = null
@@ -267,11 +269,14 @@ func finish_additive_gesture(pos: Vector2) -> void:
 
 
 ## Begin a grid-snapped box select and apply any clips already under the box.
-func start_box_selection(pos: Vector2, span_all_tracks: bool = false) -> void:
+## `from_ruler` marks a ruler range select, which spans every track and follows the
+## `selection/ruler_range_select_*` settings.
+func start_box_selection(pos: Vector2, span_all_tracks: bool = false, from_ruler: bool = false) -> void:
 	is_additive_pending = false
 	_pending_additive_clip = null
 	is_box_selecting = true
-	_box_span_all_tracks = span_all_tracks
+	_box_span_all_tracks = span_all_tracks or from_ruler
+	_box_from_ruler = from_ruler
 	box_start = pos
 	box_current = pos
 	_rebuild_box_rect()
@@ -294,11 +299,14 @@ func end_box_selection() -> void:
 	_sync_selection_to_box()
 	var start_tick := mini(box_start_tick, box_end_tick)
 	var end_tick := maxi(box_start_tick, box_end_tick)
+	var snap_to_clips := _range_snaps_to_clips()
 	is_box_selecting = false
 	_box_span_all_tracks = false
+	_box_from_ruler = false
 	_preserve_range = true
 	_set_range(start_tick, end_tick, end_tick > start_tick)
-	_expand_range_to_cover_selected_clips()
+	if snap_to_clips:
+		_expand_range_to_cover_selected_clips()
 	box_rect = Rect2()
 	box_start = Vector2.ZERO
 	box_current = Vector2.ZERO
@@ -384,11 +392,45 @@ func _rebuild_box_rect() -> void:
 
 
 ## Select every clip that intersects the current snapped box, then expand the time range to cover them.
+## A ruler range select skips either step when its settings turn them off.
 func _sync_selection_to_box() -> void:
 	if not timeline:
 		return
+	if _box_from_ruler and not _setting("selection/ruler_range_select_selects_clips"):
+		if not selection.is_empty():
+			selection.clear()
+		return
 	select_instances(timeline.get_clip_instances_in_rect(box_rect))
-	_expand_range_to_cover_selected_clips()
+	if _range_snaps_to_clips():
+		_expand_range_to_cover_selected_clips()
+
+
+## True while a range select (Ctrl/Cmd drag on the timeline or a ruler) drives the selection.
+func is_range_selecting() -> bool:
+	return is_box_selecting
+
+
+## Whether the current clip selection change should also select the clips' tracks.
+## Range selects only do so when `selection/range_select_selects_tracks` is on.
+func clip_selection_selects_tracks() -> bool:
+	if not _setting("selection/track_follows_clip_selection"):
+		return false
+	if is_range_selecting():
+		return _setting("selection/range_select_selects_tracks")
+	return true
+
+
+## A timeline range select always grows to cover the clips it selects; a ruler range
+## select only does when `selection/ruler_range_select_snaps_to_clips` is on.
+func _range_snaps_to_clips() -> bool:
+	if not _box_from_ruler:
+		return true
+	return _setting("selection/ruler_range_select_snaps_to_clips")
+
+
+## Read a registered boolean setting live (not cached, so changes apply to the next gesture).
+func _setting(key: String) -> bool:
+	return bool(Settings.get_value(key))
 
 
 ## Grow the visible range to cover selected clips without shrinking below the current range.
