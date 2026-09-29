@@ -236,7 +236,7 @@ func _on_save_project() -> void:
 	if Sonara.editor.project_path.is_empty():
 		_on_save_project_as()
 	else:
-		Sonara.editor.save_project()
+		await Sonara.editor.save_project()
 
 
 func _on_save_project_as() -> void:
@@ -359,4 +359,4 @@ func _on_file_dialog_file_selected(path: String) -> void:
 			# Ensure .sonara extension
 			if not path.ends_with(".sonara"):
 				path += ".sonara"
-			Sonara.editor.save_project(path)
+			await Sonara.editor.save_project(path)

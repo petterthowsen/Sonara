@@ -19,6 +19,7 @@ signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
 signal stats_changed()  # New processing stats for a CLAP plugin (1 Hz); see plugin_stats
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
+signal plugin_state_saved(ok: bool)  # Answer to save_plugin_state(); see plugin_state
 signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
 signal child_moved(from_position: int, to_position: int)
@@ -189,6 +190,22 @@ var _expected_param_count: int = 0
 ## Parameter values restored from a project file, reapplied after the engine advertises params.
 ## SFZ/CLAP devices wipe and rebuild their parameter list on load; this keeps saved CC/param values.
 var _restored_parameter_values: Dictionary[int, float] = {}
+
+## A CLAP plugin's own state blob (presets, samples, anything its parameters don't cover), as of
+## the last project save or load. Saved into the `.sonara` file as base64. Empty if the plugin has
+## no state extension, or it was never saved.
+var plugin_state: PackedByteArray = PackedByteArray()
+
+## `plugin_state` came from a project file and still has to reach the engine; it's sent once
+## the plugin reports "ready".
+var _plugin_state_restore_pending: bool = false
+
+## Where plugin state blobs are handed between Godot and the engine. They go through files
+## because a blob rarely fits one OSC datagram.
+const PLUGIN_STATE_DIR := "user://plugin_state"
+
+## How long a restore file is kept for the engine to read it.
+const PLUGIN_STATE_FILE_TTL_SEC := 30.0
 
 ## Guards against double-registering OSC listeners (connect_to_engine can be
 ## called both from Channel.connect_to_engine() and Channel.add_device()).
@@ -757,7 +774,78 @@ func _set_loading_state(new_state: String) -> void:
 	if loading_state == new_state:
 		return
 	loading_state = new_state
+	if loading_state == "ready":
+		_restore_plugin_state()
 	loading_state_changed.emit(loading_state)
+
+
+## ============================================================================
+## PLUGIN STATE
+## ============================================================================
+
+## Ask the engine to write this plugin's current state to a file; `plugin_state_saved` fires
+## when it answered, and `plugin_state` holds the blob if it had one. Returns false (and emits
+## nothing) when there's nothing to ask: not a loaded CLAP plugin, or not connected.
+func save_plugin_state() -> bool:
+	if not device.has_gui() or not _is_connected or loading_state != "ready":
+		return false
+	var file_path := _plugin_state_file_path("save")
+	if file_path.is_empty():
+		return false
+	AudioEngineOSC.send(osc_addr("state/save"), [file_path])
+	return true
+
+
+func _on_plugin_state_saved_received(values: Array) -> void:
+	if values.size() < 2:
+		return
+	var file_path := str(values[0])
+	var size := int(values[1])
+	var ok := size >= 0
+	if size > 0:
+		var blob := FileAccess.get_file_as_bytes(file_path)
+		if blob.size() == size:
+			plugin_state = blob
+			# The engine now has what we'd restore: a later "ready" (reload) mustn't roll it back.
+			_plugin_state_restore_pending = false
+		else:
+			logger.warn("[%s] Plugin state file %s is %d bytes, expected %d" % [get_display_name(), file_path, blob.size(), size])
+			ok = false
+	elif size < 0:
+		logger.warn("[%s] Could not save plugin state; keeping the last saved one" % get_display_name())
+	DirAccess.remove_absolute(file_path)
+	plugin_state_saved.emit(ok)
+
+
+## Send a project-loaded state blob to the engine once the plugin is ready.
+func _restore_plugin_state() -> void:
+	if not _plugin_state_restore_pending or plugin_state.is_empty() or not _is_connected:
+		return
+	_plugin_state_restore_pending = false
+	var file_path := _plugin_state_file_path("load")
+	if file_path.is_empty():
+		return
+	var file := FileAccess.open(file_path, FileAccess.WRITE)
+	if file == null:
+		logger.warn("[%s] Could not write plugin state file %s" % [get_display_name(), file_path])
+		return
+	file.store_buffer(plugin_state)
+	file.close()
+	AudioEngineOSC.send(osc_addr("state/load"), [file_path])
+	logger.info("[%s] Restoring %d bytes of plugin state" % [get_display_name(), plugin_state.size()])
+	# The engine reads the file on its command thread; give it time before cleaning up.
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree:
+		tree.create_timer(PLUGIN_STATE_FILE_TTL_SEC).timeout.connect(func(): DirAccess.remove_absolute(file_path))
+
+
+## Absolute path of a state hand-over file for this instance ("" if the directory can't be made).
+func _plugin_state_file_path(kind: String) -> String:
+	var dir := ProjectSettings.globalize_path(PLUGIN_STATE_DIR)
+	if DirAccess.make_dir_recursive_absolute(dir) != OK:
+		logger.warn("Could not create plugin state directory %s" % dir)
+		return ""
+	return dir.path_join("%s_%s_%d.bin" % [id, kind, Time.get_ticks_usec()])
 
 
 ## Connect to audio engine and listen for state updates.
@@ -779,6 +867,7 @@ func connect_to_engine() -> void:
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
 	var stats_addr = osc_addr("stats")
+	var state_saved_addr = osc_addr("state/saved")
 
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
@@ -789,6 +878,7 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.listen(host_addr, _on_host_received)
 	AudioEngineOSC.listen(stats_addr, _on_stats_received)
+	AudioEngineOSC.listen(state_saved_addr, _on_plugin_state_saved_received)
 
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
@@ -815,6 +905,7 @@ func disconnect_from_engine() -> void:
 	var crashed_addr = osc_addr("crashed")
 	var host_addr = osc_addr("host")
 	var stats_addr = osc_addr("stats")
+	var state_saved_addr = osc_addr("state/saved")
 
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
@@ -826,6 +917,7 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.unlisten(host_addr, _on_host_received)
 	AudioEngineOSC.unlisten(stats_addr, _on_stats_received)
+	AudioEngineOSC.unlisten(state_saved_addr, _on_plugin_state_saved_received)
 	for child in children:
 		child.disconnect_from_engine()
 
@@ -1268,6 +1360,8 @@ func to_json() -> Dictionary:
 		"return_channel_ids": return_channel_ids.duplicate(),
 		"slots": _slots_to_json(),
 	}
+	if not plugin_state.is_empty():
+		data["plugin_state"] = Marshalls.raw_to_base64(plugin_state)
 	var note_map_json = LayerNoteMap.to_json(slot_note_map)
 	if note_map_json != null:
 		data["slot_note_map"] = note_map_json
@@ -1319,6 +1413,10 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.return_channel_id = int(data.get("return_channel_id", -1))
 	var extra_ids = data.get("return_channel_ids", [])
 	instance.return_channel_ids.assign(extra_ids)
+	var state_b64 := str(data.get("plugin_state", ""))
+	if not state_b64.is_empty():
+		instance.plugin_state = Marshalls.base64_to_raw(state_b64)
+		instance._plugin_state_restore_pending = not instance.plugin_state.is_empty()
 
 	for child_data in data.get("children", []):
 		if child_data is Dictionary:

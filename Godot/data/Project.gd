@@ -1655,6 +1655,38 @@ func _renumber_siblings(parent_id: int) -> void:
 # ============================================================================
 
 # Serialize to JSON
+## Ask every loaded CLAP plugin for its current state so `to_json()` saves it. Waits until all of
+## them answered or `timeout_sec` passed; a plugin that didn't answer keeps its last saved state.
+func refresh_plugin_states(timeout_sec: float = 3.0) -> void:
+	var waiting: Array[DeviceInstance] = []
+	for channel in channels:
+		for inst in channel.devices:
+			_collect_plugin_state_requests(inst, waiting)
+	if waiting.is_empty():
+		return
+	var remaining := {"count": waiting.size()}
+	var on_saved := func(_ok: bool) -> void:
+		remaining.count -= 1
+	for inst in waiting:
+		inst.plugin_state_saved.connect(on_saved, CONNECT_ONE_SHOT)
+	var tree := Engine.get_main_loop() as SceneTree
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while remaining.count > 0 and Time.get_ticks_msec() < deadline and tree:
+		await tree.process_frame
+	for inst in waiting:
+		if inst.plugin_state_saved.is_connected(on_saved):
+			inst.plugin_state_saved.disconnect(on_saved)
+	if remaining.count > 0:
+		logger.warn("[Project] %d plugin(s) didn't return their state in time; saving their last known state" % remaining.count)
+
+
+func _collect_plugin_state_requests(inst: DeviceInstance, out: Array[DeviceInstance]) -> void:
+	if inst.save_plugin_state():
+		out.append(inst)
+	for child in inst.children:
+		_collect_plugin_state_requests(child, out)
+
+
 func to_json() -> Dictionary:
 	# Serialize clip pool
 	var clips_array = []

@@ -27,7 +27,6 @@ use super::pipewire::GraphInfo;
 use super::stream::{StreamControl, StreamRequest};
 use super::tempo_map::TempoMap;
 use super::types::{ChannelId, Tick};
-use base64::Engine as _;
 
 mod audio_config;
 
@@ -523,72 +522,92 @@ impl CommandWorker {
         }
     }
 
-    /// Ask a plugin for its state blob and report it (project save path).
-    fn save_plugin_state(&self, channel_id: ChannelId, device_path: DevicePath) {
+    /// Ask a plugin for its state blob, write it to `file_path` and report the size (project
+    /// save path). The blob travels as a file because it rarely fits one OSC datagram.
+    fn save_plugin_state(&self, channel_id: ChannelId, device_path: DevicePath, file_path: String) {
         let Some(handle) = self.plugin_handle(channel_id, &device_path) else {
-            // Not a subprocess plugin: keep the old locked behavior (logs and reports empty).
+            // Not a subprocess plugin: the locked path reports it has no state.
             self.apply_locked(AudioCommand::SavePluginState {
                 channel_id,
                 device_path,
+                file_path,
             });
             return;
         };
 
-        match handle.save_state() {
-            Ok(state) => {
-                let len = state.len();
-                self.with_plugin(channel_id, &device_path, |plugin| {
-                    plugin.set_saved_state(state.clone())
-                });
-                self.send_status(EngineStatus::PluginStateSaved {
-                    channel_id,
-                    device_path,
-                    state_base64: base64::engine::general_purpose::STANDARD.encode(&state),
-                });
-                info!(
-                    "Saved {} bytes of plugin state (channel {} device {})",
-                    len, channel_id, device_path
+        let size = match handle.save_state() {
+            Ok(state) => match std::fs::write(&file_path, &state) {
+                Ok(()) => {
+                    info!(
+                        "Saved {} bytes of plugin state (channel {} device {}) to {}",
+                        state.len(),
+                        channel_id,
+                        device_path,
+                        file_path
+                    );
+                    let size = state.len() as i64;
+                    self.with_plugin(channel_id, &device_path, |plugin| {
+                        plugin.set_saved_state(state)
+                    });
+                    size
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to write plugin state (channel {} device {}) to {}: {}",
+                        channel_id, device_path, file_path, e
+                    );
+                    -1
+                }
+            },
+            Err(e) => {
+                warn!(
+                    "Failed to save plugin state (channel {} device {}): {}",
+                    channel_id, device_path, e
                 );
+                -1
             }
-            Err(e) => warn!(
-                "Failed to save plugin state (channel {} device {}): {}",
-                channel_id, device_path, e
-            ),
-        }
+        };
+        self.send_status(EngineStatus::PluginStateSaved {
+            channel_id,
+            device_path,
+            file_path,
+            size,
+        });
     }
 
-    /// Hand a base64 state blob back to a plugin (project load path).
-    fn load_plugin_state(
-        &self,
-        channel_id: ChannelId,
-        device_path: DevicePath,
-        state_base64: &str,
-    ) {
+    /// Hand a state blob read from `file_path` back to a plugin (project load path).
+    fn load_plugin_state(&self, channel_id: ChannelId, device_path: DevicePath, file_path: String) {
         let Some(handle) = self.plugin_handle(channel_id, &device_path) else {
             self.apply_locked(AudioCommand::LoadPluginState {
                 channel_id,
                 device_path,
-                state_base64: state_base64.to_string(),
+                file_path,
             });
             return;
         };
 
-        let state = match base64::engine::general_purpose::STANDARD.decode(state_base64) {
+        let state = match std::fs::read(&file_path) {
             Ok(state) => state,
             Err(e) => {
                 warn!(
-                    "Invalid plugin state for channel {} device {}: {}",
-                    channel_id, device_path, e
+                    "Could not read plugin state for channel {} device {} from {}: {}",
+                    channel_id, device_path, file_path, e
                 );
                 return;
             }
         };
-        match handle.load_state(state) {
+        let len = state.len();
+        match handle.load_state(state.clone()) {
             Ok(()) => {
-                self.with_plugin(channel_id, &device_path, |plugin| plugin.set_state_dirty());
+                // Keep it as the saved state too, so a crash before the next refresh restores
+                // what the project loaded rather than the plugin's defaults.
+                self.with_plugin(channel_id, &device_path, |plugin| {
+                    plugin.set_saved_state(state);
+                    plugin.set_state_dirty();
+                });
                 info!(
-                    "Restored plugin state (channel {} device {})",
-                    channel_id, device_path
+                    "Restored {} bytes of plugin state (channel {} device {})",
+                    len, channel_id, device_path
                 );
             }
             Err(e) => warn!(
@@ -757,12 +776,13 @@ impl CommandWorker {
             AudioCommand::SavePluginState {
                 channel_id,
                 device_path,
-            } => self.save_plugin_state(channel_id, device_path),
+                file_path,
+            } => self.save_plugin_state(channel_id, device_path, file_path),
             AudioCommand::LoadPluginState {
                 channel_id,
                 device_path,
-                state_base64,
-            } => self.load_plugin_state(channel_id, device_path, &state_base64),
+                file_path,
+            } => self.load_plugin_state(channel_id, device_path, file_path),
             AudioCommand::ClearChannelDevices { channel_id } => self.clear_devices(channel_id),
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),

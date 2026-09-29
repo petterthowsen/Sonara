@@ -437,6 +437,11 @@ func save_project(path: String = "") -> bool:
 		push_error("[Editor] Cannot save: No file path specified")
 		return false
 	
+	# CLAP plugins hold state the engine has to fetch first
+	await project.refresh_plugin_states()
+	if project == null:
+		return false
+
 	# Update modified date
 	project.modified_date = Time.get_unix_time_from_system()
 	

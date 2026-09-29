@@ -527,6 +527,24 @@ impl OscServer {
                     device_path,
                 })?;
             }
+            ["state", "save"] => {
+                if let Some(OscType::String(file_path)) = args.first() {
+                    command_tx.send(AudioCommand::SavePluginState {
+                        channel_id,
+                        device_path,
+                        file_path: file_path.clone(),
+                    })?;
+                }
+            }
+            ["state", "load"] => {
+                if let Some(OscType::String(file_path)) = args.first() {
+                    command_tx.send(AudioCommand::LoadPluginState {
+                        channel_id,
+                        device_path,
+                        file_path: file_path.clone(),
+                    })?;
+                }
+            }
             // Reload a crashed plugin: respawn its host and restore its state (Phase 4).
             ["reload"] => {
                 command_tx.send(AudioCommand::ReloadDevice {
@@ -1609,41 +1627,6 @@ impl OscServer {
                     })?;
                 }
             }
-            ["plugin", "save_state"] => {
-                if let (Some(OscType::Int(channel_id)), Some(OscType::Int(device_position))) =
-                    (args.get(0), args.get(1))
-                {
-                    info!(
-                        "Save plugin state: channel={} device={}",
-                        channel_id, device_position
-                    );
-                    command_tx.send(AudioCommand::SavePluginState {
-                        channel_id: *channel_id as usize,
-                        device_path: DevicePath::root(*device_position as usize),
-                    })?;
-                }
-            }
-            ["plugin", "load_state"] => {
-                if let (
-                    Some(OscType::Int(channel_id)),
-                    Some(OscType::Int(device_position)),
-                    Some(OscType::String(state_base64)),
-                ) = (args.get(0), args.get(1), args.get(2))
-                {
-                    info!(
-                        "Load plugin state: channel={} device={} ({} bytes)",
-                        channel_id,
-                        device_position,
-                        state_base64.len()
-                    );
-                    command_tx.send(AudioCommand::LoadPluginState {
-                        channel_id: *channel_id as usize,
-                        device_path: DevicePath::root(*device_position as usize),
-                        state_base64: state_base64.clone(),
-                    })?;
-                }
-            }
-
             // AudioFile service routes
             ["audiofile", "decode"] => {
                 if let (Some(OscType::String(req_id)), Some(OscType::String(abs_path))) =
@@ -2055,13 +2038,13 @@ impl OscServer {
             EngineStatus::PluginStateSaved {
                 channel_id,
                 device_path,
-                state_base64,
+                file_path,
+                size,
             } => (
-                "/plugin/state/saved".to_string(),
+                device_path.to_osc_addr(channel_id, "state/saved"),
                 vec![
-                    OscType::Int(channel_id as i32),
-                    OscType::String(device_path.to_string()),
-                    OscType::String(state_base64),
+                    OscType::String(file_path),
+                    OscType::Int(size.clamp(-1, i32::MAX as i64) as i32),
                 ],
             ),
             EngineStatus::PluginParameterValueChanged {

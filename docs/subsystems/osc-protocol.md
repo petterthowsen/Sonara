@@ -383,11 +383,22 @@ Examples:
 
 **Plugin State Management**
 ```
-/plugin/save_state [i:channel_id, i:device_position]
-/plugin/load_state [i:channel_id, i:device_position, s:state_base64]
+{device}/state/save [s:file_path]          Godot → Rust
+{device}/state/saved [s:file_path, i:size]  Rust → Godot
+{device}/state/load [s:file_path]          Godot → Rust
 ```
-- `save_state` asks the plugin to serialize its state. Response: `/plugin/state/saved [i:channel_id, s:device_path, s:state_base64]`
-- `load_state` restores a state blob into a loaded plugin.
+State blobs travel as files, since they rarely fit one OSC datagram (the engine reads 2 KB
+packets). Paths are absolute. Godot uses `user://plugin_state/`.
+- `state/save` asks a loaded CLAP plugin for its state and writes the raw blob to `file_path`.
+  The engine always answers with `state/saved`. `size` is the byte count written, `0` when the
+  device has no state (not a CLAP plugin, or no state extension), or `-1` when saving failed
+  (no device, plugin not ready, write error). Godot reads the file and deletes it.
+- `state/load` reads the raw blob from `file_path` and restores it into the loaded plugin. The
+  blob also becomes the plugin's saved state for crash reload. Godot sends it when a
+  project-loaded plugin first reports `ready`, and deletes the file 30 s later.
+- In `.sonara` projects the blob is stored per device as base64 under `plugin_state`. Godot
+  refreshes it from every ready plugin before writing the file (3 s timeout; a plugin that doesn't
+  answer keeps its last saved blob).
 
 **Device Lifecycle Control**
 ```

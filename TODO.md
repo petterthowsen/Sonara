@@ -51,6 +51,7 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
   - [x?] A crash report names the host's log file, and a plugin that keeps missing its deadline is flagged (amber ring on the device light)
   - [x?] Plugin hosting modes like Bitwig: Settings › Audio › Plugin Hosting (Individually, By plug-in, By vendor, Together) plus "Always host individually" per plugin in the device menu. Changes move loaded plugins live and keep their state; a shared host crash shows one popup and one Reload restores every plugin in it. See `docs/engine-stability-plan.md` Phase 5
 - [ ] Plugin GUI windows should be forced to stay above Godot App
+- [x?] Plugin state persistence: CLAP plugin state is saved into `.sonara` projects and restored on load (`{device}/state/save` and `{device}/state/load`, which pass the blob as a file)
 - [ ] Sforzando CLAP GUI embeds but renders black
 - [x?] Improve logging of plugins: each plugin host writes `Engine/logs/plugins/<host>-<pid>.log` with the plugin named on every line, forwards warnings to Godot's `/log`, and reports per-plugin DSP load and dropouts (device header tooltip, EnginePanel). `plugin_host --probe` tests a plugin standalone; `SONARA_PLUGIN_HOST_WRAPPER` / `SONARA_PLUGIN_HOST_WAIT` run hosts under a debugger. See `docs/engine-stability-plan.md` Phase 6
 

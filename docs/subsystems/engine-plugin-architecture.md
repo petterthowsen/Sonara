@@ -115,7 +115,8 @@
   `PluginLoad`, so the audio thread keeps passing audio through until the new host is ready.
 - State blobs: the host implements CLAP's state extension (`save`/`load` on the main thread).
   `mark_dirty` (HostState registered) or any parameter change sets the adapter's dirty flag; the
-  command thread refreshes the blob at most once per 30 s while dirty, and on `/plugin/save_state`.
+  command thread refreshes the blob at most once per 30 s while dirty, and on `{device}/state/save`
+  (project save; see the OSC reference). `{device}/state/load` also replaces the saved blob.
   Each request carries an `alive` flag cleared by the adapter's `Drop`, so a load in flight for a
   removed device cleans its host up instead of orphaning it.
 - Removing a device shuts its host down: `Shutdown`, then `SIGKILL` if it hasn't exited within 1 s

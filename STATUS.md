@@ -9,7 +9,6 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 - Bus tracks in the arranger: shown pinned at the bottom, with a toggle to show/hide them
 - Automation lanes on buses: volume, pan, device parameters
 - Time signature changes
-- Plugin state persistence: CLAP state isn't saved in `.sonara` projects yet. The engine has `/plugin/save_state` and `/plugin/load_state`, but Godot never calls them
 
 ### Later
 - Key signature as root key + scale
@@ -18,6 +17,7 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 - Tempo automation lane and tempo map playback (spec `docs/specs/008-tempo-map-engine/`). Verified live: the engine clock, MIDI and audio clips follow ramps, the time ruler and tempo field follow the map, and devices and CLAP plugins receive transport info. `cargo test` and `Godot/tests/run_all.sh` pass.
 
 ### Not Working / Not verified
+- Plugin state persistence: `.sonara` files store each CLAP plugin's state blob (`plugin_state`, base64). It is refreshed from the engine on save and restored when the plugin reports `ready`. Unit-tested (`test_plugin_state.gd`, `save_plugin_state_always_answers`), not verified live yet. A mid-session engine restart doesn't re-send the state.
 - Audio clips now seek and loop on their own recorded-BPM timeline. Clips whose recorded BPM differs from the project tempo sit differently than before (the old seek offset was wrong for them).
 - Tempo map is resent on every (re)connect, but that path wasn't tested with a mid-session engine restart.
 

@@ -92,13 +92,13 @@ echo "   Device 1 deactivated - freeing RAM"
 
 echo ""
 echo "=== 9. Save Plugin State ==="
-send_osc /plugin/state/save ii 2 0
+send_osc /channel/2/device/0/state/save s /tmp/sonara_plugin_state.bin
 echo "   Expected OSC response:"
-echo "     /plugin/state/saved [channel_id, device_position, state_base64]"
+echo "     /channel/2/device/0/state/saved [\"/tmp/sonara_plugin_state.bin\", size]"
 
 echo ""
 echo "=== 10. Load Plugin State (example) ==="
-echo "   /plugin/state/load [2, 0, \"base64encodedstate\"]"
+echo "   /channel/2/device/0/state/load [\"/tmp/sonara_plugin_state.bin\"]"
 echo "   (Skipped - requires saved state from step 9)"
 
 echo ""
@@ -111,7 +111,7 @@ echo "  • Optional active/enabled parameters: add_device [id, pos, active?, en
 echo "  • Active=0: Plugin not loaded (saves RAM for large templates)"
 echo "  • Enabled=0: Plugin bypassed (zero-latency, maintains state)"
 echo "  • Parameters work the same: /channel/{id}/device/{pos}/param/{id}"
-echo "  • State management is plugin-specific: /plugin/state/save and /plugin/state/load"
+echo "  • State management is plugin-specific: {device}/state/save and {device}/state/load (via a file)"
 echo ""
 echo "To monitor responses, run in another terminal:"
 echo "  oscdump 7001"

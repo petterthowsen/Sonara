@@ -518,9 +518,9 @@ As built (2026-09-25):
 - **Live check: full state round trip (2026-09-25).** Loaded the same plugin, changed `Size`, waited
   past the 30 s interval → `Refreshed saved state of plugin ... (350 bytes)`. After `kill -SEGV`
   the reload logged `Restored 350 bytes of plugin state`, activated on a new pid and stayed up.
-- **Not verified:** nothing in Godot calls `/plugin/save_state` or `/plugin/load_state` yet (the
-  project file doesn't persist plugin state), and the plugin GUI knob → Godot check from Phase 2 is
-  still open.
+- **Update:** project save and load now go through `{device}/state/save` and `{device}/state/load`
+  (blobs are passed as files; the old base64 `/plugin/save_state` and `/plugin/load_state` routes
+  are gone). The plugin GUI knob → Godot check from Phase 2 is still open.
 - `./test_osc.sh` and `./test_plugin_osc.sh` still exit 0 without loading a plugin (the staleness
   noted in Phase 2), so they only prove the engine survives them.
 

@@ -376,14 +376,17 @@ pub enum AudioCommand {
         channel_id: ChannelId,
         device_path: DevicePath,
     },
+    /// Write a plugin's state blob to `file_path` (project save). Replies `PluginStateSaved`.
     SavePluginState {
         channel_id: ChannelId,
         device_path: DevicePath,
+        file_path: String,
     },
+    /// Restore a plugin's state blob from `file_path` (project load).
     LoadPluginState {
         channel_id: ChannelId,
         device_path: DevicePath,
-        state_base64: String,
+        file_path: String,
     },
     /// Respawn a crashed (or hung) plugin host and restore the plugin's state. Phase 4.
     ReloadDevice {
@@ -653,10 +656,13 @@ pub enum EngineStatus {
     },
 
     // Plugin state responses
+    /// `size` is the byte count written to `file_path`: 0 when the device has no state to
+    /// save (not a plugin, or no state extension), -1 when saving failed.
     PluginStateSaved {
         channel_id: ChannelId,
         device_path: DevicePath,
-        state_base64: String,
+        file_path: String,
+        size: i64,
     },
 
     // Plugin parameter value changes (from plugin GUI or internal modulation)
@@ -2258,53 +2264,39 @@ pub fn process_command(
                 }
             }
         }
+        // Only non-plugin devices get here: the command worker handles subprocess plugins.
         AudioCommand::SavePluginState {
             channel_id,
             device_path,
+            file_path,
         } => {
-            if let Some(channel) = state.channels.get(&channel_id) {
-                if channel.device_at_path(&device_path).is_some() {
-                    info!(
-                        "Save plugin state requested for channel {} device {}",
-                        channel_id, device_path
-                    );
-                    let _ = status_tx.send(EngineStatus::PluginStateSaved {
-                        channel_id,
-                        device_path,
-                        state_base64: String::new(),
-                    });
-                } else {
-                    warn!(
-                        "Device not found at channel {} path {}",
-                        channel_id, device_path
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for save plugin state", channel_id);
+            let found = state
+                .channels
+                .get(&channel_id)
+                .is_some_and(|channel| channel.device_at_path(&device_path).is_some());
+            if !found {
+                warn!(
+                    "Save plugin state: no device at channel {} path {}",
+                    channel_id, device_path
+                );
             }
+            // Always answer, so a project save waiting on it doesn't time out.
+            let _ = status_tx.send(EngineStatus::PluginStateSaved {
+                channel_id,
+                device_path,
+                file_path,
+                size: if found { 0 } else { -1 },
+            });
         }
         AudioCommand::LoadPluginState {
             channel_id,
             device_path,
-            state_base64,
+            ..
         } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if channel.device_at_path_mut(&device_path).is_some() {
-                    info!(
-                        "Load plugin state requested for channel {} device {} ({} bytes)",
-                        channel_id,
-                        device_path,
-                        state_base64.len()
-                    );
-                } else {
-                    warn!(
-                        "Device not found at channel {} path {}",
-                        channel_id, device_path
-                    );
-                }
-            } else {
-                warn!("Channel {} not found for load plugin state", channel_id);
-            }
+            warn!(
+                "Load plugin state: no loaded plugin at channel {} path {}",
+                channel_id, device_path
+            );
         }
         AudioCommand::OpenPluginGui {
             channel_id,
@@ -2683,5 +2675,46 @@ mod tests {
     fn get_device_state_is_silent_for_fixed_devices() {
         let synth = super::super::devices::PolySynthDevice::new(48_000.0);
         assert!(device_state_replies(Box::new(synth)).is_empty());
+    }
+
+    /// A project save waits for every `state/save` it sent, so a device without plugin state
+    /// must still answer: size 0 for a device that has none, -1 for no device at all.
+    #[test]
+    fn save_plugin_state_always_answers() {
+        let mut state = EngineState::default();
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        state.channels.get_mut(&2).unwrap().devices.push(Box::new(
+            super::super::devices::PolySynthDevice::new(48_000.0),
+        ));
+        while status_rx.try_recv().is_ok() {}
+
+        for (position, expected) in [(0, 0), (5, -1)] {
+            process_command(
+                &mut state,
+                AudioCommand::SavePluginState {
+                    channel_id: 2,
+                    device_path: DevicePath::root(position),
+                    file_path: "/tmp/unused.bin".to_string(),
+                },
+                128,
+                &status_tx,
+            );
+            let replies: Vec<EngineStatus> = status_rx.try_iter().collect();
+            assert_eq!(replies.len(), 1);
+            assert!(matches!(
+                &replies[0],
+                EngineStatus::PluginStateSaved { channel_id: 2, size, file_path, .. }
+                    if *size == expected && file_path == "/tmp/unused.bin"
+            ));
+        }
     }
 }
