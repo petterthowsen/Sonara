@@ -8,6 +8,8 @@ signal drag_completed(data: MixerChannelDrag)
 var source: MixerChannel = null
 var destination: Control = null
 var channel: Channel = null
+## Every strip moved by this drag, in on-screen order (just `channel` unless dragging a multi-selection).
+var channels: Array[Channel] = []
 var preview: Control = null
 
 ## True after a successful nest/un-nest so listeners can skip cancel cleanup.
@@ -18,6 +20,7 @@ var did_commit: bool = false
 func _init(_source: MixerChannel, _channel: Channel, _preview: Control) -> void:
 	self.source = _source
 	self.channel = _channel
+	self.channels = [_channel]
 	self.preview = _preview
 	if self.preview:
 		self.preview.tree_exiting.connect(_on_tree_exiting)
@@ -53,6 +56,13 @@ static func make_preview(ch: Channel) -> Control:
 	return ghost
 
 
+## Append the number of extra strips to the preview's name when several are dragged together.
+static func add_count_badge(preview_node: Control, count: int) -> void:
+	var name_label := preview_node.get_child(0) as Label if preview_node else null
+	if name_label:
+		name_label.text += " (+%d)" % (count - 1)
+
+
 ## True when `ch` may be dragged (buses only reorder within the right pane).
 static func can_drag(ch: Channel) -> bool:
 	return ch != null and not ch.is_master
@@ -64,7 +74,7 @@ static func can_unnest(ch: Channel) -> bool:
 
 
 ## Sibling to sit after when dropping into `box` at global `mouse_x` (null = first).
-static func after_sibling_at(box: ChannelsBox, mouse_x: float, exclude: Channel = null) -> Channel:
+static func after_sibling_at(box: ChannelsBox, mouse_x: float, exclude: Array = []) -> Channel:
 	var after: Channel = null
 	if box == null:
 		return after
@@ -72,7 +82,7 @@ static func after_sibling_at(box: ChannelsBox, mouse_x: float, exclude: Channel 
 		if not child is MixerChannel:
 			continue
 		var mc := child as MixerChannel
-		if mc.channel == null or mc.channel == exclude:
+		if mc.channel == null or exclude.has(mc.channel):
 			continue
 		if mouse_x > mc.get_global_rect().get_center().x:
 			after = mc.channel

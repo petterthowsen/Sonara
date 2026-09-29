@@ -394,8 +394,167 @@ func _on_channel_item_gui_input(event : InputEvent, channel : Channel):
 	if event is InputEventMouseButton:
 		var me = event as InputEventMouseButton
 		if me.button_index == MOUSE_BUTTON_LEFT and me.pressed:
-			select_channel(channel, me.ctrl_pressed)
+			click_select_channel(channel, me.ctrl_pressed, me.shift_pressed)
 			accept_event()
+		elif me.button_index == MOUSE_BUTTON_LEFT and not me.pressed:
+			click_released_on_channel(channel, me.ctrl_pressed, me.shift_pressed)
+
+
+## Selection for a click on a strip: Shift selects the range from the focused strip, Ctrl toggles-adds.
+func click_select_channel(ch: Channel, ctrl: bool, shift: bool) -> void:
+	if shift:
+		select_range(ch)
+	elif not ctrl and selection.size() > 1 and selection.has(ch):
+		# Pressing inside a multi-selection may start dragging all of it; a plain release collapses it.
+		if focused_channel != ch:
+			focused_channel = ch
+			channel_focused.emit(ch)
+	else:
+		select_channel(ch, ctrl)
+
+
+## A click that ended without dragging on a strip of a multi-selection selects just that strip.
+func click_released_on_channel(ch: Channel, ctrl: bool, shift: bool) -> void:
+	if not ctrl and not shift and selection.size() > 1 and selection.has(ch):
+		select_channel(ch)
+
+
+## Visible strips' channels in on-screen order: left pane (nested strips after their group), then
+## the right pane.
+func get_visible_channels_in_order() -> Array[Channel]:
+	var entries: Array = []
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		var mc := node as MixerChannel
+		if mc == null or mc.channel == null or mc.is_queued_for_deletion() or not is_ancestor_of(mc) or not mc.is_visible_in_tree():
+			continue
+		var pane := 0 if left_pane.is_ancestor_of(mc) else 1
+		entries.append([pane, mc.get_global_rect().position.x, mc.get_path().get_name_count(), mc.channel])
+	entries.sort_custom(func(a, b):
+		if a[0] != b[0]:
+			return a[0] < b[0]
+		if not is_equal_approx(a[1], b[1]):
+			return a[1] < b[1]
+		return a[2] < b[2])
+	var result: Array[Channel] = []
+	for e in entries:
+		result.append(e[3])
+	return result
+
+
+## Strips a drag started on `primary` moves: the whole selection when `primary` is part of a
+## multi-selection (same kind only, skipping ones already carried by a selected ancestor), in
+## on-screen order; otherwise just `primary`.
+func get_strip_drag_channels(primary: Channel) -> Array[Channel]:
+	var result: Array[Channel] = [primary]
+	if selection.size() < 2 or not selection.has(primary) or current_project == null:
+		return result
+	result.clear()
+	for ch in get_visible_channels_in_order():
+		if not selection.has(ch) or not MixerChannelDrag.can_drag(ch) or ch.is_bus != primary.is_bus:
+			continue
+		if _has_selected_ancestor(ch):
+			continue
+		result.append(ch)
+	if not result.has(primary):
+		return [primary]
+	return result
+
+
+func _has_selected_ancestor(ch: Channel) -> bool:
+	var parent := current_project.get_channel_by_id(ch.parent_channel_id) if ch.parent_channel_id >= 0 else null
+	while parent:
+		if selection.has(parent):
+			return true
+		parent = current_project.get_channel_by_id(parent.parent_channel_id) if parent.parent_channel_id >= 0 else null
+	return false
+
+
+## Select every visible strip between the focused one (the anchor) and `ch`.
+func select_range(ch: Channel) -> void:
+	var ordered := get_visible_channels_in_order()
+	var to := ordered.find(ch)
+	var from := ordered.find(focused_channel) if focused_channel else -1
+	if to < 0 or from < 0:
+		select_channel(ch)
+		return
+	for c in selection.duplicate():
+		deselect_channel(c, true, true, false)
+	var lo := mini(from, to)
+	var hi := maxi(from, to)
+	for i in range(lo, hi + 1):
+		select_channel(ordered[i], true, true, false)
+	# The anchor stays the focus so the range can be re-aimed with another Shift-click.
+	focused_channel = ordered[from]
+	selection_changed.emit(selection)
+	channel_focused.emit(focused_channel)
+
+
+# ============================================================================
+# KEYBOARD
+# ============================================================================
+
+## Left/Right move the selection, Up/Down nudge the fader (1 dB, 0.1 dB with Shift), Enter renames.
+## Only while the pointer is over the mixer and no text field has focus.
+func _input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or not key.pressed or current_project == null or not is_visible_in_tree():
+		return
+	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
+		return
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return
+	if not get_global_rect().has_point(get_global_mouse_position()):
+		return
+	match key.keycode:
+		KEY_LEFT, KEY_RIGHT:
+			_select_adjacent(-1 if key.keycode == KEY_LEFT else 1)
+		KEY_UP, KEY_DOWN:
+			_nudge_volume((1.0 if key.keycode == KEY_UP else -1.0) * (0.1 if key.shift_pressed else 1.0))
+		KEY_ENTER, KEY_KP_ENTER:
+			if key.echo or not _rename_focused():
+				return
+		_:
+			return
+	get_viewport().set_input_as_handled()
+
+
+## Select the strip `step` places after (or before) the focused one.
+func _select_adjacent(step: int) -> void:
+	var ordered := get_visible_channels_in_order()
+	if ordered.is_empty():
+		return
+	var index := ordered.find(focused_channel)
+	if index < 0:
+		index = 0 if step > 0 else ordered.size() - 1
+	else:
+		index = clampi(index + step, 0, ordered.size() - 1)
+	select_channel(ordered[index])
+
+
+## Change the volume of the selected channels (the focused one when nothing else is selected) by `delta_db`.
+func _nudge_volume(delta_db: float) -> void:
+	var primary := focused_channel
+	if primary == null and not selection.is_empty():
+		primary = selection[0]
+	if primary == null:
+		return
+	var old_volume := primary.volume
+	primary.set_volume(clampf(old_volume + delta_db, ChannelMultiEdit.MIN_DB, ChannelMultiEdit.MAX_DB))
+	var peers := get_multi_edit_peers(primary)
+	if peers.is_empty():
+		HistoryUtil.record_property("Set Volume", primary, "set_volume", old_volume, primary.volume, true)
+	else:
+		ChannelMultiEdit.apply_volume(primary, old_volume, peers, ValueEditKind.Kind.DRAG)
+
+
+## Start renaming the focused channel. Returns true when an editor opened.
+func _rename_focused() -> bool:
+	var mc := find_mixer_channel_ui_for_channel(focused_channel)
+	if mc == null or mc.title == null:
+		return false
+	mc.title.start_editing()
+	return mc.title.is_editing
 
 
 func find_mixer_channel_ui_for_channel(channel : Channel) -> MixerChannel:

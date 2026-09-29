@@ -48,7 +48,7 @@ static func resolve(mixer: Mixer, drag: MixerChannelDrag, mouse: Vector2) -> Mix
 	# Buses only reorder among themselves in the right pane.
 	if dragged.is_bus:
 		if mixer.right_pane.get_global_rect().has_point(mouse):
-			target._insert_in_box(mixer, project, dragged, mixer.right_channels as ChannelsBox, mouse)
+			target._insert_in_box(mixer, project, drag, mixer.right_channels as ChannelsBox, mouse)
 		return target
 
 	# Only the left pane holds nestable strips; its scrolled-out content must not catch drops.
@@ -57,12 +57,12 @@ static func resolve(mixer: Mixer, drag: MixerChannelDrag, mouse: Vector2) -> Mix
 
 	var strip := _deepest_strip_at(mixer, mouse)
 	if strip == null:
-		target._insert_in_box(mixer, project, dragged, mixer.left_channels as ChannelsBox, mouse)
+		target._insert_in_box(mixer, project, drag, mixer.left_channels as ChannelsBox, mouse)
 		return target
 
 	# Group header: nest at the end of its children.
 	if strip.header and strip.header.get_global_rect().has_point(mouse):
-		if target._try_nest(project, dragged, strip.channel, strip.header.get_global_rect()):
+		if target._try_nest(project, drag, strip.channel, strip.header.get_global_rect()):
 			return target
 
 	var kids := strip.children_slide as MixerChannelChildren
@@ -70,13 +70,13 @@ static func resolve(mixer: Mixer, drag: MixerChannelDrag, mouse: Vector2) -> Mix
 		# The fold-out's parent-colored bar is the same group's header.
 		var bar := kids.parent_header
 		if bar and bar.get_global_rect().has_point(mouse):
-			if target._try_nest(project, dragged, strip.channel, bar.get_global_rect()):
+			if target._try_nest(project, drag, strip.channel, bar.get_global_rect()):
 				return target
-		target._insert_in_box(mixer, project, dragged, kids.channels_box, mouse)
+		target._insert_in_box(mixer, project, drag, kids.channels_box, mouse)
 		return target
 
 	# Anywhere else on a strip: insert beside it.
-	target._insert_in_box(mixer, project, dragged, strip.get_parent() as ChannelsBox, mouse)
+	target._insert_in_box(mixer, project, drag, strip.get_parent() as ChannelsBox, mouse)
 	return target
 
 
@@ -85,26 +85,34 @@ func commit(mixer: Mixer, drag: MixerChannelDrag) -> bool:
 	if mixer == null or drag == null or drag.channel == null:
 		return false
 	var project := mixer.current_project
-	match kind:
-		Kind.NEST, Kind.INSERT:
-			return MixerChannelDrag.commit(project, drag.channel, parent, after_sibling)
-		Kind.UNNEST:
-			if not MixerChannelDrag.commit(project, drag.channel, null):
-				return false
-			mixer.place_root_strip(drag.channel, after_sibling)
-			return true
-		Kind.REORDER:
-			return mixer.place_root_strip(drag.channel, after_sibling)
-	return false
+	var moved := false
+	var after := after_sibling
+	# Each strip lands after the previous one, keeping the dragged strips in on-screen order.
+	for ch in drag.channels:
+		match kind:
+			Kind.NEST, Kind.INSERT:
+				moved = MixerChannelDrag.commit(project, ch, parent, after) or moved
+			Kind.UNNEST:
+				if ch.parent_channel_id >= 0:
+					if MixerChannelDrag.commit(project, ch, null):
+						mixer.place_root_strip(ch, after)
+						moved = true
+				else:
+					moved = mixer.place_root_strip(ch, after) or moved
+			Kind.REORDER:
+				moved = mixer.place_root_strip(ch, after) or moved
+		after = ch
+	return moved
 
 
 ## Nest `dragged` at the end of `group` when allowed; `rect` is the header to outline.
-func _try_nest(project: Project, dragged: Channel, group: Channel, rect: Rect2) -> bool:
-	if group == dragged or not accepts_children(group):
+func _try_nest(project: Project, drag: MixerChannelDrag, group: Channel, rect: Rect2) -> bool:
+	if drag.channels.has(group) or not accepts_children(group):
 		return false
-	var after := _last_child_except(project, group, dragged)
-	if not project.can_nest_channel(dragged, group, after):
-		return false
+	var after := _last_child_except(project, group, drag.channels)
+	for ch in drag.channels:
+		if not project.can_nest_channel(ch, group, after):
+			return false
 	kind = Kind.NEST
 	parent = group
 	after_sibling = after
@@ -117,26 +125,31 @@ func _try_nest(project: Project, dragged: Channel, group: Channel, rect: Rect2) 
 func _insert_in_box(
 	mixer: Mixer,
 	project: Project,
-	dragged: Channel,
+	drag: MixerChannelDrag,
 	box: ChannelsBox,
 	mouse: Vector2
 ) -> void:
 	if box == null:
 		return
-	var after := MixerChannelDrag.after_sibling_at(box, mouse.x, dragged)
+	var after := MixerChannelDrag.after_sibling_at(box, mouse.x, drag.channels)
 	if box.nest_parent:
-		if not project.can_nest_channel(dragged, box.nest_parent, after):
+		if drag.channels.has(box.nest_parent):
 			return
+		for ch in drag.channels:
+			if not project.can_nest_channel(ch, box.nest_parent, after):
+				return
 		kind = Kind.INSERT
 		parent = box.nest_parent
-	elif box == mixer.left_channels and dragged.parent_channel_id >= 0:
-		if not MixerChannelDrag.can_unnest(dragged):
-			return
+	elif box == mixer.left_channels and drag.channels.any(func(ch: Channel) -> bool: return ch.parent_channel_id >= 0):
+		for ch in drag.channels:
+			if ch.parent_channel_id >= 0 and not MixerChannelDrag.can_unnest(ch):
+				return
 		kind = Kind.UNNEST
 	elif box == mixer.left_channels or box == mixer.right_channels:
-		var ui := mixer.find_mixer_channel_ui_for_channel(dragged)
-		if ui == null or ui.get_parent() != box:
-			return
+		for ch in drag.channels:
+			var ui := mixer.find_mixer_channel_ui_for_channel(ch)
+			if ui == null or ui.get_parent() != box:
+				return
 		kind = Kind.REORDER
 	else:
 		return
@@ -164,10 +177,10 @@ static func _insert_line_rect(box: ChannelsBox, after: Channel) -> Rect2:
 
 
 ## Last child of `parent` other than `exclude`, or null.
-static func _last_child_except(project: Project, parent: Channel, exclude: Channel) -> Channel:
+static func _last_child_except(project: Project, parent: Channel, exclude: Array) -> Channel:
 	for i in range(parent.child_channel_ids.size() - 1, -1, -1):
 		var ch := project.get_channel_by_id(parent.child_channel_ids[i])
-		if ch and ch != exclude:
+		if ch and not exclude.has(ch):
 			return ch
 	return null
 

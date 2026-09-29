@@ -48,6 +48,10 @@ signal tab_requested(reverse: bool)
 
 var _owns_label_settings := false
 
+## Editing always draws on the LineEdit's black focus box, so its text stays white then.
+const EDIT_TEXT_COLOR := Color.WHITE
+var _font_color: Variant = null
+
 
 func _ready() -> void:
 	label.visible = true
@@ -81,6 +85,7 @@ func _input(event: InputEvent) -> void:
 
 ## Set label and line-edit font color (used for contrast on colored headers).
 func set_font_color(color: Color) -> void:
+	_font_color = color
 	if label:
 		if label.label_settings:
 			if not _owns_label_settings:
@@ -92,10 +97,15 @@ func set_font_color(color: Color) -> void:
 		else:
 			label.add_theme_color_override("font_color", color)
 			label.add_theme_color_override("font_shadow_color", Utils.contrasting_shadow_color(color))
-	if line_edit:
-		line_edit.add_theme_color_override("font_color", color)
-		line_edit.add_theme_color_override("caret_color", color)
-		line_edit.add_theme_color_override("font_shadow_color", Utils.contrasting_shadow_color(color))
+	if line_edit and not is_editing:
+		_apply_line_edit_color(color)
+
+
+## Color the line edit text, caret and shadow.
+func _apply_line_edit_color(color: Color) -> void:
+	line_edit.add_theme_color_override("font_color", color)
+	line_edit.add_theme_color_override("caret_color", color)
+	line_edit.add_theme_color_override("font_shadow_color", Utils.contrasting_shadow_color(color))
 
 
 ## Set the value (as string internally, but accepts float/int for NUMERIC type)
@@ -154,6 +164,7 @@ func start_editing() -> void:
 
 	label.visible = false
 	line_edit.visible = true
+	_apply_line_edit_color(EDIT_TEXT_COLOR)
 	line_edit.grab_click_focus.call_deferred()
 	line_edit.grab_focus.call_deferred()
 	line_edit.text = _value_string
@@ -164,6 +175,8 @@ func start_editing() -> void:
 ## Cancel editing: revert to label display without applying changes
 func cancel_editing() -> void:
 	is_editing = false
+	if _font_color != null:
+		_apply_line_edit_color(_font_color)
 	line_edit.release_focus()
 	release_focus()
 	line_edit.visible = false

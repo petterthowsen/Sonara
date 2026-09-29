@@ -1002,23 +1002,28 @@ func _move_selection_vertical(semitones: int) -> void:
 	if selection_manager.selected_notes.is_empty():
 		return
 
-	# Move all selected notes
+	# Move all selected notes. Linked clip instances show the same MidiNoteData
+	# through several visuals, so step each note once and reposition every visual.
+	var moved := {}
 	for sel_note in selection_manager.selected_notes:
 		if not sel_note.midi_note_data:
 			continue
 
 		var note_data = sel_note.midi_note_data
-		var new_pitch := step_note(note_data.note, semitones)
-		note_data.note = new_pitch
+		if not moved.has(note_data):
+			note_data.note = step_note(note_data.note, semitones)
+			moved[note_data] = true
 
-		sel_note.position.y = note_visual_y(new_pitch)
+		sel_note.position.y = note_visual_y(note_data.note)
 		sel_note._update_visual()
 
 	# Process overlaps and sync
 	var total_affected = 0
+	var synced := {}
 	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
+		if not sel_note.midi_note_data or synced.has(sel_note.midi_note_data):
 			continue
+		synced[sel_note.midi_note_data] = true
 
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
@@ -1052,14 +1057,16 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 	if selection_manager.selected_notes.is_empty():
 		return
 
-	# Move all selected notes
+	# Move all selected notes (each shared MidiNoteData once; see _move_selection_vertical)
+	var moved := {}
 	for sel_note in selection_manager.selected_notes:
 		if not sel_note.midi_note_data:
 			continue
 
 		var note_data = sel_note.midi_note_data
-		var new_start = max(0, note_data.start_tick + delta_ticks)
-		note_data.start_tick = new_start
+		if not moved.has(note_data):
+			note_data.start_tick = max(0, note_data.start_tick + delta_ticks)
+			moved[note_data] = true
 
 		# Use the shared positioning logic so track-mode's per-clip offset
 		# (ci.start_ticks) is applied instead of a bare tick->pixel conversion.
@@ -1067,9 +1074,11 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 
 	# Process overlaps and sync
 	var total_affected = 0
+	var synced := {}
 	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
+		if not sel_note.midi_note_data or synced.has(sel_note.midi_note_data):
 			continue
+		synced[sel_note.midi_note_data] = true
 
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks

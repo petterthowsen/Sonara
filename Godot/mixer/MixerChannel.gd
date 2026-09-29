@@ -407,16 +407,20 @@ func _on_header_gui_input(event : InputEvent) -> void:
 		var mouse_event = event as InputEventMouseButton
 
 		if mouse_event.pressed:
-			_request_mixer_selection(mouse_event.ctrl_pressed)
+			_request_mixer_selection(mouse_event.ctrl_pressed, mouse_event.shift_pressed)
+		elif channel and not Engine.is_editor_hint():
+			var mixer := _find_mixer()
+			if mixer:
+				mixer.click_released_on_channel(channel, mouse_event.ctrl_pressed, mouse_event.shift_pressed)
 
 
 ## Forward header clicks to the owning Mixer selection logic (strip body uses Mixer.gui_input).
-func _request_mixer_selection(multi: bool) -> void:
+func _request_mixer_selection(multi: bool, range_select := false) -> void:
 	if channel == null or Engine.is_editor_hint():
 		return
 	var mixer := _find_mixer()
 	if mixer:
-		mixer.select_channel(channel, multi)
+		mixer.click_select_channel(channel, multi, range_select)
 
 
 ## Walk ancestors to the Mixer that owns this strip (root or nested).
@@ -869,6 +873,11 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 
 	var preview := MixerChannelDrag.make_preview(channel)
 	var drag_data := MixerChannelDrag.new(self, channel, preview)
+	var mixer := _find_mixer()
+	if mixer:
+		drag_data.channels = mixer.get_strip_drag_channels(channel)
+	if drag_data.channels.size() > 1:
+		MixerChannelDrag.add_count_badge(preview, drag_data.channels.size())
 	set_drag_preview(preview)
 	# Dim in place (modulate never changes layout) until the drag ends.
 	modulate.a = 0.5
