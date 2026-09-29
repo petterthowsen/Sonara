@@ -1,6 +1,7 @@
 # PadLaneWatcher.gd
-# Emits `changed` (once per frame) when a drum pad return's lane may look different: its own
-# devices, the Drum Machine's children, the parent channel's devices, or its nesting changed.
+# Emits `changed` (once per frame) when a drum pad (or Layer slot) return's lane may look
+# different: its own devices, the Drum Machine's or Layer's children, the parent channel's devices,
+# or its nesting changed.
 # Views that list a channel's devices bind one and rebuild from PadLane.devices() while active().
 class_name PadLaneWatcher extends RefCounted
 
@@ -36,6 +37,19 @@ func bind(p_channel: Channel) -> void:
 		_watch(drum.child_added, _on_changed.unbind(2))
 		_watch(drum.child_removed, _on_changed.unbind(2))
 		_watch(drum.child_moved, _on_changed.unbind(2))
+	var slot := AuxReturnSync.get_layer_slot(channel)
+	var layer := slot.get_parent_device() if slot else null
+	if layer:
+		_watch(layer.child_added, _on_changed.unbind(2))
+		_watch(layer.child_removed, _on_changed.unbind(2))
+		_watch(layer.child_moved, _on_changed.unbind(2))
+		_watch(slot.slot_changed, _on_changed)
+	# The lane lists the source chain's devices (pad or Layer slot), so follow them too.
+	var src := PadLane.front_device(channel)
+	if src:
+		_watch(src.child_added, _on_changed.unbind(2))
+		_watch(src.child_removed, _on_changed.unbind(2))
+		_watch(src.child_moved, _on_changed.unbind(2))
 
 
 ## True while the bound channel is shown as a pad lane.

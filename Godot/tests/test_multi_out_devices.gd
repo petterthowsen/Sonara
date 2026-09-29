@@ -348,43 +348,47 @@ func _test_pad_lane_remove_empties_pad() -> void:
 	_assert(_lane_names(ret) == ["Delay"], "REQ-016: lane shows the remaining devices: %s" % str(_lane_names(ret)))
 
 
+## REQ-017 as revised by spec 006: the lane shows the pad chain's devices, not the Chain; they
+## reorder among themselves and never trade places with the return's devices.
 func _test_pad_lane_front_is_pad() -> void:
 	var project: Object = _project_script.new()
-	var d := _drum(project, ["KICK"])
-	var ret: Object = project.get_channel_by_id(d.pads[0].return_channel_id)
-	var sampler: Object = d.pads[0]
-	var note: int = sampler.slot_note
+	var ch: Object = project.create_instrument_track("Drums").channel
+	var drum := _device(ch, _aux.DRUM_MACHINE_ID, "Drum Machine")
+	ch.add_device(drum)
+	var chain := _device(ch, "sonara.builtin.chain", "Chain")
+	chain.name = "KICK"
+	ch.add_device(chain, -1, drum)
+	var sampler := _device(ch, "sonara.builtin.sampler", "Sampler")
+	sampler.name = "Sampler"
+	ch.add_device(sampler, -1, chain)
+	var ret: Object = project.get_channel_by_id(chain.return_channel_id)
 	var delay := _device(ret, "sonara.builtin.delay", "Delay")
 	ret.add_device(delay)
+	_assert(_lane_names(ret) == ["Sampler", "Delay"], "REQ-017: lane shows the pad chain's devices, no Chain: %s" % str(_lane_names(ret)))
+
+	# The pad's devices and the return's devices don't trade places.
+	_assert(not _pad_lane.can_drop(ret, sampler, 2), "REQ-017: a pad device can't move behind the return's devices")
+	_assert(not _pad_lane.can_drop(ret, delay, 0), "REQ-017: a return device can't move into the pad")
 	var hist: Object = _history_script.new()
+	var typed := Array([delay, sampler], TYPE_OBJECT, _device_instance_script.get_instance_base_type(), _device_instance_script)
+	_assert(_pad_lane.commands(ret, typed, true).is_empty(), "REQ-017: no commands for a lane that moves the pad's devices")
 
-	# Sampler behind Delay: Delay plays the pad, Sampler becomes a return device.
-	_lane_edit(hist, ret, [delay, sampler], true)
-	_assert(_lane_names(ret) == ["Delay", "KICK"], "REQ-017: lane is [Delay][Sampler]: %s" % str(_lane_names(ret)))
-	_assert(_aux.get_pad_device(ret) == delay and delay.slot_note == note and d.drum.children == [delay], "REQ-017: Delay is the pad device on note %d" % note)
-	_assert(ret.devices.size() == 1 and ret.devices[0] == sampler, "REQ-017: Sampler is the return's first device")
-	hist.undo()
-	_assert(_lane_names(ret) == ["KICK", "Delay"] and _aux.get_pad_device(ret) == sampler and ret.devices == [delay], "REQ-017: undo restores [Sampler][Delay]: %s" % str(_lane_names(ret)))
+	# Reordering inside the pad chain.
+	var eq := _device(ch, "sonara.builtin.eq", "EQ")
+	eq.name = "EQ"
+	ch.add_device(eq, -1, chain)
+	_assert(_lane_names(ret) == ["Sampler", "EQ", "Delay"], "REQ-017: a device added to the pad shows up in its part: %s" % str(_lane_names(ret)))
+	_assert(_pad_lane.can_drop(ret, eq, 0) and not _pad_lane.can_drop(ret, eq, 3), "REQ-017: pad devices reorder only within the pad")
+	_pad_lane.drop(ret, eq, 0)
+	_assert(chain.children == [eq, sampler] and _lane_names(ret) == ["EQ", "Sampler", "Delay"], "REQ-017: EQ moved in front of the Sampler inside the pad chain: %s" % str(_lane_names(ret)))
+	_assert(ret.devices == [delay], "REQ-017: the return's devices are untouched")
 
-	# Empty pad, new PolySynth at the front.
-	d.channel.remove_device_instance(sampler)
-	var poly := _device(d.channel, "sonara.builtin.polysynth", "PolySynth")
-	var channels_before: int = project.channels.size()
-	_lane_edit(hist, ret, [poly, delay], true)
-	_assert(_aux.get_pad_device(ret) == poly and poly.slot_note == note, "REQ-017: PolySynth at the front plays the empty pad")
-	_assert(project.channels.size() == channels_before and ret.aux_bus_index == 0, "REQ-019: it adopts the KICK return")
-	_assert(ret.name == "KICK", "REQ-019: adopting doesn't rename the return: %s" % ret.name)
-	hist.undo()
-	_assert(_aux.get_pad_device(ret) == null and _lane_names(ret) == ["Delay"], "REQ-017: undo empties the pad again: %s" % str(_lane_names(ret)))
-	_assert(project.get_channel_by_id(ret.id) == ret, "REQ-017: undo keeps the KICK return")
-
-	# Adding at the front of an occupied pad pushes the old pad device onto the return.
-	_lane_edit(hist, ret, [poly, delay], true)
-	var eq := _device(d.channel, "sonara.builtin.eq", "EQ")
-	_lane_edit(hist, ret, [eq, poly, delay], true)
-	_assert(_aux.get_pad_device(ret) == eq and ret.devices == [poly, delay], "REQ-017: [EQ][PolySynth][Delay] with EQ as pad device: %s" % str(_lane_names(ret)))
-	hist.undo()
-	_assert(_aux.get_pad_device(ret) == poly and ret.devices == [delay], "REQ-017: undo restores [PolySynth][Delay]: %s" % str(_lane_names(ret)))
+	# A pad holding a bare device (no chain) shows it, fixed in place.
+	var d := _drum(project, ["SNARE"])
+	var snare_ret: Object = project.get_channel_by_id(d.pads[0].return_channel_id)
+	_assert(_pad_lane.front_devices(snare_ret) == [d.pads[0]], "REQ-017: a bare pad device is its own front")
+	_assert(not _pad_lane.can_drop(snare_ret, d.pads[0], 1), "REQ-017: a bare pad device can't move")
+	hist = null
 
 
 func _test_pad_lane_append() -> void:

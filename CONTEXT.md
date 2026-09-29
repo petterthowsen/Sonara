@@ -34,7 +34,9 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **DeviceSleepState** — a device sleeps after ~3 s of silence and no MIDI/parameter activity; its processing is skipped until woken by input.
 - **Device data stream** — binary payloads (`subscribe_data`/`poll_device_data`) that visualization devices emit only while Godot holds a subscription (e.g. `"spectrum"`).
 - **Normalized parameter** — all parameter values cross the OSC/IPC boundary as 0.0–1.0; min/max live in metadata (see ADR-0005).
-- **Return channel** — a channel with no timeline track fed by a multi-out device's extra stereo outputs. Drum Machine: one per pad (`Channel.aux_pad_note`).
+- **Return channel** — a channel with no timeline track fed by a multi-out device's extra stereo outputs. Drum Machine: one per pad (`Channel.aux_pad_note`). Layer: one per slot with a separate output.
+- **Slot note map** — a Layer slot's routing table: each input note (0–127) goes to one output note or is ignored (`data/LayerNoteMap.gd`). The **full map** (every note to itself) is the default; a slot with any other map is a **zoned slot**. Several slots mapping the same input note is **layering**, and an **overlap** when both are zoned.
+- **Separate output** — a Layer slot sending its audio to its own return channel instead of the Layer output. Only for a Layer that is the first device on its channel. The slot and its return share a name and colour, and unlike other returns, a Layer return's output can be routed to any bus.
 
 ## Engine ↔ UI protocol
 
@@ -54,7 +56,7 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Data model / self-synchronizing model** — `Godot/data/` classes (Project, Track, Channel, Clip, ClipInstance, DeviceInstance). The pattern: UI calls a setter → model updates state, sends OSC, emits a signal → UI refreshes from the signal. UI never sends OSC directly.
 - **`sync_to_engine()`** — full-state resync method on data models, used on (re)connect/project load.
 - **GridHelper** — the shared tempo/zoom/scroll/snap object converting ticks ↔ pixels; views share one instance.
-- **Note map** — labels/colours per pitch on a channel (`NONE`/`AUTO`/`NAMED` mode). Labels only, never sent to the engine.
+- **Note map** — labels/colours per pitch on a channel (`NONE`/`AUTO`/`NAMED` mode). Labels only, never sent to the engine. An Auto map comes from the first Drum Machine (pad names) or zoned Layer (slot names per mapped input note) on the root chain.
 - **Device view** — Godot visual for a device, one of four types: Panel, Window, Companion, Compact; all extend `DeviceView.gd`. **SimpleView** is the generated-panel fallback.
 - **Asset provider** — pluggable source of browser assets (files, SFZ, devices) behind `AssetService`; keyed by absolute path or device ID.
 - **Settings** — the registered-settings layer over the raw `Sonara.get_config`/`set_config` JSON store at `~/.config/sonara/config.json`; defaults live only in `Settings._register_all_settings()`.

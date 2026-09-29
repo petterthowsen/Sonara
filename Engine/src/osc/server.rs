@@ -564,6 +564,56 @@ impl OscServer {
                     })?;
                 }
             }
+            ["slot", slot_str, "note_map"] => match (slot_str.parse::<usize>(), args.first()) {
+                (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 128 => {
+                    let mut map = Box::new([0u8; 128]);
+                    map.copy_from_slice(bytes);
+                    command_tx.send(AudioCommand::SetLayerSlotNoteMap {
+                        channel_id,
+                        device_path,
+                        slot,
+                        map,
+                    })?;
+                }
+                _ => warn!(
+                    "Layer note_map on channel {} path {} slot {} needs a 128-byte blob",
+                    channel_id, device_path, slot_str
+                ),
+            },
+            ["slot", slot_str, "separate_out"] => {
+                if let (Ok(slot), Some(OscType::Int(separate))) =
+                    (slot_str.parse::<usize>(), args.first())
+                {
+                    command_tx.send(AudioCommand::SetLayerSlotSeparateOut {
+                        channel_id,
+                        device_path,
+                        slot,
+                        separate: *separate != 0,
+                    })?;
+                }
+            }
+            ["slot", slot_str, "audition"] => {
+                if let (
+                    Ok(slot),
+                    Some(OscType::Int(note)),
+                    Some(OscType::Int(velocity)),
+                    Some(OscType::Int(on)),
+                ) = (
+                    slot_str.parse::<usize>(),
+                    args.first(),
+                    args.get(1),
+                    args.get(2),
+                ) {
+                    command_tx.send(AudioCommand::AuditionLayerSlot {
+                        channel_id,
+                        device_path,
+                        slot,
+                        note: (*note).clamp(0, 127) as u8,
+                        velocity: (*velocity).clamp(0, 127) as u8,
+                        is_note_on: *on != 0,
+                    })?;
+                }
+            }
             ["slot", slot_str, "note"] => {
                 if let Ok(slot) = slot_str.parse::<usize>() {
                     let note = match args.first() {

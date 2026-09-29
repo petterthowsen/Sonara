@@ -191,6 +191,9 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/mute` | `i:0_or_1` | Layer slot mute |
 | `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
 | `/channel/{id}/device/{path}/slot/{n}/note` | `i:midi` | Drum Machine: MIDI note that triggers child `n` |
+| `/channel/{id}/device/{path}/slot/{n}/note_map` | `b:128_bytes` | Layer slot note map: byte *k* = output note for input note *k*, 255 = slot ignores it. Identity = the full map (default). Any other length is logged and ignored |
+| `/channel/{id}/device/{path}/slot/{n}/separate_out` | `i:0_or_1` | Layer slot audio goes to extra bus *n* (its return channel, see `/channel/{id}/aux_out`) instead of the Layer output. Only when the Layer is the channel's first device |
+| `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 | `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
 
@@ -261,8 +264,9 @@ Use `loading_state_changed` signal in `DeviceInstance.gd` to show loading spinne
 **Layer (`sonara.builtin.layer`)**
 - **Type:** Utility container (`is_container: true`, accepts MIDI)
 - Parallel children mixed together. Empty layer is silence. Bypass is pass-through.
-- MIDI is forwarded to every child, including muted slots.
+- MIDI goes to each child through its slot note map (`/slot/{n}/note_map`; default: every note unchanged), muted slots included. A note-off goes to wherever its note-on went, even if the map changed in between.
 - No device-level params. Per-child mix via `/slot/{n}/volume|mute|solo`.
+- Multi-out: one extra bus per child (bus = child index). A child with `/slot/{n}/separate_out 1` writes to its bus (after volume/mute/solo) when the Layer is the channel's first device; otherwise it mixes into the Layer output.
 
 **Sampler (`sonara.builtin.sampler`)**
 - **Type:** Instrument (receives MIDI), file loading (`wav`/`mp3`/`ogg`)

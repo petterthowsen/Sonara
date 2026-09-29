@@ -582,7 +582,10 @@ pub fn mix_and_output(
         if channel.mix.is_route_target {
             continue;
         }
-        match channel.begin_device_chain(0, frames) {
+        // An aux source already ran its first device in the aux pass (its returns may route
+        // elsewhere, e.g. Layer slots to a bus), so only its remaining FX run here.
+        let start = if channel.mix.has_aux_source { 1 } else { 0 };
+        match channel.begin_device_chain(start, frames) {
             ChainStep::Parked => parked.push_back(id),
             ChainStep::Done { .. } => forward_device_events(channel, status_tx),
         }
@@ -1129,11 +1132,15 @@ mod tests {
         assert!(state.channels.values().all(|c| c.mix.done));
     }
 
-    /// Device that writes 0.4 to the main out and 0.8 to extra bus 0.
-    struct TestAuxDevice;
+    /// Device that writes 0.4 to the main out and 0.8 to extra bus 0, counting its blocks.
+    #[derive(Default)]
+    struct TestAuxDevice {
+        calls: Arc<AtomicUsize>,
+    }
 
     impl AudioDevice for TestAuxDevice {
         fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
             let n = (sample_count * 2).min(outputs.len());
             outputs[..n].fill(0.4);
         }
@@ -1181,7 +1188,7 @@ mod tests {
     #[test]
     fn extra_out_feeds_child_before_child_devices() {
         let mut parent = test_channel(2, Some(1), 0.0);
-        parent.devices.push(Box::new(TestAuxDevice));
+        parent.devices.push(Box::new(TestAuxDevice::default()));
         parent.set_aux_out(0, 3);
         let mut child = test_channel(3, Some(2), 0.0);
         let child_fx = add_test_device(&mut child, 0.1);
@@ -1195,6 +1202,39 @@ mod tests {
             state.channels[&2].buffer_left[0] > 0.8,
             "parent should mix child extra-out, got {}",
             state.channels[&2].buffer_left[0]
+        );
+    }
+
+    #[test]
+    fn aux_source_whose_returns_route_elsewhere_runs_once() {
+        // Layer-style source on 2 whose only return (3) routes to bus 4, not back to 2, so 2
+        // isn't a route target. Its first device must still run exactly once per block.
+        let mut parent = test_channel(2, Some(1), 0.0);
+        let source = TestAuxDevice::default();
+        let source_calls = Arc::clone(&source.calls);
+        parent.devices.push(Box::new(source));
+        let parent_fx = add_test_device(&mut parent, 0.0);
+        parent.set_aux_out(0, 3);
+        let child = test_channel(3, Some(4), 0.0);
+        let bus = test_channel(4, Some(1), 0.0);
+        let mut state = state_with(vec![test_channel(1, Some(1000), 0.0), parent, child, bus]);
+        mix(&mut state);
+
+        assert_eq!(
+            source_calls.load(Ordering::Relaxed),
+            1,
+            "aux source ran twice"
+        );
+        assert_eq!(
+            parent_fx.load(Ordering::Relaxed),
+            1,
+            "parent FX after the source ran"
+        );
+        assert!((state.channels[&3].buffer_left[0] - 0.8).abs() < 1e-4);
+        assert!(
+            state.channels[&4].buffer_left[0] > 0.7,
+            "bus should receive the return, got {}",
+            state.channels[&4].buffer_left[0]
         );
     }
 

@@ -450,6 +450,29 @@ pub enum AudioCommand {
         slot: usize,
         note: u8,
     },
+    /// Replace a Layer slot's note map (byte n = output note for input n, 255 = unmapped).
+    SetLayerSlotNoteMap {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        map: Box<[u8; 128]>,
+    },
+    /// Route a Layer slot's audio to its extra bus (return channel) instead of the main mix.
+    SetLayerSlotSeparateOut {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        separate: bool,
+    },
+    /// Play a note on one Layer slot directly, bypassing its note map (mapping window).
+    AuditionLayerSlot {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        slot: usize,
+        note: u8,
+        velocity: u8,
+        is_note_on: bool,
+    },
 }
 
 /// Response from commands that return data
@@ -811,6 +834,40 @@ fn automation_lane_mut<'a>(
         );
     }
     lane
+}
+
+/// Run `apply` on the Layer at `device_path`, warning when the channel, device or slot is missing.
+fn with_layer(
+    state: &mut EngineState,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+    slot: usize,
+    apply: impl FnOnce(&mut super::devices::LayerDevice) -> bool,
+) {
+    let Some(device) = state
+        .channels
+        .get_mut(&channel_id)
+        .and_then(|channel| channel.device_at_path_mut(device_path))
+    else {
+        warn!("No device at channel {} path {}", channel_id, device_path);
+        return;
+    };
+    let Some(layer) = device
+        .as_any_mut()
+        .downcast_mut::<super::devices::LayerDevice>()
+    else {
+        warn!(
+            "Device at channel {} path {} is not a Layer",
+            channel_id, device_path
+        );
+        return;
+    };
+    if !apply(layer) {
+        warn!(
+            "Layer slot {} not found at channel {} path {}",
+            slot, channel_id, device_path
+        );
+    }
 }
 
 /// Apply a command to the engine state. Runs on the command thread with the state lock held, so
@@ -2457,6 +2514,33 @@ pub fn process_command(
                 }
             }
         }
+
+        AudioCommand::SetLayerSlotNoteMap {
+            channel_id,
+            device_path,
+            slot,
+            map,
+        } => with_layer(state, channel_id, &device_path, slot, |layer| {
+            layer.set_slot_note_map(slot, &map)
+        }),
+        AudioCommand::SetLayerSlotSeparateOut {
+            channel_id,
+            device_path,
+            slot,
+            separate,
+        } => with_layer(state, channel_id, &device_path, slot, |layer| {
+            layer.set_slot_separate_out(slot, separate)
+        }),
+        AudioCommand::AuditionLayerSlot {
+            channel_id,
+            device_path,
+            slot,
+            note,
+            velocity,
+            is_note_on,
+        } => with_layer(state, channel_id, &device_path, slot, |layer| {
+            layer.audition_slot(slot, note, velocity, is_note_on)
+        }),
 
         // Slow commands that must run with the state lock released
         other @ (AudioCommand::ClearProject

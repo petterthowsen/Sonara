@@ -66,6 +66,10 @@ var _channel_ref: WeakRef = null
 var slot_volume: float = 0.5
 var slot_mute: bool = false
 var slot_solo: bool = false
+## Layer slot note map: 128 bytes, input note -> output note (LayerNoteMap.NONE = ignored).
+var slot_note_map: PackedByteArray = LayerNoteMap.full()
+## Layer slot audio goes to its own return channel instead of the Layer's output.
+var slot_separate_out: bool = false
 
 ## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
 var slot_note: int = -1
@@ -1085,33 +1089,86 @@ func sync_slot_to_engine() -> void:
 	var parent := get_parent_device()
 	if parent == null or parent.device == null:
 		return
-	if parent.device.device_id == "sonara.builtin.layer":
-		AudioEngineOSC.send(parent.osc_addr("slot/%d/volume" % position), [slot_volume])
-		AudioEngineOSC.send(parent.osc_addr("slot/%d/mute" % position), [1 if slot_mute else 0])
-		AudioEngineOSC.send(parent.osc_addr("slot/%d/solo" % position), [1 if slot_solo else 0])
+	if _is_layer(parent):
+		for action in LAYER_SLOT_ACTIONS:
+			_send_layer_slot(action)
 	elif parent.device.device_id == "sonara.builtin.drum_machine" and slot_note >= 0:
 		AudioEngineOSC.send(parent.osc_addr("slot/%d/note" % position), [slot_note])
+
+
+## Layer slot controls, each sent as `slot/{position}/{action}`.
+const LAYER_SLOT_ACTIONS := ["volume", "mute", "solo", "note_map", "separate_out"]
+
+
+## Send one Layer slot control (no-op unless the parent is a Layer).
+func _send_layer_slot(action: String) -> void:
+	var parent := get_parent_device()
+	if not _is_layer(parent):
+		return
+	var value
+	match action:
+		"volume": value = slot_volume
+		"mute": value = 1 if slot_mute else 0
+		"solo": value = 1 if slot_solo else 0
+		"note_map": value = slot_note_map
+		"separate_out": value = 1 if slot_separate_out else 0
+	AudioEngineOSC.send(parent.osc_addr("slot/%d/%s" % [position, action]), [value])
+
+
+static func _is_layer(inst: DeviceInstance) -> bool:
+	return inst != null and inst.device != null and inst.device.device_id == "sonara.builtin.layer"
 
 
 ## Set this child's Layer slot volume (normalized 0–1, 0.5 = unity).
 func set_slot_volume(normalized: float) -> void:
 	slot_volume = clampf(normalized, 0.0, 1.0)
-	sync_slot_to_engine()
+	_send_layer_slot("volume")
 	slot_changed.emit()
 
 
 ## Mute this Layer slot.
 func set_slot_mute(muted: bool) -> void:
 	slot_mute = muted
-	sync_slot_to_engine()
+	_send_layer_slot("mute")
 	slot_changed.emit()
 
 
 ## Solo this Layer slot.
 func set_slot_solo(soloed: bool) -> void:
 	slot_solo = soloed
-	sync_slot_to_engine()
+	_send_layer_slot("solo")
 	slot_changed.emit()
+
+
+## Replace this Layer slot's note map (see LayerNoteMap). Invalid maps are ignored.
+func set_slot_note_map(map: PackedByteArray) -> void:
+	if not LayerNoteMap.is_valid(map):
+		logger.warn("Ignoring invalid Layer note map (%d bytes)" % map.size())
+		return
+	slot_note_map = map.duplicate()
+	_send_layer_slot("note_map")
+	slot_changed.emit()
+
+
+## Send this Layer slot to its own return channel (created or restored by AuxReturnSync).
+func set_slot_separate_out(on: bool) -> void:
+	if slot_separate_out == on:
+		return
+	slot_separate_out = on
+	var layer := get_parent_device()
+	var channel := get_channel()
+	if layer != null and channel != null:
+		AuxReturnSync.on_layer_slot_separate_changed(channel.get_project(), channel, layer, self)
+	_send_layer_slot("separate_out")
+	slot_changed.emit()
+
+
+## Play `note` on this Layer slot only, bypassing its note map (mapping window audition).
+func audition_slot(note: int, velocity: int, is_note_on: bool) -> void:
+	var parent := get_parent_device()
+	if not _is_layer(parent):
+		return
+	AudioEngineOSC.send(parent.osc_addr("slot/%d/audition" % position), [note, velocity, 1 if is_note_on else 0])
 
 
 ## Assign the MIDI note this Drum Machine child responds to.
@@ -1142,7 +1199,7 @@ func next_free_drum_note() -> int:
 
 ## Serialize to JSON
 func to_json() -> Dictionary:
-	return {
+	var data := {
 		"id": id,
 		"name": name,
 		"device_id": device.id,
@@ -1157,10 +1214,15 @@ func to_json() -> Dictionary:
 		"slot_mute": slot_mute,
 		"slot_solo": slot_solo,
 		"slot_note": slot_note,
+		"slot_separate_out": slot_separate_out,
 		"return_channel_id": return_channel_id,
 		"return_channel_ids": return_channel_ids.duplicate(),
 		"slots": _slots_to_json(),
 	}
+	var note_map_json = LayerNoteMap.to_json(slot_note_map)
+	if note_map_json != null:
+		data["slot_note_map"] = note_map_json
+	return data
 
 
 ## JSON object keys must be strings; keep parameter IDs stable across save/load.
@@ -1203,6 +1265,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_mute = bool(data.get("slot_mute", false))
 	instance.slot_solo = bool(data.get("slot_solo", false))
 	instance.slot_note = int(data.get("slot_note", -1))
+	instance.slot_note_map = LayerNoteMap.from_json(data.get("slot_note_map", null))
+	instance.slot_separate_out = bool(data.get("slot_separate_out", false))
 	instance.return_channel_id = int(data.get("return_channel_id", -1))
 	var extra_ids = data.get("return_channel_ids", [])
 	instance.return_channel_ids.assign(extra_ids)

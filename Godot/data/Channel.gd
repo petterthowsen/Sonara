@@ -171,7 +171,17 @@ func get_project() -> Project:
 
 ## True when output is forced to the mixer parent (group children).
 func route_locked() -> bool:
-	return parent_channel_id >= 0
+	return parent_channel_id >= 0 and not is_layer_return()
+
+
+## True when this strip is a Layer slot's separate-output return. Unlike other nested strips its
+## route is free (e.g. to a "Perc High" bus), though it stays in the Layer's fold-out (spec 006
+## REQ-020).
+func is_layer_return() -> bool:
+	if aux_bus_index < 0 or aux_pad_note >= 0:
+		return false
+	var source := AuxReturnSync.get_source(get_project(), self)
+	return AuxReturnSync.is_layer(source.get("device"))
 
 
 ## True when this strip is a drum-pad or plugin extra-out return.

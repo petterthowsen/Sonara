@@ -1,7 +1,8 @@
 # NoteMapWatcher.gd
 # Emits `changed` (once per frame) when a channel's *effective* note map may look
 # different: the assignment itself, the device chain, a Drum Machine's pads, a pad
-# device's name, or a pad return channel's colour (REQ-004).
+# device's name, or a pad return channel's colour (REQ-004); or a Layer's slots, their
+# names, note maps and colours (spec 006).
 #
 # Modelled on PadLaneWatcher: every flush re-binds before notifying, so pads that
 # appeared or disappeared since the last frame are picked up and stale connections
@@ -30,6 +31,18 @@ func bind(p_channel: Channel) -> void:
 	_watch(channel.device_added, _on_changed.unbind(2))
 	_watch(channel.device_removed, _on_changed.unbind(2))
 	_watch(channel.device_moved, _on_changed.unbind(2))
+
+	# Every root Layer, zoned or not: its first mapping edit makes it the Auto source.
+	for device in channel.devices:
+		if not AuxReturnSync.is_layer(device):
+			continue
+		_watch(device.child_added, _on_changed.unbind(2))
+		_watch(device.child_removed, _on_changed.unbind(2))
+		_watch(device.child_moved, _on_changed.unbind(2))
+		_watch(device.slots_changed, _on_changed)
+		for slot in device.children:
+			_watch(slot.name_changed, _on_changed.unbind(1))
+			_watch(slot.slot_changed, _on_changed)
 
 	var drum := NoteMapResolver.find_drum_machine(channel)
 	if drum == null:

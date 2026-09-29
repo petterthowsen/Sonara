@@ -5,6 +5,10 @@
 ##   (`Channel.aux_pad_note`) and optionally a pad device, the Drum Machine child on that note
 ##   (`DeviceInstance.return_channel_id`). Removing the pad device leaves the pad empty with its
 ##   return; a device added on that note again adopts the return. Bus index = child order.
+## - Layer: one return per slot whose separate output is on (`slot_separate_out`), named after the
+##   slot and stored on the slot chain's `return_channel_id`. Bus index = child order; turning the
+##   separate output off detaches the return onto the slot for undo (docs/specs/006). The slot and
+##   its return share a name and colour both ways, and the return's route is free (REQ-018–020).
 ## - Any other device: `Device.extra_stereo_bus_count()` outputs named "Out N". The device stores
 ##   them in `DeviceInstance.return_channel_ids` (index = bus).
 ##
@@ -15,6 +19,7 @@
 class_name AuxReturnSync
 
 const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
+const LAYER_ID := "sonara.builtin.layer"
 
 
 # ============================================================================
@@ -26,11 +31,16 @@ static func is_drum_machine(device: DeviceInstance) -> bool:
 	return device != null and device.device != null and device.device.device_id == DRUM_MACHINE_ID
 
 
+## True when `device` is a Layer (its separate-output slots are its extra outputs).
+static func is_layer(device: DeviceInstance) -> bool:
+	return device != null and device.device != null and device.device.device_id == LAYER_ID
+
+
 ## Number of extra stereo outputs `device` feeds into return channels.
 static func extra_out_count(device: DeviceInstance) -> int:
 	if device == null or device.device == null:
 		return 0
-	if is_drum_machine(device):
+	if is_drum_machine(device) or is_layer(device):
 		return device.children.size()
 	return device.device.extra_stereo_bus_count()
 
@@ -41,6 +51,10 @@ static func get_return_channel(project: Project, device: DeviceInstance, index: 
 		return null
 	if is_drum_machine(device):
 		if index >= device.children.size():
+			return null
+		return project.get_channel_by_id(device.children[index].return_channel_id)
+	if is_layer(device):
+		if index >= device.children.size() or not device.children[index].slot_separate_out:
 			return null
 		return project.get_channel_by_id(device.children[index].return_channel_id)
 	return project.get_channel_by_id(_plugin_return_id(device, index))
@@ -59,6 +73,11 @@ static func get_source(project: Project, ch: Channel) -> Dictionary:
 		if is_drum_machine(device):
 			for i in device.children.size():
 				if device.children[i].return_channel_id == ch.id:
+					return {"device": device, "index": i}
+		elif is_layer(device):
+			for i in device.children.size():
+				var slot := device.children[i]
+				if slot.slot_separate_out and slot.return_channel_id == ch.id:
 					return {"device": device, "index": i}
 		else:
 			var idx := device.return_channel_ids.find(ch.id)
@@ -79,6 +98,17 @@ static func get_pad_drum(ch: Channel) -> DeviceInstance:
 		if is_drum_machine(device):
 			return device
 	return null
+
+
+## Layer slot (slot chain) whose separate output feeds return `ch`, or null.
+static func get_layer_slot(ch: Channel) -> DeviceInstance:
+	if ch == null or ch.aux_pad_note >= 0 or ch.aux_bus_index < 0:
+		return null
+	var source := get_source(ch.get_project(), ch)
+	var layer: DeviceInstance = source.get("device")
+	if not is_layer(layer):
+		return null
+	return layer.children[source.index]
 
 
 ## Device playing pad return `ch` (the Drum Machine child feeding it), or null for an empty pad.
@@ -109,6 +139,11 @@ static func on_device_added(
 		ensure_pad_return(project, channel, parent, device)
 		sync_pad_aux_order(project, channel, parent)
 		return
+	if is_layer(parent) and parent.get_parent_device() == null:
+		if device.slot_separate_out:
+			ensure_layer_return(project, channel, parent, device)
+		sync_layer_aux_order(project, channel, parent)
+		return
 	if parent == null:
 		_ensure_root(project, channel, device)
 
@@ -127,9 +162,18 @@ static func on_device_removed(
 		if channel:
 			sync_pad_aux_order(project, channel, parent)
 		return
+	if is_layer(parent):
+		# Unlike a pad, a removed slot takes its return with it (kept on the slot for undo).
+		_detach_layer_slot_return(project, device)
+		if channel and parent.get_parent_device() == null:
+			sync_layer_aux_order(project, channel, parent)
+		return
 	if parent != null:
 		return
-	if is_drum_machine(device):
+	if is_layer(device):
+		for slot in device.children:
+			_detach_layer_slot_return(project, slot)
+	elif is_drum_machine(device):
 		for pad in device.children:
 			_unbind_pad(pad)
 		if channel:
@@ -145,9 +189,12 @@ static func on_device_removed(
 
 ## Keep pad return bus indices in drum-child order after a move.
 static func on_device_moved(project: Project, channel: Channel, parent: DeviceInstance) -> void:
-	if project == null or channel == null or not is_drum_machine(parent):
+	if project == null or channel == null:
 		return
-	sync_pad_aux_order(project, channel, parent)
+	if is_drum_machine(parent):
+		sync_pad_aux_order(project, channel, parent)
+	elif is_layer(parent) and parent.get_parent_device() == null:
+		sync_layer_aux_order(project, channel, parent)
 
 
 ## After load: link existing returns to their sources and create missing ones.
@@ -177,6 +224,11 @@ static func _ensure_root(project: Project, channel: Channel, device: DeviceInsta
 		for pad in device.children:
 			ensure_pad_return(project, channel, device, pad)
 		sync_pad_aux_order(project, channel, device)
+	elif is_layer(device):
+		for slot in device.children:
+			if slot.slot_separate_out:
+				ensure_layer_return(project, channel, device, slot)
+		sync_layer_aux_order(project, channel, device)
 	else:
 		ensure_plugin_returns(project, channel, device)
 
@@ -210,6 +262,69 @@ static func ensure_pad_return(
 	pad.return_channel_id = ch.id
 	_bind_pad(project, pad)
 	return ch
+
+
+## Return for a separate-output Layer slot: the saved/detached one when there is one, else new.
+static func ensure_layer_return(
+	project: Project,
+	channel: Channel,
+	layer: DeviceInstance,
+	slot: DeviceInstance
+) -> Channel:
+	if project == null or channel == null or slot == null:
+		return null
+	var bus_index: int = layer.children.find(slot)
+	var ch: Channel = project.get_channel_by_id(slot.return_channel_id)
+	if ch != null and (ch.parent_channel_id != channel.id or _claimed_by_other(channel, slot, ch.id)):
+		ch = null  # Stale id (copied slot, or a return that belongs to someone else).
+	if ch == null and slot.detached_returns.has(slot.return_channel_id):
+		ch = slot.detached_returns[slot.return_channel_id]
+		if project.get_channel_by_id(ch.id) == null:
+			# Nesting routes to the parent; a Layer return keeps its own route (REQ-020).
+			var route := ch.output_channel_id
+			_attach(project, channel, ch, _layer_after_sibling(project, layer, slot))
+			if route != ch.output_channel_id and (route == 1 or project.get_channel_by_id(route) != null):
+				ch.set_route(route)
+		else:
+			ch = null
+	slot.detached_returns.clear()
+	if ch == null:
+		ch = _create_return_channel(project, channel, slot.get_display_name(), _layer_after_sibling(project, layer, slot), bus_index)
+	ch.aux_bus_index = bus_index
+	slot.return_channel_id = ch.id
+	_bind_pad(project, slot)
+	_bind_layer_return(project, layer, slot, ch)
+	# Views built while the channel was being added couldn't see its slot yet (PadLaneWatcher).
+	ch.notify_hierarchy_changed()
+	return ch
+
+
+## A Layer slot's separate output was switched: create/restore or detach its return.
+static func on_layer_slot_separate_changed(
+	project: Project,
+	channel: Channel,
+	layer: DeviceInstance,
+	slot: DeviceInstance
+) -> void:
+	# Only a Layer on the root chain is a multi-out source.
+	if project == null or channel == null or layer == null or layer.get_parent_device() != null:
+		return
+	if slot.slot_separate_out:
+		ensure_layer_return(project, channel, layer, slot)
+	else:
+		_detach_layer_slot_return(project, slot)
+	sync_layer_aux_order(project, channel, layer)
+
+
+## Detach a Layer slot's return onto the slot (kept for undo / re-enabling). The id stays on the
+## slot so ensure_layer_return finds it in `detached_returns`.
+static func _detach_layer_slot_return(project: Project, slot: DeviceInstance) -> void:
+	if slot == null:
+		return
+	_unbind_pad(slot)
+	_unbind_layer_return(project, slot)
+	if slot.return_channel_id >= 0:
+		_detach_return(project, slot, slot.return_channel_id)
 
 
 ## Extra stereo outs on a CLAP (or other) device, skipping the main pair.
@@ -349,6 +464,38 @@ static func sync_pad_aux_order(project: Project, channel: Channel, drum: DeviceI
 	sync_aux_map_to_engine(channel)
 
 
+## Align Layer return bus indices with slot order (bus = slot index) and keep the returns in
+## slot order among the channel's children, then resend the aux map.
+static func sync_layer_aux_order(project: Project, channel: Channel, layer: DeviceInstance) -> void:
+	if project == null or channel == null or layer == null:
+		return
+	var ordered: Array[int] = []
+	for i in layer.children.size():
+		var slot: DeviceInstance = layer.children[i]
+		if not slot.slot_separate_out:
+			continue
+		var ch := project.get_channel_by_id(slot.return_channel_id)
+		if ch == null or ch.parent_channel_id != channel.id:
+			continue
+		ch.aux_bus_index = i
+		ordered.append(ch.id)
+	var result: Array[int] = []
+	var next := 0
+	for child_id in channel.child_channel_ids:
+		if ordered.has(child_id):
+			result.append(ordered[next])
+			next += 1
+		else:
+			result.append(child_id)
+	for i in range(next, ordered.size()):
+		if not result.has(ordered[i]):
+			result.append(ordered[i])
+	if result != channel.child_channel_ids:
+		channel.child_channel_ids = result
+		channel.notify_hierarchy_changed()
+	sync_aux_map_to_engine(channel)
+
+
 # ============================================================================
 # HELPERS
 # ============================================================================
@@ -356,7 +503,7 @@ static func sync_pad_aux_order(project: Project, channel: Channel, drum: DeviceI
 ## True when return `channel_id` belongs to a source on `channel` other than `owner`.
 static func _claimed_by_other(channel: Channel, owner: DeviceInstance, channel_id: int) -> bool:
 	for device in channel.devices:
-		if is_drum_machine(device):
+		if is_drum_machine(device) or is_layer(device):
 			for pad in device.children:
 				if pad != owner and pad.return_channel_id == channel_id:
 					return true
@@ -381,6 +528,87 @@ static func _pad_after_sibling(project: Project, drum: DeviceInstance, pad: Devi
 		if prev:
 			return prev
 	return null
+
+
+## Previous separate Layer slot's return channel, or null to insert first.
+static func _layer_after_sibling(project: Project, layer: DeviceInstance, slot: DeviceInstance) -> Channel:
+	var idx := layer.children.find(slot)
+	for i in range(idx - 1, -1, -1):
+		var prev_slot: DeviceInstance = layer.children[i]
+		if not prev_slot.slot_separate_out:
+			continue
+		var prev := project.get_channel_by_id(prev_slot.return_channel_id)
+		if prev:
+			return prev
+	return null
+
+
+## Keep a separate Layer slot and its return in step: same name and colour, whichever changes
+## (REQ-018, REQ-019). The slot's current name and colour win when binding.
+static func _bind_layer_return(project: Project, layer: DeviceInstance, slot: DeviceInstance, ch: Channel) -> void:
+	_unbind_layer_return(project, slot)
+	var key := layer.slot_key_for(slot)
+	if ch.color != layer.slot_color(key):
+		ch.set_color(layer.slot_color(key))
+	if ch.name != ch.unique_name_for(slot.get_display_name()):
+		ch.set_name(slot.get_display_name())
+	var links: Array = [
+		[ch.name_changed, _on_layer_return_renamed.bind(slot)],
+		[ch.color_changed, _on_layer_return_recolored.bind(layer, slot)],
+	]
+	for link in links:
+		(link[0] as Signal).connect(link[1])
+	_layer_links[slot.get_instance_id()] = links
+	# One follower per Layer: Godot treats bind()s of the same method as one connection, so a
+	# per-slot bind would collide. It recolours every separate slot's return.
+	var follower := _on_layer_slots_changed.bind(project, layer)
+	if not layer.slots_changed.is_connected(follower):
+		layer.slots_changed.connect(follower)
+
+
+## Return-channel connections made by _bind_layer_return, by slot instance id:
+## [[Signal, Callable], ...]. Each return channel is its own object, so these never collide.
+static var _layer_links: Dictionary = {}
+
+
+## Drop the name/colour links between `slot` and its return (and its Layer).
+static func _unbind_layer_return(_project: Project, slot: DeviceInstance) -> void:
+	if slot == null:
+		return
+	var links: Array = _layer_links.get(slot.get_instance_id(), [])
+	for link in links:
+		var sig: Signal = link[0]
+		if not sig.is_null() and sig.is_connected(link[1]):
+			sig.disconnect(link[1])
+	_layer_links.erase(slot.get_instance_id())
+
+
+## The return was renamed (mixer, undo): the slot takes the name.
+static func _on_layer_return_renamed(new_name: String, slot: DeviceInstance) -> void:
+	if slot and slot.slot_separate_out and slot.name != new_name:
+		slot.set_name(new_name)
+
+
+## The return was recoloured: the slot takes the colour.
+static func _on_layer_return_recolored(color: Color, layer: DeviceInstance, slot: DeviceInstance) -> void:
+	if layer == null or slot == null or not slot.slot_separate_out:
+		return
+	var key := layer.slot_key_for(slot)
+	if layer.slot_color(key) != color:
+		layer.set_slot_color(key, color)
+
+
+## Slot colours changed on the Layer: each separate slot's return takes its slot's colour.
+static func _on_layer_slots_changed(project: Project, layer: DeviceInstance) -> void:
+	if project == null or layer == null:
+		return
+	for slot in layer.children:
+		if not slot.slot_separate_out:
+			continue
+		var ch := project.get_channel_by_id(slot.return_channel_id)
+		var color := layer.slot_color(layer.slot_key_for(slot))
+		if ch and ch.color != color:
+			ch.set_color(color)
 
 
 ## Follow pad device renames and note changes. Binding alone doesn't rename: a device that adopts

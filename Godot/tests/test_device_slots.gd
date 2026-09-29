@@ -320,20 +320,27 @@ func _test_legacy_children_wrapped_on_load() -> void:
 	_assert(lch.migrated_slot_paths.is_empty(), "migration bookkeeping is cleared")
 
 
+## The pad lane shows the pad chain's devices, not the Chain (spec 006 revision of 001 REQ-017).
 func _test_pad_lane_keeps_pad_chain_first() -> void:
 	var ch: Object = _fresh_project()
 	var drum := _container(ch, DRUM_ID)
 	_add_fx(ch, "kick", drum, 36)
 	var pad: Object = drum.children[0]
+	var kick: Object = pad.children[0]
 	var ret: Object = _project.get_channel_by_id(pad.return_channel_id)
 	_assert(ret != null and _pad_lane.is_pad_lane(ret), "the pad has a return lane")
-	_assert(_pad_lane.devices(ret) == [pad], "the lane starts with the pad chain")
+	_assert(_pad_lane.devices(ret) == [kick], "the lane starts with the pad's devices, not its chain")
 	var fx: Object = _device("test.fx.ret", _device_script.DeviceCategory.Effect)
-	_assert(not _pad_lane.can_drop(ret, _asset(fx.device_id), 0), "nothing lands before the pad chain")
-	_assert(_pad_lane.can_drop(ret, _asset(fx.device_id), 1), "devices go after it, on the return")
-	_assert(not _pad_lane.can_drop(ret, pad, 1), "the pad chain doesn't move")
+	_assert(_pad_lane.can_drop(ret, _asset(fx.device_id), 0), "a drop among the pad's devices is allowed")
+	_assert(_pad_lane.can_drop(ret, _asset(fx.device_id), 1), "devices go after them, on the return")
+	_assert(not _pad_lane.changes(ret, kick, 1), "the pad's device doesn't move onto the return (index 1 is its own spot)")
 	_pad_lane.drop(ret, _asset(fx.device_id), 1)
+	_assert(not _pad_lane.can_drop(ret, kick, 2), "…nor past the return's devices")
 	_assert(ret.devices.size() == 1 and pad.children.size() == 1, "the new device went on the return channel")
+	_pad_lane.drop(ret, _asset(fx.device_id), 0)
+	_assert(pad.children.size() == 2 and ret.devices.size() == 1, "a drop at the front went into the pad chain")
+	_assert(not _pad_lane.can_drop(ret, ret.devices[0], 0), "a return device can't move into the pad")
+	_assert(_pad_lane.devices(ret).size() == 3 and _pad_lane.devices(ret)[1] == kick, "the lane lists both pad devices, then the return's")
 
 
 func _test_layer_slot_is_a_chain() -> void:

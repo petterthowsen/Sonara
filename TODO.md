@@ -152,6 +152,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 ### Devices
 
+- [x?] Layer note mapping: per-slot input→output note maps (zones, remapping, layering), per-slot separate outputs, and a mapping window with Resolve overlaps and Distribute. Spec `docs/specs/006-layer-note-mapping/`. Implemented and covered headless; needs the live pass (T-014 in tasks.md)
 - [/] Simple View: a generated, editable grid view for any device without its own panel (strategies per device kind, compound controls, JSON layouts in `~/.config/sonara/device_layouts/`), spec `docs/specs/004-simple-view/`
   - [x?] DevicePanel integration (T-013). Still to check live: Sampler "Simple" toggle, "loaded layout" after restart, hand-edited `rect` shows up, page tabs on a device with more than 24 cells, eq_band rendering
   - [ ] Edit mode, part 1 (T-014): edit toggle, drag to move and corner drag to resize (snapped, overlap rejected), move to page, add/remove page, column/row spinners, Reset with confirmation. Leaving edit mode saves and sets `generated: false`. Planned in `SimpleEditOverlay.gd`

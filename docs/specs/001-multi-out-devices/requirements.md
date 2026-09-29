@@ -205,6 +205,11 @@ device becomes the pad device.
   device. Each step undoes back to the previous state.
 - **Example:** drop an EQ at index 0 of [Sampler] → [EQ][Sampler]; EQ is the pad device (silent,
   since nothing feeds it), Sampler is the return's first device.
+- *Revised 2026-09-29 (spec 006, REQ-023):* pads are slot chains now. The lane shows the pad
+  chain's devices, not the Chain. Those devices reorder among themselves, an asset dropped among
+  them goes into the pad chain, and nothing moves between them and the return's devices. An asset
+  at the front of an empty pad still fills the pad. Covered by `_test_pad_lane_front_is_pad`
+  (`test_multi_out_devices.gd`) and `_test_pad_lane_keeps_pad_chain_first` (`test_device_slots.gd`).
 
 ### REQ-018 — Pad lane appends
 

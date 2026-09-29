@@ -8,6 +8,14 @@ use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
 
+/// Slot note map entry for an input note the slot ignores (and an empty `held` entry).
+pub const NOTE_NONE: u8 = 255;
+
+/// Identity note map: every input note goes to the same output note.
+fn full_note_map() -> [u8; 128] {
+    std::array::from_fn(|i| i as u8)
+}
+
 /// One Layer child plus its mix controls.
 pub struct LayerSlot {
     /// Nested device processed in parallel with sibling slots.
@@ -18,6 +26,13 @@ pub struct LayerSlot {
     pub mute: bool,
     /// When any slot is soloed, only soloed slots contribute audio.
     pub solo: bool,
+    /// Input note -> output note sent to `device` (`NOTE_NONE` = not mapped).
+    pub note_map: [u8; 128],
+    /// Input note -> output note its sounding note-on went to (`NOTE_NONE` = not held).
+    /// Note-offs route through this, so remapping mid-note can't strand a note.
+    pub held: [u8; 128],
+    /// When true (and the Layer is a multi-out source), audio goes to this slot's extra bus.
+    pub separate_out: bool,
 }
 
 impl LayerSlot {
@@ -28,7 +43,15 @@ impl LayerSlot {
             volume: 1.0,
             mute: false,
             solo: false,
+            note_map: full_note_map(),
+            held: [NOTE_NONE; 128],
+            separate_out: false,
         }
+    }
+
+    /// True when this slot contributes audio given the Layer's solo state.
+    fn is_audible(&self, any_solo: bool) -> bool {
+        !self.mute && (!any_solo || self.solo)
     }
 }
 
@@ -92,6 +115,89 @@ impl LayerDevice {
         }
     }
 
+    /// Replace a slot's note map (input note -> output note, `NOTE_NONE` = unmapped).
+    /// Held notes keep their old output until released.
+    pub fn set_slot_note_map(&mut self, index: usize, map: &[u8; 128]) -> bool {
+        if let Some(slot) = self.slots.get_mut(index) {
+            slot.note_map = *map;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Send a slot's audio to its extra bus instead of the main mix (multi-out source only).
+    pub fn set_slot_separate_out(&mut self, index: usize, separate: bool) -> bool {
+        if let Some(slot) = self.slots.get_mut(index) {
+            slot.separate_out = separate;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Play `note` on one slot's device directly, bypassing its note map and held notes.
+    /// Called from the command thread under the state lock; the device queues the event.
+    pub fn audition_slot(
+        &mut self,
+        index: usize,
+        note: u8,
+        velocity: u8,
+        is_note_on: bool,
+    ) -> bool {
+        if let Some(slot) = self.slots.get_mut(index) {
+            slot.device.mark_activity();
+            slot.device.send_midi_event(note, velocity, is_note_on, 0);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Render every slot into `mix_buffer`, or into its extra bus when it is separate and
+    /// `extra_outs` holds a bus for it.
+    fn render_slots(
+        &mut self,
+        inputs: &[f32],
+        extra_outs: &mut [Vec<f32>],
+        sample_count: usize,
+        interleaved: usize,
+    ) {
+        self.mix_buffer[..interleaved].fill(0.0);
+        let any_solo = self.any_solo();
+
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            let audible = slot.is_audible(any_solo);
+            slot.device
+                .process_block(inputs, &mut self.child_buffer, sample_count);
+            let bus = if slot.separate_out {
+                extra_outs.get_mut(i)
+            } else {
+                None
+            };
+            match bus {
+                Some(buf) => {
+                    let n = interleaved.min(buf.len());
+                    if audible {
+                        apply_gain(&mut self.child_buffer, sample_count, slot.volume);
+                        buf[..n].copy_from_slice(&self.child_buffer[..n]);
+                    } else {
+                        buf[..n].fill(0.0);
+                    }
+                }
+                None => {
+                    if !audible {
+                        continue;
+                    }
+                    apply_gain(&mut self.child_buffer, sample_count, slot.volume);
+                    for j in 0..interleaved {
+                        self.mix_buffer[j] += self.child_buffer[j];
+                    }
+                }
+            }
+        }
+    }
+
     /// True when at least one slot is soloed.
     fn any_solo(&self) -> bool {
         self.slots.iter().any(|s| s.solo)
@@ -144,30 +250,77 @@ impl AudioDevice for LayerDevice {
             return;
         }
 
-        self.mix_buffer[..interleaved].fill(0.0);
-        let any_solo = self.any_solo();
+        // Not a multi-out source here: separate slots mix in so no audio is lost.
+        self.render_slots(inputs, &mut [], sample_count, interleaved);
+        outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
+    }
 
-        for slot in &mut self.slots {
-            let audible = !slot.mute && (!any_solo || slot.solo);
-            slot.device
-                .process_block(inputs, &mut self.child_buffer, sample_count);
-            if !audible {
-                continue;
-            }
-            apply_gain(&mut self.child_buffer, sample_count, slot.volume);
-            for i in 0..interleaved {
-                self.mix_buffer[i] += self.child_buffer[i];
-            }
+    fn extra_output_bus_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    fn process_block_with_extra(
+        &mut self,
+        inputs: &[f32],
+        outputs: &mut [f32],
+        extra_outs: &mut [Vec<f32>],
+        sample_count: usize,
+    ) {
+        let interleaved = (sample_count * 2)
+            .min(inputs.len())
+            .min(outputs.len())
+            .min(self.mix_buffer.len())
+            .min(self.child_buffer.len());
+
+        // Buses of non-separate (or missing) slots stay silent.
+        for buf in extra_outs.iter_mut() {
+            let n = interleaved.min(buf.len());
+            buf[..n].fill(0.0);
         }
 
+        if !self.enabled {
+            copy_interleaved(inputs, outputs, sample_count);
+            return;
+        }
+
+        outputs[..interleaved].fill(0.0);
+        if self.slots.is_empty() {
+            return;
+        }
+
+        self.render_slots(inputs, extra_outs, sample_count, interleaved);
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+        let input = (note & 0x7f) as usize;
+        // A note-on with velocity 0 is a note-off.
+        let is_note_on = is_note_on && velocity > 0;
         for slot in &mut self.slots {
-            slot.device.mark_activity();
-            slot.device
-                .send_midi_event(note, velocity, is_note_on, frame_offset);
+            if is_note_on {
+                let out = slot.note_map[input];
+                if out == NOTE_NONE {
+                    continue;
+                }
+                slot.device.mark_activity();
+                // Retrigger while held: release the previous output first.
+                let prev = slot.held[input];
+                if prev != NOTE_NONE {
+                    slot.device.send_midi_event(prev, 0, false, frame_offset);
+                }
+                slot.held[input] = out;
+                slot.device
+                    .send_midi_event(out, velocity, true, frame_offset);
+            } else {
+                let out = slot.held[input];
+                if out == NOTE_NONE {
+                    continue;
+                }
+                slot.held[input] = NOTE_NONE;
+                slot.device.mark_activity();
+                slot.device
+                    .send_midi_event(out, velocity, false, frame_offset);
+            }
         }
     }
 
@@ -208,6 +361,7 @@ impl AudioDevice for LayerDevice {
     fn reset(&mut self) {
         for slot in &mut self.slots {
             slot.device.reset();
+            slot.held = [NOTE_NONE; 128];
         }
         self.mix_buffer.fill(0.0);
         self.child_buffer.fill(0.0);
@@ -300,6 +454,80 @@ mod tests {
         }
     }
 
+    /// (note, velocity, is_note_on, frame_offset) as the slot device received it.
+    type MidiLog = std::sync::Arc<std::sync::Mutex<Vec<(u8, u8, bool, usize)>>>;
+
+    /// Records MIDI events and outputs silence.
+    struct MidiRecorder {
+        log: MidiLog,
+    }
+
+    impl AudioDevice for MidiRecorder {
+        fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            let n = (sample_count * 2).min(outputs.len());
+            outputs[..n].fill(0.0);
+        }
+
+        fn send_midi_event(&mut self, note: u8, velocity: u8, on: bool, frame_offset: usize) {
+            self.log
+                .lock()
+                .unwrap()
+                .push((note, velocity, on, frame_offset));
+        }
+
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+
+        fn device_id(&self) -> &str {
+            "test.midi_recorder"
+        }
+
+        fn device_name(&self) -> &str {
+            "Recorder"
+        }
+
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+
+        fn reset(&mut self) {}
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Insert a MidiRecorder at `index` and return its log.
+    fn add_recorder(layer: &mut LayerDevice, index: usize) -> MidiLog {
+        let log = MidiLog::default();
+        layer.insert_child(index, Box::new(MidiRecorder { log: log.clone() }));
+        log
+    }
+
+    fn events(log: &MidiLog) -> Vec<(u8, u8, bool, usize)> {
+        log.lock().unwrap().clone()
+    }
+
+    /// A map with only the given input -> output pairs.
+    fn map_of(pairs: &[(u8, u8)]) -> [u8; 128] {
+        let mut map = [NOTE_NONE; 128];
+        for &(input, output) in pairs {
+            map[input as usize] = output;
+        }
+        map
+    }
+
     fn render(layer: &mut LayerDevice, input: f32) -> f32 {
         let inputs = vec![input; 4];
         let mut outputs = vec![0.0f32; 4];
@@ -345,5 +573,161 @@ mod tests {
         layer.insert_child(0, Box::new(GainDevice::new(0.0)));
         layer.set_enabled(false);
         assert!((render(&mut layer, 0.8) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn layer_fresh_slot_is_full_map() {
+        let mut layer = LayerDevice::new(8);
+        let log = add_recorder(&mut layer, 0);
+        for n in 0..128u8 {
+            layer.send_midi_event(n, 100, true, 0);
+        }
+        let got: Vec<u8> = events(&log).iter().map(|e| e.0).collect();
+        assert_eq!(got, (0..128u8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn layer_routes_note_through_slot_maps() {
+        let mut layer = LayerDevice::new(8);
+        let a = add_recorder(&mut layer, 0);
+        let b = add_recorder(&mut layer, 1);
+        let c = add_recorder(&mut layer, 2);
+        layer.set_slot_note_map(0, &map_of(&[(36, 36)]));
+        layer.set_slot_note_map(1, &map_of(&[(36, 49)]));
+        layer.set_slot_note_map(2, &map_of(&[]));
+        layer.send_midi_event(36, 90, true, 17);
+        assert_eq!(events(&a), vec![(36, 90, true, 17)]);
+        assert_eq!(events(&b), vec![(49, 90, true, 17)]);
+        assert!(events(&c).is_empty());
+    }
+
+    #[test]
+    fn layer_note_off_follows_held_note_after_remap() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
+        layer.send_midi_event(36, 100, true, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 51)]));
+        layer.send_midi_event(36, 0, false, 5);
+        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 5)]);
+    }
+
+    #[test]
+    fn layer_note_off_reaches_slot_unmapped_mid_note() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.send_midi_event(40, 100, true, 0);
+        layer.set_slot_note_map(0, &map_of(&[]));
+        layer.send_midi_event(40, 0, false, 0);
+        assert_eq!(events(&b), vec![(40, 100, true, 0), (40, 0, false, 0)]);
+    }
+
+    #[test]
+    fn layer_note_off_follows_held_note_after_move() {
+        let mut layer = LayerDevice::new(8);
+        let a = add_recorder(&mut layer, 0);
+        let b = add_recorder(&mut layer, 1);
+        layer.set_slot_note_map(1, &map_of(&[(36, 49)]));
+        layer.send_midi_event(36, 100, true, 0);
+        layer.move_child(1, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 60)]));
+        layer.send_midi_event(36, 0, false, 0);
+        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 0)]);
+        assert_eq!(events(&a), vec![(36, 100, true, 0), (36, 0, false, 0)]);
+    }
+
+    #[test]
+    fn layer_retrigger_releases_previous_output() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
+        layer.send_midi_event(36, 100, true, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 51)]));
+        layer.send_midi_event(36, 80, true, 3);
+        layer.send_midi_event(36, 0, false, 4);
+        assert_eq!(
+            events(&b),
+            vec![
+                (49, 100, true, 0),
+                (49, 0, false, 3),
+                (51, 80, true, 3),
+                (51, 0, false, 4)
+            ]
+        );
+    }
+
+    #[test]
+    fn layer_velocity_zero_note_on_is_note_off() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
+        layer.send_midi_event(36, 100, true, 0);
+        layer.send_midi_event(36, 0, true, 1);
+        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 1)]);
+    }
+
+    #[test]
+    fn layer_reset_forgets_held_notes() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.send_midi_event(36, 100, true, 0);
+        layer.reset();
+        layer.send_midi_event(36, 0, false, 0);
+        assert_eq!(events(&b), vec![(36, 100, true, 0)]);
+    }
+
+    #[test]
+    fn layer_audition_bypasses_map() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.set_slot_note_map(0, &map_of(&[]));
+        assert!(layer.audition_slot(0, 49, 100, true));
+        assert!(layer.audition_slot(0, 49, 0, false));
+        assert!(!layer.audition_slot(3, 49, 100, true));
+        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 0)]);
+        // Auditioning doesn't touch held notes: a Layer note-off on 49 reaches nothing.
+        layer.send_midi_event(49, 0, false, 0);
+        assert_eq!(events(&b).len(), 2);
+    }
+
+    /// Render with `bus_count` extra buses; returns (main L, bus L per bus).
+    fn render_extra(layer: &mut LayerDevice, input: f32, bus_count: usize) -> (f32, Vec<f32>) {
+        let inputs = vec![input; 4];
+        let mut outputs = vec![0.0f32; 4];
+        let mut extras = vec![vec![9.0f32; 4]; bus_count];
+        layer.process_block_with_extra(&inputs, &mut outputs, &mut extras, 2);
+        (outputs[0], extras.iter().map(|b| b[0]).collect())
+    }
+
+    #[test]
+    fn layer_separate_slot_writes_extra_bus() {
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(GainDevice::new(0.5)));
+        layer.insert_child(1, Box::new(GainDevice::new(0.25)));
+        layer.insert_child(2, Box::new(GainDevice::new(0.125)));
+        assert_eq!(layer.extra_output_bus_count(), 3);
+        layer.set_slot_separate_out(1, true);
+        layer.set_slot_separate_out(2, true);
+
+        // Buses for slots 0 and 1 only: slot 2 has no bus and falls back to main.
+        let (main, buses) = render_extra(&mut layer, 1.0, 2);
+        assert!((main - 0.625).abs() < 1e-6);
+        assert_eq!(buses[0], 0.0);
+        assert!((buses[1] - 0.25).abs() < 1e-6);
+
+        // A muted separate slot leaves its bus silent.
+        layer.set_slot_mute(1, true);
+        let (_, buses) = render_extra(&mut layer, 1.0, 3);
+        assert_eq!(buses[1], 0.0);
+        assert!((buses[2] - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn layer_process_block_ignores_separate_flag() {
+        let mut layer = LayerDevice::new(8);
+        layer.insert_child(0, Box::new(GainDevice::new(0.5)));
+        layer.insert_child(1, Box::new(GainDevice::new(0.25)));
+        layer.set_slot_separate_out(1, true);
+        assert!((render(&mut layer, 1.0) - 0.75).abs() < 1e-6);
     }
 }

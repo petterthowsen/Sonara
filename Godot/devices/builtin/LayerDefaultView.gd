@@ -1,4 +1,5 @@
-## Layer custom UI: vertical list of slot rows (light, name, volume knob) in their slot colors.
+## Layer custom UI: vertical list of slot rows (light, name, separate output, volume knob) in their
+## slot colors, and a "Mapping…" button that opens the Layer mapping window.
 ## Clicking a row shows or hides that layer's slot in the device lane (one open at a time).
 class_name LayerDefaultView extends DeviceView
 
@@ -49,13 +50,19 @@ func _on_children_changed(_a = null, _b = null) -> void:
 	_rebuild()
 
 
-## Recreate one LayerSlotRow per child on this VBox.
+## Recreate one LayerSlotRow per child on this VBox, followed by the Mapping… button.
 func _rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
 	_rows.clear()
 	if device == null:
 		return
+	var mapping := Button.new()
+	mapping.text = "Mapping…"
+	mapping.tooltip_text = "Choose which notes each layer plays, and remap them"
+	mapping.focus_mode = Control.FOCUS_NONE
+	mapping.pressed.connect(func() -> void: LayerMappingWindow.open_for(device))
+	add_child(mapping)
 	for child in device.children:
 		var row := LayerSlotRow.new()
 		add_child(row)
