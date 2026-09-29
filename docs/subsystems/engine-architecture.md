@@ -109,7 +109,9 @@ Godot/              # Godot 4.7 UI App
 - 960 PPQ (pulses per quarter note)
 - Playhead updates sent to Godot at 20Hz, interpolated in Godot UI smoothness
 - `EngineState` maintains both `current_tick` and `current_sample_position`; the latter is incremented per callback and exposed to Godot via `/status/sample_position`.
-- Use `ProjectSettings::{ticks_to_samples,samples_to_ticks}` for conversions instead of recomputing tick/sample math—pass the device sample rate explicitly when translating clip offsets or transport seeks.
+- **Tempo map.** `EngineState.tempo_map` (`audio/tempo_map.rs`, set by `/transport/tempo_map`, empty = static `settings.tempo`) drives the clock. `process_audio` fills `RenderScratch.frame_tick_rates` (ticks per sample for every frame, walking the map with a `TempoCursor`) once per buffer; MIDI tick collection and the audio-clip loop both read that slice. Seconds use the closed-form ramp integral, matching Godot's `TempoMap.gd`.
+- **Transport snapshot.** `audio/transport.rs` builds a `Transport` (tempo, tempo change per sample, playing, beats, seconds, bar start/number, time signature) at the block's first frame and `devices::apply_transport` pushes it to every device, nested ones included, before the not-playing early return.
+- Constant-tempo `ProjectSettings::{ticks_to_samples,samples_to_ticks}` are only valid when no tempo map is active; clock advance goes through the tempo map, and audio-clip source positions use `AudioPlayback::clip_source_frame` (the clip's recorded-BPM timeline).
 
 ### Sample-Accurate Scheduling
 - `processing.rs::process_audio()` precomputes `(tick, frame_offset)` pairs for the current buffer so note events line up with the physical device sample rate (never the project setting).

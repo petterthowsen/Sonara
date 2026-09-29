@@ -12,6 +12,7 @@
 ### Mixing & Playback
 
 - [ ] Plugin latency compensation
+- [x?] Tempo map playback: the engine clock, audio clips, playhead and time ruler follow the tempo lane; devices and CLAP plugins receive transport info (tempo, ramp, position, bar, time signature) every block. Spec: `docs/specs/008-tempo-map-engine/`
 - [ ] Pan modes: Stereo Balance (default), Cubase-style Stereo Combined (position + width), Stereo Dual and Mono. Covers the mixer UI for all four modes, undoable mode switches, migrating old Combined projects to Balance, and AI `set_mixer` pan-mode support. Spec: `docs/specs/005-pan-modes/`
 - [x?] Send knobs: right-click opens a menu with a Pre-Fader toggle (undoable, disabled until the send exists); pre-fader sends draw their knob arc in blue. `Godot/tests/test_sends_panel.gd`
 - [x?] Send knobs work in dB (-inf to +12 dB): the tooltip reads dB ("-inf dB" at the bottom), double-click takes a dB value, Ctrl+click resets to -inf

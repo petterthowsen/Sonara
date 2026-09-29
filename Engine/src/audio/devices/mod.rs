@@ -341,6 +341,10 @@ pub trait AudioDevice: Send {
     /// Reset device to default state (clear buffers, stop voices, etc.)
     fn reset(&mut self);
 
+    /// Transport state at the start of the coming block, pushed every callback whether the
+    /// transport is playing or stopped. Real-time: keep it to a copy. Default: ignore.
+    fn set_transport(&mut self, _transport: &super::transport::Transport) {}
+
     /// Get version string (for compatibility checking with LV2/CLAP)
     fn version(&self) -> &str {
         "1.0"
@@ -456,5 +460,26 @@ pub trait AudioDevice: Send {
     /// True when this device can own child devices (Chain, Layer).
     fn is_container(&self) -> bool {
         false
+    }
+}
+
+/// Hand the block's transport to every device in `devices`, including nested children.
+pub fn apply_transport(
+    devices: &mut [Box<dyn AudioDevice>],
+    transport: &super::transport::Transport,
+) {
+    for device in devices {
+        apply_transport_to(device.as_mut(), transport);
+    }
+}
+
+fn apply_transport_to(device: &mut dyn AudioDevice, transport: &super::transport::Transport) {
+    device.set_transport(transport);
+    if let Some(container) = device.as_container_mut() {
+        for i in 0..container.child_count() {
+            if let Some(child) = container.child_mut(i) {
+                apply_transport_to(child, transport);
+            }
+        }
     }
 }

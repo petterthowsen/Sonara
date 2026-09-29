@@ -274,6 +274,7 @@ pub const MAX_BLOCK_EVENTS: usize = 256;
 /// [output audio: max_frames × max_channels f32, planar]
 /// [input events: max_events × BlockEvent]
 /// [output events: max_events × BlockEvent]
+/// [BlockTransport]
 /// [BlockControl]
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -289,6 +290,7 @@ pub struct SharedMemoryLayout {
     pub output_offset: usize,
     pub input_events_offset: usize,
     pub output_events_offset: usize,
+    pub transport_offset: usize,
     pub control_offset: usize,
 }
 
@@ -308,7 +310,8 @@ impl SharedMemoryLayout {
         let output_offset = align_up(input_offset + plane_bytes, 64);
         let input_events_offset = align_up(output_offset + plane_bytes, 64);
         let output_events_offset = align_up(input_events_offset + events_bytes, 64);
-        let control_offset = align_up(output_events_offset + events_bytes, 64);
+        let transport_offset = align_up(output_events_offset + events_bytes, 64);
+        let control_offset = align_up(transport_offset + std::mem::size_of::<BlockTransport>(), 64);
 
         Self {
             max_frames,
@@ -318,6 +321,7 @@ impl SharedMemoryLayout {
             output_offset,
             input_events_offset,
             output_events_offset,
+            transport_offset,
             control_offset,
         }
     }
@@ -378,6 +382,45 @@ impl BlockEvent {
             _reserved: 0,
             value: value_01,
             id: param_id,
+        }
+    }
+}
+
+/// `BlockTransport::flags` bit 0: the transport is playing.
+pub const TRANSPORT_FLAG_PLAYING: u32 = 1;
+
+/// Transport state for one block (engine writes, host reads), ordered by the same
+/// `request_seq` Release/Acquire pair as the events. The host always sets the tempo, beats,
+/// seconds and time-signature flags on the CLAP event, so only `playing` is carried.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BlockTransport {
+    pub tempo: f64,
+    /// BPM change per sample.
+    pub tempo_inc: f64,
+    pub song_pos_beats: f64,
+    pub song_pos_seconds: f64,
+    pub bar_start_beats: f64,
+    pub bar_number: i32,
+    pub flags: u32,
+    pub tsig_num: i16,
+    pub tsig_den: i16,
+    pub _reserved: [u8; 20],
+}
+
+impl From<&crate::audio::transport::Transport> for BlockTransport {
+    fn from(t: &crate::audio::transport::Transport) -> Self {
+        Self {
+            tempo: t.tempo,
+            tempo_inc: t.tempo_inc,
+            song_pos_beats: t.song_pos_beats,
+            song_pos_seconds: t.song_pos_seconds,
+            bar_start_beats: t.bar_start_beats,
+            bar_number: t.bar_number,
+            flags: if t.playing { TRANSPORT_FLAG_PLAYING } else { 0 },
+            tsig_num: t.time_sig_num as i16,
+            tsig_den: t.time_sig_den as i16,
+            _reserved: [0; 20],
         }
     }
 }

@@ -25,7 +25,8 @@ use super::devices::{
 use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::pipewire::GraphInfo;
 use super::stream::{StreamControl, StreamRequest};
-use super::types::ChannelId;
+use super::tempo_map::TempoMap;
+use super::types::{ChannelId, Tick};
 use base64::Engine as _;
 
 mod audio_config;
@@ -765,6 +766,7 @@ impl CommandWorker {
             AudioCommand::ClearChannelDevices { channel_id } => self.clear_devices(channel_id),
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),
+            AudioCommand::SetTempoMap(points) => self.set_tempo_map(points),
             AudioCommand::SetDeviceActive {
                 channel_id,
                 device_path,
@@ -1018,6 +1020,15 @@ impl CommandWorker {
         }
     }
 
+    /// Build a tempo map off the lock, swap it in, and drop the old one after unlocking.
+    fn set_tempo_map(&self, points: Vec<(Tick, f32)>) {
+        let map = TempoMap::from_points(points);
+        let count = map.points().len();
+        let old = std::mem::replace(&mut self.lock_state().tempo_map, map);
+        drop(old);
+        info!("Tempo map set: {} points", count);
+    }
+
     /// Swap out all channels, tracks and clips under the lock and drop them afterwards.
     fn clear_project(&self) {
         let removed = {
@@ -1029,6 +1040,7 @@ impl CommandWorker {
                 std::mem::take(&mut state.channels),
                 std::mem::take(&mut state.tracks),
                 std::mem::take(&mut state.clips),
+                std::mem::take(&mut state.tempo_map),
             )
         };
         drop(removed);

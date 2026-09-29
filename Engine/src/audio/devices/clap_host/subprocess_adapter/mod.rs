@@ -8,7 +8,8 @@ use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, EngineStatus};
 use crate::audio::devices::DevicePath;
 use crate::audio::ipc::{
-    futex, BlockEvent, HostAssignment, InstanceId, PluginCommand, ProcessManager, MAX_BLOCK_EVENTS,
+    futex, BlockEvent, BlockTransport, HostAssignment, InstanceId, PluginCommand, ProcessManager,
+    MAX_BLOCK_EVENTS,
 };
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
@@ -173,6 +174,9 @@ pub struct SubprocessClapAdapter {
     /// Input events for the upcoming block (notes and automation), staged so the audio thread
     /// never writes the shared block outside `process_block`.
     input_events: Vec<BlockEvent>,
+    /// Transport pushed by the mixer for the upcoming block, copied to shared memory in
+    /// `begin_block`.
+    transport: crate::audio::transport::Transport,
     stats: PluginBlockStats,
     /// Consecutive blocks that missed the deadline, for rate-limited logging.
     consecutive_misses: u32,
@@ -281,6 +285,7 @@ impl SubprocessClapAdapter {
             param_values: HashMap::new(),
             pending_output_events: Vec::with_capacity(QUEUED_OUTPUT_CAPACITY),
             input_events: Vec::with_capacity(MAX_BLOCK_EVENTS),
+            transport: Default::default(),
             stats: PluginBlockStats::default(),
             consecutive_misses: 0,
             stall: None,
@@ -400,6 +405,7 @@ impl AudioDevice for SubprocessClapAdapter {
             let dst = shared.memory.input_events();
             dst[..staged].copy_from_slice(&self.input_events[..staged]);
         }
+        *shared.memory.transport() = BlockTransport::from(&self.transport);
         control
             .input_event_count
             .store(staged as u32, Ordering::Relaxed);
@@ -550,6 +556,10 @@ impl AudioDevice for SubprocessClapAdapter {
     }
 
     /// Command thread: fire-and-forget, the host answers asynchronously.
+    fn set_transport(&mut self, transport: &crate::audio::transport::Transport) {
+        self.transport = *transport;
+    }
+
     fn reset(&mut self) {
         let Some(connection) = self.process_manager.instance(self.instance_id) else {
             return; // Not loaded yet
@@ -1011,6 +1021,7 @@ impl SubprocessClapAdapter {
             param_values: HashMap::new(),
             pending_output_events: Vec::with_capacity(QUEUED_OUTPUT_CAPACITY),
             input_events: Vec::with_capacity(MAX_BLOCK_EVENTS),
+            transport: Default::default(),
             stats: PluginBlockStats::default(),
             consecutive_misses: 0,
             stall: None,
@@ -1248,6 +1259,29 @@ mod tests {
 
     /// With the previous request still running, `begin_block` doesn't wait for it: the block
     /// drops out at once, so plugins begun after this one keep their share of the deadline.
+    #[test]
+    fn begin_block_publishes_transport() {
+        use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
+        let (load, memory, _doorbell) = ready_block("sonara_test_begin_transport", 64);
+        let clock = Arc::new(BlockClock::with_fraction(0.7));
+        let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
+        adapter.set_transport(&crate::audio::transport::Transport {
+            tempo: 90.0,
+            playing: true,
+            time_sig_num: 3,
+            time_sig_den: 4,
+            ..Default::default()
+        });
+        assert!(adapter.begin_block(&vec![0.0f32; 128], 64));
+        let published = *memory.transport();
+        assert_eq!(published.tempo, 90.0);
+        assert_eq!(
+            published.flags & TRANSPORT_FLAG_PLAYING,
+            TRANSPORT_FLAG_PLAYING
+        );
+        assert_eq!((published.tsig_num, published.tsig_den), (3, 4));
+    }
+
     #[test]
     fn begin_block_does_not_wait_for_a_late_request() {
         let (load, memory, doorbell) = ready_block("sonara_test_begin_late", 64);

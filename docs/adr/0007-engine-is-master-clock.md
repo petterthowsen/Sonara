@@ -23,4 +23,13 @@ because that aliases at high stretch factors.
 - Seek/stop reset per-instance clip playback positions in the engine, not the UI.
 - Any time math that bypasses `ProjectSettings` conversions is suspect.
 
+## Amendment 2026-09-30 — tempo map
+
+With tempo automation a constant-tempo conversion is wrong, so "all tick/sample conversions go
+through `ProjectSettings`" no longer holds. The clock advances through `TempoMap` with per-frame
+tick rates (`audio/tempo_map.rs`), and audio-clip source positions (seek, loop bounds, rate) use
+`AudioPlayback::clip_source_frame` on the clip's recorded-BPM timeline. The `ProjectSettings`
+helpers only apply at constant tempo. The core decision is unchanged: the audio callback is the
+only clock, and clip positions advance frame by frame. See `docs/specs/008-tempo-map-engine/`.
+
 References: `docs/subsystems/engine-architecture.md`, `docs/subsystems/engine-audio-thread.md`

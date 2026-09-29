@@ -11,7 +11,7 @@
 //! `BlockControl::request_seq` / `done_seq` (`Release`/`Acquire`).
 
 use super::platform_shm::PlatformSharedMemory;
-use super::protocol::{BlockControl, BlockEvent, Doorbell, SharedMemoryLayout};
+use super::protocol::{BlockControl, BlockEvent, BlockTransport, Doorbell, SharedMemoryLayout};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -62,6 +62,18 @@ impl SharedMemory {
         unsafe {
             let ptr = self.memory.as_ptr().add(self.layout.control_offset) as *const BlockControl;
             &*ptr
+        }
+    }
+
+    /// Transport state for the current block (engine writes, host reads).
+    #[allow(clippy::mut_from_ref)]
+    pub fn transport(&self) -> &mut BlockTransport {
+        // SAFETY: the layout reserves an aligned `BlockTransport` at `transport_offset`. The
+        // engine writes it before storing `request_seq` (Release), and the host reads it after
+        // loading `request_seq` (Acquire).
+        unsafe {
+            let ptr = self.memory.as_ptr().add(self.layout.transport_offset) as *mut BlockTransport;
+            &mut *ptr
         }
     }
 
@@ -208,6 +220,11 @@ mod tests {
         assert_eq!(layout.output_offset % 64, 0);
         assert_eq!(layout.input_events_offset % 64, 0);
         assert_eq!(layout.output_events_offset % 64, 0);
+        assert_eq!(layout.transport_offset % 64, 0);
         assert_eq!(layout.control_offset % 64, 0);
+        assert!(
+            layout.control_offset
+                >= layout.transport_offset + std::mem::size_of::<BlockTransport>()
+        );
     }
 }

@@ -14,6 +14,8 @@ pub mod processing;
 pub mod render_scratch;
 pub mod rt_debug;
 pub mod stream;
+pub mod tempo_map;
+pub mod transport;
 pub mod types;
 
 pub use automation::{

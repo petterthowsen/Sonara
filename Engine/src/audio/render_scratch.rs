@@ -8,6 +8,9 @@ use super::types::{ChannelId, MidiNote, MidiVelocity, Tick, TrackId};
 /// Most tick boundaries one buffer can cross at 8192 frames (one per frame, plus the start tick).
 const MAX_TICK_EVENTS: usize = 8193;
 
+/// Frames of per-frame tick rates preallocated for one buffer.
+pub const MAX_RATE_FRAMES: usize = 8192;
+
 /// Clip note events expected at a single tick before the list has to grow.
 const MAX_NOTE_EVENTS: usize = 1024;
 
@@ -21,6 +24,8 @@ pub type NoteEvent = (TrackId, MidiNote, MidiVelocity, bool);
 pub struct RenderScratch {
     /// (tick, frame_offset) boundaries crossed in the current buffer.
     pub tick_events: Vec<(Tick, usize)>,
+    /// Ticks advanced per frame in the current buffer, from the tempo map.
+    pub frame_tick_rates: Vec<f64>,
     /// Clip note events collected for the current tick.
     pub note_events: Vec<NoteEvent>,
     /// Channel IDs for the current buffer, so mixing passes can look channels up by ID.
@@ -36,6 +41,7 @@ impl Default for RenderScratch {
     fn default() -> Self {
         Self {
             tick_events: Vec::with_capacity(MAX_TICK_EVENTS),
+            frame_tick_rates: Vec::with_capacity(MAX_RATE_FRAMES),
             note_events: Vec::with_capacity(MAX_NOTE_EVENTS),
             channel_ids: Vec::with_capacity(MAX_CHANNELS),
             parked: VecDeque::with_capacity(MAX_CHANNELS),

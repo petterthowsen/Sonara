@@ -22,8 +22,8 @@ func run_tests() -> void:
 
 func _test_defaults_visible() -> void:
 	var project = _project_script.new()
-	_assert(project.ruler_lanes == {"beats": true, "time": true, "markers": true},
-		"new project shows all ruler lanes")
+	_assert(project.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false},
+		"new project shows the beats, time and marker lanes")
 
 
 func _test_round_trip() -> void:
@@ -41,5 +41,5 @@ func _test_legacy_project_loads_visible() -> void:
 	var data: Dictionary = _project_script.new().to_json()
 	data.erase("ruler_lanes")
 	var loaded = _project_script.from_json(data)
-	_assert(loaded.ruler_lanes == {"beats": true, "time": true, "markers": true},
-		"project without ruler_lanes loads with all lanes visible")
+	_assert(loaded.ruler_lanes == {"beats": true, "time": true, "markers": true, "tempo": false},
+		"project without ruler_lanes loads with the beats, time and marker lanes visible")

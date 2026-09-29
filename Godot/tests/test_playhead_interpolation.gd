@@ -42,6 +42,7 @@ func run_tests() -> void:
 	_test_tracks_engine_without_drift()
 	_test_large_jump_snaps()
 	_test_update_while_stopped_applies_directly()
+	_test_playhead_follows_tempo_map()
 
 
 ## Build an Editor with a project, positioned at tick 0 and playing.
@@ -158,4 +159,14 @@ func _test_update_while_stopped_applies_directly() -> void:
 	editor._process(FRAME_DELTA)
 	_assert(editor.playhead_ticks >= PPQ * 2 and editor.playhead_ticks < PPQ * 2 + 100,
 		"resuming continues from the current position (at %d)" % editor.playhead_ticks)
+	editor.free()
+
+
+## A tempo map of (0, 60) overrides the static 120: one second advances 960 ticks, not 1920.
+func _test_playhead_follows_tempo_map() -> void:
+	var editor: Node = _make_editor()
+	editor.project.tempo_map.add_point(0, 60.0)
+	editor._process(1.0)
+	_assert(absi(editor.playhead_ticks - 960) <= 1,
+		"map (0,60) advances 960 ticks in 1 s (got %d)" % editor.playhead_ticks)
 	editor.free()

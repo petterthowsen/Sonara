@@ -23,6 +23,18 @@ class_name GridHelper extends Resource
 			tempo = t
 			changed.emit()
 
+## Tempo automation for the time ruler. When set and non-empty, seconds follow the ramps.
+var tempo_map: TempoMap = null:
+	set(m):
+		if tempo_map == m:
+			return
+		if tempo_map != null and tempo_map.changed.is_connected(changed.emit):
+			tempo_map.changed.disconnect(changed.emit)
+		tempo_map = m
+		if tempo_map != null:
+			tempo_map.changed.connect(changed.emit)
+		changed.emit()
+
 @export var pixels_per_beat: float = 64.0:
 	set(p):
 		if pixels_per_beat != p:
@@ -172,11 +184,15 @@ func snap_pixels(pixels: float) -> float:
 
 func ticks_to_seconds(ticks: int) -> float:
 	"""Convert ticks to seconds."""
+	if tempo_map != null and not tempo_map.is_empty():
+		return tempo_map.seconds_at_tick(ticks, tempo, ppq)
 	var seconds_per_tick = 60.0 / (tempo * ppq)
 	return ticks * seconds_per_tick
 
 func seconds_to_ticks(seconds: float) -> int:
 	"""Convert seconds to ticks."""
+	if tempo_map != null and not tempo_map.is_empty():
+		return roundi(tempo_map.tick_at_seconds(seconds, tempo, ppq))
 	var seconds_per_tick = 60.0 / (tempo * ppq)
 	return roundi(seconds / seconds_per_tick)
 

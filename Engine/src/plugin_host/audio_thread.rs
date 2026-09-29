@@ -16,18 +16,22 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clack_extensions::params::PluginParams;
-use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+use clack_host::events::event_types::{
+    NoteOffEvent, NoteOnEvent, ParamValueEvent, TransportEvent, TransportFlags,
+};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
-use clack_host::events::{Pckn, UnknownEvent};
+use clack_host::events::{EventFlags, EventHeader, Pckn, UnknownEvent};
 use clack_host::prelude::*;
 use clack_host::process::PluginAudioProcessor as PluginAudioProcessorEnum;
 use clack_host::process::StoppedPluginAudioProcessor;
 use clack_host::utils::Cookie;
+use clack_host::utils::{BeatTime, SecondsTime};
 use tracing::{info, warn};
 
+use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
 use crate::audio::ipc::{
-    futex, BlockEvent, HostSharedMemory, InstanceId, SharedMemory, EVENT_NOTE_OFF, EVENT_NOTE_ON,
-    EVENT_PARAM,
+    futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory, EVENT_NOTE_OFF,
+    EVENT_NOTE_ON, EVENT_PARAM,
 };
 use crate::plugin_host::host::SubprocessHost;
 use crate::plugin_host::state::ParamMap;
@@ -224,6 +228,8 @@ struct InstanceSlot {
     queued_params: Vec<(ClapId, f64)>,
     reset_requested: bool,
     steady: u64,
+    /// Transport handed to `process()`, rebuilt in place every block.
+    transport_event: TransportEvent,
     /// Log span naming the instance; entered only on the (rare) paths that log.
     span: tracing::Span,
 }
@@ -238,6 +244,7 @@ impl InstanceSlot {
             queued_params: Vec::with_capacity(64),
             reset_requested: false,
             steady: 0,
+            transport_event: blank_transport_event(),
             span: tracing::Span::none(),
         }
     }
@@ -249,6 +256,46 @@ impl InstanceSlot {
             control.request_seq.load(Ordering::Acquire) != control.done_seq.load(Ordering::Acquire)
         })
     }
+}
+
+fn blank_transport_event() -> TransportEvent {
+    TransportEvent {
+        header: EventHeader::new_core(0, EventFlags::empty()),
+        flags: TransportFlags::empty(),
+        song_pos_beats: BeatTime::from_int(0),
+        song_pos_seconds: SecondsTime::from_int(0),
+        tempo: 0.0,
+        tempo_inc: 0.0,
+        loop_start_beats: BeatTime::from_int(0),
+        loop_end_beats: BeatTime::from_int(0),
+        loop_start_seconds: SecondsTime::from_int(0),
+        loop_end_seconds: SecondsTime::from_int(0),
+        bar_start: BeatTime::from_int(0),
+        bar_number: 0,
+        time_signature_numerator: 4,
+        time_signature_denominator: 4,
+    }
+}
+
+/// Turn the block's transport into a CLAP transport event in place. Tempo, beats, seconds and
+/// time signature are always valid. Loop, recording and pre-roll stay cleared.
+fn fill_transport_event(block: &BlockTransport, event: &mut TransportEvent) {
+    let mut flags = TransportFlags::HAS_TEMPO
+        | TransportFlags::HAS_BEATS_TIMELINE
+        | TransportFlags::HAS_SECONDS_TIMELINE
+        | TransportFlags::HAS_TIME_SIGNATURE;
+    if block.flags & TRANSPORT_FLAG_PLAYING != 0 {
+        flags |= TransportFlags::IS_PLAYING;
+    }
+    event.flags = flags;
+    event.tempo = block.tempo;
+    event.tempo_inc = block.tempo_inc;
+    event.song_pos_beats = BeatTime::from_float(block.song_pos_beats);
+    event.song_pos_seconds = SecondsTime::from_float(block.song_pos_seconds);
+    event.bar_start = BeatTime::from_float(block.bar_start_beats);
+    event.bar_number = block.bar_number;
+    event.time_signature_numerator = block.tsig_num;
+    event.time_signature_denominator = block.tsig_den;
 }
 
 /// Buffers shared by every instance's `process()` call. Preallocated once per thread.
@@ -600,6 +647,7 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
         channels: AudioPortBufferType::f32_output_only(output_channels.into_iter()),
     }]);
 
+    fill_transport_event(memory.transport(), &mut slot.transport_event);
     scratch.output_events.clear();
     let started_at = Instant::now();
     let result = {
@@ -610,7 +658,7 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
             &InputEvents::from_buffer(&scratch.input_events),
             &mut output_events,
             Some(slot.steady),
-            None,
+            Some(&slot.transport_event),
         )
     };
     let process_ns = started_at.elapsed().as_nanos().min(u32::MAX as u128) as u32;
@@ -681,4 +729,41 @@ pub fn spawn(doorbell: Arc<HostSharedMemory>) -> std::io::Result<AudioThreadHand
             info!("Plugin audio thread exiting");
         })?;
     Ok(handle)
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn fill_transport_event_maps_flags_and_fixed_point() {
+        let block = BlockTransport {
+            tempo: 120.0,
+            tempo_inc: 0.0,
+            song_pos_beats: 2.0,
+            song_pos_seconds: 1.0,
+            bar_start_beats: 0.0,
+            bar_number: 0,
+            flags: TRANSPORT_FLAG_PLAYING,
+            tsig_num: 4,
+            tsig_den: 4,
+            _reserved: [0; 20],
+        };
+        let mut event = blank_transport_event();
+        fill_transport_event(&block, &mut event);
+        assert!(event.flags.contains(
+            TransportFlags::HAS_TEMPO
+                | TransportFlags::HAS_BEATS_TIMELINE
+                | TransportFlags::HAS_SECONDS_TIMELINE
+                | TransportFlags::HAS_TIME_SIGNATURE
+                | TransportFlags::IS_PLAYING
+        ));
+        assert!(!event.flags.contains(TransportFlags::IS_LOOP_ACTIVE));
+        assert_eq!(event.tempo, 120.0);
+        assert_eq!(event.song_pos_beats.to_float(), 2.0);
+        assert_eq!(event.song_pos_seconds.to_float(), 1.0);
+
+        fill_transport_event(&BlockTransport::default(), &mut event);
+        assert!(!event.flags.contains(TransportFlags::IS_PLAYING));
+    }
 }

@@ -1142,6 +1142,22 @@ impl AudioPlayback {
         }
     }
 
+    /// Source frame reached `offset_ticks` into an audio clip recorded at `recorded_bpm`. Depends
+    /// only on the clip's own timeline, never on the project tempo.
+    pub fn clip_source_frame(offset_ticks: Tick, recorded_bpm: f32, ppq: i32, clip_sr: f64) -> f64 {
+        offset_ticks as f64 / ppq as f64 * 60.0 / recorded_bpm as f64 * clip_sr
+    }
+
+    /// Source frames to advance per device frame while the project plays at `frame_bpm`.
+    pub fn clip_advance_per_frame(
+        frame_bpm: f64,
+        recorded_bpm: f32,
+        clip_sr: f64,
+        device_sr: f64,
+    ) -> f64 {
+        frame_bpm / recorded_bpm as f64 * clip_sr / device_sr
+    }
+
     /// Advance playback position by the stretch factor
     /// Returns the interpolated sample value (handles fractional positions)
     pub fn advance_and_get_sample(

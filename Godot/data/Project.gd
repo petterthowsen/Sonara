@@ -49,7 +49,16 @@ var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
 ## Arranger header lane visibility (view state, saved with the project but not undoable).
-var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true}
+var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true, "tempo": false}
+## Tempo automation. Empty means the static `tempo` applies.
+var tempo_map: TempoMap = TempoMap.new():
+	set(map):
+		if tempo_map != null and tempo_map.changed.is_connected(_sync_tempo_map_to_engine):
+			tempo_map.changed.disconnect(_sync_tempo_map_to_engine)
+		tempo_map = map
+		if tempo_map != null:
+			tempo_map.changed.connect(_sync_tempo_map_to_engine)
+		_sync_tempo_map_to_engine()
 ## Arranger track list display toggles (view state, saved with the project but not undoable):
 ## "automation" shows automation lanes and the header automation buttons, "routing" the header
 ## IO button.
@@ -108,6 +117,7 @@ func is_connected_to_engine() -> bool:
 
 func _init():
 	"""Initialize project with master channel (always ID 1)."""
+	tempo_map.changed.connect(_sync_tempo_map_to_engine)  # the initializer doesn't run the setter
 	var master = Channel.new(1)  # Master is always ID 1
 	master.name = "Master"
 	master.output_channel_id = 1000  # Master routes to default output device (ID 1000)
@@ -187,8 +197,27 @@ func _on_engine_confirmed_connected() -> void:
 	for track in tracks:
 		track.connect_to_engine()
 
+	_sync_tempo_map_to_engine()
+
 	logger.info("[Project] Connected to audio engine")
 	_schedule_device_state_resync()
+
+
+## Above this many tempo points the OSC packet gets uncomfortably large for UDP.
+const MAX_TEMPO_POINTS_WARN := 4000
+
+
+## Send the whole tempo map to the engine (empty clears it). Called on every map change.
+func _sync_tempo_map_to_engine() -> void:
+	if _connection_state != ConnectionState.CONNECTED or tempo_map == null:
+		return
+	var args: Array = []
+	for p in tempo_map.points:
+		args.append(int(p["tick"]))
+		args.append(float(p["bpm"]))
+	if tempo_map.points.size() > MAX_TEMPO_POINTS_WARN:
+		logger.warn("[Project] %d tempo points is a lot to send in one packet" % tempo_map.points.size())
+	AudioEngineOSC.send("/transport/tempo_map", args)
 
 
 ## Seconds after connecting before every device re-requests its state.
@@ -1649,6 +1678,7 @@ func to_json() -> Dictionary:
 		"next_marker_id": next_marker_id,
 		"markers": markers.map(func(m): return m.to_json()),
 		"ruler_lanes": ruler_lanes.duplicate(),
+		"tempo_map": tempo_map.to_json(),
 		"arranger_view": arranger_view.duplicate(),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
@@ -1676,7 +1706,8 @@ static func from_json(data: Dictionary) -> Project:
 
 	var saved_lanes: Dictionary = data.get("ruler_lanes", {})
 	for lane in project.ruler_lanes:
-		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, true))
+		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, project.ruler_lanes[lane]))
+	project.tempo_map = TempoMap.from_json(data.get("tempo_map", []))
 	var saved_view: Dictionary = data.get("arranger_view", {})
 	for key in project.arranger_view:
 		project.arranger_view[key] = bool(saved_view.get(key, true))

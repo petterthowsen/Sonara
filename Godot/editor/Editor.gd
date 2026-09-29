@@ -371,6 +371,9 @@ func open_project(p: Project, path: String = "") -> void:
 	is_modified = false
 	history.clear()
 
+	if not project.tempo_map.changed.is_connected(_update_transport_ui):
+		project.tempo_map.changed.connect(_update_transport_ui)
+
 	# Update UI state
 	_update_transport_ui()
 
@@ -405,6 +408,8 @@ func close_project() -> void:
 
 	# Disconnect from audio engine
 	project.disconnect_from_engine()
+	if project.tempo_map.changed.is_connected(_update_transport_ui):
+		project.tempo_map.changed.disconnect(_update_transport_ui)
 
 	project = null
 	project_path = ""
@@ -818,7 +823,11 @@ func _update_transport_ui() -> void:
 	
 	# Update tempo
 	if tempo_spinbox:
-		tempo_spinbox.set_value_no_signal(project.tempo)
+		# With tempo automation the field shows the tempo at the playhead and is read-only
+		var automated := not project.tempo_map.is_empty()
+		tempo_spinbox.set_value_no_signal(
+			project.tempo_map.get_bpm_at_tick(playhead_ticks, project.tempo) if automated else project.tempo)
+		tempo_spinbox.editable = not automated
 	
 	# Update time signature
 	if time_signature_edit:
@@ -842,8 +851,7 @@ func ticks_to_seconds(ticks: int) -> float:
 	if project == null:
 		return 0.0
 	
-	var seconds_per_tick = 60.0 / (project.tempo * project.ppq)
-	return ticks * seconds_per_tick
+	return project.tempo_map.seconds_at_tick(ticks, project.tempo, project.ppq)
 
 
 func _update_view_visibility() -> void:
@@ -868,7 +876,8 @@ func _process(delta: float) -> void:
 
 	# Free-run at tempo rate. `_playhead_precise` is a float, so no fractional ticks are
 	# lost per frame the way integer truncation used to lose them.
-	var ticks_per_second := (project.tempo * project.ppq) / 60.0
+	var bpm := project.tempo_map.get_bpm_at_tick(_playhead_precise, project.tempo)
+	var ticks_per_second := (bpm * project.ppq) / 60.0
 	_playhead_precise += ticks_per_second * delta
 
 	# Bleed off whatever phase error the last engine update reported, spread over time

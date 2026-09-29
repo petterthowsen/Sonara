@@ -699,6 +699,13 @@ impl OscServer {
                     command_tx.send(AudioCommand::SetTempo(*tempo))?;
                 }
             }
+            ["transport", "tempo_map"] => {
+                let (points, dropped) = parse_tempo_map_args(args);
+                if dropped {
+                    warn!("/transport/tempo_map: ignoring malformed trailing argument");
+                }
+                command_tx.send(AudioCommand::SetTempoMap(points))?;
+            }
             ["transport", "time_signature"] => {
                 if let (Some(OscType::Int(num)), Some(OscType::Int(den))) =
                     (args.get(0), args.get(1))
@@ -2562,6 +2569,20 @@ fn generate_device_request_id(channel_id: usize, device_path: &DevicePath) -> St
 
 /// Parse the shared `i:point_id, i:tick, f:value, s:curve, f:tension` argument list used by
 /// `/track/{id}/automation/{lane_id}/add_point` and `.../update_point`.
+/// Parse `/transport/tempo_map` args (`i:tick, f:bpm` pairs). The flag is true when a trailing
+/// or mistyped value was dropped.
+fn parse_tempo_map_args(args: &[OscType]) -> (Vec<(i64, f32)>, bool) {
+    let mut points = Vec::with_capacity(args.len() / 2);
+    let mut dropped = args.len() % 2 == 1;
+    for pair in args.chunks_exact(2) {
+        match (&pair[0], &pair[1]) {
+            (OscType::Int(tick), OscType::Float(bpm)) => points.push((*tick as i64, *bpm)),
+            _ => dropped = true,
+        }
+    }
+    (points, dropped)
+}
+
 fn parse_automation_point(args: &[OscType]) -> Option<AutomationPoint> {
     let (
         Some(OscType::Int(point_id)),
@@ -2762,6 +2783,26 @@ mod tests {
 
     fn string(s: &str) -> OscType {
         OscType::String(s.to_string())
+    }
+
+    #[test]
+    fn tempo_map_args_parse_pairs() {
+        let (points, dropped) = parse_tempo_map_args(&[
+            OscType::Int(0),
+            OscType::Float(120.0),
+            OscType::Int(3840),
+            OscType::Float(60.0),
+        ]);
+        assert_eq!(points, vec![(0, 120.0), (3840, 60.0)]);
+        assert!(!dropped);
+
+        let (empty, dropped) = parse_tempo_map_args(&[]);
+        assert!(empty.is_empty() && !dropped);
+
+        let (points, dropped) =
+            parse_tempo_map_args(&[OscType::Int(0), OscType::Float(90.0), OscType::Int(5)]);
+        assert_eq!(points, vec![(0, 90.0)]);
+        assert!(dropped);
     }
 
     #[test]

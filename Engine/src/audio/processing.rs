@@ -1,7 +1,10 @@
 use std::time::Instant;
 
 use super::commands::EngineState;
+use super::devices::apply_transport;
 use super::rt_debug;
+use super::tempo_map::fill_tick_rates;
+use super::transport::Transport;
 use super::types::*;
 
 /// Drain each channel's live MIDI queue into `scheduled_midi_events` with frame offsets.
@@ -42,10 +45,6 @@ pub fn process_audio(
     sample_rate: f32,
     callback_start: Instant,
 ) {
-    // IMPORTANT: Use actual device sample rate for timing, not project setting
-    let ticks_per_sample =
-        (state.settings.tempo as f64 * state.settings.ppq as f64) / (60.0 * sample_rate as f64);
-
     // Always schedule incoming MIDI events (even when not playing)
     // This allows live MIDI input to play instruments without transport running
     rt_debug::section("live MIDI scheduling", || {
@@ -58,25 +57,52 @@ pub fn process_audio(
         super::automation::apply_automation(state, state.get_current_tick())
     });
 
+    let is_playing = state.get_is_playing();
+    let start_tick = state.get_current_tick();
+    let acc = state.get_fractional_tick_accumulator();
+    let start_acc = acc;
+
+    // Devices see the transport every block, playing or not
+    let transport = Transport::at(
+        &state.tempo_map,
+        &state.settings,
+        start_tick as f64 + acc,
+        sample_rate,
+        is_playing,
+    );
+    for channel in state.channels.values_mut() {
+        apply_transport(&mut channel.devices, &transport);
+    }
+
     // Only advance playhead and process clips when playing
-    if !state.get_is_playing() {
+    if !is_playing {
         return;
     }
 
+    // Per-frame tick rates from the tempo map. Uses the real device rate, not the project's.
+    // Frames past the preallocated capacity reuse the last rate rather than allocating.
+    let mut tick_rates = std::mem::take(&mut state.render_scratch.frame_tick_rates);
+    let rate_frames = frames.min(tick_rates.capacity());
+    fill_tick_rates(
+        &state.tempo_map,
+        &state.settings,
+        start_tick as f64 + acc,
+        rate_frames,
+        sample_rate,
+        &mut tick_rates,
+    );
+
     // Precompute tick boundaries within this buffer with frame offsets
     // Reuse preallocated scratch lists so the audio thread doesn't allocate
-    let start_tick = state.get_current_tick();
     let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
     let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
-    let acc = state.get_fractional_tick_accumulator();
-    let start_acc = acc;
     let emit_playhead = state.take_playhead_midi_dispatch();
     let (tick_cursor, acc) = rt_debug::section("tick events", || {
         collect_tick_events(
             start_tick,
             acc,
             frames,
-            ticks_per_sample,
+            &tick_rates,
             emit_playhead,
             &mut tick_events,
         )
@@ -193,7 +219,8 @@ pub fn process_audio(
         let mut render_acc = start_acc;
         for frame_idx in 0..frames {
             // Advance local tick based on ticks_per_sample
-            render_acc += ticks_per_sample;
+            let frame_rate = frame_rate_at(&tick_rates, frame_idx);
+            render_acc += frame_rate;
             if render_acc >= 1.0 {
                 let inc = render_acc.floor() as Tick;
                 render_tick += inc;
@@ -201,6 +228,7 @@ pub fn process_audio(
             }
 
             let current_tick = render_tick;
+            let frame_bpm = frame_rate * 60.0 * sample_rate as f64 / state.settings.ppq as f64;
 
             // Generate audio from each track
             for track in state.tracks.values_mut() {
@@ -221,6 +249,12 @@ pub fn process_audio(
                             && !clip.audio_samples.is_empty()
                         {
                             let current_pos_in_instance = current_tick - instance.start_tick;
+                            // A clip without a recorded BPM plays 1:1 at the project tempo
+                            let recorded_bpm = if clip.recorded_bpm > 0.0 {
+                                clip.recorded_bpm
+                            } else {
+                                state.settings.tempo
+                            };
 
                             // Check if we're in the playback range for this instance
                             if current_pos_in_instance >= 0
@@ -235,12 +269,13 @@ pub fn process_audio(
                                         instance.clip_offset + current_pos_in_instance;
 
                                     // Convert total offset (ticks) to sample index in the clip's sample-rate domain
-                                    let offset_samples = state.settings.ticks_to_samples(
-                                        total_offset_ticks,
-                                        clip.audio_sample_rate as f32,
-                                    )
-                                        as f64;
-                                    instance.playback_position = Some(offset_samples);
+                                    instance.playback_position =
+                                        Some(AudioPlayback::clip_source_frame(
+                                            total_offset_ticks,
+                                            recorded_bpm,
+                                            state.settings.ppq,
+                                            clip.audio_sample_rate as f64,
+                                        ));
                                 }
 
                                 // Get mutable reference to playback position
@@ -248,17 +283,13 @@ pub fn process_audio(
                                     continue;
                                 };
 
-                                // Calculate BPM stretch factor
-                                let stretch_factor = AudioPlayback::calculate_stretch_factor(
-                                    state.settings.tempo,
-                                    clip.recorded_bpm,
+                                // Source frames to advance this frame at the tempo playing now
+                                let advance_per_sample = AudioPlayback::clip_advance_per_frame(
+                                    frame_bpm,
+                                    recorded_bpm,
+                                    clip.audio_sample_rate as f64,
+                                    state.device_sample_rate as f64,
                                 );
-
-                                // Calculate samples to advance this frame
-                                // stretch_factor * device_sample_rate / clip_sample_rate
-                                let advance_per_sample = (stretch_factor as f64)
-                                    * (state.device_sample_rate as f64)
-                                    / (clip.audio_sample_rate as f64);
 
                                 let clip_sample_len =
                                     (clip.audio_samples.len() / clip.audio_channels) as f64;
@@ -321,17 +352,20 @@ pub fn process_audio(
 
                                 // Handle looping
                                 if instance.loop_enabled && instance.loop_length_ticks > 0 {
-                                    let seconds_per_tick = 60.0
-                                        / (state.settings.tempo as f64 * state.settings.ppq as f64);
-                                    let loop_start_seconds =
-                                        instance.loop_start_ticks as f64 * seconds_per_tick;
-                                    let loop_length_seconds =
-                                        instance.loop_length_ticks as f64 * seconds_per_tick;
                                     let clip_sr = clip.audio_sample_rate as f64;
-                                    let loop_start_samples =
-                                        loop_start_seconds * clip_sr * stretch_factor as f64;
-                                    let loop_length_samples =
-                                        loop_length_seconds * clip_sr * stretch_factor as f64;
+                                    let ppq = state.settings.ppq;
+                                    let loop_start_samples = AudioPlayback::clip_source_frame(
+                                        instance.loop_start_ticks,
+                                        recorded_bpm,
+                                        ppq,
+                                        clip_sr,
+                                    );
+                                    let loop_length_samples = AudioPlayback::clip_source_frame(
+                                        instance.loop_length_ticks,
+                                        recorded_bpm,
+                                        ppq,
+                                        clip_sr,
+                                    );
 
                                     if loop_length_samples > 0.0
                                         && *playback_pos >= loop_start_samples + loop_length_samples
@@ -366,6 +400,16 @@ pub fn process_audio(
         // let ticks_per_bar = state.settings.ppq as i64 * state.settings.time_numerator as i64;
         // let final_tick = state.get_current_tick();
     });
+    state.render_scratch.frame_tick_rates = tick_rates;
+}
+
+/// Tick rate for `frame_idx`, holding the last rate for frames past the preallocated slice.
+fn frame_rate_at(rates: &[f64], frame_idx: usize) -> f64 {
+    rates
+        .get(frame_idx)
+        .or_else(|| rates.last())
+        .copied()
+        .unwrap_or(0.0)
 }
 
 /// Record each newly crossed tick and its sample offset inside this buffer.
@@ -377,7 +421,7 @@ fn collect_tick_events(
     start_tick: Tick,
     mut acc: f64,
     frame_count: usize,
-    ticks_per_sample: f64,
+    tick_rates: &[f64],
     emit_start_tick: bool,
     tick_events: &mut Vec<(Tick, usize)>,
 ) -> (Tick, f64) {
@@ -387,7 +431,7 @@ fn collect_tick_events(
     }
     let mut tick_cursor = start_tick;
     for frame_idx in 0..frame_count {
-        acc += ticks_per_sample;
+        acc += frame_rate_at(tick_rates, frame_idx);
         while acc >= 1.0 {
             acc -= 1.0;
             tick_cursor += 1;
@@ -402,6 +446,7 @@ mod tests {
     use super::*;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
     use crate::audio::midi_types::MidiEvent;
+    use crate::audio::tempo_map::TempoMap;
     use std::time::Duration;
 
     /// Build a state with one channel holding note-ons that arrived `ages_ms` before `now`.
@@ -447,18 +492,16 @@ mod tests {
     #[test]
     fn consecutive_buffers_do_not_redispatch_the_boundary_tick() {
         // 0.04 ticks/sample × 256 frames = 10.24 ticks, matching 120 BPM / 960 PPQ / 48 kHz.
-        let ticks_per_sample = 0.04;
         let frames = 256;
+        let rates = vec![0.04; frames];
         let mut events = Vec::new();
 
-        let (tick1, acc1) =
-            collect_tick_events(0, 0.0, frames, ticks_per_sample, true, &mut events);
+        let (tick1, acc1) = collect_tick_events(0, 0.0, frames, &rates, true, &mut events);
         let first: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
         assert_eq!(first.first().copied(), Some(0));
         assert_eq!(*first.last().unwrap(), tick1);
 
-        let (tick2, _acc2) =
-            collect_tick_events(tick1, acc1, frames, ticks_per_sample, false, &mut events);
+        let (tick2, _acc2) = collect_tick_events(tick1, acc1, frames, &rates, false, &mut events);
         let second: Vec<Tick> = events.iter().map(|(t, _)| *t).collect();
         assert!(
             !second.contains(&tick1),
@@ -471,10 +514,10 @@ mod tests {
     #[test]
     fn playhead_tick_is_only_emitted_when_requested() {
         let mut events = Vec::new();
-        collect_tick_events(7680, 0.0, 1, 0.04, false, &mut events);
+        collect_tick_events(7680, 0.0, 1, &[0.04], false, &mut events);
         assert!(events.is_empty());
 
-        collect_tick_events(7680, 0.0, 1, 0.04, true, &mut events);
+        collect_tick_events(7680, 0.0, 1, &[0.04], true, &mut events);
         assert_eq!(events[0], (7680, 0));
     }
 
@@ -538,5 +581,149 @@ mod tests {
         channel.send_clip_note(60, 100, false, 0);
         channel.release_clip_notes();
         assert!(notes.lock().unwrap().is_empty());
+    }
+
+    /// Run buffers of `chunk` frames through the tempo map until the playhead reaches
+    /// `target_tick`, returning the frames used and every emitted tick.
+    fn frames_to_reach(
+        map: &TempoMap,
+        settings: &ProjectSettings,
+        target_tick: Tick,
+    ) -> (usize, Vec<Tick>) {
+        let chunk = 256;
+        let (mut tick, mut acc, mut frames, mut first) = (0, 0.0, 0, true);
+        let (mut rates, mut events, mut ticks) = (Vec::new(), Vec::new(), Vec::new());
+        while tick < target_tick {
+            fill_tick_rates(
+                map,
+                settings,
+                tick as f64 + acc,
+                chunk,
+                48_000.0,
+                &mut rates,
+            );
+            (tick, acc) = collect_tick_events(tick, acc, chunk, &rates, first, &mut events);
+            first = false;
+            ticks.extend(events.iter().map(|(t, _)| *t));
+            frames += chunk;
+        }
+        (frames, ticks)
+    }
+
+    #[test]
+    fn constant_60_bpm_beat_takes_48000_frames() {
+        let settings = ProjectSettings {
+            tempo: 60.0,
+            ..ProjectSettings::default()
+        };
+        let (frames, _) = frames_to_reach(&TempoMap::default(), &settings, 960);
+        assert!((frames as i64 - 48_000).abs() <= 256, "{frames}");
+    }
+
+    #[test]
+    fn ramp_duration_matches_integral() {
+        let map = TempoMap::from_points(vec![(0, 120.0), (3840, 60.0)]);
+        let (frames, _) = frames_to_reach(&map, &ProjectSettings::default(), 3840);
+        // 4 ln 2 s at 48 kHz = 133 084.6 frames, rounded up to whole 256-frame buffers
+        assert!((frames as i64 - 133_084).abs() <= 256 + 4, "{frames}");
+    }
+
+    #[test]
+    fn ramp_ticks_are_contiguous() {
+        let map = TempoMap::from_points(vec![(0, 120.0), (3840, 60.0)]);
+        let (_, ticks) = frames_to_reach(&map, &ProjectSettings::default(), 3840);
+        assert!(ticks.windows(2).all(|w| w[1] == w[0] + 1));
+    }
+
+    #[test]
+    fn clip_seek_is_tempo_independent() {
+        // 960 ticks into a clip recorded at 120 BPM, whatever the project tempo
+        for _project_bpm in [60.0, 120.0, 200.0] {
+            assert_eq!(
+                AudioPlayback::clip_source_frame(960, 120.0, 960, 48_000.0),
+                24_000.0
+            );
+        }
+    }
+
+    #[test]
+    fn clip_loop_bounds_on_clip_timeline() {
+        // A one-beat loop of a 120 BPM clip wraps at 24 000 frames at 60 and 200 BPM alike
+        let loop_len = AudioPlayback::clip_source_frame(960, 120.0, 960, 48_000.0);
+        assert_eq!(loop_len, 24_000.0);
+    }
+
+    #[test]
+    fn clip_rate_follows_tempo() {
+        assert_eq!(
+            AudioPlayback::clip_advance_per_frame(120.0, 120.0, 48_000.0, 48_000.0),
+            1.0
+        );
+        assert_eq!(
+            AudioPlayback::clip_advance_per_frame(60.0, 120.0, 48_000.0, 48_000.0),
+            0.5
+        );
+        assert!(
+            (AudioPlayback::clip_advance_per_frame(200.0, 120.0, 48_000.0, 48_000.0) - 5.0 / 3.0)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    /// Device that records the last transport it was given.
+    struct TransportRecorder {
+        seen: std::sync::Arc<std::sync::Mutex<Option<Transport>>>,
+    }
+
+    impl crate::audio::devices::AudioDevice for TransportRecorder {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_midi_event(&mut self, _note: u8, _velocity: u8, _is_note_on: bool, _offset: usize) {
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn set_transport(&mut self, transport: &Transport) {
+            *self.seen.lock().unwrap() = Some(*transport);
+        }
+        fn device_id(&self) -> &str {
+            "test.transport"
+        }
+        fn device_name(&self) -> &str {
+            "Transport"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn devices_in_containers_receive_transport() {
+        use crate::audio::devices::{ChainDevice, DeviceContainer};
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut chain = ChainDevice::new(64);
+        chain.insert_child(0, Box::new(TransportRecorder { seen: seen.clone() }));
+        let mut state = EngineState::default();
+        let mut channel = Channel::new(2, "Fx".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(chain));
+        state.channels.insert(2, channel);
+        state.set_current_tick(1920);
+
+        // Stopped: the transport still arrives, with playing = false
+        process_audio(&mut state, 64, 48_000.0, Instant::now());
+        let t = seen.lock().unwrap().expect("transport delivered");
+        assert!(!t.playing);
+        assert!((t.song_pos_beats - 2.0).abs() < 1e-9);
+        assert!((t.song_pos_seconds - 1.0).abs() < 1e-9);
     }
 }
