@@ -44,7 +44,8 @@ static func title_for_id(id: String) -> String:
 func _ready() -> void:
 	_hidden = Node.new()
 	_hidden.name = "HiddenDockPanels"
-	get_parent().add_child(_hidden)
+	# A plain Node is ignored by SplitContainer layout, and hidden panels stay in the tree.
+	add_child(_hidden)
 	_index_panels()
 	_apply_saved_layout()
 	drag_ended.connect(_on_outer_dragged)
@@ -57,6 +58,16 @@ func place_panel(panel: DockPanel, target: SideDock, insert_index: int) -> void:
 	if panel == null or target == null:
 		return
 	target.insert_panel(panel, insert_index)
+	_normalize_docks()
+	_save_layout()
+
+
+## Apply a drop target from `SideDock.drop_target_at` and persist the new layout.
+func drop_panel(panel: DockPanel, dock: SideDock, drop_target: Dictionary) -> void:
+	if panel == null or dock == null:
+		return
+	dock.apply_drop(panel, drop_target)
+	_normalize_docks()
 	_save_layout()
 
 
@@ -135,28 +146,35 @@ func _apply_saved_layout() -> void:
 		if child is DockPanel:
 			by_id[child.panel_id] = child
 			_hidden.remove_child(child)
-	_place_ids(data.get("left", _DEFAULT_LEFT), left_dock, by_id)
-	_place_ids(data.get("right", _DEFAULT_RIGHT), right_dock, by_id)
+	_place_entries(data.get("left", _DEFAULT_LEFT), left_dock, by_id)
+	_place_entries(data.get("right", _DEFAULT_RIGHT), right_dock, by_id)
 	for id in by_id:
 		var leftover: DockPanel = by_id[id]
 		if leftover.get_parent() == null:
 			_hide_panel(leftover)
 	left_dock.apply_split_offsets(data.get("left_splits", []))
 	right_dock.apply_split_offsets(data.get("right_splits", []))
-	_apply_packed_offsets(self, data.get("outer_offsets", []))
-	if _center_split:
-		_apply_packed_offsets(_center_split, data.get("inner_offsets", []))
+	right_dock.set_parent_split_offsets(_to_packed(data.get("outer_offsets", [])))
+	left_dock.set_parent_split_offsets(_to_packed(data.get("inner_offsets", [])))
 	_index_panels()
 
 
-## Insert each listed panel into `dock` in order, skipping unknown ids.
-func _place_ids(ids: Variant, dock: SideDock, by_id: Dictionary) -> void:
-	if not ids is Array:
+## Stack each saved entry into `dock` in order: an id string, or `{tabs, current}` for a tab group.
+## Unknown ids are skipped.
+func _place_entries(entries: Variant, dock: SideDock, by_id: Dictionary) -> void:
+	if not entries is Array:
 		return
-	for id in ids:
-		var panel: DockPanel = by_id.get(str(id))
-		if panel:
-			panel.visible = true
+	for entry in entries:
+		if entry is Dictionary:
+			var group: Array[DockPanel] = []
+			for id in entry.get("tabs", []):
+				var tabbed: DockPanel = by_id.get(str(id))
+				if tabbed and tabbed.get_parent() == null:
+					group.append(tabbed)
+			dock.append_tab_group(group, int(entry.get("current", 0)))
+			continue
+		var panel: DockPanel = by_id.get(str(entry))
+		if panel and panel.get_parent() == null:
 			dock.insert_panel(panel, -1)
 
 
@@ -167,7 +185,6 @@ func _show_panel(panel: DockPanel) -> void:
 		return
 	if panel.get_parent():
 		panel.get_parent().remove_child(panel)
-	panel.visible = true
 	right_dock.insert_panel(panel, -1)
 
 
@@ -180,48 +197,36 @@ func _hide_panel(panel: DockPanel) -> void:
 		panel.get_parent().remove_child(panel)
 	_hidden.add_child(panel)
 	panel.visible = false
+	_normalize_docks()
+
+
+## Dissolve tab groups left with one panel in either dock (e.g. after a cross-dock move).
+func _normalize_docks() -> void:
+	left_dock.normalize()
+	right_dock.normalize()
 
 
 ## Write dock occupancy and split offsets to Sonara config.
 func _save_layout() -> void:
 	var data := {
-		"left": _ids_of(left_dock),
-		"right": _ids_of(right_dock),
+		"left": left_dock.get_layout(),
+		"right": right_dock.get_layout(),
 		"left_splits": left_dock.get_split_offsets(),
 		"right_splits": right_dock.get_split_offsets(),
-		"outer_offsets": _offsets_of(self),
-		"inner_offsets": _offsets_of(_center_split),
+		"outer_offsets": Array(right_dock.get_parent_split_offsets()),
+		"inner_offsets": Array(left_dock.get_parent_split_offsets()),
 	}
 	Sonara.set_config(CONFIG_KEY, data)
 	Sonara.save_config()
 
 
-## Panel ids currently stacked in `dock`, top to bottom.
-func _ids_of(dock: SideDock) -> Array:
-	var ids: Array = []
-	for panel in dock.get_panels():
-		ids.append(panel.panel_id)
-	return ids
-
-
-## Split offsets as a JSON-friendly int array.
-func _offsets_of(split: SplitContainer) -> Array:
-	var values: Array = []
-	if split == null:
-		return values
-	for value in split.split_offsets:
-		values.append(int(value))
-	return values
-
-
-## Restore `split.split_offsets` from a saved int array.
-func _apply_packed_offsets(split: SplitContainer, offsets: Variant) -> void:
-	if split == null or not offsets is Array or offsets.is_empty():
-		return
+## Saved int array as split offsets; empty when missing or malformed.
+func _to_packed(offsets: Variant) -> PackedInt32Array:
 	var packed := PackedInt32Array()
-	for value in offsets:
-		packed.append(int(value))
-	split.split_offsets = packed
+	if offsets is Array:
+		for value in offsets:
+			packed.append(int(value))
+	return packed
 
 
 ## Persist the left/right dock width after the outer splitter is released.

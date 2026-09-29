@@ -1,4 +1,4 @@
-# Payload for dragging a dock panel between side docks.
+# Payload for dragging a dock panel between side docks and tab groups.
 class_name DockDrag extends RefCounted
 
 ## Panel being dragged; destination is filled by the drop target.

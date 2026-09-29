@@ -33,6 +33,35 @@ func get_content() -> Control:
 	return _content
 
 
+## Show the title bar when stacked alone; tab groups hide it because the tab is the handle.
+func set_title_visible(is_shown: bool) -> void:
+	if _title_bar:
+		_title_bar.visible = is_shown
+
+
+## Global rect of the title bar, or an empty rect while it is hidden inside a tab group.
+func get_title_global_rect() -> Rect2:
+	if _title_bar == null or not _title_bar.visible:
+		return Rect2()
+	return _title_bar.get_global_rect()
+
+
+## Tab group this panel sits in, or null when stacked on its own.
+func get_parent_tabs() -> DockTabs:
+	return get_parent() as DockTabs
+
+
+## Build the drag payload and preview. Must be called from a _get_drag_data callback.
+func create_drag() -> DockDrag:
+	var drag := DockDrag.new()
+	drag.panel = self
+	modulate.a = 0.45
+	var preview := _make_preview()
+	preview.tree_exiting.connect(_on_drag_preview_exiting)
+	set_drag_preview(preview)
+	return drag
+
+
 ## Side dock that currently owns this panel, or null when hidden.
 func get_parent_dock() -> SideDock:
 	var node: Node = get_parent()
@@ -75,13 +104,7 @@ func _set_content(content: Control) -> void:
 
 ## Begin a dock-panel drag from the title bar.
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	var drag := DockDrag.new()
-	drag.panel = self
-	modulate.a = 0.45
-	var preview := _make_preview()
-	preview.tree_exiting.connect(_on_drag_preview_exiting)
-	set_drag_preview(preview)
-	return drag
+	return create_drag()
 
 
 ## Floating title chip shown under the cursor while dragging.

@@ -17,6 +17,13 @@ Sonara (autoload)  ── Sonara.editor ──►  Editor (editor/Editor.gd)
 - Emits app-level signals only: project lifecycle (`project_opened`, `project_activated`, `project_closed`, `project_saved`, `project_modified`), tempo/time signature, transport (`playback_started`, `playback_stopped`, `playhead_moved`), selection (`clips_selected`; `clip_instance_selected` is deprecated) and focus (`channel_focused`, `track_focused`).
 - It does **not** relay per-object data changes; those come from the data objects themselves.
 
+## Side docks (`editor/docks/`)
+- `DockHost` (the outer `LeftRightSplit`) owns the left and right `SideDock`s, the hidden-panel pool, and the `ui/docks` config: per dock, a list of entries, each a panel id or a `{"tabs": [ids], "current": i}` tab group.
+- A `SideDock` stacks items in a `VSplitContainer`. An item is a lone `DockPanel` (title bar = drag handle) or a `DockTabs` (`TabContainer`; the tabs are the handles, and panel title bars are hidden).
+- All panel drags use one payload, `DockDrag`. `DockTabs` replaces its tab bar's drag forwarding and turns off `drag_to_rearrange_enabled`, so tab drags use the same drop targets as title-bar drags. During a drag, each item is split top to bottom into: an 8 px stack-above slot; the header (title bar or tab strip), which tabs the panel in (at the hovered tab index for a group); and the body, whose top and bottom quarter (capped at 64 px) stack above or below while the middle tabs. The overlay draws faint lines at every stack slot (dock top, between items, dock bottom) and highlights the hovered region. When the number of stacked items changes, the VSplit offsets reset so the items share the height evenly.
+- After every change, `normalize()` turns a tab group left with one panel back into a lone panel and frees empty groups.
+- An empty dock is hidden. During a `DockDrag` it appears as an `empty_min_width` drop strip that doesn't expand. The user's width (the parent split offsets) is stashed while the dock is empty and restored when a panel arrives, so saving an empty dock keeps that width.
+
 ## Data model layer
 data/ contains self-synchronizing (via OSC) data models (Project, Track, Channel, Clip, ClipInstance, DeviceInstance etc.), each with its own signals and `to_json()`/`from_json()` serialization.
 - `Project.gd` emits structural signals (`track_added/removed`, `channel_added/removed`, `clip_added/removed`, `connection_state_changed`), owns the OSC listeners for clip/audiofile events, and maps `req_id` ↔ clip IDs (and sampler `DeviceInstance`s).
