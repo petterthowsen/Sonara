@@ -3,6 +3,8 @@
 [ext_resource type="Script" uid="uid://cfm1llxsymt31" path="res://devices/simple_view/SimpleView.gd" id="1_1uhqw"]
 
 [node name="SimpleView" type="VBoxContainer" unique_id=1474561239]
+offset_right = 220.0
+offset_bottom = 183.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 4
@@ -10,6 +12,11 @@ script = ExtResource("1_1uhqw")
 
 [node name="PageTabs" type="TabBar" parent="." unique_id=2057874422]
 layout_mode = 2
+current_tab = 0
+close_with_middle_mouse = false
+tab_count = 2
+tab_0/title = "Main"
+tab_1/title = "Effects"
 
 [node name="Grid" type="Control" parent="." unique_id=888834911]
 custom_minimum_size = Vector2(220, 148)

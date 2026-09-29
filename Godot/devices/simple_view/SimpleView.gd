@@ -42,6 +42,8 @@ var _group_fit := {}
 
 
 func _ready() -> void:
+	_page_tabs.clear_tabs()
+	
 	if not _page_tabs.tab_changed.is_connected(_on_tab_changed):
 		_page_tabs.tab_changed.connect(_on_tab_changed)
 
