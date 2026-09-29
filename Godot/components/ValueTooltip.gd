@@ -15,6 +15,15 @@ func _init() -> void:
 	top_level = true
 	z_index = 128
 	visible = false
+	_init_panel_style()
+	_label = Label.new()
+	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_label.add_theme_font_size_override("font_size", 12)
+	add_child(_label)
+
+
+func _init_panel_style() -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.08, 0.08, 0.1, 0.94)
 	style.border_color = Color(1, 1, 1, 0.12)
@@ -25,11 +34,6 @@ func _init() -> void:
 	style.content_margin_top = 2
 	style.content_margin_bottom = 2
 	add_theme_stylebox_override("panel", style)
-	_label = Label.new()
-	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_label.add_theme_font_size_override("font_size", 12)
-	add_child(_label)
 
 
 ## Create a hidden tooltip as an unsaved internal child of `host`.
@@ -43,6 +47,25 @@ func set_font_size(font_size: int) -> void:
 	if _label.get_theme_font_size("font_size") != font_size:
 		_label.add_theme_font_size_override("font_size", font_size)
 		reset_size()
+
+
+## Plain: no panel, just outlined and shadowed text, for a readout drawn over its own
+## control (the mixer pan strip) where a panel would hide the value it describes.
+func set_plain(plain: bool) -> void:
+	if plain:
+		add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		_label.add_theme_constant_override("outline_size", 4)
+		_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
+		_label.add_theme_constant_override("shadow_offset_x", 1)
+		_label.add_theme_constant_override("shadow_offset_y", 1)
+	else:
+		_init_panel_style()
+		for c in ["font_outline_color", "font_shadow_color"]:
+			_label.remove_theme_color_override(c)
+		for c in ["outline_size", "shadow_offset_x", "shadow_offset_y"]:
+			_label.remove_theme_constant_override(c)
+	reset_size()
 
 
 func set_text(text: String) -> void:
@@ -67,6 +90,12 @@ func place_below(global_rect: Rect2) -> void:
 	if pos.y + tip_size.y > get_viewport_rect().size.y:
 		pos.y = global_rect.position.y - tip_size.y - gap
 	_set_clamped(pos, tip_size)
+
+
+## Center on `global_rect`, drawn over it (a plain readout on its own control).
+func place_over(global_rect: Rect2) -> void:
+	var tip_size := _fit()
+	_set_clamped(global_rect.get_center() - tip_size * 0.5, tip_size)
 
 
 ## Place right of `global_point`, vertically centered on it; flips left at the viewport edge.

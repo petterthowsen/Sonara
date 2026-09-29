@@ -158,6 +158,10 @@ var gamma_warp : float:
 			return 1.0
 
 signal volume_changed(volume : float)
+## Fader value restored by Ctrl/Cmd-click on the fader.
+@export var volume_default_db := -6.0
+## How the change behind the latest `volume_changed` was made; read it inside the handler.
+var last_edit_kind := ValueEditKind.Kind.DRAG
 ## Emitted when the highest peak since the last reset changes (-INF after a reset).
 signal max_peak_changed(db: float)
 ## Emitted when the user clicks the meter bars to clear the clip lights and max peak.
@@ -332,6 +336,8 @@ func _gui_input(event: InputEvent) -> void:
 				if mouse_event.pressed:
 					if mouse_event.double_click:
 						_start_value_edit()
+					elif mouse_event.is_command_or_control_pressed():
+						_reset_volume()
 					else:
 						# start dragging
 						_is_dragging_fader = true
@@ -366,7 +372,20 @@ func _on_edit_committed(text: String) -> void:
 	var trimmed := text.strip_edges()
 	if trimmed.is_valid_float():
 		volume_db = clamp(float(trimmed), db_bottom, db_top)
-		volume_changed.emit(volume_db)
+		_emit_volume_changed(ValueEditKind.Kind.TYPED)
+
+
+## Ctrl/Cmd-click: back to the default. Emits even when already there so a multi-selection resets.
+func _reset_volume() -> void:
+	_is_dragging_fader = false
+	volume_db = clamp(volume_default_db, db_bottom, db_top)
+	_emit_volume_changed(ValueEditKind.Kind.RESET)
+
+
+func _emit_volume_changed(kind: ValueEditKind.Kind) -> void:
+	last_edit_kind = kind
+	volume_changed.emit(volume_db)
+	last_edit_kind = ValueEditKind.Kind.DRAG
 
 
 ## The fader column or its handle (which is wider than the column).

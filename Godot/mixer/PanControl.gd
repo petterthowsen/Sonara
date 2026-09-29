@@ -1,16 +1,21 @@
 # PanControl.gd
 # Channel pan strip for the four pan modes: a single slider (Balance, Mono) or a dual slider
 # (Dual, Combined), with a right-click mode menu. Reads and writes the bound Channel through its
-# setters and records undo as set_pan_state snapshots.
+# setters and records undo as set_pan_state snapshots. The value readout is a plain overlay
+# drawn over the slider while it is hovered or dragged, so a long value never widens the strip.
 class_name PanControl extends PanelContainer
 
 @onready var _single_slider: HorSlider = $HSlider
 @onready var _dual_slider: HDualSlider = $DualPanSlider
 @onready var _mode_popup: PopupMenu = $PanModePopup
-@onready var _value_label: Label = $ValueLabel
 
 var channel: Channel = null
 var _drag_start_pan := 0.0
+var _value_tip: ValueTooltip
+var _hovered := false
+var _dragging := false
+## Where the pointer sits on the dual slider (HDualSlider.pick_at); picks the Combined readout.
+var _hover_part := HDualSlider.DragMode.NONE
 
 
 func _ready() -> void:
@@ -18,14 +23,20 @@ func _ready() -> void:
 	_dual_slider.values_changed.connect(_on_dual_values_changed)
 	_dual_slider.pair_dragged.connect(_on_pair_dragged)
 	_dual_slider.handle_dragged.connect(_on_handle_dragged)
+	_single_slider.reset_requested.connect(_on_single_slider_reset)
 	_single_slider.drag_started.connect(_on_drag_started)
 	_single_slider.drag_ended.connect(_on_drag_ended)
 	_dual_slider.drag_started.connect(_on_drag_started)
 	_dual_slider.drag_ended.connect(_on_drag_ended)
 	gui_input.connect(_on_gui_input)
 	_mode_popup.id_pressed.connect(_on_mode_selected)
-	_value_label.visible = false
-	_value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for slider: Control in [_single_slider, _dual_slider]:
+		slider.mouse_entered.connect(_set_hovered.bind(true))
+		slider.mouse_exited.connect(_set_hovered.bind(false))
+	_dual_slider.gui_input.connect(_on_dual_slider_input)
+	_value_tip = ValueTooltip.attach(self)
+	_value_tip.set_plain(true)
+	set_process(false)
 	_refresh()
 
 
@@ -52,6 +63,10 @@ func _unbind() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
 		_unbind()
+	elif what == NOTIFICATION_VISIBILITY_CHANGED and _value_tip and not is_visible_in_tree():
+		_hovered = false
+		_dragging = false
+		_refresh_value_tip()
 
 
 ## Balance and Mono use the single slider; Dual and Combined use the dual slider.
@@ -80,14 +95,18 @@ func _refresh() -> void:
 		_single_slider.set_value_no_signal(channel.pan * 100)
 	for i in _mode_popup.item_count:
 		_mode_popup.set_item_checked(i, _mode_popup.get_item_id(i) == channel.pan_mode)
-	if _value_label.visible:
-		_update_value_label()
+	_refresh_value_tip()
 
 
 ## Apply `mutate` to the channel and record the change. Mergeable so a drag is one undo step.
-func _record_drag(mutate: Callable) -> void:
+## With several channels selected the change applies to all of them (see ChannelMultiEdit).
+func _record_drag(mutate: Callable, kind := ValueEditKind.Kind.DRAG) -> void:
 	var old_state := channel.get_pan_state()
 	mutate.call()
+	var peers := ChannelMultiEdit.peers_of(channel, self)
+	if not peers.is_empty():
+		ChannelMultiEdit.apply_pan(channel, old_state, channel.get_pan_state(), peers, kind)
+		return
 	var cmd := PropertyCommand.new("Set Pan", channel, "set_pan_state", old_state, channel.get_pan_state())
 	cmd.set_mergeable(true)
 	HistoryUtil.record(cmd)
@@ -97,7 +116,15 @@ func _record_drag(mutate: Callable) -> void:
 func _on_single_slider_changed(value: float) -> void:
 	if channel == null:
 		return
-	_record_drag(func(): channel.set_pan(value / 100.0))
+	_record_drag(func(): channel.set_pan(value / 100.0), _single_slider.last_edit_kind)
+
+
+## Ctrl/Cmd-click on the slider. With a multi-selection, the whole selection re-centers, even
+## when this channel already was (then value_changed never fired).
+func _on_single_slider_reset() -> void:
+	if channel == null or ChannelMultiEdit.peers_of(channel, self).is_empty():
+		return
+	_record_drag(func(): channel.set_pan(0.0), ValueEditKind.Kind.RESET)
 
 
 func _on_dual_values_changed(left: float, right: float) -> void:
@@ -123,35 +150,69 @@ func _on_handle_dragged(which: int, value: float) -> void:
 	_record_drag(func(): channel.set_pan_width(width))
 
 
-## Refresh the tooltip label from the channel.
-func _update_value_label() -> void:
+## The readout for the current mode. Combined shows only the part under the pointer: the width
+## on a handle (or the empty space beside one), the position on the fill.
+func get_value_text() -> String:
 	if channel == null:
-		return
+		return ""
 	match channel.pan_mode:
 		Channel.PanMode.STEREO_DUAL:
-			_value_label.text = "L %s / R %s" % [_format_pan(channel.pan_left), _format_pan(channel.pan_right)]
+			return "%s / %s" % [_format_pan(channel.pan_left), _format_pan(channel.pan_right)]
 		Channel.PanMode.STEREO_COMBINED:
-			_value_label.text = "%s, W %d%%" % [_format_pan(channel.pan), roundi(channel.pan_width * 100.0)]
-		_:
-			_value_label.text = _format_pan(channel.pan)
+			var part := _dual_slider.get_drag_mode() if _dragging else _hover_part
+			if part == HDualSlider.DragMode.A_VALUE or part == HDualSlider.DragMode.B_VALUE:
+				return "W: %d" % roundi(channel.pan_width * 100.0)
+	return _format_pan(channel.pan)
 
 
+## Show the readout over the slider while hovered or dragged; hide it otherwise.
+func _refresh_value_tip() -> void:
+	if _value_tip == null:
+		return
+	var should_show := channel != null and (_hovered or _dragging) and is_visible_in_tree()
+	_value_tip.visible = should_show
+	set_process(should_show)
+	if should_show:
+		_value_tip.set_text(get_value_text())
+		_value_tip.place_over(get_global_rect())
+
+
+## Follow the strip while visible (scroll containers move it).
+func _process(_delta: float) -> void:
+	_value_tip.place_over(get_global_rect())
+
+
+func _set_hovered(hovered: bool) -> void:
+	_hovered = hovered
+	_refresh_value_tip()
+
+
+func _on_dual_slider_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and not _dragging:
+		var part := _dual_slider.pick_at(event.position)
+		if part != _hover_part:
+			_hover_part = part
+			_refresh_value_tip()
+
+
+## Signed percent: -100 is hard left, 100 hard right.
 func _format_pan(p: float) -> String:
-	if is_zero_approx(p):
-		return "C"
-	return "%dL" % roundi(-p * 100.0) if p < 0.0 else "%dR" % roundi(p * 100.0)
+	return str(roundi(p * 100.0))
 
 
 func _on_drag_started() -> void:
 	if channel == null:
 		return
 	_drag_start_pan = channel.pan
-	_update_value_label()
-	_value_label.visible = true
+	_dragging = true
+	_refresh_value_tip()
 
 
 func _on_drag_ended() -> void:
-	_value_label.visible = false
+	_dragging = false
+	# The pointer may rest on another part than it pressed; motion updates it only when it moves.
+	_hover_part = _dual_slider.pick_at(_dual_slider.get_local_mouse_position())
+	_refresh_value_tip()
 
 
 func _on_gui_input(event: InputEvent) -> void:

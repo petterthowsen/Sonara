@@ -201,11 +201,7 @@ func notify_hierarchy_changed() -> void:
 func _init(channel_id: int = -1):
 	"""Initialize channel with unique ID."""
 	id = channel_id
-	# Master channel (ID 1) defaults to 0 dB, others default to -6 dB for headroom
-	if id == 1:
-		volume = 0.0
-	else:
-		volume = -6.0
+	volume = get_default_volume()
 
 
 # ============================================================================
@@ -351,6 +347,11 @@ func set_color(new_color : Color):
 	logger.debug("[%d] set_color %s routed_tracks=%d" % [id, color, routed_tracks.size()])
 	color_changed.emit(color)
 	_sync_color_to_paired_tracks(new_color)
+
+
+## Master (ID 1) defaults to 0 dB, other channels to -6 dB for headroom.
+func get_default_volume() -> float:
+	return 0.0 if id == 1 else -6.0
 
 
 func set_volume(value: float) -> void:

@@ -152,9 +152,10 @@ func _drag_bounds() -> Rect2:
 	return Rect2(Vector2.ZERO, size)
 
 
-## Pick what a press grabs: a handle within the grab radius, both handles when it lands on
-## the fill or on overlapped handles, and the nearest handle anywhere else.
-func _begin_drag(pos: Vector2, alt: bool) -> void:
+## What a press at local `pos` grabs: a handle within the grab radius, both handles when it
+## lands on the fill or on overlapped handles (PENDING with `alt`), and the nearest handle
+## anywhere else. Hover readouts use it too, so they name what a press would move.
+func pick_at(pos: Vector2, alt := false) -> DragMode:
 	var a_x := _value_to_x(a_value)
 	var b_x := _value_to_x(b_value)
 	var dist_a := absf(pos.x - a_x)
@@ -164,15 +165,23 @@ func _begin_drag(pos: Vector2, alt: bool) -> void:
 	var on_fill := pos.x > minf(a_x, b_x) and pos.x < maxf(a_x, b_x)
 
 	if near_a and near_b:
-		_drag_mode = DragMode.PENDING if alt else DragMode.BOTH
-	elif near_a:
-		_drag_mode = DragMode.A_VALUE
-	elif near_b:
-		_drag_mode = DragMode.B_VALUE
-	elif on_fill:
-		_drag_mode = DragMode.BOTH
-	else:
-		_drag_mode = DragMode.A_VALUE if dist_a < dist_b else DragMode.B_VALUE
+		return DragMode.PENDING if alt else DragMode.BOTH
+	if near_a:
+		return DragMode.A_VALUE
+	if near_b:
+		return DragMode.B_VALUE
+	if on_fill:
+		return DragMode.BOTH
+	return DragMode.A_VALUE if dist_a < dist_b else DragMode.B_VALUE
+
+
+## The active drag, or NONE between drags.
+func get_drag_mode() -> DragMode:
+	return _drag_mode
+
+
+func _begin_drag(pos: Vector2, alt: bool) -> void:
+	_drag_mode = pick_at(pos, alt)
 
 	_drag_start_a = a_value
 	_drag_start_b = b_value

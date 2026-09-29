@@ -360,13 +360,6 @@ bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
 fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
 
-[node name="ValueLabel" type="Label" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=657729378]
-visible = false
-layout_mode = 2
-text = "C"
-horizontal_alignment = 1
-vertical_alignment = 1
-
 [node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=506406282]
 oversampling_override = 1.0
 title = "Pan Mode"

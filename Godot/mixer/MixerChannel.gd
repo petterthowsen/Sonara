@@ -153,8 +153,8 @@ func _ready():
 	if bottom_volume_slider:
 		bottom_volume_slider.value_changed.connect(_on_volume_changed)
 	
-	big_meter.volume_changed.connect(_on_volume_changed)
-	bottom_small_meter.volume_changed.connect(_on_volume_changed)
+	big_meter.volume_changed.connect(func(v: float) -> void: _on_volume_changed(v, big_meter.last_edit_kind))
+	bottom_small_meter.volume_changed.connect(func(v: float) -> void: _on_volume_changed(v, bottom_small_meter.last_edit_kind))
 	_setup_peak_readout()
 	
 	mouse_entered.connect(_on_mouse_entered)
@@ -275,6 +275,8 @@ func _update_from_channel() -> void:
 
 	# Update volume slider and meter faders (scene default is -6 dB for regular channels)
 	_apply_volume_to_ui(channel.volume)
+	big_meter.volume_default_db = channel.get_default_volume()
+	bottom_small_meter.volume_default_db = channel.get_default_volume()
 
 	# Update meter (peak levels)
 	big_meter.set_peak_levels(channel.peak_left, channel.peak_right)
@@ -309,11 +311,19 @@ func _on_arm_toggled(pressed: bool) -> void:
 		channel.set_record_armed(pressed)
 
 
-func _on_volume_changed(value: float) -> void:
-	if channel:
-		var old_volume := channel.volume
-		channel.set_volume(value)
-		HistoryUtil.record_property("Set Volume", channel, "set_volume", old_volume, channel.volume, true)
+## Fader, meter or typed volume. With several channels selected the edit applies to all of them.
+func _on_volume_changed(value: float, kind := ValueEditKind.Kind.DRAG) -> void:
+	if channel == null:
+		return
+	var old_volume := channel.volume
+	var peers := ChannelMultiEdit.peers_of(channel, self)
+	if kind == ValueEditKind.Kind.RESET:
+		value = channel.get_default_volume()
+	channel.set_volume(value)
+	if peers.is_empty():
+		HistoryUtil.record_property("Set Volume", channel, "set_volume", old_volume, channel.volume, kind != ValueEditKind.Kind.RESET)
+	else:
+		ChannelMultiEdit.apply_volume(channel, old_volume, peers, kind)
 
 
 func _on_mouse_entered() -> void:

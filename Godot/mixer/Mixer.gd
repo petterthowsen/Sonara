@@ -73,6 +73,28 @@ signal channel_selected(channel : Channel)
 signal channel_deselected(channel : Channel)
 signal channel_focused(channel : Channel)
 
+
+## The Mixer that owns `node`, or null.
+static func of(node: Node) -> Mixer:
+	while node:
+		if node is Mixer:
+			return node as Mixer
+		node = node.get_parent()
+	return null
+
+
+## The other selected channels an edit to `channel` should also apply to (mixer multi-edit).
+## Empty unless `channel` is one of several selected channels.
+func get_multi_edit_peers(channel: Channel) -> Array[Channel]:
+	var peers: Array[Channel] = []
+	if selection.size() < 2 or not selection.has(channel):
+		return peers
+	for ch in selection:
+		if ch != channel:
+			peers.append(ch)
+	return peers
+
+
 func _ready():
 	# clear
 	_clear_all_channels()

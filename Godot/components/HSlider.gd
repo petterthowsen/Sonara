@@ -3,6 +3,10 @@
 class_name HorSlider extends Control
 
 signal value_changed(new_value: float)
+## How the change behind the latest `value_changed` was made; read it inside the handler.
+var last_edit_kind := ValueEditKind.Kind.DRAG
+## Emitted on Ctrl/Cmd-click even when the value is already the default (see `value_changed`).
+signal reset_requested
 signal drag_started
 signal drag_ended
 
@@ -162,7 +166,10 @@ func _gui_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if event.is_command_or_control_pressed():
+					last_edit_kind = ValueEditKind.Kind.RESET
 					value = default_value
+					last_edit_kind = ValueEditKind.Kind.DRAG
+					reset_requested.emit()
 					_dragging = false
 					accept_event()
 					return

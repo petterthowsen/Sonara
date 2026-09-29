@@ -38,6 +38,11 @@ overlays and drop indicators (see `godot-drag-and-drop.md`).
   `fit_to_longest_item = false` and trim the selected item.
 - Place a value tooltip on the side away from the caption. Captions go above in Simple View and
   below in the sends panel, so the readout never covers the name (`RotaryKnob.tooltip_side`).
+- A readout drawn over its own control uses a plain `ValueTooltip` (`set_plain(true)`, then
+  `place_over`): no panel, outlined and shadowed text. The mixer pan strip does this. On hover in
+  Stereo Combined it shows only the part under the pointer (`HDualSlider.pick_at`): the width
+  (`W: 25`) on a handle or the empty space beside one, the position over the fill. Pan values are
+  signed percents (`-30`, `0`, `80`), not L/R.
 - Keep everything inside the control's rect. The EnvelopeControl insets its curve by the
   handle radius, so handles at min or max don't draw outside.
 
@@ -49,8 +54,19 @@ Every value control should behave the same way, so users learn it once:
 | Drag | Change the value | all |
 | Shift + drag | Fine adjustment (0.15×), with no jump when Shift is pressed or released mid-drag | all (knob via relative motion, the rest via `FineDrag`) |
 | Double-click | Type an exact value | RotaryKnob, VSlider, Meter fader, Volumeter |
-| Ctrl/Cmd + click | Reset to default | RotaryKnob, HorSlider |
+| Ctrl/Cmd + click | Reset to default | RotaryKnob, HorSlider, Meter fader |
 | Right-click | Context menu (mode, options) | PanControl, send knobs |
+
+RotaryKnob, HorSlider and Meter report how the last change was made in `last_edit_kind`
+(`ValueEditKind`: `DRAG`, `TYPED`, `RESET`). Read it inside the `value_changed` handler when a
+drag and an absolute entry should behave differently (mixer multi-edit does). Knob and slider
+also emit `reset_requested` on every Ctrl/Cmd-click, even when already at the default.
+
+**Mixer multi-edit.** With several strips selected, editing volume, pan or a send level on one
+selected strip applies to all (`mixer/ChannelMultiEdit.gd`): a drag moves the others by the same
+amount, a typed value sets them all, Ctrl/Cmd-click resets each to its own default. One gesture is
+one undo step (`ChannelsPropertyCommand`). A control gets the peers from
+`Mixer.get_multi_edit_peers()`, so a control outside a Mixer edits only its own channel.
 
 A new control should support the whole row, not just drag. Gaps in the right-hand column are
 backlog, not intent.
@@ -92,7 +108,7 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | Component | Use it for |
 |---|---|
 | `FineDrag.gd` | Pointer tracking with Shift precision for any drag control |
-| `ValueTooltip.gd` | Floating value readout: `ValueTooltip.attach(host)`, then `place_above` / `place_below` / `place_right_of` |
+| `ValueTooltip.gd` | Floating value readout: `ValueTooltip.attach(host)`, then `place_above` / `place_below` / `place_right_of`, or `set_plain(true)` + `place_over` for text over the control |
 | `LabelOverlay.gd` | Full text of a trimmed Label on hover: `LabelOverlay.attach(label, [hover sources])` |
 | `FloatingValueEditor.gd` | Double-click value entry |
 | `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |

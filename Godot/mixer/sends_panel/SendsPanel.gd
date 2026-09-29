@@ -201,7 +201,10 @@ func _create_send_control(bus_channel: Channel, send_config: SendConfig) -> void
 	)
 	control.set_pre_fader_display(send_config != null and send_config.pre_fader)
 
-	control.knob.value_changed.connect(_on_send_knob_changed.bind(bus_channel.id))
+	var knob := control.knob
+	var bus_id := bus_channel.id
+	knob.value_changed.connect(func(value: float) -> void: _on_send_knob_changed(value, bus_id, knob.last_edit_kind))
+	knob.reset_requested.connect(_on_send_knob_reset.bind(bus_id))
 	control.knob.gui_input.connect(_on_send_knob_gui_input.bind(bus_channel.id, control.knob))
 
 	var send_control := control
@@ -214,12 +217,14 @@ func _create_send_control(bus_channel: Channel, send_config: SendConfig) -> void
 	flow_container.add_child(control)
 
 
-## Handle send knob value changed.
-func _on_send_knob_changed(value: float, target_channel_id: int) -> void:
+## Handle send knob value changed. With several channels selected the edit applies to all of
+## their sends to this bus (see ChannelMultiEdit).
+func _on_send_knob_changed(value: float, target_channel_id: int, kind := ValueEditKind.Kind.DRAG) -> void:
 	if not channel:
 		return
 
 	var amount_db := value
+	var old_db := ChannelMultiEdit.send_db(channel, target_channel_id)
 
 	var control := _find_send_control(target_channel_id)
 	if control and control.bus_label:
@@ -230,6 +235,24 @@ func _on_send_knob_changed(value: float, target_channel_id: int) -> void:
 		channel.add_send(target_channel_id, amount_db, false)
 	else:
 		channel.set_send_amount(target_channel_id, amount_db)
+
+	var peers := ChannelMultiEdit.peers_of(channel, self)
+	if not peers.is_empty():
+		ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, amount_db, peers, kind)
+
+
+## Ctrl/Cmd-click on a send knob. With a multi-selection, every selected channel's send to this
+## bus resets, even when this one already was (then value_changed never fired).
+func _on_send_knob_reset(target_channel_id: int) -> void:
+	if not channel:
+		return
+	var peers := ChannelMultiEdit.peers_of(channel, self)
+	if peers.is_empty():
+		return
+	var old_db := ChannelMultiEdit.send_db(channel, target_channel_id)
+	if channel.get_send(target_channel_id):
+		channel.set_send_amount(target_channel_id, MIN_SEND_DB)
+	ChannelMultiEdit.apply_send(channel, target_channel_id, old_db, MIN_SEND_DB, peers, ValueEditKind.Kind.RESET)
 
 
 ## Right-click on a send knob opens its options menu.

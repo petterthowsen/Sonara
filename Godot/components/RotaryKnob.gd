@@ -3,6 +3,10 @@
 class_name RotaryKnob extends Control
 
 signal value_changed(new_value: float)
+## How the change behind the latest `value_changed` was made; read it inside the handler.
+var last_edit_kind := ValueEditKind.Kind.DRAG
+## Emitted on Ctrl/Cmd-click even when the value is already the default (see `value_changed`).
+signal reset_requested
 
 var _value := 0.5
 var _dragging := false
@@ -198,7 +202,10 @@ func _gui_input(event: InputEvent) -> void:
 				if mb.double_click:
 					_start_editing()
 				elif mb.ctrl_pressed:
+					last_edit_kind = ValueEditKind.Kind.RESET
 					value = value_default
+					last_edit_kind = ValueEditKind.Kind.DRAG
+					reset_requested.emit()
 				else:
 					_dragging = true
 					_refresh_tooltip()
@@ -226,7 +233,9 @@ func _start_editing() -> void:
 func _on_edit_committed(text: String) -> void:
 	var trimmed := text.strip_edges()
 	if trimmed.is_valid_float():
+		last_edit_kind = ValueEditKind.Kind.TYPED
 		value = float(trimmed)
+		last_edit_kind = ValueEditKind.Kind.DRAG
 
 
 func _on_mouse_entered() -> void:
