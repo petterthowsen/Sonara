@@ -8,7 +8,6 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 ### Next up
 - Bus tracks in the arranger: shown pinned at the bottom, with a toggle to show/hide them
 - Automation lanes on buses: volume, pan, device parameters
-- Tempo automation lane at the top, together with the ruler UI
 - Time signature changes
 - Plugin state persistence: CLAP state isn't saved in `.sonara` projects yet. The engine has `/plugin/save_state` and `/plugin/load_state`, but Godot never calls them
 
@@ -16,8 +15,11 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 - Key signature as root key + scale
 
 ### Working
+- Tempo automation lane and tempo map playback (spec `docs/specs/008-tempo-map-engine/`). Verified live: the engine clock, MIDI and audio clips follow ramps, the time ruler and tempo field follow the map, and devices and CLAP plugins receive transport info. `cargo test` and `Godot/tests/run_all.sh` pass.
 
 ### Not Working / Not verified
+- Audio clips now seek and loop on their own recorded-BPM timeline. Clips whose recorded BPM differs from the project tempo sit differently than before (the old seek offset was wrong for them).
+- Tempo map is resent on every (re)connect, but that path wasn't tested with a mid-session engine restart.
 
 
 ## Audio thread stalls (shared `Arc<Mutex<EngineState>>`)
