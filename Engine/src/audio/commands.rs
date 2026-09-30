@@ -13,6 +13,7 @@ use super::block_clock::BlockClock;
 use super::devices::DevicePath;
 use super::render_scratch::RenderScratch;
 use super::tempo_map::TempoMap;
+use super::time_signature_map::TimeSignatureMap;
 use super::types::*;
 
 /// Parameter information for builtin devices
@@ -59,6 +60,8 @@ pub enum AudioCommand {
     SetTempo(f32),
     /// Whole tempo map as `(tick, bpm)` points; empty clears it.
     SetTempoMap(Vec<(Tick, f32)>),
+    /// `(bar, numerator, denominator)` changes, 1-based bars. Replaces the whole map.
+    SetTimeSignatureMap(Vec<(u32, u16, u16)>),
     SetTimeSignature(i32, i32),
 
     // Channel management
@@ -729,6 +732,7 @@ pub struct EngineState {
     pub render_scratch: RenderScratch,
     /// Tempo automation; empty means the static `settings.tempo` applies.
     pub tempo_map: TempoMap,
+    pub time_signature_map: TimeSignatureMap,
     pub is_playing: AtomicBool,
     pub current_tick: AtomicI64,
     /// Fractional tick accumulator carried across buffers for sample-accurate scheduling (stored as fixed-point * 1e9)
@@ -820,6 +824,7 @@ impl Default for EngineState {
             clips: HashMap::new(),
             render_scratch: RenderScratch::default(),
             tempo_map: TempoMap::default(),
+            time_signature_map: TimeSignatureMap::default(),
             is_playing: AtomicBool::new(false),
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
@@ -2572,6 +2577,7 @@ pub fn process_command(
         | AudioCommand::RemoveDeviceFromChannel { .. }
         | AudioCommand::ClearChannelDevices { .. }
         | AudioCommand::SetTempoMap(_)
+        | AudioCommand::SetTimeSignatureMap(_)
         | AudioCommand::ReloadDevice { .. }
         | AudioCommand::SetPluginHosting { .. }
         | AudioCommand::SetAudioConfig { .. }

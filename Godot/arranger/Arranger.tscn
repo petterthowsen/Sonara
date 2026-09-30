@@ -17,6 +17,7 @@
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="14_autov"]
 [ext_resource type="Texture2D" uid="uid://y8t6htgojiid" path="res://assets/icons/route.svg" id="15_routv"]
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
+[ext_resource type="Script" path="res://arranger/ruler/TimeSignatureTrack.gd" id="17_tsig"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -144,6 +145,12 @@ tooltip_text = "Tempo Track"
 toggle_mode = true
 icon = ExtResource("5_6v1c6")
 
+[node name="TimeSignatureToggle" type="Button" parent="VSplitContainer/ArrangeTop/HBox/TracklistHeader/VBox/RulerButtons"]
+layout_mode = 2
+tooltip_text = "Time Signature Track"
+toggle_mode = true
+text = "TS"
+
 [node name="TimelineHeader" type="PanelContainer" parent="VSplitContainer/ArrangeTop/HBox" unique_id=612027961]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -175,6 +182,13 @@ custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 script = ExtResource("2_dtx23")
 enable_time_range_gestures = true
+
+[node name="TimeSignatureTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox"]
+visible = false
+custom_minimum_size = Vector2(0, 30)
+clip_contents = true
+layout_mode = 2
+script = ExtResource("17_tsig")
 
 [node name="TempoTrack" type="Control" parent="VSplitContainer/ArrangeTop/HBox/TimelineHeader/VBox" unique_id=1400000001]
 visible = false

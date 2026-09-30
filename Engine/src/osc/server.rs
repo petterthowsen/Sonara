@@ -724,6 +724,15 @@ impl OscServer {
                 }
                 command_tx.send(AudioCommand::SetTempoMap(points))?;
             }
+            ["transport", "time_signature_map"] => {
+                let (changes, dropped) = parse_time_signature_map_args(args);
+                if dropped {
+                    warn!(
+                        "/transport/time_signature_map: dropped malformed or out-of-range entries"
+                    );
+                }
+                command_tx.send(AudioCommand::SetTimeSignatureMap(changes))?;
+            }
             ["transport", "time_signature"] => {
                 if let (Some(OscType::Int(num)), Some(OscType::Int(den))) =
                     (args.get(0), args.get(1))
@@ -2566,6 +2575,34 @@ fn parse_tempo_map_args(args: &[OscType]) -> (Vec<(i64, f32)>, bool) {
     (points, dropped)
 }
 
+/// Parse `/transport/time_signature_map` args (`i:bar, i:numerator, i:denominator` triples).
+/// Out-of-range triples are dropped, duplicate bars keep the last, bar order is kept. The flag is
+/// true when anything was dropped.
+fn parse_time_signature_map_args(args: &[OscType]) -> (Vec<(u32, u16, u16)>, bool) {
+    let mut changes: Vec<(u32, u16, u16)> = Vec::with_capacity(args.len() / 3);
+    let mut dropped = args.len() % 3 != 0;
+    for triple in args.chunks_exact(3) {
+        let (OscType::Int(bar), OscType::Int(num), OscType::Int(den)) =
+            (&triple[0], &triple[1], &triple[2])
+        else {
+            dropped = true;
+            continue;
+        };
+        let in_range =
+            *bar >= 2 && (1..=32).contains(num) && matches!(*den, 1 | 2 | 4 | 8 | 16 | 32);
+        if !in_range {
+            dropped = true;
+            continue;
+        }
+        let entry = (*bar as u32, *num as u16, *den as u16);
+        match changes.iter_mut().find(|c| c.0 == entry.0) {
+            Some(existing) => *existing = entry,
+            None => changes.push(entry),
+        }
+    }
+    (changes, dropped)
+}
+
 fn parse_automation_point(args: &[OscType]) -> Option<AutomationPoint> {
     let (
         Some(OscType::Int(point_id)),
@@ -2786,6 +2823,24 @@ mod tests {
             parse_tempo_map_args(&[OscType::Int(0), OscType::Float(90.0), OscType::Int(5)]);
         assert_eq!(points, vec![(0, 90.0)]);
         assert!(dropped);
+    }
+
+    #[test]
+    fn parse_time_signature_map_args_filters() {
+        let ints = |v: &[i32]| v.iter().map(|i| OscType::Int(*i)).collect::<Vec<_>>();
+        let (c, dropped) = parse_time_signature_map_args(&ints(&[3, 7, 8, 5, 3, 4]));
+        assert_eq!(c, vec![(3, 7, 8), (5, 3, 4)]);
+        assert!(!dropped);
+
+        let (c, dropped) =
+            parse_time_signature_map_args(&ints(&[1, 3, 4, 4, 0, 4, 4, 4, 3, 6, 33, 4]));
+        assert!(c.is_empty() && dropped);
+
+        let (c, _) = parse_time_signature_map_args(&ints(&[3, 7, 8, 3, 5, 4]));
+        assert_eq!(c, vec![(3, 5, 4)]);
+
+        let (c, dropped) = parse_time_signature_map_args(&[]);
+        assert!(c.is_empty() && !dropped);
     }
 
     #[test]

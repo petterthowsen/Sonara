@@ -26,6 +26,7 @@ use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::pipewire::GraphInfo;
 use super::stream::{StreamControl, StreamRequest};
 use super::tempo_map::TempoMap;
+use super::time_signature_map::TimeSignatureMap;
 use super::types::{ChannelId, Tick};
 
 mod audio_config;
@@ -787,6 +788,7 @@ impl CommandWorker {
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),
             AudioCommand::SetTempoMap(points) => self.set_tempo_map(points),
+            AudioCommand::SetTimeSignatureMap(changes) => self.set_time_signature_map(changes),
             AudioCommand::SetDeviceActive {
                 channel_id,
                 device_path,
@@ -1049,6 +1051,15 @@ impl CommandWorker {
         info!("Tempo map set: {} points", count);
     }
 
+    /// Build a time signature map off the lock, swap it in, and drop the old one after unlocking.
+    fn set_time_signature_map(&self, changes: Vec<(u32, u16, u16)>) {
+        let map = TimeSignatureMap::from_changes(changes);
+        let count = map.changes().len();
+        let old = std::mem::replace(&mut self.lock_state().time_signature_map, map);
+        drop(old);
+        info!("Time signature map set: {} changes", count);
+    }
+
     /// Swap out all channels, tracks and clips under the lock and drop them afterwards.
     fn clear_project(&self) {
         let removed = {
@@ -1061,6 +1072,7 @@ impl CommandWorker {
                 std::mem::take(&mut state.tracks),
                 std::mem::take(&mut state.clips),
                 std::mem::take(&mut state.tempo_map),
+                std::mem::take(&mut state.time_signature_map),
             )
         };
         drop(removed);

@@ -190,6 +190,30 @@ func _on_editor_time_signature_changed(numerator : int, denominator : int):
 	# time-signature change.
 	grid_helper.time_numerator = numerator
 	grid_helper.time_denominator = denominator
+	_apply_signature_context()
+
+
+## Point the grid at the project's time signature changes. Track mode shows song ticks, so it
+## follows the map. Clip mode shows clip-local ticks (bar 1 is the clip start), so it uses the
+## signature in effect where the clip starts.
+func _apply_signature_context() -> void:
+	var project := _project()
+	if project == null:
+		return
+	var map := project.time_signature_map
+	if not map.changed.is_connected(_apply_signature_context):
+		map.changed.connect(_apply_signature_context)
+	var num := project.time_numerator
+	var den := project.time_denominator
+	if track_mode or bound_clip_instance == null:
+		grid_helper.time_signature_map = map
+	else:
+		grid_helper.time_signature_map = null
+		var sig := map.signature_at_tick(bound_clip_instance.start_ticks, num, den, project.ppq)
+		num = sig.x
+		den = sig.y
+	grid_helper.time_numerator = num
+	grid_helper.time_denominator = den
 
 func _on_visibility_changed():
 	"""Handle visibility changes - bind pending clips when becoming visible."""
@@ -252,6 +276,7 @@ func _bind_track_mode(from_selection: bool = false):
 	"""Bind to track-mode: every instrument track listed, the visible ones drawn."""
 	log.info("  - Entering TRACK-MODE (song-relative positioning)")
 	_update_mode_ui()
+	_apply_signature_context()
 	log.info("  - Track-mode tracks: %d" % [selected_tracks.size()])
 
 	_suppress_toggle_apply = true
@@ -394,6 +419,7 @@ func _bind_clip_mode():
 			log.info("  - Clip's track: '%s'" % [clip_inst.track.name])
 		midi_editor.bind_to_clip_instance(clip_inst)
 		bound_clip_instance = clip_inst
+		_apply_signature_context()
 		_update_clip_name()
 	call_deferred("_apply_drum_view_preference")
 	_mark_ruler_context_dirty()

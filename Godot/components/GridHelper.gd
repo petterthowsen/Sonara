@@ -35,6 +35,20 @@ var tempo_map: TempoMap = null:
 			tempo_map.changed.connect(changed.emit)
 		changed.emit()
 
+## Time signature changes after the base signature. When set, bars, beats and snapping follow it.
+var time_signature_map: TimeSignatureMap = null:
+	set(m):
+		if time_signature_map == m:
+			return
+		if time_signature_map != null and time_signature_map.changed.is_connected(changed.emit):
+			time_signature_map.changed.disconnect(changed.emit)
+		time_signature_map = m
+		if time_signature_map != null:
+			time_signature_map.changed.connect(changed.emit)
+		changed.emit()
+
+var _empty_signature_map := TimeSignatureMap.new()
+
 @export var pixels_per_beat: float = 64.0:
 	set(p):
 		if pixels_per_beat != p:
@@ -83,7 +97,9 @@ func _on_setting_changed(key: String, value) -> void:
 		min_line_spacing = float(value)
 
 static func from_project(p : Project) -> GridHelper:
-	return new(p.ppq, p.time_numerator, p.time_denominator, p.tempo)
+	var grid := new(p.ppq, p.time_numerator, p.time_denominator, p.tempo)
+	grid.time_signature_map = p.time_signature_map
+	return grid
 
 # ============================================================================
 # GRID INTERVAL CALCULATION
@@ -123,21 +139,44 @@ func get_ticks_per_beat() -> int:
 	return beat_ticks(ppq, time_denominator)
 
 func ticks_to_bbt(ticks: int) -> Dictionary:
-	return bbt_of(ticks, ppq, time_numerator, time_denominator)
+	return _signature_map().bbt_at_tick(ticks, time_numerator, time_denominator, ppq)
+
+## The map in use: the project's, or an empty one (a single base-signature stretch).
+func _signature_map() -> TimeSignatureMap:
+	return time_signature_map if time_signature_map != null else _empty_signature_map
+
+## Stretches of constant signature (see TimeSignatureMap.segments). Read-only.
+func get_signature_segments() -> Array[Dictionary]:
+	return _signature_map().segments(time_numerator, time_denominator, ppq)
+
+func _segment_at(ticks: int) -> Dictionary:
+	var segs := get_signature_segments()
+	return segs[_signature_map().segment_index_at_tick(ticks, time_numerator, time_denominator, ppq)]
+
+## Ticks in one bar / beat at `ticks`, following the time signature changes.
+func get_ticks_per_bar_at(ticks: int) -> int:
+	return _segment_at(ticks)["bar_ticks"]
+
+func get_ticks_per_beat_at(ticks: int) -> int:
+	return _segment_at(ticks)["beat_ticks"]
 
 func get_snap_interval() -> int:
 	"""Get the current snap interval in ticks - matches finest visible grid line."""
+	return _snap_interval_for(get_ticks_per_beat(), get_ticks_per_bar())
+
+## Snap interval for the stretch containing `ticks`.
+func get_snap_interval_at(ticks: int) -> int:
+	var seg := _segment_at(ticks)
+	return _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
+
+func _snap_interval_for(beat: int, bar: int) -> int:
 	# Snap to the finest visible grid line
-	var subdivision_interval = get_subdivision_interval()
+	var subdivision_interval := _subdivision_for(beat)
 	if subdivision_interval > 0:
-		# If subdivisions are visible, snap to them
 		return subdivision_interval
-	elif beat_lines_visible():
-		# If beats are visible, snap to beats
-		return get_ticks_per_beat()
-	else:
-		# Otherwise snap to bars
-		return get_ticks_per_bar()
+	elif ticks_to_pixels(beat) >= min_line_spacing:
+		return beat
+	return bar
 
 ## True when beats are at least min_line_spacing apart on screen.
 func beat_lines_visible() -> bool:
@@ -145,10 +184,13 @@ func beat_lines_visible() -> bool:
 
 ## Finest 1/2, 1/4 or 1/8 beat subdivision that keeps lines min_line_spacing apart, or 0 for none.
 func get_subdivision_interval() -> int:
+	return _subdivision_for(get_ticks_per_beat())
+
+func _subdivision_for(beat: int) -> int:
 	for div in [8, 4, 2]:
 		@warning_ignore("integer_division")
 		var interval: int = maxi(1, ppq / div)
-		if interval < get_ticks_per_beat() and ticks_to_pixels(interval) >= min_line_spacing:
+		if interval < beat and ticks_to_pixels(interval) >= min_line_spacing:
 			return interval
 	return 0
 
@@ -157,18 +199,26 @@ func get_subdivision_interval() -> int:
 # ============================================================================
 
 func snap_ticks(ticks: int) -> int:
-	"""Snap ticks to the current grid interval."""
-	var interval = get_snap_interval()
+	"""Snap ticks to the grid interval of the signature stretch they are in. The result never
+	passes the next stretch's first bar line."""
+	var seg := _segment_at(ticks)
+	var interval := _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
 	if interval > 0:
+		var origin: int = seg["tick"]
 		# Use rounding instead of truncation for better snapping behavior
-		return roundi(float(ticks) / float(interval)) * interval
+		var snapped := origin + roundi(float(ticks - origin) / float(interval)) * interval
+		if seg["end_tick"] >= 0:
+			snapped = mini(snapped, seg["end_tick"])
+		return snapped
 	return ticks
 
-## Snap ticks down to the current grid interval (the grid line at or before `ticks`).
+## Snap ticks down to the grid interval (the grid line at or before `ticks`).
 func floor_ticks(ticks: int) -> int:
-	var interval := get_snap_interval()
+	var seg := _segment_at(ticks)
+	var interval := _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
 	if interval > 0:
-		return floori(float(ticks) / float(interval)) * interval
+		var origin: int = seg["tick"]
+		return origin + floori(float(ticks - origin) / float(interval)) * interval
 	return ticks
 
 func snap_pixels(pixels: float) -> float:
@@ -273,46 +323,51 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 	var start_ticks = pixels_to_ticks(start_x + scroll_offset)
 	var end_ticks = pixels_to_ticks(end_x + scroll_offset)
 	
-	var ticks_per_bar = get_ticks_per_bar()
-	var ticks_per_beat = get_ticks_per_beat()
-	var ticks_per_subdivision = get_subdivision_interval()
-	
-	# Generate bar lines
-	@warning_ignore("integer_division")
-	var first_bar_tick = (start_ticks / ticks_per_bar) * ticks_per_bar
-	@warning_ignore("integer_division")
-	var bar_number = 1 + (first_bar_tick / ticks_per_bar)
-	var tick = first_bar_tick
-	
-	while tick <= end_ticks:
-		var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-		lines.append(GridLine.new(x, GridLineType.BAR, bar_number))
-		tick += ticks_per_bar
-		bar_number += 1
-	
-	# Generate beat lines (skip bars)
-	if beat_lines_visible():
+	var segs := get_signature_segments()
+	for seg in segs:
+		var seg_start: int = seg["tick"]
+		var seg_end: int = seg["end_tick"]
+		if seg_end >= 0 and seg_end <= start_ticks:
+			continue
+		if seg_start > end_ticks:
+			break
+		# A bar line on seg_end belongs to the next stretch
+		var last_tick: int = end_ticks if seg_end < 0 else mini(end_ticks, seg_end - 1)
+		var first_tick: int = maxi(start_ticks, seg_start)
+		var ticks_per_bar: int = seg["bar_ticks"]
+		var ticks_per_beat: int = seg["beat_ticks"]
+
+		# Bar lines
 		@warning_ignore("integer_division")
-		var first_beat_tick = (start_ticks / ticks_per_beat) * ticks_per_beat
-		tick = first_beat_tick
-		
-		while tick <= end_ticks:
-			if (tick % ticks_per_bar) != 0:  # Skip if it's a bar line
-				var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-				lines.append(GridLine.new(x, GridLineType.BEAT))
-			tick += ticks_per_beat
-	
-	# Generate subdivision lines (skip bars and beats)
-	if ticks_per_subdivision > 0:
-		@warning_ignore("integer_division")
-		var first_sub_tick = (start_ticks / ticks_per_subdivision) * ticks_per_subdivision
-		tick = first_sub_tick
-		
-		while tick <= end_ticks:
-			# Skip if it's a bar or beat line
-			if (tick % ticks_per_bar) != 0 and (tick % ticks_per_beat) != 0:
-				var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-				lines.append(GridLine.new(x, GridLineType.SUBDIVISION))
-			tick += ticks_per_subdivision
-	
+		var first_bar_index: int = (first_tick - seg_start) / ticks_per_bar
+		var tick := seg_start + first_bar_index * ticks_per_bar
+		var bar_number: int = int(seg["bar"]) + first_bar_index
+		while tick <= last_tick:
+			var x = ticks_to_pixels(tick) - scroll_offset + offset_x
+			lines.append(GridLine.new(x, GridLineType.BAR, bar_number))
+			tick += ticks_per_bar
+			bar_number += 1
+
+		# Beat lines (skip bars)
+		if ticks_to_pixels(ticks_per_beat) >= min_line_spacing:
+			@warning_ignore("integer_division")
+			tick = seg_start + ((first_tick - seg_start) / ticks_per_beat) * ticks_per_beat
+			while tick <= last_tick:
+				if ((tick - seg_start) % ticks_per_bar) != 0:
+					var x = ticks_to_pixels(tick) - scroll_offset + offset_x
+					lines.append(GridLine.new(x, GridLineType.BEAT))
+				tick += ticks_per_beat
+
+		# Subdivision lines (skip bars and beats)
+		var ticks_per_subdivision := _subdivision_for(ticks_per_beat)
+		if ticks_per_subdivision > 0:
+			@warning_ignore("integer_division")
+			tick = seg_start + ((first_tick - seg_start) / ticks_per_subdivision) * ticks_per_subdivision
+			while tick <= last_tick:
+				var rel := tick - seg_start
+				if (rel % ticks_per_bar) != 0 and (rel % ticks_per_beat) != 0:
+					var x = ticks_to_pixels(tick) - scroll_offset + offset_x
+					lines.append(GridLine.new(x, GridLineType.SUBDIVISION))
+				tick += ticks_per_subdivision
+
 	return lines

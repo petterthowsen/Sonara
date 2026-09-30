@@ -6,14 +6,15 @@
 Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/sonara-gaps.md`.
 
 ### Next up
-- Bus tracks in the arranger: shown pinned at the bottom, with a toggle to show/hide them
-- Automation lanes on buses: volume, pan, device parameters
-- Time signature changes
+
 
 ### Later
-- Key signature as root key + scale
+- Key signature changes, root key + scale, together with ruler in arranger.
+- Bus tracks in the arranger: shown pinned at the bottom, with a toggle to show/hide them.
+- Automation lanes on buses: volume, pan, device parameters
 
 ### Working
+- Time signature changes (spec `docs/specs/009-time-signature-map/`): engine map + `/transport/time_signature_map`, Godot `TimeSignatureMap`, segment-based grid and snapping, arranger lane (add, edit, drag, delete, undo). `cargo test` and the Godot tests pass. Not yet checked live: playing across a change with a tempo-synced CLAP plugin, save/reopen in the app, the lane UX by hand.
 - Tempo automation lane and tempo map playback (spec `docs/specs/008-tempo-map-engine/`). Verified live: the engine clock, MIDI and audio clips follow ramps, the time ruler and tempo field follow the map, and devices and CLAP plugins receive transport info. `cargo test` and `Godot/tests/run_all.sh` pass.
 
 ### Not Working / Not verified

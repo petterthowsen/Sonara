@@ -65,6 +65,7 @@ pub fn process_audio(
     // Devices see the transport every block, playing or not
     let transport = Transport::at(
         &state.tempo_map,
+        &state.time_signature_map,
         &state.settings,
         start_tick as f64 + acc,
         sample_rate,

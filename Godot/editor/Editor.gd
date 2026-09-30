@@ -373,6 +373,8 @@ func open_project(p: Project, path: String = "") -> void:
 
 	if not project.tempo_map.changed.is_connected(_update_transport_ui):
 		project.tempo_map.changed.connect(_update_transport_ui)
+	if not project.time_signature_map.changed.is_connected(_update_transport_ui):
+		project.time_signature_map.changed.connect(_update_transport_ui)
 
 	# Update UI state
 	_update_transport_ui()
@@ -410,6 +412,8 @@ func close_project() -> void:
 	project.disconnect_from_engine()
 	if project.tempo_map.changed.is_connected(_update_transport_ui):
 		project.tempo_map.changed.disconnect(_update_transport_ui)
+	if project.time_signature_map.changed.is_connected(_update_transport_ui):
+		project.time_signature_map.changed.disconnect(_update_transport_ui)
 
 	project = null
 	project_path = ""
@@ -840,7 +844,7 @@ func _update_transport_ui() -> void:
 	
 	# Update position display
 	if transport_position_label and project:
-		var bbt = GridHelper.bbt_of(playhead_ticks, project.ppq, project.time_numerator, project.time_denominator)
+		var bbt = project.time_signature_map.bbt_at_tick(playhead_ticks, project.time_numerator, project.time_denominator, project.ppq)
 		transport_position_label.text = "%d.%d.%d.%03d" % [bbt.bar, bbt.beat, bbt.sixteenth, bbt.tick]
 	
 	# Update time display

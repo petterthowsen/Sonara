@@ -49,7 +49,17 @@ var tracks: Array[Track] = []
 var clips: Dictionary[String, Clip] = {}  # String (clip_id) → Clip (global clip pool)
 var markers: Array[SongMarker] = []
 ## Arranger header lane visibility (view state, saved with the project but not undoable).
-var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true, "tempo": false}
+var ruler_lanes: Dictionary = {"beats": true, "time": true, "markers": true, "tempo": false, "time_signature": false}
+## Time signature changes after the base `time_numerator` / `time_denominator`. Empty means the
+## base signature holds throughout.
+var time_signature_map: TimeSignatureMap = TimeSignatureMap.new():
+	set(map):
+		if time_signature_map != null and time_signature_map.changed.is_connected(_sync_time_signature_map_to_engine):
+			time_signature_map.changed.disconnect(_sync_time_signature_map_to_engine)
+		time_signature_map = map
+		if time_signature_map != null:
+			time_signature_map.changed.connect(_sync_time_signature_map_to_engine)
+		_sync_time_signature_map_to_engine()
 ## Tempo automation. Empty means the static `tempo` applies.
 var tempo_map: TempoMap = TempoMap.new():
 	set(map):
@@ -118,6 +128,7 @@ func is_connected_to_engine() -> bool:
 func _init():
 	"""Initialize project with master channel (always ID 1)."""
 	tempo_map.changed.connect(_sync_tempo_map_to_engine)  # the initializer doesn't run the setter
+	time_signature_map.changed.connect(_sync_time_signature_map_to_engine)
 	var master = Channel.new(1)  # Master is always ID 1
 	master.name = "Master"
 	master.output_channel_id = 1000  # Master routes to default output device (ID 1000)
@@ -198,6 +209,7 @@ func _on_engine_confirmed_connected() -> void:
 		track.connect_to_engine()
 
 	_sync_tempo_map_to_engine()
+	_sync_time_signature_map_to_engine()
 
 	logger.info("[Project] Connected to audio engine")
 	_schedule_device_state_resync()
@@ -218,6 +230,18 @@ func _sync_tempo_map_to_engine() -> void:
 	if tempo_map.points.size() > MAX_TEMPO_POINTS_WARN:
 		logger.warn("[Project] %d tempo points is a lot to send in one packet" % tempo_map.points.size())
 	AudioEngineOSC.send("/transport/tempo_map", args)
+
+
+## Send the whole time signature map to the engine (empty clears it). Called on every map change.
+func _sync_time_signature_map_to_engine() -> void:
+	if _connection_state != ConnectionState.CONNECTED or time_signature_map == null:
+		return
+	var args: Array = []
+	for c in time_signature_map.changes:
+		args.append(int(c["bar"]))
+		args.append(int(c["numerator"]))
+		args.append(int(c["denominator"]))
+	AudioEngineOSC.send("/transport/time_signature_map", args)
 
 
 ## Seconds after connecting before every device re-requests its state.
@@ -1711,6 +1735,7 @@ func to_json() -> Dictionary:
 		"markers": markers.map(func(m): return m.to_json()),
 		"ruler_lanes": ruler_lanes.duplicate(),
 		"tempo_map": tempo_map.to_json(),
+		"time_signature_map": time_signature_map.to_json(),
 		"arranger_view": arranger_view.duplicate(),
 		"clips": clips_array,
 		"channels": channels.map(func(c): return c.to_json()),
@@ -1740,6 +1765,7 @@ static func from_json(data: Dictionary) -> Project:
 	for lane in project.ruler_lanes:
 		project.ruler_lanes[lane] = bool(saved_lanes.get(lane, project.ruler_lanes[lane]))
 	project.tempo_map = TempoMap.from_json(data.get("tempo_map", []))
+	project.time_signature_map = TimeSignatureMap.from_json(data.get("time_signature_map", []))
 	var saved_view: Dictionary = data.get("arranger_view", {})
 	for key in project.arranger_view:
 		project.arranger_view[key] = bool(saved_view.get(key, true))

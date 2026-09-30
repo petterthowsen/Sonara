@@ -25,6 +25,7 @@ channel root, or `{position}/child/{i}/child/{j}/...` for devices nested in cont
 | `/transport/stop` | - | Stop and reset to 0 |
 | `/transport/seek` | `i:ticks` | Seek to tick position |
 | `/transport/tempo` | `f:bpm` | Set tempo |
+| `/transport/time_signature_map` | `i:bar, i:numerator, i:denominator, …` (triples) | Godot → engine. Replace the whole time signature map: changes after the base signature (`/transport/time_signature`), 1-based bars ≥ 2. No args clears it. Numerator 1–32 and denominator 1/2/4/8/16/32 only; invalid triples are dropped with a warning, and a repeated bar keeps the last |
 | `/transport/tempo_map` | `i:tick, f:bpm, …` (pairs) | Godot → engine. Replace the whole tempo map. No args clears it and the static tempo applies |
 | `/transport/time_signature` | `i:numerator, i:denominator` | Set time signature |
 

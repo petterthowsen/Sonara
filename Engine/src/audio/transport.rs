@@ -1,6 +1,7 @@
 //! Per-block transport snapshot handed to every device.
 
 use super::tempo_map::TempoMap;
+use super::time_signature_map::TimeSignatureMap;
 use super::types::ProjectSettings;
 
 /// Transport state at a block's first frame.
@@ -21,10 +22,11 @@ pub struct Transport {
 }
 
 impl Transport {
-    /// Snapshot at fractional tick `tick_pos`. The engine has one static time signature, so
-    /// bars are a fixed length.
+    /// Snapshot at fractional tick `tick_pos`. Bars and signature come from the time signature
+    /// map, falling back to the static project signature.
     pub fn at(
         map: &TempoMap,
+        sig_map: &TimeSignatureMap,
         settings: &ProjectSettings,
         tick_pos: f64,
         sample_rate: f32,
@@ -32,10 +34,12 @@ impl Transport {
     ) -> Self {
         let ppq = settings.ppq as f64;
         let fallback = settings.tempo as f64;
-        let num = settings.time_numerator.max(1);
-        let den = settings.time_denominator.max(1);
-        let ticks_per_bar = ppq * 4.0 * num as f64 / den as f64;
-        let bar = (tick_pos / ticks_per_bar).floor().max(0.0);
+        let seg = sig_map.segment_at(
+            tick_pos,
+            settings.time_numerator.max(1) as u16,
+            settings.time_denominator.max(1) as u16,
+            ppq,
+        );
         let tempo = map.bpm_at(tick_pos, fallback);
         let tempo_inc = if playing {
             let ticks_per_sample = tempo * ppq / (60.0 * sample_rate as f64);
@@ -49,10 +53,10 @@ impl Transport {
             playing,
             song_pos_beats: tick_pos / ppq,
             song_pos_seconds: map.seconds_at(tick_pos, fallback, ppq),
-            bar_start_beats: bar * ticks_per_bar / ppq,
-            bar_number: bar as i32,
-            time_sig_num: num as u16,
-            time_sig_den: den as u16,
+            bar_start_beats: seg.bar_start_tick / ppq,
+            bar_number: seg.bar_index as i32,
+            time_sig_num: seg.numerator,
+            time_sig_den: seg.denominator,
         }
     }
 }
@@ -65,6 +69,7 @@ mod tests {
     fn transport_at_tick_1920() {
         let t = Transport::at(
             &TempoMap::default(),
+            &TimeSignatureMap::default(),
             &ProjectSettings::default(),
             1920.0,
             48_000.0,
@@ -82,7 +87,14 @@ mod tests {
     #[test]
     fn transport_seconds_through_ramp() {
         let map = TempoMap::from_points(vec![(0, 120.0), (3840, 60.0)]);
-        let t = Transport::at(&map, &ProjectSettings::default(), 4800.0, 48_000.0, true);
+        let t = Transport::at(
+            &map,
+            &TimeSignatureMap::default(),
+            &ProjectSettings::default(),
+            4800.0,
+            48_000.0,
+            true,
+        );
         assert!((t.song_pos_beats - 5.0).abs() < 1e-12);
         assert!((t.song_pos_seconds - 3.773).abs() < 1e-3);
         assert_eq!(t.bar_number, 1);
@@ -92,7 +104,14 @@ mod tests {
     #[test]
     fn tempo_inc_on_ramp() {
         let map = TempoMap::from_points(vec![(0, 60.0), (3840, 120.0)]);
-        let t = Transport::at(&map, &ProjectSettings::default(), 0.0, 48_000.0, true);
+        let t = Transport::at(
+            &map,
+            &TimeSignatureMap::default(),
+            &ProjectSettings::default(),
+            0.0,
+            48_000.0,
+            true,
+        );
         assert_eq!(t.tempo, 60.0);
         assert!((t.tempo_inc - 3.125e-4).abs() < 1e-9);
     }
@@ -100,8 +119,38 @@ mod tests {
     #[test]
     fn stopped_has_zero_inc() {
         let map = TempoMap::from_points(vec![(0, 60.0), (3840, 120.0)]);
-        let t = Transport::at(&map, &ProjectSettings::default(), 0.0, 48_000.0, false);
+        let t = Transport::at(
+            &map,
+            &TimeSignatureMap::default(),
+            &ProjectSettings::default(),
+            0.0,
+            48_000.0,
+            false,
+        );
         assert_eq!(t.tempo_inc, 0.0);
         assert!(!t.playing);
+    }
+
+    #[test]
+    fn signature_change_moves_bar_maths() {
+        let sig = TimeSignatureMap::from_changes(vec![(3, 7, 8)]);
+        let at = |tick| {
+            Transport::at(
+                &TempoMap::default(),
+                &sig,
+                &ProjectSettings::default(),
+                tick,
+                48_000.0,
+                true,
+            )
+        };
+        let before = at(7679.0);
+        assert_eq!((before.time_sig_num, before.time_sig_den), (4, 4));
+        let t = at(7680.0);
+        assert_eq!((t.time_sig_num, t.time_sig_den), (7, 8));
+        assert_eq!(t.bar_number, 2);
+        assert_eq!(t.bar_start_beats, 8.0);
+        let later = at(8160.0);
+        assert_eq!((later.bar_number, later.bar_start_beats), (2, 8.0));
     }
 }
