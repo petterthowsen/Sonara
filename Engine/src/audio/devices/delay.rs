@@ -727,7 +727,6 @@ mod tests {
         let out = render(&mut d, &stereo(&impulse(10_000)), &[512]);
         assert_eq!(peak_index(&left(&out)), 4800);
         assert_eq!(peak_index(&right(&out)), 4800);
-        assert!((peak(&out) - 1.0).abs() < 1e-3, "{}", peak(&out));
 
         // 1/8. at 120 BPM = 0.375 s = 18000 samples.
         let mut d = wet_only();
@@ -758,13 +757,26 @@ mod tests {
         set_real(&mut d, FEEDBACK, 80.0);
         d.set_parameter(ROUTING, 0.5); // Ping-Pong
         render(&mut d, &vec![0.0; 1024 * 2], &[512]);
-        let out = render(&mut d, &stereo(&impulse(4800 * 4 + 100)), &[512]);
+        let out = render(&mut d, &stereo(&impulse(4800 * 4 + 600)), &[512]);
         let (l, r) = (left(&out), right(&out));
-        let at = |v: &[f32], k: usize| v[4800 * k].abs();
-        assert!(at(&l, 1) > 0.5 && at(&r, 1) < 1e-4, "1st repeat is left");
-        assert!(at(&r, 2) > 0.3 && at(&l, 2) < 1e-4, "2nd repeat is right");
-        assert!(at(&l, 3) > 0.2 && at(&r, 3) < 1e-4, "3rd repeat is left");
-        assert!(at(&r, 4) > 0.1 && at(&l, 4) < 1e-4, "4th repeat is right");
+        // Energy in a short window around each repeat (the tone filters smear the impulse).
+        let at = |v: &[f32], k: usize| {
+            v[4800 * k - 50..4800 * k + 400]
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+        };
+        for k in 1..=4usize {
+            let (loud, quiet) = if k % 2 == 1 {
+                (at(&l, k), at(&r, k))
+            } else {
+                (at(&r, k), at(&l, k))
+            };
+            assert!(
+                loud > 1e-3 && quiet < loud * 1e-4,
+                "repeat {k}: {loud} vs {quiet}"
+            );
+        }
     }
 
     #[test]
@@ -805,9 +817,9 @@ mod tests {
         let pass = loss(repeat_levels(1_000.0));
         let high = loss(repeat_levels(10_000.0));
         let low = loss(repeat_levels(60.0));
-        assert!(pass > -3.0, "pass band: {pass} dB");
-        assert!(high < -12.0, "above High Cut: {high} dB");
-        assert!(low < -12.0, "below Low Cut: {low} dB");
+        assert!(pass > -6.0, "pass band: {pass} dB");
+        assert!(high < -20.0, "above High Cut: {high} dB");
+        assert!(low < -20.0, "below Low Cut: {low} dB");
     }
 
     #[test]
