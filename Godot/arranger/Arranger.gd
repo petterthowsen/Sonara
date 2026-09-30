@@ -80,8 +80,8 @@ var pan_start_v_scroll: float = 0.0
 @export var scroll_smoothing: float = 0.5
 
 # Scroll speeds
-@export var scroll_speed_h: int = 50   # Horizontal scroll speed per wheel tick
-@export var scroll_speed_v: int = 30   # Vertical scroll speed per wheel tick
+@export var scroll_speed_h: int = 100  # Horizontal scroll speed per wheel tick
+@export var scroll_speed_v: int = 90   # Vertical scroll speed per wheel tick
 
 # Zoom sensitivity: multiplier for zoom speed (higher = faster zoom)
 @export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
@@ -93,6 +93,7 @@ var pan_start_v_scroll: float = 0.0
 
 # Target scroll positions for smooth scrolling
 var target_scroll_vertical: float = 0.0
+var _last_applied_v_scroll: int = 0  # value we last wrote; a different current value means the scrollbar was dragged
 var target_scroll_horizontal: float = 0.0
 
 # Target zoom values for smooth zooming
@@ -252,6 +253,12 @@ func _refresh_after_visible() -> void:
 
 func _process(delta: float) -> void:
 	"""Update ruler, playhead, smooth scrolling, and smooth zooming every frame."""
+	# The vertical scrollbar (drag/click) changes scroll_vertical behind our back; adopt it as the
+	# target, otherwise the lerp below drags the view back toward the stale target.
+	if v_scroll.scroll_vertical != _last_applied_v_scroll:
+		target_scroll_vertical = v_scroll.scroll_vertical
+		_last_applied_v_scroll = v_scroll.scroll_vertical
+
 	# Smooth scroll and zoom interpolation
 	if scroll_smoothing > 0:
 		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
@@ -262,6 +269,7 @@ func _process(delta: float) -> void:
 		if target_scroll_vertical > max_v_scroll:
 			target_scroll_vertical = max_v_scroll
 		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
+		_last_applied_v_scroll = v_scroll.scroll_vertical
 
 		# Lerp horizontal scroll
 		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
@@ -301,6 +309,7 @@ func _process(delta: float) -> void:
 	else:
 		# Instant scrolling/zooming when smoothing is disabled
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
+		_last_applied_v_scroll = v_scroll.scroll_vertical
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 		grid_helper.scroll_position = roundi(target_scroll_horizontal)
 

@@ -6,6 +6,9 @@ class_name MidiclipRenderer extends Control
 @export var min_pitch_range: int = 12
 ## Extra semitones above/below when notes already span more than min_pitch_range.
 @export var pitch_padding: int = 1
+## Notes are never drawn thinner than this. When the clip is too short for one lane per
+## semitone, neighbouring pitches are merged into shared lanes.
+@export var min_note_height: float = 2.0
 
 var clip_instance : ClipInstance:
 	set(c):
@@ -39,7 +42,9 @@ func _draw_midi():
 	var lowest: int = display.x
 	var highest: int = display.y
 	var pitch_count := highest - lowest + 1
-	var note_height := size.y / float(pitch_count)
+	# Collapse semitones into fewer lanes when each would be thinner than min_note_height.
+	var lane_count := clampi(int(size.y / min_note_height), 1, pitch_count)
+	var note_height := size.y / float(lane_count)
 
 	var clip_length_ticks = clip_instance.duration_ticks
 	var clip_offset = clip_instance.clip_offset
