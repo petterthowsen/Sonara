@@ -2,11 +2,15 @@
 //!
 //! - Four TPT one-pole low-passes in series, with resonance feeding the last stage back to the
 //!   input. The feedback is solved instantaneously for the *linear* ladder (so there is no
-//!   unit delay and the resonance frequency stays on the cutoff), and each stage input then goes
+//!   unit delay and the resonance frequency stays on the cutoff), and the summing node then goes
 //!   through a soft saturator, which is what gives the ladder its sound and keeps
-//!   self-oscillation bounded.
-//! - The saturator is the rational tanh from `svf::soft_clip` (within 2 %), scaled by
-//!   [`HEADROOM`] so a signal near full scale is only lightly compressed at Drive 0.
+//!   self-oscillation bounded. That is the classic nonlinear ZDF ladder: saturating every
+//!   integrator as well (the Huovilainen model) adds four more links and four divides to one
+//!   serial chain — measured 0.31 % of a core for the ladder alone against 0.20 % for this —
+//!   and put 2× Ladder stereo over the plan's CPU budget.
+//! - The saturator is a cubic soft clip, scaled by [`HEADROOM`] so a signal near full scale is
+//!   only lightly compressed at Drive 0. It is division- and branch-free: the one remaining
+//!   saturator sits in the middle of the per-sample chain, and a divide there is expensive.
 //! - `g` is the pole frequency, so the response is −12 dB at the cutoff for LP 24 and the
 //!   resonance peak sits on the cutoff.
 //! - HP, BP and Notch come from mixing the stage taps with binomial weights.
@@ -14,8 +18,6 @@
 //!   `1 + COMPENSATION·k`, which keeps the bass close to its unresonant level. The notch passes
 //!   the summing node at DC, so it has the same loss; a low-passed copy of the input, below the
 //!   cutoff, adds it back there without moving the notch.
-
-use super::svf::soft_clip;
 
 /// Feedback gain at full resonance. The linear ladder self-oscillates at 4.
 pub const MAX_K: f32 = 4.2;
@@ -55,22 +57,58 @@ impl LadderCoefs {
     /// `g` from `svf::cutoff_to_g` (the pole frequency), `resonance` in 0..1.
     #[inline]
     pub fn new(g: f32, resonance: f32) -> Self {
-        let big_g = g / (1.0 + g);
+        let mut coefs = Self::for_resonance(resonance);
+        coefs.set_pole(g);
+        coefs
+    }
+
+    /// The constants for a `resonance`; the pole values are left at zero for [`Self::set_pole`]
+    /// or [`Self::set_pole_parts`].
+    #[inline]
+    pub fn for_resonance(resonance: f32) -> Self {
         let k = resonance.clamp(0.0, 1.0) * MAX_K;
-        let g2 = big_g * big_g;
         Self {
-            big_g,
+            big_g: 0.0,
             k,
-            inv_fb: 1.0 / (1.0 + k * g2 * g2),
+            inv_fb: 0.0,
             comp: 1.0 + COMPENSATION * k,
             bass_gain: k / (1.0 + k),
         }
     }
+
+    /// The pole coefficient for a cutoff: `g/(1+g)`.
+    #[inline]
+    pub fn set_pole(&mut self, g: f32) {
+        let big_g = g / (1.0 + g);
+        let g2 = big_g * big_g;
+        self.big_g = big_g;
+        self.inv_fb = 1.0 / (1.0 + self.k * g2 * g2);
+    }
+
+    /// The two pole values for a cutoff, for a caller that interpolates them per sample
+    /// (dividing every sample costs more than interpolating does).
+    #[inline]
+    pub fn pole_parts(&self, g: f32) -> (f32, f32) {
+        let big_g = g / (1.0 + g);
+        let g2 = big_g * big_g;
+        (big_g, 1.0 / (1.0 + self.k * g2 * g2))
+    }
+
+    /// Set the pole from values a caller interpolated between two [`Self::pole_parts`].
+    #[inline]
+    pub fn set_pole_parts(&mut self, big_g: f32, inv_fb: f32) {
+        self.big_g = big_g;
+        self.inv_fb = inv_fb;
+    }
 }
 
+/// The ladder's soft saturator: the cubic `u − u³/3`, with `u` clamped to ±1 so it tops out at
+/// ±2/3. C¹ at the knee and within a few percent of the rational tanh below it, but with no
+/// division and no branch, which keeps the four stages' serial chain short.
 #[inline]
 fn sat(x: f32) -> f32 {
-    HEADROOM * soft_clip(x * (1.0 / HEADROOM))
+    let u = (x * (1.0 / HEADROOM)).clamp(-1.0, 1.0);
+    HEADROOM * u * (1.0 - u * u * (1.0 / 3.0))
 }
 
 /// One channel of the ladder.
@@ -104,9 +142,9 @@ impl Ladder {
         let u = sat(x - c.k * y4_estimate);
 
         let y1 = stage(&mut self.s[0], u, g);
-        let y2 = stage(&mut self.s[1], sat(y1), g);
-        let y3 = stage(&mut self.s[2], sat(y2), g);
-        let y4 = stage(&mut self.s[3], sat(y3), g);
+        let y2 = stage(&mut self.s[1], y1, g);
+        let y3 = stage(&mut self.s[2], y2, g);
+        let y4 = stage(&mut self.s[3], y3, g);
 
         match mode {
             LadderMode::Lp12 => y2 * c.comp,

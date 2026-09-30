@@ -68,7 +68,14 @@ const FILTER_MODULE: [ParamSpec; 6] = [
         Kind::Enum(CHARACTERS),
         0.0,
     ),
-    spec(CUTOFF, "Cutoff", "Filter", "Hz", log(20.0, 20_000.0), 20_000.0),
+    spec(
+        CUTOFF,
+        "Cutoff",
+        "Filter",
+        "Hz",
+        log(20.0, 20_000.0),
+        20_000.0,
+    ),
     spec(RESONANCE, "Resonance", "Filter", "", linear(0.0, 1.0), 0.2),
     spec(DRIVE, "Drive", "Filter", "dB", linear(0.0, 24.0), 0.0),
     spec(QUALITY, "Quality", "Filter", "", Kind::Enum(QUALITIES), 1.0),
@@ -90,7 +97,14 @@ const LFO_MODULE: [ParamSpec; 5] = [
 ];
 
 const ENV_MODULE: [ParamSpec; 3] = [
-    spec(ENV_AMOUNT, "Amount", "Envelope", "oct", linear(-4.0, 4.0), 0.0),
+    spec(
+        ENV_AMOUNT,
+        "Amount",
+        "Envelope",
+        "oct",
+        linear(-4.0, 4.0),
+        0.0,
+    ),
     spec(ENV_ATTACK, "Attack", "Envelope", "ms", log(0.1, 100.0), 5.0),
     spec(
         ENV_RELEASE,
@@ -250,6 +264,16 @@ impl Params {
 
 // === Filter core ===
 
+/// Per-sample filter coefficients for one frame of one channel.
+#[derive(Clone, Copy, Debug, Default)]
+struct Frame {
+    /// SVF pole coefficient, from `svf::cutoff_to_g`.
+    g: f32,
+    /// Ladder pole coefficient (`g/(1+g)`) and its feedback solution `1/(1 + k·G⁴)`.
+    big_g: f32,
+    inv_fb: f32,
+}
+
 /// Per-control-block values the per-sample filters read.
 #[derive(Clone, Copy, Debug, Default)]
 struct Ctl {
@@ -257,11 +281,31 @@ struct Ctl {
     /// oversampled rate.
     g_a: [f32; 2],
     g_b: [f32; 2],
+    /// The ladder's pole values for the same two cutoffs. Interpolating these beats dividing
+    /// per sample, and the interpolation error over 32 frames is far below the cutoff step.
+    big_a: [f32; 2],
+    big_b: [f32; 2],
+    inv_a: [f32; 2],
+    inv_b: [f32; 2],
+    /// The ladder's per-block constants (everything that doesn't depend on the cutoff).
+    ladder: LadderCoefs,
     resonance: f32,
     /// Clean's bass-compensation coefficient, per channel.
     comp_coef: [f32; 2],
     drive_gain: f32,
     drive_blend: f32,
+}
+
+impl Ctl {
+    /// Interpolated coefficients `t` of the way through the control block, for one channel.
+    #[inline]
+    fn frame(&self, ch: usize, t: f32) -> Frame {
+        Frame {
+            g: self.g_a[ch] + (self.g_b[ch] - self.g_a[ch]) * t,
+            big_g: self.big_a[ch] + (self.big_b[ch] - self.big_a[ch]) * t,
+            inv_fb: self.inv_a[ch] + (self.inv_b[ch] - self.inv_a[ch]) * t,
+        }
+    }
 }
 
 /// One complete filter (both characters' state, for both channels) for a type and character.
@@ -296,13 +340,14 @@ impl Core {
     }
 
     #[inline]
-    fn tick(&mut self, ch: usize, x: f32, g: f32, ctl: &Ctl) -> f32 {
+    fn tick(&mut self, ch: usize, x: f32, frame: &Frame, ctl: &Ctl) -> f32 {
         if self.ladder {
-            let coefs = LadderCoefs::new(g, ctl.resonance);
+            let mut coefs = ctl.ladder;
+            coefs.set_pole_parts(frame.big_g, frame.inv_fb);
             self.lad[ch].process(x, self.ty.ladder(), &coefs)
         } else {
             let mode = self.ty.svf();
-            let coefs = SvfCoefs::new(g, self.k, mode);
+            let coefs = SvfCoefs::new(frame.g, self.k, mode);
             self.svf[ch].process(
                 x,
                 mode,
@@ -328,7 +373,12 @@ fn soft_limit(x: f32) -> f32 {
     }
 }
 
+/// Advance `param` by `frames` samples. A settled parameter (the common case) needs no stepping
+/// at all, which keeps the eight smoothers out of the per-control-block cost.
 fn advance(param: &mut SmoothedParam, frames: usize) -> f32 {
+    if param.is_settled() {
+        return param.current();
+    }
     let mut v = param.current();
     for _ in 0..frames {
         v = param.next();
@@ -399,7 +449,12 @@ impl FilterDevice {
             ctrl_pos: 0,
             hz_prev: [0.0; 2],
             primed: false,
-            env: EnvFollower::new(p.env_attack_ms, p.env_release_ms, sample_rate, Detection::Peak),
+            env: EnvFollower::new(
+                p.env_attack_ms,
+                p.env_release_ms,
+                sample_rate,
+                Detection::Peak,
+            ),
             lfo: Lfo::default(),
             rng: 0x1234_5678,
             tempo: 120.0,
@@ -494,6 +549,7 @@ impl FilterDevice {
         let env_db = gain_to_db(self.env.value());
         let env = ((env_db + ENV_RANGE_DB) / ENV_RANGE_DB).clamp(0.0, 1.0);
 
+        let ladder = LadderCoefs::for_resonance(resonance);
         for (ch, lfo) in [lfo_l, lfo_r].into_iter().enumerate() {
             let octaves = cutoff_log2 + lfo * depth + env * amount;
             let hz = octaves.exp2().clamp(MIN_CUTOFF_HZ, nyquist_cap);
@@ -501,10 +557,13 @@ impl FilterDevice {
             self.hz_prev[ch] = hz;
             self.ctl.g_a[ch] = cutoff_to_g(start, sr_hi);
             self.ctl.g_b[ch] = cutoff_to_g(hz, sr_hi);
+            (self.ctl.big_a[ch], self.ctl.inv_a[ch]) = ladder.pole_parts(self.ctl.g_a[ch]);
+            (self.ctl.big_b[ch], self.ctl.inv_b[ch]) = ladder.pole_parts(self.ctl.g_b[ch]);
             self.ctl.comp_coef[ch] = compensation_coef(hz, sr_hi);
         }
         self.primed = true;
 
+        self.ctl.ladder = ladder;
         self.ctl.resonance = resonance;
         let (gain, blend) = drive_params(drive_db);
         self.ctl.drive_gain = gain;
@@ -525,14 +584,20 @@ impl FilterDevice {
         hi_total: usize,
         buf: &mut [f32],
     ) {
-        for (j, frame) in buf.chunks_exact_mut(2).enumerate() {
-            let t = (hi_pos + j + 1) as f32 / hi_total as f32;
+        let step = 1.0 / hi_total as f32;
+        let mut t = (hi_pos + 1) as f32 * step;
+        // A cutoff that hasn't moved since the last block makes the interpolation a no-op, so
+        // build each channel's coefficients once instead of once per sample (as PolySynth's
+        // filter does). The branch is the same for the whole loop, so it predicts perfectly.
+        let steady = ctl.g_a[0] == ctl.g_b[0] && ctl.g_a[1] == ctl.g_b[1];
+        let fixed = [ctl.frame(0, 1.0), ctl.frame(1, 1.0)];
+        for frame in buf.chunks_exact_mut(2) {
             for ch in 0..2 {
-                let g = ctl.g_a[ch] + (ctl.g_b[ch] - ctl.g_a[ch]) * t;
+                let f = if steady { fixed[ch] } else { ctl.frame(ch, t) };
                 let x = drive(frame[ch], ctl.drive_gain, ctl.drive_blend);
-                let mut y = cur.tick(ch, x, g, ctl);
+                let mut y = cur.tick(ch, x, &f, ctl);
                 if *fade < 1.0 {
-                    let old = prev.tick(ch, x, g, ctl);
+                    let old = prev.tick(ch, x, &f, ctl);
                     y = old + (y - old) * *fade;
                 }
                 frame[ch] = y;
@@ -540,6 +605,7 @@ impl FilterDevice {
             if *fade < 1.0 {
                 *fade = (*fade + fade_inc).min(1.0);
             }
+            t += step;
         }
     }
 
@@ -600,8 +666,9 @@ impl AudioDevice for FilterDevice {
                     )
                 });
 
-            // A runaway would poison the state for good; start over instead.
-            let check: f32 = self.wet[..n * 2].iter().map(|x| x.abs()).sum();
+            // A runaway would poison the state for good; start over instead. NaN spreads through
+            // the filter within a sample or two, so a stride is enough to catch it.
+            let check: f32 = self.wet[..n * 2].iter().step_by(8).map(|x| x.abs()).sum();
             if !check.is_finite() {
                 self.wet[..n * 2].fill(0.0);
                 self.cur.reset_state();
@@ -610,15 +677,31 @@ impl AudioDevice for FilterDevice {
             }
 
             let out = &mut outputs[done * 2..(done + n) * 2];
-            for ((o, i), w) in out
-                .chunks_exact_mut(2)
-                .zip(input.chunks_exact(2))
-                .zip(self.wet[..n * 2].chunks_exact(2))
-            {
-                let (dry_gain, wet_gain) = dry_wet_gains(self.sm_mix.next(), MixLaw::Linear);
-                let wet_gain = wet_gain * self.sm_gain.next();
-                o[0] = i[0] * dry_gain + soft_limit(w[0]) * wet_gain;
-                o[1] = i[1] * dry_gain + soft_limit(w[1]) * wet_gain;
+            let wet = &self.wet[..n * 2];
+            if self.sm_mix.is_settled() && self.sm_gain.is_settled() {
+                // Mix and Gain are not moving, so the per-sample smoothing is a no-op: fold the
+                // two gains once and drop the smoother calls out of the loop.
+                let (dry_gain, wet_gain) = dry_wet_gains(self.sm_mix.current(), MixLaw::Linear);
+                let wet_gain = wet_gain * self.sm_gain.current();
+                for ((o, i), w) in out
+                    .chunks_exact_mut(2)
+                    .zip(input.chunks_exact(2))
+                    .zip(wet.chunks_exact(2))
+                {
+                    o[0] = i[0] * dry_gain + soft_limit(w[0]) * wet_gain;
+                    o[1] = i[1] * dry_gain + soft_limit(w[1]) * wet_gain;
+                }
+            } else {
+                for ((o, i), w) in out
+                    .chunks_exact_mut(2)
+                    .zip(input.chunks_exact(2))
+                    .zip(wet.chunks_exact(2))
+                {
+                    let (dry_gain, wet_gain) = dry_wet_gains(self.sm_mix.next(), MixLaw::Linear);
+                    let wet_gain = wet_gain * self.sm_gain.next();
+                    o[0] = i[0] * dry_gain + soft_limit(w[0]) * wet_gain;
+                    o[1] = i[1] * dry_gain + soft_limit(w[1]) * wet_gain;
+                }
             }
 
             self.ctrl_pos = (self.ctrl_pos + n) % CTRL_BLOCK;
@@ -698,11 +781,8 @@ impl AudioDevice for FilterDevice {
 
     fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
         self.sample_rate = sample_rate;
-        self.env.set_times(
-            self.p.env_attack_ms,
-            self.p.env_release_ms,
-            sample_rate,
-        );
+        self.env
+            .set_times(self.p.env_attack_ms, self.p.env_release_ms, sample_rate);
         for smoother in [
             &mut self.sm_cutoff,
             &mut self.sm_resonance,
@@ -889,7 +969,11 @@ mod tests {
                         out.iter().all(|x| x.is_finite()),
                         "non-finite at {rate} Hz, character {character}, type {ty}"
                     );
-                    assert!(peak(&out) <= 2.0 + 1e-3, "peak {} at {rate} char {character} type {ty}", peak(&out));
+                    assert!(
+                        peak(&out) <= 2.0 + 1e-3,
+                        "peak {} at {rate} char {character} type {ty}",
+                        peak(&out)
+                    );
                 }
             }
         }
@@ -937,7 +1021,11 @@ mod tests {
     fn a_synced_lfo_period_is_one_beat_at_120_bpm() {
         for playing in [true, false] {
             let mut d = device();
-            set_choice(&mut d, LFO_SYNC, crate::audio::dsp::tempo_sync::index_of("1/4"));
+            set_choice(
+                &mut d,
+                LFO_SYNC,
+                crate::audio::dsp::tempo_sync::index_of("1/4"),
+            );
             set_real(&mut d, LFO_DEPTH, 1.0);
             d.set_transport(&Transport {
                 tempo: 120.0,
@@ -971,7 +1059,11 @@ mod tests {
     #[test]
     fn a_synced_lfo_follows_the_song_position_while_playing() {
         let mut d = device();
-        set_choice(&mut d, LFO_SYNC, crate::audio::dsp::tempo_sync::index_of("1/4"));
+        set_choice(
+            &mut d,
+            LFO_SYNC,
+            crate::audio::dsp::tempo_sync::index_of("1/4"),
+        );
         set_real(&mut d, LFO_DEPTH, 1.0);
         // A quarter beat in: the sine is at its peak, whatever happened before.
         d.set_transport(&Transport {
@@ -1049,7 +1141,10 @@ mod tests {
                 set_choice(&mut d, FILTER_TYPE, to);
                 out.extend(render(&mut d, &input[48_000..], &[256]));
                 let left: Vec<f32> = out.iter().step_by(2).copied().collect();
-                let worst_step = left.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+                let worst_step = left
+                    .windows(2)
+                    .map(|w| (w[1] - w[0]).abs())
+                    .fold(0.0, f32::max);
                 // The signal itself swings 1.0 peak to peak.
                 assert!(
                     worst_step <= 0.5,
@@ -1065,7 +1160,10 @@ mod tests {
         set_choice(&mut d, CHARACTER, 1);
         out.extend(render(&mut d, &input[48_000..], &[256]));
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
-        let worst_step = left.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        let worst_step = left
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
         assert!(worst_step <= 0.5, "character switch: step {worst_step}");
     }
 
@@ -1123,8 +1221,9 @@ mod tests {
         }
     }
 
-    /// CPU at 2x Ladder, stereo. Run with `cargo test --release filter_cpu -- --ignored
-    /// --nocapture`: the budget is 0.5 % of a core at 48 kHz.
+    /// CPU at 2x Ladder, stereo, with the LFO and the envelope moving the cutoff (the worst
+    /// case). Run with `cargo test --release filter_cpu -- --ignored --nocapture`: the plan's
+    /// budget is 0.5 % of a core at 48 kHz.
     #[test]
     #[ignore = "timing test: run in release mode"]
     fn filter_cpu_2x_ladder_stereo() {

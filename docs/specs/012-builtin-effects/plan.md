@@ -361,20 +361,20 @@ visibly stops the kick from pumping, and switching Style never moves a knob.
 | Output | Mix | 0–100 %, linear | 100 % |
 | | Gain | ±12 dB | 0 |
 
-- [ ] Clean reuses `dsp/svf.rs` (resonance compensation, drive crossfade). Add HP 24 and
+- [x] Clean reuses `dsp/svf.rs` (resonance compensation, drive crossfade). Add HP 24 and
       Notch.
-- [ ] Ladder: a 4-pole nonlinear ZDF ladder with `tanh` stages. HP and BP come from mixing its
+- [x] Ladder: a 4-pole nonlinear ZDF ladder with `tanh` stages. HP and BP come from mixing its
       taps. Resonance compensation applies here as well: the bass should stay fat, per the
       research.
-- [ ] The nonlinear stage runs at the Quality rate using the Phase 0 oversampler. At 1× no
+- [x] The nonlinear stage runs at the Quality rate using the Phase 0 oversampler. At 1× no
       resampling happens.
-- [ ] Cutoff = base × 2^(LFO·Depth + Env·Amount), evaluated per 32-frame block and
+- [x] Cutoff = base × 2^(LFO·Depth + Env·Amount), evaluated per 32-frame block and
       interpolated, as in PolySynth. The right-channel LFO is offset by Stereo Phase. A synced
       LFO follows the song position while playing.
-- [ ] Level safety: an output soft limiter against self-oscillation, and a 10 ms crossfade on
+- [x] Level safety: an output soft limiter against self-oscillation, and a 10 ms crossfade on
       Type or Character changes (research: switching from a saturating filter to a linear one
       spikes).
-- [ ] Tests:
+- [x] Tests:
   - LP 12 at resonance 0 is −3 dB ± 0.5 at cutoff;
   - LP 24 is down 24 ± 2 dB one octave above cutoff;
   - at resonance 0.9 with cutoff 1 kHz, 50 Hz stays within 3 dB of its level at resonance 0
@@ -389,6 +389,49 @@ visibly stops the kick from pumping, and switching Style never moves a knob.
 
 **Done when:** a resonant LP 24 sweep over a bassline stays fat, synced LFO wobbles lock to the
 grid, and pushing Drive at 2× doesn't fizz.
+
+Implementation notes:
+- **Files:** `audio/devices/filter.rs` (the device), `audio/dsp/ladder.rs` (new), `audio/dsp/svf.rs`
+  (HP 24 and Notch added to the existing SVF: a second stage tuned like LP 24's, and `low + high`),
+  `dsp/mod.rs`, plus one line each in `factory.rs` and `devices/mod.rs`.
+- **Ladder:** the feedback is solved instantaneously for the linear ladder (`1/(1 + k·G⁴)`, so the
+  resonance peak sits on the cutoff at every rate) and the summing node saturates; HP, BP and
+  Notch are binomial tap mixes. `MAX_K` is 4.2 (the linear ladder self-oscillates at 4) and the
+  saturator bounds it.
+- **Deviation — one saturator, not four.** The plan says "`tanh` stages". Saturating each
+  integrator (the Huovilainen model) adds four links and four divides to one serial chain:
+  measured 0.31 % of a core for the ladder DSP alone against 0.20 % with the summing node only
+  (two channels at the 96 kHz rate), and it put 2× Ladder stereo over the 0.5 % budget. The one
+  saturator is the classic nonlinear ZDF ladder, and Drive (which is pre-filter) already provides
+  the character. It is a cubic soft clip (`u − u³/3`, `u` clamped to ±1) rather than the rational
+  tanh: within a few percent of tanh below ±`HEADROOM`, C¹ at the knee, and no divide or branch in
+  the chain.
+- **Deviation — the limiter runs at the base rate**, after the oversampler, not inside the
+  oversampled stage: the half-band down-sampler is a chain of all-pass sections whose transient
+  overshoot took a limited signal to 3.46 peak (+10.7 dBFS) at 2×, so limiting inside the stage
+  did not bound the output.
+- **Deviation — the ladder notch's bass.** The notch tap passes the summing node, so it inherits
+  the feedback loop's `1/(1+k)` bass loss. A low-passed copy of the input, a quarter of the cutoff
+  below, adds it back: at a 1 kHz cutoff and resonance 0.2, 60 Hz goes from −5.3 dB to −0.2 dB,
+  and at resonance 0.9 the notch is still about −14 dB deep. The added term is below the cutoff,
+  so the notch's zero stays where it is.
+- Cutoff modulation is evaluated every 32 frames; the ladder interpolates its *pole coefficients*
+  (and the SVF its `g`) per sample, and both take a cached-coefficient path while the cutoff is
+  steady, as PolySynth's filter does. A settled smoother is not stepped at all, which is what took
+  the device from 0.53 % to 0.46 %. The right channel's LFO is offset by Stereo Phase; the envelope
+  follows the louder channel, so both channels open together.
+- **Deviation — Quality changes** reset the oversampler's state (Phase 0's `set_factor` does), so
+  changing Quality while audio plays can click. Type and Character crossfade over 10 ms.
+- **Tests:** 16 in `audio::devices::filter` (15 plus the ignored CPU one) and 3 in
+  `audio::dsp::ladder`, 357 in the lib in total. Measured: LP 12 −3 dB at the cutoff (within
+  0.5 dB); LP 24 −24 dB an octave above; alias energy 1× −18.3 dB, 2× −41.3 dB (23 dB better),
+  4× −43.6 dB; the synced LFO's period is 24 000 samples, one beat at 120 BPM.
+- **CPU:** 0.46 % of a core at 2× Ladder stereo at 48 kHz (release, LFO and envelope moving the
+  cutoff; 0.44 % with the cutoff static). The Phase 0 oversampler alone is 0.19 % of that, so
+  every 2× device in this spec pays it.
+- **Godot:** no new view. The generated SimpleView layout was checked against the device's real
+  parameter list: one Main page, the four `ParamInfo.module` groups (Filter, LFO, Envelope,
+  Output), all 16 parameters placed and `validate()` clean, so no strategy is needed.
 
 ## Phase 5: Chorus (`sonara.builtin.chorus`)
 

@@ -55,11 +55,7 @@ pub fn cutoff_to_g(hz: f32, sample_rate: f32) -> f32 {
 
 /// Damping (`1/Q`) of the resonant stage for `resonance` in 0..1.
 pub fn resonance_to_k(resonance: f32, mode: FilterMode) -> f32 {
-    let k0 = if mode.is_24() {
-        K_BUTTER4_A
-    } else {
-        SQRT_2
-    };
+    let k0 = if mode.is_24() { K_BUTTER4_A } else { SQRT_2 };
     k0 * (K_MIN / k0).powf(resonance.clamp(0.0, 1.0))
 }
 
