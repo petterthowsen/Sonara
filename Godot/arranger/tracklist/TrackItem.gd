@@ -146,6 +146,13 @@ func _draw() -> void:
 	if Engine.is_editor_hint():
 		return
 	NestingStripes.draw(self, _ancestors, size.y)
+	if track:
+		var track_color := Utils.display_color(track.color)
+		# A folder/group's own stripe uses the true track color, like the one its children draw for it.
+		if track.can_contain_tracks():
+			draw_rect(Rect2(_ancestors.size() * NestingStripes.WIDTH, 0.0, NestingStripes.WIDTH, size.y), track_color)
+		# Thin divider so neighbouring items of the same color stay distinguishable.
+		draw_rect(Rect2(0.0, size.y - 1.0, size.x, 1.0), track_color.darkened(0.1))
 	if not is_selected and not is_active:
 		return
 	var inset_left := 1.0

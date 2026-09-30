@@ -205,6 +205,16 @@ func _register_all_settings() -> void:
 		"When enabled, a newly created marker opens its name for editing (after the mouse is released).",
 	)).sub("Arranger")
 
+	_register(Setting.new(
+		"arranger/right_drag_erase",
+		"Right-Drag Erases Clips",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, holding the right mouse button and dragging over clips in the arranger deletes them. "
+		+ "A plain right-click still opens the clip menu.",
+	)).sub("Arranger")
+
 	# --- Behavior: Selection ---
 	_register(Setting.new(
 		"selection/track_follows_clip_selection",

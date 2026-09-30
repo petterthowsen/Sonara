@@ -42,6 +42,8 @@ func _ready() -> void:
 ## Paint the enclosing folders' inset stripes, same as the TrackItem above this row.
 func _draw() -> void:
 	NestingStripes.draw(self, _ancestors, size.y)
+	# Separates stacked lanes.
+	draw_rect(Rect2(0.0, size.y - 1.0, size.x, 1.0), Color(0, 0, 0, 1))
 
 
 ## Release the lane/track signal connections when the row is freed. NOTIFICATION_PREDELETE rather
@@ -177,6 +179,9 @@ func _update_style() -> void:
 
 	_set_ancestors(NestingStripes.ancestors_of(track, current_project))
 	style.border_width_left = _ancestors.size() * NestingStripes.WIDTH + 10
+	# An explicit margin overrides the border-width default, so add the reserved inset back or the
+	# label draws over the nesting stripes.
+	style.content_margin_left = style.border_width_left + 6.0
 	style.border_color = Utils.display_color(track.color)
 	queue_redraw()
 

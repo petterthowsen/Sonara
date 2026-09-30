@@ -21,6 +21,26 @@ const WIDTH_STEP_BARS: int = 16
 # Instanced (not TimelineTrack.new()) so the colors/border set on the scene apply
 const TimelineTrackScene = preload("res://arranger/timeline/TimelineTrack.tscn")
 
+## Grid line colors, shared by every row (track and automation lanes). Alpha is honored: lines
+## are blended over the row fills.
+## Bar line, drawn 2px wide.
+@export var grid_color_bar: Color = Color(0.5, 0.5, 0.5, 0.66):
+	set(value):
+		grid_color_bar = value
+		queue_redraw()
+
+## Beat line (not a bar). Hidden when beats are closer than GridHelper.min_line_spacing.
+@export var grid_color_beat: Color = Color(0.35, 0.35, 0.35, 0.47):
+	set(value):
+		grid_color_beat = value
+		queue_redraw()
+
+## Subdivision line between beats: the finest level at least GridHelper.min_line_spacing apart.
+@export var grid_color_tick: Color = Color(0.21, 0.21, 0.21, 0.2):
+	set(value):
+		grid_color_tick = value
+		queue_redraw()
+
 # Grid helper for consistent snapping (set by Arranger)
 var grid_helper: GridHelper:
 	get:
@@ -564,6 +584,8 @@ func _input(event: InputEvent) -> void:
 	if _drag_active:
 		_handle_clip_drag_input(event)
 		return
+	if _handle_erase_input(event):
+		return
 	if not clip_selection_manager:
 		return
 	if not clip_selection_manager.is_box_selecting and not clip_selection_manager.is_additive_pending:
@@ -581,6 +603,74 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		clip_selection_manager.update_additive_gesture(get_local_mouse_position())
 		accept_event()
+
+
+# ============================================================================
+# RIGHT-DRAG ERASE
+# ============================================================================
+const ERASE_SETTING := "arranger/right_drag_erase"
+const ERASE_THRESHOLD_PX := 6.0
+const ERASE_SAMPLE_STEP_PX := 4.0
+
+var _erase_pressed := false  # Right button went down over the lane area
+var _erase_active := false  # Pointer passed the threshold: this gesture erases
+var _erase_press_pos := Vector2.ZERO
+var _erase_last_pos := Vector2.ZERO
+
+
+## Right-press then drag past a pixel threshold deletes every clip the pointer crosses.
+## Returns true when the event was consumed. A plain right-click still opens the clip menu.
+func _handle_erase_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			_erase_active = false
+			_erase_pressed = (Settings.get_value(ERASE_SETTING) and is_visible_in_tree()
+					and get_global_rect().has_point(event.global_position))
+			_erase_press_pos = event.global_position
+			_erase_last_pos = event.global_position
+			return false
+		var was_erasing := _erase_active
+		_erase_pressed = false
+		_erase_active = false
+		if was_erasing:
+			# Swallow the release so the clip under the pointer doesn't open its menu.
+			get_viewport().set_input_as_handled()
+		return was_erasing
+	if not _erase_pressed or not event is InputEventMouseMotion:
+		return false
+	var pos: Vector2 = event.global_position
+	if not _erase_active:
+		if pos.distance_to(_erase_press_pos) < ERASE_THRESHOLD_PX:
+			return false
+		_erase_active = true
+		_erase_last_pos = _erase_press_pos
+	_erase_along(_erase_last_pos, pos)
+	_erase_last_pos = pos
+	get_viewport().set_input_as_handled()
+	return true
+
+
+## Delete clips under the segment `from`..`to` (global), sampled so fast strokes don't skip clips.
+func _erase_along(from: Vector2, to: Vector2) -> void:
+	var steps := maxi(1, ceili(from.distance_to(to) / ERASE_SAMPLE_STEP_PX))
+	var to_local := get_global_transform().affine_inverse()
+	var doomed: Array[ClipInstance] = []
+	for i in range(1, steps + 1):
+		var local: Vector2 = to_local * from.lerp(to, float(i) / steps)
+		for lane in timeline_tracks:
+			if not lane:
+				continue
+			var in_lane := local - lane.position
+			for clip_ui in lane.clip_instances:
+				if clip_ui and clip_ui.clip_instance and clip_ui.get_rect().has_point(in_lane) \
+						and not doomed.has(clip_ui.clip_instance):
+					doomed.append(clip_ui.clip_instance)
+	var cmds: Array[Command] = []
+	for inst in doomed:
+		if inst.track:
+			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
+	if not cmds.is_empty():
+		HistoryUtil.execute_many("Erase Clips", cmds)
 
 
 # ============================================================================
@@ -1616,24 +1706,24 @@ func _draw_row_backgrounds() -> void:
 	if visible_x.y <= visible_x.x:
 		return
 	var width := visible_x.y - visible_x.x
-	var grid_style: TimelineTrack = null
 	var rows_bottom := 0.0
 	for child in get_children():
 		var row := child as Control
 		if row == null or not row.visible:
 			continue
 		if row is TimelineTrack:
-			if grid_style == null:
-				grid_style = row
 			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.get_lane_color(), true)
 		elif row is AutomationLaneRow:
-			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.bg_color, true)
+			# Same fill as the lane's own track row.
+			var owner_row := _find_timeline_track(row.track) if row.track else null
+			var fill: Color = owner_row.get_lane_color() if owner_row else row.bg_color
+			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), fill, true)
 		else:
 			continue
 		rows_bottom = maxf(rows_bottom, row.position.y + row.size.y)
 
-	if grid_style and grid_helper:
-		grid_style.draw_grid_lines(self, grid_helper, visible_x.x, visible_x.y, 0.0, rows_bottom)
+	if grid_helper:
+		_draw_grid_lines(visible_x.x, visible_x.y, rows_bottom)
 
 	for child in get_children():
 		var row := child as Control
@@ -1646,6 +1736,24 @@ func _draw_row_backgrounds() -> void:
 		elif row is AutomationLaneRow:
 			var y: float = row.position.y + row.size.y - 1.0
 			draw_line(Vector2(visible_x.x, y), Vector2(visible_x.y, y), row.border_color, 1.0)
+
+
+## Vertical grid lines between content x `start_x` and `end_x`, from the top down to `bottom`.
+## Content coordinates: the timeline scrolls inside a ScrollContainer, so no scroll offset applies.
+func _draw_grid_lines(start_x: float, end_x: float, bottom: float) -> void:
+	if end_x <= start_x or bottom <= 0.0:
+		return
+	for line in grid_helper.get_visible_grid_lines(start_x, end_x, 0.0, false):
+		var x: float = line.x
+		if x < start_x or x > end_x:
+			continue
+		match line.type:
+			GridHelper.GridLineType.BAR:
+				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_bar, 2.0)
+			GridHelper.GridLineType.BEAT:
+				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_beat, 1.0)
+			GridHelper.GridLineType.SUBDIVISION:
+				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_tick, 1.0)
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:

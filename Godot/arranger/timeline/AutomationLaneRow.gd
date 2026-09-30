@@ -14,9 +14,10 @@ class_name AutomationLaneRow extends Control
 
 var logger: Log = Log.make("AutomationLaneRow")
 
-## Row fill and bottom border, drawn by Timeline._draw. The grid uses TimelineTrack's colors.
+## Row fill and bottom border, drawn by Timeline._draw. The fill is only a fallback: the Timeline
+## paints the lane in its track's lane color. The grid uses the Timeline's grid colors.
 @export var bg_color: Color = Color(0.09, 0.09, 0.09, 1.0)
-@export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3)
+@export var border_color: Color = Color(0, 0, 0, 1)
 
 const V_PADDING := 5.0
 const POINT_RADIUS := 4.0

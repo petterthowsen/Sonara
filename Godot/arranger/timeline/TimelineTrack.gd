@@ -2,32 +2,13 @@
 #
 # One arranger lane: holds the clip nodes and handles empty-lane input. At runtime the Timeline
 # draws the lane fill, grid and bottom border for every row in one pass (see Timeline._draw), so
-# a scroll redraws one canvas item instead of every lane. This node draws them itself only as the
-# Godot editor preview, where there is no Timeline.
+# a scroll redraws one canvas item instead of every lane. This node draws the fill and border
+# itself only as the Godot editor preview, where there is no Timeline.
 @tool
 class_name TimelineTrack extends Control
 
 var logger : Log = Log.make("TimelineTrack")
 
-
-## Vertical line at the start of each bar (drawn 2px wide). The Timeline draws every row's grid
-## with these colors, so they apply to automation lane rows too.
-@export var grid_color_bar: Color = "#000":
-	set(value):
-		grid_color_bar = value
-		_request_redraw()
-
-## Vertical line on each beat that isn't a bar line. Hidden when beats are closer than GridHelper.min_line_spacing.
-@export var grid_color_beat: Color = "#151515":
-	set(value):
-		grid_color_beat = value
-		_request_redraw()
-
-## Subdivision lines between beats (1/2, 1/4 or 1/8 beat): the finest level at least GridHelper.min_line_spacing apart.
-@export var grid_color_tick: Color = "#353535":
-	set(value):
-		grid_color_tick = value
-		_request_redraw()
 
 ## Lane fill. When tinting by track color, only its value (brightness) is used.
 @export var bg_color: Color = "#555":
@@ -47,21 +28,6 @@ var logger : Log = Log.make("TimelineTrack")
 		border_thickness = value
 		_request_redraw()
 
-@export_group("Editor Preview")
-## Zoom of the mock grid drawn in the Godot editor only (no Timeline there).
-@export var preview_pixels_per_beat: float = 64.0:
-	set(value):
-		preview_pixels_per_beat = value
-		_sync_preview_grid_helper()
-
-## Preview-only mirror of GridHelper.min_line_spacing: minimum pixel gap between grid lines.
-@export var preview_min_line_spacing: float = 10.0:
-	set(value):
-		preview_min_line_spacing = value
-		_sync_preview_grid_helper()
-
-@export_group("")
-
 # Data binding
 var track: Track = null
 var track_index: int = -1
@@ -72,8 +38,6 @@ var timeline: Timeline = null
 # Clip UI instances
 const TimelineClipScene = preload("res://arranger/timeline/clip/TimelineClip.tscn")
 var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
-# Stand-in for timeline.grid_helper so the grid renders in the Godot editor
-var _preview_grid_helper: GridHelper = null
 
 # ============================================================================
 # SIGNALS
@@ -271,48 +235,8 @@ func _draw():
 	if timeline:
 		return
 	draw_rect(Rect2(Vector2.ZERO, size), get_lane_color(), true, -1.0, false)
-	var helper := _get_preview_grid_helper()
-	if helper:
-		draw_grid_lines(self, helper, 0.0, size.x, 0.0, size.y)
 	if border_thickness > 0:
 		draw_rect(Rect2(0, size.y - border_thickness, size.x, border_thickness), border_color, true)
-
-
-## A default 4/4 GridHelper mock so the grid renders in the Godot editor.
-func _get_preview_grid_helper() -> GridHelper:
-	if not Engine.is_editor_hint():
-		return null
-	if _preview_grid_helper == null:
-		_preview_grid_helper = GridHelper.new()
-		_sync_preview_grid_helper()
-	return _preview_grid_helper
-
-
-func _sync_preview_grid_helper() -> void:
-	"""Copy the preview exports onto the editor mock GridHelper and redraw."""
-	if _preview_grid_helper:
-		_preview_grid_helper.pixels_per_beat = preview_pixels_per_beat
-		_preview_grid_helper.min_line_spacing = preview_min_line_spacing
-	queue_redraw()
-
-
-## Draw the vertical grid lines between content x `start_x` and `end_x`, from `y0` to `y1`,
-## onto `target` in this lane's grid colors. `target` is in content coordinates (it scrolls
-## with the ScrollContainer), so the lines are not offset by the scroll position.
-func draw_grid_lines(target: CanvasItem, helper: GridHelper, start_x: float, end_x: float, y0: float, y1: float) -> void:
-	if end_x <= start_x or y1 <= y0:
-		return
-	for line in helper.get_visible_grid_lines(start_x, end_x, 0.0, false):
-		var x: float = line.x
-		if x < start_x or x > end_x:
-			continue
-		match line.type:
-			GridHelper.GridLineType.BAR:
-				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_bar, 2.0)
-			GridHelper.GridLineType.BEAT:
-				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_beat, 1.0)
-			GridHelper.GridLineType.SUBDIVISION:
-				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_tick, 1.0)
 
 
 # ============================================================================

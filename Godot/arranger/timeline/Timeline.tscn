@@ -13,12 +13,12 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 1
 script = ExtResource("1_khs34")
+grid_color_bar = Color(0.78431374, 0.78431374, 0.78431374, 0.5882353)
+grid_color_beat = Color(0.8392157, 0.8392157, 0.8392157, 0.39215687)
+grid_color_tick = Color(0.8235294, 0.8235294, 0.8235294, 0.19607843)
 
 [node name="TimelineTrack" parent="." unique_id=1794739747 instance=ExtResource("3_idtn6")]
 layout_mode = 2
-grid_color_bar = Color(0.74558026, 0.7455802, 0.7455802, 0.24313726)
-grid_color_beat = Color(0.5931338, 0.5931335, 0.59313357, 0.5176471)
-grid_color_tick = Color(0.45840496, 0.45840508, 0.4584049, 0.39215687)
 
 [node name="ClipContextMenu" parent="." unique_id=442140180 instance=ExtResource("2_3iuqr")]
 visible = false
