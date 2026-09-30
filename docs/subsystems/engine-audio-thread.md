@@ -19,6 +19,8 @@ let Ok(mut changed) = self.parameters_changed.try_lock() else {
 let changed = self.parameters_changed.lock().unwrap();
 ```
 
+**Denormals:** the callback calls `dsp::denormal::flush_denormals_to_zero()` first thing, so decaying filter, delay and reverb tails flush to zero instead of turning into slow denormal arithmetic. Code that runs audio outside the callback (tests, offline rendering) doesn't get this, so DSP must stay correct without it.
+
 `EngineState` is shared with the command thread (`command_worker.rs`). Anything that thread does with the state lock held must be fast, because the callback gives up after `STATE_LOCK_BUDGET` and outputs silence. Put slow commands (IPC, file or plugin loading, dropping CLAP devices) in `CommandWorker` with the lock released.
 
 ## Audio Processing Pipeline

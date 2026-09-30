@@ -22,4 +22,9 @@ it immediately via `mark_activity`. Sleep transitions are reported to Godot as
   and route targets keep processing even with no input once they receive any signal.
 - Devices must call `mark_activity` on real input or they will wrongly sleep mid-tail.
 
+Amendment (spec 012, Phase 0): audio arriving at a sleeping device's input now wakes it for that
+block (`container::run_chain`), so an effect after a silent passage no longer depends on MIDI or a
+parameter change to wake. Effects whose tails can be silent for longer than the timeout (a long
+delay between repeats) extend it with `effect::TailSleep`.
+
 References: `docs/subsystems/engine-architecture.md`

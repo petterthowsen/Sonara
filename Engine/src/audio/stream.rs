@@ -672,6 +672,7 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
     let stream = device.build_output_stream(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            crate::audio::dsp::denormal::flush_denormals_to_zero();
             let processing_start = Instant::now();
             counters.callbacks.fetch_add(1, Ordering::Relaxed);
 

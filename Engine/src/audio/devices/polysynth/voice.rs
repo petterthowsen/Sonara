@@ -9,11 +9,11 @@
 
 use super::modulation::{ModMatrix, ModSource};
 use super::params::{
-    slot_of, LfoShape, SynthParams, AMP_ENV, ATTACK, CUTOFF, CUTOFF_MAX, CUTOFF_MIN, DECAY,
-    FILTER_ENV, MAX_UNISON, PARAM_COUNT, RELEASE, SUSTAIN, VOLUME,
+    slot_of, SynthParams, AMP_ENV, ATTACK, CUTOFF, CUTOFF_MAX, CUTOFF_MIN, DECAY, FILTER_ENV,
+    MAX_UNISON, PARAM_COUNT, RELEASE, SUSTAIN, VOLUME,
 };
 use crate::audio::devices::norm_to_real;
-use crate::audio::dsp::{svf, AdsrEnvelope, FilterMode, Oscillator, Svf, SvfCoefs};
+use crate::audio::dsp::{svf, AdsrEnvelope, FilterMode, Lfo, Oscillator, Svf, SvfCoefs};
 
 pub type Mods = ModMatrix<PARAM_COUNT>;
 
@@ -98,42 +98,6 @@ pub fn unison_position(k: usize, n: usize) -> f32 {
 
 fn note_to_hz(pitch: f32) -> f64 {
     440.0 * 2f64.powf((pitch as f64 - 69.0) / 12.0)
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Lfo {
-    /// 0..1.
-    pub phase: f64,
-    /// Current sample-and-hold value.
-    held: f32,
-}
-
-impl Lfo {
-    /// Output in −1..1 at the current phase.
-    pub fn value(&self, shape: LfoShape) -> f32 {
-        let p = self.phase as f32;
-        match shape {
-            LfoShape::Sine => (std::f32::consts::TAU * p).sin(),
-            LfoShape::Triangle => {
-                if p < 0.25 {
-                    4.0 * p
-                } else if p < 0.75 {
-                    2.0 - 4.0 * p
-                } else {
-                    4.0 * p - 4.0
-                }
-            }
-            LfoShape::Saw => 2.0 * p - 1.0,
-            LfoShape::Square => {
-                if p < 0.5 {
-                    1.0
-                } else {
-                    -1.0
-                }
-            }
-            LfoShape::SampleHold => self.held,
-        }
-    }
 }
 
 /// Per-sub-voice detune ratios and pan gains for one oscillator, kept until the unison count,
@@ -338,7 +302,8 @@ impl Voice {
         }
         for i in 0..2 {
             self.lfo[i].phase = ctx.lfo_phase[i];
-            self.lfo[i].held = self.next_noise();
+            let held = self.next_noise();
+            self.lfo[i].set_held(held);
         }
         self.pitch = pending.glide_from.unwrap_or(pending.note as f32);
         self.glide_to(pending.note, ctx.glide);
@@ -553,11 +518,9 @@ impl Voice {
         }
         for i in 0..2 {
             let hz = e.lfo[i].hz(ctx.tempo);
-            let lfo = &mut self.lfo[i];
-            lfo.phase += hz * n as f64 / sr as f64;
-            if lfo.phase >= 1.0 {
-                lfo.phase = lfo.phase.fract();
-                self.lfo[i].held = self.next_noise();
+            if self.lfo[i].advance(hz * n as f64 / sr as f64) {
+                let held = self.next_noise();
+                self.lfo[i].set_held(held);
             }
         }
 
