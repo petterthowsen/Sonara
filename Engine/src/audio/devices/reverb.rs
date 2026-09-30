@@ -56,11 +56,8 @@ pub const MIX: ParamId = 51;
 
 const ALGORITHMS: &[&str] = &["Room", "Hall", "Plate"];
 
-/// Above Nyquist's usable range; the engineered artifact is at 44.1 kHz and up.
+/// IDs are all below this.
 const ID_SPACE: usize = 60;
-
-/// Number of algorithm structures (Room, Hall, Plate).
-const ALGORITHM_COUNT: usize = 3;
 
 #[rustfmt::skip]
 const SPECS: [ParamSpec; 18] = flatten(&[
@@ -103,15 +100,6 @@ const SLOT_OF: [u8; ID_SPACE] = slot_table(&SPECS);
 
 pub static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOT_OF);
 
-/// Slot of parameter `id`, if it exists.
-pub fn slot(id: ParamId) -> Option<usize> {
-    TABLE.slot(id)
-}
-
-pub fn param_infos() -> Vec<ParamInfo> {
-    TABLE.infos()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
     Room,
@@ -125,14 +113,6 @@ impl Algorithm {
             0 => Algorithm::Room,
             2 => Algorithm::Plate,
             _ => Algorithm::Hall,
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Algorithm::Room => 0,
-            Algorithm::Hall => 1,
-            Algorithm::Plate => 2,
         }
     }
 }
@@ -678,7 +658,6 @@ impl Plate {
 
 #[derive(Clone, Copy)]
 struct Settings {
-    algorithm: Algorithm,
     size: f32,
     decay: f32,
     predelay_ms: f32,
@@ -754,7 +733,6 @@ impl ReverbDevice {
         let real = |id: ParamId| params.real(id).unwrap_or(0.0);
         let algorithm = Algorithm::from_index(real(ALGORITHM) as usize);
         let settings = Settings {
-            algorithm,
             size: real(SIZE) / 100.0,
             decay: real(DECAY),
             predelay_ms: real(PREDELAY),
@@ -993,7 +971,6 @@ impl ReverbDevice {
                     self.algorithm = algo;
                     self.early_taps = early_taps(algo);
                 }
-                self.settings.algorithm = algo;
             }
             SIZE => {
                 self.settings.size = real / 100.0;
