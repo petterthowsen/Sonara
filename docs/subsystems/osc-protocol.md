@@ -576,6 +576,15 @@ AudioEngineOSC.device_spectrum_received.connect(func(osc_path, spectrum):
 AudioEngineOSC.unsubscribe_device_data(device.osc_path(), "spectrum")
 ```
 
+#### EQ analyser stream (`sonara.builtin.eq`)
+
+Data type `"spectrum"`. The EQ uses the same data type and blob encoding (little-endian f32) with a two-value header. Godot receives it through `device_spectrum_received` as a `PackedFloat32Array`:
+- `[0]` flag: `0.0` = pre-EQ (the input), `1.0` = post-EQ (the output, after Output Gain).
+- `[1]` the engine sample rate in Hz, which the view needs to place bins on the frequency axis.
+- `[2..]` the smoothed dBFS spectrum, 2049 bins of a 4096-point FFT (`sample_rate / 4096` Hz per bin), floor -160 dB, from `dsp/spectrum.rs`.
+- The engine alternates pre and post frames, each about 20 Hz (about 40 messages a second). The analyser (`sonara.builtin.spectrum_analyzer`) sends no header: don't mix the two parsers.
+- While subscribed the EQ never sleeps, so the analyser decays on silence instead of freezing.
+
 #### Example Usage
 ```gdscript
 # Add polysynth + delay to channel 2
