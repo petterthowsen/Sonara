@@ -32,6 +32,7 @@ func run_tests() -> void:
 	await _test_view_widens_to_grid()
 	await _test_parameters_tab_default()
 	await _test_groups_fill_and_spread()
+	await _test_fixed_height()
 
 
 ## A device instance for a fake built-in device with `params`, on a fresh channel. Unique ids keep
@@ -113,46 +114,80 @@ func _test_view_widens_to_grid() -> void:
 		"the DevicePanel grows to fit the grid (%.0f < %.0f)" % [panel.size.x, grid.custom_minimum_size.x])
 	panel.queue_free()
 
-	# Many narrow pages with long titles (a hand-edited layout): the tabs together are wider than
-	# the grid, so they clip and scroll with arrow buttons. The panel stays grid-wide and the tabs
-	# stay inside it.
+	# Many narrow pages with long titles (a hand-edited layout): the page tabs go in the panel's
+	# header, and together they're wider than the grid, so they clip and scroll with arrow buttons.
+	# The panel stays about grid-wide and the tabs stay inside it.
 	var paged: Object = _instance("Paged Plugin", [_float_param(0, "Gain"), _float_param(1, "Mix")])
 	panel = await _panel_for(paged)
 	view = panel._panel_view
+	_assert(not panel.header_tabs.visible, "a one-page view shows no header tabs")
 	var one_knob: Dictionary = view.layout.pages[0].controls[0].duplicate(true)
 	one_knob.rect = [0, 0, 1, 1]
 	one_knob.erase("group")
 	view.layout.pages.clear()
 	for i in 8:
 		view.layout.pages.append({"title": "A Long Page Title %d" % i, "groups": [], "controls": [one_knob.duplicate(true)]})
-	view._build_page_tabs()
 	view._build_page(0)
-	await process_frame
-	var tabs: TabBar = view.get_node("PageTabs")
-	_assert(tabs.visible and tabs.tab_count > 1, "the paged device shows page tabs (%d)" % tabs.tab_count)
+	view.header_tabs_changed.emit()
+	for _i in 2:
+		await process_frame
+	var tabs: TabBar = panel.header_tabs
+	_assert(tabs.visible and tabs.tab_count == 8, "the paged device shows its pages as header tabs (%d)" % tabs.tab_count)
+	_assert(panel.header.is_ancestor_of(tabs), "the page tabs sit in the panel's top header")
+	_assert(view.find_children("*", "TabBar", true, false).is_empty(), "the Simple View draws no tabs of its own")
 	var all_tabs_width := 0.0
 	for i in tabs.tab_count:
 		all_tabs_width += tabs.get_tab_rect(i).size.x
-	var paged_grid: Control = view.get_node("Grid")
 	_assert(tabs.clip_tabs and tabs.get_offset_buttons_visible(),
 		"the page tabs clip and show scroll arrows (all tabs %.0f px, bar %.0f px)" % [all_tabs_width, tabs.size.x])
-	var expected_width := maxf(paged_grid.custom_minimum_size.x, tabs.get_combined_minimum_size().x)
-	_assert(view.get_combined_minimum_size().x <= expected_width + 1.0 and view.get_combined_minimum_size().x < all_tabs_width,
-		"the view is as wide as its grid or one tab plus arrows, not every tab (%.0f vs grid %.0f, tab bar min %.0f)" \
-			% [view.get_combined_minimum_size().x, paged_grid.custom_minimum_size.x, tabs.get_combined_minimum_size().x])
+	_assert(panel.size.x < all_tabs_width, "the tabs don't widen the panel to fit every tab (%.0f)" % panel.size.x)
 	_assert(tabs.get_global_rect().position.x >= panel.get_global_rect().position.x
 			and tabs.get_global_rect().end.x <= panel.get_global_rect().end.x,
 		"the page tabs stay inside the DevicePanel (tabs %s, panel %s)" % [tabs.get_global_rect(), panel.get_global_rect()])
-	_assert(view.find_children("*", "ScrollContainer", true, false).is_empty(), "the Simple View has no scroll container")
+	var name_end: float = panel.name_label.get_global_rect().end.x
+	_assert(tabs.get_global_rect().position.x - name_end <= 8.0 and tabs.get_tab_rect(0).position.x < 1.0,
+		"the tabs are left-aligned, right after the name (name ends %.0f, tabs start %.0f)" % [name_end, tabs.get_global_rect().position.x])
+	tabs.current_tab = 3
+	_assert(view._current_page == 3, "picking a header tab switches the view's page")
+	view.select_header_tab(5)
+	view.header_tabs_changed.emit()
+	_assert(tabs.current_tab == 5, "the header follows a page change in the view")
 	panel.queue_free()
 
-	# Two knobs use one row of the 4-row grid; the grid shouldn't reserve the other three.
+	# Two knobs use one row of the 4-row grid; the page is one full-size row, not stretched.
 	var sparse: Object = _instance("Sparse Plugin", [_float_param(0, "Gain"), _float_param(1, "Mix")])
 	panel = await _panel_for(sparse)
 	view = panel._panel_view
-	grid = view.get_node("Grid")
-	_assert(grid.custom_minimum_size.y <= view.cell_size.y + view.group_header_height,
-		"a one-row page is one row tall (got %.0f)" % grid.custom_minimum_size.y)
+	_assert(is_equal_approx(view._row_height, view.cell_size.y), "a one-row page keeps full-size rows (%.0f)" % view._row_height)
+	panel.queue_free()
+
+
+## The panel is DevicePanel.HEIGHT tall whatever its view holds: a full page with a title strip
+## over every row shrinks its rows to fit instead of growing the panel.
+func _test_fixed_height() -> void:
+	var params := []
+	for i in 16:
+		params.append(_float_param(i, "Knob %d" % i))
+	var instance: Object = _instance("Tall Plugin", params)
+	var panel: Control = await _panel_for(instance)
+	var view: Control = panel._panel_view
+	var tall := {"title": "Tall", "groups": [], "controls": []}
+	for row in 4:
+		tall.groups.append({"id": "g%d" % row, "title": "Row %d" % row, "rect": [0, row, 4, 1]})
+		for col in 4:
+			tall.controls.append(_knob_control(row * 4 + col, [col, row, 1, 1], "g%d" % row))
+	view.layout.pages.assign([tall])
+	view._build_page(0)
+	for _i in 2:
+		await process_frame
+	_assert(is_equal_approx(panel.size.y, panel.HEIGHT), "the panel is %.0f px tall (got %.0f)" % [panel.HEIGHT, panel.size.y])
+	_assert(view._row_height < view.cell_size.y, "rows shrink to fit (%.0f)" % view._row_height)
+	var grid_bottom: float = view._grid.get_global_rect().end.y
+	var lowest := 0.0
+	for control in view._controls:
+		lowest = maxf(lowest, control.get_global_rect().end.y)
+	_assert(lowest <= grid_bottom + 0.5, "every control stays inside the view (lowest %.0f, view bottom %.0f)" % [lowest, grid_bottom])
+	_assert(view._grid.get_global_rect().end.y <= panel.get_global_rect().end.y, "the view stays inside the panel")
 	panel.queue_free()
 
 
@@ -211,7 +246,6 @@ func _test_groups_fill_and_spread() -> void:
 	var narrow := {"title": "Narrow", "groups": [{"id": "n", "title": "N", "rect": [0, 0, 2, 1]}],
 		"controls": [_knob_control(0, [0, 0, 1, 1], "n"), _knob_control(1, [1, 0, 1, 1], "n")]}
 	view.layout.pages.assign([page, narrow])
-	view._build_page_tabs()
 	view._build_page(0)
 	await process_frame
 	var centers := {}

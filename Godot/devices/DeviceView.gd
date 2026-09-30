@@ -9,6 +9,11 @@
 ## Drum Machine pad), e.g. to remove the slot.
 signal child_context_menu_requested(child: DeviceInstance)
 
+## The tabs this view wants in the DevicePanel header (`get_header_tabs`), or the selected one,
+## changed. Emitted by subclasses.
+@warning_ignore("unused_signal")
+signal header_tabs_changed
+
 var device : DeviceInstance
 var channel_id: int
 var device_position: int
@@ -66,6 +71,22 @@ func _notification(what: int) -> void:
 ## Override to disconnect whatever _on_bind() connected. `device` is still set.
 func _on_unbind() -> void:
 	pass
+
+## Titles of the tabs (pages) this view wants in the DevicePanel's top header; empty for none.
+## Views don't draw tab bars of their own, so the panel's fixed height stays for content.
+func get_header_tabs() -> PackedStringArray:
+	return PackedStringArray()
+
+
+## Index of the selected header tab.
+func get_header_tab() -> int:
+	return 0
+
+
+## The user picked header tab `index`.
+func select_header_tab(_index: int) -> void:
+	pass
+
 
 ## Called when view becomes visible (subscribe to data streams)
 ## Override to subscribe to device data (e.g., spectrum, oscilloscope)

@@ -249,7 +249,7 @@ func _test_footprint() -> void:
 	_assert(SimpleControlKinds.footprint(SimpleControlKinds.ENVELOPE) == Vector2i(3, 3), "envelope footprint fits the knob row")
 
 
-## The whole loop in a SimpleView: the source strip appears, clicking a source enters assign mode,
+## The whole loop in a SimpleView: the source column appears, clicking a source enters assign mode,
 ## dragging a knob adds a route, the button count and arc follow, Esc leaves.
 func _test_simple_view_loop() -> void:
 	var inst = _instance()
@@ -258,9 +258,12 @@ func _test_simple_view_loop() -> void:
 	view.bind_to_device(inst)
 	view._on_view_shown()
 	await process_frame
-	var strip: HBoxContainer = view._mod_strip
-	_assert(strip.visible and strip.get_child_count() == 2, "the strip shows one button per source")
+	_assert(view._mods.visible and view._mod_grid.get_child_count() == 2, "the column shows one button per source")
+	_assert(view._mod_grid.columns == 2, "sources sit two to a row")
 	var lfo_button: Button = view._mod_buttons["lfo1"]
+	_assert(is_equal_approx(lfo_button.size.x, lfo_button.size.y), "source buttons are square (%s)" % lfo_button.size)
+	_assert(view._mods.position.x < view._grid.position.x, "the source column is left of the page")
+	_assert(lfo_button.text == "LFO 1", "a source's button is labelled with its name: %s" % lfo_button.text)
 	lfo_button.button_pressed = true
 	lfo_button.toggled.emit(true)
 	_assert(view._assign_source == "lfo1", "clicking a source enters assign mode")
@@ -280,7 +283,7 @@ func _test_simple_view_loop() -> void:
 		_motion(node, Vector2(0, -30))
 		_click(node, false, false)
 		_assert(inst.get_mod_amount("lfo1", param_id) > 0.0, "the drag added a route")
-		_assert(lfo_button.text == "LFO 1 1", "the button shows its route count: %s" % lfo_button.text)
+		_assert(lfo_button.text == "LFO 1\n1", "the button shows its route count: %s" % lfo_button.text)
 		_assert(node.mod_ranges.size() == 1, "the control's arc follows the signal")
 	var esc := InputEventAction.new()
 	esc.action = "ui_cancel"

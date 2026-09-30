@@ -1,16 +1,26 @@
 ## SimpleView.gd
 ## The Panel view generated from a device's parameters (REQ-001, REQ-009). Loads (or generates)
 ## the device's `SimpleLayout` through `SimpleLayoutStore`, lays out one `SimpleControl` per
-## layout control on a grid of fixed-size cells, and shows page tabs when there is more than one
-## page. The view never scrolls: its root is a VBoxContainer (tabs above the grid) whose minimum
-## size is the tabs plus the current page, so it grows and shrinks as pages are switched.
+## layout control on a grid of cells, and hands its page titles to the DevicePanel header
+## (`get_header_tabs`) when there is more than one page. The root is an HBoxContainer: the
+## modulation sources in a scrolling two-column grid on the left, then the page grid. The view is
+## as wide as the current page, and fits the panel's fixed height by shrinking rows; only the
+## source column scrolls.
 ## Edit mode (move/resize/rename/add/remove controls) is Phase 4 (T-014/T-015), not implemented here.
 
 class_name SimpleView extends DeviceView
 
 const SimpleControlScene := preload("res://devices/simple_view/SimpleControl.tscn")
 
-## Pixel size of one grid cell, including the margin below.
+## Side of a (square) modulation source button.
+const MOD_BUTTON_SIZE := 50.0
+## Font size of a source button's name and route count.
+const MOD_BUTTON_FONT_SIZE := 10
+## Rows never get shorter than this, however little height the panel leaves.
+const MIN_ROW_HEIGHT := 32.0
+
+## Pixel size of one grid cell, including the margin below. Rows shrink below `cell_size.y` when
+## the page doesn't fit the view's height; cells never grow past it.
 @export var cell_size := Vector2(76, 68)
 ## Gap between adjacent cells.
 @export var cell_margin := 6.0
@@ -25,7 +35,9 @@ const SimpleControlScene := preload("res://devices/simple_view/SimpleControl.tsc
 
 static var logger := Log.make("SimpleView")
 
-@onready var _page_tabs: TabBar = $PageTabs
+## Source column for a device that offers modulation; hidden for devices without.
+@onready var _mods: ScrollContainer = $Mods
+@onready var _mod_grid: GridContainer = $Mods/Buttons
 @onready var _grid: Control = $Grid
 
 var layout: SimpleLayout = null
@@ -36,11 +48,14 @@ var _group_boxes: Array[Control] = []
 ## down by the group title strips above it. Grid cells stay square in the layout model; only
 ## the pixel placement makes room for group titles.
 var _row_y: PackedFloat32Array = []
+## Pixel height of one row on the current page: `cell_size.y`, or less when the page's rows and
+## title strips don't fit the grid's height.
+var _row_height := 68.0
+## Grid height the current page was placed for; a different height rebuilds it.
+var _built_height := -1.0
 ## Group id → `{rect, box}` on the current page: the group's saved cell rect and the cell rect
 ## its box is drawn over after growing into the free space to its right and below.
 var _group_fit := {}
-## Source buttons for a device that offers modulation; hidden for devices without.
-var _mod_strip: HBoxContainer = null
 ## Source id → its toggle button.
 var _mod_buttons := {}
 ## The source in assign mode ("" when none): dragging a modulatable control sets its amount.
@@ -48,16 +63,8 @@ var _assign_source := ""
 
 
 func _ready() -> void:
-	_page_tabs.clear_tabs()
-	
-	if not _page_tabs.tab_changed.is_connected(_on_tab_changed):
-		_page_tabs.tab_changed.connect(_on_tab_changed)
-	_mod_strip = HBoxContainer.new()
-	_mod_strip.add_theme_constant_override("separation", 3)
-	_mod_strip.visible = false
-	add_child(_mod_strip)
-	move_child(_mod_strip, _grid.get_index())
 	_grid.gui_input.connect(_on_grid_gui_input)
+	_grid.resized.connect(_on_grid_resized)
 
 
 ## Load (or generate) the layout and build the current page.
@@ -102,28 +109,41 @@ func _reload() -> void:
 		return
 	layout = SimpleLayoutStore.load_or_generate(device.device, device.get_parameters())
 	_current_page = clampi(_current_page, 0, maxi(layout.pages.size() - 1, 0))
-	_build_page_tabs()
-	_build_mod_strip()
+	_build_mod_buttons()
 	_build_page(_current_page)
+	header_tabs_changed.emit()
 
 
-func _on_tab_changed(index: int) -> void:
-	_build_page(index)
+## ============================================================================
+## HEADER TABS (pages)
+## ============================================================================
+
+## Page titles, shown as tabs in the DevicePanel header; none for a single page.
+func get_header_tabs() -> PackedStringArray:
+	var titles := PackedStringArray()
+	if layout != null and layout.pages.size() > 1:
+		for page in layout.pages:
+			titles.append(String(page.get("title", "")))
+	return titles
+
+
+func get_header_tab() -> int:
+	return _current_page
+
+
+func select_header_tab(index: int) -> void:
+	if index != _current_page:
+		_build_page(index)
 
 
 ## ============================================================================
 ## BUILD
 ## ============================================================================
 
-func _build_page_tabs() -> void:
-	_page_tabs.tab_changed.disconnect(_on_tab_changed)
-	_page_tabs.clear_tabs()
-	for page in layout.pages:
-		_page_tabs.add_tab(String(page.get("title", "")))
-	_page_tabs.visible = layout.pages.size() > 1
-	if layout.pages.size() > 0:
-		_page_tabs.current_tab = _current_page
-	_page_tabs.tab_changed.connect(_on_tab_changed)
+## The panel's height reached the grid (or changed): place the page for it.
+func _on_grid_resized() -> void:
+	if layout != null and not is_equal_approx(_grid.size.y, _built_height):
+		_build_page(_current_page)
 
 
 func _build_page(index: int) -> void:
@@ -132,15 +152,15 @@ func _build_page(index: int) -> void:
 	if layout == null or index < 0 or index >= layout.pages.size():
 		return
 	var page: Dictionary = layout.pages[index]
+	_built_height = _grid.size.y
 	_compute_row_y(page)
 	var page_columns := _page_columns(page)
 	_group_fit = fit_groups(page, page_columns, _used_rows(page))
-	# Only as big as this page, so a sparse page doesn't leave a wide empty area (the devices
-	# beside this one move over when pages are switched). The view (a VBoxContainer) takes its
-	# minimum size from this, so the DevicePanel grows and shrinks to fit instead of scrolling;
-	# pages split content that doesn't fit. The page tabs clip and scroll with arrow buttons, so
-	# they only need room for one tab plus the arrows.
-	_grid.custom_minimum_size = Vector2(page_columns * cell_size.x, _row_y[_used_rows(page)])
+	# Only as wide as this page, so a sparse page doesn't leave a wide empty area (the devices
+	# beside this one move over when pages are switched). The view takes its minimum width from
+	# this, so the DevicePanel grows and shrinks to fit instead of scrolling; pages split content
+	# that doesn't fit. No minimum height: the panel's height is fixed, and rows shrink to fit it.
+	_grid.custom_minimum_size = Vector2(page_columns * cell_size.x, 0)
 	for group in page.get("groups", []):
 		_add_group_box(group)
 	for control_data in page.get("controls", []):
@@ -241,24 +261,35 @@ func _used_rows(page: Dictionary) -> int:
 
 
 ## Fill `_row_y` for `page`: every row where a titled group starts gets a header strip above it.
+## Rows are `cell_size.y` tall, or shorter when the used rows and their strips don't fit the
+## grid's height (a grid with no height yet, as in a test, keeps full-size rows).
 func _compute_row_y(page: Dictionary) -> void:
+	var used_rows := _used_rows(page)
 	var header_rows := {}
 	for group in page.get("groups", []):
 		if not String(group.get("title", "")).is_empty():
 			header_rows[GridPacker.rect_from_array(group.rect).position.y] = true
+	_row_height = cell_size.y
+	if _grid.size.y > 0.0:
+		var strips := 0
+		for row in header_rows:
+			if row < used_rows:
+				strips += 1
+		var fit := (_grid.size.y - strips * group_header_height) / used_rows
+		_row_height = clampf(fit, MIN_ROW_HEIGHT, cell_size.y)
 	_row_y.resize(layout.rows + 1)
 	var y := 0.0
 	for row in range(layout.rows + 1):
 		if header_rows.has(row):
 			y += group_header_height
 		_row_y[row] = y
-		y += cell_size.y
+		y += _row_height
 
 
 ## Pixel rect of a grid rect on the current page (excluding any header strip above it).
 func _pixel_rect(rect: Rect2i) -> Rect2:
 	var top: float = _row_y[clampi(rect.position.y, 0, layout.rows)]
-	var bottom: float = _row_y[clampi(rect.end.y - 1, 0, layout.rows)] + cell_size.y
+	var bottom: float = _row_y[clampi(rect.end.y - 1, 0, layout.rows)] + _row_height
 	return Rect2(rect.position.x * cell_size.x, top, rect.size.x * cell_size.x, bottom - top)
 
 
@@ -316,21 +347,28 @@ func _on_mod_route_changed(_source: String, param_id: int, _amount: float) -> vo
 	_update_mod_button_labels()
 
 
-## One toggle button per modulation source, in the source's color, with its route count.
-func _build_mod_strip() -> void:
-	for child in _mod_strip.get_children():
+## One square toggle button per modulation source, in the source's color, with its name and route
+## count, two to a row in the scrolling column left of the page.
+func _build_mod_buttons() -> void:
+	for child in _mod_grid.get_children():
+		_mod_grid.remove_child(child)
 		child.queue_free()
 	_mod_buttons.clear()
 	var sources := device.get_mod_sources() if device else ([] as Array[Dictionary])
-	_mod_strip.visible = not sources.is_empty()
+	_mods.visible = not sources.is_empty()
 	for i in sources.size():
 		var id: String = sources[i]["id"]
 		var color := ModDisplay.source_color(i)
 		var button := Button.new()
+		button.name = id.validate_node_name()
+		button.custom_minimum_size = Vector2(MOD_BUTTON_SIZE, MOD_BUTTON_SIZE)
 		button.toggle_mode = true
 		button.focus_mode = Control.FOCUS_NONE
 		button.tooltip_text = "Modulate with %s: click, then drag a control" % sources[i]["name"]
-		button.add_theme_font_size_override("font_size", 12)
+		# The name wraps (e.g. "Filter" over "Env") so it fits the square.
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.clip_text = true
+		button.add_theme_font_size_override("font_size", MOD_BUTTON_FONT_SIZE)
 		button.add_theme_color_override("font_color", color)
 		button.add_theme_color_override("font_hover_color", color)
 		button.add_theme_color_override("font_pressed_color", Color.BLACK)
@@ -342,7 +380,7 @@ func _build_mod_strip() -> void:
 		button.toggled.connect(func(pressed): set_assign_source(id if pressed else ""))
 		button.mouse_entered.connect(_highlight_targets.bind(id, color))
 		button.mouse_exited.connect(_highlight_targets.bind("", color))
-		_mod_strip.add_child(button)
+		_mod_grid.add_child(button)
 		_mod_buttons[id] = button
 	_update_mod_button_labels()
 
@@ -353,13 +391,11 @@ static func _source_style(color: Color, filled: bool) -> StyleBoxFlat:
 	style.border_color = color
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(3)
-	style.content_margin_left = 6
-	style.content_margin_right = 6
-	style.content_margin_top = 1
-	style.content_margin_bottom = 1
+	style.set_content_margin_all(2)
 	return style
 
 
+## Each button's label: the source's name, with its route count on a line below once it has routes.
 func _update_mod_button_labels() -> void:
 	if device == null:
 		return
@@ -368,7 +404,7 @@ func _update_mod_button_labels() -> void:
 		if button == null:
 			continue
 		var count := device.get_route_count_for_source(source["id"])
-		button.text = source["name"] if count == 0 else "%s %d" % [source["name"], count]
+		button.text = source["name"] if count == 0 else "%s\n%d" % [source["name"], count]
 
 
 func _source_color(source: String) -> Color:

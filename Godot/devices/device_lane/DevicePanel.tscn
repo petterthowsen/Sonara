@@ -103,10 +103,9 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="Device" type="PanelContainer" unique_id=1822906056]
-custom_minimum_size = Vector2(160, 0)
+custom_minimum_size = Vector2(160, 350)
 offset_right = 215.0
-offset_bottom = 235.0
-size_flags_vertical = 3
+offset_bottom = 350.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
 

@@ -1,6 +1,6 @@
 ## One device in a DeviceRow: its DevicePanel, then one DeviceSlotGroup per open slot when the
 ## device is a container. The children sit beside the container instead of inside its panel, so
-## panels keep the lane's full height.
+## every panel keeps the same fixed height (DevicePanel.HEIGHT).
 class_name DeviceLaneItem extends HBoxContainer
 
 const DevicePanelScene: PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
@@ -34,7 +34,8 @@ func setup(inst: DeviceInstance, top_inset: int, in_slot: bool) -> void:
 	margin.add_theme_constant_override("margin_right", DeviceRow.PANEL_MARGIN)
 	add_child(margin)
 	panel = DevicePanelScene.instantiate()
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Fixed height (DevicePanel.HEIGHT), whatever the lane's height.
+	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	panel.request_context_menu.connect(_on_panel_context_menu)
 	panel.request_child_context_menu.connect(_on_child_context_menu)
 	margin.add_child(panel)

@@ -1,6 +1,14 @@
 # A full device panel, as shown in the DeviceLane
 class_name DevicePanel extends PanelContainer
 
+## Height of every device panel. A panel is as wide as its content needs, but views get only the
+## height left below the header and must fit it (the Simple View shrinks its rows); tabs a view
+## wants go in the header (`DeviceView.get_header_tabs`), not inside the view.
+const HEIGHT := 350.0
+
+## Widest the device name gets while view tabs share the header with it.
+const NAME_MAX_WIDTH := 140.0
+
 var logger : Log = Log.make("DevicePanel")
 
 ## Top header: light and name. Drops onto it go onto the device.
@@ -68,12 +76,21 @@ var _cc_list: ParameterList
 ## closes again once a view arrives. Any tab click by the user clears it.
 var _params_auto_opened := false
 
+## The shown view's tabs (e.g. Simple View pages), in the top header after the name.
+var header_tabs: TabBar
+## View whose tabs `header_tabs` shows (null when none is shown).
+var _tabs_view: DeviceView = null
+## True while `header_tabs` is being filled from the view, so its signals don't echo back.
+var _syncing_tabs := false
+
 signal request_context_menu()
 ## The Panel view asked for the context menu of one of the device's slot chains.
 signal request_child_context_menu(child: DeviceInstance)
 
 func _ready() -> void:
+	custom_minimum_size.y = HEIGHT
 	_create_cc_tab()
+	_create_header_tabs()
 	_create_parameter_lists()
 
 	# Parameters/CCs/File share a ButtonGroup; clicking the active tab collapses its pane.
@@ -128,6 +145,86 @@ func _create_cc_tab() -> void:
 	ccs_box = ccs_scroll.get_node("VBox")
 	for child in ccs_box.get_children():
 		child.queue_free()
+
+
+## Tab bar for the shown view's tabs, after the name in the top header. It clips and scrolls with
+## arrows, so it never widens the panel by more than one tab. The header always keeps the tab
+## bar's height, so panels line up whether or not they show tabs.
+func _create_header_tabs() -> void:
+	header_tabs = TabBar.new()
+	header_tabs.name = "ViewTabs"
+	header_tabs.clip_tabs = true
+	header_tabs.tab_alignment = TabBar.ALIGNMENT_LEFT
+	header_tabs.focus_mode = Control.FOCUS_NONE
+	header_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_tabs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header_tabs.add_theme_font_size_override("font_size", 12)
+	var row := name_label.get_parent()
+	row.add_child(header_tabs)
+	row.move_child(header_tabs, name_label.get_index() + 1)
+	header_tabs.add_tab("M")
+	(row as Control).custom_minimum_size.y = header_tabs.get_combined_minimum_size().y
+	header_tabs.clear_tabs()
+	header_tabs.visible = false
+	header_tabs.tab_changed.connect(_on_header_tab_changed)
+
+
+## Show the tabs of the view in the View pane (`DeviceView.get_header_tabs`); none while the pane
+## is hidden. Follows the view's `header_tabs_changed`.
+func _update_header_tabs() -> void:
+	if header_tabs == null:
+		return
+	var view := _shown_view() if view_pane.visible else null
+	if view != _tabs_view:
+		if is_instance_valid(_tabs_view) and _tabs_view.header_tabs_changed.is_connected(_update_header_tabs):
+			_tabs_view.header_tabs_changed.disconnect(_update_header_tabs)
+		_tabs_view = view
+		if view:
+			view.header_tabs_changed.connect(_update_header_tabs)
+	var titles := view.get_header_tabs() if view else PackedStringArray()
+	_syncing_tabs = true
+	var shown := PackedStringArray()
+	for i in header_tabs.tab_count:
+		shown.append(header_tabs.get_tab_title(i))
+	if shown != titles:
+		header_tabs.clear_tabs()
+		for title in titles:
+			header_tabs.add_tab(title)
+	if not titles.is_empty():
+		header_tabs.current_tab = clampi(view.get_header_tab(), 0, titles.size() - 1)
+	_syncing_tabs = false
+	header_tabs.visible = not titles.is_empty()
+	_fit_name_to_tabs()
+
+
+## With tabs showing, the name takes only its text's width (up to `NAME_MAX_WIDTH`) and the tabs
+## start right after it, left-aligned; without, the name takes the whole header.
+func _fit_name_to_tabs() -> void:
+	if header_tabs == null:
+		return
+	if not header_tabs.visible:
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_label.custom_minimum_size.x = 0
+		return
+	var label: Label = name_label.get_node("Label")
+	var font := label.get_theme_font("font")
+	var width := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+	name_label.size_flags_horizontal = Control.SIZE_FILL
+	name_label.custom_minimum_size.x = minf(ceilf(width) + 4.0, NAME_MAX_WIDTH)
+
+
+func _on_header_tab_changed(index: int) -> void:
+	if not _syncing_tabs and is_instance_valid(_tabs_view):
+		_tabs_view.select_header_tab(index)
+
+
+## The view showing in the View pane: the Companion view while it's up, else the Panel view.
+func _shown_view() -> DeviceView:
+	if _companion_view and _companion_view.visible:
+		return _companion_view
+	if _panel_view and _panel_view.visible:
+		return _panel_view
+	return null
 
 
 ## Host interchangeable ParameterList instances in the Parameters and CCs panes.
@@ -221,6 +318,7 @@ func _on_reload_pressed() -> void:
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
 		name_label.set_value(new_name)
+		_fit_name_to_tabs()
 	if _window_popup:
 		_window_popup.title = new_name
 
@@ -405,6 +503,7 @@ func _on_window_toggled(pressed: bool) -> void:
 func _update_view_pane_visibility() -> void:
 	var has_view := _panel_view != null or _companion_view != null
 	view_pane.visible = has_view and view_button.button_pressed
+	_update_header_tabs()
 
 
 ## Show the CCs tab only when this device has unlabeled MIDI CCs.
