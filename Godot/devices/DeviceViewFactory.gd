@@ -9,6 +9,7 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.layer": preload("res://devices/builtin/LayerDefaultView.tscn"),
 	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerDefaultView.tscn"),
 	"sonara.builtin.drum_machine": preload("res://devices/builtin/DrumMachineDefaultView.tscn"),
+	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
