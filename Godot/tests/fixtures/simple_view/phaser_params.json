@@ -1,0 +1,20 @@
+{
+  "device": {"id": "sonara.builtin.phaser", "name": "Phaser", "features": []},
+  "params": [
+    {"id":0,"name":"Stages","module":"Phaser","unit":"","type":"enum","min":0,"max":1,"default":2,"stepped":true,"logarithmic":false,"enum_values":["2","4","6","8","12"]},
+    {"id":1,"name":"Sweep","module":"Phaser","unit":"Hz","type":"float","min":20,"max":16000,"default":800,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":2,"name":"Spread","module":"Phaser","unit":"%","type":"float","min":0,"max":100,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":3,"name":"Feedback","module":"Phaser","unit":"%","type":"float","min":-95,"max":95,"default":40,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":10,"name":"Shape","module":"LFO","unit":"","type":"enum","min":0,"max":1,"default":0,"stepped":true,"logarithmic":false,"enum_values":["Sine","Triangle"]},
+    {"id":11,"name":"Rate","module":"LFO","unit":"Hz","type":"float","min":0.01,"max":20,"default":0.3,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":12,"name":"Sync","module":"LFO","unit":"","type":"enum","min":0,"max":1,"default":0,"stepped":true,"logarithmic":false,"enum_values":["Off","4/1","4/1.","4/1T","2/1","2/1.","2/1T","1/1","1/1.","1/1T","1/2","1/2.","1/2T","1/4","1/4.","1/4T","1/8","1/8.","1/8T","1/16","1/16.","1/16T","1/32","1/32.","1/32T"]},
+    {"id":13,"name":"Depth","module":"LFO","unit":"oct","type":"float","min":0,"max":6,"default":2,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":14,"name":"Stereo Phase","module":"LFO","unit":"°","type":"float","min":0,"max":180,"default":90,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":20,"name":"Amount","module":"Envelope","unit":"oct","type":"float","min":-4,"max":4,"default":0,"stepped":false,"logarithmic":false,"enum_values":[]},
+    {"id":21,"name":"Attack","module":"Envelope","unit":"ms","type":"float","min":0.1,"max":100,"default":5,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":22,"name":"Release","module":"Envelope","unit":"ms","type":"float","min":5,"max":2000,"default":200,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":30,"name":"Low Cut","module":"Tone","unit":"Hz","type":"float","min":20,"max":2000,"default":20,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":31,"name":"High Cut","module":"Tone","unit":"Hz","type":"float","min":1000,"max":20000,"default":20000,"stepped":false,"logarithmic":true,"enum_values":[]},
+    {"id":40,"name":"Mix","module":"Output","unit":"%","type":"float","min":0,"max":100,"default":50,"stepped":false,"logarithmic":false,"enum_values":[]}
+  ]
+}
