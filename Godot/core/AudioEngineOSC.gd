@@ -13,6 +13,8 @@ signal engine_disconnected()
 
 # Device data subscriptions (`osc_path` is `/channel/{id}/device/{n}` or nested `/child/{n}`)
 signal device_spectrum_received(osc_path: String, spectrum: PackedFloat32Array)
+## Every `{osc_path}/data` message, whatever its data type, with the raw blob.
+signal device_data_received(osc_path: String, data_type: String, blob: PackedByteArray)
 
 # ============================================================================
 # CONSTANTS
@@ -221,6 +223,7 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			if data_type == "spectrum":
 				var spectrum = _decode_f32_array(blob)
 				device_spectrum_received.emit(osc_path, spectrum)
+			device_data_received.emit(osc_path, data_type, blob)
 		
 		routed = true
 	
