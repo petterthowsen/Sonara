@@ -172,6 +172,14 @@ const DUCK_SCALE: f32 = 20.0;
 /// Feedback signals below this pass the soft clip unchanged.
 const CLIP_KNEE: f32 = 0.6;
 
+/// Rational tanh approximation (error under 2 %), exact at 0 and clamped to ±1 past |x| = 3.
+#[inline]
+fn fast_tanh(x: f32) -> f32 {
+    let x = x.clamp(-3.0, 3.0);
+    let x2 = x * x;
+    x * (27.0 + x2) / (27.0 + 9.0 * x2)
+}
+
 /// Linear up to the knee, then a tanh shoulder to ±1 (continuous slope).
 #[inline]
 fn soft_clip(x: f32) -> f32 {
@@ -180,7 +188,7 @@ fn soft_clip(x: f32) -> f32 {
         x
     } else {
         let room = 1.0 - CLIP_KNEE;
-        (CLIP_KNEE + room * ((a - CLIP_KNEE) / room).tanh()).copysign(x)
+        (CLIP_KNEE + room * fast_tanh((a - CLIP_KNEE) / room)).copysign(x)
     }
 }
 
@@ -478,7 +486,7 @@ impl AudioDevice for DelayDevice {
                 let mut w = self.tone[ch].process(read[ch], filter_g.0, filter_g.1);
                 if tape && drive > 0.0 {
                     let g = drive * 6.0;
-                    w = (g * w).tanh() / g;
+                    w = fast_tanh(g * w) / g;
                 }
                 wet[ch] = w;
                 own_fb[ch] = soft_clip(w * fb);
@@ -935,5 +943,32 @@ mod tests {
             d.update_sleep_state(false);
         }
         assert!(!d.is_sleeping());
+    }
+
+    /// Worst case: Tape, Ping-Pong, Drive, modulation, ducking and a tempo-synced time.
+    /// `cargo test --release cpu_delay -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cpu_delay() {
+        const FRAMES: usize = 256;
+        let mut d = DelayDevice::new(SR, 5000.0);
+        d.prepare(SR, FRAMES);
+        d.set_parameter(MODE, 1.0);
+        d.set_parameter(ROUTING, 0.5);
+        set_real(&mut d, FEEDBACK, 90.0);
+        set_real(&mut d, DRIVE, 60.0);
+        set_real(&mut d, MOD_DEPTH, 50.0);
+        set_real(&mut d, DUCKING, 50.0);
+        let input = stereo(&white_noise(FRAMES, 0.3, 3));
+        let mut out = vec![0.0; FRAMES * 2];
+        let blocks = (SR as usize * 10) / FRAMES;
+        let start = std::time::Instant::now();
+        for _ in 0..blocks {
+            d.process_block(&input, &mut out, FRAMES);
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let percent = elapsed / 10.0 * 100.0;
+        println!("Delay worst case: {percent:.3} % of a core");
+        assert!(percent < 0.5, "{percent} % of a core");
     }
 }
