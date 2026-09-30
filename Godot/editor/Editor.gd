@@ -60,6 +60,9 @@ signal view_changed(view: int)  # Editor.View
 
 @onready var file_dialog : FileDialog = $FileDialog
 
+# shows DAWproject transfer reports and import/export errors
+@onready var transfer_report_dialog: TransferReportDialog = $TransferReportDialog
+
 @onready var play_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/PlayButton
 @onready var stop_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/StopButton
 
@@ -493,6 +496,44 @@ func load_project(path: String) -> bool:
 	open_project(loaded_project, path)
 	logger.info("[Editor] Project loaded: ", path)
 	return true
+
+## Exports the open project to a `.dawproject`. Shows the transfer report when it isn't empty and
+## an error dialog on failure.
+func export_dawproject(path: String) -> bool:
+	if project == null:
+		return false
+	var result: Dictionary = await DawProjectExporter.new().export_project(project, path)
+	if not result.ok:
+		logger.error("[Editor] DAWproject export failed: ", result.error)
+		transfer_report_dialog.show_error("Export failed", result.error)
+		return false
+	logger.info("[Editor] DAWproject exported: ", path)
+	if not result.report.is_empty():
+		transfer_report_dialog.show_report("Export report", result.report)
+	return true
+
+
+## Imports a `.dawproject` as a new unsaved project. On failure the open project is left alone
+## and an error dialog is shown, except when `audio_dir_failed` is set: the caller then asks for
+## another folder and calls again with `audio_dir`. Returns the importer's result dictionary.
+func import_dawproject(path: String, audio_dir: String = "") -> Dictionary:
+	var result: Dictionary = DawProjectImporter.new().import_file(path, audio_dir)
+	if not result.ok:
+		if not result.audio_dir_failed:
+			logger.error("[Editor] DAWproject import failed: ", result.error)
+			transfer_report_dialog.show_error("Import failed", result.error)
+		return result
+	var imported := Project.from_json(result.project_json)
+	if imported == null:
+		result.ok = false
+		result.error = "The imported project could not be created"
+		transfer_report_dialog.show_error("Import failed", result.error)
+		return result
+	open_project(imported, "")
+	logger.info("[Editor] DAWproject imported: ", path)
+	if not result.report.is_empty():
+		transfer_report_dialog.show_report("Import report", result.report)
+	return result
 
 # Note: Track and Channel management now done via Project methods
 # UI components should call project.create_track(), channel.set_volume(), etc.

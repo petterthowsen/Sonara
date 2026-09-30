@@ -1,0 +1,27 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://dawproject/TransferReportDialog.gd" id="1_report"]
+
+[node name="TransferReportDialog" type="AcceptDialog"]
+title = "Transfer report"
+size = Vector2i(560, 360)
+exclusive = false
+script = ExtResource("1_report")
+
+[node name="Content" type="VBoxContainer" parent="."]
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 552.0
+offset_bottom = 311.0
+
+[node name="Summary" type="Label" parent="Content"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Entries" type="ItemList" parent="Content"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+auto_height = false
+allow_search = false

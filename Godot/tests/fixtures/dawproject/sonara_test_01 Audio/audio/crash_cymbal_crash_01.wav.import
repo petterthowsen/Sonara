@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://2sxvpr8m5pyb"
+path="res://.godot/imported/crash_cymbal_crash_01.wav-d2690d4b3a7ffa01d32c5dc340bade93.sample"
+
+[deps]
+
+source_file="res://tests/fixtures/dawproject/sonara_test_01 Audio/audio/crash_cymbal_crash_01.wav"
+dest_files=["res://.godot/imported/crash_cymbal_crash_01.wav-d2690d4b3a7ffa01d32c5dc340bade93.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

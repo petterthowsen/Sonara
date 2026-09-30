@@ -96,6 +96,7 @@ The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you
 | UI components: design principles, knobs, sliders, meters, tooltips | `godot-ui-components.md` |
 | Asset browser and providers | `godot-asset-system.md` |
 | Config system | `godot-config-system.md` |
+| DAWproject import and export, transfer report | `dawproject.md` |
 | Drag and drop | `godot-drag-and-drop.md` |
 
 ## Debugging

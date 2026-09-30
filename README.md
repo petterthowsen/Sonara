@@ -42,7 +42,8 @@ Linux-first DAW: Godot 4 for the UI, Rust for the audio engine, OSC between them
   (Arch: `alsa-lib libsndfile`)
 - Godot 4.7
 
-Optional: `liblo-tools` (`oscsend`) for OSC debugging.
+Optional: `liblo-tools` (`oscsend`) for OSC debugging, and `libxml2-utils` (`xmllint`) to
+check DAWproject exports against the schema in tests (Arch: `libxml2`).
 
 ## Run
 

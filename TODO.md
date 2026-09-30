@@ -180,6 +180,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
   - [ ] bouncing tracks or clips to audio clip on a new track
   - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio)?
 - [ ] Export MIDI
+- [x?] DAWproject import and export, core subset (tracks, channels, routing, sends, MIDI/audio clips, automation, markers, tempo and signature maps, CLAP and built-in devices with state, transfer report). Spec: `docs/specs/010-dawproject-core/`
 - [ ] Export menu with separate track (stem) selection
 
 ### Hardware & MIDI

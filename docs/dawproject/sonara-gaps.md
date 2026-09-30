@@ -35,21 +35,21 @@ These need only translation code, no new features:
 
 ### Infrastructure
 
-- [ ] **[core]** A DAWproject reader and writer: unzip, parse `project.xml` and `metadata.xml`,
+- [x] **[core]** A DAWproject reader and writer: unzip, parse `project.xml` and `metadata.xml`,
   resolve `id`/IDREF (forward references included), resolve nested `timeUnit` /
   `contentTimeUnit` scopes, and write the container with embedded files. Decide where it lives
   (Godot `XMLParser` + `ZIPReader` is enough; no engine change is needed for the file format
   itself).
-- [ ] **[core]** File menu entries: *Import DAWproject…* and *Export DAWproject…* next to the
+- [x] **[core]** File menu entries: *Import DAWproject…* and *Export DAWproject…* next to the
   `.sonara` dialogs in `Godot/editor/MainMenu.gd`.
-- [ ] **[core]** Import report: list what was dropped or approximated (unsupported plug-in
+- [x] **[core]** Import report: list what was dropped or approximated (unsupported plug-in
   formats, missing plug-ins, seconds-based content, flattened nesting) instead of failing
   silently.
-- [ ] **[core]** Unit conversion layer between DAWproject real units and Sonara values:
+- [x] **[core]** Unit conversion layer between DAWproject real units and Sonara values:
   channel volume `linear` (0–2) ↔ dB (Sonara clamps to −60…+12 dB); pan `normalized` 0–1 ↔
   −1…+1; send level; normalized device parameters (ADR-0005) ↔ each `RealParameter`'s
   `unit`/`min`/`max`.
-- [ ] **[core]** Audio file embedding on export (copy sources into `audio/…` in the ZIP) and
+- [x] **[core]** Audio file embedding on export (copy sources into `audio/…` in the ZIP) and
   extraction on import to a project-local folder, plus `external="true"` relative/absolute
   paths.
 - [ ] **[core]** Round-trip test fixtures: generate the upstream reference files
@@ -58,21 +58,21 @@ These need only translation code, no new features:
 
 ### Plug-in state
 
-- [ ] **[core]** **Sonara does not save CLAP plug-in state in `.sonara` projects today.**
+- [x] **[core]** **Sonara does not save CLAP plug-in state in `.sonara` projects today.**
   `DeviceInstance.to_json()` stores only `parameter_values`. The engine already supports
   `/plugin/save_state` → `/plugin/state/saved` (base64) and `/plugin/load_state`, but nothing in
   Godot calls them. DAWproject requires the full state as an embedded file, so this has to work
   first (and it fixes native projects too).
-- [ ] **[core]** Carry large states: plug-in states can be hundreds of KB, well over a safe UDP
+- [x] **[core]** Carry large states: plug-in states can be hundreds of KB, well over a safe UDP
   datagram (ADR-0003, OSC over localhost UDP). Needs chunking or a file-based hand-off (engine
   writes the state to a temp file and sends the path).
-- [ ] **[core]** Write and read the `.clap-preset` format the spec asks for. Verify whether it
+- [x] **[core]** Write and read the `.clap-preset` format the spec asks for. Verify whether it
   is the raw `clap_plugin_state` stream or a wrapped container (check Bitwig output and the
   CLAP `preset-load` extension) before implementing.
-- [ ] **[fidelity]** `Parameters` list on export: every automated device parameter needs a
+- [x] **[fidelity]** `Parameters` list on export: every automated device parameter needs a
   `<RealParameter id=… parameterID=… unit=… min=… max=…>` so automation can target it. CLAP
   gives min/max/default but no unit; export `unit="linear"` with the plug-in's native range.
-- [ ] **[fidelity]** Device metadata: `deviceVendor`, `pluginVersion`, `deviceRole`
+- [x] **[fidelity]** Device metadata: `deviceVendor`, `pluginVersion`, `deviceRole`
   (Sonara's `DeviceCategory` Instrument/Effect/Utility → `instrument`/`audioFX`; nothing maps
   to `noteFX`/`analyzer` except `spectrum_analyzer`).
 - [ ] **[fidelity]** Missing-plug-in placeholder: keep an unloadable device (unknown CLAP ID,
@@ -89,7 +89,7 @@ These need only translation code, no new features:
   makeup). Sonara has none.
 - [ ] **[fidelity]** Generic `Limiter`. Sonara has none.
 - [ ] **[fidelity]** Generic `NoiseGate` (includes `Range`). Sonara has none.
-- [ ] **[fidelity]** Export Sonara built-ins (`polysynth`, `delay`, `sfizz_device`, `sampler`,
+- [x] **[fidelity]** Export Sonara built-ins (`polysynth`, `delay`, `sfizz_device`, `sampler`,
   `drum_machine`, `layer`, `chain`, `spectrum_analyzer`) as `BuiltinDevice` with a vendor state
   file, so a Sonara → Sonara round-trip keeps them. Decide what the state file is (the device's
   JSON). SFZ and sample files it references must be embedded too.
@@ -98,13 +98,13 @@ These need only translation code, no new features:
 
 ### Transport, tempo and markers
 
-- [ ] **[core]** Tempo changes (`Arrangement/TempoAutomation`). Sonara has one static tempo in
+- [x] **[core]** Tempo changes (`Arrangement/TempoAutomation`). Sonara has one static tempo in
   `Project.tempo`, and the engine one `SetTempo(f32)`. Needs a tempo map in the engine clock
   (ADR-0007) and in `GridHelper` tick↔time conversion. Also needed to convert `seconds`-based
   content to beats on import.
-- [ ] **[fidelity]** Time signature changes (`TimeSignatureAutomation`). Sonara has one
+- [x] **[fidelity]** Time signature changes (`TimeSignatureAutomation`). Sonara has one
   static signature.
-- [ ] **[fidelity]** Marker ranges: `SongMarker` has `duration_ticks`, DAWproject markers are
+- [x] **[fidelity]** Marker ranges: `SongMarker` has `duration_ticks`, DAWproject markers are
   points. On export, write the start only (maybe an extra `"<name> end"` marker); on import,
   set duration 0.
 - [ ] **[later]** `metadata.xml` fields (Title, Artist, Album, Composer, Year, Genre,
@@ -117,7 +117,7 @@ These need only translation code, no new features:
 - [ ] **[fidelity]** Mute automation (`BoolParameter` target). `AutomationTarget.Kind` has
   only CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM.
 - [ ] **[fidelity]** Device bypass automation (`Device/Enabled` as a target).
-- [ ] **[fidelity]** Pan mode mapping: DAWproject has one pan value. Export
+- [x] **[fidelity]** Pan mode mapping: DAWproject has one pan value. Export
   `STEREO_BALANCE`/`MONO` as is; `STEREO_COMBINED` (width) and `STEREO_DUAL` lose information.
   Decide on the lossy mapping and document it.
 - [ ] **[fidelity]** Mono channels (`audioChannels="1"`). Sonara channels are stereo.
@@ -146,15 +146,15 @@ These need only translation code, no new features:
 
 ### Clips and audio
 
-- [ ] **[core]** Variable time warping (`Warps` with more than 2 events). Sonara supports one
+- [x] **[core]** Variable time warping (`Warps` with more than 2 events). Sonara supports one
   constant stretch factor from `recorded_bpm`. Import can fall back to the average ratio
   between the first and last warp and report it.
 - [ ] **[fidelity]** Seconds-based clip placement (`timeUnit="seconds"` timelines, and audio
   not locked to tempo). Sonara positions everything in ticks; needs the tempo map to convert,
   and has no "time-locked" clip mode.
-- [ ] **[fidelity]** Crossfades (negative `fadeInTime`). Sonara has per-clip fades but no
+- [x] **[fidelity]** Crossfades (negative `fadeInTime`). Sonara has per-clip fades but no
   crossfade concept; import can overlap the clips with ordinary fades.
-- [ ] **[fidelity]** Nested clip timelines (Bitwig puts a `Clips` of audio events inside each
+- [x] **[fidelity]** Nested clip timelines (Bitwig puts a `Clips` of audio events inside each
   arrangement clip). Import must flatten them into separate Sonara clip instances;
   export can write the flat form.
 - [ ] **[fidelity]** Clip-level automation (`Points` inside a clip, e.g. volume or a device
@@ -163,7 +163,7 @@ These need only translation code, no new features:
 - [ ] **[fidelity]** Per-instance gain and transpose (`ClipInstance.gain_offset`, `transpose`)
   have no DAWproject attribute. Export gain as clip-level `gain` expression points or bake it;
   bake transpose into note keys.
-- [ ] **[fidelity]** Automation tension: Sonara points have a `tension` curve; DAWproject has
+- [x] **[fidelity]** Automation tension: Sonara points have a `tension` curve; DAWproject has
   only `hold`/`linear`. Export must resample curved segments into extra linear points.
 - [ ] **[fidelity]** Comments on tracks, channels, clips (`Nameable@comment`). Sonara has no
   comment field.

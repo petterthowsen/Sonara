@@ -6,11 +6,11 @@ var logger : Log = Log.make("MainMenu")
 
 enum  MENU { File, Edit, View, AI }
 
-enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Quit}
+enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Sep3, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
-enum DialogMode { OPEN, SAVE, SAVE_AS }
+enum DialogMode { OPEN, SAVE, SAVE_AS, IMPORT_DAWPROJECT, EXPORT_DAWPROJECT, IMPORT_AUDIO_DIR }
 
 @onready var file: PopupMenu = $File
 @onready var edit: PopupMenu = $Edit
@@ -18,6 +18,7 @@ enum DialogMode { OPEN, SAVE, SAVE_AS }
 signal item_pressed(menu_id : int, id : int)
 
 var _current_dialog_mode: DialogMode
+var _pending_import_path: String
 var _file_dialog: FileDialog
 var _view_menu: PopupMenu
 var _ai_menu: PopupMenu
@@ -32,6 +33,9 @@ func _ready() -> void:
 	file.add_item("Save", FILE.Save)
 	file.add_item("Save As", FILE.Save_As)
 	file.add_separator("", FILE.Sep2)
+	file.add_item("Import DAWproject…", FILE.Import_DAWproject)
+	file.add_item("Export DAWproject…", FILE.Export_DAWproject)
+	file.add_separator("", FILE.Sep3)
 	file.add_item("Quit", FILE.Quit)
 	
 	# add edit menu items
@@ -77,6 +81,7 @@ func _ready() -> void:
 
 	_file_dialog = Sonara.editor.file_dialog
 	_file_dialog.file_selected.connect(_on_file_dialog_file_selected)
+	_file_dialog.dir_selected.connect(_on_file_dialog_dir_selected)
 
 
 func _on_item_pressed(item_id : int, menu_id : int):
@@ -95,6 +100,10 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_save_project()
 			FILE.Save_As:
 				_on_save_project_as()
+			FILE.Import_DAWproject:
+				_on_import_dawproject()
+			FILE.Export_DAWproject:
+				_on_export_dawproject()
 			FILE.Quit:
 				_on_quit()
 	
@@ -139,6 +148,7 @@ func _set_project_dependent_items_enabled(enabled: bool) -> void:
 	file.set_item_disabled(file.get_item_index(FILE.Close), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save_As), not enabled)
+	file.set_item_disabled(file.get_item_index(FILE.Export_DAWproject), not enabled)
 	
 	# Edit menu undo/redo depend on history, not just project open
 	_update_undo_redo_menu()
@@ -262,6 +272,47 @@ func _on_save_project_as() -> void:
 	_file_dialog.popup_centered_ratio(0.6)
 
 
+func _on_import_dawproject() -> void:
+	"""Show file dialog to pick a .dawproject to import."""
+	if not _file_dialog:
+		push_error("[MainMenu] FileDialog not available")
+		return
+	_current_dialog_mode = DialogMode.IMPORT_DAWPROJECT
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.filters = ["*.dawproject ; DAWproject Files"]
+	_file_dialog.title = "Import DAWproject"
+	_file_dialog.popup_centered_ratio(0.6)
+
+
+func _on_export_dawproject() -> void:
+	"""Show file dialog to export the open project as .dawproject."""
+	if not _file_dialog:
+		push_error("[MainMenu] FileDialog not available")
+		return
+	_current_dialog_mode = DialogMode.EXPORT_DAWPROJECT
+	_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.filters = ["*.dawproject ; DAWproject Files"]
+	_file_dialog.title = "Export DAWproject"
+	_file_dialog.current_dir = Sonara.get_projects_dir()
+	if Sonara.editor.project:
+		_file_dialog.current_file = Sonara.editor.project.project_name + ".dawproject"
+	_file_dialog.popup_centered_ratio(0.6)
+
+
+## Runs the import; when the audio folder can't be written, asks for another one and retries.
+func _import_dawproject(path: String, audio_dir: String = "") -> void:
+	var result: Dictionary = await Sonara.editor.import_dawproject(path, audio_dir)
+	if not result.ok and result.audio_dir_failed:
+		_pending_import_path = path
+		_current_dialog_mode = DialogMode.IMPORT_AUDIO_DIR
+		_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+		_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_file_dialog.title = "Choose a folder for the project's audio files"
+		_file_dialog.popup_centered_ratio(0.6)
+
+
 func _on_quit() -> void:
 	"""Quit application."""
 	# TODO: Prompt to save if modified
@@ -360,3 +411,14 @@ func _on_file_dialog_file_selected(path: String) -> void:
 			if not path.ends_with(".sonara"):
 				path += ".sonara"
 			await Sonara.editor.save_project(path)
+		DialogMode.IMPORT_DAWPROJECT:
+			await _import_dawproject(path)
+		DialogMode.EXPORT_DAWPROJECT:
+			if not path.ends_with(".dawproject"):
+				path += ".dawproject"
+			await Sonara.editor.export_dawproject(path)
+
+
+func _on_file_dialog_dir_selected(dir: String) -> void:
+	if _current_dialog_mode == DialogMode.IMPORT_AUDIO_DIR:
+		await _import_dawproject(_pending_import_path, dir)

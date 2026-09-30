@@ -14,6 +14,7 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 - Automation lanes on buses: volume, pan, device parameters
 
 ### Working
+- DAWproject import/export, core subset (spec `docs/specs/010-dawproject-core/`, docs in `docs/subsystems/dawproject.md`): tasks T-001…T-018 done, headless tests pass (units, export + xmllint schema check, import against the Bitwig fixture, round trip, editor entry points). T-019 live check is still open: import the fixture and play it, export and open in Bitwig, save the import as `.sonara` and reopen, time a 50-track export. The menu items and dialogs have not been clicked through in a running app yet.
 - Time signature changes (spec `docs/specs/009-time-signature-map/`): engine map + `/transport/time_signature_map`, Godot `TimeSignatureMap`, segment-based grid and snapping, arranger lane (add, edit, drag, delete, undo). `cargo test` and the Godot tests pass. Verified live by the user (lane UX, MIDI editor ruler, marker size). Details of each T-012 step were not itemised, so playback across a change with a tempo-synced CLAP plugin and save/reopen are covered only by the user's sign-off.
 - Tempo automation lane and tempo map playback (spec `docs/specs/008-tempo-map-engine/`). Verified live: the engine clock, MIDI and audio clips follow ramps, the time ruler and tempo field follow the map, and devices and CLAP plugins receive transport info. `cargo test` and `Godot/tests/run_all.sh` pass.
 
