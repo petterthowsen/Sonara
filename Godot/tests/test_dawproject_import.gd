@@ -27,6 +27,7 @@ func run_tests() -> void:
 	_test_fixture_clips()
 	_test_fixture_automation()
 	_test_pooled_references()
+	_test_bitwig_groups()
 	_test_report_items()
 	_test_audio_dir_failure()
 	await _test_editor_entry_points()
@@ -257,6 +258,48 @@ func _test_pooled_references() -> void:
 	_assert(track.clip_instances[2].muted and track.clip_instances[2].clip_offset == 960, "enable=false -> muted, playStart -> clip_offset")
 	_assert(project.markers.size() == 1 and project.markers[0].name == "Verse" and project.markers[0].start_ticks == 1920 and project.markers[0].duration_ticks == 0, "marker imported with duration 0")
 	_assert(project.markers[0].color.to_html(false) == "ff8800", "marker color")
+
+
+func _test_bitwig_groups() -> void:
+	# Bitwig gives a group track's own channel role="master"; it must not be taken for the project master.
+	var xml := '''<Project version="1.0">
+  <Transport><Tempo unit="bpm" value="120" id="t"/><TimeSignature numerator="4" denominator="4" id="s"/></Transport>
+  <Structure>
+    <Track id="g" name="Strings" contentType="tracks"><Channel id="gc" role="master" destination="mc"/>
+      <Track id="v" name="Violins" contentType="notes"><Channel id="vc" role="regular" destination="gc"/></Track>
+      <Track id="i" name="Inner" contentType="tracks"><Channel id="ic" role="master" destination="gc"/>
+        <Track id="c" name="Celli" contentType="notes"><Channel id="cc" role="regular" destination="ic"/></Track>
+      </Track>
+    </Track>
+    <Track id="m" name="Master" contentType="audio notes"><Channel id="mc" role="master"/></Track>
+  </Structure>
+</Project>'''
+	var path := _tmp.path_join("groups.dawproject")
+	_build_file(path, {"project.xml": xml})
+	var r: Dictionary = DawProjectImporter.new().import_file(path)
+	_assert(r.ok, "Bitwig group file imports: %s" % r.error)
+	var project: Object = _project_script.from_json(r.project_json)
+	_assert(project.tracks.size() == 4, "group, nested group and both children imported (got %d)" % project.tracks.size())
+	var strings: Object = _track_named(project, "Strings")
+	var inner: Object = _track_named(project, "Inner")
+	var violins: Object = _track_named(project, "Violins")
+	var celli: Object = _track_named(project, "Celli")
+	if strings == null or inner == null or violins == null or celli == null:
+		_assert(false, "all four tracks found by name")
+		return
+	_assert(strings.type == DawEnums.TRACK_GROUP and inner.type == DawEnums.TRACK_GROUP, "role=master containers become group tracks")
+	_assert(violins.parent_track_id == strings.id and inner.parent_track_id == strings.id and celli.parent_track_id == inner.id, "nesting matches")
+	var strings_ch: Object = project.get_channel_by_id(strings.default_channel_id)
+	var inner_ch: Object = project.get_channel_by_id(inner.default_channel_id)
+	_assert(strings_ch.id != 1 and strings_ch.output_channel_id == 1, "group channel is its own channel, routed to master")
+	_assert(inner_ch.output_channel_id == strings_ch.id and project.get_channel_by_id(celli.default_channel_id).output_channel_id == inner_ch.id, "children route into their group channel")
+
+
+func _track_named(project: Object, name: String) -> Object:
+	for t in project.tracks:
+		if t.name == name:
+			return t
+	return null
 
 
 # ---------------------------------------------------------------------------

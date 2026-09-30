@@ -348,11 +348,12 @@ func _structure_node(node: DawXml.El, parent_track_id: int, group_channel_id: in
 		return
 	var ch_el := node.child("Channel")
 	var role := ch_el.get_attr("role", "regular") if ch_el != null else "regular"
-	if role == "master":
-		_bind_master(ch_el)
-		return
 	var content := node.get_attr("contentType")
 	var is_container: bool = "tracks" in content.split(" ") or not node.children_named("Track").is_empty()
+	# Bitwig gives a group's own channel role="master"; only a leaf master track is the project master.
+	if role == "master" and not is_container:
+		_bind_master(ch_el)
+		return
 	var color: Variant = _color_of(node, null)
 	if is_container:
 		var t := _make_track(node, DawEnums.TRACK_GROUP if ch_el != null else DawEnums.TRACK_FOLDER, parent_track_id, color)
