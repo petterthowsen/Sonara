@@ -120,6 +120,26 @@ tooltip), `HorSlider` (single) and `HDualSlider` (pan),
 meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
 ADSR).
 
+## Modulation display and assign mode
+
+`RotaryKnob`, `HorSlider`, `VolumeSlider` and `Volumeter` share one modulation contract (there
+are no traits in GDScript, so each implements it; the maths is in `ModDisplay.gd`):
+
+- `mod_ranges: Array[Dictionary]` of `{amount, color, source, bipolar}` is drawn from the base value
+  to base + amount (both ways for a bipolar source): an arc just inside the knob ring, a bar along
+  the top of a `HorSlider`, a bar down the right edge of a `VolumeSlider` or `Volumeter`.
+- `mod_assign_active` / `mod_assign_color` / `mod_assign_amount`: while active the control gets an
+  outline, and dragging edits the amount instead of the value. It emits
+  `mod_amount_changed(new_amount)` and never `value_changed`. One full-range drag moves the amount
+  by 1.0 (normalized units); Shift is fine drag; a double-click emits 0, which removes the route.
+  Ctrl-click reset and typed entry are off in assign mode.
+- `mod_amount_text_callback` (Callable(amount) -> String) sets the assign tooltip. `SimpleControl`
+  gives "+1.2 oct" for logarithmic parameters and "+35 %" otherwise.
+- `mod_live_values` (0..1) draws playback markers. Phase 6 feeds it.
+
+`VolumeSlider` and `Volumeter` have the API, but nothing feeds them until channel parameters can be
+modulated. Source colors are `ModDisplay.source_color(index)`. Test: `tests/test_mod_assign_ui.gd`.
+
 ## Checklist for a new or changed control
 
 - [ ] Value readable at rest; handle and exact value on hover or drag; typed entry on double-click

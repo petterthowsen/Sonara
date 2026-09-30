@@ -86,7 +86,7 @@ Entries are one per `(kind, subject)` with a count (`TransferReport.TEMPLATES` h
   `scene_clip`, `mono_channel`, `bus_clip`, `signature_off_bar`, `send_clamped`,
   `volume_clamped`, `nested_loop`, `audio_missing`, `state_mismatch`.
 - **Export:** `marker_duration`, `clip_transpose`, `clip_gain_offset`, `pan_mode`,
-  `hardware_output`, `phase_invert`, `plugin_no_state`, `file_missing`.
+  `hardware_output`, `phase_invert`, `plugin_no_state`, `file_missing`, `mod_routes` (a built-in's modulation routes travel only in its `sonara.` State JSON).
 
 Silent by design: Bitwig's default sends (disabled, volume 0, or to their own channel), `rel`
 equal to `vel`, and empty scenes.
@@ -98,4 +98,4 @@ equal to `vel`, and empty scenes.
 - The round-trip test (`test_dawproject_roundtrip.gd`) is the tolerance reference: volume ±0.01
   dB, pan ±0.001, notes exact, automation within 2% of the range.
 - Import runs synchronously, so a very large file blocks the UI.
-- No OSC messages were added; `osc-protocol.md` is unchanged.
+- No OSC messages were added; `osc-protocol.md` is unchanged. Modulation routes (ADR-0011) are part of a built-in's `DeviceInstance.to_json()`, so they survive a Sonara round trip; importing someone else's project leaves the default patch.

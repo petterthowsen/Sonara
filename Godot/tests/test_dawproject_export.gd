@@ -443,7 +443,8 @@ func _test_devices() -> void:
 	var poly := _device("polysynth", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_INSTRUMENT)
 	var delay := _device("delay", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_EFFECT)
 	var b: Dictionary = project.create_instrument_track("Bass")
-	_add_device(b.channel, poly)
+	var poly_inst: Object = _add_device(b.channel, poly)
+	poly_inst.mod_routes["lfo1:31"] = 0.5
 	_add_device(b.channel, delay)
 	var sampler_dev := _device("sampler", DawEnums.DEVICE_BUILTIN, DawEnums.CATEGORY_INSTRUMENT)
 	var c: Dictionary = project.create_instrument_track("Perc")
@@ -476,6 +477,7 @@ func _test_devices() -> void:
 	var bass_devs: Array = _find_track(xml, "Bass").child("Channel").child("Devices").children
 	_assert(bass_devs.size() == 2 and bass_devs[0].tag == "BuiltinDevice" and bass_devs[0].get_attr("deviceID") == "sonara.polysynth", "polysynth -> BuiltinDevice sonara.polysynth")
 	_assert(bass_devs[1].get_attr("deviceID") == "sonara.delay" and bass_devs[1].get_attr("deviceRole") == "audioFX", "delay -> sonara.delay audioFX")
+	_assert(exported.result.report.count_of(TransferReport.MOD_ROUTES) == 1, "a device with modulation routes gets one report entry")
 	var state_json = JSON.parse_string(exported.entries[bass_devs[0].child("State").get_attr("path")].get_string_from_utf8())
 	_assert(state_json is Dictionary and state_json.get("device_id") == "polysynth", "builtin state re-parses as device JSON")
 

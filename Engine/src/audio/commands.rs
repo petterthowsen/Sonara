@@ -28,6 +28,8 @@ pub struct BuiltinParamInfo {
     pub param_type: super::devices::ParamType,
     pub syncable: bool,
     pub enum_values: Vec<String>,
+    pub is_logarithmic: bool,
+    pub skew: f32,
 }
 
 /// What `/audio/config` reports: the running stream, what was asked for, and the PipeWire graph.
@@ -322,6 +324,19 @@ pub enum AudioCommand {
         param_id: u32,
         value: super::types::ParamSetValue,
     },
+    /// Add, update or (amount 0) remove one modulation route. Echoed as `ModRouteChanged`.
+    SetModRoute {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        source: String,
+        param_id: u32,
+        amount: f32,
+    },
+    /// Remove every modulation route. Echoed as `ModRoutesCleared`.
+    ClearModRoutes {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+    },
     SetDeviceActive {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -615,6 +630,10 @@ pub enum EngineStatus {
         file_type_description: String,
         is_container: bool,
         parameters: Vec<BuiltinParamInfo>,
+        /// Modulation sources the device offers (empty: no modulation).
+        mod_sources: Vec<super::devices::ModSourceInfo>,
+        /// The routes a fresh instance starts with (its default patch).
+        default_mod_routes: Vec<super::devices::ModRoute>,
     },
     BuiltinDevicesComplete {
         count: usize,
@@ -674,6 +693,20 @@ pub enum EngineStatus {
         device_path: DevicePath,
         param_id: u32,
         value: f32, // Normalized 0.0-1.0
+    },
+
+    /// A modulation route was set (echo of `mod/set`, or a `state/get` resend). Amount 0 = removed.
+    ModRouteChanged {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        source: String,
+        param_id: u32,
+        amount: f32,
+    },
+    /// Every modulation route was removed (echo of `mod/clear`).
+    ModRoutesCleared {
+        channel_id: ChannelId,
+        device_path: DevicePath,
     },
 
     // Log messages forwarded to Godot UI
@@ -1996,6 +2029,63 @@ pub fn process_command(
                 warn!("Channel {} not found for set device parameter", channel_id);
             }
         }
+        AudioCommand::SetModRoute {
+            channel_id,
+            device_path,
+            source,
+            param_id,
+            amount,
+        } => {
+            let Some(device) = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            else {
+                warn!(
+                    "Mod route for missing device at channel {} path {}",
+                    channel_id, device_path
+                );
+                return None;
+            };
+            let amount = if amount.is_finite() {
+                amount.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            match device.set_mod_route(&source, param_id, amount) {
+                Ok(()) => {
+                    let _ = status_tx.send(EngineStatus::ModRouteChanged {
+                        channel_id,
+                        device_path,
+                        source,
+                        param_id,
+                        amount,
+                    });
+                }
+                Err(e) => warn!("{}", e),
+            }
+        }
+        AudioCommand::ClearModRoutes {
+            channel_id,
+            device_path,
+        } => {
+            if let Some(device) = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            {
+                device.clear_mod_routes();
+                let _ = status_tx.send(EngineStatus::ModRoutesCleared {
+                    channel_id,
+                    device_path,
+                });
+            } else {
+                warn!(
+                    "Clear mod routes for missing device at channel {} path {}",
+                    channel_id, device_path
+                );
+            }
+        }
         AudioCommand::SetDeviceActive {
             channel_id,
             device_path,
@@ -2229,6 +2319,22 @@ pub fn process_command(
                 // Still loading: the list follows the load, as it normally does.
                 if !params.is_empty() {
                     send_parameter_list(status_tx, channel_id, device_path, device, params);
+                }
+            }
+            // Routes live in the device, not in the parameters: resend them as clear + sets.
+            if !device.mod_sources().is_empty() {
+                let _ = status_tx.send(EngineStatus::ModRoutesCleared {
+                    channel_id,
+                    device_path,
+                });
+                for route in device.mod_routes() {
+                    let _ = status_tx.send(EngineStatus::ModRouteChanged {
+                        channel_id,
+                        device_path,
+                        source: route.source,
+                        param_id: route.param_id,
+                        amount: route.amount,
+                    });
                 }
             }
         }
@@ -2679,8 +2785,94 @@ mod tests {
 
     #[test]
     fn get_device_state_is_silent_for_fixed_devices() {
+        let delay = super::super::devices::DelayDevice::new(48_000.0, 5000.0);
+        assert!(device_state_replies(Box::new(delay)).is_empty());
+    }
+
+    #[test]
+    fn get_device_state_resends_mod_routes() {
         let synth = super::super::devices::PolySynthDevice::new(48_000.0);
-        assert!(device_state_replies(Box::new(synth)).is_empty());
+        let routes = super::super::devices::AudioDevice::mod_routes(&synth);
+        assert!(!routes.is_empty(), "the default patch has a route");
+        let replies = device_state_replies(Box::new(synth));
+        assert!(matches!(replies[0], EngineStatus::ModRoutesCleared { .. }));
+        assert_eq!(replies.len(), 1 + routes.len());
+        assert!(matches!(
+            &replies[1],
+            EngineStatus::ModRouteChanged { source, param_id, amount, .. }
+                if *source == routes[0].source && *param_id == routes[0].param_id
+                    && *amount == routes[0].amount
+        ));
+    }
+
+    #[test]
+    fn mod_route_commands_apply_and_echo() {
+        let mut state = EngineState::default();
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        state.channels.get_mut(&2).unwrap().devices.push(Box::new(
+            super::super::devices::PolySynthDevice::new(48_000.0),
+        ));
+        while status_rx.try_recv().is_ok() {}
+        let path = DevicePath::root(0);
+        let cutoff = 31; // Filter Cutoff
+        let set = |state: &mut EngineState, source: &str, amount: f32| {
+            process_command(
+                state,
+                AudioCommand::SetModRoute {
+                    channel_id: 2,
+                    device_path: path,
+                    source: source.to_string(),
+                    param_id: cutoff,
+                    amount,
+                },
+                128,
+                &status_tx,
+            );
+        };
+        let routes = |state: &EngineState| state.channels[&2].devices[0].mod_routes();
+
+        set(&mut state, "lfo1", 0.5);
+        assert!(routes(&state)
+            .iter()
+            .any(|r| r.source == "lfo1" && r.amount == 0.5));
+        // Out-of-range amounts clamp; the echo carries the applied value.
+        set(&mut state, "lfo1", 4.0);
+        let echoes: Vec<_> = status_rx.try_iter().collect();
+        assert!(matches!(
+            echoes.last(),
+            Some(EngineStatus::ModRouteChanged { amount, .. }) if *amount == 1.0
+        ));
+        set(&mut state, "lfo1", 0.0);
+        assert!(!routes(&state).iter().any(|r| r.source == "lfo1"));
+
+        // A bad source is refused without an echo.
+        while status_rx.try_recv().is_ok() {}
+        set(&mut state, "mod_wheel", 0.5);
+        assert!(status_rx.try_recv().is_err());
+
+        process_command(
+            &mut state,
+            AudioCommand::ClearModRoutes {
+                channel_id: 2,
+                device_path: path,
+            },
+            128,
+            &status_tx,
+        );
+        assert!(routes(&state).is_empty());
+        assert!(matches!(
+            status_rx.try_recv(),
+            Ok(EngineStatus::ModRoutesCleared { .. })
+        ));
     }
 
     /// A project save waits for every `state/save` it sent, so a device without plugin state

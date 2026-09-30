@@ -38,6 +38,12 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Slot note map** — a Layer slot's routing table: each input note (0–127) goes to one output note or is ignored (`data/LayerNoteMap.gd`). The **full map** (every note to itself) is the default; a slot with any other map is a **zoned slot**. Several slots mapping the same input note is **layering**, and an **overlap** when both are zoned.
 - **Separate output** — a Layer slot sending its audio to its own return channel instead of the Layer output. Only for a Layer that is the first device on its channel. The slot and its return share a name and colour, and unlike other returns, a Layer return's output can be routed to any bus.
 
+## Modulation
+
+- **Modulation source** — a per-voice signal a device offers to modulate its own parameters (PolySynth: Filter Env, Amp Env, LFO 1, LFO 2, Velocity, Keytrack). Identified by a stable string id (`"lfo1"`) and either unipolar (0..1) or bipolar (−1..1).
+- **Modulation route** — a link from one modulation source to one modulatable parameter of the same device. Device state, sent as `{device}/mod/set`, not a parameter (see ADR-0011).
+- **Modulation amount** — a route's strength, −1..1 in normalized parameter units per unit of source. Amount 0 means no route.
+
 ## Engine ↔ UI protocol
 
 - **OSC address** — resource-based path with embedded IDs, RESTful style: `/channel/{id}/volume`, `/clip/{id}/load_state`. Full catalog: `docs/subsystems/osc-protocol.md`.

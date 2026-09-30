@@ -68,6 +68,13 @@ signal release_changed(value: float)
 
 var _values: Array[float] = [0.01, 0.1, 0.7, 0.3]
 
+# How a stage's value maps onto its slot in the display: `fraction = ((v - lo) / (hi - lo)) ^ (1 / skew)`,
+# or log-scaled. This is the same curve as the parameter's knob, so the display and the knob
+# move together. The default skew of 2 (a square root) keeps short times readable for
+# parameters that advertise no curve of their own.
+var _skews: Array[float] = [2.0, 2.0, 1.0, 2.0]
+var _logs: Array[bool] = [false, false, false, false]
+
 @export var attack: float:
 	set(v):
 		set_stage_value(Stage.ATTACK, v)
@@ -132,6 +139,42 @@ func set_stage_range(stage: Stage, lo: float, hi: float) -> void:
 		Stage.RELEASE:
 			min_release = lo
 			max_release = hi
+
+
+## Set how `stage` maps onto the display (`skew` as in `DeviceParameter.skew`, or log).
+func set_stage_curve(stage: Stage, skew: float, is_log := false) -> void:
+	_skews[stage] = maxf(skew, 0.01)
+	_logs[stage] = is_log
+	emit_changed()
+
+
+func get_stage_skew(stage: Stage) -> float:
+	return _skews[stage]
+
+
+func is_stage_log(stage: Stage) -> bool:
+	return _logs[stage]
+
+
+## Stage value → 0–1 position along its curve (what the parameter's knob would show).
+func stage_to_fraction(stage: Stage, value: float) -> float:
+	var lo := get_stage_min(stage)
+	var hi := get_stage_max(stage)
+	if hi <= lo:
+		return 0.0
+	if _logs[stage] and lo > 0.0:
+		return clampf(log(maxf(value, lo) / lo) / log(hi / lo), 0.0, 1.0)
+	return pow(clampf((value - lo) / (hi - lo), 0.0, 1.0), 1.0 / _skews[stage])
+
+
+## Inverse of `stage_to_fraction`.
+func fraction_to_stage(stage: Stage, fraction: float) -> float:
+	var lo := get_stage_min(stage)
+	var hi := get_stage_max(stage)
+	var f := clampf(fraction, 0.0, 1.0)
+	if _logs[stage] and lo > 0.0 and hi > lo:
+		return lo * pow(hi / lo, f)
+	return lo + (hi - lo) * pow(f, _skews[stage])
 
 
 ## Clamp and store `value`; emits the stage's signal and `changed` when it actually changes.

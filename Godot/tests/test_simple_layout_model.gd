@@ -26,6 +26,7 @@ func run_tests() -> void:
 	_test_corrupt_file_not_overwritten()
 	_test_missing_file_generated_and_saved()
 	_test_outdated_generated_layout_regenerated()
+	_test_changed_params_regenerate_generated_layout()
 	_test_path_for_distinct_ids()
 	_test_simple_units()
 	_cleanup()
@@ -273,6 +274,46 @@ func _test_outdated_generated_layout_regenerated() -> void:
 	var kept := SimpleLayoutStore.load_or_generate(device, [])
 	_assert(kept.generator_version == 1 and not kept.generated, "an edited layout is kept even when outdated")
 	_assert(FileAccess.get_file_as_string(path) == edited_text, "edited layout file left unchanged")
+	SimpleLayoutStore.clear_cache()
+
+
+## A never-edited layout is generated again when the device's parameter list changes (even
+## with the same ids, e.g. a renumbered or renamed set); an edited one is only reconciled.
+func _test_changed_params_regenerate_generated_layout() -> void:
+	SimpleLayoutStore.clear_cache()
+	var device := Device.new("test.changing", "Changing Synth", Device.DeviceCategory.Instrument)
+	var before := [_param(1, "Cutoff"), _param(2, "Resonance")]
+	var first := SimpleLayoutStore.load_or_generate(device, before)
+	_assert(first.param_signature == SimpleLayout.signature_for(before), "generated layout records its parameters")
+	_assert(SimpleLayoutStore.load_or_generate(device, before) == first, "same parameters reuse the cached layout")
+
+	var renamed := [_param(1, "Drive"), _param(2, "Resonance")]
+	_assert(SimpleLayout.signature_for(renamed) != SimpleLayout.signature_for(before), "a rename changes the signature")
+	var hidden := [_param(1, "Cutoff"), _param(2, "Resonance"), _param(3, "Secret")]
+	hidden[2].is_hidden = true
+	_assert(SimpleLayout.signature_for(hidden) == SimpleLayout.signature_for(before), "hidden parameters don't count")
+
+	var after := [_param(10, "Cutoff"), _param(11, "Resonance"), _param(12, "Drive")]
+	var second := SimpleLayoutStore.load_or_generate(device, after)
+	_assert(second != first, "changed parameters give a new layout")
+	var ids := second.param_ids()
+	ids.sort()
+	_assert(ids == [10, 11, 12], "regenerated from the new parameters: %s" % [ids])
+	_assert(not second.pages.is_empty() and second.pages[-1].title != SimpleLayout.OVERFLOW_PAGE_TITLE,
+		"new parameters aren't appended to an overflow page")
+	SimpleLayoutStore.clear_cache()
+	var saved := SimpleLayoutStore.load_layout(device.device_id)
+	_assert(saved.layout != null and saved.layout.param_signature == SimpleLayout.signature_for(after), "regenerated layout saved")
+
+	# An edited layout keeps the user's arrangement: reconciled, not regenerated.
+	SimpleLayoutStore.clear_cache()
+	var edited: SimpleLayout = saved.layout
+	edited.generated = false
+	SimpleLayoutStore.save(edited)
+	var more := after + [_param(13, "Key Track")]
+	var kept := SimpleLayoutStore.load_or_generate(device, more)
+	_assert(not kept.generated and kept.param_signature == SimpleLayout.signature_for(after), "edited layout not regenerated")
+	_assert(kept.param_ids().has(13), "edited layout still picks up the new parameter")
 	SimpleLayoutStore.clear_cache()
 
 

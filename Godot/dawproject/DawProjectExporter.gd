@@ -366,6 +366,8 @@ func _write_device(inst: Object) -> void:
 	else:
 		state_path = "plugins/%s.json" % _safe_file_name(inst.id)
 		state_bytes = JSON.stringify(_embed_files_in(inst.to_json()), "\t").to_utf8_buffer()
+		if not inst.mod_routes.is_empty():
+			_report.add(TransferReport.MOD_ROUTES, inst.get_display_name(), "%s (%d routes)" % [dev.name, inst.mod_routes.size()])
 	_w.open("ClapPlugin" if is_clap else "BuiltinDevice", attrs)
 	_w.open("Parameters")
 	for param_id in _device_params.get(inst.id, []):

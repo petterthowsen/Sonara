@@ -4,8 +4,8 @@
 ## Layout, left to right: attack rises to the peak, decay falls to the sustain level, a sustain
 ## plateau stands in for the held note, and release falls to zero. Stages are drawn end to end.
 ## Every time stage gets an equal slot, and its length within the slot is
-## `((t - min) / (max - min)) ^ time_curve`, so short times stay visible and equal times look
-## equal. Without a decay stage, attack rises straight to the sustain level.
+## the envelope's per-stage curve (`Envelope.set_stage_curve`, normally the parameter's own), so
+## short times stay visible and the display moves at the same rate as the parameter's knob. Without a decay stage, attack rises straight to the sustain level.
 ##
 ## Handles: attack (x), decay (x = time, y = sustain), sustain (y, only without a decay stage),
 ## and release (x). Shift drags finely. Hovering or dragging a handle shows its value.
@@ -66,13 +66,6 @@ const MIN_HEIGHT_FOR_LABELS := 48.0
 @export var handle_radius := 4.0:
 	set(r):
 		handle_radius = r
-		queue_redraw()
-
-## Exponent applied to a stage's 0–1 time before it becomes a length. Below 1 gives short
-## times more room; 1 is linear.
-@export_range(0.1, 1.0) var time_curve := 0.5:
-	set(c):
-		time_curve = c
 		queue_redraw()
 
 @export var envelope: Envelope:
@@ -152,18 +145,12 @@ func sustain_level() -> float:
 
 ## Time stage value → 0–1 share of its slot.
 func _stage_fraction(stage: Envelope.Stage) -> float:
-	var lo := envelope.get_stage_min(stage)
-	var hi := envelope.get_stage_max(stage)
-	if hi <= lo:
-		return 0.0
-	return pow(clampf((envelope.get_stage_value(stage) - lo) / (hi - lo), 0.0, 1.0), time_curve)
+	return envelope.stage_to_fraction(stage, envelope.get_stage_value(stage))
 
 
 ## Inverse of `_stage_fraction`: share of the slot → stage value.
 func _fraction_to_value(stage: Envelope.Stage, fraction: float) -> float:
-	var lo := envelope.get_stage_min(stage)
-	var hi := envelope.get_stage_max(stage)
-	return lerpf(lo, hi, pow(clampf(fraction, 0.0, 1.0), 1.0 / time_curve))
+	return envelope.fraction_to_stage(stage, fraction)
 
 
 func _level_to_y(level: float) -> float:

@@ -199,6 +199,8 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
             param_type: p.param_type,
             syncable: p.syncable,
             enum_values: p.enum_values,
+            is_logarithmic: p.is_logarithmic,
+            skew: p.skew,
         })
         .collect();
 
@@ -232,5 +234,7 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
         file_type_description,
         is_container: device.is_container(),
         parameters,
+        mod_sources: device.mod_sources(),
+        default_mod_routes: device.mod_routes(),
     }
 }

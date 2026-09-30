@@ -39,6 +39,12 @@ var _row_y: PackedFloat32Array = []
 ## Group id → `{rect, box}` on the current page: the group's saved cell rect and the cell rect
 ## its box is drawn over after growing into the free space to its right and below.
 var _group_fit := {}
+## Source buttons for a device that offers modulation; hidden for devices without.
+var _mod_strip: HBoxContainer = null
+## Source id → its toggle button.
+var _mod_buttons := {}
+## The source in assign mode ("" when none): dragging a modulatable control sets its amount.
+var _assign_source := ""
 
 
 func _ready() -> void:
@@ -46,6 +52,12 @@ func _ready() -> void:
 	
 	if not _page_tabs.tab_changed.is_connected(_on_tab_changed):
 		_page_tabs.tab_changed.connect(_on_tab_changed)
+	_mod_strip = HBoxContainer.new()
+	_mod_strip.add_theme_constant_override("separation", 3)
+	_mod_strip.visible = false
+	add_child(_mod_strip)
+	move_child(_mod_strip, _grid.get_index())
+	_grid.gui_input.connect(_on_grid_gui_input)
 
 
 ## Load (or generate) the layout and build the current page.
@@ -60,12 +72,17 @@ func _on_bind() -> void:
 func _on_view_shown() -> void:
 	if device and not device.parameters_updated.is_connected(_on_parameters_updated):
 		device.parameters_updated.connect(_on_parameters_updated)
+	if device and not device.mod_route_changed.is_connected(_on_mod_route_changed):
+		device.mod_route_changed.connect(_on_mod_route_changed)
 	_reload()
 
 
 func _on_view_hidden() -> void:
 	if device and device.parameters_updated.is_connected(_on_parameters_updated):
 		device.parameters_updated.disconnect(_on_parameters_updated)
+	if device and device.mod_route_changed.is_connected(_on_mod_route_changed):
+		device.mod_route_changed.disconnect(_on_mod_route_changed)
+	set_assign_source("")
 
 
 func _on_device_parameter_changed(param_id: int, _value: float) -> void:
@@ -86,6 +103,7 @@ func _reload() -> void:
 	layout = SimpleLayoutStore.load_or_generate(device.device, device.get_parameters())
 	_current_page = clampi(_current_page, 0, maxi(layout.pages.size() - 1, 0))
 	_build_page_tabs()
+	_build_mod_strip()
 	_build_page(_current_page)
 
 
@@ -146,6 +164,8 @@ func _add_control(data: Dictionary) -> void:
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
 	control.bind(device, data)
 	_controls.append(control)
+	if not _assign_source.is_empty():
+		control.set_mod_assign(_assign_source, _source_color(_assign_source))
 
 
 ## Columns `page` occupies (the right edge of its rightmost control or group), at least 1.
@@ -270,3 +290,107 @@ func _add_group_box(group: Dictionary) -> void:
 		title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(title)
 	_group_boxes.append(box)
+
+
+## ============================================================================
+## MODULATION
+## ============================================================================
+
+## Leave assign mode on Esc.
+func _unhandled_input(event: InputEvent) -> void:
+	if not _assign_source.is_empty() and is_visible_in_tree() and event.is_action_pressed("ui_cancel"):
+		set_assign_source("")
+		get_viewport().set_input_as_handled()
+
+
+## A click on empty grid space leaves assign mode (controls consume their own clicks).
+func _on_grid_gui_input(event: InputEvent) -> void:
+	if not _assign_source.is_empty() and event is InputEventMouseButton and event.pressed:
+		set_assign_source("")
+
+
+func _on_mod_route_changed(_source: String, param_id: int, _amount: float) -> void:
+	for control in _controls:
+		if control.handles_param(param_id):
+			control.refresh_mod()
+	_update_mod_button_labels()
+
+
+## One toggle button per modulation source, in the source's color, with its route count.
+func _build_mod_strip() -> void:
+	for child in _mod_strip.get_children():
+		child.queue_free()
+	_mod_buttons.clear()
+	var sources := device.get_mod_sources() if device else ([] as Array[Dictionary])
+	_mod_strip.visible = not sources.is_empty()
+	for i in sources.size():
+		var id: String = sources[i]["id"]
+		var color := ModDisplay.source_color(i)
+		var button := Button.new()
+		button.toggle_mode = true
+		button.focus_mode = Control.FOCUS_NONE
+		button.tooltip_text = "Modulate with %s: click, then drag a control" % sources[i]["name"]
+		button.add_theme_font_size_override("font_size", 12)
+		button.add_theme_color_override("font_color", color)
+		button.add_theme_color_override("font_hover_color", color)
+		button.add_theme_color_override("font_pressed_color", Color.BLACK)
+		button.add_theme_color_override("font_hover_pressed_color", Color.BLACK)
+		button.add_theme_stylebox_override("normal", _source_style(color, false))
+		button.add_theme_stylebox_override("hover", _source_style(color, false))
+		button.add_theme_stylebox_override("pressed", _source_style(color, true))
+		button.add_theme_stylebox_override("hover_pressed", _source_style(color, true))
+		button.toggled.connect(func(pressed): set_assign_source(id if pressed else ""))
+		button.mouse_entered.connect(_highlight_targets.bind(id, color))
+		button.mouse_exited.connect(_highlight_targets.bind("", color))
+		_mod_strip.add_child(button)
+		_mod_buttons[id] = button
+	_update_mod_button_labels()
+
+
+static func _source_style(color: Color, filled: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color if filled else Color(color, 0.12)
+	style.border_color = color
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(3)
+	style.content_margin_left = 6
+	style.content_margin_right = 6
+	style.content_margin_top = 1
+	style.content_margin_bottom = 1
+	return style
+
+
+func _update_mod_button_labels() -> void:
+	if device == null:
+		return
+	for source in device.get_mod_sources():
+		var button: Button = _mod_buttons.get(source["id"])
+		if button == null:
+			continue
+		var count := device.get_route_count_for_source(source["id"])
+		button.text = source["name"] if count == 0 else "%s %d" % [source["name"], count]
+
+
+func _source_color(source: String) -> Color:
+	var sources := device.get_mod_sources() if device else ([] as Array[Dictionary])
+	for i in sources.size():
+		if sources[i]["id"] == source:
+			return ModDisplay.source_color(i)
+	return Color.WHITE
+
+
+## Enter assign mode for `source`, or leave it with "".
+func set_assign_source(source: String) -> void:
+	_assign_source = source
+	var color := _source_color(source)
+	for id in _mod_buttons:
+		(_mod_buttons[id] as Button).set_pressed_no_signal(id == source)
+	for control in _controls:
+		control.set_mod_assign(source, color)
+
+
+## Dim the controls that `source` doesn't modulate, while its button is hovered.
+func _highlight_targets(source: String, color: Color) -> void:
+	for control in _controls:
+		if control.is_modulatable():
+			control.set_mod_highlight(source, color)

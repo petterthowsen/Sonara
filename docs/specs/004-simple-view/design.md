@@ -201,10 +201,14 @@ different ids can never map to the same file.
   - 1×1: knob, toggle, dropdown, spinbox
   - 2×1: slider, segmented
   - 2×2: xy
-  - 3×2: envelope
+  - 3×3: envelope (was 3×2; see the divergence note below)
   - 2×1: eq_band
 - A `segmented` control falls back to a dropdown at render time when its labels don't fit the
   control's width. Controls clip to their cells; titles are ellipsized with the full name as tooltip.
+- **Divergence (spec 011, phase 5):** the `envelope` compound is the `EnvelopeControl` display with a
+  row of `RotaryKnob`s underneath, one per stage in `stages`, so it needs 3×3 cells. The knobs
+  and the display edit the same parameters, and the knobs are modulation targets (the display
+  isn't). `SimpleControl` builds them for every device, not only PolySynth.
 - `generated` becomes false after the first edit that gets saved.
 
 **Display units (REQ-013).** `SimpleUnits.gd` maps a unit to a formatter:

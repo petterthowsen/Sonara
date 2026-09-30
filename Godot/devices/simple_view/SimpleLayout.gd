@@ -23,6 +23,9 @@ var kind: String = "generic"
 var generated: bool = true
 ## `SimpleLayoutGenerator.VERSION` that generated the layout (1 for files from before it was saved).
 var generator_version: int = 1
+## `signature_for` of the parameters a generated layout was made from. When a device's parameter
+## list changes, a layout the user never edited is generated again instead of reconciled.
+var param_signature: String = ""
 var rows: int = DEFAULT_ROWS
 var pages: Array[Dictionary] = []
 
@@ -50,6 +53,7 @@ static func from_dict(data: Variant) -> SimpleLayout:
 	layout.kind = str(data.get("kind", "generic"))
 	layout.generated = bool(data.get("generated", true))
 	layout.generator_version = int(data.generator) if _is_number(data.get("generator")) else 1
+	layout.param_signature = str(data.get("params", ""))
 	layout.rows = maxi(1, int(grid.rows))
 	for raw_page in raw_pages:
 		var page := _page_from_dict(raw_page)
@@ -67,9 +71,24 @@ func to_dict() -> Dictionary:
 		"kind": kind,
 		"generated": generated,
 		"generator": generator_version,
+		"params": param_signature,
 		"grid": {"rows": rows},
 		"pages": pages.duplicate(true),
 	}
+
+
+## Hash of everything about the visible parameters that layout generation reads, so any
+## renumbering, renaming, regrouping or range change gives a different signature.
+static func signature_for(params: Array) -> String:
+	var parts := PackedStringArray()
+	for param in params:
+		if not ParamClassifier.is_visible(param):
+			continue
+		parts.append("%d|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [
+			param.id, param.name, param.module, param.unit, param.param_type, param.group,
+			",".join(param.enum_values), param.min_value, param.max_value,
+			param.is_logarithmic, param.skew])
+	return "\n".join(parts).md5_text()
 
 
 static func _is_number(v: Variant) -> bool:

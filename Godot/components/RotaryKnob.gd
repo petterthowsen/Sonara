@@ -142,6 +142,41 @@ var value_text_callback: Callable
 
 @export var fine_drag_scale := 0.15
 
+## Emitted while `mod_assign_active` and the user drags (or double-clicks, which asks for 0).
+## The value itself doesn't change. See `ModDisplay`.
+signal mod_amount_changed(new_amount: float)
+
+## Routes into this value: `{amount, color, source, bipolar}`, drawn as arcs inside the ring.
+var mod_ranges: Array[Dictionary] = []:
+	set(r):
+		mod_ranges = r
+		queue_redraw()
+
+## While true, dragging edits the modulation amount instead of the value.
+var mod_assign_active := false:
+	set(a):
+		mod_assign_active = a
+		_dragging = false
+		queue_redraw()
+		_refresh_tooltip()
+
+var mod_assign_color := Color.WHITE:
+	set(c):
+		mod_assign_color = c
+		queue_redraw()
+
+## Amount of the route being edited; the owner keeps it in sync, drags advance it.
+var mod_assign_amount := 0.0
+
+## Optional Callable(amount: float) -> String for the assign tooltip (e.g. "+1.2 oct").
+var mod_amount_text_callback: Callable
+
+## Live modulated positions (0..1) while playing, drawn as dots on the ring.
+var mod_live_values := PackedFloat32Array():
+	set(v):
+		mod_live_values = v
+		queue_redraw()
+
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -158,6 +193,10 @@ func set_value_no_signal(v: float) -> void:
 
 ## Format the current value for the tooltip.
 func get_value_text() -> String:
+	if mod_assign_active:
+		if mod_amount_text_callback.is_valid():
+			return str(mod_amount_text_callback.call(mod_assign_amount))
+		return ModDisplay.default_amount_text(mod_assign_amount)
 	if value_text_callback.is_valid():
 		return str(value_text_callback.call(_value))
 	var text := value_format % _value
@@ -192,13 +231,44 @@ func _draw() -> void:
 	var line_start: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.3)
 	var line_end: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.9)
 	draw_line(line_start, line_end, knob_line_color, knob_line_width, true)
+	_draw_modulation(center, arc_radius, min_rotation_rad, max_rotation_rad)
+
+
+## Route arcs just inside the value ring, the live markers on it, and an outline while assigning.
+func _draw_modulation(center: Vector2, arc_radius: float, min_rad: float, max_rad: float) -> void:
+	var base := _value_to_normalized(_value)
+	var thin := maxf(arc_width * 0.6, 1.5)
+	var ring := arc_radius - arc_width * 0.5 - thin * 0.5 - 1.0
+	for i in mod_ranges.size():
+		var route := mod_ranges[i]
+		var band := ModDisplay.span(base, float(route["amount"]), bool(route.get("bipolar", false)))
+		if band.y - band.x < 0.002:
+			continue
+		var r := ring - i * (thin + 0.5)
+		if r <= thin:
+			break
+		draw_arc(center, r, lerpf(min_rad, max_rad, band.x), lerpf(min_rad, max_rad, band.y),
+			24, route["color"], thin, true)
+	for live in mod_live_values:
+		var angle := lerpf(min_rad, max_rad, clampf(live, 0.0, 1.0))
+		draw_circle(center + Vector2.from_angle(angle) * arc_radius, maxf(arc_width * 0.5, 1.5),
+			ModDisplay.LIVE_MARKER_COLOR)
+	if mod_assign_active:
+		draw_arc(center, arc_radius + arc_width * 0.5, 0.0, TAU, 48, Color(mod_assign_color, 0.9), 1.5, true)
 
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
+			if mb.pressed and mod_assign_active:
+				if mb.double_click:
+					mod_assign_amount = 0.0
+					mod_amount_changed.emit(0.0)
+				else:
+					_dragging = true
+				_refresh_tooltip()
+			elif mb.pressed:
 				if mb.double_click:
 					_start_editing()
 				elif mb.ctrl_pressed:
@@ -216,6 +286,13 @@ func _gui_input(event: InputEvent) -> void:
 		if _dragging:
 			var motion := event as InputEventMouseMotion
 			var drag_scale: float = fine_drag_scale if motion.shift_pressed else 1.0
+			if mod_assign_active:
+				var amount := ModDisplay.step_amount(mod_assign_amount, -motion.relative.y * drag_sensitivity * drag_scale)
+				if not is_equal_approx(amount, mod_assign_amount):
+					mod_assign_amount = amount
+					mod_amount_changed.emit(amount)
+					_refresh_tooltip()
+				return
 			var new_n: float = _value_to_normalized(_value) + (-motion.relative.y) * drag_sensitivity * drag_scale
 			value = _normalized_to_value(new_n)
 

@@ -154,7 +154,10 @@ func _on_plugin_scan_complete(args: Array) -> void:
 ##  audio_in:Int, audio_out:Int, supports_file_loading:Int(0|1), file_type_description:String,
 ##  extension_count:Int, each extension:String..., param_count:Int, then param tuples:
 ##  (param_id:Int, name:String, unit:String, type:String, syncable:Int(0|1),
-##   min:Float, max:Float, default:Float, enum_count:Int, enum_values:String...) ..., is_container:Int]
+##   min:Float, max:Float, default:Float, is_log:Int(0|1), skew:Float, enum_count:Int,
+##   enum_values:String...) ..., is_container:Int, then optionally the modulation block:
+##  source_count:Int, (id:String, name:String, bipolar:Int(0|1))..., route_count:Int,
+##  (source:String, param_id:Int, amount:Float)... (the default patch)]
 func _on_builtin_info_received(args: Array) -> void:
 	if args.size() < 10:
 		logger.warn("Invalid /builtin/info message: %s" % str(args))
@@ -189,7 +192,7 @@ func _on_builtin_info_received(args: Array) -> void:
 	idx += 1
 
 	for _i in range(param_count):
-		if idx + 8 >= args.size():
+		if idx + 10 >= args.size():
 			logger.warn("Truncated parameter data for builtin device %s" % dev_id)
 			break
 		var param := DeviceParameter.new(int(args[idx]), String(args[idx + 1]), String(args[idx + 2]))
@@ -198,8 +201,10 @@ func _on_builtin_info_received(args: Array) -> void:
 		param.min_value = float(args[idx + 5])
 		param.max_value = float(args[idx + 6])
 		param.default_value = float(args[idx + 7])
-		var enum_count: int = int(args[idx + 8])
-		idx += 9
+		param.is_logarithmic = int(args[idx + 8]) != 0
+		param.skew = maxf(float(args[idx + 9]), 0.01)
+		var enum_count: int = int(args[idx + 10])
+		idx += 11
 
 		var enum_vals: Array[String] = []
 		for _j in range(enum_count):
@@ -209,14 +214,48 @@ func _on_builtin_info_received(args: Array) -> void:
 			enum_vals.append(String(args[idx]))
 			idx += 1
 		param.enum_values = enum_vals
-		param.is_logarithmic = _guess_logarithmic(param)
 		device.add_parameter(param)
 
 	if idx < args.size():
 		device.is_container = int(args[idx]) != 0
+		idx += 1
+
+	_parse_modulation(device, args, idx)
 
 	# Batched: devices_changed fires on /builtin/complete.
 	_register(device)
+
+
+## Modulation block of /builtin/info starting at `idx`. Absent for devices without modulation.
+func _parse_modulation(device: Device, args: Array, idx: int) -> void:
+	if idx >= args.size():
+		return
+	var source_count := int(args[idx])
+	idx += 1
+	for _i in range(source_count):
+		if idx + 2 >= args.size():
+			logger.warn("Truncated modulation sources for builtin device %s" % device.device_id)
+			return
+		device.mod_sources.append({
+			"id": String(args[idx]),
+			"name": String(args[idx + 1]),
+			"bipolar": int(args[idx + 2]) != 0,
+		})
+		idx += 3
+	if idx >= args.size():
+		return
+	var route_count := int(args[idx])
+	idx += 1
+	for _i in range(route_count):
+		if idx + 2 >= args.size():
+			logger.warn("Truncated default modulation routes for builtin device %s" % device.device_id)
+			return
+		device.default_mod_routes.append({
+			"source": String(args[idx]),
+			"param_id": int(args[idx + 1]),
+			"amount": float(args[idx + 2]),
+		})
+		idx += 3
 
 
 func _on_builtin_complete(args: Array) -> void:
@@ -225,19 +264,6 @@ func _on_builtin_complete(args: Array) -> void:
 	var builtins := _devices_of_kind(true)
 	if not builtins.is_empty():
 		devices_changed.emit(builtins, [] as Array[Device])
-
-
-## Name heuristic until the engine advertises the scale: time, cutoff, frequency and speed
-## are log. Sampler Speed is log 0.25–4x on the engine; a linear UI maps default 1.0 to
-## normalized 0.2 (~0.44x) and unity to a displayed ~2.13x.
-static func _guess_logarithmic(param: DeviceParameter) -> bool:
-	if param.param_type != "float":
-		return false
-	var lname := param.name.to_lower()
-	for word in ["time", "cutoff", "frequency", "speed"]:
-		if lname.contains(word):
-			return true
-	return false
 
 
 ## ============================================================================

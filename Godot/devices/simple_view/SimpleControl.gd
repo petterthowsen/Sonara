@@ -13,6 +13,9 @@ const SEGMENT_FONT_SIZE := 13
 const SEGMENT_PADDING := 10.0
 ## Font size of the value readout (knob tooltip, spin box).
 const VALUE_FONT_SIZE := 13
+## Height of the caption-and-knob row under an envelope display (about one Simple View cell body).
+const ENVELOPE_KNOB_ROW_HEIGHT := 56.0
+const ENVELOPE_STAGE_NAMES := {"a": "Attack", "d": "Decay", "s": "Sustain", "r": "Release"}
 
 ## Color of the control's title (dimmer than group titles, so groups read first).
 @export var title_color := Color(1, 1, 1, 0.6)
@@ -26,6 +29,12 @@ var control_data: Dictionary = {}
 var _param_ids: Array[int] = []
 var _inner: Control = null
 var _envelope: Envelope = null
+## The envelope compound's knobs, in bound-parameter order (same index as `_param_ids`).
+var _env_knobs: Array[RotaryKnob] = []
+## Modulation-capable inner controls: `{node, index}` with `index` into the bound params.
+var _mod_targets: Array[Dictionary] = []
+var _assign_source := ""
+var _assign_color := Color.WHITE
 ## Full title on hover when it's trimmed; created on the first bind.
 var _title_overlay: LabelOverlay = null
 ## True while pushing device values into the inner control(s), so their signals don't loop back.
@@ -52,7 +61,9 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	_title.custom_minimum_size.x = 0.0
 	_title.visible = not _title.text.is_empty()
 	_build_inner()
+	_collect_mod_targets()
 	refresh()
+	refresh_mod()
 
 
 ## True when this control shows `param_id` (lets the view skip controls a change doesn't touch).
@@ -120,6 +131,8 @@ func _build_inner() -> void:
 		child.queue_free()
 	_inner = null
 	_envelope = null
+	_env_knobs.clear()
+	_mod_targets.clear()
 	var kind := String(control_data.get("kind", ""))
 	if kind == SimpleControlKinds.SEGMENTED and not _segments_fit():
 		kind = SimpleControlKinds.DROPDOWN
@@ -279,8 +292,14 @@ func _build_xy() -> XYSlider:
 ## Any subset of attack/decay/sustain/release (`stages`, default "adsr"). Times are real seconds
 ## with the parameters' ranges; sustain is the parameter's normalized value (plugins use 0–1,
 ## percent or dB), shown as a 0–1 level.
-func _build_envelope() -> EnvelopeControl:
+func _build_envelope() -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
 	var control := EnvelopeControl.new()
+	control.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	control.custom_minimum_size.y = 16.0
+	column.add_child(control)
+	column.add_child(_build_envelope_knobs())
 	_envelope = Envelope.new()
 	_envelope.stages = _envelope_stages()
 	for stage in 4:
@@ -289,12 +308,53 @@ func _build_envelope() -> EnvelopeControl:
 			continue
 		var lo := maxf(0.0, param.min_value)
 		_envelope.set_stage_range(stage, lo, maxf(lo + 0.001, param.max_value))
+		# Follow the parameter's own curve so display and knob agree. Parameters that advertise
+		# none (plain linear plugin times) keep the envelope's default.
+		if param.is_logarithmic or not is_equal_approx(param.skew, 1.0):
+			_envelope.set_stage_curve(stage, param.skew, param.is_logarithmic)
 	control.envelope = _envelope
 	_envelope.attack_changed.connect(_commit_envelope.bind(Envelope.Stage.ATTACK))
 	_envelope.decay_changed.connect(_commit_envelope.bind(Envelope.Stage.DECAY))
 	_envelope.sustain_changed.connect(_commit_envelope.bind(Envelope.Stage.SUSTAIN))
 	_envelope.release_changed.connect(_commit_envelope.bind(Envelope.Stage.RELEASE))
-	return control
+	return column
+
+
+## One captioned knob per stage the envelope has, under the display, sized like the other Simple
+## View knobs. They are ordinary knobs on the same parameters, so they commit through `_commit`
+## and are modulation targets in assign mode.
+func _build_envelope_knobs() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	row.custom_minimum_size.y = ENVELOPE_KNOB_ROW_HEIGHT
+	row.size_flags_vertical = Control.SIZE_SHRINK_END
+	for i in _param_ids.size():
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 2)
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var caption := Label.new()
+		caption.text = ENVELOPE_STAGE_NAMES.get(_envelope_stages()[i], "")
+		caption.add_theme_font_size_override("font_size", 13)
+		caption.add_theme_color_override("font_color", title_color)
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		caption.custom_minimum_size.x = 0.0
+		column.add_child(caption)
+		var knob := RotaryKnob.new()
+		knob.min_value = 0.0
+		knob.max_value = 1.0
+		var param := _param(i)
+		knob.value_default = param.value_to_normalized(param.default_value) if param else 0.5
+		knob.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		knob.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		knob.tooltip_side = RotaryKnob.TooltipSide.BELOW
+		knob.value_font_size = VALUE_FONT_SIZE
+		knob.value_text_callback = func(v): return SimpleUnits.format(param, v, "") if param else ""
+		knob.value_changed.connect(func(v): _commit(i, v))
+		column.add_child(knob)
+		row.add_child(column)
+		_env_knobs.append(knob)
+	return row
 
 
 func _envelope_stages() -> String:
@@ -389,6 +449,8 @@ func _refresh_envelope() -> void:
 		else:
 			values.append(param.normalized_to_value(_normalized(index)))
 	_envelope.set_adsr(values[0], values[1], values[2], values[3])
+	for i in _env_knobs.size():
+		_env_knobs[i].set_value_no_signal(_normalized(i))
 
 
 func _refresh_eq_band() -> void:
@@ -425,3 +487,114 @@ func _commit_real(index: int, real_value: float) -> void:
 func _format_value(normalized: float) -> String:
 	var param := _param(0)
 	return SimpleUnits.format(param, normalized, _unit_override()) if param else ""
+
+
+## ============================================================================
+## MODULATION
+## ============================================================================
+
+## Fill `_mod_targets` from the inner control: single-parameter knobs and sliders, and the
+## envelope's knobs. Only float parameters can be modulated. The envelope display, XY and EQ band
+## compounds don't take part yet.
+func _collect_mod_targets() -> void:
+	_mod_targets.clear()
+	if instance == null or not instance.has_modulation():
+		return
+	match String(control_data.get("kind", "")):
+		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER:
+			if _is_modulatable(0) and (_inner is RotaryKnob or _inner is HorSlider):
+				_mod_targets.append({"node": _inner, "index": 0})
+		SimpleControlKinds.ENVELOPE:
+			for i in _env_knobs.size():
+				if _is_modulatable(i):
+					_mod_targets.append({"node": _env_knobs[i], "index": i})
+	for target in _mod_targets:
+		var node: Control = target["node"]
+		var index: int = target["index"]
+		node.mod_amount_text_callback = _mod_amount_text.bind(index)
+		node.mod_amount_changed.connect(_on_mod_amount_changed.bind(index))
+
+
+func _is_modulatable(index: int) -> bool:
+	var param := _param(index)
+	return param != null and param.param_type == "float"
+
+
+## True when the control can take a route in assign mode.
+func is_modulatable() -> bool:
+	return not _mod_targets.is_empty()
+
+
+## Enter assign mode for `source` (an id from the device's sources), or leave it with "".
+func set_mod_assign(source: String, color: Color = Color.WHITE) -> void:
+	_assign_source = source
+	_assign_color = color
+	for target in _mod_targets:
+		var node: Control = target["node"]
+		node.mod_assign_color = color
+		node.mod_assign_amount = instance.get_mod_amount(source, _param_ids[target["index"]]) if not source.is_empty() else 0.0
+		node.mod_assign_active = not source.is_empty()
+
+
+## Redraw the route arcs and bars from the model's routes.
+func refresh_mod() -> void:
+	if instance == null:
+		return
+	var sources := instance.get_mod_sources()
+	for target in _mod_targets:
+		var node: Control = target["node"]
+		var param_id: int = _param_ids[target["index"]]
+		var ranges: Array[Dictionary] = []
+		for route in instance.get_routes_for_param(param_id):
+			for i in sources.size():
+				if sources[i]["id"] == route["source"]:
+					ranges.append({
+						"amount": route["amount"],
+						"color": ModDisplay.source_color(i),
+						"source": route["source"],
+						"bipolar": bool(sources[i].get("bipolar", false)),
+					})
+		node.mod_ranges = ranges
+		if not _assign_source.is_empty():
+			node.mod_assign_amount = instance.get_mod_amount(_assign_source, param_id)
+
+
+## True when a route from `source` ends in this control.
+func has_route_from(source: String) -> bool:
+	for target in _mod_targets:
+		if instance.get_mod_amount(source, _param_ids[target["index"]]) != 0.0:
+			return true
+	return false
+
+
+## Highlight (or stop highlighting) this control as a target of `source`, e.g. while its button
+## is hovered.
+func set_mod_highlight(source: String, color: Color = Color.WHITE) -> void:
+	for target in _mod_targets:
+		var node: Control = target["node"]
+		if _assign_source.is_empty():
+			node.mod_assign_color = color
+			node.modulate = Color.WHITE if source.is_empty() or has_route_from(source) else Color(1, 1, 1, 0.35)
+
+
+func _on_mod_amount_changed(amount: float, index: int) -> void:
+	if instance == null or _assign_source.is_empty():
+		return
+	var param_id := _param_ids[index]
+	var old := instance.get_mod_amount(_assign_source, param_id)
+	instance.set_mod_amount(_assign_source, param_id, amount)
+	var applied := instance.get_mod_amount(_assign_source, param_id)
+	if not is_equal_approx(old, applied):
+		HistoryUtil.record(instance.mod_amount_command(_assign_source, param_id, old, applied))
+
+
+## Assign tooltip: octaves for a logarithmic (Hz) parameter, else percent of the control's travel.
+func _mod_amount_text(amount: float, index: int) -> String:
+	var param := _param(index)
+	if param != null and param.is_logarithmic:
+		var base := _normalized(index)
+		var low := param.normalized_to_value(base)
+		var high := param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
+		if low > 0.0 and high > 0.0:
+			return "%+.1f oct" % (log(high / low) / log(2.0))
+	return ModDisplay.default_amount_text(amount)

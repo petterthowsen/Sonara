@@ -471,6 +471,11 @@ impl OscServer {
                     }
                 }
             }
+            ["mod", _] => {
+                if let Some(cmd) = parse_mod_command(channel_id, device_path, &action_refs, args) {
+                    command_tx.send(cmd)?;
+                }
+            }
             ["data", "subscribe"] => {
                 if let Some(OscType::String(data_type)) = args.first() {
                     command_tx.send(AudioCommand::SubscribeDeviceData {
@@ -1914,6 +1919,8 @@ impl OscServer {
                 file_type_description,
                 is_container,
                 parameters,
+                mod_sources,
+                default_mod_routes,
             } => {
                 tracing::info!("📨 Sending builtin device info: {} ({})", name, id);
 
@@ -1937,7 +1944,7 @@ impl OscServer {
 
                 args.push(OscType::Int(parameters.len() as i32));
 
-                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, enum_count, enum_values...)
+                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values...)
                 for param in parameters {
                     args.push(OscType::Int(param.id as i32));
                     args.push(OscType::String(param.name));
@@ -1952,6 +1959,8 @@ impl OscServer {
                     args.push(OscType::Float(param.min));
                     args.push(OscType::Float(param.max));
                     args.push(OscType::Float(param.default));
+                    args.push(OscType::Int(if param.is_logarithmic { 1 } else { 0 }));
+                    args.push(OscType::Float(param.skew));
                     args.push(OscType::Int(param.enum_values.len() as i32));
                     for ev in param.enum_values {
                         args.push(OscType::String(ev));
@@ -1959,6 +1968,21 @@ impl OscServer {
                 }
 
                 args.push(OscType::Int(if is_container { 1 } else { 0 }));
+
+                // Modulation: source_count, (id, name, bipolar)..., route_count,
+                // (source, param_id, amount)... (the default patch)
+                args.push(OscType::Int(mod_sources.len() as i32));
+                for source in mod_sources {
+                    args.push(OscType::String(source.id));
+                    args.push(OscType::String(source.name));
+                    args.push(OscType::Int(if source.bipolar { 1 } else { 0 }));
+                }
+                args.push(OscType::Int(default_mod_routes.len() as i32));
+                for route in default_mod_routes {
+                    args.push(OscType::String(route.source));
+                    args.push(OscType::Int(route.param_id as i32));
+                    args.push(OscType::Float(route.amount));
+                }
 
                 ("/builtin/info".to_string(), args)
             }
@@ -2067,6 +2091,24 @@ impl OscServer {
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
             }
+            EngineStatus::ModRouteChanged {
+                channel_id,
+                device_path,
+                source,
+                param_id,
+                amount,
+            } => (
+                device_path.to_osc_addr(channel_id, "mod/set"),
+                vec![
+                    OscType::String(source),
+                    OscType::Int(param_id as i32),
+                    OscType::Float(amount),
+                ],
+            ),
+            EngineStatus::ModRoutesCleared {
+                channel_id,
+                device_path,
+            } => (device_path.to_osc_addr(channel_id, "mod/clear"), vec![]),
             EngineStatus::LogMessage { level, message } => (
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
@@ -2796,6 +2838,36 @@ impl EngineStatsSummary {
     }
 }
 
+/// `{device}/mod/set [s:source, i:param_id, f:amount]` and `{device}/mod/clear`.
+fn parse_mod_command(
+    channel_id: usize,
+    device_path: DevicePath,
+    action: &[&str],
+    args: &[OscType],
+) -> Option<AudioCommand> {
+    match action {
+        ["mod", "set"] => match (args.first(), args.get(1), args.get(2)) {
+            (
+                Some(OscType::String(source)),
+                Some(OscType::Int(param_id)),
+                Some(OscType::Float(amount)),
+            ) if *param_id >= 0 => Some(AudioCommand::SetModRoute {
+                channel_id,
+                device_path,
+                source: source.clone(),
+                param_id: *param_id as u32,
+                amount: *amount,
+            }),
+            _ => None,
+        },
+        ["mod", "clear"] => Some(AudioCommand::ClearModRoutes {
+            channel_id,
+            device_path,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2803,6 +2875,35 @@ mod tests {
 
     fn string(s: &str) -> OscType {
         OscType::String(s.to_string())
+    }
+
+    #[test]
+    fn mod_set_and_clear_parse() {
+        let path = DevicePath::root(0);
+        let args = [string("lfo1"), OscType::Int(33), OscType::Float(-0.25)];
+        match parse_mod_command(2, path, &["mod", "set"], &args) {
+            Some(AudioCommand::SetModRoute {
+                channel_id: 2,
+                source,
+                param_id: 33,
+                amount,
+                ..
+            }) => {
+                assert_eq!(source, "lfo1");
+                assert_eq!(amount, -0.25);
+            }
+            other => panic!("unexpected: {:?}", other.is_some()),
+        }
+        assert!(matches!(
+            parse_mod_command(2, path, &["mod", "clear"], &[]),
+            Some(AudioCommand::ClearModRoutes { channel_id: 2, .. })
+        ));
+        // Wrong argument types, a negative id and an unknown action are all dropped.
+        let bad = [string("lfo1"), OscType::Float(33.0), OscType::Float(0.5)];
+        assert!(parse_mod_command(2, path, &["mod", "set"], &bad).is_none());
+        let neg = [string("lfo1"), OscType::Int(-1), OscType::Float(0.5)];
+        assert!(parse_mod_command(2, path, &["mod", "set"], &neg).is_none());
+        assert!(parse_mod_command(2, path, &["mod", "bogus"], &[]).is_none());
     }
 
     #[test]

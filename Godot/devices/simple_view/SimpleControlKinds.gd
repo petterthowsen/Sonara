@@ -22,7 +22,7 @@ const FOOTPRINT: Dictionary[String, Vector2i] = {
 	SLIDER: Vector2i(2, 1),
 	SEGMENTED: Vector2i(2, 1),
 	XY: Vector2i(2, 2),
-	ENVELOPE: Vector2i(3, 2),
+	ENVELOPE: Vector2i(3, 3),
 	EQ_BAND: Vector2i(2, 1),
 }
 

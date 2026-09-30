@@ -28,6 +28,10 @@ var default_value: float = 0.5
 ## Whether this parameter is logarithmic (e.g., delay time, frequency)
 var is_logarithmic: bool = false
 
+## Power curve for non-log float parameters: `real = min + (max - min) * n ^ skew`. 1.0 is linear.
+## Ignored when `is_logarithmic`. Engine built-ins advertise it (envelope times, glide).
+var skew: float = 1.0
+
 ## Parameter description/documentation
 var description: String = ""
 
@@ -95,8 +99,11 @@ func value_to_normalized(value: float) -> float:
 			return 1.0
 		return log(value / min_value) / log(max_value / min_value)
 	else:
-		# Linear scaling
-		return clamp((value - min_value) / (max_value - min_value), 0.0, 1.0)
+		# Linear scaling, with an optional power curve (`skew`)
+		if max_value <= min_value:
+			return 0.0
+		var linear: float = clamp((value - min_value) / (max_value - min_value), 0.0, 1.0)
+		return pow(linear, 1.0 / skew) if skew != 1.0 else linear
 
 
 ## Convert normalized 0.0-1.0 to real value
@@ -119,8 +126,9 @@ func normalized_to_value(normalized: float) -> float:
 			return min_value
 		return min_value * pow(max_value / min_value, clamped)
 	else:
-		# Linear scaling
-		return min_value + clamped * (max_value - min_value)
+		# Linear scaling, with an optional power curve (`skew`)
+		var curved: float = pow(clamped, skew) if skew != 1.0 else clamped
+		return min_value + curved * (max_value - min_value)
 
 
 ## Convert a tool value to normalized 0–1. `{ok:true, normalized}` or `{ok:false, error}`.

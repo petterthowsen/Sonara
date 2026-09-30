@@ -62,6 +62,13 @@ var audio_out_channels: int = 2
 ## Whether this device can own nested child devices (Chain, Layer).
 var is_container: bool = false
 
+## Modulation sources the engine advertises: [{id: String, name: String, bipolar: bool}]. Empty when
+## the device has no modulation.
+var mod_sources: Array[Dictionary] = []
+
+## The routes a fresh instance starts with: [{source: String, param_id: int, amount: float}].
+var default_mod_routes: Array[Dictionary] = []
+
 ## Whether this device supports loading files (e.g., SFZ, samples)
 var supports_file_loading: bool = false
 
@@ -99,6 +106,11 @@ func _init(p_device_id: String, p_name: String, p_category: DeviceCategory, p_de
 ## Add a parameter to this device
 func add_parameter(param: DeviceParameter) -> void:
 	parameters.append(param)
+
+
+## True when the engine advertised modulation sources for this device.
+func has_modulation() -> bool:
+	return not mod_sources.is_empty()
 
 
 ## Get parameter by ID

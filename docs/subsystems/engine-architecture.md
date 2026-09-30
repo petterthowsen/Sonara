@@ -69,9 +69,10 @@ Engine/src/
     types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
     devices/
-      mod.rs             # AudioDevice trait, parameter types, DeviceSleepState
+      mod.rs             # AudioDevice trait (incl. mod_sources/set_mod_route), parameter types, DeviceSleepState
       factory.rs         # DeviceFactory: builds devices by type/ID, built-in device metadata
-      polysynth.rs       # SIMD-optimized block-based polysynth
+      polysynth/         # mod.rs (device, voice pool, stealing), voice.rs (per-voice DSP + modulation),
+                         # params.rs (parameter table, slots), modulation.rs (sources, route matrix)
       delay.rs           # Delay effect device
       sfizz_device.rs    # SFZ sampler backed by sfizz
       spectrum_analyzer.rs# Utility pass-through FFT analyzer
@@ -79,7 +80,9 @@ Engine/src/
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
       envelope.rs
-      oscillator.rs
+      oscillator.rs      # PolyBLEP oscillators; process_block_ramped glides the pitch across a block
+      smoothing.rs       # SmoothedParam
+      svf.rs             # ZDF state-variable filter, drive, resonance compensation
       simd.rs
     ipc/
       mod.rs             # Shared-memory IPC for out-of-process plugin hosting

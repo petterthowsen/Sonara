@@ -61,6 +61,45 @@ signal volume_changed(volume : float)
 var is_adjusting := false
 @export var fine_drag_scale := FineDrag.DEFAULT_SCALE
 var _fine_drag := FineDrag.new()
+
+## Emitted while `mod_assign_active` and the user drags (or double-clicks, which asks for 0).
+## The value itself doesn't change. See `ModDisplay`.
+signal mod_amount_changed(new_amount: float)
+
+## Routes into this value: `{amount, color, source, bipolar}`.
+var mod_ranges: Array[Dictionary] = []:
+	set(r):
+		mod_ranges = r
+		queue_redraw()
+
+## While true, dragging edits the modulation amount instead of the value.
+var mod_assign_active := false:
+	set(a):
+		mod_assign_active = a
+		_mod_dragging = false
+		queue_redraw()
+
+var mod_assign_color := Color.WHITE:
+	set(c):
+		mod_assign_color = c
+		queue_redraw()
+
+## Amount of the route being edited; the owner keeps it in sync, drags advance it.
+var mod_assign_amount := 0.0
+
+## Optional Callable(amount: float) -> String for the assign tooltip (e.g. "+1.2 oct").
+var mod_amount_text_callback: Callable
+
+## Live modulated positions (0..1) while playing, drawn as thin markers.
+var mod_live_values := PackedFloat32Array():
+	set(v):
+		mod_live_values = v
+		queue_redraw()
+
+var _mod_dragging := false
+var _mod_tooltip: ValueTooltip = null
+
+const MOD_BAR := 3.0
 var _tooltip: ValueTooltip = null
 var _clip_until_msec := 0
 var _clip_timer_armed := false
@@ -119,6 +158,8 @@ func _draw():
 	if _is_clip_held():
 		draw_rect(Rect2(0, 0, size.x, CLIP_LINE_HEIGHT), bar_color_clip, true)
 
+	_draw_modulation()
+
 	# volume handle, only while hovered or dragged
 	if mouse_hovered or is_adjusting:
 		draw_rect(Rect2(0, _handle_y(), size.x, HANDLE_HEIGHT), handle_color, true)
@@ -138,7 +179,66 @@ func _draw_level(db: float, alpha: float) -> void:
 		draw_rect(Rect2(0, y_top, size.x, y_zero - y_top), Color(bar_color_clip, bar_color_clip.a * alpha), true)
 
 
+## Route bars down the right edge (beside the handle), live markers, and an assign outline.
+func _draw_modulation() -> void:
+	var base := _db_to_norm(volume_db)
+	for i in mod_ranges.size():
+		var route := mod_ranges[i]
+		var band := ModDisplay.span(base, float(route["amount"]), bool(route.get("bipolar", false)))
+		if band.y - band.x < 0.002:
+			continue
+		draw_rect(Rect2(size.x - (i + 1) * MOD_BAR, (1.0 - band.y) * size.y, MOD_BAR, (band.y - band.x) * size.y),
+			route["color"], true)
+	for live in mod_live_values:
+		draw_rect(Rect2(0, (1.0 - clampf(live, 0.0, 1.0)) * size.y - 0.5, size.x, 1.5), ModDisplay.LIVE_MARKER_COLOR, true)
+	if mod_assign_active:
+		draw_rect(Rect2(Vector2.ZERO, size), Color(mod_assign_color, 0.9), false, 1.5)
+
+
+## Assign mode input: drags edit the amount, double-click removes the route.
+func _mod_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if event.double_click:
+				mod_assign_amount = 0.0
+				mod_amount_changed.emit(0.0)
+			else:
+				_mod_dragging = true
+			_refresh_mod_tooltip()
+		else:
+			_mod_dragging = false
+			_refresh_mod_tooltip()
+		accept_event()
+	elif event is InputEventMouseMotion and _mod_dragging and size.y > 0.0:
+		var scale := fine_drag_scale if event.shift_pressed else 1.0
+		var amount := ModDisplay.step_amount(mod_assign_amount, -event.relative.y / size.y * scale)
+		if not is_equal_approx(amount, mod_assign_amount):
+			mod_assign_amount = amount
+			mod_amount_changed.emit(amount)
+			_refresh_mod_tooltip()
+		accept_event()
+
+
+func _refresh_mod_tooltip() -> void:
+	if Engine.is_editor_hint() or not is_inside_tree():
+		return
+	if not (mod_assign_active and (_mod_dragging or mouse_hovered)):
+		if _mod_tooltip:
+			_mod_tooltip.visible = false
+		return
+	if _mod_tooltip == null:
+		_mod_tooltip = ValueTooltip.attach(self)
+	var text: String = str(mod_amount_text_callback.call(mod_assign_amount)) \
+		if mod_amount_text_callback.is_valid() else ModDisplay.default_amount_text(mod_assign_amount)
+	_mod_tooltip.set_text(text)
+	_mod_tooltip.visible = true
+	_mod_tooltip.place_right_of(Vector2(get_global_rect().end.x, get_global_rect().get_center().y))
+
+
 func _gui_input(event: InputEvent) -> void:
+	if mod_assign_active:
+		_mod_gui_input(event)
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if event.double_click:
@@ -211,7 +311,7 @@ func get_value_text() -> String:
 func _refresh_tooltip() -> void:
 	if Engine.is_editor_hint() or not is_inside_tree():
 		return
-	if not (mouse_hovered or is_adjusting):
+	if mod_assign_active or not (mouse_hovered or is_adjusting):
 		if _tooltip:
 			_tooltip.visible = false
 		return

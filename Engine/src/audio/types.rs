@@ -482,9 +482,7 @@ impl ClipInstance {
     /// Fold a content position past the loop end back into the loop region. Positions before
     /// the loop start, and all positions when looping is off, pass through.
     pub fn wrap_content_tick(&self, content_tick: Tick) -> Tick {
-        if self.loop_enabled
-            && self.loop_length_ticks > 0
-            && content_tick >= self.loop_start_ticks
+        if self.loop_enabled && self.loop_length_ticks > 0 && content_tick >= self.loop_start_ticks
         {
             self.loop_start_ticks + (content_tick - self.loop_start_ticks) % self.loop_length_ticks
         } else {
@@ -1395,14 +1393,30 @@ mod tests {
     #[test]
     fn wrap_content_tick_folds_into_loop_region() {
         let mut inst = ClipInstance::new("i".to_string(), "c".to_string(), 0, 10_000);
-        assert_eq!(inst.wrap_content_tick(5_000), 5_000, "no loop passes through");
+        assert_eq!(
+            inst.wrap_content_tick(5_000),
+            5_000,
+            "no loop passes through"
+        );
 
         inst.loop_enabled = true;
         inst.loop_start_ticks = 960;
         inst.loop_length_ticks = 1_920;
-        assert_eq!(inst.wrap_content_tick(500), 500, "before the loop start is untouched");
-        assert_eq!(inst.wrap_content_tick(2_879), 2_879, "inside the first pass");
-        assert_eq!(inst.wrap_content_tick(2_880), 960, "loop end wraps to loop start");
+        assert_eq!(
+            inst.wrap_content_tick(500),
+            500,
+            "before the loop start is untouched"
+        );
+        assert_eq!(
+            inst.wrap_content_tick(2_879),
+            2_879,
+            "inside the first pass"
+        );
+        assert_eq!(
+            inst.wrap_content_tick(2_880),
+            960,
+            "loop end wraps to loop start"
+        );
         assert_eq!(inst.wrap_content_tick(3_000), 1_080);
     }
 

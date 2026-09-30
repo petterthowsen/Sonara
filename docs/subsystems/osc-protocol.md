@@ -184,6 +184,8 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/move_device` | `i:from_position, i:to_position` | Reorder top-level devices |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
+| `/channel/{id}/device/{path}/mod/set` | `s:source_id, i:param_id, f:amount` | Add, update or (amount 0) remove a modulation route; amount is clamped to −1..1 (see Modulation routes) |
+| `/channel/{id}/device/{path}/mod/clear` | - | Remove every modulation route |
 | `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
 | `/channel/{id}/device/{path}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
 | `/channel/{id}/device/{path}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add a child into a container device |
@@ -198,7 +200,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 | `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
-| `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state` and, for SFZ/CLAP devices, its parameter list (see Recovering missed state) |
+| `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state`, for SFZ/CLAP devices its parameter list, and for devices with modulation its routes (see Recovering missed state) |
 
 `{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
 
@@ -209,7 +211,17 @@ Examples:
 
 ### Device State Updates (Rust -> Godot)
 
-Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`, `/param/{id}/value`, `/data`).
+Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`, `/param/{id}/value`, `/mod/set`, `/mod/clear`, `/data`).
+
+**Modulation routes** (`{device}/mod/set [s:source_id, i:param_id, f:amount]`, `{device}/mod/clear`).
+A route moves a parameter by `amount` (−1..1, normalized units per unit of source) from one of the
+device's modulation sources (advertised in `/builtin/info`). Routes are device state, not
+parameters, and are evaluated inside the device per voice (ADR-0011). The engine applies them on
+the command thread, refuses unknown sources and non-modulatable parameters (logged, no echo) and
+echoes the applied, clamped amount as `{device}/mod/set`; `mod/clear` echoes `mod/clear`. Godot
+swallows the echoes of its own edits like parameter echoes (`DeviceInstance._consume_mod_echo`).
+Godot re-sends `mod/clear` plus every route from `DeviceInstance.sync_to_engine()`, so the project
+is authoritative.
 
 **Loading States** (`{device}/loading_state [s:state]`, sent on every transition):
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
@@ -233,6 +245,9 @@ answers dozens of device loads). The engine replies with:
 - `{device}/param/count` + `param/info`, only for devices whose parameters come from loaded
   content (Sfizz, CLAP) and only once that list is non-empty. Built-ins with fixed parameters
   keep Godot's registry metadata and get nothing.
+- `{device}/mod/clear` followed by one `{device}/mod/set` per route, only for devices that
+  advertise modulation sources (PolySynth). Godot applies the clear, so routes missing in the
+  engine disappear locally too.
 
 Godot asks for every device once, 1 s after the project connects (`Project._resync_device_states`),
 and every 2 s for a device that stays `loading` (`DeviceInstance._schedule_loading_recheck`).
@@ -242,19 +257,18 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 
 **PolySynth (`sonara.builtin.polysynth`)**
 - **Type:** Instrument (receives MIDI)
-- **Params (typed):**
-  - `0`: Waveform A (enum: Sine, Square, Saw, Triangle)
-  - `1`: Attack (float 0.0-1.0)
-  - `2`: Decay (float 0.0-1.0)
-  - `3`: Sustain (float 0.0-1.0)
-  - `4`: Release (float 0.0-1.0)
-  - `5`: Master Volume (float 0.0-1.0)
-  - `6`: Osc A Level (float 0.0-1.0)
-  - `7`: Waveform B (enum: Sine, Square, Saw, Triangle)
-  - `8`: Osc B Level (float 0.0-1.0)
-  - `9`: Osc B Detune (float 0.0-1.0)
-  - `10`: Osc A Octave (enum: -2, -1, 0, +1, +2)
-  - `11`: Osc B Octave (enum: -2, -1, 0, +1, +2)
+- **Params (typed):** IDs are grouped ten per module (`ParamInfo.module`); the gaps are reserved
+  for Filter (30s), Filter Env (50s) and LFOs (60s, 70s). Real ranges travel in `/builtin/info`;
+  the source of truth is `audio/devices/polysynth/params.rs`.
+  - `0`–`8` Osc 1, `10`–`18` Osc 2 (same offsets): `+0` Wave (enum: Sine, Triangle, Saw, Pulse),
+    `+1` Pulse Width (5–95 %), `+2` Octave (enum −3…+3), `+3` Semi (enum −12…+12),
+    `+4` Fine (±100 cents), `+5` Level (0–1), `+6` Unison (enum 1–16),
+    `+7` Unison Detune (0–100 cents), `+8` Unison Spread (0–100 %)
+  - `20`: Noise Level (0–1), `21`: Noise Color (0–100 %, dark → white → bright)
+  - `40`–`43`: Amp Attack, Decay, Sustain, Release (times 0.5 ms–10 s, skew 4)
+  - `80`: Voice Mode (enum: Poly, Mono, Legato), `81`: Polyphony (enum 1–64),
+    `82`: Glide (0–1 s, skew 3), `83`: Velocity (0–100 % amp sensitivity)
+  - `90`: Volume (−60…+6 dB, skew 0.5; the bottom is silence)
 
 **Delay (`sonara.builtin.delay`)**
 - **Type:** Effect
@@ -323,14 +337,23 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
     i:param_id, s:name, s:unit,
     s:type, i:syncable,
     f:min, f:max, f:default,
+    i:is_logarithmic, f:skew,
     i:enum_count, ...enum_values
   ),
-  i:is_container
+  i:is_container,
+  i:source_count,
+  repeat source_count times: (s:id, s:name, i:bipolar),
+  i:route_count,
+  repeat route_count times: (s:source_id, i:param_id, f:amount)
 ]
 ```
 - `type`: "float" | "bool" | "enum"
 - For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
 - `is_container`: 1 when the device can own nested children (Chain, Layer, Drum Machine).
+- The modulation block follows `is_container`: the sources the device offers (`bipolar` 1 =
+  runs −1..1, else 0..1) and the routes a fresh instance starts with (its default patch; PolySynth:
+  `filter_env` → `31` Filter Cutoff at +0.35). Godot seeds a new `DeviceInstance.mod_routes` from
+  them. A device without modulation sends `0, 0`; Godot treats a missing block the same way.
 
 #### CLAP Plugins
 

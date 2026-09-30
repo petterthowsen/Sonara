@@ -27,6 +27,8 @@ signal slot_changed()
 ## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
 signal slots_changed()
 signal name_changed(new_name: String)
+## A modulation route was added, changed or removed (amount 0). See "MODULATION".
+signal mod_route_changed(source: String, param_id: int, amount: float)
 
 
 ## ============================================================================
@@ -95,6 +97,15 @@ var sample_source: AudioSourceInfo = null
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
+
+## Modulation routes (device state, not parameters): "source:param_id" -> amount (-1..1).
+## Amount 0 is never stored. Seeded from the device's default patch; see "MODULATION".
+var mod_routes: Dictionary = {}
+
+## Echoes of our own mod messages still in flight: key ("source:param_id", or MOD_CLEAR_KEY)
+## -> [count, first_msec]. Same idea as `_pending_echoes`.
+var _pending_mod_echoes: Dictionary = {}
+const MOD_CLEAR_KEY := "*clear*"
 
 ## Parameter metadata advertised by the engine for THIS instance (SFZ/CLAP
 ## devices whose param list depends on the loaded file/plugin instance).
@@ -237,6 +248,8 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 		return
 	for param in get_parameters():
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
+	for route in device.default_mod_routes:
+		mod_routes[_mod_key(route["source"], route["param_id"])] = float(route["amount"])
 
 
 ## Assign a path-safe, sibling-unique display name. Emits `name_changed` when it differs.
@@ -451,6 +464,163 @@ func contains_device(other: DeviceInstance) -> bool:
 		if child.contains_device(other):
 			return true
 	return false
+
+
+## ============================================================================
+## MODULATION
+## ============================================================================
+## Routes are device state, not parameters: a source (e.g. "lfo1") moves a parameter by
+## `amount` (-1..1, normalized units per unit of source). They are evaluated inside the engine
+## device (per voice) and travel as `{device}/mod/set` / `mod/clear`. Like parameters, the UI
+## only calls the setter; the model sends OSC and emits `mod_route_changed`.
+
+static func _mod_key(source: String, param_id: int) -> String:
+	return "%s:%d" % [source, param_id]
+
+
+## Sources this device offers: [{id, name, bipolar}].
+func get_mod_sources() -> Array[Dictionary]:
+	return device.mod_sources if device != null else ([] as Array[Dictionary])
+
+
+func has_modulation() -> bool:
+	return device != null and device.has_modulation()
+
+
+## Amount of the route from `source` to `param_id` (0 when there is none).
+func get_mod_amount(source: String, param_id: int) -> float:
+	return float(mod_routes.get(_mod_key(source, param_id), 0.0))
+
+
+## Routes into `param_id`: [{source: String, amount: float}], in source-list order.
+func get_routes_for_param(param_id: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for src in get_mod_sources():
+		var amount := get_mod_amount(src["id"], param_id)
+		if amount != 0.0:
+			out.append({"source": src["id"], "amount": amount})
+	return out
+
+
+## Number of routes leaving `source`.
+func get_route_count_for_source(source: String) -> int:
+	var count := 0
+	for key in mod_routes:
+		if String(key).begins_with(source + ":"):
+			count += 1
+	return count
+
+
+## Set (or with 0, remove) the route from `source` to `param_id`. Syncs to the engine and emits
+## `mod_route_changed`; the engine's echo only emits again when it corrects the amount.
+func set_mod_amount(source: String, param_id: int, amount: float) -> void:
+	amount = clampf(amount, -1.0, 1.0)
+	if absf(amount) < 0.001:
+		amount = 0.0
+	var old := get_mod_amount(source, param_id)
+	if is_equal_approx(old, amount):
+		return
+	_store_mod_amount(source, param_id, amount)
+	_expect_mod_echo(_mod_key(source, param_id))
+	AudioEngineOSC.send(osc_addr("mod/set"), [source, param_id, amount])
+	mod_route_changed.emit(source, param_id, amount)
+
+
+## Remove every route.
+func clear_mod_routes() -> void:
+	if mod_routes.is_empty():
+		return
+	var removed := mod_routes.duplicate()
+	mod_routes.clear()
+	_expect_mod_echo(MOD_CLEAR_KEY)
+	AudioEngineOSC.send(osc_addr("mod/clear"), [])
+	_emit_removed_routes(removed)
+
+
+## Undo step for one mod-amount edit; consecutive drags on the same route merge. The caller
+## records it with `HistoryUtil.record()`, as parameter edits do (the model never does).
+func mod_amount_command(source: String, param_id: int, old_amount: float, new_amount: float) -> PropertyCommand:
+	var cmd := PropertyCommand.new(
+		"Set Modulation Amount",
+		self,
+		"set_mod_amount",
+		[source, param_id, old_amount],
+		[source, param_id, new_amount]
+	)
+	# Same target and setter name, so consecutive drags merge (lambdas never compare equal).
+	return cmd.set_unpack_array(true).set_mergeable(true)
+
+
+func _store_mod_amount(source: String, param_id: int, amount: float) -> void:
+	var key := _mod_key(source, param_id)
+	if amount == 0.0:
+		mod_routes.erase(key)
+	else:
+		mod_routes[key] = amount
+
+
+func _emit_removed_routes(removed: Dictionary) -> void:
+	for key in removed:
+		var parts := String(key).rsplit(":", true, 1)
+		mod_route_changed.emit(parts[0], int(parts[1]), 0.0)
+
+
+func _expect_mod_echo(key: String) -> void:
+	var now := Time.get_ticks_msec()
+	var pending: Array = _pending_mod_echoes.get(key, [0, now])
+	var count: int = pending[0] if now - int(pending[1]) < PENDING_ECHO_TIMEOUT_MS else 0
+	_pending_mod_echoes[key] = [count + 1, now]
+
+
+## Consume one expected echo for `key`. True while newer local edits are still in flight, so the
+## arriving echo is stale (or just our own) and should be ignored.
+func _consume_mod_echo(key: String) -> bool:
+	if not _pending_mod_echoes.has(key):
+		return false
+	var pending: Array = _pending_mod_echoes[key]
+	if Time.get_ticks_msec() - int(pending[1]) >= PENDING_ECHO_TIMEOUT_MS:
+		_pending_mod_echoes.erase(key)
+		return false
+	var remaining: int = int(pending[0]) - 1
+	if remaining <= 0:
+		_pending_mod_echoes.erase(key)
+		return false
+	pending[0] = remaining
+	return true
+
+
+func _on_mod_set_received(values: Array) -> void:
+	if values.size() < 3:
+		return
+	var source := String(values[0])
+	var param_id := int(values[1])
+	var amount := float(values[2])
+	if _consume_mod_echo(_mod_key(source, param_id)):
+		return
+	if is_equal_approx(get_mod_amount(source, param_id), amount):
+		return
+	_store_mod_amount(source, param_id, amount)
+	mod_route_changed.emit(source, param_id, amount)
+
+
+func _on_mod_clear_received(_values: Array) -> void:
+	if _consume_mod_echo(MOD_CLEAR_KEY) or mod_routes.is_empty():
+		return
+	var removed := mod_routes.duplicate()
+	mod_routes.clear()
+	_emit_removed_routes(removed)
+
+
+## Make the engine's routes match ours: clear, then one set per route.
+func sync_mod_routes_to_engine() -> void:
+	if not has_modulation():
+		return
+	_expect_mod_echo(MOD_CLEAR_KEY)
+	AudioEngineOSC.send(osc_addr("mod/clear"), [])
+	for key in mod_routes:
+		var parts := String(key).rsplit(":", true, 1)
+		_expect_mod_echo(String(key))
+		AudioEngineOSC.send(osc_addr("mod/set"), [parts[0], int(parts[1]), float(mod_routes[key])])
 
 
 ## ============================================================================
@@ -911,6 +1081,8 @@ func connect_to_engine() -> void:
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
 	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
+	AudioEngineOSC.listen(osc_addr("mod/set"), _on_mod_set_received)
+	AudioEngineOSC.listen(osc_addr("mod/clear"), _on_mod_clear_received)
 
 	sync_slot_to_engine()
 	for child in children:
@@ -940,6 +1112,8 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.unlisten(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
+	AudioEngineOSC.unlisten(osc_addr("mod/set"), _on_mod_set_received)
+	AudioEngineOSC.unlisten(osc_addr("mod/clear"), _on_mod_clear_received)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
@@ -1184,6 +1358,7 @@ func _push_restored_parameters_to_engine() -> void:
 ## Sync this device instance's parameters to the audio engine (bulk sync)
 ## TODO: Implement this
 func sync_to_engine() -> void:
+	sync_mod_routes_to_engine()
 	for param_id in parameter_values:
 		var param = get_parameter(param_id)
 		if param and not param.syncable:
@@ -1390,12 +1565,24 @@ func to_json() -> Dictionary:
 		"return_channel_ids": return_channel_ids.duplicate(),
 		"slots": _slots_to_json(),
 	}
+	if has_modulation():
+		data["mod_routes"] = _mod_routes_to_json()
 	if not plugin_state.is_empty():
 		data["plugin_state"] = Marshalls.raw_to_base64(plugin_state)
 	var note_map_json = LayerNoteMap.to_json(slot_note_map)
 	if note_map_json != null:
 		data["slot_note_map"] = note_map_json
 	return data
+
+
+## `[{source, param_id, amount}]`, sorted so saves are stable.
+func _mod_routes_to_json() -> Array:
+	var out: Array = []
+	for key in mod_routes:
+		var parts := String(key).rsplit(":", true, 1)
+		out.append({"source": parts[0], "param_id": int(parts[1]), "amount": mod_routes[key]})
+	out.sort_custom(func(a, b): return _mod_key(a["source"], a["param_id"]) < _mod_key(b["source"], b["param_id"]))
+	return out
 
 
 ## JSON object keys must be strings; keep parameter IDs stable across save/load.
@@ -1432,6 +1619,16 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 		instance.parameter_values[param_id] = value
 		instance._restored_parameter_values[param_id] = value
 	
+	# Saved routes replace the default patch (an empty list means the user removed them all);
+	# a project saved before routes existed keeps the defaults.
+	if data.has("mod_routes") and data["mod_routes"] is Array:
+		instance.mod_routes.clear()
+		for route in data["mod_routes"]:
+			if route is Dictionary and route.has("source") and route.has("param_id"):
+				var amount := clampf(float(route.get("amount", 0.0)), -1.0, 1.0)
+				if amount != 0.0:
+					instance.mod_routes[_mod_key(str(route["source"]), int(route["param_id"]))] = amount
+
 	# Restore loaded file path (will be reloaded after engine connection)
 	instance.loaded_file_path = data.get("loaded_file_path", "")
 	instance.slot_volume = float(data.get("slot_volume", 0.5))

@@ -188,6 +188,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 - [ ] Modulation
   - [ ] Basic modulation, similar to Bitwig: allow any channel and device parameter to be modulatable
+  - [x?] Device modulation routes (PolySynth v2, spec `docs/specs/011-polysynth-v2/`): engine + OSC + Godot model done (phase 4); assign UI in SimpleView done (phase 5, [x?]: manual check pending); live display is phase 6
   - [ ] Phase 1: track automation lanes for channel and device parameters (incl. MIDI CCs) — spec `docs/specs/003-automation/`
 
 ### UI / Quality of Life

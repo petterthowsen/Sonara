@@ -5,7 +5,11 @@
 pub mod envelope;
 pub mod oscillator;
 pub mod simd;
+pub mod smoothing;
+pub mod svf;
 
 pub use envelope::{AdsrEnvelope, AdsrState};
 pub use oscillator::{Oscillator, Waveform};
 pub use simd::mix_blocks;
+pub use smoothing::SmoothedParam;
+pub use svf::{FilterMode, Svf, SvfCoefs};

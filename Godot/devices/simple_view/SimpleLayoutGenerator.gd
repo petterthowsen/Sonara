@@ -43,6 +43,7 @@ static func generate(device: Device, params: Array, rows: int = SimpleLayout.DEF
 	layout.kind = kind
 	layout.generated = true
 	layout.generator_version = VERSION
+	layout.param_signature = SimpleLayout.signature_for(params)
 	layout.rows = maxi(1, rows)
 	layout.pages = build_pages(items, strategy, layout.rows)
 	return layout

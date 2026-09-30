@@ -81,7 +81,8 @@ static func save(layout: SimpleLayout) -> bool:
 ## The layout for `device`: from the cache, else its file, else newly generated and saved.
 ## A file the user never edited that older generation rules made is generated again and saved.
 ## A broken file is left untouched and a generated layout is used instead (REQ-017).
-## Loaded layouts are reconciled with `params` (REQ-016) unless `params` is empty.
+## Unless `params` is empty: a never-edited layout made from a different parameter list is
+## generated again and saved, and any other layout is reconciled with `params` (REQ-016).
 static func load_or_generate(device: Device, params: Array) -> SimpleLayout:
 	var device_id := device.device_id
 	var layout: SimpleLayout = _cache.get(device_id)
@@ -105,8 +106,15 @@ static func load_or_generate(device: Device, params: Array) -> SimpleLayout:
 				if save(layout):
 					logger.info("generated layout for %s at %s" % [device_id, path_for(device_id)])
 		_cache[device_id] = layout
-	if not params.is_empty():
-		layout.reconcile(params)
+	if params.is_empty():
+		return layout
+	if layout.generated and layout.param_signature != SimpleLayout.signature_for(params):
+		# The parameter list changed under a layout nobody edited: generate it again rather
+		# than patching new parameters onto the end.
+		layout = regenerate(device, params)
+		logger.info("regenerated layout for %s: its parameters changed" % device_id)
+		return layout
+	layout.reconcile(params)
 	return layout
 
 
