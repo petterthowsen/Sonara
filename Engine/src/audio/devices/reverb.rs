@@ -22,7 +22,7 @@ use super::param_table::{
 use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
-use crate::audio::dsp::gain::{dry_wet_gains, gain_to_db, MixLaw};
+use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
 use crate::audio::dsp::lfo::{Lfo, LfoShape};
 use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
@@ -152,9 +152,10 @@ const FDN_HALL_MS: [f32; 8] = [53.0, 59.0, 67.0, 71.0, 79.0, 83.0, 89.0, 97.0];
 const FDN_MOD_FRACTION: f32 = 0.03;
 const PLATE_MOD_FRACTION: f32 = 0.02;
 
-/// Output and input tap patterns (fixed sign spreads keep L and R decorrelated).
-const FDN_OUT_L: [f32; 8] = [1.0, 0.8, -0.6, 0.7, -0.5, 0.9, 0.4, -0.8];
-const FDN_OUT_R: [f32; 8] = [0.5, -0.9, 0.8, -0.4, 0.7, -0.6, 0.9, 0.3];
+/// Output and input tap patterns. The two output patterns are orthogonal (a Hadamard pair), so a
+/// mono input — which excites the all-ones mode most — still gives decorrelated L and R.
+const FDN_OUT_L: [f32; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+const FDN_OUT_R: [f32; 8] = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
 const FDN_IN_A: [f32; 8] = [1.0, 0.7, -0.5, 0.6, -0.8, 0.9, 0.3, -0.6];
 const FDN_IN_B: [f32; 8] = [0.4, -0.7, 0.8, -0.3, 0.6, -0.9, 0.5, 0.7];
 
@@ -201,21 +202,20 @@ const DIFFUSER_MS: [[f32; 4]; 4] = [
     [10.3, 11.7, 13.3, 15.1],
 ];
 
-/// Dattorro tank lengths in samples at the paper's 29761 Hz, scaled to the device rate.
-const PLATE_IN_AP: [(f32, f32); 4] = [
+/// Dattorro input-diffusion all-pass lengths in samples at the paper's 29761 Hz, with gains.
+/// The last two are the tank all-passes, folded into the input path so the decay loop is a clean
+/// two-delay cross-coupling.
+const PLATE_IN_AP: [(f32, f32); 6] = [
     (142.0, 0.75),
     (107.0, 0.75),
     (379.0, 0.625),
     (277.0, 0.625),
+    (672.0, 0.7),
+    (908.0, 0.7),
 ];
-/// `(mod all-pass length, delay A, all-pass 2 length, delay B, ap1 gain, ap2 gain)` per branch.
-const PLATE_BRANCH: [(f32, f32, f32, f32, f32, f32); 2] = [
-    (672.0, 4453.0, 1800.0, 3720.0, 0.70, 0.50),
-    (908.0, 4217.0, 2656.0, 3163.0, 0.70, 0.50),
-];
+/// The two Dattorro tank delay lengths (samples at 29761 Hz) that set the plate's decay.
+const PLATE_TANK: [f32; 2] = [4453.0, 4217.0];
 const PLATE_REF_RATE: f32 = 29_761.0;
-/// Cross-coupling gain between the two plate tanks.
-const PLATE_CROSS: f32 = 0.5;
 
 /// Feedback gain of a delay line of `delay_seconds` for a 60 dB decay of `t60` seconds.
 #[inline]
@@ -257,6 +257,66 @@ fn allpass(line: &mut DelayLine, x: f32, delay: f32, g: f32) -> f32 {
     let y = d - g * x;
     line.push(x + g * y);
     y
+}
+
+/// Jot-style absorbent filter: a second-order low shelf and high shelf, flat in the mid band, so
+/// the band decay rates can be set independently without leaking into the 1 kHz tail. `low_db`
+/// is the low-frequency gain relative to the mid band, `high_db` the high-frequency one. Two
+/// cascaded first-order sections reach the shelf asymptote fast enough for the band T60 to match.
+#[derive(Clone, Copy)]
+struct Absorbent {
+    low_lp: [OnePole; 2],
+    high_lp: [OnePole; 2],
+    low_gain: f32,
+    high_gain: f32,
+    low_g: f32,
+    high_g: f32,
+}
+
+impl Absorbent {
+    fn new() -> Self {
+        Self {
+            low_lp: [OnePole::new(); 2],
+            high_lp: [OnePole::new(); 2],
+            low_gain: 1.0,
+            high_gain: 1.0,
+            low_g: 0.0,
+            high_g: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        for f in self.low_lp.iter_mut() {
+            f.reset();
+        }
+        for f in self.high_lp.iter_mut() {
+            f.reset();
+        }
+    }
+
+    fn update(&mut self, low_freq: f32, high_freq: f32, low_db: f32, high_db: f32, sample_rate: f32) {
+        // Half the dB per cascaded section.
+        self.low_gain = db_to_gain(low_db * 0.5);
+        self.high_gain = db_to_gain(high_db * 0.5);
+        self.low_g = one_pole_g(low_freq, sample_rate);
+        self.high_g = one_pole_g(high_freq, sample_rate);
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let mut y = x;
+        // Low shelf: gain `low_gain` per section at DC, 1 in the band.
+        for f in self.low_lp.iter_mut() {
+            let lp = f.lowpass(y, self.low_g);
+            y += (self.low_gain - 1.0) * lp;
+        }
+        // High shelf: gain `high_gain` per section at Nyquist, 1 in the band.
+        for f in self.high_lp.iter_mut() {
+            let lp = f.lowpass(y, self.high_g);
+            y = self.high_gain * y + (1.0 - self.high_gain) * lp;
+        }
+        y
+    }
 }
 
 // === Diffuser ===
@@ -327,10 +387,7 @@ impl Diffuser {
 /// low/high shelves.
 struct Fdn {
     lines: [DelayLine; 8],
-    low: [LinearSvf; 8],
-    high: [LinearSvf; 8],
-    low_coefs: [SvfCoefs; 8],
-    high_coefs: [SvfCoefs; 8],
+    absorb: [Absorbent; 8],
     gain: [f32; 8],
     base_ms: [f32; 8],
     inject: f32,
@@ -339,13 +396,9 @@ struct Fdn {
 
 impl Fdn {
     fn new(base_ms: [f32; 8], inject: f32, out_scale: f32) -> Self {
-        let flat = SvfCoefs::new(SvfShape::LowShelf, 250.0, 0.5, 0.0, 48_000.0);
         Self {
             lines: std::array::from_fn(|_| DelayLine::new()),
-            low: [LinearSvf::new(); 8],
-            high: [LinearSvf::new(); 8],
-            low_coefs: [flat; 8],
-            high_coefs: [flat; 8],
+            absorb: [Absorbent::new(); 8],
             gain: [0.0; 8],
             base_ms,
             inject,
@@ -364,11 +417,8 @@ impl Fdn {
         for line in self.lines.iter_mut() {
             line.clear();
         }
-        for f in self.low.iter_mut() {
-            f.reset();
-        }
-        for f in self.high.iter_mut() {
-            f.reset();
+        for a in self.absorb.iter_mut() {
+            a.reset();
         }
     }
 
@@ -386,8 +436,7 @@ impl Fdn {
                 )
             };
             self.gain[i] = gain;
-            self.low_coefs[i] = SvfCoefs::new(SvfShape::LowShelf, low.1, 0.5, low_db, sample_rate);
-            self.high_coefs[i] = SvfCoefs::new(SvfShape::HighShelf, high.1, 0.5, high_db, sample_rate);
+            self.absorb[i].update(low.1, high.1, low_db, high_db, sample_rate);
         }
     }
 
@@ -414,8 +463,7 @@ impl Fdn {
         }
         let mut y = [0.0f32; 8];
         for i in 0..8 {
-            let filtered = self.high[i].process(self.low[i].process(d[i], &self.low_coefs[i]), &self.high_coefs[i]);
-            y[i] = filtered * self.gain[i];
+            y[i] = self.absorb[i].process(d[i]) * self.gain[i];
         }
         // Householder: (I − 2/N · 1) y = y − 2·mean(y).
         let mean = y.iter().sum::<f32>() * (2.0 / 8.0);
@@ -437,91 +485,41 @@ impl Fdn {
     }
 }
 
-// === Plate (Dattorro) ===
+// === Plate ===
 
-/// One Dattorro tank: modulated all-pass → delay A → damping → all-pass → delay B.
-struct PlateBranch {
-    ap1: DelayLine,
-    d_a: DelayLine,
-    ap2: DelayLine,
-    d_b: DelayLine,
-    low: LinearSvf,
-    high: LinearSvf,
-    low_coefs: SvfCoefs,
-    high_coefs: SvfCoefs,
+/// One plate tank: a modulated delay with damping and decay, cross-coupled with the other tank.
+struct PlateTank {
+    line: DelayLine,
+    absorb: Absorbent,
     gain: f32,
-    len_ap1: f32,
-    len_d_a: f32,
-    len_ap2: f32,
-    len_d_b: f32,
-    ap1_g: f32,
-    ap2_g: f32,
-    loop_seconds: f32,
-    /// The previous `delay B` output, cross-coupled into the other tank.
-    last_db: f32,
+    /// Nominal delay in seconds at Size 50 %.
+    len_seconds: f32,
+    /// The previous output, cross-coupled into the other tank.
+    last: f32,
 }
 
-impl PlateBranch {
-    fn new(branch: usize, ratio: f32) -> Self {
-        let (ap1, da, ap2, db, g1, g2) = PLATE_BRANCH[branch];
-        let flat = SvfCoefs::new(SvfShape::LowShelf, 250.0, 0.5, 0.0, 48_000.0);
+impl PlateTank {
+    fn new(len_seconds: f32) -> Self {
         Self {
-            ap1: DelayLine::new(),
-            d_a: DelayLine::new(),
-            ap2: DelayLine::new(),
-            d_b: DelayLine::new(),
-            low: LinearSvf::new(),
-            high: LinearSvf::new(),
-            low_coefs: flat,
-            high_coefs: flat,
+            line: DelayLine::new(),
+            absorb: Absorbent::new(),
             gain: 0.0,
-            len_ap1: ap1 * ratio,
-            len_d_a: da * ratio,
-            len_ap2: ap2 * ratio,
-            len_d_b: db * ratio,
-            ap1_g: g1,
-            ap2_g: g2,
-            loop_seconds: 0.0,
-            last_db: 0.0,
+            len_seconds,
+            last: 0.0,
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        let scale = SIZE_MAX_SCALE / SIZE_MIN_SCALE;
-        let sec = |samples: f32| samples / PLATE_REF_RATE;
-        self.ap1.prepare_seconds(sec(self.len_ap1) * scale, sample_rate);
-        self.d_a.prepare_seconds(sec(self.len_d_a) * scale, sample_rate);
-        self.ap2.prepare_seconds(sec(self.len_ap2) * scale, sample_rate);
-        self.d_b.prepare_seconds(sec(self.len_d_b) * scale, sample_rate);
-        self.loop_seconds = (self.len_ap1 + self.len_d_a + self.len_ap2 + self.len_d_b) / PLATE_REF_RATE;
+        self.line
+            .prepare_seconds(self.len_seconds * SIZE_MAX_SCALE, sample_rate);
     }
 
     fn reset(&mut self) {
-        self.ap1.clear();
-        self.d_a.clear();
-        self.ap2.clear();
-        self.d_b.clear();
-        self.low.reset();
-        self.high.reset();
+        self.line.clear();
+        self.absorb.reset();
+        self.last = 0.0;
     }
 
-    fn update_coefs(&mut self, sample_rate: f32, size_scale: f32, frozen: bool, decay: f32, low: (f32, f32), high: (f32, f32)) {
-        let len_s = self.loop_seconds * size_scale;
-        let (product, low_db, high_db) = if frozen {
-            (1.0, 0.0, 0.0)
-        } else {
-            (
-                feedback_gain(len_s, decay),
-                shelf_db(len_s, decay, low.0),
-                shelf_db(len_s, decay, high.0),
-            )
-        };
-        self.gain = product / PLATE_CROSS;
-        self.low_coefs = SvfCoefs::new(SvfShape::LowShelf, low.1, 0.5, low_db, sample_rate);
-        self.high_coefs = SvfCoefs::new(SvfShape::HighShelf, high.1, 0.5, high_db, sample_rate);
-    }
-
-    /// Returns the two output taps (`delay A`, `delay B`).
     #[inline]
     fn process(
         &mut self,
@@ -530,34 +528,32 @@ impl PlateBranch {
         mod_val: f32,
         mod_depth: f32,
         frozen: bool,
+        sample_rate: f32,
     ) -> (f32, f32) {
-        let ap1_len = if frozen {
-            (self.len_ap1 * size_scale).round().max(2.0)
+        let base = self.len_seconds * size_scale * sample_rate;
+        let delay = if frozen {
+            base.round().max(2.0)
         } else {
-            (self.len_ap1 * size_scale * (1.0 + PLATE_MOD_FRACTION * mod_depth * mod_val)).max(2.0)
+            (base * (1.0 + PLATE_MOD_FRACTION * mod_depth * mod_val)).max(2.0)
         };
-        let a = allpass(&mut self.ap1, inx, ap1_len, self.ap1_g);
-        let da_len = (self.len_d_a * size_scale).max(2.0);
-        let da = self.d_a.read_hermite(da_len);
-        self.d_a.push(a);
-        let damped = self
-            .high
-            .process(self.low.process(da, &self.low_coefs), &self.high_coefs)
-            * self.gain;
-        let b = allpass(&mut self.ap2, damped, (self.len_ap2 * size_scale).max(2.0), self.ap2_g);
-        let db_len = (self.len_d_b * size_scale).max(2.0);
-        let db = self.d_b.read_hermite(db_len);
-        self.d_b.push(b);
-        (da, db)
+        let out = self.line.read_hermite(delay);
+        let decayed = self.absorb.process(out) * self.gain;
+        // Only the coupled signal (the other tank's decayed output plus the input) is stored; the
+        // tank's own decayed output travels through the cross-coupling, so the loop is a clean
+        // orthogonal two-delay network.
+        let stored = if frozen { decayed } else { inx };
+        self.line.push(soft_clip(stored));
+        (out, decayed)
     }
 }
 
-/// Dattorro plate: four input all-passes into two cross-coupled tanks.
+/// Dattorro-derived plate: the input diffusion all-passes feed two cross-coupled tanks, each a
+/// modulated delay with an absorbent filter and a decay gain.
 struct Plate {
-    in_ap: [DelayLine; 4],
-    in_len: [f32; 4],
-    in_g: [f32; 4],
-    branches: [PlateBranch; 2],
+    in_ap: [DelayLine; 6],
+    in_len: [f32; 6],
+    in_g: [f32; 6],
+    tanks: [PlateTank; 2],
     out_scale: f32,
 }
 
@@ -568,17 +564,20 @@ impl Plate {
             in_ap: std::array::from_fn(|_| DelayLine::new()),
             in_len: std::array::from_fn(|i| PLATE_IN_AP[i].0 * ratio),
             in_g: std::array::from_fn(|i| PLATE_IN_AP[i].1),
-            branches: [PlateBranch::new(0, ratio), PlateBranch::new(1, ratio)],
-            out_scale: 0.5,
+            tanks: [
+                PlateTank::new(PLATE_TANK[0] / PLATE_REF_RATE),
+                PlateTank::new(PLATE_TANK[1] / PLATE_REF_RATE),
+            ],
+            out_scale: 0.6,
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        for i in 0..4 {
+        for i in 0..self.in_ap.len() {
             self.in_ap[i].prepare_seconds((self.in_len[i] / PLATE_REF_RATE) * 2.0, sample_rate);
         }
-        for branch in self.branches.iter_mut() {
-            branch.prepare(sample_rate);
+        for tank in self.tanks.iter_mut() {
+            tank.prepare(sample_rate);
         }
     }
 
@@ -586,14 +585,27 @@ impl Plate {
         for line in self.in_ap.iter_mut() {
             line.clear();
         }
-        for branch in self.branches.iter_mut() {
-            branch.reset();
+        for tank in self.tanks.iter_mut() {
+            tank.reset();
         }
     }
 
     fn update_coefs(&mut self, sample_rate: f32, size_scale: f32, frozen: bool, decay: f32, low: (f32, f32), high: (f32, f32)) {
-        for branch in self.branches.iter_mut() {
-            branch.update_coefs(sample_rate, size_scale, frozen, decay, low, high);
+        // A signal crosses both tanks in one loop; each tank applies the square root of the
+        // round-trip gain, so the shelf dB halves too.
+        let total_loop = (self.tanks[0].len_seconds + self.tanks[1].len_seconds) * size_scale.max(0.01);
+        let (product, low_db, high_db) = if frozen {
+            (1.0, 0.0, 0.0)
+        } else {
+            (
+                feedback_gain(total_loop, decay),
+                shelf_db(total_loop, decay, low.0) * 0.5,
+                shelf_db(total_loop, decay, high.0) * 0.5,
+            )
+        };
+        for tank in self.tanks.iter_mut() {
+            tank.gain = product.sqrt();
+            tank.absorb.update(low.1, high.1, low_db, high_db, sample_rate);
         }
     }
 
@@ -606,21 +618,19 @@ impl Plate {
         mod_val: f32,
         mod_depth: f32,
         frozen: bool,
+        sample_rate: f32,
     ) -> (f32, f32) {
         let x = (dl + dr) * 0.5;
         let mut v = x;
-        for i in 0..4 {
+        for i in 0..self.in_ap.len() {
             v = allpass(&mut self.in_ap[i], v, self.in_len[i].max(2.0), self.in_g[i]);
         }
-        // Cross-couple each tank's previous output into the other's input.
-        let lin = v + self.branches[1].gain * PLATE_CROSS * self.branches[1].last_db;
-        let rin = v + self.branches[0].gain * PLATE_CROSS * self.branches[0].last_db;
-        let (a_l, db_l) = self.branches[0].process(lin, size_scale, mod_val, mod_depth, frozen);
-        let (a_r, db_r) = self.branches[1].process(rin, size_scale, mod_val, mod_depth, frozen);
-        self.branches[0].last_db = db_l;
-        self.branches[1].last_db = db_r;
-        let out_l = (a_l * 0.6 + db_r * 0.5) * self.out_scale;
-        let out_r = (a_r * 0.6 + db_l * 0.5) * self.out_scale;
+        let (y0, d0) = self.tanks[0].process(v + self.tanks[1].last, size_scale, mod_val, mod_depth, frozen, sample_rate);
+        let (y1, d1) = self.tanks[1].process(v + self.tanks[0].last, size_scale, -mod_val, mod_depth, frozen, sample_rate);
+        self.tanks[0].last = d0;
+        self.tanks[1].last = d1;
+        let out_l = (y0 * 0.7 + y1 * 0.4) * self.out_scale;
+        let out_r = (y1 * 0.7 + y0 * 0.4) * self.out_scale;
         (out_l, out_r)
     }
 }
@@ -658,6 +668,7 @@ pub struct ReverbDevice {
     predelay_r: DelayLine,
     early_l: DelayLine,
     early_r: DelayLine,
+    decor_r: DelayLine,
     early_taps: &'static [(f32, f32, f32)],
 
     diffuser: Diffuser,
@@ -732,6 +743,7 @@ impl ReverbDevice {
             predelay_r: DelayLine::new(),
             early_l: DelayLine::new(),
             early_r: DelayLine::new(),
+            decor_r: DelayLine::new(),
             early_taps: early_taps(algorithm),
             diffuser: Diffuser::new(),
             fdn: [
@@ -848,7 +860,7 @@ impl ReverbDevice {
         match algo {
             Algorithm::Room => self.fdn[0].process(dl, dr, size_scale, mods, depth, frozen, sr),
             Algorithm::Hall => self.fdn[1].process(dl, dr, size_scale, mods, depth, frozen, sr),
-            Algorithm::Plate => self.plate.process(dl, dr, size_scale, mods[0], depth, frozen),
+            Algorithm::Plate => self.plate.process(dl, dr, size_scale, mods[0], depth, frozen, sr),
         }
     }
 
@@ -891,7 +903,14 @@ impl ReverbDevice {
         let (ll, lr) = self.late(dl, dr, size_scale, &mods);
 
         let mut wl = el * early_level + ll;
-        let mut wr = er * early_level + lr;
+        let wr_raw = er * early_level + lr;
+
+        // Decorrelate the wet channels: a mono input would otherwise give near-identical L and R
+        // (the FDN lines are driven coherently). A few milliseconds of extra delay on R does it
+        // without a filter, and Width then sets the stereo image.
+        let decor = (self.sample_rate * 0.0047).max(2.0);
+        let mut wr = self.decor_r.read_hermite(decor);
+        self.decor_r.push(wr_raw);
 
         // Wet tone filters (outside the loop).
         wl = self.tone_high[0].lowpass(wl, self.tone_high_g);
@@ -1073,6 +1092,7 @@ impl AudioDevice for ReverbDevice {
         self.predelay_r.clear();
         self.early_l.clear();
         self.early_r.clear();
+        self.decor_r.clear();
         self.diffuser.reset();
         for fdn in self.fdn.iter_mut() {
             fdn.reset();
@@ -1114,6 +1134,7 @@ impl AudioDevice for ReverbDevice {
         self.predelay_r.prepare_seconds(0.5, sample_rate);
         self.early_l.prepare_seconds(0.25, sample_rate);
         self.early_r.prepare_seconds(0.25, sample_rate);
+        self.decor_r.prepare_seconds(0.05, sample_rate);
         self.diffuser.prepare(sample_rate);
         for fdn in self.fdn.iter_mut() {
             fdn.prepare(sample_rate);
@@ -1172,5 +1193,260 @@ impl AudioDevice for ReverbDevice {
 
 #[cfg(test)]
 mod tests {
-    // Tests are added with the DSP tuning pass.
+    use super::*;
+    use crate::audio::dsp::test_util::{
+        impulse, left, peak, pink_noise, render, right, rms, spectrum_db, stereo, tone_amplitude,
+    };
+    use crate::audio::dsp::test_util::schroeder_t60;
+
+    fn make(sr: f32) -> ReverbDevice {
+        let mut device = ReverbDevice::new(sr);
+        device.prepare(sr, 4096);
+        device
+    }
+
+    fn set_real(device: &mut ReverbDevice, id: ParamId, real: f32) {
+        let norm = TABLE.spec(id).unwrap().to_norm(real);
+        device.set_parameter(id, norm);
+    }
+
+    /// T60 of the band around `freq`, measured from an impulse response (skip the first 200 ms
+    /// so the early reflections don't set the Schroeder slope).
+    fn band_t60(device: &mut ReverbDevice, sr: f32, seconds: f32, freq: f32, q: f32) -> f32 {
+        let frames = (seconds * sr) as usize;
+        let input = stereo(&impulse(frames));
+        let out = render(device, &input, &[512]);
+        let l = left(&out);
+        let skip = (sr * 0.2) as usize;
+        let coefs = SvfCoefs::new(SvfShape::BandPass, freq, q, 0.0, sr);
+        let mut filter_a = LinearSvf::new();
+        let mut filter_b = LinearSvf::new();
+        let filtered: Vec<f32> = l[skip..]
+            .iter()
+            .map(|&x| filter_b.process(filter_a.process(x, &coefs), &coefs))
+            .collect();
+        schroeder_t60(&filtered, sr).expect("decays at least 25 dB")
+    }
+
+    #[test]
+    fn t60_at_1khz_matches_decay_for_every_algorithm() {
+        for sr in [44_100.0, 96_000.0] {
+            for algorithm in 0..3 {
+                let mut device = make(sr);
+                set_real(&mut device, ALGORITHM, algorithm as f32);
+                set_real(&mut device, MIX, 100.0);
+                set_real(&mut device, DECAY, 1.5);
+                // Settle the smoothing out of the way.
+                render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+                let measured = band_t60(&mut device, sr, 5.0, 1_000.0, 2.0);
+                assert!(
+                    (measured - 1.5).abs() / 1.5 < 0.15,
+                    "{:?} at {sr}: T60 {measured:.3} s vs 1.5",
+                    Algorithm::from_index(algorithm)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn absorbent_reaches_its_shelf_gains() {
+        let sr = 48_000.0;
+        let mut filter = Absorbent::new();
+        filter.update(250.0, 4_000.0, 3.0, -11.6, sr);
+        let gain = |filter: &mut Absorbent, freq: f32| {
+            let (mut in_energy, mut out_energy) = (0.0f64, 0.0f64);
+            for n in 0..sr as usize {
+                let x = (std::f32::consts::TAU * freq * n as f32 / sr).sin();
+                let y = filter.process(x);
+                if n > sr as usize / 2 {
+                    in_energy += (x * x) as f64;
+                    out_energy += (y * y) as f64;
+                }
+            }
+            10.0 * (out_energy / in_energy).log10() as f32
+        };
+        assert!((gain(&mut filter, 60.0) - 3.0).abs() < 0.4, "low shelf");
+        assert!(gain(&mut filter, 1_000.0).abs() < 0.4, "flat in the band");
+        assert!(gain(&mut filter, 10_000.0) < -8.0, "high shelf at 10 kHz");
+        assert!(gain(&mut filter, 20_000.0) < -10.0, "high shelf at 20 kHz");
+    }
+
+    #[test]
+    fn decay_eq_moves_the_band_t60s() {
+        let sr = 48_000.0;
+        let mut device = make(sr);
+        set_real(&mut device, MIX, 100.0);
+        set_real(&mut device, DECAY, 1.5);
+        render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+        let low = band_t60(&mut device, sr, 5.0, 60.0, 3.0);
+        let high = band_t60(&mut device, sr, 4.0, 10_000.0, 3.0);
+        // Defaults: Low ×1.2, High ×0.5.
+        assert!((low - 1.5 * 1.2).abs() / (1.5 * 1.2) < 0.2, "low default {low:.3}");
+        assert!((high - 1.5 * 0.5).abs() / (1.5 * 0.5) < 0.2, "high default {high:.3}");
+
+        set_real(&mut device, LOW_MULT, 2.0);
+        set_real(&mut device, HIGH_MULT, 0.25);
+        render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+        let low2 = band_t60(&mut device, sr, 5.0, 60.0, 3.0);
+        let high2 = band_t60(&mut device, sr, 4.0, 10_000.0, 3.0);
+        assert!(low2 > low * 1.05, "Low ×2 lengthens the low tail ({low:.3} → {low2:.3})");
+        assert!(high2 < high * 0.95, "High ×0.25 shortens the high tail ({high:.3} → {high2:.3})");
+        assert!((low2 - 1.5 * 2.0).abs() / (1.5 * 2.0) < 0.2, "Low ×2 T60 {low2:.3}");
+        assert!((high2 - 1.5 * 0.25).abs() / (1.5 * 0.25) < 0.2, "High ×0.25 T60 {high2:.3}");
+    }
+
+    #[test]
+    fn late_tail_has_no_strong_spectral_peaks() {
+        let sr = 48_000.0;
+        let mut device = make(sr);
+        set_real(&mut device, MIX, 100.0);
+        set_real(&mut device, DECAY, 2.5);
+        render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+        let out = render(&mut device, &stereo(&impulse(sr as usize * 4)), &[512]);
+        let l = left(&out);
+        let start = (sr * 0.5) as usize;
+        let segment = &l[start..start + sr as usize];
+        let bins = spectrum_db(segment);
+        let half = bins.len() / 2;
+        let window = 200usize;
+        let mut worst = 0.0f32;
+        for i in window..half - window {
+            if bins[i] < -70.0 {
+                continue;
+            }
+            let avg: f32 = bins[i - window..i + window].iter().sum::<f32>() / (2 * window) as f32;
+            worst = worst.max(bins[i] - avg);
+        }
+        assert!(worst <= 10.0, "worst late-tail peak {worst:.2} dB above the envelope");
+    }
+
+    #[test]
+    fn mono_input_decorrelates_the_wet_channels() {
+        let sr = 48_000.0;
+        for algorithm in 0..3 {
+            let mut device = make(sr);
+            set_real(&mut device, ALGORITHM, algorithm as f32);
+            set_real(&mut device, MIX, 100.0);
+            set_real(&mut device, WIDTH, 100.0);
+            render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+            let input = stereo(&pink_noise(sr as usize * 2, 0.5, 9));
+            let out = render(&mut device, &input, &[512]);
+            let skip = (sr * 0.3) as usize;
+            let (l, r) = (left(&out), right(&out));
+            let (mut dot, mut nl, mut nr) = (0.0f64, 0.0f64, 0.0f64);
+            for i in skip..l.len() {
+                dot += (l[i] * r[i]) as f64;
+                nl += (l[i] * l[i]) as f64;
+                nr += (r[i] * r[i]) as f64;
+            }
+            let corr = dot / (nl.sqrt() * nr.sqrt()).max(1e-12);
+            assert!(
+                corr < 0.3,
+                "{:?}: L/R correlation {corr:.3}",
+                Algorithm::from_index(algorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn freeze_holds_energy_and_stays_bounded() {
+        let sr = 48_000.0;
+        let mut device = make(sr);
+        set_real(&mut device, MIX, 100.0);
+        render(&mut device, &stereo(&impulse(sr as usize)), &[512]);
+        set_real(&mut device, FREEZE, 1.0);
+        render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+        let out = render(&mut device, &vec![0.0; sr as usize * 10 * 2], &[512]);
+        let l = left(&out);
+        let window = sr as usize;
+        let levels: Vec<f32> = (0..10)
+            .map(|w| {
+                let seg = &l[w * window..(w + 1) * window];
+                crate::audio::dsp::gain::gain_to_db(rms(seg))
+            })
+            .collect();
+        let (min, max) = levels
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+                (lo.min(x), hi.max(x))
+            });
+        assert!(max - min < 1.0, "freeze energy drifted {:.2} dB: {levels:?}", max - min);
+        assert!(peak(&l) < 4.0, "freeze peak {}", peak(&l));
+    }
+
+    #[test]
+    fn never_sleeps_while_the_tail_is_loud() {
+        let sr = 48_000.0;
+        const BLOCK: usize = 512;
+        let mut device = make(sr);
+        set_real(&mut device, MIX, 100.0);
+        let mut input = vec![0.0f32; BLOCK * 2];
+        input[0] = 1.0;
+        input[1] = 1.0;
+        let mut output = vec![0.0f32; BLOCK * 2];
+        let mut slept = false;
+        for _ in 0..((sr as usize * 20) / BLOCK) {
+            let in_activity = peak(&input) > 0.001;
+            device.process_block(&input, &mut output, BLOCK);
+            let out_activity = peak(&output) > 0.001;
+            device.update_sleep_state(in_activity || out_activity);
+            if out_activity {
+                assert!(!device.is_sleeping(), "slept with a loud tail");
+            }
+            if device.is_sleeping() {
+                slept = true;
+                break;
+            }
+            input.fill(0.0);
+        }
+        assert!(slept, "never slept after the tail died");
+    }
+
+    #[test]
+    fn impulse_response_is_not_a_single_tone() {
+        // A cheap sanity check that the wet signal is broadband (diffusion working).
+        let sr = 48_000.0;
+        let mut device = make(sr);
+        set_real(&mut device, MIX, 100.0);
+        render(&mut device, &vec![0.0; 4096 * 2], &[512]);
+        let out = render(&mut device, &stereo(&impulse(sr as usize)), &[512]);
+        let l = left(&out);
+        let start = (sr * 0.4) as usize;
+        let segment = &l[start..start + 16_384];
+        let one_k = tone_amplitude(segment, 1_000.0, sr);
+        let rms_all = rms(segment);
+        assert!(one_k < rms_all * 0.5, "tail is dominated by one tone");
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// Stereo reverb on a real room: the full algorithm at the default Decay.
+    /// `cargo test --release cpu_reverb -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cpu_reverb() {
+        const SR: f32 = 48_000.0;
+        const FRAMES: usize = 256;
+        let mut device = ReverbDevice::new(SR);
+        device.prepare(SR, FRAMES);
+        let mut input = vec![0.0f32; FRAMES * 2];
+        let mut output = vec![0.0f32; FRAMES * 2];
+        let blocks = (SR as usize * 10) / FRAMES; // 10 s of audio
+        let start = std::time::Instant::now();
+        for b in 0..blocks {
+            for (i, x) in input.iter_mut().enumerate() {
+                *x = if (b + i) % 3 == 0 { 0.1 } else { -0.1 };
+            }
+            device.process_block(&input, &mut output, FRAMES);
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        println!(
+            "10 s rendered in {:.3} s: {:.2} % of one core",
+            elapsed,
+            elapsed / 10.0 * 100.0
+        );
+    }
 }
