@@ -443,13 +443,13 @@ without fizz, and flipping the channel to mono keeps the chorus.
 | Tone | Low Cut, High Cut (wet) | 20 Hz–2 kHz / 1–20 kHz, log | 20 Hz / 20 kHz |
 | Output | Mix | 0–100 %, equal power | 50 % |
 
-- [ ] A chain of Phase 0 first-order all-pass stages. The coefficient comes from
+- [x] A chain of Phase 0 first-order all-pass stages. The coefficient comes from
       Sweep × 2^(LFO·Depth + Env·Amount) × the spread offset per stage, with an exact
       coefficient per 8 frames and interpolation in between. Feedback goes from the last stage
       to the input with a one-sample delay, and is soft-clipped.
-- [ ] Depth 0 and Amount 0 give a static, fully manual phaser. This is the research's most
+- [x] Depth 0 and Amount 0 give a static, fully manual phaser. This is the research's most
       repeated request.
-- [ ] Tests:
+- [x] Tests:
   - at Mix 50 % with a static sweep, a swept-sine response shows Stages/2 notches, with the
     first within ±5 % of the expected frequency;
   - Depth 0 is static over 10 s;
@@ -457,6 +457,48 @@ without fizz, and flipping the channel to mono keeps the chorus.
   - ±95 % feedback stays bounded;
   - Env Amount moves the notch with input level;
   - conformance, and CPU with 12 stages in stereo under 0.5 %.
+
+Implementation notes:
+- **CPU:** `cpu_phaser` renders 60 s of 12-stage stereo (LFO 6 oct, Env 4 oct, Feedback 80 %)
+  at **0.444 % of one core** (release, Ryzen 5 7535HS). The first cut was 1.23 %: the
+  equal-power Mix recomputed sin/cos per sample, the feedback used `tanh`, and
+  `OnePole::allpass` divides per stage per sample. Hoisting the Mix gains to the control block,
+  a cubic soft clip and a precomputed `gp = g/(1+g)` brought it under the budget.
+- **`dsp/one_pole.rs`:** added `OnePole::allpass_g(x, gp)` — the same TPT all-pass with the
+  division folded out. The Phaser stores `gp` per stage (interpolated per sample) and calls it,
+  so the audio loop has no division. `allpass` is unchanged and still used by its own tests.
+- The chain is always built for 12 stages; a stage the Stages count leaves out is bypassed by
+  blending its output back to its input, and the blend ramps over 5 ms, so changing Stages
+  fades instead of clicking (decision 8). One set of filter states, and bypassed stages stay
+  warm.
+- `Spread` spaces the stages geometrically around Sweep: stage i of N sits at
+  `Sweep × 2^(spread × 2 oct × (i/(N−1) − 0.5))`, so Spread 0 puts every stage on Sweep.
+- Sweep (smoothed in octaves), Spread, Feedback, Depth, Env Amount, Mix, Low Cut and High Cut
+  use `SmoothedParam` (5 ms). The 8-frame control block is anchored to an absolute frame
+  counter, so block size never changes the output.
+- Only the feedback term is soft-clipped (a cubic, bounded at ±1), so 0 % feedback is clean.
+- The envelope follower (peak, linear domain) runs per sample and is read at each control
+  block. The LFO is the shared phase-accumulator `Lfo`; a synced LFO takes its rate from the
+  tempo and re-locks its phase to the song position on each `set_transport` while playing.
+- `TailSleep` sleeps after 3 s of quiet; the feedback ring is gone in under a millisecond at
+  95 %, so it needs no extra tail.
+- **Measured:** 6 stages at Sweep 800 give 3 notches with the first at 221.1 Hz (a phase
+  bisection including the wet tone filters predicts 220.2 Hz). Frozen at LFO phase 0.25 with
+  Depth 2, the L first notch is at 863.5 Hz (L −34.1 dB, R −10.9 dB) and the R one at 59.4 Hz
+  (R −28.6 dB, L +2.8 dB).
+- The first-notch test bisects the chain's phase *including* the wet tone filters: the 20 Hz
+  low cut shifts a low notch by about 10 %, so the bare `tan(90°/N)` formula would miss it.
+- Deviation: the "swept-sine response" notch count is measured with a per-frequency sine scan
+  (`tone_amplitude`), which is equivalent and more precise than an FFT of a log sweep.
+- Godot: `dump_phaser_view_fixture` (ignored) regenerates
+  `Godot/tests/fixtures/simple_view/phaser_params.json`; `test_phaser_view.gd` lays it out — one
+  Main page, one group per module (Output, Envelope, LFO, Phaser, Tone), 6 columns wide. No
+  strategy was added; the module grouping reads well. Checked headlessly only, not in both
+  themes.
+- Tests: 5 new in `phaser::tests` (notch count and position, Depth 0 static, Stereo Phase
+  separation, ±95 % feedback, Env Amount) plus the ignored `cpu_phaser` and fixture dump. The
+  lib suite is 338 → 343 passing, 4 ignored. The device is in `EFFECT_IDS`, so the conformance
+  test covers it.
 
 **Done when:** automating Sweep by hand gives a Phase-90-style swoosh, 12 stages with feedback
 is recognisably different from 4, and a 60 s cycle LFO works.
