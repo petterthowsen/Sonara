@@ -3,7 +3,6 @@
 [ext_resource type="Script" uid="uid://d3da2pljq85j3" path="res://clip_editor/VisualNote.gd" id="1_ilw01"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7ep2o"]
-resource_local_to_scene = true
 content_margin_left = 4.0
 content_margin_right = 4.0
 bg_color = Color(0.1477873, 0.27474967, 1.100006, 1)

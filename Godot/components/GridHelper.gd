@@ -4,18 +4,28 @@ class_name GridHelper extends Resource
 # Centralized grid calculation and snapping logic
 # Used by Ruler, Timeline, and MidiEditor for consistent grid behavior
 
-@export var ppq: int = 960
+## Emitted when tick <-> pixel conversion or snapping may have changed (zoom, ppq, time
+## signature, tempo map, grid spacing), but not on scroll. `changed` still fires for
+## everything, scroll included. Content that scrolls inside a ScrollContainer (the clip
+## editor's notes) only needs this one.
+signal scale_changed
+
+@export var ppq: int = 960:
+	set(p):
+		if ppq != p:
+			ppq = p
+			_emit_scale_changed()
 @export var time_numerator: int = 4:
 	set(n):
 		if time_numerator != n:
 			time_numerator = n
-			changed.emit()
+			_emit_scale_changed()
 		
 @export var time_denominator: int = 4:
 	set(d):
 		if time_denominator != d:
 			time_denominator = d
-			changed.emit()
+			_emit_scale_changed()
 
 @export var tempo: float = 120.0:
 	set(t):
@@ -28,32 +38,37 @@ var tempo_map: TempoMap = null:
 	set(m):
 		if tempo_map == m:
 			return
-		if tempo_map != null and tempo_map.changed.is_connected(changed.emit):
-			tempo_map.changed.disconnect(changed.emit)
+		if tempo_map != null and tempo_map.changed.is_connected(_emit_scale_changed):
+			tempo_map.changed.disconnect(_emit_scale_changed)
 		tempo_map = m
 		if tempo_map != null:
-			tempo_map.changed.connect(changed.emit)
-		changed.emit()
+			tempo_map.changed.connect(_emit_scale_changed)
+		_emit_scale_changed()
 
 ## Time signature changes after the base signature. When set, bars, beats and snapping follow it.
 var time_signature_map: TimeSignatureMap = null:
 	set(m):
 		if time_signature_map == m:
 			return
-		if time_signature_map != null and time_signature_map.changed.is_connected(changed.emit):
-			time_signature_map.changed.disconnect(changed.emit)
+		if time_signature_map != null and time_signature_map.changed.is_connected(_emit_scale_changed):
+			time_signature_map.changed.disconnect(_emit_scale_changed)
 		time_signature_map = m
 		if time_signature_map != null:
-			time_signature_map.changed.connect(changed.emit)
-		changed.emit()
+			time_signature_map.changed.connect(_emit_scale_changed)
+		_emit_scale_changed()
 
 var _empty_signature_map := TimeSignatureMap.new()
+
+
+func _emit_scale_changed() -> void:
+	scale_changed.emit()
+	changed.emit()
 
 @export var pixels_per_beat: float = 64.0:
 	set(p):
 		if pixels_per_beat != p:
 			pixels_per_beat = p
-			changed.emit()
+			_emit_scale_changed()
 
 @export var scroll_position: float = 0.0:
 	set(s):
@@ -69,7 +84,7 @@ var _empty_signature_map := TimeSignatureMap.new()
 	set(v):
 		if min_line_spacing != v:
 			min_line_spacing = v
-			changed.emit()
+			_emit_scale_changed()
 
 func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4, tempo_val : float = 120.0):
 	ppq = ppq_val

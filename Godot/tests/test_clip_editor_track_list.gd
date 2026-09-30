@@ -351,11 +351,16 @@ func _make_midi_setup() -> Dictionary:
 	return out
 
 
-func _editor_of(midi: Object, track: Object) -> Object:
-	for e in midi.note_editors:
-		if midi._editor_track(e) == track:
-			return e
-	return null
+## Global centre of a note of `track` that the context layer draws (no node exists for it).
+func _context_note_center(midi: Object, track: Object, pitch: int) -> Vector2:
+	for ci in track.clip_instances:
+		for nd in ci.clip.midi_notes:
+			if nd.note == pitch:
+				# Loaded at run time: naming the class here would compile it before the autoloads exist.
+				var placement: Object = load("res://clip_editor/note_editor/NotePlacement.gd")
+				var rect: Rect2 = placement.note_rect(nd, ci.content_origin_ticks(), midi.lane_layout, midi.grid_helper)
+				return midi.context_layer.get_global_transform() * rect.get_center()
+	return Vector2(-99999, -99999)
 
 
 func _note_center(editor: Object, pitch: int) -> Vector2:
@@ -383,44 +388,42 @@ func _test_hidden_track_not_drawn() -> void:
 	midi.bind_to_clips(clips, _typed([a, b]))
 	await process_frame
 	await process_frame
-	var scene_editor: Object = midi.note_editors[0]
-	var editor_a: Object = _editor_of(midi, a)
-	_assert(editor_a != null and _editor_of(midi, b) != null, "both tracks have an editor after bind")
+	var editor: Object = midi.note_editors[0]
+	_assert(midi.note_editors.size() == 1, "track mode has a single note editor")
+	_assert(midi._editor_track(editor) == a, "the editor shows the active track A")
+	_assert(midi.context_layer.excluded_track == a and midi.context_layer.track_count() == 2,
+		"the context layer knows both tracks and skips the active one")
 
 	# Selection on A must survive B being hidden.
-	var first_note: Array[VisualNote] = [editor_a.get_all_visual_notes()[0]]
-	editor_a.selection_manager._set_selected_notes(first_note)
+	var first_note: Array[VisualNote] = [editor.get_all_visual_notes()[0]]
+	editor.selection_manager._set_selected_notes(first_note)
 	midi.set_track_views(_typed([a]), clips)
 	await process_frame
-	_assert(_editor_of(midi, b) == null, "hiding B leaves no editor for B")
-	_assert(_editor_of(midi, a) == editor_a, "A keeps its editor")
-	_assert(editor_a.selection_manager.selected_notes.size() == 1, "A's note selection survives hiding B")
-	_assert(midi.note_editors[0] == scene_editor, "the scene editor stays first")
-	var drawn := 0
-	for e in midi.note_editors:
-		if e.visible:
-			drawn += e.get_all_visual_notes().size()
-	_assert(drawn == 2, "only A's 2 notes are drawn: %d" % drawn)
+	_assert(midi.context_layer.track_count() == 1, "hiding B leaves it out of the layer")
+	_assert(midi._editor_track(editor) == a, "A keeps its editor")
+	_assert(editor.selection_manager.selected_notes.size() == 1, "A's note selection survives hiding B")
+	_assert(midi.note_editors[0] == editor, "the scene editor stays first")
+	_assert(editor.get_all_visual_notes().size() == 2, "only A's 2 notes have nodes")
 
 	midi.set_track_views(_typed([]), clips)
 	await process_frame
-	_assert(midi.note_editors[0] == scene_editor and not scene_editor.visible,
-		"with nothing visible the scene editor is kept but hidden")
+	_assert(midi.note_editors[0] == editor and not editor.visible and midi._editor_track(editor) == null,
+		"with nothing visible the scene editor is kept but hidden and unbound")
 
 	midi.set_track_views(_typed([a, b]), clips)
 	await process_frame
 	await process_frame
-	var editor_b: Object = _editor_of(midi, b)
-	_assert(editor_b != null and editor_b.get_all_visual_notes().size() == 2, "showing B draws its 2 notes again")
-	_assert(midi.note_editors[0] == scene_editor, "the scene editor is still first")
+	_assert(editor.visible and midi._editor_track(editor) == a and editor.get_all_visual_notes().size() == 2,
+		"showing the tracks again draws A's 2 notes")
+	_assert(midi.context_layer.track_count() == 2, "and B is back in the layer")
 
-	# Dimming: active 1.0, editable 0.85, visible but not editable 0.5.
+	# Dimming: editable 0.85, visible but not editable 0.5; only editable tracks can be hit.
 	midi.editable_tracks = _typed([a])
 	midi.current_track = a
-	_assert(_editor_of(midi, a).modulate.a == 1.0, "active editor is fully opaque")
-	_assert(_editor_of(midi, b).modulate.a == 0.5, "visible non-editable track is dimmed to 0.5")
+	_assert(editor.modulate.a == 1.0, "active editor is fully opaque")
+	_assert(midi.context_layer.alpha_for(b) == 0.5, "visible non-editable track is dimmed to 0.5")
 	midi.editable_tracks = _typed([a, b])
-	_assert(is_equal_approx(_editor_of(midi, b).modulate.a, 0.85), "editable inactive track is 0.85")
+	_assert(is_equal_approx(midi.context_layer.alpha_for(b), 0.85), "editable inactive track is 0.85")
 	setup.clip_editor.queue_free()
 	await process_frame
 
@@ -437,62 +440,72 @@ func _test_cross_track_note_press() -> void:
 	midi.current_track = a
 	await process_frame
 	await process_frame
-	var ea: Object = _editor_of(midi, a)
-	var eb: Object = _editor_of(midi, b)
+	var editor: Object = midi.note_editors[0]
 
 	var picked: Array = []
 	midi.note_track_picked.connect(func(t): picked.append(t))
 
 	# Overlapping notes (both tracks have pitch 60 at tick 0): the active track wins (REQ-035).
-	var hit: Array = midi._note_hit(_note_center(ea, 60))
-	_assert(hit.size() == 2 and hit[0] == ea, "overlapping notes: the active track's note is hit first")
+	var hit: Dictionary = midi._note_hit(_note_center(editor, 60))
+	_assert(hit.has("editor") and hit.visual.midi_note_data in setup.ci_a.clip.midi_notes,
+		"overlapping notes: the active track's note is hit first")
+	var hit_b: Dictionary = midi._note_hit(_context_note_center(midi, b, 72))
+	_assert(hit_b.get("track") == b and hit_b.data.note == 72 and hit_b.instance == setup.ci_b,
+		"B's note is found in the data: track, instance and note")
 	midi.current_track = b
-	hit = midi._note_hit(_note_center(eb, 60))
-	_assert(hit.size() == 2 and hit[0] == eb, "overlapping notes: after switching, B's note wins")
+	hit = midi._note_hit(_note_center(editor, 60))
+	_assert(hit.has("editor") and hit.visual.midi_note_data in setup.ci_b.clip.midi_notes,
+		"overlapping notes: after switching, B's note wins")
 	midi.current_track = a
 
-	# Pressing B's own note picks B (REQ-033, REQ-034).
-	var gp := _note_center(eb, 72)
-	midi._handle_left_mouse_press(eb.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_LEFT, true))
+	# Pressing B's own note picks B (REQ-033, REQ-034) and carries on as a press on that note.
+	var gp := _context_note_center(midi, b, 72)
+	midi._handle_left_mouse_press(editor.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_LEFT, true))
 	_assert(midi.current_track == b, "pressing B's note selects B")
 	_assert(picked == [b], "note_track_picked emitted with B")
-	midi._handle_left_mouse_release(eb.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_LEFT, false))
-	_assert(midi.get_active_note_editor() == eb, "B's editor is now active")
+	_assert(midi._editor_track(editor) == b, "the note editor is now bound to B")
+	# Drag or resize, depending on where the real (headless) mouse happens to be over the note.
+	var grabbed: VisualNote = editor.dragging_note if editor.dragging_note else editor.resizing_note
+	_assert(grabbed != null and grabbed.midi_note_data in setup.ci_b.clip.midi_notes and grabbed.midi_note_data.note == 72,
+		"the press carries on as a gesture on B's note")
+	midi._handle_left_mouse_release(editor.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_LEFT, false))
+	_assert(midi.get_active_note_editor() == editor, "B's editor is now active")
 
 	# The next empty-space press places on B (REQ-036).
 	var count_before: int = setup.ci_b.clip.midi_notes.size()
-	var empty_gp := _note_center(eb, 72) + Vector2(0, midi.note_height * 5)
-	midi._handle_left_mouse_press(eb.make_canvas_position_local(empty_gp), _mouse_button(empty_gp, MOUSE_BUTTON_LEFT, true))
-	midi._handle_left_mouse_release(eb.make_canvas_position_local(empty_gp), _mouse_button(empty_gp, MOUSE_BUTTON_LEFT, false))
+	var empty_gp := _note_center(editor, 72) + Vector2(0, midi.note_height * 5)
+	midi._handle_left_mouse_press(editor.make_canvas_position_local(empty_gp), _mouse_button(empty_gp, MOUSE_BUTTON_LEFT, true))
+	midi._handle_left_mouse_release(editor.make_canvas_position_local(empty_gp), _mouse_button(empty_gp, MOUSE_BUTTON_LEFT, false))
 	_assert(setup.ci_b.clip.midi_notes.size() == count_before + 1, "empty-space press places a note on B")
 	_assert(picked == [b], "an empty-space press does not emit note_track_picked")
 
 	# Right-press erases B's note while A stays selected (REQ-037).
 	midi.current_track = a
 	picked.clear()
-	gp = _note_center(eb, 72)
+	gp = _context_note_center(midi, b, 72)
 	var n_b: int = setup.ci_b.clip.midi_notes.size()
-	midi._handle_right_mouse_press(ea.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_RIGHT, true))
+	midi._handle_right_mouse_press(editor.make_canvas_position_local(gp), _mouse_button(gp, MOUSE_BUTTON_RIGHT, true))
 	midi._handle_right_mouse_release()
 	_assert(setup.ci_b.clip.midi_notes.size() == n_b - 1, "right-press erased B's note")
 	_assert(midi.current_track == a and picked.is_empty(), "erasing does not switch tracks")
+	_assert(midi._note_hit(gp).get("track") != b or midi._note_hit(gp).data.note != 72, "the erased note can't be hit any more")
 
 	# Box select covers only the active track's notes (REQ-038).
-	var boxed: Array = ea.get_notes_in_box(Rect2(-100000, -100000, 200000, 200000))
+	var boxed: Array = editor.get_notes_in_box(Rect2(-100000, -100000, 200000, 200000))
 	var only_a := true
 	for vn in boxed:
-		if not ea.is_ancestor_of(vn):
+		if not editor.is_ancestor_of(vn) or vn.midi_note_data not in setup.ci_a.clip.midi_notes:
 			only_a = false
-	_assert(only_a and boxed.size() == ea.get_all_visual_notes().size(), "box select covers only A's notes")
+	_assert(only_a and boxed.size() == editor.get_all_visual_notes().size(), "box select covers only A's notes")
 
 	# A non-editable B is not hit (REQ-039).
 	midi.editable_tracks = _typed([a])
-	var hit_b := false
-	for vn in eb.get_all_visual_notes():
-		var h: Array = midi._note_hit(vn.get_global_rect().get_center())
-		if not h.is_empty() and h[0] == eb:
-			hit_b = true
-	_assert(not hit_b, "a visible but non-editable track's notes are not hit")
+	var hit_b_any := false
+	for nd in setup.ci_b.clip.midi_notes:
+		var h: Dictionary = midi._note_hit(_context_note_center(midi, b, nd.note))
+		if h.get("track") == b:
+			hit_b_any = true
+	_assert(not hit_b_any, "a visible but non-editable track's notes are not hit")
 
 	# No selected track: no active editor, so nothing to place on (REQ-031).
 	midi.current_track = null
@@ -531,13 +544,10 @@ func _open_track_mode(setup: Dictionary, indices: Array) -> void:
 	await process_frame
 
 
+## The tracks the clip editor shows: the visible ones, the active one in the note editor and
+## the rest in the context layer.
 func _editor_tracks(midi: Object) -> Array:
-	var out: Array = []
-	for e in midi.note_editors:
-		var t: Object = midi._editor_track(e)
-		if t:
-			out.append(t)
-	return out
+	return midi._view_tracks.duplicate()
 
 
 func _test_initial_states() -> void:
@@ -551,7 +561,7 @@ func _test_initial_states() -> void:
 	_assert(not st.is_on(t[1], 0) and not st.is_on(t[1], 1), "unselected track B starts hidden and not editable")
 	var drawn := _editor_tracks(setup.midi)
 	_assert(drawn.size() == 2 and drawn.has(t[0]) and drawn.has(t[2]) and not drawn.has(t[1]),
-		"only A and C have note editors")
+		"only A and C are shown")
 	_assert(setup.midi.current_track == t[0], "the first selected track is the active one")
 	_assert(setup.midi.editable_tracks.size() == 2, "MidiEditor knows the editable tracks")
 

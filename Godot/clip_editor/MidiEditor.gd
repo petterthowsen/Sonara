@@ -1,7 +1,7 @@
 # Midi Editor
 # 
 # Composed of a VPiano (Vertical Piano keys) on the left side
-# and NoteLanes, GridRenderer and layerreed NoteEditors on the right.
+# and NoteLanes, GridRenderer, one NoteEditor and a ContextNotesLayer on the right.
 #
 # designed to have a ScrollContainer with only vertical scroll enabled
 # I.E VPiano, and notte_area nodes are as tall as the keyboard
@@ -23,9 +23,15 @@ var logger := Log.make("MidiEditor")
 @onready var note_lanes: NoteLanes = $HBox/NoteArea/NoteLanes
 @onready var grid_renderer: GridRenderer = $HBox/NoteArea/GridRenderer
 
-# h_scroll Contains all NoteEditors
+# h_scroll contains the NoteEditor and, behind it, the ContextNotesLayer
 @onready var h_scroll: ScrollContainer = $HBox/NoteArea/HScroll
+## The NoteEditors. Only ever one, the scene's: in track mode it is bound to current_track, and
+## the other visible tracks are drawn by context_layer. An array so code that loops over
+## the editors keeps working.
 var note_editors : Array[NoteEditor] = []
+
+## Draws the visible tracks other than current_track (track mode) without a node per note.
+var context_layer := ContextNotesLayer.new()
 
 # Active track.color_changed subscriptions, as [track, callable] pairs, so note
 # colors follow the track color while the editor is bound.
@@ -33,13 +39,16 @@ var _color_bindings : Array = []
 
 # Track-mode state
 var track_mode: bool = false  # True when displaying multiple clips across tracks
+## The visible tracks in list order (track mode), and the clips the user opened on them.
+var _view_tracks: Array[Track] = []
+var _edited_clips: Array[ClipInstance] = []
 var current_track: Track = null:  # Active track in track-mode
 	set(value):
 		if current_track != value:
 			# The time range is shared by the tracks: carry it to the new track's editor.
 			var carried := get_selection_range_song() if track_mode else NO_RANGE
 			current_track = value
-			_update_note_editor_states()
+			_sync_track_views()
 			if track_mode and value:
 				apply_selection_range_song(carried)
 			current_track_changed.emit()
@@ -63,6 +72,8 @@ var note_editor: NoteEditor:
 
 ## Tracks whose notes can be hit and edited, in track-list order (the priority for overlapping
 ## notes). Set by ClipEditor from its toggle state; bind_to_clips makes every bound track editable.
+## Only the current track has notes to select; the others' notes can be clicked (to switch to
+## them) and erased.
 var editable_tracks: Array[Track] = []:
 	set(value):
 		editable_tracks = value
@@ -152,9 +163,13 @@ var grid_helper: GridHelper:
 			if grid_helper and grid_helper.changed.is_connected(_on_grid_helper_changed):
 				grid_helper.changed.disconnect(_on_grid_helper_changed)
 
+			if grid_helper and grid_helper.scale_changed.is_connected(update_content_width):
+				grid_helper.scale_changed.disconnect(update_content_width)
+
 			grid_helper = gh
 			note_lanes.grid_helper = gh
 			grid_renderer.set_grid_helper(gh)
+			context_layer.grid_helper = gh
 			
 			# Update all note editors
 			for editor in note_editors:
@@ -164,6 +179,8 @@ var grid_helper: GridHelper:
 			# Connect to new grid_helper's changed signal
 			if grid_helper:
 				grid_helper.changed.connect(_on_grid_helper_changed)
+				grid_helper.scale_changed.connect(update_content_width)
+				update_content_width()
 
 
 # Local cursor position (in ticks) - propagated to NoteEditor(s)
@@ -248,6 +265,19 @@ var scroll_speed_notes = 2
 @export var zoom_sensitivity_v: int = 1      # Vertical zoom delta per scroll tick
 @export var pan_zoom_sensitivity: float = 0.5  # Zoom factor per pixel of mouse movement when shift+panning (percentage)
 
+# Horizontal scrolling: the note area is at least min_width_bars wide, reaches
+# extra_width_bars past the content, and grows by scroll_growth_bars whenever the view
+# comes within one viewport of its right edge, so scrolling right never runs out.
+@export var min_width_bars: int = 8
+@export var extra_width_bars: int = 4
+@export var scroll_growth_bars: int = 16
+
+## How far scrolling has grown the note area, in ticks. Only grows; reset on unbind.
+var _scroll_extent_ticks: int = 0
+## Width in ticks last given to the note editors.
+var _content_width_ticks: int = 0
+var _content_width_queued := false
+
 # Horizontal zoom limits (pixels per beat)
 @export var zoom_min_pixels_per_beat: float = 8.0
 @export var zoom_max_pixels_per_beat: float = 1024
@@ -296,11 +326,20 @@ func _ready():
 	v_piano.layout = lane_layout
 	note_lanes.layout = lane_layout
 	
+	context_layer.name = "ContextNotes"
+	context_layer.layout = lane_layout
+	context_layer.notes_changed.connect(queue_row_rebuild)
+	context_layer.content_extent_changed.connect(queue_content_width_update)
+	h_scroll.add_child(context_layer)
+	h_scroll.move_child(context_layer, 0)  # behind the note editor
+
 	# Find existing NoteEditor in scene tree (from .tscn)
 	var scene_note_editor = h_scroll.get_node_or_null("NoteEditor")
 	if scene_note_editor:
 		note_editors.append(scene_note_editor)
 		_configure_note_editor(scene_note_editor)
+
+	h_scroll.resized.connect(_check_scroll_growth)
 
 	v_piano.key_pressed.connect(_on_piano_key_pressed)
 	v_piano.key_released.connect(_on_piano_key_released)
@@ -333,6 +372,9 @@ func _process(delta: float):
 		grid_helper.scroll_position = h_scroll.scroll_horizontal
 
 
+	# The context layer draws only what is on screen; tell it what that is.
+	context_layer.view_rect = Rect2(h_scroll.scroll_horizontal, scroll_vertical, h_scroll.size.x, size.y)
+
 	# Update playhead position based on scroll/zoom
 	_update_playhead_position()
 	_update_hovered_key()
@@ -348,17 +390,16 @@ func unbind():
 	track_mode = false
 	current_track = null
 	_clear_color_bindings()
+	_scroll_extent_ticks = 0
+	_view_tracks.clear()
+	_edited_clips.clear()
+	context_layer.set_tracks([], [])
+	context_layer.excluded_track = null
 	
 	# Unbind all note editors
 	for editor in note_editors:
 		if editor:
 			editor.unbind()
-	
-	# Keep only the first editor (from scene tree), remove any dynamically created ones
-	while note_editors.size() > 1:
-		var editor = note_editors.pop_back()
-		if editor:
-			editor.queue_free()
 
 func bind_to_clip_instance(ci : ClipInstance):
 	"""Bind to a single clip instance (clip-mode)."""
@@ -394,8 +435,8 @@ func bind_to_clip_instance(ci : ClipInstance):
 func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	"""Bind to multiple clips in track-mode (song-relative positioning).
 
-	NEW BEHAVIOR: Creates one NoteEditor per TRACK, showing ALL clips on each track.
-	This gives a complete timeline view for each selected track.
+	Shows ALL clips of every given track: the first track in a NoteEditor, the rest in the
+	context layer. This gives a complete timeline view for each selected track.
 	"""
 	logger.info("[MidiEditor] bind_to_clips called (track-mode)")
 	logger.info("  - %d clips across %d tracks" % [clips.size(), tracks.size()])
@@ -406,28 +447,8 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 		unbind()
 
 	track_mode = true
-
-	# Create one NoteEditor per TRACK (not per clip)
-	for i in range(tracks.size()):
-		var track = tracks[i]
-
-		# Get ALL clips from this track (entire timeline, not just selected clips)
-		var all_track_clips = track.clip_instances
-
-		logger.info("  - Track %d: '%s' has %d total clips" % [i, track.name, all_track_clips.size()])
-
-		# Reuse first editor, create new ones for the rest
-		var editor: NoteEditor
-		if i < note_editors.size():
-			editor = note_editors[i]
-		else:
-			editor = NoteEditor.new()
-			h_scroll.add_child(editor)
-			note_editors.append(editor)
-
-		_bind_editor_to_track(editor, track, clips)
-
-		logger.info("  - Bound editor %d to track '%s' with %d clips" % [i, track.name, all_track_clips.size()])
+	_view_tracks = tracks.duplicate()
+	_edited_clips = clips.duplicate()
 
 	# Store reference to first clip for convenience (optional, may not be used)
 	if not clips.is_empty():
@@ -439,6 +460,7 @@ func bind_to_clips(clips: Array[ClipInstance], tracks: Array[Track]):
 	# Set first track as active by default
 	if not tracks.is_empty():
 		current_track = tracks[0]
+	_sync_track_views()
 	# The time range survives rebinding (same song ticks in track mode).
 	apply_selection_range_song(carried)
 
@@ -468,70 +490,50 @@ func _set_edited_clips(editor: NoteEditor, track: Track, clips: Array[ClipInstan
 			editor.edited_clip_instances.append(ci)
 
 
-## Makes the note editors match `tracks` (the visible ones): editors whose track stays keep their
-## notes' selection, newly visible tracks get an editor, hidden tracks lose theirs. The scene's
-## editor stays first in note_editors and is only unbound and hidden when it has no track.
+## Makes the display match `tracks` (the visible ones): current_track gets the note editor
+## (when it is among them), all of them are known to the context layer, which draws every one
+## but the current track.
 func set_track_views(tracks: Array[Track], edited_clips: Array[ClipInstance]) -> void:
 	if not track_mode:
 		if clip_instance:
 			unbind()
 		track_mode = true
 
-	var scene_editor := note_editors[0] if not note_editors.is_empty() else null
-	var kept := {}  # Track -> NoteEditor
-	var spare: Array[NoteEditor] = []
-	for editor in note_editors:
-		var t := _editor_track(editor)
-		if t and tracks.has(t) and not kept.has(t):
-			kept[t] = editor
-		else:
-			spare.append(editor)
-
-	var result: Array[NoteEditor] = []
-	for t in tracks:
-		var editor: NoteEditor = kept.get(t)
-		if editor:
-			_set_edited_clips(editor, t, edited_clips)
-		else:
-			# Reuse an idle spare (never the scene editor mid-gesture), else make one.
-			for i in spare.size():
-				if spare[i] != scene_editor or spare[i].interaction_mode == NoteEditor.InteractionMode.NONE:
-					editor = spare.pop_at(i)
-					break
-			if editor:
-				_clear_color_bindings_for(editor)
-				editor.unbind()
-			else:
-				editor = NoteEditor.new()
-				h_scroll.add_child(editor)
-			_bind_editor_to_track(editor, t, edited_clips)
-		result.append(editor)
-
-	# Leftover editors: the scene editor is kept (unbound, hidden), the rest are freed.
-	# One mid-gesture is left alone rather than freed under the user's cursor.
-	for editor in spare:
-		if editor.interaction_mode != NoteEditor.InteractionMode.NONE:
-			result.append(editor)
-			continue
-		_clear_color_bindings_for(editor)
-		if editor == scene_editor:
-			editor.unbind()
-			editor.visible = false
-			result.append(editor)
-		else:
-			editor.queue_free()
-
-	# The scene editor stays first.
-	if scene_editor and result.has(scene_editor):
-		result.erase(scene_editor)
-		result.push_front(scene_editor)
-	note_editors = result
+	_view_tracks = tracks.duplicate()
+	_edited_clips = edited_clips.duplicate()
+	_sync_track_views()
 
 	if not tracks.is_empty() and not clip_instance:
 		clip_instance = edited_clips[0] if not edited_clips.is_empty() else null
-	_update_note_editor_states()
 	_update_selection_overlays()
+	queue_content_width_update()
 	call_deferred("refresh_note_map")
+
+
+## Track mode: bind the note editor to current_track if it is shown, else hide it, and hand
+## the layer the tracks. Cheap when nothing changed.
+func _sync_track_views() -> void:
+	if not track_mode or note_editors.is_empty():
+		return
+	var editor := note_editors[0]
+	var wanted: Track = current_track if _view_tracks.has(current_track) else null
+	if wanted == null:
+		if _editor_track(editor) != null or editor.visible:
+			_clear_color_bindings_for(editor)
+			editor.unbind()
+			if editor.selection_manager:
+				editor.selection_manager.clear_selection()
+			editor.visible = false
+	elif _editor_track(editor) != wanted or not editor.visible:
+		_clear_color_bindings_for(editor)
+		editor.unbind()
+		_bind_editor_to_track(editor, wanted, _edited_clips)
+		# The new track's notes may reach further right than the old one's.
+		queue_content_width_update()
+		queue_row_rebuild()
+	else:
+		_set_edited_clips(editor, wanted, _edited_clips)
+	_update_note_editor_states()
 
 
 func _clear_color_bindings_for(editor: NoteEditor) -> void:
@@ -853,24 +855,35 @@ func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 				accept_event()
 
 
-## The note under a global position and the editor that owns it, as [editor, note], or [].
-## The active editor wins, then the other editable tracks in list order (REQ-035); tracks that
-## are hidden or not editable are never hit.
-func _note_hit(global_pos: Vector2) -> Array:
-	var candidates: Array[NoteEditor] = []
+## The note under a global position, or {}. The active editor's notes win, then the other
+## editable tracks in list order (REQ-035); tracks that are hidden or not editable are never hit.
+## A hit on the active track is {editor, visual}; a hit on any other track is
+## {track, instance, data}, found in the data (the context layer has no nodes).
+func _note_hit(global_pos: Vector2) -> Dictionary:
 	var active := get_active_note_editor()
 	if active:
-		candidates.append(active)
-	if track_mode:
-		for t in editable_tracks:
-			for editor in note_editors:
-				if _editor_track(editor) == t and not candidates.has(editor):
-					candidates.append(editor)
-	for editor in candidates:
-		var note := editor.get_note_at_position(editor.make_canvas_position_local(global_pos))
+		var note := active.get_note_at_position(active.make_canvas_position_local(global_pos))
 		if note:
-			return [editor, note]
-	return []
+			return {"editor": active, "visual": note}
+	if track_mode:
+		return context_layer.note_at(context_layer.make_canvas_position_local(global_pos))
+	return {}
+
+
+## Erase a note of a track that only the context layer draws, as one undo step.
+func _erase_context_note(hit: Dictionary) -> void:
+	var instance: ClipInstance = hit.instance
+	var data: MidiNoteData = hit.data
+	var note_clip := instance.clip
+	ClipNotesStateCommand.record_edit("Erase Note", note_clip, func(): note_clip.remove_midi_note(data))
+	queue_row_rebuild()
+
+
+func _erase_hit(hit: Dictionary) -> void:
+	if hit.has("editor"):
+		hit.editor.erase_note(hit.visual)
+	else:
+		_erase_context_note(hit)
 
 
 func _forget_erased_notes() -> void:
@@ -891,14 +904,21 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 	if not active_editor:
 		return
 
-	# A note of another editable track switches to that track before the gesture starts.
+	# A note of another editable track switches to that track before the gesture starts: the
+	# note editor is rebound to it and the press carries on as a press on its note.
 	var hit := _note_hit(mevent.global_position)
-	if not hit.is_empty() and hit[0] != active_editor:
-		current_track = _editor_track(hit[0])
+	var clicked_note: VisualNote = hit.get("visual") if not hit.is_empty() else null
+	if not hit.is_empty() and not hit.has("editor"):
+		current_track = hit.track
 		note_track_picked.emit(current_track)
-		active_editor = hit[0]
+		active_editor = get_active_note_editor()
+		if not active_editor:
+			return
 		note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
-	var clicked_note: VisualNote = hit[1] if not hit.is_empty() else null
+		clicked_note = active_editor.visual_for(hit.instance, hit.data)
+		if not clicked_note:
+			accept_event()
+			return
 
 	if clicked_note:
 		# Clicking on a note
@@ -996,7 +1016,7 @@ func _handle_right_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouse
 	# Erasing works on any editable track's note and never switches the selected track.
 	var hit := _note_hit(mevent.global_position)
 	if not hit.is_empty():
-		hit[0].erase_note(hit[1])
+		_erase_hit(hit)
 		accept_event()
 	else:
 		active_editor.selection_manager.clear_selection()
@@ -1084,10 +1104,17 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
 		var hit := _note_hit(mevent.global_position)
-		if not hit.is_empty() and hit[1] != hit[0].last_erased_note:
-			hit[0].erase_note(hit[1])
+		if not hit.is_empty() and (not hit.has("editor") or hit.visual != active_editor.last_erased_note):
+			_erase_hit(hit)
 			accept_event()
 			_update_selection_overlays()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.NONE:
+		active_editor.update_hover_cursor(note_editor_pos)
+		# A note of another track can be clicked too: show the hand over it.
+		if track_mode and active_editor.mouse_default_cursor_shape == Control.CURSOR_ARROW \
+				and not context_layer.note_at(context_layer.make_canvas_position_local(mevent.global_position)).is_empty():
+			active_editor.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 
 # ============================================================================
@@ -1189,6 +1216,59 @@ func _on_grid_helper_changed() -> void:
 	"""Called when grid_helper properties change (zoom, scroll, time signature, etc.)"""
 	_update_playhead_position()
 	_update_selection_overlays()
+	_check_scroll_growth()
+
+
+# ============================================================================
+# CONTENT WIDTH (shared by every note editor)
+# ============================================================================
+
+## Recompute the note area width after this frame. Editors ask for this whenever their
+## content extent may have changed, so an edit touching many notes still costs one update.
+func queue_content_width_update() -> void:
+	if _content_width_queued:
+		return
+	_content_width_queued = true
+	_flush_content_width.call_deferred()
+
+
+func _flush_content_width() -> void:
+	_content_width_queued = false
+	update_content_width()
+
+
+## Give every note editor the same width: the widest content plus extra_width_bars, at least
+## min_width_bars, and at least as far as scrolling has grown it.
+func update_content_width() -> void:
+	if not grid_helper:
+		return
+	var bar := grid_helper.get_ticks_per_bar()
+	var end_ticks := 0
+	for editor in note_editors:
+		if editor:
+			end_ticks = maxi(end_ticks, editor.content_end_ticks())
+	end_ticks = maxi(end_ticks, context_layer.content_end_ticks())
+	_content_width_ticks = maxi(maxi(min_width_bars * bar, end_ticks + extra_width_bars * bar), _scroll_extent_ticks)
+	var width := grid_helper.ticks_to_pixels(_content_width_ticks)
+	for editor in note_editors:
+		if editor:
+			editor.custom_minimum_size.x = width
+	context_layer.custom_minimum_size.x = width
+	_check_scroll_growth()
+
+
+## Grow the note area by whole scroll_growth_bars chunks once the view is within one
+## viewport of its right edge. Cheap enough to run on every scroll step.
+func _check_scroll_growth() -> void:
+	if not grid_helper or not is_node_ready():
+		return
+	var needed := grid_helper.pixels_to_ticks(h_scroll.scroll_horizontal + 2.0 * h_scroll.size.x)
+	if needed <= _content_width_ticks:
+		return
+	var chunk := maxi(1, scroll_growth_bars * grid_helper.get_ticks_per_bar())
+	@warning_ignore("integer_division")
+	_scroll_extent_ticks = maxi(_scroll_extent_ticks, (needed + chunk - 1) / chunk * chunk)
+	queue_content_width_update()
 
 
 func _update_playhead_position() -> void:
@@ -1212,33 +1292,24 @@ func _update_playhead_position() -> void:
 
 
 func _update_note_editor_states() -> void:
-	"""Update visual state of note editors: active, editable context, and non-editable context."""
+	"""Track mode: give the context layer the tracks it draws and can hit. Clip mode: the note
+	editor is the only thing shown."""
 	if not track_mode:
-		# In clip-mode, ensure first editor is active
-		for i in range(note_editors.size()):
-			var editor = note_editors[i]
+		for editor in note_editors:
 			if editor:
-				editor.z_index = 1 if i == 0 else 0
-				editor.modulate.a = 1.0 if i == 0 else 0.5
+				editor.z_index = 1
+				editor.modulate.a = 1.0
+		context_layer.set_tracks([], [])
+		context_layer.excluded_track = null
 		return
 
-	for editor in note_editors:
-		if not editor:
-			continue
-		var editor_track := _editor_track(editor)
-		if not editor_track:
-			continue
-		# Active: on top, full opacity. Other editable tracks: behind, slightly dimmed.
-		# Visible but not editable tracks: behind, dimmed as context.
-		var is_active := editor_track == current_track
-		editor.z_index = 1 if is_active else 0
-		if is_active:
-			editor.modulate.a = 1.0
-			editor.move_to_front()
-		elif editable_tracks.has(editor_track):
-			editor.modulate.a = 0.85
-		else:
-			editor.modulate.a = 0.5
+	# The context layer dims per track: editable tracks slightly, view-only ones more.
+	context_layer.set_tracks(_view_tracks, editable_tracks)
+	context_layer.excluded_track = current_track
+	var active := get_active_note_editor()
+	if active:
+		active.z_index = 1
+		active.modulate.a = 1.0
 
 
 ## Keep a note editor sized to content and wired to this MidiEditor's grid.
@@ -1252,6 +1323,10 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	editor.layout = lane_layout
 	if not editor.notes_changed.is_connected(queue_row_rebuild):
 		editor.notes_changed.connect(queue_row_rebuild)
+	if not editor.content_extent_changed.is_connected(queue_content_width_update):
+		editor.content_extent_changed.connect(queue_content_width_update)
+	if not editor.notes_changed.is_connected(_invalidate_sounding):
+		editor.notes_changed.connect(_invalidate_sounding)
 	# The focused note editor handles keys itself (see NoteEditor._gui_input); the
 	# range overlays are ours, so refresh them when that changed the selection.
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
@@ -1334,9 +1409,13 @@ func wants_drum_view() -> bool:
 	return NoteMapResolver.wants_drum_view(get_active_channel())
 
 
-## Every clip currently on screen, across all note editors.
+## Every clip instance currently on screen: all of the visible tracks' in track mode.
 func _visible_clips() -> Array:
 	var clips: Array = []
+	if track_mode:
+		for t in _view_tracks:
+			clips.append_array(t.clip_instances)
+		return clips
 	for editor in note_editors:
 		if editor == null:
 			continue
@@ -1522,6 +1601,16 @@ var transport_playing := false
 var _live_notes: Dictionary = {}
 var _live_channel: Channel = null
 
+## What the active editor had sounding at _sounding_tick, so the scan only reruns when
+## the playhead moves (it reports ~20 times a second, the editor redraws every frame).
+var _sounding: Dictionary = {}
+var _sounding_tick := -1
+var _sounding_editor: NoteEditor = null
+
+
+func _invalidate_sounding() -> void:
+	_sounding_tick = -1
+
 
 ## Follow live notes on the channel now in focus.
 func _bind_live_channel(channel: Channel) -> void:
@@ -1549,7 +1638,11 @@ func _update_active_keys() -> void:
 	if transport_playing and playhead_ticks >= 0:
 		var active_editor := get_active_note_editor()
 		if active_editor:
-			held = active_editor.pitches_sounding_at(playhead_ticks)
+			if playhead_ticks != _sounding_tick or active_editor != _sounding_editor:
+				_sounding = active_editor.pitches_sounding_at(playhead_ticks)
+				_sounding_tick = playhead_ticks
+				_sounding_editor = active_editor
+			held = _sounding.duplicate()
 			held.merge(_live_notes)
 	var header = drum_row_header if drum_view else v_piano
 	header.set_active_notes(held)

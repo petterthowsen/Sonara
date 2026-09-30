@@ -87,7 +87,7 @@ func _test_note_added_only_to_its_own_clip() -> void:
 	var visuals := _visuals_for(ctx.editor, note_id)
 	_assert(visuals.size() == 1, "note added to one clip makes exactly one visual, not one per clip on the track: %d" % visuals.size())
 	if visuals.size() == 1:
-		var ci: Object = visuals[0].get_meta("clip_instance")
+		var ci: Object = visuals[0].clip_instance
 		_assert(ci == ctx.inst_a, "the visual belongs to the clip that gained the note")
 	_teardown(ctx)
 

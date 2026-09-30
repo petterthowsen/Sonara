@@ -10,6 +10,12 @@ class_name VisualNote extends Panel
 # Data reference
 var midi_note_data: MidiNoteData = null  # Reference to data layer MidiNoteData
 
+## Track mode: the ClipInstance this note is shown through (a clip used several times
+## on a track gets one VisualNote per instance). Null in clip mode and for pending duplicates.
+## Untyped on purpose: naming ClipInstance (or NoteContainer below) here would make every
+## script that names VisualNote compile them too, before the autoloads they use exist.
+var clip_instance = null
+
 # Visual state
 var is_selected: bool = false
 var note_color: Color = Color(0.3, 0.6, 0.9)  # Base color (inherited from track)
@@ -34,17 +40,38 @@ var is_pending: bool = false:
 ## The stored duration is untouched either way (REQ-022).
 var drum_mode: bool = false
 
+## Velocity brightness is rounded to this many steps, so the notes of one colour share a
+## small set of styleboxes (see NoteContainer.note_style).
+const VELOCITY_SHADES: int = 16
+
+## The scene's stylebox, before any shared per-colour box replaces it.
+var _base_style: StyleBoxFlat = null
+## Fallback box for a note with no NoteContainer parent (it can't share one).
+var _own_style: StyleBoxFlat = null
+## The box currently applied as the panel override.
+var _applied_style: StyleBoxFlat = null
+## Row height update_label_visibility last applied, or -1 to force the next one.
+var _label_row_height: float = -1.0
+var _label_text_color: Color = Color(-1, -1, -1)
+
 func _ready():
-	mouse_filter = Control.MOUSE_FILTER_PASS
+	# NoteEditor does all hit-testing on its own (MidiEditor._note_hit) and sets the
+	# hover cursor, so notes never take part in GUI picking.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	focus_mode = Control.FOCUS_NONE
-	prepare_piano_roll_layout()
-	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	if label:
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_base_style = get_theme_stylebox("panel") as StyleBoxFlat
+	_apply_absolute_layout()
+	if label:
+		label.visible = not drum_mode
 	_update_visual()
 
 
 ## Keep the note in absolute piano-roll coordinates. Fill-parent layout stretches
 ## notes with the editor, which hides horizontal zoom on the focused (expanded) editor.
-func prepare_piano_roll_layout() -> void:
+## Only needed once: nothing changes these afterwards.
+func _apply_absolute_layout() -> void:
 	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	anchor_right = 0.0
 	anchor_bottom = 0.0
@@ -53,19 +80,29 @@ func prepare_piano_roll_layout() -> void:
 	size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	custom_minimum_size = Vector2.ZERO
-	drum_mode = false
-	if label:
-		label.visible = true
+
+
+## Piano roll: the note is a bar spanning its duration, with a pitch label.
+func prepare_piano_roll_layout() -> void:
+	set_drum_mode(false)
 
 
 ## Drum View: the note is a hit marker at its start instead of a bar spanning its
 ## duration. Velocity shading is kept, the pitch label is hidden (a whole row is
 ## one pitch already) and the note cannot be resized (REQ-022).
 func prepare_drum_layout() -> void:
-	prepare_piano_roll_layout()
-	drum_mode = true
+	set_drum_mode(true)
+
+
+## Switch between bar and hit marker. Does nothing when the note is already in that mode,
+## so repositioning every note on zoom stays cheap.
+func set_drum_mode(on: bool) -> void:
+	if drum_mode == on:
+		return
+	drum_mode = on
+	_label_row_height = -1.0
 	if label:
-		label.visible = false
+		label.visible = not on
 
 
 ## Height of the hit marker for a given row height: it fills the row, minus a
@@ -74,12 +111,9 @@ static func drum_marker_height(row_height: float) -> float:
 	return maxf(3.0, row_height - 2.0)
 
 
-func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
-		if _is_over_resize_handle(event.position):
-			mouse_default_cursor_shape = Control.CURSOR_HSIZE
-		else:
-			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+## Cursor for the mouse at `local_pos` over this note (NoteEditor shows it while hovering).
+func cursor_shape_at(local_pos: Vector2) -> Control.CursorShape:
+	return Control.CURSOR_HSIZE if _is_over_resize_handle(local_pos) else Control.CURSOR_POINTING_HAND
 
 
 func bind_to_note(note: MidiNoteData) -> void:
@@ -112,6 +146,7 @@ func _update_visual() -> void:
 		# Map velocity (1-127) to brightness (0.2-0.8)
 		var velocity = midi_note_data.velocity
 		var velocity_normalized = (velocity - 1) / 126.0  # Normalize to 0.0-1.0
+		velocity_normalized = roundf(velocity_normalized * (VELOCITY_SHADES - 1)) / (VELOCITY_SHADES - 1)
 		var brightness = lerp(0.2, 0.8, velocity_normalized)
 		
 		display_color = Color.from_hsv(
@@ -124,16 +159,44 @@ func _update_visual() -> void:
 	if is_selected:
 		display_color.v = clamp(display_color.v + selection_brightness_boost, 0.0, 1.0)
 
-	# Update color
-	var style: StyleBoxFlat = get_theme_stylebox("panel")
-	if style:
-		style.bg_color = Utils.display_color(display_color)
+	_apply_bg_color(Utils.display_color(display_color))
 
 	# Update label
 	if label and midi_note_data:
 		var note_name = Midi.midi_to_note_name(midi_note_data.note)
-		label.text = note_name
-		Utils.apply_label_font_color(label, Utils.contrasting_text_color(display_color))
+		if label.text != note_name:
+			label.text = note_name
+		_apply_label_color(Utils.contrasting_text_color(display_color))
+
+
+## Use the container's shared stylebox for this colour instead of editing a per-note copy.
+func _apply_bg_color(color: Color) -> void:
+	if _base_style == null:
+		return
+	var box: StyleBoxFlat
+	var container := get_parent()
+	if container and container.has_method(&"note_style"):
+		box = container.note_style(_base_style, color)
+	else:
+		if _own_style == null:
+			_own_style = _base_style.duplicate()
+		_own_style.bg_color = color
+		box = _own_style
+	if box != _applied_style:
+		_applied_style = box
+		add_theme_stylebox_override("panel", box)
+
+
+func _apply_label_color(text_color: Color) -> void:
+	if text_color == _label_text_color:
+		return
+	_label_text_color = text_color
+	var container := get_parent()
+	if container and container.has_method(&"note_label_settings") and label.label_settings:
+		label.label_settings = container.note_label_settings(label.label_settings, text_color)
+		_label_row_height = -1.0
+	else:
+		Utils.apply_label_font_color(label, text_color)
 
 ## Label font size at full row height, and the smallest size still worth drawing.
 const LABEL_FONT_SIZE_MAX: int = 16
@@ -149,9 +212,10 @@ static func label_font_size_for(row_height: float) -> int:
 func update_label_visibility(target_height: float) -> void:
 	"""Show the label at a font size that fits the row, hiding it once too small.
 
-	Every note shares the scene's one LabelSettings resource, and every note in the
-	editor has the same row height, so writing its font size here resizes all labels
-	together through a single resource change instead of per-note theme overrides."""
+	The notes of one NoteContainer share its LabelSettings (one per text colour), and
+	every note in the editor has the same row height, so writing the font size here
+	resizes all labels together through a single resource change instead of per-note
+	theme overrides. Skipped when the row height hasn't changed since the last call."""
 	if not label:
 		return
 
@@ -159,6 +223,9 @@ func update_label_visibility(target_height: float) -> void:
 		label.visible = false
 		return
 
+	if target_height == _label_row_height:
+		return
+	_label_row_height = target_height
 	var fs := label_font_size_for(target_height)
 	label.visible = fs > 0
 	if fs > 0 and label.label_settings and label.label_settings.font_size != fs:

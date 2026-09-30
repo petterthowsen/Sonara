@@ -95,6 +95,13 @@ func unbind():
 	# The pending duplicates are children and go with the rest; forget them too.
 	_dup_origins.clear()
 	dup_anchor = null
+	# Every note node goes away, so no gesture can carry on with one.
+	interaction_mode = InteractionMode.NONE
+	dragging_note = null
+	resizing_note = null
+	placed_note_awaiting_drag = null
+	last_erased_note = null
+	erasing_mode = false
 	super.unbind()
 
 
@@ -182,6 +189,14 @@ func _history_snapshots_equal(a: Array, b: Array) -> bool:
 func get_note_at_position(pos: Vector2) -> VisualNote:
 	"""Find which note is at the given position (public API for MidiEditor)."""
 	return _get_note_at_position(pos)
+
+
+## Hover cursor for the mouse at `pos` (local): resize over a note's right edge, a hand over
+## the rest of a note. Notes ignore the mouse themselves, and this editor is the control
+## under the pointer, so it carries the cursor. Only this editor's notes are checked.
+func update_hover_cursor(pos: Vector2) -> void:
+	var note := get_note_at_position(pos)
+	mouse_default_cursor_shape = note.cursor_shape_at(pos - note.position) if note else Control.CURSOR_ARROW
 
 
 func get_notes_in_box(box_rect: Rect2) -> Array[VisualNote]:
@@ -380,11 +395,9 @@ func _snapshot_selection() -> void:
 	resize_start_durations.clear()
 	for sel_note in selection_manager.selected_notes:
 		if sel_note.midi_note_data:
-			var source_clip_instance: ClipInstance = null
 			# Prefer the visual note's attached clip instance to avoid id collisions in multi-clip mode
-			if sel_note.has_meta("clip_instance"):
-				source_clip_instance = sel_note.get_meta("clip_instance")
-			else:
+			var source_clip_instance: ClipInstance = sel_note.clip_instance
+			if not source_clip_instance:
 				source_clip_instance = get_clip_instance_for_note(sel_note.midi_note_data.id)
 			drag_start_positions[sel_note.midi_note_data.id] = {
 				"start_tick": sel_note.midi_note_data.start_tick,
@@ -487,10 +500,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 			# Clamp within clip content in track-mode to avoid crossing instance boundaries
 			if multi_clip_mode:
-				var owner_ci_clamp: ClipInstance = null
-				if sel_note.has_meta("clip_instance"):
-					owner_ci_clamp = sel_note.get_meta("clip_instance")
-				else:
+				var owner_ci_clamp: ClipInstance = sel_note.clip_instance
+				if not owner_ci_clamp:
 					owner_ci_clamp = get_clip_instance_for_note(sel_note.midi_note_data.id)
 				if owner_ci_clamp and owner_ci_clamp.clip:
 					# The bound is the instance's played window, not the content
@@ -508,10 +519,8 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			# Calculate visual position (accounting for clip offset in multi-clip mode)
 			var visual_offset_ticks = 0
 			if multi_clip_mode:
-				var owner_ci_vis: ClipInstance = null
-				if sel_note.has_meta("clip_instance"):
-					owner_ci_vis = sel_note.get_meta("clip_instance")
-				else:
+				var owner_ci_vis: ClipInstance = sel_note.clip_instance
+				if not owner_ci_vis:
 					owner_ci_vis = get_clip_instance_for_note(sel_note.midi_note_data.id)
 				if owner_ci_vis:
 					visual_offset_ticks = owner_ci_vis.content_origin_ticks()
@@ -572,7 +581,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
-		# Get the clip this visual note belongs to (prefer meta clip_instance)
+		# Get the clip this visual note belongs to (prefer its clip_instance)
 		var note_clip: Clip = _clip_for_visual_note(sel_note)
 		if not note_clip:
 			continue
@@ -826,7 +835,7 @@ func select_edited_clips() -> bool:
 			start_tick = mini(start_tick, ci.start_ticks)
 			end_tick = maxi(end_tick, ci.get_end_ticks())
 		for vn in get_all_visual_notes():
-			if vn.has_meta("clip_instance") and instances.has(vn.get_meta("clip_instance")):
+			if vn.clip_instance and instances.has(vn.clip_instance):
 				notes.append(vn)
 	else:
 		if not clip_instance:
@@ -1111,12 +1120,17 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 
 func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is removed from the clip."""
-	# Remove from selection if selected
-	var note_instance = get_visual_note(note_data.id)
-	if note_instance:
-		if note_instance in selection_manager.selected_notes:
-			selection_manager.selected_notes.erase(note_instance)
-		if selection_manager.selected_note == note_instance:
+	# Drop every visual of the note from the selection (track mode: one per instance)
+	var gone: Array[VisualNote] = []
+	if multi_clip_mode:
+		gone = _visuals_of(note_data, source_clip)
+	else:
+		var note_instance := get_visual_note(note_data.id)
+		if note_instance:
+			gone.append(note_instance)
+	for vn in gone:
+		selection_manager.selected_notes.erase(vn)
+		if selection_manager.selected_note == vn:
 			selection_manager.selected_note = null
 
 	# Call parent implementation
@@ -1128,7 +1142,7 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 # ============================================================================
 # Duplicates are "pending" visual notes that belong to no clip yet: their note data is
 # a copy whose start_tick is in this editor's ticks (clip-content in clip mode, song in
-# track mode). With no clip_instance meta, _update_single_note_position places them at
+# track mode). With no clip_instance, _update_single_note_position places them at
 # exactly that tick in both modes, so zoom and scroll keep working mid-drag. They are
 # only written to clips when the drag ends.
 
@@ -1298,9 +1312,7 @@ func _handle_cross_clip_transfers() -> void:
 		# Resolve the source from the note's current owner rather than the snapshot
 		# taken at drag start: an earlier transfer may already have moved it, and a
 		# stale source makes the removal below silently do nothing.
-		var source_clip_instance: ClipInstance = null
-		if sel_note.has_meta("clip_instance"):
-			source_clip_instance = sel_note.get_meta("clip_instance")
+		var source_clip_instance: ClipInstance = sel_note.clip_instance
 		if not source_clip_instance:
 			source_clip_instance = start_pos.get("clip_instance") as ClipInstance
 		if not source_clip_instance or not source_clip_instance.clip:
@@ -1376,10 +1388,9 @@ func _clip_for_visual_note(note: VisualNote) -> Clip:
 		return null
 	if not multi_clip_mode:
 		return clip
-	if note.has_meta("clip_instance"):
-		var ci: ClipInstance = note.get_meta("clip_instance")
-		if ci and ci.clip:
-			return ci.clip
+	var ci: ClipInstance = note.clip_instance
+	if ci and ci.clip:
+		return ci.clip
 	return _get_clip_for_note(note.midi_note_data.id)
 
 

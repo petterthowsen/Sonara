@@ -24,6 +24,10 @@ const visual_note_scene = preload("res://clip_editor/VisualNote.tscn")
 ## moved. MidiEditor listens to rebuild Drum View's rows (REQ-016).
 signal notes_changed
 
+## Something that sets how far right the content reaches changed (notes, instances). The
+## owner (MidiEditor) recomputes one width for all its editors; see content_end_ticks().
+signal content_extent_changed
+
 ## Shared pitch <-> row <-> Y math, handed down by MidiEditor. Defaults to its own
 ## chromatic layout so a standalone NoteEditor still positions notes.
 var layout: LaneLayout = LaneLayout.chromatic():
@@ -45,18 +49,24 @@ var layout: LaneLayout = LaneLayout.chromatic():
 			# Notify parent ScrollContainer that our size changed
 			# and queue relayout
 			update_minimum_size()
-			queue_sort()
+			_queue_reposition()
 
 
 ## Rows or row height changed: every note needs repositioning and the container
 ## needs to resize (Drum View is far shorter than 128 chromatic lanes).
 func _on_layout_changed() -> void:
 	update_minimum_size()
-	queue_sort()
+	_queue_reposition()
 
-# Horizontal scrolling configuration
-@export var min_width_bars: int = 8		# minimum width in bars
-@export var extra_width_bars: int = 4		# extra width to the right of the rightmost note
+
+## Set when notes must be repositioned on the next sort. Other sorts (a width change,
+## for example) leave note positions alone: they depend only on ticks, pitch and scale.
+var _positions_dirty := false
+
+
+func _queue_reposition() -> void:
+	_positions_dirty = true
+	queue_sort()
 
 # Grid helper which must be set by the parent ClipEditor/MidiEditor
 var grid_helper: GridHelper = null:
@@ -65,23 +75,24 @@ var grid_helper: GridHelper = null:
 
 func set_grid_helper(gh: GridHelper) -> void:
 	# Disconnect from old grid_helper if it exists
-	if grid_helper and grid_helper.changed.is_connected(_on_grid_helper_changed):
-		grid_helper.changed.disconnect(_on_grid_helper_changed)
+	if grid_helper and grid_helper.scale_changed.is_connected(_on_grid_scale_changed):
+		grid_helper.scale_changed.disconnect(_on_grid_scale_changed)
 	
 	grid_helper = gh
 	
-	# Connect to new grid_helper's changed signal
+	# Only scale changes move notes: the notes scroll with h_scroll, not with
+	# scroll_position, so scrolling needs no work here.
 	if grid_helper:
-		grid_helper.changed.connect(_on_grid_helper_changed)
+		grid_helper.scale_changed.connect(_on_grid_scale_changed)
 	
 	_update_note_positions()
 	update_container_width()
 
 
-func _on_grid_helper_changed() -> void:
-	"""Called when grid_helper properties change (zoom, scroll, time signature, etc.)"""
+func _on_grid_scale_changed() -> void:
+	"""Zoom, ppq, time signature or grid spacing changed (never plain scrolling)."""
+	# MidiEditor rescales the shared width itself on the same signal.
 	_update_note_positions()
-	update_container_width()
 
 
 # Should be set to track or clip color
@@ -89,6 +100,8 @@ var note_color = Color(0.3, 0.6, 0.9):
 	set(nc):
 		if note_color != nc:
 			note_color = nc
+			# The shared boxes are per display colour; the old ones are no longer used.
+			_style_cache.clear()
 			# Notify all visual notes to update their color
 			for node in get_children():
 				if node is VisualNote:
@@ -106,6 +119,39 @@ var position_offset_ticks: int = 0:
 			position_offset_ticks = value
 			_update_note_positions()
 			update_container_width()
+
+
+## Display colour -> StyleBoxFlat shared by every note drawn in that colour. Velocity
+## shading is quantised (VisualNote.VELOCITY_SHADES), so this stays small.
+var _style_cache: Dictionary = {}
+## Text colour -> LabelSettings shared by every note label in that colour.
+var _label_settings_cache: Dictionary = {}
+
+
+## The shared stylebox for notes of `color`, made from the note scene's `base` box.
+func note_style(base: StyleBoxFlat, color: Color) -> StyleBoxFlat:
+	var box: StyleBoxFlat = _style_cache.get(color)
+	if box == null:
+		box = base.duplicate()
+		box.bg_color = color
+		_style_cache[color] = box
+	return box
+
+
+## The shared label settings for note labels drawn in `text_color`.
+func note_label_settings(base: LabelSettings, text_color: Color) -> LabelSettings:
+	var settings: LabelSettings = _label_settings_cache.get(text_color)
+	if settings == null:
+		settings = base.duplicate()
+		settings.font_color = text_color
+		settings.shadow_color = Utils.contrasting_shadow_color(text_color)
+		_label_settings_cache[text_color] = settings
+	# A note can switch colour between row-height changes (a velocity drag), so hand the
+	# settings out at the current size.
+	var fs := VisualNote.label_font_size_for(layout.row_height)
+	if fs > 0 and settings.font_size != fs:
+		settings.font_size = fs
+	return settings
 
 
 # SINGLE-CLIP MODE: The clip instance that opened this editor (for context, not edited directly)
@@ -128,6 +174,35 @@ var multi_clip_mode: bool = false
 # SINGLE-CLIP MODE: note_id -> VisualNote
 # MULTI-CLIP MODE: note_id -> {visual_note: VisualNote, clip_instance: ClipInstance}
 var visual_notes_by_id: Dictionary = {}
+
+## MULTI-CLIP MODE: note id -> Array of the VisualNotes showing it, in creation order (one
+## per instance of the owning clip; ids from different clips can also collide). Lets
+## lookups by bare id skip scanning every child. Pending duplicates are never in it.
+var _visuals_by_note_id: Dictionary = {}
+
+
+func _index_visual(vn: VisualNote) -> void:
+	var id := vn.midi_note_data.id
+	var list: Array = _visuals_by_note_id.get(id, [])
+	list.append(vn)
+	_visuals_by_note_id[id] = list
+
+
+func _unindex_visual(vn: VisualNote, id: int) -> void:
+	var list: Array = _visuals_by_note_id.get(id, [])
+	list.erase(vn)
+	if list.is_empty():
+		_visuals_by_note_id.erase(id)
+
+
+## Track mode: the visuals of `note_data` on every instance of `source_clip` on this track.
+func _visuals_of(note_data: MidiNoteData, source_clip: Clip) -> Array[VisualNote]:
+	var out: Array[VisualNote] = []
+	for ci in _instances_of_clip(source_clip):
+		var entry = visual_notes_by_id.get(_make_note_key(ci, note_data))
+		if entry is Dictionary and is_instance_valid(entry.visual_note):
+			out.append(entry.visual_note)
+	return out
 
 ## Unique key per (clip_instance, note_id) to avoid collisions when instances share a Clip.
 func _make_note_key(ci: ClipInstance, nd: MidiNoteData) -> String:
@@ -207,11 +282,14 @@ func unbind():
 	# Keep grid_helper connected. Unbind only clears clip data; zoom/scroll
 	# still need to relayout this editor when it is reused (the scene editor).
 
-	# Clear all visual notes
+	# Clear all visual notes. They leave the tree now (not at the end of the frame), so a
+	# rebind in the same frame never finds the old ones.
 	for node in get_children():
+		remove_child(node)
 		node.queue_free()
 
 	visual_notes_by_id.clear()
+	_visuals_by_note_id.clear()
 	clip_instance = null
 	clip_instances.clear()
 	track = null
@@ -284,7 +362,7 @@ func _get_minimum_size() -> Vector2:
 
 
 func _notification(what):
-	if what == NOTIFICATION_SORT_CHILDREN:
+	if what == NOTIFICATION_SORT_CHILDREN and _positions_dirty:
 		_update_note_positions()
 
 
@@ -293,8 +371,10 @@ func _update_note_positions() -> void:
 	if not grid_helper:
 		return
 
-	for note in get_children():
-		if note is VisualNote and note.midi_note_data:
+	_positions_dirty = false
+	for i in get_child_count():
+		var note := get_child(i) as VisualNote
+		if note and note.midi_note_data:
 			_update_single_note_position(note)
 
 
@@ -308,8 +388,14 @@ func get_all_visual_notes() -> Array[VisualNote]:
 	return notes
 
 
+## Test hook: how many times _update_single_note_position ran (tests check that
+## scrolling leaves notes alone).
+var reposition_calls: int = 0
+
+
 func _update_single_note_position(note: VisualNote) -> void:
 	"""Update the position and size of a single visual note."""
+	reposition_calls += 1
 	if not note.midi_note_data:
 		return
 
@@ -320,7 +406,7 @@ func _update_single_note_position(note: VisualNote) -> void:
 	if multi_clip_mode:
 		# MULTI-CLIP MODE: place the note where its instance plays it, and hide the
 		# trimmed-away content outside the instance window, as the arranger does.
-		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
+		var ci: ClipInstance = note.clip_instance
 		if ci:
 			offset_ticks = ci.content_origin_ticks()
 			if not ci.plays_clip_span(note_data.start_tick, note_data.start_tick + note_data.duration_ticks):
@@ -337,22 +423,11 @@ func _update_single_note_position(note: VisualNote) -> void:
 		return
 	note.visible = true
 
-	# Apply position offset for song-relative positioning
-	var note_x = ticks_to_pixels(note_data.start_tick + offset_ticks)
-	var note_y = layout.pitch_to_y(note_data.note)
-	var row_height := layout.row_height
-
-	if layout.is_folded():
-		# Hit marker at the note's start; the stored duration is untouched (REQ-022).
-		note.prepare_drum_layout()
-		note.position = Vector2(note_x, note_visual_y(note_data.note))
-		note.size = drum_marker_size(note_data.duration_ticks)
-	else:
-		var note_width = ticks_to_pixels(note_data.duration_ticks)
-		note.prepare_piano_roll_layout()
-		note.position = Vector2(note_x, note_y)
-		note.size = Vector2(maxf(1.0, note_width), row_height)
-	note.update_label_visibility(row_height)
+	var rect := NotePlacement.note_rect(note_data, offset_ticks, layout, grid_helper)
+	note.set_drum_mode(layout.is_folded())
+	note.position = rect.position
+	note.size = rect.size
+	note.update_label_visibility(layout.row_height)
 
 
 func get_note_song_position(note: VisualNote) -> Dictionary:
@@ -369,7 +444,7 @@ func get_note_song_position(note: VisualNote) -> Dictionary:
 	
 	if multi_clip_mode:
 		# MULTI-CLIP MODE: song position is where the note's instance plays it
-		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
+		var ci: ClipInstance = note.clip_instance
 		if ci:
 			offset_ticks = ci.content_origin_ticks()
 	else:
@@ -382,54 +457,31 @@ func get_note_song_position(note: VisualNote) -> Dictionary:
 	}
 
 
-# TODO: move this to NoteEditor
+## Ask the owner to recompute the content width. Cheap: MidiEditor batches these into one
+## width update per frame for all its editors.
 func update_container_width() -> void:
-	"""Update the container's minimum width for infinite scrolling."""
-	var h_scroll = get_parent()
-	if not h_scroll is ScrollContainer:
-		return
+	content_extent_changed.emit()
 
-	# Calculate minimum visible width
-	var ticks_per_bar = grid_helper.get_ticks_per_bar() if grid_helper else 3840
-	var min_width_ticks = min_width_bars * ticks_per_bar
-	var min_width_pixels = ticks_to_pixels(min_width_ticks)
 
-	# Get current scroll position and viewport width
-	var scroll_pos = grid_helper.scroll_position if grid_helper else 0.0
-	var viewport_width = get_parent().size.x
-
-	# Find rightmost content position (account for clip offsets in multi-clip mode)
-	var rightmost_tick = 0
+## Rightmost tick this editor's content reaches, in its own ticks. Track mode: the end of
+## the last instance on the track. Clip mode: the last note end plus position_offset_ticks.
+func content_end_ticks() -> int:
+	var rightmost_tick := 0
 	if multi_clip_mode:
-		# Use clip instance end ticks to cover entire clips on the track
 		for ci in clip_instances:
 			if ci:
-				rightmost_tick = max(rightmost_tick, ci.get_end_ticks())
-	else:
-		# Single-clip mode: use note ends (plus optional position offset)
-		for note in get_children():
-			if note is VisualNote and note.midi_note_data:
-				var note_end = note.midi_note_data.start_tick + note.midi_note_data.duration_ticks + position_offset_ticks
-				rightmost_tick = max(rightmost_tick, note_end)
-	var rightmost_pixels = ticks_to_pixels(rightmost_tick)
-
-	# Calculate required width
-	var extra_ticks = extra_width_bars * ticks_per_bar
-	var extra_pixels = ticks_to_pixels(extra_ticks)
-
-	var width_from_scroll = scroll_pos + viewport_width + extra_pixels
-	var width_from_content = rightmost_pixels + extra_pixels
-	var required_width = max(min_width_pixels, width_from_scroll, width_from_content)
-
-	logger.debug("update_container_width: multi=%s rightmost_tick=%d min_px=%.1f scroll=%.1f viewport=%.1f content_px=%.1f required_px=%.1f" % [str(multi_clip_mode), rightmost_tick, min_width_pixels, scroll_pos, viewport_width, width_from_content, required_width])
-
-	custom_minimum_size.x = required_width
+				rightmost_tick = maxi(rightmost_tick, ci.get_end_ticks())
+	elif clip:
+		for nd in clip.midi_notes:
+			rightmost_tick = maxi(rightmost_tick, nd.start_tick + nd.duration_ticks + position_offset_ticks)
+	return rightmost_tick
 
 
 func _load_clip_notes() -> void:
 	logger.info("_load_clip_notes called")
 
 	visual_notes_by_id.clear()
+	_visuals_by_note_id.clear()
 
 	if multi_clip_mode:
 		# MULTI-CLIP MODE: Load notes from all clip instances
@@ -483,9 +535,11 @@ func _load_notes_from_multiple_clips() -> void:
 			# Create visual note instance
 			var note_instance = visual_note_scene.instantiate()
 			add_child(note_instance)
-			note_instance.bind_to_note(note_data)
 			# Attach clip instance to the visual note for positioning and lookups
-			note_instance.set_meta("clip_instance", ci)
+			# (before binding, so its first visual update already knows it)
+			note_instance.clip_instance = ci
+			note_instance.bind_to_note(note_data)
+			_index_visual(note_instance)
 
 			# Set color from track
 			note_instance.set_color(note_color)
@@ -517,9 +571,10 @@ func _on_clip_note_added(note_data: MidiNoteData, source_clip: Clip) -> void:
 				continue
 			var vn = visual_note_scene.instantiate()
 			add_child(vn)
+			vn.clip_instance = ci
 			vn.bind_to_note(note_data)
 			vn.set_color(note_color)
-			vn.set_meta("clip_instance", ci)
+			_index_visual(vn)
 			visual_notes_by_id[key] = {
 				"visual_note": vn,
 				"clip_instance": ci
@@ -547,16 +602,9 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is removed from the clip (reactive)."""
 	if multi_clip_mode:
 		# Remove the visuals on every instance of the emitting clip, and only those.
-		var owned := _instances_of_clip(source_clip)
-		var to_free: Array[VisualNote] = []
-		for child in get_children():
-			if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_data.id:
-				var ci: ClipInstance = child.get_meta("clip_instance") if child.has_meta("clip_instance") else null
-				if ci not in owned:
-					continue
-				visual_notes_by_id.erase(_make_note_key(ci, note_data))
-				to_free.append(child)
-		for vn in to_free:
+		for vn in _visuals_of(note_data, source_clip):
+			visual_notes_by_id.erase(_make_note_key(vn.clip_instance, note_data))
+			_unindex_visual(vn, note_data.id)
 			vn.queue_free()
 	else:
 		var single_key = _note_dict_key(clip_instance, note_data.id)
@@ -577,14 +625,9 @@ func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is modified in the clip (reactive)."""
 	if multi_clip_mode:
 		# Update every instance of the emitting clip, and only those.
-		var owned := _instances_of_clip(source_clip)
-		for child in get_children():
-			if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_data.id:
-				var ci: ClipInstance = child.get_meta("clip_instance") if child.has_meta("clip_instance") else null
-				if ci not in owned:
-					continue
-				child._update_visual()
-				_update_single_note_position(child)
+		for vn in _visuals_of(note_data, source_clip):
+			vn._update_visual()
+			_update_single_note_position(vn)
 	else:
 		var single_key = _note_dict_key(clip_instance, note_data.id)
 		if not visual_notes_by_id.has(single_key):
@@ -622,7 +665,7 @@ func pitches_sounding_at(tick: int, only_played: bool = true) -> Dictionary:
 ## Ticks added to a note's clip-content start to place it in this editor's space.
 func _note_offset_ticks(note: VisualNote) -> int:
 	if multi_clip_mode:
-		var ci: ClipInstance = note.get_meta("clip_instance") if note.has_meta("clip_instance") else null
+		var ci: ClipInstance = note.clip_instance
 		return ci.content_origin_ticks() if ci else 0
 	return position_offset_ticks
 
@@ -640,36 +683,16 @@ func note_to_y(note : int) -> float:
 	return layout.pitch_to_y(note)
 
 
-## Size of a Drum View hit marker: a fixed width that fills the row vertically.
-## The width is deliberately independent of the row height, so zooming vertically
-## only makes the markers taller. It is still capped so a marker is never wider
-## than one grid step, nor wider than the note itself.
-##
-## `duration_ticks` is the note's own length. Notes on one pitch never overlap in
-## the data, so clamping to that length is what actually guarantees the markers
-## don't overlap on screen: the grid step alone is wrong whenever notes are
-## shorter than the current snap, and the old 3 px floor overlapped once a step
-## shrank below it at low zoom. Pass 0 (the default) for the generic marker size
-## with no note in hand.
+## Size of a Drum View hit marker; see NotePlacement.drum_marker_size.
 func drum_marker_size(duration_ticks: int = 0) -> Vector2:
-	var h := VisualNote.drum_marker_height(layout.row_height)
-	var w := VisualNote.DRUM_MARKER_WIDTH
-	var step_px := ticks_to_pixels(get_snap_interval())
-	if step_px > 0.0:
-		w = minf(w, step_px - 1.0)
-	if duration_ticks > 0:
-		w = minf(w, ticks_to_pixels(duration_ticks) - 1.0)
-	return Vector2(maxf(1.0, w), h)
+	return NotePlacement.drum_marker_size(layout, grid_helper, duration_ticks)
 
 
-## Top Y of a note's *visual*, which in Drum View is the centred hit marker rather
-## than the whole row. Drag code positions notes through this so markers don't
+## Top Y of a note's *visual*, which in Drum View is the centred hit marker rather than
+## the whole row. Drag code positions notes through this so markers don't
 ## jump to the row's top edge mid-drag.
 func note_visual_y(pitch: int) -> float:
-	var y := layout.pitch_to_y(pitch)
-	if layout.is_folded():
-		y += (layout.row_height - VisualNote.drum_marker_height(layout.row_height)) * 0.5
-	return y
+	return NotePlacement.visual_y(layout, pitch)
 
 
 ## Vertical delta between two Y positions, measured in rows and signed so that
@@ -706,14 +729,11 @@ func get_snap_interval() -> int:
 
 func _get_note_at_position(pos: Vector2) -> VisualNote:
 	"""Find which note is at the given position (if any)."""
-	# Iterate through children in reverse (top-most first)
-	var children = get_children()
-	for i in range(children.size() - 1, -1, -1):
-		var child = children[i]
-		if child is VisualNote and child.visible and not child.is_pending:
-			var rect = Rect2(child.position, child.size)
-			if rect.has_point(pos):
-				return child
+	# Iterate through children in reverse (top-most first), without copying the child list
+	for i in range(get_child_count() - 1, -1, -1):
+		var child := get_child(i) as VisualNote
+		if child and child.visible and not child.is_pending and child.get_rect().has_point(pos):
+			return child
 	return null
 
 
@@ -728,20 +748,25 @@ func get_visual_note(note_id: int) -> VisualNote:
 		if legacy is VisualNote:
 			return legacy
 		return null
-	for child in get_children():
-		if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_id:
-			return child
-	return null
+	var list: Array = _visuals_by_note_id.get(note_id, [])
+	return list[0] if not list.is_empty() else null
+
+
+## The visual showing `note_data` through `ci` (track mode), or the note's only visual
+## (clip mode). Null when there is none.
+func visual_for(ci: ClipInstance, note_data: MidiNoteData) -> VisualNote:
+	var entry = visual_notes_by_id.get(_make_note_key(ci, note_data))
+	if entry is Dictionary:
+		return entry.visual_note if is_instance_valid(entry.visual_note) else null
+	return entry as VisualNote
 
 
 func get_clip_instance_for_note(note_id: int) -> ClipInstance:
 	"""Get the clip instance that owns this note (multi-clip mode)."""
 	if not multi_clip_mode:
 		return clip_instance
-	for child in get_children():
-		if child is VisualNote and child.midi_note_data and child.midi_note_data.id == note_id:
-			return child.get_meta("clip_instance") if child.has_meta("clip_instance") else null
-	return null
+	var vn := get_visual_note(note_id)
+	return vn.clip_instance if vn else null
 
 
 func get_clip_at_position(tick: int) -> ClipInstance:

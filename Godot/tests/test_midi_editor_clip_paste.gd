@@ -105,7 +105,7 @@ func _test_copy_notes_paste_on_other_track() -> void:
 
 	midi.current_track = b.track
 	var editor_b: Object = midi.get_active_note_editor()
-	_assert(editor_b != editor_a, "switching tracks activates B's editor")
+	_assert(editor_b == editor_a and midi._editor_track(editor_b) == b.track, "switching tracks rebinds the one editor to B")
 	var sm_b: Object = editor_b.selection_manager
 	_assert(sm_b.box_selection_start_tick == BAR and sm_b.box_selection_end_tick == BAR + 720,
 		"the range carried over to B: %d-%d" % [sm_b.box_selection_start_tick, sm_b.box_selection_end_tick])

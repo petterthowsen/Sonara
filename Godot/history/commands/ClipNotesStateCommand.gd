@@ -36,6 +36,28 @@ static func capture_clip_notes(p_clip: Clip) -> Array:
 	return snaps
 
 
+## Run `edit` (which changes `p_clip`'s notes) and record it as one undo step. Nothing is
+## recorded when the notes came out the same. For edits made without a NoteEditor, such as
+## erasing a note on a track the editor only draws.
+static func record_edit(action_name: String, p_clip: Clip, edit: Callable) -> void:
+	var before := capture_clip_notes(p_clip)
+	edit.call()
+	var after := capture_clip_notes(p_clip)
+	if before.size() == after.size() and _same_fields(before, after):
+		return
+	HistoryUtil.record(ClipNotesStateCommand.new(action_name, p_clip, before, after))
+
+
+static func _same_fields(a: Array, b: Array) -> bool:
+	for i in a.size():
+		var x: Dictionary = a[i]
+		var y: Dictionary = b[i]
+		for key in ["id", "note", "velocity", "start_tick", "duration_ticks"]:
+			if x[key] != y[key]:
+				return false
+	return true
+
+
 ## Deep-copy fields of a MidiNoteData into a dictionary (keeps object ref).
 static func _snapshot_note(note: MidiNoteData) -> Dictionary:
 	return {

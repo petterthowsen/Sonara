@@ -153,6 +153,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] Consider Modifier+right-click to open context menu in NoteEditor?
 - [x?] should probably add a gray line between E/F and between B/C
 - [x?] Clip editor track list: every instrument track is listed with an eye and a pencil toggle (drag to paint, Shift+click solo, revert), hidden tracks aren't drawn, clicking another editable track's note switches to that track, right-click erases across tracks, and the header shows the clip name in clip mode with an icon mode toggle. Spec `docs/specs/007-clip-editor-track-list/`. Implemented and covered headless; needs the live pass (T-012 in tasks.md)
+- [x?] Clip editor track-mode performance (`docs/clip-editor-performance-plan.md`, phases 1 and 2): scrolling no longer repositions notes, and only the active track has note nodes; the other visible tracks are drawn and hit-tested from data by `ContextNotesLayer`. Headless benchmark: binding 100 tracks x 500 notes went from 10.9 s to 0.14 s. Needs a live pass: drawing of the dimmed tracks, clicking one to switch, right-click erase across tracks, Drum View with many tracks, and the hand cursor over other tracks' notes
 
 ### Devices
 
@@ -196,6 +197,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
   - [ ] Double-click value entry (`FloatingValueEditor`) on HorSlider, XYSlider and EnvelopeControl (per handle)
   - [ ] Ctrl/Cmd-click reset to default on VSlider, the Meter fader, Volumeter (0 dB? or the channel default) and EnvelopeControl (per handle)
 - [x?] SmartLineEdit: clicking outside (or losing focus) commits the edit, like Enter
+- [ ] Logging performance: every log call writes and flushes the log file with no level filter, and the note editor logs once per note on every edit. That adds up during bulk edits; a level filter or removing those lines would fix it.
 
 ### Settings
 

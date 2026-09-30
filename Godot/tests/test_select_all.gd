@@ -161,26 +161,22 @@ func _test_ctrl_a_track_mode_focus() -> void:
 	await process_frame
 
 	var midi: Object = editor.midi_editor
-	_assert(midi.track_mode and midi.note_editors.size() == 2, "track mode: one editor per track")
-	if midi.note_editors.size() != 2:
-		editor.queue_free()
-		return
-
-	var editor_a: Object = midi.note_editors[0]
-	var editor_b: Object = midi.note_editors[1]
-	editor_a.selection_manager.clear_selection()
-	editor_b.selection_manager.clear_selection()
+	_assert(midi.track_mode and midi.note_editors.size() == 1, "track mode: one note editor, bound to the active track")
+	var note_editor: Object = midi.note_editors[0]
 
 	midi.current_track = b.track
 	await process_frame
 	await process_frame
-	_assert(editor_b.has_focus(), "the active track's editor takes keyboard focus")
+	_assert(note_editor.has_focus(), "the active track's editor takes keyboard focus")
+	_assert(midi._editor_track(note_editor) == b.track, "the editor is bound to the active track")
+	note_editor.selection_manager.clear_selection()
 
 	root.push_input(_ctrl_a())
 	await process_frame
-	_assert(editor_b.selection_manager.selected_notes.size() == 2,
-		"Ctrl+A selects every note on the active track: %d" % editor_b.selection_manager.selected_notes.size())
-	_assert(editor_a.selection_manager.selected_notes.is_empty(), "the other track's notes are untouched")
+	_assert(note_editor.selection_manager.selected_notes.size() == 2,
+		"Ctrl+A selects every note on the active track: %d" % note_editor.selection_manager.selected_notes.size())
+	for vn in note_editor.selection_manager.selected_notes:
+		_assert(vn.midi_note_data in clip_b.midi_notes, "and only that track's notes")
 
 	editor.queue_free()
 	await process_frame
