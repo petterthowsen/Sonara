@@ -15,7 +15,7 @@
 //! is bit-exact dry). Every continuous parameter is smoothed, and a Mode change crossfades both
 //! voicings over 8 ms.
 
-use std::f32::consts::TAU;
+use std::f64::consts::FRAC_PI_2;
 
 use super::effect::pass_through;
 use super::param_table::{
@@ -162,6 +162,16 @@ impl ChorusMode {
             _ => 0.0,
         }
     }
+
+    /// `(cos, sin)` of each voice's phase offset for the sine voicing, so one `sin`/`cos` pair
+    /// per sample builds all three voices by angle addition. None for the triangle voicings,
+    /// whose shape is cheap to evaluate per voice.
+    fn sine_offsets(&self) -> Option<&'static [(f32, f32)]> {
+        match self {
+            ChorusMode::Ensemble => Some(&ENSEMBLE_SINE_OFFSETS),
+            _ => None,
+        }
+    }
 }
 
 /// One modulated read: `source` is the delay line it reads, `left`/`right` its output weights,
@@ -188,6 +198,13 @@ const ENSEMBLE_VOICES: [Voice; 3] = [
     Voice { source: 0, left: 0.5, right: 0.5, phase: 2.0 / 3.0 },
 ];
 
+/// `(cos, sin)` of the Ensemble voices' offsets (0, 120°, 240°).
+const ENSEMBLE_SINE_OFFSETS: [(f32, f32); 3] = [
+    (1.0, 0.0),
+    (-0.5, 0.866_025_4),
+    (-0.5, -0.866_025_4),
+];
+
 /// LFO output at an absolute phase in cycles.
 fn lfo_value(shape: LfoShape, phase: f64) -> f32 {
     let mut lfo = Lfo::default();
@@ -195,7 +212,45 @@ fn lfo_value(shape: LfoShape, phase: f64) -> f32 {
     lfo.value(shape)
 }
 
+/// `sin` and `cos` of a phase in cycles (0..1), to a few 1e-6.
+///
+/// The per-sample sine voicing needs a `sin`/`cos` pair and the vibrato another `sin`; three
+/// libm calls per sample are most of the chorus's CPU budget, so this uses a quarter-wave
+/// reduction and minimax polynomials instead. The error is ~2e-6, far below anything audible in
+/// a delay modulation.
+#[inline]
+fn sin_cos_cycles(phase: f64) -> (f32, f32) {
+    let fraction = phase.fract();
+    let p = (if fraction < 0.0 { fraction + 1.0 } else { fraction }) * 4.0;
+    let quadrant = p as i32;
+    let x = (p - quadrant as f64) * FRAC_PI_2;
+    let x2 = x * x;
+    let sin_x =
+        x * (1.0 - x2 * (1.0 / 6.0 - x2 * (1.0 / 120.0 - x2 * (1.0 / 5_040.0 - x2 / 362_880.0))));
+    let cos_x = 1.0
+        - x2 * (0.5
+            - x2 * (1.0 / 24.0
+                - x2 * (1.0 / 720.0 - x2 * (1.0 / 40_320.0 - x2 / 3_628_800.0))));
+    let (sin, cos) = (sin_x as f32, cos_x as f32);
+    match quadrant {
+        0 => (sin, cos),
+        1 => (cos, -sin),
+        2 => (-sin, -cos),
+        _ => (-cos, sin),
+    }
+}
+
+/// `sin` of a phase in cycles.
+#[inline]
+fn sine_cycles(phase: f64) -> f32 {
+    sin_cos_cycles(phase).0
+}
+
 /// Read delay of voice `voice` of `mode`, in frames at the device rate.
+///
+/// The slow, literal form of what [`ChorusDevice::mode_wet`] computes: the tests measure the
+/// rendered audio against this.
+#[cfg(test)]
 fn voice_delay_frames(
     mode: ChorusMode,
     voice: usize,
@@ -209,7 +264,7 @@ fn voice_delay_frames(
     // The vibrato is common-mode: the voices keep their 120° spacing from the main LFO alone.
     let vibrato = mode.vibrato_amp();
     if vibrato > 0.0 {
-        m += vibrato * (TAU as f64 * vibrato_phase).sin() as f32;
+        m += vibrato * sine_cycles(vibrato_phase);
     }
     let m = m.clamp(-1.0, 1.0);
     (base_frames * (1.0 + depth01 * mode.depth_scale() * m)).max(MIN_HERMITE_DELAY)
@@ -253,9 +308,23 @@ pub struct ChorusDevice {
     /// Dimension's extra BBD softening filter.
     bbd: [OnePole; 2],
     bbd_g: f32,
-    fb_state: [f32; 2],
+
+    /// Per-sample coefficients cached against their smoothed inputs, so the audio thread only
+    /// pays for `tan`/`cos`/`sin` while a knob is actually moving.
+    g_hp: f32,
+    g_lp: f32,
+    last_low_cut_hz: f32,
+    last_tone_hz: f32,
+    dry_gain: f32,
+    wet_gain: f32,
+    last_mix: f32,
 
     enabled: bool,
+
+    /// `1 / sample_rate` and `sample_rate / 1000`, so the per-sample path multiplies instead of
+    /// dividing.
+    inv_sample_rate: f64,
+    frames_per_ms: f32,
 }
 
 impl ChorusDevice {
@@ -283,14 +352,23 @@ impl ChorusDevice {
             low_pass: [OnePole::new(); 2],
             bbd: [OnePole::new(); 2],
             bbd_g: one_pole_g(BBD_HZ, sample_rate),
-            fb_state: [0.0; 2],
+            g_hp: 0.0,
+            g_lp: 0.0,
+            last_low_cut_hz: f32::NAN,
+            last_tone_hz: f32::NAN,
+            dry_gain: 1.0,
+            wet_gain: 0.0,
+            last_mix: f32::NAN,
             enabled: true,
+            inv_sample_rate: 1.0 / sample_rate as f64,
+            frames_per_ms: sample_rate / 1000.0,
         };
         device.prepare(sample_rate, 4_096);
         device
     }
 
     /// Rate in Hz: the synced division when Sync isn't Off, else the (smoothed) free Rate.
+    #[inline]
     fn effective_rate(&self, sync_seconds: Option<f64>, free_hz: f32) -> f32 {
         match sync_seconds {
             Some(seconds) => (1.0 / seconds) as f32,
@@ -299,6 +377,10 @@ impl ChorusDevice {
     }
 
     /// Sum of the mode's voices from the delay lines, as a stereo wet pair.
+    ///
+    /// `voice_delay_frames` is the reference for the mathematics; this fast path is the same
+    /// formula, with the sine voicing's three voices built from one `sin`/`cos` pair.
+    #[inline]
     fn mode_wet(
         &self,
         mode: ChorusMode,
@@ -307,9 +389,30 @@ impl ChorusDevice {
         lfo_phase: f64,
         vibrato_phase: f64,
     ) -> (f32, f32) {
+        let vibrato_amp = mode.vibrato_amp();
+        let vibrato = if vibrato_amp > 0.0 {
+            vibrato_amp * sine_cycles(vibrato_phase)
+        } else {
+            0.0
+        };
+        let sine_offsets = mode.sine_offsets();
+        let (sin_a, cos_a) = match sine_offsets {
+            Some(_) => sin_cos_cycles(lfo_phase),
+            None => (0.0, 0.0),
+        };
+        let scale = mode.depth_scale();
+
         let (mut left, mut right) = (0.0, 0.0);
         for (v, spec) in mode.voices().iter().enumerate() {
-            let delay = voice_delay_frames(mode, v, base_frames, depth01, lfo_phase, vibrato_phase);
+            let main = match sine_offsets {
+                Some(offsets) => {
+                    let (cos_offset, sin_offset) = offsets[v];
+                    sin_a * cos_offset + cos_a * sin_offset
+                }
+                None => lfo_value(mode.shape(), lfo_phase + spec.phase),
+            };
+            let m = (main + vibrato).clamp(-1.0, 1.0);
+            let delay = (base_frames * (1.0 + depth01 * scale * m)).max(MIN_HERMITE_DELAY);
             let sample = self.lines[spec.source].read_hermite(delay);
             left += spec.left * sample;
             right += spec.right * sample;
@@ -319,6 +422,7 @@ impl ChorusDevice {
     }
 
     /// How much Dimension colour to apply right now (1 during the voicing, fading at its edges).
+    #[inline]
     fn dimension_weight(&self) -> f32 {
         let current = self.mode == ChorusMode::Dimension;
         match self.prev_mode {
@@ -347,6 +451,14 @@ impl ChorusDevice {
         self.prev_mode = Some(self.mode);
         self.mode = mode;
         self.fade = 0.0;
+    }
+
+    /// Force the next sample to recompute the filter gains and the dry/wet gains (reset, rate
+    /// change, tests).
+    fn invalidate_coefficients(&mut self) {
+        self.last_low_cut_hz = f32::NAN;
+        self.last_tone_hz = f32::NAN;
+        self.last_mix = f32::NAN;
     }
 
     /// Put every smoothed value on its target (reset, tests).
@@ -383,6 +495,11 @@ impl AudioDevice for ChorusDevice {
             .min(outputs.len() / 2);
 
         let g_bbd = self.bbd_g;
+        let frames_per_ms = self.frames_per_ms;
+        let inv_sample_rate = self.inv_sample_rate;
+        // Dimension's extra colour only runs while that voicing is in play.
+        let dimension_active = self.mode == ChorusMode::Dimension
+            || self.prev_mode == Some(ChorusMode::Dimension);
 
         for i in 0..frames {
             let dry_l = inputs[i * 2];
@@ -399,7 +516,7 @@ impl AudioDevice for ChorusDevice {
 
             let lfo_phase = self.lfo.phase;
             let vibrato_phase = self.vibrato_phase;
-            let base_frames = delay_ms * sample_rate / 1000.0;
+            let base_frames = delay_ms * frames_per_ms;
 
             let (mut wet_l, mut wet_r) =
                 self.mode_wet(self.mode, base_frames, depth01, lfo_phase, vibrato_phase);
@@ -411,8 +528,8 @@ impl AudioDevice for ChorusDevice {
                 wet_r = prev_r + (wet_r - prev_r) * t;
             }
 
-            let dim = self.dimension_weight();
-            if dim > 0.0 {
+            if dimension_active {
+                let dim = self.dimension_weight();
                 let soft_l = soft_clip(self.bbd[0].lowpass(wet_l, g_bbd));
                 let soft_r = soft_clip(self.bbd[1].lowpass(wet_r, g_bbd));
                 wet_l += (soft_l - wet_l) * dim;
@@ -420,20 +537,34 @@ impl AudioDevice for ChorusDevice {
             }
 
             // Tone: Low Cut keeps the bass out of the wet path, Tone softens the top.
-            let g_hp = one_pole_g(low_cut_hz, sample_rate);
-            let g_lp = one_pole_g(tone_hz, sample_rate);
+            if low_cut_hz != self.last_low_cut_hz {
+                self.last_low_cut_hz = low_cut_hz;
+                self.g_hp = one_pole_g(low_cut_hz, sample_rate);
+            }
+            if tone_hz != self.last_tone_hz {
+                self.last_tone_hz = tone_hz;
+                self.g_lp = one_pole_g(tone_hz, sample_rate);
+            }
+            let (g_hp, g_lp) = (self.g_hp, self.g_lp);
             let wet_l = self.low_pass[0].lowpass(self.high_pass[0].highpass(wet_l, g_hp), g_lp);
             let wet_r = self.low_pass[1].lowpass(self.high_pass[1].highpass(wet_r, g_hp), g_lp);
 
             // The feedback loop taps the wet before Width (so Width can't multiply it).
-            self.fb_state = [wet_l, wet_r];
+            self.lines[0].push(dry_l + feedback * wet_l);
+            self.lines[1].push(dry_r + feedback * wet_r);
 
             let mid = (wet_l + wet_r) * 0.5;
             let side = (wet_l - wet_r) * 0.5 * width;
             let wet_l = mid + side;
             let wet_r = mid - side;
 
-            let (dry_gain, wet_gain) = dry_wet_gains(mix, MixLaw::EqualPower);
+            if mix != self.last_mix {
+                self.last_mix = mix;
+                let (dry, wet) = dry_wet_gains(mix, MixLaw::EqualPower);
+                self.dry_gain = dry;
+                self.wet_gain = wet;
+            }
+            let (dry_gain, wet_gain) = (self.dry_gain, self.wet_gain);
             let (out_l, out_r) = if wet_gain == 0.0 {
                 (dry_l, dry_r)
             } else {
@@ -443,17 +574,13 @@ impl AudioDevice for ChorusDevice {
                 )
             };
 
-            self.lines[0].push(dry_l + feedback * self.fb_state[0]);
-            self.lines[1].push(dry_r + feedback * self.fb_state[1]);
-
             outputs[i * 2] = out_l;
             outputs[i * 2 + 1] = out_r;
 
-            let rate_hz = self.effective_rate(sync_seconds, free_hz);
-            self.lfo
-                .advance(rate_hz as f64 / sample_rate as f64);
+            let rate_hz = self.effective_rate(sync_seconds, free_hz) as f64 * inv_sample_rate;
+            self.lfo.advance(rate_hz);
             self.vibrato_phase =
-                (self.vibrato_phase + VIBRATO_MULT * rate_hz as f64 / sample_rate as f64).fract();
+                (self.vibrato_phase + VIBRATO_MULT * rate_hz).fract();
 
             if self.prev_mode.is_some() {
                 self.fade += self.fade_step;
@@ -519,11 +646,11 @@ impl AudioDevice for ChorusDevice {
         self.high_pass = [OnePole::new(); 2];
         self.low_pass = [OnePole::new(); 2];
         self.bbd = [OnePole::new(); 2];
-        self.fb_state = [0.0; 2];
         self.lfo.phase = 0.0;
         self.vibrato_phase = 0.0;
         self.prev_mode = None;
         self.fade = 1.0;
+        self.invalidate_coefficients();
         self.snap_all();
     }
 
@@ -536,6 +663,9 @@ impl AudioDevice for ChorusDevice {
         self.low_pass = [OnePole::new(); 2];
         self.bbd = [OnePole::new(); 2];
         self.bbd_g = one_pole_g(BBD_HZ, sample_rate);
+        self.inv_sample_rate = 1.0 / sample_rate as f64;
+        self.frames_per_ms = sample_rate / 1000.0;
+        self.invalidate_coefficients();
         self.fade_step = 1.0 / (MODE_FADE_MS * 0.001 * sample_rate).max(1.0);
         self.delay_ms.set_ramp(sample_rate, DELAY_RAMP_MS);
         for param in [
@@ -864,20 +994,33 @@ mod tests {
     #[ignore = "CPU measurement: cargo test --release cpu_chorus -- --ignored --nocapture"]
     fn cpu_chorus() {
         const FRAMES: usize = 256;
+        const SECONDS: usize = 10;
+        const REPEATS: usize = 5;
         let mut device = device();
-        set_real(&mut device, MODE, 2.0); // Ensemble: three voices, the worst case.
         let mut output = vec![0.0; FRAMES * 2];
-        let input = stereo(&vec![0.1; FRAMES]);
-        let blocks = (SR as usize * 10) / FRAMES;
-        let start = std::time::Instant::now();
-        for _ in 0..blocks {
-            device.process_block(&input, &mut output, FRAMES);
+        // A quiet sine keeps the filters and the delay lines busy without clipping.
+        let input = stereo(&sine(220.0, SR, FRAMES, 0.1));
+        let blocks = (SR as usize * SECONDS) / FRAMES;
+        for (index, name) in [(0.0, "Classic"), (1.0, "Dimension"), (2.0, "Ensemble")] {
+            set_real(&mut device, MODE, index);
+            device.prev_mode = None;
+            device.fade = 1.0;
+            let mut best = f64::MAX;
+            for _ in 0..REPEATS {
+                // Warm up, so the first block's cache misses don't count.
+                for _ in 0..64 {
+                    device.process_block(&input, &mut output, FRAMES);
+                }
+                let start = std::time::Instant::now();
+                for _ in 0..blocks {
+                    device.process_block(&input, &mut output, FRAMES);
+                }
+                best = best.min(start.elapsed().as_secs_f64());
+            }
+            println!(
+                "{name}: {SECONDS} s rendered in {best:.3} s: {:.2} % of one core (best of {REPEATS})",
+                best / SECONDS as f64 * 100.0
+            );
         }
-        let elapsed = start.elapsed().as_secs_f64();
-        println!(
-            "10 s rendered in {:.3} s: {:.2} % of one core",
-            elapsed,
-            elapsed / 10.0 * 100.0
-        );
     }
 }
