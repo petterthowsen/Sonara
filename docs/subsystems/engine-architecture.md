@@ -70,7 +70,11 @@ Engine/src/
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
     devices/
       mod.rs             # AudioDevice trait (incl. mod_sources/set_mod_route), parameter types, DeviceSleepState
-      factory.rs         # DeviceFactory: builds devices by type/ID, built-in device metadata
+      factory.rs         # DeviceFactory: builds devices by type/ID, built-in device metadata;
+                         # EFFECT_IDS + create_effect for the built-in effects (spec 012)
+      param_table.rs     # Static parameter tables (ParamSpec, flatten, slot_table, ParamValues)
+      effect.rs          # Shared effect helpers: pass_through, TailSleep (tail-aware sleep)
+      effect_conformance.rs # Tests every EFFECT_IDS entry must pass
       polysynth/         # mod.rs (device, voice pool, stealing), voice.rs (per-voice DSP + modulation),
                          # params.rs (parameter table, slots), modulation.rs (sources, route matrix)
       delay.rs           # Delay effect device
@@ -79,10 +83,21 @@ Engine/src/
       clap_host/         # CLAP subprocess adapter (in-use) + legacy in-process adapter.rs (unused)
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
+      delay_line.rs      # Ring buffer with linear/Hermite fractional reads
+      denormal.rs        # flush_denormals_to_zero (called at the top of every callback)
+      env_follower.rs    # Peak/RMS envelope follower (attack/release)
       envelope.rs
+      gain.rs            # dB helpers, DcBlocker, dry/wet Mix laws
+      lfo.rs             # Phase-accumulator LFO shared by PolySynth and effects
+      linear_svf.rs      # Linear SVF: EQ responses (bell, shelves, cuts, notch) + exact magnitude_db
+      one_pole.rs        # TPT one-pole: LP/HP (6 dB/oct) and all-pass (phaser stage)
       oscillator.rs      # PolyBLEP oscillators; process_block_ramped glides the pitch across a block
+      oversampler.rs     # 2x/4x polyphase IIR half-band oversampling (no reported latency)
       smoothing.rs       # SmoothedParam
-      svf.rs             # ZDF state-variable filter, drive, resonance compensation
+      spectrum.rs        # Windowed FFT → smoothed dBFS spectrum (analyser, EQ)
+      svf.rs             # ZDF state-variable filter, drive, resonance compensation (synth filter)
+      tempo_sync.rs      # Shared sync choice list (Off, 4/1 … 1/32 straight/dotted/triplet)
+      test_util.rs       # Test-only signals and measurements (tone amplitude, spectrum, T60)
       simd.rs
     ipc/
       mod.rs             # Shared-memory IPC for out-of-process plugin hosting
@@ -129,7 +144,8 @@ Godot/              # Godot 4.7 UI App
 
 ### Device Sleep
 - Each device carries a `DeviceSleepState` (`devices/mod.rs`): after `DEFAULT_SLEEP_TIMEOUT` (3 s) with no signal above `SLEEP_THRESHOLD` and no MIDI/parameter activity, the device sleeps and `Channel::process_device_chain` skips its processing.
-- MIDI input wakes a device immediately (`mark_activity`).
+- MIDI input wakes a device immediately (`mark_activity`), and so does audio reaching a sleeping device's input (`container::run_chain` checks the input before skipping it).
+- Effects with tails use `effect::TailSleep`: they sleep only after 3 s plus their tail of quiet, and never while the tail is infinite (freeze, feedback ≥ 100 %).
 - Sleep transitions become `EngineStatus::DeviceSleepStatus`, forwarded as `/channel/{id}/device/{pos}/sleep [0|1]`.
 
 ### Built-in Device Advertisement

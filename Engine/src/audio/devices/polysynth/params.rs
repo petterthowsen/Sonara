@@ -7,9 +7,11 @@
 //! Every parameter also has a *slot*: its index in [`SPECS`]. Modulation routes and the
 //! normalized value array are indexed by slot.
 
-use super::super::{
-    enum_to_norm, norm_to_enum, norm_to_real, real_to_norm, ParamId, ParamInfo, ParamType,
-};
+use super::super::param_table::{flatten, linear, slot_table, spec, Kind, ParamSpec, ParamTable};
+use super::super::{ParamId, ParamInfo};
+pub use crate::audio::dsp::lfo::LfoShape;
+use crate::audio::dsp::lfo::LFO_SHAPES;
+use crate::audio::dsp::tempo_sync::{sync_beats, SYNC_CHOICES};
 use crate::audio::dsp::FilterMode;
 
 pub const OSC1: ParamId = 0;
@@ -96,15 +98,6 @@ const FILTER_MODES: [FilterMode; 4] = [
     FilterMode::Hp12,
     FilterMode::Bp12,
 ];
-const LFO_SHAPES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "S&H"];
-/// Off, then each division straight, dotted and triplet. Lengths are in `SYNC_BEATS`.
-const LFO_SYNCS: &[&str] = &[
-    "Off", "4/1", "4/1.", "4/1T", "2/1", "2/1.", "2/1T", "1/1", "1/1.", "1/1T", "1/2", "1/2.",
-    "1/2T", "1/4", "1/4.", "1/4T", "1/8", "1/8.", "1/8T", "1/16", "1/16.", "1/16T", "1/32",
-    "1/32.", "1/32T",
-];
-/// Straight division lengths in quarter-note beats, in `LFO_SYNCS` order.
-const SYNC_DIVISIONS: [f64; 8] = [16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125];
 const LFO_RETRIGGERS: &[&str] = &["Free", "Note"];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 const POLYPHONY_COUNTS: &[&str] = &[
@@ -114,138 +107,12 @@ const POLYPHONY_COUNTS: &[&str] = &[
     "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64",
 ];
 
-#[derive(Clone, Copy)]
-pub enum Kind {
-    Float {
-        min: f32,
-        max: f32,
-        log: bool,
-        skew: f32,
-    },
-    Enum(&'static [&'static str]),
-}
-
-/// One parameter's metadata. `default` is a real value, or a choice index for enums.
-#[derive(Clone, Copy)]
-pub struct ParamSpec {
-    pub id: ParamId,
-    pub name: &'static str,
-    pub module: &'static str,
-    pub unit: &'static str,
-    pub kind: Kind,
-    pub default: f32,
-}
-
-impl ParamSpec {
-    fn to_norm(&self, real: f32) -> f32 {
-        match self.kind {
-            Kind::Float {
-                min,
-                max,
-                log,
-                skew,
-            } => real_to_norm(real, min, max, log, skew),
-            Kind::Enum(values) => enum_to_norm(real as usize, values.len()),
-        }
-    }
-
-    /// Real value for a normalized one (a choice index for enums).
-    fn to_real(&self, norm: f32) -> f32 {
-        match self.kind {
-            Kind::Float {
-                min,
-                max,
-                log,
-                skew,
-            } => norm_to_real(norm, min, max, log, skew),
-            Kind::Enum(values) => norm_to_enum(norm, values.len()) as f32,
-        }
-    }
-
-    /// Canonical normalized value (enums snap to their nearest choice).
-    fn canonical(&self, norm: f32) -> f32 {
-        match self.kind {
-            Kind::Float { .. } => norm.clamp(0.0, 1.0),
-            Kind::Enum(values) => enum_to_norm(norm_to_enum(norm, values.len()), values.len()),
-        }
-    }
-
-    /// Floats are modulation destinations; enums are not.
-    pub fn is_modulatable(&self) -> bool {
-        matches!(self.kind, Kind::Float { .. })
-    }
-
-    fn info(&self) -> ParamInfo {
-        let (min, max, log, skew, param_type, enum_values) = match self.kind {
-            Kind::Float {
-                min,
-                max,
-                log,
-                skew,
-            } => (min, max, log, skew, ParamType::Float, Vec::new()),
-            Kind::Enum(values) => (
-                0.0,
-                1.0,
-                false,
-                1.0,
-                ParamType::Enum,
-                values.iter().map(|v| v.to_string()).collect(),
-            ),
-        };
-        ParamInfo {
-            id: self.id,
-            name: self.name.to_string(),
-            unit: self.unit.to_string(),
-            min,
-            max,
-            default: self.default,
-            is_automation_safe: true,
-            param_type,
-            syncable: true,
-            enum_values,
-            is_hidden: false,
-            is_read_only: false,
-            is_bypass: false,
-            module: self.module.to_string(),
-            is_logarithmic: log,
-            skew,
-        }
-    }
-}
-
-const fn linear(min: f32, max: f32) -> Kind {
-    Kind::Float {
-        min,
-        max,
-        log: false,
-        skew: 1.0,
-    }
-}
-
 const TIME: Kind = Kind::Float {
     min: TIME_MIN,
     max: TIME_MAX,
     log: false,
     skew: TIME_SKEW,
 };
-
-const fn spec(
-    id: ParamId,
-    name: &'static str,
-    module: &'static str,
-    unit: &'static str,
-    kind: Kind,
-    default: f32,
-) -> ParamSpec {
-    ParamSpec {
-        id,
-        name,
-        module,
-        unit,
-        kind,
-        default,
-    }
-}
 
 macro_rules! osc_specs {
     ($base:expr, $module:literal, $wave:expr, $fine:expr, $level:expr) => {
@@ -394,7 +261,7 @@ macro_rules! lfo_specs {
                 concat!($module, " Sync"),
                 $module,
                 "",
-                Kind::Enum(LFO_SYNCS),
+                Kind::Enum(SYNC_CHOICES),
                 0.0,
             ),
             spec(
@@ -443,7 +310,8 @@ const VOICE_OUTPUT_SPECS: [ParamSpec; 5] = [
 /// Number of real parameters.
 pub const PARAM_COUNT: usize = 9 + 9 + 7 + 4 + 4 + 4 + 4 + 5;
 
-const PARTS: [&[ParamSpec]; 8] = [
+/// Every parameter, in display order. A parameter's index here is its slot.
+pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
     &OSC1_SPECS,
     &OSC2_SPECS,
     &NOISE_FILTER_SPECS,
@@ -452,49 +320,19 @@ const PARTS: [&[ParamSpec]; 8] = [
     &LFO1_SPECS,
     &LFO2_SPECS,
     &VOICE_OUTPUT_SPECS,
-];
-
-/// Every parameter, in display order. A parameter's index here is its slot.
-pub const SPECS: [ParamSpec; PARAM_COUNT] = {
-    let mut out = [OSC1_SPECS[0]; PARAM_COUNT];
-    let mut n = 0;
-    let mut p = 0;
-    while p < PARTS.len() {
-        let mut i = 0;
-        while i < PARTS[p].len() {
-            out[n] = PARTS[p][i];
-            n += 1;
-            i += 1;
-        }
-        p += 1;
-    }
-    assert!(n == PARAM_COUNT);
-    out
-};
+]);
 
 /// IDs are all below this.
 const ID_SPACE: usize = 100;
-const NO_SLOT: u8 = u8::MAX;
 
-/// Slot of each ID, or `NO_SLOT`.
-const SLOT_OF: [u8; ID_SPACE] = {
-    let mut table = [NO_SLOT; ID_SPACE];
-    let mut i = 0;
-    while i < PARAM_COUNT {
-        let id = SPECS[i].id as usize;
-        assert!(id < ID_SPACE && table[id] == NO_SLOT);
-        table[id] = i as u8;
-        i += 1;
-    }
-    table
-};
+/// Slot of each ID, or `param_table::NO_SLOT`.
+const SLOT_OF: [u8; ID_SPACE] = slot_table(&SPECS);
+
+pub static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOT_OF);
 
 /// Slot of parameter `id`, if it exists.
 pub fn slot(id: ParamId) -> Option<usize> {
-    match SLOT_OF.get(id as usize) {
-        Some(&s) if s != NO_SLOT => Some(s as usize),
-        _ => None,
-    }
+    TABLE.slot(id)
 }
 
 /// Slot of a parameter known to exist (for the constants above).
@@ -503,7 +341,7 @@ pub const fn slot_of(id: ParamId) -> usize {
 }
 
 pub fn param_infos() -> Vec<ParamInfo> {
-    SPECS.iter().map(ParamSpec::info).collect()
+    TABLE.infos()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -511,15 +349,6 @@ pub enum VoiceMode {
     Poly,
     Mono,
     Legato,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LfoShape {
-    Sine,
-    Triangle,
-    Saw,
-    Square,
-    SampleHold,
 }
 
 /// One oscillator's decoded settings.
@@ -714,27 +543,9 @@ impl SynthParams {
         if block == LFO1 || block == LFO2 {
             let lfo = &mut self.lfo[((block - LFO1) / 10) as usize];
             match id % 10 {
-                LFO_SHAPE => {
-                    lfo.shape = match real as usize {
-                        0 => LfoShape::Sine,
-                        1 => LfoShape::Triangle,
-                        2 => LfoShape::Saw,
-                        3 => LfoShape::Square,
-                        _ => LfoShape::SampleHold,
-                    }
-                }
+                LFO_SHAPE => lfo.shape = LfoShape::from_index(real as usize),
                 LFO_RATE => lfo.rate_hz = real,
-                LFO_SYNC => {
-                    let index = real as usize;
-                    lfo.sync_beats = (index > 0).then(|| {
-                        let division = SYNC_DIVISIONS[(index - 1) / 3];
-                        match (index - 1) % 3 {
-                            0 => division,
-                            1 => division * 1.5,
-                            _ => division * 2.0 / 3.0,
-                        }
-                    });
-                }
+                LFO_SYNC => lfo.sync_beats = sync_beats(real as usize),
                 _ => lfo.retrigger = real as usize == 1,
             }
             return Changed::Other;

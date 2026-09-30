@@ -83,9 +83,12 @@ impl DeviceFactory {
         channel_id: ChannelId,
         device_path: &DevicePath,
     ) -> Option<Box<dyn AudioDevice>> {
+        if let Some(device) = create_effect(device_id, self.sample_rate, self.max_buffer_size) {
+            info!("Created built-in effect {}", device_id);
+            return Some(device);
+        }
         let device: Box<dyn AudioDevice> = match device_id {
             "sonara.builtin.polysynth" => Box::new(PolySynthDevice::new(self.sample_rate)),
-            "sonara.builtin.delay" => Box::new(DelayDevice::new(self.sample_rate, 5000.0)),
             "sonara.builtin.sfizz" => Box::new(SfizzDevice::new(
                 self.sample_rate,
                 self.max_buffer_size,
@@ -160,9 +163,8 @@ impl DeviceFactory {
     /// Describe every built-in device (ports, parameters, file support) for Godot's browser.
     pub fn builtin_device_infos(&self) -> Vec<EngineStatus> {
         // TODO: Simplify this to avoid creating temporary instances
-        let devices: [Box<dyn AudioDevice>; 8] = [
+        let others: [Box<dyn AudioDevice>; 7] = [
             Box::new(PolySynthDevice::new(self.sample_rate)),
-            Box::new(DelayDevice::new(self.sample_rate, 5000.0)),
             Box::new(SpectrumAnalyzerDevice::new(self.sample_rate)),
             Box::new(SfizzDevice::new_for_metadata(self.sample_rate)),
             Box::new(ChainDevice::new(self.max_buffer_size)),
@@ -170,11 +172,34 @@ impl DeviceFactory {
             Box::new(SamplerDevice::new_for_metadata()),
             Box::new(DrumMachineDevice::new(self.max_buffer_size)),
         ];
-        devices
+        let effects = EFFECT_IDS
             .iter()
+            .filter_map(|id| create_effect(id, self.sample_rate, self.max_buffer_size));
+        others
+            .into_iter()
+            .chain(effects)
             .map(|device| builtin_device_info(device.as_ref()))
             .collect()
     }
+}
+
+/// Built-in audio effects (spec 012): each is made from the sample rate and block size alone.
+/// The effect conformance test runs over this list, so a new effect is covered by adding it here.
+pub const EFFECT_IDS: &[&str] = &["sonara.builtin.delay"];
+
+/// Create a built-in effect from [`EFFECT_IDS`], prepared for `sample_rate` and blocks of up to
+/// `max_frames`. Command thread only (allocates). None for any other ID.
+pub fn create_effect(
+    device_id: &str,
+    sample_rate: f32,
+    max_frames: usize,
+) -> Option<Box<dyn AudioDevice>> {
+    let mut device: Box<dyn AudioDevice> = match device_id {
+        "sonara.builtin.delay" => Box::new(DelayDevice::new(sample_rate, 5000.0)),
+        _ => return None,
+    };
+    device.prepare(sample_rate, max_frames);
+    Some(device)
 }
 
 /// Build the `BuiltinDeviceInfo` status for one device instance.

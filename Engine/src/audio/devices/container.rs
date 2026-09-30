@@ -469,10 +469,18 @@ pub fn run_chain(
         let (input, output) = chain_buffers(idx, buf_a, buf_b);
 
         if device.is_sleeping() {
-            let copy_len = interleaved_count.min(input.len()).min(output.len());
-            output[..copy_len].copy_from_slice(&input[..copy_len]);
-            cursor.next += 1;
-            continue;
+            // Audio reaching a sleeping device (an effect after a silence) wakes it for this
+            // block; MIDI and parameter changes wake devices elsewhere.
+            let count = interleaved_count.min(input.len());
+            if has_audio_signal(&input[..count]) && device.update_sleep_state(true) {
+                on_sleep_change(idx, device.is_sleeping());
+            }
+            if device.is_sleeping() {
+                let copy_len = count.min(output.len());
+                output[..copy_len].copy_from_slice(&input[..copy_len]);
+                cursor.next += 1;
+                continue;
+            }
         }
 
         let begun = !serial && {
@@ -910,6 +918,74 @@ mod tests {
         for sample in &out[..8] {
             assert!((sample - 2.0).abs() < 1e-6, "got {}", sample);
         }
+    }
+
+    /// Doubles its input; sleeps after a block without activity.
+    struct SleepyGain {
+        sleeping: bool,
+    }
+
+    impl AudioDevice for SleepyGain {
+        fn process_block(&mut self, inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            for i in 0..sample_count * 2 {
+                outputs[i] = inputs[i] * 2.0;
+            }
+        }
+        fn is_sleeping(&self) -> bool {
+            self.sleeping
+        }
+        fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
+            let changed = self.sleeping == has_audio_activity;
+            self.sleeping = !has_audio_activity;
+            changed
+        }
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.sleepy"
+        }
+        fn device_name(&self) -> &str {
+            "Sleepy"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn audio_reaching_a_sleeping_effect_wakes_it_in_the_same_block() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(SleepyGain { sleeping: true })];
+        let mut buf_a = vec![0.25f32; 8];
+        let mut buf_b = vec![0.0f32; 8];
+        let mut changes = Vec::new();
+        let result_in_b = process_serial_chain(
+            &mut devices,
+            &mut buf_a,
+            &mut buf_b,
+            4,
+            true,
+            |idx, sleeping| changes.push((idx, sleeping)),
+        );
+        let out = if result_in_b { &buf_b } else { &buf_a };
+        assert_eq!(out[0], 0.5, "processed, not passed through");
+        assert_eq!(changes, vec![(0, false)]);
+
+        // Silence keeps it asleep and passes through.
+        let mut buf_a = vec![0.0f32; 8];
+        process_serial_chain(&mut devices, &mut buf_a, &mut buf_b, 4, false, |_, _| {});
+        assert!(devices[0].is_sleeping());
     }
 
     #[test]

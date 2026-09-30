@@ -58,10 +58,11 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 
 ### Built-in Devices
 
-- [ ] Reverb
-- [ ] EQ: Parametric, built-in spectrum
+- [ ] Effects suite (spec 012, `docs/specs/012-builtin-effects/plan.md`): Delay v2, EQ, Compressor, Filter, Chorus, Phaser, Reverb, external sidechain
+  - [ ] Reverb
+  - [ ] EQ: Parametric, built-in spectrum
+  - [ ] Compressor
 - [ ] Limiter
-- [ ] Compressor
 - [ ] Saturator
 - [ ] L/R and M/S modes
 
