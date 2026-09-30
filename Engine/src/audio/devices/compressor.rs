@@ -67,7 +67,14 @@ const DYNAMICS: [ParamSpec; 4] = [
         -18.0,
     ),
     // Skewed so the low ratios get most of the travel; the top reads infinity in the view.
-    spec(RATIO, "Ratio", "Dynamics", "", skewed(1.0, RATIO_MAX, 2.0), 4.0),
+    spec(
+        RATIO,
+        "Ratio",
+        "Dynamics",
+        "",
+        skewed(1.0, RATIO_MAX, 2.0),
+        4.0,
+    ),
     spec(KNEE, "Knee", "Dynamics", "dB", linear(0.0, 24.0), 6.0),
     spec(RANGE, "Range", "Dynamics", "dB", linear(0.0, 60.0), 60.0),
 ];
@@ -149,6 +156,7 @@ const DATA_RATE_HZ: f32 = 20.0;
 
 /// Gain reduction in dB for a detector level, with the Giannoulis/Massberg/Reiss soft knee.
 /// `ratio` is `N:1`, `knee_db` the knee width and `range_db` the cap on the reduction.
+#[inline]
 pub fn gain_reduction_db(
     level_db: f32,
     threshold_db: f32,
@@ -228,12 +236,15 @@ fn fast_exp2(x: f32) -> f32 {
     if x >= 127.0 {
         return f32::MAX;
     }
-    let n = x.floor();
+    // `floor` is a library call without SSE4.1, so bias into positive territory where the
+    // integer cast truncates the same way.
+    let n = ((x + 128.0) as i32 - 128) as f32;
     let f = x - n;
     let poly = 1.0
         + f * (0.693_147_2
             + f * (0.240_226_5
-                + f * (0.055_504_11 + f * (0.009_618_129 + f * (0.001_333_355_8 + f * 0.000_154_035_3)))));
+                + f * (0.055_504_11
+                    + f * (0.009_618_129 + f * (0.001_333_355_8 + f * 0.000_154_035_3)))));
     let scale = f32::from_bits(((n as i32 + 127) as u32) << 23);
     poly * scale
 }
@@ -360,7 +371,11 @@ impl Ramp {
     /// The value inside the chunk at position `t` in `0..=1`.
     #[inline]
     fn at(&self, t: f32) -> f32 {
-        self.start + (self.end - self.start) * t
+        if self.start == self.end {
+            self.end
+        } else {
+            self.start + (self.end - self.start) * t
+        }
     }
 
     /// Jump to the target (initialisation, reset).
@@ -418,6 +433,14 @@ pub struct CompressorDevice {
     sc_hp: [[OnePole; 2]; 2],
     auto_blend: f32,
     prog_mem: f32,
+
+    // Per-chunk flags and values, so a bypassed feature costs nothing per sample.
+    sc_bypass: bool,
+    detect_bypass: bool,
+    prog_active: bool,
+    punch_active: bool,
+    feedback: bool,
+    auto_gain_db: f32,
 
     phase: usize,
     smooth: f32,
@@ -486,6 +509,12 @@ impl CompressorDevice {
             sc_hp: [[OnePole::new(); 2]; 2],
             auto_blend: 0.0,
             prog_mem: 0.0,
+            sc_bypass: true,
+            detect_bypass: true,
+            prog_active: false,
+            punch_active: false,
+            feedback: false,
+            auto_gain_db: 0.0,
             phase: 0,
             smooth: 0.0,
             enabled: true,
@@ -594,6 +623,26 @@ impl CompressorDevice {
         self.release_slow_coef = time_coef(release_ms * 4.0, sample_rate);
         self.det_coef = time_coef((release_ms / DETECTOR_RELEASE_RATIO).max(0.05), sample_rate);
         self.sc_g = one_pole_g(self.sc_cut_hz.end, sample_rate);
+
+        // What this chunk can skip, and the auto gain (which only moves with the chunk's
+        // threshold, ratio, knee and range).
+        let bypass = self.sc_cut_mix.start == 0.0 && self.sc_cut_mix.end == 0.0;
+        if bypass && !self.sc_bypass {
+            self.sc_hp = [[OnePole::new(); 2]; 2];
+        }
+        self.sc_bypass = bypass;
+        self.detect_bypass = self.detection_mix.start == 0.0 && self.detection_mix.end == 0.0;
+        self.prog_active = matches!(self.style, Style::Glue | Style::Opto);
+        self.punch_active = self.punch_mix.start > 0.0 || self.punch_mix.end > 0.0;
+        self.feedback = self.style.is_feedback();
+        self.auto_gain_db = 0.5
+            * gain_reduction_db(
+                0.0,
+                self.threshold.end,
+                self.ratio.end,
+                self.knee.end,
+                self.range.end,
+            );
     }
 
     /// The detection mix the style asks for: Glue leans towards RMS.
@@ -622,8 +671,10 @@ impl CompressorDevice {
                 self.det_coef * self.det_peak[channel] + (1.0 - self.det_coef) * level;
             self.det_peak[channel]
         };
-        self.det_ms[channel] =
-            self.rms_coef * self.det_ms[channel] + (1.0 - self.rms_coef) * x * x;
+        if self.detect_bypass {
+            return lin_to_db(peak);
+        }
+        self.det_ms[channel] = self.rms_coef * self.det_ms[channel] + (1.0 - self.rms_coef) * x * x;
         let rms = self.det_ms[channel].sqrt();
         lin_to_db(peak + mix * (rms - peak))
     }
@@ -636,25 +687,25 @@ impl CompressorDevice {
         let range = self.range.at(t);
         let link = self.link.at(t);
         let mix = self.mix.at(t);
-        let punch_mix = self.punch_mix.at(t);
         let detection_mix = self.detection_mix.at(t);
-        let sc_cut_mix = self.sc_cut_mix.at(t);
         let sc_listen_mix = self.sc_listen_mix.at(t);
-        let makeup_db = self.makeup.at(t)
-            + self.auto_gain_mix.at(t) * 0.5 * gain_reduction_db(0.0, threshold, ratio, knee, range);
+        let makeup_db = self.makeup.at(t) + self.auto_gain_mix.at(t) * self.auto_gain_db;
 
         // What the detector listens to: the input, or the previous output for Punch's feedback.
-        let (mut dl, mut dr) = if self.style.is_feedback() {
+        let (mut dl, mut dr) = if self.feedback {
             (self.prev_out[0], self.prev_out[1])
         } else {
             (in_l, in_r)
         };
-        let hl = self.sc_hp[0][0].highpass(dl, self.sc_g);
-        let hl = self.sc_hp[0][1].highpass(hl, self.sc_g);
-        let hr = self.sc_hp[1][0].highpass(dr, self.sc_g);
-        let hr = self.sc_hp[1][1].highpass(hr, self.sc_g);
-        dl += sc_cut_mix * (hl - dl);
-        dr += sc_cut_mix * (hr - dr);
+        if !self.sc_bypass {
+            let sc_cut_mix = self.sc_cut_mix.at(t);
+            let hl = self.sc_hp[0][0].highpass(dl, self.sc_g);
+            let hl = self.sc_hp[0][1].highpass(hl, self.sc_g);
+            let hr = self.sc_hp[1][0].highpass(dr, self.sc_g);
+            let hr = self.sc_hp[1][1].highpass(hr, self.sc_g);
+            dl += sc_cut_mix * (hl - dl);
+            dr += sc_cut_mix * (hr - dr);
+        }
 
         let (al, ar) = match self.channels {
             Channels::Stereo => (dl, dr),
@@ -677,26 +728,35 @@ impl CompressorDevice {
         let target_r = gain_reduction_db(lvl_r, threshold, ratio, knee, range);
         let mean_target = (target_l + target_r) * 0.5;
 
-        self.prog_mem += (mean_target - self.prog_mem) * self.prog_coef;
-        if mean_target > 0.5 * (self.gain[0] + self.gain[1]) {
-            self.auto_blend += (1.0 - self.auto_blend) * self.auto_attack_coef;
-        } else {
-            self.auto_blend += (0.0 - self.auto_blend) * self.auto_release_coef;
+        if self.prog_active {
+            self.prog_mem += (mean_target - self.prog_mem) * self.prog_coef;
         }
         let release_coef = if self.auto_release {
-            self.release_slow_coef + (self.release_fast_coef - self.release_slow_coef) * self.auto_blend
+            if mean_target > 0.5 * (self.gain[0] + self.gain[1]) {
+                self.auto_blend += (1.0 - self.auto_blend) * self.auto_attack_coef;
+            } else {
+                self.auto_blend += (0.0 - self.auto_blend) * self.auto_release_coef;
+            }
+            self.release_slow_coef
+                + (self.release_fast_coef - self.release_slow_coef) * self.auto_blend
         } else {
             self.release_coef
         };
-        for (channel, target) in [(0usize, target_l), (1usize, target_r)] {
-            let current = self.gain[channel];
-            let coef = if target > current {
-                self.attack_coef
-            } else {
-                release_coef
-            };
-            self.gain[channel] = current + (1.0 - coef) * (target - current);
-        }
+        let attack = self.attack_coef;
+        let current = self.gain[0];
+        let coef = if target_l > current {
+            attack
+        } else {
+            release_coef
+        };
+        self.gain[0] = current + (1.0 - coef) * (target_l - current);
+        let current = self.gain[1];
+        let coef = if target_r > current {
+            attack
+        } else {
+            release_coef
+        };
+        self.gain[1] = current + (1.0 - coef) * (target_r - current);
 
         let gain_l = gain_db_to_lin(makeup_db - self.gain[0]);
         let gain_r = gain_db_to_lin(makeup_db - self.gain[1]);
@@ -704,9 +764,9 @@ impl CompressorDevice {
         let mut wet_r = in_r * gain_r;
 
         // Punch's mild odd-harmonic saturation, driven by how hard it is working.
-        if punch_mix > 0.0 {
-            let drive =
-                1.0 + PUNCH_DRIVE * (self.gain[0].max(self.gain[1]) / 6.0).clamp(0.0, 1.0);
+        if self.punch_active {
+            let punch_mix = self.punch_mix.at(t);
+            let drive = 1.0 + PUNCH_DRIVE * (self.gain[0].max(self.gain[1]) / 6.0).clamp(0.0, 1.0);
             let sat_l = (drive * wet_l).tanh() / drive;
             let sat_r = (drive * wet_r).tanh() / drive;
             wet_l += punch_mix * (sat_l - wet_l);
@@ -771,10 +831,12 @@ impl CompressorDevice {
         self.link.set_target(real(STEREO_LINK) * 0.01);
         let sc_cut = real(SC_LOW_CUT);
         self.sc_cut_hz.set_target(sc_cut.max(20.0));
-        self.sc_cut_mix.set_target(if sc_cut > 0.0 { 1.0 } else { 0.0 });
+        self.sc_cut_mix
+            .set_target(if sc_cut > 0.0 { 1.0 } else { 0.0 });
         self.punch_mix
             .set_target(if self.style == Style::Punch { 1.0 } else { 0.0 });
-        self.detection_mix.set_target(self.effective_detection_mix());
+        self.detection_mix
+            .set_target(self.effective_detection_mix());
         self.sc_listen_mix
             .set_target(if self.sc_listen { 1.0 } else { 0.0 });
         self.auto_gain_mix
@@ -1043,7 +1105,12 @@ mod tests {
         set(&mut d, ATTACK, 50.0);
         set(&mut d, RELEASE, 200.0);
         let quiet = stereo(&sine(1_000.0, SR, SR as usize, 10f32.powf(-30.0 / 20.0)));
-        let loud = stereo(&sine(1_000.0, SR, SR as usize / 2, 10f32.powf(-10.0 / 20.0)));
+        let loud = stereo(&sine(
+            1_000.0,
+            SR,
+            SR as usize / 2,
+            10f32.powf(-10.0 / 20.0),
+        ));
         render(&mut d, &quiet, &[512]);
         let trace = gain_trace(&mut d, &loud, 1_000.0, 10f32.powf(-10.0 / 20.0));
         let final_gr = -20.0 * trace[trace.len() - 1].log10();
@@ -1081,7 +1148,11 @@ mod tests {
         let mut previous = 0.0f32;
         for (i, &gain) in trace.iter().enumerate() {
             let gr = -20.0 * gain.max(1e-12).log10();
-            let hit = if rising { gr >= target_gr } else { gr <= target_gr };
+            let hit = if rising {
+                gr >= target_gr
+            } else {
+                gr <= target_gr
+            };
             if hit {
                 // Linear interpolation between the previous and this window.
                 let span = gr - previous;
@@ -1127,8 +1198,10 @@ mod tests {
         let input = crate::audio::dsp::test_util::interleave(&loud, &quiet);
         let out = render(&mut d, &input, &[512]);
         let tail = SR as usize / 2;
-        let gain_l = tone_amplitude(&left(&out)[tail..], 1_000.0, SR) / tone_amplitude(&loud[tail..], 1_000.0, SR);
-        let gain_r = tone_amplitude(&right(&out)[tail..], 1_000.0, SR) / tone_amplitude(&quiet[tail..], 1_000.0, SR);
+        let gain_l = tone_amplitude(&left(&out)[tail..], 1_000.0, SR)
+            / tone_amplitude(&loud[tail..], 1_000.0, SR);
+        let gain_r = tone_amplitude(&right(&out)[tail..], 1_000.0, SR)
+            / tone_amplitude(&quiet[tail..], 1_000.0, SR);
         assert!(
             (gain_l - gain_r).abs() < 1e-3,
             "L gain {gain_l:.5}, R gain {gain_r:.5}"
@@ -1159,7 +1232,10 @@ mod tests {
         let mut d = device();
         set(&mut d, SC_LISTEN, 1.0);
         let unity = steady_out_db(&mut d, 1_000.0, -12.0, 1.0);
-        assert!((unity + 12.0).abs() < 0.2, "SC Listen is unity: {unity:.3} dBFS");
+        assert!(
+            (unity + 12.0).abs() < 0.2,
+            "SC Listen is unity: {unity:.3} dBFS"
+        );
         set(&mut d, SC_LOW_CUT, 200.0);
         let cut = steady_out_db(&mut d, 60.0, -12.0, 2.0);
         assert!(cut < -12.0, "the 60 Hz tone is filtered: {cut:.2} dB");
@@ -1242,8 +1318,13 @@ mod tests {
                     .chunks_exact(4)
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
-                assert!(values.chunks_exact(3).all(|r| r.iter().all(|v| v.is_finite())));
-                assert!(values.chunks_exact(3).any(|r| r[2] > 1.0), "shows reduction");
+                assert!(values
+                    .chunks_exact(3)
+                    .all(|r| r.iter().all(|v| v.is_finite())));
+                assert!(
+                    values.chunks_exact(3).any(|r| r[2] > 1.0),
+                    "shows reduction"
+                );
                 records += count;
                 blobs += 1;
             }
@@ -1282,7 +1363,10 @@ mod tests {
         set(&mut d, KNEE, 0.0);
         set(&mut d, AUTO_GAIN, 0.0);
         let got = steady_out_db(&mut d, 1_000.0, 0.0, 3.0);
-        assert!((got + 3.0).abs() < 0.3, "capped at {got:.2} dB of reduction");
+        assert!(
+            (got + 3.0).abs() < 0.3,
+            "capped at {got:.2} dB of reduction"
+        );
     }
 
     #[test]
