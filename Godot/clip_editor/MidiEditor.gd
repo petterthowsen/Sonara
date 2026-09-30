@@ -915,7 +915,10 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 		if not active_editor:
 			return
 		note_editor_pos = active_editor.make_canvas_position_local(mevent.global_position)
-		clicked_note = active_editor.visual_for(hit.instance, hit.data)
+		# The visual under the mouse (a loop repeat, say), else the note's own.
+		clicked_note = active_editor.get_note_at_position(note_editor_pos)
+		if not clicked_note or clicked_note.midi_note_data != hit.data:
+			clicked_note = active_editor.visual_for(hit.instance, hit.data)
 		if not clicked_note:
 			accept_event()
 			return
@@ -929,7 +932,7 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 			_ctrl_press_note = clicked_note
 			_ctrl_press_pos = mevent.global_position
 			accept_event()
-		elif clicked_note._is_over_resize_handle(clicked_note.get_local_mouse_position()):
+		elif clicked_note._is_over_resize_handle(note_editor_pos - clicked_note.position):
 			active_editor._on_resize_started(clicked_note, note_editor_pos)
 			active_editor.interaction_mode = NoteEditor.InteractionMode.RESIZING
 			accept_event()

@@ -103,33 +103,38 @@ func _draw_midi():
 	var lane_count := clampi(int(size.y / min_note_height), 1, pitch_count)
 	var note_height := size.y / float(lane_count)
 
-	var clip_length_ticks = clip_instance.duration_ticks
-	var clip_offset = clip_instance.clip_offset
-	var visible_start = clip_offset
-	var visible_end = clip_offset + clip_length_ticks
-	if _culling:
-		if _window.y <= _window.x:
-			return
-		visible_start = clip_offset + _window.x
-		visible_end = clip_offset + mini(_window.y, clip_length_ticks)
-
-	for note: MidiNoteData in clip.midi_notes:
-		var note_end = note.start_tick + note.duration_ticks
-		if note_end <= visible_start or note.start_tick >= visible_end:
+	var clip_length_ticks := clip_instance.duration_ticks
+	# Each segment is one contiguous run of content; a looped clip has one per pass.
+	for segment: Vector3i in clip_instance.get_loop_segments():
+		var seg_start := segment.x
+		var seg_end := segment.y
+		if _culling and (seg_end <= _window.x or seg_start >= _window.y):
 			continue
+		var content_start := segment.z
+		var content_end := content_start + (seg_end - seg_start)
+		var visible_start := content_start
+		var visible_end := content_end
+		if _culling:
+			if _window.y <= _window.x:
+				return
+			visible_start = content_start + maxi(0, _window.x - seg_start)
+			visible_end = content_start + mini(_window.y, seg_end) - seg_start
 
-		var note_local_start = note.start_tick - clip_offset
-		var note_local_end = note_end - clip_offset
-		var draw_start = max(note_local_start, 0)
-		var draw_end = min(note_local_end, clip_length_ticks)
-		var draw_duration = draw_end - draw_start
+		for note: MidiNoteData in clip.midi_notes:
+			var note_end = note.start_tick + note.duration_ticks
+			if note_end <= visible_start or note.start_tick >= visible_end:
+				continue
 
-		var x = remap(draw_start, 0, clip_length_ticks, 0, size.x)
-		var w = remap(draw_duration, 0, clip_length_ticks, 0, size.x)
-		var y = (highest - note.note) * note_height
-		y = clampf(y, 0.0, size.y - note_height)
+			var draw_start = seg_start + maxi(note.start_tick - content_start, 0)
+			var draw_end = seg_start + mini(note_end - content_start, seg_end - seg_start)
+			var draw_duration = draw_end - draw_start
 
-		draw_rect(Rect2(x, y, w, note_height), note_color, true, -1.0, true)
+			var x = remap(draw_start, 0, clip_length_ticks, 0, size.x)
+			var w = remap(draw_duration, 0, clip_length_ticks, 0, size.x)
+			var y = (highest - note.note) * note_height
+			y = clampf(y, 0.0, size.y - note_height)
+
+			draw_rect(Rect2(x, y, w, note_height), note_color, true, -1.0, true)
 
 
 ## Expand [lowest, highest] to at least one octave, centered, clamped to 0–127.

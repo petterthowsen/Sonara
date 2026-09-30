@@ -857,7 +857,11 @@ func _add_instance(p: Dictionary, clip_json: Dictionary, offset_ticks: int) -> v
 		inst["loop_start_ticks"] = loop_start
 		inst["loop_length_ticks"] = maxi(1, loop_end - loop_start)
 	p["track"]["clip_instances"].append(inst)
-	clip_json["content_length_ticks"] = maxi(int(clip_json["content_length_ticks"]), int(inst["clip_offset"]) + int(inst["duration_ticks"]))
+	# A looped instance shows the loop over and over, so the content ends at the loop end.
+	var shown_end := int(inst["clip_offset"]) + int(inst["duration_ticks"])
+	if inst.get("loop_enabled", false):
+		shown_end = mini(shown_end, int(inst["loop_start_ticks"]) + int(inst["loop_length_ticks"]))
+	clip_json["content_length_ticks"] = maxi(int(clip_json["content_length_ticks"]), shown_end)
 
 
 # ---- MIDI ---------------------------------------------------------------

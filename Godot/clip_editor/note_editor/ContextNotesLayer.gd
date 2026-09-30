@@ -315,6 +315,8 @@ func _draw() -> void:
 			if ci.get_end_ticks() < first_tick or ci.start_ticks > last_tick:
 				continue
 			_draw_instance(ci, fills, alpha, first_tick, last_tick, top, bottom)
+			if ci.loop_enabled:
+				_draw_loop_repeats(ci, fills, alpha, first_tick, last_tick, top, bottom)
 
 
 func _draw_instance(ci: ClipInstance, fills: PackedColorArray, alpha: float,
@@ -338,6 +340,38 @@ func _draw_instance(ci: ClipInstance, fills: PackedColorArray, alpha: float,
 		var color := fills[_shade_of(nd.velocity)]
 		color.a = alpha
 		draw_rect(rect, color)
+
+
+## The passes after the first of a looped instance: the notes starting in the loop region
+## again, cut off where the loop wraps (the engine ends them there).
+func _draw_loop_repeats(ci: ClipInstance, fills: PackedColorArray, alpha: float,
+		first_tick: int, last_tick: int, top: float, bottom: float) -> void:
+	var entry := _index_of(ci.clip)
+	var notes: Array[MidiNoteData] = entry.notes
+	var segments := ci.get_loop_segments()
+	for k in range(1, segments.size()):
+		var seg := segments[k]
+		var seg_song_start := ci.start_ticks + seg.x
+		var seg_song_end := ci.start_ticks + seg.y
+		if seg_song_end < first_tick:
+			continue
+		if seg_song_start > last_tick:
+			break
+		var content_start := seg.z
+		var content_end := content_start + (seg.y - seg.x)
+		# A pass only plays the notes that start inside it.
+		var i := _first_at_or_after(notes, content_start)
+		while i < notes.size():
+			var nd := notes[i]
+			i += 1
+			if nd.start_tick >= content_end:
+				break
+			var rect := NotePlacement.repeat_rect(nd, ci, seg, layout, grid_helper)
+			if not rect.has_area() or rect.end.y < top or rect.position.y > bottom:
+				continue
+			var color := fills[_shade_of(nd.velocity)]
+			color.a = alpha
+			draw_rect(rect, color)
 
 
 # ============================================================================
@@ -384,4 +418,27 @@ func _note_at_on_track(t: Track, local_pos: Vector2, tick: int, pitch: int) -> D
 				continue
 			if NotePlacement.note_rect(nd, origin, layout, grid_helper).has_point(local_pos):
 				found = {"track": t, "instance": ci, "data": nd}
+		if ci.loop_enabled and tick >= ci.start_ticks and tick < ci.get_end_ticks():
+			var repeat := _repeat_at(ci, notes, local_pos, tick, pitch)
+			if repeat:
+				found = {"track": t, "instance": ci, "data": repeat}
 	return found
+
+
+## The note whose loop repeat on `ci` is under `local_pos`, or null.
+func _repeat_at(ci: ClipInstance, notes: Array[MidiNoteData], local_pos: Vector2, tick: int, pitch: int) -> MidiNoteData:
+	var segments := ci.get_loop_segments()
+	for k in range(1, segments.size()):
+		var seg := segments[k]
+		if tick < ci.start_ticks + seg.x or tick >= ci.start_ticks + seg.y:
+			continue
+		var found: MidiNoteData = null
+		var i := _first_at_or_after(notes, seg.z)
+		var content_end := seg.z + seg.y - seg.x
+		while i < notes.size() and notes[i].start_tick < content_end:
+			var nd := notes[i]
+			i += 1
+			if nd.note == pitch and NotePlacement.repeat_rect(nd, ci, seg, layout, grid_helper).has_point(local_pos):
+				found = nd
+		return found
+	return null

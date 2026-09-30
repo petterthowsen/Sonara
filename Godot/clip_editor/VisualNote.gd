@@ -16,6 +16,11 @@ var midi_note_data: MidiNoteData = null  # Reference to data layer MidiNoteData
 ## script that names VisualNote compile them too, before the autoloads they use exist.
 var clip_instance = null
 
+## Track mode, looped instance: 0 for the note where the instance first plays it, k >= 1 for
+## its repeat in the k-th loop segment (ClipInstance.get_loop_segments). A repeat shares the
+## note's MidiNoteData, so editing it edits the note (and every other repeat of it).
+var repeat_pass: int = 0
+
 # Visual state
 var is_selected: bool = false
 var note_color: Color = Color(0.3, 0.6, 0.9)  # Base color (inherited from track)

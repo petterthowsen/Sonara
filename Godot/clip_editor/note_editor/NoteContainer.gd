@@ -180,6 +180,14 @@ var visual_notes_by_id: Dictionary = {}
 ## lookups by bare id skip scanning every child. Pending duplicates are never in it.
 var _visuals_by_note_id: Dictionary = {}
 
+## MULTI-CLIP MODE: note key (see _make_note_key) -> Array of the note's loop repeat visuals,
+## index k - 1 for loop segment k (null where it never played). A repeat whose note stops
+## playing in its pass is hidden, not freed, so a drag can move a note out and back in.
+var _repeats: Dictionary = {}
+## MULTI-CLIP MODE: ClipInstance -> its loop segments ([] when not looping), as the repeats
+## were last built for.
+var _loop_segments: Dictionary = {}
+
 
 func _index_visual(vn: VisualNote) -> void:
 	var id := vn.midi_note_data.id
@@ -260,11 +268,138 @@ func _instances_of_clip(c: Clip) -> Array[ClipInstance]:
 func _watch_instance(ci: ClipInstance) -> void:
 	if ci and not ci.instance_modified.is_connected(_on_instance_modified):
 		ci.instance_modified.connect(_on_instance_modified)
+	if ci:
+		_loop_segments.erase(ci)
 
 
 func _on_instance_modified() -> void:
+	# A moved instance keeps its repeats; a loop, trim or length change can add or drop passes.
+	for ci in clip_instances:
+		if ci and ci.clip and _compute_loop_segments(ci) != _loop_segments.get(ci, []):
+			_loop_segments.erase(ci)
+			for nd in ci.clip.midi_notes:
+				_sync_repeats(ci, nd)
 	_update_note_positions()
 	update_container_width()
+
+
+# ============================================================================
+# LOOP REPEATS (track mode)
+# ============================================================================
+# A looped instance plays its loop region again after the first pass. Each later pass shows
+# the notes it plays as VisualNotes of their own (repeat_pass >= 1), bound to the same
+# MidiNoteData, so they look and behave like the note: hit-testing, box selection, labels and
+# the selection look all come for free, and an edit made through any of them edits the note.
+
+func _compute_loop_segments(ci: ClipInstance) -> Array[Vector3i]:
+	if ci.loop_enabled and ci.loop_length_ticks > 0:
+		return ci.get_loop_segments()
+	return []
+
+
+## The loop segments of `ci` (cached until its loop, trim or length changes).
+func _segments_for(ci: ClipInstance) -> Array[Vector3i]:
+	var segs = _loop_segments.get(ci)
+	if segs == null:
+		segs = _compute_loop_segments(ci)
+		_loop_segments[ci] = segs
+	return segs
+
+
+## Make `nd`'s repeat visuals on `ci` match the passes it plays in: create the missing ones,
+## hide the ones it no longer plays in, and free those past the instance's last pass.
+func _sync_repeats(ci: ClipInstance, nd: MidiNoteData) -> void:
+	var key := _make_note_key(ci, nd)
+	var segs := _segments_for(ci)
+	var nodes: Array = _repeats.get(key, [])
+	while nodes.size() > maxi(segs.size() - 1, 0):
+		var gone = nodes.pop_back()
+		if gone:
+			_free_visual(gone)
+	for k in range(1, segs.size()):
+		var span := NotePlacement.repeat_ticks(nd, segs[k])
+		var vn: VisualNote = nodes[k - 1] if k - 1 < nodes.size() else null
+		if vn == null and span.y > span.x:
+			vn = visual_note_scene.instantiate()
+			vn.clip_instance = ci
+			vn.repeat_pass = k
+			add_child(vn)
+			vn.bind_to_note(nd)
+			vn.set_color(note_color)
+			if nodes.size() < k:
+				nodes.resize(k)
+			nodes[k - 1] = vn
+		elif vn:
+			vn._update_visual()
+		if vn:
+			_update_single_note_position(vn)
+	if nodes.is_empty():
+		_repeats.erase(key)
+	else:
+		_repeats[key] = nodes
+
+
+## The repeat visuals of `nd` on `ci`, shown or hidden.
+func _repeats_of(ci: ClipInstance, nd: MidiNoteData) -> Array[VisualNote]:
+	var out: Array[VisualNote] = []
+	for vn in _repeats.get(_make_note_key(ci, nd), []):
+		if vn:
+			out.append(vn)
+	return out
+
+
+func _free_repeats(ci: ClipInstance, nd: MidiNoteData) -> void:
+	for vn in _repeats_of(ci, nd):
+		_free_visual(vn)
+	_repeats.erase(_make_note_key(ci, nd))
+
+
+## Take a note visual out of the editor for good. NoteEditor also drops it from the selection.
+func _free_visual(vn: VisualNote) -> void:
+	_forget_visual(vn)
+	if vn.get_parent() == self:
+		remove_child(vn)
+	vn.queue_free()
+
+
+## Hook: `vn` is about to be freed.
+func _forget_visual(_vn: VisualNote) -> void:
+	pass
+
+
+## Bring every visual of `nd` (from `source_clip`) up to date with its data: colour, place and,
+## in track mode, which loop passes it shows in. Used mid-gesture, before the clip is told.
+func refresh_note(nd: MidiNoteData, source_clip: Clip) -> void:
+	if not multi_clip_mode:
+		var vn := visual_for(clip_instance, nd)
+		if vn:
+			vn._update_visual()
+			_update_single_note_position(vn)
+		return
+	for ci in _instances_of_clip(source_clip):
+		var vn := visual_for(ci, nd)
+		if vn:
+			vn._update_visual()
+			_update_single_note_position(vn)
+		_sync_repeats(ci, nd)
+
+
+## The shown visual of `nd` on `ci` that plays at `song_tick`: the note or one of its loop
+## repeats. Falls back to the note's own visual.
+func visual_at_song_tick(ci: ClipInstance, nd: MidiNoteData, song_tick: int) -> VisualNote:
+	var own := visual_for(ci, nd)
+	var candidates: Array[VisualNote] = []
+	if own:
+		candidates.append(own)
+	if multi_clip_mode:
+		candidates.append_array(_repeats_of(ci, nd))
+	for vn in candidates:
+		if not vn.visible:
+			continue
+		var pos := get_note_song_position(vn)
+		if song_tick >= pos.start_tick and song_tick < pos.end_tick:
+			return vn
+	return own
 
 
 func unbind():
@@ -290,6 +425,8 @@ func unbind():
 
 	visual_notes_by_id.clear()
 	_visuals_by_note_id.clear()
+	_repeats.clear()
+	_loop_segments.clear()
 	clip_instance = null
 	clip_instances.clear()
 	track = null
@@ -379,7 +516,7 @@ func _update_note_positions() -> void:
 
 
 ## Every shown visual note in this editor, in child order (clip mode: the clip's notes;
-## track mode: the notes the track's instances actually play).
+## track mode: the notes the track's instances actually play, loop repeats included).
 func get_all_visual_notes() -> Array[VisualNote]:
 	var notes: Array[VisualNote] = []
 	for child in get_children():
@@ -400,6 +537,9 @@ func _update_single_note_position(note: VisualNote) -> void:
 		return
 
 	var note_data = note.midi_note_data
+	if note.repeat_pass > 0:
+		_update_repeat_position(note)
+		return
 
 	# Calculate position offset based on mode
 	var offset_ticks = 0
@@ -430,6 +570,24 @@ func _update_single_note_position(note: VisualNote) -> void:
 	note.update_label_visibility(layout.row_height)
 
 
+## Place a loop repeat in its pass, cut off at the loop wrap; hidden when the note does not
+## play in that pass (any more).
+func _update_repeat_position(note: VisualNote) -> void:
+	var ci: ClipInstance = note.clip_instance
+	var segs := _segments_for(ci) if ci else ([] as Array[Vector3i])
+	var rect := Rect2()
+	if note.repeat_pass < segs.size():
+		rect = NotePlacement.repeat_rect(note.midi_note_data, ci, segs[note.repeat_pass], layout, grid_helper)
+	if not rect.has_area():
+		note.visible = false
+		return
+	note.visible = true
+	note.set_drum_mode(layout.is_folded())
+	note.position = rect.position
+	note.size = rect.size
+	note.update_label_visibility(layout.row_height)
+
+
 func get_note_song_position(note: VisualNote) -> Dictionary:
 	"""Get the song-relative position for a note (accounts for clip offset in track-mode).
 	
@@ -441,7 +599,16 @@ func get_note_song_position(note: VisualNote) -> Dictionary:
 	
 	var note_data = note.midi_note_data
 	var offset_ticks = 0
-	
+
+	if note.repeat_pass > 0 and note.clip_instance:
+		# A loop repeat: where that pass plays it, ending at the loop wrap.
+		var ci: ClipInstance = note.clip_instance
+		var segs := _segments_for(ci)
+		if note.repeat_pass < segs.size():
+			var span := NotePlacement.repeat_ticks(note_data, segs[note.repeat_pass])
+			if span.y > span.x:
+				return {"start_tick": ci.start_ticks + span.x, "end_tick": ci.start_ticks + span.y}
+
 	if multi_clip_mode:
 		# MULTI-CLIP MODE: song position is where the note's instance plays it
 		var ci: ClipInstance = note.clip_instance
@@ -549,7 +716,8 @@ func _load_notes_from_multiple_clips() -> void:
 				"visual_note": note_instance,
 				"clip_instance": ci
 			}
-			
+			_sync_repeats(ci, note_data)
+
 			total_notes += 1
 	
 	logger.info("Loaded %d notes from %d clip instances on track '%s'" % [total_notes, clip_instances.size(), track.name if track else "null"])
@@ -580,6 +748,7 @@ func _on_clip_note_added(note_data: MidiNoteData, source_clip: Clip) -> void:
 				"clip_instance": ci
 			}
 			_update_single_note_position(vn)
+			_sync_repeats(ci, note_data)
 	else:
 		# Single-clip mode
 		var single_key = _note_dict_key(clip_instance, note_data.id)
@@ -606,6 +775,8 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 			visual_notes_by_id.erase(_make_note_key(vn.clip_instance, note_data))
 			_unindex_visual(vn, note_data.id)
 			vn.queue_free()
+		for ci in _instances_of_clip(source_clip):
+			_free_repeats(ci, note_data)
 	else:
 		var single_key = _note_dict_key(clip_instance, note_data.id)
 		if not visual_notes_by_id.has(single_key):
@@ -623,20 +794,11 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 
 func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 	"""Handle when a note is modified in the clip (reactive)."""
-	if multi_clip_mode:
-		# Update every instance of the emitting clip, and only those.
-		for vn in _visuals_of(note_data, source_clip):
-			vn._update_visual()
-			_update_single_note_position(vn)
-	else:
-		var single_key = _note_dict_key(clip_instance, note_data.id)
-		if not visual_notes_by_id.has(single_key):
-			push_warning("[NoteContainer] Cannot update visual note %d - not found" % note_data.id)
-			return
-		var vn_single: VisualNote = visual_notes_by_id[single_key]
-		if vn_single:
-			vn_single._update_visual()
-			_update_single_note_position(vn_single)
+	if not multi_clip_mode and not visual_notes_by_id.has(_note_dict_key(clip_instance, note_data.id)):
+		push_warning("[NoteContainer] Cannot update visual note %d - not found" % note_data.id)
+		return
+	# Track mode: every instance of the emitting clip, and only those, with their loop repeats.
+	refresh_note(note_data, source_clip)
 	update_container_width()
 
 	logger.info("Reactively updated visual note %d" % note_data.id)
@@ -650,24 +812,16 @@ func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 func pitches_sounding_at(tick: int, only_played: bool = true) -> Dictionary:
 	var out := {}
 	if only_played and not multi_clip_mode and clip_instance:
-		if tick < clip_instance.clip_offset or tick >= clip_instance.clip_offset + clip_instance.duration_ticks:
+		if not clip_instance.plays_content_tick(tick):
 			return out
 	for child in get_children():
 		if not (child is VisualNote and child.visible and child.midi_note_data) or child.is_pending:
 			continue
 		var nd: MidiNoteData = child.midi_note_data
-		var start := nd.start_tick + _note_offset_ticks(child)
-		if tick >= start and tick < start + nd.duration_ticks:
+		var pos := get_note_song_position(child)
+		if tick >= pos.start_tick and tick < pos.end_tick:
 			out[nd.note] = maxi(out.get(nd.note, 0), nd.velocity)
 	return out
-
-
-## Ticks added to a note's clip-content start to place it in this editor's space.
-func _note_offset_ticks(note: VisualNote) -> int:
-	if multi_clip_mode:
-		var ci: ClipInstance = note.clip_instance
-		return ci.content_origin_ticks() if ci else 0
-	return position_offset_ticks
 
 
 # ============================================================================
@@ -728,7 +882,7 @@ func get_snap_interval() -> int:
 
 
 func _get_note_at_position(pos: Vector2) -> VisualNote:
-	"""Find which note is at the given position (if any)."""
+	"""Find which note is at the given position (if any). Loop repeats are notes too."""
 	# Iterate through children in reverse (top-most first), without copying the child list
 	for i in range(get_child_count() - 1, -1, -1):
 		var child := get_child(i) as VisualNote

@@ -161,7 +161,7 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 | `/track/{id}/instance/{id}/set_transpose` | `i:semitones` | Set instance transpose (-12 to +12) |
 | `/track/{id}/instance/{id}/set_gain` | `f:db` | Set instance gain offset in dB |
 | `/track/{id}/instance/{id}/set_mute` | `i:0_or_1` | Set instance mute state |
-| `/track/{id}/instance/{id}/set_loop` | `i:enabled, i:start_tick, i:length` | Configure instance looping |
+| `/track/{id}/instance/{id}/set_loop` | `i:enabled, i:start_tick, i:length` | Configure instance looping. `start_tick` and `length` are clip content ticks (the same space as `clip_offset`), so the instance repeats that region of the content until its duration ends |
 
 ### Clip Load Status (Rust -> Godot)
 

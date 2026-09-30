@@ -133,33 +133,44 @@ pub fn process_audio(
 
                     if is_within_instance || is_at_instance_end {
                         if let Some(clip) = state.clips.get(&instance.clip_id) {
-                            let mut offset_in_instance = current_tick - instance.start_tick;
+                            let offset_in_instance = current_tick - instance.start_tick;
 
-                            // Debug: log when we're processing an instance
-                            if current_tick % 960 == 0 {
-                                // Log once per beat - disabled for real-time safety
-                                // info!("Processing instance {} at tick {}: offset_in_instance={}, clip has {} notes",
-                                //     instance.id, current_tick, offset_in_instance, clip.midi_notes.len());
-                            }
+                            // Position in the clip's content: loop points live in content
+                            // space (like audio), so `clip_offset` is added before wrapping.
+                            let unwrapped_pos = instance.clip_offset + offset_in_instance;
+                            let content_pos = instance.wrap_content_tick(unwrapped_pos);
+                            let just_wrapped = content_pos != unwrapped_pos
+                                && content_pos == instance.loop_start_ticks;
 
-                            // Handle looping
-                            if instance.loop_enabled && instance.loop_length_ticks > 0 {
-                                if offset_in_instance >= instance.loop_start_ticks {
-                                    let loop_offset =
-                                        offset_in_instance - instance.loop_start_ticks;
-                                    offset_in_instance = instance.loop_start_ticks
-                                        + (loop_offset % instance.loop_length_ticks);
+                            // A loop wrap ends every note still sounding at the loop end. Sent
+                            // before the note-ons so a note restarting on the same pitch wins.
+                            if just_wrapped && is_within_instance {
+                                let loop_end =
+                                    instance.loop_start_ticks + instance.loop_length_ticks;
+                                for clip_note in &clip.midi_notes {
+                                    if clip_note.start_tick < loop_end
+                                        && clip_note.start_tick + clip_note.duration_ticks
+                                            >= loop_end
+                                    {
+                                        let transposed_note = (clip_note.note as i16
+                                            + instance.transpose as i16)
+                                            .clamp(0, 127)
+                                            as MidiNote;
+                                        note_events.push((
+                                            *track_id,
+                                            transposed_note,
+                                            clip_note.velocity,
+                                            false,
+                                        ));
+                                    }
                                 }
                             }
 
                             for clip_note in &clip.midi_notes {
-                                // Apply clip_offset
-                                let note_start_in_instance =
-                                    clip_note.start_tick - instance.clip_offset;
-                                let note_end_in_instance =
-                                    note_start_in_instance + clip_note.duration_ticks;
+                                let note_end = clip_note.start_tick + clip_note.duration_ticks;
 
-                                if note_end_in_instance <= 0 {
+                                // Entirely before the trimmed start
+                                if note_end <= instance.clip_offset {
                                     continue;
                                 }
 
@@ -170,9 +181,7 @@ pub fn process_audio(
                                     as MidiNote;
 
                                 // Note On
-                                if is_within_instance
-                                    && note_start_in_instance == offset_in_instance
-                                {
+                                if is_within_instance && clip_note.start_tick == content_pos {
                                     note_events.push((
                                         *track_id,
                                         transposed_note,
@@ -183,11 +192,10 @@ pub fn process_audio(
 
                                 // Note Off at the written end, or clipped to the instance right edge
                                 // so notes longer than the clip don't hang forever.
-                                let note_off_at_written_end =
-                                    note_end_in_instance == offset_in_instance;
+                                let note_off_at_written_end = note_end == content_pos;
                                 let note_off_clipped_to_instance = is_at_instance_end
-                                    && note_start_in_instance < offset_in_instance
-                                    && note_end_in_instance > offset_in_instance;
+                                    && clip_note.start_tick < content_pos
+                                    && note_end > content_pos;
                                 if note_off_at_written_end || note_off_clipped_to_instance {
                                     note_events.push((
                                         *track_id,
@@ -266,8 +274,9 @@ pub fn process_audio(
                                 // PLUS account for seeking into the middle of the instance
                                 if instance.playback_position.is_none() {
                                     // Total offset = clip_offset (trim) + current position in instance (seek)
-                                    let total_offset_ticks =
-                                        instance.clip_offset + current_pos_in_instance;
+                                    let total_offset_ticks = instance.wrap_content_tick(
+                                        instance.clip_offset + current_pos_in_instance,
+                                    );
 
                                     // Convert total offset (ticks) to sample index in the clip's sample-rate domain
                                     instance.playback_position =

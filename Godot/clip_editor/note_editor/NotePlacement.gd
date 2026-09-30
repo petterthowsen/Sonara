@@ -22,6 +22,34 @@ static func note_rect(nd: MidiNoteData, offset_ticks: int, layout: LaneLayout, g
 	return Rect2(x, layout.pitch_to_y(nd.note), maxf(1.0, width), layout.row_height)
 
 
+## Where `nd` plays in one later pass of a looped instance, as instance-local [start, end).
+## `seg` is that pass from ClipInstance.get_loop_segments (instance-local start and end, content
+## start). Like the engine, a pass only starts the notes that begin inside it and ends them at
+## the loop wrap. Vector2i.ZERO when the note does not start in this pass.
+static func repeat_ticks(nd: MidiNoteData, seg: Vector3i) -> Vector2i:
+	var content_start := seg.z
+	var content_end := content_start + (seg.y - seg.x)
+	if nd.start_tick < content_start or nd.start_tick >= content_end:
+		return Vector2i.ZERO
+	var note_end := mini(nd.start_tick + nd.duration_ticks, content_end)
+	return Vector2i(seg.x + nd.start_tick - content_start, seg.x + note_end - content_start)
+
+
+## Where `nd` is drawn in one later pass of a looped instance (see repeat_ticks): cut off where
+## the pass ends. Empty when the note does not play in this pass or its pitch has no row.
+static func repeat_rect(nd: MidiNoteData, ci: ClipInstance, seg: Vector3i, layout: LaneLayout, gh: GridHelper) -> Rect2:
+	var span := repeat_ticks(nd, seg)
+	if span.y <= span.x:
+		return Rect2()
+	var rect := note_rect(nd, 0, layout, gh)
+	if not rect.has_area():
+		return rect
+	rect.position.x = gh.ticks_to_pixels(ci.start_ticks + span.x)
+	if not layout.is_folded():
+		rect.size.x = maxf(gh.ticks_to_pixels(ci.start_ticks + span.y) - rect.position.x, 1.0)
+	return rect
+
+
 ## Size of a Drum View hit marker: a fixed width that fills the row vertically.
 ## The width is deliberately independent of the row height, so zooming vertically
 ## only makes the markers taller. It is still capped so a marker is never wider

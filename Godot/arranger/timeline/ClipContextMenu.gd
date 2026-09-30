@@ -7,6 +7,7 @@ class_name ClipContextMenu extends PopupPanel
 # Data Controls
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
+@onready var loop_checkbox: CheckButton = $VBoxContainer/LoopCheckbox
 @onready var cut: Button = $VBoxContainer/Cut
 @onready var copy: Button = $VBoxContainer/Copy
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
@@ -23,6 +24,8 @@ var selected_instances: Array[ClipInstance] = []
 
 ## Wire buttons, size the title so the name is readable, and listen for renames.
 func _ready() -> void:
+	if is_instance_valid(loop_checkbox):
+		loop_checkbox.toggled.connect(_on_loop_toggled)
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -75,6 +78,14 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 			var clip_name = clip_instance.clip.name if clip_instance.clip else "Clip"
 			label.set_value(clip_name)
 
+	# Loop reads on when every selected instance loops
+	if loop_checkbox:
+		var all_loop := not selected_instances.is_empty()
+		for inst in selected_instances:
+			all_loop = all_loop and inst.loop_enabled
+		loop_checkbox.set_pressed_no_signal(all_loop)
+		loop_checkbox.disabled = selected_instances.is_empty()
+
 	# Enable/disable Make Unique: enable if ANY selected instance shares its clip
 	var can_make_unique = false
 	if Sonara and Sonara.editor and Sonara.editor.project:
@@ -95,6 +106,26 @@ func _on_name_changed(new_value) -> void:
 	if new_name.is_empty() or new_name == clip_instance.clip.name:
 		return
 	HistoryUtil.execute_property("Rename Clip", clip_instance.clip, "set_name", clip_instance.clip.name, new_name)
+
+
+## Switch looping on or off for the bound instances as one undo step. Switching on loops the
+## content each clip shows now.
+func _on_loop_toggled(enabled: bool) -> void:
+	var cmds: Array[Command] = []
+	for inst in selected_instances:
+		var old_state := inst.get_loop_state()
+		var region := Vector2i(inst.loop_start_ticks, inst.loop_length_ticks)
+		if enabled and not inst.loop_enabled:
+			region = inst.default_loop_region()
+		var new_state := [enabled, region.x, region.y]
+		if new_state == old_state:
+			continue
+		cmds.append(ClipInstanceTransformCommand.new(
+			"Loop Clip" if enabled else "Unloop Clip", inst,
+			inst.start_ticks, inst.duration_ticks, inst.clip_offset,
+			inst.start_ticks, inst.duration_ticks, inst.clip_offset,
+			old_state, new_state))
+	HistoryUtil.execute_many("Loop Clips" if enabled else "Unloop Clips", cmds)
 
 
 ## Request Cut for the bound instances.

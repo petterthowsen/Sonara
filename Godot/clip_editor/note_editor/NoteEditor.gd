@@ -308,15 +308,17 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	# Determine which clip to add note to
 	var target_clip: Clip
+	var target_clip_instance: ClipInstance = null
+	var song_tick: int = tick_position
 	if multi_clip_mode:
 		# MULTI-CLIP MODE: Find clip at cursor position, or create one
-		var target_clip_instance = get_or_create_clip_at_position(tick_position)
+		target_clip_instance = get_or_create_clip_at_position(tick_position)
 		if not target_clip_instance:
 			logger.warn("No clip at position and creation not yet implemented (Phase 5)")
 			return null
 		target_clip = target_clip_instance.clip
-		# In multi-clip mode, tick_position is song-relative, need to convert to clip-local
-		tick_position = target_clip_instance.song_to_clip_ticks(tick_position)
+		# Song ticks to clip content; a click in a loop repeat lands in the loop region.
+		tick_position = target_clip_instance.song_to_played_content_ticks(tick_position)
 		end_tick = tick_position + new_note_length
 	else:
 		# SINGLE-CLIP MODE: Use the bound clip
@@ -343,8 +345,13 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	logger.info("Added note %d: MIDI=%d start=%d duration=%d" % [note_data.id, midi_note_num, tick_position, new_note_length])
 
-	# Get visual note created reactively
-	var note_instance = get_visual_note(note_data.id)
+	# Get visual note created reactively: the one under the mouse (a loop repeat, or the
+	# note on the clicked instance when the clip is used more than once).
+	var note_instance: VisualNote = null
+	if target_clip_instance:
+		note_instance = visual_at_song_tick(target_clip_instance, note_data, song_tick)
+	else:
+		note_instance = get_visual_note(note_data.id)
 	if note_instance == null:
 		push_error("[NoteEditor] Failed to find visual note after creation")
 		return null
@@ -446,14 +453,14 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 	# Snap the drag delta, not each note, so notes keep their offsets from each other.
 	var snapped_delta_ticks: int = grid_helper.snap_ticks(delta_ticks) if grid_helper else delta_ticks
 
+	# Each note once, however many of its visuals (loop repeats, linked instances) are selected.
+	var edited := _selected_note_visuals()
+
 	if alt_pressed:
 		# Alt mode: Control velocity
 		var velocity_delta = int(-delta_y / 2.0)
 
-		for sel_note in selection_manager.selected_notes:
-			if not sel_note.midi_note_data:
-				continue
-
+		for sel_note in edited:
 			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
 			if not start_pos:
 				continue
@@ -462,24 +469,16 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			var new_velocity = clamp(start_velocity + velocity_delta, 1, 127)
 
 			sel_note.midi_note_data.velocity = new_velocity
-			sel_note._update_visual()
 
 	elif shift_pressed:
 		# Shift mode: Control note length
-		for sel_note in selection_manager.selected_notes:
-			if not sel_note.midi_note_data:
-				continue
-
+		for sel_note in edited:
 			var start_duration = resize_start_durations.get(sel_note.midi_note_data.id)
 			if start_duration == null:
 				continue
 
 			var new_duration := _snapped_duration(start_duration + delta_ticks)
-
 			sel_note.midi_note_data.duration_ticks = new_duration
-			var note_width = ticks_to_pixels(new_duration)
-			sel_note.size.x = note_width
-
 			default_note_length_ticks = new_duration
 	else:
 		# Normal mode: Control position
@@ -487,23 +486,22 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 		# agree exactly in chromatic mode.
 		var delta_steps := layout.row_of_pitch(drag_start_midi_note) - layout.y_to_row(mouse_pos_local.y)
 
-		for sel_note in selection_manager.selected_notes:
-			if not sel_note.midi_note_data:
-				continue
-
+		for sel_note in edited:
 			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
 			if not start_pos:
 				continue
 
-			var new_ticks = max(0, start_pos.start_tick + snapped_delta_ticks)
+			var new_ticks: int = maxi(0, start_pos.start_tick + snapped_delta_ticks)
 			var new_midi_note := step_note(start_pos.note, delta_steps)
 
 			# Clamp within clip content in track-mode to avoid crossing instance boundaries
 			if multi_clip_mode:
-				var owner_ci_clamp: ClipInstance = sel_note.clip_instance
-				if not owner_ci_clamp:
-					owner_ci_clamp = get_clip_instance_for_note(sel_note.midi_note_data.id)
-				if owner_ci_clamp and owner_ci_clamp.clip:
+				var owner_ci_clamp := _instance_for_visual_note(sel_note)
+				if owner_ci_clamp and owner_ci_clamp.in_loop_region(start_pos.start_tick):
+					# A note in the loop stays in it: dragged past the loop end it comes in
+					# again at the loop start, which is where the next pass shows it.
+					new_ticks = owner_ci_clamp.fold_into_loop(start_pos.start_tick + snapped_delta_ticks)
+				elif owner_ci_clamp and owner_ci_clamp.clip:
 					# The bound is the instance's played window, not the content
 					# length: content length is the rightmost note end, so using it
 					# would pin the last note in place and make dragging right a no-op.
@@ -511,26 +509,26 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 					# gets that larger bound, so no note is ever clamped backwards.
 					var clip_len: int = max(owner_ci_clamp.clip_offset + owner_ci_clamp.duration_ticks, owner_ci_clamp.clip.get_content_length())
 					if clip_len > 0:
-						new_ticks = clamp(new_ticks, 0, max(0, clip_len - sel_note.midi_note_data.duration_ticks))
+						new_ticks = clampi(new_ticks, 0, maxi(0, clip_len - sel_note.midi_note_data.duration_ticks))
 
 			sel_note.midi_note_data.start_tick = new_ticks
 			sel_note.midi_note_data.note = new_midi_note
 
-			# Calculate visual position (accounting for clip offset in multi-clip mode)
-			var visual_offset_ticks = 0
-			if multi_clip_mode:
-				var owner_ci_vis: ClipInstance = sel_note.clip_instance
-				if not owner_ci_vis:
-					owner_ci_vis = get_clip_instance_for_note(sel_note.midi_note_data.id)
-				if owner_ci_vis:
-					visual_offset_ticks = owner_ci_vis.content_origin_ticks()
-					logger.debug("Drag render note ", sel_note.midi_note_data.id,
-						" ci=", owner_ci_vis.id, " ci_start=", owner_ci_vis.start_ticks,
-						" clip_local=", new_ticks)
+	_refresh_notes(edited)
 
-			var note_x = ticks_to_pixels(new_ticks + visual_offset_ticks)
-			sel_note.position = Vector2(note_x, note_visual_y(new_midi_note))
-			sel_note._update_visual()
+	if not alt_pressed and not shift_pressed:
+		# A note dragged out of its (unlooped) instance stays in view under the mouse until
+		# the drop moves it into the clip it lands on.
+		for sel_note in selection_manager.selected_notes:
+			if not is_instance_valid(sel_note) or not sel_note.midi_note_data or sel_note.repeat_pass > 0:
+				continue
+			var owner_ci := _instance_for_visual_note(sel_note)
+			if multi_clip_mode and owner_ci and not owner_ci.loop_enabled and not sel_note.visible:
+				var rect := NotePlacement.note_rect(sel_note.midi_note_data, owner_ci.content_origin_ticks(), layout, grid_helper)
+				if rect.has_area():
+					sel_note.visible = true
+					sel_note.position = rect.position
+					sel_note.size = rect.size
 
 
 func _on_drag_ended(note: VisualNote) -> void:
@@ -572,12 +570,9 @@ func _on_drag_ended(note: VisualNote) -> void:
 
 	# Process all selected notes (cut overlaps and update)
 	var total_affected = 0
-	for sel_note in selection_manager.selected_notes.duplicate():
-		# A cross-clip transfer above frees the old visual and replaces it with a new
-		# one carrying a new id; the stale entry must not be updated.
-		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
-			continue
-
+	# A cross-clip transfer above frees the old visual and replaces it with a new one
+	# carrying a new id, and drops it from the selection, so this list is current.
+	for sel_note in _selected_note_visuals():
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
@@ -660,11 +655,9 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	var shift_pressed = Input.is_key_pressed(KEY_SHIFT)
 
-	# Update all selected notes
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
-			continue
-
+	# Update all selected notes (each once; see _selected_note_visuals)
+	var edited := _selected_note_visuals()
+	for sel_note in edited:
 		var note_new_duration: int
 
 		if shift_pressed:
@@ -676,8 +669,7 @@ func _on_resize_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 			note_new_duration = _snapped_duration(note_start_duration + delta_ticks)
 
 		sel_note.midi_note_data.duration_ticks = note_new_duration
-		var note_width = ticks_to_pixels(note_new_duration)
-		sel_note.size.x = note_width
+	_refresh_notes(edited)
 
 
 func _on_resize_ended(note: VisualNote) -> void:
@@ -691,10 +683,7 @@ func _on_resize_ended(note: VisualNote) -> void:
 
 	# Process all selected notes
 	var total_affected = 0
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
-			continue
-
+	for sel_note in _selected_note_visuals():
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
@@ -842,6 +831,9 @@ func select_edited_clips() -> bool:
 			return false
 		start_tick = clip_instance.clip_offset
 		end_tick = clip_instance.clip_offset + clip_instance.duration_ticks
+		if clip_instance.loop_enabled:
+			start_tick = clip_instance.loop_start_ticks
+			end_tick = start_tick + clip_instance.loop_length_ticks
 		for vn in get_all_visual_notes():
 			var nd: MidiNoteData = vn.midi_note_data
 			if nd.start_tick >= start_tick and nd.start_tick < end_tick:
@@ -885,18 +877,21 @@ func _paste_at_position(tick_position: int) -> void:
 	# Pick each note's clip. Track mode: the clip playing at the note's song position, or a
 	# new clip covering the pasted span when there is none, so a range copied across several
 	# clips lands in the matching clips of the target track (notes stay visible).
-	var targets: Array = []  # [MidiNoteData in clip-content ticks, Clip]
+	var targets: Array = []  # [MidiNoteData in clip-content ticks, Clip, ClipInstance, song tick]
 	var target_clips: Array = []
 	for note_data in source.get_notes_at_position(tick_position):
 		var target_clip: Clip = clip
+		var ci: ClipInstance = null
+		var song_tick := note_data.start_tick
 		if multi_clip_mode:
-			var ci := get_or_create_clip_at_position(note_data.start_tick, span_end)
+			ci = get_or_create_clip_at_position(note_data.start_tick, span_end)
 			if not ci:
 				logger.warn("Cannot paste note at tick %d - no clip there" % note_data.start_tick)
 				continue
-			note_data.start_tick = ci.song_to_clip_ticks(note_data.start_tick)
+			# A note pasted into a loop repeat lands in the loop region.
+			note_data.start_tick = ci.song_to_played_content_ticks(note_data.start_tick)
 			target_clip = ci.clip
-		targets.append([note_data, target_clip])
+		targets.append([note_data, target_clip, ci, song_tick])
 		if not target_clips.has(target_clip):
 			target_clips.append(target_clip)
 	if targets.is_empty():
@@ -919,7 +914,7 @@ func _paste_at_position(tick_position: int) -> void:
 	selection_manager.clear_selection()
 
 	# Add notes to clips
-	var pasted_note_ids: Array[int] = []
+	var pasted: Array = []  # the targets that were added
 	for target in targets:
 		var note_data: MidiNoteData = target[0]
 		var target_clip: Clip = target[1]
@@ -928,13 +923,15 @@ func _paste_at_position(tick_position: int) -> void:
 		if added == null:
 			push_warning("[NoteEditor] Failed to paste note at pitch=%d, start=%d" % [note_data.note, note_data.start_tick])
 			continue
-		pasted_note_ids.append(note_data.id)
+		pasted.append(target)
 
-	# Select newly pasted notes
+	# Select newly pasted notes: the visuals where they were pasted (a loop repeat, or the
+	# instance the paste landed on)
 	var pasted_notes: Array[VisualNote] = []
-	for note_id in pasted_note_ids:
-		var note_instance = get_visual_note(note_id)
-		if note_instance:
+	for target in pasted:
+		var note_data: MidiNoteData = target[0]
+		var note_instance: VisualNote = visual_at_song_tick(target[2], note_data, target[3]) if target[2] else get_visual_note(note_data.id)
+		if note_instance and note_instance not in pasted_notes:
 			pasted_notes.append(note_instance)
 
 	selection_manager._set_selected_notes(pasted_notes)
@@ -948,7 +945,7 @@ func _paste_at_position(tick_position: int) -> void:
 	selection_manager.selection_changed.emit(selection_manager.selected_notes)
 
 	logger.info("Pasted %d notes at tick %d (range: %d-%d)" % [
-		pasted_note_ids.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
+		pasted.size(), tick_position, selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick
 	])
 	_history_commit("Paste Notes")
 
@@ -984,16 +981,13 @@ func _delete_selection() -> void:
 		logger.warn("No notes selected to delete")
 		return
 
-	var count = selection_manager.selected_notes.size()
-
-	# Remove notes in reverse
-	for i in range(selection_manager.selected_notes.size() - 1, -1, -1):
-		var note = selection_manager.selected_notes[i]
-		if is_instance_valid(note) and note.midi_note_data:
-			var note_clip = _clip_for_visual_note(note)
-			if note_clip:
-				note_clip.remove_midi_note(note.midi_note_data)
-			note.queue_free()
+	# Each note once: removing it frees all its visuals and drops them from the selection.
+	var doomed := _selected_note_visuals()
+	var count = doomed.size()
+	for note in doomed:
+		var note_clip = _clip_for_visual_note(note)
+		if note_clip:
+			note_clip.remove_midi_note(note.midi_note_data)
 
 	selection_manager.selected_notes.clear()
 	selection_manager.selected_note = null
@@ -1011,29 +1005,16 @@ func _move_selection_vertical(semitones: int) -> void:
 	if selection_manager.selected_notes.is_empty():
 		return
 
-	# Move all selected notes. Linked clip instances show the same MidiNoteData
-	# through several visuals, so step each note once and reposition every visual.
-	var moved := {}
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
-			continue
-
-		var note_data = sel_note.midi_note_data
-		if not moved.has(note_data):
-			note_data.note = step_note(note_data.note, semitones)
-			moved[note_data] = true
-
-		sel_note.position.y = note_visual_y(note_data.note)
-		sel_note._update_visual()
+	# Move all selected notes. Linked clip instances and loop repeats show the same
+	# MidiNoteData through several visuals, so step each note once.
+	var edited := _selected_note_visuals()
+	for sel_note in edited:
+		sel_note.midi_note_data.note = step_note(sel_note.midi_note_data.note, semitones)
+	_refresh_notes(edited)
 
 	# Process overlaps and sync
 	var total_affected = 0
-	var synced := {}
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data or synced.has(sel_note.midi_note_data):
-			continue
-		synced[sel_note.midi_note_data] = true
-
+	for sel_note in edited:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
@@ -1067,28 +1048,20 @@ func _move_selection_horizontal(delta_ticks: int) -> void:
 		return
 
 	# Move all selected notes (each shared MidiNoteData once; see _move_selection_vertical)
-	var moved := {}
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data:
-			continue
-
-		var note_data = sel_note.midi_note_data
-		if not moved.has(note_data):
-			note_data.start_tick = max(0, note_data.start_tick + delta_ticks)
-			moved[note_data] = true
-
-		# Use the shared positioning logic so track-mode's per-clip offset
-		# (ci.start_ticks) is applied instead of a bare tick->pixel conversion.
-		_update_single_note_position(sel_note)
+	var edited := _selected_note_visuals()
+	for sel_note in edited:
+		var note_data := sel_note.midi_note_data
+		var owner_ci := _instance_for_visual_note(sel_note) if multi_clip_mode else null
+		if owner_ci and owner_ci.in_loop_region(note_data.start_tick):
+			# Stays in the loop, like a drag (the next pass shows it past the loop end).
+			note_data.start_tick = owner_ci.fold_into_loop(note_data.start_tick + delta_ticks)
+		else:
+			note_data.start_tick = maxi(0, note_data.start_tick + delta_ticks)
+	_refresh_notes(edited)
 
 	# Process overlaps and sync
 	var total_affected = 0
-	var synced := {}
-	for sel_note in selection_manager.selected_notes:
-		if not sel_note.midi_note_data or synced.has(sel_note.midi_note_data):
-			continue
-		synced[sel_note.midi_note_data] = true
-
+	for sel_note in edited:
 		var note_data = sel_note.midi_note_data
 		var end_tick = note_data.start_tick + note_data.duration_ticks
 
@@ -1182,7 +1155,8 @@ func start_duplicate_drag(grabbed: VisualNote, mouse_pos_local: Vector2) -> bool
 		copy.note = nd.note
 		copy.velocity = nd.velocity
 		copy.duration_ticks = nd.duration_ticks
-		copy.start_tick = nd.start_tick + _note_offset_ticks(src)
+		# Where this visual shows it: a loop repeat's pass, not the note's first one.
+		copy.start_tick = get_note_song_position(src).start_tick
 		var vn: VisualNote = visual_note_scene.instantiate()
 		vn.is_pending = true
 		add_child(vn)
@@ -1255,20 +1229,20 @@ func finish_duplicate_drag() -> void:
 		var nd: MidiNoteData = t[0]
 		var ci: ClipInstance = t[1]
 		var target_clip: Clip = t[2]
-		var local := ci.song_to_clip_ticks(nd.start_tick) if multi_clip_mode else nd.start_tick
+		# Dropped on a loop repeat, the copy lands in the loop region.
+		var local := ci.song_to_played_content_ticks(nd.start_tick) if multi_clip_mode else nd.start_tick
 		local = maxi(0, local)
 		target_clip.cut_overlapping_notes_at_pitch(nd.note, local, local + nd.duration_ticks, target_clip.allocate_note_id)
 		var new_note := target_clip.add_midi_note(target_clip.allocate_note_id(), nd.note, nd.velocity, local, nd.duration_ticks)
 		if new_note:
-			added.append([new_note, ci])
+			added.append([new_note, ci, nd.start_tick])
 
 	cancel_duplicate_drag()
 
 	var new_visuals: Array[VisualNote] = []
-	for pair in added:
-		var entry = visual_notes_by_id.get(_make_note_key(pair[1], pair[0]) if multi_clip_mode else _note_dict_key(clip_instance, pair[0].id))
-		var vn: VisualNote = entry.visual_note if entry is Dictionary else entry
-		if vn:
+	for entry in added:
+		var vn: VisualNote = visual_at_song_tick(entry[1], entry[0], entry[2]) if multi_clip_mode else visual_for(clip_instance, entry[0])
+		if vn and vn not in new_visuals:
 			new_visuals.append(vn)
 	selection_manager.select_all(new_visuals)
 	_history_commit("Duplicate Notes")
@@ -1296,9 +1270,13 @@ func _handle_cross_clip_transfers() -> void:
 		return
 
 	# Iterate a copy: removing a note fires midi_note_removed, which erases entries
-	# from selected_notes and would make this loop skip elements.
-	for sel_note in selection_manager.selected_notes.duplicate():
+	# from selected_notes and would make this loop skip elements. Each note once.
+	for sel_note in _selected_note_visuals():
 		if not is_instance_valid(sel_note) or not sel_note.midi_note_data:
+			continue
+		# A note in a loop stays in its instance: the drag folded it into the loop region.
+		var owner_ci := _instance_for_visual_note(sel_note)
+		if owner_ci and owner_ci.loop_enabled and owner_ci.in_loop_region(sel_note.midi_note_data.start_tick):
 			continue
 
 		var note_data = sel_note.midi_note_data
@@ -1379,6 +1357,53 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 		return
 
 	logger.info("Note transferred: old_id=%d, new_id=%d, new_local_pos=%d" % [note_data.id, new_note.id, dest_local_position])
+
+
+## One selected visual per selected note. A note selected through several visuals (loop
+## repeats, instances of a linked clip) shares one MidiNoteData, so edits apply to it once.
+func _selected_note_visuals() -> Array[VisualNote]:
+	var seen := {}
+	var out: Array[VisualNote] = []
+	for vn in selection_manager.selected_notes:
+		if is_instance_valid(vn) and vn.midi_note_data and not seen.has(vn.midi_note_data):
+			seen[vn.midi_note_data] = true
+			out.append(vn)
+	return out
+
+
+## Show the current data of the notes behind `visuals` on all their visuals (mid-gesture).
+func _refresh_notes(visuals: Array[VisualNote]) -> void:
+	for vn in visuals:
+		if is_instance_valid(vn) and vn.midi_note_data:
+			refresh_note(vn.midi_note_data, _clip_for_visual_note(vn))
+
+
+## The instance a visual shows its note through (track mode), or the bound one (clip mode).
+func _instance_for_visual_note(vn: VisualNote) -> ClipInstance:
+	if not multi_clip_mode:
+		return clip_instance
+	var ci: ClipInstance = vn.clip_instance
+	if ci == null and vn.midi_note_data:
+		ci = get_clip_instance_for_note(vn.midi_note_data.id)
+	return ci
+
+
+## A visual is freed (its note or loop pass went away): nothing may keep using it.
+func _forget_visual(vn: VisualNote) -> void:
+	selection_manager.selected_notes.erase(vn)
+	if selection_manager.selected_note == vn:
+		selection_manager.selected_note = selection_manager.selected_notes[0] if not selection_manager.selected_notes.is_empty() else null
+	var fallback: VisualNote = null
+	if vn.clip_instance and vn.midi_note_data:
+		fallback = visual_for(vn.clip_instance, vn.midi_note_data)
+	if dragging_note == vn:
+		dragging_note = fallback
+	if resizing_note == vn:
+		resizing_note = fallback
+	if placed_note_awaiting_drag == vn:
+		placed_note_awaiting_drag = null
+	if last_erased_note == vn:
+		last_erased_note = null
 
 
 ## The clip a given visual note belongs to. Prefers the clip_instance stamped on the

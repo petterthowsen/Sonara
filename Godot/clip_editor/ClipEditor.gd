@@ -792,7 +792,16 @@ func _rebuild_ruler_regions() -> void:
 		if ci.track:
 			_watch_ruler(ci.track.color_changed, _mark_ruler_context_dirty.unbind(1))
 		c.a = 0.38
-		regions.append({"start": ci.clip_offset, "end": ci.clip_offset + ci.duration_ticks, "color": c, "edges": true})
+		if ci.loop_enabled:
+			# The content that repeats; whatever the first run plays before it is fainter.
+			var run := ci.first_run_range()
+			if run.x < ci.loop_start_ticks:
+				var lead := c
+				lead.a = 0.15
+				regions.append({"start": run.x, "end": ci.loop_start_ticks, "color": lead, "edges": false})
+			regions.append({"start": ci.loop_start_ticks, "end": ci.loop_start_ticks + ci.loop_length_ticks, "color": c, "edges": true})
+		else:
+			regions.append({"start": ci.clip_offset, "end": ci.clip_offset + ci.duration_ticks, "color": c, "edges": true})
 	ruler.set_regions(regions)
 
 
@@ -823,7 +832,7 @@ func _on_editor_playhead_moved(global_playhead_ticks: int):
 		playhead_ticks = global_playhead_ticks
 	elif bound_clip_instance:
 		# CLIP-MODE: clip-content ticks, where the bound instance plays that moment
-		playhead_ticks = bound_clip_instance.song_to_clip_ticks(global_playhead_ticks)
+		playhead_ticks = bound_clip_instance.song_to_played_content_ticks(global_playhead_ticks)
 	
 	# Pass to MidiEditor
 	if midi_editor:

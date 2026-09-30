@@ -52,6 +52,8 @@ var resize_start_pos: Vector2 = Vector2.ZERO
 var resize_start_ticks: int = 0
 var resize_start_duration: int = 0
 var resize_start_offset: int = 0  # Initial clip_offset when resize started
+var resize_start_loop: Array = []  # Initial loop state when resize started
+var resize_start_content_length: int = 0  # Source clip length when resize started
 var resize_padding_added: int = 0  # Track total padding added during this resize
 ## Clips resized together with this grabbed one (itself included): the whole selection when
 ## this clip is part of a multi-selection.
@@ -70,6 +72,21 @@ var _resize_group: Array[TimelineClip] = []
 ## Font size and color of the clip name (the font is the theme's Label font).
 @export var name_settings: LabelSettings = null
 @export_group("")
+
+## Loop-point drag: `_loop_drag_pass` is the 1-based divider being dragged (0 = none).
+var _loop_drag_pass: int = 0
+var _loop_drag_start_state: Array = []
+var _loop_drag_start_content: int = 0
+## Pixels either side of a divider that grab it.
+const LOOP_GRAB_PX := 4.0
+
+## Extra waveform views for the loop passes after the first (the scene's own view draws the first).
+var _loop_waveforms: Array[WaveformView] = []
+## Draws the dividers between loop passes above the notes and waveforms. Built on first use.
+var _loop_overlay: Control = null
+var _loop_boundaries: PackedInt32Array = PackedInt32Array()
+## Cap on waveform views per clip; passes beyond it show no waveform.
+const MAX_LOOP_WAVEFORMS := 64
 
 ## The clip name, shaped once per rename and trimmed with an ellipsis to the header width.
 var _name_line := TextLine.new()
@@ -153,6 +170,8 @@ func _on_instance_modified() -> void:
 	custom_minimum_size.x = width
 	size.x = width
 	_update_waveform()
+	if clip_renderer:
+		clip_renderer.queue_redraw()
 	queue_redraw()
 
 
@@ -178,6 +197,7 @@ func _unbind_grid_helper() -> void:
 ## Matches the engine's constant stretch (AudioPlayback::calculate_stretch_factor): one tick
 ## covers 60 / (recorded_bpm × ppq) seconds of the source file.
 func _update_waveform() -> void:
+	_update_loop_overlay()
 	if waveform_view == null:
 		return
 	var clip: Clip = clip_instance.clip if clip_instance else null
@@ -185,6 +205,7 @@ func _update_waveform() -> void:
 	waveform_view.visible = is_audio
 	if not is_audio:
 		waveform_view.data = null
+		_layout_loop_waveforms([])
 		return
 	waveform_view.data = clip.audio_source.data
 	var gh: GridHelper = timeline.grid_helper if timeline else null
@@ -192,8 +213,88 @@ func _update_waveform() -> void:
 		return
 	var bpm: float = clip.recorded_bpm if clip.recorded_bpm > 0.0 else gh.tempo
 	var frames_per_tick := float(waveform_view.source_sample_rate()) * 60.0 / (bpm * float(gh.ppq))
-	waveform_view.start_frame = float(clip_instance.clip_offset) * frames_per_tick
-	waveform_view.frames_per_pixel = float(gh.ppq) / gh.pixels_per_beat * frames_per_tick
+	var frames_per_pixel := float(gh.ppq) / gh.pixels_per_beat * frames_per_tick
+	var segments: Array[Vector3i] = []
+	if clip_instance.loop_enabled:
+		segments = clip_instance.get_loop_segments(MAX_LOOP_WAVEFORMS + 1)
+	if segments.size() <= 1:
+		# One run of content: the view fills the clip body.
+		_layout_loop_waveforms([])
+		waveform_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		waveform_view.start_frame = float(clip_instance.clip_offset) * frames_per_tick
+		waveform_view.frames_per_pixel = frames_per_pixel
+		return
+	_layout_loop_waveforms(segments)
+	_place_waveform(waveform_view, segments[0], frames_per_tick, frames_per_pixel)
+	for i in _loop_waveforms.size():
+		_place_waveform(_loop_waveforms[i], segments[i + 1], frames_per_tick, frames_per_pixel)
+
+
+## Put `view` over one run of content: `segment` is Vector3i(local_start, local_end, content_start).
+func _place_waveform(view: WaveformView, segment: Vector3i, frames_per_tick: float, frames_per_pixel: float) -> void:
+	var x0: float = timeline.ticks_to_pixels(segment.x)
+	var x1: float = timeline.ticks_to_pixels(segment.y)
+	# Anchored to the body's top and bottom, with the run's x range as the horizontal offsets.
+	view.anchor_left = 0.0
+	view.anchor_right = 0.0
+	view.anchor_top = 0.0
+	view.anchor_bottom = 1.0
+	view.offset_left = x0
+	view.offset_right = maxf(x1, x0)
+	view.offset_top = 0.0
+	view.offset_bottom = 0.0
+	view.start_frame = float(segment.z) * frames_per_tick
+	view.frames_per_pixel = frames_per_pixel
+
+
+## Keep one extra waveform view per run after the first: `segments` is empty for an unlooped clip.
+func _layout_loop_waveforms(segments: Array) -> void:
+	var wanted := maxi(0, segments.size() - 1)
+	while _loop_waveforms.size() > wanted:
+		_loop_waveforms.pop_back().queue_free()
+	while _loop_waveforms.size() < wanted:
+		var view := WaveformView.new()
+		view.color = waveform_view.color
+		view.data = waveform_view.data
+		clip_renderer.add_child(view)
+		_loop_waveforms.append(view)
+	for view in _loop_waveforms:
+		view.data = waveform_view.data
+		view.color = waveform_view.color
+
+
+## Redraw the dividers between loop passes, creating the overlay the first time a clip loops.
+func _update_loop_overlay() -> void:
+	_loop_boundaries.clear()
+	if clip_instance and clip_instance.loop_enabled:
+		for segment in clip_instance.get_loop_segments():
+			if segment.x > 0:
+				_loop_boundaries.append(segment.x)
+	if _loop_boundaries.is_empty() and _loop_overlay == null:
+		return
+	if _loop_overlay == null:
+		_loop_overlay = Control.new()
+		_loop_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_loop_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_loop_overlay.offset_top = header_height
+		_loop_overlay.draw.connect(_draw_loop_overlay)
+		add_child(_loop_overlay)
+	_loop_overlay.queue_redraw()
+
+
+func _draw_loop_overlay() -> void:
+	if timeline == null:
+		return
+	var color := Color(1.0, 1.0, 1.0, 0.45)
+	for tick in _loop_boundaries:
+		var x: float = roundf(timeline.ticks_to_pixels(tick)) + 0.5
+		if x <= 0.0 or x >= size.x:
+			continue
+		# Dashed, so it reads as a repeat marker rather than a clip edge.
+		var y := 0.0
+		while y < _loop_overlay.size.y:
+			_loop_overlay.draw_line(Vector2(x, y), Vector2(x, minf(y + 4.0, _loop_overlay.size.y)), color, 1.0)
+			y += 8.0
 
 
 ## Listen to the current source clip for rename and content updates.
@@ -388,7 +489,7 @@ func _update_cursor_for_position(local_pos: Vector2) -> void:
 		mouse_default_cursor_shape = CURSOR_HSIZE
 	else:
 		var edge = _get_edge_at_position(local_pos)
-		if edge != "":
+		if edge != "" or _loop_boundary_pass_at(local_pos.x) > 0 or _loop_drag_pass > 0:
 			mouse_default_cursor_shape = CURSOR_HSIZE
 		else:
 			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -426,14 +527,29 @@ func _gui_input(event: InputEvent) -> void:
 			if event.pressed:
 				var local_pos = get_local_mouse_position()
 				var edge = _get_edge_at_position(local_pos)
+				var boundary_pass := _loop_boundary_pass_at(local_pos.x) if edge == "" else 0
 
-				if edge != "":
+				if boundary_pass > 0:
+					_loop_drag_start_state = clip_instance.get_loop_state()
+					_begin_loop_drag(boundary_pass)
+					accept_event()
+				elif edge != "":
 					# Start resize
 					is_resizing = true
 					resize_start_pos = get_global_mouse_position()
 					_resize_group = _find_resize_group()
 					for clip_ui in _resize_group:
 						clip_ui._begin_resize(edge)
+					if edge == "right" and event.alt_pressed and clip_instance and not clip_instance.loop_enabled:
+						# Alt puts a loop point at the instance's current end; the drag then lengthens
+						# the instance, which repeats the loop. A MIDI clip is trimmed (or grown) to
+						# end there too, so the loop is exactly what the instance showed.
+						var region := clip_instance.default_loop_region()
+						var clip := clip_instance.clip
+						if clip and clip.type == Clip.ClipType.MIDI:
+							region = Vector2i(clip_instance.clip_offset, clip_instance.duration_ticks)
+							clip.set_content_length(region.x + region.y)
+						clip_instance.set_loop(true, region.x, region.y)
 					accept_event()
 				elif event.double_click and not (event.ctrl_pressed or event.meta_pressed or event.shift_pressed):
 					# The first click already selected this clip; open it instead of starting a drag.
@@ -458,7 +574,10 @@ func _gui_input(event: InputEvent) -> void:
 					accept_event()
 			else:
 				# End resize or drag
-				if is_resizing:
+				if _loop_drag_pass > 0:
+					_finish_loop_drag()
+					accept_event()
+				elif is_resizing:
 					is_resizing = false
 					_finish_resize()
 					accept_event()
@@ -471,6 +590,10 @@ func _gui_input(event: InputEvent) -> void:
 						exclusive_click_requested.emit(self)
 					is_dragging = false
 					accept_event()
+
+	elif event is InputEventMouseMotion and _loop_drag_pass > 0 and clip_instance and timeline:
+		_drag_loop_point(event.shift_pressed)
+		accept_event()
 
 	elif event is InputEventMouseMotion and is_resizing and clip_instance and timeline:
 		# Handle resize dragging: this clip's snapped edge sets the delta for the whole group
@@ -497,6 +620,60 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
+## The 1-based divider under local x `x`, or 0.
+func _loop_boundary_pass_at(x: float) -> int:
+	if timeline == null:
+		return 0
+	for i in _loop_boundaries.size():
+		if absf(timeline.ticks_to_pixels(_loop_boundaries[i]) - x) <= LOOP_GRAB_PX:
+			return i + 1
+	return 0
+
+
+## Start dragging the loop point that ends divider `pass_index`. A pass of 1 is the loop end
+## itself; later dividers are whole loop lengths further on.
+func _begin_loop_drag(pass_index: int) -> void:
+	_loop_drag_pass = pass_index
+	_loop_drag_start_content = clip_instance.clip.content_length_ticks if clip_instance.clip else 0
+
+
+## Move the dragged divider to the pointer: the loop length changes, the clip's own length doesn't.
+func _drag_loop_point(free_move: bool) -> void:
+	var inst := clip_instance
+	var local_tick: int = timeline.pixels_to_ticks(get_local_mouse_position().x)
+	if not free_move:
+		local_tick = timeline.grid_helper.snap_ticks(inst.start_ticks + local_tick) - inst.start_ticks
+	# Divider k sits k loop lengths after the loop start, minus the trim
+	var new_length := int(round(float(inst.clip_offset + local_tick - inst.loop_start_ticks) / float(_loop_drag_pass)))
+	new_length = maxi(1, new_length)
+	var clip := inst.clip
+	if clip and clip.type == Clip.ClipType.MIDI:
+		# Past the end of the notes the clip itself grows; pulling back gives the growth up again
+		clip.set_content_length(maxi(_loop_drag_start_content, inst.loop_start_ticks + new_length))
+	elif clip:
+		# Audio can't grow, so the loop stops at the end of the file
+		new_length = mini(new_length, maxi(1, inst.content_end_ticks() - inst.loop_start_ticks))
+	inst.set_loop(true, inst.loop_start_ticks, new_length)
+	_update_waveform()
+	clip_renderer.queue_redraw()
+
+
+## Record the loop-point drag as one undo step.
+func _finish_loop_drag() -> void:
+	_loop_drag_pass = 0
+	var new_state := clip_instance.get_loop_state()
+	var clip_length := clip_instance.clip.content_length_ticks if clip_instance.clip else 0
+	if new_state != _loop_drag_start_state or clip_length != _loop_drag_start_content:
+		HistoryUtil.record(ClipInstanceTransformCommand.new(
+			"Move Loop Point", clip_instance,
+			clip_instance.start_ticks, clip_instance.duration_ticks, clip_instance.clip_offset,
+			clip_instance.start_ticks, clip_instance.duration_ticks, clip_instance.clip_offset,
+			_loop_drag_start_state, new_state,
+			_loop_drag_start_content,
+			clip_instance.clip.content_length_ticks if clip_instance.clip else -1))
+	_loop_drag_start_state = []
+
+
 ## Every selected clip when this one is part of a multi-selection, else just this clip.
 func _find_resize_group() -> Array[TimelineClip]:
 	var group: Array[TimelineClip] = [self]
@@ -521,6 +698,8 @@ func _begin_resize(edge: String) -> void:
 		resize_start_ticks = clip_instance.start_ticks
 		resize_start_duration = clip_instance.duration_ticks
 		resize_start_offset = clip_instance.clip_offset
+		resize_start_loop = clip_instance.get_loop_state()
+		resize_start_content_length = clip_instance.clip.content_length_ticks if clip_instance.clip else 0
 
 
 ## Pointer movement of `tick_delta` as an edge delta, snapped so this clip's edge lands on the grid.
@@ -587,7 +766,20 @@ func _resize_by(delta: int, min_duration: int) -> void:
 
 		# Update clip instance
 		clip_instance.set_duration(new_duration)
+		_extend_clip_to(new_duration, resize_start_content_length)
 		_update_from_clip_instance()
+
+
+## Grow a MIDI clip's length so the instance's end is inside it, never below `start_length`
+## (so dragging the edge back undoes the growth). Audio can't grow, and a looping instance
+## repeats its content rather than lengthening it.
+func _extend_clip_to(instance_end_ticks: int, start_length: int) -> void:
+	var clip := clip_instance.clip
+	if clip == null or clip.type != Clip.ClipType.MIDI or clip_instance.loop_enabled:
+		return
+	var wanted := maxi(start_length, clip_instance.clip_offset + instance_end_ticks)
+	if wanted != clip.content_length_ticks:
+		clip.set_content_length(wanted)
 
 
 ## Record the group's resize as one undo step and clear the resize state.
@@ -602,12 +794,17 @@ func _finish_resize() -> void:
 			inst.start_ticks != clip_ui.resize_start_ticks
 			or inst.duration_ticks != clip_ui.resize_start_duration
 			or inst.clip_offset != clip_ui.resize_start_offset
+			or inst.get_loop_state() != clip_ui.resize_start_loop
+			or (inst.clip and inst.clip.content_length_ticks != clip_ui.resize_start_content_length)
 		):
 			cmds.append(ClipInstanceTransformCommand.new(
 				"Resize Clip",
 				inst,
 				clip_ui.resize_start_ticks, clip_ui.resize_start_duration, clip_ui.resize_start_offset,
-				inst.start_ticks, inst.duration_ticks, inst.clip_offset
+				inst.start_ticks, inst.duration_ticks, inst.clip_offset,
+				clip_ui.resize_start_loop, inst.get_loop_state(),
+				clip_ui.resize_start_content_length,
+				inst.clip.content_length_ticks if inst.clip else -1
 			))
 	_resize_group.clear()
 	HistoryUtil.record_many("Resize Clips", cmds)
