@@ -29,7 +29,7 @@ func close_socket():
 func prepare_message(osc_address : String, args : Array):
 	var packet = PackedByteArray()
 	
-	packet.append_array(osc_address.to_ascii_buffer())
+	packet.append_array(osc_address.to_utf8_buffer())
 	
 	packet.append(0)
 	while fmod(packet.size(), 4):
@@ -75,7 +75,7 @@ func prepare_message(osc_address : String, args : Array):
 				pack.encode_float(0, arg)
 				pack.reverse()
 			TYPE_STRING:
-				pack.append_array(arg.to_ascii_buffer())
+				pack.append_array(arg.to_utf8_buffer())
 				pack.append(0)
 				while fmod(pack.size(), 4):
 					pack.append(0)

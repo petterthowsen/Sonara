@@ -55,7 +55,7 @@ func parse():
 func parse_message(packet: PackedByteArray):
 	#print(packet)
 	var comma_index = packet.find(44)
-	var address = packet.slice(0, comma_index).get_string_from_ascii()
+	var address = _decode_string(packet.slice(0, comma_index))
 	var args = packet.slice(comma_index, packet.size())
 	var tags = args.get_string_from_ascii()
 	var vals = []
@@ -105,9 +105,12 @@ func parse_message(packet: PackedByteArray):
 				vals.append(val.decode_float(0))
 				args = args.slice(4, args.size())
 			115: #s: string
-				var val = args.get_string_from_ascii()
-				vals.append(val)
-				args = args.slice(ceili((val.length() + 1) / 4.0) * 4, args.size())
+				# OSC strings are NUL-terminated UTF-8; pad by byte length, not character count.
+				var end = args.find(0)
+				if end < 0:
+					end = args.size()
+				vals.append(_decode_string(args.slice(0, end)))
+				args = args.slice(ceili((end + 1) / 4.0) * 4, args.size())
 			98:  #b: blob
 				vals.append(args)
 			
@@ -164,7 +167,7 @@ func parse_bundle(packet: PackedByteArray):
 		bund_packet.insert(0,0)
 		#print(bund_packet)
 		var comma_index = bund_packet.find(44)
-		var address = bund_packet.slice(1, comma_index).get_string_from_ascii()
+		var address = _decode_string(bund_packet.slice(1, comma_index))
 		var args = bund_packet.slice(comma_index, packet.size())
 		var tags = args.get_string_from_ascii()
 		var vals = []
@@ -205,9 +208,12 @@ func parse_bundle(packet: PackedByteArray):
 					vals.append(val.decode_float(0))
 					args = args.slice(4, args.size())
 				115: #s: string
-					var val = args.get_string_from_ascii()
-					vals.append(val)
-					args = args.slice(ceili((val.length() + 1) / 4.0) * 4, args.size())
+					# OSC strings are NUL-terminated UTF-8; pad by byte length, not character count.
+					var end = args.find(0)
+					if end < 0:
+						end = args.size()
+					vals.append(_decode_string(args.slice(0, end)))
+					args = args.slice(ceili((end + 1) / 4.0) * 4, args.size())
 				98:  #b: blob
 					vals.append(args)
 				
@@ -215,3 +221,11 @@ func parse_bundle(packet: PackedByteArray):
 		print(address, " ", vals)
 		incoming_messages[address] = vals
 		message_received.emit(address, vals, Time.get_time_string_from_system())
+
+
+## Decode a NUL-terminated/padded OSC string as UTF-8, stopping at the first NUL.
+func _decode_string(bytes: PackedByteArray) -> String:
+	var end = bytes.find(0)
+	if end >= 0:
+		bytes = bytes.slice(0, end)
+	return bytes.get_string_from_utf8()

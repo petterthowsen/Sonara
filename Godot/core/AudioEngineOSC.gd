@@ -21,6 +21,7 @@ signal device_spectrum_received(osc_path: String, spectrum: PackedFloat32Array)
 const ENGINE_SEND_PORT = 7000  # Rust listens here
 const ENGINE_RECEIVE_PORT = 7001  # Godot listens here
 const HEARTBEAT_TIMEOUT_SEC = 3.0  # Disconnect if no heartbeat for 3 seconds
+const STALL_THRESHOLD_MSEC = 500  # A frame gap this long means the main thread was blocked
 
 var logger = Log.make("OSC")
 
@@ -37,6 +38,7 @@ var osc_server: OSCServer
 
 var _is_engine_connected: bool = false
 var _last_heartbeat_time: float = 0.0  # Time.get_ticks_msec() of last heartbeat
+var _last_process_msec: int = 0  # Time.get_ticks_msec() of the previous _process
 var _is_ready: bool = false  # Whether OSC server/client are fully initialized
 ## Messages sent before the UDP client is bound; flushed from `_ready()`.
 var _pending_sends: Array[Dictionary] = []
@@ -80,6 +82,14 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	"""Check for heartbeat timeout."""
+	var now := Time.get_ticks_msec()
+	# Heartbeats that arrived while the main thread was blocked (e.g. a large project sync)
+	# are still queued in the socket: OSCServer is our child, so it drains them after this
+	# check. Restart the timeout window instead of blaming the engine for our own stall.
+	if _last_process_msec > 0 and now - _last_process_msec > STALL_THRESHOLD_MSEC:
+		_last_heartbeat_time = now
+	_last_process_msec = now
+
 	if _is_engine_connected:
 		var time_since_heartbeat = (Time.get_ticks_msec() - _last_heartbeat_time) / 1000.0
 		if time_since_heartbeat > HEARTBEAT_TIMEOUT_SEC:
