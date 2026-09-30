@@ -15,6 +15,9 @@ var _is_rebuilding: bool = false
 
 # Minimum timeline length (in bars) when empty
 const MIN_TIMELINE_BARS: int = 32  # Show at least 32 bars
+## The width grows in steps of this many bars. It follows the scroll position (infinite scroll),
+## and every width change relayouts every lane and clip, so it must not change on every frame.
+const WIDTH_STEP_BARS: int = 16
 # Instanced (not TimelineTrack.new()) so the colors/border set on the scene apply
 const TimelineTrackScene = preload("res://arranger/timeline/TimelineTrack.tscn")
 
@@ -102,15 +105,67 @@ func _ready():
 func _on_grid_helper_changed() -> void:
 	"""Update timeline width when grid_helper properties change (scroll, zoom, etc)."""
 	_update_timeline_width()
-	# Scroll/zoom changes shift which part of the grid is visible; tracks only
-	# clip-draw the visible range, so they must redraw explicitly here (a pure
-	# scroll doesn't resize anything, so NOTIFICATION_RESIZED won't fire).
-	for timeline_track in timeline_tracks:
-		if timeline_track:
-			timeline_track.queue_redraw()
-	for row in _lane_rows.values():
-		if is_instance_valid(row):
-			row.queue_redraw()
+	# Scroll/zoom changes shift which part of the grid is visible. The row backgrounds and the
+	# automation curves only draw the visible range, so they redraw here (a pure scroll doesn't
+	# resize anything, so NOTIFICATION_RESIZED won't fire). Track lanes draw nothing themselves.
+	queue_redraw()
+	_redraw_lane_rows()
+
+
+## TimelineTracks whose clips were given an on-screen range by the last _update_clip_windows.
+var _rows_on_screen: Dictionary = {}
+
+
+func _process(_delta: float) -> void:
+	_update_clip_windows()
+
+
+## Tell every clip on an on-screen row which part of it is visible, so its notes are drawn only
+## there (MidiclipRenderer.show_px_range); clips on rows that just left the screen drop theirs.
+## Runs after Arranger._process (parents process first) has applied this frame's scroll and
+## zoom, and before the deferred redraws those queued.
+func _update_clip_windows() -> void:
+	var view := _visible_content_rect() if is_visible_in_tree() else Rect2()
+	var on_screen: Dictionary = {}
+	if view.has_area():
+		for row in timeline_tracks:
+			if not is_instance_valid(row) or not row.visible:
+				continue
+			if row.position.y >= view.end.y or row.position.y + row.size.y <= view.position.y:
+				continue
+			on_screen[row] = true
+			for clip_ui in row.clip_instances:
+				if is_instance_valid(clip_ui) and clip_ui.clip_renderer:
+					var x0: float = row.position.x + clip_ui.position.x + clip_ui.clip_renderer.position.x
+					clip_ui.clip_renderer.show_px_range(view.position.x - x0, view.end.x - x0)
+	for row in _rows_on_screen:
+		if on_screen.has(row) or not is_instance_valid(row):
+			continue
+		for clip_ui in row.clip_instances:
+			if is_instance_valid(clip_ui) and clip_ui.clip_renderer:
+				clip_ui.clip_renderer.show_px_range(0.0, 0.0)
+	_rows_on_screen = on_screen
+
+
+## The part of this control that is on screen, in local coordinates: the viewport clipped by
+## every ancestor that clips its contents (the horizontal and vertical ScrollContainers).
+func _visible_content_rect() -> Rect2:
+	var rect := get_viewport_rect()
+	var node := get_parent()
+	while node is CanvasItem:
+		if node is Control and node.clip_contents:
+			rect = rect.intersection(node.get_global_rect())
+		node = node.get_parent()
+	if not rect.has_area():
+		return Rect2()
+	return get_global_transform().affine_inverse() * rect
+
+
+## Rows moved or resized (reorder, fold animation, track height, automation lanes shown or
+## hidden): the row backgrounds drawn in _draw follow them.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_SORT_CHILDREN or what == NOTIFICATION_RESIZED:
+		queue_redraw()
 
 
 func get_viewport_width() -> float:
@@ -543,11 +598,10 @@ func set_scroll_offset(offset: float) -> void:
 	_redraw_all_tracks()
 
 func _redraw_all_tracks() -> void:
-	"""Request redraw for all timeline tracks and update clip positions."""
+	"""Update clip positions on every track and redraw the row backgrounds."""
 	for timeline_track in timeline_tracks:
 		if timeline_track:
 			timeline_track._update_clip_positions()
-			timeline_track.queue_redraw()
 	queue_redraw()
 
 
@@ -566,9 +620,7 @@ func refresh_layout() -> void:
 		timeline_track._update_clip_sizes(height)
 		# Update positions after sizes
 		timeline_track._update_clip_positions()
-		# Redraw track
-		timeline_track.queue_redraw()
-	# Redraw timeline container
+	# Redraw the row backgrounds
 	queue_redraw()
 
 
@@ -622,14 +674,17 @@ func _update_timeline_width() -> void:
 	# Use whichever is larger: content length, minimum, or scroll extent
 	var timeline_ticks = max(last_clip_end_ticks, min_ticks, scroll_extent_ticks)
 
-	# Add some padding (2 bars)
+	# Add some padding (2 bars), then round up to a whole width step
 	timeline_ticks += ticks_per_bar * 2
+	var step_ticks: int = ticks_per_bar * WIDTH_STEP_BARS
+	timeline_ticks = ceili(float(timeline_ticks) / step_ticks) * step_ticks
 
 	# Convert to pixels
 	var timeline_width = ticks_to_pixels(timeline_ticks)
 
 	# Set minimum width on this container
-	custom_minimum_size.x = timeline_width
+	if custom_minimum_size.x != timeline_width:
+		custom_minimum_size.x = timeline_width
 
 # ============================================================================
 # COORDINATE CONVERSION
@@ -659,6 +714,8 @@ func register_clip_ui(clip_ui: TimelineClip) -> void:
 		clip_selection_manager.register_clip_ui(clip_ui)
 	if not clip_ui:
 		return
+	if clip_ui.clip_renderer:
+		clip_ui.clip_renderer.enable_culling()
 	if not clip_ui.drag_begin_requested.is_connected(_on_clip_drag_begin_requested):
 		clip_ui.drag_begin_requested.connect(_on_clip_drag_begin_requested)
 
@@ -1342,7 +1399,6 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 	for track_ui in tracks_to_refresh:
 		if track_ui:
 			track_ui._update_clip_positions()
-			track_ui.queue_redraw()
 	HistoryUtil.record_many("Move Clips", cmds)
 	clip_selection_manager.refresh_after_modification()
 	queue_redraw()
@@ -1441,7 +1497,6 @@ func _refresh_tracks_for_instances(instances: Array[ClipInstance]) -> void:
 	for track_ui in tracks_to_refresh:
 		if track_ui:
 			track_ui._update_clip_positions()
-			track_ui.queue_redraw()
 
 
 ## True when `local_pos` (Timeline space) hits a clip UI.
@@ -1530,7 +1585,16 @@ func _on_clip_make_unique_requested(instances: Array[ClipInstance]) -> void:
 
 
 
+## Content x range currently inside the scroll viewport.
+func get_visible_x_range() -> Vector2:
+	var start_x := 0.0
+	if grid_helper:
+		start_x = clampf(grid_helper.scroll_position, 0.0, size.x)
+	return Vector2(start_x, clampf(start_x + get_viewport_width(), 0.0, size.x))
+
+
 func _draw() -> void:
+	_draw_row_backgrounds()
 	if not clip_selection_manager:
 		return
 
@@ -1541,6 +1605,47 @@ func _draw() -> void:
 		var rect := clip_selection_manager.box_rect.abs()
 		draw_rect(rect, theme_fill, true)
 		draw_rect(rect, theme_stroke, false, 2.0)
+
+
+## Every row's fill, the grid, then every row's bottom border, in one pass beneath the rows.
+## Only the visible x range is drawn, so a horizontal scroll redraws this one canvas item; a
+## vertical scroll redraws nothing. Children draw on top: clips over track lanes, curves and
+## points over automation lanes.
+func _draw_row_backgrounds() -> void:
+	var visible_x := get_visible_x_range()
+	if visible_x.y <= visible_x.x:
+		return
+	var width := visible_x.y - visible_x.x
+	var grid_style: TimelineTrack = null
+	var rows_bottom := 0.0
+	for child in get_children():
+		var row := child as Control
+		if row == null or not row.visible:
+			continue
+		if row is TimelineTrack:
+			if grid_style == null:
+				grid_style = row
+			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.get_lane_color(), true)
+		elif row is AutomationLaneRow:
+			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.bg_color, true)
+		else:
+			continue
+		rows_bottom = maxf(rows_bottom, row.position.y + row.size.y)
+
+	if grid_style and grid_helper:
+		grid_style.draw_grid_lines(self, grid_helper, visible_x.x, visible_x.y, 0.0, rows_bottom)
+
+	for child in get_children():
+		var row := child as Control
+		if row == null or not row.visible:
+			continue
+		if row is TimelineTrack:
+			var thickness: float = row.border_thickness
+			if thickness > 0:
+				draw_rect(Rect2(visible_x.x, row.position.y + row.size.y - thickness, width, thickness), row.border_color, true)
+		elif row is AutomationLaneRow:
+			var y: float = row.position.y + row.size.y - 1.0
+			draw_line(Vector2(visible_x.x, y), Vector2(visible_x.y, y), row.border_color, 1.0)
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:

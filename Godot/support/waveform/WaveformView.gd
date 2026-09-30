@@ -188,8 +188,11 @@ func _set_param(key: String, value: Variant) -> void:
 	queue_redraw()
 
 
+## Without data there is no slice to point at (_apply_data sets it once the data is ready). A
+## MIDI clip's hidden view is resized on every arranger zoom step, so this skips real work.
 func _on_resized() -> void:
-	_update_slice()
+	if is_data_ready():
+		_update_slice()
 
 
 ## Local x range [x0, x1) of this control that is on screen, in whole pixels.

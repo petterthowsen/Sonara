@@ -79,37 +79,23 @@ script = ExtResource("1_timeline_clip")
 style_normal = SubResource("StyleBoxFlat_hpdcv")
 style_hovered = SubResource("StyleBoxFlat_c74fi")
 style_selected = SubResource("StyleBoxFlat_ehbcd")
+header_style = SubResource("StyleBoxFlat_w6h2l")
+name_settings = SubResource("LabelSettings_c74fi")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=285986600]
+[node name="ClipRenderer" type="Control" parent="." unique_id=1859425417]
+texture_filter = 1
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_top = 24.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 0
-
-[node name="Header" type="PanelContainer" parent="VBoxContainer" unique_id=1972394042]
-show_behind_parent = true
-layout_mode = 2
-mouse_filter = 1
-theme_override_styles/panel = SubResource("StyleBoxFlat_w6h2l")
-
-[node name="Label" type="Label" parent="VBoxContainer/Header" unique_id=1258780357]
-layout_mode = 2
-text = "Clip Name"
-label_settings = SubResource("LabelSettings_c74fi")
-text_overrun_behavior = 3
-
-[node name="ClipRenderer" type="Control" parent="VBoxContainer" unique_id=1859425417]
-texture_filter = 1
-layout_mode = 2
-size_flags_vertical = 3
 mouse_filter = 2
 script = ExtResource("2_c74fi")
 min_pitch_range = 6
 
-[node name="Waveform" type="Control" parent="VBoxContainer/ClipRenderer" unique_id=1418093527]
+[node name="Waveform" type="Control" parent="ClipRenderer" unique_id=1418093527]
 visible = false
 layout_mode = 1
 anchors_preset = 15

@@ -1,47 +1,51 @@
 # TimelineTrack.gd
 #
-# Draws vertical lines across itself and contains audio/midi clip nodes
+# One arranger lane: holds the clip nodes and handles empty-lane input. At runtime the Timeline
+# draws the lane fill, grid and bottom border for every row in one pass (see Timeline._draw), so
+# a scroll redraws one canvas item instead of every lane. This node draws them itself only as the
+# Godot editor preview, where there is no Timeline.
 @tool
 class_name TimelineTrack extends Control
 
 var logger : Log = Log.make("TimelineTrack")
 
 
-## Vertical line at the start of each bar (drawn 2px wide).
+## Vertical line at the start of each bar (drawn 2px wide). The Timeline draws every row's grid
+## with these colors, so they apply to automation lane rows too.
 @export var grid_color_bar: Color = "#000":
 	set(value):
 		grid_color_bar = value
-		queue_redraw()
+		_request_redraw()
 
 ## Vertical line on each beat that isn't a bar line. Hidden when beats are closer than GridHelper.min_line_spacing.
 @export var grid_color_beat: Color = "#151515":
 	set(value):
 		grid_color_beat = value
-		queue_redraw()
+		_request_redraw()
 
 ## Subdivision lines between beats (1/2, 1/4 or 1/8 beat): the finest level at least GridHelper.min_line_spacing apart.
 @export var grid_color_tick: Color = "#353535":
 	set(value):
 		grid_color_tick = value
-		queue_redraw()
+		_request_redraw()
 
 ## Lane fill. When tinting by track color, only its value (brightness) is used.
 @export var bg_color: Color = "#555":
 	set(value):
 		bg_color = value
-		_refresh_lane_color()
+		_request_redraw()
 
 @export_group("Border")
 ## Horizontal line along the bottom edge that separates this lane from the next.
 @export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3):
 	set(value):
 		border_color = value
-		queue_redraw()
+		_request_redraw()
 
 @export var border_thickness: float = 1.0:
 	set(value):
 		border_thickness = value
-		queue_redraw()
+		_request_redraw()
 
 @export_group("Editor Preview")
 ## Zoom of the mock grid drawn in the Godot editor only (no Timeline there).
@@ -68,7 +72,6 @@ var timeline: Timeline = null
 # Clip UI instances
 const TimelineClipScene = preload("res://arranger/timeline/clip/TimelineClip.tscn")
 var clip_instances: Array[TimelineClip] = []  # Array of TimelineClip instances
-var _lane_bg: ColorRect = null
 # Stand-in for timeline.grid_helper so the grid renders in the Godot editor
 var _preview_grid_helper: GridHelper = null
 
@@ -78,18 +81,17 @@ var _preview_grid_helper: GridHelper = null
 signal empty_area_clicked(ticks: int, pixels: float)
 
 
-## Set up hit-testing, fill width, and the live-updating lane tint.
+## Set up hit-testing and fill width.
 func _ready():
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_ensure_lane_bg()
-	_refresh_lane_color()
 
 
-## Redraw grid/border when layout changes; Control `_draw` does not do this on its own.
+## Redraw the editor preview when its size changes; Control `_draw` does not do this on its own.
+## At runtime the Timeline redraws after every layout pass instead.
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
+	if what == NOTIFICATION_RESIZED and timeline == null:
 		queue_redraw()
 
 
@@ -156,7 +158,7 @@ func _update_from_track() -> void:
 
 	# Create clip instances for all clips in track
 	_update_clips()
-	_refresh_lane_color()
+	_request_redraw()
 
 
 func _on_track_height_changed(new_height: int) -> void:
@@ -167,7 +169,7 @@ func _on_track_height_changed(new_height: int) -> void:
 
 func _on_track_color_changed(_new_color: Color) -> void:
 	"""Apply the new track color to the lane background and clip UIs immediately."""
-	_refresh_lane_color()
+	_request_redraw()
 	_update_clip_track_colors()
 
 
@@ -233,22 +235,8 @@ func _update_clip_positions() -> void:
 # ============================================================================
 # DRAWING
 # ============================================================================
-func _ensure_lane_bg() -> void:
-	"""Create a full-rect color layer so lane tint updates without waiting on `_draw`."""
-	if _lane_bg != null:
-		return
-	_lane_bg = ColorRect.new()
-	_lane_bg.name = "LaneBackground"
-	_lane_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_lane_bg.show_behind_parent = true
-	add_child(_lane_bg)
-	_lane_bg.owner = null
-	_lane_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	move_child(_lane_bg, 0)
-
-
-func _get_lane_color() -> Color:
-	"""Resolve the lane fill from track color, falling back to `bg_color`."""
+## The lane fill: the track color at `bg_color`'s brightness, or `bg_color` when tinting is off.
+func get_lane_color() -> Color:
 	if track == null:
 		return bg_color
 	var tint_by_track := true
@@ -261,13 +249,12 @@ func _get_lane_color() -> Color:
 	return bg_color
 
 
-func _refresh_lane_color() -> void:
-	"""Push the current lane color to the ColorRect and redraw grid/border."""
-	if _lane_bg == null and is_inside_tree():
-		_ensure_lane_bg()
-	if _lane_bg:
-		_lane_bg.color = _get_lane_color()
-	queue_redraw()
+## Lane look changed: the Timeline draws it at runtime, this node only in the editor preview.
+func _request_redraw() -> void:
+	if timeline:
+		timeline.queue_redraw()
+	else:
+		queue_redraw()
 
 
 func _update_clip_track_colors() -> void:
@@ -279,23 +266,20 @@ func _update_clip_track_colors() -> void:
 			clip_ui.track_color = track.color
 
 
+## Editor preview only; at runtime Timeline._draw draws the fill, grid and border of every row.
 func _draw():
-	if _lane_bg == null:
-		draw_rect(Rect2(Vector2.ZERO, size), _get_lane_color(), true, -1.0, false)
-	
-	if Engine.is_editor_hint() or (timeline and Sonara and Sonara.editor and Sonara.editor.project):
-		_draw_grid()
-
-	# Draw bottom border
+	if timeline:
+		return
+	draw_rect(Rect2(Vector2.ZERO, size), get_lane_color(), true, -1.0, false)
+	var helper := _get_preview_grid_helper()
+	if helper:
+		draw_grid_lines(self, helper, 0.0, size.x, 0.0, size.y)
 	if border_thickness > 0:
-		var border_y = size.y - border_thickness
-		draw_rect(Rect2(0, border_y, size.x, border_thickness), border_color, true)
+		draw_rect(Rect2(0, size.y - border_thickness, size.x, border_thickness), border_color, true)
 
 
-func _get_grid_helper() -> GridHelper:
-	"""The timeline's shared GridHelper, or a default 4/4 mock when previewing in the editor."""
-	if timeline and timeline.grid_helper:
-		return timeline.grid_helper
+## A default 4/4 GridHelper mock so the grid renders in the Godot editor.
+func _get_preview_grid_helper() -> GridHelper:
 	if not Engine.is_editor_hint():
 		return null
 	if _preview_grid_helper == null:
@@ -312,46 +296,23 @@ func _sync_preview_grid_helper() -> void:
 	queue_redraw()
 
 
-func _draw_grid() -> void:
-	"""Draw vertical grid lines using GridHelper, clipped to the visible scroll range."""
-	var helper := _get_grid_helper()
-	if helper == null:
+## Draw the vertical grid lines between content x `start_x` and `end_x`, from `y0` to `y1`,
+## onto `target` in this lane's grid colors. `target` is in content coordinates (it scrolls
+## with the ScrollContainer), so the lines are not offset by the scroll position.
+func draw_grid_lines(target: CanvasItem, helper: GridHelper, start_x: float, end_x: float, y0: float, y1: float) -> void:
+	if end_x <= start_x or y1 <= y0:
 		return
-
-	# TimelineTrack is sized to the full (scrollable) content width, not just
-	# the visible viewport, so drawing start_x=0..size.x draws the whole grid
-	# on every track on every redraw (e.g. on every zoom change). Clip to the
-	# currently visible scroll range instead. The editor preview has no
-	# timeline, so it just draws the whole width.
-	var start_x := 0.0
-	var end_x := size.x
-	if timeline:
-		var viewport_width = timeline.get_viewport_width()
-		start_x = clampf(helper.scroll_position, 0.0, size.x)
-		end_x = clampf(helper.scroll_position + viewport_width, 0.0, size.x)
-	if end_x <= start_x:
-		return
-
-	# Get grid lines from shared grid_helper
-	# use_scroll = false because TimelineTrack is inside a ScrollContainer
-	# which automatically handles the viewport translation
-	var grid_lines = helper.get_visible_grid_lines(start_x, end_x, 0.0, false)
-	
-	# Draw each grid line
-	for line in grid_lines:
-		var x = line.x
-		
-		# Only draw if within visible area
-		if x >= 0.0 and x <= size.x:
-			match line.type:
-				GridHelper.GridLineType.BAR:
-					draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_bar, 2.0)
-				
-				GridHelper.GridLineType.BEAT:
-					draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_beat, 1.0)
-				
-				GridHelper.GridLineType.SUBDIVISION:
-					draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_tick, 1.0)
+	for line in helper.get_visible_grid_lines(start_x, end_x, 0.0, false):
+		var x: float = line.x
+		if x < start_x or x > end_x:
+			continue
+		match line.type:
+			GridHelper.GridLineType.BAR:
+				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_bar, 2.0)
+			GridHelper.GridLineType.BEAT:
+				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_beat, 1.0)
+			GridHelper.GridLineType.SUBDIVISION:
+				target.draw_line(Vector2(x, y0), Vector2(x, y1), grid_color_tick, 1.0)
 
 
 # ============================================================================

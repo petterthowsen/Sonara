@@ -1,6 +1,6 @@
 # AutomationLaneRow.gd
-# The timeline-side row for one automation lane: draws the grid the way TimelineTrack does, draws
-# the lane's curve and points, and owns the direct-manipulation input - double-click to insert
+# The timeline-side row for one automation lane: draws the lane's curve and points (the Timeline
+# draws its fill, grid and border along with every other row's), and owns the direct-manipulation input - double-click to insert
 # (and keep dragging the new point), drag to move, shift-click / shift-drag to add or remove
 # points, drag on empty space to box-select, ctrl-drag to select a grid-snapped time range,
 # right-click for the point menu (REQ-013, REQ-018, REQ-019, REQ-020).
@@ -14,10 +14,7 @@ class_name AutomationLaneRow extends Control
 
 var logger: Log = Log.make("AutomationLaneRow")
 
-## Grid colors, matching TimelineTrack so the two row kinds line up visually.
-@export var grid_color_bar: Color = Color("#000")
-@export var grid_color_beat: Color = Color("#151515")
-@export var grid_color_tick: Color = Color("#353535")
+## Row fill and bottom border, drawn by Timeline._draw. The grid uses TimelineTrack's colors.
 @export var bg_color: Color = Color(0.09, 0.09, 0.09, 1.0)
 @export var border_color: Color = Color(0.15, 0.15, 0.15, 0.3)
 
@@ -192,9 +189,6 @@ func _point_at(local_pos: Vector2) -> AutomationPoint:
 # ============================================================================
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), bg_color, true)
-	_draw_grid()
-
 	if lane:
 		_draw_range()
 		_draw_curve()
@@ -206,34 +200,6 @@ func _draw() -> void:
 		var box := _box_rect()
 		draw_rect(box, Color(0.4, 0.8, 1.0, 0.15), true)
 		draw_rect(box, Color(0.4, 0.8, 1.0, 0.6), false, 1.0)
-
-	draw_line(Vector2(0, size.y - 1), Vector2(size.x, size.y - 1), border_color, 1.0)
-
-
-## Vertical grid lines, clipped to the visible scroll range exactly like
-## `TimelineTrack._draw_grid()` - the row is as wide as the whole scrollable timeline, so drawing
-## 0..size.x would redraw the entire song on every scroll.
-func _draw_grid() -> void:
-	if timeline == null or timeline.grid_helper == null:
-		return
-	var helper := timeline.grid_helper
-	var viewport_width := timeline.get_viewport_width()
-	var start_x := clampf(helper.scroll_position, 0.0, size.x)
-	var end_x := clampf(helper.scroll_position + viewport_width, 0.0, size.x)
-	if end_x <= start_x:
-		return
-
-	for line in helper.get_visible_grid_lines(start_x, end_x, 0.0, false):
-		var x: float = line.x
-		if x < 0.0 or x > size.x:
-			continue
-		match line.type:
-			GridHelper.GridLineType.BAR:
-				draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_bar, 2.0)
-			GridHelper.GridLineType.BEAT:
-				draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_beat, 1.0)
-			GridHelper.GridLineType.SUBDIVISION:
-				draw_line(Vector2(x, 0), Vector2(x, size.y), grid_color_tick, 1.0)
 
 
 ## The lane's curve: a flat hold before the first point and after the last (REQ-006), a

@@ -1,5 +1,8 @@
 # TimelineClip.gd
-# Visual representation of a Clip on the timeline
+# Visual representation of a Clip on the timeline. The body, header band and name are drawn here
+# rather than built from container and Label nodes: every node under the scrolled timeline costs
+# time on each scroll frame, and a project has hundreds of clips. Only the note/waveform renderer
+# is a child.
 class_name TimelineClip extends Control
 
 static var logger := Log.make("TimelineClip")
@@ -11,10 +14,8 @@ signal drag_begin_requested(clip_ui: TimelineClip, press_global_position: Vector
 signal context_menu_requested(clip_ui: TimelineClip, global_position: Vector2)
 signal open_in_editor_requested(clip_ui: TimelineClip)  # Double-click on the clip body
 
-@onready var header: PanelContainer = $VBoxContainer/Header
-@onready var label: Label = $VBoxContainer/Header/Label
-@onready var clip_renderer: MidiclipRenderer = $VBoxContainer/ClipRenderer
-@onready var waveform_view: WaveformView = $VBoxContainer/ClipRenderer/Waveform
+@onready var clip_renderer: MidiclipRenderer = $ClipRenderer
+@onready var waveform_view: WaveformView = $ClipRenderer/Waveform
 
 # Data binding
 var clip_instance: ClipInstance = null:  # The instance we're displaying
@@ -62,22 +63,26 @@ var _resize_group: Array[TimelineClip] = []
 @export var style_hovered: StyleBoxFlat = null
 @export var style_selected: StyleBoxFlat = null
 
+@export_group("Header")
+## Band along the top holding the clip name. ClipRenderer's offset_top matches its height.
+@export var header_style: StyleBoxFlat = null
+@export var header_height: float = 24.0
+## Font size and color of the clip name (the font is the theme's Label font).
+@export var name_settings: LabelSettings = null
+@export_group("")
+
+## The clip name, shaped once per rename and trimmed with an ellipsis to the header width.
+var _name_line := TextLine.new()
+var _name_text: String = ""
+
 ## Own hover, cursor, and mouse-filter so child visuals don't steal clip clicks.
 func _ready() -> void:
 	focus_mode = Control.FOCUS_CLICK
 	# Children are visual-only; this Control owns clip mouse input. PASS so
 	# unused events (middle-click pan) are not auto-handled by the Viewport.
 	mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBoxContainer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if header:
-		header.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		header.custom_minimum_size.y = 24
-	if label:
-		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		label.custom_minimum_size.y = 20
-		if label.label_settings:
-			label.label_settings = label.label_settings.duplicate()
-			label.label_settings.font_size = 14
+	_name_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_shape_name()
 	if clip_renderer:
 		clip_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	mouse_entered.connect(_on_mouse_entered)
@@ -151,7 +156,8 @@ func _on_instance_modified() -> void:
 	queue_redraw()
 
 
-## Follow zoom changes so the waveform's frames-per-pixel stays in step.
+## Follow zoom changes so the waveform's frames-per-pixel stays in step. Not scroll: the
+## WaveformView tracks its own visible slice, and every clip would otherwise run this per frame.
 func _bind_grid_helper() -> void:
 	var gh: GridHelper = timeline.grid_helper if timeline else null
 	if gh == _bound_grid_helper:
@@ -159,12 +165,12 @@ func _bind_grid_helper() -> void:
 	_unbind_grid_helper()
 	_bound_grid_helper = gh
 	if gh:
-		gh.changed.connect(_update_waveform)
+		gh.scale_changed.connect(_update_waveform)
 
 
 func _unbind_grid_helper() -> void:
-	if _bound_grid_helper and _bound_grid_helper.changed.is_connected(_update_waveform):
-		_bound_grid_helper.changed.disconnect(_update_waveform)
+	if _bound_grid_helper and _bound_grid_helper.scale_changed.is_connected(_update_waveform):
+		_bound_grid_helper.scale_changed.disconnect(_update_waveform)
 	_bound_grid_helper = null
 
 
@@ -285,11 +291,8 @@ func _update_from_clip_instance() -> void:
 	if clip_instance == null or timeline == null:
 		return
 
-	# Update label (use clip name if available)
-	if clip_instance.clip:
-		label.text = clip_instance.clip.name
-	else:
-		label.text = "Clip Instance"
+	# Update the name (use clip name if available)
+	_set_name_text(clip_instance.clip.name if clip_instance.clip else "Clip Instance")
 
 	# Update position and size based on instance timing
 	var start_x = timeline.ticks_to_pixels(clip_instance.start_ticks)
@@ -304,10 +307,49 @@ func _update_from_clip_instance() -> void:
 	_update_style()
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		queue_redraw()
+	elif what == NOTIFICATION_THEME_CHANGED:
+		_shape_name()
+
+
 func _draw() -> void:
-	"""Draw the stylebox manually."""
+	"""Draw the body stylebox, the header band and the clip name."""
 	var style := _get_current_style()
-	style.draw(get_canvas_item(), Rect2(Vector2.ZERO, size))
+	if style:
+		style.draw(get_canvas_item(), Rect2(Vector2.ZERO, size))
+	var band := Rect2(0.0, 0.0, size.x, minf(header_height, size.y))
+	if header_style:
+		header_style.draw(get_canvas_item(), band)
+	if _name_text.is_empty():
+		return
+	var margin_left := header_style.content_margin_left if header_style else 0.0
+	var margin_right := header_style.content_margin_right if header_style else 0.0
+	var margin_top := header_style.content_margin_top if header_style else 0.0
+	var width := size.x - margin_left - margin_right
+	if width <= 0.0:
+		return
+	_name_line.width = width
+	var color := name_settings.font_color if name_settings else Color.WHITE
+	_name_line.draw(get_canvas_item(), Vector2(margin_left, margin_top), color)
+
+
+func _set_name_text(text: String) -> void:
+	if text == _name_text:
+		return
+	_name_text = text
+	_shape_name()
+
+
+## Reshape the name for the current text and font; `_draw` only sets the width.
+func _shape_name() -> void:
+	_name_line.clear()
+	if not _name_text.is_empty() and is_inside_tree():
+		var font: Font = name_settings.font if name_settings and name_settings.font else get_theme_font("font", "Label")
+		var font_size: int = name_settings.font_size if name_settings else get_theme_font_size("font_size", "Label")
+		_name_line.add_string(_name_text, font, font_size)
+	queue_redraw()
 
 
 func _get_current_style() -> StyleBoxFlat:
