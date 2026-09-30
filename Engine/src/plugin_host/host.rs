@@ -35,6 +35,9 @@ pub struct SubprocessHostShared {
     event_tx: std::sync::mpsc::Sender<HostMessage>,
     /// Set when the plugin's parameter list or ranges changed (`rescan` with INFO or ALL)
     params_rescanned: Arc<AtomicBool>,
+    /// Set when the plugin's parameter values changed without per-parameter events (`rescan`
+    /// with VALUES, INFO or ALL), e.g. a preset loaded from its own GUI
+    param_values_rescanned: Arc<AtomicBool>,
     /// Set when the plugin asks for `params.flush()` while not processing
     flush_requested: Arc<AtomicBool>,
     /// Set when the plugin calls `mark_dirty` on the state extension
@@ -57,6 +60,7 @@ impl SubprocessHostShared {
             instance_id,
             event_tx,
             params_rescanned: Arc::new(AtomicBool::new(false)),
+            param_values_rescanned: Arc::new(AtomicBool::new(false)),
             flush_requested: Arc::new(AtomicBool::new(false)),
             state_dirty: Arc::new(AtomicBool::new(false)),
         }
@@ -78,6 +82,11 @@ impl SubprocessHostShared {
     /// True once after the plugin's parameter list or ranges changed.
     pub fn take_params_rescanned(&self) -> bool {
         self.params_rescanned.swap(false, Ordering::AcqRel)
+    }
+
+    /// True once after the plugin's parameter values changed wholesale.
+    pub fn take_param_values_rescanned(&self) -> bool {
+        self.param_values_rescanned.swap(false, Ordering::AcqRel)
     }
 
     /// Re-arm `mark_dirty` reporting: the engine is about to take a fresh state blob, so the
@@ -271,6 +280,13 @@ impl HostParamsImplMainThread for SubprocessHostMainThread<'_> {
         info!("Plugin requested parameter rescan ({:?})", flags);
         if flags.intersects(ParamRescanFlags::INFO | ParamRescanFlags::ALL) {
             self.shared.params_rescanned.store(true, Ordering::Release);
+        }
+        if flags
+            .intersects(ParamRescanFlags::VALUES | ParamRescanFlags::INFO | ParamRescanFlags::ALL)
+        {
+            self.shared
+                .param_values_rescanned
+                .store(true, Ordering::Release);
         }
     }
 

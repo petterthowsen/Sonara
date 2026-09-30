@@ -211,6 +211,36 @@ fn service_plugin_side(
     }
 }
 
+/// Read every parameter's current value and send it to the engine as a parameter change.
+fn send_all_param_values(socket: &UnixStream, state: &mut PluginState) {
+    let param_map = Arc::clone(state.param_map());
+    let mut handle = state.instance.plugin_handle();
+    let Some(params) = handle.get_extension::<PluginParams>() else {
+        return;
+    };
+    let mut sent = 0;
+    for param_id in 0..param_map.len() {
+        let Some(entry) = param_map.get(param_id) else {
+            continue;
+        };
+        let Some(value) = params.get_value(&mut handle, entry.clap_id) else {
+            continue;
+        };
+        send(
+            socket,
+            &HostMessage::Event {
+                instance_id: state.instance_id,
+                event: PluginEvent::ParameterValueChanged {
+                    param_id,
+                    value: entry.normalize(value),
+                },
+            },
+        );
+        sent += 1;
+    }
+    info!("Reported {} parameter values after a value rescan", sent);
+}
+
 /// Main plugin host event loop.
 ///
 /// Runs on the main thread (CLAP's main thread) until the engine closes the control socket. Audio
@@ -270,6 +300,11 @@ pub fn run_plugin_host(
             // Plugin-required main-thread work (timers, GUI callbacks, parameter flush).
             let span = state.span.clone();
             let _entered = span.enter();
+            // Values changed without per-parameter events (a preset loaded in the plugin's GUI):
+            // report every current value.
+            if state.shared.take_param_values_rescanned() {
+                send_all_param_values(&socket, state);
+            }
             service_plugin_side(&socket, state, &audio, &mut flush_events);
         }
 

@@ -80,6 +80,11 @@ impl ParamMap {
         map
     }
 
+    /// Number of parameter indices, including ones without info.
+    pub fn len(&self) -> u32 {
+        self.entries.len() as u32
+    }
+
     pub fn get(&self, index: u32) -> Option<ParamEntry> {
         self.entries.get(index as usize).copied().flatten()
     }

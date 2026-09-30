@@ -191,6 +191,13 @@ var _expected_param_count: int = 0
 ## SFZ/CLAP devices wipe and rebuild their parameter list on load; this keeps saved CC/param values.
 var _restored_parameter_values: Dictionary[int, float] = {}
 
+## Engine echoes still expected for values this instance sent: param_id -> [count, send msec].
+## While more than one is in flight, an arriving echo is for an older value and is dropped, so a
+## fast drag doesn't snap back to stale values. Entries older than PENDING_ECHO_TIMEOUT_MS are
+## discarded in case an echo never arrives.
+var _pending_echoes: Dictionary[int, Array] = {}
+const PENDING_ECHO_TIMEOUT_MS := 500
+
 ## A CLAP plugin's own state blob (presets, samples, anything its parameters don't cover), as of
 ## the last project save or load. Saved into the `.sonara` file as base64. Empty if the plugin has
 ## no state extension, or it was never saved.
@@ -331,26 +338,47 @@ func has_cc_parameters() -> bool:
 
 
 ## Set a parameter value (normalized 0.0-1.0)
-## This is called from UI controls and syncs to the engine.
-## Does NOT emit signal - signal is emitted when engine echoes back via OSC.
-## This ensures server is the single source of truth.
+## This is called from UI controls: it updates the local value, syncs it to the engine and emits
+## `parameter_changed` so every view of this device (device view, parameter list) updates. The
+## engine's echo only emits again if it corrects the value (see _on_parameter_value_received).
 func set_parameter_normalized(param_id: int, normalized_value: float) -> void:
 	if param_id in parameter_values:
 		var new_value = clamp(normalized_value, 0.0, 1.0)
 		var old_value = parameter_values[param_id]
-		
+
 		# Only sync if value actually changed
 		if abs(old_value - new_value) > 0.0001:
-			# Update local cache (for immediate visual feedback)
 			parameter_values[param_id] = new_value
 
 			var param = get_parameter(param_id)
-			if param and not param.syncable:
-				# UI-local parameter: emit immediately, do not send OSC
-				parameter_changed.emit(param_id, parameter_values[param_id])
-			else:
-				# Sync to engine - it will echo back and we'll emit signal then
+			if param == null or param.syncable:
+				_expect_echo(param_id)
 				sync_parameter_to_engine(param_id)
+			parameter_changed.emit(param_id, parameter_values[param_id])
+
+
+func _expect_echo(param_id: int) -> void:
+	var now := Time.get_ticks_msec()
+	var pending: Array = _pending_echoes.get(param_id, [0, now])
+	var count: int = pending[0] if now - int(pending[1]) < PENDING_ECHO_TIMEOUT_MS else 0
+	_pending_echoes[param_id] = [count + 1, now]
+
+
+## Consume one expected echo for `param_id`. True when newer local values are still in flight,
+## meaning the arriving echo is stale and should be ignored.
+func _consume_echo(param_id: int) -> bool:
+	if not _pending_echoes.has(param_id):
+		return false
+	var pending: Array = _pending_echoes[param_id]
+	if Time.get_ticks_msec() - int(pending[1]) >= PENDING_ECHO_TIMEOUT_MS:
+		_pending_echoes.erase(param_id)
+		return false
+	var remaining: int = int(pending[0]) - 1
+	if remaining <= 0:
+		_pending_echoes.erase(param_id)
+		return false
+	pending[0] = remaining
+	return true
 
 
 ## Get a parameter value (normalized 0.0-1.0)
@@ -1043,23 +1071,25 @@ func _on_parameter_value_received_wildcard(values: Array, address: String) -> vo
 
 func _on_parameter_value_received(values: Array, param_id: int) -> void:
 	"""Handle parameter value changes from the engine (all changes, including echoes).
-	This is the ONLY place we emit parameter_changed signal, ensuring server is source of truth.
-	Receives both: echoes of our UI changes AND plugin-initiated changes (GUI, preset, modulation)."""
+	Receives both: echoes of our UI changes AND plugin-initiated changes (GUI, preset, modulation).
+	Emits only when the value differs from the local one; echoes of older values sent by this
+	instance are dropped while a newer one is still in flight."""
 	if values.size() < 1:
 		return
-	
+
 	var new_value = float(values[0])
-	
+
 	# Update parameter if it exists
 	if param_id not in parameter_values:
 		push_warning("[DeviceInstance] Received update for unknown parameter %d" % param_id)
 		return
-	
+
+	if _consume_echo(param_id):
+		return
+
 	var old_value = parameter_values[param_id]
 	if abs(old_value - new_value) > 0.0001:  # Floating point tolerance
 		parameter_values[param_id] = clamp(new_value, 0.0, 1.0)
-		
-		# Always emit signal - this is the single source of truth for all parameter changes
 		parameter_changed.emit(param_id, parameter_values[param_id])
 
 
