@@ -294,7 +294,14 @@ impl Absorbent {
         }
     }
 
-    fn update(&mut self, low_freq: f32, high_freq: f32, low_db: f32, high_db: f32, sample_rate: f32) {
+    fn update(
+        &mut self,
+        low_freq: f32,
+        high_freq: f32,
+        low_db: f32,
+        high_db: f32,
+        sample_rate: f32,
+    ) {
         // Half the dB per cascaded section.
         self.low_gain = db_to_gain(low_db * 0.5);
         self.high_gain = db_to_gain(high_db * 0.5);
@@ -423,7 +430,15 @@ impl Fdn {
     }
 
     /// Recompute the absorbent filters and loop gains for the current Decay / band settings.
-    fn update_coefs(&mut self, sample_rate: f32, size_scale: f32, frozen: bool, decay: f32, low: (f32, f32), high: (f32, f32)) {
+    fn update_coefs(
+        &mut self,
+        sample_rate: f32,
+        size_scale: f32,
+        frozen: bool,
+        decay: f32,
+        low: (f32, f32),
+        high: (f32, f32),
+    ) {
         for i in 0..8 {
             let len_s = self.base_ms[i] * 0.001 * size_scale;
             let (gain, low_db, high_db) = if frozen {
@@ -590,10 +605,19 @@ impl Plate {
         }
     }
 
-    fn update_coefs(&mut self, sample_rate: f32, size_scale: f32, frozen: bool, decay: f32, low: (f32, f32), high: (f32, f32)) {
+    fn update_coefs(
+        &mut self,
+        sample_rate: f32,
+        size_scale: f32,
+        frozen: bool,
+        decay: f32,
+        low: (f32, f32),
+        high: (f32, f32),
+    ) {
         // A signal crosses both tanks in one loop; each tank applies the square root of the
         // round-trip gain, so the shelf dB halves too.
-        let total_loop = (self.tanks[0].len_seconds + self.tanks[1].len_seconds) * size_scale.max(0.01);
+        let total_loop =
+            (self.tanks[0].len_seconds + self.tanks[1].len_seconds) * size_scale.max(0.01);
         let (product, low_db, high_db) = if frozen {
             (1.0, 0.0, 0.0)
         } else {
@@ -605,7 +629,8 @@ impl Plate {
         };
         for tank in self.tanks.iter_mut() {
             tank.gain = product.sqrt();
-            tank.absorb.update(low.1, high.1, low_db, high_db, sample_rate);
+            tank.absorb
+                .update(low.1, high.1, low_db, high_db, sample_rate);
         }
     }
 
@@ -625,8 +650,22 @@ impl Plate {
         for i in 0..self.in_ap.len() {
             v = allpass(&mut self.in_ap[i], v, self.in_len[i].max(2.0), self.in_g[i]);
         }
-        let (y0, d0) = self.tanks[0].process(v + self.tanks[1].last, size_scale, mod_val, mod_depth, frozen, sample_rate);
-        let (y1, d1) = self.tanks[1].process(v + self.tanks[0].last, size_scale, -mod_val, mod_depth, frozen, sample_rate);
+        let (y0, d0) = self.tanks[0].process(
+            v + self.tanks[1].last,
+            size_scale,
+            mod_val,
+            mod_depth,
+            frozen,
+            sample_rate,
+        );
+        let (y1, d1) = self.tanks[1].process(
+            v + self.tanks[0].last,
+            size_scale,
+            -mod_val,
+            mod_depth,
+            frozen,
+            sample_rate,
+        );
         self.tanks[0].last = d0;
         self.tanks[1].last = d1;
         let out_l = (y0 * 0.7 + y1 * 0.4) * self.out_scale;
@@ -790,8 +829,9 @@ impl ReverbDevice {
         if self.settings.freeze {
             self.sleep.set_tail_seconds(None);
         } else {
-            self.sleep
-                .set_tail_seconds(Some(self.settings.decay * 1.5 + self.settings.predelay_ms * 0.001));
+            self.sleep.set_tail_seconds(Some(
+                self.settings.decay * 1.5 + self.settings.predelay_ms * 0.001,
+            ));
         }
     }
 
@@ -822,7 +862,8 @@ impl ReverbDevice {
 
         self.fdn[0].update_coefs(self.sample_rate, size, frozen, decay, low, high);
         self.fdn[1].update_coefs(self.sample_rate, size, frozen, decay, low, high);
-        self.plate.update_coefs(self.sample_rate, size, frozen, decay, low, high);
+        self.plate
+            .update_coefs(self.sample_rate, size, frozen, decay, low, high);
 
         self.tone_low_g = one_pole_g(self.low_cut_s.current(), self.sample_rate);
         self.tone_high_g = one_pole_g(self.high_cut_s.current(), self.sample_rate);
@@ -860,7 +901,9 @@ impl ReverbDevice {
         match algo {
             Algorithm::Room => self.fdn[0].process(dl, dr, size_scale, mods, depth, frozen, sr),
             Algorithm::Hall => self.fdn[1].process(dl, dr, size_scale, mods, depth, frozen, sr),
-            Algorithm::Plate => self.plate.process(dl, dr, size_scale, mods[0], depth, frozen, sr),
+            Algorithm::Plate => self
+                .plate
+                .process(dl, dr, size_scale, mods[0], depth, frozen, sr),
         }
     }
 
@@ -889,7 +932,8 @@ impl ReverbDevice {
         for (i, m) in mods.iter_mut().enumerate() {
             *m = self.lfo.value_at(LfoShape::Sine, i as f64 * 0.125);
         }
-        self.lfo.advance(self.rate_s.current() as f64 / self.sample_rate as f64);
+        self.lfo
+            .advance(self.rate_s.current() as f64 / self.sample_rate as f64);
 
         let pl = self.predelay_l.read_hermite(pd);
         let pr = self.predelay_r.read_hermite(pd);
@@ -1041,9 +1085,7 @@ impl AudioDevice for ReverbDevice {
             self.sleep.on_block(sample_count);
             return;
         }
-        let frames = sample_count
-            .min(inputs.len() / 2)
-            .min(outputs.len() / 2);
+        let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
         self.update_block(frames);
         for f in 0..frames {
             let in_l = inputs[f * 2];
@@ -1194,10 +1236,10 @@ impl AudioDevice for ReverbDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::dsp::test_util::schroeder_t60;
     use crate::audio::dsp::test_util::{
         impulse, left, peak, pink_noise, render, right, rms, spectrum_db, stereo, tone_amplitude,
     };
-    use crate::audio::dsp::test_util::schroeder_t60;
 
     fn make(sr: f32) -> ReverbDevice {
         let mut device = ReverbDevice::new(sr);
@@ -1281,18 +1323,36 @@ mod tests {
         let low = band_t60(&mut device, sr, 5.0, 60.0, 3.0);
         let high = band_t60(&mut device, sr, 4.0, 10_000.0, 3.0);
         // Defaults: Low ×1.2, High ×0.5.
-        assert!((low - 1.5 * 1.2).abs() / (1.5 * 1.2) < 0.2, "low default {low:.3}");
-        assert!((high - 1.5 * 0.5).abs() / (1.5 * 0.5) < 0.2, "high default {high:.3}");
+        assert!(
+            (low - 1.5 * 1.2).abs() / (1.5 * 1.2) < 0.2,
+            "low default {low:.3}"
+        );
+        assert!(
+            (high - 1.5 * 0.5).abs() / (1.5 * 0.5) < 0.2,
+            "high default {high:.3}"
+        );
 
         set_real(&mut device, LOW_MULT, 2.0);
         set_real(&mut device, HIGH_MULT, 0.25);
         render(&mut device, &vec![0.0; 4096 * 2], &[512]);
         let low2 = band_t60(&mut device, sr, 5.0, 60.0, 3.0);
         let high2 = band_t60(&mut device, sr, 4.0, 10_000.0, 3.0);
-        assert!(low2 > low * 1.05, "Low ×2 lengthens the low tail ({low:.3} → {low2:.3})");
-        assert!(high2 < high * 0.95, "High ×0.25 shortens the high tail ({high:.3} → {high2:.3})");
-        assert!((low2 - 1.5 * 2.0).abs() / (1.5 * 2.0) < 0.2, "Low ×2 T60 {low2:.3}");
-        assert!((high2 - 1.5 * 0.25).abs() / (1.5 * 0.25) < 0.2, "High ×0.25 T60 {high2:.3}");
+        assert!(
+            low2 > low * 1.05,
+            "Low ×2 lengthens the low tail ({low:.3} → {low2:.3})"
+        );
+        assert!(
+            high2 < high * 0.95,
+            "High ×0.25 shortens the high tail ({high:.3} → {high2:.3})"
+        );
+        assert!(
+            (low2 - 1.5 * 2.0).abs() / (1.5 * 2.0) < 0.2,
+            "Low ×2 T60 {low2:.3}"
+        );
+        assert!(
+            (high2 - 1.5 * 0.25).abs() / (1.5 * 0.25) < 0.2,
+            "High ×0.25 T60 {high2:.3}"
+        );
     }
 
     #[test]
@@ -1317,7 +1377,10 @@ mod tests {
             let avg: f32 = bins[i - window..i + window].iter().sum::<f32>() / (2 * window) as f32;
             worst = worst.max(bins[i] - avg);
         }
-        assert!(worst <= 10.0, "worst late-tail peak {worst:.2} dB above the envelope");
+        assert!(
+            worst <= 10.0,
+            "worst late-tail peak {worst:.2} dB above the envelope"
+        );
     }
 
     #[test]
@@ -1370,7 +1433,11 @@ mod tests {
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
                 (lo.min(x), hi.max(x))
             });
-        assert!(max - min < 1.0, "freeze energy drifted {:.2} dB: {levels:?}", max - min);
+        assert!(
+            max - min < 1.0,
+            "freeze energy drifted {:.2} dB: {levels:?}",
+            max - min
+        );
         assert!(peak(&l) < 4.0, "freeze peak {}", peak(&l));
     }
 
