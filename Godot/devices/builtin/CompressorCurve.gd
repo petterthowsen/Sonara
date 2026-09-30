@@ -145,11 +145,8 @@ func drag_corner_to(pos: Vector2) -> void:
 	# Above the threshold the curve is `T + (in - T) / ratio`, so the level at 0 dBFS is
 	# `T * (1 - 1/ratio)`; inverting that gives the ratio the pointer is asking for.
 	var new_ratio := CompressorData.RATIO_MAX
-	if threshold < -0.5 and top < threshold - 0.05 {
+	if top > threshold + 0.05:
 		new_ratio = threshold / (threshold - top)
-	} else if top >= threshold - 0.05 {
-		new_ratio = 1.0
-	}
 	new_ratio = clampf(new_ratio, 1.0, CompressorData.RATIO_MAX)
 	device.set_parameter_real(CompressorData.P_THRESHOLD, threshold)
 	device.set_parameter_real(CompressorData.P_RATIO, new_ratio)
