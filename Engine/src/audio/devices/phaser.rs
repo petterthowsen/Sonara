@@ -119,10 +119,12 @@ const SLOT_OF: [u8; ID_SPACE] = slot_table(&SPECS);
 /// The device's parameter table.
 pub static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOT_OF);
 
-/// Bounded soft clip for the feedback path: transparent for small signals, hard-bounded at ±1.
+/// Bounded soft clip for the feedback path: smooth, monotone and exactly ±1 at the clamp.
+/// A cubic is far cheaper than `tanh` and the loop only needs it to stay bounded.
 #[inline]
 fn soft_clip(x: f32) -> f32 {
-    x.tanh()
+    let x = x.clamp(-1.5, 1.5);
+    x - (4.0 / 27.0) * x * x * x
 }
 
 /// Spread multiplier for stage `i` of `count` stages: 1.0 at Spread 0, spanning
@@ -198,15 +200,18 @@ pub struct PhaserDevice {
     w_cur: [f32; MAX_STAGES],
     w_step: [f32; MAX_STAGES],
 
-    /// Per-channel, per-stage all-pass coefficient and its per-frame step.
-    g_cur: [[f32; MAX_STAGES]; 2],
-    g_step: [[f32; MAX_STAGES]; 2],
+    /// Per-channel, per-stage all-pass coefficient `g/(1+g)` and its per-frame step.
+    gp_cur: [[f32; MAX_STAGES]; 2],
+    gp_step: [[f32; MAX_STAGES]; 2],
     hp_cur: [f32; 2],
     hp_step: [f32; 2],
     lp_cur: [f32; 2],
     lp_step: [f32; 2],
 
     frames_to_control: usize,
+    /// Equal-power Mix gains, recomputed with the coefficients (every control block).
+    dry_gain: f32,
+    wet_gain: f32,
 
     sleep: TailSleep,
     is_active: bool,
@@ -245,13 +250,15 @@ impl PhaserDevice {
             stage_count: 0,
             w_cur: [0.0; MAX_STAGES],
             w_step: [0.0; MAX_STAGES],
-            g_cur: [[0.0; MAX_STAGES]; 2],
-            g_step: [[0.0; MAX_STAGES]; 2],
+            gp_cur: [[0.0; MAX_STAGES]; 2],
+            gp_step: [[0.0; MAX_STAGES]; 2],
             hp_cur: [0.0; 2],
             hp_step: [0.0; 2],
             lp_cur: [0.0; 2],
             lp_step: [0.0; 2],
             frames_to_control: 0,
+            dry_gain: 1.0,
+            wet_gain: 0.0,
             sleep: TailSleep::new(sample_rate),
             is_active: true,
             is_enabled: true,
@@ -358,7 +365,8 @@ impl PhaserDevice {
     }
 
     /// Compute the all-pass and tone coefficients. `snap` sets them outright (init); otherwise it
-    /// steps toward them over the control block.
+    /// steps toward them over the control block. The stage coefficient is stored as
+    /// `gp = g / (1 + g)` (see [`OnePole::allpass_g`]), so the audio loop never divides.
     fn recompute_g(&mut self, snap: bool) {
         let sr = self.sample_rate;
         let sweep_oct = self.sweep_oct.current();
@@ -372,13 +380,25 @@ impl PhaserDevice {
             let lfo = self.lfo.value_at(shape, offset);
             let env = self.followers[ch].value();
             let base = 2f32.powf(sweep_oct + lfo * depth + env * amount);
-            for i in 0..MAX_STAGES {
-                let g = one_pole_g(base * spread_mult(i, count, spread), sr);
+            let mut set = |g: f32, cur: &mut f32, step: &mut f32| {
+                let gp = g / (1.0 + g);
                 if snap {
-                    self.g_cur[ch][i] = g;
-                    self.g_step[ch][i] = 0.0;
+                    *cur = gp;
+                    *step = 0.0;
                 } else {
-                    self.g_step[ch][i] = (g - self.g_cur[ch][i]) / CONTROL_BLOCK as f32;
+                    *step = (gp - *cur) / CONTROL_BLOCK as f32;
+                }
+            };
+            if spread <= 0.0 {
+                // Every stage sits on Sweep: one coefficient for the whole chain.
+                let g = one_pole_g(base, sr);
+                for i in 0..MAX_STAGES {
+                    set(g, &mut self.gp_cur[ch][i], &mut self.gp_step[ch][i]);
+                }
+            } else {
+                for i in 0..MAX_STAGES {
+                    let g = one_pole_g(base * spread_mult(i, count, spread), sr);
+                    set(g, &mut self.gp_cur[ch][i], &mut self.gp_step[ch][i]);
                 }
             }
             let hp = one_pole_g(self.low_cut.current(), sr);
@@ -393,6 +413,9 @@ impl PhaserDevice {
                 self.lp_step[ch] = (lp - self.lp_cur[ch]) / CONTROL_BLOCK as f32;
             }
         }
+        let (dry, wet) = dry_wet_gains(self.mix.current(), MixLaw::EqualPower);
+        self.dry_gain = dry;
+        self.wet_gain = wet;
     }
 
     /// The 8-frame control update: new coefficients and one LFO step.
@@ -403,20 +426,33 @@ impl PhaserDevice {
             .advance(rate * CONTROL_BLOCK as f64 / self.sample_rate as f64);
     }
 
-    /// One frame of one channel: feedback, the all-pass chain, the wet tone filters.
+    /// One frame of both channels: feedback, the all-pass chain, the wet tone filters. The two
+    /// channels share the stage loop so their independent divisions pipeline.
     #[inline]
-    fn process_channel(&mut self, ch: usize, x: f32, feedback: f32) -> f32 {
-        let mut s = x + soft_clip(self.chains[ch].fb);
-        for i in 0..MAX_STAGES {
-            let g = self.g_cur[ch][i];
-            let ap = self.chains[ch].stages[i].allpass(s, g);
-            s += self.w_cur[i] * (ap - s);
+    fn process_frame(&mut self, x: [f32; 2], feedback: f32) -> [f32; 2] {
+        let mut s = [
+            x[0] + soft_clip(self.chains[0].fb),
+            x[1] + soft_clip(self.chains[1].fb),
+        ];
+        {
+            let (left, right) = self.chains.split_at_mut(1);
+            let (c0, c1) = (&mut left[0], &mut right[0]);
+            for i in 0..MAX_STAGES {
+                let ap0 = c0.stages[i].allpass_g(s[0], self.gp_cur[0][i]);
+                let ap1 = c1.stages[i].allpass_g(s[1], self.gp_cur[1][i]);
+                let w = self.w_cur[i];
+                s[0] += w * (ap0 - s[0]);
+                s[1] += w * (ap1 - s[1]);
+            }
         }
-        self.chains[ch].fb = s * feedback;
-
-        let (hp_g, lp_g) = (self.hp_cur[ch], self.lp_cur[ch]);
-        let hp = self.tone_hp[ch].highpass(s, hp_g);
-        self.tone_lp[ch].lowpass(hp, lp_g)
+        let mut out = [0.0f32; 2];
+        for ch in 0..2 {
+            self.chains[ch].fb = s[ch] * feedback;
+            let (hp_g, lp_g) = (self.hp_cur[ch], self.lp_cur[ch]);
+            let hp = self.tone_hp[ch].highpass(s[ch], hp_g);
+            out[ch] = self.tone_lp[ch].lowpass(hp, lp_g);
+        }
+        out
     }
 }
 
@@ -430,7 +466,7 @@ impl AudioDevice for PhaserDevice {
         let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
         for frame in 0..frames {
             // Smoothed parameters advance once per frame.
-            let mix = self.mix.next();
+            self.mix.next();
             let feedback = self.feedback.next();
             self.sweep_oct.next();
             self.spread.next();
@@ -450,19 +486,19 @@ impl AudioDevice for PhaserDevice {
             }
             for ch in 0..2 {
                 for i in 0..MAX_STAGES {
-                    self.g_cur[ch][i] += self.g_step[ch][i];
+                    self.gp_cur[ch][i] += self.gp_step[ch][i];
                 }
                 self.hp_cur[ch] += self.hp_step[ch];
                 self.lp_cur[ch] += self.lp_step[ch];
             }
 
-            let (dry_gain, wet_gain) = dry_wet_gains(mix, MixLaw::EqualPower);
-            for ch in 0..2 {
-                let x = inputs[frame * 2 + ch];
-                self.followers[ch].process(x);
-                let wet = self.process_channel(ch, x, feedback);
-                outputs[frame * 2 + ch] = x * dry_gain + wet * wet_gain;
-            }
+            let (dry_gain, wet_gain) = (self.dry_gain, self.wet_gain);
+            let x = [inputs[frame * 2], inputs[frame * 2 + 1]];
+            self.followers[0].process(x[0]);
+            self.followers[1].process(x[1]);
+            let wet = self.process_frame(x, feedback);
+            outputs[frame * 2] = x[0] * dry_gain + wet[0] * wet_gain;
+            outputs[frame * 2 + 1] = x[1] * dry_gain + wet[1] * wet_gain;
         }
     }
 
@@ -631,7 +667,12 @@ mod tests {
     }
 
     /// The magnitude response over a log-spaced grid, as `(freq, db_left, db_right)`.
-    fn scan(device: &mut PhaserDevice, f_lo: f32, f_hi: f32, points: usize) -> Vec<(f32, f32, f32)> {
+    fn scan(
+        device: &mut PhaserDevice,
+        f_lo: f32,
+        f_hi: f32,
+        points: usize,
+    ) -> Vec<(f32, f32, f32)> {
         let ratio = (f_hi / f_lo).powf(1.0 / (points - 1) as f32);
         let mut out = Vec::with_capacity(points);
         let mut f = f_lo;
@@ -763,7 +804,10 @@ mod tests {
             let out = render(&mut device, &input, &[512]);
             let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
             assert!(peak < 3.0, "feedback {feedback} % peaked at {peak}");
-            assert!(out.iter().all(|x| x.is_finite()), "feedback {feedback} % went non-finite");
+            assert!(
+                out.iter().all(|x| x.is_finite()),
+                "feedback {feedback} % went non-finite"
+            );
         }
     }
 
@@ -844,21 +888,26 @@ mod tests {
 
         let input = stereo(&white_noise(FRAMES, 0.5, 3));
         let mut out = vec![0.0; FRAMES * 2];
-        let blocks = SR as usize * 10 / FRAMES; // 10 s of audio
+        // Warm up the caches and the CPU's clock before measuring.
+        for _ in 0..(SR as usize * 10 / FRAMES) {
+            device.process_block(&input, &mut out, FRAMES);
+        }
+        let seconds = 60usize;
+        let blocks = SR as usize * seconds / FRAMES;
         let start = std::time::Instant::now();
         for _ in 0..blocks {
             device.process_block(&input, &mut out, FRAMES);
         }
         let elapsed = start.elapsed().as_secs_f64();
         println!(
-            "10 s rendered in {:.3} s: {:.3} % of one core",
+            "{seconds} s rendered in {:.3} s: {:.3} % of one core",
             elapsed,
-            elapsed / 10.0 * 100.0
+            elapsed / seconds as f64 * 100.0
         );
         assert!(
-            elapsed / 10.0 < 0.005,
+            elapsed / (seconds as f64) < 0.005,
             "12-stage stereo phaser took {:.3} % of a core",
-            elapsed / 10.0 * 100.0
+            elapsed / seconds as f64 * 100.0
         );
     }
 

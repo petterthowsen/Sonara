@@ -46,6 +46,17 @@ impl OnePole {
     pub fn allpass(&mut self, x: f32, g: f32) -> f32 {
         2.0 * self.lowpass(x, g) - x
     }
+
+    /// All-pass output for a precomputed `gp = g / (1 + g)`. A caller that interpolates the
+    /// coefficient every sample (the Phaser, spec 012) folds the division into its control-rate
+    /// update, so the audio loop has no division per stage.
+    #[inline]
+    pub fn allpass_g(&mut self, x: f32, gp: f32) -> f32 {
+        let v = (x - self.s) * gp;
+        let lp = v + self.s;
+        self.s = lp + v;
+        2.0 * lp - x
+    }
 }
 
 /// Exact magnitude in dB of the low pass (`high = false`) or high pass at `freq`, for a cutoff
