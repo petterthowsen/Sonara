@@ -645,21 +645,32 @@ impl EqDevice {
             if !band.active {
                 continue;
             }
-            let level = band.level_start + (band.level - band.level_start) * t;
+            let level = if band.level == band.level_start {
+                band.level
+            } else {
+                band.level_start + (band.level - band.level_start) * t
+            };
+            // At full level the band's output replaces the input (no blend rounding).
+            let full = level == 1.0;
             match band.live.stereo {
                 StereoMode::Stereo => {
                     let fl = band.run(0, l);
                     let fr = band.run(1, r);
-                    l += level * (fl - l);
-                    r += level * (fr - r);
+                    if full {
+                        l = fl;
+                        r = fr;
+                    } else {
+                        l += level * (fl - l);
+                        r += level * (fr - r);
+                    }
                 }
                 StereoMode::Left => {
                     let fl = band.run(0, l);
-                    l += level * (fl - l);
+                    l = if full { fl } else { l + level * (fl - l) };
                 }
                 StereoMode::Right => {
                     let fr = band.run(1, r);
-                    r += level * (fr - r);
+                    r = if full { fr } else { r + level * (fr - r) };
                 }
                 StereoMode::Mid => {
                     let m = (l + r) * 0.5;

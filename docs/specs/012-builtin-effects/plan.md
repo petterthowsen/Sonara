@@ -213,21 +213,21 @@ Output: **Gain** (±24 dB) and **Listen Band** (Off, 1–8). Listen Band is hidd
 automatable; the view sets it while you hold a band's node.
 
 **Engine**
-- [ ] Per-band SVF from Phase 0. Cuts cascade stages for their slope (6 dB is a one-pole).
+- [x] Per-band SVF from Phase 0. Cuts cascade stages for their slope (6 dB is a one-pole).
       Coefficients are recomputed per 32-frame block while a parameter moves, and cached while
       it is steady.
-- [ ] M/S: encode once when any enabled band uses Mid or Side, and decode once at the end.
-- [ ] Listen Band: output a band-pass around the band's frequency and Q (a peaked Bell or Band
+- [x] M/S: encode once when any enabled band uses Mid or Side, and decode once at the end.
+- [x] Listen Band: output a band-pass around the band's frequency and Q (a peaked Bell or Band
       Pass shows the region being boosted or cut), at unity gain.
-- [ ] Disabled bands cost nothing. A band switching on or off crossfades over 5 ms.
-- [ ] Data stream `"spectrum"`: pre- and post-EQ magnitude frames at about 20 Hz from
+- [x] Disabled bands cost nothing. A band switching on or off crossfades over 5 ms.
+- [x] Data stream `"spectrum"`: pre- and post-EQ magnitude frames at about 20 Hz from
       `dsp/spectrum.rs`, while subscribed. Uses the analyser's existing blob format with a
       pre/post flag. Document it in `osc-protocol.md`.
-- [ ] Near Nyquist, bells cramp. Accept that in v1: the view draws the real response, so it
+- [x] Near Nyquist, bells cramp. Accept that in v1: the view draws the real response, so it
       stays honest. A decramped response or 2× oversampling is a follow-up.
 
 **Godot**
-- [ ] `devices/builtin/EqDefaultView` (registered in `DeviceViewFactory`):
+- [x] `devices/builtin/EqDefaultView` (registered in `DeviceViewFactory`):
   - a log-frequency grid from 20 Hz to 20 kHz, a dB grid (±6/12/24, switchable), and a piano
     strip along the bottom edge (C3 = 60);
   - the analyser behind the curve, with pre faint and post solid. Pre/Post/Off is view state
@@ -239,22 +239,22 @@ automatable; the view sets it while you hold a band's node.
     button) on a node listens to it;
   - a band strip underneath with Freq, Gain and Q knobs and a type icon per enabled band, for
     exact entry and as automation targets. Hovering a node shows a value tooltip.
-- [ ] `EqResponse.gd` computes each band's magnitude with the same formulas as the engine.
-- [ ] Subscribe to `"spectrum"` in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
+- [x] `EqResponse.gd` computes each band's magnitude with the same formulas as the engine.
+- [x] Subscribe to `"spectrum"` in `_on_view_shown` and unsubscribe in `_on_view_hidden`.
 
 **Tests**
-- [ ] Engine:
+- [x] Engine:
   - each type's measured magnitude (Goertzel on a sine) matches the analytic
     `magnitude_db` within 0.1 dB below 10 kHz at 48 kHz;
   - cut slopes measure within ±1.5 dB/oct of nominal one octave past the corner;
   - a Mid-only band leaves the Side signal untouched;
   - all bands disabled at 0 dB output is bit-exact.
-- [ ] Cross-language: a Rust test (`--ignored`, regenerates the file) writes
+- [x] Cross-language: a Rust test (`--ignored`, regenerates the file) writes
       `Godot/tests/fixtures/eq_response.json` with engine magnitudes for fixed settings.
       `test_eq_response.gd` checks `EqResponse.gd` against it within 0.05 dB.
-- [ ] Godot: node drags call `set_parameter` on the right parameters, double-click enables the
+- [x] Godot: node drags call `set_parameter` on the right parameters, double-click enables the
       first free band, and the view state survives a save and reload.
-- [ ] Conformance test, and CPU with 8 bands enabled in stereo under 0.5 %.
+- [x] Conformance test, and CPU with 8 bands enabled in stereo under 0.5 %.
 
 - [ ] Optional: DAWproject export writes the EQ as a typed `<Equalizer>` with bands alongside
       the Sonara state, and import creates a Sonara EQ from a foreign `<Equalizer>` instead of
@@ -262,6 +262,56 @@ automatable; the view sets it while you hold a band's node.
 
 **Done when:** you can shape a vocal entirely on the curve, the analyser shows the result, and
 the drawn curve matches what the analyser shows for pink noise.
+
+Implementation notes:
+- **Device** is `audio/devices/eq.rs` (parameter IDs: band *n* at `n*10` with offsets Enabled 0, Type 1,
+  Freq 2, Gain 3, Q 4, Slope 5, Stereo 6; Output Gain 80, Listen Band 81). Listen Band is `hidden` and
+  `not_automatable`, but `/builtin/info` doesn't carry those flags (nor `module`), so Godot's parameter list
+  still shows it. Carrying them is a small additive change to `BuiltinParamInfo`, left to the merge.
+- **Filter design** is one function (`BandFilter::new`) shared by the audio path and the analytic
+  `magnitude_db`: Bell, shelves, Notch and Band Pass are one SVF stage; Tilt is a low shelf of -gain/2 plus a
+  high shelf of +gain/2 (positive gain brightens); cuts are an optional one-pole plus Butterworth SVF sections
+  (6: pole; 12: 1 section; 18: pole + 1; 24: 2; 36: 3; 48: 4). The Q knob scales the sharpest section's Q, so
+  the default 0.71 is exactly Butterworth. Band Pass is normalised to 0 dB at its peak (the raw SVF band output
+  peaks at Q); Gain is ignored by cuts, Notch and Band Pass.
+- **M/S** deviation: no separate encode/decode pass. A Mid or Side band computes `m = (l+r)/2` or `s = (l-r)/2`,
+  filters it, and adds the change to both channels (subtracting it on R for Side). That is exactly an M/S
+  encode, filter and decode per band, and it keeps the bands in order when modes are mixed. A Mid-only band
+  leaves pure side material bit-exact (test).
+- **Smoothing and block independence:** freq and Q (log domain), gain and Output Gain glide with a 5 ms
+  one-pole, stepped once per 32-frame chunk counted from the device's first frame, with the band level
+  ramped per sample inside the chunk. The chunk grid doesn't depend on how the host splits blocks, so odd
+  block sizes match (conformance). A band switching on or off ramps its level over 5 ms; changing Type, Slope
+  or Stereo of an enabled band fades it out, switches at zero, and fades back in (decision 8).
+- **Listen Band** outputs a unity band pass of the input at the band's smoothed freq and Q, crossfaded in over 5 ms.
+- **Analyser stream:** two 4096-point `dsp::spectrum` instances (pre = input mono sum, post = output). The
+  engine alternates pre and post frames at 20 Hz each. Frame = `[flag, sample_rate, bins...]` (little-endian
+  f32), a two-value header instead of the plan's single flag because the view needs the rate to place bins.
+  The EQ stays awake while subscribed. Documented in `osc-protocol.md` ("EQ analyser stream").
+- **Godot files:** `devices/builtin/EqDefaultView` (toolbar, curve editor, band strip with Freq/Gain/Q knobs
+  and a type icon, Output knob), `EqCurveEditor.gd` (drawing and gestures; no autoload references),
+  `EqResponse.gd`, `EqTypeIcon.gd`, `EqViewState.gd`. Reusable for the Compressor view:
+  `components/visualization/FreqAxis.gd` (log axis, grid, piano strip), `DbGrid.gd` (dB axis and grid, any
+  min/max) and `MeterDraw.gd` (level and gain-reduction bars in the mixer colours).
+- **View state** (analyser Post/Pre/Off, dB range 6/12/24) is stored in the app config under `devices/eq/view`
+  (`Sonara.get_config`), shared by every EQ. "Post" draws the post spectrum solid over a faint pre one; "Pre"
+  draws only the pre spectrum.
+- **Gestures:** double-click on empty space enables the first free band in index order as a Bell, except that
+  band 1 and band 8 keep their default Low and High Cut when the click is below 40 Hz or above 12 kHz. Wheel
+  = Q (x1.12 per notch, x1.03 with Shift). Nodes of cuts, Notch and Band Pass sit on the 0 dB line and drag
+  frequency only. No undo step is recorded for node drags (same as the knobs).
+- **Tests:** engine: 14 new (types vs analytic within 0.1 dB at 48 kHz, slopes within 1.5 dB/oct, Mid/Side
+  isolation, bit-exact empty EQ, crossfade without a click, Listen, finite at 44.1-192 kHz, analyser
+  frames, pink noise seen by the analyser matching the drawn curve within 1 dB) plus
+  the conformance test, which now covers the EQ: 338 + 14 = 352 lib tests, all green, 4 ignored
+  (including cpu_eq and write_response_fixture). Godot: `test_eq_response.gd` (72 cases, worst
+  difference 0.0001 dB against the engine) and `test_eq_view.gd` (gestures, view state save and reload,
+  draws in the tree).
+- **CPU:** `cpu_eq` (8 bands, stereo, 7 Bells with one 24 dB/oct Low Cut, 48 kHz, release): **0.38 % of a core**.
+- **Tooling note for parallel worktrees:** a workspace member's build hash doesn't include its checkout path,
+  so worktrees sharing one `CARGO_TARGET_DIR` overwrite each other's `engine` test binary (tests from another
+  phase ran against my filter). I built with `--config 'profile.dev.package.engine.opt-level=1'` (and
+  `profile.release.package.engine.codegen-units=15` for the CPU run) to get a distinct hash.
 
 ## Phase 3: Compressor (`sonara.builtin.compressor`)
 
