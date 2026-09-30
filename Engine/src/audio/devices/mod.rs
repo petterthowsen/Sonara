@@ -7,6 +7,7 @@ pub mod effect;
 #[cfg(test)]
 mod effect_conformance;
 mod factory;
+mod filter;
 mod layer;
 pub mod param_table;
 mod polysynth;
@@ -20,6 +21,7 @@ pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
 pub use drum_machine::DrumMachineDevice;
 pub use factory::{create_effect, DeviceFactory, EFFECT_IDS};
+pub use filter::FilterDevice;
 pub use layer::LayerDevice;
 pub use polysynth::PolySynthDevice;
 pub use sampler::SamplerDevice;
