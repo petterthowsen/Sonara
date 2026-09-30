@@ -229,9 +229,16 @@ Implementation notes:
   `Sync L`/`Sync R` sibling; `SimpleView` resolves that at bind time (so nothing display-only is
   saved in the layout) and `SimpleControl` leads the knob's readout with the division and dims the
   knob to 0.5 alpha while Sync isn't Off — the ms value stays visible and editable, only greyed.
-  `handles_param` also answers for the Sync id, so a Sync change refreshes the Time knob. Built-in
-  devices don't advertise `ParamInfo.module` over OSC, so the layout is grouped by name sections
-  and the DelayStrategy roles; no layout change beyond the annotation was needed.
+  `handles_param` also answers for the Sync id, so a Sync change refreshes the Time knob. The
+  strategy's roles/groups were also finished off against the real parameter names, because the
+  generated layout read badly: Mode (matched by the `mod*` keyword) and Drive sat under
+  Modulation, and Link, Routing, Ducking and Duck Release fell into the Controls catch-all. Now
+  Character (Mode, Drive) and Dynamics (Ducking, Duck Release) are groups of their own, Link
+  joins Delay and Routing joins Stereo, so the page is Delay (Time L/R, Sync L/R, Link,
+  Feedback) · Mix · Character · Dynamics · Tone · Stereo · Modulation — one Main page. Built-in
+  devices don't advertise `ParamInfo.module` over OSC, so grouping is by name sections plus the
+  strategy roles; the delay's changed parameter list regenerates any generated layout, so no
+  `SimpleLayoutGenerator.VERSION` bump was needed.
 - **Bus default.** `Channel.add_device` sets Mix to 100 % for `sonara.builtin.delay` and
   `sonara.builtin.reverb` on a BUS channel (`BUS_WET_DEVICE_IDS`). It runs only from `add_device`,
   never from `Channel.from_json`, so a saved Mix survives a reload; an insert keeps the device's
@@ -240,6 +247,9 @@ Implementation notes:
   `Godot/tests/test_delay_view.gd` (15 assertions) for the Sync display and the bus Mix default.
   CPU worst case (Tape, Ping-Pong, Drive, modulation, ducking, synced time, 256-frame blocks):
   **0.414 % of a core**.
+- **Not done here:** the visual pass over the panel at `DevicePanel.HEIGHT` in both themes (this
+  worktree is headless); the layout above was checked by generating it for the real parameter
+  list and by the render tests. AGENTS.md and TODO.md are the coordinator's housekeeping.
 
 **Done when:** a dotted-eighth ping-pong on a vocal-like loop sits behind the source with
 Ducking on, and dragging Time while playing never clicks in Clean mode.
