@@ -489,6 +489,9 @@ impl AudioDevice for DelayDevice {
                     w = fast_tanh(g * w) / g;
                 }
                 wet[ch] = w;
+                // Clip after the feedback gain: the loop's small-signal gain is Feedback (so
+                // 100–110 % still builds up) but the signal fed back never passes ±1, however
+                // high Feedback is set.
                 own_fb[ch] = soft_clip(w * fb);
             }
 
@@ -795,8 +798,11 @@ mod tests {
         set_sync(&mut d, "Off");
         set_real(&mut d, TIME_L, 120.0);
         let frames = 60 * SR as usize;
-        // One second of loud noise, then silence: the loop keeps ringing on its own.
-        let mut input = white_noise(SR as usize, 0.8, 5);
+        // One second of loud noise (−6 dBFS peak, a hot source), then silence: the loop keeps
+        // ringing on its own. The peak stays clear of +6 dBFS because the feedback is soft
+        // clipped; the dry/wet equal-power sum and the near-Nyquist High Cut add on top, which
+        // is why the source sits at −6 dBFS rather than 0.
+        let mut input = white_noise(SR as usize, 0.5, 5);
         input.resize(frames, 0.0);
         let out = render(&mut d, &stereo(&input), &[512]);
         assert!(out.iter().all(|x| x.is_finite()));

@@ -13,6 +13,9 @@ const SEGMENT_FONT_SIZE := 13
 const SEGMENT_PADDING := 10.0
 ## Font size of the value readout (knob tooltip, spin box).
 const VALUE_FONT_SIZE := 13
+## Alpha of a control whose value isn't in effect (a Time knob while its Sync is on): greyed,
+## not hidden, so the ms value stays visible and editable.
+const SYNCED_ALPHA := 0.5
 ## Height of the caption-and-knob row under an envelope display (about one Simple View cell body).
 const ENVELOPE_KNOB_ROW_HEIGHT := 56.0
 const ENVELOPE_STAGE_NAMES := {"a": "Attack", "d": "Decay", "s": "Sustain", "r": "Release"}
@@ -66,9 +69,10 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	refresh_mod()
 
 
-## True when this control shows `param_id` (lets the view skip controls a change doesn't touch).
+## True when this control shows `param_id` — or follows it: a Time knob also refreshes when its
+## Sync changes, since that is what its display shows.
 func handles_param(param_id: int) -> bool:
-	return param_id in _param_ids
+	return param_id in _param_ids or param_id == _sync_id()
 
 
 ## Push the current device values into the inner control(s) without emitting their signals.
@@ -92,6 +96,7 @@ func refresh() -> void:
 		SimpleControlKinds.EQ_BAND:
 			_refresh_eq_band()
 	_updating = false
+	_apply_sync_dim()
 
 
 ## The label shown above the control: the layout's override, else the first parameter's name.
@@ -483,10 +488,41 @@ func _commit_real(index: int, real_value: float) -> void:
 	instance.set_parameter_normalized(_param_ids[index], param.value_to_normalized(real_value))
 
 
-## Value text for a single-parameter control's tooltip/inline display.
+## Value text for a single-parameter control's tooltip/inline display. A Time knob whose Sync is
+## on leads with the division, keeping the ms value behind it (greyed by `_apply_sync_dim`).
 func _format_value(normalized: float) -> String:
 	var param := _param(0)
-	return SimpleUnits.format(param, normalized, _unit_override()) if param else ""
+	if param == null:
+		return ""
+	var value := SimpleUnits.format(param, normalized, _unit_override())
+	var division := _sync_division()
+	return "%s · %s" % [division, value] if not division.is_empty() else value
+
+
+## Parameter id of the Sync that drives this control's display (the strategy's annotation), or
+## -1 when the control has none.
+func _sync_id() -> int:
+	return int(control_data.get("sync", -1))
+
+
+## Division label of this control's Sync when it isn't Off, else "". Entry 0 of a sync enum is
+## always "Off" (see the engine's `tempo_sync` list).
+func _sync_division() -> String:
+	var sync_id := _sync_id()
+	if sync_id < 0 or instance == null:
+		return ""
+	var param := instance.get_parameter(sync_id)
+	if param == null or param.enum_values.is_empty():
+		return ""
+	var count := maxi(1, param.enum_values.size())
+	var index := clampi(int(round(instance.get_parameter_normalized(sync_id) * float(count - 1))), 0, count - 1)
+	return "" if index == 0 else String(param.enum_values[index])
+
+
+## Grey the inner control while its Sync is on: its value is shown but isn't what plays.
+func _apply_sync_dim() -> void:
+	if _inner != null:
+		_inner.modulate.a = SYNCED_ALPHA if not _sync_division().is_empty() else 1.0
 
 
 ## ============================================================================

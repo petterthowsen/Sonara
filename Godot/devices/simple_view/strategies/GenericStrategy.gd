@@ -74,6 +74,13 @@ func group_for_item(item: Dictionary) -> Dictionary:
 	return group_for_role(item.role)
 
 
+## Optional annotation for one generated control, read when the view binds it (so it never needs
+## to be saved in the layout): a strategy returns a copy carrying extra display keys, e.g. the
+## Sync parameter a Time knob follows. `params` are the instance's parameters, for id lookups.
+func decorate_control(control: Dictionary, _params: Array) -> Dictionary:
+	return control
+
+
 ## Page title for a generated item: the `page` of the strategy group its role belongs to, or ""
 ## for Main.
 func page_for_item(item: Dictionary) -> String:
