@@ -11,7 +11,9 @@
 //!   resonance peak sits on the cutoff.
 //! - HP, BP and Notch come from mixing the stage taps with binomial weights.
 //! - Resonance compensation: the low-pass modes lose `1/(1+k)` at DC. The output is scaled by
-//!   `1 + COMPENSATION·k`, which keeps the bass close to its unresonant level.
+//!   `1 + COMPENSATION·k`, which keeps the bass close to its unresonant level. The notch passes
+//!   the summing node at DC, so it has the same loss; a low-passed copy of the input, below the
+//!   cutoff, adds it back there without moving the notch.
 
 use super::svf::soft_clip;
 
@@ -44,6 +46,9 @@ pub struct LadderCoefs {
     inv_fb: f32,
     /// Output scale for the low-pass modes.
     comp: f32,
+    /// Notch bass compensation: `k/(1 + k)` of the input comes back through a low-pass below the
+    /// cutoff.
+    bass_gain: f32,
 }
 
 impl LadderCoefs {
@@ -58,6 +63,7 @@ impl LadderCoefs {
             k,
             inv_fb: 1.0 / (1.0 + k * g2 * g2),
             comp: 1.0 + COMPENSATION * k,
+            bass_gain: k / (1.0 + k),
         }
     }
 }
@@ -71,11 +77,14 @@ fn sat(x: f32) -> f32 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ladder {
     s: [f32; 4],
+    /// Low-passed input, below the cutoff, for the notch's bass compensation.
+    bass: f32,
 }
 
 impl Ladder {
     pub fn reset(&mut self) {
         self.s = [0.0; 4];
+        self.bass = 0.0;
     }
 
     /// Filter one sample.
@@ -86,6 +95,9 @@ impl Ladder {
         let g2 = g * g;
         let g3 = g2 * g;
         let [s0, s1, s2, s3] = self.s;
+        // Kept current in every mode, so a type change doesn't hand the notch a stale value.
+        // The corner sits well below the cutoff (a quarter of it), so the notch keeps its depth.
+        let bass = stage(&mut self.bass, x, 0.25 * g);
         // The linear ladder's output is `G⁴·in + S` with `S` from the states; solve the loop.
         let state_part = (1.0 - g) * (g3 * s0 + g2 * s1 + g * s2 + s3);
         let y4_estimate = (g2 * g2 * x + state_part) * c.inv_fb;
@@ -103,7 +115,7 @@ impl Ladder {
             LadderMode::Hp24 => u - 4.0 * y1 + 6.0 * y2 - 4.0 * y3 + y4,
             // Peak gain 0.5 at the cutoff, scaled to unity.
             LadderMode::Bp12 => 2.0 * (y1 - y2),
-            LadderMode::Notch => u - 2.0 * (y1 - y2),
+            LadderMode::Notch => u - 2.0 * (y1 - y2) + c.bass_gain * bass,
         }
     }
 }
@@ -159,6 +171,10 @@ mod tests {
         let dry_bass = gain_at(LadderMode::Lp24, 1_000.0, 0.0, 50.0, 0.01);
         let diff_db = 20.0 * (bass / dry_bass).log10();
         assert!(diff_db.abs() < 3.0, "bass moved {diff_db} dB");
+        // The notch passes the low end too, so it gets the same compensation.
+        let notch_bass = gain_at(LadderMode::Notch, 1_000.0, 0.9, 50.0, 0.01);
+        assert!(notch_bass > 0.9, "notch bass {notch_bass}");
+        assert!(gain_at(LadderMode::Notch, 1_000.0, 0.9, 1_000.0, 0.01) < 0.3);
     }
 
     #[test]
