@@ -8,9 +8,11 @@ func role_keywords() -> Dictionary:
 	return {
 		"mix": ["mix", "dry", "wet", "level", "blend", "balance", "volume", "gain", "output"],
 		"feedback": ["feedback", "fb", "repeat*", "regen*"],
-		"time": ["time", "delay", "sync", "division", "length", "bpm", "note", "beat*"],
+		"time": ["time", "delay", "sync", "division", "length", "bpm", "note", "beat*", "link"],
 		"tone": ["low", "high", "cut", "filter", "damp*", "tone", "freq*", "lpf", "hpf", "lowcut", "highcut"],
-		"stereo": ["pan", "width", "ping", "pong", "pingpong", "stereo", "spread", "cross"],
+		"stereo": ["pan", "width", "ping", "pong", "pingpong", "stereo", "spread", "cross", "rout*"],
+		"character": ["mode", "drive", "tape", "clean"],
+		"dynamics": ["duck*"],
 		"modulation": ["mod*", "rate", "depth", "wow", "flutter"],
 	}
 
@@ -20,6 +22,8 @@ func role_weights() -> Dictionary:
 		"time": 1.0,
 		"feedback": 0.95,
 		"mix": 0.9,
+		"character": 0.7,
+		"dynamics": 0.65,
 		"tone": 0.5,
 		"stereo": 0.45,
 		"modulation": 0.35,
@@ -30,6 +34,8 @@ func role_weights() -> Dictionary:
 func groups() -> Array[Dictionary]:
 	return [
 		{"id": "delay", "title": "Delay", "roles": ["time", "feedback"]},
+		{"id": "character", "title": "Character", "roles": ["character"]},
+		{"id": "dynamics", "title": "Dynamics", "roles": ["dynamics"]},
 		{"id": "mix", "title": "Mix", "roles": ["mix"]},
 		{"id": "tone", "title": "Tone", "roles": ["tone"]},
 		{"id": "stereo", "title": "Stereo", "roles": ["stereo"]},

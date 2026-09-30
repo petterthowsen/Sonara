@@ -25,6 +25,11 @@ enum PanMode {
 	MONO              # Sums to mono, then pans the sum
 }
 
+## Send effects: added to a BUS channel they default to 100 % wet (the send/aux workflow, spec
+## 012 Phase 1). On a track they keep the device's own Mix default (an insert).
+const BUS_WET_DEVICE_IDS := ["sonara.builtin.delay", "sonara.builtin.reverb"]
+const BUS_WET_MIX := 1.0
+
 # ============================================================================
 # SIGNALS
 # ============================================================================
@@ -750,6 +755,7 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 	device_instance.set_channel(self)
 	device_instance.set_parent_device(parent)
 	_reindex_host(host)
+	_apply_bus_mix_default(device_instance)
 	# A new slot chain (see SlotChain) arrives holding its device.
 	for child in device_instance.children:
 		_wire_loaded_device(child, device_instance)
@@ -769,6 +775,17 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		device_added.emit(device_instance, position)
 	logger.info("[%d] Device added at %s: %s" % [id, device_instance.osc_path(), device_instance.device.name])
 	AuxReturnSync.on_device_added(get_project(), self, device_instance, parent)
+
+
+## Give a send effect added to a BUS channel a 100 % wet Mix (see `BUS_WET_DEVICE_IDS`). Runs
+## only from `add_device`, never from `from_json`, so a saved Mix survives a project reload.
+func _apply_bus_mix_default(device_instance: DeviceInstance) -> void:
+	if not is_bus or device_instance == null or device_instance.device == null:
+		return
+	if not device_instance.device.device_id in BUS_WET_DEVICE_IDS:
+		return
+	if device_instance.get_parameter_id_by_name("Mix") >= 0:
+		device_instance.set_parameter_normalized_by_name("Mix", BUS_WET_MIX)
 
 
 func remove_device(position: int, parent: DeviceInstance = null) -> void:

@@ -758,6 +758,22 @@ mod tests {
         });
         let out = render(&mut d, &stereo(&impulse(40_000)), &[512]);
         assert_eq!(peak_index(&left(&out)), 36_000);
+
+        // A tempo change while the device is running retargets the tap (the tempo map is read
+        // every block).
+        let mut d = wet_only();
+        set_sync(&mut d, "1/8.");
+        d.set_transport(&Transport {
+            tempo: 120.0,
+            ..Transport::default()
+        });
+        render(&mut d, &vec![0.0; 4800 * 2], &[512]);
+        d.set_transport(&Transport {
+            tempo: 60.0,
+            ..Transport::default()
+        });
+        let out = render(&mut d, &stereo(&impulse(40_000)), &[512]);
+        assert_eq!(peak_index(&left(&out)), 36_000);
     }
 
     #[test]
@@ -806,6 +822,7 @@ mod tests {
         input.resize(frames, 0.0);
         let out = render(&mut d, &stereo(&input), &[512]);
         assert!(out.iter().all(|x| x.is_finite()));
+        println!("feedback 110 % peak: {:.3} dBFS", to_db(peak(&out)));
         assert!(to_db(peak(&out)) < 6.0, "peak {} dBFS", to_db(peak(&out)));
         assert!(peak(&out[out.len() - 9600..]) > 0.02, "still ringing");
     }

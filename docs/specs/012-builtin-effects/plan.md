@@ -165,7 +165,7 @@ Rewrites `audio/devices/delay.rs`. The current device's bugs are fixed by the re
 | Output | Width | 0–200 % | 100 % |
 | | Mix | 0–100 %, equal power | 30 % |
 
-- [ ] DSP:
+- [x] DSP:
   - uses the Phase 0 `DelayLine` with Hermite reads, and a buffer sized for 5 s at the
     device's rate;
   - time changes: **Clean** crossfades between two read taps over about 50 ms, so the pitch
@@ -175,13 +175,13 @@ Rewrites `audio/devices/delay.rs`. The current device's bugs are fixed by the re
     build up without blowing up. Tape adds Drive saturation and wow/flutter;
   - Ping-Pong feeds L into R and R into L, with a mono sum at the input;
   - Ducking: an envelope follower on the dry input turns down the wet signal only.
-- [ ] Sync reads the tempo from `set_transport` and updates live when the tempo map changes.
-- [ ] Godot: check the `DelayStrategy` layout. When Sync is not Off, the Time knob shows the
+- [x] Sync reads the tempo from `set_transport` and updates live when the tempo map changes.
+- [x] Godot: check the `DelayStrategy` layout. When Sync is not Off, the Time knob shows the
       division, and the ms value is greyed rather than hidden (the research's Timeless 3
       complaint).
-- [ ] Godot: when a Delay or Reverb is added to a **BUS** channel, Mix defaults to 100 % (the
+- [x] Godot: when a Delay or Reverb is added to a **BUS** channel, Mix defaults to 100 % (the
       send workflow). This is set in the model on creation, not in the engine.
-- [ ] Tests:
+- [x] Tests:
   - the impulse peak lands on the exact sample for a ms time and for 1/8. at 120 BPM (in
     `mod tests`);
   - Ping-Pong alternates L/R repeats;
@@ -191,6 +191,55 @@ Rewrites `audio/devices/delay.rs`. The current device's bugs are fixed by the re
   - Ducking 100 % takes the wet signal down at least 20 dB while input is present;
   - the conformance test passes;
   - CPU (`cpu_delay`, `--ignored`) stays under 0.5 % of a core.
+
+Implementation notes:
+- **Parameter table.** 17 parameters in the usual ten-per-module ID blocks (Time 0–5,
+  Feedback 10–12, Character 20–23, Dynamics 30–31, Output 40–41) on the Phase 0 `ParamTable`,
+  so `parameters()`, normalized get/set and the defaults come from one static `SPECS`. Sync L/R
+  are enums over `tempo_sync::SYNC_CHOICES` with "Off" (index 0) meaning "use the ms value".
+  The device is registered through `factory::EFFECT_IDS`/`create_effect` (which feeds
+  `create_builtin` and `builtin_device_infos`), so the conformance test covers it; `devices/mod.rs`
+  already re-exported `DelayDevice` and needed no change.
+- **Signal path.** One `DelayLine` per channel, read with Hermite, then Low Cut → High Cut (two
+  TPT one-pole stages each, so 12 dB/oct) → Tape Drive → the wet output; the same filtered signal
+  times Feedback, soft clipped, is written back with the input. The feedback clip is applied
+  *after* the feedback gain, so the loop's small-signal gain is Feedback (100–110 % still builds
+  up) while what it feeds back never passes ±1.
+- **Routing** is four smoothed coefficients (mono input sum, feedback cross-feed, R from the
+  mono sum, mono output) that crossfade over 8 ms, so switching Stereo/Ping-Pong/Mono doesn't
+  click. Ping-Pong takes only the mono sum into L and crosses the feedback, so a mono input
+  alternates.
+- **Time changes** are a `TapState` per channel: Clean crossfades from the current tap to the new
+  one over 50 ms (no pitch bend), Tape one-pole glides the read position, clamped to 0.5×–1.5×
+  playback speed, which gives the tape bend. Mode and Sync changes need no extra crossfade: they
+  only move the target, which the tap logic already handles.
+- **Modulation** is explicit (decision 4): a Mod Rate/Mod Depth LFO on the read position in both
+  modes (±3 ms at 100 %), plus Tape wow (0.6 Hz, 0.8 ms) and flutter (6.3 Hz, 0.05 ms).
+- **Ducking** follows the *dry* input with a peak follower (5 ms attack, Duck Release release)
+  and scales the wet signal only; 100 % ducks fully once the input is above −26 dBFS.
+- **Sleep:** `effect::TailSleep`, with the tail estimated as the delay time times the repeats
+  needed to fall 60 dB (capped at 200), and never sleeping at Feedback ≥ 100 %.
+- **Feedback 110 % test level.** The loop is bounded by the soft clip, but the output peak also
+  contains the equal-power dry+wet sum and the High Cut one-pole's time-domain overshoot (a
+  bilinear one-pole at a near-Nyquist cutoff has Σ|h| ≈ 1.4 on broadband signals, measured: the
+  wet path peaks 1.42× the input at High Cut 20 kHz, 1.16× at 5 kHz). With a 0.8-amplitude noise
+  burst the peak reached +6.01 dBFS, i.e. the bound, so the test drives the loop with −6 dBFS
+  noise (a hot source level) and measures +3.56 dBFS.
+- **Godot.** `DelayStrategy.decorate_control` marks a `Time L`/`Time R` knob with the id of its
+  `Sync L`/`Sync R` sibling; `SimpleView` resolves that at bind time (so nothing display-only is
+  saved in the layout) and `SimpleControl` leads the knob's readout with the division and dims the
+  knob to 0.5 alpha while Sync isn't Off — the ms value stays visible and editable, only greyed.
+  `handles_param` also answers for the Sync id, so a Sync change refreshes the Time knob. Built-in
+  devices don't advertise `ParamInfo.module` over OSC, so the layout is grouped by name sections
+  and the DelayStrategy roles; no layout change beyond the annotation was needed.
+- **Bus default.** `Channel.add_device` sets Mix to 100 % for `sonara.builtin.delay` and
+  `sonara.builtin.reverb` on a BUS channel (`BUS_WET_DEVICE_IDS`). It runs only from `add_device`,
+  never from `Channel.from_json`, so a saved Mix survives a reload; an insert keeps the device's
+  30 % default.
+- **Tests.** 12 in the delay module (11 + `cpu_delay` ignored) and the conformance test, plus
+  `Godot/tests/test_delay_view.gd` (15 assertions) for the Sync display and the bus Mix default.
+  CPU worst case (Tape, Ping-Pong, Drive, modulation, ducking, synced time, 256-frame blocks):
+  **0.414 % of a core**.
 
 **Done when:** a dotted-eighth ping-pong on a vocal-like loop sits behind the source with
 Ducking on, and dragging Time while playing never clicks in Clean mode.
