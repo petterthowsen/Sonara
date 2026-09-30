@@ -13,6 +13,7 @@ mod polysynth;
 mod sampler;
 mod sfizz_device;
 mod spectrum_analyzer;
+mod phaser;
 
 pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
@@ -25,6 +26,7 @@ pub use polysynth::PolySynthDevice;
 pub use sampler::SamplerDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
+pub use phaser::PhaserDevice;
 
 use std::time::{Duration, Instant};
 
