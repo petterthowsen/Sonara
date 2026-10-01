@@ -1,41 +1,41 @@
 mod chain;
+mod chorus;
 pub mod clap_host;
+pub mod compressor;
 pub mod container;
 mod delay;
 mod drum_machine;
 pub mod effect;
 #[cfg(test)]
 mod effect_conformance;
+pub mod eq;
 mod factory;
 mod filter;
 mod layer;
 pub mod param_table;
+mod phaser;
 mod polysynth;
+mod reverb;
 mod sampler;
 mod sfizz_device;
 mod spectrum_analyzer;
-pub mod eq;
-pub mod compressor;
-mod chorus;
-mod phaser;
-mod reverb;
 
 pub use chain::ChainDevice;
+pub use chorus::ChorusDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
 pub use drum_machine::DrumMachineDevice;
+pub use eq::EqDevice;
 pub use factory::{create_effect, DeviceFactory, EFFECT_IDS};
 pub use filter::FilterDevice;
 pub use layer::LayerDevice;
+pub use phaser::PhaserDevice;
 pub use polysynth::PolySynthDevice;
+pub use reverb::ReverbDevice;
 pub use sampler::SamplerDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
-pub use eq::EqDevice;
-pub use chorus::ChorusDevice;
-pub use phaser::PhaserDevice;
-pub use reverb::ReverbDevice;
 
 use std::time::{Duration, Instant};
 

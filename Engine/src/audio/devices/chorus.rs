@@ -90,11 +90,7 @@ const OUTPUT_SPECS: [ParamSpec; 2] = [
 pub const PARAM_COUNT: usize = 6 + 2 + 2;
 
 /// Every parameter, in display order (its index here is its slot).
-pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
-    &CHORUS_SPECS,
-    &TONE_SPECS,
-    &OUTPUT_SPECS,
-]);
+pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[&CHORUS_SPECS, &TONE_SPECS, &OUTPUT_SPECS]);
 
 /// IDs are all below this.
 const ID_SPACE: usize = 22;
@@ -185,25 +181,57 @@ struct Voice {
 }
 
 const CLASSIC_VOICES: [Voice; 2] = [
-    Voice { source: 0, left: 1.0, right: 0.0, phase: 0.0 },
-    Voice { source: 1, left: 0.0, right: 1.0, phase: 0.25 },
+    Voice {
+        source: 0,
+        left: 1.0,
+        right: 0.0,
+        phase: 0.0,
+    },
+    Voice {
+        source: 1,
+        left: 0.0,
+        right: 1.0,
+        phase: 0.25,
+    },
 ];
 const DIMENSION_VOICES: [Voice; 2] = [
-    Voice { source: 0, left: 1.0, right: 0.5, phase: 0.0 },
-    Voice { source: 1, left: 0.5, right: 1.0, phase: 0.5 },
+    Voice {
+        source: 0,
+        left: 1.0,
+        right: 0.5,
+        phase: 0.0,
+    },
+    Voice {
+        source: 1,
+        left: 0.5,
+        right: 1.0,
+        phase: 0.5,
+    },
 ];
 const ENSEMBLE_VOICES: [Voice; 3] = [
-    Voice { source: 0, left: 1.0, right: 0.0, phase: 0.0 },
-    Voice { source: 1, left: 0.0, right: 1.0, phase: 1.0 / 3.0 },
-    Voice { source: 0, left: 0.5, right: 0.5, phase: 2.0 / 3.0 },
+    Voice {
+        source: 0,
+        left: 1.0,
+        right: 0.0,
+        phase: 0.0,
+    },
+    Voice {
+        source: 1,
+        left: 0.0,
+        right: 1.0,
+        phase: 1.0 / 3.0,
+    },
+    Voice {
+        source: 0,
+        left: 0.5,
+        right: 0.5,
+        phase: 2.0 / 3.0,
+    },
 ];
 
 /// `(cos, sin)` of the Ensemble voices' offsets (0, 120°, 240°).
-const ENSEMBLE_SINE_OFFSETS: [(f32, f32); 3] = [
-    (1.0, 0.0),
-    (-0.5, 0.866_025_4),
-    (-0.5, -0.866_025_4),
-];
+const ENSEMBLE_SINE_OFFSETS: [(f32, f32); 3] =
+    [(1.0, 0.0), (-0.5, 0.866_025_4), (-0.5, -0.866_025_4)];
 
 /// LFO output at an absolute phase in cycles.
 fn lfo_value(shape: LfoShape, phase: f64) -> f32 {
@@ -221,7 +249,11 @@ fn lfo_value(shape: LfoShape, phase: f64) -> f32 {
 #[inline]
 fn sin_cos_cycles(phase: f64) -> (f32, f32) {
     let fraction = phase.fract();
-    let p = (if fraction < 0.0 { fraction + 1.0 } else { fraction }) * 4.0;
+    let p = (if fraction < 0.0 {
+        fraction + 1.0
+    } else {
+        fraction
+    }) * 4.0;
     let quadrant = p as i32;
     let x = (p - quadrant as f64) * FRAC_PI_2;
     let x2 = x * x;
@@ -229,8 +261,7 @@ fn sin_cos_cycles(phase: f64) -> (f32, f32) {
         x * (1.0 - x2 * (1.0 / 6.0 - x2 * (1.0 / 120.0 - x2 * (1.0 / 5_040.0 - x2 / 362_880.0))));
     let cos_x = 1.0
         - x2 * (0.5
-            - x2 * (1.0 / 24.0
-                - x2 * (1.0 / 720.0 - x2 * (1.0 / 40_320.0 - x2 / 3_628_800.0))));
+            - x2 * (1.0 / 24.0 - x2 * (1.0 / 720.0 - x2 * (1.0 / 40_320.0 - x2 / 3_628_800.0))));
     let (sin, cos) = (sin_x as f32, cos_x as f32);
     match quadrant {
         0 => (sin, cos),
@@ -490,16 +521,14 @@ impl AudioDevice for ChorusDevice {
         let sample_rate = self.sample_rate;
         let sync = self.params.real(SYNC).unwrap_or(0.0) as usize;
         let sync_seconds = division_seconds(sync, self.tempo);
-        let frames = sample_count
-            .min(inputs.len() / 2)
-            .min(outputs.len() / 2);
+        let frames = sample_count.min(inputs.len() / 2).min(outputs.len() / 2);
 
         let g_bbd = self.bbd_g;
         let frames_per_ms = self.frames_per_ms;
         let inv_sample_rate = self.inv_sample_rate;
         // Dimension's extra colour only runs while that voicing is in play.
-        let dimension_active = self.mode == ChorusMode::Dimension
-            || self.prev_mode == Some(ChorusMode::Dimension);
+        let dimension_active =
+            self.mode == ChorusMode::Dimension || self.prev_mode == Some(ChorusMode::Dimension);
 
         for i in 0..frames {
             let dry_l = inputs[i * 2];
@@ -579,8 +608,7 @@ impl AudioDevice for ChorusDevice {
 
             let rate_hz = self.effective_rate(sync_seconds, free_hz) as f64 * inv_sample_rate;
             self.lfo.advance(rate_hz);
-            self.vibrato_phase =
-                (self.vibrato_phase + VIBRATO_MULT * rate_hz).fract();
+            self.vibrato_phase = (self.vibrato_phase + VIBRATO_MULT * rate_hz).fract();
 
             if self.prev_mode.is_some() {
                 self.fade += self.fade_step;
@@ -697,10 +725,10 @@ impl AudioDevice for ChorusDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::devices::{enum_to_norm, real_to_norm, ParamType};
     use crate::audio::dsp::test_util::{
         left, peak, pink_noise, render, right, rms, sine, stereo, to_db,
     };
-    use crate::audio::devices::{enum_to_norm, real_to_norm, ParamType};
 
     const SR: f32 = 48_000.0;
     const BASE_MS: f32 = 7.0;
@@ -787,9 +815,8 @@ mod tests {
 
     #[test]
     fn voice_phase_offsets_are_the_documented_ones() {
-        let phases = |mode: ChorusMode| -> Vec<f64> {
-            mode.voices().iter().map(|v| v.phase).collect()
-        };
+        let phases =
+            |mode: ChorusMode| -> Vec<f64> { mode.voices().iter().map(|v| v.phase).collect() };
         assert_eq!(phases(ChorusMode::Classic), vec![0.0, 0.25]);
         assert_eq!(phases(ChorusMode::Dimension), vec![0.0, 0.5]);
         let ensemble = phases(ChorusMode::Ensemble);
@@ -912,7 +939,11 @@ mod tests {
         let input = stereo(&mono);
         let mut output = vec![0.0; frames * 2];
 
-        let delay_info = device.parameters().into_iter().find(|p| p.id == DELAY).unwrap();
+        let delay_info = device
+            .parameters()
+            .into_iter()
+            .find(|p| p.id == DELAY)
+            .unwrap();
         let big = real_to_norm(
             30.0,
             delay_info.min,
@@ -927,7 +958,11 @@ mod tests {
                 // Deliberately do *not* settle the smoother: this is the step the glide hides.
                 device.set_parameter(DELAY, big);
             }
-            device.process_block(&input[pos * 2..(pos + n) * 2], &mut output[pos * 2..(pos + n) * 2], n);
+            device.process_block(
+                &input[pos * 2..(pos + n) * 2],
+                &mut output[pos * 2..(pos + n) * 2],
+                n,
+            );
             pos += n;
         }
 
@@ -969,7 +1004,11 @@ mod tests {
         let mut output = vec![0.0; frames * 2];
 
         let switch = frames / 2;
-        let mode_info = device.parameters().into_iter().find(|p| p.id == MODE).unwrap();
+        let mode_info = device
+            .parameters()
+            .into_iter()
+            .find(|p| p.id == MODE)
+            .unwrap();
         let ensemble = enum_to_norm(2, mode_info.enum_values.len());
         let mut pos = 0;
         while pos < frames {
@@ -977,7 +1016,11 @@ mod tests {
             if pos == switch {
                 device.set_parameter(MODE, ensemble);
             }
-            device.process_block(&input[pos * 2..(pos + n) * 2], &mut output[pos * 2..(pos + n) * 2], n);
+            device.process_block(
+                &input[pos * 2..(pos + n) * 2],
+                &mut output[pos * 2..(pos + n) * 2],
+                n,
+            );
             pos += n;
         }
 

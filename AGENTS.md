@@ -61,7 +61,7 @@ Pan is applied only in pass 2 and once per route target in pass 3, never while r
 - Channel IDs: 0 = none, 1 = master, 2–999 = user channels, 1000 and up = hardware outputs.
 - Tracks (sequencing) are separate from channels (mixing) and point to one through `default_channel_id`.
 - Each channel has an ordered chain of `Box<dyn AudioDevice>` (`audio/devices/mod.rs`). MIDI goes only to the first device.
-- Built-in devices: `polysynth`, `delay`, `sfizz_device` (SFZ sampler), `spectrum_analyzer`. Godot discovers them at runtime through `/builtin/request` → `/builtin/info` → `/builtin/complete`.
+- Built-in devices: `polysynth`, `sfizz_device` (SFZ sampler), `spectrum_analyzer`, plus the spec 012 effects `delay`, `eq`, `compressor`, `filter`, `chorus`, `phaser` and `reverb` (registered in `factory.rs` `EFFECT_IDS` / `create_effect`, checked by `effect_conformance.rs`). Godot discovers them at runtime through `/builtin/request` → `/builtin/info` → `/builtin/complete`.
 - Devices go to sleep after about 3 s of silence and no MIDI (`DeviceSleepState`) so their processing is skipped.
 - Parameters cross the OSC and IPC boundary as normalized 0.0–1.0 values.
 

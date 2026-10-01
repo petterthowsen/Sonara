@@ -7,8 +7,9 @@ use tracing::{info, warn};
 
 use super::clap_host::SubprocessClapAdapter;
 use super::{
-    AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, DrumMachineDevice,
-    FilterDevice, LayerDevice, PolySynthDevice, PortFlow, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice, ChorusDevice, ReverbDevice,
+    AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DeviceCategory, DevicePath,
+    DrumMachineDevice, FilterDevice, LayerDevice, PolySynthDevice, PortFlow, ReverbDevice,
+    SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};

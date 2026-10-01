@@ -58,10 +58,10 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 
 ### Built-in Devices
 
-- [ ] Effects suite (spec 012, `docs/specs/012-builtin-effects/plan.md`): Delay v2, EQ, Compressor, Filter, Chorus, Phaser, Reverb, external sidechain
-  - [ ] Reverb
-  - [ ] EQ: Parametric, built-in spectrum
-  - [ ] Compressor
+- [/] Effects suite (spec 012, `docs/specs/012-builtin-effects/plan.md`): Delay v2, EQ, Compressor, Filter, Chorus, Phaser, Reverb, external sidechain
+  - [x?] Phases 1-7 (Delay v2, EQ, Compressor, Filter, Chorus, Phaser, Reverb) merged and covered headless. Still needs the visual pass in both themes and a live listening pass; review the deviations in each phase's Implementation notes
+  - [ ] Chorus Ensemble mode is over its CPU budget (0.35 % vs 0.3 %)
+  - [ ] Phase 8: external sidechain (may become spec 013)
 - [ ] Limiter
 - [ ] Saturator
 - [ ] L/R and M/S modes
