@@ -137,8 +137,15 @@ pub fn process_audio(
 
                             // Position in the clip's content: loop points live in content
                             // space (like audio), so `clip_offset` is added before wrapping.
+                            // At the instance end, read the position the last tick ends at rather
+                            // than wrapping it: an end on a loop boundary would otherwise fold to
+                            // the loop start, and notes sounding up to the end never get a note-off.
                             let unwrapped_pos = instance.clip_offset + offset_in_instance;
-                            let content_pos = instance.wrap_content_tick(unwrapped_pos);
+                            let content_pos = if is_within_instance {
+                                instance.wrap_content_tick(unwrapped_pos)
+                            } else {
+                                instance.wrap_content_tick(unwrapped_pos - 1) + 1
+                            };
                             let just_wrapped = content_pos != unwrapped_pos
                                 && content_pos == instance.loop_start_ticks;
 
@@ -603,6 +610,52 @@ mod tests {
         channel.send_clip_note(60, 100, false, 0);
         channel.release_clip_notes();
         assert!(notes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn looped_instance_ending_on_loop_boundary_releases_last_note() {
+        let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = EngineState::default();
+        let mut channel = Channel::new(2, "Synth".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(NoteRecorder {
+            notes: notes.clone(),
+        }));
+        state.channels.insert(2, channel);
+
+        // Four back-to-back beats, the last one held right up to the loop end
+        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+        for (i, note) in [60u8, 62, 64, 65].into_iter().enumerate() {
+            clip.midi_notes.push(ClipNote {
+                id: i as _,
+                note,
+                velocity: 100,
+                start_tick: i as Tick * 960,
+                duration_ticks: 960,
+            });
+        }
+        clip.content_length_ticks = 3840;
+        state.clips.insert("c".to_string(), clip);
+
+        // Two full passes; the instance ends exactly where the loop would wrap again
+        let mut instance = ClipInstance::new("i".to_string(), "c".to_string(), 960, 7680);
+        instance.loop_enabled = true;
+        instance.loop_length_ticks = 3840;
+        let mut track = Track::new(1, 2);
+        track.clip_instances.push(instance);
+        state.tracks.insert(1, track);
+
+        state.set_is_playing(true);
+        state.request_playhead_midi_dispatch();
+        while state.get_current_tick() < 10_000 {
+            process_audio(&mut state, 64, 48_000.0, Instant::now());
+        }
+
+        let notes = notes.lock().unwrap();
+        let ons = notes.iter().filter(|(_, on)| *on).count();
+        let offs = notes.iter().filter(|(_, on)| !*on).count();
+        assert_eq!(ons, 8, "two passes of four notes, nothing past the end");
+        assert_eq!(offs, 8, "every note is released, including the last");
+        assert_eq!(notes.last(), Some(&(65, false)));
     }
 
     /// Run buffers of `chunk` frames through the tempo map until the playhead reaches
