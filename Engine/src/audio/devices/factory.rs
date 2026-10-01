@@ -191,6 +191,7 @@ pub const EFFECT_IDS: &[&str] = &[
     "sonara.builtin.compressor",
     "sonara.builtin.filter",
     "sonara.builtin.chorus",
+    "sonara.builtin.phaser",
 ];
 
 /// Create a built-in effect from [`EFFECT_IDS`], prepared for `sample_rate` and blocks of up to
@@ -208,6 +209,7 @@ pub fn create_effect(
         }
         "sonara.builtin.filter" => Box::new(FilterDevice::new(sample_rate)),
         "sonara.builtin.chorus" => Box::new(ChorusDevice::new(sample_rate)),
+        "sonara.builtin.phaser" => Box::new(super::PhaserDevice::new(sample_rate)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);
