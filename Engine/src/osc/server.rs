@@ -1521,6 +1521,18 @@ impl OscServer {
                     }
                 }
             }
+            ["track", track_id_str, "instance", instance_id_str, "set_reverse"] => {
+                if let Ok(track_id) = track_id_str.parse::<usize>() {
+                    if let Some(OscType::Int(reverse)) = args.first() {
+                        info!("Set instance {} reverse: {}", instance_id_str, reverse);
+                        command_tx.send(AudioCommand::UpdateClipInstanceReverse {
+                            track_id,
+                            instance_id: instance_id_str.to_string(),
+                            reverse: *reverse != 0,
+                        })?;
+                    }
+                }
+            }
 
             // Device management - path-based: /channel/{id}/add_device
             ["channel", channel_id_str, "add_device"] => {

@@ -133,6 +133,11 @@ static func apply_heights(project: Object, rows: Array, node_for: Callable) -> v
 		elif node.has_meta(&"fold_clip"):
 			node.clip_contents = node.get_meta(&"fold_clip")
 			node.remove_meta(&"fold_clip")
+			# A wrapped header can gain its content floor while the fold clips the row, when
+			# TrackItem._sync_layout_height() skips. Its realized size then does not change on
+			# unclip, so nothing would re-run it: ask the node to reconcile now.
+			if node.has_method(&"_sync_layout_height"):
+				node.call(&"_sync_layout_height")
 
 
 ## True when a collapsed ancestor hides `track` and isn't still sliding its children away.

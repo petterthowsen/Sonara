@@ -95,9 +95,7 @@ func _ready() -> void:
 
 
 ## Keys that were renamed: old -> new. Old values are copied once if the new key is unset.
-const _RENAMED_KEYS := {
-	"appearence/color_timeline_by_track": "appearance/color_timeline_by_track",
-}
+const _RENAMED_KEYS := {}
 
 
 func _migrate_renamed_keys() -> void:
@@ -259,14 +257,6 @@ func _register_all_settings() -> void:
 	)).sub("Selection")
 
 	# --- Appearance ---
-	_register(Setting.new(
-		"appearance/color_timeline_by_track",
-		"Color Timeline by Track",
-		Type.BOOL,
-		true,
-		CATEGORY_APPEARANCE,
-		"Use the track color as the timeline background tint.",
-	)).sub("Arranger")
 	_register(Setting.new(
 		"appearance/automation_lane_height",
 		"Automation Lane Height",

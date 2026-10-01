@@ -12,6 +12,7 @@ class_name ClipInstance extends RefCounted
 signal position_changed(new_start_ticks: int)
 signal duration_changed(new_duration_ticks: int)
 signal loop_changed(enabled: bool)
+signal reverse_changed(enabled: bool)
 signal instance_modified()  # Any change to instance properties
 signal clip_changed(new_clip: Clip)  # Source clip retargeted (Make Unique)
 
@@ -40,6 +41,9 @@ var clip_offset: int = 0  # Offset in ticks into the clip's content (allows trim
 var loop_enabled: bool = false  # Whether to loop the clip content (default: disabled)
 var loop_start_ticks: int = 0  # Loop region start, in clip content ticks (same space as clip_offset)
 var loop_length_ticks: int = 3840  # Length of loop region
+
+# Audio only: play the source samples backwards (mirrored around the clip's centre).
+var reverse_enabled: bool = false
 
 # Instance-specific overrides (don't affect the source Clip)
 var transpose: int = 0  # Semitones to transpose MIDI (for MIDI clips)
@@ -147,6 +151,18 @@ func set_loop(enabled: bool, start_ticks_in_clip: int, length_ticks: int) -> voi
 	instance_modified.emit()
 
 
+## Play the source samples backwards for this instance (audio clips only).
+func set_reverse_enabled(enabled: bool) -> void:
+	if reverse_enabled == enabled:
+		return
+	reverse_enabled = enabled
+	if track and track.is_engine_connected():
+		AudioEngineOSC.send("/track/%d/instance/%s/set_reverse" % [track.id, id],
+				[1 if reverse_enabled else 0])
+	reverse_changed.emit(reverse_enabled)
+	instance_modified.emit()
+
+
 ## End of the source clip's content: its stored length, or the last note's end when that is later.
 func content_end_ticks() -> int:
 	if clip == null:
@@ -220,6 +236,7 @@ func copy_overrides_from(other: ClipInstance) -> void:
 	loop_enabled = other.loop_enabled
 	loop_start_ticks = other.loop_start_ticks
 	loop_length_ticks = other.loop_length_ticks
+	reverse_enabled = other.reverse_enabled
 	transpose = other.transpose
 	gain_offset = other.gain_offset
 	muted = other.muted
@@ -311,6 +328,7 @@ func to_json() -> Dictionary:
 		"loop_enabled": loop_enabled,
 		"loop_start_ticks": loop_start_ticks,
 		"loop_length_ticks": loop_length_ticks,
+		"reverse_enabled": reverse_enabled,
 		"transpose": transpose,
 		"gain_offset": gain_offset,
 		"muted": muted,
@@ -331,6 +349,7 @@ static func from_json(data: Dictionary) -> ClipInstance:
 	instance.loop_enabled = data.get("loop_enabled", false)
 	instance.loop_start_ticks = data.get("loop_start_ticks", 0)
 	instance.loop_length_ticks = data.get("loop_length_ticks", 3840)
+	instance.reverse_enabled = data.get("reverse_enabled", false)
 	instance.transpose = data.get("transpose", 0)
 	instance.gain_offset = data.get("gain_offset", 0.0)
 	instance.muted = data.get("muted", false)

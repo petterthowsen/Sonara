@@ -523,6 +523,8 @@ func _write_clip(inst: Object, track: Object) -> void:
 		attrs["loopEnd"] = DawUnits.ticks_to_beats(inst.loop_start_ticks + inst.loop_length_ticks)
 	if inst.gain_offset != 0.0:
 		_report.add(TransferReport.CLIP_GAIN_OFFSET, track.name)
+	if inst.reverse_enabled:
+		_report.add(TransferReport.CLIP_REVERSE, track.name)
 	var is_midi: bool = clip.type == DawEnums.CLIP_MIDI
 	var transposed: bool = is_midi and inst.transpose != 0
 	if transposed:

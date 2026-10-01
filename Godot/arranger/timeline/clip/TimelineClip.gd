@@ -107,9 +107,35 @@ func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	
 	clip_renderer.clip_instance = clip_instance
+	_layout_clip_renderer()
 	_apply_note_color()
 	_bind_grid_helper()
 	_update_waveform()
+
+
+## Keep the note/waveform renderer inside the clip's border and below the header band. Without
+## this a short clip draws its notes over the 1px body border (the renderer spans the full rect
+## and children paint over the parent's stylebox); the left/right insets stop wide notes from
+## covering the vertical borders too.
+func _layout_clip_renderer() -> void:
+	if clip_renderer == null:
+		return
+	var style := _get_current_style()
+	var left := 0.0
+	var right := 0.0
+	var bottom := 0.0
+	if style:
+		left = float(style.border_width_left)
+		right = float(style.border_width_right)
+		bottom = float(style.border_width_bottom)
+	clip_renderer.anchor_left = 0.0
+	clip_renderer.anchor_top = 0.0
+	clip_renderer.anchor_right = 1.0
+	clip_renderer.anchor_bottom = 1.0
+	clip_renderer.offset_left = left
+	clip_renderer.offset_top = header_height
+	clip_renderer.offset_right = -right
+	clip_renderer.offset_bottom = -bottom
 
 
 func _exit_tree() -> void:
@@ -207,6 +233,7 @@ func _update_waveform() -> void:
 		waveform_view.data = null
 		_layout_loop_waveforms([])
 		return
+	waveform_view.reverse = clip_instance.reverse_enabled
 	waveform_view.data = clip.audio_source.data
 	var gh: GridHelper = timeline.grid_helper if timeline else null
 	if gh == null or not waveform_view.is_data_ready() or gh.pixels_per_beat <= 0.0:
@@ -261,6 +288,7 @@ func _layout_loop_waveforms(segments: Array) -> void:
 	for view in _loop_waveforms:
 		view.data = waveform_view.data
 		view.color = waveform_view.color
+		view.reverse = waveform_view.reverse
 
 
 ## Redraw the dividers between loop passes, creating the overlay the first time a clip loops.
@@ -277,6 +305,8 @@ func _update_loop_overlay() -> void:
 		_loop_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_loop_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_loop_overlay.offset_top = header_height
+		# Stop the dividers above the body's bottom border, like the note renderer.
+		_loop_overlay.offset_bottom = -1.0
 		_loop_overlay.draw.connect(_draw_loop_overlay)
 		add_child(_loop_overlay)
 	_loop_overlay.queue_redraw()
@@ -467,6 +497,7 @@ func _get_current_style() -> StyleBoxFlat:
 
 func _update_style() -> void:
 	"""Trigger redraw to update visual appearance."""
+	_layout_clip_renderer()
 	queue_redraw()
 
 # ============================================================================

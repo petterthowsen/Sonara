@@ -26,6 +26,9 @@ var _ancestors: Array[Track] = []
 var _label: Label = null
 var _bypass_button: Button = null
 var _delete_button: Button = null
+## The row's content, kept so `_content_min_height()` can measure it without the ratchet of the
+## node's own `custom_minimum_size` (which is the current `lane.height`).
+var _content: HBoxContainer = null
 
 var _is_resizing: bool = false
 var _resize_start_y: float = 0.0
@@ -69,6 +72,9 @@ func _build_ui() -> void:
 	row.add_theme_constant_override("separation", 2)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(row)
+	_content = row
+	# A theme font or button change can raise the content floor: keep the lane height above it.
+	_content.minimum_size_changed.connect(_clamp_lane_height)
 
 	_label = Label.new()
 	_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -144,6 +150,7 @@ func _refresh() -> void:
 	if lane == null or _label == null:
 		return
 
+	_clamp_lane_height()
 	custom_minimum_size.y = lane.height
 	size.y = lane.height
 
@@ -170,11 +177,7 @@ func _update_style() -> void:
 	var style := get_theme_stylebox("panel") as StyleBoxFlat
 	if style == null or track == null:
 		return
-	var c := Utils.display_color(track.color)
-	c.v = clampf(c.v * 0.35, 0.0, 1.0)
-	c.s = clampf(c.s * 0.5, 0.0, 1.0)
-	if not lane.resolved:
-		c = c.lerp(Color(0.35, 0.1, 0.1), 0.5)
+	var c := Utils.automation_lane_color(track.color, lane.resolved)
 	style.bg_color = c
 
 	_set_ancestors(NestingStripes.ancestors_of(track, current_project))
@@ -214,6 +217,29 @@ func _is_in_resize_gutter() -> bool:
 	return get_local_mouse_position().y >= size.y - RESIZE_GUTTER
 
 
+## Smallest height this row can realize: its content minimum plus the panel stylebox, never below
+## `MIN_HEIGHT`. Measured from the content directly (not `get_combined_minimum_size()`, which
+## already includes the current `custom_minimum_size` = `lane.height` and would ratchet).
+func _content_min_height() -> int:
+	var content_min := MIN_HEIGHT
+	if _content:
+		content_min = maxi(content_min, int(_content.get_combined_minimum_size().y))
+	var stylebox := get_theme_stylebox("panel") as StyleBox
+	if stylebox:
+		content_min += int(stylebox.get_minimum_size().y)
+	return content_min
+
+
+## Raise `lane.height` to this row's content floor. Idempotent: the follow-up `height_changed`
+## finds `lane.height` already at the floor and stops.
+func _clamp_lane_height() -> void:
+	if lane == null:
+		return
+	var floor := _content_min_height()
+	if lane.height < floor:
+		lane.set_height(floor)
+
+
 ## Keep the resize cursor truthful for the whole band (the buttons swallow motion, so deriving
 ## the shape in _gui_input alone left it stuck on the last value).
 func _update_resize_cursor() -> void:
@@ -231,7 +257,7 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var delta_y := get_global_mouse_position().y - _resize_start_y
-		var new_height := maxi(MIN_HEIGHT, _resize_start_height + int(delta_y))
+		var new_height := maxi(_content_min_height(), _resize_start_height + int(delta_y))
 		if lane:
 			lane.set_height(new_height)
 		else:
@@ -264,6 +290,10 @@ func _on_lane_bypass_changed(_bypassed: bool) -> void:
 func _on_lane_height_changed(new_height: int) -> void:
 	custom_minimum_size.y = new_height
 	size.y = new_height
+	# `AutomationLane.set_height` only knows its 20px minimum, not what this row's label and
+	# buttons need. Push the content floor back into the model so the timeline lane row (which
+	# sizes from `lane.height`) is never shorter than this header.
+	_clamp_lane_height()
 
 
 func _on_lane_resolved_changed(_resolved: bool) -> void:

@@ -292,6 +292,11 @@ pub enum AudioCommand {
         start_tick: Tick,
         length_ticks: Tick,
     },
+    UpdateClipInstanceReverse {
+        track_id: TrackId,
+        instance_id: ClipInstanceId,
+        reverse: bool,
+    },
 
     // Device management
     AddDeviceToChannel {
@@ -1960,6 +1965,29 @@ pub fn process_command(
                 }
             } else {
                 warn!("Track not found for update instance loop: {}", track_id);
+            }
+        }
+        AudioCommand::UpdateClipInstanceReverse {
+            track_id,
+            instance_id,
+            reverse,
+        } => {
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if let Some(instance) = track
+                    .clip_instances
+                    .iter_mut()
+                    .find(|i| i.id == instance_id)
+                {
+                    instance.reverse = reverse;
+                    info!("ClipInstance {} reverse updated: {}", instance_id, reverse);
+                } else {
+                    warn!(
+                        "ClipInstance {} not found on track {}",
+                        instance_id, track_id
+                    );
+                }
+            } else {
+                warn!("Track not found for update instance reverse: {}", track_id);
             }
         }
 

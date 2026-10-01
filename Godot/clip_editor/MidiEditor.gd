@@ -280,7 +280,7 @@ var _content_width_queued := false
 
 # Horizontal zoom limits (pixels per beat)
 @export var zoom_min_pixels_per_beat: float = 8.0
-@export var zoom_max_pixels_per_beat: float = 1024
+@export var zoom_max_pixels_per_beat: float = 4096
 
 # Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
 @export var scroll_smoothing: float = 0.2
@@ -771,7 +771,7 @@ func _gui_input(event: InputEvent):
 				# Scale the sensitivity by the starting zoom level for consistent feel across all zoom levels
 				var zoom_factor = 1.0 - (delta.y * pan_zoom_sensitivity / 50)
 				var new_ppb = pan_start_pixels_per_beat * zoom_factor
-				new_ppb = clamp(new_ppb, 8.0, 512.0)
+				new_ppb = clamp(new_ppb, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 
 				# Calculate zoom ratio
 				var zoom_ratio = new_ppb / pan_start_pixels_per_beat

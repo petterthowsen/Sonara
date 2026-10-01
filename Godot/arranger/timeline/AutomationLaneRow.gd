@@ -5,8 +5,14 @@
 # points, drag on empty space to box-select, ctrl-drag to select a grid-snapped time range,
 # right-click for the point menu (REQ-013, REQ-018, REQ-019, REQ-020).
 #
+# Hovering a point, or dragging one, shows its value in a `ValueTooltip` formatted like the
+# target's own control (e.g. `-6.0 dB`), so a point can be read without opening anything.
+#
 # Built in code rather than from a .tscn, like TimelineTrack, which Timeline also instantiates
 # with `.new()`.
+#
+# The curve and its points are drawn in the owning track's color (see `get_curve_color`), so a lane
+# reads as belonging to its track and follows the track color when it changes.
 #
 # Value <-> pixel mapping: value 1.0 sits at `V_PADDING` from the top and 0.0 at `V_PADDING` from
 # the bottom, so a point at either extreme is still fully drawn inside the row.
@@ -14,10 +20,13 @@ class_name AutomationLaneRow extends Control
 
 var logger: Log = Log.make("AutomationLaneRow")
 
-## Row fill and bottom border, drawn by Timeline._draw. The fill is only a fallback: the Timeline
-## paints the lane in its track's lane color. The grid uses the Timeline's grid colors.
+## Row fill fallback, drawn by Timeline._draw when the row has no track; a bound row uses
+## `get_lane_color()` (its tracklist header's tint). The grid uses the Timeline's grid colors.
 @export var bg_color: Color = Color(0.09, 0.09, 0.09, 1.0)
 @export var border_color: Color = Color(0, 0, 0, 1)
+
+## Curve and point fallback for a row with no bound track (editor preview, tests).
+const DEFAULT_CURVE_COLOR := Color(0.8, 0.8, 0.8)
 
 const V_PADDING := 5.0
 const POINT_RADIUS := 4.0
@@ -59,6 +68,7 @@ var _box_base_ids: Array = []              # TOGGLE: the selection when the gest
 var _box_click_point_id: int = -1          # RANGE: point under a ctrl-press, toggled if it never moves
 
 var _hover_point_id: int = -1
+var _tooltip: ValueTooltip = null
 
 
 func _ready() -> void:
@@ -73,6 +83,9 @@ func _notification(what: int) -> void:
 		queue_redraw()
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		_set_hover(-1)
+	elif what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
+		if not is_visible_in_tree():
+			_refresh_tooltip()
 	elif what == NOTIFICATION_PREDELETE:
 		_unbind()
 
@@ -98,6 +111,8 @@ func bind_to_lane(p_lane: AutomationLane, p_track: Track, p_timeline: Timeline) 
 		lane.height_changed.connect(_on_lane_height_changed)
 		lane.resolved_changed.connect(_on_lane_flag_changed)
 		custom_minimum_size.y = lane.height
+	if track:
+		track.color_changed.connect(_on_track_color_changed)
 
 	queue_redraw()
 
@@ -116,23 +131,56 @@ func _unbind() -> void:
 			lane.height_changed.disconnect(_on_lane_height_changed)
 		if lane.resolved_changed.is_connected(_on_lane_flag_changed):
 			lane.resolved_changed.disconnect(_on_lane_flag_changed)
+	if track and track.color_changed.is_connected(_on_track_color_changed):
+		track.color_changed.disconnect(_on_track_color_changed)
 	lane = null
 	track = null
 	timeline = null
+	_refresh_tooltip()
 
 
 func _on_lane_changed_point(_point: AutomationPoint) -> void:
 	queue_redraw()
+	if _tooltip and _tooltip.visible:
+		_refresh_tooltip()
 
 
 func _on_lane_point_removed(point_id: int) -> void:
 	if selection_manager:
 		selection_manager.forget_point(lane, point_id)
 	queue_redraw()
+	if _tooltip and _tooltip.visible:
+		_refresh_tooltip()
+
+
+## The lane fill, drawn by Timeline._draw_row_backgrounds: the same tint as this lane's tracklist
+## header row, so the timeline row and its header match.
+func get_lane_color() -> Color:
+	if track == null:
+		return bg_color
+	return Utils.automation_lane_color(track.color, lane == null or lane.resolved)
+
+
+## The curve and point color: the owning track's color at full brightness, so a lane is visibly
+## its track's and the curve stands out against the darkened row fill. A row with no bound track
+## (editor preview, tests) falls back to a neutral grey.
+func get_curve_color() -> Color:
+	if track == null:
+		return DEFAULT_CURVE_COLOR
+	return Utils.display_color(track.color)
+
+
+## The row is a separate CanvasItem from the track row, so it repaints itself when the track is
+## recolored. (The Timeline's central fill pass repaints from TimelineTrack's own handler.)
+func _on_track_color_changed(_new_color: Color) -> void:
+	queue_redraw()
 
 
 func _on_lane_flag_changed(_value: bool) -> void:
 	queue_redraw()
+	# The fill is drawn by the Timeline, so a resolved-state change must redraw its background.
+	if timeline:
+		timeline.queue_redraw()
 
 
 func _on_lane_height_changed(new_height: int) -> void:
@@ -209,7 +257,7 @@ func _draw_curve() -> void:
 	if lane.points.is_empty():
 		return
 
-	var colour := lane.color
+	var colour := get_curve_color()
 	colour.a = 0.35 if lane.bypassed else 1.0
 	var visible_range := _visible_x_range()
 
@@ -282,7 +330,7 @@ func _draw_points() -> void:
 		var centre := Vector2(x, value_to_y(point.value))
 		var selected := selection_manager != null and selection_manager.is_selected(lane, point.id)
 		var hovered := point.id == _hover_point_id
-		var fill := Color.WHITE if selected else lane.color
+		var fill := Color.WHITE if selected else get_curve_color()
 		if hovered and not selected:
 			fill = fill.lightened(0.4)
 		if lane.bypassed:
@@ -401,6 +449,66 @@ func _set_hover(point_id: int) -> void:
 		return
 	_hover_point_id = point_id
 	queue_redraw()
+	_refresh_tooltip()
+
+
+# ============================================================================
+# VALUE TOOLTIP
+# ============================================================================
+
+## The point whose value the tooltip should show: the point being dragged, else the hovered one.
+func _tooltip_point() -> AutomationPoint:
+	if lane == null:
+		return null
+	if _drag_active or _drag_pending:
+		return _find_point(_drag_point_id)
+	if _hover_point_id >= 0:
+		return _find_point(_hover_point_id)
+	return null
+
+
+## Tooltip text for `point`, formatted the way the target's own control shows it (e.g. `-6.0 dB`),
+## matching `AutomationTarget.format_value`.
+func get_point_value_text(point: AutomationPoint) -> String:
+	if lane == null or lane.target == null:
+		return "%.3f" % point.value
+	var channel: Object = track.get_linked_channel() if track else null
+	return lane.target.format_value(channel, point.value)
+
+
+## Show, hide or update the value tooltip for hover and live dragging (REQ-013).
+func _refresh_tooltip() -> void:
+	var point := _tooltip_point()
+	if point == null or timeline == null or not is_inside_tree():
+		if _tooltip:
+			_tooltip.visible = false
+		set_process(false)
+		return
+	if _tooltip == null:
+		_tooltip = ValueTooltip.attach(self)
+	_tooltip.set_text(get_point_value_text(point))
+	_tooltip.visible = true
+	_position_tooltip()
+	# The row lives in the timeline's scroll container, so the tooltip must follow it every frame.
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if _tooltip and _tooltip.visible:
+		_position_tooltip()
+	else:
+		set_process(false)
+
+
+## Place the tooltip beside the point, in viewport space, tracking scroll and zoom.
+func _position_tooltip() -> void:
+	if _tooltip == null or not _tooltip.visible:
+		return
+	var point := _tooltip_point()
+	if point == null:
+		return
+	var centre := Vector2(tick_to_x(point.tick), value_to_y(point.value))
+	_tooltip.place_right_of(get_global_transform() * centre)
 
 
 ## Any press in the row makes this lane the target for paste and takes the clip selection away,
@@ -442,6 +550,7 @@ func _begin_point_drag(point: AutomationPoint, pos: Vector2) -> void:
 	_drag_anchor_value = point.value
 	_drag_before = AutomationActions.capture_point_states(_dragged_points())
 	queue_redraw()
+	_refresh_tooltip()
 
 
 ## The points a drag moves: the whole selection when the grabbed point is part of it.
@@ -453,6 +562,8 @@ func _dragged_points() -> Array:
 
 
 func _find_point(point_id: int) -> AutomationPoint:
+	if lane == null:
+		return null
 	for point in lane.points:
 		if point.id == point_id:
 			return point
@@ -488,6 +599,7 @@ func _apply_point_drag(pos: Vector2) -> void:
 			clampf(before["value"] + value_delta, 0.0, 1.0)
 		)
 	queue_redraw()
+	_refresh_tooltip()
 
 
 ## Commit the gesture as one mergeable history entry (REQ-022). A press that never moved just
@@ -512,6 +624,7 @@ func _finish_point_drag() -> void:
 	_drag_before.clear()
 	_drag_point_id = -1
 	queue_redraw()
+	_refresh_tooltip()
 
 
 # ---------------------------------------------------------------------------

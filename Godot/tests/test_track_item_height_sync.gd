@@ -25,6 +25,7 @@ func suite_name() -> String:
 func run_tests() -> void:
 	await _test_wrapping_height_reaches_timeline_lane()
 	await _test_explicit_resize_supersedes_layout_height()
+	await _test_shrink_below_floor_keeps_lane_as_tall_as_header()
 
 
 ## Build a header inside a fixed-width column plus a timeline lane for the same track.
@@ -103,5 +104,32 @@ func _test_explicit_resize_supersedes_layout_height() -> void:
 	await process_frame
 
 	_assert(track.height == 200, "explicit height survives widening (height=%d)" % track.height)
+
+	f.root.queue_free()
+
+
+## A vertical zoom, undo or a small stored height can write `Track.height` below what the header's
+## wrapped controls need. The container then keeps the header at its content floor while its
+## realized size does not change, so the lane (which sizes from `Track.height`) would stay shorter
+## than its header. The model height must be pushed back up to the header's realized height.
+func _test_shrink_below_floor_keeps_lane_as_tall_as_header() -> void:
+	var f := await _make_fixture()
+	var track: Object = f.track
+	var item: Control = f.item
+	var lane: Control = f.lane
+
+	f.column.custom_minimum_size.x = NARROW_COLUMN
+	await process_frame
+	await process_frame
+	var floor: int = track.height
+	_assert(floor > BASE_HEIGHT, "narrow column raised the floor to %d" % floor)
+
+	track.height = 30
+	await process_frame
+	await process_frame
+
+	_assert(int(item.size.y) == floor, "header stays at its floor (%d)" % int(item.size.y))
+	_assert(track.height == int(item.size.y), "model height follows the header (track=%d header=%d)" % [track.height, int(item.size.y)])
+	_assert(int(lane.custom_minimum_size.y) == int(item.size.y), "lane is as tall as the header (lane=%d header=%d)" % [int(lane.custom_minimum_size.y), int(item.size.y)])
 
 	f.root.queue_free()

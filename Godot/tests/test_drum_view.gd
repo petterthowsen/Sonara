@@ -156,8 +156,7 @@ func _test_row_stepping() -> void:
 	_assert(ne.step_note(38, 1) == 42, "REQ-020: stepping up one row goes 38 -> 42")
 	_assert(ne.step_note(38, -1) == 36, "REQ-020: stepping down one row goes 38 -> 36")
 
-	# REQ-019: a new note is one grid step long, not the remembered length.
-	ne.default_note_length_ticks = 1920
+	# REQ-019: a new note is one grid step long.
 	var snap: int = ne.get_snap_interval()
 	var placed = ne._place_note_at_position(Vector2(0, midi.lane_layout.pitch_to_y_center(38)))
 	await process_frame
@@ -185,7 +184,6 @@ func _test_mode_switch_keeps_selection() -> void:
 	# Notes are placed through the editor rather than seeded into the clip:
 	# NoteContainer._load_notes_from_single_clip needs Sonara.editor.project,
 	# which does not exist headless, so pre-seeded notes get no visuals here.
-	ne.default_note_length_ticks = 240
 	var notes: Array = []
 	for pitch in [36, 38]:
 		var vn = ne._place_note_at_position(Vector2(0, midi.lane_layout.pitch_to_y_center(pitch)))

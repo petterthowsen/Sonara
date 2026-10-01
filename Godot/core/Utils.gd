@@ -12,6 +12,38 @@ static func display_color(color: Color) -> Color:
 	return color.clamp()
 
 
+## Resting header tint multipliers: TrackItem's unselected exports default to these, and the
+## arranger lane fill uses them too, so a timeline lane always matches its track header.
+const HEADER_RESTING_BRIGHTNESS := 0.55
+const HEADER_RESTING_SATURATION := 0.65
+
+
+## Track header background for a track color: clamped for drawing, then value and saturation
+## scaled by the header's state multipliers. Shared by TrackItem and the arranger lane fill.
+static func header_color(color: Color, brightness: float = 1.0, saturation: float = 1.0) -> Color:
+	var c := display_color(color)
+	c.v = clampf(c.v * brightness, 0.0, 1.0)
+	c.s = clampf(c.s * saturation, 0.0, 1.0)
+	return c
+
+
+## Automation lane tint multipliers: darker and less saturated than the track header, so a lane
+## reads as belonging to the track above it.
+const AUTOMATION_LANE_BRIGHTNESS := 0.35
+const AUTOMATION_LANE_SATURATION := 0.5
+
+
+## Automation lane background for a track color, matching between the tracklist header and the
+## timeline row. A lane that hasn't resolved to a target gets the unresolved red-grey tint.
+static func automation_lane_color(color: Color, resolved: bool = true) -> Color:
+	var c := display_color(color)
+	c.v = clampf(c.v * AUTOMATION_LANE_BRIGHTNESS, 0.0, 1.0)
+	c.s = clampf(c.s * AUTOMATION_LANE_SATURATION, 0.0, 1.0)
+	if not resolved:
+		c = c.lerp(Color(0.35, 0.1, 0.1), 0.5)
+	return c
+
+
 ## Black or white depending on background luminance, for readable labels.
 static func contrasting_text_color(bg: Color) -> Color:
 	var drawn := display_color(bg)

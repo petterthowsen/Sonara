@@ -438,6 +438,8 @@ pub struct ClipInstance {
     pub loop_enabled: bool,
     pub loop_start_ticks: Tick, // Loop region start, in clip content ticks (includes `clip_offset`)
     pub loop_length_ticks: Tick,
+    /// Audio clips: read the source samples backwards (mirrored around the clip's centre).
+    pub reverse: bool,
     /// Audio clips: fractional read position in the clip's samples while the playhead is inside
     /// this instance. None until playback enters it; reset on seek, stop and edits.
     pub playback_position: Option<f64>,
@@ -471,6 +473,7 @@ impl ClipInstance {
             loop_enabled: false,
             loop_start_ticks: 0,
             loop_length_ticks: 0,
+            reverse: false,
             playback_position: None,
         }
     }
@@ -1167,6 +1170,12 @@ impl AudioPlayback {
         device_sr: f64,
     ) -> f64 {
         frame_bpm / recorded_bpm as f64 * clip_sr / device_sr
+    }
+
+    /// Source frame a reversed instance reads at `playback_pos`: the file mirrored around its
+    /// centre, so position 0 reads the last frame. Positions past the end clamp to frame 0.
+    pub fn reverse_source_frame(playback_pos: f64, sample_len: f64) -> f64 {
+        ((sample_len - 1.0) - playback_pos).max(0.0)
     }
 
     /// Advance playback position by the stretch factor

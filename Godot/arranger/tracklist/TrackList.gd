@@ -789,7 +789,6 @@ func _on_automation_parameter_chosen(track: Track, target: AutomationTarget) -> 
 		return
 	var lane := AutomationLane.new(_unique_lane_id(track), target)
 	lane.height = Settings.get_value("appearance/automation_lane_height")
-	lane.color = Utils.display_color(track.color)
 	var seed_value: float = target.current_normalized_value(track.get_linked_channel())
 	AutomationActions.create_lane(track, lane)
 	AutomationActions.add_point(lane, 0, seed_value)

@@ -31,6 +31,7 @@ const STATE_MISMATCH := "state_mismatch"
 const MARKER_DURATION := "marker_duration"
 const CLIP_TRANSPOSE := "clip_transpose"
 const CLIP_GAIN_OFFSET := "clip_gain_offset"
+const CLIP_REVERSE := "clip_reverse"
 const PAN_MODE := "pan_mode"
 const HARDWARE_OUTPUT := "hardware_output"
 const PHASE_INVERT := "phase_invert"
@@ -67,6 +68,7 @@ const TEMPLATES: Dictionary = {
 	MARKER_DURATION: "{n} marker durations not exported",
 	CLIP_TRANSPOSE: "{n} clip instances with transpose exported as separate transposed clips",
 	CLIP_GAIN_OFFSET: "{n} clip gain offsets not exported",
+	CLIP_REVERSE: "{n} reversed clip instances exported as their forward audio",
 	PAN_MODE: "pan mode {detail} exported as pan position only",
 	HARDWARE_OUTPUT: "hardware output routing exported as master",
 	PHASE_INVERT: "phase invert not exported",

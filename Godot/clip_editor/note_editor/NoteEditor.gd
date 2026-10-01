@@ -55,12 +55,6 @@ var cursor_position_ticks: int = 0
 var edited_clip_instances: Array[ClipInstance] = []
 
 
-# Default note length for new notes
-var default_note_length_ticks: int = 960:
-	set(value):
-		default_note_length_ticks = value
-
-
 func _ready():
 	# This is the control that holds keyboard focus for the note area
 	# (MidiEditor delegates mouse input, ClipEditor focuses the note editor), so it has
@@ -70,18 +64,10 @@ func _ready():
 
 	# Create selection manager (grid_helper will be set via override below)
 	selection_manager = NoteSelectionManager.new(grid_helper)
-	selection_manager.selection_changed.connect(_on_selection_changed)
-	
+
 	# Provide coordinate conversion callback to selection manager
 	# This allows it to work in the correct coordinate space without tight coupling
 	selection_manager.get_note_song_position = get_note_song_position
-
-
-func _on_selection_changed(notes: Array[VisualNote]) -> void:
-	"""Handle selection changed from selection manager."""
-	# Update default note length if single note selected
-	if notes.size() == 1 and notes[0].midi_note_data:
-		default_note_length_ticks = notes[0].midi_note_data.duration_ticks
 
 
 # Override set_grid_helper to also update selection manager
@@ -103,25 +89,6 @@ func unbind():
 	last_erased_note = null
 	erasing_mode = false
 	super.unbind()
-
-
-# Override bind to update default note length from grid helper
-func bind(ci: ClipInstance):
-	super.bind(ci)
-
-	# Initialize default note length from snap interval if not already set
-	if grid_helper and default_note_length_ticks == 960:
-		default_note_length_ticks = grid_helper.get_snap_interval()
-
-
-# Override bind_to_clips for multi-clip mode (track-mode)
-func bind_to_clips(instances: Array[ClipInstance], owner_track: Track):
-	super.bind_to_clips(instances, owner_track)
-
-	# Initialize default note length from snap interval if not already set
-	if grid_helper and default_note_length_ticks == 960:
-		default_note_length_ticks = grid_helper.get_snap_interval()
-
 
 
 # ============================================================================
@@ -301,8 +268,9 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	if grid_helper:
 		tick_position = grid_helper.floor_ticks(tick_position)
 
-	# Drum View hits are one grid step long, not the remembered note length (REQ-019).
-	var new_note_length := get_snap_interval() if layout.is_folded() else default_note_length_ticks
+	# A new note is one grid step long (REQ-019), in both views: the current snap
+	# interval is the finest visible grid line, so zooming in lets you write 16ths.
+	var new_note_length := get_snap_interval()
 
 	var end_tick = tick_position + new_note_length
 
@@ -479,7 +447,6 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 			var new_duration := _snapped_duration(start_duration + delta_ticks)
 			sel_note.midi_note_data.duration_ticks = new_duration
-			default_note_length_ticks = new_duration
 	else:
 		# Normal mode: Control position
 		# Row-wise in Drum View, semitone-wise in the piano roll (REQ-020). The two
@@ -676,10 +643,6 @@ func _on_resize_ended(note: VisualNote) -> void:
 	"""Handle note resize end."""
 	if resizing_note != note or not note.midi_note_data:
 		return
-
-	# Store new note length as default
-	default_note_length_ticks = note.midi_note_data.duration_ticks
-	logger.info("Updated default note length to %d ticks" % default_note_length_ticks)
 
 	# Process all selected notes
 	var total_affected = 0

@@ -77,9 +77,10 @@ func _emit_scale_changed() -> void:
 			changed.emit()
 
 ## Minimum on-screen gap in pixels between adjacent grid lines. Beat lines, then
-## 1/2, 1/4 and 1/8 beat subdivisions, appear (and become snap targets) only
-## once their spacing reaches this. Bar lines always show. At runtime this
-## follows the "appearance/grid_min_line_spacing" setting.
+## 1/2, 1/4, 1/8 and 1/16 beat subdivisions (8th, 16th, 32nd and 64th notes),
+## appear (and become snap targets) only once their spacing reaches this. Bar
+## lines always show. At runtime this follows the
+## "appearance/grid_min_line_spacing" setting.
 @export var min_line_spacing: float = 10.0:
 	set(v):
 		if min_line_spacing != v:
@@ -197,12 +198,13 @@ func _snap_interval_for(beat: int, bar: int) -> int:
 func beat_lines_visible() -> bool:
 	return ticks_to_pixels(get_ticks_per_beat()) >= min_line_spacing
 
-## Finest 1/2, 1/4 or 1/8 beat subdivision that keeps lines min_line_spacing apart, or 0 for none.
+## Finest 1/2, 1/4, 1/8 or 1/16 beat subdivision that keeps lines min_line_spacing
+## apart, or 0 for none. Finest first, so `ppq / 16` (a 64th note) is the floor.
 func get_subdivision_interval() -> int:
 	return _subdivision_for(get_ticks_per_beat())
 
 func _subdivision_for(beat: int) -> int:
-	for div in [8, 4, 2]:
+	for div in [16, 8, 4, 2]:
 		@warning_ignore("integer_division")
 		var interval: int = maxi(1, ppq / div)
 		if interval < beat and ticks_to_pixels(interval) >= min_line_spacing:

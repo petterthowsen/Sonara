@@ -35,6 +35,7 @@ func run_tests() -> void:
 	await _test_duplicate_drag_commits()
 	await _test_duplicate_drag_without_move_cancels()
 	_test_label_font_size()
+	await _test_placed_note_length_follows_grid()
 	await _test_clip_editor_ruler_regions()
 
 
@@ -207,6 +208,45 @@ func _test_label_font_size() -> void:
 	_assert(_visual_note_script.label_font_size_for(20.0) == 12, "scaled down at 20 px rows")
 	_assert(_visual_note_script.label_font_size_for(12.0) == 7, "still shown at 12 px rows")
 	_assert(_visual_note_script.label_font_size_for(8.0) == 0, "hidden at the smallest rows")
+
+
+## A placed note is one grid step long and the step follows the zoom, so zooming in to
+## 16ths (or finer) lets you write them. The grid's finest level must keep advancing with
+## the zoom instead of stopping at 8ths.
+func _test_placed_note_length_follows_grid() -> void:
+	var project: Object = _project_script.new()
+	var pair: Dictionary = project.create_instrument_track("Synth")
+	var clip: Object = project.create_clip("Riff")
+	project.add_clip(clip)
+	var inst: Object = pair.track.create_clip_instance(clip, 0, 7680)
+
+	var editor: Object = _note_editor_script.new()
+	var gh: Object = _grid_helper_script.new()
+	gh.min_line_spacing = 10.0
+	editor.set_grid_helper(gh)
+	root.add_child(editor)
+	editor.bind(inst)
+	await process_frame
+
+	var y: float = editor.layout.pitch_to_y_center(72)
+	for ppb in [64.0, 128.0, 512.0, 4096.0]:
+		gh.pixels_per_beat = ppb
+		await process_frame
+		var step: int = gh.get_snap_interval()
+		var vn = editor._place_note_at_position(Vector2(100.0, y))
+		await process_frame
+		_assert(vn != null and vn.midi_note_data.duration_ticks == step,
+			"ppb=%.0f: a new note is one grid step (%d) long" % [ppb, step])
+		if vn:
+			clip.remove_midi_note(vn.midi_note_data)
+
+	gh.pixels_per_beat = 64.0
+	_assert(gh.get_snap_interval() == 240, "at 64 ppb the grid is 16th notes (240 ticks)")
+	gh.pixels_per_beat = 4096.0
+	_assert(gh.get_snap_interval() == 60, "at 4096 ppb it reaches 64th notes (60 ticks)")
+
+	editor.queue_free()
+	await process_frame
 
 
 ## Clip mode: the ruler is in clip-content ticks and shades the instance's played window.

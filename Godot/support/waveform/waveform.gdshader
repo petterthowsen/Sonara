@@ -31,6 +31,8 @@ uniform int level_rows[24];
 uniform int level_blocks[24];
 uniform float base_block = 64.0;
 uniform float total_frames = 0.0;
+// 1 = the clip plays backwards: each column reads the file mirrored around its centre.
+uniform float reverse = 0.0;
 
 uniform vec2 rect_size = vec2(1.0);
 uniform float frame0 = 0.0;
@@ -165,8 +167,17 @@ float raw_line(float r, int ch, bool mono) {
 
 // The envelope path: reduce the peak blocks under column x.
 void peaks_column(float x, float fpp, int rows, bool right, float centre, float half_h, float py, inout vec4 out_color) {
-	float f0 = floor(frame0 + x * fpp);
-	float f1 = max(floor(frame0 + (x + 1.0) * fpp), f0 + 1.0);
+	float d0 = frame0 + x * fpp;
+	float d1 = frame0 + (x + 1.0) * fpp;
+	float f0;
+	float f1;
+	if (reverse > 0.5) {
+		f0 = floor(total_frames - d1);
+		f1 = max(floor(total_frames - d0), f0 + 1.0);
+	} else {
+		f0 = floor(d0);
+		f1 = max(floor(d1), f0 + 1.0);
+	}
 	f1 = min(f1, total_frames);
 
 	if (f0 >= 0.0 && f0 < total_frames && levels > 0) {
@@ -224,20 +235,24 @@ void fragment() {
 	bool right = rows == 2 && row == 1;
 	float py = local_pos.y;
 
-	// Raw samples: the column spans window-relative positions [ra, rb].
-	float ra = samples_rel0 + x * fpp;
-	float rb = ra + fpp;
-	bool raw = fpp < base_block && samples_channels > 0 && ra >= 0.0 && rb <= samples_len;
+	// Raw samples: the column spans window-relative positions [da, db]. Reversed playback
+	// walks the file the other way, so `db < da` then.
+	float step_dir = reverse > 0.5 ? -1.0 : 1.0;
+	float da = samples_rel0 + x * fpp * step_dir;
+	float db = da + fpp * step_dir;
+	float lo_pos = min(da, db);
+	float hi_pos = max(da, db);
+	bool raw = fpp < base_block && samples_channels > 0 && lo_pos >= 0.0 && hi_pos <= samples_len;
 	if (raw) {
 		bool mono = rows == 1 && samples_channels > 1;
 		int ch = (right && samples_channels > 1) ? 1 : 0;
-		float lo = min(raw_line(ra, ch, mono), raw_line(rb, ch, mono));
-		float hi = max(raw_line(ra, ch, mono), raw_line(rb, ch, mono));
+		float lo = min(raw_line(lo_pos, ch, mono), raw_line(hi_pos, ch, mono));
+		float hi = max(raw_line(lo_pos, ch, mono), raw_line(hi_pos, ch, mono));
 		// Sample points strictly inside the column (at most ceil(fpp) < 65).
-		int i0 = int(floor(ra - 0.5)) + 1;
+		int i0 = int(floor(lo_pos - 0.5)) + 1;
 		for (int k = 0; k < 66; k++) {
 			int i = i0 + k;
-			if (float(i) + 0.5 >= rb) {
+			if (float(i) + 0.5 >= hi_pos) {
 				break;
 			}
 			float v = raw_value(i, ch, mono);
@@ -251,9 +266,9 @@ void fragment() {
 		float alpha = span_cov(py, top, bottom);
 		// Dots on the sample points once they are at least 4 px apart.
 		if (fpp < 0.25) {
-			float pos = (ra + 0.5 * fpp) - 0.5;
-			int i = int(floor(pos + 0.5));
-			float dx = ((float(i) + 0.5) - (ra + 0.5 * fpp)) / fpp;
+			float mid = 0.5 * (da + db);
+			int i = int(floor(mid + 0.5));
+			float dx = ((float(i) + 0.5) - mid) / fpp;
 			float dy = py - (centre - to_scale(raw_value(i, ch, mono) * g) * half_h);
 			float d = length(vec2(dx, dy));
 			alpha = max(alpha, clamp(2.5 - d, 0.0, 1.0));
@@ -262,7 +277,11 @@ void fragment() {
 		float n = 0.0;
 		if (color_mode == 1) {
 			// Colour from the base-level band energies of the block under the column.
-			int b = clamp(int(floor((frame0 + (x + 0.5) * fpp) / base_block)), 0, level_blocks[0] - 1);
+			float dmid = frame0 + (x + 0.5) * fpp;
+			if (reverse > 0.5) {
+				dmid = total_frames - dmid;
+			}
+			int b = clamp(int(floor(dmid / base_block)), 0, level_blocks[0] - 1);
 			ivec2 t = texel_of(0, b);
 			if (!right || rows == 1) {
 				vec3 bb = texelFetch(plane_b_l, t, 0).rgb;

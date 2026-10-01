@@ -304,9 +304,21 @@ pub fn process_audio(
                                 let clip_sample_len =
                                     (clip.audio_samples.len() / clip.audio_channels) as f64;
 
+                                // A reversed instance reads the source mirrored around its centre,
+                                // while the playback position (and any loop wrap) still advances
+                                // forward in content time.
+                                let read_pos = if instance.reverse {
+                                    AudioPlayback::reverse_source_frame(
+                                        *playback_pos,
+                                        clip_sample_len,
+                                    )
+                                } else {
+                                    *playback_pos
+                                };
+
                                 // Get the current interpolated sample
-                                let sample_idx = playback_pos.floor() as usize;
-                                let frac = (playback_pos.fract()) as f32;
+                                let sample_idx = read_pos.floor() as usize;
+                                let frac = (read_pos.fract()) as f32;
 
                                 if sample_idx < clip_sample_len as usize {
                                     let interleaved_idx = sample_idx * clip.audio_channels;
@@ -654,6 +666,53 @@ mod tests {
                 24_000.0
             );
         }
+    }
+
+    #[test]
+    fn reverse_reads_the_file_backwards() {
+        // Position 0 is the last frame; the end clamps to the first frame.
+        assert_eq!(AudioPlayback::reverse_source_frame(0.0, 1_000.0), 999.0);
+        assert_eq!(AudioPlayback::reverse_source_frame(999.0, 1_000.0), 0.0);
+        assert_eq!(AudioPlayback::reverse_source_frame(1_000.0, 1_000.0), 0.0);
+    }
+
+    /// One 64-frame buffer of a mono ramp clip on track 2, played at 1:1 (120 BPM, 48 kHz).
+    fn render_ramp(reverse: bool) -> Vec<f32> {
+        let mut state = EngineState::default();
+
+        let mut clip = Clip::new("c".to_string(), "Ramp".to_string(), ClipType::Audio);
+        clip.audio_samples = (0..200).map(|i| i as f32).collect();
+        clip.audio_channels = 1;
+        clip.audio_sample_rate = 48_000;
+        clip.recorded_bpm = 120.0;
+        clip.content_length_ticks = 960;
+        state.clips.insert("c".to_string(), clip);
+
+        let mut instance = ClipInstance::new("i".to_string(), "c".to_string(), 0, 960);
+        instance.reverse = reverse;
+        let mut track = Track::new(2, 2);
+        track.clip_instances.push(instance);
+        state.tracks.insert(2, track);
+        state
+            .channels
+            .insert(2, Channel::new(2, "Audio".to_string(), 64, 48_000.0));
+
+        state.set_is_playing(true);
+        state.set_current_tick(0);
+        state.set_fractional_tick_accumulator(0.0);
+        process_audio(&mut state, 64, 48_000.0, Instant::now());
+        state.channels.get(&2).unwrap().buffer_left.clone()
+    }
+
+    #[test]
+    fn reverse_instance_plays_the_clip_backwards() {
+        let forward = render_ramp(false);
+        let backward = render_ramp(true);
+        // 1:1 playback, so frame i reads source frame i forwards and 199 - i reversed.
+        assert_eq!(forward[0], 0.0);
+        assert_eq!(forward[63], 63.0);
+        assert_eq!(backward[0], 199.0);
+        assert_eq!(backward[63], 136.0);
     }
 
     #[test]

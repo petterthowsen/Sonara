@@ -8,6 +8,7 @@ class_name ClipContextMenu extends PopupPanel
 @onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
 @onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
 @onready var loop_checkbox: CheckButton = $VBoxContainer/LoopCheckbox
+@onready var reverse_checkbox: CheckButton = $VBoxContainer/ReverseCheckbox
 @onready var cut: Button = $VBoxContainer/Cut
 @onready var copy: Button = $VBoxContainer/Copy
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
@@ -26,6 +27,8 @@ var selected_instances: Array[ClipInstance] = []
 func _ready() -> void:
 	if is_instance_valid(loop_checkbox):
 		loop_checkbox.toggled.connect(_on_loop_toggled)
+	if is_instance_valid(reverse_checkbox):
+		reverse_checkbox.toggled.connect(_on_reverse_toggled)
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -86,6 +89,18 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 		loop_checkbox.set_pressed_no_signal(all_loop)
 		loop_checkbox.disabled = selected_instances.is_empty()
 
+	# Reverse is an audio-clip feature: shown only when every selected instance is audio.
+	if reverse_checkbox:
+		var all_audio := not selected_instances.is_empty()
+		for inst in selected_instances:
+			all_audio = all_audio and inst.clip != null \
+					and inst.clip.type == Clip.ClipType.AUDIO
+		reverse_checkbox.visible = all_audio
+		var all_reverse := all_audio
+		for inst in selected_instances:
+			all_reverse = all_reverse and inst.reverse_enabled
+		reverse_checkbox.set_pressed_no_signal(all_reverse)
+
 	# Enable/disable Make Unique: enable if ANY selected instance shares its clip
 	var can_make_unique = false
 	if Sonara and Sonara.editor and Sonara.editor.project:
@@ -126,6 +141,20 @@ func _on_loop_toggled(enabled: bool) -> void:
 			inst.start_ticks, inst.duration_ticks, inst.clip_offset,
 			old_state, new_state))
 	HistoryUtil.execute_many("Loop Clips" if enabled else "Unloop Clips", cmds)
+
+
+## Switch audio playback direction for the bound audio instances as one undo step.
+func _on_reverse_toggled(enabled: bool) -> void:
+	var cmds: Array[Command] = []
+	for inst in selected_instances:
+		if inst == null or inst.clip == null or inst.clip.type != Clip.ClipType.AUDIO:
+			continue
+		if inst.reverse_enabled == enabled:
+			continue
+		cmds.append(PropertyCommand.new(
+			"Reverse Clip" if enabled else "Unreverse Clip", inst,
+			"set_reverse_enabled", inst.reverse_enabled, enabled))
+	HistoryUtil.execute_many("Reverse Clips" if enabled else "Unreverse Clips", cmds)
 
 
 ## Request Cut for the bound instances.

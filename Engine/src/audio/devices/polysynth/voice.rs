@@ -70,6 +70,8 @@ pub struct StartCtx {
     pub glide: f32,
     /// Starting LFO phases: 0 for Retrigger Note, else the device's free-running phase.
     pub lfo_phase: [f64; 2],
+    /// Per LFO: Retrigger Note, so a re-triggered note restarts the phase too.
+    pub lfo_retrigger: [bool; 2],
 }
 
 /// Everything a voice reads while rendering one span of the block. The slices cover the whole
@@ -317,24 +319,33 @@ impl Voice {
     }
 
     /// Retrigger a sounding voice with a new note: gliding from where it is now, and restarting
-    /// the envelopes from their current levels only when `retrigger_env` (Mono, same-note
-    /// repeats).
+    /// the envelopes from their current levels only when `retrigger` (Mono, same-note repeats).
+    /// The same flag restarts any LFO whose Retrigger is Note, so a re-triggered note keys its
+    /// LFO just like a fresh note.
     pub fn retrigger(
         &mut self,
         note: u8,
         velocity: f32,
         age: u64,
         glide_seconds: f32,
-        retrigger_env: bool,
+        retrigger: bool,
+        ctx: &StartCtx,
     ) {
         self.note = note;
         self.velocity = velocity;
         self.age = age;
         self.gate = true;
         self.glide_to(note, glide_seconds);
-        if retrigger_env {
+        if retrigger {
             self.amp_env.retrigger_from_current();
             self.filter_env.retrigger_from_current();
+            for i in 0..2 {
+                if ctx.lfo_retrigger[i] {
+                    self.lfo[i].phase = ctx.lfo_phase[i];
+                    let held = self.next_noise();
+                    self.lfo[i].set_held(held);
+                }
+            }
         }
     }
 

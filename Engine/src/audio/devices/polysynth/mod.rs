@@ -219,6 +219,7 @@ impl PolySynthDevice {
         StartCtx {
             glide: self.params.glide,
             lfo_phase: [phase(0), phase(1)],
+            lfo_retrigger: [self.params.lfo[0].retrigger, self.params.lfo[1].retrigger],
         }
     }
 
@@ -249,7 +250,7 @@ impl PolySynthDevice {
             .iter_mut()
             .find(|v| v.active && !v.is_fading() && v.note == note)
         {
-            v.retrigger(note, velocity, age, 0.0, true);
+            v.retrigger(note, velocity, age, 0.0, true, &start);
             return;
         }
 
@@ -310,7 +311,7 @@ impl PolySynthDevice {
         let voice = &mut self.voices[0];
         if voice.active && !voice.is_fading() {
             // Legato only slides while another key is held; Mono always retriggers.
-            voice.retrigger(note, velocity, age, glide, !(legato && was_held));
+            voice.retrigger(note, velocity, age, glide, !(legato && was_held), &start);
         } else {
             let pending = PendingNote {
                 note,
@@ -341,9 +342,10 @@ impl PolySynthDevice {
             }
             VoiceMode::Mono | VoiceMode::Legato => {
                 self.held.remove(note);
-                let retrigger_env = self.params.mode == VoiceMode::Mono;
+                let retrigger = self.params.mode == VoiceMode::Mono;
                 let glide = self.params.glide;
                 let age = self.next_age();
+                let start = self.start_ctx();
                 let voice = &mut self.voices[0];
                 if let Some(p) = voice.pending.as_mut().filter(|p| p.note == note) {
                     match self.held.top() {
@@ -358,7 +360,7 @@ impl PolySynthDevice {
                 match self.held.top() {
                     Some(top) => {
                         let velocity = voice.velocity;
-                        voice.retrigger(top, velocity, age, glide, retrigger_env);
+                        voice.retrigger(top, velocity, age, glide, retrigger, &start);
                     }
                     None => voice.release(),
                 }
@@ -1332,6 +1334,28 @@ mod tests {
             .map(|v| v.lfo[0].phase)
             .collect();
         assert!((phases[0] - phases[1]).abs() > 0.1, "{phases:?}");
+    }
+
+    #[test]
+    fn retrigger_restarts_note_lfo_in_poly_and_mono() {
+        // LFO 1 Retrigger defaults to Note. Re-triggering the same note (Poly) or a new note
+        // while one sounds (Mono) must restart the LFO, just like a fresh voice does.
+        for (mode, label) in [(0.0, "poly"), (1.0, "mono")] {
+            let mut dev = synth();
+            set_real(&mut dev, VOICE_MODE, mode);
+            dev.send_midi_event(60, 100, true, 0);
+            render(&mut dev, 4);
+            let before = dev.voices[0].lfo[0].phase;
+            assert!(before > 0.05, "{label}: LFO should be running: {before}");
+
+            dev.send_midi_event(60, 100, true, 0);
+            render(&mut dev, 1);
+            let after = dev.voices[0].lfo[0].phase;
+            assert!(
+                after < 0.05,
+                "{label}: retrigger should restart the LFO, {before} -> {after}"
+            );
+        }
     }
 
     #[test]

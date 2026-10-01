@@ -29,8 +29,8 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 		queue_redraw()
 
 @export_group("Selection Style")
-@export var unselected_brightness := 0.55
-@export var unselected_saturation := 0.65
+@export var unselected_brightness := Utils.HEADER_RESTING_BRIGHTNESS
+@export var unselected_saturation := Utils.HEADER_RESTING_SATURATION
 @export var selected_brightness := 1.05
 @export var active_brightness := 1.25
 @export var selected_outline_color := Color(1, 1, 1, 0.35)
@@ -547,15 +547,13 @@ func _update_header_style() -> void:
 	if stylebox == null:
 		return
 
-	var c := Utils.display_color(track.color)
+	var c: Color
 	if is_active:
-		c.v = clampf(c.v * active_brightness, 0.0, 1.0)
-		c.s = clampf(c.s * 1.05, 0.0, 1.0)
+		c = Utils.header_color(track.color, active_brightness, 1.05)
 	elif is_selected:
-		c.v = clampf(c.v * selected_brightness, 0.0, 1.0)
+		c = Utils.header_color(track.color, selected_brightness)
 	else:
-		c.v = clampf(c.v * unselected_brightness, 0.0, 1.0)
-		c.s = clampf(c.s * unselected_saturation, 0.0, 1.0)
+		c = Utils.header_color(track.color, unselected_brightness, unselected_saturation)
 	stylebox.bg_color = c
 
 	if label:
@@ -571,6 +569,11 @@ func _on_track_height_changed(new_height: int) -> void:
 		# A drag, vertical zoom or undo set this height explicitly: it supersedes any
 		# height remembered from layout-driven growth.
 		_pre_layout_height = -1
+		# `new_height` can be below what the header's content needs (vertical zoom, undo, a
+		# project with small stored heights). The container then keeps this node at the content
+		# floor, but its realized size does not change, so NOTIFICATION_RESIZED never fires and
+		# the lane would stay at the smaller `Track.height`. Push the floor back here instead.
+		_sync_layout_height()
 
 
 func _on_track_channel_id_changed(new_channel_id: int) -> void:

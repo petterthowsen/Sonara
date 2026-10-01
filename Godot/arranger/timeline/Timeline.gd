@@ -625,7 +625,8 @@ func _handle_erase_input(event: InputEvent) -> bool:
 		if event.pressed:
 			_erase_active = false
 			_erase_pressed = (Settings.get_value(ERASE_SETTING) and is_visible_in_tree()
-					and get_global_rect().has_point(event.global_position))
+					and get_global_rect().has_point(event.global_position)
+					and not _is_over_automation_lane_row(event.global_position))
 			_erase_press_pos = event.global_position
 			_erase_last_pos = event.global_position
 			return false
@@ -671,6 +672,18 @@ func _erase_along(from: Vector2, to: Vector2) -> void:
 			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
 	if not cmds.is_empty():
 		HistoryUtil.execute_many("Erase Clips", cmds)
+
+
+## An automation lane row owns its own right-click (point context menu, or clearing the point
+## selection on empty space) and is consumed in `_gui_input`. But `_input` runs first, so the
+## erase gesture must exclude those rows here or a right-click on a point arms an erase drag.
+## No clip lives in a lane row, so nothing is lost by never starting the gesture there.
+func _is_over_automation_lane_row(global_pos: Vector2) -> bool:
+	for lane_row in _lane_rows.values():
+		if is_instance_valid(lane_row) and lane_row.is_visible_in_tree() \
+				and lane_row.get_global_rect().has_point(global_pos):
+			return true
+	return false
 
 
 # ============================================================================
@@ -1747,10 +1760,8 @@ func _draw_row_backgrounds() -> void:
 		if row is TimelineTrack:
 			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.get_lane_color(), true)
 		elif row is AutomationLaneRow:
-			# Same fill as the lane's own track row.
-			var owner_row := _find_timeline_track(row.track) if row.track else null
-			var fill: Color = owner_row.get_lane_color() if owner_row else row.bg_color
-			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), fill, true)
+			# The automation header's darker tint of the track color, so row and header match.
+			draw_rect(Rect2(visible_x.x, row.position.y, width, row.size.y), row.get_lane_color(), true)
 		else:
 			continue
 		rows_bottom = maxf(rows_bottom, row.position.y + row.size.y)

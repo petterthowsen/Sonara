@@ -539,6 +539,9 @@ func _sync_clip_instance_to_engine(instance: ClipInstance) -> void:
 			instance.loop_length_ticks
 		])
 
+	if instance.reverse_enabled:
+		AudioEngineOSC.send("/track/%d/instance/%s/set_reverse" % [id, instance.id], [1])
+
 
 func _clear_clip_instance_from_engine(instance: ClipInstance) -> void:
 	"""Remove clip instance from the engine."""

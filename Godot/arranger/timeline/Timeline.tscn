@@ -13,9 +13,9 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 1
 script = ExtResource("1_khs34")
-grid_color_bar = Color(0.78431374, 0.78431374, 0.78431374, 0.5882353)
-grid_color_beat = Color(0.8392157, 0.8392157, 0.8392157, 0.39215687)
-grid_color_tick = Color(0.8235294, 0.8235294, 0.8235294, 0.19607843)
+grid_color_bar = Color(0.6431373, 0.6431373, 0.6431373, 0.5019608)
+grid_color_beat = Color(0.6117647, 0.6117647, 0.6117647, 0.3529412)
+grid_color_tick = Color(0.63529414, 0.63529414, 0.63529414, 0.15686275)
 
 [node name="TimelineTrack" parent="." unique_id=1794739747 instance=ExtResource("3_idtn6")]
 layout_mode = 2

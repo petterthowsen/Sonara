@@ -162,6 +162,7 @@ Device IDs: `-3` none, `-2` all devices, `-1` virtual keyboard, `0+` physical.
 | `/track/{id}/instance/{id}/set_gain` | `f:db` | Set instance gain offset in dB |
 | `/track/{id}/instance/{id}/set_mute` | `i:0_or_1` | Set instance mute state |
 | `/track/{id}/instance/{id}/set_loop` | `i:enabled, i:start_tick, i:length` | Configure instance looping. `start_tick` and `length` are clip content ticks (the same space as `clip_offset`), so the instance repeats that region of the content until its duration ends |
+| `/track/{id}/instance/{id}/set_reverse` | `i:0_or_1` | Audio clips: read the source samples backwards (mirrored around the clip's centre). Loop wrapping and tempo stretch still advance forward in content time |
 
 ### Clip Load Status (Rust -> Godot)
 

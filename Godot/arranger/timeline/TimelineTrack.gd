@@ -10,7 +10,7 @@ class_name TimelineTrack extends Control
 var logger : Log = Log.make("TimelineTrack")
 
 
-## Lane fill. When tinting by track color, only its value (brightness) is used.
+## Lane fill fallback for a lane with no bound track; a bound lane uses its track's header color.
 @export var bg_color: Color = "#555":
 	set(value):
 		bg_color = value
@@ -199,18 +199,13 @@ func _update_clip_positions() -> void:
 # ============================================================================
 # DRAWING
 # ============================================================================
-## The lane fill: the track color at `bg_color`'s brightness, or `bg_color` when tinting is off.
+## The lane fill: the track's resting header color, so a lane always matches its TrackHeader.
+## `bg_color` is only the fallback for a lane with no bound track (editor preview).
 func get_lane_color() -> Color:
 	if track == null:
 		return bg_color
-	var tint_by_track := true
-	if not Engine.is_editor_hint():
-		tint_by_track = Settings.get_value("appearance/color_timeline_by_track")
-	if tint_by_track:
-		var col := Color.from_hsv(track.color.h, track.color.s, bg_color.v)
-		col.a = 0.5
-		return col
-	return bg_color
+	return Utils.header_color(
+		track.color, Utils.HEADER_RESTING_BRIGHTNESS, Utils.HEADER_RESTING_SATURATION)
 
 
 ## Lane look changed: the Timeline draws it at runtime, this node only in the editor preview.

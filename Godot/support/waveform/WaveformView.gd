@@ -62,6 +62,16 @@ var gain: float = 1.0:
 			return
 		gain = v
 		_set_param("gain", v)
+## Draw the file mirrored (clip plays backwards); the sample window follows the mirror too.
+var reverse: bool = false:
+	set(v):
+		if reverse == v:
+			return
+		reverse = v
+		_set_param("reverse", 1.0 if v else 0.0)
+		if is_data_ready():
+			_samples.clear()
+			_update_slice()
 var fade_in_frames: float = 0.0:
 	set(v):
 		if fade_in_frames == v:
@@ -124,6 +134,7 @@ func _init() -> void:
 	_samples.changed.connect(_on_samples_changed)
 	for key in ["frames_per_pixel", "gain", "fade_in_frames", "fade_out_frames", "fade_curve", "color"]:
 		_material.set_shader_parameter(key, get(key))
+	_material.set_shader_parameter("reverse", 1.0 if reverse else 0.0)
 	for key in ["channel_mode", "style", "color_mode", "amp_scale"]:
 		_material.set_shader_parameter(key, int(get(key)))
 
@@ -213,6 +224,13 @@ func _visible_x_range() -> Vector2:
 	return Vector2(x0, x1)
 
 
+## Source frame shown at `display_frame` (a content-source frame): mirrored when reversed.
+func _source_frame(display_frame: float) -> float:
+	if reverse and is_data_ready():
+		return float(data.frames) - display_frame
+	return display_frame
+
+
 ## Point the shader at the visible slice. Frame positions are computed here in double
 ## precision and passed relative to the slice, so the shader only sees small numbers.
 func _update_slice() -> void:
@@ -223,7 +241,7 @@ func _update_slice() -> void:
 	_material.set_shader_parameter("frame0", frame0)
 	_material.set_shader_parameter("fade_rel0", _slice.x * fpp)
 	_material.set_shader_parameter("view_frames", size.x * fpp)
-	_material.set_shader_parameter("samples_rel0", frame0 - float(_samples.window_start))
+	_material.set_shader_parameter("samples_rel0", _source_frame(frame0) - float(_samples.window_start))
 	queue_redraw()
 	_schedule_samples()
 
@@ -245,9 +263,13 @@ func _update_samples() -> void:
 		return
 	var f0 := start_frame + _slice.x * frames_per_pixel
 	var f1 := start_frame + _slice.y * frames_per_pixel
-	var margin := (f1 - f0) * 0.25
-	if not _samples.set_range(floori(f0 - margin), ceili(f1 + margin)):
-		_samples.set_range(floori(f0), ceili(f1) + 1)
+	var s0 := _source_frame(f0)
+	var s1 := _source_frame(f1)
+	var lo := minf(s0, s1)
+	var hi := maxf(s0, s1)
+	var margin := (hi - lo) * 0.25
+	if not _samples.set_range(floori(lo - margin), ceili(hi + margin)):
+		_samples.set_range(floori(lo), ceili(hi) + 1)
 
 
 func _on_samples_changed() -> void:
@@ -257,7 +279,7 @@ func _on_samples_changed() -> void:
 	_material.set_shader_parameter("samples_row", WaveformSampleWindow.CHUNK)
 	_material.set_shader_parameter("samples_len", float(_samples.window_len))
 	_material.set_shader_parameter("samples_rel0",
-			start_frame + _slice.x * frames_per_pixel - float(_samples.window_start))
+			_source_frame(start_frame + _slice.x * frames_per_pixel) - float(_samples.window_start))
 	queue_redraw()
 
 

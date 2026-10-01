@@ -17,10 +17,10 @@ var target: AutomationTarget = null
 var points: Array[AutomationPoint] = []  # Always sorted by tick.
 var bypassed: bool = false
 
-# Visual state (never sent to the engine).
+# Visual state (never sent to the engine). The lane has no color of its own: the curve and points
+# are drawn in the owning `track`'s color, so recoloring a track recolors its automation.
 var visible: bool = true
 var height: int = 40
-var color: Color = Color.from_string("#FFA500", Color.ORANGE)
 
 ## False when `target` no longer resolves against the linked channel (REQ-024). A lane in this
 ## state keeps its points but is not synced to the engine.
@@ -212,7 +212,6 @@ func to_json() -> Dictionary:
 		"bypassed": bypassed,
 		"visible": visible,
 		"height": height,
-		"color": color.to_html(),
 	}
 
 
@@ -223,7 +222,6 @@ static func from_json(data: Dictionary, default_id: String = "") -> AutomationLa
 	lane.bypassed = data.get("bypassed", false)
 	lane.visible = data.get("visible", true)
 	lane.height = data.get("height", 40)
-	lane.color = Color.from_string(data.get("color", "#FFA500"), Color.ORANGE)
 
 	var index := 0
 	var max_id := 0
