@@ -302,6 +302,22 @@ Gates before any task is marked `[x]`: `cargo test` and `cargo fmt` for engine t
     `Godot/logs/last.log`
   - _Depends on_: T-010, T-023, T-025, T-026, T-027
 
+## Phase 8 — Automation follows clips (REQ-025)
+
+- [x?] **T-029** [REQ-025] Move the lane points under a clip when the clip moves.
+  - _Files_: `Godot/history/AutomationActions.gd`, `Godot/arranger/timeline/Timeline.gd`,
+    `Godot/data/Project.gd`, `Godot/arranger/Arranger.gd` + `.tscn`,
+    `Godot/assets/icons/`, `Godot/tests/test_automation_follows_clips.gd`,
+    `Godot/tests/test_arranger_view_toggles.gd`
+  - _Output_: an "Automation Follows Clips" footer toggle (`arranger_view["automation_follows_clips"]`,
+    default off); `AutomationActions.shift_track_automation` merges touching clip ranges and calls
+    `shift_points_in_range`, which anchors a range edge that lacks a point and shifts every point
+    inside it; `Timeline` folds those commands into the clip move for both the drag and the
+    keyboard nudge
+  - _Verify_: `godot --headless --path Godot -s tests/test_automation_follows_clips.gd -- --test`
+    passes (shift, anchors, range merge, undo/redo, the real nudge and drag paths)
+  - _Depends on_: T-016, T-025
+
 ## Requirement coverage
 
 | REQ | Tasks |
@@ -330,3 +346,4 @@ Gates before any task is marked `[x]`: `cargo test` and `cargo fmt` for engine t
 | REQ-022 | T-016, T-017 |
 | REQ-023 | T-013, T-028 |
 | REQ-024 | T-008, T-012, T-026 |
+| REQ-025 | T-029 |

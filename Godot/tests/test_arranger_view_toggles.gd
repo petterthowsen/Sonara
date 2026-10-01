@@ -19,6 +19,7 @@ func suite_name() -> String:
 
 func run_tests() -> void:
 	await _test_automation_toggle()
+	await _test_automation_follows_clips_toggle()
 	await _test_routing_toggle()
 	_test_view_persists()
 	await _test_click_in_multi_selection_selects_one_on_release()
@@ -96,6 +97,18 @@ func _test_automation_toggle() -> void:
 	await _free(f)
 
 
+func _test_automation_follows_clips_toggle() -> void:
+	var f := await _make_fixture()
+	var arranger: Control = f.arranger
+	_assert(not arranger.automation_follows_clips_toggle.button_pressed,
+		"follows-clips starts off (new project default)")
+	arranger.automation_follows_clips_toggle.button_pressed = true
+	await process_frame
+	_assert(f.project.get_arranger_view("automation_follows_clips"),
+		"toggle writes the project view state")
+	await _free(f)
+
+
 func _test_routing_toggle() -> void:
 	var f := await _make_fixture()
 	var arranger: Control = f.arranger
@@ -113,14 +126,20 @@ func _test_routing_toggle() -> void:
 func _test_view_persists() -> void:
 	var project_script: GDScript = load("res://data/Project.gd")
 	var project: Object = project_script.new()
-	_assert(project.arranger_view == {"automation": true, "routing": true}, "new project shows everything")
+	_assert(project.arranger_view == {"automation": true, "routing": true, "automation_follows_clips": false},
+		"new project shows automation/routing, follows-clips off")
 	project.set_arranger_view("automation", false)
+	project.set_arranger_view("automation_follows_clips", true)
 	var loaded: Object = project_script.from_json(project.to_json())
 	_assert(not loaded.get_arranger_view("automation"), "hidden automation survives reload")
 	_assert(loaded.get_arranger_view("routing"), "shown routing survives reload")
+	_assert(loaded.get_arranger_view("automation_follows_clips"), "follows-clips survives reload")
 	var data: Dictionary = project.to_json()
 	data.erase("arranger_view")
-	_assert(project_script.from_json(data).get_arranger_view("automation"), "old projects load with automation shown")
+	var old_project: Object = project_script.from_json(data)
+	_assert(old_project.get_arranger_view("automation"), "old projects load with automation shown")
+	_assert(not old_project.get_arranger_view("automation_follows_clips"),
+		"old projects load with follows-clips off")
 
 
 func _test_click_in_multi_selection_selects_one_on_release() -> void:

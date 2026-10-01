@@ -187,6 +187,32 @@ No phase-1 control writes `tension`, so every point saved by phase 1 has tension
 deliberate: it keeps the persisted format and the parity tests final, so adding the deferred
 tension handle later is a pure UI change.
 
+## Automation follows clips (REQ-025)
+
+The arranger footer's "Automation Follows Clips" toggle (project flag
+`arranger_view["automation_follows_clips"]`, default off, saved with the project like the other
+view flags) makes a clip move drag the lane points under it. The engine is untouched: the shifted
+points are ordinary `update_point` / `add_point` messages, so playback just hears the new ticks.
+
+- `AutomationActions.shift_track_automation(moves, delta)` is the entry point. `moves` is one
+  `{track, start, end}` per moved clip; ranges on a track that touch or overlap are merged first,
+  so a point on a seam between two clips that move together shifts once instead of twice.
+- `AutomationActions.shift_points_in_range(lane, start, end, delta)` does one lane: if the lane
+  has no point inside the range it does nothing (the clip carries no automation); otherwise it
+  creates a point on either edge that lacks one - value from `get_value_at_tick`, curve and
+  tension inherited from the segment the edge splits - then shifts every point in the inclusive
+  range by `delta`.
+- Both mutate the lane live and return the commands (`AutomationPointsAddCommand` for the new
+  anchors plus `AutomationPointsTransformCommand` for the shift) so `Timeline` folds them into
+  the same `record_many("Move Clips", ...)` macro as the clip transform. One gesture, one undo.
+- Only horizontal, same-track moves follow. A cross-track move leaves the source lane alone - a
+  lane is owned by its track and its target does not travel with the clip - and copy/paste
+  creates new clips rather than moving existing ones, so it is unaffected.
+
+Known limits: splitting a segment with non-zero `tension` at a new anchor is an approximation
+(one point cannot reproduce a warped ramp exactly), and if the shift lands a moved point on the
+tick of a point that did not move, the lane ends up with two points on that tick.
+
 ## Data and protocol changes
 
 ### New OSC messages (Godot → Rust)
@@ -274,7 +300,7 @@ constrained to 20–200), used as the height of a newly created lane. Read throu
 
 | File | Change |
 |---|---|
-| `Godot/history/AutomationActions.gd` | **New.** Static helpers mirroring `ClipActions` / `ClipRangeActions`: `create_lane`, `delete_lane`, `add_point`, `delete_points`, `move_points`, `set_curve`, and the range operations `copy_segment`, `clear_range`, `paste_segment` (REQ-021). |
+| `Godot/history/AutomationActions.gd` | **New.** Static helpers mirroring `ClipActions` / `ClipRangeActions`: `create_lane`, `delete_lane`, `add_point`, `delete_points`, `move_points`, `set_curve`, the range operations `copy_segment`, `clear_range`, `paste_segment` (REQ-021), and `shift_points_in_range` / `shift_track_automation` for "automation follows clips" (REQ-025). |
 | `Godot/history/commands/AutomationLaneCreateCommand.gd` | **New.** Create/undo a lane. |
 | `Godot/history/commands/AutomationLaneDeleteCommand.gd` | **New.** Delete a lane, restoring every point on undo. |
 | `Godot/history/commands/AutomationPointsAddCommand.gd` | **New.** Add one or more points as one entry. |
@@ -294,7 +320,9 @@ constrained to 20–200), used as the height of a newly created lane. Read throu
 | `Godot/arranger/timeline/AutomationLaneRow.gd` + `.tscn` | **New.** The timeline-side lane row: draws the grid the way `TimelineTrack._draw_grid()` does (clipped to the visible scroll range), draws the curve and its points, and owns input — double-click insert (then drag the new point), drag to move, shift-click/shift-drag to add or remove points, box select, ctrl-drag for a grid-snapped time range, hover highlight (REQ-018, REQ-020). Renders step segments as a hold-then-jump and honours a point's stored `tension` when drawing, even though no phase-1 gesture writes it. |
 | `Godot/arranger/timeline/AutomationPointContextMenu.gd` | **New.** Right-click menu on a point or the current selection: set curve shape to Linear or Step, and Delete. Modelled on `ClipContextMenu.gd` (REQ-019). |
 | `Godot/arranger/timeline/AutomationPointSelectionManager.gd` | **New.** Modelled on `ClipSelectionManager`: selection set, box-select, the grid-snapped time range, the last-clicked anchor, and the clipboard payload for segment cut/copy/paste/duplicate (REQ-020, REQ-021). |
-| `Godot/arranger/timeline/Timeline.gd` | Instantiate and order `AutomationLaneRow`s via `AutomationRowOrder`; route cut/copy/paste/duplicate to the automation selection manager when the automation selection is the active one, otherwise to the existing clip path. |
+| `Godot/arranger/timeline/Timeline.gd` | Instantiate and order `AutomationLaneRow`s via `AutomationRowOrder`; route cut/copy/paste/duplicate to the automation selection manager when the automation selection is the active one, otherwise to the existing clip path. Fold `shift_track_automation` into the clip move for the drag and the keyboard nudge when the project's follows-clips flag is on (REQ-025). |
+| `Godot/arranger/Arranger.gd` + `.tscn` | Add the footer "Automation Follows Clips" toggle, bound to `Project.set_arranger_view("automation_follows_clips", …)` like the automation/routing toggles (REQ-025). |
+| `Godot/data/Project.gd` | Add `automation_follows_clips` (default off) to `arranger_view`, and load each flag with its own default so a project saved before the flag existed keeps it off (REQ-025). |
 | `Godot/settings/Settings.gd` | Register `appearance/automation_lane_height` (`Type.INT`, default 40, `CATEGORY_APPEARANCE`), then set `min_val` / `max_val` / `step` on the stored `Setting` the way the virtual-keyboard INT settings do (lines 118–124). |
 
 ### Docs
@@ -346,6 +374,10 @@ constrained to 20–200), used as the height of a newly created lane. Read throu
     expected values from the Rust curve tests to within 0.001 (REQ-005).
   - `… -s tests/test_automation_range_ops.gd -- --test` — copy a 1-bar segment, paste at bar 3,
     assert shifted ticks and preserved curves; undo returns the prior state (REQ-021, REQ-022).
+  - `… -s tests/test_automation_follows_clips.gd -- --test` — shift a range and assert the created
+    anchors and shifted points, a merged seam shifts once, a point past the range stays, undo/redo
+    restores, and the real Timeline nudge and drag paths move the lane when the flag is on and not
+    when it is off (REQ-025).
   - `… -s tests/test_midi_cc_names.gd -- --test` — CC 1/7/10/11/64/74 resolve to standard names,
     an unassigned number falls back to `CC{n}`, and no number 0–127 returns empty (REQ-016).
   - `Godot/tests/run_all.sh` to confirm nothing else regressed.

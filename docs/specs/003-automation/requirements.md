@@ -278,6 +278,20 @@ engine, and the engine shall apply nothing for it.
 - **Acceptance:** live — delete a device that has a lane, confirm the lane row remains marked
   unresolved, the parameter returns to its base value, and no error spams `Engine/logs/`.
 
+### REQ-025 — Moving a clip can move the automation under it
+
+WHEN the arranger's "Automation Follows Clips" toggle is on, moving a clip instance in the
+timeline shall shift every automation point on that track inside the clip's start and end ticks by
+the same tick delta, creating a point on either edge that lacks one (value read from the lane
+there) so the automation outside the clip stays put. The gesture is one undo step, and with the
+toggle off a clip move leaves the lanes alone.
+
+- **Acceptance:** Godot test nudges and drags a clip with the toggle on and asserts the lane's
+  in-range points (and the created edge anchors) shifted by the delta, a point past the range
+  stayed, and undo returns the original lane; with the toggle off the lane is unchanged.
+- **Example:** a lane with points at 100 and 900 and a 1000-tick clip at tick 0 moved +480 lands
+  at 480, 580, 1380 and 1480 — anchors created at 0 and 1000, then all four shifted.
+
 ## Non-functional
 
 - **Real-time safety:** lane evaluation runs on the audio callback under the existing bounded
@@ -304,9 +318,9 @@ engine, and the engine shall apply nothing for it.
   behaviour when a user grabs an automated control during playback.
 - Modulators, macro knobs, LFOs, envelope followers and any additive modulation contribution —
   phase 1 establishes the resolution model but implements only the automation contribution.
-- Clip-level or clip-instance-level automation.
-- The "automation follows clips" toggle: moving or copying a clip instance does not move lane
-  points in phase 1.
+- Clip-level or clip-instance-level automation. (Automation stays owned by the track; the
+  "automation follows clips" toggle of REQ-025 moves lane points with a clip but does not carry
+  them to another track, and copying a clip does not copy automation.)
 - Automation of buses and the master channel, and of any channel no track routes to.
 - Tempo, time-signature and transport automation.
 - Per-sample accuracy for third-party CLAP plugin parameters.
@@ -321,6 +335,6 @@ engine, and the engine shall apply nothing for it.
 
 ## Open questions
 
-None — the three blocking forks (bus/master scope, seek-while-stopped behaviour, and whether
-"follows clips" ships in phase 1) were resolved before this document was written and are recorded
-in Out of scope and REQ-008.
+None — the blocking forks (bus/master scope and seek-while-stopped behaviour) were resolved before
+this document was written and are recorded in Out of scope and REQ-008. "Follows clips" is
+implemented as REQ-025.

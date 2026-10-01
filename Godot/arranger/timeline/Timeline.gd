@@ -1092,6 +1092,10 @@ func _finish_drag() -> void:
 				old_start, inst.duration_ticks, inst.clip_offset,
 				new_start, inst.duration_ticks, inst.clip_offset
 			))
+	if _automation_follows_enabled() and _drag_current_tick_delta != 0:
+		cmds.append_array(AutomationActions.shift_track_automation(
+			_drag_automation_moves(), _drag_current_tick_delta, "Move Automation"
+		))
 	HistoryUtil.record_many("Move Clips", cmds)
 
 	_reset_drag_state()
@@ -1108,6 +1112,30 @@ func _reset_drag_state() -> void:
 	_drag_selected_instances.clear()
 	_drag_current_tick_delta = 0
 	_drag_current_track_delta = 0
+
+
+## "Automation follows clips" (REQ-025): moving a clip also drags the lane points under it. Skip
+## cross-track moves - a lane is owned by its track and its target does not travel with the clip.
+func _automation_follows_enabled() -> bool:
+	return project != null and project.get_arranger_view("automation_follows_clips")
+
+
+## The dragged clips that moved horizontally on their original track, as
+## `{track, start, end}` ranges for `AutomationActions.shift_track_automation`.
+func _drag_automation_moves() -> Array:
+	var moves: Array = []
+	for inst in _drag_selected_instances:
+		if not inst or inst.track == null:
+			continue
+		var old_track_idx: int = _drag_initial_track_indices.get(inst, -1)
+		var old_track: Track = null
+		if old_track_idx >= 0 and old_track_idx < timeline_tracks.size():
+			old_track = timeline_tracks[old_track_idx].track
+		if old_track == null or old_track != inst.track:
+			continue
+		var old_start: int = _drag_initial_positions.get(inst, inst.start_ticks)
+		moves.append({"track": old_track, "start": old_start, "end": old_start + inst.duration_ticks})
+	return moves
 
 
 func _clamp_track_delta(requested_delta: int) -> int:
@@ -1470,6 +1498,7 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 	
 	var tracks_to_refresh: Array[TimelineTrack] = []
 	var cmds: Array[Command] = []
+	var moves: Array = []
 	for inst in selected:
 		if not inst:
 			continue
@@ -1483,12 +1512,16 @@ func move_selection_by_ticks(delta_ticks: int) -> void:
 			old_start, inst.duration_ticks, inst.clip_offset,
 			new_start, inst.duration_ticks, inst.clip_offset
 		))
+		if inst.track != null:
+			moves.append({"track": inst.track, "start": old_start, "end": old_start + inst.duration_ticks})
 		var track_ui = _get_timeline_track_for_instance(inst)
 		if track_ui and not tracks_to_refresh.has(track_ui):
 			tracks_to_refresh.append(track_ui)
 	for track_ui in tracks_to_refresh:
 		if track_ui:
 			track_ui._update_clip_positions()
+	if _automation_follows_enabled() and not moves.is_empty():
+		cmds.append_array(AutomationActions.shift_track_automation(moves, clamped_delta, "Move Automation"))
 	HistoryUtil.record_many("Move Clips", cmds)
 	clip_selection_manager.refresh_after_modification()
 	queue_redraw()

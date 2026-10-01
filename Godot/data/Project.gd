@@ -71,8 +71,8 @@ var tempo_map: TempoMap = TempoMap.new():
 		_sync_tempo_map_to_engine()
 ## Arranger track list display toggles (view state, saved with the project but not undoable):
 ## "automation" shows automation lanes and the header automation buttons, "routing" the header
-## IO button.
-var arranger_view: Dictionary = {"automation": true, "routing": true}
+## IO button, "automation_follows_clips" makes a clip move drag the lane points under it (REQ-025).
+var arranger_view: Dictionary = {"automation": true, "routing": true, "automation_follows_clips": false}
 
 var next_marker_id: int = 1
 
@@ -1768,7 +1768,9 @@ static func from_json(data: Dictionary) -> Project:
 	project.time_signature_map = TimeSignatureMap.from_json(data.get("time_signature_map", []))
 	var saved_view: Dictionary = data.get("arranger_view", {})
 	for key in project.arranger_view:
-		project.arranger_view[key] = bool(saved_view.get(key, true))
+		# Fall back to this build's default per key, so a project saved before a flag existed
+		# (e.g. "automation_follows_clips") loads with that flag's default, not `true`.
+		project.arranger_view[key] = bool(saved_view.get(key, project.arranger_view[key]))
 
 	project.markers.clear()
 	for marker_data in data.get("markers", []):

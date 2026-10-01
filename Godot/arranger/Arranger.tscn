@@ -18,6 +18,7 @@
 [ext_resource type="Texture2D" uid="uid://y8t6htgojiid" path="res://assets/icons/route.svg" id="15_routv"]
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
 [ext_resource type="Script" uid="uid://dr6wv5u2qpn6k" path="res://arranger/ruler/TimeSignatureTrack.gd" id="17_tsig"]
+[ext_resource type="Texture2D" uid="uid://bimmip1tp0w01" path="res://assets/icons/link.svg" id="18_link"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_nqsw4"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -311,6 +312,15 @@ focus_mode = 0
 toggle_mode = true
 button_pressed = true
 icon = ExtResource("15_routv")
+icon_alignment = 1
+
+[node name="AutomationFollowsClipsToggle" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1478523690]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+tooltip_text = "Automation Follows Clips: moving a clip moves the automation points under it"
+focus_mode = 0
+toggle_mode = true
+icon = ExtResource("18_link")
 icon_alignment = 1
 
 [node name="TimelineScrollBarMargin" type="MarginContainer" parent="VSplitContainer/ArrangeBody/ArrangeBottom" unique_id=1739402257]

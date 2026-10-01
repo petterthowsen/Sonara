@@ -21,8 +21,8 @@ names=(
   app-window app-window-mac external-link picture-in-picture picture-in-picture-2
   panel-top-open square-arrow-out-up-right square-arrow-out-down-right
   monitor-up gallery-horizontal-end copy-plus
-  # arranger view toggles (automation lanes, routing)
-  spline route
+  # arranger view toggles (automation lanes, routing, automation-follows-clips)
+  spline route link
   # clip editor track list (editability toggle, track-mode switch)
   pencil pencil-off layers
 )

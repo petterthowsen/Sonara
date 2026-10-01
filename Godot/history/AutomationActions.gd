@@ -195,3 +195,161 @@ static func paste_segment(lane: Object, specs: Array, label: String = "Paste Poi
 	cmds.append(add_cmd)
 	HistoryUtil.execute_many(label, cmds)
 	return add_cmd.points
+
+
+# ============================================================================
+# "AUTOMATION FOLLOWS CLIPS" (REQ-025)
+# ============================================================================
+# Moving a clip instance shifts the lane points that sit under it by the same tick delta, so the
+# automation travels with the clip. Points just outside the range must not move, so a point is
+# created on each range edge that lacks one (value read from the lane at that tick, curve/tension
+# inherited from the segment it splits). Those two live edits - create the anchors, then shift
+# every point in the inclusive range - are returned as commands so the caller can fold them into
+# the same history entry as the clip move.
+
+## Shift every point of `lane` inside the inclusive range `[start_tick, end_tick]` by
+## `delta_ticks`, first creating a point on either edge when the lane has none there. Mutates the
+## lane live and returns the commands that recreate the gesture (an add for the new anchors plus a
+## transform for every moved point), or `[]` when nothing changed.
+##
+## Returns `[]` for a lane with no point inside the range: there is nothing to follow.
+static func shift_points_in_range(
+	lane: Object,
+	start_tick: int,
+	end_tick: int,
+	delta_ticks: int,
+	label: String = "Move Automation"
+) -> Array[Command]:
+	if lane == null or delta_ticks == 0 or end_tick < start_tick:
+		return []
+
+	# Nothing under the range means the clip carries no automation: leave the lane alone rather
+	# than inventing anchors for a segment that does not travel.
+	var has_inside := false
+	for point in lane.points:
+		if point.tick >= start_tick and point.tick <= end_tick:
+			has_inside = true
+			break
+	if not has_inside:
+		return []
+
+	var cmds: Array[Command] = []
+	var add_cmd: Object = _PointsAddCommand.new(label, lane, [])
+
+	# Anchors so the curve outside the range keeps its shape. A created anchor is pre-seeded into
+	# the add command so a redo re-inserts the very same object (stable id), matching the command's
+	# own first-do() behaviour.
+	for tick: int in [start_tick, end_tick]:
+		if _point_at_tick(lane, tick) != null:
+			continue
+		var spec := _boundary_spec(lane, tick)
+		var point: Object = lane.add_point(
+			spec["tick"], spec["value"], spec["curve"], spec["tension"]
+		)
+		add_cmd.points.append(point)
+
+	if not add_cmd.points.is_empty():
+		cmds.append(add_cmd)
+
+	# Capture the before-state of everything on the (now anchor-inclusive) range, then shift it.
+	var ids: Array = []
+	var before: Dictionary = {}
+	var after: Dictionary = {}
+	for point in lane.points:
+		if point.tick < start_tick or point.tick > end_tick:
+			continue
+		ids.append(point.id)
+		before[point.id] = {
+			"tick": point.tick,
+			"value": point.value,
+			"curve": point.curve,
+			"tension": point.tension,
+		}
+		after[point.id] = {
+			"tick": maxi(0, point.tick + delta_ticks),
+			"value": point.value,
+			"curve": point.curve,
+			"tension": point.tension,
+		}
+	if ids.is_empty():
+		# Only reachable when delta_ticks == 0, which is rejected above.
+		return cmds
+
+	for point_id in ids:
+		var state: Dictionary = after[point_id]
+		lane.update_point(point_id, state["tick"], state["value"], state["curve"], state["tension"])
+
+	cmds.append(_PointsTransformCommand.new(label, lane, ids, before, after))
+	return cmds
+
+
+## Apply "automation follows clips" for a batch of clip moves that all share `delta_ticks`.
+## `moves` is a list of `{track: Track, start: int, end: int}` describing each moved clip's range
+## on its own track, before the move. Ranges that touch or overlap on a track are merged first, so
+## a point on a shared edge between two clips that both move is shifted exactly once.
+##
+## Mutates the affected lanes live and returns the commands to record alongside the clip move.
+static func shift_track_automation(
+	moves: Array,
+	delta_ticks: int,
+	label: String = "Move Automation"
+) -> Array[Command]:
+	if moves.is_empty() or delta_ticks == 0:
+		return []
+
+	var ranges_by_track: Dictionary = {}
+	for move in moves:
+		var track: Object = move.get("track")
+		if track == null:
+			continue
+		var ranges: Array = ranges_by_track.get(track, [])
+		ranges.append([int(move["start"]), int(move["end"])])
+		ranges_by_track[track] = ranges
+
+	var cmds: Array[Command] = []
+	for track in ranges_by_track:
+		if track.automation_lanes.is_empty():
+			continue
+		var spans := _merge_ranges(ranges_by_track[track])
+		for span in spans:
+			for lane in track.automation_lanes:
+				cmds.append_array(shift_points_in_range(lane, span[0], span[1], delta_ticks, label))
+	return cmds
+
+
+## The point of `lane` sitting exactly on `tick`, or null.
+static func _point_at_tick(lane: Object, tick: int) -> Object:
+	for point in lane.points:
+		if point.tick == tick:
+			return point
+	return null
+
+
+## Spec for a point created on a range edge: the lane's value there, with the curve and tension of
+## the segment that edge splits (so a STEP segment stays a step and a tensioned ramp keeps its
+## bend as closely as one extra point allows).
+static func _boundary_spec(lane: Object, tick: int) -> Dictionary:
+	var value: float = lane.get_value_at_tick(tick)
+	if is_nan(value):
+		value = 0.0
+	var curve: int = AutomationPoint.CurveType.LINEAR
+	var tension: float = 0.0
+	for point in lane.points:
+		if point.tick > tick:
+			break
+		curve = point.curve
+		tension = point.tension
+	return {"tick": tick, "value": value, "curve": curve, "tension": tension}
+
+
+## Sort `[start, end]` ranges and merge the ones that touch or overlap.
+static func _merge_ranges(ranges: Array) -> Array:
+	var sorted_ranges := ranges.duplicate()
+	sorted_ranges.sort_custom(func(a, b): return a[0] < b[0])
+	var spans: Array = []
+	for r in sorted_ranges:
+		if spans.is_empty() or r[0] > spans[-1][1]:
+			spans.append([r[0], r[1]])
+		else:
+			spans[-1][1] = maxi(spans[-1][1], r[1])
+	return spans

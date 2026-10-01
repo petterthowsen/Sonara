@@ -33,6 +33,7 @@ var logger : Log = Log.make("Arranger")
 @onready var add_folder_button: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AddFolderButton
 @onready var automation_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationViewToggle
 @onready var routing_view_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/RoutingViewToggle
+@onready var automation_follows_clips_toggle: Button = $VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons/AutomationFollowsClipsToggle
 @onready var timeline_scroll_bar_margin: MarginContainer = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin
 @onready var timeline_scroll_bar: TimelineScrollBar = $VSplitContainer/ArrangeBody/ArrangeBottom/TimelineScrollBarMargin/TimelineScrollBar
 
@@ -130,6 +131,7 @@ func _ready():
 	add_folder_button.pressed.connect(_on_add_folder_pressed)
 	automation_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation"))
 	routing_view_toggle.toggled.connect(_on_arranger_view_toggled.bind("routing"))
+	automation_follows_clips_toggle.toggled.connect(_on_arranger_view_toggled.bind("automation_follows_clips"))
 
 	beats_ruler_toggle.toggled.connect(_on_beats_ruler_toggled)
 	time_ruler_toggle.toggled.connect(_on_time_ruler_toggled)
@@ -759,6 +761,7 @@ func _on_project_activated(project: Project) -> void:
 	_apply_ruler_row_visibility()
 	automation_view_toggle.set_pressed_no_signal(project.get_arranger_view("automation"))
 	routing_view_toggle.set_pressed_no_signal(project.get_arranger_view("routing"))
+	automation_follows_clips_toggle.set_pressed_no_signal(project.get_arranger_view("automation_follows_clips"))
 
 	# Set grid_helper on timeline and ruler
 	timeline.grid_helper = grid_helper
