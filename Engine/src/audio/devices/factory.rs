@@ -185,7 +185,11 @@ impl DeviceFactory {
 
 /// Built-in audio effects (spec 012): each is made from the sample rate and block size alone.
 /// The effect conformance test runs over this list, so a new effect is covered by adding it here.
-pub const EFFECT_IDS: &[&str] = &["sonara.builtin.delay", "sonara.builtin.eq"];
+pub const EFFECT_IDS: &[&str] = &[
+    "sonara.builtin.delay",
+    "sonara.builtin.eq",
+    "sonara.builtin.compressor",
+];
 
 /// Create a built-in effect from [`EFFECT_IDS`], prepared for `sample_rate` and blocks of up to
 /// `max_frames`. Command thread only (allocates). None for any other ID.
@@ -197,6 +201,9 @@ pub fn create_effect(
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.delay" => Box::new(DelayDevice::new(sample_rate, 5000.0)),
         "sonara.builtin.eq" => Box::new(super::eq::EqDevice::new(sample_rate)),
+        "sonara.builtin.compressor" => {
+            Box::new(super::compressor::CompressorDevice::new(sample_rate))
+        }
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);

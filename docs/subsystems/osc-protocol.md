@@ -585,6 +585,24 @@ Data type `"spectrum"`. The EQ uses the same data type and blob encoding (little
 - The engine alternates pre and post frames, each about 20 Hz (about 40 messages a second). The analyser (`sonara.builtin.spectrum_analyzer`) sends no header: don't mix the two parsers.
 - While subscribed the EQ never sleeps, so the analyser decays on silence instead of freezing.
 
+#### Compressor dynamics stream (`sonara.builtin.compressor`)
+
+Data type `"dynamics"`. Unlike the analyser streams this one is not a spectrum: it is the level
+history behind the compressor's meters and scrolling display. It arrives through
+`device_data_received` as a `PackedByteArray`:
+
+- The blob is little-endian: a `u32` record count, then that many records of three `f32`s:
+  `in_peak_db`, `out_peak_db`, `gr_db` (the gain reduction as a positive number of dB).
+- On the audio thread the device appends one record every 64 frames, holding the peaks of that
+  window and the largest gain reduction in it.
+- Every poll (about 20 Hz while subscribed) drains the accumulated records into one blob, so the
+  view gets a smooth history instead of 20 steps a second. A poll carries about 37 records at
+  48 kHz.
+- While subscribed the compressor never sleeps, so the meters and history keep moving in
+  silence.
+- `CompressorData.decode()` in Godot splits the blob into `{count, in_peak_db, out_peak_db,
+  gr_db}`.
+
 #### Example Usage
 ```gdscript
 # Add polysynth + delay to channel 2

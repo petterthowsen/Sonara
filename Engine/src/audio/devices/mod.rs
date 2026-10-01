@@ -14,6 +14,7 @@ mod sampler;
 mod sfizz_device;
 mod spectrum_analyzer;
 pub mod eq;
+pub mod compressor;
 
 pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};

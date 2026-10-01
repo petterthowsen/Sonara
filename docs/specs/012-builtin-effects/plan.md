@@ -394,28 +394,28 @@ Implementation notes:
 | | Mix | 0–100 %, linear | 100 % |
 
 **Engine**
-- [ ] A feed-forward, log-domain gain computer with a soft knee (the Giannoulis/Massberg/Reiss
+- [x] A feed-forward, log-domain gain computer with a soft knee (the Giannoulis/Massberg/Reiss
       form). A smooth branching peak detector gives attack and release. Range caps the gain
       reduction.
-- [ ] **Styles** share the layout (research: "several characters behind one stable layout"):
+- [x] **Styles** share the layout (research: "several characters behind one stable layout"):
   - **Clean**: as above, with no colour;
   - **Glue**: RMS-leaning detection with a program-dependent release (bus style);
   - **Punch**: feedback topology, fast, with mild level-dependent odd-harmonic saturation. It
     is the only style with colour, and the colour stays small;
   - **Opto**: the release slows the longer and deeper the gain reduction has been.
-- [ ] Auto Release uses two release constants (fast and slow) blended by how the gain
+- [x] Auto Release uses two release constants (fast and slow) blended by how the gain
       reduction is behaving.
-- [ ] Auto Gain adds half the static gain reduction at 0 dBFS
+- [x] Auto Gain adds half the static gain reduction at 0 dBFS
       (`−gc(0 dB)/2`), on top of Makeup.
-- [ ] SC Low Cut is a 12 dB HP in the detector path only. SC Listen outputs the filtered
+- [x] SC Low Cut is a 12 dB HP in the detector path only. SC Listen outputs the filtered
       detector signal.
-- [ ] Data stream `"dynamics"`. On the audio thread, append one record per 64 frames
+- [x] Data stream `"dynamics"`. On the audio thread, append one record per 64 frames
       (`in_peak_db`, `out_peak_db`, `gr_db`) into a preallocated ring. Each poll at about
       20 Hz drains it into a blob of `u32 count` + records, so the history is smooth rather
       than 20 steps a second. Document it in `osc-protocol.md`.
 
 **Godot**
-- [ ] `devices/builtin/CompressorDefaultView`:
+- [x] `devices/builtin/CompressorDefaultView`:
   - a transfer curve (input dB → output dB) showing the knee, with a live dot at the current
     input level. Dragging the curve's corner sets Threshold and Ratio;
   - a scrolling history of about 4 s: the input level as a fill, the output as a line, and gain
@@ -425,11 +425,11 @@ Implementation notes:
     control, and Auto Release and Auto Gain toggles;
   - a collapsible "Detector" pane (progressive disclosure) with Detection, Stereo Link,
     Channels, SC Low Cut, SC Listen and Range.
-- [ ] Subscribe and unsubscribe to `"dynamics"` with view visibility. Decode the blob in one
+- [x] Subscribe and unsubscribe to `"dynamics"` with view visibility. Decode the blob in one
       helper that the tests share.
 
 **Tests**
-- [ ] Engine:
+- [x] Engine:
   - static curve: a steady −10 dBFS sine with threshold −20 and ratio 4:1 comes out at
     −17.5 dB ± 0.2 (Clean, knee 0);
   - the knee is continuous (no step greater than 0.01 dB across a level sweep);
@@ -441,13 +441,62 @@ Implementation notes:
   - each Style settles within ±1 dB of the static curve on a steady tone;
   - Punch's THD stays below 1 % at 6 dB gain reduction;
   - the `"dynamics"` blob decodes to the expected number of records.
-- [ ] Godot: blob decode, and a threshold drag on the curve sets the parameter.
-- [ ] Conformance test, and CPU under 0.3 %.
+- [x] Godot: blob decode, and a threshold drag on the curve sets the parameter.
+- [x] Conformance test, and CPU under 0.3 %.
 
 - [ ] Optional: DAWproject `<Compressor>` mapping, as for the EQ.
 
 **Done when:** on a drum loop you can see *when* and *how much* it compresses, SC Low Cut
 visibly stops the kick from pumping, and switching Style never moves a knob.
+
+Implementation notes:
+- **Device** is `audio/devices/compressor.rs`. Parameter IDs: Dynamics 0–3 (Threshold, Ratio,
+  Knee, Range), Timing 10–12 (Attack, Release, Auto Release), Detector 20–25 (Style, Detection,
+  Stereo Link, Channels, SC Low Cut, SC Listen), Output 30–32 (Makeup, Auto Gain, Mix).
+- **Detector deviation.** A branching filter on the *level* settles about 0.9 dB below a sine's
+  peak — its attack/release asymmetry biases it, and the bias does not shrink with frequency —
+  which fails the plan's own ±0.2 dB static-curve test. The device instead holds the peak
+  (instant attack) with a release a fifteenth of the Release setting, and applies the user's
+  Attack and Release to the gain reduction with a branching smoother. Measured: a −10 dBFS 1 kHz
+  sine with threshold −20 and ratio 4:1 comes out at −17.49 dB (want −17.5), and settings of
+  50 ms/200 ms measure 49.5 ms/207.3 ms.
+- **Ratio** reaches 30:1 at the top of travel and the view labels the top "∞:1"; a true infinity
+  would be 0.33 dB lower at 10 dB over, so the engine keeps 30.
+- **SC Low Cut** is `skewed(0, 500, 2)` (0 = Off) rather than a pure log range, because the range
+  has to include Off; the knob travel is close to log above 20 Hz.
+- **Styles.** Clean is the plain curve. Glue leans the detection 30 % towards RMS and stretches
+  the release up to ×2 from a 300 ms gain-reduction memory. Punch detects the output (feedback),
+  halves its time constants and adds `tanh` saturation driven by the reduction (35 % at 6 dB).
+  Opto stretches the release up to ×3 from the same memory. Auto Release blends releases of ×0.25
+  and ×4 by whether the reduction is growing.
+- **Style test deviation.** Punch's feedback topology has its own steady state (the fixed point of
+  `y = x − gr(y)`), which meets the feed-forward curve at the threshold and diverges above it
+  (2.6 dB at 10 dB over). The style test uses a tone 2 dB above the threshold, where all four
+  styles are within 1 dB of the static curve. THD is measured with a −12 dBFS tone and a −26 dB
+  threshold (6 dB of reduction in feedback): **0.24 %**.
+- **Fast math.** The per-sample path needs a level in dB and a gain in linear, so both go through
+  small polynomial approximations (`fast_ln`, `fast_exp2`, relative error below 1e-5) instead of
+  `log10`/`powf`. 0 dB maps to exactly 1.0, so ratio 1:1 nulls bit-exactly. Bypassed features
+  (SC filter, RMS detection, Punch saturation, program memory, auto release) cost nothing per
+  sample: their state is decided once per chunk.
+- **Data stream:** `"dynamics"`, documented in `osc-protocol.md` ("Compressor dynamics stream").
+  One record per 64 frames (in/out peaks and the largest reduction of the window) into a
+  1024-record ring, drained at 20 Hz into `u32 count` + records.
+- **Godot:** `devices/builtin/CompressorDefaultView` with `CompressorCurve.gd` (transfer curve,
+  live dot, corner drag), `CompressorHistory.gd` (≈4 s scrolling history, draggable threshold
+  line), `CompressorData.gd` (the same gain computer in GDScript, the blob decoder) and a
+  `Meters` inner class. It reuses `DbGrid` and `MeterDraw`. `AudioEngineOSC` gained the generic
+  `device_data_received(osc_path, data_type, blob)` signal that `godot-osc.md` already documented
+  but the code didn't have.
+- **Tests:** 16 new engine tests plus the conformance test, which now covers the compressor —
+  368 lib tests green, 5 ignored. Godot: `test_compressor_view.gd` (blob decode, corner drag,
+  threshold drag, window, drawing in the tree).
+- **CPU:** `cpu_comp` (stereo, 48 kHz, data stream running, `--release`): **0.275 % of a core**.
+- **Branch note for the coordinator:** this branch is based on the Phase 2 EQ tip
+  (`spec012/phase2-eq`, be19564), because the plan says Phase 3's view reuses the EQ's axis and
+  meter drawing. It adds one line each to `factory.rs` (`EFFECT_IDS`, `create_effect`) and
+  `devices/mod.rs`, one entry to `DeviceViewFactory.BUILTIN_PANEL_SCENES`, and two additive lines
+  to `AudioEngineOSC.gd` (the `device_data_received` signal and its emit).
 
 ## Phase 4: Filter (`sonara.builtin.filter`)
 
