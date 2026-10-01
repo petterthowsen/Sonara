@@ -29,6 +29,7 @@ func run_tests() -> void:
 	_test_no_overlap_in_bounds()
 	_test_generate_500_params_under_100ms()
 	_test_dragonfly_hall_fixture()
+	_test_builtin_reverb()
 	_test_apricot_fixture()
 	_test_extrabold_fixture()
 	_test_librestrings_fixture()
@@ -484,6 +485,59 @@ func _test_dragonfly_hall_fixture() -> void:
 	for n in ["Dry Level", "Decay", "Size"]:
 		_assert(by_name[n].page == 0, "%s on the Main page" % n)
 	_assert(layout.pages[0].title == "Main", "first page titled Main")
+
+
+func _test_builtin_reverb() -> void:
+	# The Phase 7 parameter table (Sonara Reverb). Modules drive grouping.
+	var params: Array = []
+	var by_name := {}
+	var add := func(p: DeviceParameter) -> void:
+		params.append(p)
+		by_name[p.name] = p.id
+	var float_param := func(id: int, name: String, unit: String, module: String, min_v: float, max_v: float, log_v := false) -> void:
+		var p := _float(id, name, unit, min_v, max_v)
+		p.module = module
+		p.is_logarithmic = log_v
+		add.call(p)
+	var enum_param := func(id: int, name: String, module: String, count: int) -> void:
+		var p := _enum(id, name, count)
+		p.module = module
+		add.call(p)
+	var bool_param := func(id: int, name: String, module: String) -> void:
+		var p := _bool(id, name)
+		p.module = module
+		add.call(p)
+
+	enum_param.call(0, "Algorithm", "Space", 3)
+	float_param.call(1, "Size", "%", "Space", 0.0, 100.0)
+	float_param.call(2, "Decay", "s", "Space", 0.1, 30.0, true)
+	float_param.call(3, "Pre-Delay", "ms", "Space", 0.0, 500.0)
+	float_param.call(4, "Diffusion", "%", "Space", 0.0, 100.0)
+	float_param.call(5, "Early", "%", "Space", 0.0, 100.0)
+	float_param.call(10, "Low Mult", "×", "Decay EQ", 0.25, 2.0, true)
+	float_param.call(11, "Low Freq", "Hz", "Decay EQ", 50.0, 1000.0, true)
+	float_param.call(12, "High Mult", "×", "Decay EQ", 0.1, 1.0, true)
+	float_param.call(13, "High Freq", "Hz", "Decay EQ", 1000.0, 20000.0, true)
+	float_param.call(20, "Rate", "Hz", "Modulation", 0.05, 5.0, true)
+	float_param.call(21, "Depth", "%", "Modulation", 0.0, 100.0)
+	float_param.call(30, "Low Cut", "Hz", "Tone", 20.0, 1000.0, true)
+	float_param.call(31, "High Cut", "Hz", "Tone", 1000.0, 20000.0, true)
+	float_param.call(40, "Ducking", "%", "Dynamics", 0.0, 100.0)
+	bool_param.call(41, "Freeze", "Dynamics")
+	float_param.call(50, "Width", "%", "Output", 0.0, 200.0)
+	float_param.call(51, "Mix", "%", "Output", 0.0, 100.0)
+
+	var device := _device("sonara.builtin.reverb", "Reverb", Device.DeviceCategory.Effect)
+	_assert(DeviceKind.infer(device) == DeviceKind.REVERB, "sonara.builtin.reverb → reverb")
+	var layout := SimpleLayoutGenerator.generate(device, params)
+	_check_layout(layout, params, "builtin reverb")
+	_assert(layout.kind == DeviceKind.REVERB, "generated with the Reverb strategy")
+	for n in ["Mix", "Decay", "Size"]:
+		_assert(_find(layout, by_name[n]).page == 0, "reverb %s on the Main page" % n)
+	_assert(_find(layout, by_name["Algorithm"]).control.kind == SimpleControlKinds.SEGMENTED,
+		"Algorithm is a segmented control (%s)" % _find(layout, by_name["Algorithm"]).control.kind)
+	_assert(_find(layout, by_name["Freeze"]).control.kind == SimpleControlKinds.TOGGLE,
+		"Freeze is a toggle")
 
 
 func _test_apricot_fixture() -> void:

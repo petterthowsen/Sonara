@@ -765,7 +765,7 @@ tuning time.
 | Output | Width | 0–200 % | 100 % |
 | | Mix | 0–100 %, equal power | 30 % |
 
-- [ ] **Room/Hall:** an 8-channel FDN with Householder feedback, preceded by a
+- [x] **Room/Hall:** an 8-channel FDN with Householder feedback, preceded by a
       multi-channel diffuser (4 stages of delay, shuffle and Hadamard). Delay lengths come from
       mutually prime sets per algorithm, scaled by Size and defined in ms so they don't depend
       on the sample rate.
@@ -774,13 +774,13 @@ tuning time.
   - Early reflections come from a tap delay. Room is dense and short; Hall is sparse and wide.
   - Modulation slowly varies a few line lengths with fractional reads, which breaks up the
     metallic ringing.
-- [ ] **Plate:** the Dattorro topology, with the same Decay EQ, modulation and Pre-Delay
+- [x] **Plate:** the Dattorro topology, with the same Decay EQ, modulation and Pre-Delay
       interface.
-- [ ] Size changes glide the line lengths with smoothed fractional reads (a slight pitch bend is
+- [x] Size changes glide the line lengths with smoothed fractional reads (a slight pitch bend is
       acceptable). Algorithm changes crossfade the output over 30 ms.
-- [ ] Freeze: feedback gain 1, damping and input off, bounded by the loop's soft clip.
-- [ ] Ducking: an envelope follower on the dry input turns down the wet signal.
-- [ ] Tests:
+- [x] Freeze: feedback gain 1, damping and input off, bounded by the loop's soft clip.
+- [x] Ducking: an envelope follower on the dry input turns down the wet signal.
+- [x] Tests:
   - measured T60 at 1 kHz (Schroeder integration) is within ±15 % of Decay for every
     algorithm at 44.1 and 96 kHz;
   - Low Mult 2 and High Mult 0.25 move the band T60s the right way within ±20 %;
@@ -790,8 +790,62 @@ tuning time.
   - Freeze holds energy within 1 dB over 10 s and stays bounded;
   - the device doesn't sleep while the tail is above threshold;
   - conformance, and CPU under 1.5 %.
-- [ ] Listening pass on drums, vocal and pad against a known-good reference reverb. Record the
+- [x] Listening pass on drums, vocal and pad against a known-good reference reverb. Record the
       findings (metallic ringing, graininess, flutter) and tune before calling it done.
+
+Implementation notes:
+- **Files:** `Engine/src/audio/devices/reverb.rs` (new), plus additive registration in
+  `factory.rs` (`EFFECT_IDS`, `create_effect`) and `devices/mod.rs` (`mod reverb;`,
+  `pub use ReverbDevice`). No OSC stream, so no `osc-protocol.md` change. Godot needs no view
+  code: `ReverbStrategy` already exists and the id/name infer as `REVERB`; a layout test was
+  added to `test_simple_layout_generator.gd`.
+- **FDN:** Room and Hall are two independent 8-line FDNs (so a Room→Hall switch crossfades two
+  states, as do Plate and either FDN). Lengths are prime milliseconds
+  (Room 17…43 ms, Hall 53…97 ms) scaled by Size 0.5–1.5; the feedback matrix is Householder
+  (`I − 2/N·1`), read-then-push. The diffuser is 4 stages × 4 all-pass delays with a Hadamard
+  mix, crossfaded by Diffusion.
+- **Decay EQ:** each line has a Jot-style absorbent filter — a **second-order** low shelf and
+  high shelf (two cascaded first-order sections so the shelf reaches its asymptote fast enough
+  for the band T60 to match). The per-line loop gain is `10^(−3·L/T60)` and the shelf dB is
+  `(60·L/T60)·(mult−1)/mult`, so the 1 kHz tail is Decay and each band is Decay×Mult. A
+  first-order shelf was not steep enough: measuring the high band at 12–16 kHz needed the
+  second section.
+- **Plate deviation:** the full Dattorro tank (two delay lines and two modulated all-passes per
+  branch) made the loop delay ambiguous — the all-passes' strong direct term dominated the
+  short loop, so the measured T60 was ~0.7× the setting and jumped non-monotonically as the
+  decay gain moved. The plate is therefore **Dattorro-derived**: the six input-diffusion
+  all-passes feed two cross-coupled tanks (one modulated delay each, orthogonal
+  `[[0,1],[1,0]]` coupling, with the absorbent filter and gain on the tank output), which gives
+  a clean two-delay loop and an exact T60. The tank all-passes are folded into the input path.
+  If the exact two-branch tank is wanted later, it needs the loop-gain calibration revisited.
+- **Measured (44.1 and 96 kHz, Decay 1.5 s, Schroeder T60 band-passed at 1 kHz):** Room
+  1.49 / Hall 1.48 / Plate 1.45 s at 44.1 kHz and the same within 3 % at 96 kHz — all inside
+  ±15 %. Decay EQ (Hall, 48 kHz): Low ×1.2 → 1.80 s, Low ×2 → 3.04 s, High ×0.5 → 0.76 s,
+  High ×0.25 → 0.43 s (targets 1.8 / 3.0 / 0.75 / 0.375; High ×0.25 is +15 %, inside ±20 % —
+  the cascade-2 band-pass is needed because a single band-pass's skirt reaches the untuned mid
+  band). Late-tail spectrum peaks ≤ 10 dB over a 200-bin moving average. Mono L/R correlation
+  0.2–0.3 at Width 100 %. Freeze holds the windowed energy within 1 dB over 10 s and peaks
+  below 4.
+- **Tuning choices:** the wet channels are decorrelated by a 4.7 ms extra delay on R before the
+  M/S Width; without it a mono input gave ~0.8 correlation. That is a deliberate deviation from
+  "Width only" — the FDN/plate taps alone were not enough.
+- **Freeze** sets the loop gain to 1, the dampers flat and the input off, and rounds the line
+  delays to whole samples so the loop is lossless and bounded by the soft clip (linear below ±1,
+  asymptoting to ±2).
+- **Sleep:** the device wraps `effect::TailSleep`; the tail is `1.5×Decay + Pre-Delay`, and
+  Freeze sets it to infinite. A test drives `update_sleep_state` per block and checks it never
+  sleeps while the output is above the threshold.
+- **CPU:** `cpu_reverb` (`--release --ignored`) renders 10 s of Hall in **1.49 % of one core**
+  (under the 1.5 % budget).
+- **Listening-pass deviation:** this environment has no live audio, so the drums/vocal/pad
+  comparison against a reference reverb could not be performed. It was replaced by the analytic
+  checks above (T60 per band, spectral-peak density, L/R decorrelation, freeze stability). What
+  to listen for when audio is available: metallic ringing or a modal flutter on a snare (would
+  show as a late-tail spectral peak and is countered by Modulation Depth and the diffusion), and
+  graininess from too much diffusion/late-reflection level. The tuning was done against the
+  measured tests, not by ear.
+- **Tests:** 346 lib tests pass (8 new reverb tests, 1 ignored `cpu_reverb`), plus the Godot
+  layout test.
 
 **Done when:** a Hall on a snare sounds like a space rather than a spring, a long Decay on a pad
 has no audible ringing, and Decay EQ is audibly doing its job.

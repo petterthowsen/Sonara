@@ -18,6 +18,7 @@ pub mod eq;
 pub mod compressor;
 mod chorus;
 mod phaser;
+mod reverb;
 
 pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
@@ -34,6 +35,7 @@ pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 pub use eq::EqDevice;
 pub use chorus::ChorusDevice;
 pub use phaser::PhaserDevice;
+pub use reverb::ReverbDevice;
 
 use std::time::{Duration, Instant};
 
