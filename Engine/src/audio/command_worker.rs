@@ -784,6 +784,13 @@ impl CommandWorker {
                 device_path,
                 file_path,
             } => self.load_plugin_state(channel_id, device_path, file_path),
+            AudioCommand::ConfigureDeviceData {
+                channel_id,
+                device_path,
+                data_type,
+                key,
+                value,
+            } => self.configure_device_data(channel_id, device_path, &data_type, &key, value),
             AudioCommand::ClearChannelDevices { channel_id } => self.clear_devices(channel_id),
             AudioCommand::RemoveChannel { id } => self.remove_channel(id),
             AudioCommand::ClearProject => self.clear_project(),
@@ -1020,6 +1027,59 @@ impl CommandWorker {
         }
         drop(removed);
         info!("Device removed from channel {} at {}", channel_id, path);
+    }
+
+    /// Set a device data stream option. An option that needs new buffers (the EQ analyser's FFT
+    /// size) builds them with the lock released and swaps them in; the old ones are dropped
+    /// after the lock is released again.
+    fn configure_device_data(
+        &self,
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        data_type: &str,
+        key: &str,
+        value: f32,
+    ) {
+        let build = {
+            let mut state = self.lock_state();
+            let Some(device) = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            else {
+                warn!(
+                    "Device not found at channel {} path {} for configure device data",
+                    channel_id, device_path
+                );
+                return;
+            };
+            match device.configure_data(data_type, key, value) {
+                Ok(build) => build,
+                Err(e) => {
+                    warn!(
+                        "Failed to set '{}' of '{}' on channel {} device {}: {}",
+                        key, data_type, channel_id, device_path, e
+                    );
+                    return;
+                }
+            }
+        };
+        let Some(build) = build else {
+            return;
+        };
+        let built = build();
+        let replaced = {
+            let mut state = self.lock_state();
+            match state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            {
+                Some(device) => device.apply_data_build(built),
+                None => Some(built),
+            }
+        };
+        drop(replaced);
     }
 
     /// Detach a channel's whole device chain under the lock and drop it afterwards.

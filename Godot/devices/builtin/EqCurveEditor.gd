@@ -10,9 +10,12 @@
 ## autoloads, so tests can drive it headless.
 class_name EqCurveEditor extends Control
 
-## The view state (analyser mode, dB range) changed; the owner persists it.
+## The view state (analyser mode, dB range, resolution, speed, tilt) changed; the owner persists
+## it (and sends the analyser options to the engine).
 signal view_state_changed
 signal band_hovered(band: int)
+## The band shown in the view's knob row changed (-1: none).
+signal selection_changed(band: int)
 
 const PIANO_HEIGHT := 12.0
 const NODE_RADIUS := 7.0
@@ -22,6 +25,10 @@ const WHEEL_Q_FINE_STEP := 1.03
 ## The analyser's own scale (dBFS), drawn behind the EQ curve over the whole plot height.
 const ANALYSER_FLOOR_DB := -90.0
 const ANALYSER_CEIL_DB := 0.0
+## Analyser frames start with [flag, sample_rate, lo_hz, hi_hz] (eq.rs `SPECTRUM_HEADER_LEN`).
+const SPECTRUM_HEADER_LEN := 4
+## The display tilt pivots here: this frequency reads the same at every tilt.
+const TILT_PIVOT_HZ := 1000.0
 
 const BG_COLOR := Color(0.067, 0.067, 0.067)
 const GRID_COLOR := Color(1, 1, 1, 0.06)
@@ -55,15 +62,25 @@ var output_gain_db := 0.0
 var hover_band := -1
 var drag_band := -1
 var listen_band := -1
+## The band whose knobs the view shows: the last one clicked or enabled.
+var selected_band := -1
+## The piano strip along the bottom edge. The device lane is too short for it to be readable.
+var show_piano := true:
+	set(value):
+		show_piano = value
+		_curves_dirty = true
+		queue_redraw()
 
 var _fine := FineDrag.new()
 var _curve_freqs := PackedFloat32Array()
 var _curves: Array[PackedFloat32Array] = []
 var _total := PackedFloat32Array()
 var _curves_dirty := true
-var _pre_bins := PackedFloat32Array()
-var _post_bins := PackedFloat32Array()
-var _bin_rate := 48000.0
+## Analyser points (dBFS), log-spaced from `_points_lo_hz` to `_points_hi_hz`.
+var _pre_points := PackedFloat32Array()
+var _post_points := PackedFloat32Array()
+var _points_lo_hz := 20.0
+var _points_hi_hz := 20000.0
 var _menu: PopupMenu
 var _type_menu: PopupMenu
 var _slope_menu: PopupMenu
@@ -108,6 +125,7 @@ func refresh_all() -> void:
 	output_gain_db = _real(EqResponse.OUTPUT_GAIN, 0.0)
 	var listen := int(_real(EqResponse.LISTEN_BAND, 0.0))
 	listen_band = listen - 1
+	_keep_selection_valid()
 	_curves_dirty = true
 	queue_redraw()
 
@@ -128,6 +146,15 @@ func _read_band(i: int) -> void:
 	}
 
 
+## The selection follows the device: a band disabled elsewhere (undo, automation, the window view)
+## gives it up, and the first enabled band is picked when nothing is selected.
+func _keep_selection_valid() -> void:
+	if selected_band >= 0 and not bands[selected_band]["enabled"]:
+		select_band(_first_enabled_band())
+	elif selected_band < 0:
+		select_band(_first_enabled_band())
+
+
 func _real(param_id: int, fallback: float) -> float:
 	if device == null or device.get_parameter(param_id) == null:
 		return fallback
@@ -141,6 +168,7 @@ func _on_parameter_changed(param_id: int, _value: float) -> void:
 		output_gain_db = _real(EqResponse.OUTPUT_GAIN, 0.0)
 	elif param_id == EqResponse.LISTEN_BAND:
 		listen_band = int(_real(EqResponse.LISTEN_BAND, 0.0)) - 1
+	_keep_selection_valid()
 	_curves_dirty = true
 	queue_redraw()
 
@@ -155,24 +183,26 @@ func set_band_param(band: int, offset: int, real_value: float) -> void:
 # ANALYSER
 # ============================================================================
 
-## A `"spectrum"` frame from the engine: [flag, sample_rate, bins...] (flag 0 = pre, 1 = post).
+## A `"spectrum"` frame from the engine: [flag, sample_rate, lo_hz, hi_hz, points...] (flag 0 =
+## pre, 1 = post), the points log-spaced from lo_hz to hi_hz.
 func on_spectrum_frame(frame: PackedFloat32Array) -> void:
-	if frame.size() < 4:
+	if frame.size() < SPECTRUM_HEADER_LEN + 2 or frame[2] <= 0.0 or frame[3] <= frame[2]:
 		return
-	var bins := frame.slice(2)
-	_bin_rate = frame[1]
+	var points := frame.slice(SPECTRUM_HEADER_LEN)
+	_points_lo_hz = frame[2]
+	_points_hi_hz = frame[3]
 	if frame[0] >= 0.5:
-		_post_bins = bins
+		_post_points = points
 	else:
-		_pre_bins = bins
+		_pre_points = points
 	if frame[1] > 0.0 and not is_equal_approx(frame[1], sample_rate):
 		sample_rate = frame[1]
 	queue_redraw()
 
 
 func clear_analyser() -> void:
-	_pre_bins = PackedFloat32Array()
-	_post_bins = PackedFloat32Array()
+	_pre_points = PackedFloat32Array()
+	_post_points = PackedFloat32Array()
 	queue_redraw()
 
 
@@ -195,16 +225,51 @@ func set_range_db(range_db: float) -> void:
 	queue_redraw()
 
 
+func set_resolution(resolution: int) -> void:
+	if state.resolution == resolution:
+		return
+	state.resolution = resolution
+	view_state_changed.emit()
+
+
+func set_speed(speed: int) -> void:
+	if state.speed == speed:
+		return
+	state.speed = speed
+	view_state_changed.emit()
+
+
+func set_tilt_db(tilt_db: float) -> void:
+	if is_equal_approx(state.tilt_db, tilt_db):
+		return
+	state.tilt_db = tilt_db
+	view_state_changed.emit()
+	queue_redraw()
+
+
 # ============================================================================
 # GEOMETRY
 # ============================================================================
 
 func plot_rect() -> Rect2:
-	return Rect2(0, 0, size.x, maxf(size.y - PIANO_HEIGHT, 1.0))
+	return Rect2(0, 0, size.x, maxf(size.y - _piano_height(), 1.0))
 
 
 func piano_rect() -> Rect2:
-	return Rect2(0, maxf(size.y - PIANO_HEIGHT, 0.0), size.x, PIANO_HEIGHT)
+	return Rect2(0, maxf(size.y - _piano_height(), 0.0), size.x, _piano_height())
+
+
+func _piano_height() -> float:
+	return PIANO_HEIGHT if show_piano else 0.0
+
+
+## Show band `band`'s knobs (-1: none).
+func select_band(band: int) -> void:
+	if band == selected_band:
+		return
+	selected_band = band
+	selection_changed.emit(band)
+	queue_redraw()
 
 
 func _update_layout() -> void:
@@ -235,6 +300,13 @@ func band_at(pos: Vector2) -> int:
 	return best
 
 
+func _first_enabled_band() -> int:
+	for i in bands.size():
+		if bands[i]["enabled"]:
+			return i
+	return -1
+
+
 func first_free_band() -> int:
 	for i in bands.size():
 		if not bands[i]["enabled"]:
@@ -262,6 +334,7 @@ func enable_band_at(pos: Vector2) -> int:
 	if EqResponse.type_uses_gain(type):
 		set_band_param(band, EqResponse.P_GAIN, db_grid.y_to_db(pos.y))
 	set_band_param(band, EqResponse.P_ENABLED, 1.0)
+	select_band(band)
 	return band
 
 
@@ -269,6 +342,8 @@ func disable_band(band: int) -> void:
 	if listen_band == band:
 		end_listen()
 	set_band_param(band, EqResponse.P_ENABLED, 0.0)
+	if selected_band == band:
+		select_band(_first_enabled_band())
 
 
 ## Move band `band`'s node to the plot point `point`: frequency, and gain where the type has one.
@@ -331,6 +406,7 @@ func _on_mouse_button(mb: InputEventMouseButton) -> void:
 					accept_event()
 				elif band >= 0:
 					drag_band = band
+					select_band(band)
 					_fine.begin_at(node_position(bands[band]), mb.position)
 					if mb.alt_pressed:
 						begin_listen(band)
@@ -490,7 +566,8 @@ func _draw() -> void:
 			_draw_node(i, i == hot)
 	if hot >= 0 and bands[hot]["enabled"]:
 		_draw_readout(hot, font)
-	freq_axis.draw_piano_strip(self, piano_rect(), font, 8)
+	if show_piano:
+		freq_axis.draw_piano_strip(self, piano_rect(), font, 8)
 
 
 ## Faint vertical fill between a band's curve and the 0 dB line.
@@ -513,6 +590,8 @@ func _draw_node(band: int, hot: bool) -> void:
 	draw_circle(pos, NODE_RADIUS, Color(color, 1.0 if hot else 0.9))
 	if hot:
 		draw_arc(pos, NODE_RADIUS + 1.0, 0.0, TAU, 24, Color.WHITE, 1.5, true)
+	elif band == selected_band:
+		draw_arc(pos, NODE_RADIUS + 3.0, 0.0, TAU, 24, Color(1, 1, 1, 0.55), 1.0, true)
 	var font := _font if _font != null else ThemeDB.fallback_font
 	var text := str(band + 1)
 	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
@@ -542,42 +621,33 @@ func _draw_readout(band: int, font: Font) -> void:
 func _draw_analyser() -> void:
 	match state.analyser:
 		EqViewState.Analyser.POST:
-			_draw_bins(_pre_bins, PRE_LINE, Color(0, 0, 0, 0))
-			_draw_bins(_post_bins, POST_LINE, POST_FILL)
+			_draw_points(_pre_points, PRE_LINE, Color(0, 0, 0, 0))
+			_draw_points(_post_points, POST_LINE, POST_FILL)
 		EqViewState.Analyser.PRE:
-			_draw_bins(_pre_bins, POST_LINE, POST_FILL)
+			_draw_points(_pre_points, POST_LINE, POST_FILL)
 
 
-## A spectrum as a line (and optional fill) over the plot. Bins are mapped onto the log axis:
-## columns between bins interpolate, columns covering several bins take their maximum.
-func _draw_bins(bins: PackedFloat32Array, line_color: Color, fill_color: Color) -> void:
-	if bins.size() < 4:
+## A spectrum as a line (and optional fill) over the plot. The engine already smoothed it into
+## log-spaced points, so this only places them, adding the display tilt (dB per octave around
+## TILT_PIVOT_HZ).
+func _draw_points(values: PackedFloat32Array, line_color: Color, fill_color: Color) -> void:
+	var count := values.size()
+	if count < 2:
 		return
 	var plot := plot_rect()
-	var bin_hz := _bin_rate / (2.0 * float(bins.size() - 1))
+	var octaves := log(_points_hi_hz / _points_lo_hz) / log(2.0)
+	var pivot_octaves := log(TILT_PIVOT_HZ / _points_lo_hz) / log(2.0)
 	var points := PackedVector2Array()
-	var x := plot.position.x
-	while x <= plot.end.x + 0.5:
-		var lo_hz := freq_axis.x_to_hz(x - 1.0)
-		var hi_hz := freq_axis.x_to_hz(x + 1.0)
-		var i0 := int(floor(lo_hz / bin_hz))
-		var i1 := int(ceil(hi_hz / bin_hz))
-		var db: float
-		if i1 - i0 <= 1:
-			var position := freq_axis.x_to_hz(x) / bin_hz
-			var a := clampi(int(floor(position)), 0, bins.size() - 1)
-			var b := mini(a + 1, bins.size() - 1)
-			db = lerpf(bins[a], bins[b], position - floorf(position))
-		else:
-			db = ANALYSER_FLOOR_DB
-			for i in range(maxi(i0, 0), mini(i1, bins.size() - 1) + 1):
-				db = maxf(db, bins[i])
-		var t := clampf((db - ANALYSER_FLOOR_DB) / (ANALYSER_CEIL_DB - ANALYSER_FLOOR_DB), 0.0, 1.0)
-		points.append(Vector2(x, plot.end.y - plot.size.y * t))
-		x += 2.0
-	if fill_color.a > 0.0 and points.size() > 2:
+	points.resize(count)
+	for i in count:
+		var t := float(i) / float(count - 1)
+		var hz := _points_lo_hz * pow(2.0, octaves * t)
+		var db := values[i] + state.tilt_db * (octaves * t - pivot_octaves)
+		var y := clampf((db - ANALYSER_FLOOR_DB) / (ANALYSER_CEIL_DB - ANALYSER_FLOOR_DB), 0.0, 1.0)
+		points[i] = Vector2(freq_axis.hz_to_x(hz), plot.end.y - plot.size.y * y)
+	if fill_color.a > 0.0:
 		var polygon := points.duplicate()
-		polygon.append(Vector2(points[points.size() - 1].x, plot.end.y))
+		polygon.append(Vector2(points[count - 1].x, plot.end.y))
 		polygon.append(Vector2(points[0].x, plot.end.y))
 		draw_colored_polygon(polygon, fill_color)
 	draw_polyline(points, line_color, 1.0, true)

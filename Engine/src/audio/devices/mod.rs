@@ -39,6 +39,10 @@ pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 
 use std::time::{Duration, Instant};
 
+/// Off-lock work requested by [`AudioDevice::configure_data`]: the command thread runs it with
+/// the state lock released and passes its product to [`AudioDevice::apply_data_build`].
+pub type DataBuild = Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>;
+
 /// Audio silence threshold for sleep detection (-60dB)
 const SLEEP_THRESHOLD: f32 = 0.001;
 
@@ -556,6 +560,34 @@ pub trait AudioDevice: Send {
     /// Unsubscribe from a data stream
     fn unsubscribe_data(&mut self, _data_type: &str) {
         // Default: no-op (device doesn't support subscriptions)
+    }
+
+    /// Set an option of a data stream (e.g. the EQ analyser's `"resolution"`), from the
+    /// `/data/configure` OSC message. Runs on the command thread under the state lock, so it must
+    /// be quick: an option that needs new buffers returns a [`DataBuild`] instead of allocating
+    /// them here. Returns an error for an unknown stream, key or value.
+    fn configure_data(
+        &mut self,
+        data_type: &str,
+        key: &str,
+        _value: f32,
+    ) -> Result<Option<DataBuild>, String> {
+        Err(format!(
+            "Device '{}' has no option '{}' for '{}' data",
+            self.device_name(),
+            key,
+            data_type
+        ))
+    }
+
+    /// Install what a [`DataBuild`] from `configure_data` produced (under the state lock).
+    /// Returns what it replaced (or `built` itself if it doesn't fit), which the caller drops
+    /// after releasing the lock.
+    fn apply_data_build(
+        &mut self,
+        built: Box<dyn std::any::Any + Send>,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
+        Some(built)
     }
 
     /// Poll for device data (called periodically from audio thread if subscribed)

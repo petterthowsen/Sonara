@@ -1,6 +1,15 @@
 # Sonara DAW - Project Status
 
 
+## Built-in effects UI (spec 012 follow-up)
+
+The engine side of the effects (`docs/specs/012-builtin-effects/plan.md`, phases 1-7) is close to spec. Some of the Godot views need work.
+
+### Not Working / To do
+- EQ analyser rework, needs a live check: Blackman-Harris FFT with the DC removed, 256 log-spaced points (fractional-octave power average, attack/release in dB) instead of 2049 raw bins, and a Display menu (Resolution, Speed, Tilt). The 36 Hz peak was most likely DC leaking through the Hann window's sidelobes past the 30 Hz cut; confirm it's gone on the same material. Tests pass (`cargo test`, `Godot/tests/run_all.sh`).
+- Compressor: no real-time visual feedback. There seems to be a meter component, but it shows nothing. The design needs more thought; later.
+
+
 ## Working toward DAWproject support
 
 Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/sonara-gaps.md`.
@@ -19,7 +28,6 @@ Spec: `docs/dawproject/specification.md`. Full gap checklist: `docs/dawproject/s
 - Tempo automation lane and tempo map playback (spec `docs/specs/008-tempo-map-engine/`). Verified live: the engine clock, MIDI and audio clips follow ramps, the time ruler and tempo field follow the map, and devices and CLAP plugins receive transport info. `cargo test` and `Godot/tests/run_all.sh` pass.
 
 ### Not Working / Not verified
-- Plugin state persistence: `.sonara` files store each CLAP plugin's state blob (`plugin_state`, base64). It is refreshed from the engine on save and restored when the plugin reports `ready`. Unit-tested (`test_plugin_state.gd`, `save_plugin_state_always_answers`), not verified live yet. A mid-session engine restart doesn't re-send the state.
 - Audio clips now seek and loop on their own recorded-BPM timeline. Clips whose recorded BPM differs from the project tempo sit differently than before (the old seek offset was wrong for them).
 - Tempo map is resent on every (re)connect, but that path wasn't tested with a mid-session engine restart.
 

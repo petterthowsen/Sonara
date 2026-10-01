@@ -455,6 +455,15 @@ pub enum AudioCommand {
         device_path: DevicePath,
         data_type: String,
     },
+    /// Set an option of a device data stream (`AudioDevice::configure_data`). Handled by
+    /// `CommandWorker`, which builds new buffers with the state lock released.
+    ConfigureDeviceData {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        data_type: String,
+        key: String,
+        value: f32,
+    },
     SetLayerSlotVolume {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -2682,6 +2691,7 @@ pub fn process_command(
         | AudioCommand::AddDeviceToChannel { .. }
         | AudioCommand::RemoveDeviceFromChannel { .. }
         | AudioCommand::ClearChannelDevices { .. }
+        | AudioCommand::ConfigureDeviceData { .. }
         | AudioCommand::SetTempoMap(_)
         | AudioCommand::SetTimeSignatureMap(_)
         | AudioCommand::ReloadDevice { .. }

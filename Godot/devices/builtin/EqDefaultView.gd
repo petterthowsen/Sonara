@@ -1,15 +1,22 @@
-## Panel view of the built-in EQ: the curve editor (`EqCurveEditor`) over a strip of Freq, Gain and
-## Q knobs for each enabled band (exact entry, and targets for automation), a toolbar for the
-## analyser mode and dB range, and the Output gain.
+## Panel view of the built-in EQ: a toolbar for the analyser mode and dB range, the curve editor
+## (`EqCurveEditor`), and the knobs (type, Freq, Gain, Q) of the selected band plus Output gain.
+## As the Window view it is the full editor with the piano strip; the Companion view
+## (`EqBandsCompanionView`) then has the knobs of every band.
 ##
-## Analyser mode and range are view state, not parameters: they live in the app config
-## (`EqViewState.CONFIG_KEY`) and are the same for every EQ. The view subscribes to the device's
-## `"spectrum"` stream while shown (and the analyser isn't off) and unsubscribes when hidden.
+## Analyser mode, range, resolution, speed and tilt are view state, not parameters: they live in
+## the app config (`EqViewState.CONFIG_KEY`) and are the same for every EQ. The view subscribes to
+## the device's `"spectrum"` stream while shown (and the analyser isn't off) and unsubscribes when
+## hidden. Resolution and speed are engine options (`data/configure`), sent after subscribing and
+## whenever they change; tilt is applied only when drawing.
 class_name EqDefaultView extends DeviceView
 
-const STRIP_HEIGHT := 74.0
-const KNOB_SIZE := Vector2(28, 28)
-const KNOB_LABEL_WIDTH := 34.0
+const STRIP_HEIGHT := 78.0
+const RESOLUTION_LABELS: Array[String] = ["Low", "Medium", "High", "Max"]
+const SPEED_LABELS: Array[String] = ["Fast", "Medium", "Slow"]
+## Item ids in the Display menu: resolution, speed and tilt items start at these.
+const MENU_RESOLUTION := 0
+const MENU_SPEED := 10
+const MENU_TILT := 20
 
 var editor: EqCurveEditor = null
 ## Read and write the view state. Default: the app config (Sonara autoload); tests replace them.
@@ -18,19 +25,36 @@ var save_config := Callable(self, "_save_app_config")
 
 var _analyser_option: OptionButton = null
 var _range_option: OptionButton = null
-var _strip: HBoxContainer = null
-var _items: Array[Dictionary] = []
+var _display_menu: MenuButton = null
+var _band_label: Label = null
+var _type_option: OptionButton = null
+var _freq_knob: LabeledKnob = null
+var _gain_knob: LabeledKnob = null
+var _q_knob: LabeledKnob = null
 var _output_knob: LabeledKnob = null
+var _band := -1
+## Views subscribed per device path. The engine keeps one subscription per device, not one per
+## view, so the panel and window views share it: the last one to unsubscribe cancels it.
+static var _subscriber_counts := {}
 var _subscribed := false
 var _shown := false
+## The analyser options last sent to the engine (-1: none since subscribing).
+var _sent_resolution := -1
+var _sent_speed := -1
 
 
 func _ready() -> void:
 	_build()
 
 
+## True for the Window view: the same editor, with the piano strip and without the knob row (the
+## companion view in the device panel has the knobs).
+func _is_window() -> bool:
+	return is_type(Device.ViewType.Window)
+
+
 func _get_minimum_size() -> Vector2:
-	return Vector2(480, 250)
+	return Vector2(640, 380) if _is_window() else Vector2(420, 250)
 
 
 func _build() -> void:
@@ -56,36 +80,65 @@ func _build() -> void:
 		_range_option.add_item("±%d dB" % int(range_db))
 	_range_option.item_selected.connect(_on_range_selected)
 	toolbar.add_child(_range_option)
+	_display_menu = MenuButton.new()
+	_display_menu.text = "Display"
+	_display_menu.flat = false
+	_display_menu.tooltip_text = "Analyser resolution, speed and tilt"
+	_build_display_menu(_display_menu.get_popup())
+	toolbar.add_child(_display_menu)
 
 	editor = EqCurveEditor.new()
+	editor.show_piano = _is_window()
 	editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	editor.view_state_changed.connect(_on_editor_view_state_changed)
+	editor.selection_changed.connect(_on_selection_changed)
 	root.add_child(editor)
 
+	# The selected band's knobs. No scrolling: the row is as wide as its content and the device
+	# grows horizontally with it.
 	var bottom := HBoxContainer.new()
 	bottom.custom_minimum_size.y = STRIP_HEIGHT
-	bottom.add_theme_constant_override("separation", 8)
+	bottom.visible = not _is_window()
+	bottom.add_theme_constant_override("separation", 10)
 	root.add_child(bottom)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	bottom.add_child(scroll)
-	_strip = HBoxContainer.new()
-	_strip.add_theme_constant_override("separation", 10)
-	scroll.add_child(_strip)
-	for i in EqResponse.BAND_COUNT:
-		_items.append(_build_band_item(i))
-
-	_output_knob = LabeledKnob.new()
-	_output_knob.text = "Out"
-	_output_knob.knob_size = KNOB_SIZE
-	_output_knob.label_width = KNOB_LABEL_WIDTH
-	_output_knob.knob.value_changed.connect(_on_param_knob_changed.bind(EqResponse.OUTPUT_GAIN))
+	_band_label = Label.new()
+	_band_label.custom_minimum_size.x = 18
+	bottom.add_child(_band_label)
+	_type_option = OptionButton.new()
+	_type_option.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	for type_name in EqResponse.TYPE_NAMES:
+		_type_option.add_item(type_name)
+	_type_option.item_selected.connect(_on_type_selected)
+	bottom.add_child(_type_option)
+	_freq_knob = EqKnobs.make_knob("Freq", _on_band_knob_changed.bind(EqResponse.P_FREQ))
+	_gain_knob = EqKnobs.make_knob("Gain", _on_band_knob_changed.bind(EqResponse.P_GAIN))
+	_q_knob = EqKnobs.make_knob("Q", _on_band_knob_changed.bind(EqResponse.P_Q))
+	for knob in [_freq_knob, _gain_knob, _q_knob]:
+		bottom.add_child(knob)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom.add_child(spacer)
+	_output_knob = EqKnobs.make_knob("Out", _on_param_knob_changed.bind(EqResponse.OUTPUT_GAIN))
 	bottom.add_child(_output_knob)
 
 	_apply_state(_read_state())
+	_refresh_band_controls()
+
+
+func _build_display_menu(popup: PopupMenu) -> void:
+	popup.hide_on_checkable_item_selection = false
+	popup.add_separator("Resolution")
+	for i in RESOLUTION_LABELS.size():
+		popup.add_radio_check_item(RESOLUTION_LABELS[i], MENU_RESOLUTION + i)
+	popup.add_separator("Speed")
+	for i in SPEED_LABELS.size():
+		popup.add_radio_check_item(SPEED_LABELS[i], MENU_SPEED + i)
+	popup.add_separator("Tilt")
+	for i in EqViewState.TILTS.size():
+		var tilt := EqViewState.TILTS[i]
+		popup.add_radio_check_item("Flat" if tilt == 0.0 else "%s dB/oct" % str(tilt), MENU_TILT + i)
+	popup.id_pressed.connect(_on_display_item)
 
 
 func _caption(text: String) -> Label:
@@ -94,35 +147,6 @@ func _caption(text: String) -> Label:
 	label.add_theme_font_size_override("font_size", 11)
 	label.modulate = Color(1, 1, 1, 0.6)
 	return label
-
-
-func _build_band_item(band: int) -> Dictionary:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 1)
-	_strip.add_child(box)
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 4)
-	box.add_child(header)
-	var number := Label.new()
-	number.text = str(band + 1)
-	number.add_theme_color_override("font_color", EqCurveEditor.band_color(band))
-	header.add_child(number)
-	var icon := EqTypeIcon.new()
-	icon.color = EqCurveEditor.band_color(band)
-	header.add_child(icon)
-	var knobs := HBoxContainer.new()
-	knobs.add_theme_constant_override("separation", 2)
-	box.add_child(knobs)
-	var item := {"root": box, "icon": icon}
-	for entry in [["freq", "Freq", EqResponse.P_FREQ], ["gain", "Gain", EqResponse.P_GAIN], ["q", "Q", EqResponse.P_Q]]:
-		var knob := LabeledKnob.new()
-		knob.text = entry[1]
-		knob.knob_size = KNOB_SIZE
-		knob.label_width = KNOB_LABEL_WIDTH
-		knob.knob.value_changed.connect(_on_param_knob_changed.bind(band * EqResponse.BAND_STRIDE + int(entry[2])))
-		knobs.add_child(knob)
-		item[entry[0]] = knob
-	return item
 
 
 # ============================================================================
@@ -135,11 +159,16 @@ func _on_bind() -> void:
 	var audio_config := _autoload("AudioConfig")
 	if audio_config != null and audio_config.config.has("sample_rate"):
 		editor.sample_rate = float(audio_config.config["sample_rate"])
-	_configure_knobs()
-	_refresh_strip()
+	EqKnobs.configure(_output_knob.knob, device, EqResponse.OUTPUT_GAIN, "%+.1f", " dB")
+	_band = editor.selected_band
+	_configure_band_knobs()
+	_refresh_band_controls()
+	_refresh_output()
 
 
 func _on_unbind() -> void:
+	_shown = false
+	_sync_subscription()
 	if editor != null:
 		editor.device = null
 
@@ -148,65 +177,66 @@ func _on_device_parameter_changed(param_id: int, _value: float) -> void:
 	if editor == null:
 		return
 	if param_id < EqResponse.BAND_COUNT * EqResponse.BAND_STRIDE:
-		_refresh_band(param_id / EqResponse.BAND_STRIDE)
+		if param_id / EqResponse.BAND_STRIDE == _band:
+			_refresh_band_controls()
 	elif param_id == EqResponse.OUTPUT_GAIN:
 		_refresh_output()
 
 
-## Point each knob at its parameter's range and curve (real units; the device converts).
-func _configure_knobs() -> void:
-	for band in EqResponse.BAND_COUNT:
-		var item := _items[band]
-		var base := band * EqResponse.BAND_STRIDE
-		_configure_knob(item["freq"].knob, base + EqResponse.P_FREQ, "%.0f", " Hz")
-		_configure_knob(item["gain"].knob, base + EqResponse.P_GAIN, "%+.1f", " dB")
-		_configure_knob(item["q"].knob, base + EqResponse.P_Q, "%.2f", "")
-	_configure_knob(_output_knob.knob, EqResponse.OUTPUT_GAIN, "%+.1f", " dB")
+func _on_selection_changed(band: int) -> void:
+	_band = band
+	_configure_band_knobs()
+	_refresh_band_controls()
 
 
-func _configure_knob(knob: RotaryKnob, param_id: int, format: String, unit_suffix: String) -> void:
-	var param := device.get_parameter(param_id)
-	if param == null:
+## Aim the three knobs at the selected band's parameters.
+func _configure_band_knobs() -> void:
+	if device == null or _band < 0:
 		return
-	knob.min_value = param.min_value
-	knob.max_value = param.max_value
-	knob.logarithmic = param.is_logarithmic
-	knob.value_default = param.default_value
-	knob.value_format = format
-	knob.value_text_callback = func(value: float) -> String:
-		if param_id % EqResponse.BAND_STRIDE == EqResponse.P_FREQ and param_id < EqResponse.OUTPUT_GAIN:
-			return FreqAxis.format_hz(value) + " Hz"
-		return (format % value) + unit_suffix
+	var base := _band * EqResponse.BAND_STRIDE
+	EqKnobs.configure(_freq_knob.knob, device, base + EqResponse.P_FREQ, "%.0f", " Hz")
+	EqKnobs.configure(_gain_knob.knob, device, base + EqResponse.P_GAIN, "%+.1f", " dB")
+	EqKnobs.configure(_q_knob.knob, device, base + EqResponse.P_Q, "%.2f", "")
 
 
-func _refresh_strip() -> void:
-	for band in EqResponse.BAND_COUNT:
-		_refresh_band(band)
-	_refresh_output()
-
-
-func _refresh_band(band: int) -> void:
-	if device == null or band < 0 or band >= _items.size():
+## Show the selected band's values; the whole row dims when no band is enabled.
+func _refresh_band_controls() -> void:
+	if _band_label == null:
 		return
-	var item := _items[band]
-	var base := band * EqResponse.BAND_STRIDE
-	var enabled := device.get_parameter_real(base + EqResponse.P_ENABLED) >= 0.5
+	var has_band := device != null and _band >= 0
+	for control in [_band_label, _type_option, _freq_knob, _gain_knob, _q_knob]:
+		control.modulate.a = 1.0 if has_band else 0.25
+		control.mouse_filter = Control.MOUSE_FILTER_PASS if has_band else Control.MOUSE_FILTER_IGNORE
+	_type_option.disabled = not has_band
+	_freq_knob.knob.mouse_filter = Control.MOUSE_FILTER_STOP if has_band else Control.MOUSE_FILTER_IGNORE
+	_q_knob.knob.mouse_filter = _freq_knob.knob.mouse_filter
+	if not has_band:
+		_band_label.text = ""
+		return
+	var base := _band * EqResponse.BAND_STRIDE
 	var type := int(device.get_parameter_real(base + EqResponse.P_TYPE))
-	item["root"].visible = enabled
-	item["icon"].type = type
-	item["freq"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
-	item["gain"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
-	item["q"].knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
-	# Gain means nothing for cuts, notches and band passes: dim it rather than shifting the row.
-	var uses_gain := EqResponse.type_uses_gain(type)
-	item["gain"].modulate.a = 1.0 if uses_gain else 0.25
-	item["gain"].mouse_filter = Control.MOUSE_FILTER_PASS if uses_gain else Control.MOUSE_FILTER_IGNORE
-	item["gain"].knob.mouse_filter = Control.MOUSE_FILTER_STOP if uses_gain else Control.MOUSE_FILTER_IGNORE
+	_band_label.text = str(_band + 1)
+	_band_label.add_theme_color_override("font_color", EqCurveEditor.band_color(_band))
+	_type_option.select(type)
+	_freq_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_FREQ))
+	_gain_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_GAIN))
+	_q_knob.knob.set_value_no_signal(device.get_parameter_real(base + EqResponse.P_Q))
+	EqKnobs.dim_gain(_gain_knob, type)
 
 
 func _refresh_output() -> void:
 	if device != null:
 		_output_knob.knob.set_value_no_signal(device.get_parameter_real(EqResponse.OUTPUT_GAIN))
+
+
+func _on_band_knob_changed(value: float, offset: int) -> void:
+	if device != null and _band >= 0:
+		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + offset, value)
+
+
+func _on_type_selected(index: int) -> void:
+	if device != null and _band >= 0:
+		device.set_parameter_real(_band * EqResponse.BAND_STRIDE + EqResponse.P_TYPE, float(index))
 
 
 func _on_param_knob_changed(value: float, param_id: int) -> void:
@@ -228,7 +258,29 @@ func _apply_state(state: EqViewState) -> void:
 	editor.state = state
 	_analyser_option.select(state.analyser)
 	_range_option.select(maxi(DbGrid.EQ_RANGES.find(state.range_db), 0))
+	_refresh_display_menu()
 	_sync_subscription()
+
+
+## Tick the current resolution, speed and tilt in the Display menu.
+func _refresh_display_menu() -> void:
+	var popup := _display_menu.get_popup()
+	var state := editor.state
+	for i in RESOLUTION_LABELS.size():
+		popup.set_item_checked(popup.get_item_index(MENU_RESOLUTION + i), i == state.resolution)
+	for i in SPEED_LABELS.size():
+		popup.set_item_checked(popup.get_item_index(MENU_SPEED + i), i == state.speed)
+	for i in EqViewState.TILTS.size():
+		popup.set_item_checked(popup.get_item_index(MENU_TILT + i), is_equal_approx(EqViewState.TILTS[i], state.tilt_db))
+
+
+func _on_display_item(id: int) -> void:
+	if id >= MENU_TILT:
+		editor.set_tilt_db(EqViewState.TILTS[id - MENU_TILT])
+	elif id >= MENU_SPEED:
+		editor.set_speed(id - MENU_SPEED)
+	else:
+		editor.set_resolution(id - MENU_RESOLUTION)
 
 
 func _on_analyser_selected(index: int) -> void:
@@ -241,7 +293,9 @@ func _on_range_selected(index: int) -> void:
 
 func _on_editor_view_state_changed() -> void:
 	save_config.call(EqViewState.CONFIG_KEY, editor.state.to_dict())
+	_refresh_display_menu()
 	_sync_subscription()
+	_send_analyser_options()
 
 
 ## Subscribe while shown and the analyser is on; unsubscribe otherwise.
@@ -249,18 +303,45 @@ func _sync_subscription() -> void:
 	var want := _shown and device != null and editor != null and editor.state.analyser != EqViewState.Analyser.OFF
 	if want == _subscribed:
 		return
+	_sent_resolution = -1
+	_sent_speed = -1
 	var osc := _autoload("AudioEngineOSC")
 	if osc == null:
 		return
+	var path: String = device.osc_path()
+	var count: int = _subscriber_counts.get(path, 0)
 	if want:
-		osc.subscribe_device_data(device.osc_path(), "spectrum")
+		_subscriber_counts[path] = count + 1
+		if count == 0:
+			osc.subscribe_device_data(path, "spectrum")
 		if not osc.device_spectrum_received.is_connected(_on_spectrum_received):
 			osc.device_spectrum_received.connect(_on_spectrum_received)
 	else:
-		osc.unsubscribe_device_data(device.osc_path(), "spectrum")
+		_subscriber_counts[path] = maxi(count - 1, 0)
+		if count <= 1:
+			_subscriber_counts.erase(path)
+			osc.unsubscribe_device_data(path, "spectrum")
 		if osc.device_spectrum_received.is_connected(_on_spectrum_received):
 			osc.device_spectrum_received.disconnect(_on_spectrum_received)
 	_subscribed = want
+	_send_analyser_options()
+
+
+## Send resolution and speed to the engine when subscribed and they changed since the last send.
+## The engine ignores a resolution it already has, so a second view resending is harmless.
+func _send_analyser_options() -> void:
+	if not _subscribed or device == null:
+		return
+	var osc := _autoload("AudioEngineOSC")
+	if osc == null:
+		return
+	var path: String = device.osc_path()
+	if editor.state.resolution != _sent_resolution:
+		_sent_resolution = editor.state.resolution
+		osc.configure_device_data(path, "spectrum", "resolution", float(_sent_resolution))
+	if editor.state.speed != _sent_speed:
+		_sent_speed = editor.state.speed
+		osc.configure_device_data(path, "spectrum", "speed", float(_sent_speed))
 
 
 func _on_view_shown() -> void:

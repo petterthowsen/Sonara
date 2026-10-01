@@ -10,6 +10,7 @@ pub mod gain;
 pub mod ladder;
 pub mod lfo;
 pub mod linear_svf;
+pub mod log_spectrum;
 pub mod one_pole;
 pub mod oscillator;
 pub mod oversampler;

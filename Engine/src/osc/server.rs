@@ -494,6 +494,30 @@ impl OscServer {
                     })?;
                 }
             }
+            ["data", "configure"] => {
+                let value = match args.get(2) {
+                    Some(OscType::Float(v)) => Some(*v),
+                    Some(OscType::Int(v)) => Some(*v as f32),
+                    Some(OscType::Double(v)) => Some(*v as f32),
+                    _ => None,
+                };
+                if let (Some(OscType::String(data_type)), Some(OscType::String(key)), Some(value)) =
+                    (args.first(), args.get(1), value)
+                {
+                    command_tx.send(AudioCommand::ConfigureDeviceData {
+                        channel_id,
+                        device_path,
+                        data_type: data_type.clone(),
+                        key: key.clone(),
+                        value,
+                    })?;
+                } else {
+                    warn!(
+                        "/data/configure expects [s:data_type, s:key, f:value]: {:?}",
+                        args
+                    );
+                }
+            }
             ["add_device"] => {
                 if let Some(cmd) = parse_add_device_command(channel_id, device_path, args) {
                     command_tx.send(cmd)?;

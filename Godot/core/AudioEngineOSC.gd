@@ -136,6 +136,11 @@ func unsubscribe_device_data(osc_path: String, data_type: String) -> void:
 	send("%s/data/unsubscribe" % osc_path, [data_type])
 
 
+## Set an option of a device data stream, e.g. the EQ analyser's `"resolution"`.
+func configure_device_data(osc_path: String, data_type: String, key: String, value: float) -> void:
+	send("%s/data/configure" % osc_path, [data_type, key, value])
+
+
 func listen(address: String, callback: Callable) -> void:
 	"""Register a callback for incoming OSC messages matching the address.
 

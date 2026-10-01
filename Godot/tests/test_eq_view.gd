@@ -24,6 +24,9 @@ func run_tests() -> void:
 	_test_listen_follows_the_button()
 	_test_view_state_round_trip()
 	_test_view_persists_state()
+	_test_display_menu_sends_analyser_options()
+	_test_tilt_lifts_the_highs()
+	_test_selection_and_piano()
 	_test_hidden_view_stops_interaction()
 	await _test_draws_in_the_tree()
 
@@ -232,10 +235,15 @@ func _test_view_state_round_trip() -> void:
 	var state := EqViewState.new()
 	state.analyser = EqViewState.Analyser.PRE
 	state.range_db = 24.0
+	state.resolution = EqViewState.Resolution.MAX
+	state.speed = EqViewState.Speed.SLOW
+	state.tilt_db = 4.5
 	var restored := EqViewState.from_dict(JSON.parse_string(JSON.stringify(state.to_dict())))
 	_assert(restored.equals(state), "state survives a JSON save and reload")
-	var bad := EqViewState.from_dict({"analyser": "sideways", "range_db": 7.0})
+	var bad := EqViewState.from_dict({"analyser": "sideways", "range_db": 7.0, "resolution": "huge", "speed": 9, "tilt_db": 5.0})
 	_assert(bad.analyser == EqViewState.Analyser.POST and bad.range_db == 12.0, "junk falls back to the defaults")
+	_assert(bad.resolution == EqViewState.Resolution.MEDIUM and bad.speed == EqViewState.Speed.MEDIUM and bad.tilt_db == 0.0, "junk analyser options too")
+	_assert(EqViewState.from_dict({"analyser": "pre"}).resolution == EqViewState.Resolution.MEDIUM, "state saved before the options existed loads")
 	_assert(EqViewState.from_dict(null).range_db == 12.0, "missing state is the defaults")
 
 
@@ -261,10 +269,50 @@ func _test_view_persists_state() -> void:
 	_assert(reloaded._analyser_option.selected == EqViewState.Analyser.OFF and reloaded._range_option.selected == 0, "and shows it in the toolbar")
 	# The knobs show the band's parameters.
 	_enable(inst, 2, EqResponse.Type.HIGH_SHELF, 4000.0, 5.0)
-	_assert(view._items[2]["root"].visible and not view._items[3]["root"].visible, "only enabled bands show a knob strip")
-	_assert(absf(view._items[2]["freq"].knob.value - 4000.0) < 1.0 and absf(view._items[2]["gain"].knob.value - 5.0) < 0.05, "knobs follow the device")
+	_assert(view.editor.selected_band == 2 and view._band == 2, "enabling a band selects it, and the view follows")
+	_assert(absf(view._freq_knob.knob.value - 4000.0) < 1.0 and absf(view._gain_knob.knob.value - 5.0) < 0.05, "the knobs show the selected band")
+	_assert(view._type_option.selected == EqResponse.Type.HIGH_SHELF, "and its type")
+	view._freq_knob.knob.value_changed.emit(5000.0)
+	_assert(absf(_real(inst, 2, EqResponse.P_FREQ) - 5000.0) < 0.5, "a knob writes the selected band")
+	view._type_option.item_selected.emit(EqResponse.Type.LOW_CUT)
+	_assert(int(_real(inst, 2, EqResponse.P_TYPE)) == EqResponse.Type.LOW_CUT, "the type box writes the selected band")
+	_assert(not view.editor.show_piano, "the panel view has no piano strip")
+	_enable(inst, 4, EqResponse.Type.BELL, 800.0, 1.0)
+	view.editor.disable_band(2)
+	_assert(view.editor.selected_band == 4 and view._band == 4, "disabling the selected band selects another enabled one")
 	view.free()
 	reloaded.free()
+
+
+func _test_selection_and_piano() -> void:
+	var inst := _make_instance()
+	_enable(inst, 0, EqResponse.Type.BELL, 200.0, 3.0)
+	_enable(inst, 1, EqResponse.Type.BELL, 2000.0, -3.0)
+	var editor := _make_editor(inst)
+	_assert(editor.selected_band == 0, "the first enabled band starts selected")
+	editor.select_band(-1)
+	var pos := editor.node_position(editor.bands[1])
+	editor._gui_input(_button(pos, MOUSE_BUTTON_LEFT, true))
+	_assert(editor.selected_band == 1, "pressing a node selects it")
+	var with_piano := editor.plot_rect().size.y
+	editor.show_piano = false
+	_assert(editor.plot_rect().size.y == editor.size.y and with_piano < editor.size.y, "hiding the piano gives its height to the plot")
+	editor.free()
+	var companion_view = load("res://devices/builtin/EqBandsCompanionView.gd").new()
+	companion_view.bind_to_device(inst)
+	_assert(companion_view._items[0]["toggle"].button_pressed and not companion_view._items[2]["toggle"].button_pressed, "the companion view toggles show which bands are on")
+	companion_view._items[2]["toggle"].toggled.emit(true)
+	_assert(_real(inst, 2, EqResponse.P_ENABLED) >= 0.5, "a toggle enables its band")
+	companion_view._items[1]["q"].knob.value_changed.emit(2.0)
+	_assert(absf(_real(inst, 1, EqResponse.P_Q) - 2.0) < 0.05, "a knob writes its band")
+	companion_view.free()
+	var window_view = load("res://devices/builtin/EqDefaultView.gd").new()
+	window_view.set_view_type(Device.ViewType.Window)
+	window_view.load_config = func(_key: String) -> Variant: return {}
+	window_view.save_config = func(_key: String, _value: Variant) -> void: pass
+	window_view.bind_to_device(inst)
+	_assert(window_view.editor.show_piano, "the window view keeps the piano strip")
+	window_view.free()
 
 
 func _test_hidden_view_stops_interaction() -> void:
@@ -286,6 +334,59 @@ func _test_hidden_view_stops_interaction() -> void:
 	view.free()
 
 
+## The Display menu changes the view state, and the view sends resolution and speed to the
+## engine after subscribing and on change, but not again when nothing changed. In test mode the
+## OSC autoload queues sends in `_pending_sends` instead of sending them.
+func _test_display_menu_sends_analyser_options() -> void:
+	var osc: Node = root.get_node_or_null("AudioEngineOSC")
+	if osc == null:
+		_assert(false, "AudioEngineOSC autoload is present")
+		return
+	var store := {}
+	var view_script: GDScript = load("res://devices/builtin/EqDefaultView.gd")
+	var view = view_script.new()
+	view.load_config = func(key: String) -> Variant: return store.get(key, {})
+	view.save_config = func(key: String, value: Variant) -> void: store[key] = value
+	view.bind_to_device(_make_instance())
+	osc._pending_sends.clear()
+	view._on_view_shown()
+	var configures := func() -> Array:
+		return osc._pending_sends.filter(func(item): return str(item["address"]).ends_with("/data/configure")).map(func(item): return item["args"])
+	_assert(configures.call() == [["spectrum", "resolution", 1.0], ["spectrum", "speed", 1.0]], "subscribing sends both options: %s" % [configures.call()])
+	osc._pending_sends.clear()
+	view._on_display_item(view_script.MENU_RESOLUTION + 3)
+	_assert(view.editor.state.resolution == EqViewState.Resolution.MAX, "the menu sets the resolution")
+	_assert(configures.call() == [["spectrum", "resolution", 3.0]], "and sends only that: %s" % [configures.call()])
+	osc._pending_sends.clear()
+	view._on_display_item(view_script.MENU_TILT + 2)
+	_assert(view.editor.state.tilt_db == 4.5, "the menu sets the tilt")
+	_assert(configures.call().is_empty(), "tilt is drawing only: nothing sent")
+	var popup: PopupMenu = view._display_menu.get_popup()
+	_assert(popup.is_item_checked(popup.get_item_index(view_script.MENU_RESOLUTION + 3)), "the menu ticks the new resolution")
+	_assert(EqViewState.from_dict(store[EqViewState.CONFIG_KEY]).tilt_db == 4.5, "and the config keeps it")
+	view._on_view_hidden()
+	osc._pending_sends.clear()
+	view.free()
+
+
+## Tilt rotates the drawn analyser around 1 kHz: a flat spectrum rises towards the highs.
+func _test_tilt_lifts_the_highs() -> void:
+	var editor := EqCurveEditor.new()
+	editor.size = Vector2(600, 300)
+	editor.show_piano = false
+	editor.freq_axis.rect = editor.plot_rect()
+	var frame := PackedFloat32Array([1.0, 48000.0, 20.0, 20000.0])
+	for i in 256:
+		frame.append(-40.0)
+	editor.on_spectrum_frame(frame)
+	_assert(editor._post_points.size() == 256 and editor._points_hi_hz == 20000.0, "a frame is parsed into points")
+	editor.on_spectrum_frame(PackedFloat32Array([1.0, 48000.0, 20.0]))
+	_assert(editor._post_points.size() == 256, "a short frame is ignored")
+	editor.set_tilt_db(6.0)
+	_assert(editor.state.tilt_db == 6.0, "tilt is view state")
+	editor.free()
+
+
 ## Everything the view draws (grids, analyser, curves, nodes, readout, piano strip, menu) runs in
 ## the tree without script errors; run_all.sh fails a script that prints one.
 func _test_draws_in_the_tree() -> void:
@@ -305,11 +406,11 @@ func _test_draws_in_the_tree() -> void:
 	view.bind_to_device(inst)
 	root.add_child(view)
 	view._on_view_shown()
-	var frame := PackedFloat32Array([0.0, 48000.0])
-	var post := PackedFloat32Array([1.0, 48000.0])
-	for i in 2049:
-		frame.append(-60.0 - 20.0 * log(1.0 + i / 40.0))
-		post.append(-55.0 - 20.0 * log(1.0 + i / 40.0))
+	var frame := PackedFloat32Array([0.0, 48000.0, 20.0, 20000.0])
+	var post := PackedFloat32Array([1.0, 48000.0, 20.0, 20000.0])
+	for i in 256:
+		frame.append(-30.0 - 0.15 * i)
+		post.append(-25.0 - 0.15 * i)
 	view.editor.on_spectrum_frame(frame)
 	view.editor.on_spectrum_frame(post)
 	view.editor.hover_band = 1
@@ -317,6 +418,7 @@ func _test_draws_in_the_tree() -> void:
 	await process_frame
 	view.editor.set_range_db(24.0)
 	view.editor.set_analyser_mode(EqViewState.Analyser.PRE)
+	view.editor.set_tilt_db(4.5)
 	view.editor.drag_band = 2
 	await process_frame
 	view.editor._open_menu(1, Vector2(100, 100))

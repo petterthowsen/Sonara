@@ -543,6 +543,15 @@ Subscribe to device visualization data (spectrum analyzer, oscilloscope, phase m
 /channel/{id}/device/{path}/data/unsubscribe [s:data_type]
 ```
 
+**Set a Data Stream Option (Godot → Rust):**
+```
+/channel/{id}/device/{path}/data/configure [s:data_type, s:key, f:value]
+```
+Handled by `AudioDevice::configure_data`. An unknown stream, key or value logs a warning. An
+option that needs new buffers (a new FFT size) has them built on the command thread with the
+state lock released, then swapped in. Options are not saved by the engine: the view resends them
+after subscribing.
+
 **Data Types:**
 - `"spectrum"` - Frequency spectrum (FFT magnitude bins in dB)
 - `"oscilloscope"` - Time-domain waveform (future)
@@ -578,11 +587,15 @@ AudioEngineOSC.unsubscribe_device_data(device.osc_path(), "spectrum")
 
 #### EQ analyser stream (`sonara.builtin.eq`)
 
-Data type `"spectrum"`. The EQ uses the same data type and blob encoding (little-endian f32) with a two-value header. Godot receives it through `device_spectrum_received` as a `PackedFloat32Array`:
+Data type `"spectrum"`. The EQ uses the same data type and blob encoding (little-endian f32) with a four-value header. Godot receives it through `device_spectrum_received` as a `PackedFloat32Array`:
 - `[0]` flag: `0.0` = pre-EQ (the input), `1.0` = post-EQ (the output, after Output Gain).
-- `[1]` the engine sample rate in Hz, which the view needs to place bins on the frequency axis.
-- `[2..]` the smoothed dBFS spectrum, 2049 bins of a 4096-point FFT (`sample_rate / 4096` Hz per bin), floor -160 dB, from `dsp/spectrum.rs`.
-- The engine alternates pre and post frames, each about 20 Hz (about 40 messages a second). The analyser (`sonara.builtin.spectrum_analyzer`) sends no header: don't mix the two parsers.
+- `[1]` the engine sample rate in Hz (the view's curves use it).
+- `[2]`, `[3]` `lo_hz` and `hi_hz`: 20 Hz and 20 kHz (lower when Nyquist is below 20 kHz).
+- `[4..]` 256 dBFS points, log-spaced from `lo_hz` to `hi_hz` (point *i* is at `lo_hz * (hi_hz / lo_hz)^(i / 255)`), floor -160 dB. Each is the mean power of a fractional-octave band around it (Blackman-Harris FFT, DC removed), with attack/release ballistics in dB (`dsp/log_spectrum.rs`).
+- Options (`data/configure` with data type `"spectrum"`):
+  - `"resolution"` 0..3: FFT size 2048 / 4096 / 8192 / 16384 at 48 kHz (scaled up with the sample rate) and band width 1/3, 1/6, 1/12, 1/24 octave. Default 1.
+  - `"speed"` 0..2 (fast, medium, slow): attack/release 10/120 ms, 30/350 ms, 80 ms/1 s. Default 1.
+- The engine alternates pre and post frames, each about 30 Hz (about 60 messages a second; fewer with large audio buffers, since it polls once per buffer). The analyser (`sonara.builtin.spectrum_analyzer`) sends no header: don't mix the two parsers.
 - While subscribed the EQ never sleeps, so the analyser decays on silence instead of freezing.
 
 #### Compressor dynamics stream (`sonara.builtin.compressor`)

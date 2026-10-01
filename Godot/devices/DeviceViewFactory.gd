@@ -14,8 +14,11 @@ const BUILTIN_PANEL_SCENES := {
 }
 const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
+	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
 }
-const BUILTIN_COMPANION_SCENES := {}
+const BUILTIN_COMPANION_SCENES := {
+	"sonara.builtin.eq": preload("res://devices/builtin/EqBandsCompanionView.tscn"),
+}
 const BUILTIN_COMPACT_SCENES := {}
 
 ## The generated Simple View (`devices/simple_view/`), used for the Panel view of any device

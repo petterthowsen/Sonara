@@ -17,11 +17,15 @@ use super::effect::{pass_through, TailSleep};
 use super::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
-use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+use super::{
+    AudioDevice, DataBuild, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
+};
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
+use crate::audio::dsp::log_spectrum::LogSpectrum;
 use crate::audio::dsp::one_pole::{one_pole_g, one_pole_magnitude_db, OnePole};
-use crate::audio::dsp::spectrum::Spectrum;
+use crate::audio::dsp::spectrum::{Spectrum, Window};
+use std::any::Any;
 use std::f32::consts::FRAC_1_SQRT_2;
 
 pub const DEVICE_ID: &str = "sonara.builtin.eq";
@@ -452,23 +456,90 @@ pub struct EqDevice {
 
     // Analyser
     subscribed: bool,
-    pre: Spectrum,
-    post: Spectrum,
+    analyser: Analyser,
+    /// Indices into [`RESOLUTIONS`] and [`SPEEDS`].
+    resolution: usize,
+    speed: usize,
     frames_since_poll: usize,
     poll_interval: usize,
     send_post_next: bool,
 }
 
-/// FFT size and smoothing of the analyser frames.
-const ANALYSER_FFT: usize = 4096;
-const ANALYSER_SMOOTHING: f32 = 0.6;
-/// Frames of the analyser stream start with `[flag, sample_rate]`: flag 0 = pre, 1 = post.
-pub const SPECTRUM_HEADER_LEN: usize = 2;
+/// Analyser resolutions (`"resolution"` option 0..3): the FFT size at 48 kHz (doubled at 96 kHz
+/// and so on, so the bin width stays put) and the width in octaves of the band each point averages.
+const RESOLUTIONS: [(usize, f32); 4] = [
+    (2048, 1.0 / 3.0),
+    (4096, 1.0 / 6.0),
+    (8192, 1.0 / 12.0),
+    (16384, 1.0 / 24.0),
+];
+const DEFAULT_RESOLUTION: usize = 1;
+/// Analyser speeds (`"speed"` option 0..2: fast, medium, slow): attack and release time
+/// constants in seconds.
+const SPEEDS: [(f32, f32); 3] = [(0.01, 0.12), (0.03, 0.35), (0.08, 1.0)];
+const DEFAULT_SPEED: usize = 1;
+/// Points per analyser frame, log-spaced from 20 Hz to 20 kHz (or just below Nyquist).
+pub const ANALYSER_POINTS: usize = 256;
+/// Frames of the analyser stream start with `[flag, sample_rate, lo_hz, hi_hz]`: flag 0 = pre,
+/// 1 = post.
+pub const SPECTRUM_HEADER_LEN: usize = 4;
 /// Frames per second for each of pre and post.
-const ANALYSER_RATE_HZ: f32 = 20.0;
+const ANALYSER_RATE_HZ: f32 = 30.0;
 const RAMP_SECONDS: f32 = 0.005;
 /// Ringing time after input stops, for sleep.
 const TAIL_SECONDS: f32 = 1.0;
+
+/// The pre and post analysers: FFTs and their log-spaced, ballistic display points.
+struct Analyser {
+    size: usize,
+    pre: Spectrum,
+    post: Spectrum,
+    pre_log: LogSpectrum,
+    post_log: LogSpectrum,
+}
+
+impl Analyser {
+    /// Allocates: build it on the command thread, ideally with the state lock released.
+    fn new(sample_rate: f32, resolution: usize, speed: usize) -> Self {
+        let width = RESOLUTIONS[resolution].1;
+        let size = Self::fft_size(sample_rate, resolution);
+        let spectrum = || Spectrum::with_window(size, 0.0, Window::BlackmanHarris);
+        let log = || {
+            let mut log = LogSpectrum::new(ANALYSER_POINTS);
+            log.configure(sample_rate, size, width);
+            log
+        };
+        let mut analyser = Self {
+            size,
+            pre: spectrum(),
+            post: spectrum(),
+            pre_log: log(),
+            post_log: log(),
+        };
+        analyser.set_speed(speed);
+        analyser
+    }
+
+    /// The FFT size for a resolution: doubled at 96 kHz and so on, so the bin width stays put.
+    fn fft_size(sample_rate: f32, resolution: usize) -> usize {
+        let scale = (sample_rate / 48_000.0).round().max(1.0) as usize;
+        RESOLUTIONS[resolution].0 * scale.next_power_of_two()
+    }
+
+    fn set_speed(&mut self, speed: usize) {
+        let (attack, release) = SPEEDS[speed];
+        for log in [&mut self.pre_log, &mut self.post_log] {
+            log.set_ballistics(attack, release, 1.0 / ANALYSER_RATE_HZ);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pre.reset();
+        self.post.reset();
+        self.pre_log.reset();
+        self.post_log.reset();
+    }
+}
 
 impl EqDevice {
     pub fn new(sample_rate: f32) -> Self {
@@ -499,8 +570,9 @@ impl EqDevice {
             enabled: true,
             sleep,
             subscribed: false,
-            pre: Spectrum::new(ANALYSER_FFT, ANALYSER_SMOOTHING),
-            post: Spectrum::new(ANALYSER_FFT, ANALYSER_SMOOTHING),
+            analyser: Analyser::new(sample_rate, DEFAULT_RESOLUTION, DEFAULT_SPEED),
+            resolution: DEFAULT_RESOLUTION,
+            speed: DEFAULT_SPEED,
             frames_since_poll: 0,
             poll_interval: 0,
             send_post_next: false,
@@ -517,6 +589,13 @@ impl EqDevice {
         self.level_step = chunk_seconds / RAMP_SECONDS;
         self.poll_interval = (sample_rate / (ANALYSER_RATE_HZ * 2.0)) as usize;
         self.sleep.set_sample_rate(sample_rate);
+        // Sample rate changes come with `prepare`, which may allocate anyway.
+        self.analyser = Analyser::new(sample_rate, self.resolution, self.speed);
+    }
+
+    fn reset_analyser(&mut self) {
+        self.analyser.reset();
+        self.frames_since_poll = 0;
     }
 
     /// Jump every smoothed value to its target and clear all filter state.
@@ -765,8 +844,8 @@ impl AudioDevice for EqDevice {
         if self.subscribed {
             for frame in 0..n {
                 let k = frame * 2;
-                self.pre.push((inputs[k] + inputs[k + 1]) * 0.5);
-                self.post.push((outputs[k] + outputs[k + 1]) * 0.5);
+                self.analyser.pre.push((inputs[k] + inputs[k + 1]) * 0.5);
+                self.analyser.post.push((outputs[k] + outputs[k + 1]) * 0.5);
             }
             self.frames_since_poll += n;
         }
@@ -805,9 +884,7 @@ impl AudioDevice for EqDevice {
 
     fn reset(&mut self) {
         self.snap_all();
-        self.pre.reset();
-        self.post.reset();
-        self.frames_since_poll = 0;
+        self.reset_analyser();
         self.sleep.wake();
     }
 
@@ -846,9 +923,7 @@ impl AudioDevice for EqDevice {
             return Err(format!("EQ does not support '{data_type}' data"));
         }
         if !self.subscribed {
-            self.pre.reset();
-            self.post.reset();
-            self.frames_since_poll = 0;
+            self.reset_analyser();
             self.subscribed = true;
         }
         self.sleep.wake();
@@ -861,8 +936,54 @@ impl AudioDevice for EqDevice {
         }
     }
 
-    /// Alternates a pre and a post frame, each 20 times a second:
-    /// `[flag, sample_rate, bins…]` as little-endian f32 (flag 0 = pre, 1 = post).
+    /// `"speed"` 0..2 (see [`SPEEDS`]) applies at once. `"resolution"` 0..3 (see
+    /// [`RESOLUTIONS`]) changes the FFT size, so it asks for a new [`Analyser`] built off the lock.
+    fn configure_data(
+        &mut self,
+        data_type: &str,
+        key: &str,
+        value: f32,
+    ) -> Result<Option<DataBuild>, String> {
+        if data_type != "spectrum" {
+            return Err(format!("EQ does not support '{data_type}' data"));
+        }
+        let index = value.round().max(0.0) as usize;
+        match key {
+            "speed" if index < SPEEDS.len() => {
+                self.speed = index;
+                self.analyser.set_speed(index);
+                Ok(None)
+            }
+            "resolution" if index == self.resolution => Ok(None),
+            "resolution" if index < RESOLUTIONS.len() => {
+                self.resolution = index;
+                let (sample_rate, speed) = (self.sample_rate, self.speed);
+                Ok(Some(Box::new(move || {
+                    Box::new(Analyser::new(sample_rate, index, speed)) as Box<dyn Any + Send>
+                })))
+            }
+            _ => Err(format!("EQ analyser has no '{key}' = {value}")),
+        }
+    }
+
+    /// Swap in an [`Analyser`] built for `configure_data`, unless the sample rate or settings
+    /// moved on meanwhile.
+    fn apply_data_build(&mut self, built: Box<dyn Any + Send>) -> Option<Box<dyn Any + Send>> {
+        let analyser = built.downcast::<Analyser>().ok()?;
+        let current = Analyser::fft_size(self.sample_rate, self.resolution);
+        if analyser.size != current || analyser.pre_log.hi_hz() != self.analyser.pre_log.hi_hz() {
+            return Some(analyser);
+        }
+        let mut analyser = *analyser;
+        analyser.set_speed(self.speed);
+        let old = std::mem::replace(&mut self.analyser, analyser);
+        self.frames_since_poll = 0;
+        Some(Box::new(old))
+    }
+
+    /// Alternates a pre and a post frame, each 30 times a second:
+    /// `[flag, sample_rate, lo_hz, hi_hz, points…]` as little-endian f32 (flag 0 = pre,
+    /// 1 = post), [`ANALYSER_POINTS`] dBFS values log-spaced from `lo_hz` to `hi_hz`.
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
         if !self.subscribed || self.frames_since_poll < self.poll_interval {
             return None;
@@ -870,13 +991,24 @@ impl AudioDevice for EqDevice {
         self.frames_since_poll = 0;
         let post = self.send_post_next;
         self.send_post_next = !post;
-        let spectrum = if post { &mut self.post } else { &mut self.pre };
-        spectrum.compute(self.sample_rate);
-        let bins = spectrum.smoothed();
-        let mut bytes = Vec::with_capacity((SPECTRUM_HEADER_LEN + bins.len()) * 4);
-        bytes.extend_from_slice(&(post as u8 as f32).to_le_bytes());
-        bytes.extend_from_slice(&self.sample_rate.to_le_bytes());
-        for value in bins {
+        let analyser = &mut self.analyser;
+        let (spectrum, log) = if post {
+            (&mut analyser.post, &mut analyser.post_log)
+        } else {
+            (&mut analyser.pre, &mut analyser.pre_log)
+        };
+        if spectrum.transform() {
+            log.update(spectrum.power());
+        }
+        let points = log.db();
+        let mut bytes = Vec::with_capacity((SPECTRUM_HEADER_LEN + points.len()) * 4);
+        let header = [
+            post as u8 as f32,
+            self.sample_rate,
+            log.lo_hz(),
+            log.hi_hz(),
+        ];
+        for value in header.iter().chain(points) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         Some(("spectrum".to_string(), bytes))
@@ -1125,8 +1257,9 @@ mod tests {
                     .chunks_exact(4)
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
-                assert_eq!(values.len(), SPECTRUM_HEADER_LEN + ANALYSER_FFT / 2 + 1);
+                assert_eq!(values.len(), SPECTRUM_HEADER_LEN + ANALYSER_POINTS);
                 assert_eq!(values[1], SR);
+                assert_eq!((values[2], values[3]), (20.0, 20_000.0));
                 flags.push(values[0]);
                 if values[0] == 1.0 {
                     last_post = values;
@@ -1134,13 +1267,16 @@ mod tests {
             }
         }
         assert!(
-            flags.len() >= 30,
-            "about 40 frames a second: {}",
+            flags.len() >= 40,
+            "about 60 frames a second (fewer with 512-frame blocks): {}",
             flags.len()
         );
         assert!(flags.windows(2).all(|w| w[0] != w[1]), "{flags:?}");
         assert_eq!(flags[0], 0.0);
-        assert!(last_post.iter().skip(2).any(|&db| db > -60.0));
+        assert!(last_post
+            .iter()
+            .skip(SPECTRUM_HEADER_LEN)
+            .any(|&db| db > -60.0));
         d.unsubscribe_data("spectrum");
         assert!(d.poll_device_data().is_none());
     }
@@ -1154,7 +1290,7 @@ mod tests {
         configure(&mut d, 4, 0, 1_000.0, 12.0, 1.0, 1);
         let input = stereo(&pink_noise(SR as usize * 4, 0.3, 4));
         // Average the frames after the first second, so the noise's own variance settles.
-        let len = ANALYSER_FFT / 2 + 1 + SPECTRUM_HEADER_LEN;
+        let len = ANALYSER_POINTS + SPECTRUM_HEADER_LEN;
         let (mut pre, mut post) = (vec![0.0f32; len], vec![0.0f32; len]);
         let (mut pre_n, mut post_n) = (0.0f32, 0.0f32);
         for (n, block) in input.chunks(512 * 2).enumerate() {
@@ -1180,11 +1316,17 @@ mod tests {
         pre.iter_mut().for_each(|v| *v /= pre_n);
         post.iter_mut().for_each(|v| *v /= post_n);
         let filter = d.band_filter(4);
-        let bin_hz = SR / ANALYSER_FFT as f32;
-        // Average over a band of bins to tame the noise's own variance.
+        let points = &d.analyser.pre_log;
+        // Average a few points around the centre to tame the noise's own variance.
         for centre in [300.0f32, 1_000.0, 3_000.0] {
-            let lo = (centre * 0.9 / bin_hz) as usize + 2;
-            let hi = (centre * 1.1 / bin_hz) as usize + 2;
+            let nearest = (0..ANALYSER_POINTS)
+                .min_by(|&a, &b| {
+                    let off = |i: usize| (points.point_hz(i) / centre).ln().abs();
+                    off(a).total_cmp(&off(b))
+                })
+                .unwrap();
+            let lo = SPECTRUM_HEADER_LEN + nearest - 1;
+            let hi = SPECTRUM_HEADER_LEN + nearest + 2;
             let mean = |v: &[f32]| v[lo..hi].iter().sum::<f32>() / (hi - lo) as f32;
             let seen = mean(&post) - mean(&pre);
             let drawn = filter.magnitude_db(centre, SR);
@@ -1193,6 +1335,56 @@ mod tests {
                 "{centre} Hz: analyser shows {seen:.2} dB, curve {drawn:.2} dB"
             );
         }
+    }
+
+    #[test]
+    fn analyser_options_resize_the_fft() {
+        let mut d = device();
+        assert_eq!(d.analyser.pre.size(), 4096, "medium by default");
+        let build = d.configure_data("spectrum", "resolution", 3.0).unwrap();
+        assert_eq!(
+            d.analyser.pre.size(),
+            4096,
+            "nothing allocated under the lock"
+        );
+        let old = d.apply_data_build(build.expect("a build")());
+        assert!(
+            old.unwrap().downcast::<Analyser>().is_ok(),
+            "the old analyser comes back"
+        );
+        assert_eq!(d.analyser.pre.size(), 16384);
+        assert_eq!(d.analyser.post.size(), 16384);
+        assert!(d
+            .configure_data("spectrum", "speed", 2.0)
+            .unwrap()
+            .is_none());
+        // A build that the device outgrew meanwhile is handed back, not installed.
+        let stale = d
+            .configure_data("spectrum", "resolution", 0.0)
+            .unwrap()
+            .unwrap()();
+        d.configure_data("spectrum", "resolution", 2.0).unwrap();
+        assert!(d.apply_data_build(stale).is_some());
+        assert_eq!(d.analyser.pre.size(), 16384);
+        d.configure_data("spectrum", "resolution", 3.0).unwrap();
+        assert!(d.configure_data("spectrum", "resolution", 4.0).is_err());
+        assert!(d.configure_data("spectrum", "tilt", 1.0).is_err());
+        assert!(d.configure_data("dynamics", "speed", 0.0).is_err());
+        d.prepare(96_000.0, 512);
+        assert_eq!(
+            d.analyser.pre.size(),
+            32768,
+            "the bin width stays put at 96 kHz"
+        );
+        d.subscribe_data("spectrum").unwrap();
+        let input = stereo(&pink_noise(96_000 / 2, 0.3, 4));
+        let mut frames = 0;
+        for block in input.chunks(512 * 2) {
+            let mut out = vec![0.0; block.len()];
+            d.process_block(block, &mut out, block.len() / 2);
+            frames += d.poll_device_data().is_some() as usize;
+        }
+        assert!(frames > 10);
     }
 
     #[test]

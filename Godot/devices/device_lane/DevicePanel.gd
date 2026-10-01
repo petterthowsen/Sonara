@@ -685,7 +685,8 @@ func _clear_panel_and_companion() -> void:
 
 
 func _show_panel_view() -> void:
-	if _panel_view and _panel_view.visible:
+	# The panel view is hidden, not freed, while the companion view is up, so don't test `visible`.
+	if _panel_view and not _panel_view.is_queued_for_deletion():
 		logger.info("showing panel view")
 
 		if not _panel_view.is_node_ready():
@@ -783,6 +784,7 @@ func _open_window() -> void:
 		# add window view to popup
 		var popup = _get_window()
 		popup.add_child(_window_view)
+		_window_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		
 		# bind window view to device
 		_window_view.bind_to_device(device)
@@ -795,7 +797,10 @@ func _open_window() -> void:
 			await _window_view.ready
 
 		# show window
-		popup.popup_centered(Vector2(300, 200))
+		# Size the popup to the view's minimum: a fixed 300x200 left the EQ cut off until reopened.
+		var min_size := Vector2i(_window_view.get_combined_minimum_size())
+		popup.min_size = min_size
+		popup.popup_centered(Vector2i(maxi(min_size.x, 300), maxi(min_size.y, 200)))
 		# notify window view it is now visible so it can subscribe
 		_window_view._on_view_shown()
 
