@@ -33,6 +33,18 @@ pub enum FilterMode {
     Lp24,
     Hp12,
     Bp12,
+    /// Two cascaded high-pass stages tuned like LP 24 (4-pole Butterworth at resonance 0).
+    Hp24,
+    /// Low plus high: a notch whose width follows resonance.
+    Notch,
+}
+
+impl FilterMode {
+    /// True for the modes built from two cascaded stages.
+    #[inline]
+    pub fn is_24(self) -> bool {
+        matches!(self, FilterMode::Lp24 | FilterMode::Hp24)
+    }
 }
 
 /// Integrator coefficient for `hz` at `sample_rate` (clamped to a safe range).
@@ -43,11 +55,7 @@ pub fn cutoff_to_g(hz: f32, sample_rate: f32) -> f32 {
 
 /// Damping (`1/Q`) of the resonant stage for `resonance` in 0..1.
 pub fn resonance_to_k(resonance: f32, mode: FilterMode) -> f32 {
-    let k0 = if mode == FilterMode::Lp24 {
-        K_BUTTER4_A
-    } else {
-        SQRT_2
-    };
+    let k0 = if mode.is_24() { K_BUTTER4_A } else { SQRT_2 };
     k0 * (K_MIN / k0).powf(resonance.clamp(0.0, 1.0))
 }
 
@@ -112,7 +120,7 @@ impl SvfCoefs {
     pub fn new(g: f32, k: f32, mode: FilterMode) -> Self {
         Self {
             first: StageCoefs::new(g, k),
-            second: if mode == FilterMode::Lp24 {
+            second: if mode.is_24() {
                 StageCoefs::new(g, K_BUTTER4_B)
             } else {
                 StageCoefs::default()
@@ -183,6 +191,15 @@ impl Svf {
             FilterMode::Hp12 => self.stages[0].tick(x, c).2,
             // Scaled by k so the peak stays at unity gain as the band narrows.
             FilterMode::Bp12 => self.stages[0].tick(x, c).1 * c.k,
+            FilterMode::Hp24 => {
+                let (_, _, a) = self.stages[0].tick(x, c);
+                self.stages[1].tick(a, &coefs.second).2
+            }
+            // Low + high = input minus the band-pass term.
+            FilterMode::Notch => {
+                let (low, _, high) = self.stages[0].tick(x, c);
+                low + high
+            }
         }
     }
 
@@ -294,5 +311,24 @@ mod tests {
         let (gain, blend) = drive_params(24.0);
         assert!(drive(1.0, gain, blend) <= 1.0);
         assert!(drive(0.1, gain, blend) > 0.5, "drive boosts quiet input");
+    }
+    #[test]
+    fn hp24_and_notch_have_the_right_shape() {
+        let sr = 48_000.0;
+        // HP 24: Butterworth -3 dB at cutoff, about -24 dB an octave below, flat above.
+        let at = gain_at(FilterMode::Hp24, 1_000.0, 0.0, 1_000.0, sr);
+        assert!((at - 0.707).abs() < 0.05, "{at}");
+        let below = gain_at(FilterMode::Hp24, 1_000.0, 0.0, 500.0, sr);
+        assert!((0.03..0.08).contains(&below), "octave below {below}");
+        assert!(gain_at(FilterMode::Hp24, 1_000.0, 0.0, 10_000.0, sr) > 0.98);
+        assert!(gain_at(FilterMode::Hp24, 1_000.0, 0.0, 60.0, sr) < 1e-4);
+        // Notch: passes lows and highs, removes the cutoff, and narrows with resonance.
+        let wide = gain_at(FilterMode::Notch, 1_000.0, 0.0, 1_000.0, sr);
+        assert!(wide < 0.02, "notch depth {wide}");
+        assert!(gain_at(FilterMode::Notch, 1_000.0, 0.0, 100.0, sr) > 0.95);
+        assert!(gain_at(FilterMode::Notch, 1_000.0, 0.0, 10_000.0, sr) > 0.95);
+        let near_wide = gain_at(FilterMode::Notch, 1_000.0, 0.0, 800.0, sr);
+        let near_narrow = gain_at(FilterMode::Notch, 1_000.0, 0.9, 800.0, sr);
+        assert!(near_narrow > near_wide, "{near_narrow} vs {near_wide}");
     }
 }

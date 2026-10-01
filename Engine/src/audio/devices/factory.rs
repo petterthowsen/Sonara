@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use super::clap_host::SubprocessClapAdapter;
 use super::{
     AudioDevice, ChainDevice, DelayDevice, DeviceCategory, DevicePath, DrumMachineDevice,
-    LayerDevice, PolySynthDevice, PortFlow, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
+    FilterDevice, LayerDevice, PolySynthDevice, PortFlow, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
@@ -189,6 +189,7 @@ pub const EFFECT_IDS: &[&str] = &[
     "sonara.builtin.delay",
     "sonara.builtin.eq",
     "sonara.builtin.compressor",
+    "sonara.builtin.filter",
 ];
 
 /// Create a built-in effect from [`EFFECT_IDS`], prepared for `sample_rate` and blocks of up to
@@ -204,6 +205,7 @@ pub fn create_effect(
         "sonara.builtin.compressor" => {
             Box::new(super::compressor::CompressorDevice::new(sample_rate))
         }
+        "sonara.builtin.filter" => Box::new(FilterDevice::new(sample_rate)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);

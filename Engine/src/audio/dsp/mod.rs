@@ -7,6 +7,7 @@ pub mod denormal;
 pub mod env_follower;
 pub mod envelope;
 pub mod gain;
+pub mod ladder;
 pub mod lfo;
 pub mod linear_svf;
 pub mod one_pole;
