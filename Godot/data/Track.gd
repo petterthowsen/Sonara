@@ -246,6 +246,20 @@ func set_height(new_height: int) -> void:
 		return
 	_height = new_height
 	height_changed.emit(_height)
+	if _sync_lane_heights_enabled():
+		for lane in automation_lanes:
+			lane.set_height(_height)
+
+
+## "Sync Track and Automation Lane Height": any lane resize drives the track, which drives the rest.
+## Setters ignore unchanged values and clamp monotonically, so this settles instead of looping.
+func _on_lane_height_changed(new_height: int) -> void:
+	if _sync_lane_heights_enabled():
+		set_height(new_height)
+
+
+static func _sync_lane_heights_enabled() -> bool:
+	return bool(Settings.get_value("arranger/sync_track_and_lane_height"))
 
 
 # Shorthand property for height
@@ -621,6 +635,7 @@ func remove_clip_instance(instance: ClipInstance) -> void:
 func add_automation_lane(lane: AutomationLane) -> void:
 	lane.track = self
 	automation_lanes.append(lane)
+	lane.height_changed.connect(_on_lane_height_changed)
 	# Evaluate the new lane's target against the linked channel before syncing (REQ-024).
 	refresh_automation_resolution()
 	if _is_connected:
@@ -634,6 +649,8 @@ func remove_automation_lane(lane: AutomationLane) -> void:
 	if idx < 0:
 		return
 	automation_lanes.remove_at(idx)
+	if lane.height_changed.is_connected(_on_lane_height_changed):
+		lane.height_changed.disconnect(_on_lane_height_changed)
 	if _is_connected:
 		AudioEngineOSC.send("/track/%d/automation/%s/delete" % [id, lane.id])
 	lane.track = null
@@ -765,6 +782,7 @@ static func from_json(data: Dictionary) -> Track:
 			var lane := AutomationLane.from_json(lane_data, "lane%d" % lane_index)
 			lane.track = track
 			track.automation_lanes.append(lane)
+			lane.height_changed.connect(track._on_lane_height_changed)
 			lane_index += 1
 
 	return track

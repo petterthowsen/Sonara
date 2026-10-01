@@ -788,7 +788,8 @@ func _on_automation_parameter_chosen(track: Track, target: AutomationTarget) -> 
 	if track == null or target == null:
 		return
 	var lane := AutomationLane.new(_unique_lane_id(track), target)
-	lane.height = Settings.get_value("appearance/automation_lane_height")
+	lane.height = track.height if Settings.get_value("arranger/sync_track_and_lane_height") \
+		else Settings.get_value("appearance/automation_lane_height")
 	var seed_value: float = target.current_normalized_value(track.get_linked_channel())
 	AutomationActions.create_lane(track, lane)
 	AutomationActions.add_point(lane, 0, seed_value)

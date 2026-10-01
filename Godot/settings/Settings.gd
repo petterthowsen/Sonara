@@ -256,6 +256,15 @@ func _register_all_settings() -> void:
 		+ "Only applies when Ruler Range Select Selects Clips is on.",
 	)).sub("Selection")
 
+	_register(Setting.new(
+		"arranger/sync_track_and_lane_height",
+		"Sync Track and Automation Lane Height",
+		Type.BOOL,
+		true,
+		CATEGORY_BEHAVIOR,
+		"When enabled, a track and its automation lanes share one height in the arranger: resizing the track (or zooming vertically) resizes its lanes, and resizing a lane resizes the track and its other lanes. New lanes start at the track's height.",
+	)).sub("Arranger")
+
 	# --- Appearance ---
 	_register(Setting.new(
 		"appearance/automation_lane_height",
