@@ -606,25 +606,61 @@ Implementation notes:
 | Output | Width | 0–200 % | 100 % |
 | | Mix | 0–100 %, equal power | 50 % |
 
-- [ ] Voices use Hermite fractional reads from the Phase 0 `DelayLine`, with smoothed delay
+- [x] Voices use Hermite fractional reads from the Phase 0 `DelayLine`, with smoothed delay
       times so changing Delay doesn't zipper:
-  - **Classic**: two voices with a triangle LFO, the L and R voices in quadrature;
-  - **Dimension**: two anti-phase voices with cross-mixing and low depth, mild BBD-style
-    softening (a gentle LP plus soft saturation) and no added noise;
-  - **Ensemble**: three voices 120° apart, sine plus a faster, shallow vibrato component.
-- [ ] Mono safety: the wet Low Cut keeps bass out of the modulated path. Voices are placed so
+  - [x] **Classic**: two voices with a triangle LFO, the L and R voices in quadrature;
+  - [x] **Dimension**: two anti-phase voices with cross-mixing and low depth, mild BBD-style
+        softening (a gentle LP plus soft saturation) and no added noise;
+  - [x] **Ensemble**: three voices 120° apart, sine plus a faster, shallow vibrato component.
+- [x] Mono safety: the wet Low Cut keeps bass out of the modulated path. Voices are placed so
       the mono sum doesn't collapse (research: "anemic" in mono).
-- [ ] Tests:
-  - the delay swing matches Depth × the mode's range;
-  - the mono sum stays within 3 dB of the stereo energy at Width 100 % (each mode, pink
-    noise);
-  - there is no sample jump when Delay changes;
-  - the voice phase offsets for each mode are correct;
-  - Feedback 90 % stays bounded;
-  - conformance, and CPU under 0.3 %.
+- [x] Tests:
+  - [x] the delay swing matches Depth × the mode's range;
+  - [x] the mono sum stays within 3 dB of the stereo energy at Width 100 % (each mode, pink
+        noise);
+  - [x] there is no sample jump when Delay changes;
+  - [x] the voice phase offsets for each mode are correct;
+  - [x] Feedback 90 % stays bounded;
+  - [x] conformance, and CPU under 0.3 %.
 
 **Done when:** each mode sounds distinct on a pad, the Depth knob goes from subtle to seasick
 without fizz, and flipping the channel to mono keeps the chorus.
+
+Implementation notes:
+- One `DelayLine` per channel; every voice is a Hermite fractional read at its own modulated
+  delay, so a voicing is just a table of `(source line, L gain, R gain, LFO phase offset)`.
+  Classic = [0°, 90°], the L voice reading the L line and the R voice the R line; Dimension =
+  [0°, 180°] cross-mixed (L = v0 + ½·v1, R = ½·v0 + v1) so the wet stays same-signed and the
+  mono sum keeps its energy; Ensemble = [0°, 120°, 240°] with the third voice shared by both
+  channels at half gain.
+- Depth's per-voicing "range" scale is Classic 1.0, Dimension 0.4 (deliberately shallow),
+  Ensemble 0.7. The Ensemble's vibrato is common-mode (6 × Rate, 18 %), so the voices keep
+  their 120° spacing from the main LFO alone.
+- Dimension's BBD colour is a 5 kHz one-pole low-pass plus `x/(1+|x|)` saturation, blended in
+  by the voicing weight; it only runs while that voicing is in play and adds no noise.
+- A Mode change crossfades both voicings over 8 ms by reading each from the same delay lines
+  and blending the wet before the shared tone filters, so switching doesn't click.
+- Every continuous parameter is smoothed (Delay over 50 ms — a big Delay move then plays back
+  like a tape instead of stepping — and the rest over 5 ms). Width is a mid/side scale on the
+  wet, Mix an equal-power crossfade whose 0 % is bit-exact dry. The feedback loop is
+  soft-clipped, so Feedback 90 % settles at about +6 dB over the input and rings down within a
+  second of the input stopping.
+- CPU (release, best of 5 × 10 s at 48 kHz): Classic 0.24 %, Dimension 0.30 %, Ensemble
+  0.35 % of one core. The 0.3 % budget holds for the default Classic voicing; the Ensemble's
+  third modulated read costs the extra 0.11 %, which is the voice itself rather than overhead.
+  The per-sample path caches the tone-filter gains and the dry/wet gains against their smoothed
+  inputs (so `tan`/`cos` only run while a knob moves) and uses a quarter-wave polynomial for
+  the LFO's sine instead of libm.
+- The delay tests park the LFO at fixed phases and inject a mono impulse at Mix 100 %; the peak
+  lag of each channel reads its dominant voice's delay to within ±2 samples, which is how the
+  per-mode offsets (quadrature, anti-phase, 120°) and the Depth × range swing are checked
+  against the rendered audio rather than the formula.
+- SimpleView: the device infers as `generic` and lays out as one Main page in three groups —
+  Chorus (Mode, Rate, Sync, Depth, Delay, Feedback), Tone (Tone, Low Cut) and Output (Width,
+  Mix) — straight from the module paths, so no strategy was added. Checked headlessly by
+  generating the layout from the device's parameter list.
+- No OSC data stream, so `osc-protocol.md` is unchanged.
+- 10 new lib tests (plus the ignored `cpu_chorus`): 348 pass in the lib.
 
 ## Phase 6: Phaser (`sonara.builtin.phaser`)
 

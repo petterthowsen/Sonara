@@ -16,6 +16,7 @@ mod sfizz_device;
 mod spectrum_analyzer;
 pub mod eq;
 pub mod compressor;
+mod chorus;
 
 pub use chain::ChainDevice;
 pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
@@ -30,6 +31,7 @@ pub use sampler::SamplerDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
 pub use eq::EqDevice;
+pub use chorus::ChorusDevice;
 
 use std::time::{Duration, Instant};
 
