@@ -855,7 +855,16 @@ impl CommandWorker {
         };
         info!("Plugin scan complete: {} plugins found", count);
 
-        for plugin in self.plugin_scanner.all_plugins() {
+        // Godot drains its OSC socket once per frame into a 64 KB queue, and a full scan is
+        // far more than that. Send in batches with a pause (about one frame) in between so
+        // the tail, including /plugin/scan_complete, isn't dropped.
+        const BATCH: usize = 32;
+        const BATCH_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
+        for (i, plugin) in self.plugin_scanner.all_plugins().enumerate() {
+            if i > 0 && i % BATCH == 0 {
+                std::thread::sleep(BATCH_PAUSE);
+            }
             let category = match plugin.category {
                 DeviceCategory::Instrument => "instrument",
                 DeviceCategory::Effect => "effect",
@@ -875,6 +884,7 @@ impl CommandWorker {
             });
         }
 
+        std::thread::sleep(BATCH_PAUSE);
         self.send_status(EngineStatus::PluginScanComplete { count });
     }
 
