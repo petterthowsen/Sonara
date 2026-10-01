@@ -114,6 +114,11 @@ func _ready():
 	if not clip_ctx_menu.cut_requested.is_connected(_on_clip_cut_requested):
 		clip_ctx_menu.cut_requested.connect(_on_clip_cut_requested)
 
+	if not clip_ctx_menu.split_requested.is_connected(_on_clip_split_requested):
+		clip_ctx_menu.split_requested.connect(_on_clip_split_requested)
+	if not clip_ctx_menu.merge_requested.is_connected(_on_clip_merge_requested):
+		clip_ctx_menu.merge_requested.connect(_on_clip_merge_requested)
+
 	if not clip_ctx_menu.copy_requested.is_connected(_on_clip_copy_requested):
 		clip_ctx_menu.copy_requested.connect(_on_clip_copy_requested)
 
@@ -1366,7 +1371,7 @@ func paste_clipboard() -> void:
 
 ## Insert `source` (or the clipboard) at `target_tick`, with the topmost clip on `target_track`
 ## (null keeps each clip's own track). Returns [] when blocked or empty.
-func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste", target_track: Track = null) -> Array[ClipInstance]:
+func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null, update_selection: bool = true, action_name: String = "Paste", target_track: Track = null, copy_automation: bool = false) -> Array[ClipInstance]:
 	if not Sonara.editor or not Sonara.editor.project:
 		push_warning("[Timeline] Cannot paste clips - no active project")
 		return []
@@ -1383,6 +1388,7 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 
 	var new_instances: Array[ClipInstance] = []
 	var cmds: Array[Command] = []
+	var automation_copies: Array = []
 	for placement in _plan_placement(source, target_tick, target_track):
 		var original_inst: ClipInstance = placement.instance
 		var dest_track: Track = placement.track
@@ -1401,9 +1407,20 @@ func paste_clipboard_at(target_tick: int, selection_source: ClipSelection = null
 		)
 		cmd.name = "%s Clip" % action_name
 		cmds.append(cmd)
+		# A lane belongs to its track, so automation only travels with copies on the same track.
+		if copy_automation and dest_track == original_inst.track:
+			automation_copies.append({
+				"track": dest_track,
+				"start": original_inst.start_ticks,
+				"end": original_inst.start_ticks + original_inst.duration_ticks,
+				"delta": new_start - original_inst.start_ticks,
+			})
 
 	if new_instances.is_empty():
 		return []
+
+	if not automation_copies.is_empty() and _automation_follows_enabled():
+		cmds.append_array(AutomationActions.copy_track_automation_commands(automation_copies, "%s Automation" % action_name))
 
 	HistoryUtil.execute_many("%s Clips" % action_name, cmds)
 
@@ -1435,7 +1452,7 @@ func duplicate_selection() -> void:
 		clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
 		logger.warn("Duplicate skipped - no adequate space")
 		return
-	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate")
+	var new_instances = paste_clipboard_at(target_tick, selection_clone, true, "Duplicate", null, true)
 	clip_clipboard = previous_clipboard if previous_clipboard else selection_clone
 
 	if not new_instances.is_empty():
@@ -1667,10 +1684,53 @@ func _on_clip_context_menu_requested(clip_ui: TimelineClip, mouse_pos_global: Ve
 	if selection.is_empty() or not selection.has(clip_ui.clip_instance):
 		selection = [clip_ui.clip_instance]
 	clip_ctx_menu.bind_to_instances(selection)
-	# Nudge so the cursor sits inside the panel; a corner popup closes on mouse-up.
-	var c_pos = mouse_pos_global - Vector2(8, 8)
-	var c_size = clip_ctx_menu.get_contents_minimum_size()
-	clip_ctx_menu.popup(Rect2(c_pos, c_size))
+	# Split lands where the user clicked, snapped to the grid.
+	var local_x := (get_global_transform().affine_inverse() * mouse_pos_global).x
+	var click_ticks := pixels_to_ticks(local_x)
+	clip_ctx_menu.split_tick = grid_helper.snap_ticks(click_ticks) if grid_helper else click_ticks
+	# Dock above or below the clip, inside the visible arranger area, so the clip stays visible.
+	var bounds := get_viewport_rect()
+	var scroll_parent := get_parent()
+	if scroll_parent is Control:
+		bounds = bounds.intersection(scroll_parent.get_global_rect())
+	clip_ctx_menu.popup_docked(clip_ui.get_global_rect(), bounds, mouse_pos_global.x, mouse_pos_global.y)
+
+
+## Split the clip bound to the context menu at the position that was clicked. One undo step.
+func _on_clip_split_requested(instances: Array[ClipInstance]) -> void:
+	var at: int = clip_ctx_menu.split_tick
+	var cmds: Array[Command] = []
+	for inst in instances:
+		if inst == null or inst.track == null or at <= inst.start_ticks or at >= inst.get_end_ticks():
+			continue
+		var tail := ClipRangeActions.piece(inst, at, inst.get_end_ticks())
+		if inst.loop_enabled:
+			tail.clip_offset = inst.wrap_content_tick(tail.clip_offset)
+		var head_duration: int = at - inst.start_ticks
+		var create := ClipInstanceCreateCommand.new(inst.track, inst.clip, tail.start_ticks, tail.duration_ticks, null, false, tail)
+		var trim := ClipInstanceTransformCommand.new(
+			"Split Clip", inst,
+			inst.start_ticks, inst.duration_ticks, inst.clip_offset,
+			inst.start_ticks, head_duration, inst.clip_offset)
+		create.do()
+		trim.do()
+		cmds.append(create)
+		cmds.append(trim)
+	HistoryUtil.record_many("Split Clip", cmds)
+
+
+## Merge the instances bound to the context menu, per track, and select the results. One undo step.
+func _on_clip_merge_requested(instances: Array[ClipInstance]) -> void:
+	if not Sonara.editor or not Sonara.editor.project:
+		return
+	var merged := ClipMergeActions.merge(Sonara.editor.project, instances)
+	if merged.is_empty():
+		return
+	if clip_selection_manager:
+		clip_selection_manager.select_instances(merged)
+		clip_selection_manager.refresh_after_modification()
+	_refresh_tracks_for_instances(merged)
+	logger.info("Merged clips into %d instance(s)" % merged.size())
 
 
 ## Cut the instances bound to the context menu (may not match the live selection if the clicked clip was unselected).

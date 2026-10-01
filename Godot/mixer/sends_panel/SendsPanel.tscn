@@ -2,12 +2,13 @@
 
 [ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="1_uimjy"]
 [ext_resource type="Script" uid="uid://cd20oxxf113um" path="res://mixer/sends_panel/SendsPanel.gd" id="1_y4mpk"]
+[ext_resource type="Script" uid="uid://cxinkubl1xx0e" path="res://components/ChevronScrollContainer.gd" id="2_4cyvj"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hah71"]
-content_margin_left = 6.0
-content_margin_top = 6.0
-content_margin_right = 6.0
-content_margin_bottom = 6.0
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
 bg_color = Color(0.1882353, 0.1882353, 0.1882353, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
@@ -16,23 +17,37 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="SendsPanel" type="PanelContainer" unique_id=775721798]
+custom_minimum_size = Vector2(46, 38)
+offset_right = 82.0
+offset_bottom = 134.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_hah71")
 script = ExtResource("1_y4mpk")
 
-[node name="FlowContainer" type="FlowContainer" parent="." unique_id=1285042169]
+[node name="ChevronScrollContainer" type="ScrollContainer" parent="." unique_id=1562115925]
 layout_mode = 2
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 3
+script = ExtResource("2_4cyvj")
+reserve_button_space = true
+fade_hidden_items = true
+metadata/_custom_type_script = "uid://cxinkubl1xx0e"
+
+[node name="FlowContainer" type="FlowContainer" parent="ChevronScrollContainer" unique_id=1285042169]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_override_constants/h_separation = 8
 theme_override_constants/v_separation = 8
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="SendControl" type="BoxContainer" parent="FlowContainer" unique_id=1195949013]
+[node name="SendControl" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=1195949013]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl" unique_id=1068324280]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl" unique_id=1068324280]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -44,16 +59,16 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl" unique_id=2129220382]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl" unique_id=2129220382]
 layout_mode = 2
 text = "FX 1"
 horizontal_alignment = 1
 
-[node name="SendControl2" type="BoxContainer" parent="FlowContainer" unique_id=389315679]
+[node name="SendControl2" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=389315679]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl2" unique_id=651371779]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl2" unique_id=651371779]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -65,16 +80,16 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl2" unique_id=1289880887]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl2" unique_id=1289880887]
 layout_mode = 2
 text = "FX 2"
 horizontal_alignment = 1
 
-[node name="SendControl3" type="BoxContainer" parent="FlowContainer" unique_id=1390756439]
+[node name="SendControl3" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=1390756439]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl3" unique_id=1417974041]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl3" unique_id=1417974041]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -86,16 +101,16 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl3" unique_id=1229012941]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl3" unique_id=1229012941]
 layout_mode = 2
 text = "FX 3"
 horizontal_alignment = 1
 
-[node name="SendControl4" type="BoxContainer" parent="FlowContainer" unique_id=1722696662]
+[node name="SendControl4" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=1722696662]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl4" unique_id=1215034499]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl4" unique_id=1215034499]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -107,16 +122,16 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl4" unique_id=606897188]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl4" unique_id=606897188]
 layout_mode = 2
 text = "FX 4"
 horizontal_alignment = 1
 
-[node name="SendControl5" type="BoxContainer" parent="FlowContainer" unique_id=977329033]
+[node name="SendControl5" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=977329033]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl5" unique_id=1193720821]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl5" unique_id=1193720821]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -128,16 +143,16 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl5" unique_id=265890728]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl5" unique_id=265890728]
 layout_mode = 2
 text = "FX 4"
 horizontal_alignment = 1
 
-[node name="SendControl6" type="BoxContainer" parent="FlowContainer" unique_id=372480061]
+[node name="SendControl6" type="BoxContainer" parent="ChevronScrollContainer/FlowContainer" unique_id=372480061]
 layout_mode = 2
 vertical = true
 
-[node name="RotaryKnob" type="Control" parent="FlowContainer/SendControl6" unique_id=143535053]
+[node name="RotaryKnob" type="Control" parent="ChevronScrollContainer/FlowContainer/SendControl6" unique_id=143535053]
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 mouse_default_cursor_shape = 2
@@ -149,7 +164,7 @@ min_rotation_deg = -140.0
 max_rotation_deg = 140.0
 arc_offset = 0.0
 
-[node name="Label" type="Label" parent="FlowContainer/SendControl6" unique_id=603561166]
+[node name="Label" type="Label" parent="ChevronScrollContainer/FlowContainer/SendControl6" unique_id=603561166]
 layout_mode = 2
 text = "FX 4"
 horizontal_alignment = 1

@@ -34,6 +34,7 @@ func _ready() -> void:
 	custom_minimum_size.y = 56
 
 	_menu = PopupMenu.new()
+	_menu.theme_type_variation = &"ContextMenuList"
 	_menu.id_pressed.connect(_on_menu_id_pressed)
 	add_child(_menu)
 

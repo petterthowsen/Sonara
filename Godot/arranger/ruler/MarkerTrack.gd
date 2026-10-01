@@ -52,6 +52,7 @@ func _ready() -> void:
 		resized.connect(_on_grid_changed)
 
 	_lane_menu = PopupMenu.new()
+	_lane_menu.theme_type_variation = &"ContextMenuList"
 	_lane_menu.add_item("Add Marker", 0)
 	_lane_menu.id_pressed.connect(func(_id: int): _create_marker_at_x(_lane_menu_x))
 	add_child(_lane_menu)

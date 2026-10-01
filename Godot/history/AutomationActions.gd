@@ -317,6 +317,65 @@ static func shift_track_automation(
 	return cmds
 
 
+## Commands that copy the lane automation under clip ranges onto the same track at an offset, for
+## duplicating clips with "automation follows clips" on. `copies` is a list of
+## `{track: Track, start: int, end: int, delta: int}` (source range on its track, tick offset of
+## the copy). Nothing is applied: the caller executes the returned commands in the same history
+## entry as the clip creation. A range with no points under it carries no automation and is skipped.
+static func copy_track_automation_commands(copies: Array, label: String = "Duplicate Automation") -> Array[Command]:
+	var cmds: Array[Command] = []
+	var groups: Dictionary = {}  # track -> {delta -> [[start, end], ...]}
+	for copy in copies:
+		var track: Object = copy.get("track")
+		if track == null or track.automation_lanes.is_empty() or int(copy["delta"]) == 0:
+			continue
+		var by_delta: Dictionary = groups.get(track, {})
+		var ranges: Array = by_delta.get(int(copy["delta"]), [])
+		ranges.append([int(copy["start"]), int(copy["end"])])
+		by_delta[int(copy["delta"])] = ranges
+		groups[track] = by_delta
+
+	for track in groups:
+		for delta in groups[track]:
+			for span in _merge_ranges(groups[track][delta]):
+				for lane in track.automation_lanes:
+					cmds.append_array(_copy_range_commands(lane, span[0], span[1], delta, label))
+	return cmds
+
+
+static func _copy_range_commands(lane: Object, start_tick: int, end_tick: int, delta: int, label: String) -> Array[Command]:
+	var cmds: Array[Command] = []
+	var has_inside := false
+	for point in lane.points:
+		if point.tick >= start_tick and point.tick <= end_tick:
+			has_inside = true
+			break
+	if not has_inside:
+		return cmds
+
+	# Edge anchors (read from the lane, not added to it) keep the copy's shape at the clip bounds.
+	var specs: Array = []
+	for tick: int in [start_tick, end_tick]:
+		if _point_at_tick(lane, tick) == null:
+			specs.append(_boundary_spec(lane, tick))
+	for point in lane.points:
+		if point.tick >= start_tick and point.tick <= end_tick:
+			specs.append({"tick": point.tick, "value": point.value, "curve": point.curve, "tension": point.tension})
+	var dest_start := maxi(0, start_tick + delta)
+	var dest_end := maxi(0, end_tick + delta)
+	for spec in specs:
+		spec["tick"] = maxi(0, int(spec["tick"]) + delta)
+
+	var doomed: Array = []
+	for point in lane.points:
+		if point.tick >= dest_start and point.tick <= dest_end:
+			doomed.append(point)
+	if not doomed.is_empty():
+		cmds.append(_PointsRemoveCommand.new(label, lane, doomed))
+	cmds.append(_PointsAddCommand.new(label, lane, specs))
+	return cmds
+
+
 ## The point of `lane` sitting exactly on `tick`, or null.
 static func _point_at_tick(lane: Object, tick: int) -> Object:
 	for point in lane.points:

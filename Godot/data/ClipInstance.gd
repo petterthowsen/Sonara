@@ -13,6 +13,7 @@ signal position_changed(new_start_ticks: int)
 signal duration_changed(new_duration_ticks: int)
 signal loop_changed(enabled: bool)
 signal reverse_changed(enabled: bool)
+signal muted_changed(muted: bool)
 signal instance_modified()  # Any change to instance properties
 signal clip_changed(new_clip: Clip)  # Source clip retargeted (Make Unique)
 
@@ -160,6 +161,17 @@ func set_reverse_enabled(enabled: bool) -> void:
 		AudioEngineOSC.send("/track/%d/instance/%s/set_reverse" % [track.id, id],
 				[1 if reverse_enabled else 0])
 	reverse_changed.emit(reverse_enabled)
+	instance_modified.emit()
+
+
+## Silence this instance without removing it.
+func set_muted(value: bool) -> void:
+	if muted == value:
+		return
+	muted = value
+	if track and track.is_engine_connected():
+		AudioEngineOSC.send("/track/%d/instance/%s/set_mute" % [track.id, id], [1 if muted else 0])
+	muted_changed.emit(muted)
 	instance_modified.emit()
 
 

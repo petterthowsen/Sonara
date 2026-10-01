@@ -470,9 +470,13 @@ func _build_menus() -> void:
 	if _menu != null:
 		return
 	_menu = PopupMenu.new()
+	_menu.theme_type_variation = &"ContextMenuList"
 	_type_menu = PopupMenu.new()
+	_type_menu.theme_type_variation = &"ContextMenuList"
 	_slope_menu = PopupMenu.new()
+	_slope_menu.theme_type_variation = &"ContextMenuList"
 	_stereo_menu = PopupMenu.new()
+	_stereo_menu.theme_type_variation = &"ContextMenuList"
 	for sub in [_type_menu, _slope_menu, _stereo_menu]:
 		_menu.add_child(sub)
 	for i in EqResponse.TYPE_NAMES.size():

@@ -15,8 +15,8 @@
 [ext_resource type="Script" uid="uid://b1ka208d2k8vm" path="res://arranger/ruler/MarkerTrack.gd" id="8_8wvub"]
 [ext_resource type="Texture2D" uid="uid://687klfr8sj3d" path="res://assets/icons/folder-plus.svg" id="13_8wvub"]
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="14_autov"]
-[ext_resource type="Texture2D" uid="uid://y8t6htgojiid" path="res://assets/icons/route.svg" id="15_routv"]
 [ext_resource type="Script" uid="uid://d2c70supsq5id" path="res://arranger/ruler/TempoTrack.gd" id="16_tempo"]
+[ext_resource type="Texture2D" uid="uid://c2o0kitrsi84r" path="res://assets/icons/cable.svg" id="17_mxg1e"]
 [ext_resource type="Script" uid="uid://dr6wv5u2qpn6k" path="res://arranger/ruler/TimeSignatureTrack.gd" id="17_tsig"]
 [ext_resource type="Texture2D" uid="uid://bimmip1tp0w01" path="res://assets/icons/link.svg" id="18_link"]
 
@@ -311,7 +311,7 @@ tooltip_text = "Show Track Routing"
 focus_mode = 0
 toggle_mode = true
 button_pressed = true
-icon = ExtResource("15_routv")
+icon = ExtResource("17_mxg1e")
 icon_alignment = 1
 
 [node name="AutomationFollowsClipsToggle" type="Button" parent="VSplitContainer/ArrangeBody/ArrangeBottom/TracksPanelFooter/Buttons" unique_id=1478523690]
@@ -341,6 +341,7 @@ script = ExtResource("5_nqsw4")
 bg_color = Color(0.15, 0.15, 0.15, 1)
 
 [node name="ArrangerFooter" type="PanelContainer" parent="." unique_id=1834632994]
+visible = false
 layout_mode = 2
 
 [node name="HBoxContainer" type="HBoxContainer" parent="ArrangerFooter" unique_id=149124084]

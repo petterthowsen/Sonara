@@ -67,7 +67,8 @@ class SendControl extends LabeledKnob:
 const MIN_SEND_DB := -60.0
 const MAX_SEND_DB := 12.0
 
-@onready var flow_container: FlowContainer = $FlowContainer
+@onready var scroll_container: ChevronScrollContainer = $ChevronScrollContainer
+@onready var flow_container: FlowContainer = $ChevronScrollContainer/FlowContainer
 
 # Data binding
 var channel: Channel = null
@@ -80,6 +81,36 @@ var _bus_signal_connections: Dictionary = {}  # bus_id -> Callable
 enum SendMenuItem { PRE_FADER }
 var _send_menu: PopupMenu = null
 var _menu_target_channel_id: int = -1
+
+
+## Height needed to show every send knob when laid out at `width` (the panel's outer width).
+## Simulates the FlowContainer wrap, because its own minimum size can be stale after a resize.
+func needed_height(width: float) -> float:
+	var panel_box := get_theme_stylebox("panel")
+	var inner_w := width - panel_box.get_minimum_size().x
+	var h_sep := flow_container.get_theme_constant("h_separation")
+	var v_sep := flow_container.get_theme_constant("v_separation")
+	var total := 0.0
+	var line_w := 0.0
+	var line_h := 0.0
+	var lines := 0
+	for child in flow_container.get_children():
+		var c := child as Control
+		if c == null or not c.visible:
+			continue
+		var cs := c.get_combined_minimum_size()
+		if line_w > 0.0 and line_w + h_sep + cs.x > inner_w:
+			total += line_h
+			lines += 1
+			line_w = 0.0
+			line_h = 0.0
+		line_w += (h_sep if line_w > 0.0 else 0.0) + cs.x
+		line_h = maxf(line_h, cs.y)
+	if line_w > 0.0:
+		total += line_h
+		lines += 1
+	total += v_sep * maxi(lines - 1, 0)
+	return total + panel_box.get_minimum_size().y
 
 
 ## Strip scene placeholders, then build sends if this panel was bound early.
@@ -269,6 +300,7 @@ func _show_send_menu(target_channel_id: int) -> void:
 		return
 	if _send_menu == null:
 		_send_menu = PopupMenu.new()
+		_send_menu.theme_type_variation = &"ContextMenuList"
 		_send_menu.add_check_item("Pre-Fader", SendMenuItem.PRE_FADER)
 		_send_menu.id_pressed.connect(_on_send_menu_id_pressed)
 		add_child(_send_menu)

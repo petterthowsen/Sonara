@@ -27,6 +27,7 @@ grow_begin = -1.0
 grow_end = -1.0
 
 [node name="MarkerContextMenu" type="PopupPanel"]
+theme_type_variation = &"ContextMenu"
 oversampling_override = 1.0
 size = Vector2i(190, 143)
 script = ExtResource("1_markerctx")

@@ -1,0 +1,41 @@
+[gd_scene format=3 uid="uid://b6v5v4pwwjg0w"]
+
+[ext_resource type="Script" uid="uid://d07easneqblka" path="res://arranger/tracklist/TrackItemContextMenu.gd" id="1_6slh3"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_1v486"]
+[ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="3_3ycxx"]
+
+[node name="TrackItemContextMenu" type="PopupPanel" unique_id=1719893711]
+oversampling_override = 1.0
+size = Vector2i(166, 114)
+visible = true
+theme_type_variation = &"ContextMenu"
+script = ExtResource("1_6slh3")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1010532439]
+custom_minimum_size = Vector2(150, 0)
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 158.0
+offset_bottom = 106.0
+
+[node name="ColorAndName" type="HBoxContainer" parent="VBoxContainer" unique_id=751468388]
+layout_mode = 2
+
+[node name="ColorPickerButton" type="ColorPickerButton" parent="VBoxContainer/ColorAndName" unique_id=35679049]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+edit_alpha = false
+edit_intensity = false
+
+[node name="Name" parent="VBoxContainer/ColorAndName" unique_id=301351815 instance=ExtResource("2_1v486")]
+layout_mode = 2
+size_flags_horizontal = 3
+value_type = 1
+
+[node name="Buttons" type="VBoxContainer" parent="VBoxContainer" unique_id=1505233943]
+layout_mode = 2
+
+[node name="Delete" type="Button" parent="VBoxContainer/Buttons" unique_id=276839209]
+layout_mode = 2
+text = "Delete"
+icon = ExtResource("3_3ycxx")

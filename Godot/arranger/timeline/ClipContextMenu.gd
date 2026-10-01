@@ -2,15 +2,17 @@ class_name ClipContextMenu extends PopupPanel
 
 # Containers
 @onready var v_box: VBoxContainer = $VBoxContainer
-@onready var header: PanelContainer = $VBoxContainer/Header
+@onready var header: HBoxContainer = $VBoxContainer/Header
 
 # Data Controls
-@onready var label: SmartLineEdit = $VBoxContainer/Header/HBox/Label
-@onready var active_checkbox: CheckButton = $VBoxContainer/ActiveCheckbox
-@onready var loop_checkbox: CheckButton = $VBoxContainer/LoopCheckbox
+@onready var label: SmartLineEdit = $VBoxContainer/Header/Label
+@onready var mute_toggle: Button = $VBoxContainer/Header/MuteToggle
+@onready var loop_toggle: Button = $VBoxContainer/Header/LoopToggle
 @onready var reverse_checkbox: CheckButton = $VBoxContainer/ReverseCheckbox
-@onready var cut: Button = $VBoxContainer/Cut
-@onready var copy: Button = $VBoxContainer/Copy
+@onready var cut: Button = $VBoxContainer/CutCopy/Cut
+@onready var copy: Button = $VBoxContainer/CutCopy/Copy
+@onready var split: Button = $VBoxContainer/Split
+@onready var merge: Button = $VBoxContainer/Merge
 @onready var make_unique: Button = $VBoxContainer/MakeUnique
 @onready var delete: Button = $VBoxContainer/Delete
 
@@ -18,6 +20,11 @@ signal delete_requested(instances: Array[ClipInstance])
 signal make_unique_requested(instances: Array[ClipInstance])
 signal cut_requested(instances: Array[ClipInstance])
 signal copy_requested(instances: Array[ClipInstance])
+signal split_requested(instances: Array[ClipInstance])
+signal merge_requested(instances: Array[ClipInstance])
+
+const SLIDE_SECONDS := 0.3
+const CLIP_GAP := 4.0
 
 var clip_instance: ClipInstance = null
 var selected_instances: Array[ClipInstance] = []
@@ -25,10 +32,16 @@ var selected_instances: Array[ClipInstance] = []
 
 ## Wire buttons, size the title so the name is readable, and listen for renames.
 func _ready() -> void:
-	if is_instance_valid(loop_checkbox):
-		loop_checkbox.toggled.connect(_on_loop_toggled)
+	if is_instance_valid(loop_toggle):
+		loop_toggle.toggled.connect(_on_loop_toggled)
 	if is_instance_valid(reverse_checkbox):
 		reverse_checkbox.toggled.connect(_on_reverse_toggled)
+	if is_instance_valid(mute_toggle):
+		mute_toggle.toggled.connect(_on_mute_toggled)
+	if is_instance_valid(split):
+		split.pressed.connect(_on_split_pressed)
+	if is_instance_valid(merge):
+		merge.pressed.connect(_on_merge_pressed)
 	if is_instance_valid(cut):
 		cut.pressed.connect(_on_cut_pressed)
 	if is_instance_valid(copy):
@@ -38,7 +51,7 @@ func _ready() -> void:
 	if is_instance_valid(delete):
 		delete.pressed.connect(_on_delete_pressed)
 	if is_instance_valid(label):
-		label.custom_minimum_size = Vector2(148, 32)
+		label.custom_minimum_size = Vector2(96, 32)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		label.size_flags_vertical = Control.SIZE_FILL
 		if label.label:
@@ -49,10 +62,8 @@ func _ready() -> void:
 				label.label.label_settings.font_size = 16
 		if not label.value_changed.is_connected(_on_name_changed):
 			label.value_changed.connect(_on_name_changed)
-	if is_instance_valid(header):
-		header.custom_minimum_size.y = 32
 	if is_instance_valid(v_box):
-		v_box.custom_minimum_size.x = 160
+		v_box.custom_minimum_size.x = 192
 
 
 ## Bind the menu to a single clip instance.
@@ -82,12 +93,27 @@ func bind_to_instances(instances: Array[ClipInstance]) -> void:
 			label.set_value(clip_name)
 
 	# Loop reads on when every selected instance loops
-	if loop_checkbox:
+	if loop_toggle:
 		var all_loop := not selected_instances.is_empty()
 		for inst in selected_instances:
 			all_loop = all_loop and inst.loop_enabled
-		loop_checkbox.set_pressed_no_signal(all_loop)
-		loop_checkbox.disabled = selected_instances.is_empty()
+		loop_toggle.set_pressed_no_signal(all_loop)
+		loop_toggle.disabled = selected_instances.is_empty()
+
+	# Mute reads on when every selected instance is muted
+	if mute_toggle:
+		var all_muted := not selected_instances.is_empty()
+		for inst in selected_instances:
+			all_muted = all_muted and inst.muted
+		mute_toggle.set_pressed_no_signal(all_muted)
+		mute_toggle.disabled = selected_instances.is_empty()
+
+	# Split needs a single instance with the split position inside it.
+	_update_split_enabled()
+
+	# Merge needs at least one MIDI instance.
+	if merge:
+		merge.disabled = not ClipMergeActions.can_merge(selected_instances)
 
 	# Reverse is an audio-clip feature: shown only when every selected instance is audio.
 	if reverse_checkbox:
@@ -181,9 +207,67 @@ func _on_delete_pressed() -> void:
 	hide()
 
 
+## Request Merge for the bound instances.
+func _on_merge_pressed() -> void:
+	if selected_instances.is_empty():
+		return
+	merge_requested.emit(selected_instances.duplicate())
+	hide()
+
+
 ## Request Make Unique for the bound instances.
 func _on_make_unique_pressed() -> void:
 	if selected_instances.is_empty():
 		return
 	make_unique_requested.emit(selected_instances.duplicate())
 	hide()
+
+
+## Where a split lands, in song ticks. Set by the caller before popup; -1 means "not set".
+var split_tick: int = -1:
+	set(value):
+		split_tick = value
+		_update_split_enabled()
+
+
+func _update_split_enabled() -> void:
+	if not split:
+		return
+	var ok := clip_instance != null and split_tick > clip_instance.start_ticks \
+			and split_tick < clip_instance.get_end_ticks()
+	split.disabled = not ok
+
+
+## Request a split of the bound instance at `split_tick`.
+func _on_split_pressed() -> void:
+	if clip_instance == null:
+		return
+	split_requested.emit([clip_instance] as Array[ClipInstance])
+	hide()
+
+
+## Mute or unmute the bound instances as one undo step.
+func _on_mute_toggled(enabled: bool) -> void:
+	var cmds: Array[Command] = []
+	for inst in selected_instances:
+		if inst.muted == enabled:
+			continue
+		cmds.append(PropertyCommand.new(
+			"Mute Clip" if enabled else "Unmute Clip", inst, "set_muted", inst.muted, enabled))
+	HistoryUtil.execute_many("Mute Clips" if enabled else "Unmute Clips", cmds)
+
+
+## Show the menu docked to the clip: below it when there is room under `clip_rect` inside
+## `bounds` (all in popup coordinates), otherwise above. The window slides in from `from_pos`.
+func popup_docked(clip_rect: Rect2, bounds: Rect2, from_x: float, from_y: float) -> void:
+	var menu_size := Vector2(get_contents_minimum_size())
+	menu_size.x = maxf(menu_size.x, 192.0)
+	var below := clip_rect.end.y + CLIP_GAP + menu_size.y <= bounds.end.y
+	var target_y := clip_rect.end.y + CLIP_GAP if below else clip_rect.position.y - CLIP_GAP - menu_size.y
+	target_y = clampf(target_y, bounds.position.y, maxf(bounds.position.y, bounds.end.y - menu_size.y))
+	var x := clampf(from_x - 8.0, bounds.position.x, maxf(bounds.position.x, bounds.end.x - menu_size.x))
+	var start_y := from_y
+	popup(Rect2i(Vector2i(int(x), int(start_y)), Vector2i(menu_size)))
+	var tween := create_tween()
+	tween.tween_property(self, "position:y", int(target_y), SLIDE_SECONDS) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)

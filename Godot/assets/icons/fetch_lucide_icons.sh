@@ -25,6 +25,10 @@ names=(
   spline route link
   # clip editor track list (editability toggle, track-mode switch)
   pencil pencil-off layers
+  # clip context menu
+  scissors square-split-horizontal
+  # mixer toolbar toggles
+  move-horizontal panel-right send cable chart-no-axes-column plug
 )
 
 for n in "${names[@]}"; do

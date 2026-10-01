@@ -4,6 +4,12 @@
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="2_64am7"]
 [ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="3_wr7tj"]
 [ext_resource type="PackedScene" uid="uid://c07tx27b6f3o" path="res://mixer/ChannelContextMenu.tscn" id="4_wr7tj"]
+[ext_resource type="Texture2D" path="res://assets/icons/move-horizontal.svg" id="icon_sizemode"]
+[ext_resource type="Texture2D" path="res://assets/icons/panel-right.svg" id="icon_compact"]
+[ext_resource type="Texture2D" path="res://assets/icons/cable.svg" id="icon_io"]
+[ext_resource type="Texture2D" path="res://assets/icons/send.svg" id="icon_sends"]
+[ext_resource type="Texture2D" path="res://assets/icons/chart-no-axes-column.svg" id="icon_bigmeters"]
+[ext_resource type="Texture2D" path="res://assets/icons/plug.svg" id="icon_devices"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_64am7"]
 bg_color = Color(0.20703125, 0.20703125, 0.20703125, 1)
@@ -108,26 +114,39 @@ theme_override_constants/separation = 4
 [node name="SizeMode" type="Button" parent="Toolbar/HBox/Toggles"]
 layout_mode = 2
 text = "Medium"
+tooltip_text = "Strip width: cycle narrow / medium / wide"
+icon = ExtResource("icon_sizemode")
 
 [node name="Compact" type="Button" parent="Toolbar/HBox/Toggles" unique_id=404125249]
 layout_mode = 2
 toggle_mode = true
-text = "Compact"
+tooltip_text = "Compact layout (devices and sends in a side pane on the selected strip)"
+icon = ExtResource("icon_compact")
 
 [node name="IO" type="Button" parent="Toolbar/HBox/Toggles" unique_id=1544949243]
 layout_mode = 2
 toggle_mode = true
-text = "IO"
+tooltip_text = "Show I/O routing"
+icon = ExtResource("icon_io")
 
 [node name="Sends" type="Button" parent="Toolbar/HBox/Toggles" unique_id=1339419404]
 layout_mode = 2
 toggle_mode = true
-text = "Sends"
+tooltip_text = "Show sends"
+icon = ExtResource("icon_sends")
+
+[node name="Devices" type="Button" parent="Toolbar/HBox/Toggles"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+tooltip_text = "Show device list (hidden in narrow width)"
+icon = ExtResource("icon_devices")
 
 [node name="BigMeters" type="Button" parent="Toolbar/HBox/Toggles" unique_id=374127531]
 layout_mode = 2
 toggle_mode = true
-text = "Big Meters"
+tooltip_text = "Big meters and faders"
+icon = ExtResource("icon_bigmeters")
 
 [node name="ChannelContextMenu" parent="." unique_id=839567157 instance=ExtResource("4_wr7tj")]
 visible = false

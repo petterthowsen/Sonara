@@ -7,8 +7,8 @@
 [ext_resource type="Script" uid="uid://cv34riskcs45v" path="res://support/ToggleIconButton.gd" id="5_mscrg"]
 [ext_resource type="Texture2D" uid="uid://damamek5tek7h" path="res://assets/icons/folder-open.svg" id="6_ru4rj"]
 [ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="7_ru4rj"]
-[ext_resource type="Texture2D" uid="uid://ddyiilul4naja" path="res://assets/icons/audio-waveform.svg" id="8_xkg54"]
 [ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="9_ru4rj"]
+[ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
 
@@ -208,7 +208,7 @@ size_flags_stretch_ratio = 2.0
 tooltip_text = "Automation lanes"
 focus_mode = 0
 theme_override_font_sizes/font_size = 10
-icon = ExtResource("8_xkg54")
+icon = ExtResource("9_yavxh")
 icon_alignment = 1
 expand_icon = true
 

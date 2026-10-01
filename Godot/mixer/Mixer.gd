@@ -33,6 +33,7 @@ const MixerChannelScene = preload("res://mixer/MixerChannel.tscn")
 @onready var compact_toggle: Button = $Toolbar/HBox/Toggles/Compact
 @onready var io_toggle: Button = $Toolbar/HBox/Toggles/IO
 @onready var sends_toggle: Button = $Toolbar/HBox/Toggles/Sends
+@onready var devices_toggle: Button = $Toolbar/HBox/Toggles/Devices
 @onready var big_meters_toggle: Button = $Toolbar/HBox/Toggles/BigMeters
 
 ## Narrow/medium/wide size-mode cycle button, in enum order.
@@ -114,6 +115,7 @@ func _ready():
 	compact_toggle.toggled.connect(_on_compact_toggled)
 	io_toggle.toggled.connect(_on_io_toggled)
 	sends_toggle.toggled.connect(_on_sends_toggled)
+	devices_toggle.toggled.connect(_on_devices_toggled)
 	big_meters_toggle.toggled.connect(_on_big_meters_toggled)
 	
 	# Connect context menu signals
@@ -662,6 +664,12 @@ func _on_sends_toggled(pressed: bool) -> void:
 	get_tree().call_group("mixer_channel_sends", "set", "visible", pressed)
 	logger.info("Sends panel: ", pressed)
 
+## Narrow strips hide the device list regardless of this toggle.
+func _on_devices_toggled(pressed: bool) -> void:
+	get_tree().call_group("mixer_channel", "set_devices_visible", pressed)
+	logger.info("Devices panel: ", pressed)
+
+
 func _on_big_meters_toggled(pressed: bool):
 	get_tree().call_group("mixer_channel_big_meters", "set", "visible", pressed)
 	get_tree().call_group("mixer_channel_compact_meter", "set", "visible", not pressed)
@@ -674,12 +682,13 @@ func _apply_toggle_states_to_channel(channel_item: MixerChannel) -> void:
 	var layout := MixerChannel.LayoutMode.COMPACT if compact_toggle.button_pressed else MixerChannel.LayoutMode.TALL
 	channel_item.set_strip_layout_mode(layout)
 	channel_item.set_resizable(resizable_channels)
+	channel_item.set_devices_visible(devices_toggle.button_pressed)
 
 	# Apply IO / Sends / meters from the toolbar so nested strips match roots.
 	if channel_item.io:
 		channel_item.io.visible = io_toggle.button_pressed
-	if channel_item.sends_panel:
-		channel_item.sends_panel.get_parent().visible = sends_toggle.button_pressed
+	if channel_item.sends_panel and channel_item.sends_panel.is_in_group("mixer_channel_sends"):
+		channel_item.sends_panel.visible = sends_toggle.button_pressed
 	if channel_item.big_meter:
 		channel_item.big_meter.visible = big_meters_toggle.button_pressed
 	if channel_item.bottom_small_meter:

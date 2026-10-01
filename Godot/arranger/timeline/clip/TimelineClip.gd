@@ -195,6 +195,7 @@ func _on_instance_modified() -> void:
 	position.x = timeline.ticks_to_pixels(clip_instance.start_ticks)
 	custom_minimum_size.x = width
 	size.x = width
+	modulate.a = 0.45 if clip_instance.muted else 1.0
 	_update_waveform()
 	if clip_renderer:
 		clip_renderer.queue_redraw()
@@ -424,6 +425,7 @@ func _update_from_clip_instance() -> void:
 
 	# Update the name (use clip name if available)
 	_set_name_text(clip_instance.clip.name if clip_instance.clip else "Clip Instance")
+	modulate.a = 0.45 if clip_instance.muted else 1.0
 
 	# Update position and size based on instance timing
 	var start_x = timeline.ticks_to_pixels(clip_instance.start_ticks)
@@ -563,6 +565,8 @@ func _gui_input(event: InputEvent) -> void:
 				if boundary_pass > 0:
 					_loop_drag_start_state = clip_instance.get_loop_state()
 					_begin_loop_drag(boundary_pass)
+					if Sonara.editor:
+						Sonara.editor.set_playhead(clip_instance.start_ticks + _loop_boundaries[boundary_pass - 1])
 					accept_event()
 				elif edge != "":
 					# Start resize

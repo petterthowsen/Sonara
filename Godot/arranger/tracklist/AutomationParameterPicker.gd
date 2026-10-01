@@ -27,6 +27,7 @@ var _submenu_paths: Dictionary = {}
 
 
 func _ready() -> void:
+	theme_type_variation = &"ContextMenuList"
 	if not id_pressed.is_connected(_on_root_id_pressed):
 		id_pressed.connect(_on_root_id_pressed)
 
@@ -77,6 +78,7 @@ func _add_device(instance: DeviceInstance, path: Array) -> void:
 		return
 
 	var submenu := PopupMenu.new()
+	submenu.theme_type_variation = &"ContextMenuList"
 	submenu.name = "Device%s" % "_".join(PackedStringArray(path.map(func(i): return str(i))))
 	# CLAP plugins can expose hundreds of parameters; let the user type to narrow them down.
 	submenu.set_search_bar_enabled(true)

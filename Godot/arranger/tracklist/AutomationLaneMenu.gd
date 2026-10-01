@@ -15,6 +15,7 @@ var _lanes: Array[AutomationLane] = []
 
 
 func _ready() -> void:
+	theme_type_variation = &"ContextMenuList"
 	hide_on_checkable_item_selection = false
 	if not id_pressed.is_connected(_on_id_pressed):
 		id_pressed.connect(_on_id_pressed)

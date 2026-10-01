@@ -374,6 +374,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	var pos: Vector2 = event.position
 
 	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if _point_at(pos) == null and timeline and timeline.clip_selection_manager:
+			timeline.clip_selection_manager.clear_selection()
 		_open_context_menu(pos)
 		accept_event()
 		return
@@ -519,6 +521,12 @@ func _on_lane_pressed(pos: Vector2) -> void:
 		selection_manager.set_anchor(_snap_tick(x_to_tick(pos.x)))
 	if timeline and timeline.clip_selection_manager:
 		timeline.clip_selection_manager.clear_selection()
+
+
+## Empty-space click: move the playhead like a click on empty track-lane space.
+func _set_playhead_at(pos: Vector2) -> void:
+	if Sonara.editor:
+		Sonara.editor.set_playhead(maxi(0, _snap_tick(x_to_tick(pos.x))))
 
 
 ## Double-click insert: snapped tick, value straight off the cursor (REQ-018). The new point
@@ -704,6 +712,8 @@ func _finish_box_select(pos: Vector2) -> void:
 				selection_manager.toggle(lane, _box_click_point_id)
 			elif _box_mode != BoxMode.TOGGLE:
 				selection_manager.clear_selection()
+				if _box_mode == BoxMode.FREE:
+					_set_playhead_at(pos)
 		else:
 			_apply_box_select()
 			if _box_mode == BoxMode.RANGE:

@@ -16,6 +16,7 @@ var points: Array = []
 
 
 func _ready() -> void:
+	theme_type_variation = &"ContextMenuList"
 	if not id_pressed.is_connected(_on_id_pressed):
 		id_pressed.connect(_on_id_pressed)
 

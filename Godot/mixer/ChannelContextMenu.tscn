@@ -29,19 +29,16 @@ grow_end = -1.0
 [node name="ChannelContextMenu" type="PopupPanel" unique_id=428470510]
 oversampling_override = 1.0
 position = Vector2i(55, 0)
-size = Vector2i(167, 143)
+size = Vector2i(170, 143)
 visible = true
+theme_type_variation = &"ContextMenu"
 script = ExtResource("1_3cfc4")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1901110300]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = 4.0
-offset_right = -2.0
-offset_bottom = -6.0
-grow_horizontal = 2
-grow_vertical = 2
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 162.0
+offset_bottom = 135.0
 theme_override_constants/separation = 0
 
 [node name="Header" type="PanelContainer" parent="VBoxContainer" unique_id=2019508167]

@@ -142,6 +142,7 @@ expand_margin_right = 3.0
 expand_margin_bottom = 2.0
 
 [node name="MixerChannel" type="PanelContainer" unique_id=381553760 groups=["mixer_channel"]]
+custom_minimum_size = Vector2(80, 0)
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_top = 1.0
@@ -152,6 +153,7 @@ focus_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_x6p0d")
 script = ExtResource("1_o7qmb")
 resizable = false
+side_pane_width = 160.0
 
 [node name="HBox" type="HBoxContainer" parent="." unique_id=1923224323]
 layout_mode = 2
@@ -220,11 +222,10 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="MainPane" type="VBoxContainer" parent="HBox/VBox/MainAndSideBox" unique_id=194528483]
-custom_minimum_size = Vector2(108, 0)
+custom_minimum_size = Vector2(80, 0)
 layout_mode = 2
 
 [node name="BigMeter" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=149619559 groups=["mixer_channel_big_meters"] instance=ExtResource("1_nssln")]
-visible = false
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
 size_flags_stretch_ratio = 2.0
@@ -247,8 +248,8 @@ fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
 layout_mode = 2
 size_flags_vertical = 3
-split_offsets = PackedInt32Array(35)
-split_offset = 35
+split_offsets = PackedInt32Array(239)
+split_offset = 239
 
 [node name="DeviceList" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2101730065 instance=ExtResource("8_xa46q")]
 custom_minimum_size = Vector2(0, 48)
@@ -258,15 +259,7 @@ size_flags_stretch_ratio = 2.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_8wi2u")
 hide_parameters = true
 
-[node name="Sends" type="ScrollContainer" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=1983758220 groups=["mixer_channel_sends"]]
-visible = false
-custom_minimum_size = Vector2(0, 70)
-layout_mode = 2
-size_flags_vertical = 3
-horizontal_scroll_mode = 0
-vertical_scroll_mode = 4
-
-[node name="SendsPanel" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends" unique_id=2063406988 instance=ExtResource("5_xa46q")]
+[node name="SendsPanel" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2063406988 groups=["mixer_channel_sends"] instance=ExtResource("5_xa46q")]
 layout_mode = 2
 
 [node name="IO" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1905663024 groups=["mixer_channel_io"]]
@@ -364,6 +357,7 @@ alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
 oversampling_override = 1.0
 title = "Pan Mode"
 size = Vector2i(174, 100)
+theme_type_variation = &"ContextMenuList"
 item_count = 4
 item_0/text = "Stereo Combined"
 item_0/checkable = 1
@@ -439,6 +433,8 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+split_offsets = PackedInt32Array(239)
+split_offset = 239
 
 [node name="ChildrenClip" type="Control" parent="HBox" unique_id=470089134]
 visible = false

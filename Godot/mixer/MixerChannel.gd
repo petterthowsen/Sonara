@@ -37,8 +37,7 @@ var logger : Log = Log.make("MixerChannel")
 @onready var device_list: ChannelDeviceList = $HBox/VBox/MainAndSideBox/MainPane/VSplit/DeviceList
 
 # sends panel; lives in MainPane/VSplit (Tall mode) or SidePane/VSplit (Compact mode)
-@onready var sends: ScrollContainer = $HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends
-@onready var sends_panel: SendsPanel = $HBox/VBox/MainAndSideBox/MainPane/VSplit/Sends/SendsPanel
+@onready var sends_panel: SendsPanel = $HBox/VBox/MainAndSideBox/MainPane/VSplit/SendsPanel
 
 # Resizing
 var is_resizing := false
@@ -85,7 +84,7 @@ var _header_fill: StyleBoxFlat = null
 enum SizeMode {NARROW, MEDIUM, WIDE}
 const NARROW_WIDTH := 0
 const MEDIUM_BASE_WIDTH := 80
-const WIDE_WIDTH := 108
+const WIDE_WIDTH := 116
 
 ## Tall keeps DeviceList/Sends in the main column. Compact moves them into the SidePane,
 ## which only shows (and slides out) while this strip is selected.
@@ -116,6 +115,9 @@ var _base_header_height := 0.0
 ## its content never forces the width; this value (animated) is the only thing that sizes it.
 @export var side_pane_width := 180.0
 var _side_pane_tween: Tween
+
+## Mixer toolbar "Devices" toggle; the list is also hidden whenever size_mode is NARROW.
+var devices_visible := true
 
 ## 0..1 fraction of the fold-out's width currently revealed; tweened when toggling.
 var _children_reveal := 0.0
@@ -165,13 +167,19 @@ func _ready():
 
 	if main_vsplit:
 		main_vsplit.dragged.connect(_on_vsplit_dragged)
+		main_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
 	if side_vsplit:
 		side_vsplit.dragged.connect(_on_vsplit_dragged)
+		side_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
 	_apply_shared_vsplit_offset()
-	if sends:
-		sends.get_v_scroll_bar().value_changed.connect(_on_sends_scrolled)
+	if sends_panel:
+		# Clamp straight from resized: sends_panel.size is only fresh there, and a stale size
+		# makes the correction overshoot and the divider jump back while dragging.
+		sends_panel.resized.connect(_clamp_vsplit_to_sends)
+		sends_panel.minimum_size_changed.connect(_queue_clamp_vsplit_to_sends)
+		sends_panel.scroll_container.get_v_scroll_bar().value_changed.connect(_on_sends_scrolled)
 		# Adopt the shared position once the sends have content to scroll.
-		sends.get_v_scroll_bar().changed.connect(_apply_shared_sends_scroll)
+		sends_panel.scroll_container.get_v_scroll_bar().changed.connect(_apply_shared_sends_scroll)
 
 	if header:
 		header.gui_input.connect(_on_header_gui_input)
@@ -288,9 +296,9 @@ func _update_from_channel() -> void:
 
 	# Master has no sends target (nothing to route to); keep it hidden
 	# regardless of the mixer-wide "show sends" toggle.
-	if channel.is_master and sends:
-		sends.remove_from_group("mixer_channel_sends")
-		sends.visible = false
+	if channel.is_master and sends_panel:
+		sends_panel.remove_from_group("mixer_channel_sends")
+		sends_panel.visible = false
 
 
 # ============================================================================
@@ -572,9 +580,21 @@ func _apply_selection_layout() -> void:
 	_update_size_for_mode()
 
 
+## Show the device list. It is hidden in narrow mode no matter what this is set to.
+func set_devices_visible(v: bool) -> void:
+	devices_visible = v
+	_update_device_list_visibility()
+
+
+func _update_device_list_visibility() -> void:
+	if device_list:
+		device_list.visible = devices_visible and size_mode != SizeMode.NARROW
+
+
 ## Cycle/apply the narrow-medium-wide base width.
 func set_size_mode(m: SizeMode) -> void:
 	size_mode = m
+	_update_device_list_visibility()
 	_update_size_for_mode()
 
 
@@ -589,8 +609,94 @@ func set_strip_layout_mode(m: LayoutMode) -> void:
 
 ## Propagate a manual VSplit drag (MainPane or SidePane) to every mixer strip.
 func _on_vsplit_dragged(offset: int) -> void:
-	_shared_vsplit_offset = offset
+	if _vsplit_snap_tween and _vsplit_snap_tween.is_valid():
+		_vsplit_snap_tween.kill()
+	_set_shared_vsplit_offset(offset)
+
+
+## Dragging past the top gives a negative raw offset; keep the shared one at 0 or more, since
+## a negative value means "unset" to _apply_shared_vsplit_offset.
+func _set_shared_vsplit_offset(offset: int) -> void:
+	_shared_vsplit_offset = maxi(offset, 0)
 	get_tree().call_group("mixer_channel", "_apply_shared_vsplit_offset")
+
+
+const VSPLIT_SNAP_DURATION := 0.15
+var _vsplit_snap_tween: Tween
+
+## After a manual divider drag, ease the divider to where the sends show whole knob rows, then
+## line the scroll up with a row so none is cut off at the top either.
+func _snap_vsplit_to_send_rows() -> void:
+	if sends_panel == null or not sends_panel.is_visible_in_tree():
+		return
+	var vsplit := sends_panel.get_parent() as VSplitContainer
+	if vsplit == null:
+		return
+	# Animate from the effective offset, not a raw value dragged past the limit.
+	vsplit.clamp_split_offset()
+	var panel_h := sends_panel.get_theme_stylebox("panel").get_minimum_size().y
+	var current := sends_panel.size.y
+	var target := sends_panel.scroll_container.snap_length(true, current - panel_h) + panel_h
+	target = minf(target, _shared_sends_needed_height())
+	target = maxf(target, sends_panel.get_combined_minimum_size().y)
+	var delta := roundi(current - target)
+	if delta == 0:
+		sends_panel.scroll_container.snap_scroll(true)
+		return
+	if _vsplit_snap_tween and _vsplit_snap_tween.is_valid():
+		_vsplit_snap_tween.kill()
+	_vsplit_snap_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_vsplit_snap_tween.tween_method(_set_shared_vsplit_offset, vsplit.split_offset,
+			vsplit.split_offset + delta, VSPLIT_SNAP_DURATION)
+	_vsplit_snap_tween.tween_callback(sends_panel.scroll_container.snap_scroll.bind(true))
+
+
+var _clamp_queued := false
+
+## Coalesce clamp requests (resize, content change, drag) into one call after layout.
+func _queue_clamp_vsplit_to_sends() -> void:
+	if _clamp_queued:
+		return
+	_clamp_queued = true
+	_clamp_vsplit_to_sends.call_deferred()
+
+
+## Height this strip's sends need to show every knob at its current width.
+func _sends_needed_height() -> float:
+	return maxf(sends_panel.needed_height(sends_panel.size.x), sends_panel.custom_minimum_size.y)
+
+
+## The divider is shared, so size it for the strip that needs the most (bus strips have one
+## knob fewer than the others, and strips can differ in width).
+func _shared_sends_needed_height() -> float:
+	var needed := 0.0
+	for node in get_tree().get_nodes_in_group("mixer_channel"):
+		var strip := node as MixerChannel
+		if strip and strip.sends_panel and strip.sends_panel.is_visible_in_tree():
+			needed = maxf(needed, strip._sends_needed_height())
+	return needed
+
+
+## Stop the VSplit from giving the sends more height than their knobs need.
+## Excess height is handed back to the device list by moving the divider down.
+func _clamp_vsplit_to_sends() -> void:
+	_clamp_queued = false
+	if sends_panel == null or not sends_panel.is_visible_in_tree():
+		return
+	var vsplit := sends_panel.get_parent() as VSplitContainer
+	if vsplit == null:
+		return
+	var excess := sends_panel.size.y - _shared_sends_needed_height()
+	if excess < 1.0:
+		return
+	# split_offset is the raw dragged value and can run far past what the layout allows. Bring
+	# it back to the effective offset first, or the correction lands short and changes nothing.
+	vsplit.clamp_split_offset()
+	vsplit.split_offset += int(excess)
+	# This runs from sends_panel.resized, inside the VSplit's own sort, where the sort the new
+	# offset queues is dropped. Queue one for after this pass, or the divider stays put.
+	vsplit.queue_sort.call_deferred()
+	_set_shared_vsplit_offset(vsplit.split_offset)
 
 
 ## Apply the shared VSplit offset (from whichever strip was last dragged) to this strip.
@@ -613,10 +719,10 @@ func _on_sends_scrolled(value: float) -> void:
 
 ## Scroll this strip's sends to the shared position (clamped by the scroll bar).
 func _apply_shared_sends_scroll() -> void:
-	if sends == null or sends.scroll_vertical == _shared_sends_scroll:
+	if sends_panel == null or sends_panel.scroll_container.scroll_vertical == _shared_sends_scroll:
 		return
 	_applying_sends_scroll = true
-	sends.scroll_vertical = _shared_sends_scroll
+	sends_panel.scroll_container.scroll_vertical = _shared_sends_scroll
 	_applying_sends_scroll = false
 
 
@@ -629,13 +735,15 @@ func _apply_layout_mode() -> void:
 	match strip_layout_mode:
 		LayoutMode.TALL:
 			_reparent_into(device_list, main_vsplit)
-			_reparent_into(sends, main_vsplit)
+			_reparent_into(sends_panel, main_vsplit)
+			main_vsplit.show()
 			if side_pane:
 				side_pane.visible = false
 				side_pane.custom_minimum_size.x = 0
 		LayoutMode.COMPACT:
 			_reparent_into(device_list, side_vsplit)
-			_reparent_into(sends, side_vsplit)
+			_reparent_into(sends_panel, side_vsplit)
+			main_vsplit.hide()
 			_update_side_pane()
 
 
