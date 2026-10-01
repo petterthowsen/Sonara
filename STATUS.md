@@ -6,7 +6,6 @@
 The engine side of the effects (`docs/specs/012-builtin-effects/plan.md`, phases 1-7) is close to spec. Some of the Godot views need work.
 
 ### Not Working / To do
-- EQ analyser rework, needs a live check: Blackman-Harris FFT with the DC removed, 256 log-spaced points (fractional-octave power average, attack/release in dB) instead of 2049 raw bins, and a Display menu (Resolution, Speed, Tilt). The 36 Hz peak was most likely DC leaking through the Hann window's sidelobes past the 30 Hz cut; confirm it's gone on the same material. Tests pass (`cargo test`, `Godot/tests/run_all.sh`).
 - Compressor: no real-time visual feedback. There seems to be a meter component, but it shows nothing. The design needs more thought; later.
 
 
