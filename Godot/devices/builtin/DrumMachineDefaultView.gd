@@ -82,6 +82,8 @@ func _on_unbind() -> void:
 			child.slot_changed.disconnect(_on_children_changed)
 		if child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.disconnect(_on_children_changed)
+		if child.choke_group_changed.is_connected(_on_children_changed):
+			child.choke_group_changed.disconnect(_on_children_changed)
 	_tracked_children.clear()
 
 
@@ -140,6 +142,7 @@ func _rebuild() -> void:
 		var child: DeviceInstance = by_note.get(note, null)
 		_pads[i].setup(note, child, device)
 		_pads[i].set_selected(note == open_note)
+		_pads[i].tooltip_text = _pad_tooltip(child)
 
 
 ## Keep slot/loading subscriptions exactly on the machine's current children, so a
@@ -154,6 +157,8 @@ func _sync_child_signals() -> void:
 				child.slot_changed.disconnect(_on_children_changed)
 			if child.loading_state_changed.is_connected(_on_children_changed):
 				child.loading_state_changed.disconnect(_on_children_changed)
+			if child.choke_group_changed.is_connected(_on_children_changed):
+				child.choke_group_changed.disconnect(_on_children_changed)
 	_tracked_children.clear()
 	for child in current:
 		_tracked_children.append(child)
@@ -161,6 +166,8 @@ func _sync_child_signals() -> void:
 			child.slot_changed.connect(_on_children_changed)
 		if not child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.connect(_on_children_changed)
+		if not child.choke_group_changed.is_connected(_on_children_changed):
+			child.choke_group_changed.connect(_on_children_changed)
 
 
 ## Open the pad's slot in the device lane; an empty pad's slot takes drops onto its note.
@@ -217,3 +224,13 @@ func _child_for_note(note: int) -> DeviceInstance:
 		if child.slot_note == note:
 			return child
 	return null
+
+
+## Pad tooltip: the device name and, when set, its choke group.
+func _pad_tooltip(child: DeviceInstance) -> String:
+	if child == null:
+		return ""
+	var text := child.get_display_name()
+	if child.choke_group > 0:
+		text += "\nChoke group %d" % child.choke_group
+	return text

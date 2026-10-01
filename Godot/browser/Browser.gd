@@ -454,7 +454,7 @@ func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: T
 		if not device:
 			continue
 
-		var category = device.get_category_string()  # "Instrument", "Effect", "Utility"
+		var category = device.get_browser_group()  # "Instrument", "Effect", "Utility" or "Drums"
 		var vendor = device.author if device.author != "" else "Unknown"
 		var device_name = device.name
 

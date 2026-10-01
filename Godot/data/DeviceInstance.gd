@@ -24,6 +24,8 @@ signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
 signal child_moved(from_position: int, to_position: int)
 signal slot_changed()
+## A Drum Machine pad's choke group changed (0 = none, 1–8). See "DRUM CHOKE GROUPS".
+signal choke_group_changed(group: int)
 ## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
 signal slots_changed()
 signal name_changed(new_name: String)
@@ -76,6 +78,10 @@ var slot_separate_out: bool = false
 
 ## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
 var slot_note: int = -1
+
+## Choke group for a Drum Machine pad (0 = none, 1–8): a note-on in a group chokes every other
+## pad in it. Lives on the pad's own instance; see "DRUM CHOKE GROUPS".
+var choke_group: int = 0
 
 ## Container slots: color per slot key (random on first use) and the keys shown in the device lane.
 ## Saved with the project; see "CONTAINER SLOTS".
@@ -1373,6 +1379,11 @@ func sync_to_engine() -> void:
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		else:
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
+	# A Drum Machine pad re-sends its choke group so a reload restores it (the note itself goes
+	# through sync_slot_to_engine() in the device-tree walk).
+	var choke_addr := _drum_pad_addr("choke")
+	if choke_addr != "":
+		AudioEngineOSC.send(choke_addr, [choke_group])
 
 
 ## Sync a single parameter to the audio engine
@@ -1440,6 +1451,17 @@ func sync_slot_to_engine() -> void:
 			_send_layer_slot(action)
 	elif parent.device.device_id == "sonara.builtin.drum_machine" and slot_note >= 0:
 		AudioEngineOSC.send(parent.osc_addr("slot/%d/note" % position), [slot_note])
+
+
+## OSC address for a control (`note`, `choke`) on this Drum Machine pad, or "" when this
+## instance is not a pad (its parent is not a Drum Machine, or it has no note yet).
+func _drum_pad_addr(action: String) -> String:
+	var parent := get_parent_device()
+	if parent == null or parent.device == null:
+		return ""
+	if parent.device.device_id != "sonara.builtin.drum_machine" or slot_note < 0:
+		return ""
+	return parent.osc_addr("slot/%d/%s" % [position, action])
 
 
 ## Layer slot controls, each sent as `slot/{position}/{action}`.
@@ -1524,6 +1546,15 @@ func set_slot_note(note: int) -> void:
 	slot_changed.emit()
 
 
+## Set this Drum Machine pad's choke group (0 = none, 1–8) and tell the engine.
+func set_choke_group(group: int) -> void:
+	choke_group = clampi(group, 0, 8)
+	var addr := _drum_pad_addr("choke")
+	if addr != "":
+		AudioEngineOSC.send(addr, [choke_group])
+	choke_group_changed.emit(choke_group)
+
+
 ## Next unused pad note from C1 upward (Drum Machine containers only).
 func next_free_drum_note() -> int:
 	var used := {}
@@ -1560,6 +1591,7 @@ func to_json() -> Dictionary:
 		"slot_mute": slot_mute,
 		"slot_solo": slot_solo,
 		"slot_note": slot_note,
+		"choke_group": choke_group,
 		"slot_separate_out": slot_separate_out,
 		"return_channel_id": return_channel_id,
 		"return_channel_ids": return_channel_ids.duplicate(),
@@ -1635,6 +1667,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_mute = bool(data.get("slot_mute", false))
 	instance.slot_solo = bool(data.get("slot_solo", false))
 	instance.slot_note = int(data.get("slot_note", -1))
+	instance.choke_group = clampi(int(data.get("choke_group", 0)), 0, 8)
 	instance.slot_note_map = LayerNoteMap.from_json(data.get("slot_note_map", null))
 	instance.slot_separate_out = bool(data.get("slot_separate_out", false))
 	instance.return_channel_id = int(data.get("return_channel_id", -1))

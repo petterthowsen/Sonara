@@ -16,6 +16,9 @@ func suite_name() -> String:
 
 func run_tests() -> void:
 	_test_kind_inference()
+	_test_drum_kind_inference()
+	_test_builtin_drum_layout()
+	_test_drum_tune_note_name()
 	_test_control_kinds()
 	_test_integer_enum_spinbox()
 	_test_hidden_readonly_excluded()
@@ -124,6 +127,89 @@ func _test_kind_inference() -> void:
 	_assert(DeviceKind.infer(_device("x.eq", "Para EQ")) == DeviceKind.EQ, "EQ by name → eq")
 	_assert(DeviceKind.infer(_device("x.seq", "Step Sequencer")) == DeviceKind.GENERIC, "'sequencer' is not an eq")
 	_assert(DeviceKind.infer(null) == DeviceKind.GENERIC, "null → generic")
+
+
+func _test_drum_kind_inference() -> void:
+	_assert(DeviceKind.infer(_device("sonara.builtin.kick", "Kick", Device.DeviceCategory.Instrument)) == DeviceKind.DRUM,
+		"a device named Kick infers drum")
+	_assert(DeviceKind.infer(_device("x.drum", "Thing", Device.DeviceCategory.Effect, ["drum"])) == DeviceKind.DRUM,
+		"the drum feature infers drum")
+	_assert(DeviceKind.infer(_device("clap:/x/Reverb", "Big Reverb")) == DeviceKind.REVERB,
+		"an id token 'clap' does not make a reverb a drum")
+	for n in ["Snare", "Closed Hat", "HiHat", "Clap"]:
+		_assert(DeviceKind.infer(_device("x.thing", n, Device.DeviceCategory.Instrument)) == DeviceKind.DRUM,
+			"%s infers drum" % n)
+
+
+## The Phase 1 Kick parameter table: modules drive grouping, so the layout shows the device's own
+## sections (Body, Punch, Click, Noise, Mode, Global) with Tune and Decay as the large knobs.
+func _test_builtin_drum_layout() -> void:
+	var params: Array = []
+	var add := func(p: DeviceParameter, module: String) -> void:
+		p.module = module
+		params.append(p)
+	# Tune and Decay come first: they are the large knobs and sort first within Body.
+	add.call(_float(0, "Tune", "Hz", 20.0, 200.0), "Body")
+	add.call(_float(2, "Decay", "ms", 30.0, 3000.0), "Body")
+	add.call(_bool(1, "Keytrack"), "Body")
+	add.call(_float(3, "Curve", "", -1.0, 1.0), "Body")
+	add.call(_float(4, "Amp Attack", "ms", 0.0, 10.0), "Body")
+	add.call(_float(5, "Start Phase", "°", 0.0, 90.0), "Body")
+	add.call(_float(6, "Level"), "Body")
+	add.call(_float(7, "Drive", "dB", 0.0, 24.0), "Body")
+	add.call(_float(10, "Sweep", "st", 0.0, 48.0), "Punch")
+	add.call(_float(11, "Sweep Time", "ms", 5.0, 200.0), "Punch")
+	add.call(_float(20, "Level"), "Click")
+	add.call(_float(21, "Tone", "Hz", 1000.0, 8000.0), "Click")
+	add.call(_enum(22, "Type", 2), "Click")
+	add.call(_float(30, "Level"), "Noise")
+	add.call(_float(31, "Decay", "ms", 10.0, 1000.0), "Noise")
+	add.call(_float(32, "Color", "Hz", 200.0, 12000.0), "Noise")
+	add.call(_bool(40, "Gate"), "Mode")
+	add.call(_float(41, "Gate Release", "ms", 10.0, 2000.0), "Mode")
+	add.call(_float(42, "Glide", "ms", 0.0, 500.0), "Mode")
+	add.call(_float(90, "Velocity"), "Global")
+	add.call(_float(91, "Output", "dB", -60.0, 12.0), "Global")
+	add.call(_float(92, "Humanize"), "Global")
+
+	var device := _device("sonara.builtin.kick", "Kick", Device.DeviceCategory.Instrument)
+	_assert(DeviceKind.infer(device) == DeviceKind.DRUM, "Kick → drum")
+	var layout := SimpleLayoutGenerator.generate(device, params)
+	_assert(layout.kind == DeviceKind.DRUM, "generated with the Drum strategy")
+	_check_layout(layout, params, "Kick")
+
+	var tune := _find(layout, 0)
+	var decay := _find(layout, 2)
+	_assert(tune.group_title == "Body", "Tune is in the Body module (%s)" % tune.group_title)
+	_assert(decay.group_title == "Body", "Decay is in the Body module (%s)" % decay.group_title)
+	var body: Array = []
+	for page in layout.pages:
+		for c in page.controls:
+			if c.get("group", "") == tune.group:
+				body.append(c)
+	body.sort_custom(func(a, b):
+		return (a.rect[1] < b.rect[1]) if (a.rect[1] != b.rect[1]) else (a.rect[0] < b.rect[0]))
+	_assert(0 in body[0].params, "Tune sorts first in Body")
+	_assert(2 in body[1].params, "Decay sorts second in Body")
+
+
+## The drum Tune knob shows a note name (E0 at 41.2 Hz), and Decay is left alone.
+func _test_drum_tune_note_name() -> void:
+	var strategy := DrumStrategy.new()
+	var tune := _float(0, "Tune", "Hz", 20.0, 200.0)
+	var keytrack := _bool(1, "Keytrack")
+	var decay := _float(2, "Decay", "ms", 30.0, 3000.0)
+	var params := [tune, keytrack, decay]
+	var knob := {"kind": SimpleControlKinds.KNOB, "params": [0], "rect": [0, 0, 1, 1]}
+	var marked: Dictionary = strategy.decorate_control(knob, params)
+	_assert(marked.get("unit", "") == "note", "the Tune knob is marked as a note (%s)" % [marked.get("unit", "")])
+	_assert(not knob.has("unit"), "the original layout control is left alone")
+	_assert(SimpleUnits.format(tune, tune.value_to_normalized(41.2), "note") == "E0",
+		"41.2 Hz reads as E0 (%s)" % [SimpleUnits.format(tune, tune.value_to_normalized(41.2), "note")])
+	var decay_knob := {"kind": SimpleControlKinds.KNOB, "params": [2], "rect": [1, 0, 1, 1]}
+	_assert(not strategy.decorate_control(decay_knob, params).has("unit"), "Decay keeps its ms unit")
+	var keytrack_control := {"kind": SimpleControlKinds.TOGGLE, "params": [1], "rect": [2, 0, 1, 1]}
+	_assert(not strategy.decorate_control(keytrack_control, params).has("unit"), "a bool Keytrack control is untouched")
 
 
 func _test_control_kinds() -> void:

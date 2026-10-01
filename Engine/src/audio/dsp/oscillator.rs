@@ -13,7 +13,7 @@ static SINE_TABLE: Lazy<Vec<f32>> = Lazy::new(|| {
 });
 
 #[inline]
-fn fast_sin(phase: f64) -> f32 {
+pub fn fast_sin(phase: f64) -> f32 {
     let idx = ((phase.fract() * SINE_TABLE_SIZE as f64) as usize) % SINE_TABLE_SIZE;
     SINE_TABLE[idx]
 }

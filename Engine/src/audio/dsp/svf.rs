@@ -10,6 +10,8 @@
 
 use std::f32::consts::{PI, SQRT_2};
 
+pub use super::saturate::{drive, drive_params, soft_clip};
+
 /// Lowest and highest cutoff the coefficient helper allows (the top as a fraction of the rate).
 pub const MIN_CUTOFF_HZ: f32 = 10.0;
 const MAX_CUTOFF_RATIO: f32 = 0.49;
@@ -21,9 +23,6 @@ const K_BUTTER4_B: f32 = 0.765_367;
 /// How much low-passed input comes back at full resonance (LP modes), so the lows don't thin
 /// out under a big resonant peak. 0.5 is about +3.5 dB of bass at resonance 1.
 const RESONANCE_COMPENSATION: f32 = 0.5;
-/// Drive reaches a fully saturated signal at this many dB; below it the clean and saturated
-/// signals are crossfaded, so 0 dB is exactly clean and the knob has no jump.
-const DRIVE_BLEND_DB: f32 = 6.0;
 /// Keeps the integrator states out of denormal range when the input goes silent.
 const ANTI_DENORMAL: f32 = 1.0e-18;
 
@@ -62,25 +61,6 @@ pub fn resonance_to_k(resonance: f32, mode: FilterMode) -> f32 {
 /// One-pole coefficient for the compensation low-pass, an octave below the cutoff.
 pub fn compensation_coef(hz: f32, sample_rate: f32) -> f32 {
     1.0 - (-PI * hz.max(MIN_CUTOFF_HZ) / sample_rate).exp()
-}
-
-/// Rational tanh: exact at 0, within 2 % up to ±3, and ±1 beyond.
-#[inline]
-pub fn soft_clip(x: f32) -> f32 {
-    let x = x.clamp(-3.0, 3.0);
-    let x2 = x * x;
-    x * (27.0 + x2) / (27.0 + 9.0 * x2)
-}
-
-/// Pre-filter drive for `drive_db` (0 and up): `(gain, blend)`, applied by [`drive`].
-pub fn drive_params(drive_db: f32) -> (f32, f32) {
-    let db = drive_db.max(0.0);
-    (10f32.powf(db / 20.0), (db / DRIVE_BLEND_DB).min(1.0))
-}
-
-#[inline]
-pub fn drive(x: f32, gain: f32, blend: f32) -> f32 {
-    x + blend * (soft_clip(x * gain) - x)
 }
 
 /// One stage's per-sample coefficients for a given `g` and `k`.
@@ -201,6 +181,17 @@ impl Svf {
                 low + high
             }
         }
+    }
+
+    /// The band (`Bp12`, scaled by `k`) and high (`Hp12`) outputs of the first stage in a single
+    /// pass, so a caller that needs both at the same cutoff ticks the filter once instead of twice.
+    /// The two modes share their coefficients (`is_24` is false for both), so this is bit-exact
+    /// with two [`Svf`]s fed the same input.
+    #[inline]
+    pub fn process_band_high(&mut self, x: f32, coefs: &SvfCoefs) -> (f32, f32) {
+        let x = x + ANTI_DENORMAL;
+        let (_, band, high) = self.stages[0].tick(x, &coefs.first);
+        (band * coefs.first.k, high)
     }
 
     #[inline]

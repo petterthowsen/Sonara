@@ -158,6 +158,14 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 ### Devices
 
+- [/] Drum synths: four built-in drum instruments (Kick, Snare, Hat, Clap) sharing `Engine/src/audio/devices/drums/` and the `audio/dsp/` drum blocks. Spec `docs/specs/013-drum-synths/`
+  - [x?] Phase 0: shared foundation — one-shot/burst envelopes, `sweep_osc`, `noise`, `saturate`, generic `DrumHost<DrumVoice>`, `DRUM_IDS`/`create_drum`, `drum_conformance.rs`, Godot `DeviceKind.DRUM` + `DrumStrategy`
+  - [x?] Phase 1: Kick (`sonara.builtin.kick`) — swept body + click + filtered noise, keytrack, gate mode; `drums/layers.rs` (`ClickLayer`, `DriveStage`)
+  - [x?] Phase 2: Snare (`sonara.builtin.snare`) — two tone modes + band-passed snares + snap
+  - [x?] Phase 3: Hat (`sonara.builtin.hat`) — six 808 pulses + noise, band-pass + high-pass; Drum Machine choke groups (engine `AudioDevice::choke`, OSC `slot/{slot}/choke`, project persistence, ADR 0012)
+  - [x?] Phase 4: Clap (`sonara.builtin.clap`) — burst hands + room tail
+  - [x?] Wrap-up: "Synth Kit" Drum Machine preset — `DrumKit.gd` plus "Load Synth Kit" in a Drum Machine's context menu (GM notes Kick 36, Snare 38, Clap 39, Closed Hat 42, Open Hat 46; both hats in choke group 1, the open hat's Decay set so it rings). Covered headless by `Godot/tests/test_drum_kit.gd`
+  - [ ] Live pass: a full four-piece pattern with no clicks or dropouts, and a kick that sounds good at its defaults
 - [x?] Layer note mapping: per-slot input→output note maps (zones, remapping, layering), per-slot separate outputs, and a mapping window with Resolve overlaps and Distribute. Spec `docs/specs/006-layer-note-mapping/`. Implemented and covered headless; needs the live pass (T-014 in tasks.md)
 - [/] Simple View: a generated, editable grid view for any device without its own panel (strategies per device kind, compound controls, JSON layouts in `~/.config/sonara/device_layouts/`), spec `docs/specs/004-simple-view/`
   - [x?] DevicePanel integration (T-013). Still to check live: Sampler "Simple" toggle, "loaded layout" after restart, hand-edited `rect` shows up, page tabs on a device with more than 24 cells, eq_band rendering

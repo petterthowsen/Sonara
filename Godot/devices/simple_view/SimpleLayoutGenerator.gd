@@ -17,6 +17,8 @@ static func strategy_for(kind: String) -> GenericStrategy:
 	match kind:
 		DeviceKind.SYNTH:
 			return SynthStrategy.new()
+		DeviceKind.DRUM:
+			return DrumStrategy.new()
 		DeviceKind.REVERB:
 			return ReverbStrategy.new()
 		DeviceKind.DELAY:

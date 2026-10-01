@@ -16,12 +16,19 @@ pub struct DrumSlot {
     pub device: Box<dyn AudioDevice>,
     /// MIDI note that routes to this child. Unique within the drum machine.
     pub note: u8,
+    /// Choke group: 0 = none, 1–8 = closed/open hat style group. A note-on on this slot chokes
+    /// every other slot in the same group.
+    pub choke_group: u8,
 }
 
 impl DrumSlot {
-    /// Wrap `device` and assign `note`.
+    /// Wrap `device` and assign `note`; the slot starts in choke group 0 (none).
     pub fn new(device: Box<dyn AudioDevice>, note: u8) -> Self {
-        Self { device, note }
+        Self {
+            device,
+            note,
+            choke_group: 0,
+        }
     }
 }
 
@@ -62,6 +69,25 @@ impl DrumMachineDevice {
         }
         if let Some(slot) = self.slots.get_mut(index) {
             slot.note = note;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The choke group of slot `index`, or `None` if there is no such slot.
+    pub fn slot_choke_group(&self, index: usize) -> Option<u8> {
+        self.slots.get(index).map(|s| s.choke_group)
+    }
+
+    /// Set slot `index`'s choke group. Accepts 0 (none) through 8; returns false otherwise or if
+    /// the slot does not exist.
+    pub fn set_slot_choke_group(&mut self, index: usize, group: u8) -> bool {
+        if group > 8 {
+            return false;
+        }
+        if let Some(slot) = self.slots.get_mut(index) {
+            slot.choke_group = group;
             true
         } else {
             false
@@ -184,11 +210,24 @@ impl AudioDevice for DrumMachineDevice {
     }
 
     fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        if let Some(slot) = self.slots.iter_mut().find(|s| s.note == note) {
-            slot.device.mark_activity();
-            slot.device
-                .send_midi_event(note, velocity, is_note_on, frame_offset);
+        let Some(index) = self.slots.iter().position(|s| s.note == note) else {
+            return;
+        };
+        // A note-on chokes every other slot in the same non-zero group, at the same offset.
+        if is_note_on && velocity > 0 {
+            let group = self.slots[index].choke_group;
+            if group != 0 {
+                for (i, slot) in self.slots.iter_mut().enumerate() {
+                    if i != index && slot.choke_group == group {
+                        slot.device.choke(frame_offset);
+                    }
+                }
+            }
         }
+        let slot = &mut self.slots[index];
+        slot.device.mark_activity();
+        slot.device
+            .send_midi_event(note, velocity, is_note_on, frame_offset);
     }
 
     fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
@@ -378,5 +417,123 @@ mod tests {
         assert_eq!(outputs[0], 0.0);
         assert!((extras[0][0] - 0.1).abs() < 1e-6);
         assert!((extras[1][0] - 0.1).abs() < 1e-6);
+    }
+
+    /// A device that records the notes and choke offsets it receives.
+    struct ChokeCapture {
+        hits: Vec<u8>,
+        choked: Vec<usize>,
+    }
+
+    impl ChokeCapture {
+        fn new() -> Self {
+            Self {
+                hits: Vec::new(),
+                choked: Vec::new(),
+            }
+        }
+    }
+
+    impl AudioDevice for ChokeCapture {
+        fn process_block(&mut self, _inputs: &[f32], outputs: &mut [f32], sample_count: usize) {
+            let count = (sample_count * 2).min(outputs.len());
+            outputs[..count].fill(0.1);
+        }
+
+        fn send_midi_event(&mut self, note: u8, _v: u8, is_on: bool, _f: usize) {
+            if is_on {
+                self.hits.push(note);
+            }
+        }
+
+        fn choke(&mut self, frame_offset: usize) {
+            self.choked.push(frame_offset);
+        }
+
+        fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
+
+        fn get_parameter(&self, _id: ParamId) -> Option<ParamValue> {
+            None
+        }
+
+        fn device_id(&self) -> &str {
+            "test.choke_capture"
+        }
+
+        fn device_name(&self) -> &str {
+            "Choke Capture"
+        }
+
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+
+        fn reset(&mut self) {}
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn capture(dm: &mut DrumMachineDevice, index: usize) -> &ChokeCapture {
+        dm.child_mut(index)
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<ChokeCapture>()
+            .unwrap()
+    }
+
+    #[test]
+    fn note_on_chokes_only_same_group_siblings() {
+        let mut dm = DrumMachineDevice::new(8);
+        dm.insert_child(0, Box::new(ChokeCapture::new()));
+        dm.insert_child(1, Box::new(ChokeCapture::new()));
+        dm.insert_child(2, Box::new(ChokeCapture::new()));
+        // `insert_child` auto-assigns 36/37/38, so reassign from the top to avoid a temporary clash.
+        assert!(dm.set_slot_note(2, 40));
+        assert!(dm.set_slot_note(1, 38));
+        assert!(dm.set_slot_note(0, 36));
+        assert!(dm.set_slot_choke_group(0, 1));
+        assert!(dm.set_slot_choke_group(1, 1));
+        assert!(dm.set_slot_choke_group(2, 2));
+
+        dm.send_midi_event(36, 100, true, 5);
+
+        assert_eq!(capture(&mut dm, 0).hits, vec![36]);
+        assert!(capture(&mut dm, 0).choked.is_empty());
+        assert!(capture(&mut dm, 1).hits.is_empty());
+        assert_eq!(capture(&mut dm, 1).choked, vec![5]);
+        assert!(capture(&mut dm, 2).choked.is_empty());
+
+        // A note-off does not choke.
+        dm.send_midi_event(36, 0, false, 7);
+        assert_eq!(capture(&mut dm, 1).choked, vec![5]);
+    }
+
+    #[test]
+    fn choke_group_0_is_none_and_range_is_rejected() {
+        let mut dm = DrumMachineDevice::new(8);
+        dm.insert_child(0, Box::new(ChokeCapture::new()));
+        dm.insert_child(1, Box::new(ChokeCapture::new()));
+        assert!(dm.set_slot_note(0, 36));
+        assert!(dm.set_slot_note(1, 38));
+        assert_eq!(dm.slot_choke_group(0), Some(0));
+        assert!(dm.set_slot_choke_group(0, 8));
+        assert!(!dm.set_slot_choke_group(0, 9));
+        assert_eq!(dm.slot_choke_group(0), Some(8));
+        assert!(!dm.set_slot_choke_group(5, 1));
+
+        // Group 0 never chokes.
+        assert!(dm.set_slot_choke_group(0, 0));
+        dm.send_midi_event(36, 100, true, 3);
+        assert!(capture(&mut dm, 1).choked.is_empty());
     }
 }

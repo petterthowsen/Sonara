@@ -38,6 +38,12 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Slot note map** — a Layer slot's routing table: each input note (0–127) goes to one output note or is ignored (`data/LayerNoteMap.gd`). The **full map** (every note to itself) is the default; a slot with any other map is a **zoned slot**. Several slots mapping the same input note is **layering**, and an **overlap** when both are zoned.
 - **Separate output** — a Layer slot sending its audio to its own return channel instead of the Layer output. Only for a Layer that is the first device on its channel. The slot and its return share a name and colour, and unlike other returns, a Layer return's output can be routed to any bus.
 
+## Drum instruments
+
+- **Hit** — one trigger of a drum voice. A note-on starts a fresh voice (phase reset, so every hit sounds the same) while the previous voice fades out over 3 ms; note-off is ignored unless the drum has a gate mode.
+- **Sweep** — a drum's pitch envelope: the body starts `Sweep` semitones above its tune and falls to it over `Sweep Time`. Rendered with `dsp::sweep_osc`.
+- **Choke group** — a Drum Machine pad group (1–8; 0 = none). A note-on in a group chokes every other pad in it, so a closed hat cuts an open one.
+
 ## Modulation
 
 - **Modulation source** — a per-voice signal a device offers to modulate its own parameters (PolySynth: Filter Env, Amp Env, LFO 1, LFO 2, Velocity, Keytrack). Identified by a stable string id (`"lfo1"`) and either unipolar (0..1) or bipolar (−1..1).

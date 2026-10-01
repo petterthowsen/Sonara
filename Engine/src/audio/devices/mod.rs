@@ -4,7 +4,10 @@ pub mod clap_host;
 pub mod compressor;
 pub mod container;
 mod delay;
+#[cfg(test)]
+mod drum_conformance;
 mod drum_machine;
+mod drums;
 pub mod effect;
 #[cfg(test)]
 mod effect_conformance;
@@ -26,8 +29,9 @@ pub use clap_host::{ClapDeviceAdapter, PluginDescriptor, PluginScanner};
 pub use container::{parse_osc_device_addr, DeviceContainer, DevicePath};
 pub use delay::DelayDevice;
 pub use drum_machine::DrumMachineDevice;
+pub use drums::{DrumHost, DrumParams, DrumVoice, GlobalParams, GLOBAL_SPECS};
 pub use eq::EqDevice;
-pub use factory::{create_effect, DeviceFactory, EFFECT_IDS};
+pub use factory::{create_drum, create_effect, DeviceFactory, DRUM_IDS, EFFECT_IDS};
 pub use filter::FilterDevice;
 pub use layer::LayerDevice;
 pub use phaser::PhaserDevice;
@@ -353,6 +357,13 @@ pub trait AudioDevice: Send {
     ) {
         // Default: ignore MIDI (effects don't need it)
     }
+
+    /// Fade out any sounding voice over ~3 ms starting `frame_offset` samples into the coming
+    /// block (Drum Machine choke groups). Default: no-op.
+    ///
+    /// The offset keeps the choke sample-accurate; the Drum Machine calls it with the same
+    /// `frame_offset` as the triggering note.
+    fn choke(&mut self, _frame_offset: usize) {}
 
     /// Set a parameter value (normalized 0.0-1.0)
     ///

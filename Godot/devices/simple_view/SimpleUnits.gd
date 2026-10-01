@@ -28,6 +28,8 @@ static func format(param: DeviceParameter, normalized: float, unit_override: Str
 			return "%.2f s" % real
 		"Hz":
 			return _format_hz(real)
+		"note":
+			return Midi.frequency_to_note_name(real)
 		_:
 			return "%.2f %s" % [real, unit_override]
 

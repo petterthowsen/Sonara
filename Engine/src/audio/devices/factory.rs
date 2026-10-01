@@ -88,6 +88,10 @@ impl DeviceFactory {
             info!("Created built-in effect {}", device_id);
             return Some(device);
         }
+        if let Some(device) = create_drum(device_id, self.sample_rate, self.max_buffer_size) {
+            info!("Created built-in drum {}", device_id);
+            return Some(device);
+        }
         let device: Box<dyn AudioDevice> = match device_id {
             "sonara.builtin.polysynth" => Box::new(PolySynthDevice::new(self.sample_rate)),
             "sonara.builtin.sfizz" => Box::new(SfizzDevice::new(
@@ -173,11 +177,15 @@ impl DeviceFactory {
             Box::new(SamplerDevice::new_for_metadata()),
             Box::new(DrumMachineDevice::new(self.max_buffer_size)),
         ];
+        let drums = DRUM_IDS
+            .iter()
+            .filter_map(|id| create_drum(id, self.sample_rate, self.max_buffer_size));
         let effects = EFFECT_IDS
             .iter()
             .filter_map(|id| create_effect(id, self.sample_rate, self.max_buffer_size));
         others
             .into_iter()
+            .chain(drums)
             .chain(effects)
             .map(|device| builtin_device_info(device.as_ref()))
             .collect()
@@ -195,6 +203,36 @@ pub const EFFECT_IDS: &[&str] = &[
     "sonara.builtin.phaser",
     "sonara.builtin.reverb",
 ];
+
+/// Built-in drum instruments (spec 013). Each is made from the sample rate and block size alone.
+/// The drum conformance test runs over this list, so a new drum is covered by adding it here.
+pub const DRUM_IDS: &[&str] = &[
+    "sonara.builtin.kick",
+    "sonara.builtin.snare",
+    "sonara.builtin.hat",
+    "sonara.builtin.clap",
+];
+
+/// Create a built-in drum from [`DRUM_IDS`], prepared for `sample_rate` and blocks of up to
+/// `max_frames`. Command thread only (allocates). None for any other ID.
+pub fn create_drum(
+    device_id: &str,
+    sample_rate: f32,
+    max_frames: usize,
+) -> Option<Box<dyn AudioDevice>> {
+    use super::drums::{
+        clap::ClapVoice, hat::HatVoice, kick::KickVoice, snare::SnareVoice, DrumHost,
+    };
+    let mut device: Box<dyn AudioDevice> = match device_id {
+        "sonara.builtin.kick" => Box::new(DrumHost::<KickVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.snare" => Box::new(DrumHost::<SnareVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.hat" => Box::new(DrumHost::<HatVoice>::new(sample_rate, max_frames)),
+        "sonara.builtin.clap" => Box::new(DrumHost::<ClapVoice>::new(sample_rate, max_frames)),
+        _ => return None,
+    };
+    device.prepare(sample_rate, max_frames);
+    Some(device)
+}
 
 /// Create a built-in effect from [`EFFECT_IDS`], prepared for `sample_rate` and blocks of up to
 /// `max_frames`. Command thread only (allocates). None for any other ID.

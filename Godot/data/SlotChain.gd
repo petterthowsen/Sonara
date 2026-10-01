@@ -42,11 +42,13 @@ static func wrap_device(inst: DeviceInstance) -> DeviceInstance:
 	chain.slot_mute = inst.slot_mute
 	chain.slot_solo = inst.slot_solo
 	chain.slot_note = inst.slot_note
+	chain.choke_group = inst.choke_group
 	chain.return_channel_id = inst.return_channel_id
 	inst.slot_volume = 0.5
 	inst.slot_mute = false
 	inst.slot_solo = false
 	inst.slot_note = -1
+	inst.choke_group = 0
 	inst.return_channel_id = -1
 	inst.position = 0
 	inst.set_parent_device(chain)

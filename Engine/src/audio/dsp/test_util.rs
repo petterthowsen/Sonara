@@ -180,6 +180,51 @@ pub fn schroeder_t60(response: &[f32], sample_rate: f32) -> Option<f32> {
     Some(3.0 * (t25 - t5))
 }
 
+/// Estimated fundamental of `signal` from upward zero crossings (linearly interpolated between
+/// samples), using the first and last crossing so the estimate is not quantised by the window
+/// length. 0.0 when there are fewer than two crossings.
+pub fn instantaneous_freq(signal: &[f32], sample_rate: f32) -> f32 {
+    let mut first = None;
+    let mut last = 0.0f32;
+    let mut count = 0usize;
+    for i in 1..signal.len() {
+        let (a, b) = (signal[i - 1], signal[i]);
+        if a <= 0.0 && b > 0.0 {
+            let frac = -a / (b - a);
+            let t = i as f32 - 1.0 + frac;
+            if first.is_none() {
+                first = Some(t);
+            }
+            last = t;
+            count += 1;
+        }
+    }
+    match first {
+        Some(f) if count >= 2 => (count - 1) as f32 * sample_rate / (last - f),
+        _ => 0.0,
+    }
+}
+
+/// Seconds until `signal`'s absolute level last exceeds `db` relative to its peak. 0.0 if it
+/// never exceeds it.
+pub fn time_to_db(signal: &[f32], db: f32, sample_rate: f32) -> f32 {
+    let peak = peak(signal);
+    if peak <= 0.0 {
+        return 0.0;
+    }
+    let threshold = peak * 10f32.powf(db / 20.0);
+    let mut last = None;
+    for (i, &x) in signal.iter().enumerate() {
+        if x.abs() > threshold {
+            last = Some(i);
+        }
+    }
+    match last {
+        Some(i) => i as f32 / sample_rate,
+        None => 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +263,29 @@ mod tests {
         assert_eq!(peak_bin, (750.0 * 4_096.0 / SR).round() as usize);
         assert!(peak(&pink_noise(10_000, 0.5, 3)) <= 0.5 + 1e-6);
         assert_eq!(log_sweep(20.0, 20_000.0, SR, 100, 1.0).len(), 100);
+    }
+
+    #[test]
+    fn instantaneous_freq_reads_a_sine() {
+        let signal = sine(100.0, SR, (SR * 0.5) as usize, 1.0);
+        let f = instantaneous_freq(&signal, SR);
+        assert!((f - 100.0).abs() / 100.0 < 0.01, "{f}");
+        assert_eq!(instantaneous_freq(&[0.5; 100], SR), 0.0);
+        assert_eq!(instantaneous_freq(&[], SR), 0.0);
+    }
+
+    #[test]
+    fn time_to_db_finds_the_decay_point() {
+        let t60 = 1.5;
+        let signal: Vec<f32> = (0..(SR * 2.0) as usize)
+            .map(|n| 10f32.powf(-3.0 * n as f32 / SR / t60))
+            .collect();
+        // -6 dB relative to the peak (1.0) is reached at about 0.1 * t60.
+        let t = time_to_db(&signal, -6.0, SR);
+        let want = 0.1 * t60;
+        assert!((t - want).abs() / want < 0.02, "{t} vs {want}");
+        let constant = vec![1.0; 100];
+        assert!((time_to_db(&constant, -6.0, SR) - 99.0 / SR).abs() < 1e-6);
+        assert_eq!(time_to_db(&[0.0; 10], -6.0, SR), 0.0);
     }
 }

@@ -684,6 +684,23 @@ impl OscServer {
                     }
                 }
             }
+            ["slot", slot_str, "choke"] => {
+                if let Ok(slot) = slot_str.parse::<usize>() {
+                    let group = match args.first() {
+                        Some(OscType::Int(g)) => Some(*g as u8),
+                        Some(OscType::Float(g)) => Some(*g as u8),
+                        _ => None,
+                    };
+                    if let Some(group) = group {
+                        command_tx.send(AudioCommand::SetDrumSlotChoke {
+                            channel_id,
+                            device_path,
+                            slot,
+                            group,
+                        })?;
+                    }
+                }
+            }
             _ => {
                 warn!(
                     "Unhandled device OSC action {:?} on channel {} path {}",

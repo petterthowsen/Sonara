@@ -240,6 +240,13 @@ func get_category_string() -> String:
 			return "Unknown"
 
 
+## Browser category for this device: "Drums" for drum instruments, else the plain category string.
+func get_browser_group() -> String:
+	if DeviceKind.infer(self) == DeviceKind.DRUM:
+		return "Drums"
+	return get_category_string()
+
+
 ## Get icon name for this device type
 func get_icon() -> String:
 	match category:

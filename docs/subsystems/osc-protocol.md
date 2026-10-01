@@ -195,6 +195,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/mute` | `i:0_or_1` | Layer slot mute |
 | `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
 | `/channel/{id}/device/{path}/slot/{n}/note` | `i:midi` | Drum Machine: MIDI note that triggers child `n` |
+| `/channel/{id}/device/{path}/slot/{n}/choke` | `i:group` | Drum Machine: choke group of child `n` (0 = none, 1–8). A note-on on a slot chokes the other slots in the same non-zero group; out-of-range is logged and ignored |
 | `/channel/{id}/device/{path}/slot/{n}/note_map` | `b:128_bytes` | Layer slot note map: byte *k* = output note for input note *k*, 255 = slot ignores it. Identity = the full map (default). Any other length is logged and ignored |
 | `/channel/{id}/device/{path}/slot/{n}/separate_out` | `i:0_or_1` | Layer slot audio goes to extra bus *n* (its return channel, see `/channel/{id}/aux_out`) instead of the Layer output. Only when the Layer is the channel's first device |
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
@@ -323,6 +324,9 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 - Parallel mix like Layer. MIDI is routed to the child whose `/slot/{n}/note` matches (unique notes; default C1 / 36 upward).
 - Empty drum machine is silence. A pad may hold any device (Sampler, Chain, CLAP, …).
 - No device-level params. Per-child note via `/slot/{n}/note`.
+- Choke groups (closed/open hats) via `/slot/{n}/choke`. Group 0 = none, 1–8 are groups; a
+  note-on chokes every other slot in the same group with a ~3 ms fade starting at the same frame
+  offset as the note (see ADR-0012).
 
 ##### Built-in Parameter Advertisement (Rust → Godot)
 `/builtin/info` sends device metadata and typed parameter descriptors:

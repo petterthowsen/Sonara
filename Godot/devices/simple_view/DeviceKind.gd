@@ -1,10 +1,11 @@
 ## DeviceKind.gd
 ## Infers which Simple View generation rules fit a device: from its CLAP feature tags first,
-## then its category, then keywords in its id and name.
+## then drum name keywords, then its category, then keywords in its id and name.
 
 class_name DeviceKind extends RefCounted
 
 const SYNTH := "synth"
+const DRUM := "drum"
 const REVERB := "reverb"
 const DELAY := "delay"
 const COMPRESSOR := "compressor"
@@ -13,6 +14,7 @@ const GENERIC := "generic"
 
 ## Feature tag → kind, checked in this order (reverbs sometimes also tag "delay").
 const FEATURE_KINDS: Array[Array] = [
+	["drum", DRUM],
 	["reverb", REVERB],
 	["delay", DELAY],
 	["compressor", COMPRESSOR],
@@ -21,6 +23,10 @@ const FEATURE_KINDS: Array[Array] = [
 	["instrument", SYNTH],
 	["synthesizer", SYNTH],
 ]
+
+## Drum name keywords, matched against the device name only (not its id: a CLAP plugin's id
+## contains the token "clap", which would otherwise classify every plugin as a drum).
+const DRUM_NAME_KEYWORDS: Array = ["kick*", "snare*", "hat*", "hihat*", "clap*"]
 
 ## Kind → name/id keywords (see `ParamClassifier.matches_keyword`), checked in this order.
 const NAME_KEYWORDS: Array[Array] = [
@@ -39,6 +45,9 @@ static func infer(device: Device) -> String:
 	for pair in FEATURE_KINDS:
 		if device.features.has(pair[0]):
 			return pair[1]
+	var name_tokens := ParamClassifier.name_tokens(device.name)
+	if ParamClassifier.tokens_match(name_tokens, DRUM_NAME_KEYWORDS):
+		return DRUM
 	if device.category == Device.DeviceCategory.Instrument:
 		return SYNTH
 	var tokens := ParamClassifier.name_tokens(device.device_id + " " + device.name)
