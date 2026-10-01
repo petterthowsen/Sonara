@@ -13,10 +13,7 @@ use crate::audio::dsp::test_util::{peak, render, stereo, white_noise};
 const SR: f32 = 48_000.0;
 const MAX_FRAMES: usize = 4_096;
 /// Effects that don't pass yet, with the reason. `known_failing_effects_still_fail` runs them.
-const KNOWN_FAILING: &[(&str, &str)] = &[(
-    "sonara.builtin.delay",
-    "the pre-012 Delay advertises 1–5000 ms but maps 1–1250 ms; Delay v2 (Phase 1) replaces it",
-)];
+const KNOWN_FAILING: &[(&str, &str)] = &[];
 
 fn make(id: &str) -> Box<dyn AudioDevice> {
     create_effect(id, SR, MAX_FRAMES).unwrap_or_else(|| panic!("{id} is not an effect"))

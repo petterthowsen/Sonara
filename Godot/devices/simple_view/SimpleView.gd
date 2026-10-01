@@ -182,10 +182,18 @@ func _add_control(data: Dictionary) -> void:
 	var pixel_rect := _control_pixel_rect(GridPacker.rect_from_array(data.rect), String(data.get("group", "")))
 	control.position = pixel_rect.position + Vector2(cell_margin, cell_margin) * 0.5
 	control.size = pixel_rect.size - Vector2(cell_margin, cell_margin)
-	control.bind(device, data)
+	control.bind(device, _decorated(data))
 	_controls.append(control)
 	if not _assign_source.is_empty():
 		control.set_mod_assign(_assign_source, _source_color(_assign_source))
+
+
+## The layout control with the strategy's annotations (e.g. a Time knob's Sync sibling), resolved
+## here so the saved layout stays free of display-only keys.
+func _decorated(data: Dictionary) -> Dictionary:
+	if layout == null or device == null:
+		return data
+	return SimpleLayoutGenerator.strategy_for(layout.kind).decorate_control(data, device.get_parameters())
 
 
 ## Columns `page` occupies (the right edge of its rightmost control or group), at least 1.
