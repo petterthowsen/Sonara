@@ -815,3 +815,60 @@ cycle. It returns to the requested size once the quantum drops.
 The device sample rate changed. Audio clips were decoded at the old rate. They keep playing at the
 right pitch (playback compensates for the clip's rate), and Godot re-sends `load_audio_file` for
 each one so they're resampled properly. Files decode at the new rate from this message on.
+
+## Offline Rendering (Godot <-> Rust)
+
+The engine renders a range offline (`Engine/src/audio/render/`) on a worker thread with its own
+clock. While a render runs:
+- live output is silent and `/transport/play`, `/pause`, `/stop` and `/seek` are ignored with a
+  warning. A playing transport is stopped first (`/status/playing 0`), and the playhead is restored
+  afterwards (`/status/playhead`).
+- devices are reset before and after, so nothing from live playback leaks in, and are kept awake
+  for the whole render (no device sleep).
+- CLAP plugins are switched to offline mode (CLAP render extension, when they have it) and may take
+  up to 2 s per block. A plugin that misses that, or whose host crashes, fails the render instead of
+  leaving a gap.
+- live MIDI input is dropped.
+
+Only one render runs at a time. Files are written as `<path>.part` and renamed when the render
+succeeds, so a failed or cancelled render leaves nothing at the requested paths.
+
+### `/render/start` (Godot -> Rust)
+
+| # | Type | Meaning |
+|---|---|---|
+| 0 | s | `job_id`: chosen by Godot, echoed by every reply |
+| 1 | i/h | `start_tick`: first tick of the range |
+| 2 | i/h | `end_tick`: end of the range (exclusive). The range stops on the frame before this tick's MIDI would play, so a note on `end_tick` is not rendered |
+| 3 | f | `tail_seconds`: tail rendered after the range with the transport stopped (0–600) |
+| 4 | i | `until_silent`: 1 ends the tail once the master has stayed below −90 dBFS for 1 s, with `tail_seconds` as the cap; 0 renders exactly `tail_seconds` |
+| 5 | s | `master_path`: stereo WAV of the master; `""` writes none |
+| 6 | i | `bit_depth`: 16 or 24 (integer, clipped to ±1.0, no dither) or 32 (float, keeps overs) |
+| 7 | i | `sample_rate`: 0 renders at the engine's rate, the only rate supported so far |
+| 8 | i | `block_frames`: frames per block (32–8192); 0 uses 512 |
+| 9… | i, s | stems: `(channel_id, path)` pairs. A stem is the channel's post-fader, post-pan output (what it sends on), so a muted channel, or one silenced by solo, is silent |
+
+At least one of the master and the stems is required. Missing parent directories are created.
+Before rendering, the engine waits up to 60 s for plugins and SFZ files that are still loading and
+for audio clips in the range that are still decoding. A device that failed to load or crashed fails
+the render; bypassed and deactivated devices are ignored. A malformed message is answered with
+`/render/failed` at once.
+
+### `/render/cancel [s:job_id]` (Godot -> Rust)
+
+Stop the render after its current block. It ends with `/render/failed [job_id, "cancelled"]`.
+
+### `/render/progress [s:job_id, f:fraction]` (Rust -> Godot)
+
+About 10 times a second while rendering, 0.0–1.0. With an until-silent tail the estimate assumes the
+whole cap, so it jumps to 1.0 when the tail ends early.
+
+### `/render/done [s:job_id, s:path…]` (Rust -> Godot)
+
+The render finished. The paths of the files written: the master first (when requested), then the
+stems in request order.
+
+### `/render/failed [s:job_id, s:error]` (Rust -> Godot)
+
+The render failed or was cancelled (`error` is `cancelled`), or the request was rejected (bad
+range, unknown stem channel, another render still running, …). No files were written.

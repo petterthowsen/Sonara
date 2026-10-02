@@ -9,6 +9,7 @@ The Rust audio engine keeps slow work off the real-time path:
 - **Audio Callback Thread**: Real-time audio generation (high priority, no allocations). Takes the state with `lock_state_for_callback` (`stream.rs`): spins on `try_lock` for up to `STATE_LOCK_BUDGET` (1 ms), then outputs silence for that buffer.
 - **Stream Thread** (`stream.rs`, "audio-stream"): owns the CPAL output stream (`Stream` is `!Send`) and its watchdog, which reopens the stream when callbacks stall. The command thread drives it through `StreamControl` (`stop`, `resolve`, `start`) to change device, rate or buffer size (Phase 7, see below).
 - **PipeWire Monitor** (`pipewire.rs`): every 3 s reads the graph with `pw-top -b`, `pw-dump` and `pw-metadata`, reports quantum/rate changes to the command thread and adds PipeWire errors on the engine's node to the xrun counter. Exits when the tools aren't installed.
+- **Render Thread** (`audio/render/`, "engine-render"): runs one offline render at a time (export, stems), started by `AudioCommand::StartRender` on the command thread. It calls `process_audio` and `mix_and_output` with its own clock, locking the state for one block at a time and writing files with the lock released. While `EngineState::rendering` is set the live callback outputs silence without locking, transport commands are ignored and `BlockClock` is in offline mode (below). Wire format: `osc-protocol.md` › Offline Rendering.
 - **Window Thread**: Dedicated winit loop (`WindowManager`) that creates/resizes/destroys plugin host windows based on messages from the main thread; required for X11/Wayland event handling.
 - **AudioFileService Workers**: Four-thread job pool that performs blocking audio decode, resampling, and peak-file generation off the real-time path. Each job decodes once: native-rate chunks feed `PeakBuilder` (`io/peaks.rs`, peaks in source-sample space) and resampled chunks fill the interleaved playback buffer, the only full copy of the audio. It sends `DecodeReady` with the PCM, then writes the peak file atomically (temp file + rename) and sends `WaveformReady`. A valid cached peak file (`waveform_cache.rs`, keyed by path, size and mtime) skips the peak work. Format: `osc-protocol.md` › Waveform Cache Format. A separate sample thread answers `/audiofile/samples` (raw native-rate samples for deep zoom) from `io/sample_reader.rs`, which seeks in the source file and caches the last decoded window per file; decode jobs register `cache_key → path` for it.
 - **Communication**: Crossbeam unbounded MPMC channels carry commands (main → command thread) and statuses (command/audio threads → main), plus `std::sync::mpsc` channels from statuses → main loop → window thread. The command thread and audio callback share `EngineState` through a mutex.
@@ -66,6 +67,7 @@ Engine/src/
     processing.rs      # Audio callback: MIDI scheduling, transport, rendering
     mixing.rs          # Audio mixing and routing logic
     render_scratch.rs  # Preallocated scratch lists and per-channel mix buffers for the callback
+    render/            # Offline rendering: RenderJob, the render thread (worker.rs), WAV output (wav.rs)
     types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
     devices/
@@ -130,6 +132,12 @@ Godot/              # Godot 4.7 UI App
 - **Tempo map.** `EngineState.tempo_map` (`audio/tempo_map.rs`, set by `/transport/tempo_map`, empty = static `settings.tempo`) drives the clock. `process_audio` fills `RenderScratch.frame_tick_rates` (ticks per sample for every frame, walking the map with a `TempoCursor`) once per buffer; MIDI tick collection and the audio-clip loop both read that slice. Seconds use the closed-form ramp integral, matching Godot's `TempoMap.gd`.
 - **Transport snapshot.** `audio/transport.rs` builds a `Transport` (tempo, tempo change per sample, playing, beats, seconds, bar start/number, time signature) at the block's first frame and `devices::apply_transport` pushes it to every device, nested ones included, before the not-playing early return.
 - Constant-tempo `ProjectSettings::{ticks_to_samples,samples_to_ticks}` are only valid when no tempo map is active; clock advance goes through the tempo map, and audio-clip source positions use `AudioPlayback::clip_source_frame` (the clip's recorded-BPM timeline).
+
+### Offline Rendering
+- `render::run_render` takes the engine over (sets `rendering`, stops the transport, remembers the playhead), waits until no device is loading and the range's audio clips are decoded, resets every device, switches CLAP plugins to offline mode and seeks to the start tick.
+- The range ends on the frame before the end tick's MIDI would be dispatched: `processing::frames_before_tick` runs the same tick arithmetic as `process_audio`, so a note on the end tick never leaks into the tail. The tail then renders with the transport stopped (fixed length, or until the master stays below −90 dBFS for 1 s).
+- Each block drains live MIDI, wakes every device (polysynth and sampler sleep on wall-clock time, which would make two renders of the same range differ), and publishes an offline plugin deadline. After `mix_and_output` every channel buffer holds that channel's post-fader, post-pan output, which is what stems are copied from.
+- `end` always runs: reset devices, plugins back to realtime, playhead restored, `rendering` cleared. Two renders of the same range are bit-identical for built-in devices.
 
 ### Sample-Accurate Scheduling
 - `processing.rs::process_audio()` precomputes `(tick, frame_offset)` pairs for the current buffer so note events line up with the physical device sample rate (never the project setting).

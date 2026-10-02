@@ -1676,6 +1676,30 @@ impl OscServer {
                 command_tx.send(AudioCommand::RequestAudioConfig)?;
             }
             // /audio/config/set <device:s> <rate:i> <buffer:i> — device "" is the default.
+            ["render", "start"] => match parse_render_start(args) {
+                Ok(job) => command_tx.send(AudioCommand::StartRender(job))?,
+                Err(e) => {
+                    warn!("Rejecting /render/start: {}", e);
+                    let job_id = match args.first() {
+                        Some(OscType::String(id)) => id.clone(),
+                        _ => String::new(),
+                    };
+                    Self::send_status_update(
+                        &self.socket,
+                        self.client_port,
+                        EngineStatus::RenderFailed {
+                            job_id,
+                            error: format!("invalid /render/start: {}", e),
+                        },
+                    );
+                }
+            },
+            ["render", "cancel"] => match args.first() {
+                Some(OscType::String(job_id)) => command_tx.send(AudioCommand::CancelRender {
+                    job_id: job_id.clone(),
+                })?,
+                _ => warn!("Ignoring /render/cancel without a job id"),
+            },
             ["audio", "config", "set"] => match parse_audio_config(args) {
                 Ok(command) => command_tx.send(command)?,
                 Err(e) => warn!("Ignoring /audio/config/set: {}", e),
@@ -1784,6 +1808,23 @@ impl OscServer {
             EngineStatus::PlayingStateChanged(playing) => (
                 "/status/playing".to_string(),
                 vec![OscType::Int(if playing { 1 } else { 0 })],
+            ),
+            EngineStatus::RenderProgress { job_id, fraction } => (
+                "/render/progress".to_string(),
+                vec![OscType::String(job_id), OscType::Float(fraction)],
+            ),
+            EngineStatus::RenderDone { job_id, outputs } => {
+                let mut args = vec![OscType::String(job_id)];
+                args.extend(
+                    outputs
+                        .into_iter()
+                        .map(|path| OscType::String(path.to_string_lossy().into_owned())),
+                );
+                ("/render/done".to_string(), args)
+            }
+            EngineStatus::RenderFailed { job_id, error } => (
+                "/render/failed".to_string(),
+                vec![OscType::String(job_id), OscType::String(error)],
             ),
             EngineStatus::ChannelPeaks {
                 id,
@@ -2755,6 +2796,63 @@ fn parse_hosting_policy(args: &[OscType]) -> Result<crate::audio::ipc::HostingPo
     Ok(policy)
 }
 
+/// Parse `/render/start <job_id:s> <start_tick:i> <end_tick:i> <tail_seconds:f>
+/// <until_silent:i> <master_path:s> <bit_depth:i> <sample_rate:i> <block_frames:i>
+/// [<channel_id:i> <stem_path:s>]*`. An empty master path writes no master; a sample rate or
+/// block size of 0 uses the default. The job itself is validated by the render worker.
+fn parse_render_start(args: &[OscType]) -> Result<crate::audio::render::RenderJob, String> {
+    use crate::audio::render::{RenderJob, RenderTail, WavFormat, DEFAULT_BLOCK_FRAMES};
+
+    let tick = |arg: &OscType| match arg {
+        OscType::Int(value) => Some(*value as i64),
+        OscType::Long(value) => Some(*value),
+        _ => None,
+    };
+    let [OscType::String(job_id), start, end, OscType::Float(tail_seconds), OscType::Int(until_silent), OscType::String(master), OscType::Int(bit_depth), OscType::Int(sample_rate), OscType::Int(block_frames), stems @ ..] =
+        args
+    else {
+        return Err(format!(
+            "expected (job_id:s, start_tick:i, end_tick:i, tail_seconds:f, until_silent:i, \
+             master_path:s, bit_depth:i, sample_rate:i, block_frames:i, [channel_id:i, \
+             stem_path:s]*), got {:?}",
+            args
+        ));
+    };
+    let (Some(start_tick), Some(end_tick)) = (tick(start), tick(end)) else {
+        return Err("start_tick and end_tick must be integers".to_string());
+    };
+    if job_id.is_empty() {
+        return Err("the job id is empty".to_string());
+    }
+    let mut job = RenderJob::new(job_id.clone(), start_tick, end_tick);
+    job.tail = if *until_silent != 0 {
+        RenderTail::UntilSilent {
+            max_seconds: *tail_seconds,
+        }
+    } else {
+        RenderTail::Seconds(*tail_seconds)
+    };
+    job.outputs.format = WavFormat::from_bits(*bit_depth)
+        .ok_or_else(|| format!("bit depth {} isn't 16, 24 or 32", bit_depth))?;
+    job.outputs.master = (!master.is_empty()).then(|| master.into());
+    job.sample_rate = (*sample_rate).max(0) as u32;
+    job.block_frames = if *block_frames > 0 {
+        *block_frames as usize
+    } else {
+        DEFAULT_BLOCK_FRAMES
+    };
+    for pair in stems.chunks(2) {
+        let [OscType::Int(channel_id), OscType::String(path)] = pair else {
+            return Err("stems must be (channel_id:i, stem_path:s) pairs".to_string());
+        };
+        if *channel_id <= 0 {
+            return Err(format!("invalid stem channel {}", channel_id));
+        }
+        job.outputs.stems.push((*channel_id as usize, path.into()));
+    }
+    Ok(job)
+}
+
 /// Parse `/audio/config/set <device:s> <rate:i> <buffer:i>`.
 fn parse_audio_config(args: &[OscType]) -> Result<AudioCommand, String> {
     match args {
@@ -2928,6 +3026,46 @@ mod tests {
 
     fn string(s: &str) -> OscType {
         OscType::String(s.to_string())
+    }
+
+    #[test]
+    fn render_start_parses() {
+        use crate::audio::render::{RenderTail, WavFormat};
+        let mut args = vec![
+            string("job1"),
+            OscType::Int(0),
+            OscType::Long(7680),
+            OscType::Float(4.0),
+            OscType::Int(1),
+            string("/tmp/mix.wav"),
+            OscType::Int(24),
+            OscType::Int(0),
+            OscType::Int(0),
+            OscType::Int(3),
+            string("/tmp/bass.wav"),
+        ];
+        let job = parse_render_start(&args).unwrap();
+        assert_eq!(job.job_id, "job1");
+        assert_eq!((job.start_tick, job.end_tick), (0, 7680));
+        assert_eq!(job.tail, RenderTail::UntilSilent { max_seconds: 4.0 });
+        assert_eq!(job.outputs.format, WavFormat::Int24);
+        assert_eq!(job.outputs.master.as_deref(), Some("/tmp/mix.wav".as_ref()));
+        assert_eq!(job.outputs.stems, vec![(3, "/tmp/bass.wav".into())]);
+        assert_eq!(job.block_frames, crate::audio::render::DEFAULT_BLOCK_FRAMES);
+
+        // No master, fixed tail
+        args[4] = OscType::Int(0);
+        args[5] = string("");
+        let job = parse_render_start(&args).unwrap();
+        assert_eq!(job.tail, RenderTail::Seconds(4.0));
+        assert!(job.outputs.master.is_none());
+
+        args[6] = OscType::Int(8);
+        assert!(parse_render_start(&args).unwrap_err().contains("bit depth"));
+        args[6] = OscType::Int(16);
+        args.pop();
+        assert!(parse_render_start(&args).unwrap_err().contains("pairs"));
+        assert!(parse_render_start(&args[..4]).is_err());
     }
 
     #[test]

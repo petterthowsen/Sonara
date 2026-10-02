@@ -254,6 +254,12 @@ fn print_extensions(instance: &mut PluginInstance<SubprocessHost>) {
     if handle.get_extension::<PluginTimer>().is_some() {
         found.push("timer-support");
     }
+    if handle
+        .get_extension::<clack_extensions::render::PluginRender>()
+        .is_some()
+    {
+        found.push("render");
+    }
     println!("\nExtensions the host uses: {}", found.join(", "));
 }
 

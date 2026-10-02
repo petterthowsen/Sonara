@@ -24,6 +24,7 @@ use super::devices::{
 };
 use super::ipc::{HostingPolicy, PluginEvent, ProcessManager};
 use super::pipewire::GraphInfo;
+use super::render::{RenderHandle, RenderJob};
 use super::stream::{StreamControl, StreamRequest};
 use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
@@ -109,6 +110,9 @@ pub struct CommandWorker {
     plugin_reports_since: Instant,
     stream: StreamControl,
     audio: AudioSettings,
+    block_clock: Arc<BlockClock>,
+    /// The offline render running or last run (`audio/render`).
+    render: Option<RenderHandle>,
 }
 
 impl CommandWorker {
@@ -131,7 +135,7 @@ impl CommandWorker {
             max_buffer_size,
             status_tx.clone(),
             command_tx,
-            block_clock,
+            block_clock.clone(),
         );
 
         Self {
@@ -153,6 +157,8 @@ impl CommandWorker {
                 notice: String::new(),
                 mismatch: String::new(),
             },
+            block_clock,
+            render: None,
         }
     }
 
@@ -236,7 +242,9 @@ impl CommandWorker {
                 plugin.handle.kill_host();
                 continue;
             }
-            if plugin.stalled && !plugin.handle.is_debugging() {
+            // An offline render gives a block more time than the stall timeout and fails on a
+            // plugin that misses it, so a slow offline block isn't a hang.
+            if plugin.stalled && !plugin.handle.is_debugging() && !self.block_clock.is_offline() {
                 warn!(
                     "Plugin {} (channel {} device {}) hasn't finished a block in {:?}; killing its host",
                     plugin.handle.device_name(),
@@ -728,6 +736,8 @@ impl CommandWorker {
     fn handle(&mut self, cmd: AudioCommand) {
         match cmd {
             AudioCommand::ScanPlugins { paths } => self.scan_plugins(paths),
+            AudioCommand::StartRender(job) => self.start_render(job),
+            AudioCommand::CancelRender { job_id } => self.cancel_render(&job_id),
             AudioCommand::AdvertiseBuiltinDevices => self.advertise_builtin_devices(),
             AudioCommand::AddDeviceToChannel {
                 channel_id,
@@ -833,6 +843,34 @@ impl CommandWorker {
                 }),
             },
             other => self.apply_locked(other),
+        }
+    }
+
+    /// Start an offline render on its own thread. Only one runs at a time; another job fails
+    /// at once.
+    fn start_render(&mut self, job: RenderJob) {
+        if let Some(running) = self.render.as_ref().filter(|r| !r.is_finished()) {
+            self.send_status(EngineStatus::RenderFailed {
+                job_id: job.job_id,
+                error: format!("render {} is still running", running.job_id()),
+            });
+            return;
+        }
+        let job_id = job.job_id.clone();
+        match RenderHandle::spawn(job, self.state.clone(), self.status_tx.clone()) {
+            Ok(handle) => self.render = Some(handle),
+            Err(e) => self.send_status(EngineStatus::RenderFailed {
+                job_id,
+                error: format!("couldn't start the render thread: {}", e),
+            }),
+        }
+    }
+
+    /// Cancel the running render if it is `job_id`.
+    fn cancel_render(&self, job_id: &str) {
+        match self.render.as_ref().filter(|r| !r.is_finished()) {
+            Some(running) if running.job_id() == job_id => running.cancel(),
+            _ => warn!("Cancel for render {}, which isn't running", job_id),
         }
     }
 

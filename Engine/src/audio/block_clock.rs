@@ -6,13 +6,20 @@
 //!
 //! The deadline is stored as microseconds since the clock's creation so the audio thread can
 //! read it without a lock. One engine callback sets it before mixing; plugin adapters read it.
+//!
+//! An offline render (`audio/render`) switches the clock to offline mode. Its deadline is kept
+//! apart from the live one, so a live callback that publishes late can't cut a render block
+//! short, and a missed block is counted for the render to fail on instead of being dropped.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Fraction of the block time plugins may use before the engine gives up on them. Overridden
 /// with `SONARA_PLUGIN_DEADLINE_FRACTION` (clamped to 0.1–0.95).
 const DEFAULT_DEADLINE_FRACTION: f32 = 0.7;
+
+/// How long a plugin may take for one block of an offline render before the render fails.
+pub const OFFLINE_BLOCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Shared per-callback deadline. Attach one to the engine state; adapters hold a clone.
 pub struct BlockClock {
@@ -23,6 +30,12 @@ pub struct BlockClock {
     deadline_us: AtomicI64,
     /// Fraction of block time plugins get. Read from the environment once at construction.
     fraction: f32,
+    /// An offline render owns the clock: `deadline` returns `offline_deadline_us`.
+    offline: AtomicBool,
+    /// The render block's deadline, same encoding as `deadline_us`.
+    offline_deadline_us: AtomicI64,
+    /// Plugin blocks that missed an offline deadline since the last `take_offline_misses`.
+    offline_misses: AtomicU64,
 }
 
 impl BlockClock {
@@ -35,6 +48,9 @@ impl BlockClock {
             start: Instant::now(),
             deadline_us: AtomicI64::new(0),
             fraction: fraction.clamp(0.1, 0.95),
+            offline: AtomicBool::new(false),
+            offline_deadline_us: AtomicI64::new(0),
+            offline_misses: AtomicU64::new(0),
         }
     }
 
@@ -47,13 +63,53 @@ impl BlockClock {
         self.deadline_us.store(at, Ordering::Relaxed);
     }
 
-    /// The absolute deadline, or None when none was published.
+    /// The absolute deadline, or None when none was published. While offline, the render
+    /// block's deadline.
     pub fn deadline(&self) -> Option<Instant> {
-        let at = self.deadline_us.load(Ordering::Relaxed);
+        let at = if self.is_offline() {
+            self.offline_deadline_us.load(Ordering::Relaxed)
+        } else {
+            self.deadline_us.load(Ordering::Relaxed)
+        };
         if at <= 0 {
             return None;
         }
         Some(self.start + Duration::from_micros(at as u64))
+    }
+
+    /// Enter offline mode for a render: plugins wait on the render's deadlines and misses are
+    /// counted. Clears the miss count.
+    pub fn begin_offline(&self) {
+        self.offline_misses.store(0, Ordering::Relaxed);
+        self.offline_deadline_us.store(0, Ordering::Relaxed);
+        self.offline.store(true, Ordering::Release);
+    }
+
+    /// Leave offline mode; the live callback's deadline applies again.
+    pub fn end_offline(&self) {
+        self.offline.store(false, Ordering::Release);
+    }
+
+    pub fn is_offline(&self) -> bool {
+        self.offline.load(Ordering::Acquire)
+    }
+
+    /// Publish the deadline for an offline block starting now: `OFFLINE_BLOCK_TIMEOUT` away.
+    pub fn publish_offline_block(&self) {
+        let offset = Instant::now().saturating_duration_since(self.start) + OFFLINE_BLOCK_TIMEOUT;
+        self.offline_deadline_us
+            .store(offset.as_micros() as i64, Ordering::Relaxed);
+    }
+
+    /// A plugin missed the offline deadline: the block it returned is dry, so the render is
+    /// corrupt. Called by plugin adapters while `is_offline`.
+    pub fn record_offline_miss(&self) {
+        self.offline_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Offline misses since the last call.
+    pub fn take_offline_misses(&self) -> u64 {
+        self.offline_misses.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -83,6 +139,24 @@ mod tests {
         let remaining = clock.deadline().unwrap() - Instant::now();
         assert!(remaining <= Duration::from_millis(50));
         assert!(remaining > Duration::from_millis(40));
+    }
+
+    #[test]
+    fn offline_deadline_ignores_live_publishes() {
+        let clock = BlockClock::with_fraction(0.5);
+        clock.begin_offline();
+        clock.publish_offline_block();
+        // A live callback publishing late doesn't shorten the render block's deadline.
+        clock.publish(Instant::now(), Duration::from_millis(1));
+        let remaining = clock.deadline().unwrap() - Instant::now();
+        assert!(remaining > OFFLINE_BLOCK_TIMEOUT / 2);
+
+        clock.record_offline_miss();
+        assert_eq!(clock.take_offline_misses(), 1);
+        assert_eq!(clock.take_offline_misses(), 0);
+
+        clock.end_offline();
+        assert!(clock.deadline().unwrap() <= Instant::now() + Duration::from_millis(1));
     }
 
     #[test]

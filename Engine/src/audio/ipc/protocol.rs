@@ -135,6 +135,10 @@ pub enum PluginCommand {
     /// Reset plugin (clear buffers, stop voices)
     Reset,
 
+    /// Tell the plugin whether it renders offline (export) or in real time, through the CLAP
+    /// render extension. Answered with `RenderModeSet`.
+    SetRenderMode { offline: bool },
+
     /// Remove this instance from its host, which keeps running for its other instances: close
     /// its GUI, deactivate it and drop it. Answered with `Unloaded`.
     Unload,
@@ -210,6 +214,9 @@ pub enum PluginResponse {
 
     /// Plugin reset complete
     ResetComplete,
+
+    /// Answer to `SetRenderMode`: false when the plugin has no render extension or declined.
+    RenderModeSet { applied: bool },
 
     /// The instance was removed from its host (`Unload`)
     Unloaded,

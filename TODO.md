@@ -186,7 +186,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 ### Save / Load / Export
 
 - [ ] Welcome Screen with recent projects, templates
-- [ ] Export/rendering
+- [ ] Export/rendering (offline render core and WAV export: `docs/analyze-plan.md` Phases 1–2)
   - [ ] bouncing tracks or clips to audio clip on a new track
   - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio)?
 - [ ] Export MIDI
@@ -228,6 +228,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
+- [ ] `analyze` tool: render a range offline and return a per-bar loudness/band grid of the master and channels (see `docs/analyze-plan.md`; needs offline rendering first)
 - [ ] Allow the AI to ask questions via a tool with multiple choice answers (but always with a custom answer option), optionally tagging a clip, track, channel. The question will then be presented to the user and the element highlighted in the chat (if clicked, select and make visible/scroll toward it in mixerchannel or timeline (and switch arranger/mix/edit view if needed).
   - [ ] Actually, could also implement link system that both assistant and user can use via some simple syntax maybe URL style? clip://some-clip and it is rendered as a clickable badge? 
 - [ ] Implement conversation compaction — when triggered, send the conversation to a compaction model with instructions to summarize it, focusing on the important bits. Add configuration settings to Settings/AI menu (threshold and what model to use). Compaction prompt can be a .md file with a {conversation} variable maybe?

@@ -159,6 +159,26 @@ impl PluginIpcHandle {
         }
     }
 
+    /// Reset the plugin (voices, delay lines) and wait until the host has queued it on its audio
+    /// thread, which applies it before the next block it processes. Blocking.
+    pub fn reset(&self) -> Result<(), String> {
+        match self.request(PluginCommand::Reset)? {
+            PluginResponse::ResetComplete => Ok(()),
+            PluginResponse::Error { error, .. } => Err(error),
+            other => Err(format!("Unexpected response to Reset: {:?}", other)),
+        }
+    }
+
+    /// Switch the plugin between realtime and offline rendering (CLAP render extension).
+    /// Returns false when the plugin doesn't have the extension or declined the mode. Blocking.
+    pub fn set_render_mode(&self, offline: bool) -> Result<bool, String> {
+        match self.request(PluginCommand::SetRenderMode { offline })? {
+            PluginResponse::RenderModeSet { applied } => Ok(applied),
+            PluginResponse::Error { error, .. } => Err(error),
+            other => Err(format!("Unexpected response to SetRenderMode: {:?}", other)),
+        }
+    }
+
     /// False once the host process has exited (or the instance is no longer registered).
     pub fn is_alive(&self) -> bool {
         self.connection()

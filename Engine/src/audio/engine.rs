@@ -41,7 +41,10 @@ impl AudioEngine {
         let (command_tx, command_rx) = crossbeam::channel::unbounded();
 
         let state = Arc::new(Mutex::new(EngineState::default()));
-        let block_clock = state.lock().expect("fresh state lock").block_clock.clone();
+        let (block_clock, rendering) = {
+            let fresh = state.lock().expect("fresh state lock");
+            (fresh.block_clock.clone(), fresh.rendering.clone())
+        };
         let counters = Arc::new(CallbackCounters::default());
 
         let stream = StreamControl::spawn(CallbackContext {
@@ -49,6 +52,7 @@ impl AudioEngine {
             state: state.clone(),
             counters: counters.clone(),
             block_clock: block_clock.clone(),
+            rendering,
         })?;
         let request = StreamRequest::default();
         let resolved = stream

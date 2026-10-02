@@ -432,6 +432,39 @@ pub fn process_audio(
     state.render_scratch.frame_tick_rates = tick_rates;
 }
 
+/// Frames the transport can play from the current playhead (at most `max_frames`) before
+/// `target`'s MIDI would be dispatched. Runs the same tick arithmetic as `process_audio`, so
+/// stopping after that many frames plays everything before `target` and nothing at it. The
+/// offline renderer uses it to end a range exactly; it allocates into the given scratch.
+pub fn frames_before_tick(
+    state: &EngineState,
+    target: Tick,
+    max_frames: usize,
+    sample_rate: f32,
+    rates: &mut Vec<f64>,
+    events: &mut Vec<(Tick, usize)>,
+) -> usize {
+    let start_tick = state.get_current_tick();
+    if start_tick >= target {
+        return 0;
+    }
+    let acc = state.get_fractional_tick_accumulator();
+    fill_tick_rates(
+        &state.tempo_map,
+        &state.settings,
+        start_tick as f64 + acc,
+        max_frames,
+        sample_rate,
+        rates,
+    );
+    // The start tick itself is below `target`, so whether it's re-emitted doesn't matter.
+    collect_tick_events(start_tick, acc, max_frames, rates, false, events);
+    events
+        .iter()
+        .find(|&&(tick, _)| tick >= target)
+        .map_or(max_frames, |&(_, frame)| frame)
+}
+
 /// Tick rate for `frame_idx`, holding the last rate for frames past the preallocated slice.
 fn frame_rate_at(rates: &[f64], frame_idx: usize) -> f64 {
     rates

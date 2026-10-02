@@ -11,7 +11,7 @@ use cpal::{
     BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize,
 };
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -155,6 +155,8 @@ pub struct CallbackContext {
     pub state: Arc<Mutex<EngineState>>,
     pub counters: Arc<CallbackCounters>,
     pub block_clock: Arc<BlockClock>,
+    /// `EngineState::rendering`: set while an offline render owns the devices.
+    pub rendering: Arc<AtomicBool>,
 }
 
 /// Requests from the command thread to the stream thread.
@@ -646,6 +648,7 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
         state,
         counters,
         block_clock,
+        rendering,
     } = ctx;
     let sample_rate = config.sample_rate.0;
     let channels = config.channels as usize;
@@ -689,43 +692,31 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
             }
             previous_block = Some((processing_start, block_duration));
 
-            // One absolute deadline for every subprocess plugin in this callback.
-            block_clock.publish(processing_start, block_duration);
-
             rt_debug::check_callback(|| {
-                let Some(mut state) = lock_state_for_callback(&state, processing_start) else {
+                let outcome = run_live_block(
+                    &state,
+                    &rendering,
+                    &block_clock,
+                    data,
+                    channels,
+                    sample_rate as f32,
+                    processing_start,
+                    &status_tx,
+                    |state| {
+                        samples_since_update += frames;
+                        if samples_since_update >= update_interval as usize {
+                            // Subtract rather than reset: resetting discards the remainder,
+                            // which makes the status cadence slower and less regular than the
+                            // nominal rate.
+                            samples_since_update -= update_interval as usize;
+                            rt_debug::section("playhead/meter sends", || {
+                                send_meters(state, &status_tx)
+                            });
+                        }
+                    },
+                );
+                if outcome == LiveBlock::LockMissed {
                     counters.lock_misses.fetch_add(1, Ordering::Relaxed);
-                    data.fill(0.0);
-                    return;
-                };
-
-                rt_debug::section("clear buffers", || {
-                    for channel in state.channels.values_mut() {
-                        channel.clear_buffers();
-                    }
-                });
-
-                rt_debug::section("process_audio", || {
-                    process_audio(&mut state, frames, sample_rate as f32, processing_start)
-                });
-                rt_debug::section("mix_and_output", || {
-                    mix_and_output(&mut state, data, channels, frames, &status_tx)
-                });
-
-                rt_debug::section("update_peaks", || {
-                    for channel in state.channels.values_mut() {
-                        channel.update_peaks(frames, sample_rate as f32);
-                    }
-                });
-
-                samples_since_update += frames;
-                if samples_since_update >= update_interval as usize {
-                    // Subtract rather than reset: resetting discards the remainder, which makes
-                    // the status cadence slower and less regular than the nominal rate.
-                    samples_since_update -= update_interval as usize;
-                    rt_debug::section("playhead/meter sends", || {
-                        send_meters(&mut state, &status_tx)
-                    });
                 }
             });
 
@@ -755,6 +746,74 @@ fn build_stream(device: &Device, config: &StreamConfig, ctx: CallbackContext) ->
     )?;
 
     Ok(stream)
+}
+
+/// What one live callback block did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveBlock {
+    Rendered,
+    /// The command thread held the state lock past the budget: silence.
+    LockMissed,
+    /// An offline render owns the devices: silence, and nothing advanced.
+    Rendering,
+}
+
+/// Render one live block into the interleaved `data`, then run `after` with the state still
+/// locked (meter sends). Outputs silence when the state lock stays busy or an offline render
+/// runs. The render flag is checked before locking (so a render holding the lock for a block
+/// doesn't count as lock misses) and again after (a render may have started while this
+/// callback waited for the lock).
+#[allow(clippy::too_many_arguments)]
+fn run_live_block(
+    state: &Mutex<EngineState>,
+    rendering: &AtomicBool,
+    block_clock: &BlockClock,
+    data: &mut [f32],
+    channels: usize,
+    sample_rate: f32,
+    processing_start: Instant,
+    status_tx: &Sender<EngineStatus>,
+    after: impl FnOnce(&mut EngineState),
+) -> LiveBlock {
+    if rendering.load(Ordering::Acquire) {
+        data.fill(0.0);
+        return LiveBlock::Rendering;
+    }
+    let frames = data.len() / channels.max(1);
+    let block_duration = Duration::from_secs_f64(frames as f64 / sample_rate as f64);
+    // One absolute deadline for every subprocess plugin in this callback.
+    block_clock.publish(processing_start, block_duration);
+
+    let Some(mut state) = lock_state_for_callback(state, processing_start) else {
+        data.fill(0.0);
+        return LiveBlock::LockMissed;
+    };
+    if rendering.load(Ordering::Acquire) {
+        data.fill(0.0);
+        return LiveBlock::Rendering;
+    }
+
+    rt_debug::section("clear buffers", || {
+        for channel in state.channels.values_mut() {
+            channel.clear_buffers();
+        }
+    });
+
+    rt_debug::section("process_audio", || {
+        process_audio(&mut state, frames, sample_rate, processing_start)
+    });
+    rt_debug::section("mix_and_output", || {
+        mix_and_output(&mut state, data, channels, frames, status_tx)
+    });
+
+    rt_debug::section("update_peaks", || {
+        for channel in state.channels.values_mut() {
+            channel.update_peaks(frames, sample_rate);
+        }
+    });
+
+    after(&mut state);
+    LiveBlock::Rendered
 }
 
 /// Send the playhead (while playing) and every channel's meters.
@@ -801,6 +860,55 @@ fn lock_state_for_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_output_is_silent_while_rendering() {
+        use crate::audio::devices::{AudioDevice, PolySynthDevice};
+        use crate::audio::types::Channel;
+
+        let mut state = EngineState::default();
+        state.ensure_master_channel(MAX_BLOCK_FRAMES);
+        let mut channel = Channel::new(2, "Synth".to_string(), MAX_BLOCK_FRAMES, 48_000.0);
+        let mut synth = PolySynthDevice::new(48_000.0);
+        synth.prepare(48_000.0, MAX_BLOCK_FRAMES);
+        channel.devices.push(Box::new(synth));
+        channel.send_midi_event_to_devices(60, 100, true, 0);
+        state.channels.insert(2, channel);
+        state.set_is_playing(true);
+        let rendering = state.rendering.clone();
+        let block_clock = state.block_clock.clone();
+        let state = Mutex::new(state);
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+
+        let mut run = |data: &mut [f32]| {
+            run_live_block(
+                &state,
+                &rendering,
+                &block_clock,
+                data,
+                2,
+                48_000.0,
+                Instant::now(),
+                &status_tx,
+                |_| {},
+            )
+        };
+
+        rendering.store(true, Ordering::Release);
+        let mut data = vec![1.0; 1024];
+        assert_eq!(run(&mut data), LiveBlock::Rendering);
+        assert!(data.iter().all(|&s| s == 0.0));
+        assert_eq!(
+            state.lock().unwrap().get_current_tick(),
+            0,
+            "the transport didn't move"
+        );
+
+        rendering.store(false, Ordering::Release);
+        assert_eq!(run(&mut data), LiveBlock::Rendered);
+        assert!(data.iter().any(|&s| s.abs() > 0.001), "the held note plays");
+        assert!(state.lock().unwrap().get_current_tick() > 0);
+    }
 
     #[test]
     fn hardware_devices_open_every_channel() {

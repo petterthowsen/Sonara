@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 use clack_extensions::gui::{GuiSize, PluginGui};
 use clack_extensions::latency::PluginLatency;
 use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
+use clack_extensions::render::{PluginRender, RenderMode};
 use clack_extensions::state::PluginState as ClapState;
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
@@ -370,6 +371,13 @@ pub fn process_command(
             Some(PluginResponse::ResetComplete)
         }
 
+        PluginCommand::SetRenderMode { offline } => {
+            let applied = plugin_state
+                .as_mut()
+                .is_some_and(|state| set_render_mode(state, offline));
+            Some(PluginResponse::RenderModeSet { applied })
+        }
+
         PluginCommand::Unload => {
             // The host keeps running for its other instances: tear this one down completely.
             if let Some(state) = plugin_state.as_mut() {
@@ -667,6 +675,31 @@ fn deactivate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) {
     }
     state.activated = false;
     state.processing = false;
+}
+
+/// Switch the plugin to offline or realtime rendering. False when it has no render extension or
+/// declined the mode (a plugin with a hard realtime requirement still renders, just in realtime
+/// mode).
+fn set_render_mode(state: &mut PluginState, offline: bool) -> bool {
+    let mut handle = state.instance.plugin_handle();
+    let Some(render) = handle.get_extension::<PluginRender>() else {
+        return false;
+    };
+    let mode = if offline {
+        RenderMode::Offline
+    } else {
+        RenderMode::Realtime
+    };
+    match render.set(&mut handle, mode) {
+        Ok(()) => {
+            info!("Render mode set to {:?}", mode);
+            true
+        }
+        Err(e) => {
+            warn!("Plugin declined render mode {:?}: {}", mode, e);
+            false
+        }
+    }
 }
 
 /// The plugin's reported latency at the current sample rate, 0 when it has no latency extension.

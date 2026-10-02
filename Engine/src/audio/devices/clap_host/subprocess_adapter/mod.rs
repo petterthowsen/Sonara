@@ -627,8 +627,9 @@ impl SubprocessClapAdapter {
     }
 
     /// Wait until the host has finished request `seq`, spinning first and then futex-waiting on
-    /// the host's doorbell. Bounded by the callback's absolute deadline; falls back to 70% of the
-    /// block when no clock was published (unit tests, offline use).
+    /// the host's doorbell. Bounded by the callback's absolute deadline, or by the render block's
+    /// generous one during an offline render; falls back to 70% of the block when no clock was
+    /// published (unit tests).
     fn wait_for_done(&self, shared: &PluginShared, seq: u64, sample_count: usize) -> bool {
         let deadline = self.block_clock.deadline().unwrap_or_else(|| {
             let block =
@@ -700,6 +701,10 @@ impl SubprocessClapAdapter {
     fn record_deadline_miss(&mut self) {
         self.stats.deadline_misses += 1;
         PLUGIN_UNDERRUNS.fetch_add(1, Ordering::Relaxed);
+        if self.block_clock.is_offline() {
+            // An offline render must not drop a block: it fails on this.
+            self.block_clock.record_offline_miss();
+        }
         self.consecutive_misses += 1;
         self.stats.max_consecutive_misses = self
             .stats

@@ -59,6 +59,12 @@ pub enum AudioCommand {
     Pause,
     Stop,
     Seek(Tick),
+    /// Render a range offline (export, stems). Live output is silent until it finishes.
+    StartRender(super::render::RenderJob),
+    /// Cancel the running render with this job id. It ends with `RenderFailed("cancelled")`.
+    CancelRender {
+        job_id: String,
+    },
     SetTempo(f32),
     /// Whole tempo map as `(tick, bpm)` points; empty clears it.
     SetTempoMap(Vec<(Tick, f32)>),
@@ -537,6 +543,21 @@ pub enum CommandResponse {
 pub enum EngineStatus {
     PlayheadUpdate(Tick),
     PlayingStateChanged(bool),
+    /// An offline render's progress, 0.0–1.0 (estimated while the tail renders until silent).
+    RenderProgress {
+        job_id: String,
+        fraction: f32,
+    },
+    /// An offline render finished: the files it wrote (master first, then stems).
+    RenderDone {
+        job_id: String,
+        outputs: Vec<PathBuf>,
+    },
+    /// An offline render failed or was cancelled (`error` is "cancelled"); nothing was written.
+    RenderFailed {
+        job_id: String,
+        error: String,
+    },
     ChannelPeaks {
         id: ChannelId,
         peak_left: f32,
@@ -796,6 +817,10 @@ pub struct EngineState {
     pub dispatch_playhead_tick: AtomicBool,
     /// One absolute plugin deadline per callback, shared with subprocess plugin adapters.
     pub block_clock: Arc<BlockClock>,
+    /// An offline render owns the devices and the transport (`audio/render`). The live
+    /// callback holds a clone and outputs silence while it is set; transport commands are
+    /// ignored.
+    pub rendering: Arc<AtomicBool>,
 }
 
 impl EngineState {
@@ -828,6 +853,11 @@ impl EngineState {
     /// Set playing state (lock-free)
     pub fn set_is_playing(&self, playing: bool) {
         self.is_playing.store(playing, Ordering::Release);
+    }
+
+    /// True while an offline render runs.
+    pub fn is_rendering(&self) -> bool {
+        self.rendering.load(Ordering::Acquire)
     }
 
     /// Ask the next playing callback to fire clip MIDI at the current playhead tick.
@@ -885,6 +915,7 @@ impl Default for EngineState {
             fractional_tick_accumulator: AtomicI64::new(0),
             dispatch_playhead_tick: AtomicBool::new(false),
             block_clock: Arc::new(BlockClock::new()),
+            rendering: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -988,6 +1019,18 @@ pub fn process_command(
     buffer_size: usize,
     status_tx: &Sender<EngineStatus>,
 ) -> Option<EngineStatus> {
+    if state.is_rendering()
+        && matches!(
+            cmd,
+            AudioCommand::Play | AudioCommand::Pause | AudioCommand::Stop | AudioCommand::Seek(_)
+        )
+    {
+        warn!(
+            "Ignoring {:?}: the transport is unavailable while rendering",
+            cmd
+        );
+        return None;
+    }
     match cmd {
         AudioCommand::InitProject(mut settings) => {
             let device_sr = state.device_sample_rate.round() as i32;
@@ -2765,6 +2808,8 @@ pub fn process_command(
         | AudioCommand::RequestAudioDevices
         | AudioCommand::PipeWireGraph(_)
         | AudioCommand::ScanPlugins { .. }
+        | AudioCommand::StartRender(_)
+        | AudioCommand::CancelRender { .. }
         | AudioCommand::AdvertiseBuiltinDevices) => {
             warn!("{:?} must be handled by CommandWorker, ignoring", other);
         }
