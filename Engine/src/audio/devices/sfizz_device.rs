@@ -3,6 +3,7 @@
 //! Provides built-in SFZ sample playback using the sfizz library.
 //! Supports background loading of SFZ files for real-time safety.
 
+use super::sfizz_keys::{read_key_info, KeyInfo};
 use super::{
     AudioDevice, DeviceCategory, DevicePath, DeviceVariant, FileLoadingSupport, MidiPort, ParamId,
     ParamInfo, ParamType, ParamValue, PortFlow,
@@ -95,6 +96,10 @@ pub struct SfizzDevice {
 
     // Flag to indicate parameters changed (polled by command handler)
     parameters_changed: Arc<Mutex<bool>>,
+
+    // Key labels and keyswitches declared by the loaded SFZ (spec 014)
+    key_info: Arc<Mutex<Vec<KeyInfo>>>,
+    key_info_changed: Arc<Mutex<bool>>,
 
     // Pre-allocated buffers for planar audio conversion
     left_buffer: Vec<f32>,
@@ -207,6 +212,8 @@ impl SfizzDevice {
             cc_params: Arc::new(Mutex::new(Vec::new())),
             cc_values: Arc::new(Mutex::new(HashMap::new())),
             parameters_changed: Arc::new(Mutex::new(false)),
+            key_info: Arc::new(Mutex::new(Vec::new())),
+            key_info_changed: Arc::new(Mutex::new(false)),
             left_buffer: vec![0.0; max_buffer_size],
             right_buffer: vec![0.0; max_buffer_size],
             is_active: true,
@@ -232,6 +239,20 @@ impl SfizzDevice {
             return false;
         };
         std::mem::take(&mut *changed)
+    }
+
+    /// Whether the loaded SFZ's key info is new since the last call (poll-based, like
+    /// `take_parameters_changed`). A contended lock reports no change and is retried next tick.
+    pub fn take_key_info_changed(&self) -> bool {
+        let Ok(mut changed) = self.key_info_changed.try_lock() else {
+            return false;
+        };
+        std::mem::take(&mut *changed)
+    }
+
+    /// Key labels and keyswitches of the loaded SFZ. Empty when it declares none.
+    pub fn key_info(&self) -> Vec<KeyInfo> {
+        self.key_info.lock().unwrap().clone()
     }
 
     /// Queue a parameter change for later (when try_lock fails)
@@ -311,6 +332,8 @@ impl SfizzDevice {
         let cc_params = Arc::clone(&self.cc_params);
         let cc_values = Arc::clone(&self.cc_values);
         let parameters_changed = Arc::clone(&self.parameters_changed);
+        let key_info = Arc::clone(&self.key_info);
+        let key_info_changed = Arc::clone(&self.key_info_changed);
         let sample_rate = self.sample_rate;
         let max_buffer_size = self.max_buffer_size;
         let status_tx = self.status_tx.clone();
@@ -380,6 +403,16 @@ impl SfizzDevice {
                                     send_normalized_cc(&synth, label.cc_number, default_value);
                                 }
                             }
+
+                            // Key labels and keyswitches (spec 014). Always flagged, even when
+                            // empty, so a reload clears the previous SFZ's labels in Godot.
+                            let keys = read_key_info(&mut synth);
+                            info!("🎹 SFZ declares {} labeled/keyswitch keys", keys.len());
+                            for key in &keys {
+                                info!("  key {} [{:?}]: {:?}", key.key, key.kind, key.label);
+                            }
+                            *key_info.lock().unwrap() = keys;
+                            *key_info_changed.lock().unwrap() = true;
 
                             // Mark that parameters have changed so they get re-sent to Godot
                             {

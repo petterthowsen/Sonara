@@ -18,6 +18,7 @@ use super::devices::clap_host::subprocess_adapter::{
     PluginBlockStats, PluginIpcHandle, PluginLoad, HUNG_STALL_TIMEOUT,
 };
 use super::devices::clap_host::{PluginScanner, SubprocessClapAdapter};
+use super::devices::sfizz_keys::KeyKind;
 use super::devices::{
     container, AudioDevice, DeviceCategory, DeviceFactory, DevicePath, ParamId, ParamValue,
     SfizzDevice,
@@ -218,6 +219,7 @@ impl CommandWorker {
                         });
                     } else if let Some(sfizz) = any.downcast_mut::<SfizzDevice>() {
                         collect_sfizz_parameters(channel_id, *device_path, sfizz, &mut statuses);
+                        collect_sfizz_key_info(channel_id, *device_path, sfizz, &mut statuses);
                     }
                 });
             }
@@ -1347,6 +1349,28 @@ impl CommandWorker {
             device_path,
         });
     }
+}
+
+/// Queue the key labels and keyswitches an SFZ declared when it loaded. Sent even when empty.
+fn collect_sfizz_key_info(
+    channel_id: ChannelId,
+    device_path: DevicePath,
+    sfizz: &mut SfizzDevice,
+    statuses: &mut Vec<EngineStatus>,
+) {
+    if !sfizz.take_key_info_changed() {
+        return;
+    }
+    let keys = sfizz
+        .key_info()
+        .into_iter()
+        .map(|info| (info.key, info.kind == KeyKind::Keyswitch, info.label))
+        .collect();
+    statuses.push(EngineStatus::SfzKeyInfo {
+        channel_id,
+        device_path,
+        keys,
+    });
 }
 
 /// Queue a status pair describing an SFZ device's parameters when its instrument changed them.

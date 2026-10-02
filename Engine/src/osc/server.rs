@@ -2180,6 +2180,14 @@ impl OscServer {
                 device_path.to_osc_addr(channel_id, "param/count"),
                 vec![OscType::Int(count as i32)],
             ),
+            EngineStatus::SfzKeyInfo {
+                channel_id,
+                device_path,
+                keys,
+            } => (
+                device_path.to_osc_addr(channel_id, "keys/info"),
+                sfz_key_info_args(&keys),
+            ),
             EngineStatus::PluginStateSaved {
                 channel_id,
                 device_path,
@@ -3099,8 +3107,41 @@ fn parse_mod_command(
     }
 }
 
+/// Args for `.../keys/info`: the count, then `(key, is_keyswitch, label)` per key.
+fn sfz_key_info_args(keys: &[(u8, bool, String)]) -> Vec<OscType> {
+    let mut args = Vec::with_capacity(1 + keys.len() * 3);
+    args.push(OscType::Int(keys.len() as i32));
+    for (key, is_keyswitch, label) in keys {
+        args.push(OscType::Int(*key as i32));
+        args.push(OscType::Int(*is_keyswitch as i32));
+        args.push(OscType::String(label.clone()));
+    }
+    args
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sfz_key_info_args_layout() {
+        use rosc::OscType;
+        let args =
+            super::sfz_key_info_args(&[(24, true, "Sustain".into()), (60, false, "Open".into())]);
+        assert_eq!(
+            args,
+            vec![
+                OscType::Int(2),
+                OscType::Int(24),
+                OscType::Int(1),
+                OscType::String("Sustain".into()),
+                OscType::Int(60),
+                OscType::Int(0),
+                OscType::String("Open".into()),
+            ]
+        );
+        // An empty list is still a message, so Godot clears stale labels.
+        assert_eq!(super::sfz_key_info_args(&[]), vec![OscType::Int(0)]);
+    }
+
     use super::*;
     use crate::audio::ipc::HostingMode;
 

@@ -719,6 +719,14 @@ pub enum EngineStatus {
         device_path: DevicePath,
         count: usize,
     },
+    /// Key labels and keyswitches an SFZ declares, sent after every SFZ load (empty when it
+    /// declares none, so Godot clears the previous file's labels). Each entry is
+    /// `(key, is_keyswitch, label)`.
+    SfzKeyInfo {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        keys: Vec<(u8, bool, String)>,
+    },
 
     // Plugin state responses
     /// `size` is the byte count written to `file_path`: 0 when the device has no state to

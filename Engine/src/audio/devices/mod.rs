@@ -21,6 +21,7 @@ mod polysynth;
 mod reverb;
 mod sampler;
 mod sfizz_device;
+pub mod sfizz_keys;
 mod spectrum_analyzer;
 
 pub use chain::ChainDevice;

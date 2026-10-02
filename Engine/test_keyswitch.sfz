@@ -1,0 +1,36 @@
+// Keyswitch fixture for the SFZ key-info reader (spec 014).
+// Generator samples (*sine) so no audio files are needed.
+
+<control>
+label_key60=Open
+label_key62=Muted
+
+<group>
+sw_lokey=24
+sw_hikey=29
+sw_default=24
+
+<region>
+sw_last=24
+sw_label=Sustain
+sample=*sine
+key=60
+
+<region>
+sw_last=25
+sw_label=Staccato
+sample=*sine
+key=60
+
+// Range keyswitch with one shared label
+<region>
+sw_last=27
+sw_label=Trill
+sample=*sine
+key=62
+
+// Keyswitch with no label
+<region>
+sw_last=29
+sample=*sine
+key=62
