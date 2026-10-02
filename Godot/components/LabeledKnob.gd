@@ -1,3 +1,4 @@
+@tool
 ## RotaryKnob with a caption above or below it. A caption too long for `label_width` ends in an
 ## ellipsis; hovering the knob or caption shows the full caption on top (`LabelOverlay`). The
 ## value tooltip goes on the side away from the caption so the two never overlap.

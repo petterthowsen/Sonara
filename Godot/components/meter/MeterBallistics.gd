@@ -1,3 +1,4 @@
+@tool
 ## Time-based meter ballistics in dB, shared by meters that draw their own bars: instant-attack
 ## peak with a constant dB/s release, a peak hold line that sticks and then falls, and a one-pole
 ## RMS with separate attack and release. Lifted from `Meter.gd`.

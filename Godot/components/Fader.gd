@@ -1,3 +1,4 @@
+@tool
 ## Vertical value control, the sibling of `RotaryKnob`: a dark track, a fill in `fill_color`, a
 ## cap-style handle and an optional scale. It has no dB assumptions; a skewed taper comes from
 ## `logarithmic` or a `to_position` / `from_position` Callable pair (e.g. a `DeviceParameter`'s
@@ -76,7 +77,7 @@ var from_position: Callable
 		queue_redraw()
 
 ## Array of `{value, label}` drawn beside the track (see `ScaleMarks`).
-var scale_marks: Array[Dictionary] = []:
+@export var scale_marks: Array[Dictionary] = []:
 	set(m):
 		scale_marks = m
 		queue_redraw()
@@ -98,6 +99,15 @@ var ghost_value := NAN:
 	set(v):
 		ghost_value = v
 		queue_redraw()
+
+## False: the fader shows its value but ignores input and is drawn dimmed.
+@export var editable := true:
+	set(v):
+		editable = v
+		_dragging = false
+		self_modulate = Color.WHITE if v else Color(1, 1, 1, 0.45)
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if v else Control.CURSOR_ARROW
+		_refresh_tooltip()
 
 @export var show_value_tooltip := true
 @export var tooltip_side := TooltipSide.AUTO
@@ -145,9 +155,15 @@ var _cap_style := StyleBoxFlat.new()
 
 
 func _init() -> void:
-	custom_minimum_size = Vector2(24, 60)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_cap_style.set_corner_radius_all(2)
+
+
+## Default minimum size. Not set in `_init`: attaching the script from a scene runs `_init` after
+## the scene's `custom_minimum_size` has been applied and would overwrite it. `custom_minimum_size`
+## still raises this.
+func _get_minimum_size() -> Vector2:
+	return Vector2(24, 60)
 
 
 func _ready() -> void:
@@ -272,6 +288,8 @@ func _draw_modulation(track: Rect2) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
+	if not editable:
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index != MOUSE_BUTTON_LEFT:

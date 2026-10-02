@@ -47,6 +47,9 @@ pub const SC_LOW_CUT: ParamId = 24;
 pub const SC_LISTEN: ParamId = 25;
 pub const MAKEUP: ParamId = 30;
 pub const AUTO_GAIN: ParamId = 31;
+/// Auto Gain makes up half the reduction a signal at this level gets. Typical peaks of a mixed
+/// track sit near here; compensating the reduction at 0 dBFS added too much gain.
+pub const AUTO_GAIN_REFERENCE_DB: f32 = -6.0;
 pub const MIX: ParamId = 32;
 
 const ID_SPACE: usize = 33;
@@ -709,7 +712,7 @@ impl CompressorDevice {
         self.feedback = self.style.is_feedback();
         self.auto_gain_db = 0.5
             * gain_reduction_db(
-                0.0,
+                AUTO_GAIN_REFERENCE_DB,
                 self.threshold.end,
                 self.ratio.end,
                 self.knee.end,
@@ -761,7 +764,9 @@ impl CompressorDevice {
         let mix = self.mix.at(t);
         let detection_mix = self.detection_mix.at(t);
         let sc_listen_mix = self.sc_listen_mix.at(t);
-        let makeup_db = self.makeup.at(t) + self.auto_gain_mix.at(t) * self.auto_gain_db;
+        // Auto Gain replaces the manual Makeup (the ramp crossfades between them).
+        let auto_mix = self.auto_gain_mix.at(t);
+        let makeup_db = self.makeup.at(t) * (1.0 - auto_mix) + auto_mix * self.auto_gain_db;
 
         // What the detector listens to: the input, or the previous output for Punch's feedback.
         let (mut dl, mut dr) = if self.feedback {
@@ -1558,8 +1563,8 @@ mod tests {
     }
 
     #[test]
-    fn auto_gain_adds_half_the_reduction_at_full_scale() {
-        // threshold -18, ratio 4: gr(0 dBFS) = 18 * 0.75 = 13.5 dB, so +6.75 dB of makeup.
+    fn auto_gain_adds_half_the_reduction_at_the_reference_level() {
+        // threshold -18, ratio 4: gr(-6 dBFS) = 12 * 0.75 = 9 dB, so +4.5 dB of makeup.
         let mut d = device();
         set(&mut d, KNEE, 0.0);
         set(&mut d, AUTO_GAIN, 1.0);
@@ -1568,8 +1573,24 @@ mod tests {
         // A signal well below the threshold is untouched, so its level shows the makeup.
         let got = steady_out_db(&mut d, 1_000.0, -50.0, 2.0);
         assert!(
-            (got + 50.0 - 6.75).abs() < 0.3,
+            (got + 50.0 - 4.5).abs() < 0.3,
             "{:.3} dB of auto gain",
+            got + 50.0
+        );
+    }
+
+    #[test]
+    fn auto_gain_replaces_the_manual_makeup() {
+        let mut d = device();
+        set(&mut d, KNEE, 0.0);
+        set(&mut d, AUTO_GAIN, 1.0);
+        set(&mut d, MAKEUP, 10.0);
+        set(&mut d, THRESHOLD, -18.0);
+        set(&mut d, RATIO, 4.0);
+        let got = steady_out_db(&mut d, 1_000.0, -50.0, 2.0);
+        assert!(
+            (got + 50.0 - 4.5).abs() < 0.3,
+            "{:.3} dB with a manual +10 dB makeup set",
             got + 50.0
         );
     }

@@ -1,3 +1,4 @@
+@tool
 ## Floating LineEdit for double-click-to-edit value controls (RotaryKnob, Volumeter, Meter, VSlider).
 ## Enter commits; Escape or a click outside the editor cancels. Frees itself when done.
 class_name FloatingValueEditor extends LineEdit

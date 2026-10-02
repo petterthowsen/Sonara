@@ -1,3 +1,4 @@
+@tool
 ## Vertical dB axis for plots: maps dB to y inside `rect` and draws the horizontal grid with
 ## labels. Used by the EQ curve editor (symmetric, +/-6/12/24) and meant for the Compressor's
 ## transfer and history views (any min/max). Holds no data and sends nothing.

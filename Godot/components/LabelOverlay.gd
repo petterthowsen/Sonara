@@ -1,3 +1,4 @@
+@tool
 ## Shows a trimmed Label's full text on top of everything, centered on the label, while the
 ## label or any of its hover sources (e.g. the knob it captions) is hovered. Top-level and
 ## click-through, so it never affects layout. Nothing shows when the text fits.

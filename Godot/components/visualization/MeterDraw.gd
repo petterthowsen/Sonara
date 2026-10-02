@@ -1,3 +1,4 @@
+@tool
 ## Static helpers that draw level meters on any CanvasItem, in the mixer strip's colours
 ## (`godot-ui-components.md`, principle 5). The EQ shows an output level with it; the Compressor
 ## view reuses it for input, output and gain-reduction meters.

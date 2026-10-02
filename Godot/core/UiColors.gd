@@ -1,3 +1,4 @@
+@tool
 ## App-wide colour tokens. New components default to these; the existing controls still carry
 ## their own defaults until the theme follow-up (spec 015 §2.6).
 class_name UiColors extends RefCounted

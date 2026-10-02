@@ -1,3 +1,4 @@
+@tool
 ## The compressor's transfer curve (input dB -> output dB) with the knee drawn, a live dot at
 ## the current input level and a corner node that sets Threshold and Ratio by dragging.
 ##

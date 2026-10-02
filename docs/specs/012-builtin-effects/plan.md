@@ -35,7 +35,7 @@ Inputs:
    Dynamics devices and the Filter use a linear crossfade, which is what parallel compression
    expects. Delay, Reverb, Chorus and Phaser use an equal-power crossfade.
 6. **The Compressor's Auto Gain is estimated, not measured.** It is a static makeup computed
-   from threshold, ratio and knee. That is predictable, testable, and doesn't pump when
+   from threshold, ratio and knee, and it replaces the manual Makeup while on. That is predictable, testable, and doesn't pump when
    automated. Measured (RMS-matched) auto gain is a follow-up.
 7. **External sidechain is the last phase and may split into its own spec (013).** It changes
    the mixing dependency order, so it needs an ADR. Until it lands, every detector
@@ -405,7 +405,7 @@ Implementation notes:
   - **Opto**: the release slows the longer and deeper the gain reduction has been.
 - [x] Auto Release uses two release constants (fast and slow) blended by how the gain
       reduction is behaving.
-- [x] Auto Gain adds half the static gain reduction at 0 dBFS
+- [x] Auto Gain replaces the manual Makeup with half the static gain reduction at −6 dBFS (was 0 dBFS, which added too much)
       (`−gc(0 dB)/2`), on top of Makeup.
 - [x] SC Low Cut is a 12 dB HP in the detector path only. SC Listen outputs the filtered
       detector signal.

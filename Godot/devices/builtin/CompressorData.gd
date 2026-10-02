@@ -1,3 +1,4 @@
+@tool
 ## Compressor constants, the static curve and the `"dynamics"` blob decoder, shared by the
 ## panel view (`CompressorDefaultView`) and the tests.
 ##
@@ -80,9 +81,13 @@ static func static_curve_db(
 	return level_db - gain_reduction_db(level_db, threshold_db, ratio, knee_db, range_db)
 
 
-## The makeup Auto Gain adds: half the reduction at 0 dBFS, as the engine computes it.
+## Auto Gain makes up half the reduction at this level (engine `AUTO_GAIN_REFERENCE_DB`).
+const AUTO_GAIN_REFERENCE_DB := -6.0
+
+
+## The makeup Auto Gain applies in place of the manual Makeup, as the engine computes it.
 static func auto_makeup_db(threshold_db: float, ratio: float, knee_db: float, range_db: float) -> float:
-	return 0.5 * gain_reduction_db(0.0, threshold_db, ratio, knee_db, range_db)
+	return 0.5 * gain_reduction_db(AUTO_GAIN_REFERENCE_DB, threshold_db, ratio, knee_db, range_db)
 
 
 ## "4:1", "1:1", or "∞:1" at the top of the Ratio knob.

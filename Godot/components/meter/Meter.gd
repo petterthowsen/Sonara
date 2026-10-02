@@ -119,9 +119,15 @@ var _hold_timer_right := 0.0
 	set(v):
 		volume_db = v
 		queue_redraw()
+		if _tooltip and _tooltip.visible:
+			_refresh_tooltip()
 @export var fader_handle_color := Color.WHITE_SMOKE: ## Fader handle color when not hovered
 	set(v):
 		fader_handle_color = v
+		_wake()
+@export var fader_handle_height := 8.0: ## Height of the cap-style fader handle
+	set(v):
+		fader_handle_height = v
 		_wake()
 @export var fader_handle_color_hover := Color.WHITE: ## Fader handle color while hovered
 	set(v):
@@ -174,6 +180,12 @@ var _clip_left := false
 var _clip_right := false
 
 var _is_dragging_fader := false
+## The pointer is over the fader column or its handle (not just the bars).
+var _fader_hot := false
+var _tooltip: ValueTooltip = null
+var _cap_style := _make_cap_style()
+const HANDLE_GRAB_PAD := 4.0
+const HANDLE_OVERHANG := 3.0
 @export var fader_fine_drag_scale := FineDrag.DEFAULT_SCALE ## Multiplier applied to mouse movement during shift-held fine fader drags
 var _fine_drag := FineDrag.new()
 var mouse_hovered := false
@@ -221,6 +233,9 @@ func _wake() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED:
 		set_process(is_visible_in_tree())
+	if (what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE) \
+			and not is_visible_in_tree() and _tooltip:
+		_tooltip.visible = false
 
 
 func _ready() -> void:
@@ -244,6 +259,8 @@ func _on_mouse_entered():
 
 func _on_mouse_exited():
 	mouse_hovered = false
+	_fader_hot = false
+	_refresh_tooltip()
 	if show_fader:
 		queue_redraw()
 
@@ -339,23 +356,44 @@ func _gui_input(event: InputEvent) -> void:
 					elif mouse_event.is_command_or_control_pressed():
 						_reset_volume()
 					else:
-						# start dragging
-						_is_dragging_fader = true
-						_handle_fader_drag(_fine_drag.begin(mouse_event.position))
+						_begin_fader_drag(mouse_event.position)
 					accept_event()
 				else:
 					# stop dragging
 					_is_dragging_fader = false
+					_refresh_tooltip()
 					accept_event()
 
 	elif event is InputEventMouseMotion:
 		var mouse_event = event as InputEventMouseMotion
 		_update_cursor_for_fader()
+		var hot := _is_mouse_on_fader(mouse_event.position)
+		if hot != _fader_hot:
+			_fader_hot = hot
+			_refresh_tooltip()
 		if _is_dragging_fader:
 			_fine_drag.scale = fader_fine_drag_scale
 			_handle_fader_drag(_fine_drag.update(mouse_event.position, mouse_event.shift_pressed, Rect2(Vector2.ZERO, size)))
 			accept_event()
 			queue_redraw()
+
+
+## A press on the handle grabs it where it is; a press elsewhere on the fader jumps to the pointer.
+func _begin_fader_drag(mouse: Vector2) -> void:
+	_is_dragging_fader = true
+	if _handle_grab_rect().has_point(mouse):
+		_fine_drag.begin_at(Vector2(mouse.x, _db_to_y(volume_db)), mouse)
+	else:
+		_handle_fader_drag(_fine_drag.begin(mouse))
+	_refresh_tooltip()
+
+
+## Where a press grabs the handle instead of jumping.
+func _handle_grab_rect() -> Rect2:
+	var width := bars_spacing
+	var left := _get_fader_offset_x() - HANDLE_OVERHANG - HANDLE_GRAB_PAD
+	var top := _db_to_y(volume_db) - fader_handle_height * 0.5 - HANDLE_GRAB_PAD
+	return Rect2(left, top, width + (HANDLE_OVERHANG + HANDLE_GRAB_PAD) * 2.0, fader_handle_height + HANDLE_GRAB_PAD * 2.0)
 
 
 ## Open a floating LineEdit above the fader to type a new volume directly.
@@ -422,33 +460,7 @@ func _get_fader_offset_x() -> float:
 
 
 func _is_mouse_over_fader_handle(mouse_pos: Vector2) -> bool:
-	if not show_fader:
-		return false
-
-	# calculate fader position (same as in _draw_fader)
-	var vol_normalized = _db_to_norm(volume_db)
-	var fader_offset_x = 0.0
-
-	# find fader x position (same calculation as _draw)
-	var minimum_bars_width = 12 if mono else 25
-	var show_ticks = size.x >= 28.0 + minimum_bars_width
-	var ticks_width = 28.0 if show_ticks else 0.0
-	var bars_width = max(0.0, size.x - ticks_width)
-	var offset_x = ticks_width
-
-	if mono:
-		fader_offset_x = offset_x + bars_width + 2
-	else:
-		var bar_width = max(0.0, (bars_width - bars_spacing) * 0.5)
-		fader_offset_x = offset_x + bar_width
-
-	var width = bars_spacing
-	var handle_radius = width
-	var fader_top = (1.0 - vol_normalized) * size.y
-	var handle_pos = Vector2(fader_offset_x + (width / 2), fader_top)
-
-	# check if mouse is within handle radius
-	return handle_pos.distance_to(mouse_pos) <= handle_radius * 1.5
+	return show_fader and _handle_grab_rect().has_point(mouse_pos)
 
 
 ## Set the volume from a fader point (FineDrag already applied Shift precision).
@@ -467,6 +479,7 @@ func _handle_fader_drag(mouse_pos: Vector2) -> void:
 	if new_volume_db != volume_db:
 		volume_db = clamp(new_volume_db, db_bottom, db_top)
 		volume_changed.emit(volume_db)
+		_refresh_tooltip()
 
 
 func _update_cursor_for_fader() -> void:
@@ -551,31 +564,34 @@ func _draw_fader(offset_x : float, width : float):
 
 	draw_rect(Rect2(offset_x, fader_top, width, fader_height), fader_color, true, -1.0, true)
 
-	# draw white circular handle
-	var handle_radius = width
-	var handle_c = fader_handle_color_hover if mouse_hovered else fader_handle_color
-	draw_circle(Vector2(offset_x + (width / 2), fader_top), handle_radius, handle_c, true, -1.0, true)
+	# cap-style handle, wider than the column
+	var cap := Rect2(offset_x - HANDLE_OVERHANG, fader_top - fader_handle_height * 0.5,
+		width + HANDLE_OVERHANG * 2.0, fader_handle_height)
+	_cap_style.bg_color = fader_handle_color_hover if mouse_hovered else fader_handle_color
+	draw_style_box(_cap_style, cap)
+	draw_line(Vector2(cap.position.x + 2.0, fader_top), Vector2(cap.end.x - 2.0, fader_top), Color(0, 0, 0, 0.45), 1.0)
 
-	# draw volume value label when hovering or dragging
-	if mouse_hovered or _is_dragging_fader:
-		var font := get_theme_default_font()
-		var fs := 16
-		var value_text = "%0.1f" % volume_db
-		var text_size = font.get_string_size(value_text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
 
-		# position above handle if handle is in lower half, otherwise below
-		var label_y = fader_top - text_size.y - 6 if fader_top > size.y * 0.5 else fader_top + handle_radius + 28
-		var label_x = offset_x + (width / 2) - (text_size.x / 2)
+static func _make_cap_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.set_corner_radius_all(2)
+	return style
 
-		draw_string(
-			font,
-			Vector2(label_x, label_y),
-			value_text,
-			HORIZONTAL_ALIGNMENT_CENTER,
-			-1.0,
-			fs,
-			Color.WHITE
-		)
+
+## The value tooltip beside the fader at the handle, on hover and while dragging.
+func _refresh_tooltip() -> void:
+	if not is_inside_tree():
+		return
+	if not show_fader or not (_fader_hot or _is_dragging_fader):
+		if _tooltip:
+			_tooltip.visible = false
+		return
+	if _tooltip == null:
+		_tooltip = ValueTooltip.attach(self)
+	_tooltip.set_text("%.1f dB" % volume_db)
+	_tooltip.visible = true
+	var rect := get_global_rect()
+	_tooltip.place_right_of(Vector2(rect.end.x, global_position.y + _db_to_y(volume_db)))
 
 
 func _get_ticks():

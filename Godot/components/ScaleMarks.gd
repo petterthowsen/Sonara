@@ -1,3 +1,4 @@
+@tool
 ## Tick and label layout for a scale drawn beside a control (Fader, HorSlider). The mapping from a
 ## value to 0..1 is the control's own, so marks sit exactly where the fill does.
 class_name ScaleMarks extends RefCounted

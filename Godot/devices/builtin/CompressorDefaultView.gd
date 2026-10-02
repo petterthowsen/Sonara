@@ -79,21 +79,15 @@ func _build() -> void:
 	if _built:
 		return
 	_built = true
-	var labelled := func(control: SegmentedControl, items: Array, handler: Callable) -> void:
-		control.set_items(PackedStringArray(items))
-		control.selected_changed.connect(handler)
-	labelled.call(display_control, ["Curve", "Scope"], _on_display_selected)
-	labelled.call(metering_control, ["Peak", "RMS"], _on_metering_selected)
-	labelled.call(style_control, CompressorData.STYLE_NAMES, _on_option_selected.bind(CompressorData.P_STYLE))
-	labelled.call(detection_control, CompressorData.DETECTION_NAMES, _on_option_selected.bind(CompressorData.P_DETECTION))
-	labelled.call(channels_control, CompressorData.CHANNELS_NAMES, _on_option_selected.bind(CompressorData.P_CHANNELS))
+	display_control.selected_changed.connect(_on_display_selected)
+	metering_control.selected_changed.connect(_on_metering_selected)
+	style_control.selected_changed.connect(_on_option_selected.bind(CompressorData.P_STYLE))
+	detection_control.selected_changed.connect(_on_option_selected.bind(CompressorData.P_DETECTION))
+	channels_control.selected_changed.connect(_on_option_selected.bind(CompressorData.P_CHANNELS))
 
 	_add_fader(threshold_fader, %ThresholdValue, CompressorData.P_THRESHOLD, "%.1f dB")
 	_add_fader(ratio_fader, %RatioValue, CompressorData.P_RATIO, "")
 	_add_fader(output_fader, %OutputValue, CompressorData.P_MAKEUP, "%+.1f dB")
-	threshold_fader.scale_marks.assign(_marks([0, -12, -24, -36, -48, -60]))
-	ratio_fader.scale_marks.assign(_marks([1, 2, 4, 8, 16, 30], func(v: float) -> String: return "∞" if v >= 30.0 else str(int(v))))
-	output_fader.scale_marks.assign(_marks([24, 12, 6, 0, -12], func(v: float) -> String: return "%+d" % int(v) if v != 0.0 else "0"))
 
 	_add_slider(%KneeSlider, %KneeValue, CompressorData.P_KNEE, "%.1f dB")
 	_add_slider(%MixSlider, %MixValue, CompressorData.P_MIX, "%.0f %%")
@@ -112,16 +106,6 @@ func _build() -> void:
 	for meter in [in_meter, out_meter]:
 		meter.hold_time = 1.5
 	_apply_state(CompressorViewState.from_dict(load_config.call(CONFIG_KEY)))
-
-
-func _marks(values: Array, labeller := Callable()) -> Array[Dictionary]:
-	var marks: Array[Dictionary] = []
-	for v in values:
-		var mark := {"value": float(v)}
-		if labeller.is_valid():
-			mark["label"] = labeller.call(float(v))
-		marks.append(mark)
-	return marks
 
 
 func _add_fader(fader: Fader, value_label: Label, param_id: int, format: String) -> void:
@@ -193,8 +177,9 @@ func _configure_controls() -> void:
 		fader.max_value = param.max_value
 		fader.value_default = param.default_value
 		if int(entry["id"]) == CompressorData.P_RATIO:
-			fader.to_position = param.value_to_normalized
-			fader.from_position = param.normalized_to_value
+			# Reversed: 1:1 at the top, ∞:1 at the bottom.
+			fader.to_position = func(v: float) -> float: return 1.0 - param.value_to_normalized(v)
+			fader.from_position = func(n: float) -> float: return param.normalized_to_value(1.0 - n)
 		fader.value_text_callback = _fader_text.bind(entry)
 	for entry in _knobs:
 		var param := device.get_parameter(int(entry["id"]))
@@ -226,11 +211,17 @@ func _fader_text(value: float, entry: Dictionary) -> String:
 func _refresh() -> void:
 	if device == null or not is_node_ready():
 		return
+	# Toggles first: Auto Gain decides what the Output fader shows.
+	for entry in _toggles:
+		(entry["check"] as CheckBox).set_pressed_no_signal(device.get_parameter_real(int(entry["id"])) >= 0.5)
 	for entry in _faders:
 		var fader: Fader = entry["fader"]
 		var value := device.get_parameter_real(int(entry["id"]))
+		if int(entry["id"]) == CompressorData.P_MAKEUP and auto_gain.button_pressed:
+			# Auto Gain replaces Makeup: show the gain it applies, read-only.
+			value = clampf(_auto_makeup_db(), fader.min_value, fader.max_value)
 		fader.set_value_no_signal(value)
-		(entry["label"] as Label).text = _fader_text(value, entry)
+		(entry["label"] as Label).text = _fader_text(value, entry) + (" auto" if fader == output_fader and auto_gain.button_pressed else "")
 	for entry in _sliders:
 		var param := device.get_parameter(int(entry["id"]))
 		if param == null:
@@ -240,15 +231,13 @@ func _refresh() -> void:
 		(entry["label"] as Label).text = String(entry["format"]) % real
 	for entry in _knobs:
 		(entry["knob"] as LabeledKnob).knob.set_value_no_signal(device.get_parameter_real(int(entry["id"])))
-	for entry in _toggles:
-		(entry["check"] as CheckBox).set_pressed_no_signal(device.get_parameter_real(int(entry["id"])) >= 0.5)
 	style_control.set_selected_no_signal(int(device.get_parameter_real(CompressorData.P_STYLE)))
 	detection_control.set_selected_no_signal(int(device.get_parameter_real(CompressorData.P_DETECTION)))
 	channels_control.set_selected_no_signal(int(device.get_parameter_real(CompressorData.P_CHANNELS)))
 
 	var range_db := device.get_parameter_real(CompressorData.P_RANGE)
 	gr_meter.max_db = 12.0 if range_db <= 12.0 else (24.0 if range_db <= 24.0 else 48.0)
-	output_fader.ghost_value = _auto_makeup_db() if auto_gain.button_pressed else NAN
+	output_fader.editable = not auto_gain.button_pressed
 	curve.refresh()
 	scope_top.refresh()
 	scope_bottom.refresh()

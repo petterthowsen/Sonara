@@ -1,3 +1,4 @@
+@tool
 ## Shared pieces of the modulation contract that RotaryKnob, HorSlider, VolumeSlider and
 ## Volumeter each implement (GDScript has no traits, so the common maths lives here).
 ##

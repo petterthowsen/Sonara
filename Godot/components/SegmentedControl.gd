@@ -1,3 +1,4 @@
+@tool
 ## A row of exclusive toggle buttons (Clean | Glue | Punch | Opto) in the app's colours. The
 ## selected segment is filled with `UiColors.PRIMARY`. `Simple View` and the compressor view
 ## share it.
@@ -10,9 +11,22 @@ signal selected_changed(index: int)
 		font_size = v
 		for btn in _buttons:
 			btn.add_theme_font_size_override("font_size", v)
+## Trim labels to the width the control is given (for tight cells). Off: each segment is as wide
+## as its label.
+@export var clip_labels := false:
+	set(v):
+		clip_labels = v
+		for btn in _buttons:
+			btn.clip_text = v
 @export var selected_color := UiColors.PRIMARY
 @export var idle_color := Color(0.16, 0.16, 0.18)
 @export var hover_color := Color(0.22, 0.22, 0.25)
+
+## The segment labels. Set in the scene to see them in the editor; `set_items` does the same.
+@export var items := PackedStringArray():
+	set(v):
+		items = v
+		_rebuild()
 
 ## Index of the selected segment, -1 for none. Setting it emits `selected_changed` on a change.
 var selected: int:
@@ -34,24 +48,29 @@ func _init() -> void:
 
 
 ## Replace the segments. Nothing is selected afterwards.
-func set_items(items: PackedStringArray) -> void:
+func set_items(labels: PackedStringArray) -> void:
+	items = labels
+
+
+func _rebuild() -> void:
+	var labels := items
 	for btn in _buttons:
 		btn.queue_free()
 		remove_child(btn)
 	_buttons.clear()
 	_group = ButtonGroup.new()
 	_selected = -1
-	for i in items.size():
+	for i in labels.size():
 		var btn := Button.new()
-		btn.text = items[i]
-		btn.tooltip_text = items[i]
-		btn.clip_text = true
+		btn.text = labels[i]
+		btn.tooltip_text = labels[i]
+		btn.clip_text = clip_labels
 		btn.toggle_mode = true
 		btn.button_group = _group
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.add_theme_font_size_override("font_size", font_size)
-		_style(btn, i, items.size())
+		_style(btn, i, labels.size())
 		btn.pressed.connect(_on_pressed.bind(i))
 		add_child(btn)
 		_buttons.append(btn)

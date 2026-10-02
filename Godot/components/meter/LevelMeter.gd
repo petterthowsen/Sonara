@@ -1,3 +1,4 @@
+@tool
 ## A configurable dB level meter: any number of bars, peak and/or RMS, hold lines, optional scale,
 ## numeric readout and caption. It draws everything itself from `MeterBallistics`.
 ##

@@ -1,3 +1,4 @@
+@tool
 ## One half of the compressor's scrolling scope: a dB envelope of the input over about four
 ## seconds, newest on the right, growing away from a baseline. `direction` picks the side: UP grows
 ## from the bottom edge, DOWN from the top edge, so two scopes stacked (UP over DOWN) draw a

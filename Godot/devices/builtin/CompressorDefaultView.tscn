@@ -1,22 +1,25 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://bhuxdiedss8jq"]
 
-[ext_resource type="Script" path="res://devices/builtin/CompressorDefaultView.gd" id="1_view"]
-[ext_resource type="Script" path="res://components/Fader.gd" id="2_fader"]
-[ext_resource type="Script" path="res://components/meter/LevelMeter.gd" id="3_meter"]
-[ext_resource type="Script" path="res://components/SegmentedControl.gd" id="4_segmented"]
-[ext_resource type="Script" path="res://components/HSlider.gd" id="5_slider"]
-[ext_resource type="Script" path="res://components/LabeledKnob.gd" id="6_knob"]
-[ext_resource type="Script" path="res://devices/builtin/CompressorCurve.gd" id="7_curve"]
-[ext_resource type="Script" path="res://devices/builtin/CompressorScope.gd" id="8_scope"]
-[node name="CompressorDefaultView" type="Control"]
-custom_minimum_size = Vector2(780, 250)
+[ext_resource type="Script" uid="uid://co2iwa25vsvlm" path="res://devices/builtin/CompressorDefaultView.gd" id="1_view"]
+[ext_resource type="Script" uid="uid://3fglhr4dpof8" path="res://components/Fader.gd" id="2_fader"]
+[ext_resource type="Script" uid="uid://l5sifv4kcm4n" path="res://components/meter/LevelMeter.gd" id="3_meter"]
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="4_segmented"]
+[ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="5_slider"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="6_knob"]
+[ext_resource type="Script" uid="uid://7admcx4msko3" path="res://devices/builtin/CompressorCurve.gd" id="7_curve"]
+[ext_resource type="Script" uid="uid://u3o1lgev45ds" path="res://devices/builtin/CompressorScope.gd" id="8_scope"]
+
+[node name="CompressorDefaultView" type="Control" unique_id=1097681823]
+custom_minimum_size = Vector2(700, 250)
 layout_mode = 3
 anchors_preset = 0
+offset_right = 700.0
+offset_bottom = 250.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_view")
 
-[node name="MainPage" type="VBoxContainer" parent="."]
+[node name="MainPage" type="VBoxContainer" parent="." unique_id=315898097]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
@@ -26,373 +29,433 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 4
 
-[node name="Top" type="HBoxContainer" parent="MainPage"]
+[node name="Top" type="HBoxContainer" parent="MainPage" unique_id=1176984708]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 8
 
-[node name="ThresholdColumn" type="VBoxContainer" parent="MainPage/Top"]
+[node name="ThresholdColumn" type="VBoxContainer" parent="MainPage/Top" unique_id=1536767282]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="Caption" type="Label" parent="MainPage/Top/ThresholdColumn"]
+[node name="Caption" type="Label" parent="MainPage/Top/ThresholdColumn" unique_id=1853198289]
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "THRESH"
+horizontal_alignment = 1
 
-[node name="ThresholdFader" type="Control" parent="MainPage/Top/ThresholdColumn"]
+[node name="ThresholdFader" type="Control" parent="MainPage/Top/ThresholdColumn" unique_id=734692126]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 60)
 layout_mode = 2
-script = ExtResource("2_fader")
-custom_minimum_size = Vector2(44, 100)
-size_flags_horizontal = 4
 size_flags_vertical = 3
-track_width = 18.0
-scale_side = 1
+mouse_default_cursor_shape = 2
+script = ExtResource("2_fader")
 min_value = -60.0
 max_value = 0.0
-value_default = -18.0
 value = -18.0
+value_default = -18.0
+fill_origin = nan
+track_width = 18.0
+scale_marks = Array[Dictionary]([{
+"value": 0.0
+}, {
+"value": -12.0
+}, {
+"value": -24.0
+}, {
+"value": -36.0
+}, {
+"value": -48.0
+}, {
+"value": -60.0
+}])
+scale_side = 1
 
-[node name="ThresholdValue" type="Label" parent="MainPage/Top/ThresholdColumn"]
+[node name="ThresholdValue" type="Label" parent="MainPage/Top/ThresholdColumn" unique_id=284185175]
 unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "0.0 dB"
+horizontal_alignment = 1
 
-[node name="RatioColumn" type="VBoxContainer" parent="MainPage/Top"]
+[node name="RatioColumn" type="VBoxContainer" parent="MainPage/Top" unique_id=891849999]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="Caption" type="Label" parent="MainPage/Top/RatioColumn"]
+[node name="Caption" type="Label" parent="MainPage/Top/RatioColumn" unique_id=1222492332]
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "RATIO"
+horizontal_alignment = 1
 
-[node name="RatioFader" type="Control" parent="MainPage/Top/RatioColumn"]
+[node name="RatioFader" type="Control" parent="MainPage/Top/RatioColumn" unique_id=981378152]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 60)
 layout_mode = 2
-script = ExtResource("2_fader")
-custom_minimum_size = Vector2(44, 100)
-size_flags_horizontal = 4
 size_flags_vertical = 3
-track_width = 18.0
-scale_side = 1
+mouse_default_cursor_shape = 2
+script = ExtResource("2_fader")
 min_value = 1.0
 max_value = 30.0
+value = 30.0
 value_default = 4.0
+fill_origin = nan
+track_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
+track_width = 18.0
+scale_marks = Array[Dictionary]([{
+"label": "1",
+"value": 1.0
+}, {
+"label": "2",
+"value": 2.0
+}, {
+"label": "4",
+"value": 4.0
+}, {
+"label": "8",
+"value": 8.0
+}, {
+"label": "16",
+"value": 16.0
+}, {
+"label": "∞",
+"value": 30.0
+}])
+scale_side = 1
 
-[node name="RatioValue" type="Label" parent="MainPage/Top/RatioColumn"]
+[node name="RatioValue" type="Label" parent="MainPage/Top/RatioColumn" unique_id=1423898024]
 unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "0.0 dB"
+horizontal_alignment = 1
 
-[node name="VizColumn" type="VBoxContainer" parent="MainPage/Top"]
+[node name="VizColumn" type="VBoxContainer" parent="MainPage/Top" unique_id=1306415281]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 3
 
-[node name="VizStack" type="VBoxContainer" parent="MainPage/Top/VizColumn"]
+[node name="VizStack" type="VBoxContainer" parent="MainPage/Top/VizColumn" unique_id=752504404]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 
-[node name="Curve" type="Control" parent="MainPage/Top/VizColumn/VizStack"]
+[node name="Curve" type="Control" parent="MainPage/Top/VizColumn/VizStack" unique_id=1385394219]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 140)
+clip_contents = true
 layout_mode = 2
-script = ExtResource("7_curve")
-custom_minimum_size = Vector2(120, 100)
 size_flags_horizontal = 3
 size_flags_vertical = 3
+script = ExtResource("7_curve")
 
-[node name="ScopeStack" type="VBoxContainer" parent="MainPage/Top/VizColumn/VizStack"]
+[node name="ScopeStack" type="VBoxContainer" parent="MainPage/Top/VizColumn/VizStack" unique_id=145296930]
 unique_name_in_owner = true
-layout_mode = 2
 visible = false
+layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 1
 
-[node name="ScopeTop" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack"]
+[node name="ScopeTop" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack" unique_id=1662651744]
 unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("8_scope")
 custom_minimum_size = Vector2(120, 40)
+clip_contents = true
+layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-direction = 0
+script = ExtResource("8_scope")
 
-[node name="ScopeBottom" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack"]
+[node name="ScopeBottom" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack" unique_id=1970080778]
 unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("8_scope")
 custom_minimum_size = Vector2(120, 40)
+clip_contents = true
+layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+script = ExtResource("8_scope")
 direction = 1
 show_threshold_label = false
 
-[node name="VizToolbar" type="HBoxContainer" parent="MainPage/Top/VizColumn"]
+[node name="VizToolbar" type="HBoxContainer" parent="MainPage/Top/VizColumn" unique_id=905996586]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="AutoGain" type="CheckBox" parent="MainPage/Top/VizColumn/VizToolbar"]
+[node name="AutoGain" type="CheckBox" parent="MainPage/Top/VizColumn/VizToolbar" unique_id=278709683]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
 text = "Auto Gain"
 
-[node name="Spacer" type="Control" parent="MainPage/Top/VizColumn/VizToolbar"]
+[node name="Spacer" type="Control" parent="MainPage/Top/VizColumn/VizToolbar" unique_id=1432294651]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="DisplayControl" type="HBoxContainer" parent="MainPage/Top/VizColumn/VizToolbar"]
+[node name="DisplayControl" type="HBoxContainer" parent="MainPage/Top/VizColumn/VizToolbar" unique_id=2066516564]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 1
 script = ExtResource("4_segmented")
 font_size = 10
+items = PackedStringArray("Curve", "Scope")
 
-[node name="MetersColumn" type="VBoxContainer" parent="MainPage/Top"]
+[node name="MetersColumn" type="VBoxContainer" parent="MainPage/Top" unique_id=1691088091]
 layout_mode = 2
 theme_override_constants/separation = 3
 
-[node name="Meters" type="HBoxContainer" parent="MainPage/Top/MetersColumn"]
+[node name="Meters" type="HBoxContainer" parent="MainPage/Top/MetersColumn" unique_id=1051398590]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 8
 
-[node name="InMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+[node name="InMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters" unique_id=1883162723]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 80)
 layout_mode = 2
 script = ExtResource("3_meter")
-custom_minimum_size = Vector2(52, 80)
 bar_count = 2
-min_db = -60.0
-max_db = 6.0
 scale_marks = Array[float]([0.0, -12.0, -24.0, -36.0, -48.0])
 scale_side = 1
 readout = 2
 caption = "IN"
 
-[node name="GrMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+[node name="GrMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters" unique_id=1311498392]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(16, 80)
 layout_mode = 2
 script = ExtResource("3_meter")
-custom_minimum_size = Vector2(16, 80)
 mode = 1
 min_db = 0.0
 max_db = 24.0
+background_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 show_hold = false
 readout = 2
 caption = "GR"
 
-[node name="OutMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+[node name="OutMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters" unique_id=2059038736]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(36, 80)
 layout_mode = 2
 script = ExtResource("3_meter")
-custom_minimum_size = Vector2(36, 80)
 bar_count = 2
-min_db = -60.0
-max_db = 6.0
+background_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 readout = 2
 caption = "OUT"
 
-[node name="MeteringControl" type="HBoxContainer" parent="MainPage/Top/MetersColumn"]
+[node name="MeteringControl" type="HBoxContainer" parent="MainPage/Top/MetersColumn" unique_id=1070087503]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 1
 script = ExtResource("4_segmented")
 font_size = 10
+items = PackedStringArray("Peak", "RMS")
 
-[node name="OutputColumn" type="VBoxContainer" parent="MainPage/Top"]
+[node name="OutputColumn" type="VBoxContainer" parent="MainPage/Top" unique_id=1348367716]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="Caption" type="Label" parent="MainPage/Top/OutputColumn"]
+[node name="Caption" type="Label" parent="MainPage/Top/OutputColumn" unique_id=1231089943]
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "OUTPUT"
+horizontal_alignment = 1
 
-[node name="OutputFader" type="Control" parent="MainPage/Top/OutputColumn"]
+[node name="OutputFader" type="Control" parent="MainPage/Top/OutputColumn" unique_id=1874067033]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 60)
 layout_mode = 2
-script = ExtResource("2_fader")
-custom_minimum_size = Vector2(44, 100)
-size_flags_horizontal = 4
 size_flags_vertical = 3
-track_width = 18.0
-scale_side = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("2_fader")
 min_value = -12.0
 max_value = 24.0
-value_default = 0.0
 fill_origin = 0.0
+track_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
+track_width = 18.0
+scale_marks = Array[Dictionary]([{
+"label": "+24",
+"value": 24.0
+}, {
+"label": "+12",
+"value": 12.0
+}, {
+"label": "+6",
+"value": 6.0
+}, {
+"label": "0",
+"value": 0.0
+}, {
+"label": "-12",
+"value": -12.0
+}])
+scale_side = 2
 
-[node name="OutputValue" type="Label" parent="MainPage/Top/OutputColumn"]
+[node name="OutputValue" type="Label" parent="MainPage/Top/OutputColumn" unique_id=261731515]
 unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 1
 text = "0.0 dB"
+horizontal_alignment = 1
 
-[node name="Separator" type="HSeparator" parent="MainPage"]
+[node name="Separator" type="HSeparator" parent="MainPage" unique_id=1895906296]
 layout_mode = 2
 
-[node name="Bottom" type="HFlowContainer" parent="MainPage"]
+[node name="Bottom" type="HFlowContainer" parent="MainPage" unique_id=172434262]
 layout_mode = 2
 theme_override_constants/h_separation = 16
 theme_override_constants/v_separation = 4
 
-[node name="KneeGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+[node name="KneeGroup" type="HBoxContainer" parent="MainPage/Bottom" unique_id=866581902]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="KneeCaption" type="Label" parent="MainPage/Bottom/KneeGroup"]
-layout_mode = 2
-custom_minimum_size = Vector2(44, 0)
-theme_override_font_sizes/font_size = 10
+[node name="KneeCaption" type="Label" parent="MainPage/Bottom/KneeGroup" unique_id=1216726243]
 modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
 text = "Knee"
 
-[node name="KneeSlider" type="Control" parent="MainPage/Bottom/KneeGroup"]
+[node name="KneeSlider" type="Control" parent="MainPage/Bottom/KneeGroup" unique_id=1957854938]
 unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("5_slider")
 custom_minimum_size = Vector2(110, 16)
+layout_mode = 2
 size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("5_slider")
 max_value = 1.0
 bidirectional = false
 fill_color = Color(0.384, 0.302, 0.6, 1)
 handle_on_hover_only = false
 
-[node name="KneeValue" type="Label" parent="MainPage/Bottom/KneeGroup"]
+[node name="KneeValue" type="Label" parent="MainPage/Bottom/KneeGroup" unique_id=26643817]
 unique_name_in_owner = true
-layout_mode = 2
 custom_minimum_size = Vector2(56, 0)
-theme_override_font_sizes/font_size = 10
-text = ""
-
-[node name="MixGroup" type="HBoxContainer" parent="MainPage/Bottom"]
 layout_mode = 2
+theme_override_font_sizes/font_size = 10
+
+[node name="StyleGroup" type="HBoxContainer" parent="MainPage/Bottom" unique_id=514500815]
+layout_mode = 2
+size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="MixCaption" type="Label" parent="MainPage/Bottom/MixGroup"]
-layout_mode = 2
-custom_minimum_size = Vector2(44, 0)
-theme_override_font_sizes/font_size = 10
+[node name="StyleCaption" type="Label" parent="MainPage/Bottom/StyleGroup" unique_id=689539148]
 modulate = Color(1, 1, 1, 0.6)
-text = "Mix"
-
-[node name="MixSlider" type="Control" parent="MainPage/Bottom/MixGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("5_slider")
-custom_minimum_size = Vector2(110, 16)
-size_flags_vertical = 4
-max_value = 1.0
-bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
-handle_on_hover_only = false
-
-[node name="MixValue" type="Label" parent="MainPage/Bottom/MixGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-custom_minimum_size = Vector2(56, 0)
-theme_override_font_sizes/font_size = 10
-text = ""
-
-[node name="AttackGroup" type="HBoxContainer" parent="MainPage/Bottom"]
-layout_mode = 2
-theme_override_constants/separation = 6
-
-[node name="AttackCaption" type="Label" parent="MainPage/Bottom/AttackGroup"]
-layout_mode = 2
-custom_minimum_size = Vector2(44, 0)
-theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-text = "Attack"
-
-[node name="AttackSlider" type="Control" parent="MainPage/Bottom/AttackGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("5_slider")
-custom_minimum_size = Vector2(110, 16)
-size_flags_vertical = 4
-max_value = 1.0
-bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
-handle_on_hover_only = false
-
-[node name="AttackValue" type="Label" parent="MainPage/Bottom/AttackGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-custom_minimum_size = Vector2(56, 0)
-theme_override_font_sizes/font_size = 10
-text = ""
-
-[node name="ReleaseGroup" type="HBoxContainer" parent="MainPage/Bottom"]
-layout_mode = 2
-theme_override_constants/separation = 6
-
-[node name="ReleaseCaption" type="Label" parent="MainPage/Bottom/ReleaseGroup"]
-layout_mode = 2
-custom_minimum_size = Vector2(44, 0)
-theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-text = "Release"
-
-[node name="ReleaseSlider" type="Control" parent="MainPage/Bottom/ReleaseGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("5_slider")
-custom_minimum_size = Vector2(110, 16)
-size_flags_vertical = 4
-max_value = 1.0
-bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
-handle_on_hover_only = false
-
-[node name="ReleaseValue" type="Label" parent="MainPage/Bottom/ReleaseGroup"]
-unique_name_in_owner = true
-layout_mode = 2
-custom_minimum_size = Vector2(56, 0)
-theme_override_font_sizes/font_size = 10
-text = ""
-
-[node name="StyleGroup" type="HBoxContainer" parent="MainPage/Bottom"]
-layout_mode = 2
-theme_override_constants/separation = 6
-
-[node name="StyleCaption" type="Label" parent="MainPage/Bottom/StyleGroup"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
 text = "Style"
 
-[node name="StyleControl" type="HBoxContainer" parent="MainPage/Bottom/StyleGroup"]
+[node name="StyleControl" type="HBoxContainer" parent="MainPage/Bottom/StyleGroup" unique_id=240124056]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 1
 script = ExtResource("4_segmented")
 font_size = 10
+items = PackedStringArray("Clean", "Glue", "Punch", "Opto")
 
-[node name="AutoRelease" type="CheckBox" parent="MainPage/Bottom"]
+[node name="MixGroup" type="HBoxContainer" parent="MainPage/Bottom" unique_id=742362687]
+layout_mode = 2
+size_flags_horizontal = 10
+theme_override_constants/separation = 6
+
+[node name="MixCaption" type="Label" parent="MainPage/Bottom/MixGroup" unique_id=247093007]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Mix"
+
+[node name="MixSlider" type="Control" parent="MainPage/Bottom/MixGroup" unique_id=842803894]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 16)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("5_slider")
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="MixValue" type="Label" parent="MainPage/Bottom/MixGroup" unique_id=1288417075]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(56, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+
+[node name="AttackGroup" type="HBoxContainer" parent="MainPage/Bottom" unique_id=898129284]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AttackCaption" type="Label" parent="MainPage/Bottom/AttackGroup" unique_id=1913711270]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Attack"
+
+[node name="AttackSlider" type="Control" parent="MainPage/Bottom/AttackGroup" unique_id=90621693]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 16)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("5_slider")
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="AttackValue" type="Label" parent="MainPage/Bottom/AttackGroup" unique_id=1628062414]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(56, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+
+[node name="ReleaseGroup" type="HBoxContainer" parent="MainPage/Bottom" unique_id=1602817988]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ReleaseCaption" type="Label" parent="MainPage/Bottom/ReleaseGroup" unique_id=1060735471]
+modulate = Color(1, 1, 1, 0.6)
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Release"
+
+[node name="ReleaseSlider" type="Control" parent="MainPage/Bottom/ReleaseGroup" unique_id=1581781794]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 16)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("5_slider")
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="ReleaseValue" type="Label" parent="MainPage/Bottom/ReleaseGroup" unique_id=1716924601]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(56, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+
+[node name="AutoRelease" type="CheckBox" parent="MainPage/Bottom/ReleaseGroup" unique_id=1599308383]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-text = "Auto Rel"
+text = "Auto Release"
 
-[node name="DetectorPage" type="HFlowContainer" parent="."]
+[node name="DetectorPage" type="HFlowContainer" parent="." unique_id=1243801544]
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
@@ -404,65 +467,65 @@ grow_vertical = 2
 theme_override_constants/h_separation = 20
 theme_override_constants/v_separation = 8
 
-[node name="DetectionGroup" type="VBoxContainer" parent="DetectorPage"]
+[node name="DetectionGroup" type="VBoxContainer" parent="DetectorPage" unique_id=1803742382]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="DetectionCaption" type="Label" parent="DetectorPage/DetectionGroup"]
+[node name="DetectionCaption" type="Label" parent="DetectorPage/DetectionGroup" unique_id=1656154087]
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 0
 text = "Detection"
 
-[node name="DetectionControl" type="HBoxContainer" parent="DetectorPage/DetectionGroup"]
+[node name="DetectionControl" type="HBoxContainer" parent="DetectorPage/DetectionGroup" unique_id=738676949]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 1
 script = ExtResource("4_segmented")
-font_size = 11
+items = PackedStringArray("Peak", "RMS")
 
-[node name="ChannelsGroup" type="VBoxContainer" parent="DetectorPage"]
+[node name="ChannelsGroup" type="VBoxContainer" parent="DetectorPage" unique_id=240169664]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="ChannelsCaption" type="Label" parent="DetectorPage/ChannelsGroup"]
+[node name="ChannelsCaption" type="Label" parent="DetectorPage/ChannelsGroup" unique_id=40209780]
+modulate = Color(1, 1, 1, 0.6)
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
-modulate = Color(1, 1, 1, 0.6)
-horizontal_alignment = 0
 text = "Channels"
 
-[node name="ChannelsControl" type="HBoxContainer" parent="DetectorPage/ChannelsGroup"]
+[node name="ChannelsControl" type="HBoxContainer" parent="DetectorPage/ChannelsGroup" unique_id=172789629]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 1
 script = ExtResource("4_segmented")
-font_size = 11
+items = PackedStringArray("Stereo", "Mid", "Side")
 
-[node name="LinkKnob" type="VBoxContainer" parent="DetectorPage"]
+[node name="LinkKnob" type="VBoxContainer" parent="DetectorPage" unique_id=1449873532]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 2
 script = ExtResource("6_knob")
 knob_size = Vector2(36, 36)
-label_width = 44.0
 text = "Link"
 
-[node name="ScCutKnob" type="VBoxContainer" parent="DetectorPage"]
+[node name="ScCutKnob" type="VBoxContainer" parent="DetectorPage" unique_id=1558859602]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 2
 script = ExtResource("6_knob")
 knob_size = Vector2(36, 36)
-label_width = 44.0
 text = "SC Cut"
 
-[node name="RangeKnob" type="VBoxContainer" parent="DetectorPage"]
+[node name="RangeKnob" type="VBoxContainer" parent="DetectorPage" unique_id=319571421]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_constants/separation = 2
 script = ExtResource("6_knob")
 knob_size = Vector2(36, 36)
-label_width = 44.0
 text = "Range"
 
-[node name="ScListen" type="CheckBox" parent="DetectorPage"]
+[node name="ScListen" type="CheckBox" parent="DetectorPage" unique_id=1466263125]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 10

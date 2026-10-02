@@ -303,7 +303,7 @@ func _test_scope_keeps_the_window() -> void:
 
 
 func _test_auto_makeup() -> void:
-	_assert(is_equal_approx(CompressorData.auto_makeup_db(-20.0, 4.0, 0.0, 60.0), 7.5), "auto makeup is half the reduction at 0 dBFS")
+	_assert(is_equal_approx(CompressorData.auto_makeup_db(-20.0, 4.0, 0.0, 60.0), 5.25), "auto makeup is half the reduction at -6 dBFS")
 	_assert(is_equal_approx(CompressorData.auto_makeup_db(-20.0, 1.0, 0.0, 60.0), 0.0), "1:1 adds nothing")
 
 
@@ -322,15 +322,25 @@ func _test_view_in_the_tree() -> void:
 	view._on_view_shown()
 	await process_frame
 
+	_assert(view.style_control.items == PackedStringArray(CompressorData.STYLE_NAMES), "the scene's Style items match the data")
+	_assert(view.detection_control.items == PackedStringArray(CompressorData.DETECTION_NAMES), "and Detection")
+	_assert(view.channels_control.items == PackedStringArray(CompressorData.CHANNELS_NAMES), "and Channels")
 	_assert(view.style_control.selected == 2, "the Style control shows the device's style")
 	_assert(is_equal_approx(view.threshold_fader.value, -18.0), "the Threshold fader shows the parameter")
 	view.threshold_fader.value = -30.0
 	_assert(is_equal_approx(inst.get_parameter_real(CompressorData.P_THRESHOLD), -30.0), "a Threshold fader drag sets Threshold")
 	view.ratio_fader.value = 8.0
 	_assert(absf(inst.get_parameter_real(CompressorData.P_RATIO) - 8.0) < 0.01, "a Ratio fader drag sets Ratio")
+	view.auto_gain.button_pressed = false
 	view.output_fader.value = 6.0
 	_assert(is_equal_approx(inst.get_parameter_real(CompressorData.P_MAKEUP), 6.0), "an Output fader drag sets Makeup")
 	_assert(is_equal_approx(view.threshold_fader.value, -30.0), "the fader follows the parameter")
+	_assert(view.ratio_fader.value_to_position(1.0) > 0.99 and view.ratio_fader.value_to_position(30.0) < 0.01, "the Ratio fader is reversed: 1:1 at the top")
+	view.auto_gain.button_pressed = true
+	_assert(not view.output_fader.editable, "Auto Gain locks the Output fader")
+	_assert(absf(view.output_fader.value - CompressorData.auto_makeup_db(-30.0, 8.0, 6.0, 60.0)) < 0.01, "and it shows the auto gain")
+	view.auto_gain.button_pressed = false
+	_assert(view.output_fader.editable and is_equal_approx(view.output_fader.value, 6.0), "turning it off returns the manual Makeup")
 	var attack_param: DeviceParameter = inst.get_parameter(CompressorData.P_ATTACK)
 	view.get_node("%AttackSlider").value = attack_param.value_to_normalized(1.0)
 	_assert(absf(inst.get_parameter_real(CompressorData.P_ATTACK) - 1.0) < 0.01, "the Attack slider sets Attack through its taper")

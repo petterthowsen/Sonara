@@ -1,3 +1,4 @@
+@tool
 # ValueEditKind.gd
 # How a value control's last change came about, so an owner can treat a drag (relative) differently
 # from a typed entry or a reset (absolute), e.g. when several mixer channels are edited together.

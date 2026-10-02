@@ -107,7 +107,7 @@ func set_value_no_signal(val: float) -> void:
 		if is_inside_tree():
 			queue_redraw()
 
-@export var bg_color := Color.BLACK:
+@export var bg_color :Color = "#121212":
 	set(c):
 		bg_color = c
 		if is_inside_tree():
