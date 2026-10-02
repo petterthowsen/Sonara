@@ -5,6 +5,8 @@ class_name DevicePanel extends PanelContainer
 ## height left below the header and must fit it (the Simple View shrinks its rows); tabs a view
 ## wants go in the header (`DeviceView.get_header_tabs`), not inside the view.
 const HEIGHT := 350.0
+const ICON_VIEW_OPEN := preload("res://assets/icons/chevron-right.svg")
+const ICON_VIEW_CLOSED := preload("res://assets/icons/chevron-left.svg")
 
 ## Widest the device name gets while view tabs share the header with it.
 const NAME_MAX_WIDTH := 140.0
@@ -25,14 +27,16 @@ var logger : Log = Log.make("DevicePanel")
 @onready var reload_button: Button = $VBox/TopHeader/HBox/Reload
 
 # Left header: View and Window toggles, then the Parameters/CCs/File tabs (one ButtonGroup)
-@onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/TabButtons
-@onready var view_button: Button = $VBox/HBox/LeftHeader/TabButtons/View
-@onready var window_button: Button = $VBox/HBox/LeftHeader/TabButtons/Window
+## Device name written vertically in the left header while the View is closed.
+@onready var vertical_name_label: Label = $VBox/HBox/LeftHeader/VBox/Name/Label
+@onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/VBox/TabButtons
+@onready var view_button: Button = $VBox/HBox/LeftHeader/VBox/View
+@onready var window_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Window
 ## Switches between a device's own Panel view and the generated Simple View (REQ-011 decision).
 ## Visible only for a device that has both.
-@onready var simple_button: Button = $VBox/HBox/LeftHeader/TabButtons/Simple
-@onready var params_button : Button = $VBox/HBox/LeftHeader/TabButtons/Parameters
-@onready var file_button: Button = $VBox/HBox/LeftHeader/TabButtons/File
+@onready var simple_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Simple
+@onready var params_button : Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Parameters
+@onready var file_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/File
 
 ## MIDI CC tab (duplicated from Parameters at runtime until it gets its own icon)
 var cc_button: Button
@@ -80,9 +84,12 @@ var _cc_list: ParameterList
 var _params_auto_opened := false
 
 ## The shown view's tabs (e.g. Simple View pages), in the top header after the name.
-var header_tabs: TabBar
+@onready var header_tabs: TabBar = $VBox/TopHeader/HBox/ViewTabs
 ## View whose tabs `header_tabs` shows (null when none is shown).
 var _tabs_view: DeviceView = null
+## True while the View is toggled off: the top header then shows only the device light and the
+## name runs vertically in the left header.
+var _collapsed := false
 ## True while `header_tabs` is being filled from the view, so its signals don't echo back.
 var _syncing_tabs := false
 
@@ -93,7 +100,7 @@ signal request_child_context_menu(child: DeviceInstance)
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
 	_create_cc_tab()
-	_create_header_tabs()
+	_setup_header_tabs()
 	_create_parameter_lists()
 
 	# Parameters/CCs/File share a ButtonGroup; clicking the active tab collapses its pane.
@@ -151,25 +158,14 @@ func _create_cc_tab() -> void:
 		child.queue_free()
 
 
-## Tab bar for the shown view's tabs, after the name in the top header. It clips and scrolls with
-## arrows, so it never widens the panel by more than one tab. The header always keeps the tab
-## bar's height, so panels line up whether or not they show tabs.
-func _create_header_tabs() -> void:
-	header_tabs = TabBar.new()
-	header_tabs.name = "ViewTabs"
-	header_tabs.clip_tabs = true
-	header_tabs.tab_alignment = TabBar.ALIGNMENT_LEFT
-	header_tabs.focus_mode = Control.FOCUS_NONE
-	header_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header_tabs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	header_tabs.add_theme_font_size_override("font_size", 12)
-	var row := name_label.get_parent()
-	row.add_child(header_tabs)
-	row.move_child(header_tabs, name_label.get_index() + 1)
+## Tab bar for the shown view's tabs (`ViewTabs` in the scene), after the name in the top header.
+## It clips and scrolls with arrows, so it never widens the panel by more than one tab. The header
+## always keeps the tab bar's height, so panels line up whether or not they show tabs.
+func _setup_header_tabs() -> void:
 	header_tabs.add_tab("M")
-	(row as Control).custom_minimum_size.y = header_tabs.get_combined_minimum_size().y
+	(header_tabs.get_parent() as Control).custom_minimum_size.y = header_tabs.get_combined_minimum_size().y
 	header_tabs.clear_tabs()
-	header_tabs.visible = false
+	header_tabs.hide()
 	header_tabs.tab_changed.connect(_on_header_tab_changed)
 
 
@@ -197,7 +193,7 @@ func _update_header_tabs() -> void:
 	if not titles.is_empty():
 		header_tabs.current_tab = clampi(view.get_header_tab(), 0, titles.size() - 1)
 	_syncing_tabs = false
-	header_tabs.visible = not titles.is_empty()
+	header_tabs.visible = not titles.is_empty() and not _collapsed
 	_fit_name_to_tabs()
 
 
@@ -293,7 +289,7 @@ func _update_reload_button_visibility() -> void:
 	if reload_button == null:
 		return
 	var state: String = device.loading_state if device else ""
-	reload_button.visible = state.begins_with("crashed:") or state.begins_with("failed:")
+	reload_button.visible = (state.begins_with("crashed:") or state.begins_with("failed:")) and not _collapsed
 
 
 func _on_device_loading_state_changed(_state: String) -> void:
@@ -421,6 +417,7 @@ func _on_reload_pressed() -> void:
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
 		name_label.set_value(new_name)
+		vertical_name_label.text = new_name
 		_fit_name_to_tabs()
 	if _window_popup:
 		_window_popup.title = new_name
@@ -430,7 +427,9 @@ func _on_device_name_changed(new_name: String) -> void:
 func _on_name_edited(value) -> void:
 	if device == null:
 		return
-	name_label.set_value(DeviceActions.rename(device, str(value)))
+	var new_name := DeviceActions.rename(device, str(value))
+	name_label.set_value(new_name)
+	vertical_name_label.text = new_name
 
 
 func bind_to_device(dev : DeviceInstance):
@@ -441,6 +440,7 @@ func bind_to_device(dev : DeviceInstance):
 		await ready
 	device_light.bind_to_device_instance(dev)
 	name_label.set_value(dev.get_display_name())
+	vertical_name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)
 	if not dev.loading_state_changed.is_connected(_on_device_loading_state_changed):
@@ -562,6 +562,7 @@ func _update_view_toggle_visibility() -> void:
 	var can_simple := device.device.uses_simple_view(device.get_parameters())
 	view_button.visible = device.device.has_panel_view() or device.device.has_companion_view() or can_simple
 	simple_button.visible = device.device.has_panel_view() and can_simple
+	_update_view_pane_visibility()
 	simple_button.set_pressed_no_signal(bool(Sonara.get_config("devices/simple_view/%s" % device.device.device_id, false)))
 
 
@@ -609,7 +610,19 @@ func _on_window_toggled(pressed: bool) -> void:
 func _update_view_pane_visibility() -> void:
 	var has_view := _panel_view != null or _companion_view != null
 	view_pane.visible = has_view and view_button.button_pressed
+	_set_collapsed(view_button.visible and not view_button.button_pressed)
 	_update_header_tabs()
+	_update_reload_button_visibility()
+
+
+## With the View closed the top header keeps only the device light; the name moves to the left
+## header, written vertically. The chevron points left when closed, right when open.
+func _set_collapsed(collapsed: bool) -> void:
+	_collapsed = collapsed
+	view_button.icon = ICON_VIEW_CLOSED if collapsed else ICON_VIEW_OPEN
+	preset_button.visible = not collapsed
+	name_label.visible = not collapsed
+	vertical_name_label.visible = collapsed
 
 
 ## Show the CCs tab only when this device has unlabeled MIDI CCs.

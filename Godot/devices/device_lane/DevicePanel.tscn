@@ -3,12 +3,12 @@
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://devices/device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
+[ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="5_d6wny"]
 [ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
 [ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
-[ext_resource type="Texture2D" path="res://assets/icons/bookmark.svg" id="9_preset"]
-[ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="6_n5ici"]
 [ext_resource type="Texture2D" uid="uid://cpre341cdgoij" path="res://assets/icons/gauge.svg" id="7_d6wny"]
 [ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
+[ext_resource type="Texture2D" uid="uid://dutkm4ba5qf0r" path="res://assets/icons/bookmark.svg" id="9_preset"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
 content_margin_left = 1.0
@@ -49,6 +49,36 @@ fill_from = Vector2(0.4957265, 0.5)
 fill_to = Vector2(0.14529915, 0.14102565)
 
 [sub_resource type="LabelSettings" id="LabelSettings_r4rlf"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_d6wny"]
+content_margin_left = 10.0
+content_margin_top = 4.0
+content_margin_right = 10.0
+content_margin_bottom = 4.0
+bg_color = Color(0, 0, 0, 0.6)
+draw_center = false
+border_color = Color(0.175, 0.175, 0.175, 1)
+corner_detail = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0wr7l"]
+content_margin_left = 10.0
+content_margin_top = 4.0
+content_margin_right = 10.0
+content_margin_bottom = 4.0
+bg_color = Color(0, 0, 0, 0.6)
+draw_center = false
+border_color = Color(0.175, 0.175, 0.175, 1)
+corner_detail = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7wb5b"]
+content_margin_left = 10.0
+content_margin_top = 4.0
+content_margin_right = 10.0
+content_margin_bottom = 4.0
+bg_color = Color(0.1, 0.1, 0.1, 0.6)
+border_color = Color(1, 1, 1, 0.75)
+corner_detail = 1
+expand_margin_bottom = 1.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cpmka"]
 content_margin_left = 2.0
@@ -104,8 +134,8 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="Device" type="PanelContainer" unique_id=1822906056]
-custom_minimum_size = Vector2(160, 350)
-offset_right = 215.0
+custom_minimum_size = Vector2(0, 350)
+offset_right = 296.0
 offset_bottom = 350.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
@@ -140,16 +170,17 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Preset" type="Button" parent="VBox/TopHeader/HBox"]
+[node name="Preset" type="Button" parent="VBox/TopHeader/HBox" unique_id=2002879220]
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_vertical = 4
 tooltip_text = "No preset"
-flat = true
 icon = ExtResource("9_preset")
+flat = true
 expand_icon = true
 
 [node name="Name" parent="VBox/TopHeader/HBox" unique_id=547742797 instance=ExtResource("3_smle")]
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
@@ -163,6 +194,24 @@ clip_text = true
 
 [node name="LineEdit" parent="VBox/TopHeader/HBox/Name" index="1" unique_id=1087718571]
 alignment = 0
+
+[node name="ViewTabs" type="TabBar" parent="VBox/TopHeader/HBox" unique_id=896160528]
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 8
+focus_mode = 0
+theme_override_colors/font_selected_color = Color(0.88235295, 0.88235295, 0.88235295, 1)
+theme_override_colors/font_hovered_color = Color(0.88193667, 0.88193655, 0.8819369, 1)
+theme_override_colors/font_unselected_color = Color(0.50140655, 0.5014065, 0.5014065, 1)
+theme_override_font_sizes/font_size = 12
+theme_override_styles/tab_unselected = SubResource("StyleBoxFlat_d6wny")
+theme_override_styles/tab_hovered = SubResource("StyleBoxFlat_0wr7l")
+theme_override_styles/tab_selected = SubResource("StyleBoxFlat_7wb5b")
+current_tab = 0
+tab_count = 2
+tab_0/title = "Main"
+tab_1/title = "Modulation"
 
 [node name="Reload" type="Button" parent="VBox/TopHeader/HBox" unique_id=2000000301]
 visible = false
@@ -179,35 +228,64 @@ theme_override_constants/separation = 0
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_cpmka")
 
-[node name="TabButtons" type="BoxContainer" parent="VBox/HBox/LeftHeader" unique_id=1070410924]
+[node name="VBox" type="VBoxContainer" parent="VBox/HBox/LeftHeader" unique_id=1232623642]
 layout_mode = 2
+
+[node name="View" type="Button" parent="VBox/HBox/LeftHeader/VBox" unique_id=58150463]
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+size_flags_vertical = 0
+tooltip_text = "View Device Controls"
+toggle_mode = true
+button_pressed = true
+icon = ExtResource("5_d6wny")
+
+[node name="Name" type="Control" parent="VBox/HBox/LeftHeader/VBox" unique_id=990993931]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Label" type="Label" parent="VBox/HBox/LeftHeader/VBox/Name" unique_id=922953410]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -14.0
+offset_top = 45.5
+offset_right = 88.0
+offset_bottom = 68.5
+grow_horizontal = 2
+grow_vertical = 2
+rotation = -1.5707964
+text = "Device Name"
+horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="TabButtons" type="BoxContainer" parent="VBox/HBox/LeftHeader/VBox" unique_id=1070410924]
+layout_mode = 2
+size_flags_vertical = 10
 alignment = 1
 vertical = true
 
-[node name="View" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=58150463]
-custom_minimum_size = Vector2(28, 0)
-layout_mode = 2
-size_flags_vertical = 3
-tooltip_text = "View Device Controls"
-toggle_mode = true
-icon = ExtResource("6_n5ici")
-
-[node name="Window" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1513885063]
+[node name="Window" type="Button" parent="VBox/HBox/LeftHeader/VBox/TabButtons" unique_id=1513885063]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 tooltip_text = "Open External Window"
 toggle_mode = true
 icon = ExtResource("7_ohvca")
 
-[node name="Simple" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1844591318]
-visible = false
+[node name="Simple" type="Button" parent="VBox/HBox/LeftHeader/VBox/TabButtons" unique_id=1844591318]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 tooltip_text = "Switch to the Simple View"
 toggle_mode = true
 icon = ExtResource("7_d6wny")
 
-[node name="Parameters" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=759836976]
+[node name="Parameters" type="Button" parent="VBox/HBox/LeftHeader/VBox/TabButtons" unique_id=759836976]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 size_flags_vertical = 4
@@ -217,7 +295,7 @@ toggle_mode = true
 button_group = SubResource("ButtonGroup_1cidk")
 icon = ExtResource("5_n5ici")
 
-[node name="File" type="Button" parent="VBox/HBox/LeftHeader/TabButtons" unique_id=1192976894]
+[node name="File" type="Button" parent="VBox/HBox/LeftHeader/VBox/TabButtons" unique_id=1192976894]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
 size_flags_vertical = 4
@@ -280,7 +358,6 @@ size_flags_vertical = 4
 text = "Load File"
 
 [node name="View" type="PanelContainer" parent="VBox/HBox/Content/HBox" unique_id=214953315]
-custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_r4rlf")
