@@ -97,6 +97,10 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 - Level meters use the mixer strip's colors everywhere (a Volumeter or any new meter matches
   `Meter` in `MixerChannel.tscn`): low `(0.728, 0.8, 0.08)`, high `(0.8, 0.416, 0.08)`, clip
   `(0.8, 0.08, 0.08)`, dark background, white-smoke handle.
+- `LevelMeter` has two colour modes. ZONES uses `safe_color` below `warn_db`, then the warn and
+  clip colours; SOLID uses `safe_color` only. The compressor view sets the safe colour to
+  `UiColors.PRIMARY`. Whether the mixer meter follows is left to the theme follow-up
+  (spec 015 §2.6).
 - Volume controls share the -60 to +6 dB range of the mixer fader.
 - Editor backgrounds are near-black (`#111`), not pure black. Grid lines are faint white
   (`Color(1, 1, 1, 0.06)`).
@@ -113,6 +117,9 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | `FloatingValueEditor.gd` | Double-click value entry |
 | `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
 | `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
+| `core/UiColors.gd` | Colour tokens (`PRIMARY` `#624d99`, `TRACK_BG`, the meter palette). New components default to these |
+| `meter/MeterBallistics.gd` | dB-domain peak release, hold and RMS smoothing for any meter that draws itself (`push`, `step`, `settled`) |
+| `meter/LevelMeter.gd` | Configurable dB meter: N bars, `display` PEAK/RMS/BOTH, ZONES/SOLID colour, LEVEL or REDUCTION (GR from the top), scale, readout, caption. `push(index, peak_db, rms_db)`; click resets holds |
 
 Controls built on them: `RotaryKnob` (fills its rect, or set `radius`; `value_font_size` for its
 tooltip), `HorSlider` (single) and `HDualSlider` (pan),

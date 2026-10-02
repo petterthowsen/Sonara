@@ -3,11 +3,11 @@
 ## view reuses it for input, output and gain-reduction meters.
 class_name MeterDraw extends RefCounted
 
-const COLOR_LOW := Color(0.728, 0.8, 0.08)
-const COLOR_HIGH := Color(0.8, 0.416, 0.08)
-const COLOR_CLIP := Color(0.8, 0.08, 0.08)
-const COLOR_BACKGROUND := Color(0.07, 0.07, 0.07)
-const COLOR_HOLD := Color(0.96, 0.96, 0.96)
+const COLOR_LOW := UiColors.METER_LOW
+const COLOR_HIGH := UiColors.METER_WARN
+const COLOR_CLIP := UiColors.METER_CLIP
+const COLOR_BACKGROUND := UiColors.METER_BG
+const COLOR_HOLD := UiColors.METER_HOLD
 
 ## Where the meter turns from low to high colour, and to clip, as a fraction of its range.
 const HIGH_AT := 0.75
