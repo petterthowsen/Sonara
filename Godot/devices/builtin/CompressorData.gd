@@ -80,6 +80,11 @@ static func static_curve_db(
 	return level_db - gain_reduction_db(level_db, threshold_db, ratio, knee_db, range_db)
 
 
+## The makeup Auto Gain adds: half the reduction at 0 dBFS, as the engine computes it.
+static func auto_makeup_db(threshold_db: float, ratio: float, knee_db: float, range_db: float) -> float:
+	return 0.5 * gain_reduction_db(0.0, threshold_db, ratio, knee_db, range_db)
+
+
 ## "4:1", "1:1", or "∞:1" at the top of the Ratio knob.
 static func format_ratio(ratio: float) -> String:
 	if ratio >= RATIO_MAX - 0.5:

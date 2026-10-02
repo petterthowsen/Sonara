@@ -269,26 +269,26 @@ Each phase ends green (`cargo test`, `Godot/tests/run_all.sh`) and can be commit
       `test_compressor_view.gd`'s decode test.
 
 ### Phase 4: Rebuild `CompressorDefaultView`
-- [ ] New layout from 2.1. Delete the inner `Meters` class and the Detector pane. Add the Main /
+- [x] New layout from 2.1, as a scene (`CompressorDefaultView.tscn`, box and flow containers). Delete the inner `Meters` class and the Detector pane. Add the Main /
       Detector header tabs.
-- [ ] Feed the Threshold `overlay_level` and `CompressorCurve.live_input_db` from
+- [x] Feed the Threshold `overlay_level` and `CompressorCurve.live_input_db` from
       `summary.detector_db`, the meters from the summary, and `ghost_value` from the static auto
       makeup (half the reduction at 0 dBFS, as the engine computes it; add a
       `CompressorData.auto_makeup_db`).
-- [ ] `CompressorCurve`: square-friendly (it keeps its aspect ratio inside the column), drawn in
+- [x?] `CompressorCurve`: square-friendly (it keeps its aspect ratio inside the column), drawn in
       `UiColors`, with the dot fed from `detector_db`.
-- [ ] `CompressorScope` replaces `CompressorHistory`. It keeps the rolling buffer, the
+- [x] `CompressorScope` (one half, `direction` UP/DOWN, used twice for the mirrored scope) replaces `CompressorHistory`. It keeps the rolling buffer, the
       sample-rate capacity and the threshold drag, and adds the mirrored primary / gray / red
       drawing from 2.1. Add a headless test that checks the three segment heights for one
       column (input above the threshold with known GR).
-- [ ] View state `{display: CURVE|SCOPE, metering: PEAK|RMS}` in the app config at
+- [x] View state `{display: CURVE|SCOPE, metering: PEAK|RMS}` in the app config at
       `devices/compressor/view`, as the EQ does with `EqViewState`. The `Peak | RMS` toggle sets
       `display` on every `LevelMeter` in the view.
-- [ ] `_get_minimum_size()` ≤ (780, 250) for the panel, with a larger size when opened as a
+- [x] `_get_minimum_size()` ≤ (780, 250) for the panel, with a larger size when opened as a
       window (as `EqDefaultView._is_window`).
-- [ ] Update `test_compressor_view.gd`: fader drags set Threshold, Ratio and Makeup, the
+- [x] Update `test_compressor_view.gd`: fader drags set Threshold, Ratio and Makeup, the
       header tabs switch pages, meters receive the summary, and the view fits the panel height.
-- [ ] Manual check with the engine running (with the user): drums through the compressor, and
+- [x] Manual check with the engine running (with the user): drums through the compressor, and
       confirm the GR meter, the dot and the threshold bar agree.
 
 ### Phase 5: Simple View integration

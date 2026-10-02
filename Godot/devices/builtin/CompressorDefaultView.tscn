@@ -1,10 +1,469 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://devices/builtin/CompressorDefaultView.gd" id="1_compview"]
-
+[ext_resource type="Script" path="res://devices/builtin/CompressorDefaultView.gd" id="1_view"]
+[ext_resource type="Script" path="res://components/Fader.gd" id="2_fader"]
+[ext_resource type="Script" path="res://components/meter/LevelMeter.gd" id="3_meter"]
+[ext_resource type="Script" path="res://components/SegmentedControl.gd" id="4_segmented"]
+[ext_resource type="Script" path="res://components/HSlider.gd" id="5_slider"]
+[ext_resource type="Script" path="res://components/LabeledKnob.gd" id="6_knob"]
+[ext_resource type="Script" path="res://devices/builtin/CompressorCurve.gd" id="7_curve"]
+[ext_resource type="Script" path="res://devices/builtin/CompressorScope.gd" id="8_scope"]
 [node name="CompressorDefaultView" type="Control"]
-custom_minimum_size = Vector2(520, 300)
+custom_minimum_size = Vector2(780, 250)
 layout_mode = 3
+anchors_preset = 0
 size_flags_horizontal = 3
 size_flags_vertical = 3
-script = ExtResource("1_compview")
+script = ExtResource("1_view")
+
+[node name="MainPage" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 4
+
+[node name="Top" type="HBoxContainer" parent="MainPage"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="ThresholdColumn" type="VBoxContainer" parent="MainPage/Top"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Top/ThresholdColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "THRESH"
+
+[node name="ThresholdFader" type="Control" parent="MainPage/Top/ThresholdColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_fader")
+custom_minimum_size = Vector2(44, 100)
+size_flags_horizontal = 4
+size_flags_vertical = 3
+track_width = 18.0
+scale_side = 1
+min_value = -60.0
+max_value = 0.0
+value_default = -18.0
+value = -18.0
+
+[node name="ThresholdValue" type="Label" parent="MainPage/Top/ThresholdColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "0.0 dB"
+
+[node name="RatioColumn" type="VBoxContainer" parent="MainPage/Top"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Top/RatioColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "RATIO"
+
+[node name="RatioFader" type="Control" parent="MainPage/Top/RatioColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_fader")
+custom_minimum_size = Vector2(44, 100)
+size_flags_horizontal = 4
+size_flags_vertical = 3
+track_width = 18.0
+scale_side = 1
+min_value = 1.0
+max_value = 30.0
+value_default = 4.0
+
+[node name="RatioValue" type="Label" parent="MainPage/Top/RatioColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "0.0 dB"
+
+[node name="VizColumn" type="VBoxContainer" parent="MainPage/Top"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 3
+
+[node name="VizStack" type="VBoxContainer" parent="MainPage/Top/VizColumn"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+
+[node name="Curve" type="Control" parent="MainPage/Top/VizColumn/VizStack"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("7_curve")
+custom_minimum_size = Vector2(120, 100)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ScopeStack" type="VBoxContainer" parent="MainPage/Top/VizColumn/VizStack"]
+unique_name_in_owner = true
+layout_mode = 2
+visible = false
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 1
+
+[node name="ScopeTop" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("8_scope")
+custom_minimum_size = Vector2(120, 40)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+direction = 0
+
+[node name="ScopeBottom" type="Control" parent="MainPage/Top/VizColumn/VizStack/ScopeStack"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("8_scope")
+custom_minimum_size = Vector2(120, 40)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+direction = 1
+show_threshold_label = false
+
+[node name="VizToolbar" type="HBoxContainer" parent="MainPage/Top/VizColumn"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AutoGain" type="CheckBox" parent="MainPage/Top/VizColumn/VizToolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Auto Gain"
+
+[node name="Spacer" type="Control" parent="MainPage/Top/VizColumn/VizToolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DisplayControl" type="HBoxContainer" parent="MainPage/Top/VizColumn/VizToolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("4_segmented")
+font_size = 10
+
+[node name="MetersColumn" type="VBoxContainer" parent="MainPage/Top"]
+layout_mode = 2
+theme_override_constants/separation = 3
+
+[node name="Meters" type="HBoxContainer" parent="MainPage/Top/MetersColumn"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="InMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_meter")
+custom_minimum_size = Vector2(52, 80)
+bar_count = 2
+min_db = -60.0
+max_db = 6.0
+scale_marks = Array[float]([0.0, -12.0, -24.0, -36.0, -48.0])
+scale_side = 1
+readout = 2
+caption = "IN"
+
+[node name="GrMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_meter")
+custom_minimum_size = Vector2(16, 80)
+mode = 1
+min_db = 0.0
+max_db = 24.0
+show_hold = false
+readout = 2
+caption = "GR"
+
+[node name="OutMeter" type="Control" parent="MainPage/Top/MetersColumn/Meters"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("3_meter")
+custom_minimum_size = Vector2(36, 80)
+bar_count = 2
+min_db = -60.0
+max_db = 6.0
+readout = 2
+caption = "OUT"
+
+[node name="MeteringControl" type="HBoxContainer" parent="MainPage/Top/MetersColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("4_segmented")
+font_size = 10
+
+[node name="OutputColumn" type="VBoxContainer" parent="MainPage/Top"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Caption" type="Label" parent="MainPage/Top/OutputColumn"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "OUTPUT"
+
+[node name="OutputFader" type="Control" parent="MainPage/Top/OutputColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_fader")
+custom_minimum_size = Vector2(44, 100)
+size_flags_horizontal = 4
+size_flags_vertical = 3
+track_width = 18.0
+scale_side = 2
+min_value = -12.0
+max_value = 24.0
+value_default = 0.0
+fill_origin = 0.0
+
+[node name="OutputValue" type="Label" parent="MainPage/Top/OutputColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 1
+text = "0.0 dB"
+
+[node name="Separator" type="HSeparator" parent="MainPage"]
+layout_mode = 2
+
+[node name="Bottom" type="HFlowContainer" parent="MainPage"]
+layout_mode = 2
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 4
+
+[node name="KneeGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="KneeCaption" type="Label" parent="MainPage/Bottom/KneeGroup"]
+layout_mode = 2
+custom_minimum_size = Vector2(44, 0)
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+text = "Knee"
+
+[node name="KneeSlider" type="Control" parent="MainPage/Bottom/KneeGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("5_slider")
+custom_minimum_size = Vector2(110, 16)
+size_flags_vertical = 4
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="KneeValue" type="Label" parent="MainPage/Bottom/KneeGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+theme_override_font_sizes/font_size = 10
+text = ""
+
+[node name="MixGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MixCaption" type="Label" parent="MainPage/Bottom/MixGroup"]
+layout_mode = 2
+custom_minimum_size = Vector2(44, 0)
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+text = "Mix"
+
+[node name="MixSlider" type="Control" parent="MainPage/Bottom/MixGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("5_slider")
+custom_minimum_size = Vector2(110, 16)
+size_flags_vertical = 4
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="MixValue" type="Label" parent="MainPage/Bottom/MixGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+theme_override_font_sizes/font_size = 10
+text = ""
+
+[node name="AttackGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AttackCaption" type="Label" parent="MainPage/Bottom/AttackGroup"]
+layout_mode = 2
+custom_minimum_size = Vector2(44, 0)
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+text = "Attack"
+
+[node name="AttackSlider" type="Control" parent="MainPage/Bottom/AttackGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("5_slider")
+custom_minimum_size = Vector2(110, 16)
+size_flags_vertical = 4
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="AttackValue" type="Label" parent="MainPage/Bottom/AttackGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+theme_override_font_sizes/font_size = 10
+text = ""
+
+[node name="ReleaseGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ReleaseCaption" type="Label" parent="MainPage/Bottom/ReleaseGroup"]
+layout_mode = 2
+custom_minimum_size = Vector2(44, 0)
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+text = "Release"
+
+[node name="ReleaseSlider" type="Control" parent="MainPage/Bottom/ReleaseGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("5_slider")
+custom_minimum_size = Vector2(110, 16)
+size_flags_vertical = 4
+max_value = 1.0
+bidirectional = false
+fill_color = Color(0.384, 0.302, 0.6, 1)
+handle_on_hover_only = false
+
+[node name="ReleaseValue" type="Label" parent="MainPage/Bottom/ReleaseGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+theme_override_font_sizes/font_size = 10
+text = ""
+
+[node name="StyleGroup" type="HBoxContainer" parent="MainPage/Bottom"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="StyleCaption" type="Label" parent="MainPage/Bottom/StyleGroup"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+text = "Style"
+
+[node name="StyleControl" type="HBoxContainer" parent="MainPage/Bottom/StyleGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("4_segmented")
+font_size = 10
+
+[node name="AutoRelease" type="CheckBox" parent="MainPage/Bottom"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "Auto Rel"
+
+[node name="DetectorPage" type="HFlowContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/h_separation = 20
+theme_override_constants/v_separation = 8
+
+[node name="DetectionGroup" type="VBoxContainer" parent="DetectorPage"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="DetectionCaption" type="Label" parent="DetectorPage/DetectionGroup"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 0
+text = "Detection"
+
+[node name="DetectionControl" type="HBoxContainer" parent="DetectorPage/DetectionGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("4_segmented")
+font_size = 11
+
+[node name="ChannelsGroup" type="VBoxContainer" parent="DetectorPage"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="ChannelsCaption" type="Label" parent="DetectorPage/ChannelsGroup"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+modulate = Color(1, 1, 1, 0.6)
+horizontal_alignment = 0
+text = "Channels"
+
+[node name="ChannelsControl" type="HBoxContainer" parent="DetectorPage/ChannelsGroup"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("4_segmented")
+font_size = 11
+
+[node name="LinkKnob" type="VBoxContainer" parent="DetectorPage"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("6_knob")
+knob_size = Vector2(36, 36)
+label_width = 44.0
+text = "Link"
+
+[node name="ScCutKnob" type="VBoxContainer" parent="DetectorPage"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("6_knob")
+knob_size = Vector2(36, 36)
+label_width = 44.0
+text = "SC Cut"
+
+[node name="RangeKnob" type="VBoxContainer" parent="DetectorPage"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("6_knob")
+knob_size = Vector2(36, 36)
+label_width = 44.0
+text = "Range"
+
+[node name="ScListen" type="CheckBox" parent="DetectorPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "SC Listen"
