@@ -29,6 +29,9 @@ func run_tests() -> void:
 	_test_labelled_sfz_map()
 	_test_unlabelled_sfz_is_not_a_source()
 	_test_drum_machine_unchanged()
+	_test_playable_ranges()
+	_test_ranges_only_sfz()
+	_test_assistant_text()
 	await _test_watcher()
 
 
@@ -50,11 +53,14 @@ func _sfz_channel() -> Dictionary:
 	return {"channel": ch, "sfz": sfz}
 
 
-## keys/info args: [count, (key, is_keyswitch, label)...]
-func _info(entries: Array) -> Array:
+## keys/info args: [count, (key, is_keyswitch, label)..., range_count, (lo, hi)...]
+func _info(entries: Array, ranges: Array = []) -> Array:
 	var args: Array = [entries.size()]
 	for e in entries:
 		args.append_array(e)
+	args.append(ranges.size())
+	for r in ranges:
+		args.append_array(r)
 	return args
 
 
@@ -126,3 +132,49 @@ func _test_watcher() -> void:
 	await process_frame
 	_assert(hits[0] == 2, "a later reload notifies again (got %d)" % hits[0])
 	watcher.bind(null)
+
+
+func _test_playable_ranges() -> void:
+	var d := _sfz_channel()
+	d.sfz._on_key_info_received(_info([[24, 1, "Sustain"]], [[36, 72], [80, 90]]))
+	_assert(d.sfz.playable_ranges == [[36, 72], [80, 90]], "ranges parsed (got %s)" % [d.sfz.playable_ranges])
+	var map: Object = _resolver.effective_map(d.channel)
+	_assert(map.is_playable(36) and map.is_playable(72) and map.is_playable(85), "keys inside ranges are playable")
+	_assert(not map.is_playable(35) and not map.is_playable(73) and not map.is_playable(24), "keys outside ranges are not")
+	_assert(map.has_entry(24), "a keyswitch outside the ranges keeps its map entry (the piano doesn't grey it)")
+	_assert(map.duplicate_map().playable_ranges == map.playable_ranges, "duplicate keeps ranges")
+	_assert(not map.to_json().has("playable_ranges"), "ranges are not serialized")
+	d.sfz._on_key_info_received([0])
+	_assert(d.sfz.playable_ranges.is_empty(), "an older engine (no range tail) leaves no ranges")
+	d.sfz._on_key_info_received(_info([]))
+	_assert(_resolver.effective_map(d.channel).is_playable(5), "no ranges: every key is playable")
+
+
+func _test_ranges_only_sfz() -> void:
+	var d := _sfz_channel()
+	d.sfz._on_key_info_received(_info([], [[36, 36]]))
+	_assert(_resolver.has_auto_source(d.channel), "an SFZ with ranges is a source")
+	_assert(_resolver.effective_map(d.channel).is_empty(), "…that names nothing")
+	_assert(not _resolver.wants_drum_view(d.channel), "…and never wants Drum View")
+
+
+func _test_assistant_text() -> void:
+	var util: GDScript = load("res://ai/tools/SfzKeyInfoUtil.gd")
+	var d := _sfz_channel()
+	var sfz: Object = d.sfz
+	_assert(util.row_fields(sfz).is_empty(), "no file loaded: nothing to report")
+	sfz.loaded_file_path = "/tmp/x.sfz"
+	_assert(util.text_for(sfz, "Strings/SFZ") == "", "engine not connected: no pending message (key info will never come)")
+	sfz.key_info_received = true
+	_assert(util.text_for(sfz, "Strings/SFZ") == "", "an SFZ that declares nothing says nothing")
+	sfz._on_key_info_received(_info([[0, 1, "Sustain"], [1, 1, ""], [60, 0, "Open"]], [[36, 72], [80, 80]]))
+	var fields: Dictionary = util.row_fields(sfz)
+	_assert(fields.get("playable_ranges") == [{"from": "C1", "to": "C4"}, {"from": "G#4", "to": "G#4"}], "ranges as note names (got %s)" % [fields.get("playable_ranges")])
+	_assert(fields.get("keyswitches") == [{"key": "C-2", "name": "Sustain"}, {"key": "C#-2", "name": "(unnamed)"}], "keyswitches only, as note names (got %s)" % [fields.get("keyswitches")])
+	var text: String = util.text_for(sfz, "Strings/SFZ")
+	_assert(text.contains("Playable keys: C1-C4, G#4."), "text lists ranges (got '%s')" % text)
+	_assert(text.contains("C-2 Sustain, C#-2 (unnamed)"), "text lists keyswitches (got '%s')" % text)
+	var watch: Callable = util.watch(sfz)
+	var t0 := Time.get_ticks_msec()
+	await watch.call()
+	_assert(Time.get_ticks_msec() - t0 < 500, "nothing to wait for offline: returns at once")

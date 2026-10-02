@@ -128,6 +128,14 @@ var parameters: Array[DeviceParameter] = []
 ## re-sends it whenever the SFZ loads, and an empty message clears it.
 var key_labels: Array = []
 
+## SFZ sampler only: inclusive [lo, hi] key ranges its regions play, sorted and merged.
+## Empty until the SFZ has loaded. Not persisted, like key_labels.
+var playable_ranges: Array = []
+
+## True once `keys/info` has arrived for the current file. load_file() resets it, so the
+## assistant can tell "not here yet" from "this SFZ declares nothing".
+var key_info_received := false
+
 ## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
 var loaded_file_path: String = ""
 
@@ -1304,8 +1312,8 @@ func _on_param_count_received(args: Array) -> void:
 	logger.debug("[%s] Expecting %d parameters" % [device.name, count])
 
 
-## `keys/info`: [count, then count x (key, is_keyswitch, label)]. Always replaces the
-## whole list, so a count of 0 (a reload to an SFZ with no labels) clears it.
+## `keys/info`: [count, count x (key, is_keyswitch, label), range_count, range_count x (lo, hi)].
+## Always replaces the whole list and the ranges, so a count of 0 (a reload to an SFZ with no labels) clears it.
 func _on_key_info_received(args: Array) -> void:
 	var count: int = args[0] if args.size() >= 1 else 0
 	var keys: Array = []
@@ -1316,6 +1324,17 @@ func _on_key_info_received(args: Array) -> void:
 		keys.append({"key": int(args[base]), "keyswitch": int(args[base + 1]) != 0, "label": str(args[base + 2])})
 	keys.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.key < b.key)
 	key_labels = keys
+	# The ranges follow the entries: [range_count, (lo, hi)...]. An older engine sends none.
+	var ranges: Array = []
+	var range_at := 1 + count * 3
+	if args.size() > range_at:
+		for i in int(args[range_at]):
+			var base := range_at + 1 + i * 2
+			if base + 1 >= args.size():
+				break
+			ranges.append([int(args[base]), int(args[base + 1])])
+	playable_ranges = ranges
+	key_info_received = true
 	key_labels_changed.emit()
 
 
@@ -1438,6 +1457,7 @@ func load_file(file_path: String) -> void:
 
 	logger.info("Loading file into %s: %s" % [device.name, file_path])
 	loaded_file_path = file_path
+	key_info_received = false
 	if sample_source == null:
 		sample_source = AudioSourceInfo.new()
 	else:

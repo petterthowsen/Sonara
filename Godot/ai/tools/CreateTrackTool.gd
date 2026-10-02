@@ -55,14 +55,17 @@ func execute(args: Dictionary) -> Dictionary:
 		data["channel"] = compact_channel(project, cmd.channel)
 	var warnings: Array[String] = []
 	var note := ""
+	var sfz_text := ""
 	if cmd.channel and not resolved.is_empty():
 		var asset: Asset = resolved.asset
 		var spec := {"asset_path": asset.path, "_asset": asset}
 		var device_v: Variant = DeviceToolUtil.add_one(cmd.channel, null, spec, args)
 		if device_v is DeviceInstance:
+			await SfzKeyInfoUtil.watch(device_v).call()
 			data["device"] = compact_device(project, device_v)
 			text += " with %s" % device_v.get_display_name()
 			note = str(resolved.get("note", ""))
+			sfz_text = SfzKeyInfoUtil.text_for(device_v, data["device"].path)
 		else:
 			warnings.append("device not added: %s" % str(device_v.get("error", "")))
 	if cmd.channel and args.has("output"):
@@ -73,6 +76,8 @@ func execute(args: Dictionary) -> Dictionary:
 			warnings.append("output not routed: %s" % str(route_v.get("error", "")))
 	if not note.is_empty():
 		text += "\n%s" % note
+	if not sfz_text.is_empty():
+		text += "\n%s" % sfz_text
 	for w in warnings:
 		text += "\nWarning: %s" % w
 	return ok_text(text, data)

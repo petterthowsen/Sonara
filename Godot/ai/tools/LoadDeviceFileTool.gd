@@ -40,9 +40,15 @@ func execute(args: Dictionary) -> Dictionary:
 		return fail("Cannot load that file into %s" % inst.get_display_name())
 	var old_path := inst.loaded_file_path
 	var cmd := PropertyCommand.new("Load Device File", inst, "load_file", old_path, asset.path)
+	# Connect before loading: the engine reports an SFZ's keyswitches after the async load.
+	var key_info_wait := SfzKeyInfoUtil.watch(inst)
 	HistoryUtil.execute(cmd)
+	await key_info_wait.call()
 	var data := compact_device(project, inst)
 	var text := "Loaded into %s" % data.path
+	var key_text := SfzKeyInfoUtil.text_for(inst, data.path)
+	if not key_text.is_empty():
+		text += "\n%s" % key_text
 	var note := str(resolved.get("note", ""))
 	if not note.is_empty():
 		text += "\n%s" % note

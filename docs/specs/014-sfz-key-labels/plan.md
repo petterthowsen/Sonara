@@ -144,6 +144,61 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified. Do in 
   lanes, then load a different SFZ and confirm the labels update and stale ones clear.
   - _Depends on_: T-1 to T-7
 
+### Phase 4 — Playable ranges, piano tint, assistant knowledge
+
+Added after phase 2. Goal: an auto-mapped SFZ also knows which keys it can play, the piano roll greys
+the rest, and the AI assistant is told the range and the keyswitches when it loads an SFZ.
+
+Design:
+
+- **Source of ranges (engine).** Union of every region's `lokey`..`hikey` (sfizz message queries
+  `/num_regions`, `/region{n}/lokey`, `/region{n}/hikey`; same reply path as `sfizz_keys.rs`),
+  merged into sorted, non-overlapping `(lo, hi)` ranges. Ranges, not one from/to, because drum and
+  percussion patches have gaps. Keyswitch keys are not region keys, so they stay outside the ranges.
+  The assistant text can still say "C1–C5" when there is one range.
+- **OSC.** Append the ranges to the existing `keys/info` message so labels and ranges stay atomic
+  (an empty list still clears): `[count, count × (key, is_keyswitch, label), range_count, range_count × (lo, hi)]`.
+  Godot treats a missing tail as "no ranges", so an older engine still works.
+- **Model.** `DeviceInstance.playable_ranges: Array` (`[lo, hi]` pairs, not persisted, like `key_labels`).
+  `NoteMap` gets an optional `playable_ranges` (empty = every key is playable) and
+  `is_playable(pitch)`. Only the SFZ Auto map fills it. Not editable and not serialized, so the
+  note-map UI and library files are untouched.
+- **Source rule.** An SFZ is an Auto source when it has labels **or** ranges. It still names nothing
+  without labels, and `has_row_source` keeps Drum View off.
+- **Piano tint.** `NoteLanes.gd` tints keys outside `playable_ranges` toward gray when the map has
+  ranges. Keyswitch keys are outside the ranges but have a map entry, so they keep their own color
+  and are not tinted.
+- **Assistant.** The info lives on the `DeviceInstance`, so it does not depend on the load result.
+  `AiTool.compact_device` (shared by `load_device_file`, `add_device`, `get_device`, `list_devices`)
+  adds, for an SFZ device, `playable_ranges` and `keyswitches` (`[{key, name}]`, note names in the
+  project's convention: middle C = C3 = 60) once they have arrived, or `"key_info": "loading"` while
+  the SFZ is still loading. `load_device_file` / `add_device` also await `key_labels_changed` for up
+  to ~2 s so the common case answers immediately. On timeout the result says the key info is not
+  ready and to call `get_device` shortly, which then returns it. `system_prompt.md` gets a line
+  telling the model to use keyswitches, stay inside the playable range, and re-check while `key_info`
+  is `loading`.
+
+Tasks:
+
+- [x?] **T-10** Engine: `read_playable_ranges` + merge, appended to `SfzKeyInfo` / `keys/info`.
+  - _Verify_: test on `test_keyswitch.sfz` (add regions with a gap), serializer test for the new layout.
+  - _Done_: `read_playable_ranges` + `merge_ranges` in `sfizz_keys.rs`. sfizz replies `/num_regions` as int64 (`h`) and `key_range` as ints, so the reply decoder accepts `i` and `h`. The fixture already has a gap (keys 60 and 62), so no new regions were needed. `keys/info` now ends with `range_count, (lo, hi)...`; update `osc-protocol.md` in T-8.
+- [x?] **T-11** Godot: `DeviceInstance.playable_ranges`, `NoteMap.playable_ranges` / `is_playable`,
+  `NoteMapResolver.sfz_map`, source rule.
+  - _Verify_: extend `test_note_map_sfz.gd`; `test_note_map.gd` still passes.
+  - _Depends on_: T-10
+  - _Done_: `NoteMap.playable_ranges` / `is_playable` (not serialized, kept by `duplicate_map`); `DeviceInstance.playable_ranges` and `key_info_received` (reset by `load_file`).
+- [x?] **T-12** Piano tint in `NoteLanes.gd`.
+  - _Verify_: headless test for the tint decision (unmapped gray, keyswitch not gray, no ranges = no tint); visual check in T-13.
+  - _Depends on_: T-11
+  - _Done_: `VPiano._draw_key` pulls a key toward gray when it has no map entry and is outside the ranges (`unplayable_gray_strength`). Only the piano, not the note lanes. The decision itself (`is_playable`) is unit tested; the look needs T-14.
+- [x?] **T-13** Assistant: key info in `compact_device`, bounded await in `load_device_file` / `add_device`, prompt line.
+  - _Verify_: tool test with a fake device that emits `key_labels_changed`; the timeout path; a later `get_device` returns the info; `"key_info": "loading"` while loading.
+  - _Depends on_: T-11
+  - _Done_: new `ai/tools/SfzKeyInfoUtil.gd`. Note `ok_text` results send only `text` to the model, so `load_device_file`, `add_device` and `create_track` append a text paragraph; `compact_device` (JSON, used by `get_device` / `list_devices`) gets the structured fields. The wait only happens when the channel is connected to the engine.
+- [ ] **T-14** Live check (ask first, port 7000): ranges, tint and assistant result with a real keyswitch SFZ.
+  - _Depends on_: T-10 to T-13
+
 ## Open questions
 
 - Should keyswitch keys also be drawn in the piano roll's note-entry area as non-note "switch" markers

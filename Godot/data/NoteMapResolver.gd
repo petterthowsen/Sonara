@@ -68,16 +68,21 @@ static func find_drum_machine(channel: Channel) -> DeviceInstance:
 
 
 ## First device on the root chain an Auto map comes from: a Drum Machine, a
-## Layer with at least one zoned slot, or an SFZ sampler that has labelled keys. A Layer
-## whose slots all play every note (plain layering) and an unlabelled SFZ name nothing,
-## so they aren't sources.
+## Layer with at least one zoned slot, or an SFZ sampler that has labelled keys or playable
+## ranges. A Layer whose slots all play every note (plain layering) and an SFZ that told
+## us nothing name nothing, so they aren't sources.
 static func find_auto_source(channel: Channel) -> DeviceInstance:
 	if channel == null:
 		return null
 	for device in channel.devices:
-		if _is_row_source(device) or (AuxReturnSync.is_sfz(device) and not device.key_labels.is_empty()):
+		if _is_row_source(device) or (AuxReturnSync.is_sfz(device) and _has_key_info(device)):
 			return device
 	return null
+
+
+## An SFZ is a source once it has named keys or known playable ranges.
+static func _has_key_info(sfz: DeviceInstance) -> bool:
+	return not sfz.key_labels.is_empty() or not sfz.playable_ranges.is_empty()
 
 
 ## Drum Machine or zoned Layer: a source whose notes are rows (pads / slots), so Drum View
@@ -126,6 +131,7 @@ static func layer_map(layer: DeviceInstance) -> NoteMap:
 static func sfz_map(sfz: DeviceInstance) -> NoteMap:
 	var map := NoteMap.new()
 	map.map_name = sfz.get_display_name()
+	map.playable_ranges = sfz.playable_ranges.duplicate(true)
 	for info in sfz.key_labels:
 		if info.keyswitch:
 			var label: String = info.label

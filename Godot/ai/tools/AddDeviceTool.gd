@@ -77,6 +77,7 @@ func execute(args: Dictionary) -> Dictionary:
 			_add_note(notes, resolved)
 			specs[i] = spec
 	var added: Array = []
+	var key_info_waits: Array[Callable] = []
 	for spec in specs:
 		var one = DeviceToolUtil.add_one(channel, parent, spec, args)
 		if one is Dictionary and one.get("ok") == false:
@@ -85,8 +86,12 @@ func execute(args: Dictionary) -> Dictionary:
 			break
 		if one is DeviceInstance:
 			added.append(one)
+			# An SFZ's keyswitches arrive after its async load; wait for them below.
+			key_info_waits.append(SfzKeyInfoUtil.watch(one))
 	if added.is_empty():
 		return fail("Device was not added")
+	for key_info_wait in key_info_waits:
+		await key_info_wait.call()
 	var result: Dictionary
 	if added.size() == 1:
 		result = _one_result(project, channel, added[0])
@@ -110,6 +115,9 @@ func _one_result(project: Project, channel: Channel, inst: DeviceInstance) -> Di
 	var text := "Added %s to %s → path \"%s\"" % [inst.get_display_name(), channel.name, data.path]
 	if inst.slot_note >= 0:
 		text += ", pad note %d" % inst.slot_note
+	var key_text := SfzKeyInfoUtil.text_for(inst, data.path)
+	if not key_text.is_empty():
+		text += "\n%s" % key_text
 	return ok_text(text, data)
 
 

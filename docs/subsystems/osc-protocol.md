@@ -458,6 +458,11 @@ Responses:
 - `{device}/param/info`, see the table below
 - `{device}/param/{param_id}/value [f:normalized]` when the plugin or SFZ CC changes
 - `{device}/sleep [i:0_or_1]` when the device sleeps or wakes
+- `{device}/keys/info [i:count, count x (i:key, i:is_keyswitch, s:label), i:range_count, range_count x (i:lo, i:hi)]`,
+  SFZ sampler only, once after every SFZ load (spec 014). Keys are `label_key` names and `sw_last`
+  keyswitches (a keyswitch with no `sw_label` has an empty label); ranges are the inclusive key
+  ranges the regions play, sorted and merged. Sent even when empty so Godot clears the previous
+  file's data.
 
 `{device}/param/info`:
 

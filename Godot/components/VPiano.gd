@@ -75,6 +75,12 @@ var note_map: NoteMap = null:
 		map_tint_strength = t
 		queue_redraw()
 
+## How far a key outside the map's playable ranges is pulled toward gray (spec 014).
+@export_range(0.0, 1.0) var unplayable_gray_strength := 0.6:
+	set(g):
+		unplayable_gray_strength = g
+		queue_redraw()
+
 ## Tint applied to the key under the mouse in the note area (or on the piano).
 @export var hover_color := Color(1.0, 1.0, 1.0, 0.22):
 	set(hc):
@@ -261,6 +267,9 @@ func _draw_key(note : int):
 	var mapped := entry_color.a > 0.0
 	if mapped and map_tint_strength > 0.0:
 		color = color.lerp(Color(entry_color.r, entry_color.g, entry_color.b, 1.0), map_tint_strength)
+	# Outside an SFZ's playable ranges and not a keyswitch: nothing sounds here, so grey it.
+	if note_map and not mapped and not note_map.is_playable(note):
+		color = color.lerp(Color(0.5, 0.5, 0.5, color.a), unplayable_gray_strength)
 	
 	var note_rect: Rect2 = get_note_rect(note)
 	var is_pressed := note == pressed_note or active_notes.has(note)

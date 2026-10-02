@@ -630,6 +630,7 @@ static func compact_device(project: Project, inst: DeviceInstance) -> Dictionary
 		row["children"] = kids
 	if inst.slot_note >= 0:
 		row["slot_note"] = inst.slot_note
+	row.merge(SfzKeyInfoUtil.row_fields(inst))
 	return row
 
 

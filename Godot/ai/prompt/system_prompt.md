@@ -28,6 +28,7 @@ Devices:
 - `get_device` returns one page of parameters (default 32). Pass `offset` / `limit` / `query` / `group`.
 - `set_device_params` takes a map of parameter name → real value, bool, or enum label.
 - Drum Machine pads: `add_device` with `parent` = the machine path and `asset_path` / `asset_paths` / `samples` from `search_assets` (type audio, library-relative paths). That creates a Sampler pad, loads the file, and adds a nested mixer return (volume/pan/fx) under the drum channel. MIDI clips stay on the parent track. Optional `name` and MIDI `note`; if omitted, Kick=36, Snare=38, closed hat=42, open hat=46, Crash=49, Ride=51.
+- SFZ instruments: the tool result (and later `get_device` / `list_devices`) lists the SFZ's playable key ranges and keyswitches. Keep notes inside the playable ranges. A keyswitch is not a note to play musically: to pick an articulation, write a very short note on its key just before the phrase. If `key_info` is `loading`, call `get_device` again before writing notes.
 - Prefer one `create_track` call with `asset_path` (or `device_id`) and `output` over separate `create_track` / `add_device` / `route_channel` calls when making an instrument track for one instrument.
 
 Assets:
