@@ -250,16 +250,16 @@ Each phase ends green (`cargo test`, `Godot/tests/run_all.sh`) and can be commit
       principle 5.
 
 ### Phase 2: `Fader` (Godot only)
-- [ ] `components/ScaleMarks.gd` (tick and label layout through a value→position Callable).
-- [ ] `components/Fader.gd` as in 2.2, including the mod contract and `overlay_level` /
+- [x] `components/ScaleMarks.gd` (tick and label layout through a value→position Callable).
+- [x] `components/Fader.gd` as in 2.2, including the mod contract and `overlay_level` /
       `ghost_value`.
-- [ ] `tests/test_fader.gd` following `test_value_controls.gd`: grab without a jump, track click
+- [x] `tests/test_fader.gd` following `test_value_controls.gd`: grab without a jump, track click
       jumps, Shift fine drag, Ctrl-click reset and `reset_requested`, typed entry, a skewed
       taper round-trip, `fill_origin` at 0 dB, no signal on a no-op. Add the Fader to
       `test_mod_assign_ui.gd`.
-- [ ] `components/SegmentedControl.gd` (button row in `UiColors`, `selected` + `*_no_signal`), so
+- [x] `components/SegmentedControl.gd` (button row in `UiColors`, `selected` + `*_no_signal`), so
       the compressor view can use it in Phase 4.
-- [ ] Docs: shared pieces table and the §3 gesture table row.
+- [x] Docs: shared pieces table and the §3 gesture table row.
 
 ### Phase 3: Engine meter summary
 - [ ] `compressor.rs`: per-side peak and mean-square accumulators for in/out, and a

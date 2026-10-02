@@ -17,6 +17,7 @@ func run_tests() -> void:
 	await _test_component(_add(RotaryKnob.new()), "knob")
 	await _test_component(_add(HorSlider.new(), true), "hslider")
 	await _test_component(_add(Volumeter.new()), "volumeter")
+	await _test_component(_add(Fader.new()), "fader")
 	await _test_volume_slider()
 	await _test_simple_control_assign()
 	await _test_envelope_compound()

@@ -53,11 +53,11 @@ Every value control should behave the same way, so users learn it once:
 |---|---|---|
 | Drag | Change the value | all |
 | Shift + drag | Fine adjustment (0.15×), with no jump when Shift is pressed or released mid-drag | all (knob via relative motion, the rest via `FineDrag`) |
-| Double-click | Type an exact value | RotaryKnob, VSlider, Meter fader, Volumeter |
-| Ctrl/Cmd + click | Reset to default | RotaryKnob, HorSlider, Meter fader |
+| Double-click | Type an exact value | RotaryKnob, Fader, VSlider, Meter fader, Volumeter |
+| Ctrl/Cmd + click | Reset to default | RotaryKnob, Fader, HorSlider, Meter fader |
 | Right-click | Context menu (mode, options) | PanControl, send knobs |
 
-RotaryKnob, HorSlider and Meter report how the last change was made in `last_edit_kind`
+RotaryKnob, Fader, HorSlider and Meter report how the last change was made in `last_edit_kind`
 (`ValueEditKind`: `DRAG`, `TYPED`, `RESET`). Read it inside the `value_changed` handler when a
 drag and an absolute entry should behave differently (mixer multi-edit does). Knob and slider
 also emit `reset_requested` on every Ctrl/Cmd-click, even when already at the default.
@@ -118,6 +118,9 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
 | `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
 | `core/UiColors.gd` | Colour tokens (`PRIMARY` `#624d99`, `TRACK_BG`, the meter palette). New components default to these |
+| `Fader.gd` | Vertical value control (the knob's sibling): `min/max/value_default`, `logarithmic` or `to_position`/`from_position`, `fill_origin`, `scale_marks` + `scale_side`, `overlay_level`, `ghost_value`, mod contract. `value_to_position(v)` maps a value onto the track |
+| `ScaleMarks.gd` | Tick/label layout through a value→0..1 Callable, so marks sit where the fill does |
+| `SegmentedControl.gd` | Exclusive toggle-button row: `set_items`, `selected` / `set_selected_no_signal`, `selected_changed` |
 | `meter/MeterBallistics.gd` | dB-domain peak release, hold and RMS smoothing for any meter that draws itself (`push`, `step`, `settled`) |
 | `meter/LevelMeter.gd` | Configurable dB meter: N bars, `display` PEAK/RMS/BOTH, ZONES/SOLID colour, LEVEL or REDUCTION (GR from the top), scale, readout, caption. `push(index, peak_db, rms_db)`; click resets holds |
 
@@ -129,7 +132,7 @@ ADSR).
 
 ## Modulation display and assign mode
 
-`RotaryKnob`, `HorSlider`, `VolumeSlider` and `Volumeter` share one modulation contract (there
+`RotaryKnob`, `HorSlider`, `Fader`, `VolumeSlider` and `Volumeter` share one modulation contract (there
 are no traits in GDScript, so each implements it; the maths is in `ModDisplay.gd`):
 
 - `mod_ranges: Array[Dictionary]` of `{amount, color, source, bipolar}` is drawn from the base value
