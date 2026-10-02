@@ -7,8 +7,13 @@
 class_name NameSections extends RefCounted
 
 ## A numbered family with more instances than this ("Step 1" … "Step 16") is one section, not one
-## per instance.
+## per instance, unless each instance is substantial (`MIN_ITEMS_PER_LARGE_INSTANCE`).
 const MAX_INSTANCE_SECTIONS := 8
+## Hard cap on one section per instance, however big the instances are.
+const MAX_LARGE_INSTANCE_SECTIONS := 24
+## Families of more than `MAX_INSTANCE_SECTIONS` instances are still split (a 11-band EQ with six
+## parameters per band) when instances average at least this many items.
+const MIN_ITEMS_PER_LARGE_INSTANCE := 4
 ## A family is split into one section per instance only when instances average this many items.
 const MIN_ITEMS_PER_INSTANCE := 2
 ## Names only group a device when sections cover at least this share of its items.
@@ -113,8 +118,10 @@ static func _assign_family(key: String, members: Array, result: Dictionary) -> v
 	var instances := {}
 	for m in members:
 		instances[m.instance] = instances.get(m.instance, m.section_title)
-	var split := instances.size() <= MAX_INSTANCE_SECTIONS \
-		and members.size() >= MIN_ITEMS_PER_INSTANCE * instances.size()
+	var per_instance := MIN_ITEMS_PER_INSTANCE if instances.size() <= MAX_INSTANCE_SECTIONS \
+		else MIN_ITEMS_PER_LARGE_INSTANCE
+	var split := instances.size() <= MAX_LARGE_INSTANCE_SECTIONS \
+		and members.size() >= per_instance * instances.size()
 	if not split and members.size() < 2:
 		return
 	var family_id := _id(key)

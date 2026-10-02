@@ -30,6 +30,12 @@ func role_weights() -> Dictionary:
 	}
 
 
+## No `EQ_BAND` compound: every band is a group of its own already, and three labelled knobs read
+## better there than the compound's three small unlabelled ones.
+func compound_kinds() -> Array[String]:
+	return [SimpleControlKinds.XY, SimpleControlKinds.ENVELOPE]
+
+
 func groups() -> Array[Dictionary]:
 	return [
 		{"id": "output", "title": "Output", "roles": ["output"]},

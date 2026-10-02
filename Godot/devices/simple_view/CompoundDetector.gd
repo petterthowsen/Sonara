@@ -3,7 +3,8 @@
 ## `x`/`y` → xy, attack/decay/sustain/release → envelope, freq/gain/q → eq_band.
 ## Incomplete patterns stay single controls, except envelopes: any two or more of A/D/S/R make
 ## one (its `stages` says which, e.g. "ads"), but attack + release alone don't, since that's
-## a compressor or gate far more often than an envelope.
+## a compressor or gate far more often than an envelope. Parts only combine within one module:
+## the built-in EQ's bands are all named "Freq"/"Gain"/"Q" and told apart by module alone.
 
 class_name CompoundDetector extends RefCounted
 
@@ -30,10 +31,12 @@ const ENVELOPE_STAGE_LETTERS := "adsr"
 
 ## Turn classified entries (see `ParamClassifier.classify`) into generated items, keeping order.
 ## Each item: `{kind, params: Array[int], label, name, role, importance, module, index}`;
-## a compound sits where its earliest parameter was.
-static func detect(entries: Array[Dictionary]) -> Array[Dictionary]:
-	# pattern index → stem → {part index → entry}
+## a compound sits where its earliest parameter was. `kinds` limits which compound kinds are made
+## (see `GenericStrategy.compound_kinds`); empty allows all.
+static func detect(entries: Array[Dictionary], kinds: Array[String] = []) -> Array[Dictionary]:
+	# pattern index → module + stem key → {part index → entry}
 	var found: Array[Dictionary] = []
+	var stems := {}  # module + stem key → stem
 	for _p in PATTERNS:
 		found.append({})
 	for entry in entries:
@@ -43,11 +46,15 @@ static func detect(entries: Array[Dictionary]) -> Array[Dictionary]:
 		var split := _stem_and_part(param.name)
 		if split.is_empty():
 			continue
+		var key: String = "%s|%s" % [entry.module, split.stem]
+		stems[key] = split.stem
 		for p in range(PATTERNS.size()):
+			if not kinds.is_empty() and PATTERNS[p].kind not in kinds:
+				continue
 			var parts: Array = PATTERNS[p].parts
 			for part in range(parts.size()):
 				if split.part in parts[part]:
-					var by_stem: Dictionary = found[p].get_or_add(split.stem, {})
+					var by_stem: Dictionary = found[p].get_or_add(key, {})
 					if not by_stem.has(part):
 						by_stem[part] = entry
 
@@ -55,8 +62,8 @@ static func detect(entries: Array[Dictionary]) -> Array[Dictionary]:
 	var consumed := {}  # entry index → true
 	for p in range(PATTERNS.size()):
 		var pattern: Dictionary = PATTERNS[p]
-		for stem in found[p]:
-			var by_part: Dictionary = found[p][stem]
+		for key in found[p]:
+			var by_part: Dictionary = found[p][key]
 			var is_envelope: bool = pattern.kind == SimpleControlKinds.ENVELOPE
 			if is_envelope:
 				if not _is_envelope_subset(by_part):
@@ -73,7 +80,7 @@ static func detect(entries: Array[Dictionary]) -> Array[Dictionary]:
 				continue
 			if is_envelope and not _looks_like_envelope(by_part):
 				continue
-			var item := _compound_item(pattern, stem, members)
+			var item := _compound_item(pattern, stems[key], members)
 			if is_envelope and stages != ENVELOPE_STAGE_LETTERS:
 				item["stages"] = stages
 			for m in members:

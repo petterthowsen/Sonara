@@ -39,6 +39,11 @@ func fader_roles() -> Array[String]:
 	return []
 
 
+## Compound control kinds (see `CompoundDetector`) this device kind uses; empty allows all.
+func compound_kinds() -> Array[String]:
+	return []
+
+
 ## Groups in display order: `{id, title, roles, page?}`. Roles not listed go to `OTHER_GROUP`.
 ## A group with a `page` title goes on that page instead of Main (keep these to broad sections).
 func groups() -> Array[Dictionary]:

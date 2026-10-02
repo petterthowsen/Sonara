@@ -24,6 +24,8 @@ func run_tests() -> void:
 	_test_hidden_readonly_excluded()
 	_test_compounds()
 	_test_grouping_module_and_role()
+	_test_builtin_eq_layout()
+	_test_compounds_stay_in_their_module()
 	_test_name_sections()
 	_test_main_page_importance()
 	_test_pages_grow_sideways()
@@ -74,7 +76,7 @@ func _bool(id: int, name: String) -> DeviceParameter:
 
 func _items(params: Array, kind := DeviceKind.GENERIC) -> Array[Dictionary]:
 	var strategy := SimpleLayoutGenerator.strategy_for(kind)
-	return CompoundDetector.detect(ParamClassifier.classify(params, strategy))
+	return CompoundDetector.detect(ParamClassifier.classify(params, strategy), strategy.compound_kinds())
 
 
 ## Control holding `param_id`, with its page index under "page" and the page's group title under "group_title".
@@ -140,6 +142,58 @@ func _test_drum_kind_inference() -> void:
 	for n in ["Snare", "Closed Hat", "HiHat", "Clap"]:
 		_assert(DeviceKind.infer(_device("x.thing", n, Device.DeviceCategory.Instrument)) == DeviceKind.DRUM,
 			"%s infers drum" % n)
+
+
+## The built-in EQ names every band's parameters alike ("Freq", "Gain", "Q") and tells them apart
+## by module. Each band gets its own group of labelled knobs; Band 1 used to be the only one with an
+## EQ compound, because the bands' identical stems collided.
+func _test_builtin_eq_layout() -> void:
+	var params: Array = []
+	for b in range(1, 9):
+		var base := (b - 1) * 10
+		for p in [_bool(base, "Enabled"), _enum(base + 1, "Type", 7), _float(base + 2, "Freq", "Hz", 20.0, 20000.0),
+				_float(base + 3, "Gain", "dB", -24.0, 24.0), _float(base + 4, "Q", "", 0.1, 30.0)]:
+			p.module = "Band %d" % b
+			params.append(p)
+	var layout := SimpleLayoutGenerator.generate(_device("sonara.builtin.eq", "EQ"), params)
+	for b in range(1, 9):
+		var base := (b - 1) * 10
+		for offset in [2, 3, 4]:
+			var found := _find(layout, base + offset)
+			_assert(found.control.kind == SimpleControlKinds.KNOB and found.control.params.size() == 1,
+				"band %d param %d is its own knob (%s)" % [b, offset, found.control.kind])
+			_assert(found.group_title == "Band %d" % b, "band %d param %d sits in its band (%s)" % [b, offset, found.group_title])
+
+
+## Same-named parts in different modules never combine: "Attack"/"Decay" in Amp and "Sustain"/
+## "Release" in Filter are two envelopes, not one across both.
+func _test_compounds_stay_in_their_module() -> void:
+	var params: Array = []
+	for p in [_float(0, "Freq", "Hz", 20.0, 20000.0), _float(1, "Gain", "dB", -24.0, 24.0), _float(2, "Q", "", 0.1, 30.0)]:
+		p.module = "Low"
+		params.append(p)
+	for p in [_float(3, "Freq", "Hz", 20.0, 20000.0), _float(4, "Gain", "dB", -24.0, 24.0), _float(5, "Q", "", 0.1, 30.0)]:
+		p.module = "High"
+		params.append(p)
+	var items := _items(params)
+	var eq_params: Array = []
+	for item in items:
+		if item.kind == SimpleControlKinds.EQ_BAND:
+			eq_params.append(item.params)
+	_assert(eq_params == [[0, 1, 2], [3, 4, 5]], "one EQ compound per module %s" % [eq_params])
+
+	var split: Array = []
+	for p in [_float(10, "Attack", "s", 0.0, 5.0), _float(11, "Decay", "s", 0.0, 5.0)]:
+		p.module = "Amp"
+		split.append(p)
+	for p in [_float(12, "Sustain"), _float(13, "Release", "s", 0.0, 5.0)]:
+		p.module = "Filter"
+		split.append(p)
+	var envs: Array = []
+	for item in _items(split):
+		if item.kind == SimpleControlKinds.ENVELOPE:
+			envs.append(item.params)
+	_assert(envs == [[10, 11], [12, 13]], "envelope parts stay in their module %s" % [envs])
 
 
 ## The Phase 1 Kick parameter table: modules drive grouping, so the layout shows the device's own
@@ -349,6 +403,20 @@ func _test_name_sections() -> void:
 	var seq := _sections(steps)
 	_assert(seq.get(2) == ["Step", "Pitch 3"], "many thin instances: one section, numbered labels %s" % [seq.get(2)])
 
+	# ZeroEQ: 5 global params and 11 bands of 6 → a section per band, not one "Band" section.
+	var zero: Array = [_bool(0, "Bypass"), _float(1, "Output Gain"), _float(2, "Analyzer")]
+	for b in range(1, 12):
+		zero.append(_bool(zero.size(), "Band %d On" % b))
+		for n in ["Type", "Freq", "Gain", "Q", "Slope"]:
+			zero.append(_float(zero.size(), "Band %d %s" % [b, n]))
+	var zero_layout := SimpleLayoutGenerator.generate(null, zero)
+	var band_titles: Array = []
+	for page in zero_layout.pages:
+		for group in page.groups:
+			band_titles.append(group.title)
+	_assert(band_titles.has("Band 1") and band_titles.has("Band 11") and not band_titles.has("Band"),
+		"11-band EQ: one group per band %s" % [band_titles])
+
 	var words := _sections([_float(0, "Filter Cutoff"), _float(1, "Filter Key Track"), _float(2, "Matrix Amount 1"),
 		_float(3, "Matrix Amount 2"), _float(4, "Pitch Bend Up"), _float(5, "Pitch Bend Down")])
 	_assert(words.get(1) == ["Filter", "Key Track"], "shared first word forms a section %s" % [words.get(1)])
@@ -524,7 +592,7 @@ func _test_no_overlap_in_bounds() -> void:
 		for id in range(60):
 			params.append(_float(id, "%s %d" % [names[id % names.size()], id / names.size()], "s", 0, 5))
 		var strategy := SimpleLayoutGenerator.strategy_for(kind)
-		var items := CompoundDetector.detect(ParamClassifier.classify(params, strategy))
+		var items := CompoundDetector.detect(ParamClassifier.classify(params, strategy), strategy.compound_kinds())
 		var layout := SimpleLayout.new()
 		layout.pages = SimpleLayoutGenerator.build_pages(items, strategy, 4)
 		_check_layout(layout, params, "%s strategy" % kind)
