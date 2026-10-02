@@ -14,6 +14,7 @@ signal parameter_changed(param_id: int, value: float)
 signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
+signal key_labels_changed()  # SFZ key labels / keyswitches (re)loaded; see key_labels
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
 signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
@@ -121,6 +122,11 @@ const MOD_CLEAR_KEY := "*clear*"
 ## is shared by every instance of the same device type and must not be
 ## overwritten per-instance.
 var parameters: Array[DeviceParameter] = []
+
+## SFZ sampler only: keys the loaded SFZ names, sorted by key. Each entry is
+## {"key": int, "keyswitch": bool, "label": String}. Not persisted: the engine
+## re-sends it whenever the SFZ loads, and an empty message clears it.
+var key_labels: Array = []
 
 ## Track loaded file path (for devices that support file loading, e.g., SFZ sampler)
 var loaded_file_path: String = ""
@@ -1073,6 +1079,7 @@ func connect_to_engine() -> void:
 	var stats_addr = osc_addr("stats")
 	var state_saved_addr = osc_addr("state/saved")
 
+	AudioEngineOSC.listen(osc_addr("keys/info"), _on_key_info_received)
 	AudioEngineOSC.listen(active_addr, _on_active_received)
 	AudioEngineOSC.listen(enabled_addr, _on_enabled_received)
 	AudioEngineOSC.listen(param_count_addr, _on_param_count_received)
@@ -1113,6 +1120,7 @@ func disconnect_from_engine() -> void:
 	var stats_addr = osc_addr("stats")
 	var state_saved_addr = osc_addr("state/saved")
 
+	AudioEngineOSC.unlisten(osc_addr("keys/info"), _on_key_info_received)
 	AudioEngineOSC.unlisten(active_addr, _on_active_received)
 	AudioEngineOSC.unlisten(enabled_addr, _on_enabled_received)
 	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
@@ -1294,6 +1302,21 @@ func _on_param_count_received(args: Array) -> void:
 	parameter_values.clear()
 	
 	logger.debug("[%s] Expecting %d parameters" % [device.name, count])
+
+
+## `keys/info`: [count, then count x (key, is_keyswitch, label)]. Always replaces the
+## whole list, so a count of 0 (a reload to an SFZ with no labels) clears it.
+func _on_key_info_received(args: Array) -> void:
+	var count: int = args[0] if args.size() >= 1 else 0
+	var keys: Array = []
+	for i in count:
+		var base := 1 + i * 3
+		if base + 2 >= args.size():
+			break
+		keys.append({"key": int(args[base]), "keyswitch": int(args[base + 1]) != 0, "label": str(args[base + 2])})
+	keys.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.key < b.key)
+	key_labels = keys
+	key_labels_changed.emit()
 
 
 func _on_param_info_received(args: Array) -> void:

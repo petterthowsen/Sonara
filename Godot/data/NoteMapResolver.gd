@@ -7,6 +7,12 @@
 # NoteMapWatcher.changed rather than resolving every frame.
 class_name NoteMapResolver extends RefCounted
 
+## SFZ keys the file labels (`label_key`): neutral, they are ordinary notes.
+const SFZ_KEY_COLOR := Color(0.62, 0.66, 0.72)
+## SFZ keyswitch keys (`sw_last`): amber, so they read as switches rather than notes.
+const SFZ_KEYSWITCH_COLOR := Color(0.93, 0.62, 0.2)
+const SFZ_KEYSWITCH_FALLBACK_NAME := "Keyswitch"
+
 
 ## The map a channel's clips should be labelled with. Never null: an unmapped
 ## channel resolves to an empty map so callers don't have to null-check.
@@ -23,8 +29,8 @@ static func effective_map(channel: Channel) -> NoteMap:
 
 
 ## Map derived from the channel's instrument: the first Auto source on the root
-## chain, a Drum Machine (its pads) or a Layer with zoned slots (its slot note maps,
-## spec 006). An unmapped channel gives an empty map (REQ-003).
+## chain, a Drum Machine (its pads), a Layer with zoned slots (its slot note maps,
+## spec 006) or an SFZ sampler with labelled keys (spec 014). An unmapped channel gives an empty map (REQ-003).
 static func auto_map(channel: Channel) -> NoteMap:
 	var map := NoteMap.new()
 	var source := find_auto_source(channel)
@@ -32,6 +38,8 @@ static func auto_map(channel: Channel) -> NoteMap:
 		return map
 	if AuxReturnSync.is_layer(source):
 		return layer_map(source)
+	if AuxReturnSync.is_sfz(source):
+		return sfz_map(source)
 	var drum := source
 	map.map_name = drum.get_display_name()
 	var project := channel.get_project()
@@ -59,16 +67,23 @@ static func find_drum_machine(channel: Channel) -> DeviceInstance:
 	return null
 
 
-## First device on the root chain an Auto map comes from: a Drum Machine, or a
-## Layer with at least one zoned slot. A Layer whose slots all play every note
-## (plain layering) names nothing, so it isn't a source.
+## First device on the root chain an Auto map comes from: a Drum Machine, a
+## Layer with at least one zoned slot, or an SFZ sampler that has labelled keys. A Layer
+## whose slots all play every note (plain layering) and an unlabelled SFZ name nothing,
+## so they aren't sources.
 static func find_auto_source(channel: Channel) -> DeviceInstance:
 	if channel == null:
 		return null
 	for device in channel.devices:
-		if AuxReturnSync.is_drum_machine(device) or (AuxReturnSync.is_layer(device) and has_zoned_slot(device)):
+		if _is_row_source(device) or (AuxReturnSync.is_sfz(device) and not device.key_labels.is_empty()):
 			return device
 	return null
+
+
+## Drum Machine or zoned Layer: a source whose notes are rows (pads / slots), so Drum View
+## fits it. An SFZ only labels keys of a normal piano roll.
+static func _is_row_source(device: DeviceInstance) -> bool:
+	return AuxReturnSync.is_drum_machine(device) or (AuxReturnSync.is_layer(device) and has_zoned_slot(device))
 
 
 ## True when some slot of `layer` doesn't play every note unchanged.
@@ -106,10 +121,31 @@ static func layer_map(layer: DeviceInstance) -> NoteMap:
 	return map
 
 
-## Whether an Auto map would have a source to derive from. Drives the Drum View
-## default for a channel the user has never switched by hand (REQ-028).
+## One entry per key the SFZ names. Keyswitches take the keyswitch colour and fall back
+## to "Keyswitch" when the file gives no `sw_label`.
+static func sfz_map(sfz: DeviceInstance) -> NoteMap:
+	var map := NoteMap.new()
+	map.map_name = sfz.get_display_name()
+	for info in sfz.key_labels:
+		if info.keyswitch:
+			var label: String = info.label
+			map.set_entry(info.key, label if not label.is_empty() else SFZ_KEYSWITCH_FALLBACK_NAME, SFZ_KEYSWITCH_COLOR)
+		else:
+			map.set_entry(info.key, info.label, SFZ_KEY_COLOR)
+	return map
+
+
+## Whether an Auto map would have a source to derive from (labelling).
 static func has_auto_source(channel: Channel) -> bool:
 	return find_auto_source(channel) != null
+
+
+## Whether the Auto source is made of rows (Drum Machine, zoned Layer). Drives the Drum
+## View default for a channel the user has never switched by hand (REQ-028); an SFZ
+## source labels keys but never turns on Drum View.
+static func has_row_source(channel: Channel) -> bool:
+	var source := find_auto_source(channel)
+	return source != null and _is_row_source(source)
 
 
 ## Effective map for the channel a track plays through.
@@ -127,4 +163,4 @@ static func wants_drum_view(channel: Channel) -> bool:
 		return false
 	if channel.drum_view >= 0:
 		return channel.drum_view == 1
-	return channel.note_map_mode == Channel.NoteMapMode.AUTO and has_auto_source(channel)
+	return channel.note_map_mode == Channel.NoteMapMode.AUTO and has_row_source(channel)

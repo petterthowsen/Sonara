@@ -20,6 +20,7 @@ class_name AuxReturnSync
 
 const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
 const LAYER_ID := "sonara.builtin.layer"
+const SFZ_ID := "sonara.builtin.sfizz"
 
 
 # ============================================================================
@@ -34,6 +35,11 @@ static func is_drum_machine(device: DeviceInstance) -> bool:
 ## True when `device` is a Layer (its separate-output slots are its extra outputs).
 static func is_layer(device: DeviceInstance) -> bool:
 	return device != null and device.device != null and device.device.device_id == LAYER_ID
+
+
+## True when `device` is the built-in SFZ sampler.
+static func is_sfz(device: DeviceInstance) -> bool:
+	return device != null and device.device != null and device.device.device_id == SFZ_ID
 
 
 ## Number of extra stereo outputs `device` feeds into return channels.
