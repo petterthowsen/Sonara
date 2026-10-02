@@ -29,14 +29,45 @@ var ratio := 4.0
 var knee_db := 6.0
 var range_db := 60.0
 ## Input level of the live dot, in dBFS (NAN hides it).
-var live_input_db := NAN
+var live_input_db := NAN:
+	set(value):
+		live_input_db = value
+		queue_redraw()
+var _live_target := NAN
 var dragging := false
 
 var db_grid := DbGrid.new()
 var _font: Font
 
 
+const LIVE_ATTACK_SECONDS := 0.03
+const LIVE_FALL_DB_PER_SECOND := 60.0
+
+
+## Set where the live dot should be. Blobs arrive at about 12 Hz, so the dot eases there every
+## frame (fast attack, steady fall) instead of jumping.
+func push_live_level(level_db: float) -> void:
+	_live_target = level_db
+	if is_nan(live_input_db):
+		live_input_db = level_db
+	set_process(true)
+
+
+func _process(delta: float) -> void:
+	if is_nan(_live_target) or is_nan(live_input_db):
+		set_process(false)
+		return
+	if _live_target > live_input_db:
+		live_input_db += (_live_target - live_input_db) * (1.0 - exp(-delta / LIVE_ATTACK_SECONDS))
+	else:
+		live_input_db = maxf(live_input_db - LIVE_FALL_DB_PER_SECOND * delta, _live_target)
+	if absf(live_input_db - _live_target) < 0.05:
+		live_input_db = _live_target
+		set_process(false)
+
+
 func _init() -> void:
+	set_process(false)
 	custom_minimum_size = Vector2(200, 140)
 	clip_contents = true
 

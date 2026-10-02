@@ -228,7 +228,8 @@ func _on_osc_message_received(address: String, values, _time) -> void:
 			if data_type == "spectrum":
 				var spectrum = _decode_f32_array(blob)
 				device_spectrum_received.emit(osc_path, spectrum)
-			device_data_received.emit(osc_path, data_type, blob)
+			# The parsed blob still carries its 4-byte big-endian length prefix; consumers get the payload.
+			device_data_received.emit(osc_path, data_type, _blob_payload(blob))
 		
 		routed = true
 	
@@ -306,6 +307,15 @@ func _matches_wildcard(address: String, pattern: String) -> bool:
 
 
 ## Decode PackedByteArray containing f32 values to PackedFloat32Array
+func _blob_payload(blob: PackedByteArray) -> PackedByteArray:
+	if blob.size() < 4:
+		return PackedByteArray()
+	var length := (int(blob[0]) << 24) | (int(blob[1]) << 16) | (int(blob[2]) << 8) | int(blob[3])
+	if 4 + length > blob.size():
+		return PackedByteArray()
+	return blob.slice(4, 4 + length)
+
+
 func _decode_f32_array(blob: PackedByteArray) -> PackedFloat32Array:
 	# OSC blob encoding: 4-byte big-endian length, followed by payload, padded to 4 bytes
 	if blob.size() < 4:

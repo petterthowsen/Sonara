@@ -15,6 +15,9 @@ const KNOB_LABEL_WIDTH := 36.0
 var curve: CompressorCurve = null
 var history: CompressorHistory = null
 var meters: Control = null
+static var logger := Log.make("CompressorView")
+var _sample_rate := 48_000.0
+var _logged_first_blob := false
 
 var _threshold_knob: LabeledKnob = null
 var _ratio_knob: LabeledKnob = null
@@ -48,6 +51,8 @@ class Meters extends Control:
 	const LEVEL_MAX_DB := 12.0
 	const GR_MAX_DB := 24.0
 	const HOLD_FALL_DB_PER_SECOND := 24.0
+	const ATTACK_SECONDS := 0.03
+	const FALL_DB_PER_SECOND := 60.0
 
 	var input_db := -160.0
 	var output_db := -160.0
@@ -55,19 +60,22 @@ class Meters extends Control:
 	var input_hold := -160.0
 	var output_hold := -160.0
 	var reduction_hold := 0.0
+	var _input_target := -160.0
+	var _output_target := -160.0
+	var _reduction_target := 0.0
 
 	func _init() -> void:
 		custom_minimum_size = Vector2(BAR_WIDTH * 3.0 + GAP * 2.0, 80)
+		set_process(false)
 		clip_contents = true
 
-	func push(input_level: float, output_level: float, reduction: float, delta: float) -> void:
-		input_db = input_level
-		output_db = output_level
-		reduction_db = maxf(reduction, 0.0)
-		input_hold = maxf(input_hold + HOLD_FALL_DB_PER_SECOND * delta, input_db)
-		output_hold = maxf(output_hold + HOLD_FALL_DB_PER_SECOND * delta, output_db)
-		reduction_hold = maxf(reduction_hold - HOLD_FALL_DB_PER_SECOND * delta, reduction_db)
-		queue_redraw()
+	## Blobs arrive at about 12 Hz, so `push` only sets targets; `_process` eases the bars every
+	## frame (fast attack, steady fall) and lets the holds fall.
+	func push(input_level: float, output_level: float, reduction: float, _delta: float) -> void:
+		_input_target = input_level
+		_output_target = output_level
+		_reduction_target = maxf(reduction, 0.0)
+		set_process(true)
 
 	func reset() -> void:
 		input_db = -160.0
@@ -76,7 +84,32 @@ class Meters extends Control:
 		input_hold = -160.0
 		output_hold = -160.0
 		reduction_hold = 0.0
+		_input_target = -160.0
+		_output_target = -160.0
+		_reduction_target = 0.0
 		queue_redraw()
+
+	func _process(delta: float) -> void:
+		var attack := 1.0 - exp(-delta / ATTACK_SECONDS)
+		var fall := FALL_DB_PER_SECOND * delta
+		input_db = _ease(input_db, _input_target, attack, fall)
+		output_db = _ease(output_db, _output_target, attack, fall)
+		reduction_db = _ease(reduction_db, _reduction_target, attack, fall)
+		var hold_fall := HOLD_FALL_DB_PER_SECOND * delta
+		input_hold = maxf(input_hold - hold_fall, input_db)
+		output_hold = maxf(output_hold - hold_fall, output_db)
+		reduction_hold = maxf(reduction_hold - hold_fall, reduction_db)
+		queue_redraw()
+		var settled := absf(input_db - _input_target) < 0.05 and absf(output_db - _output_target) < 0.05 \
+				and absf(reduction_db - _reduction_target) < 0.05 and input_hold <= input_db + 0.05 \
+				and output_hold <= output_db + 0.05 and reduction_hold <= reduction_db + 0.05
+		if settled:
+			set_process(false)
+
+	func _ease(current: float, target: float, attack: float, fall: float) -> float:
+		if target > current:
+			return current + (target - current) * attack
+		return maxf(current - fall, target)
 
 	func _draw() -> void:
 		var font := ThemeDB.fallback_font
@@ -265,7 +298,8 @@ func _on_bind() -> void:
 	history.device = device
 	var audio_config := _autoload("AudioConfig")
 	if audio_config != null and audio_config.config.has("sample_rate"):
-		history.set_sample_rate(float(audio_config.config["sample_rate"]))
+		_sample_rate = float(audio_config.config["sample_rate"])
+		history.set_sample_rate(_sample_rate)
 	_configure_controls()
 	_refresh()
 
@@ -386,7 +420,9 @@ func _sync_subscription() -> void:
 	var osc := _autoload("AudioEngineOSC")
 	if osc == null:
 		return
+	logger.debug("%s dynamics path=%s" % ["subscribe" if want else "unsubscribe", device.osc_path()])
 	if want:
+		_logged_first_blob = false
 		osc.subscribe_device_data(device.osc_path(), "dynamics")
 		if not osc.device_data_received.is_connected(_on_dynamics_received):
 			osc.device_data_received.connect(_on_dynamics_received)
@@ -398,8 +434,16 @@ func _sync_subscription() -> void:
 
 
 func _on_dynamics_received(osc_path: String, data_type: String, blob: PackedByteArray) -> void:
-	if data_type != "dynamics" or device == null or osc_path != device.osc_path():
+	if data_type != "dynamics":
 		return
+	if device == null or osc_path != device.osc_path():
+		if not _logged_first_blob:
+			logger.debug("dynamics blob for other path '%s' (want '%s')" % [osc_path, device.osc_path() if device else "null"])
+		return
+	if not _logged_first_blob:
+		_logged_first_blob = true
+		logger.debug("first dynamics blob: %d bytes, meters=%s, visible=%s, meters.size=%s" % [
+			blob.size(), meters != null, is_visible_in_tree(), meters.size if meters != null else "n/a"])
 	_apply_dynamics(CompressorData.decode(blob))
 
 
@@ -410,19 +454,17 @@ func _apply_dynamics(decoded: Dictionary) -> void:
 		return
 	if history != null:
 		history.push_records(decoded)
+	var input_peak := -160.0
+	var output_peak := -160.0
+	var reduction := 0.0
+	for i in count:
+		input_peak = maxf(input_peak, decoded["in_peak_db"][i])
+		output_peak = maxf(output_peak, decoded["out_peak_db"][i])
+		reduction = maxf(reduction, decoded["gr_db"][i])
 	if curve != null:
-		curve.live_input_db = decoded["in_peak_db"][count - 1]
-	var delta := float(count * CompressorData.RECORD_FRAMES) / 48_000.0
+		curve.push_live_level(input_peak)
 	if meters != null:
-		var reduction := 0.0
-		for value in decoded["gr_db"]:
-			reduction = maxf(reduction, value)
-		meters.push(
-			decoded["in_peak_db"][count - 1],
-			decoded["out_peak_db"][count - 1],
-			reduction,
-			delta
-		)
+		meters.push(input_peak, output_peak, reduction, 0.0)
 
 
 func _autoload(autoload_name: String) -> Node:

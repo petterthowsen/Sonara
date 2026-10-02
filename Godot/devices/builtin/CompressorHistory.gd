@@ -10,6 +10,9 @@ const GR_STRIP_HEIGHT := 22.0
 const GR_MAX_DB := 24.0
 const THRESHOLD_GRAB := 7.0
 const GRID_DB := 12.0
+## Width of one drawn column in pixels. Records are folded into columns (max of each) so the
+## cost of a redraw follows the control's width, not the number of records held.
+const COLUMN_WIDTH := 2.0
 ## Records kept when the sample rate is unknown.
 const DEFAULT_CAPACITY := 4096
 
@@ -34,9 +37,18 @@ var _in := PackedFloat32Array()
 var _out := PackedFloat32Array()
 var _gr := PackedFloat32Array()
 var _font: Font
+## Seconds of history the window shows, from the sample rate.
+var _window_seconds := 4.0
+## Pixels the drawing is shifted right of where the records sit. Blobs arrive at about 12 Hz, so
+## each one adds its width here and `_process` eases it back to 0 at the scroll speed: the
+## history then scrolls smoothly instead of in steps.
+var _scroll_offset := 0.0
+## Records dropped from the front so far: record `i` is number `_base + i` of the stream.
+var _base := 0
 
 
 func _init() -> void:
+	set_process(false)
 	custom_minimum_size = Vector2(200, 120)
 	clip_contents = true
 
@@ -75,6 +87,7 @@ func _on_parameter_changed(param_id: int, _value: float) -> void:
 ## How many records a four-second window holds at `sample_rate`.
 func set_sample_rate(sample_rate: float) -> void:
 	capacity = clampi(int(sample_rate / CompressorData.RECORD_FRAMES * 4.0), 256, 8192)
+	_window_seconds = float(capacity) * CompressorData.RECORD_FRAMES / maxf(sample_rate, 1.0)
 
 
 ## Append one decoded `"dynamics"` blob.
@@ -85,15 +98,37 @@ func push_records(decoded: Dictionary) -> void:
 	_in.append_array(decoded["in_peak_db"])
 	_out.append_array(decoded["out_peak_db"])
 	_gr.append_array(decoded["gr_db"])
-	if _in.size() > capacity:
-		var drop := _in.size() - capacity
+	# Keep more than the window: the drawing is shifted right by the scroll offset, and the
+	# oldest, partly filled column must stay off the left edge.
+	var retained := retained_count()
+	if _in.size() > retained:
+		var drop := _in.size() - retained
+		_base += drop
 		_in = _in.slice(drop)
 		_out = _out.slice(drop)
 		_gr = _gr.slice(drop)
+	# Cap the lag at a quarter of the window, so a stalled stream can't leave the plot empty.
+	var width := plot_rect().size.x
+	_scroll_offset = minf(_scroll_offset + width * float(count) / float(capacity), width * 0.25)
+	set_process(_scroll_offset > 0.0)
+	queue_redraw()
+
+
+## Records kept: the window plus room for the scroll lag and one partly filled column.
+func retained_count() -> int:
+	return capacity + int(ceilf(capacity * 0.25)) + 64
+
+
+func _process(delta: float) -> void:
+	_scroll_offset = maxf(_scroll_offset - plot_rect().size.x / _window_seconds * delta, 0.0)
+	if _scroll_offset <= 0.0:
+		set_process(false)
 	queue_redraw()
 
 
 func clear() -> void:
+	_scroll_offset = 0.0
+	_base = 0
 	_in = PackedFloat32Array()
 	_out = PackedFloat32Array()
 	_gr = PackedFloat32Array()
@@ -199,8 +234,9 @@ func _draw() -> void:
 	draw_rect(gr_rect(), Color(0.05, 0.05, 0.05))
 	draw_rect(plot_rect(), BG_COLOR)
 	db_grid.draw_grid(self, font, 9, GRID_COLOR, Color(1, 1, 1, 0.18), LABEL_COLOR)
-	_draw_gr(font)
-	_draw_levels()
+	var columns := _columns()
+	_draw_gr(font, columns)
+	_draw_levels(columns)
 	_draw_threshold()
 	if font != null:
 		draw_string(
@@ -214,21 +250,58 @@ func _draw() -> void:
 		)
 
 
+## Records per column: about `COLUMN_WIDTH` pixels each.
+func _records_per_column() -> int:
+	var per_record := plot_rect().size.x / float(maxi(capacity, 1))
+	return maxi(int(roundf(COLUMN_WIDTH / maxf(per_record, 0.001))), 1)
+
+
+## Fold the records into columns, keeping the max of each series. A column is fixed to absolute
+## stream positions (`_base + i`), so data that has scrolled into the past never changes.
+## Returns {first, per, in, out, gr}; column `j` is stream column `first + j`.
+func _columns() -> Dictionary:
+	var per := _records_per_column()
+	var first := _base / per
+	var last := (_base + _in.size() - 1) / per
+	var column_count := maxi(last - first + 1, 0)
+	var in_max := PackedFloat32Array()
+	var out_max := PackedFloat32Array()
+	var gr_max := PackedFloat32Array()
+	in_max.resize(column_count)
+	out_max.resize(column_count)
+	gr_max.resize(column_count)
+	in_max.fill(-INF)
+	out_max.fill(-INF)
+	for i in _in.size():
+		var column := (_base + i) / per - first
+		in_max[column] = maxf(in_max[column], _in[i])
+		out_max[column] = maxf(out_max[column], _out[i])
+		gr_max[column] = maxf(gr_max[column], _gr[i])
+	return {"first": first, "per": per, "count": column_count, "in": in_max, "out": out_max, "gr": gr_max}
+
+
+## Left edge of stream column `first + j`. The newest record sits at the right edge, plus the
+## scroll offset that eases away.
+func _column_x(columns: Dictionary, j: int) -> float:
+	var per_record := plot_rect().size.x / float(maxi(capacity, 1))
+	var newest := _base + _in.size()
+	var start_record: int = (int(columns["first"]) + j) * int(columns["per"])
+	return plot_rect().end.x - float(newest - start_record) * per_record + _scroll_offset
+
+
+func _column_width(columns: Dictionary) -> float:
+	return int(columns["per"]) * plot_rect().size.x / float(maxi(capacity, 1))
+
+
 ## The gain reduction hanging from the top of its strip.
-func _draw_gr(font: Font) -> void:
+func _draw_gr(font: Font, columns: Dictionary) -> void:
 	var strip := gr_rect()
-	var count := _gr.size()
-	if count < 2:
-		return
-	# Filled as a band between the top edge and the reduction depth.
-	var fill := PackedVector2Array()
-	for i in count:
-		fill.append(Vector2(record_x(i), strip.position.y))
-	for i in range(count - 1, -1, -1):
-		var depth := clampf(_gr[i] / GR_MAX_DB, 0.0, 1.0) * (strip.size.y - 2.0)
-		fill.append(Vector2(record_x(i), strip.position.y + depth))
-	if fill.size() > 2:
-		draw_colored_polygon(fill, GR_COLOR)
+	var gr_max: PackedFloat32Array = columns["gr"]
+	var width := _column_width(columns)
+	for column in columns["count"]:
+		var depth := clampf(gr_max[column] / GR_MAX_DB, 0.0, 1.0) * (strip.size.y - 2.0)
+		if depth > 0.0:
+			draw_rect(Rect2(_column_x(columns, column), strip.position.y, width, depth), GR_COLOR)
 	if font != null:
 		draw_string(
 			font,
@@ -241,24 +314,20 @@ func _draw_gr(font: Font) -> void:
 		)
 
 
-func _draw_levels() -> void:
-	var count := _in.size()
-	if count < 2:
-		return
-	var bottom := plot_rect().end.y
-	var input_fill := PackedVector2Array()
+func _draw_levels(columns: Dictionary) -> void:
+	var plot := plot_rect()
+	var bottom := plot.end.y
+	var in_max: PackedFloat32Array = columns["in"]
+	var out_max: PackedFloat32Array = columns["out"]
 	var output_line := PackedVector2Array()
-	for i in count:
-		var x := record_x(i)
-		input_fill.append(Vector2(x, db_to_y(_in[i])))
-		output_line.append(Vector2(x, db_to_y(_out[i])))
-	# Close the input fill down to the floor so it reads as a level.
-	var closed := input_fill.duplicate()
-	closed.append(Vector2(input_fill[input_fill.size() - 1].x, bottom))
-	closed.append(Vector2(input_fill[0].x, bottom))
-	draw_colored_polygon(closed, INPUT_FILL)
-	draw_polyline(input_fill, Color(0.45, 0.68, 1.0, 0.8), 1.0, true)
-	draw_polyline(output_line, OUTPUT_LINE, 1.5, true)
+	var width := _column_width(columns)
+	for column in columns["count"]:
+		var x := _column_x(columns, column)
+		var top := clampf(db_to_y(in_max[column]), plot.position.y, bottom)
+		draw_rect(Rect2(x, top, width, bottom - top), INPUT_FILL)
+		output_line.append(Vector2(x + width * 0.5, db_to_y(out_max[column])))
+	if output_line.size() >= 2:
+		draw_polyline(output_line, OUTPUT_LINE, 1.5, true)
 
 
 func _draw_threshold() -> void:

@@ -22,6 +22,7 @@ func run_tests() -> void:
 	_test_corner_drag_up_raises_the_ratio()
 	_test_history_threshold_drag()
 	_test_history_keeps_the_window()
+	_test_history_past_columns_are_static()
 	await _test_draws_in_the_tree()
 
 
@@ -202,13 +203,37 @@ func _test_history_threshold_drag() -> void:
 	history.free()
 
 
+## Columns that have scrolled into the past must not change when newer records arrive.
+func _test_history_past_columns_are_static() -> void:
+	var history := CompressorHistory.new()
+	history.size = Vector2(200, 160)
+	history.capacity = 400
+	var push := func(count: int, base: int) -> void:
+		var records := []
+		for i in count:
+			records.append([float((base + i * 7) % 50) - 60.0, 0.0, 0.0])
+		history.push_records(CompressorData.decode(_make_blob(records)))
+	push.call(64, 0)
+	push.call(64, 64)
+	var before := history._columns()
+	push.call(64, 128)
+	var after := history._columns()
+	var shift := int(after["first"]) - int(before["first"])
+	var same := true
+	for j in int(before["count"]) - 1:
+		if before["in"][j] != after["in"][j + shift]:
+			same = false
+	_assert(same, "columns in the past keep their values when new records arrive")
+	history.free()
+
+
 func _test_history_keeps_the_window() -> void:
 	var history := CompressorHistory.new()
 	history.capacity = 8
-	for i in 20:
+	for i in 100:
 		var decoded := CompressorData.decode(_make_blob([[float(i), 0.0, 0.0]]))
 		history.push_records(decoded)
-	_assert(history.record_count() == 8, "only the window is kept (%s)" % history.record_count())
+	_assert(history.record_count() == history.retained_count(), "only the retained window is kept (%s)" % history.record_count())
 	history.clear()
 	_assert(history.record_count() == 0, "clearing empties it")
 	history.free()
