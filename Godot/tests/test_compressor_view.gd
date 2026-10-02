@@ -16,6 +16,7 @@ func run_tests() -> void:
 	_device_script = load("res://data/Device.gd")
 	_instance_script = load("res://data/DeviceInstance.gd")
 	_test_blob_decodes()
+	_test_blob_decodes_the_summary()
 	_test_blob_rejects_junk()
 	_test_static_curve_matches_the_engine()
 	_test_corner_drag_sets_threshold_and_ratio()
@@ -70,9 +71,11 @@ func _make_instance() -> Object:
 	return _instance_script.new(device, 2, 0)
 
 
-func _make_blob(records: Array) -> PackedByteArray:
+func _make_blob(records: Array, summary := []) -> PackedByteArray:
 	var blob := PackedByteArray()
-	blob.resize(4 + records.size() * 12)
+	blob.resize(4 + records.size() * 12 + summary.size() * 4)
+	for k in summary.size():
+		blob.encode_float(4 + records.size() * 12 + k * 4, summary[k])
 	blob.encode_u32(0, records.size())
 	for i in records.size():
 		var record: Array = records[i]
@@ -90,6 +93,20 @@ func _test_blob_decodes() -> void:
 	_assert(is_equal_approx(decoded["in_peak_db"][0], -12.0), "input peak of the first record")
 	_assert(is_equal_approx(decoded["out_peak_db"][2], -30.0), "output peak of the last record")
 	_assert(is_equal_approx(decoded["gr_db"][1], 6.5), "gain reduction of the middle record")
+
+
+func _test_blob_decodes_the_summary() -> void:
+	var summary := [-6.0, -160.0, -7.0, -160.0, -9.0, -160.0, -10.0, -160.0, -12.5, 4.0]
+	var decoded := CompressorData.decode(_make_blob([[-12.0, -18.0, 6.0]], summary))
+	_assert(decoded["count"] == 1 and decoded["summary"].size() == 10, "records and summary both decode")
+	_assert(is_equal_approx(decoded["summary"]["in_peak_l"], -6.0), "in peak L")
+	_assert(is_equal_approx(decoded["summary"]["out_rms_l"], -10.0), "out rms L")
+	_assert(is_equal_approx(decoded["summary"]["detector_db"], -12.5), "detector level")
+	_assert(is_equal_approx(decoded["summary"]["gr_max_db"], 4.0), "largest reduction")
+	var old := CompressorData.decode(_make_blob([[-12.0, -18.0, 6.0]]))
+	_assert(old["count"] == 1 and old["summary"].is_empty(), "a blob without a summary still decodes")
+	var partial := _make_blob([[-12.0, -18.0, 6.0]], summary).slice(0, 4 + 12 + 20)
+	_assert(CompressorData.decode(partial)["summary"].is_empty(), "a partial summary is ignored")
 
 
 func _test_blob_rejects_junk() -> void:

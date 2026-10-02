@@ -262,10 +262,10 @@ Each phase ends green (`cargo test`, `Godot/tests/run_all.sh`) and can be commit
 - [x] Docs: shared pieces table and the §3 gesture table row.
 
 ### Phase 3: Engine meter summary
-- [ ] `compressor.rs`: per-side peak and mean-square accumulators for in/out, and a
+- [x] `compressor.rs`: per-side peak and mean-square accumulators for in/out, and a
       `detector_db` max over the window. Append the 10-float summary in `poll_device_data`.
-- [ ] Tests as listed in 2.4. Update `osc-protocol.md`.
-- [ ] `CompressorData.decode` returns a `summary` dictionary when one is present. Update
+- [x] Tests as listed in 2.4. Update `osc-protocol.md`.
+- [x] `CompressorData.decode` returns a `summary` dictionary when one is present. Update
       `test_compressor_view.gd`'s decode test.
 
 ### Phase 4: Rebuild `CompressorDefaultView`

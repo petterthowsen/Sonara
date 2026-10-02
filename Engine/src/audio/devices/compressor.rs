@@ -17,14 +17,16 @@
 //!   sidechain low cut is a 12 dB/oct high pass in the detector path only, and SC Listen
 //!   replaces the output with what the detector hears.
 //! - Data stream `"dynamics"`: one record per 64 frames (`in_peak_db`, `out_peak_db`, `gr_db`)
-//!   into a preallocated ring, drained on polls of about 20 Hz into `u32 count` + records.
+//!   into a preallocated ring, drained on polls of about 20 Hz into `u32 count` + records, then a
+//!   [`SUMMARY_FLOATS`]-float [`MeterWindow`] summary for the meters (per-side peak and RMS of
+//!   the input and output, the detector level, the largest reduction) over the whole window.
 
 use super::effect::{pass_through, TailSleep};
 use super::param_table::{
     flatten, linear, log, skewed, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
 use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
-use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};
+use crate::audio::dsp::gain::{dry_wet_gains, MixLaw, SILENCE_DB};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 
 pub const DEVICE_ID: &str = "sonara.builtin.compressor";
@@ -150,6 +152,8 @@ pub const RECORD_FRAMES: usize = 64;
 pub const RING_CAPACITY: usize = 1024;
 /// Bytes in one `"dynamics"` record.
 pub const RECORD_BYTES: usize = 12;
+/// `f32`s in the meter summary that follows the records.
+pub const SUMMARY_FLOATS: usize = 10;
 const DATA_RATE_HZ: f32 = 20.0;
 
 // === Gain computer (shared by the device, the tests and the Godot view) ===
@@ -385,6 +389,69 @@ impl Ramp {
     }
 }
 
+// === Meter window ===
+
+/// Level accumulators over one poll window. Plain fields, so the audio thread never allocates.
+#[derive(Clone, Copy)]
+struct MeterWindow {
+    in_peak: [f32; 2],
+    out_peak: [f32; 2],
+    in_sq: [f64; 2],
+    out_sq: [f64; 2],
+    frames: u32,
+    detector_db: f32,
+    gr_max_db: f32,
+}
+
+impl MeterWindow {
+    const EMPTY: Self = Self {
+        in_peak: [0.0; 2],
+        out_peak: [0.0; 2],
+        in_sq: [0.0; 2],
+        out_sq: [0.0; 2],
+        frames: 0,
+        detector_db: SILENCE_DB,
+        gr_max_db: 0.0,
+    };
+
+    #[inline]
+    fn add(&mut self, input: [f32; 2], output: [f32; 2], detector_db: f32, gr_db: f32) {
+        for c in 0..2 {
+            self.in_peak[c] = self.in_peak[c].max(input[c].abs());
+            self.out_peak[c] = self.out_peak[c].max(output[c].abs());
+            self.in_sq[c] += (input[c] as f64) * (input[c] as f64);
+            self.out_sq[c] += (output[c] as f64) * (output[c] as f64);
+        }
+        self.frames += 1;
+        self.detector_db = self.detector_db.max(detector_db);
+        self.gr_max_db = self.gr_max_db.max(gr_db);
+    }
+
+    fn rms_db(&self, sum_sq: f64) -> f32 {
+        if self.frames == 0 {
+            return SILENCE_DB;
+        }
+        lin_to_db((sum_sq / self.frames as f64).sqrt() as f32)
+    }
+
+    /// `in_peak_l, in_peak_r, out_peak_l, out_peak_r, in_rms_l, in_rms_r, out_rms_l, out_rms_r,
+    /// detector_db, gr_max_db`, all in dB.
+    fn summary(&self) -> [f32; SUMMARY_FLOATS] {
+        [
+            lin_to_db(self.in_peak[0]),
+            lin_to_db(self.in_peak[1]),
+            lin_to_db(self.out_peak[0]),
+            lin_to_db(self.out_peak[1]),
+            self.rms_db(self.in_sq[0]),
+            self.rms_db(self.in_sq[1]),
+            self.rms_db(self.out_sq[0]),
+            self.rms_db(self.out_sq[1]),
+            self.detector_db,
+            self.gr_max_db,
+        ]
+    }
+}
+
 // === Device ===
 
 pub struct CompressorDevice {
@@ -456,6 +523,8 @@ pub struct CompressorDevice {
     rec_in_peak: f32,
     rec_out_peak: f32,
     rec_gr: f32,
+    meter: MeterWindow,
+    last_detector_db: f32,
 }
 
 impl CompressorDevice {
@@ -528,6 +597,8 @@ impl CompressorDevice {
             rec_in_peak: 0.0,
             rec_out_peak: 0.0,
             rec_gr: 0.0,
+            meter: MeterWindow::EMPTY,
+            last_detector_db: SILENCE_DB,
         };
         device.configure_rate(sample_rate);
         device.apply(THRESHOLD);
@@ -581,6 +652,7 @@ impl CompressorDevice {
         self.rec_in_peak = 0.0;
         self.rec_out_peak = 0.0;
         self.rec_gr = 0.0;
+        self.meter = MeterWindow::EMPTY;
         self.frames_since_poll = 0;
         self.update_coefficients();
     }
@@ -721,6 +793,7 @@ impl CompressorDevice {
         let lvl_l = self.detect(0, al, detection_mix);
         let lvl_r = self.detect(1, ar, detection_mix);
         let linked = lvl_l.max(lvl_r);
+        self.last_detector_db = linked;
         let lvl_l = lvl_l + link * (linked - lvl_l);
         let lvl_r = lvl_r + link * (linked - lvl_r);
 
@@ -867,7 +940,12 @@ impl AudioDevice for CompressorDevice {
                 outputs[frame + 1] = out_r;
                 self.rec_in_peak = self.rec_in_peak.max(in_l.abs()).max(in_r.abs());
                 self.rec_out_peak = self.rec_out_peak.max(out_l.abs()).max(out_r.abs());
-                self.rec_gr = self.rec_gr.max(0.5 * (self.gain[0] + self.gain[1]));
+                let gr = 0.5 * (self.gain[0] + self.gain[1]);
+                self.rec_gr = self.rec_gr.max(gr);
+                if self.subscribed {
+                    self.meter
+                        .add([in_l, in_r], [out_l, out_r], self.last_detector_db, gr);
+                }
                 self.push_record();
             }
             self.phase += run;
@@ -955,6 +1033,7 @@ impl AudioDevice for CompressorDevice {
             self.ring_len = 0;
             self.record_frames = 0;
             self.frames_since_poll = 0;
+            self.meter = MeterWindow::EMPTY;
             self.subscribed = true;
         }
         self.sleep.wake();
@@ -967,8 +1046,8 @@ impl AudioDevice for CompressorDevice {
         }
     }
 
-    /// `u32 count` followed by `count` records of `in_peak_db, out_peak_db, gr_db`
-    /// (little-endian f32).
+    /// `u32 count` followed by `count` records of `in_peak_db, out_peak_db, gr_db`, then the
+    /// [`SUMMARY_FLOATS`] meter summary of the whole window (little-endian f32).
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
         if !self.subscribed || self.frames_since_poll < self.poll_interval {
             return None;
@@ -978,13 +1057,17 @@ impl AudioDevice for CompressorDevice {
             return None;
         }
         let count = self.ring_len;
-        let mut bytes = Vec::with_capacity(4 + count * RECORD_BYTES);
+        let mut bytes = Vec::with_capacity(4 + count * RECORD_BYTES + SUMMARY_FLOATS * 4);
         bytes.extend_from_slice(&(count as u32).to_le_bytes());
         for record in &self.ring[..count] {
             for value in record {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
         }
+        for value in self.meter.summary() {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        self.meter = MeterWindow::EMPTY;
         self.ring_len = 0;
         Some(("dynamics".to_string(), bytes))
     }
@@ -1313,8 +1396,8 @@ mod tests {
             while let Some((kind, bytes)) = d.poll_device_data() {
                 assert_eq!(kind, "dynamics");
                 let count = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
-                assert_eq!(bytes.len(), 4 + count * RECORD_BYTES);
-                let values: Vec<f32> = bytes[4..]
+                assert_eq!(bytes.len(), 4 + count * RECORD_BYTES + SUMMARY_FLOATS * 4);
+                let values: Vec<f32> = bytes[4..4 + count * RECORD_BYTES]
                     .chunks_exact(4)
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
@@ -1337,6 +1420,111 @@ mod tests {
         );
         d.unsubscribe_data("dynamics");
         assert!(d.poll_device_data().is_none());
+    }
+
+    /// Run `frames` of `input` (interleaved stereo) with the stream on and return the summary of
+    /// the last blob.
+    fn last_summary(d: &mut CompressorDevice, input: &[f32]) -> [f32; SUMMARY_FLOATS] {
+        let mut summary = None;
+        for block in input.chunks(512 * 2) {
+            let mut out = vec![0.0; block.len()];
+            d.process_block(block, &mut out, block.len() / 2);
+            while let Some((_, bytes)) = d.poll_device_data() {
+                let count = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+                let tail = &bytes[4 + count * RECORD_BYTES..];
+                assert_eq!(
+                    tail.len(),
+                    SUMMARY_FLOATS * 4,
+                    "summary follows the records"
+                );
+                let mut values = [0.0; SUMMARY_FLOATS];
+                for (v, b) in values.iter_mut().zip(tail.chunks_exact(4)) {
+                    *v = f32::from_le_bytes(b.try_into().unwrap());
+                }
+                summary = Some(values);
+            }
+        }
+        summary.expect("at least one poll")
+    }
+
+    #[test]
+    fn summary_reports_hard_panned_peaks_per_side() {
+        let mut d = device();
+        d.subscribe_data("dynamics").unwrap();
+        set(&mut d, THRESHOLD, 0.0);
+        let frames = SR as usize;
+        let mono = sine(1_000.0, SR, frames, 0.5);
+        let input: Vec<f32> = mono.iter().flat_map(|&x| [x, 0.0]).collect();
+        let s = last_summary(&mut d, &input);
+        let half = 20.0 * 0.5f32.log10();
+        assert!((s[0] - half).abs() < 0.2, "in peak L {:.2}", s[0]);
+        assert!(
+            s[1] <= SILENCE_DB + 0.01,
+            "in peak R is silent: {:.2}",
+            s[1]
+        );
+        assert!((s[2] - half).abs() < 0.5, "out peak L {:.2}", s[2]);
+        assert!(
+            s[3] <= SILENCE_DB + 0.01,
+            "out peak R is silent: {:.2}",
+            s[3]
+        );
+        assert!(s[5] <= SILENCE_DB + 0.01, "in rms R is silent: {:.2}", s[5]);
+        assert!(
+            s[9] < 0.1,
+            "no reduction above a 0 dB threshold: {:.2}",
+            s[9]
+        );
+    }
+
+    #[test]
+    fn summary_rms_of_a_sine_is_three_db_below_its_peak() {
+        let mut d = device();
+        d.subscribe_data("dynamics").unwrap();
+        let input = stereo(&sine(1_000.0, SR, SR as usize, 0.5));
+        let s = last_summary(&mut d, &input);
+        assert!(
+            ((s[0] - s[4]) - 3.01).abs() < 0.3,
+            "peak {:.2} rms {:.2}",
+            s[0],
+            s[4]
+        );
+        assert!(
+            ((s[2] - s[6]) - 3.01).abs() < 0.3,
+            "out peak {:.2} rms {:.2}",
+            s[2],
+            s[6]
+        );
+    }
+
+    #[test]
+    fn summary_detector_level_follows_what_the_gain_computer_sees() {
+        let mut d = device();
+        d.subscribe_data("dynamics").unwrap();
+        set(&mut d, THRESHOLD, -30.0);
+        set(&mut d, RATIO, 4.0);
+        let input = stereo(&sine(1_000.0, SR, SR as usize, 0.25));
+        let s = last_summary(&mut d, &input);
+        let expected = 20.0 * 0.25f32.log10();
+        assert!(
+            (s[8] - expected).abs() < 1.0,
+            "detector {:.2} dB, input peak {expected:.2}",
+            s[8]
+        );
+        assert!(s[9] > 5.0, "reduction reported: {:.2}", s[9]);
+        // A 2 kHz sidechain low cut lowers what the detector sees but not the input peak.
+        let mut cut = device();
+        cut.subscribe_data("dynamics").unwrap();
+        set(&mut cut, THRESHOLD, -30.0);
+        set(&mut cut, SC_LOW_CUT, 2_000.0);
+        let low = stereo(&sine(100.0, SR, SR as usize, 0.25));
+        let s = last_summary(&mut cut, &low);
+        assert!(
+            s[8] < s[0] - 10.0,
+            "detector {:.2} below input {:.2}",
+            s[8],
+            s[0]
+        );
     }
 
     #[test]

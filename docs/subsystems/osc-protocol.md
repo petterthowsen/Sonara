@@ -618,6 +618,12 @@ history behind the compressor's meters and scrolling display. It arrives through
 
 - The blob is little-endian: a `u32` record count, then that many records of three `f32`s:
   `in_peak_db`, `out_peak_db`, `gr_db` (the gain reduction as a positive number of dB).
+- After the records comes a meter summary of ten `f32`s (dB) covering the whole poll window:
+  `in_peak_l`, `in_peak_r`, `out_peak_l`, `out_peak_r`, `in_rms_l`, `in_rms_r`, `out_rms_l`,
+  `out_rms_r`, `detector_db`, `gr_max_db`. RMS is the mean square over the window. `detector_db`
+  is the level the gain computer sees (after SC Low Cut and Channels, RMS when Detection is RMS,
+  the louder side). `gr_max_db` is the largest gain reduction. Silence reads -160 dB. The
+  accumulators run only while subscribed. A decoder that stops after the records still works.
 - On the audio thread the device appends one record every 64 frames, holding the peaks of that
   window and the largest gain reduction in it.
 - Every poll (about 20 Hz while subscribed) drains the accumulated records into one blob, so the
@@ -626,7 +632,7 @@ history behind the compressor's meters and scrolling display. It arrives through
 - While subscribed the compressor never sleeps, so the meters and history keep moving in
   silence.
 - `CompressorData.decode()` in Godot splits the blob into `{count, in_peak_db, out_peak_db,
-  gr_db}`.
+  gr_db, summary}`. `summary` maps the names above to dB, and is empty when the blob has none.
 
 #### Example Usage
 ```gdscript

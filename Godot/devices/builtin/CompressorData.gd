@@ -38,6 +38,12 @@ const MAX_DB := 24.0
 const RECORD_FRAMES := 64
 ## Floats in one record: in_peak_db, out_peak_db, gr_db.
 const RECORD_VALUES := 3
+## The meter summary after the records, in blob order (engine `MeterWindow::summary`), all dB.
+const SUMMARY_KEYS: Array[String] = [
+	"in_peak_l", "in_peak_r", "out_peak_l", "out_peak_r",
+	"in_rms_l", "in_rms_r", "out_rms_l", "out_rms_r",
+	"detector_db", "gr_max_db",
+]
 
 
 ## Gain reduction in dB of the soft-knee static curve (Giannoulis/Massberg/Reiss).
@@ -81,14 +87,17 @@ static func format_ratio(ratio: float) -> String:
 	return "%.1f:1" % ratio
 
 
-## Decode a `"dynamics"` blob: `u32 count` followed by `count` records of three little-endian
-## f32s. Returns {count, in_peak_db, out_peak_db, gr_db} with one entry per record.
+## Decode a `"dynamics"` blob: `u32 count`, `count` records of three little-endian f32s, then
+## the meter summary of `SUMMARY_KEYS.size()` f32s. Returns {count, in_peak_db, out_peak_db,
+## gr_db, summary} with one entry per record. `summary` maps `SUMMARY_KEYS` to dB, and is empty
+## when the blob ends after the records (an older engine).
 static func decode(blob: PackedByteArray) -> Dictionary:
 	var empty := {
 		"count": 0,
 		"in_peak_db": PackedFloat32Array(),
 		"out_peak_db": PackedFloat32Array(),
 		"gr_db": PackedFloat32Array(),
+		"summary": {},
 	}
 	if blob.size() < 4:
 		return empty
@@ -106,4 +115,12 @@ static func decode(blob: PackedByteArray) -> Dictionary:
 		input[i] = blob.decode_float(base)
 		output[i] = blob.decode_float(base + 4)
 		reduction[i] = blob.decode_float(base + 8)
-	return {"count": count, "in_peak_db": input, "out_peak_db": output, "gr_db": reduction}
+	var summary := {}
+	var summary_at := 4 + count * RECORD_VALUES * 4
+	if blob.size() >= summary_at + SUMMARY_KEYS.size() * 4:
+		for k in SUMMARY_KEYS.size():
+			summary[SUMMARY_KEYS[k]] = blob.decode_float(summary_at + k * 4)
+	return {
+		"count": count, "in_peak_db": input, "out_peak_db": output, "gr_db": reduction,
+		"summary": summary,
+	}
