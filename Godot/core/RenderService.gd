@@ -20,6 +20,11 @@ signal running_changed(running: bool)
 
 const CANCELLED := "cancelled"
 const MAX_TAIL_SECONDS := 600.0
+## An analysis job that reports no progress for this long is abandoned (engine not running, or hung).
+const WATCHDOG_SECONDS := 30.0
+
+## Emitted when any job ends, for `analyze()` to await: (job_id, error, paths). `error` is "" on success.
+signal _settled(job_id: String, error: String, paths: PackedStringArray)
 
 var logger := Log.make("RenderService")
 
@@ -27,8 +32,12 @@ var transport: Object = null
 var is_running := false
 var current_job_id := ""
 var progress := 0.0
+## Why the last `start` / `start_analysis` returned "".
+var last_error := ""
 
 var _counter := 0
+var _activity := 0
+var _last_settled: Array = []
 var _listening := false
 
 
@@ -46,16 +55,11 @@ func _ready() -> void:
 ##   stems: Array of {"channel_id": int, "path": String}
 func start(options: Dictionary) -> String:
 	var error := validate(options)
+	if error == "" and is_running:
+		error = "A render is already running"
 	if error != "":
-		logger.warn("Render rejected: ", error)
-		job_failed.emit("", error)
-		return ""
-	if is_running:
-		job_failed.emit("", "A render is already running")
-		return ""
-	_ensure_transport()
-	_counter += 1
-	var job_id := "render_%d_%d" % [Time.get_ticks_msec(), _counter]
+		return _reject(error)
+	var job_id := _begin_job()
 	var args: Array = [
 		job_id,
 		int(options.start_tick),
@@ -70,13 +74,105 @@ func start(options: Dictionary) -> String:
 	for stem in options.get("stems", []):
 		args.append(int(stem.channel_id))
 		args.append(String(stem.path))
-	current_job_id = job_id
-	progress = 0.0
-	_set_running(true)
 	transport.send("/render/start", args)
 	logger.info("Render started: ", job_id)
 	job_started.emit(job_id)
 	return job_id
+
+
+## Start an offline analysis of a range (`/render/analyze`). Returns the job id, or "" when rejected.
+## The result is a JSON file at `result_path`; `job_finished` reports it as its only path.
+##
+## `options` keys:
+##   start_tick, end_tick (int, required, end exclusive)
+##   result_path (String, required)
+##   resolution ("bar" or "beat", default "bar")
+##   pre_roll_ticks (int, default -1 = render from the project start)
+##   all_channels (bool) or channel_ids (Array of int); the master is always analyzed
+func start_analysis(options: Dictionary) -> String:
+	var error := validate_analysis(options)
+	if error == "" and is_running:
+		error = "A render is already running"
+	if error != "":
+		return _reject(error)
+	var job_id := _begin_job()
+	var args: Array = [
+		job_id,
+		int(options.start_tick),
+		int(options.end_tick),
+		String(options.get("resolution", "bar")),
+		int(options.get("pre_roll_ticks", -1)),
+		String(options.result_path),
+		1 if options.get("all_channels", false) else 0,
+	]
+	for id in options.get("channel_ids", []):
+		args.append(int(id))
+	transport.send("/render/analyze", args)
+	logger.info("Analysis started: ", job_id)
+	job_started.emit(job_id)
+	_watchdog(job_id)
+	return job_id
+
+
+## Run an analysis and wait for it. Returns `{ok: true, path}` or `{ok: false, error}`.
+func analyze(options: Dictionary) -> Dictionary:
+	var job_id := start_analysis(options)
+	if job_id == "":
+		return {"ok": false, "error": last_error}
+	# A transport that answers inline has settled the job already.
+	var settled: Array = _last_settled
+	while settled.is_empty() or settled[0] != job_id:
+		settled = await _settled
+	if settled[1] != "":
+		return {"ok": false, "error": settled[1]}
+	var paths: PackedStringArray = settled[2]
+	return {"ok": true, "path": paths[0] if not paths.is_empty() else String(options.result_path)}
+
+
+## Returns "" when `options` describe a valid analysis, else a message.
+static func validate_analysis(options: Dictionary) -> String:
+	if not options.has("start_tick") or not options.has("end_tick"):
+		return "No range to analyze"
+	if int(options.end_tick) <= int(options.start_tick):
+		return "The range is empty"
+	if String(options.get("result_path", "")) == "":
+		return "No result path"
+	if not String(options.get("resolution", "bar")) in ["bar", "beat"]:
+		return "Resolution must be bar or beat"
+	return ""
+
+
+func _reject(error: String) -> String:
+	last_error = error
+	logger.warn("Render rejected: ", error)
+	job_failed.emit("", error)
+	return ""
+
+
+func _begin_job() -> String:
+	_ensure_transport()
+	_counter += 1
+	var job_id := "render_%d_%d" % [Time.get_ticks_msec(), _counter]
+	last_error = ""
+	current_job_id = job_id
+	progress = 0.0
+	_activity = 0
+	_set_running(true)
+	return job_id
+
+
+## Give up on a job the engine never reports on. Only runs inside the tree (no timers otherwise).
+func _watchdog(job_id: String) -> void:
+	if not is_inside_tree():
+		return
+	var seen := -1
+	while is_running and current_job_id == job_id:
+		if _activity == seen:
+			transport.send("/render/cancel", [job_id])
+			_finish_failed(job_id, "The engine did not respond")
+			return
+		seen = _activity
+		await get_tree().create_timer(WATCHDOG_SECONDS).timeout
 
 
 ## Returns "" when `options` describe a valid job, else a message for the user.
@@ -120,6 +216,7 @@ func _on_progress(args: Array) -> void:
 	if args.size() < 2 or str(args[0]) != current_job_id or not is_running:
 		return
 	progress = clampf(float(args[1]), 0.0, 1.0)
+	_activity += 1
 	progress_changed.emit(current_job_id, progress)
 
 
@@ -134,6 +231,8 @@ func _on_done(args: Array) -> void:
 	_set_running(false)
 	logger.info("Render finished: ", job_id, " files=", paths.size())
 	job_finished.emit(job_id, paths)
+	_last_settled = [job_id, "", paths]
+	_settled.emit(job_id, "", paths)
 
 
 func _on_failed(args: Array) -> void:
@@ -143,10 +242,15 @@ func _on_failed(args: Array) -> void:
 	# A rejected request is answered with the id we sent, so it matches the current job too.
 	if job_id != current_job_id or not is_running:
 		return
-	var error := str(args[1]) if args.size() > 1 else "Render failed"
+	_finish_failed(job_id, str(args[1]) if args.size() > 1 else "Render failed")
+
+
+func _finish_failed(job_id: String, error: String) -> void:
 	_set_running(false)
 	logger.warn("Render failed: ", job_id, " ", error)
 	job_failed.emit(job_id, error)
+	_last_settled = [job_id, error, PackedStringArray()]
+	_settled.emit(job_id, error, PackedStringArray())
 
 
 func _set_running(value: bool) -> void:

@@ -8,9 +8,9 @@ Implementation plan for the assistant's `analyze` tool. The assistant can't hear
 
 - [x] Phase 1: Engine offline render core
 - [x] Phase 2: Export to WAV from Godot (verifies Phase 1 end to end)
-- [ ] Phase 3: Engine analyzer
-- [ ] Phase 4: Analysis render jobs
-- [ ] Phase 5: Godot `analyze` tool
+- [x?] Phase 3: Engine analyzer
+- [x?] Phase 4: Analysis render jobs
+- [x] Phase 5: Godot `analyze` tool
 - [ ] Phase 6 (optional): Extras and tuning
 
 Do the phases in order. Run `cargo test` (from `Engine/`) after each engine phase and `Godot/tests/run_all.sh` after each Godot phase. Mark tasks `[x?]` when implemented and `[x]` once verified. Phases 1 and 4 touch the engine's threading and add OSC messages, so read `docs/subsystems/engine-architecture.md`, `engine-audio-thread.md`, `engine-plugin-architecture.md` and ADRs 0002, 0007 and 0009 before starting.
@@ -76,40 +76,46 @@ _Verify:_ export a project from the UI with stems, and import the stems back int
 
 A pure component, `audio/analysis/mod.rs`. It is fed `(tick_at_block_start, frames, &[f32] stereo)` per channel and the master, plus the tempo and time-signature maps so it can find bar and beat boundaries inside a block. It has no I/O and no locks, so it is fully unit-testable.
 
-- [ ] Per tap, accumulated per bar (and per beat when requested):
-  - [ ] Loudness: K-weighted mean square, as in BS.1770 (two biquads), reported as LUFS.
-  - [ ] Band energy for six bands: sub 20–60 Hz, bass 60–250 Hz, lowmid 250–800 Hz, mid 800 Hz–2.5 kHz, himid 2.5–6 kHz, air 6–20 kHz. Use a bank of 4th-order band-pass filters with coefficients computed from the render sample rate.
-  - [ ] Sample peak in dBFS, with a flag when a sample is above 0 dBFS.
-  - [ ] Crest factor (peak over RMS, in dB).
-  - [ ] Stereo correlation (−1…1) and side/mid energy ratio.
-- [ ] Scales are applied in the formatter, but define and test them here:
-  - [ ] Loudness digit = `clamp(round((LUFS + 33) / 3), 0, 9)`, so −6 LUFS → 9 and roughly −33 LUFS → 0. Silence is shown as `.`, not `0`.
-  - [ ] Band digit uses the same 3 dB steps, measured relative to a pink-noise tilt. Each band's level is compared to the level pink noise at the same overall loudness would have in that band. A balanced mix then reads roughly flat, so `air` doesn't always look low.
-- [ ] Output a serializable `AnalysisResult`: a list of bars, each holding values per tap (master plus channel ids), plus a header with the sample rate, the range and the scale version.
-- [ ] Tests with synthetic signals:
-  - [ ] A 1 kHz sine lands in `mid` only, with negligible leakage.
-  - [ ] Pink noise reads flat across the bands.
-  - [ ] A −23 LUFS reference tone reads −23 ±0.5.
-  - [ ] Bar boundaries are exact across tempo and time-signature changes.
-  - [ ] Splitting the same input into different block sizes gives identical results.
+- [x?] Per tap, accumulated per bar (and per beat when requested):
+  - [x?] Loudness: K-weighted mean square, as in BS.1770 (two biquads), reported as LUFS.
+  - [x?] Band energy for six bands: sub 20–60 Hz, bass 60–250 Hz, lowmid 250–800 Hz, mid 800 Hz–2.5 kHz, himid 2.5–6 kHz, air 6–20 kHz. Use a bank of 4th-order band-pass filters with coefficients computed from the render sample rate.
+  - [x?] Sample peak in dBFS, with a flag when a sample is above 0 dBFS.
+  - [x?] Crest factor (peak over RMS, in dB).
+  - [x?] Stereo correlation (−1…1) and side/mid energy ratio.
+- [x?] Scales are applied in the formatter, but define and test them here:
+  - [x?] Loudness digit = `clamp(round((LUFS + 33) / 3), 0, 9)`, so −6 LUFS → 9 and roughly −33 LUFS → 0. Silence is shown as `.`, not `0`.
+  - [x?] Band digit uses the same 3 dB steps, measured relative to a pink-noise tilt. Each band's level is compared to the level pink noise at the same overall loudness would have in that band. A balanced mix then reads roughly flat, so `air` doesn't always look low.
+- [x?] Output a serializable `AnalysisResult`: a list of bars, each holding values per tap (master plus channel ids), plus a header with the sample rate, the range and the scale version.
+  - _Done:_ `audio/analysis/` (`mod.rs` analyzer and result types, `filters.rs`, `scale.rs`). Taps are channel IDs (1 = master). `Analyzer::process_block(start_tick, frames, &[&[f32]])` takes one stereo interleaved buffer per tap and steps ticks itself with `fill_tick_rates`; `next_tick()` chains blocks for callers without a clock. The config also has a range: frames outside it run through the filters (pre-roll) but aren't accumulated, and a range that starts mid-bar gives a partial first bar (`frames` says how many). `finish()` returns the `AnalysisResult`, and `to_json()` serializes it.
+  - Values are plain dB, with silence at `FLOOR_DB` (-120). The formatter maps them with `scale::level_digit` (`None` = silence, at or below -70). `side_mid` is linear, capped at 1000.
+  - _Deviations:_ each band edge is a Linkwitz-Riley 4th-order filter (two cascaded Butterworth sections) rather than a single 4th-order band-pass, so the 1 kHz sine leaks about 8 dB into lowmid (it is only a third of an octave above lowmid's edge); tones at the band centres leak at least 15 dB down. The pink tilt is calibrated from the filters' own responses: `PinkCalibration` integrates ideal pink noise through the K filter and every band at the render sample rate, so pink noise reads the same in every band and the same as its LUFS (a plain octave-width share left pink about 2 dB under its LUFS, because the crossovers dip and K-weighting lifts pink by 1.4 dB). Bump `SCALE_VERSION` if any of this changes.
+- [x?] Tests with synthetic signals:
+  - [x?] A 1 kHz sine lands in `mid` only, with negligible leakage.
+  - [x?] Pink noise reads flat across the bands.
+  - [x?] A −23 LUFS reference tone reads −23 ±0.5.
+  - [x?] Bar boundaries are exact across tempo and time-signature changes.
+  - [x?] Splitting the same input into different block sizes gives identical results.
 
 ## Phase 4: Analysis render jobs
 
-- [ ] Add an analysis sink to `RenderJob`. It has the taps to analyze (master always, plus a list of channel ids or "all"), a resolution (bar or beat), and an output path. The job writes no WAV.
-- [ ] Wire the Phase 1 per-channel tap into the analyzer.
-- [ ] Pre-roll: render from project start (or a configurable number of bars before the range) but only accumulate inside the requested range. Held notes, reverb tails, LFO phase and compressor state are then correct at the start of the range. Offline rendering is fast enough that rendering from the start is the default.
-- [ ] Write the `AnalysisResult` as JSON to the engine's cache directory, then send `/render/done` with the path. The progress messages are the same as for normal renders.
-- [ ] Test: render a two-channel project (bass-only and hat-only) and check that the bass channel's energy is in sub/bass and the hat's is in himid/air. Check that bars outside the range are absent.
+- [x?] Add an analysis sink to `RenderJob`. It has the taps to analyze (master always, plus a list of channel ids or "all"), a resolution (bar or beat), and an output path. The job writes no WAV.
+- [x?] Wire the Phase 1 per-channel tap into the analyzer.
+  - _Done:_ `RenderJob::analysis` holds an `AnalysisSpec` (`AnalysisTaps::{Channels, All}`, `Resolution`, `PreRoll`, result path), validated with the other outputs, so an analysis-only job needs no WAV. The worker builds the `Analyzer` after the outputs open, copies the tapped channels out of the state each block like stems, and feeds the analyzer with the lock released. Taps are the master first, then channels (ascending for `All`). OSC: `/render/analyze` (`parse_render_analyze` in `osc/server.rs`, documented in `osc-protocol.md`). `/render/done` carries the JSON path.
+- [x?] Pre-roll: render from project start (or a configurable number of bars before the range) but only accumulate inside the requested range. Held notes, reverb tails, LFO phase and compressor state are then correct at the start of the range. Offline rendering is fast enough that rendering from the start is the default.
+- [x?] Write the `AnalysisResult` as JSON to the engine's cache directory, then send `/render/done` with the path. The progress messages are the same as for normal renders.
+- [x?] Test: render a two-channel project (bass-only and hat-only) and check that the bass channel's energy is in sub/bass and the hat's is in himid/air. Check that bars outside the range are absent.
+  - _Done:_ `analysis_job_reports_each_channels_bands`, `analysis_pre_roll_warms_the_range_start` and `analysis_of_a_missing_channel_fails` in `render/worker.rs`, plus `render_analyze_parses`. The "hat" is a polysynth at note 108 (no drum device is needed; it lands in himid/air). A note that starts before a short pre-roll doesn't sound at all (the test shows it), which is why `FromStart` is the default.
+  - _Not verified:_ a real project with CLAP plugins; run `oscsend localhost 7000 /render/analyze job1 3840 15360 bar -1 /tmp/an.json 1` and read the JSON.
 
 ## Phase 5: Godot `analyze` tool
 
-- [ ] Add `Godot/ai/tools/AnalyzeTool.gd` and register it in `ToolRegistry.gd`. Parameters:
+- [x] Add `Godot/ai/tools/AnalyzeTool.gd` and register it in `ToolRegistry.gd`. Parameters:
   - `start`, `end` (required): positions in the same bar.beat.tick format as `move_clips`. A bare bar number is allowed.
   - `channels` (optional): channel names resolved through the existing name lookup (`NameStyle`), or `"all"`. When omitted, only the master is analyzed.
   - `resolution` (optional): `"bar"` (default) or `"beat"`. Refuse beat resolution for ranges longer than 16 bars to keep the output small.
-- [ ] Execute: convert the range to ticks with the time-signature map, start an analysis job through `RenderService`, await `/render/done`, then load the JSON. Return `fail()` with the engine's message if the job fails. The tool must handle the await properly; check how other async tools do it, and add support to `AiTool` if none do.
-- [ ] Compute `root` per bar from MIDI: the lowest pitch class sounding longest in the bar across non-drum instrument tracks. Show `-` when nothing pitched is playing. Name notes as C3 = 60.
-- [ ] Format the result as text: one row per metric, one column per bar, with a bar header and marker names as section labels. Sketch:
+- [x] Execute: convert the range to ticks with the time-signature map, start an analysis job through `RenderService`, await `/render/done`, then load the JSON. Return `fail()` with the engine's message if the job fails. The tool must handle the await properly; check how other async tools do it, and add support to `AiTool` if none do.
+- [x] Compute `root` per bar from MIDI: the lowest pitch class sounding longest in the bar across non-drum instrument tracks. Show `-` when nothing pitched is playing. Name notes as C3 = 60.
+- [x] Format the result as text: one row per metric, one column per bar, with a bar header and marker names as section labels. Sketch:
 
   ```
   bars:   17 18 19 20 | 21 22 23 24
@@ -126,9 +132,18 @@ A pure component, `audio/analysis/mod.rs`. It is fed `(tick_at_block_start, fram
   ```
 
   Per-channel blocks follow the same layout. Below them, add a **masking summary**: per band and section, the channels that contribute most when two or more are within 3 dB of each other, e.g. `lowmid bars 21–24: Bass 7, Pad 6, Guitar 6`.
-- [ ] Add a one-line legend at the top: the scale, what `.` and `!` mean, and the band edges.
-- [ ] Update the system prompt (`Godot/ai/prompt/`) with when to use `analyze`: before giving mixing advice, after changing levels, EQ or arrangement, and to compare sections.
-- [ ] Tests (`Godot/ai/tests/test_analyze_tool.gd`): format a fixed `AnalysisResult` fixture and compare against the expected text. Cover range parsing, refusing an oversized beat-resolution request, computing `root` from a fixture project, and the masking summary.
+- [x] Add a one-line legend at the top: the scale, what `.` and `!` mean, and the band edges.
+- [x] Update the system prompt (`Godot/ai/prompt/`) with when to use `analyze`: before giving mixing advice, after changing levels, EQ or arrangement, and to compare sections.
+- [x] Tests (`Godot/ai/tests/test_analyze_tool.gd`): format a fixed `AnalysisResult` fixture and compare against the expected text. Cover range parsing, refusing an oversized beat-resolution request, computing `root` from a fixture project, and the masking summary.
+
+  _Done:_ `ai/tools/AnalyzeTool.gd` (registered in `ToolRegistry`), `ai/analysis/AnalysisFormat.gd` (grid text from a parsed `AnalysisResult`, pure) and `ai/analysis/AnalysisRoots.gd` (MIDI roots). `RenderService` gained `start_analysis`, an awaitable `analyze(options)` and a 30 s no-progress watchdog, so the tool simply awaits it (`ToolRegistry.execute` already awaits tools). Notes and deviations:
+  - Positions are bar numbers or `bar.beat.tick` counted through the time-signature map (`parse_position`); a bare number is always a bar, unlike `move_clips`. `end` is exclusive. Ranges over 128 bars are refused too.
+  - The tool always renders from the project start (pre-roll -1), writes the engine's JSON to `<user data>/analysis/` and deletes it after reading. A render already running makes the tool fail at once.
+  - Block headers (`[Master]`, `[Bass]`) appear only when more than one tap is analyzed. The `root` row is in the master block only. Channels that are silent in every bar are left out and counted (`all` can be long).
+  - `root` is the pitch class the lowest sounding note spends longest on (ties go to the lower pitch), from non-drum instrument tracks, honouring loops, trims, transpose and muted instances. Pitch classes are sharps (`A#`), no octave.
+  - Masking: per section (marker or the whole range) and band, the mean power of each channel (silent bars count as zero); channels within 3 dB of the loudest are listed when there are two or more and the loudest reads at least digit 3. Capped at 4 names.
+  - The legend takes band edges from the result header and warns when the result's scale version isn't the formatter's.
+  - Tests: `ai/tests/test_analyze_tool.gd` (formatter fixture, range parsing across a 3/4 change, planning and refusals, roots, masking, and a full execute against a mocked transport).
 
 _Verify:_ in the app, ask the assistant to analyze a real project's chorus and give mixing advice. Check that the grid matches what you hear and that the advice refers to specific bars and channels.
 
