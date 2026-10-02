@@ -481,9 +481,22 @@ Responses:
 | 8 | s | CLAP module path (`/`-separated), empty if none |
 | 9 | i | `enum_count` |
 | 10… | s | `enum_count` enum value labels; the index matches the engine value |
+| next | s | Unit of the display values (`"Hz"`, `"dB"`, `"ms"`, …), empty if none |
+| next | i | `display_count` |
+| next… | f | `display_count` display values, sampled evenly from min to max (both ends included) |
 
 Args 6 onward were added later. Godot treats a missing trailing arg as its default (`float`, no
-flags, no module, no enum values).
+flags, no module, no enum values, no unit, no display curve).
+
+**Display curve (CLAP).** CLAP has no unit field; a host learns what a value means only from the
+plugin's `value_to_text`. When parameters are queried, `plugin_host` samples that text at 33
+evenly spaced plain values of every non-stepped parameter and parses each label into a number and
+a unit (`plugin_host/value_text.rs`: `"1.20 kHz"` → 1200 Hz, `"-inf dB"` → −∞; "ms" and "s"
+mixed → ms). The curve is sent when at least 75% of the labels parse with one unit and the values
+change; labels that don't parse are NaN. Godot's `DeviceParameter.display_value` interpolates it
+(geometrically between samples of one sign, so frequency curves are exact) and `format_value` shows
+the result, so a ZeroEQ frequency that runs 0–1 reads 20 Hz … 20 kHz. Other devices send an empty
+curve.
 
 **Plugin Crash and Reload**
 

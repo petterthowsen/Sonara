@@ -263,6 +263,9 @@ pub struct ParamInfo {
     pub is_logarithmic: bool,
     /// Power curve for the normalized value: `real = min + (max - min) * n^skew`. 1.0 is linear.
     pub skew: f32,
+    /// Display values (in `unit`) sampled evenly over `min..=max`, for UIs to interpolate; empty
+    /// when the real value is shown as is. Only CLAP plugins fill it (see `plugin_host::value_text`).
+    pub display: Vec<f32>,
 }
 
 /// A modulation source a device offers (for the UI's source strip).

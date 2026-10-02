@@ -14,6 +14,10 @@ func run_tests() -> void:
 	_test_log_ignores_skew()
 	_test_builtin_info_carries_curve()
 	_test_envelope_stage_curve()
+	_test_display_curve_interpolates()
+	_test_display_curve_edges()
+	_test_format_display()
+	_test_param_info_carries_display_curve()
 
 
 func _param(lo: float, hi: float, skew: float, is_log := false) -> DeviceParameter:
@@ -82,3 +86,68 @@ func _test_envelope_stage_curve() -> void:
 		"envelope inverse matches")
 	env.set_stage_curve(Envelope.Stage.ATTACK, 1.0)
 	_assert(is_equal_approx(env.stage_to_fraction(Envelope.Stage.ATTACK, 5.0), 0.5), "linear curve")
+
+
+## A CLAP frequency that runs 0–1 with an exponential 20 Hz – 20 kHz text curve (spec: CLAP has no
+## unit field, so the engine samples the plugin's value text).
+func _freq_param() -> DeviceParameter:
+	var p := _param(0.0, 1.0, 1.0)
+	p.unit = "Hz"
+	var curve := PackedFloat32Array()
+	for i in range(33):
+		curve.append(20.0 * pow(1000.0, float(i) / 32.0))
+	p.display_curve = curve
+	return p
+
+
+func _test_display_curve_interpolates() -> void:
+	var p := _freq_param()
+	_assert(is_equal_approx(p.display_value(0.0), 20.0), "curve start")
+	_assert(absf(p.display_value(1.0) - 20000.0) < 0.5, "curve end (%s)" % p.display_value(1.0))
+	# Between samples: geometric, so exact for the exponential curve.
+	var mid := p.display_value(0.51)
+	var want := 20.0 * pow(1000.0, 0.51)
+	_assert(absf(mid - want) / want < 1e-3, "between samples follows the curve (%s vs %s)" % [mid, want])
+	_assert(p.format_value(1.0) == "20.0 kHz", "kHz readout (%s)" % p.format_value(1.0))
+	_assert(p.format_value(0.0) == "20.0 Hz", "Hz readout (%s)" % p.format_value(0.0))
+	_assert(SimpleUnits.format(p, 1.0, "") == "20.0 kHz", "Simple View shows the curve's unit")
+	_assert(SimpleUnits.format(p, 1.0, "Hz") == "20.00 kHz", "a Hz override reads the curve too")
+
+
+func _test_display_curve_edges() -> void:
+	var gain := _param(0.0, 1.0, 1.0)
+	gain.unit = "dB"
+	gain.display_curve = PackedFloat32Array([-INF, -24.0, 0.0])
+	_assert(gain.format_value(0.0) == "-inf dB", "-inf sample (%s)" % gain.format_value(0.0))
+	_assert(gain.format_value(0.4) == "-24.0 dB", "next to -inf: the nearer sample (%s)" % gain.format_value(0.4))
+	# Opposite signs interpolate linearly.
+	var pan := _param(-1.0, 1.0, 1.0)
+	pan.display_curve = PackedFloat32Array([-50.0, 50.0])
+	_assert(is_equal_approx(pan.display_value(0.0), 0.0), "linear across zero (%s)" % pan.display_value(0.0))
+	var stray := _param(0.0, 1.0, 1.0)
+	stray.display_curve = PackedFloat32Array([NAN, 5.0, 10.0])
+	_assert(stray.format_value(0.0) == "-", "unparsed sample shows a dash (%s)" % stray.format_value(0.0))
+
+
+func _test_format_display() -> void:
+	_assert(DeviceParameter.format_display(440.0, "Hz") == "440 Hz", "440 Hz")
+	_assert(DeviceParameter.format_display(1250.0, "Hz") == "1.25 kHz", "1.25 kHz")
+	_assert(DeviceParameter.format_display(-6.0, "dB") == "-6.0 dB", "-6.0 dB")
+	_assert(DeviceParameter.format_display(12.5, "ms") == "12.5 ms", "12.5 ms")
+	_assert(DeviceParameter.format_display(2500.0, "ms") == "2.50 s", "ms switches to s")
+	_assert(DeviceParameter.format_display(50.0, "%") == "50.0%", "percent has no space")
+	_assert(DeviceParameter.format_display(0.71, "") == "0.71", "unitless")
+
+
+## `param/info` appends `s:unit, i:n, f…` after the enum labels.
+func _test_param_info_carries_display_curve() -> void:
+	var device := Device.new("test.clap", "Clap", Device.DeviceCategory.Effect, Device.DeviceType.CLAP)
+	var dev = load("res://data/DeviceInstance.gd").new(device, 0, 0)
+	dev._on_param_count_received([2])
+	dev._on_param_info_received([0, "Freq", 0.0, 1.0, 0.5, "param", "float", 0, "", 0, "Hz", 3, 20.0, 632.0, 20000.0])
+	dev._on_param_info_received([1, "Mode", 0.0, 2.0, 0.0, "param", "enum", 0, "", 3, "A", "B", "C", "", 0])
+	var freq: DeviceParameter = dev.get_parameter(0)
+	_assert(freq.unit == "Hz", "unit parsed (%s)" % freq.unit)
+	_assert(freq.display_curve == PackedFloat32Array([20.0, 632.0, 20000.0]), "curve parsed %s" % [freq.display_curve])
+	var mode: DeviceParameter = dev.get_parameter(1)
+	_assert(mode.enum_values == ["A", "B", "C"] and mode.display_curve.is_empty(), "enum labels still parsed")

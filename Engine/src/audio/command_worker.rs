@@ -1409,6 +1409,8 @@ fn collect_sfizz_parameters(
             is_bypass: false,
             module: String::new(),
             enum_values: param.enum_values.clone(),
+            unit: param.unit.clone(),
+            display: param.display.clone(),
         });
     }
 }

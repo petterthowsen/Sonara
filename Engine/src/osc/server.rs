@@ -2146,6 +2146,8 @@ impl OscServer {
                 is_bypass,
                 module,
                 enum_values,
+                unit,
+                display,
             } => {
                 let param_type_str = match param_type {
                     crate::audio::devices::ParamType::Float => "float",
@@ -2171,6 +2173,9 @@ impl OscServer {
                 for ev in enum_values {
                     args.push(OscType::String(ev));
                 }
+                args.push(OscType::String(unit));
+                args.push(OscType::Int(display.len() as i32));
+                args.extend(display.into_iter().map(OscType::Float));
 
                 (device_path.to_osc_addr(channel_id, "param/info"), args)
             }

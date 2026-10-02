@@ -11,6 +11,7 @@ pub mod logging;
 pub mod operations;
 pub mod probe;
 pub mod state;
+pub mod value_text;
 pub mod x11_error;
 
 // Re-export commonly used types

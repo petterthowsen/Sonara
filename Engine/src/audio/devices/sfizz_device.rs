@@ -747,6 +747,7 @@ impl AudioDevice for SfizzDevice {
                     is_bypass: false,
                     is_logarithmic: false,
                     skew: 1.0,
+                    display: Vec::new(),
                     module: String::new(),
                     param_type: ParamType::Float,
                     syncable: true,

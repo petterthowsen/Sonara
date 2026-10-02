@@ -29,6 +29,7 @@ use crate::plugin_host::operations::{
     close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui,
 };
 use crate::plugin_host::state::{ParamMap, PluginState};
+use crate::plugin_host::value_text;
 
 /// Process a command for `instance_id` and return the response, if it has one. `fds` are the
 /// file descriptors that came with the command. `plugin_state` is that instance's slot: None
@@ -489,28 +490,26 @@ pub fn process_command(
                             let max = clap_info.max_value;
                             let param_id = clap_info.id;
 
+                            let mut value_text = |value: f64| -> Option<String> {
+                                let mut text_buffer = [std::mem::MaybeUninit::<u8>::uninit(); 256];
+                                params
+                                    .value_to_text(&mut handle, param_id, value, &mut text_buffer)
+                                    .ok()
+                                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                                    .map(|s| s.trim_end_matches('\0').to_string())
+                            };
+
                             let step_labels = if is_stepped {
                                 let step_count = (max - min).round() as i64 + 1;
                                 if step_count > 0 && step_count <= 64 {
-                                    let mut labels = Vec::with_capacity(step_count as usize);
-                                    for step in 0..step_count {
-                                        let value = min + step as f64;
-                                        let mut text_buffer =
-                                            [std::mem::MaybeUninit::<u8>::uninit(); 256];
-                                        let label = params
-                                            .value_to_text(
-                                                &mut handle,
-                                                param_id,
-                                                value,
-                                                &mut text_buffer,
-                                            )
-                                            .ok()
-                                            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                                            .map(|s| s.to_string())
-                                            .unwrap_or_else(|| (value.round() as i64).to_string());
-                                        labels.push(label);
-                                    }
-                                    labels
+                                    (0..step_count)
+                                        .map(|step| {
+                                            let value = min + step as f64;
+                                            value_text(value).unwrap_or_else(|| {
+                                                (value.round() as i64).to_string()
+                                            })
+                                        })
+                                        .collect()
                                 } else {
                                     Vec::new()
                                 }
@@ -518,10 +517,20 @@ pub fn process_command(
                                 Vec::new()
                             };
 
+                            // CLAP has no unit field: sample the plugin's own value text instead.
+                            let (unit, display) = if is_stepped {
+                                (String::new(), Vec::new())
+                            } else {
+                                let labels: Vec<Option<String>> = (0..value_text::DISPLAY_POINTS)
+                                    .map(|i| value_text(value_text::sample_value(min, max, i)))
+                                    .collect();
+                                value_text::display_curve(&labels).unwrap_or_default()
+                            };
+
                             let param_info = PluginParameterInfo {
                                 id: i, // Use sequential index as ID
                                 name,
-                                unit: String::new(), // CLAP doesn't expose units separately
+                                unit,
                                 min: clap_info.min_value as f32,
                                 max: clap_info.max_value as f32,
                                 default: clap_info.default_value as f32,
@@ -534,6 +543,7 @@ pub fn process_command(
                                 is_bypass: clap_info.flags.contains(ParamInfoFlags::IS_BYPASS),
                                 module,
                                 step_labels,
+                                display,
                             };
 
                             param_infos.push(param_info);

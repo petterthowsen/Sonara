@@ -717,6 +717,10 @@ pub enum EngineStatus {
         /// CLAP module path, e.g. "Early/Size"; "" if none
         module: String,
         enum_values: Vec<String>,
+        /// Unit of the display values ("Hz", "dB", …); "" if none
+        unit: String,
+        /// See `ParamInfo::display`
+        display: Vec<f32>,
     },
     PluginParameterCount {
         channel_id: ChannelId,
@@ -1021,6 +1025,8 @@ fn send_parameter_list(
             is_bypass: param.is_bypass,
             module: param.module,
             enum_values: param.enum_values,
+            unit: param.unit,
+            display: param.display,
         });
     }
 }

@@ -261,6 +261,11 @@ pub struct PluginParameterInfo {
     pub module: String,
     /// Per-step display labels, only when `is_stepped` and (max-min+1) <= 64; else empty
     pub step_labels: Vec<String>,
+    /// Real display values at `value_text::DISPLAY_POINTS` evenly spaced plain values, parsed from
+    /// the plugin's value text (in `unit`); NaN where a label didn't parse. Empty when the text
+    /// gave no usable curve or the parameter is stepped.
+    #[serde(default)]
+    pub display: Vec<f32>,
 }
 
 /// Audio channels carried by one instance's shared block (planar input and output).

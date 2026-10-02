@@ -359,6 +359,7 @@ impl ClapDeviceAdapter {
                     module,
                     is_logarithmic: false,
                     skew: 1.0,
+                    display: Vec::new(),
                 };
 
                 tracing::debug!(

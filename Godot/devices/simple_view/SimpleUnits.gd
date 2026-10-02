@@ -16,7 +16,7 @@ static func format(param: DeviceParameter, normalized: float, unit_override: Str
 		return ""
 	if unit_override.is_empty():
 		return param.format_value(param.normalized_to_value(normalized))
-	var real := param.normalized_to_value(normalized)
+	var real := param.display_value(param.normalized_to_value(normalized))
 	match unit_override:
 		"%":
 			return "%d%%" % roundi(normalized * 100.0)

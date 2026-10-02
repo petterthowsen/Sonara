@@ -53,6 +53,7 @@ pub fn plugin_param_to_info(p: &PluginParameterInfo) -> ParamInfo {
         module: p.module.clone(),
         is_logarithmic: false,
         skew: 1.0,
+        display: p.display.clone(),
     }
 }
 
@@ -136,6 +137,7 @@ mod tests {
             is_bypass: false,
             module: String::new(),
             step_labels: Vec::new(),
+            display: Vec::new(),
         }
     }
 

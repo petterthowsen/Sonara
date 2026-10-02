@@ -194,6 +194,7 @@ impl ParamSpec {
             module: self.module.to_string(),
             is_logarithmic: log,
             skew,
+            display: Vec::new(),
         }
     }
 }

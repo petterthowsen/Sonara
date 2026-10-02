@@ -1379,6 +1379,16 @@ func _on_param_info_received(args: Array) -> void:
 			if arg_idx < args.size():
 				enum_values.append(str(args[arg_idx]))
 		param.enum_values = enum_values
+		# After the enum labels: unit, then the display curve (CLAP plugins; see DeviceParameter.display_curve).
+		var unit_idx := 10 + enum_count
+		if unit_idx < args.size() and args[unit_idx] is String:
+			param.unit = args[unit_idx]
+		if unit_idx + 1 < args.size():
+			var curve := PackedFloat32Array()
+			for i in range(int(args[unit_idx + 1])):
+				if unit_idx + 2 + i < args.size():
+					curve.append(float(args[unit_idx + 2 + i]))
+			param.display_curve = curve
 	parameters.append(param)
 	
 	parameter_values[param_id] = _value_for_advertised_param(param_id, param)

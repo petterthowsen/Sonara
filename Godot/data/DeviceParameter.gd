@@ -63,6 +63,11 @@ var is_bypass: bool = false
 ## CLAP module path, e.g. "Early/Size"; empty if none
 var module: String = ""
 
+## Display values (in `unit`) sampled evenly over `min_value..max_value`, parsed by the engine from
+## a CLAP plugin's own value text: a ZeroEQ frequency that runs 0–1 shows as 20 Hz … 20 kHz. NaN
+## where the plugin's text didn't parse. Empty when the real value is shown as is.
+var display_curve := PackedFloat32Array()
+
 
 ## ============================================================================
 ## INITIALIZATION
@@ -194,10 +199,62 @@ func format_value(value: float) -> String:
 		var idx := int(clamp(round(value), 0.0, float(n - 1)))
 		return enum_values[idx]
 
+	if not display_curve.is_empty():
+		return format_display(display_value(value), unit)
 	if unit.is_empty():
 		return "%.2f" % value
 	else:
 		return "%.2f %s" % [value, unit]
+
+
+## The value to show for real `value`: read off `display_curve` when there is one, else `value`.
+## Neighbouring samples of one sign are interpolated geometrically (exact for exponential curves
+## such as frequencies), others linearly; next to a NaN or infinite sample the nearer one is used.
+func display_value(value: float) -> float:
+	var n := display_curve.size()
+	if n == 0:
+		return value
+	if n == 1 or max_value <= min_value:
+		return display_curve[0]
+	var pos := clampf((value - min_value) / (max_value - min_value), 0.0, 1.0) * float(n - 1)
+	var i := mini(int(pos), n - 2)
+	var t := pos - float(i)
+	var a := display_curve[i]
+	var b := display_curve[i + 1]
+	if not (is_finite(a) and is_finite(b)):
+		return a if t < 0.5 else b
+	if a * b > 0.0:
+		return a * pow(b / a, t)
+	return lerpf(a, b, t)
+
+
+## `value` in `unit` with precision to suit its size: "1.25 kHz", "440 Hz", "-6.0 dB", "12.5 ms".
+static func format_display(value: float, unit: String) -> String:
+	if is_nan(value):
+		return "-"
+	if is_inf(value):
+		return ("-inf" if value < 0.0 else "inf") + ("" if unit.is_empty() else " " + unit)
+	var shown := value
+	var shown_unit := unit
+	if unit == "Hz" and absf(value) >= 1000.0:
+		shown = value / 1000.0
+		shown_unit = "kHz"
+	elif unit == "ms" and absf(value) >= 1000.0:
+		shown = value / 1000.0
+		shown_unit = "s"
+	var size := absf(shown)
+	var text: String
+	if shown_unit == "dB":
+		text = "%.1f" % shown
+	elif size >= 100.0:
+		text = "%.0f" % shown
+	elif size >= 10.0:
+		text = "%.1f" % shown
+	else:
+		text = "%.2f" % shown
+	if shown_unit.is_empty():
+		return text
+	return text + ("%" if shown_unit == "%" else " " + shown_unit)
 
 
 ## Get the full parameter label (name + unit)
