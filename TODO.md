@@ -64,6 +64,7 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
   - [ ] Phase 8: external sidechain (may become spec 013)
 - [ ] Limiter
 - [ ] Saturator
+- [ ] Multiband FX: container that splits audio into 2–6 bands (LR4 crossovers), each with its own slot chain, e.g. multiband compression. Spec `docs/specs/016-multiband-fx/plan.md`
 - [ ] L/R and M/S modes
 
 ---

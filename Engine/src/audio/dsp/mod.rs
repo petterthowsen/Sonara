@@ -2,6 +2,7 @@
 ///
 /// This module contains reusable DSP building blocks for audio synthesis
 /// and processing, optimized for real-time performance.
+pub mod crossover;
 pub mod delay_line;
 pub mod denormal;
 pub mod env_follower;

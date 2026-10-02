@@ -8,8 +8,8 @@ use tracing::{info, warn};
 use super::clap_host::SubprocessClapAdapter;
 use super::{
     AudioDevice, ChainDevice, ChorusDevice, DelayDevice, DeviceCategory, DevicePath,
-    DrumMachineDevice, FilterDevice, LayerDevice, PolySynthDevice, PortFlow, ReverbDevice,
-    SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
+    DrumMachineDevice, FilterDevice, LayerDevice, MultibandDevice, PolySynthDevice, PortFlow,
+    ReverbDevice, SamplerDevice, SfizzDevice, SpectrumAnalyzerDevice,
 };
 use crate::audio::block_clock::BlockClock;
 use crate::audio::commands::{AudioCommand, BuiltinParamInfo, EngineStatus};
@@ -106,6 +106,9 @@ impl DeviceFactory {
             }
             "sonara.builtin.chain" => Box::new(ChainDevice::new(self.max_buffer_size)),
             "sonara.builtin.layer" => Box::new(LayerDevice::new(self.max_buffer_size)),
+            "sonara.builtin.multiband" => {
+                Box::new(MultibandDevice::new(self.sample_rate, self.max_buffer_size))
+            }
             "sonara.builtin.sampler" => Box::new(SamplerDevice::new(
                 self.sample_rate,
                 channel_id as usize,
@@ -168,12 +171,13 @@ impl DeviceFactory {
     /// Describe every built-in device (ports, parameters, file support) for Godot's browser.
     pub fn builtin_device_infos(&self) -> Vec<EngineStatus> {
         // TODO: Simplify this to avoid creating temporary instances
-        let others: [Box<dyn AudioDevice>; 7] = [
+        let others: [Box<dyn AudioDevice>; 8] = [
             Box::new(PolySynthDevice::new(self.sample_rate)),
             Box::new(SpectrumAnalyzerDevice::new(self.sample_rate)),
             Box::new(SfizzDevice::new_for_metadata(self.sample_rate)),
             Box::new(ChainDevice::new(self.max_buffer_size)),
             Box::new(LayerDevice::new(self.max_buffer_size)),
+            Box::new(MultibandDevice::new(self.sample_rate, self.max_buffer_size)),
             Box::new(SamplerDevice::new_for_metadata()),
             Box::new(DrumMachineDevice::new(self.max_buffer_size)),
         ];
@@ -318,5 +322,43 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
         parameters,
         mod_sources: device.mod_sources(),
         default_mod_routes: device.mod_routes(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiband_is_advertised_as_an_effect_container() {
+        let device = MultibandDevice::new(48_000.0, 512);
+        let EngineStatus::BuiltinDeviceInfo {
+            id,
+            category,
+            is_container,
+            accepts_midi,
+            parameters,
+            ..
+        } = builtin_device_info(&device)
+        else {
+            panic!("expected BuiltinDeviceInfo");
+        };
+        assert_eq!(id, "sonara.builtin.multiband");
+        assert_eq!(category, "effect");
+        assert!(is_container);
+        assert!(!accepts_midi);
+        // Mix + Output, then Active + Gain + Mute + Solo per band, plus Low Edge for bands 2..6.
+        assert_eq!(parameters.len(), 2 + 6 * 4 + 5);
+        let active = parameters
+            .iter()
+            .find(|p| p.id == 10)
+            .expect("band 1 Active");
+        assert!(!active.is_automation_safe);
+    }
+
+    #[test]
+    fn multiband_is_a_container_not_an_effect_id() {
+        assert!(!EFFECT_IDS.contains(&"sonara.builtin.multiband"));
+        assert!(create_effect("sonara.builtin.multiband", 48_000.0, 512).is_none());
     }
 }

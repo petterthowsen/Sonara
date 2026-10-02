@@ -27,7 +27,7 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 
 - **AudioDevice** — a processing unit in a channel's ordered chain (`Engine/src/audio/devices/`). MIDI goes only to the first device.
 - **Built-in device** — first-party device advertised to Godot at runtime via `/builtin/request` → `/builtin/info` (`sonara.builtin.polysynth|delay|sfizz|sampler|spectrum_analyzer|chain|layer|drum_machine`).
-- **Container** — a built-in device that owns child devices (`is_container`): **Chain** (serial), **Layer** (parallel mix) and **Drum Machine** (parallel, MIDI routed per pad). Nested devices are addressed by a **device path** (`{position}/child/{i}/…`).
+- **Container** — a built-in device that owns child devices (`is_container`): **Chain** (serial), **Layer** (parallel mix), **Multiband FX** (frequency-split bands) and **Drum Machine** (parallel, MIDI routed per pad). Nested devices are addressed by a **device path** (`{position}/child/{i}/…`).
 - **Slot** — a chain of devices inside a container, shown in the device lane beside the container under a bracket in the slot's color. A Chain has one slot: its own children. Each child of a Layer or Drum Machine is a **slot chain** (a Chain holding that slot's devices) with its own volume/mute/solo; a Drum Machine slot (a **pad**) also has a trigger note, and exists even while empty.
 - **CLAP plugin** — third-party plugin hosted out-of-process in the `plugin_host` binary (see ADR-0001).
 - **Host process** / **hosting mode** — a running `plugin_host` and the rule that picks which plugin instances share one: `individually` (default), `by_plugin`, `by_vendor`, `together`. A crash belongs to the host process and hits every instance in it (see ADR-0009).
@@ -37,6 +37,14 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Return channel** — a channel with no timeline track fed by a multi-out device's extra stereo outputs. Drum Machine: one per pad (`Channel.aux_pad_note`). Layer: one per slot with a separate output.
 - **Slot note map** — a Layer slot's routing table: each input note (0–127) goes to one output note or is ignored (`data/LayerNoteMap.gd`). The **full map** (every note to itself) is the default; a slot with any other map is a **zoned slot**. Several slots mapping the same input note is **layering**, and an **overlap** when both are zoned.
 - **Separate output** — a Layer slot sending its audio to its own return channel instead of the Layer output. Only for a Layer that is the first device on its channel. The slot and its return share a name and colour, and unlike other returns, a Layer return's output can be routed to any bus.
+
+## Multiband FX
+
+- **Multiband FX** — a built-in effect container (`sonara.builtin.multiband`) that splits its input into 2–6 frequency bands with Linkwitz-Riley crossovers, runs each band through its own slot chain, and sums them back.
+- **Band** — one of six fixed positions in frequency order (band 1 lowest, band 6 highest). A band *position* always exists; it is *active* when its `Active` parameter is on. At least 2 are active. Band position = child index + 1.
+- **Crossover** — the split point between two neighbouring active bands: the Low Edge of the higher one. K active bands have K−1 crossovers.
+- **Low Edge** — the frequency at which a band starts (bands 2–6). The lowest active band ignores its Low Edge and extends down to 0 Hz.
+- **Band slot chain** — the Chain child holding one band's devices. Always six exist; an inactive band's chain is empty.
 
 ## Drum instruments
 

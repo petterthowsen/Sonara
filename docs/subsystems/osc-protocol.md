@@ -299,6 +299,23 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 - No device-level params. Per-child mix via `/slot/{n}/volume|mute|solo`.
 - Multi-out: one extra bus per child (bus = child index). A child with `/slot/{n}/separate_out 1` writes to its bus (after volume/mute/solo) when the Layer is the channel's first device; otherwise it mixes into the Layer output.
 
+**Multiband FX (`sonara.builtin.multiband`)** (spec 016)
+- **Type:** Effect container (`is_container: true`, no MIDI, no extra buses)
+- Six fixed **band positions** in frequency order (band 1 lowest, band 6 highest); any 2–6 are active (default {1, 3, 5}). The input is split into the active bands with Linkwitz-Riley (LR4) crossovers, each band runs through its own child, and the bands are summed. Magnitude is flat when every band is empty (phase-aligned, zero latency).
+- **Band position = child index + 1.** Godot always creates six children (slot chains). A missing child is a pass-through band; a 7th `insert_child` is dropped with a warning. Inactive bands are never processed, even if their child holds devices.
+- **Low Edge semantics:** an active band covers `[its Low Edge, Low Edge of the next active band)`. The lowest active band extends to 0 Hz and ignores its Low Edge; the highest extends to Nyquist. With K active bands there are K−1 crossovers. The engine keeps them ascending (each at least 1.1× the previous, at most 20 kHz and below 0.45 × sample rate) whatever the stored values are.
+- Per-band mix is by **parameters**, not `/slot/*`. Muted or soloed-out bands still process their child so compressor state and tails don't jump. Solo only considers active bands.
+- Changing the active set fades the output out over 5 ms, switches topology, and fades back in.
+- **Params** (band *p* = 1..6 uses block `10·p`):
+  - `0`: Mix (0–100 %, default 100; the dry is phase-aligned to the bands)
+  - `1`: Output (±24 dB, default 0)
+  - `10·p + 0`: Band *p* Active (bool; defaults on for 1, 3, 5; **not automation-safe**)
+  - `10·p + 1`: Band *p* Low Edge (p ≥ 2 only, log 20–20000 Hz; defaults 60 / 200 / 700 / 2500 / 8000)
+  - `10·p + 2`: Band *p* Gain (±24 dB)
+  - `10·p + 3`: Band *p* Mute (bool)
+  - `10·p + 4`: Band *p* Solo (bool)
+- No device data stream yet (planned `"bands"` stream, spec 016 E2.3).
+
 **Sampler (`sonara.builtin.sampler`)**
 - **Type:** Instrument (receives MIDI), file loading (`wav`/`mp3`/`ogg`)
 - One-shot or gated playback of a single decoded sample. PCM stays in the engine; Godot draws the waveform from the AudioFileService cache.
