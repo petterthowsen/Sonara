@@ -81,7 +81,7 @@ func refresh() -> void:
 		return
 	_updating = true
 	match String(control_data.get("kind", "")):
-		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER:
+		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER:
 			_refresh_single(_inner)
 		SimpleControlKinds.TOGGLE:
 			(_inner as CheckButton).set_pressed_no_signal(_normalized(0) >= 0.5)
@@ -146,6 +146,8 @@ func _build_inner() -> void:
 			_inner = _build_knob()
 		SimpleControlKinds.SLIDER:
 			_inner = _build_slider()
+		SimpleControlKinds.FADER:
+			_inner = _build_fader()
 		SimpleControlKinds.TOGGLE:
 			_inner = _build_toggle()
 		SimpleControlKinds.SEGMENTED:
@@ -168,7 +170,7 @@ func _build_inner() -> void:
 		_body.add_child(_inner)
 		_inner.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		# Single-parameter controls reveal their full title while hovered, like the title itself.
-		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER]:
+		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER]:
 			_title_overlay.add_hover_source(_inner)
 
 
@@ -195,6 +197,17 @@ func _build_slider() -> HorSlider:
 	return slider
 
 
+func _build_fader() -> Fader:
+	var fader := Fader.new()
+	fader.min_value = 0.0
+	fader.max_value = 1.0
+	fader.value_default = _param(0).value_to_normalized(_param(0).default_value) if _param(0) else 0.5
+	fader.value_text_callback = _format_value
+	fader.value_font_size = VALUE_FONT_SIZE
+	fader.value_changed.connect(func(v): _commit(0, v))
+	return fader
+
+
 func _build_toggle() -> CheckButton:
 	var toggle := CheckButton.new()
 	toggle.text = ""
@@ -217,22 +230,14 @@ func _segments_fit() -> bool:
 	return true
 
 
-func _build_segmented() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 1)
-	var group := ButtonGroup.new()
+func _build_segmented() -> SegmentedControl:
+	var row := SegmentedControl.new()
+	row.font_size = SEGMENT_FONT_SIZE
+	row.clip_labels = true
 	var values := _param(0).enum_values if _param(0) else []
-	for i in range(values.size()):
-		var btn := Button.new()
-		btn.text = values[i]
-		btn.tooltip_text = values[i]
-		btn.clip_text = true
-		btn.add_theme_font_size_override("font_size", SEGMENT_FONT_SIZE)
-		btn.toggle_mode = true
-		btn.button_group = group
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.pressed.connect(_commit.bind(0, 0.0 if values.size() <= 1 else float(i) / float(values.size() - 1)))
-		row.add_child(btn)
+	row.set_items(PackedStringArray(values))
+	row.selected_changed.connect(func(i):
+		_commit(0, 0.0 if values.size() <= 1 else float(i) / float(values.size() - 1)))
 	return row
 
 
@@ -412,6 +417,8 @@ func _build_eq_band() -> HBoxContainer:
 func _refresh_single(node: Control) -> void:
 	if node is RotaryKnob:
 		(node as RotaryKnob).set_value_no_signal(_normalized(0))
+	elif node is Fader:
+		(node as Fader).set_value_no_signal(_normalized(0))
 	elif node is HorSlider:
 		(node as HorSlider).set_value_no_signal(_normalized(0))
 
@@ -424,10 +431,8 @@ func _refresh_choice(node: Control) -> void:
 	var idx := clampi(int(round(_normalized(0) * float(n - 1))), 0, n - 1)
 	if node is OptionButton:
 		(node as OptionButton).select(idx)
-	elif node is HBoxContainer:
-		var children := (node as HBoxContainer).get_children()
-		if idx < children.size():
-			(children[idx] as Button).set_pressed_no_signal(true)
+	elif node is SegmentedControl:
+		(node as SegmentedControl).set_selected_no_signal(idx)
 
 
 func _refresh_spinbox() -> void:
@@ -537,8 +542,8 @@ func _collect_mod_targets() -> void:
 	if instance == null or not instance.has_modulation():
 		return
 	match String(control_data.get("kind", "")):
-		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER:
-			if _is_modulatable(0) and (_inner is RotaryKnob or _inner is HorSlider):
+		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER:
+			if _is_modulatable(0) and (_inner is RotaryKnob or _inner is HorSlider or _inner is Fader):
 				_mod_targets.append({"node": _inner, "index": 0})
 		SimpleControlKinds.ENVELOPE:
 			for i in _env_knobs.size():

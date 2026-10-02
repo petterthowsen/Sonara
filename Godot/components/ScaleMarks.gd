@@ -33,3 +33,17 @@ static func draw_vertical(ci: CanvasItem, items: Array[Dictionary], edge_x: floa
 		var x := edge_x - tick - 2.0 - w if left else edge_x + tick + 2.0
 		var baseline := clampf(y + font_size * 0.35, font_size, maxf(height, font_size))
 		ci.draw_string(font, Vector2(x, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+
+
+## Draws `items` (from `layout` with a positive `length`) as ticks rising from the bottom edge of a
+## horizontal track, with labels just above them. Labels are kept inside 0..`width`.
+static func draw_horizontal(ci: CanvasItem, items: Array[Dictionary], bottom_y: float, width: float,
+		font_size := 9, color := Color(1, 1, 1, 0.4)) -> void:
+	var font := ThemeDB.fallback_font
+	for item in items:
+		var x: float = item["pos"]
+		var text: String = item["label"]
+		ci.draw_line(Vector2(x, bottom_y), Vector2(x, bottom_y - 3.0), color, 1.0)
+		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		var left := clampf(x - w * 0.5, 0.0, maxf(width - w, 0.0))
+		ci.draw_string(font, Vector2(left, bottom_y - 5.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)

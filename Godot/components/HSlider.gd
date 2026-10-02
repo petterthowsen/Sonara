@@ -141,6 +141,14 @@ func set_value_no_signal(val: float) -> void:
 
 var _hovered := false
 
+## Array of `{value, label}` drawn as ticks along the bottom edge (see `ScaleMarks`). Values are in
+## the slider's own units, so marks sit where the fill reaches them.
+@export var scale_marks: Array[Dictionary] = []:
+	set(m):
+		scale_marks = m
+		queue_redraw()
+@export var scale_font_size := 9
+
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -192,6 +200,10 @@ func _draw() -> void:
 		var cx := roundf(rect.size.x / 2.0)
 		draw_rect(Rect2(cx - 0.5, 0, 1, rect.size.y), Color(handle_color, handle_color.a * 0.3), true)
 
+	if not scale_marks.is_empty():
+		var items := ScaleMarks.layout(scale_marks, _value_to_norm, 0.0, size.x)
+		ScaleMarks.draw_horizontal(self, items, size.y, size.x, scale_font_size)
+
 	_draw_modulation()
 
 	if not is_handle_visible():
@@ -201,6 +213,13 @@ func _draw() -> void:
 	var handle_half := handle_width / 2.0
 	var handle_x: float = clamp(value_x - handle_half, 0, rect.size.x - handle_width)
 	draw_rect(Rect2(handle_x, 0, handle_width, rect.size.y), handle_color, true, -1.0, true)
+
+
+## 0..1 position of `v` across the track, honouring `bidirectional`.
+func _value_to_norm(v: float) -> float:
+	var lo := -max_value if bidirectional else min_value
+	var span := max_value - lo
+	return (v - lo) / span if span != 0.0 else 0.0
 
 
 ## Value position as 0..1 across the track.

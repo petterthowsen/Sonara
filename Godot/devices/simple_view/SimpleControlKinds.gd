@@ -5,6 +5,7 @@ class_name SimpleControlKinds extends RefCounted
 
 const KNOB := "knob"
 const SLIDER := "slider"
+const FADER := "fader"
 const TOGGLE := "toggle"
 const SEGMENTED := "segmented"
 const DROPDOWN := "dropdown"
@@ -20,6 +21,7 @@ const FOOTPRINT: Dictionary[String, Vector2i] = {
 	DROPDOWN: Vector2i(1, 1),
 	SPINBOX: Vector2i(1, 1),
 	SLIDER: Vector2i(2, 1),
+	FADER: Vector2i(1, 3),
 	SEGMENTED: Vector2i(2, 1),
 	XY: Vector2i(2, 2),
 	ENVELOPE: Vector2i(3, 3),
