@@ -20,8 +20,8 @@ var logger : Log = Log.make("MixerChannel")
 
 @onready var controls: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/Controls
 @onready var arm_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/ArmToggle
-@onready var solo_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/SoloToggle
-@onready var mute_toggle: Button = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/MuteToggle
+@onready var solo_toggle: DragToggleButton = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/SoloToggle
+@onready var mute_toggle: DragToggleButton = $HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute/MuteToggle
 
 @onready var io: PanelContainer = $HBox/VBox/MainAndSideBox/MainPane/IO
 @onready var output_menu_buttton: MenuButton = $HBox/VBox/MainAndSideBox/MainPane/IO/OutputMenuButtton
@@ -148,8 +148,10 @@ func _ready():
 	# Connect UI signals
 	if solo_toggle:
 		solo_toggle.toggled.connect(_on_solo_toggled)
+		solo_toggle.drag_region = self
 	if mute_toggle:
 		mute_toggle.toggled.connect(_on_mute_toggled)
+		mute_toggle.drag_region = self
 	if arm_toggle:
 		arm_toggle.toggled.connect(_on_arm_toggled)
 	if bottom_volume_slider:

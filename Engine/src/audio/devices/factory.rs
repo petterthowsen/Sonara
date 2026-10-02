@@ -281,6 +281,8 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
             enum_values: p.enum_values,
             is_logarithmic: p.is_logarithmic,
             skew: p.skew,
+            module: p.module,
+            is_automation_safe: p.is_automation_safe,
         })
         .collect();
 

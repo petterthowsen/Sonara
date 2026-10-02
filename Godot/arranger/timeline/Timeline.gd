@@ -631,7 +631,8 @@ func _handle_erase_input(event: InputEvent) -> bool:
 			_erase_active = false
 			_erase_pressed = (Settings.get_value(ERASE_SETTING) and is_visible_in_tree()
 					and get_global_rect().has_point(event.global_position)
-					and not _is_over_automation_lane_row(event.global_position))
+							and _is_pointer_over_timeline()
+				and not _is_over_automation_lane_row(event.global_position))
 			_erase_press_pos = event.global_position
 			_erase_last_pos = event.global_position
 			return false
@@ -677,6 +678,14 @@ func _erase_along(from: Vector2, to: Vector2) -> void:
 			cmds.append(ClipInstanceDeleteCommand.new(inst.track, inst))
 	if not cmds.is_empty():
 		HistoryUtil.execute_many("Erase Clips", cmds)
+
+
+## `_input` sees every click, including ones on UI stacked over the timeline's rect (device
+## panels, popups). Only arm the erase gesture when the control actually under the pointer is
+## the timeline or one of its descendants.
+func _is_pointer_over_timeline() -> bool:
+	var hovered := get_viewport().gui_get_hovered_control()
+	return hovered != null and (hovered == self or is_ancestor_of(hovered))
 
 
 ## An automation lane row owns its own right-click (point context menu, or clearing the point

@@ -14,6 +14,7 @@
 [ext_resource type="Script" uid="uid://c5hc8g1r5wo5i" path="res://mixer/MixerChannelChildren.gd" id="9_an1hh"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
 [ext_resource type="Script" uid="uid://cv2bu0k4y0j80" path="res://mixer/PanControl.gd" id="11_panctl"]
+[ext_resource type="Script" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -310,6 +311,8 @@ theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
 theme_override_styles/pressed = SubResource("StyleBoxFlat_m2250")
 toggle_mode = true
 text = "S"
+script = ExtResource("dragtoggle_btn")
+drag_group = &"solo"
 
 [node name="MuteToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=1401776336]
 custom_minimum_size = Vector2(22, 0)
@@ -319,6 +322,8 @@ theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859
 theme_override_styles/pressed = SubResource("StyleBoxFlat_cybrc")
 toggle_mode = true
 text = "M"
+script = ExtResource("dragtoggle_btn")
+drag_group = &"mute"
 
 [node name="Panning" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=657729377]
 layout_mode = 2

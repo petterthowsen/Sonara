@@ -112,10 +112,7 @@ func _add_param_group(submenu: PopupMenu, instance: DeviceInstance, path: Array,
 			continue
 		if added == 0 and not separator_label.is_empty():
 			submenu.add_separator(separator_label)
-		var label: String = param.name
-		if group == "cc":
-			label = Midi.cc_display_name(param.id, param.name)
-		submenu.add_item(label, param.id)
+		submenu.add_item(AutomationTarget.param_label(instance, param), param.id)
 		added += 1
 	return added
 

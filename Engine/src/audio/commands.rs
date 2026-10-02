@@ -30,6 +30,10 @@ pub struct BuiltinParamInfo {
     pub enum_values: Vec<String>,
     pub is_logarithmic: bool,
     pub skew: f32,
+    /// Module the parameter belongs to (`Band 1`); "" if none. Disambiguates repeated names.
+    pub module: String,
+    /// False when driving it from the audio thread is unsafe (or it is a UI-only control).
+    pub is_automation_safe: bool,
 }
 
 /// What `/audio/config` reports: the running stream, what was asked for, and the PipeWire graph.

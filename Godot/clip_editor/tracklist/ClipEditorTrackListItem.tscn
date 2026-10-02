@@ -21,15 +21,6 @@ script = ExtResource("1_vgqjk")
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="Label" type="Label" parent="HBox"]
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Track"
-label_settings = SubResource("LabelSettings_vgqjk")
-vertical_alignment = 1
-text_overrun_behavior = 3
-
 [node name="VisibleToggle" type="Button" parent="HBox"]
 custom_minimum_size = Vector2(26, 26)
 layout_mode = 2
@@ -40,6 +31,15 @@ icon = ExtResource("2_eye")
 flat = true
 icon_alignment = 1
 expand_icon = true
+
+[node name="Label" type="Label" parent="HBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Track"
+label_settings = SubResource("LabelSettings_vgqjk")
+vertical_alignment = 1
+text_overrun_behavior = 3
 
 [node name="EditToggle" type="Button" parent="HBox"]
 custom_minimum_size = Vector2(26, 26)

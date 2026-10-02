@@ -136,6 +136,10 @@ func display_name(channel: Object) -> String:
 		Kind.SEND_AMOUNT:
 			if channel != null and send_index >= 0 and send_index < channel.send_channels.size():
 				var target_id: int = channel.send_channels[send_index].target_channel_id
+				var project: Object = channel.get_project()
+				var target_channel: Object = project.get_channel_by_id(target_id) if project else null
+				if target_channel != null:
+					return "Send: %s" % target_channel.name
 				return "Send %d" % target_id
 			return "Send %d" % send_index
 		Kind.DEVICE_PARAM:
@@ -143,11 +147,23 @@ func display_name(channel: Object) -> String:
 			if instance == null:
 				return "Unresolved"
 			var param: Object = instance.get_parameter(param_id)
-			var param_name: String = param.name if param else "Param %d" % param_id
-			if param and param.group == "cc":
-				param_name = Midi.cc_display_name(param_id, param_name)
+			var param_name: String = param_label(instance, param) if param else "Param %d" % param_id
 			return "%s / %s" % [instance.name, param_name]
 	return "Unknown"
+
+
+## Menu/lane label for `param` on `instance`. CC entries go through `Midi.cc_display_name`. A
+## name shared by several parameters in the same group (the EQ's per-band `Gain`, a CLAP
+## plugin's per-section `Level`) is prefixed with its module (`Band 2 / Gain`); a unique name
+## stays bare.
+static func param_label(instance: Object, param: Object) -> String:
+	if param.group == "cc":
+		return Midi.cc_display_name(param.id, param.name)
+	if param.module != "":
+		for other in instance.get_parameters_in_group(param.group if param.group != "" else "param"):
+			if other != param and other.name == param.name:
+				return "%s / %s" % [param.module, param.name]
+	return param.name
 
 
 # ============================================================================

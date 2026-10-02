@@ -11,6 +11,7 @@
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
+[ext_resource type="Script" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
@@ -190,6 +191,8 @@ theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
 toggle_mode = true
 text = "S"
+script = ExtResource("dragtoggle_btn")
+drag_group = &"solo"
 
 [node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=1775177518]
 custom_minimum_size = Vector2(32, 32)
@@ -200,6 +203,8 @@ theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859
 theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
 toggle_mode = true
 text = "M"
+script = ExtResource("dragtoggle_btn")
+drag_group = &"mute"
 
 [node name="AutomationMenuButton" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1871101369]
 custom_minimum_size = Vector2(32, 32)

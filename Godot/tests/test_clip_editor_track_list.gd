@@ -227,7 +227,7 @@ func _test_item_style() -> void:
 	var got: Array = []
 	var pressed_count := [0]
 	ia.toggle_pressed.connect(func(kind, shift): got.append([kind, shift]))
-	ia.pressed.connect(func(): pressed_count[0] += 1)
+	ia.pressed.connect(func(_s): pressed_count[0] += 1)
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = true

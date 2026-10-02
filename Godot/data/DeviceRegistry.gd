@@ -214,6 +214,10 @@ func _on_builtin_info_received(args: Array) -> void:
 			enum_vals.append(String(args[idx]))
 			idx += 1
 		param.enum_values = enum_vals
+		if idx + 1 < args.size():
+			param.module = String(args[idx])
+			param.is_automation_safe = int(args[idx + 1]) != 0
+			idx += 2
 		device.add_parameter(param)
 
 	if idx < args.size():

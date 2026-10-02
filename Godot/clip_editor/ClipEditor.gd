@@ -112,6 +112,7 @@ func _ready():
 	midi_editor.note_track_picked.connect(_on_note_track_picked)
 	track_toggles.changed.connect(_on_track_toggles_changed)
 	track_selector.track_selected.connect(_on_track_selector_track_selected)
+	track_selector.track_selected_additive.connect(_on_track_selector_track_selected.bind(true))
 	track_selector.tracks_changed.connect(_on_track_list_changed)
 	all_visible_toggle.pressed.connect(_on_all_toggle_pressed.bind(TrackToggleState.Kind.VISIBLE))
 	all_editable_toggle.pressed.connect(_on_all_toggle_pressed.bind(TrackToggleState.Kind.EDITABLE))
@@ -913,12 +914,17 @@ func _on_track_mode_toggle_toggled(pressed: bool):
 		log.info("  - Switched to CLIP mode (clip_id=%s, track='%s')" % [str(selected_clips[0].id) if not selected_clips.is_empty() else "null", current_t.name if current_t else "null"])
 
 
-func _on_track_selector_track_selected(track: Track):
+func _on_track_selector_track_selected(track: Track, additive := false):
 	"""Handle track selection from track selector - update active track in MidiEditor."""
 	log.info("Track selected from selector: %s" % track.name)
 	if midi_editor and track_mode:
 		# The selected track is always visible and editable (REQ-030).
 		_suppress_toggle_apply = true
+		if not additive:
+			# A plain click leaves this as the only editable track.
+			for t in _listed_tracks():
+				if t != track:
+					track_toggles.set_on(t, TrackToggleState.Kind.EDITABLE, false)
 		track_toggles.set_on(track, TrackToggleState.Kind.VISIBLE, true)
 		track_toggles.set_on(track, TrackToggleState.Kind.EDITABLE, true)
 		_suppress_toggle_apply = false

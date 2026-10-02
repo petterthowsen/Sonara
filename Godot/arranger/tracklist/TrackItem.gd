@@ -42,8 +42,8 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 @export var volumeter: Volumeter
 @export var label: SmartLineEdit
 @export var arm_toggle: Button
-@export var solo_toggle: Button
-@export var mute_toggle: Button
+@export var solo_toggle: DragToggleButton
+@export var mute_toggle: DragToggleButton
 @export var automation_toggle: Button
 @export var automation_menu_button: Button
 ## Folder/group fold button (hidden for tracks without children).
@@ -99,8 +99,10 @@ func _ready():
 			arm_toggle.toggled.connect(_on_arm_toggled)
 		if solo_toggle:
 			solo_toggle.toggled.connect(_on_solo_toggled)
+			solo_toggle.drag_region = self
 		if mute_toggle:
 			mute_toggle.toggled.connect(_on_mute_toggled)
+			mute_toggle.drag_region = self
 		if automation_toggle:
 			automation_toggle.toggled.connect(_on_automation_toggled)
 		if automation_menu_button:

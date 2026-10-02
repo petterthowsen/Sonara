@@ -87,12 +87,6 @@ theme_override_constants/margin_right = 8
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="TracksLabel" type="Label" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Tracks"
-vertical_alignment = 1
-
 [node name="AllVisibleToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
 custom_minimum_size = Vector2(26, 26)
 layout_mode = 2
@@ -103,6 +97,12 @@ icon = ExtResource("eye_icon")
 flat = true
 icon_alignment = 1
 expand_icon = true
+
+[node name="TracksLabel" type="Label" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Tracks"
+vertical_alignment = 1
 
 [node name="AllEditableToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
 custom_minimum_size = Vector2(26, 26)

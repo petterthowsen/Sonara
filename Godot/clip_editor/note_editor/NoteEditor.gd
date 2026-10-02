@@ -45,6 +45,9 @@ const DRAG_THRESHOLD: float = 3.0
 var erasing_mode: bool = false
 var last_erased_note: VisualNote = null
 
+# Length (ticks) of the last note the user resized; new notes start with it. 0 = use the grid step.
+var last_note_length: int = 0
+
 
 # Local cursor position (for paste operations)
 var cursor_position_ticks: int = 0
@@ -270,7 +273,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	# A new note is one grid step long (REQ-019), in both views: the current snap
 	# interval is the finest visible grid line, so zooming in lets you write 16ths.
-	var new_note_length := get_snap_interval()
+	var new_note_length := last_note_length if last_note_length > 0 else get_snap_interval()
 
 	var end_tick = tick_position + new_note_length
 
@@ -531,6 +534,10 @@ func _on_drag_ended(note: VisualNote) -> void:
 		update_container_width()
 		return
 
+	var drag_start_duration = resize_start_durations.get(note.midi_note_data.id)
+	if drag_start_duration != null and note.midi_note_data.duration_ticks != drag_start_duration:
+		last_note_length = note.midi_note_data.duration_ticks
+
 	# MULTI-CLIP MODE: Check if notes need to be transferred between clips
 	if multi_clip_mode:
 		_handle_cross_clip_transfers()
@@ -643,6 +650,8 @@ func _on_resize_ended(note: VisualNote) -> void:
 	"""Handle note resize end."""
 	if resizing_note != note or not note.midi_note_data:
 		return
+
+	last_note_length = note.midi_note_data.duration_ticks
 
 	# Process all selected notes
 	var total_affected = 0

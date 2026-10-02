@@ -15,11 +15,16 @@ var toggle_state: TrackToggleState = null
 # Drag-to-paint: while the left button is held after a plain press on a toggle, every item the
 # pointer passes gets `_paint_value` for `_paint_kind`.
 var _painting := false
+# True for a drag that started on an item body (shows the passed items) rather than a toggle.
+var _painting_items := false
+var _paint_shift := false
 var _paint_kind := 0
 var _paint_value := false
 var _rebuild_queued := false
 
 signal track_selected(track: Track)
+## Shift+press on an item: select it without taking editing away from other tracks.
+signal track_selected_additive(track: Track)
 ## The listed tracks changed (project add/remove/reorder).
 signal tracks_changed
 
@@ -86,6 +91,7 @@ func set_tracks_from_clips(clip_instances: Array[ClipInstance]):
 func clear():
 	"""Remove all track items from the list."""
 	_painting = false
+	_painting_items = false
 	tracks.clear()
 	for ti in items.get_children():
 		if ti is ClipEditorTrackListItem:
@@ -161,15 +167,26 @@ func _on_item_toggle_pressed(kind: int, shift: bool, track: Track) -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if not _painting:
+	if not _painting and not _painting_items:
 		return
 	if event is InputEventMouseMotion:
 		var item := _item_at_global_y(event.global_position.y)
 		if item:
-			toggle_state.set_on(item.track, _paint_kind, _paint_value)
+			if _painting_items:
+				_show_dragged(item.track)
+			else:
+				toggle_state.set_on(item.track, _paint_kind, _paint_value)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
 			and not event.pressed:
 		_painting = false
+		_painting_items = false
+
+
+## Drag over item bodies: the passed track is shown, and also made editable with Shift.
+func _show_dragged(t: Track) -> void:
+	toggle_state.set_on(t, TrackToggleState.Kind.VISIBLE, true)
+	if _paint_shift:
+		toggle_state.set_on(t, TrackToggleState.Kind.EDITABLE, true)
 
 
 ## The item whose rect contains global `y`, or null (e.g. in the gap between items).
@@ -212,8 +229,13 @@ func _update_selection():
 		ti.set_selected(ti.track == selected_track)
 
 
-func _on_item_pressed(track: Track):
-	"""Handle track item press."""
+func _on_item_pressed(shift: bool, track: Track):
+	"""Handle track item press; dragging on from it shows the items passed over."""
 	selected_track = track
 	_update_selection()
-	track_selected.emit(track)
+	_painting_items = toggle_state != null
+	_paint_shift = shift
+	if shift:
+		track_selected_additive.emit(track)
+	else:
+		track_selected.emit(track)

@@ -9,6 +9,8 @@ const PENCIL_ON := preload("res://assets/icons/pencil.svg")
 const PENCIL_OFF := preload("res://assets/icons/pencil-off.svg")
 ## Edit toggle alpha while the track is hidden (REQ-023).
 const DIMMED_ALPHA := 0.4
+## Whole-item alpha while the track is hidden.
+const HIDDEN_ALPHA := 0.5
 
 @onready var label: Label = $HBox/Label
 @onready var visible_toggle: Button = $HBox/VisibleToggle
@@ -19,7 +21,8 @@ var track: Track:
 
 var _selected := false
 
-signal pressed
+## shift: add to the shown/editable tracks instead of becoming the only editable one.
+signal pressed(shift: bool)
 ## kind is a TrackToggleState.Kind.
 signal toggle_pressed(kind: int, shift: bool)
 
@@ -113,12 +116,14 @@ func refresh_toggles(state: TrackToggleState) -> void:
 	visible_toggle.icon = EYE_ON if visible_on else EYE_OFF
 	edit_toggle.icon = PENCIL_ON if edit_on else PENCIL_OFF
 	edit_toggle.modulate.a = 1.0 if visible_on else DIMMED_ALPHA
+	# Hidden tracks read as muted.
+	modulate.a = 1.0 if visible_on else HIDDEN_ALPHA
 	_set_toggle_color(visible_toggle, state.soloed_track(TrackToggleState.Kind.VISIBLE) == track)
 	_set_toggle_color(edit_toggle, state.soloed_track(TrackToggleState.Kind.EDITABLE) == track)
 
 
 func _set_toggle_color(button: Button, soloed: bool) -> void:
-	var c := SOLO_COLOR if soloed else Utils.contrasting_text_color(Utils.display_color(track.color))
+	var c := SOLO_COLOR if soloed else Color.WHITE
 	button.add_theme_color_override("icon_normal_color", c)
 	button.add_theme_color_override("icon_hover_color", c)
 	button.add_theme_color_override("icon_pressed_color", c)
@@ -148,5 +153,5 @@ func _gui_input(event: InputEvent):
 	if event is InputEventMouseButton:
 		var mouse_event = event as InputEventMouseButton
 		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
-			pressed.emit()
+			pressed.emit(mouse_event.shift_pressed)
 			accept_event()

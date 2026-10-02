@@ -56,8 +56,8 @@ func _test_builtin_info_carries_curve() -> void:
 	registry._on_builtin_info_received([
 		"test.curves", "Curves", "instrument", "", 1, 0, 2, 0, "", 0,
 		2,
-		1, "Attack", "s", "float", 1, 0.0005, 10.0, 0.01, 0, 4.0, 0,
-		2, "Cutoff", "Hz", "float", 1, 20.0, 20000.0, 2000.0, 1, 1.0, 0,
+		1, "Attack", "s", "float", 1, 0.0005, 10.0, 0.01, 0, 4.0, 0, "", 1,
+		2, "Cutoff", "Hz", "float", 1, 20.0, 20000.0, 2000.0, 1, 1.0, 0, "", 1,
 		0,
 	])
 	var device: Device = registry.get_device("test.curves")

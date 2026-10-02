@@ -27,7 +27,7 @@ func _synth() -> Device:
 	registry._on_builtin_info_received([
 		"test.synth", "Synth", "instrument", "", 1, 0, 2, 0, "", 0,
 		1,
-		31, "Cutoff", "Hz", "float", 1, 20.0, 20000.0, 2000.0, 1, 1.0, 0,
+		31, "Cutoff", "Hz", "float", 1, 20.0, 20000.0, 2000.0, 1, 1.0, 0, "", 1,
 		0,
 		2, "filter_env", "Filter Env", 0, "lfo1", "LFO 1", 1,
 		1, "filter_env", 31, 0.35,

@@ -2056,7 +2056,7 @@ impl OscServer {
 
                 args.push(OscType::Int(parameters.len() as i32));
 
-                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values...)
+                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values..., module, automatable)
                 for param in parameters {
                     args.push(OscType::Int(param.id as i32));
                     args.push(OscType::String(param.name));
@@ -2077,6 +2077,8 @@ impl OscServer {
                     for ev in param.enum_values {
                         args.push(OscType::String(ev));
                     }
+                    args.push(OscType::String(param.module));
+                    args.push(OscType::Int(if param.is_automation_safe { 1 } else { 0 }));
                 }
 
                 args.push(OscType::Int(if is_container { 1 } else { 0 }));
