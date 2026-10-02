@@ -13,6 +13,9 @@ var _scan_interval: float = 5.0
 var _tree: SceneTree
 var _first_scan: bool = true
 
+## Set by tests to keep the cache out of the real config dir.
+var cache_dir_override: String = ""
+
 
 func _init() -> void:
 	supports_hot_reload = true
@@ -28,6 +31,21 @@ func _scan_paths_setting() -> String:
 func _cache_file_name() -> String:
 	push_error("FileScanAssetProvider._cache_file_name() is abstract")
 	return ""
+
+
+## Directories to walk. Defaults to the paths in `_scan_paths_setting()`.
+func _scan_roots() -> Array:
+	return Settings.get_value(_scan_paths_setting())
+
+
+## Extra per-asset fields to keep in the cache file.
+func _cache_extra(_asset: Asset) -> Dictionary:
+	return {}
+
+
+## Restore what `_cache_extra` wrote.
+func _restore_extra(_asset: Asset, _data: Dictionary) -> void:
+	pass
 
 
 ## Asset type for a lower-case file extension, or -1 to skip the file.
@@ -53,7 +71,7 @@ func _schedule_next_scan() -> void:
 
 func scan() -> void:
 	var new_assets: Array[Asset] = []
-	for path in Settings.get_value(_scan_paths_setting()):
+	for path in _scan_roots():
 		_scan_directory(Utils.expand_path(path), new_assets)
 
 	var changed := _detect_changes(new_assets)
@@ -156,7 +174,8 @@ func _detect_changes(new_assets: Array[Asset]) -> bool:
 # ============================================================================
 
 func _cache_path() -> String:
-	return Sonara.get_config_dir().path_join(_cache_file_name())
+	var dir := cache_dir_override if not cache_dir_override.is_empty() else Sonara.get_config_dir()
+	return dir.path_join(_cache_file_name())
 
 
 func _load_cache() -> void:
@@ -186,6 +205,7 @@ func _load_cache() -> void:
 		asset.name = asset_data.get("name", "")
 		asset.file_size_bytes = asset_data.get("file_size_bytes", 0)
 		asset.file_modified_time = asset_data.get("file_modified_time", 0)
+		_restore_extra(asset, asset_data)
 		_assets.append(asset)
 
 	logger.info("[%s] Loaded %d assets from cache" % [provider_name, _assets.size()])
@@ -196,13 +216,15 @@ func _load_cache() -> void:
 func _save_cache() -> void:
 	var cached_assets: Array = []
 	for asset in _assets:
-		cached_assets.append({
+		var entry := {
 			"type": asset.type,
 			"path": asset.path,
 			"name": asset.name,
 			"file_size_bytes": asset.file_size_bytes,
 			"file_modified_time": asset.file_modified_time
-		})
+		}
+		entry.merge(_cache_extra(asset))
+		cached_assets.append(entry)
 
 	var cache_path := _cache_path()
 	var file := FileAccess.open(cache_path, FileAccess.WRITE)

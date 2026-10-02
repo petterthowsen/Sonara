@@ -5,6 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
 [ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
 [ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
+[ext_resource type="Texture2D" path="res://assets/icons/bookmark.svg" id="9_preset"]
 [ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="6_n5ici"]
 [ext_resource type="Texture2D" uid="uid://cpre341cdgoij" path="res://assets/icons/gauge.svg" id="7_d6wny"]
 [ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
@@ -138,6 +139,15 @@ border_color_active = Color(0.82421875, 0.82421875, 0.82421875, 1)
 border_thickness = 1.5
 test_active = true
 test_enabled = true
+
+[node name="Preset" type="Button" parent="VBox/TopHeader/HBox"]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "No preset"
+flat = true
+icon = ExtResource("9_preset")
+expand_icon = true
 
 [node name="Name" parent="VBox/TopHeader/HBox" unique_id=547742797 instance=ExtResource("3_smle")]
 layout_mode = 2

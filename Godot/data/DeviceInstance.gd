@@ -30,6 +30,7 @@ signal choke_group_changed(group: int)
 ## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
 signal slots_changed()
 signal name_changed(new_name: String)
+signal preset_changed()  # preset_name / preset_path changed; see set_preset
 ## A modulation route was added, changed or removed (amount 0). See "MODULATION".
 signal mod_route_changed(source: String, param_id: int, amount: float)
 
@@ -43,6 +44,11 @@ var id: String = ""
 
 ## Display name for this instance (sibling-unique on a host). Empty until assigned.
 var name: String = ""
+
+## Preset this device was created or loaded from, or last saved as (empty = none). Saved with the
+## project; see docs/device-presets-plan.md. Change through set_preset().
+var preset_name: String = ""
+var preset_path: String = ""
 
 ## The device type (metadata)
 var device: Device
@@ -1617,6 +1623,15 @@ func next_free_drum_note() -> int:
 ## SERIALIZATION
 ## ============================================================================
 
+## Remember the preset this device now stands for ("" clears it).
+func set_preset(p_name: String, p_path: String = "") -> void:
+	if p_name == preset_name and p_path == preset_path:
+		return
+	preset_name = p_name
+	preset_path = p_path
+	preset_changed.emit()
+
+
 ## Serialize to JSON
 func to_json() -> Dictionary:
 	var data := {
@@ -1640,6 +1655,9 @@ func to_json() -> Dictionary:
 		"return_channel_ids": return_channel_ids.duplicate(),
 		"slots": _slots_to_json(),
 	}
+	if not preset_name.is_empty():
+		data["preset_name"] = preset_name
+		data["preset_path"] = preset_path
 	if has_modulation():
 		data["mod_routes"] = _mod_routes_to_json()
 	if not plugin_state.is_empty():
@@ -1668,6 +1686,51 @@ func _parameter_values_to_json() -> Dictionary:
 	return out
 
 
+## Give a serialized device tree new instance ids on `channel_id`, dropping aux return links.
+static func refresh_ids_in_json(device_data: Dictionary, channel_id: int) -> void:
+	device_data.erase("id")
+	device_data["channel_id"] = channel_id
+	device_data["return_channel_id"] = -1
+	device_data["return_channel_ids"] = []
+	for child_data in device_data.get("children", []):
+		if child_data is Dictionary:
+			refresh_ids_in_json(child_data, channel_id)
+
+
+## Ask every loaded CLAP plugin under `roots` for its current state so `to_json()` saves it. Waits
+## until all of them answered or `timeout_sec` passed; a plugin that didn't answer keeps its last
+## saved state. Returns true when every request was answered in time.
+static func refresh_plugin_states(roots: Array, timeout_sec: float = 3.0) -> bool:
+	var waiting: Array[DeviceInstance] = []
+	for inst in roots:
+		_collect_plugin_state_requests(inst, waiting)
+	if waiting.is_empty():
+		return true
+	var remaining := {"count": waiting.size()}
+	var on_saved := func(_ok: bool) -> void:
+		remaining.count -= 1
+	for inst in waiting:
+		inst.plugin_state_saved.connect(on_saved, CONNECT_ONE_SHOT)
+	var tree := Engine.get_main_loop() as SceneTree
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while remaining.count > 0 and Time.get_ticks_msec() < deadline and tree:
+		await tree.process_frame
+	for inst in waiting:
+		if inst.plugin_state_saved.is_connected(on_saved):
+			inst.plugin_state_saved.disconnect(on_saved)
+	if remaining.count > 0:
+		logger.warn("%d plugin(s) didn't return their state in time; using their last known state" % remaining.count)
+		return false
+	return true
+
+
+static func _collect_plugin_state_requests(inst: DeviceInstance, out: Array[DeviceInstance]) -> void:
+	if inst.save_plugin_state():
+		out.append(inst)
+	for child in inst.children:
+		_collect_plugin_state_requests(child, out)
+
+
 ## Deserialize from JSON
 static func from_json(data: Dictionary) -> DeviceInstance:
 	var device_id = data.get("device_id", "")
@@ -1685,6 +1748,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	var instance = DeviceInstance.new(loaded_device, chan_id, pos, is_active, is_enabled)
 	instance.id = data.get("id", instance.id)  # Restore original ID
 	instance.name = str(data.get("name", ""))
+	instance.preset_name = str(data.get("preset_name", ""))
+	instance.preset_path = str(data.get("preset_path", ""))
 	
 	# Restore parameter values (kept aside so SFZ/plugin advertisement does not wipe them)
 	var param_values = data.get("parameter_values", {})

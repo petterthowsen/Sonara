@@ -20,9 +20,19 @@ static func can_drop_asset_on_channel(channel: Channel, asset: Asset) -> bool:
 		return channel.channel_type == Channel.ChannelType.INSTRUMENT
 	if asset.type == Asset.TYPE.Audio:
 		return false
-	if asset.type != Asset.TYPE.Device:
-		return false
-	return device_fits_channel(AssetService.get_device(asset.path), channel)
+	return device_fits_channel(device_for_asset(asset), channel)
+
+
+## The Device a Device or Preset asset stands for, or null for other assets and missing devices.
+static func device_for_asset(asset: Asset) -> Device:
+	if asset == null:
+		return null
+	match asset.type:
+		Asset.TYPE.Device:
+			return AssetService.get_device(asset.path)
+		Asset.TYPE.Preset:
+			return AssetService.get_device(asset.device_id)
+	return null
 
 
 ## Instruments only go on instrument channels (master keeps the default INSTRUMENT type, so it is
@@ -93,15 +103,19 @@ static func drop_asset(
 	if asset.type == Asset.TYPE.Audio and _is_drum_machine(parent):
 		drop_on_drum_pad(channel, parent, parent.next_free_drum_note(), asset)
 		return
-	var device_instance := instance_for_asset(asset, channel.id, position)
+	var device_instance := instance_for_asset(asset, channel.id, position, channel.get_project())
 	if device_instance:
 		HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position, parent))
 
 
-## New instance for a Device asset, or an sfizz instance with the SFZ queued. Null for other assets.
-static func instance_for_asset(asset: Asset, channel_id: int, position: int = -1) -> DeviceInstance:
+## New instance for a Device asset, a Preset asset (the preset's device tree, named after the
+## preset) or an sfizz instance with the SFZ queued. Null for other assets. `project` supplies ids for
+## a preset's return channels (default: the open project).
+static func instance_for_asset(asset: Asset, channel_id: int, position: int = -1, project: Project = null) -> DeviceInstance:
 	if asset == null:
 		return null
+	if asset.type == Asset.TYPE.Preset:
+		return _instance_for_preset(asset, channel_id, project)
 	var device_id := ""
 	match asset.type:
 		Asset.TYPE.SFZ:
@@ -120,6 +134,47 @@ static func instance_for_asset(asset: Asset, channel_id: int, position: int = -1
 	return device_instance
 
 
+## Loads the preset file behind `asset` and instantiates it. Missing files and other load warnings
+## are shown in one message; null when the file or its device is unusable.
+static func _instance_for_preset(asset: Asset, channel_id: int, project: Project) -> DeviceInstance:
+	return instance_for_preset_path(asset.path, channel_id, project)
+
+
+## Same as a Preset asset drop, from the preset file's path.
+static func instance_for_preset_path(preset_path: String, channel_id: int, project: Project) -> DeviceInstance:
+	var preset := PresetLibrary.load_preset(preset_path)
+	if preset == null:
+		_show_preset_message("Preset not loaded", "Could not read the preset file:\n%s" % preset_path)
+		return null
+	if project == null:
+		var editor := _editor()
+		project = editor.project if editor else null
+	var inst := preset.instantiate(channel_id, project)
+	var lines := PackedStringArray(preset.warnings)
+	if not preset.missing_files.is_empty():
+		lines.append("Missing files:")
+		for file in preset.missing_files:
+			lines.append("  " + file)
+	if inst == null:
+		lines.insert(0, "Preset '%s' could not be created." % preset.name)
+	if not lines.is_empty():
+		_show_preset_message("Preset '%s'" % preset.name, "\n".join(lines))
+	return inst
+
+
+static func _show_preset_message(title: String, body: String) -> void:
+	push_warning("[DeviceDropUtil] %s: %s" % [title, body])
+	var editor := _editor()
+	if editor:
+		editor.show_error(title, body)
+
+
+## The Editor node, or null when there is none (headless tests). Sonara.editor errors without one.
+static func _editor() -> Editor:
+	var tree := Engine.get_main_loop() as SceneTree
+	return tree.root.get_node_or_null("Editor") as Editor if tree else null
+
+
 ## Kind of channel a device drop on empty mixer space creates: "instrument" or "audio" track on the
 ## track side, "bus" on the bus side, or "" when `data` can't start a channel there. Instruments
 ## and containers (and SFZ files) make instrument tracks; effects make audio tracks or buses.
@@ -134,8 +189,7 @@ static func new_channel_kind(data: Variant, bus_side: bool) -> String:
 		var asset := data as Asset
 		if asset.type == Asset.TYPE.SFZ:
 			return "" if bus_side else "instrument"
-		if asset.type == Asset.TYPE.Device:
-			device = AssetService.get_device(asset.path)
+		device = device_for_asset(asset)
 	if device == null:
 		return ""
 	if device.creates_instrument_track():
@@ -179,7 +233,7 @@ static func create_channel_for(
 	if data is DeviceInstance:
 		place = DeviceTransferCommand.new(data, channel, null, -1)
 	else:
-		var device_instance := instance_for_asset(data, channel.id, 0)
+		var device_instance := instance_for_asset(data, channel.id, 0, project)
 		if device_instance:
 			place = DeviceAddCommand.new(channel, device_instance, -1)
 	if place:
@@ -195,8 +249,10 @@ static func _channel_name_for(data: Variant) -> String:
 	return _track_name_for(data)
 
 
-## Device name for a Device asset, file name for an SFZ.
+## Preset name for a preset, device name for a Device asset, file name for an SFZ.
 static func _track_name_for(asset: Asset) -> String:
+	if asset.type == Asset.TYPE.Preset:
+		return asset.get_display_name()
 	if asset.type == Asset.TYPE.Device:
 		var device := AssetService.get_device(asset.path)
 		if device:
@@ -299,9 +355,19 @@ static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 	data = DeviceDrag.unwrap(data)
 	if inst == null:
 		return false
+	if is_preset_for_device(inst, data):
+		return true
 	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, data):
 		return true
 	return data is Asset and can_drop_file_on_device(inst, data)
+
+
+## Whether `data` is a Preset asset saved from the same device type as `inst` (load in place).
+static func is_preset_for_device(inst: DeviceInstance, data: Variant) -> bool:
+	data = DeviceDrag.unwrap(data)
+	return inst != null and inst.device != null and inst.get_channel() != null \
+			and data is Asset and (data as Asset).type == Asset.TYPE.Preset \
+			and (data as Asset).device_id == inst.device.id
 
 
 ## Drop `data` onto the device panel for `inst`. Returns true when it was added into the container.
@@ -310,12 +376,28 @@ static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 	if inst == null:
 		return false
 	var channel := inst.get_channel()
+	if is_preset_for_device(inst, data):
+		load_preset_into(inst, (data as Asset).path)
+		return false
 	if inst.is_container() and can_drop_on_container(channel, inst, data):
 		drop_on_container(channel, inst, data)
 		return true
 	if data is Asset and can_drop_file_on_device(inst, data):
 		inst.load_file((data as Asset).path)
 	return false
+
+
+## Replace `inst` with the preset at `preset_path` in one undo step. Returns the new instance, or
+## null when the preset can't be loaded.
+static func load_preset_into(inst: DeviceInstance, preset_path: String) -> DeviceInstance:
+	var channel := inst.get_channel() if inst else null
+	if channel == null:
+		return null
+	var fresh := instance_for_preset_path(preset_path, channel.id, channel.get_project())
+	if fresh == null:
+		return null
+	HistoryUtil.execute(DevicePresetLoadCommand.new(channel, inst, fresh))
+	return fresh
 
 
 ## Drop onto a container device itself (append a child).
@@ -374,8 +456,8 @@ static func can_drop_on_drum_pad(
 		# A file loads into the pad's sampler; anything else joins the pad's chain.
 		if can_drop_file_on_device(find_file_loading_descendant(occupied), asset):
 			return true
-		return occupied.is_container() and (asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device)
-	if asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device:
+		return occupied.is_container() and (asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device or asset.type == Asset.TYPE.Preset)
+	if asset.type == Asset.TYPE.Audio or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Device or asset.type == Asset.TYPE.Preset:
 		return true
 	return false
 
@@ -402,7 +484,7 @@ static func drop_on_drum_pad(
 		if can_drop_file_on_device(target, asset):
 			target.load_file(asset.path)
 		elif occupied.is_container():
-			var added := _sampler_for(asset, channel.id) if asset.type == Asset.TYPE.Audio else instance_for_asset(asset, channel.id)
+			var added := _sampler_for(asset, channel.id) if asset.type == Asset.TYPE.Audio else instance_for_asset(asset, channel.id, -1, channel.get_project())
 			if added:
 				HistoryUtil.execute(DeviceAddCommand.new(channel, added, -1, occupied))
 		return
@@ -410,7 +492,7 @@ static func drop_on_drum_pad(
 	if asset.type == Asset.TYPE.Audio:
 		device_instance = _sampler_for(asset, channel.id)
 	else:
-		device_instance = instance_for_asset(asset, channel.id)
+		device_instance = instance_for_asset(asset, channel.id, -1, channel.get_project())
 	if device_instance == null:
 		return
 	device_instance.slot_note = note

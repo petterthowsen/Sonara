@@ -152,7 +152,7 @@ static func _items_of(data: Variant) -> Array:
 		if not item is Asset:
 			return []
 		var asset := item as Asset
-		if asset.type != Asset.TYPE.Device and asset.type != Asset.TYPE.SFZ:
+		if asset.type != Asset.TYPE.Device and asset.type != Asset.TYPE.Preset and asset.type != Asset.TYPE.SFZ:
 			return []
 		items.append(asset)
 	return items

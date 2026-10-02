@@ -18,6 +18,9 @@ var logger : Log = Log.make("DevicePanel")
 @onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
 @onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
 
+## Opens the preset menu (save, load, show in browser).
+@onready var preset_button: Button = $VBox/TopHeader/HBox/Preset
+
 ## Shown only while the bound device is crashed/failed; reloads the plugin host.
 @onready var reload_button: Button = $VBox/TopHeader/HBox/Reload
 
@@ -104,6 +107,7 @@ func _ready() -> void:
 	window_button.toggled.connect(_on_window_toggled)
 	simple_button.toggled.connect(_on_simple_toggled)
 	reload_button.pressed.connect(_on_reload_pressed)
+	preset_button.pressed.connect(_on_preset_button_pressed)
 
 	# Connect file loading
 	file_load_button.pressed.connect(_on_load_file_pressed)
@@ -272,6 +276,8 @@ func _unbind() -> void:
 		device.host_changed.disconnect(_update_header_tooltip)
 	if device.stats_changed.is_connected(_update_header_tooltip):
 		device.stats_changed.disconnect(_update_header_tooltip)
+	if device.preset_changed.is_connected(_update_preset_tooltip):
+		device.preset_changed.disconnect(_update_preset_tooltip)
 	if reload_button:
 		reload_button.visible = false
 	if _channel and _channel.device_parameters_updated.is_connected(_on_device_parameters_updated):
@@ -307,6 +313,103 @@ func _update_header_tooltip() -> void:
 		text += "\n" + device.plugin_stats.describe()
 	header.tooltip_text = text
 	name_label.tooltip_text = text
+
+
+# ============================================================================
+# PRESETS
+# ============================================================================
+
+## Subfolder submenus kick in when a device has more presets than this.
+const PRESET_SUBMENU_THRESHOLD := 15
+## Menu ids must be >= 0 (-1 means "auto-assign"); preset items use 0..n-1.
+const PRESET_SAVE := 100001
+const PRESET_SAVE_NEW := 100002
+const PRESET_BROWSER := 100003
+
+const SaveDialogScene := preload("res://devices/DevicePresetSaveDialog.tscn")
+
+var _preset_menu: PopupMenu = null
+var _preset_save_dialog: DevicePresetSaveDialog = null
+## Preset file paths of the menu's items; the item id indexes into it.
+var _preset_menu_paths: PackedStringArray = []
+
+
+func _update_preset_tooltip() -> void:
+	if preset_button and device:
+		preset_button.tooltip_text = device.preset_name if not device.preset_name.is_empty() else "No preset"
+
+
+func _on_preset_button_pressed() -> void:
+	if device == null:
+		return
+	if _preset_menu == null:
+		_preset_menu = PopupMenu.new()
+		_preset_menu.theme_type_variation = &"ContextMenuList"
+		_preset_menu.id_pressed.connect(_on_preset_menu_id)
+		add_child(_preset_menu)
+	_build_preset_menu()
+	_preset_menu.position = Vector2i(preset_button.get_screen_position() + Vector2(0, preset_button.size.y))
+	_preset_menu.popup()
+
+
+func _build_preset_menu() -> void:
+	_preset_menu.clear()
+	for i in range(_preset_menu.get_child_count() - 1, -1, -1):
+		_preset_menu.get_child(i).queue_free()
+	_preset_menu_paths = PackedStringArray()
+	_preset_menu.add_item("Save Preset…", PRESET_SAVE)
+	_preset_menu.add_item("Save as New Preset…", PRESET_SAVE_NEW)
+	_preset_menu.add_separator()
+	var presets := PresetLibrary.list_for_device(device.device.id, device.device.name)
+	if presets.is_empty():
+		_preset_menu.add_item("(No presets)")
+		_preset_menu.set_item_disabled(_preset_menu.item_count - 1, true)
+	var root := PresetLibrary.folder_for(device.device.name)
+	var submenus: Dictionary = {}
+	for preset in presets:
+		var target := _preset_menu
+		var folder := preset.path.get_base_dir()
+		if presets.size() > PRESET_SUBMENU_THRESHOLD and folder != root and folder.begins_with(root + "/"):
+			var sub_name := folder.substr(root.length() + 1)
+			if not submenus.has(sub_name):
+				var sub := PopupMenu.new()
+				sub.theme_type_variation = &"ContextMenuList"
+				sub.name = "Sub%d" % submenus.size()
+				sub.id_pressed.connect(_on_preset_menu_id)
+				_preset_menu.add_child(sub)
+				_preset_menu.add_submenu_node_item(sub_name, sub)
+				submenus[sub_name] = sub
+			target = submenus[sub_name]
+		var id := _preset_menu_paths.size()
+		_preset_menu_paths.append(preset.path)
+		target.add_check_item(preset.name, id)
+		target.set_item_checked(target.item_count - 1, preset.path == device.preset_path)
+	_preset_menu.add_separator()
+	_preset_menu.add_item("Show in Browser", PRESET_BROWSER)
+
+
+func _on_preset_menu_id(id: int) -> void:
+	if device == null:
+		return
+	match id:
+		PRESET_SAVE:
+			_open_preset_save_dialog(true)
+		PRESET_SAVE_NEW:
+			_open_preset_save_dialog(false)
+		PRESET_BROWSER:
+			var browser := get_tree().get_first_node_in_group(Browser.GROUP) as Browser
+			if browser:
+				browser.show_presets(device.device.name)
+		_:
+			if id >= 0 and id < _preset_menu_paths.size():
+				DeviceDropUtil.load_preset_into(device, _preset_menu_paths[id])
+
+
+func _open_preset_save_dialog(keep_preset: bool) -> void:
+	if _preset_save_dialog == null:
+		_preset_save_dialog = SaveDialogScene.instantiate()
+		add_child(_preset_save_dialog)
+	_preset_save_dialog.open_for(device, keep_preset)
 
 
 func _on_reload_pressed() -> void:
@@ -346,6 +449,9 @@ func bind_to_device(dev : DeviceInstance):
 		dev.host_changed.connect(_update_header_tooltip)
 	if not dev.stats_changed.is_connected(_update_header_tooltip):
 		dev.stats_changed.connect(_update_header_tooltip)
+	if not dev.preset_changed.is_connected(_update_preset_tooltip):
+		dev.preset_changed.connect(_update_preset_tooltip)
+	_update_preset_tooltip()
 	_update_reload_button_visibility()
 	_update_header_tooltip()
 	# Listen for parameter list updates (when plugins load params asynchronously)

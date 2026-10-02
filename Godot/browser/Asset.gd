@@ -1,6 +1,6 @@
 class_name Asset extends RefCounted
 
-enum TYPE { Audio, Midi, Device, SFZ, SoundFont }
+enum TYPE { Audio, Midi, Device, SFZ, SoundFont, Preset }
 
 # ============================================================================
 # CORE PROPERTIES
@@ -21,6 +21,11 @@ var last_used: int = 0  # Unix timestamp
 var file_size_bytes: int = 0
 var file_modified_time: int = 0  # For hot-reload detection
 
+# Preset assets only (read from the .sonpreset header, so matching never reopens the file)
+var device_id: String = ""
+var device_name: String = ""
+var author: String = ""
+
 
 # ============================================================================
 # HELPER METHODS
@@ -29,6 +34,9 @@ var file_modified_time: int = 0  # For hot-reload detection
 ## Get display name (filename without extension, or device title if device asset)
 func get_display_name() -> String:
 	if path.is_empty():
+		return name
+
+	if type == TYPE.Preset and not name.is_empty():
 		return name
 
 	# For device assets, try to get the device and use its title
@@ -67,6 +75,30 @@ func is_soundfont() -> bool:
 	return type == TYPE.SoundFont
 
 
+## Check if this is a device preset
+func is_preset() -> bool:
+	return type == TYPE.Preset
+
+
+## True for a preset whose device isn't installed (a plugin that is missing). Other assets are never unavailable.
+func is_unavailable() -> bool:
+	return type == TYPE.Preset and not device_id.is_empty() and AssetService.get_device(device_id) == null
+
+
+## Tooltip for a preset: device, author, tags, and what's missing if the device isn't installed.
+func get_preset_tooltip() -> String:
+	var lines: Array[String] = []
+	var dev := device_name if not device_name.is_empty() else device_id
+	lines.append("%s (%s)" % [get_display_name(), dev])
+	if not author.is_empty():
+		lines.append("Author: " + author)
+	if not tags.is_empty():
+		lines.append("Tags: " + ", ".join(tags))
+	if is_unavailable():
+		lines.append("Needs device \"%s\", which is not installed." % dev)
+	return "\n".join(lines)
+
+
 ## Get icon name for this asset type
 func get_icon() -> String:
 	match type:
@@ -80,6 +112,8 @@ func get_icon() -> String:
 			return "AudioStreamSample"  # Sample-based instrument
 		TYPE.SoundFont:
 			return "AudioStreamSample"  # Sample-based instrument
+		TYPE.Preset:
+			return "Save"
 		_:
 			return "File"
 

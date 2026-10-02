@@ -37,6 +37,9 @@ signal asset_requested_drag(asset: Asset)  # When user starts dragging an asset
 
 const CONFIG_KEY := "ui/browser"
 
+## Presets whose device isn't installed.
+const UNAVAILABLE_COLOR := Color(0.5, 0.5, 0.5)
+
 # Display mode
 var _display_mode: DisplayMode = DisplayMode.FLAT_LIST
 var _applying_tree_state: bool = false
@@ -44,6 +47,9 @@ var _applying_tree_state: bool = false
 var _expanded_folders: Dictionary = {}
 
 # Tab management
+## Group the browser joins, so other panels can reach it (see show_presets).
+const GROUP := "browser"
+
 var _current_tab: Asset.TYPE = Asset.TYPE.Audio
 var _item_lists: Dictionary = {}  # Asset.TYPE -> ItemList
 var _trees: Dictionary = {}  # Asset.TYPE -> Tree
@@ -55,6 +61,7 @@ var _midi_assets: Array[Asset] = []
 var _device_assets: Array[Asset] = []
 var _sfz_assets: Array[Asset] = []
 var _soundfont_assets: Array[Asset] = []
+var _preset_assets: Array[Asset] = []
 
 # Search/filter
 var _search_filter: String = ""
@@ -76,6 +83,7 @@ var logger := Log.make("Browser")
 
 func _ready() -> void:
 	logger.info("Initializing...")
+	add_to_group(GROUP)
 	_load_ui_state()
 	_setup_ui()
 	_connect_to_asset_service()
@@ -91,16 +99,19 @@ func _setup_ui() -> void:
 	_create_tab_button("S", "Samples", Asset.TYPE.Audio)
 	_create_tab_button("D", "Devices", Asset.TYPE.Device)
 	_create_tab_button("SFZ", "SFZ", Asset.TYPE.SFZ)
+	_create_tab_button("P", "Presets", Asset.TYPE.Preset)
 
 	# Create ItemLists for each category
 	_create_item_list(Asset.TYPE.Audio)
 	_create_item_list(Asset.TYPE.Device)
 	_create_item_list(Asset.TYPE.SFZ)
+	_create_item_list(Asset.TYPE.Preset)
 	
 	# Create Tree controls for each category
 	_create_tree(Asset.TYPE.Audio)
 	_create_tree(Asset.TYPE.Device)
 	_create_tree(Asset.TYPE.SFZ)
+	_create_tree(Asset.TYPE.Preset)
 
 	# Connect search input, debounced so fast typing doesn't rebuild tabs per keystroke
 	search_text.text_changed.connect(_on_search_text_changed)
@@ -193,6 +204,8 @@ func _connect_to_asset_service() -> void:
 		# so listening to it alone is sufficient and avoids one full rebuild per
 		# individual asset_added signal when N files are discovered at once.
 		AssetService.assets_updated.connect(_on_assets_updated)
+		# Presets grey out or come back as plugins are scanned.
+		AssetService.device_registry.devices_changed.connect(_on_devices_changed)
 		logger.info("Connected to AssetService")
 
 
@@ -221,6 +234,7 @@ func _rebuild_asset_partitions() -> void:
 	_device_assets.clear()
 	_sfz_assets.clear()
 	_soundfont_assets.clear()
+	_preset_assets.clear()
 
 	var all_assets = AssetService.get_all_assets()
 	for asset in all_assets:
@@ -235,6 +249,8 @@ func _rebuild_asset_partitions() -> void:
 				_sfz_assets.append(asset)
 			Asset.TYPE.SoundFont:
 				_soundfont_assets.append(asset)
+			Asset.TYPE.Preset:
+				_preset_assets.append(asset)
 
 
 ## Called when the underlying asset data changed. Rebuilds the cheap partitions,
@@ -273,6 +289,11 @@ func _populate_tab_for(asset_type: Asset.TYPE) -> void:
 			_trees[Asset.TYPE.SFZ].clear()
 			_populate_sfz_tab()
 			_populate_sfz_tree()
+		Asset.TYPE.Preset:
+			_item_lists[Asset.TYPE.Preset].clear()
+			_trees[Asset.TYPE.Preset].clear()
+			_populate_presets_tab()
+			_populate_presets_tree()
 	_applying_tree_state = false
 	_dirty_tabs[asset_type] = false
 
@@ -328,6 +349,26 @@ func _populate_sfz_tab() -> void:
 		var asset = result.asset
 		var idx = item_list.add_item(asset.get_display_name())
 		item_list.set_item_metadata(idx, asset)
+
+
+func _populate_presets_tab() -> void:
+	var item_list = _item_lists[Asset.TYPE.Preset]
+	var scored := _filter_and_score_assets(_preset_assets)
+
+	if scored.is_empty():
+		var message = "(No matches)" if not _search_filter.is_empty() else "(No presets)"
+		var idx = item_list.add_item(message)
+		item_list.set_item_disabled(idx, true)
+		return
+
+	for result in scored:
+		var asset: Asset = result.asset
+		var device_label := asset.device_name if not asset.device_name.is_empty() else asset.device_id
+		var idx = item_list.add_item("%s — %s" % [asset.get_display_name(), device_label])
+		item_list.set_item_metadata(idx, asset)
+		item_list.set_item_tooltip(idx, asset.get_preset_tooltip())
+		if asset.is_unavailable():
+			item_list.set_item_custom_fg_color(idx, UNAVAILABLE_COLOR)
 
 
 func _populate_devices_tab() -> void:
@@ -417,6 +458,40 @@ func _populate_sfz_tree() -> void:
 	_prune_empty_directories(root)
 	_sort_tree_items(root)
 	_restore_or_expand_tree(tree, Asset.TYPE.SFZ)
+
+
+func _populate_presets_tree() -> void:
+	var tree = _trees[Asset.TYPE.Preset]
+	var root = tree.create_item()
+	var filtered: Array[Asset] = []
+	for result in _filter_and_score_assets(_preset_assets):
+		filtered.append(result.asset)
+
+	if filtered.is_empty():
+		var item = tree.create_item(root)
+		item.set_text(0, "(No matches)" if not _search_filter.is_empty() else "(No presets)")
+		item.set_selectable(0, false)
+		return
+
+	_build_asset_tree(root, filtered, tree)
+	_prune_empty_directories(root)
+	_sort_tree_items(root)
+	_decorate_preset_items(root)
+	_restore_or_expand_tree(tree, Asset.TYPE.Preset)
+
+
+## Tooltips on preset rows, and grey for those whose device isn't installed.
+func _decorate_preset_items(item: TreeItem) -> void:
+	var child := item.get_first_child()
+	while child:
+		var asset = child.get_metadata(0)
+		if asset is Asset:
+			child.set_tooltip_text(0, asset.get_preset_tooltip())
+			if asset.is_unavailable():
+				child.set_custom_color(0, UNAVAILABLE_COLOR)
+		else:
+			_decorate_preset_items(child)
+		child = child.get_next()
 
 
 func _populate_devices_tree() -> void:
@@ -581,6 +656,8 @@ func _get_search_paths_for_assets(assets: Array[Asset]) -> Array[String]:
 			var paths = Settings.get_value("assets/sfz/paths")
 			for path in paths:
 				search_paths.append(Utils.expand_path(path))
+		Asset.TYPE.Preset:
+			search_paths.append(PresetLibrary.root_dir())
 		Asset.TYPE.Device:
 			# Devices might not have search paths, return empty
 			pass
@@ -822,6 +899,14 @@ func _switch_tab(asset_type: Asset.TYPE) -> void:
 	_current_tab = asset_type
 
 
+## Switch to the Presets tab and filter it by `filter`.
+func show_presets(filter: String = "") -> void:
+	search_text.text = filter
+	_search_filter = filter.strip_edges()
+	_switch_tab(Asset.TYPE.Preset)
+	_populate_tab_for(Asset.TYPE.Preset)
+
+
 func _on_tab_button_pressed(asset_type: Asset.TYPE) -> void:
 	_switch_tab(asset_type)
 
@@ -855,7 +940,7 @@ func _get_drag_data(at_position: Vector2) -> Variant:
 	# If nothing is selected, or the clicked item isn't selected, just drag the clicked item
 	if selected_indices.is_empty() or not clicked_idx in selected_indices:
 		var asset = item_list.get_item_metadata(clicked_idx)
-		if not asset is Asset:
+		if not asset is Asset or asset.is_unavailable():
 			return null
 		asset_requested_drag.emit(asset)
 		return asset
@@ -864,7 +949,7 @@ func _get_drag_data(at_position: Vector2) -> Variant:
 	var assets: Array[Asset] = []
 	for idx in selected_indices:
 		var asset = item_list.get_item_metadata(idx)
-		if asset is Asset:
+		if asset is Asset and not asset.is_unavailable():
 			assets.append(asset)
 			asset_requested_drag.emit(asset)
 	
@@ -895,7 +980,7 @@ func _get_drag_data_tree(_at_position: Vector2) -> Variant:
 		return null
 	
 	var asset = selected.get_metadata(0)
-	if not asset is Asset:
+	if not asset is Asset or asset.is_unavailable():
 		return null
 	
 	asset_requested_drag.emit(asset)
@@ -931,6 +1016,12 @@ func _on_assets_updated() -> void:
 	# batch already (see AssetService), and _request_refresh further coalesces
 	# any signals that still land in the same frame into one deferred rebuild.
 	_request_refresh()
+
+
+func _on_devices_changed(_added: Array[Device], _removed: Array[Device]) -> void:
+	_dirty_tabs[Asset.TYPE.Preset] = true
+	if _current_tab == Asset.TYPE.Preset:
+		_populate_tab_for(Asset.TYPE.Preset)
 
 
 func _on_search_text_changed(_new_text: String) -> void:

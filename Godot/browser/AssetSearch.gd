@@ -28,6 +28,9 @@ static func score(asset: Asset, query: String, include_path: bool = false) -> fl
 		if device:
 			best = maxf(best, Utils.fuzzy_match(needle, device.get_category_string()))
 			best = maxf(best, Utils.fuzzy_match(needle, device.author))
+	if asset.type == Asset.TYPE.Preset:
+		best = maxf(best, Utils.fuzzy_match(needle, asset.author))
+		best = maxf(best, Utils.fuzzy_match(needle, asset.device_name))
 	if include_path and best <= MATCH_THRESHOLD and asset.path.to_lower().contains(needle):
 		best = PATH_MATCH_SCORE
 	return best

@@ -109,6 +109,14 @@ func _initialize_providers() -> void:
 		_providers.append(sfz_provider)
 		logger.info("Registered SfzAssetProvider")
 
+	# Device preset provider
+	if "presets" in enabled_providers:
+		var preset_provider = PresetAssetProvider.new()
+		preset_provider.assets_changed.connect(_on_provider_assets_changed)
+		preset_provider.initialize(get_tree())
+		_providers.append(preset_provider)
+		logger.info("Registered PresetAssetProvider")
+
 	# Skip initial scan - rely on cache and hot-reload timers
 	# Users can manually trigger scan via Edit > Scan Assets
 	logger.info("Skipping initial scan, relying on cached data")
@@ -234,6 +242,8 @@ func _type_from_filter(type_filter: String) -> int:
 			return Asset.TYPE.SFZ
 		"soundfont":
 			return Asset.TYPE.SoundFont
+		"preset":
+			return Asset.TYPE.Preset
 		_:
 			return -1
 
@@ -251,6 +261,16 @@ func get_midi_assets() -> Array[Asset]:
 ## Get all device assets
 func get_device_assets() -> Array[Asset]:
 	return get_assets_by_type(Asset.TYPE.Device)
+
+
+## Get all device preset assets
+func get_preset_assets() -> Array[Asset]:
+	return get_assets_by_type(Asset.TYPE.Preset)
+
+
+## Rescan the presets folder now, so a just-saved preset shows without waiting for the timer.
+func rescan_presets() -> void:
+	_rescan_provider(PresetAssetProvider)
 
 
 ## Get all SFZ assets
@@ -347,7 +367,14 @@ func _load_asset_metadata(asset: Asset) -> void:
 	if _asset_metadata.has(asset.path):
 		var asset_meta = _asset_metadata[asset.path]
 		asset.favorite = asset_meta.get("favorite", false)
-		asset.tags = asset_meta.get("tags", [] as Array[String])
+		var saved_tags: Array = asset_meta.get("tags", [])
+		if asset.type == Asset.TYPE.Preset:
+			# Header tags belong to the file; user tags from the metadata cache add to them.
+			for tag in saved_tags:
+				if not str(tag) in asset.tags:
+					asset.tags.append(str(tag))
+		else:
+			asset.tags = asset_meta.get("tags", [] as Array[String])
 		asset.last_used = asset_meta.get("last_used", 0)
 
 
@@ -436,11 +463,13 @@ func _on_setting_changed(key: String, value) -> void:
 		for provider in _providers:
 			if provider is FileSystemAssetProvider:
 				provider._scan_interval = float(value)
-			elif provider is SfzAssetProvider:
+			elif provider is SfzAssetProvider or provider is PresetAssetProvider:
 				provider._scan_interval = float(value)
 	elif key == "assets/samples/paths":
 		_rescan_provider(FileSystemAssetProvider)
 		_rebuild_roots()
+	elif key == "presets/path":
+		_rescan_provider(PresetAssetProvider)
 	elif key == "assets/sfz/paths":
 		_rescan_provider(SfzAssetProvider)
 		_rebuild_roots()

@@ -67,7 +67,7 @@ static func can_drop(channel: Channel, data: Variant, index: int) -> bool:
 		return false
 	var asset := data as Asset
 	if _goes_to_source(src, front_size, at):
-		return asset.type == Asset.TYPE.Device or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Audio
+		return asset.type == Asset.TYPE.Device or asset.type == Asset.TYPE.Preset or asset.type == Asset.TYPE.SFZ or asset.type == Asset.TYPE.Audio
 	if at < front_size:
 		return false  # Among the devices of a source that isn't a Chain.
 	return DeviceDropUtil.can_drop_asset_on_channel(channel, asset)

@@ -116,19 +116,8 @@ func _copy_channel(source_channel: Channel) -> Channel:
 	data["name"] = project.unique_name(track.name, track, null, "Channel")
 	var devices: Array = data.get("devices", [])
 	for device_data in devices:
-		_refresh_device_ids(device_data, int(data["id"]))
+		DeviceInstance.refresh_ids_in_json(device_data, int(data["id"]))
 	var copy := Channel.from_json(data)
 	copy.output_channel_id = source_channel.output_channel_id
 	project.add_channel(copy, track)
 	return copy
-
-
-## Give a serialized device tree new instance ids on `channel_id`, dropping aux return links.
-func _refresh_device_ids(device_data: Dictionary, channel_id: int) -> void:
-	device_data.erase("id")
-	device_data["channel_id"] = channel_id
-	device_data["return_channel_id"] = -1
-	device_data["return_channel_ids"] = []
-	for child_data in device_data.get("children", []):
-		if child_data is Dictionary:
-			_refresh_device_ids(child_data, channel_id)

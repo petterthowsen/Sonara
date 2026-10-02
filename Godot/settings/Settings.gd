@@ -100,6 +100,15 @@ const _RENAMED_KEYS := {}
 
 func _migrate_renamed_keys() -> void:
 	var migrated := false
+	# The presets provider was added later: switch it on once for configs that predate it.
+	if Sonara.get_config("migrations/presets_provider") == null:
+		var providers = Sonara.get_config("assets/enabled_providers")
+		if providers is Array and not "presets" in providers:
+			providers = providers.duplicate()
+			providers.append("presets")
+			Sonara.set_config("assets/enabled_providers", providers)
+		Sonara.set_config("migrations/presets_provider", true)
+		migrated = true
 	for old_key in _RENAMED_KEYS:
 		var old_val = Sonara.get_config(old_key)
 		if old_val != null and Sonara.get_config(_RENAMED_KEYS[old_key]) == null:
@@ -153,10 +162,10 @@ func _register_all_settings() -> void:
 		"assets/enabled_providers",
 		"Enabled Asset Providers",
 		Type.CHOICE_MULTI,
-		["filesystem", "devices", "sfz"],
+		["filesystem", "devices", "sfz", "presets"],
 		CATEGORY_ASSETS,
 		"Which asset providers are active in the browser.",
-	)).sub("Browser").choices(["filesystem", "devices", "sfz"])
+	)).sub("Browser").choices(["filesystem", "devices", "sfz", "presets"])
 
 	_register(Setting.new(
 		"assets/samples/paths",
@@ -175,6 +184,15 @@ func _register_all_settings() -> void:
 		CATEGORY_ASSETS,
 		"Directories to scan for SFZ instrument files.",
 	)).sub("SFZ Instruments")
+
+	_register(Setting.new(
+		"presets/path",
+		"Device Presets Folder",
+		Type.PATH,
+		"~/Documents/sonara/presets",
+		CATEGORY_ASSETS,
+		"Folder holding saved device presets (.sonpreset), one subfolder per device. Created on first save.",
+	)).sub("Presets")
 
 	_register(Setting.new(
 		"assets/clap/paths",

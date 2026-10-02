@@ -3,11 +3,11 @@
 ## Overview
 - Asset discovery is provider-based: each `AssetProvider` subclasses `AssetProvider.gd`, emits `assets_changed`, and stays free of UI concerns.
 - `AssetService.gd` is the sole entry point; it initializes providers at startup, runs scans, merges results, and broadcasts updates to consumers.
-- Providers: `FileSystemAssetProvider` (audio/MIDI files) and `SfzAssetProvider` (SFZ instruments), both on `FileScanAssetProvider`, plus `DeviceAssetProvider` (built-in and plugin devices from `DeviceRegistry`).
+- Providers: `FileSystemAssetProvider` (audio/MIDI files) and `SfzAssetProvider` (SFZ instruments), both on `FileScanAssetProvider`, plus `DeviceAssetProvider` (built-in and plugin devices from `DeviceRegistry`) and `PresetAssetProvider` (device presets, see below).
 
 ## Asset & Provider Contracts
 - `Asset.gd` wraps identity plus metadata (favorite, tags, last_used, size, modified time) and exposes helpers (`get_display_name`, type guards: `is_audio`, `is_midi`, `is_sfz`, `is_soundfont`).
-- Asset types: `Audio` (audio files), `Midi` (MIDI files), `Device` (plugins/instruments), `SFZ` (SFZ instruments), `SoundFont` (SF2/SF3 instruments).
+- Asset types: `Audio` (audio files), `Midi` (MIDI files), `Device` (plugins/instruments), `SFZ` (SFZ instruments), `SoundFont` (SF2/SF3 instruments), `Preset` (`.sonpreset` device presets; appended last because the asset cache stores the int).
 - Providers must populate `Asset.path` with an absolute file path or canonical device ID; `AssetService` keys on this value.
 - Change detection flows through the `assets_changed(added, removed, modified)` signal; AssetService reloads metadata and rebroadcasts.
 
@@ -38,3 +38,10 @@
 - `AssetService` writes all user metadata (favorite, tags, last_used) to `assets.json` under the same config directory as the plugin cache.
 - On provider change events, metadata is re-applied before signals propagate, so UI listeners always receive hydrated assets.
 - Providers should avoid duplicating persistence logic; any additional metadata must route through AssetService to keep the cache consistent.
+
+## PresetAssetProvider (device presets)
+- A `FileScanAssetProvider` that scans the single `presets/path` folder (`_scan_roots()` returns `[]` while the folder doesn't exist yet) for `.sonpreset` files and caches them in `preset_cache.json`. It reads only the header through `DevicePreset.read_header`, skipping broken files with a warning.
+- Preset `Asset`s carry `device_id`, `device_name`, `author` and header tags. `Asset.is_unavailable()` is true when the device isn't in `DeviceRegistry`. The Browser greys those rows out, names the missing device in the tooltip and refuses to drag them. It refreshes the Presets tab on `devices_changed`.
+- User tags from `assets.json` are merged into the header tags, never replace them.
+- `PresetLibrary.save` calls `AssetService.rescan_presets()`, and a change to `presets/path` triggers a rescan too. `presets` is in `assets/enabled_providers`; `Settings` switches it on once for configs that predate it.
+- The Browser's Presets tab shows `Name — Device` in the list and the folder structure under the presets root in the tree.
