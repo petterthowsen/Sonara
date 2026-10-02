@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod automation;
 pub mod block_clock;
 pub mod command_worker;

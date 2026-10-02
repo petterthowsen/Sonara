@@ -1694,6 +1694,24 @@ impl OscServer {
                     );
                 }
             },
+            ["render", "analyze"] => match parse_render_analyze(args) {
+                Ok(job) => command_tx.send(AudioCommand::StartRender(job))?,
+                Err(e) => {
+                    warn!("Rejecting /render/analyze: {}", e);
+                    let job_id = match args.first() {
+                        Some(OscType::String(id)) => id.clone(),
+                        _ => String::new(),
+                    };
+                    Self::send_status_update(
+                        &self.socket,
+                        self.client_port,
+                        EngineStatus::RenderFailed {
+                            job_id,
+                            error: format!("invalid /render/analyze: {}", e),
+                        },
+                    );
+                }
+            },
             ["render", "cancel"] => match args.first() {
                 Some(OscType::String(job_id)) => command_tx.send(AudioCommand::CancelRender {
                     job_id: job_id.clone(),
@@ -2853,6 +2871,68 @@ fn parse_render_start(args: &[OscType]) -> Result<crate::audio::render::RenderJo
     Ok(job)
 }
 
+/// Parse `/render/analyze <job_id:s> <start_tick:i> <end_tick:i> <resolution:s> <pre_roll_ticks:i>
+/// <result_path:s> <all_channels:i> [<channel_id:i>]*`. Resolution is "bar" or "beat"; a
+/// negative pre-roll renders from tick 0. The master is always analyzed, plus every channel when
+/// `all_channels` is non-zero, else the listed ones. Writes no WAV; `/render/done` carries the
+/// result path.
+fn parse_render_analyze(args: &[OscType]) -> Result<crate::audio::render::RenderJob, String> {
+    use crate::audio::analysis::Resolution;
+    use crate::audio::render::{AnalysisSpec, AnalysisTaps, PreRoll, RenderJob};
+
+    let tick = |arg: &OscType| match arg {
+        OscType::Int(value) => Some(*value as i64),
+        OscType::Long(value) => Some(*value),
+        _ => None,
+    };
+    let [OscType::String(job_id), start, end, OscType::String(resolution), pre_roll, OscType::String(path), OscType::Int(all), channels @ ..] =
+        args
+    else {
+        return Err(format!(
+            "expected (job_id:s, start_tick:i, end_tick:i, resolution:s, pre_roll_ticks:i, \
+             result_path:s, all_channels:i, [channel_id:i]*), got {:?}",
+            args
+        ));
+    };
+    let (Some(start_tick), Some(end_tick), Some(pre_roll)) =
+        (tick(start), tick(end), tick(pre_roll))
+    else {
+        return Err("start_tick, end_tick and pre_roll_ticks must be integers".to_string());
+    };
+    if job_id.is_empty() {
+        return Err("the job id is empty".to_string());
+    }
+    let resolution = match resolution.as_str() {
+        "bar" => Resolution::Bar,
+        "beat" => Resolution::Beat,
+        other => return Err(format!("resolution '{}' isn't bar or beat", other)),
+    };
+    let taps = if *all != 0 {
+        AnalysisTaps::All
+    } else {
+        let mut ids = Vec::with_capacity(channels.len());
+        for arg in channels {
+            match arg {
+                OscType::Int(id) if *id > 0 => ids.push(*id as usize),
+                other => return Err(format!("invalid channel id {:?}", other)),
+            }
+        }
+        AnalysisTaps::Channels(ids)
+    };
+    let mut job = RenderJob::new(job_id.clone(), start_tick, end_tick);
+    job.analysis = Some(AnalysisSpec {
+        taps,
+        resolution,
+        pre_roll: if pre_roll < 0 {
+            PreRoll::FromStart
+        } else {
+            PreRoll::Ticks(pre_roll)
+        },
+        path: path.into(),
+    });
+    Ok(job)
+}
+
 /// Parse `/audio/config/set <device:s> <rate:i> <buffer:i>`.
 fn parse_audio_config(args: &[OscType]) -> Result<AudioCommand, String> {
     match args {
@@ -3026,6 +3106,42 @@ mod tests {
 
     fn string(s: &str) -> OscType {
         OscType::String(s.to_string())
+    }
+
+    #[test]
+    fn render_analyze_parses() {
+        use crate::audio::analysis::Resolution;
+        use crate::audio::render::{AnalysisTaps, PreRoll};
+        let mut args = vec![
+            string("a1"),
+            OscType::Int(3840),
+            OscType::Int(7680),
+            string("beat"),
+            OscType::Int(-1),
+            string("/tmp/a.json"),
+            OscType::Int(0),
+            OscType::Int(3),
+            OscType::Int(4),
+        ];
+        let job = parse_render_analyze(&args).unwrap();
+        let spec = job.analysis.as_ref().unwrap();
+        assert_eq!((job.start_tick, job.end_tick), (3840, 7680));
+        assert_eq!(spec.resolution, Resolution::Beat);
+        assert_eq!(spec.pre_roll, PreRoll::FromStart);
+        assert_eq!(spec.taps, AnalysisTaps::Channels(vec![3, 4]));
+        assert_eq!(spec.path, std::path::PathBuf::from("/tmp/a.json"));
+        assert_eq!(job.render_start_tick(), 0);
+        assert!(job.validate(48_000).is_ok());
+
+        args[4] = OscType::Int(960);
+        args[6] = OscType::Int(1);
+        let job = parse_render_analyze(&args).unwrap();
+        assert_eq!(job.analysis.as_ref().unwrap().taps, AnalysisTaps::All);
+        assert_eq!(job.render_start_tick(), 2880);
+
+        args[3] = string("minute");
+        assert!(parse_render_analyze(&args).is_err());
+        assert!(parse_render_analyze(&args[..5]).is_err());
     }
 
     #[test]

@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use super::wav::WavOutput;
-use super::{RenderJob, RenderTail};
+use super::{AnalysisTaps, RenderJob, RenderTail};
+use crate::audio::analysis::{Analyzer, AnalyzerConfig};
 use crate::audio::block_clock::{BlockClock, OFFLINE_BLOCK_TIMEOUT};
 use crate::audio::commands::{EngineState, EngineStatus};
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
@@ -106,6 +107,17 @@ struct Tap {
     interleaved: Vec<f32>,
 }
 
+/// An analysis in progress: the analyzer and the channel audio copied out for it each block.
+struct AnalysisRun {
+    analyzer: Analyzer,
+    /// One interleaved buffer per analyzer tap, in the analyzer's order.
+    buffers: Vec<(ChannelId, Vec<f32>)>,
+    /// Tick of the current block's first frame.
+    block_start_tick: f64,
+    /// Set once the range has been rendered; the tail is not analyzed.
+    done: bool,
+}
+
 /// A render in progress. `begin` takes the engine over; `end` must run to hand it back.
 struct Render<'a> {
     job: &'a RenderJob,
@@ -119,6 +131,7 @@ struct Render<'a> {
     /// Plugins switched to offline mode, switched back at the end.
     plugins: Vec<PluginIpcHandle>,
     frames_written: u64,
+    analysis: Option<AnalysisRun>,
     /// Estimated frames in the range plus the longest tail, for progress.
     frames_expected: u64,
     last_progress: Instant,
@@ -140,6 +153,7 @@ impl<'a> Render<'a> {
         status_tx: &'a Sender<EngineStatus>,
         sample_rate: f32,
     ) -> Self {
+        let render_start = job.render_start_tick();
         let (saved_tick, was_playing, frames_expected, block_clock) = {
             let state = lock(state);
             state.rendering.store(true, Ordering::Release);
@@ -151,7 +165,7 @@ impl<'a> Render<'a> {
                     .tempo_map
                     .seconds_at(tick as f64, settings.tempo as f64, settings.ppq as f64)
             };
-            let range_seconds = seconds_at(job.end_tick) - seconds_at(job.start_tick);
+            let range_seconds = seconds_at(job.end_tick) - seconds_at(render_start);
             let tail_seconds = job.tail.max_seconds() as f64;
             let expected = ((range_seconds + tail_seconds) * sample_rate as f64).max(1.0);
             (
@@ -178,6 +192,7 @@ impl<'a> Render<'a> {
             saved_tick,
             plugins: Vec::new(),
             frames_written: 0,
+            analysis: None,
             frames_expected,
             last_progress: Instant::now(),
             rates: Vec::with_capacity(job.block_frames),
@@ -190,15 +205,20 @@ impl<'a> Render<'a> {
     /// Wait for the devices, rewind them, render the range and the tail, and finish the files.
     fn run(&mut self) -> Result<Vec<PathBuf>, RenderError> {
         let mut taps = self.open_outputs()?;
+        self.analysis = self.open_analysis()?;
         self.wait_until_ready()?;
         self.prepare_devices()?;
         self.render_range(&mut taps)?;
+        if let Some(analysis) = &mut self.analysis {
+            analysis.done = true;
+        }
         self.render_tail(&mut taps)?;
 
-        let mut paths = Vec::with_capacity(taps.len());
+        let mut paths = Vec::with_capacity(taps.len() + 1);
         for tap in taps {
             paths.push(tap.output.finish()?);
         }
+        paths.extend(self.finish_analysis()?);
         let _ = self.status_tx.try_send(EngineStatus::RenderProgress {
             job_id: self.job.job_id.clone(),
             fraction: 1.0,
@@ -237,6 +257,74 @@ impl<'a> Render<'a> {
                 })
             })
             .collect()
+    }
+
+    /// Build the analyzer: master first, then the requested channels, each once.
+    fn open_analysis(&self) -> Result<Option<AnalysisRun>, RenderError> {
+        let Some(spec) = &self.job.analysis else {
+            return Ok(None);
+        };
+        let state = lock(self.state);
+        let mut channels = vec![MASTER_CHANNEL_ID];
+        match &spec.taps {
+            AnalysisTaps::Channels(ids) => {
+                for &id in ids {
+                    if !state.channels.contains_key(&id) {
+                        return Err(format!("channel {} doesn't exist", id).into());
+                    }
+                    if !channels.contains(&id) {
+                        channels.push(id);
+                    }
+                }
+            }
+            AnalysisTaps::All => {
+                let mut ids: Vec<ChannelId> = state.channels.keys().copied().collect();
+                ids.sort_unstable();
+                channels.extend(ids.into_iter().filter(|&id| id != MASTER_CHANNEL_ID));
+            }
+        }
+        let analyzer = Analyzer::new(AnalyzerConfig {
+            sample_rate: self.sample_rate,
+            settings: state.settings.clone(),
+            tempo_map: state.tempo_map.clone(),
+            time_signatures: state.time_signature_map.clone(),
+            resolution: spec.resolution,
+            range_start_tick: self.job.start_tick as f64,
+            range_end_tick: self.job.end_tick as f64,
+            taps: channels.iter().map(|&id| id as u32).collect(),
+        });
+        let buffers = channels
+            .into_iter()
+            .map(|id| (id, Vec::with_capacity(self.job.block_frames * 2)))
+            .collect();
+        Ok(Some(AnalysisRun {
+            analyzer,
+            buffers,
+            block_start_tick: 0.0,
+            done: false,
+        }))
+    }
+
+    /// Write the analysis JSON (as `.part` until complete) and return its path.
+    fn finish_analysis(&mut self) -> Result<Option<PathBuf>, RenderError> {
+        let (Some(run), Some(spec)) = (self.analysis.take(), &self.job.analysis) else {
+            return Ok(None);
+        };
+        let json = run
+            .analyzer
+            .finish()
+            .to_json()
+            .map_err(|e| format!("couldn't serialize the analysis: {}", e))?;
+        let fail = |e: std::io::Error| format!("couldn't write {}: {}", spec.path.display(), e);
+        if let Some(dir) = spec.path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(fail)?;
+        }
+        let mut part = spec.path.clone().into_os_string();
+        part.push(".part");
+        let part = PathBuf::from(part);
+        std::fs::write(&part, json).map_err(fail)?;
+        std::fs::rename(&part, &spec.path).map_err(fail)?;
+        Ok(Some(spec.path.clone()))
     }
 
     fn check_cancelled(&self) -> Result<(), RenderError> {
@@ -305,7 +393,7 @@ impl<'a> Render<'a> {
         }
 
         let state = lock(self.state);
-        state.set_current_tick(self.job.start_tick);
+        state.set_current_tick(self.job.render_start_tick());
         state.set_fractional_tick_accumulator(0.0);
         state.request_playhead_midi_dispatch();
         state.set_is_playing(true);
@@ -414,6 +502,11 @@ impl<'a> Render<'a> {
             channel.clear_buffers();
         }
 
+        if let Some(run) = &mut self.analysis {
+            run.block_start_tick =
+                state.get_current_tick() as f64 + state.get_fractional_tick_accumulator();
+        }
+
         self.block_clock.publish_offline_block();
         process_audio(state, frames, self.sample_rate, Instant::now());
         mix_and_output(
@@ -438,6 +531,20 @@ impl<'a> Render<'a> {
                 None => tap.interleaved.resize(frames * 2, 0.0),
             }
         }
+        if let Some(run) = self.analysis.as_mut().filter(|run| !run.done) {
+            for (channel_id, buffer) in &mut run.buffers {
+                buffer.clear();
+                match state.channels.get(channel_id) {
+                    Some(channel) => buffer.extend(
+                        channel.buffer_left[..frames]
+                            .iter()
+                            .zip(&channel.buffer_right[..frames])
+                            .flat_map(|(&l, &r)| [l, r]),
+                    ),
+                    None => buffer.resize(frames * 2, 0.0),
+                }
+            }
+        }
     }
 
     /// With the lock released: fail on a plugin that missed its block, write the block, report
@@ -452,6 +559,11 @@ impl<'a> Render<'a> {
         }
         for tap in taps.iter_mut() {
             tap.output.write(&tap.interleaved)?;
+        }
+        if let Some(run) = self.analysis.as_mut().filter(|run| !run.done) {
+            let buffers: Vec<&[f32]> = run.buffers.iter().map(|(_, b)| b.as_slice()).collect();
+            run.analyzer
+                .process_block(run.block_start_tick, frames, &buffers);
         }
         self.frames_written += frames as u64;
         if self.last_progress.elapsed() >= PROGRESS_INTERVAL {
@@ -561,7 +673,7 @@ fn find_unready(state: &mut EngineState, job: &RenderJob) -> Result<Option<Strin
     for track in state.tracks.values() {
         for instance in &track.clip_instances {
             let in_range =
-                instance.start_tick < job.end_tick && instance.end_tick() > job.start_tick;
+                instance.start_tick < job.end_tick && instance.end_tick() > job.render_start_tick();
             if instance.muted || !in_range {
                 continue;
             }
@@ -590,8 +702,9 @@ fn find_unready(state: &mut EngineState, job: &RenderJob) -> Result<Option<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::super::RenderJob;
+    use super::super::{AnalysisSpec, PreRoll, RenderJob};
     use super::*;
+    use crate::audio::analysis::{AnalysisResult, Resolution};
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue, PolySynthDevice,
     };
@@ -769,6 +882,124 @@ mod tests {
             error,
             RenderError::Failed("channel 42 doesn't exist".into())
         );
+    }
+
+    /// Channel 2 plays a low note and channel 3 a very high one, one clip each, bars 1-4.
+    fn bass_and_hat_project() -> Mutex<EngineState> {
+        let state = project(&[(0, 4 * BAR, 36)], 4 * BAR);
+        {
+            let mut state = state.lock().unwrap();
+            let mut channel = Channel::new(3, "Hat".to_string(), MAX_BLOCK_FRAMES, SR);
+            let mut synth = PolySynthDevice::new(SR);
+            synth.prepare(SR, MAX_BLOCK_FRAMES);
+            channel.devices.push(Box::new(synth));
+            state.channels.insert(3, channel);
+
+            let mut clip = Clip::new("h".to_string(), "Hat".to_string(), ClipType::Midi);
+            clip.midi_notes.push(ClipNote {
+                id: 0,
+                note: 108,
+                velocity: 100,
+                start_tick: 0,
+                duration_ticks: 4 * BAR,
+            });
+            clip.content_length_ticks = 4 * BAR;
+            state.clips.insert("h".to_string(), clip);
+            let mut track = Track::new(2, 3);
+            track.clip_instances.push(ClipInstance::new(
+                "hi".to_string(),
+                "h".to_string(),
+                0,
+                4 * BAR,
+            ));
+            state.tracks.insert(2, track);
+        }
+        state
+    }
+
+    fn analysis_job(dir: &Path, start: Tick, end: Tick, taps: AnalysisTaps) -> RenderJob {
+        let mut job = RenderJob::new("an", start, end);
+        job.analysis = Some(AnalysisSpec {
+            taps,
+            resolution: Resolution::Bar,
+            pre_roll: PreRoll::FromStart,
+            path: dir.join("sub").join("an.json"),
+        });
+        job
+    }
+
+    #[test]
+    fn analysis_job_reports_each_channels_bands() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = bass_and_hat_project();
+        let job = analysis_job(dir.path(), BAR, 3 * BAR, AnalysisTaps::All);
+
+        let outputs = render(&state, &job).unwrap();
+        let path = dir.path().join("sub").join("an.json");
+        assert_eq!(outputs, vec![path.clone()], "an analysis job writes no WAV");
+        assert!(!path.with_extension("json.part").exists());
+
+        let result: AnalysisResult =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(result.header.taps, vec![1, 2, 3]);
+        // Bars 2 and 3 only: the pre-roll and everything after the range are absent.
+        let bars: Vec<u32> = result.bars.iter().map(|b| b.bar).collect();
+        assert_eq!(bars, vec![2, 3]);
+        for bar in &result.bars {
+            assert!(bar.frames.abs_diff(96_000) <= 1, "{} frames", bar.frames);
+            let metrics = |tap: u32| bar.taps.iter().find(|t| t.tap == tap).unwrap();
+            let loudest = |tap: u32| {
+                let bands = metrics(tap).bands_db;
+                (0..bands.len())
+                    .max_by(|&a, &b| bands[a].total_cmp(&bands[b]))
+                    .unwrap()
+            };
+            // sub = 0, bass = 1, himid = 4, air = 5
+            assert!(loudest(2) <= 1, "bass channel peaks in {}", loudest(2));
+            assert!(loudest(3) >= 4, "hat channel peaks in {}", loudest(3));
+            let (bass, hat) = (metrics(2), metrics(3));
+            assert!(bass.bands_db[1] > bass.bands_db[5] + 10.0);
+            assert!(hat.bands_db[4].max(hat.bands_db[5]) > hat.bands_db[1] + 10.0);
+            assert!(metrics(1).lufs > -60.0, "the master has both");
+        }
+    }
+
+    #[test]
+    fn analysis_pre_roll_warms_the_range_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = bass_and_hat_project();
+        let channels = AnalysisTaps::Channels(vec![2]);
+        let read = |job: RenderJob| -> AnalysisResult {
+            render(&state, &job).unwrap();
+            let path = job.analysis.unwrap().path;
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+
+        // The note starts at tick 0. Rendering from the start plays it into bar 3; a one-bar
+        // pre-roll begins after the note-on, so nothing sounds.
+        let from_start = read(analysis_job(dir.path(), 2 * BAR, 3 * BAR, channels.clone()));
+        assert_eq!(from_start.bars.len(), 1);
+        assert_eq!(from_start.bars[0].bar, 3);
+        assert!(from_start.bars[0].taps[1].lufs > -60.0);
+
+        let mut short = analysis_job(dir.path(), 2 * BAR, 3 * BAR, channels);
+        short.analysis.as_mut().unwrap().pre_roll = PreRoll::Ticks(BAR);
+        assert_eq!(short.render_start_tick(), BAR);
+        let short = read(short);
+        assert_eq!(short.bars.len(), 1);
+        assert!(short.bars[0].taps[1].lufs < -100.0);
+    }
+
+    #[test]
+    fn analysis_of_a_missing_channel_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = bass_and_hat_project();
+        let job = analysis_job(dir.path(), 0, BAR, AnalysisTaps::Channels(vec![42]));
+        assert_eq!(
+            render(&state, &job),
+            Err(RenderError::Failed("channel 42 doesn't exist".into()))
+        );
+        assert!(!state.lock().unwrap().is_rendering());
     }
 
     /// Effect that requests cancellation of the job after it has processed `after` blocks.

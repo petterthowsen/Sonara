@@ -67,6 +67,7 @@ Engine/src/
     processing.rs      # Audio callback: MIDI scheduling, transport, rendering
     mixing.rs          # Audio mixing and routing logic
     render_scratch.rs  # Preallocated scratch lists and per-channel mix buffers for the callback
+    analysis/          # Mix analyzer (spec: docs/analyze-plan.md): per-bar loudness/band/peak/stereo metrics, scale.rs digit scale
     render/            # Offline rendering: RenderJob, the render thread (worker.rs), WAV output (wav.rs)
     types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
@@ -137,6 +138,7 @@ Godot/              # Godot 4.7 UI App
 - `render::run_render` takes the engine over (sets `rendering`, stops the transport, remembers the playhead), waits until no device is loading and the range's audio clips are decoded, resets every device, switches CLAP plugins to offline mode and seeks to the start tick.
 - The range ends on the frame before the end tick's MIDI would be dispatched: `processing::frames_before_tick` runs the same tick arithmetic as `process_audio`, so a note on the end tick never leaks into the tail. The tail then renders with the transport stopped (fixed length, or until the master stays below −90 dBFS for 1 s).
 - Each block drains live MIDI, wakes every device (polysynth and sampler sleep on wall-clock time, which would make two renders of the same range differ), and publishes an offline plugin deadline. After `mix_and_output` every channel buffer holds that channel's post-fader, post-pan output, which is what stems are copied from.
+- Analysis jobs (`RenderJob::analysis`, `/render/analyze`) feed the same blocks to an `Analyzer`. The worker copies the tapped channels' buffers out each block, passing the block's start tick (`current_tick` plus the fractional accumulator). The render starts at `render_start_tick()` (tick 0 or a pre-roll) while the analyzer accumulates only inside the requested range, and the tail isn't analyzed. The JSON result is written as `<path>.part`, then renamed.
 - `end` always runs: reset devices, plugins back to realtime, playhead restored, `rendering` cleared. Two renders of the same range are bit-identical for built-in devices.
 
 ### Sample-Accurate Scheduling

@@ -854,6 +854,17 @@ for audio clips in the range that are still decoding. A device that failed to lo
 the render; bypassed and deactivated devices are ignored. A malformed message is answered with
 `/render/failed` at once.
 
+### `/render/analyze [s:job_id, i:start_tick, i:end_tick, s:resolution, i:pre_roll_ticks, s:result_path, i:all_channels, i:channel_id…]` (Godot -> Rust)
+
+Render the range offline and analyze it (loudness, six band levels, peak, crest, stereo) instead of
+writing a WAV. `resolution` is `bar` or `beat`. The render starts `pre_roll_ticks` before
+`start_tick`, or at tick 0 when that is negative, so held notes and tails are right at the start of
+the range, but only `[start_tick, end_tick)` is analyzed. The master is always analyzed, plus every
+channel when `all_channels` is non-zero, otherwise the listed channel IDs. The engine writes the
+`AnalysisResult` JSON (`audio/analysis/mod.rs`) to `result_path`, creating its directory, and
+reports `/render/done [job_id, result_path]`. Progress, cancel and failure are the same as for
+`/render/start`; the two share the one-render-at-a-time rule.
+
 ### `/render/cancel [s:job_id]` (Godot -> Rust)
 
 Stop the render after its current block. It ends with `/render/failed [job_id, "cancelled"]`.

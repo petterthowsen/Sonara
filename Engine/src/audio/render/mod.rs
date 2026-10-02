@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use tracing::{error, info};
 
+use super::analysis::Resolution;
 use super::commands::{EngineState, EngineStatus};
 use super::stream::MAX_BLOCK_FRAMES;
 use super::types::{ChannelId, Tick};
@@ -93,6 +94,37 @@ impl RenderOutputs {
     }
 }
 
+/// Where an analysis render starts relative to the analyzed range. Everything before the range
+/// is rendered but not accumulated, so held notes, tails, LFO phase and compressor state are
+/// right when the range begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreRoll {
+    /// From tick 0.
+    #[default]
+    FromStart,
+    /// This many ticks before the range (clamped at tick 0).
+    Ticks(Tick),
+}
+
+/// Which channels an analysis covers. The master is always analyzed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisTaps {
+    /// Master only, plus these channels.
+    Channels(Vec<ChannelId>),
+    /// Master plus every channel that exists when the render starts.
+    All,
+}
+
+/// Plain data for an analysis output, turned into an `Analyzer` by the worker. The job's
+/// `[start_tick, end_tick)` is the analyzed range; the result is written as JSON to `path`.
+#[derive(Debug, Clone)]
+pub struct AnalysisSpec {
+    pub taps: AnalysisTaps,
+    pub resolution: Resolution,
+    pub pre_roll: PreRoll,
+    pub path: PathBuf,
+}
+
 /// One offline render: the range `[start_tick, end_tick)`, then the tail.
 #[derive(Debug, Clone)]
 pub struct RenderJob {
@@ -105,6 +137,8 @@ pub struct RenderJob {
     pub sample_rate: u32,
     pub block_frames: usize,
     pub outputs: RenderOutputs,
+    /// Analyze the range as it renders; the result goes to `AnalysisSpec::path`.
+    pub analysis: Option<AnalysisSpec>,
     /// Set by `CancelRender`; the worker checks it between blocks.
     pub cancel: Arc<AtomicBool>,
 }
@@ -120,7 +154,17 @@ impl RenderJob {
             sample_rate: 0,
             block_frames: DEFAULT_BLOCK_FRAMES,
             outputs: RenderOutputs::default(),
+            analysis: None,
             cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The tick rendering starts at: the range start, or earlier for an analysis pre-roll.
+    pub fn render_start_tick(&self) -> Tick {
+        match self.analysis.as_ref().map(|a| a.pre_roll) {
+            Some(PreRoll::FromStart) => 0,
+            Some(PreRoll::Ticks(ticks)) => (self.start_tick - ticks.max(0)).max(0),
+            None => self.start_tick,
         }
     }
 
@@ -155,10 +199,12 @@ impl RenderJob {
                 tail, MAX_TAIL_SECONDS
             ));
         }
-        if self.outputs.master.is_none() && self.outputs.stems.is_empty() {
+        if self.outputs.master.is_none() && self.outputs.stems.is_empty() && self.analysis.is_none()
+        {
             return Err("the job has no outputs".to_string());
         }
-        let paths = self.outputs.paths();
+        let mut paths = self.outputs.paths();
+        paths.extend(self.analysis.iter().map(|a| a.path.clone()));
         for (i, path) in paths.iter().enumerate() {
             if path.as_os_str().is_empty() {
                 return Err("an output path is empty".to_string());
