@@ -33,6 +33,12 @@ func role_weights() -> Dictionary:
 	}
 
 
+## Roles whose float parameters are drawn as a tall `fader` instead of a knob. Empty by default:
+## a fader is three rows tall, so only strategies for devices that suit it opt in.
+func fader_roles() -> Array[String]:
+	return []
+
+
 ## Groups in display order: `{id, title, roles, page?}`. Roles not listed go to `OTHER_GROUP`.
 ## A group with a `page` title goes on that page instead of Main (keep these to broad sections).
 func groups() -> Array[Dictionary]:

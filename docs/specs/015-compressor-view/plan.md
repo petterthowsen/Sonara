@@ -295,7 +295,7 @@ Each phase ends green (`cargo test`, `Godot/tests/run_all.sh`) and can be commit
 - [x] Switch `SimpleControl._build_segmented` to `SegmentedControl` (built in Phase 2).
 - [x] `SimpleControlKinds.FADER` + `SimpleControl._build_fader` / refresh / mod wiring.
 - [x] `HorSlider.scale_marks`.
-- [ ] Optional: let `GenericStrategy` pick `fader` for output and gain roles when the packer has
+- [x] Optional (opt-in per strategy via `fader_roles`, used by the compressor): let `GenericStrategy` pick `fader` for output and gain roles when the packer has
       vertical room (`GridPacker`). Check `test_simple_layout_generator.gd`.
 
 ### Phase 6: Consolidation (optional, separate PRs)

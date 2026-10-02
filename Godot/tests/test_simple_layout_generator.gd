@@ -36,6 +36,7 @@ func run_tests() -> void:
 	_test_apricot_fixture()
 	_test_extrabold_fixture()
 	_test_librestrings_fixture()
+	_test_compressor_faders()
 
 
 ## ----------------------------------------------------------------------------
@@ -768,3 +769,22 @@ func _test_librestrings_fixture() -> void:
 		"Vibrato shares a group with Dynamics and Pressure (%s)" % vibrato.group_title)
 	var group_ids: Array = layout.pages[0].groups.map(func(g): return g.id)
 	_assert(not "modulation" in group_ids, "no one-knob Modulation group %s" % [group_ids])
+
+
+## Compressor Threshold, Ratio and Makeup are faders (opt-in through `fader_roles`), three rows
+## tall; the group holding them takes the page height. A generic device keeps its knobs.
+func _test_compressor_faders() -> void:
+	var params := [_float(0, "Threshold", "dB", -60, 0), _float(1, "Ratio"), _float(2, "Knee", "dB", 0, 24),
+		_float(3, "Makeup", "dB", -12, 24)]
+	var layout := SimpleLayoutGenerator.generate(
+		_device("x.comp", "Comp", Device.DeviceCategory.Effect, ["audio-effect", "compressor"]), params)
+	var by_param := {}
+	for page in layout.pages:
+		for control in page.controls:
+			by_param[control.params[0]] = control
+	_assert(by_param[0].kind == "fader" and by_param[1].kind == "fader" and by_param[3].kind == "fader",
+		"threshold, ratio and makeup are faders")
+	_assert(by_param[2].kind == "knob", "knee stays a knob")
+	_assert(by_param[0].rect[3] == 3, "a fader keeps its three rows (%s)" % [by_param[0].rect])
+	var generic := SimpleLayoutGenerator.generate(_device("x.fx", "Fx"), [_float(0, "Output Gain", "dB", -12, 12)])
+	_assert(generic.pages[0].controls[0].kind == "knob", "a generic device keeps its knobs")

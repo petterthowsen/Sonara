@@ -194,14 +194,21 @@ static func pack_block(sizes: Array[Vector2i], max_cols: int, max_rows: int) -> 
 
 
 ## Block for a whole group (see `pack_block` for the result): a single row when it's a few
-## one-row controls, else the narrowest `BLOCK_ROWS`-tall block up to `MAX_BLOCK_COLUMNS` wide,
+## one-row controls, else the full page height when it holds a fader, else the narrowest `BLOCK_ROWS`-tall block up to `MAX_BLOCK_COLUMNS` wide,
 ## else the narrowest full-height one. A group too big for a page gets as much as fits.
 static func group_block(sizes: Array[Vector2i], rows: int, max_columns: int) -> Dictionary:
 	var cells := 0
 	var one_row := true
+	var has_fader := false
 	for s in sizes:
 		cells += s.x * s.y
 		one_row = one_row and s.y == 1
+		has_fader = has_fader or s == SimpleControlKinds.footprint(SimpleControlKinds.FADER)
+	if has_fader:
+		# a fader would be squashed in a two-row block: give the group the page height
+		var tall := _narrowest_block(sizes, rows, max_columns)
+		if not tall.is_empty():
+			return tall
 	if one_row and cells <= SINGLE_ROW_CELLS:
 		var row := _narrowest_block(sizes, 1, max_columns)
 		if not row.is_empty():

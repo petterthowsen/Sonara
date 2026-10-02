@@ -68,10 +68,13 @@ static func classify(params: Array, strategy: GenericStrategy) -> Array[Dictiona
 	for i in range(n):
 		var param := visible[i]
 		var role := strategy.role_for(param)
+		var kind := control_kind(param)
+		if kind == SimpleControlKinds.KNOB and role in strategy.fader_roles():
+			kind = SimpleControlKinds.FADER
 		entries.append({
 			"param": param,
 			"id": param.id,
-			"kind": control_kind(param),
+			"kind": kind,
 			"role": role,
 			"importance": strategy.importance(role) + ORDER_BONUS * (1.0 - float(i) / float(n)),
 			"module": param.module,

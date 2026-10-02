@@ -31,6 +31,10 @@ func role_weights() -> Dictionary:
 	}
 
 
+func fader_roles() -> Array[String]:
+	return ["threshold", "ratio", "makeup"]
+
+
 func groups() -> Array[Dictionary]:
 	return [
 		{"id": "dynamics", "title": "Dynamics", "roles": ["threshold", "ratio", "knee"]},
