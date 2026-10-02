@@ -182,16 +182,16 @@ auto-name table.
 ## 4. Godot
 
 ### Phase G1: Model, add flow, band toggling
-- [ ] **G1.1** `Godot/data/Device.gd`: `container_focuses_one_child()` includes
+- [x?] **G1.1** `Godot/data/Device.gd`: `container_focuses_one_child()` includes
   `"sonara.builtin.multiband"`, so children become slot chains, one band open at a time.
   Add `is_multiband()` (or a `MULTIBAND_ID` const on `SlotChain`, alongside `CHAIN_ID`).
-- [ ] **G1.2** `Device.creates_instrument_track()` currently returns true for every container.
+- [x?] **G1.2** `Device.creates_instrument_track()` currently returns true for every container.
   Multiband FX must behave like an effect: dropping it on an empty tracklist/mixer creates an
   audio track or is refused, the same as the Compressor.
-- [ ] **G1.3** When a Multiband FX instance is created (`history/commands/DeviceAddCommand.gd` or the
+- [x?] **G1.3** When a Multiband FX instance is created (`history/commands/DeviceAddCommand.gd` or the
   instance's own setup), create its 6 empty slot chains via `SlotChain.empty` (D9). Name them with
   the band-name table.
-- [ ] **G1.4** Band toggling: one undoable history command per toggle.
+- [x?] **G1.4** Band toggling: one undoable history command per toggle.
   - **Enable** band *p*: set `Active`, then place edges per D7 (one or two `Low Edge` params).
     Refresh the auto names.
   - **Disable** band *p*: refuse if only 2 are active. If its slot chain has devices, show a
@@ -200,20 +200,20 @@ auto-name table.
     both. Reuse the existing device-remove command's snapshot/restore instead of writing a new one.
     Refresh the auto names.
   - Look at how existing commands in `Godot/history/commands/` batch several changes.
-- [ ] **G1.5** Guard the Layer-only paths. Every place that checks `is_slot_parent` /
+- [x?] **G1.5** Guard the Layer-only paths. Every place that checks `is_slot_parent` /
   `container_focuses_one_child` and then does something Layer- or Drum-Machine-specific must exclude
   Multiband FX: `AuxReturnSync` (no returns), `NoteMapWatcher` / `NoteMapResolver` (no note maps),
   `DeviceInstance.set_slot_volume` and the other slot mix controls (D11: they must not send Layer
   `/slot/*` OSC to a Multiband parent), `DevicePreset.gd:110/181` (per-child handling).
   `grep -rn "is_slot_parent\|container_focuses_one_child\|is_layer\|slot_volume" Godot --include=*.gd`
   and go through every hit.
-- [ ] **G1.6** Block structural edits that would shift band positions (D9): removing, reordering or
+- [x?] **G1.6** Block structural edits that would shift band positions (D9): removing, reordering or
   dragging a band slot chain out of a Multiband FX (`DeviceDropUtil.gd`, `DeviceContextMenu.gd`,
   device lane delete). Dropping a device *onto* a band adds it inside that band's existing slot
   chain. Check that `SlotChain.for_parent` targets the band chain instead of appending a 7th child.
   Dropping onto an inactive band isn't possible, because inactive bands aren't shown (G2.2). Add a
   "Clear Band" context action that removes the devices inside the band's chain (undoable).
-- [ ] **G1.7** Persistence: save/load uses the generic container path. Check that a project
+- [x?] **G1.7** Persistence: save/load uses the generic container path. Check that a project
   round-trips with a non-default active set (e.g. {1, 3, 6}) and devices in its bands. Check that
   slot chains are not re-wrapped on load (`_wrap_slot_children` must leave Multiband children that
   are already Chains alone). On load, a Multiband FX with fewer than 6 children gets the missing
@@ -229,7 +229,7 @@ auto-name table.
     command, not the dialog.
 
 ### Phase G2: View
-- [ ] **G2.1** `Godot/devices/builtin/MultibandDefaultView.gd/.tscn`, registered in
+- [x?] **G2.1** `Godot/devices/builtin/MultibandDefaultView.gd/.tscn`, registered in
   `DeviceViewFactory.gd`. It must fit `DevicePanel.HEIGHT` (350 px minus header; see the overflow
   note in spec 015). Layout:
   ```
@@ -260,7 +260,7 @@ auto-name table.
   - Meters: only if E2.3 exists. Subscribe in `_on_view_shown`, unsubscribe in `_on_view_hidden`.
   - Follow `docs/subsystems/godot-ui-components.md` (existing `RotaryKnob`, toggles, theme primary
     accent).
-- [ ] **G2.2** Device lane: band slot chains show their band name and color, and only active bands
+- [x?] **G2.2** Device lane: band slot chains show their band name and color, and only active bands
   are offered (`DeviceInstance.slot_keys()` returns only active bands' chains for Multiband FX). If
   the open band is disabled, close its slot.
   - _Verify_ (G2): `godot --path Godot` against a release engine. Add Multiband FX to a drum loop

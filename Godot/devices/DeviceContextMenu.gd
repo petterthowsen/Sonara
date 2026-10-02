@@ -54,7 +54,7 @@ func bind_to_device(device_instance : DeviceInstance) -> void:
 	
 	device = device_instance
 	label.set_value(device.get_display_name())
-	remove.text = "Remove Pad" if _pad_return() else "Remove"
+	remove.text = "Remove Pad" if _pad_return() else ("Clear Band" if Multiband.is_band_chain(device) else "Remove")
 	var pad := _drum_pad()
 	choke_group.visible = pad != null
 	if pad:
@@ -116,6 +116,11 @@ func _on_remove_pressed() -> void:
 		var pad_return := _pad_return()
 		if pad_return:
 			HistoryUtil.execute(ChannelDeleteCommand.new(channel.get_project(), pad_return))
+		elif Multiband.is_band_chain(device):
+			var parent := device.get_parent_device()
+			var clear := Multiband.clear_band_command(parent, Multiband.position_of(parent, device))
+			if clear:
+				HistoryUtil.execute(clear)
 		elif channel:
 			HistoryUtil.execute(DeviceRemoveCommand.new(channel, device, device.position))
 	hide()

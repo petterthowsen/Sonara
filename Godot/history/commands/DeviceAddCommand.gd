@@ -26,9 +26,15 @@ func _init(
 ) -> void:
 	name = "Add Device"
 	channel = p_channel
-	device_instance = SlotChain.for_parent(p_parent, p_device)
 	position = p_position
 	parent = p_parent
+	if Multiband.is_multiband(parent) and not Multiband.is_band_chain(p_device):
+		# A Multiband FX always has its six band chains: the device goes into one of them.
+		var band := Multiband.target_chain(parent)
+		if band != null:
+			parent = band
+			position = -1
+	device_instance = SlotChain.for_parent(parent, p_device)
 
 
 ## Add the device at the stored position.

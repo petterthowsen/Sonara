@@ -11,6 +11,7 @@ const BUILTIN_PANEL_SCENES := {
 	"sonara.builtin.drum_machine": preload("res://devices/builtin/DrumMachineDefaultView.tscn"),
 	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
 	"sonara.builtin.compressor": preload("res://devices/builtin/CompressorDefaultView.tscn"),
+	"sonara.builtin.multiband": preload("res://devices/builtin/MultibandDefaultView.tscn"),
 }
 const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),

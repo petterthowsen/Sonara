@@ -206,12 +206,13 @@ func extra_stereo_bus_count() -> int:
 
 ## True when dropping this device on an empty tracklist/mixer should create an instrument track.
 func creates_instrument_track() -> bool:
-	return category == DeviceCategory.Instrument or is_container
+	return category == DeviceCategory.Instrument or (is_container and device_id != "sonara.builtin.multiband")
 
 
-## True when expanding this container should show one focused child at a time (Layer, Drum Machine).
+## True when expanding this container should show one focused child at a time (Layer, Drum Machine,
+## Multiband FX).
 func container_focuses_one_child() -> bool:
-	return is_container and device_id in ["sonara.builtin.layer", "sonara.builtin.drum_machine"]
+	return is_container and device_id in ["sonara.builtin.layer", "sonara.builtin.drum_machine", "sonara.builtin.multiband"]
 
 
 ## Get a human-readable device type string

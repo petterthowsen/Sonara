@@ -53,10 +53,14 @@ static func can_drop_instance_on_host(
 ) -> bool:
 	if channel == null or inst == null:
 		return false
+	if Multiband.is_band_chain(inst):
+		return false  # band positions are fixed (spec 016 D9)
 	if inst.channel_id != channel.id and not can_transfer_to_channel(inst, channel):
 		return false
 	if host_parent == null:
 		return true
+	if Multiband.is_multiband(host_parent) and SlotChain.is_chain(inst):
+		return false
 	if inst == host_parent:
 		return false
 	if inst.contains_device(host_parent):
@@ -270,6 +274,12 @@ static func drop_instance(
 ) -> void:
 	if not can_drop_instance_on_host(channel, inst, to_parent):
 		return
+	if Multiband.is_multiband(to_parent):
+		var band := Multiband.target_chain(to_parent)
+		if band == null:
+			return
+		to_parent = band
+		to_position = -1
 	if SlotChain.is_slot_parent(to_parent) and inst.get_parent_device() != to_parent and not SlotChain.is_chain(inst):
 		HistoryUtil.execute_many("Move Device", _new_slot_commands(channel, inst, to_parent, to_position))
 		return

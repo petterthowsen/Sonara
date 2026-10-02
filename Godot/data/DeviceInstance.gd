@@ -276,6 +276,7 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
 	for route in device.default_mod_routes:
 		mod_routes[_mod_key(route["source"], route["param_id"])] = float(route["amount"])
+	Multiband.ensure_chains(self)
 
 
 ## Assign a path-safe, sibling-unique display name. Emits `name_changed` when it differs.
@@ -688,7 +689,11 @@ func slot_keys() -> PackedStringArray:
 	if not device.container_focuses_one_child():
 		keys.append(CHAIN_SLOT)
 		return keys
-	for child in children:
+	var multiband := Multiband.is_multiband(self)
+	for i in children.size():
+		if multiband and not Multiband.is_active(self, i + 1):
+			continue  # only active bands are offered (spec 016 G2.2)
+		var child := children[i]
 		keys.append(pad_slot_key(child.slot_note) if _is_drum_machine() else child.id)
 	return keys
 
@@ -752,7 +757,8 @@ func slot_title(key: String) -> String:
 ## Color of slot `key`. A slot without one gets a random color that is kept from then on.
 func slot_color(key: String) -> Color:
 	if not _slot_colors.has(key):
-		_slot_colors[key] = Color.from_hsv(randf(), 0.6, 0.72)
+		var band := Multiband.position_of(self, slot_chain(key)) if Multiband.is_multiband(self) else 0
+		_slot_colors[key] = Multiband.band_color(band) if band > 0 else Color.from_hsv(randf(), 0.6, 0.72)
 	return _slot_colors[key]
 
 
@@ -1796,6 +1802,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 		instance.plugin_state = Marshalls.base64_to_raw(state_b64)
 		instance._plugin_state_restore_pending = not instance.plugin_state.is_empty()
 
+	if Multiband.is_multiband(instance):
+		instance.children.clear()  # `_init` made empty band chains; the saved ones replace them
 	for child_data in data.get("children", []):
 		if child_data is Dictionary:
 			var child := DeviceInstance.from_json(child_data)
@@ -1804,6 +1812,7 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 				instance.children.append(child)
 	instance._slots_from_json(data.get("slots", {}))
 	instance._wrap_slot_children()
+	Multiband.ensure_chains(instance)  # a Multiband FX saved with fewer than six bands
 
 	return instance
 
