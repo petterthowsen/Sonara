@@ -1,0 +1,150 @@
+[gd_scene format=3 uid="uid://wd107ykpmm32"]
+
+[ext_resource type="Script" uid="uid://bxa8prncyhsdo" path="res://export/ExportAudioDialog.gd" id="1_nvxns"]
+
+[node name="ExportAudioDialog" type="Window" unique_id=576359315]
+oversampling_override = 1.0
+title = "Export audio"
+position = Vector2i(0, 36)
+size = Vector2i(560, 640)
+visible = false
+transient = true
+force_native = true
+min_size = Vector2i(480, 520)
+script = ExtResource("1_nvxns")
+
+[node name="Background" type="PanelContainer" parent="." unique_id=1449270985]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_type_variation = &"PrimaryPanel"
+
+[node name="Margin" type="MarginContainer" parent="Background" unique_id=1804776249]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="Background/Margin" unique_id=1281023882]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Form" type="GridContainer" parent="Background/Margin/VBox" unique_id=2029204463]
+layout_mode = 2
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 8
+columns = 2
+
+[node name="RangeLabel" type="Label" parent="Background/Margin/VBox/Form" unique_id=1881633453]
+layout_mode = 2
+text = "Range"
+
+[node name="RangeRow" type="HBoxContainer" parent="Background/Margin/VBox/Form" unique_id=457218486]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RangeOption" type="OptionButton" parent="Background/Margin/VBox/Form/RangeRow" unique_id=2097335109]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RangeInfo" type="Label" parent="Background/Margin/VBox/Form/RangeRow" unique_id=1622240387]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6509804, 0.6509804, 0.6509804, 1)
+
+[node name="TailLabel" type="Label" parent="Background/Margin/VBox/Form" unique_id=1175683173]
+layout_mode = 2
+text = "Tail"
+
+[node name="TailRow" type="HBoxContainer" parent="Background/Margin/VBox/Form" unique_id=1112703519]
+layout_mode = 2
+
+[node name="TailSpin" type="SpinBox" parent="Background/Margin/VBox/Form/TailRow" unique_id=978127082]
+unique_name_in_owner = true
+layout_mode = 2
+max_value = 600.0
+step = 0.5
+suffix = "s"
+
+[node name="UntilSilent" type="CheckBox" parent="Background/Margin/VBox/Form/TailRow" unique_id=390529681]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "The tail ends once the master stays silent for a second; the tail length is the cap."
+text = "Stop early when silent"
+
+[node name="FormatLabel" type="Label" parent="Background/Margin/VBox/Form" unique_id=2031813714]
+layout_mode = 2
+text = "Format"
+
+[node name="BitDepthOption" type="OptionButton" parent="Background/Margin/VBox/Form" unique_id=92658889]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FileLabel" type="Label" parent="Background/Margin/VBox/Form" unique_id=192693939]
+layout_mode = 2
+text = "File"
+
+[node name="PathRow" type="HBoxContainer" parent="Background/Margin/VBox/Form" unique_id=1534347899]
+layout_mode = 2
+
+[node name="PathEdit" type="LineEdit" parent="Background/Margin/VBox/Form/PathRow" unique_id=1139653111]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "/path/to/mix.wav"
+
+[node name="BrowseButton" type="Button" parent="Background/Margin/VBox/Form/PathRow" unique_id=1785721105]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Browse…"
+
+[node name="MasterCheck" type="CheckBox" parent="Background/Margin/VBox" unique_id=323696773]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+text = "Master mix"
+
+[node name="StemsLabel" type="Label" parent="Background/Margin/VBox" unique_id=1050265099]
+layout_mode = 2
+text = "Stems: one WAV per checked channel, written next to the file above"
+
+[node name="StemTree" type="Tree" parent="Background/Margin/VBox" unique_id=1864502621]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+hide_root = true
+
+[node name="StatusLabel" type="Label" parent="Background/Margin/VBox" unique_id=1634418633]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ProgressBar" type="ProgressBar" parent="Background/Margin/VBox" unique_id=1606089868]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="Buttons" type="HBoxContainer" parent="Background/Margin/VBox" unique_id=367828002]
+layout_mode = 2
+alignment = 2
+
+[node name="CancelButton" type="Button" parent="Background/Margin/VBox/Buttons" unique_id=604777219]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Close"
+
+[node name="ExportButton" type="Button" parent="Background/Margin/VBox/Buttons" unique_id=994747508]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Export"
+
+[node name="FileDialog" type="FileDialog" parent="." unique_id=1335811478]
+unique_name_in_owner = true
+title = "Export audio to"
+access = 2
+filters = PackedStringArray("*.wav ; WAV audio")
+use_native_dialog = true

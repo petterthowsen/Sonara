@@ -6,7 +6,7 @@ var logger : Log = Log.make("MainMenu")
 
 enum  MENU { File, Edit, View, AI }
 
-enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Sep3, Quit}
+enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
@@ -35,6 +35,7 @@ func _ready() -> void:
 	file.add_separator("", FILE.Sep2)
 	file.add_item("Import DAWproject…", FILE.Import_DAWproject)
 	file.add_item("Export DAWproject…", FILE.Export_DAWproject)
+	file.add_item("Export Audio…", FILE.Export_Audio)
 	file.add_separator("", FILE.Sep3)
 	file.add_item("Quit", FILE.Quit)
 	
@@ -104,6 +105,8 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_import_dawproject()
 			FILE.Export_DAWproject:
 				_on_export_dawproject()
+			FILE.Export_Audio:
+				Sonara.editor.show_export_audio_dialog()
 			FILE.Quit:
 				_on_quit()
 	
@@ -149,6 +152,7 @@ func _set_project_dependent_items_enabled(enabled: bool) -> void:
 	file.set_item_disabled(file.get_item_index(FILE.Save), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save_As), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Export_DAWproject), not enabled)
+	file.set_item_disabled(file.get_item_index(FILE.Export_Audio), not enabled)
 	
 	# Edit menu undo/redo depend on history, not just project open
 	_update_undo_redo_menu()

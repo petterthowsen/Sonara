@@ -7,7 +7,7 @@ Implementation plan for the assistant's `analyze` tool. The assistant can't hear
 ## Checklist
 
 - [x] Phase 1: Engine offline render core
-- [ ] Phase 2: Export to WAV from Godot (verifies Phase 1 end to end)
+- [x] Phase 2: Export to WAV from Godot (verifies Phase 1 end to end)
 - [ ] Phase 3: Engine analyzer
 - [ ] Phase 4: Analysis render jobs
 - [ ] Phase 5: Godot `analyze` tool
@@ -59,11 +59,16 @@ oscdump 7001   # watch for /render/progress, /render/done or /render/failed (sto
 
 This is the user-visible half of issue #49 and the end-to-end check of Phase 1.
 
-- [ ] Add a `RenderService` (or an extension of the `AudioEngineOSC` model layer). It starts jobs, tracks progress and done/failed by job id, and exposes signals. UI code never sends OSC directly.
-- [ ] Export dialog. It has range options (whole project, loop region, or selection), a tail setting, a file path, and optional stems by channel. Show a progress bar with a cancel button.
-- [ ] Disable transport controls while a render runs.
-- [ ] Add a test script that drives `RenderService` against a mocked transport.
-- [ ] Update the "Export/rendering" items in `TODO.md` and comment on #49.
+- [x?] Add a `RenderService` (or an extension of the `AudioEngineOSC` model layer). It starts jobs, tracks progress and done/failed by job id, and exposes signals. UI code never sends OSC directly.
+  - _Done:_ `Godot/core/RenderService.gd`, owned by `Editor` (`render_service`). The transport is injectable (`transport.send/listen`), which is how the tests mock it.
+- [x?] Export dialog. It has range options (whole project, loop region, or selection), a tail setting, a file path, and optional stems by channel. Show a progress bar with a cancel button.
+  - _Done:_ File › Export Audio… opens `export/ExportAudioDialog.tscn`, a native `Window` instanced in `Editor.tscn`. The project has no loop region yet, so the range options are whole project and arranger selection; add a loop option when a loop region exists. Stems are written next to the master as `<name> - <channel>.wav`; bit depth is 16, 24 or 32-bit float.
+- [x?] Disable transport controls while a render runs.
+  - _Done:_ play and stop are disabled, and `Editor.play/pause/stop/set_playhead` return early while `render_service.is_running`.
+- [x?] Add a test script that drives `RenderService` against a mocked transport.
+  - _Done:_ `Godot/tests/test_render_service.gd` (also covers the dialog's option building).
+- [x?] Update the "Export/rendering" items in `TODO.md` and comment on #49.
+  - _Done:_ `TODO.md` is updated. The #49 comment is not posted yet.
 
 _Verify:_ export a project from the UI with stems, and import the stems back into Sonara. They should line up with the original clips.
 

@@ -19,6 +19,7 @@
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
 [ext_resource type="PackedScene" uid="uid://dqpm2sagwx4tb" path="res://components/PopupMessage.tscn" id="14_popup"]
 [ext_resource type="PackedScene" path="res://dawproject/TransferReportDialog.tscn" id="15_report"]
+[ext_resource type="PackedScene" uid="uid://wd107ykpmm32" path="res://export/ExportAudioDialog.tscn" id="20_flnwk"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
 content_margin_left = 4.0
@@ -497,3 +498,5 @@ oversampling_override = 1.0
 
 [node name="TransferReportDialog" parent="." unique_id=859814544 instance=ExtResource("15_report")]
 oversampling_override = 1.0
+
+[node name="ExportAudioDialog" parent="." unique_id=576359315 instance=ExtResource("20_flnwk")]

@@ -62,6 +62,7 @@ signal view_changed(view: int)  # Editor.View
 
 # shows DAWproject transfer reports and import/export errors
 @onready var transfer_report_dialog: TransferReportDialog = $TransferReportDialog
+@onready var export_audio_dialog: ExportAudioDialog = $ExportAudioDialog
 
 @onready var play_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/PlayButton
 @onready var stop_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/StopButton
@@ -136,6 +137,9 @@ const PLAYHEAD_CORRECTION_RATE := 5.0
 ## since there is no arranger outside the scene tree.
 var test_time_range_override: Dictionary = {}
 
+## Offline render jobs (export). While one runs the engine ignores the transport.
+var render_service: RenderService
+
 # Selection State (Channels and tracks)
 var focused_channel : Channel
 var focused_track: Track
@@ -152,6 +156,11 @@ var current_view: View = View.ARRANGER
 # ============================================================================
 
 func _ready():
+	render_service = RenderService.new()
+	render_service.name = "RenderService"
+	add_child(render_service)
+	render_service.running_changed.connect(_on_render_running_changed)
+
 	# Connect UI signals
 	_connect_ui_signals()
 
@@ -542,9 +551,26 @@ func import_dawproject(path: String, audio_dir: String = "") -> Dictionary:
 # TRANSPORT CONTROL
 # ============================================================================
 
+func is_rendering() -> bool:
+	return render_service != null and render_service.is_running
+
+
+## Opens the export audio dialog for the open project.
+func show_export_audio_dialog() -> void:
+	if project == null:
+		return
+	export_audio_dialog.open_for(project, render_service, get_time_range())
+
+
+## The engine silences live output and ignores the transport during a render, so grey the controls.
+func _on_render_running_changed(running: bool) -> void:
+	play_button.disabled = running
+	stop_button.disabled = running
+
+
 func play() -> void:
 	"""Start playback from current playhead position."""
-	if is_playing:
+	if is_playing or is_rendering():
 		return
 
 	# Send play command to audio engine (it will update our state)
@@ -554,6 +580,8 @@ func play() -> void:
 
 func pause() -> void:
 	"""Pause playback (stops playing but keeps playhead position)."""
+	if is_rendering():
+		return
 	# Send pause command to audio engine (it will update our state)
 	AudioEngineOSC.send("/transport/pause", [])
 	logger.info("[Editor] Pause command sent to audio engine")
@@ -561,6 +589,8 @@ func pause() -> void:
 
 func stop() -> void:
 	"""Stop playback and handle start position based on playback state."""
+	if is_rendering():
+		return
 	if is_playing:
 		# If playing, stop and seek to start_position
 		AudioEngineOSC.send("/transport/stop", [])
@@ -592,6 +622,8 @@ func get_time_range() -> Dictionary:
 
 func set_playhead(ticks: int) -> void:
 	"""Set playhead position."""
+	if is_rendering():
+		return
 	# Send seek command to audio engine
 	AudioEngineOSC.send("/transport/seek", [ticks])
 	# Update both local and engine playhead immediately to avoid desync

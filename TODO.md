@@ -186,12 +186,12 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 ### Save / Load / Export
 
 - [ ] Welcome Screen with recent projects, templates
-- [ ] Export/rendering (offline render core and WAV export: `docs/analyze-plan.md` Phases 1–2)
+- [x] Export/rendering (offline render core and WAV export: `docs/analyze-plan.md` Phases 1–2). File › Export Audio…
   - [ ] bouncing tracks or clips to audio clip on a new track
   - [ ] bounce in-place a midi clip to audio clip, replacing midi clip with audio and auto-converting channel to hybrid track (midi+audio)?
 - [ ] Export MIDI
 - [x?] DAWproject import and export, core subset (tracks, channels, routing, sends, MIDI/audio clips, automation, markers, tempo and signature maps, CLAP and built-in devices with state, transfer report). Spec: `docs/specs/010-dawproject-core/`
-- [ ] Export menu with separate track (stem) selection
+- [x] Export menu with separate track (stem) selection (Export Audio… dialog, per-channel stems)
 
 ### Hardware & MIDI
 
