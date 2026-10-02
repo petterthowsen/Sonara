@@ -2184,9 +2184,10 @@ impl OscServer {
                 channel_id,
                 device_path,
                 keys,
+                ranges,
             } => (
                 device_path.to_osc_addr(channel_id, "keys/info"),
-                sfz_key_info_args(&keys),
+                sfz_key_info_args(&keys, &ranges),
             ),
             EngineStatus::PluginStateSaved {
                 channel_id,
@@ -3107,14 +3108,20 @@ fn parse_mod_command(
     }
 }
 
-/// Args for `.../keys/info`: the count, then `(key, is_keyswitch, label)` per key.
-fn sfz_key_info_args(keys: &[(u8, bool, String)]) -> Vec<OscType> {
-    let mut args = Vec::with_capacity(1 + keys.len() * 3);
+/// Args for `.../keys/info`: the key count, `(key, is_keyswitch, label)` per key, then the range
+/// count and `(lo, hi)` per playable range.
+fn sfz_key_info_args(keys: &[(u8, bool, String)], ranges: &[(u8, u8)]) -> Vec<OscType> {
+    let mut args = Vec::with_capacity(2 + keys.len() * 3 + ranges.len() * 2);
     args.push(OscType::Int(keys.len() as i32));
     for (key, is_keyswitch, label) in keys {
         args.push(OscType::Int(*key as i32));
         args.push(OscType::Int(*is_keyswitch as i32));
         args.push(OscType::String(label.clone()));
+    }
+    args.push(OscType::Int(ranges.len() as i32));
+    for (lo, hi) in ranges {
+        args.push(OscType::Int(*lo as i32));
+        args.push(OscType::Int(*hi as i32));
     }
     args
 }
@@ -3124,8 +3131,10 @@ mod tests {
     #[test]
     fn sfz_key_info_args_layout() {
         use rosc::OscType;
-        let args =
-            super::sfz_key_info_args(&[(24, true, "Sustain".into()), (60, false, "Open".into())]);
+        let args = super::sfz_key_info_args(
+            &[(24, true, "Sustain".into()), (60, false, "Open".into())],
+            &[(36, 72), (80, 90)],
+        );
         assert_eq!(
             args,
             vec![
@@ -3136,10 +3145,18 @@ mod tests {
                 OscType::Int(60),
                 OscType::Int(0),
                 OscType::String("Open".into()),
+                OscType::Int(2),
+                OscType::Int(36),
+                OscType::Int(72),
+                OscType::Int(80),
+                OscType::Int(90),
             ]
         );
-        // An empty list is still a message, so Godot clears stale labels.
-        assert_eq!(super::sfz_key_info_args(&[]), vec![OscType::Int(0)]);
+        // An empty list is still a message, so Godot clears stale labels and ranges.
+        assert_eq!(
+            super::sfz_key_info_args(&[], &[]),
+            vec![OscType::Int(0), OscType::Int(0)]
+        );
     }
 
     use super::*;

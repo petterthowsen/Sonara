@@ -30,6 +30,7 @@ pub struct KeyInfo {
 enum Reply {
     Blob(Vec<u8>),
     Text(String),
+    Ints(Vec<i32>),
     Other,
 }
 
@@ -73,6 +74,22 @@ unsafe extern "C" fn on_reply(
             } else {
                 Reply::Text(unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned())
             }
+        }
+        // sfizz replies integers as `i` (int32) or `h` (int64) depending on the property.
+        Some(b'i' | b'h') if !args.is_null() && sig.bytes().all(|c| c == b'i' || c == b'h') => {
+            Reply::Ints(
+                sig.bytes()
+                    .enumerate()
+                    .map(|(n, c)| unsafe {
+                        let arg = *args.add(n);
+                        if c == b'h' {
+                            arg.h as i32
+                        } else {
+                            arg.i
+                        }
+                    })
+                    .collect(),
+            )
         }
         _ => Reply::Other,
     };
@@ -144,6 +161,41 @@ fn keyswitch_label(synth: &mut sfizz::Synth, key: u8) -> String {
         Some(Reply::Text(text)) => text,
         _ => String::new(),
     }
+}
+
+/// Keys the SFZ's regions can play: the union of every region's `key_range`, merged into sorted,
+/// non-overlapping inclusive `(lo, hi)` ranges. Keyswitch keys are not region keys, so they are
+/// not included. Empty when the SFZ has no regions.
+pub fn read_playable_ranges(synth: &mut sfizz::Synth) -> Vec<(u8, u8)> {
+    let count = match query(synth, "/num_regions") {
+        Some(Reply::Ints(v)) => v.first().copied().unwrap_or(0),
+        _ => 0,
+    };
+    let mut ranges = Vec::new();
+    for region in 0..count.max(0) {
+        if let Some(Reply::Ints(v)) = query(synth, &format!("/region{region}/key_range")) {
+            if let [lo, hi, ..] = v[..] {
+                // A disabled region (`key=-1`) has a negative or inverted range.
+                if lo >= 0 && lo <= hi {
+                    ranges.push((lo.min(127) as u8, hi.min(127) as u8));
+                }
+            }
+        }
+    }
+    merge_ranges(ranges)
+}
+
+/// Sort and merge overlapping or touching inclusive ranges.
+fn merge_ranges(mut ranges: Vec<(u8, u8)>) -> Vec<(u8, u8)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(u8, u8)> = Vec::with_capacity(ranges.len());
+    for (lo, hi) in ranges {
+        match merged.last_mut() {
+            Some(last) if lo as u16 <= last.1 as u16 + 1 => last.1 = last.1.max(hi),
+            _ => merged.push((lo, hi)),
+        }
+    }
+    merged
 }
 
 /// Everything the loaded SFZ names or switches, sorted by key. A key that is both labeled and a
@@ -221,10 +273,28 @@ mod tests {
     }
 
     #[test]
+    fn playable_ranges_merge_regions() {
+        let mut synth = load_fixture();
+        // Regions play keys 60 and 62 only: two ranges with a gap, keyswitches excluded.
+        assert_eq!(read_playable_ranges(&mut synth), vec![(60, 60), (62, 62)]);
+    }
+
+    #[test]
+    fn merge_ranges_joins_overlapping_and_touching() {
+        assert_eq!(
+            merge_ranges(vec![(48, 60), (36, 47), (55, 70), (80, 90)]),
+            vec![(36, 70), (80, 90)]
+        );
+        assert!(merge_ranges(vec![]).is_empty());
+    }
+
+    #[test]
     fn plain_sfz_has_no_key_info() {
         let mut synth = sfizz::Synth::new().expect("synth");
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/test_kick.sfz");
         synth.load_sfz(path).expect("load kick");
         assert!(read_key_info(&mut synth).is_empty());
+        // The kick plays its one key.
+        assert_eq!(read_playable_ranges(&mut synth), vec![(36, 36)]);
     }
 }

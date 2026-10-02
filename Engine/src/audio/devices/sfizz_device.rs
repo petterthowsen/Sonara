@@ -3,7 +3,7 @@
 //! Provides built-in SFZ sample playback using the sfizz library.
 //! Supports background loading of SFZ files for real-time safety.
 
-use super::sfizz_keys::{read_key_info, KeyInfo};
+use super::sfizz_keys::{read_key_info, read_playable_ranges, KeyInfo};
 use super::{
     AudioDevice, DeviceCategory, DevicePath, DeviceVariant, FileLoadingSupport, MidiPort, ParamId,
     ParamInfo, ParamType, ParamValue, PortFlow,
@@ -100,6 +100,7 @@ pub struct SfizzDevice {
     // Key labels and keyswitches declared by the loaded SFZ (spec 014)
     key_info: Arc<Mutex<Vec<KeyInfo>>>,
     key_info_changed: Arc<Mutex<bool>>,
+    playable_ranges: Arc<Mutex<Vec<(u8, u8)>>>,
 
     // Pre-allocated buffers for planar audio conversion
     left_buffer: Vec<f32>,
@@ -214,6 +215,7 @@ impl SfizzDevice {
             parameters_changed: Arc::new(Mutex::new(false)),
             key_info: Arc::new(Mutex::new(Vec::new())),
             key_info_changed: Arc::new(Mutex::new(false)),
+            playable_ranges: Arc::new(Mutex::new(Vec::new())),
             left_buffer: vec![0.0; max_buffer_size],
             right_buffer: vec![0.0; max_buffer_size],
             is_active: true,
@@ -251,6 +253,11 @@ impl SfizzDevice {
     }
 
     /// Key labels and keyswitches of the loaded SFZ. Empty when it declares none.
+    /// Inclusive `(lo, hi)` key ranges the loaded SFZ's regions play, sorted and merged.
+    pub fn playable_ranges(&self) -> Vec<(u8, u8)> {
+        self.playable_ranges.lock().unwrap().clone()
+    }
+
     pub fn key_info(&self) -> Vec<KeyInfo> {
         self.key_info.lock().unwrap().clone()
     }
@@ -334,6 +341,7 @@ impl SfizzDevice {
         let parameters_changed = Arc::clone(&self.parameters_changed);
         let key_info = Arc::clone(&self.key_info);
         let key_info_changed = Arc::clone(&self.key_info_changed);
+        let playable_ranges = Arc::clone(&self.playable_ranges);
         let sample_rate = self.sample_rate;
         let max_buffer_size = self.max_buffer_size;
         let status_tx = self.status_tx.clone();
@@ -411,7 +419,10 @@ impl SfizzDevice {
                             for key in &keys {
                                 info!("  key {} [{:?}]: {:?}", key.key, key.kind, key.label);
                             }
+                            let ranges = read_playable_ranges(&mut synth);
+                            info!("🎹 SFZ playable key ranges: {:?}", ranges);
                             *key_info.lock().unwrap() = keys;
+                            *playable_ranges.lock().unwrap() = ranges;
                             *key_info_changed.lock().unwrap() = true;
 
                             // Mark that parameters have changed so they get re-sent to Godot

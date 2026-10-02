@@ -721,11 +721,13 @@ pub enum EngineStatus {
     },
     /// Key labels and keyswitches an SFZ declares, sent after every SFZ load (empty when it
     /// declares none, so Godot clears the previous file's labels). Each entry is
-    /// `(key, is_keyswitch, label)`.
+    /// `(key, is_keyswitch, label)`. `ranges` are the inclusive `(lo, hi)` keys the SFZ's
+    /// regions play, sorted and merged.
     SfzKeyInfo {
         channel_id: ChannelId,
         device_path: DevicePath,
         keys: Vec<(u8, bool, String)>,
+        ranges: Vec<(u8, u8)>,
     },
 
     // Plugin state responses

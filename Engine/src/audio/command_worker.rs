@@ -1370,6 +1370,7 @@ fn collect_sfizz_key_info(
         channel_id,
         device_path,
         keys,
+        ranges: sfizz.playable_ranges(),
     });
 }
 
