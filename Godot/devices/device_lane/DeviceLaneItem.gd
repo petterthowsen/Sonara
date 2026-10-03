@@ -104,7 +104,7 @@ func _sync_groups() -> void:
 		var group: DeviceSlotGroup = _groups.get(keys[i])
 		if group == null:
 			group = DeviceSlotGroup.new()
-			group.setup(device, keys[i])
+			group.setup(device, keys[i], _in_slot)
 			group.context_menu_requested.connect(context_menu_requested.emit)
 			add_child(group)
 			_groups[keys[i]] = group

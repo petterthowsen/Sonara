@@ -6,10 +6,24 @@
 class_name DeviceSlotGroup extends MarginContainer
 
 ## Height of the color bracket above the slot's panels, in pixels.
-const STRIP_HEIGHT := 10
+const STRIP_HEIGHT := 12
 
 ## Thickness of the bracket's bar and end ticks, in pixels.
 const BAR := 4.0
+
+## Thickness of the tick down at the left end of the bracket, in pixels.
+const LEFT_TICK_WIDTH := 8.0
+
+## How far a bracket reaches past the right end of its row, so the bracket of a slot nested in
+## the row ends inside this one instead of on top of it.
+const END_OVERHANG := 24
+
+## Height of the triangular cap at the right end, in pixels. It reaches below the strip, into the
+## empty margin right of the last device.
+const CAP_HEIGHT := 24.0
+
+## How far the first slot's bar reaches back over the container's panel, from the panel's right edge.
+const BANNER_REACH := 32.0
 
 ## Width of an empty slot's drop zone.
 const EMPTY_WIDTH := 200.0
@@ -18,6 +32,8 @@ signal context_menu_requested(device_instance: DeviceInstance, in_slot: bool)
 
 var container: DeviceInstance = null
 var key := ""
+## True for a slot of a device that is itself inside a slot.
+var nested := false
 var row: DeviceRow = null
 ## Slot row drop rules (see DeviceDropTarget).
 var drop_host := DeviceChainDropHost.new()
@@ -27,14 +43,18 @@ var _chain: DeviceInstance = null
 
 
 ## Show slot `p_key` of `p_container`.
-func setup(p_container: DeviceInstance, p_key: String) -> void:
+func setup(p_container: DeviceInstance, p_key: String, p_nested := false) -> void:
 	container = p_container
+	nested = p_nested
 	key = p_key
 	name = "Slot_%s" % key.validate_node_name()
 	add_theme_constant_override("margin_left", DeviceRow.GAP)
-	add_theme_constant_override("margin_top", STRIP_HEIGHT)
+	# A nested slot sits in its parent's row, already below the parent's strip: it adds no margin
+	# and draws its bracket up over the parent's instead, so deep panels keep their full height.
+	add_theme_constant_override("margin_top", 0 if nested else STRIP_HEIGHT)
+	add_theme_constant_override("margin_right", END_OVERHANG)
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	resized.connect(queue_redraw)
+	item_rect_changed.connect(queue_redraw)
 
 	row = DeviceRow.new()
 	row.in_slot = true
@@ -115,13 +135,24 @@ func _sync() -> void:
 	queue_redraw()
 
 
-## Bracket: a bar along the top with a tick down at each end, over the row (not the gap before it).
+## Bracket: a bar along the top with a tick down at the left end and a triangular cap at the right, over the row (not the gap before it).
+## The first slot's bar flows out of the container's header, starting BANNER_REACH left of the
+## panel's right edge, like a banner.
 func _draw() -> void:
 	var color := slot_color()
 	var left := float(DeviceRow.GAP)
-	draw_rect(Rect2(left, 0, size.x - left, BAR), color)
-	draw_rect(Rect2(left, 0, BAR, STRIP_HEIGHT), color)
-	draw_rect(Rect2(size.x - BAR, 0, BAR, STRIP_HEIGHT), color)
+	var bar_left := left
+	var panel := get_parent().get_child(0) as Control if get_index() == 1 else null
+	if panel:
+		bar_left = panel.position.x + panel.size.x - DeviceRow.PANEL_MARGIN - BANNER_REACH - position.x
+	var top := -float(STRIP_HEIGHT) if nested else 0.0
+	draw_rect(Rect2(bar_left, top, size.x - bar_left, BAR), color)
+	draw_rect(Rect2(bar_left, top, LEFT_TICK_WIDTH, STRIP_HEIGHT), color)
+	# End cap: a right triangle, upright edge on the right, sloping down to follow the last device.
+	var right := size.x
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(right - END_OVERHANG, top), Vector2(right, top), Vector2(right, top + CAP_HEIGHT),
+	]), color)
 
 
 ## Drops on the slot resolve from the pointer through the enclosing device lane.
