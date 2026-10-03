@@ -323,8 +323,7 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
         file_type_description,
         is_container: device.is_container(),
         parameters,
-        mod_sources: device.mod_sources(),
-        default_mod_routes: device.mod_routes(),
+        default_modulators: device.default_modulators(),
     }
 }
 

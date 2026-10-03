@@ -185,8 +185,11 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/move_device` | `i:from_position, i:to_position` | Reorder top-level devices |
 | `/channel/{id}/clear_devices` | - | Remove all devices from channel |
 | `/channel/{id}/device/{path}/param/{param_id}` | `f:normalized_value` or `i:index` | Set device parameter |
-| `/channel/{id}/device/{path}/mod/set` | `s:source_id, i:param_id, f:amount` | Add, update or (amount 0) remove a modulation route; amount is clamped to −1..1 (see Modulation routes) |
-| `/channel/{id}/device/{path}/mod/clear` | - | Remove every modulation route |
+| `/channel/{id}/device/{path}/modulator/add` | `i:mod_id, s:kind` | Add a modulator with its kind's default parameters (`lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`). Wraps the device if it has none (see Modulators) |
+| `/channel/{id}/device/{path}/modulator/{mod_id}/remove` | - | Remove a modulator and its routes; the last one unwraps the device |
+| `/channel/{id}/device/{path}/modulator/{mod_id}/param/{id}/value` | `f:normalized` | Set a modulator parameter (floats clamp, enums and bools snap; the echo carries the canonical value) |
+| `/channel/{id}/device/{path}/modulator/{mod_id}/route/set` | `s:target, f:amount` | Add, update or (amount 0) remove a route to `param/{id}`, `child/{i.j…}/param/{id}` or `mod/{mod_id}/param/{id}`; amount is clamped to −1..1 |
+| `/channel/{id}/device/{path}/modulator/clear` | - | Remove every modulator and route |
 | `/channel/{id}/device/{path}/activate` | `i:active` | Activate/deactivate device (1=load, 0=unload) |
 | `/channel/{id}/device/{path}/enable` | `i:enabled` | Enable/disable device (1=on, 0=bypass) |
 | `/channel/{id}/device/{path}/add_device` | `s:device_id, i:position, i:active?, i:enabled?, s:type?, s:file?` | Add a child into a container device |
@@ -202,7 +205,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
 | `/channel/{id}/device/{path}/load_file` | `s:abs_path, s:req_id?` | Load an SFZ into Sfizz, or an audio file into Sampler |
 | `/channel/{id}/device/{path}/reload` | - | Reload a crashed plugin (see Plugin crash and reload) |
-| `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state`, for SFZ/CLAP devices its parameter list, and for devices with modulation its routes (see Recovering missed state) |
+| `/channel/{id}/device/{path}/state/get` | - | Re-send the device's `loading_state`, for SFZ/CLAP devices its parameter list, and for devices with modulators the modulator list (see Recovering missed state) |
 
 `{path}` is `{position}` at the channel root, or `{position}/child/{i}/child/{j}/...` for nested devices.
 
@@ -213,17 +216,23 @@ Examples:
 
 ### Device State Updates (Rust -> Godot)
 
-Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`, `/param/{id}/value`, `/mod/set`, `/mod/clear`, `/data`).
+Status echoes use the same path as the command (`/active`, `/enabled`, `/loading_state`,
+`/param/{id}/value`, `/modulator/...`, `/data`).
 
-**Modulation routes** (`{device}/mod/set [s:source_id, i:param_id, f:amount]`, `{device}/mod/clear`).
-A route moves a parameter by `amount` (−1..1, normalized units per unit of source) from one of the
-device's modulation sources (advertised in `/builtin/info`). Routes are device state, not
-parameters, and are evaluated inside the device per voice (ADR-0011). The engine applies them on
-the command thread, refuses unknown sources and non-modulatable parameters (logged, no echo) and
-echoes the applied, clamped amount as `{device}/mod/set`; `mod/clear` echoes `mod/clear`. Godot
-swallows the echoes of its own edits like parameter echoes (`DeviceInstance._consume_mod_echo`).
-Godot re-sends `mod/clear` plus every route from `DeviceInstance.sync_to_engine()`, so the project
-is authoritative.
+**Modulators** (`{device}/modulator/...`). A modulator belongs to one device instance and drives
+parameters of that device, of a device nested inside it, or (later) of another modulator. Its
+kind is one of `lfo`, `adsr`, `ad`, `velocity`, `keytrack`, `random`; each kind has its own
+parameter table (advertised in the `/builtin/modulator_*` batch). `modulator/add` wraps the
+device in a transparent `ModulatedDevice` the first time and `modulator/remove` (or
+`modulator/clear`) unwraps it again, so a device without modulators costs nothing. Routes are
+device state, not parameters, and are evaluated on the command thread's control step (64 frames),
+next to the base value (ADR-0014). The engine echoes the applied state on the same address:
+`modulator/add` (mod_id, kind), `modulator/{id}/remove`, `modulator/{id}/param/{p}/value` (the
+canonical normalized value), `modulator/{id}/route/set` (target, clamped amount) and
+`modulator/clear`. A route whose target can't resolve or isn't modulatable is logged as an error
+and echoed with amount 0, so the UI drops it. Godot swallows the echoes of its own edits like
+parameter echoes, and re-sends `modulator/clear` plus every modulator, parameter and route from
+`DeviceInstance.sync_to_engine()`, so the project is authoritative.
 
 **Loading States** (`{device}/loading_state [s:state]`, sent on every transition):
 - **`idle`**: No content loaded (e.g., SFZ sampler with no file loaded)
@@ -247,9 +256,9 @@ answers dozens of device loads). The engine replies with:
 - `{device}/param/count` + `param/info`, only for devices whose parameters come from loaded
   content (Sfizz, CLAP) and only once that list is non-empty. Built-ins with fixed parameters
   keep Godot's registry metadata and get nothing.
-- `{device}/mod/clear` followed by one `{device}/mod/set` per route, only for devices that
-  advertise modulation sources (PolySynth). Godot applies the clear, so routes missing in the
-  engine disappear locally too.
+- `{device}/modulator/clear` followed by one `{device}/modulator/add` per modulator, each of its
+  `param/{id}/value` messages and each `route/set`, only for devices that carry modulators. Godot
+  applies the clear, so modulators missing in the engine disappear locally too.
 
 Godot asks for every device once, 1 s after the project connects (`Project._resync_device_states`),
 and every 2 s for a device that stays `loading` (`DeviceInstance._schedule_loading_recheck`).
@@ -364,20 +373,39 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
     s:module, i:automatable, i:modulatable
   ),
   i:is_container,
-  i:source_count,
-  repeat source_count times: (s:id, s:name, i:bipolar),
-  i:route_count,
-  repeat route_count times: (s:source_id, i:param_id, f:amount)
+  i:default_modulator_count,
+  repeat default_modulator_count times: (
+    s:kind, s:name,
+    i:param_count, repeat: (i:param_id, f:normalized),
+    i:route_count, repeat: (s:target, f:amount)
+  )
 ]
 ```
 - `type`: "float" | "bool" | "enum"
 - `module`: group the parameter belongs to (EQ `Band 1`, `Output`), "" if none; the automation picker prefixes it when a name repeats. `automatable` 0 keeps the parameter out of the picker. `modulatable` 1 means a modulator can drive it (an automatable float).
 - For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
 - `is_container`: 1 when the device can own nested children (Chain, Layer, Drum Machine).
-- The modulation block follows `is_container`: the sources the device offers (`bipolar` 1 =
-  runs −1..1, else 0..1) and the routes a fresh instance starts with (its default patch; PolySynth:
-  `filter_env` → `31` Filter Cutoff at +0.35). Godot seeds a new `DeviceInstance.mod_routes` from
-  them. A device without modulation sends `0, 0`; Godot treats a missing block the same way.
+- The default-modulator block follows `is_container`: one entry per modulator a fresh instance
+  starts with, with its kind, name, normalized parameters (by the kind's IDs) and its routes into
+  the device. Godot seeds a new `DeviceInstance` from them and does not re-send them on load. A
+  device without a default patch sends `0`. PolySynth's default patch (Filter Env → Cutoff) lands
+  here in spec 018 Phase 6.
+
+##### Modulator Kinds (Rust → Godot)
+The same `/builtin/request` batch advertises the modulator kinds, after the devices:
+```
+/builtin/modulator_info [i:kind_count]
+repeat kind_count times:
+  /builtin/modulator_kind [
+    s:id, s:name, i:bipolar, i:param_count,
+    repeat param_count times: (the same parameter tuple as /builtin/info)
+  ]
+/builtin/modulator_complete [i:kind_count]
+```
+`bipolar` 1 means the kind runs −1..1 (LFO, keytrack, random), else 0..1 (the envelopes and
+velocity). The kinds are engine-global, not per device. Godot stores each kind's parameters as
+ordinary `DeviceParameter`s, so the Modulators pane builds its controls from the same component
+set as a device.
 
 #### CLAP Plugins
 

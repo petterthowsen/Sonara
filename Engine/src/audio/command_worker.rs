@@ -943,6 +943,9 @@ impl CommandWorker {
         for device_info in device_infos {
             self.send_status(device_info);
         }
+        for kind_info in crate::audio::commands::modulator_kind_infos() {
+            self.send_status(kind_info);
+        }
         info!("Advertised {} builtin devices", count);
         self.send_status(EngineStatus::BuiltinDevicesComplete { count });
     }

@@ -293,6 +293,18 @@ pub struct ModRoute {
     pub amount: f32,
 }
 
+/// A modulator a fresh device instance starts with: its kind, display name, normalized
+/// parameters (by the kind's parameter IDs) and its routes (`target string`, amount). Devices
+/// advertise these through `/builtin/info`, so Godot seeds a new instance's modulators from
+/// them. A device without a default patch returns an empty list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultModulator {
+    pub kind: crate::audio::modulation::ModulatorKind,
+    pub name: String,
+    pub params: Vec<(ParamId, f32)>,
+    pub routes: Vec<(String, f32)>,
+}
+
 /// Base trait for all audio devices (instruments and effects)
 ///
 /// Designed to support:
@@ -477,6 +489,12 @@ pub trait AudioDevice: Send {
 
     /// The current routes (for state/get and tests). Default: none.
     fn mod_routes(&self) -> Vec<ModRoute> {
+        Vec::new()
+    }
+
+    /// Modulators a fresh instance starts with (the device's default patch, advertised in
+    /// `/builtin/info`). Default: none.
+    fn default_modulators(&self) -> Vec<DefaultModulator> {
         Vec::new()
     }
 

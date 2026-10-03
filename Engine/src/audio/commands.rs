@@ -38,6 +38,27 @@ pub struct BuiltinParamInfo {
     pub is_modulatable: bool,
 }
 
+impl From<&super::devices::ParamInfo> for BuiltinParamInfo {
+    fn from(p: &super::devices::ParamInfo) -> Self {
+        Self {
+            id: p.id,
+            name: p.name.clone(),
+            unit: p.unit.clone(),
+            min: p.min,
+            max: p.max,
+            default: p.default,
+            param_type: p.param_type,
+            syncable: p.syncable,
+            enum_values: p.enum_values.clone(),
+            is_logarithmic: p.is_logarithmic,
+            skew: p.skew,
+            module: p.module.clone(),
+            is_automation_safe: p.is_automation_safe,
+            is_modulatable: p.is_modulatable,
+        }
+    }
+}
+
 /// What `/audio/config` reports: the running stream, what was asked for, and the PipeWire graph.
 #[derive(Debug, Clone, Default)]
 pub struct AudioConfigReport {
@@ -341,16 +362,37 @@ pub enum AudioCommand {
         param_id: u32,
         value: super::types::ParamSetValue,
     },
-    /// Add, update or (amount 0) remove one modulation route. Echoed as `ModRouteChanged`.
-    SetModRoute {
+    /// Add a modulator to a device, wrapping it if it isn't yet. Echoed as `ModulatorAdded`.
+    AddModulator {
         channel_id: ChannelId,
         device_path: DevicePath,
-        source: String,
+        mod_id: u8,
+        kind: String,
+    },
+    /// Remove a modulator and its routes. Echoed as `ModulatorRemoved`.
+    RemoveModulator {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
+    },
+    /// Set a modulator parameter. Echoed as `ModulatorParamChanged`.
+    SetModulatorParameter {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
         param_id: u32,
+        value: f32,
+    },
+    /// Add, update or (amount 0) remove one modulator route. Echoed as `ModulatorRouteChanged`.
+    SetModulatorRoute {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
+        target: String,
         amount: f32,
     },
-    /// Remove every modulation route. Echoed as `ModRoutesCleared`.
-    ClearModRoutes {
+    /// Remove every modulator and route. Echoed as `ModulatorsCleared`.
+    ClearModulators {
         channel_id: ChannelId,
         device_path: DevicePath,
     },
@@ -679,10 +721,8 @@ pub enum EngineStatus {
         file_type_description: String,
         is_container: bool,
         parameters: Vec<BuiltinParamInfo>,
-        /// Modulation sources the device offers (empty: no modulation).
-        mod_sources: Vec<super::devices::ModSourceInfo>,
-        /// The routes a fresh instance starts with (its default patch).
-        default_mod_routes: Vec<super::devices::ModRoute>,
+        /// Modulators a fresh instance starts with (the device's default patch; empty: none).
+        default_modulators: Vec<super::devices::DefaultModulator>,
     },
     BuiltinDevicesComplete {
         count: usize,
@@ -760,18 +800,55 @@ pub enum EngineStatus {
         value: f32, // Normalized 0.0-1.0
     },
 
-    /// A modulation route was set (echo of `mod/set`, or a `state/get` resend). Amount 0 = removed.
-    ModRouteChanged {
+    /// A modulator was added (echo of `modulator/add`, or a `state/get` resend).
+    ModulatorAdded {
         channel_id: ChannelId,
         device_path: DevicePath,
-        source: String,
+        mod_id: u8,
+        kind: String,
+    },
+    /// A modulator was removed (echo of `modulator/{id}/remove`).
+    ModulatorRemoved {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
+    },
+    /// A modulator parameter changed (echo of `modulator/{id}/param/{p}/value`, or a resend).
+    ModulatorParamChanged {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
         param_id: u32,
+        value: f32,
+    },
+    /// A modulator route was set (echo of `modulator/{id}/route/set`, or a resend).
+    /// Amount 0 = removed.
+    ModulatorRouteChanged {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        mod_id: u8,
+        target: String,
         amount: f32,
     },
-    /// Every modulation route was removed (echo of `mod/clear`).
-    ModRoutesCleared {
+    /// Every modulator was removed (echo of `modulator/clear`).
+    ModulatorsCleared {
         channel_id: ChannelId,
         device_path: DevicePath,
+    },
+    /// The modulator kinds the engine offers follow (`/builtin/modulator_info`, then one
+    /// `/builtin/modulator_kind` per kind, then `/builtin/modulator_complete`).
+    ModulatorKindsInfo {
+        count: usize,
+    },
+    /// One modulator kind: its stable id, display name, polarity and parameter table.
+    ModulatorKindInfo {
+        id: String,
+        name: String,
+        bipolar: bool,
+        params: Vec<BuiltinParamInfo>,
+    },
+    ModulatorKindsComplete {
+        count: usize,
     },
 
     // Log messages forwarded to Godot UI
@@ -2142,62 +2219,192 @@ pub fn process_command(
                 warn!("Channel {} not found for set device parameter", channel_id);
             }
         }
-        AudioCommand::SetModRoute {
+        AudioCommand::AddModulator {
             channel_id,
             device_path,
-            source,
-            param_id,
-            amount,
+            mod_id,
+            kind,
         } => {
-            let Some(device) = state
+            let Some(kind) = crate::audio::modulation::ModulatorKind::from_id(&kind) else {
+                let message = format!("Unknown modulator kind '{kind}'");
+                warn!("{}", message);
+                log_engine_error(status_tx, &message);
+                return None;
+            };
+            if let Err(e) = ensure_modulated(state, channel_id, &device_path) {
+                warn!("{}", e);
+                log_engine_error(status_tx, &e);
+                return None;
+            }
+            let result = state
                 .channels
                 .get_mut(&channel_id)
                 .and_then(|channel| channel.device_at_path_mut(&device_path))
-            else {
+                .and_then(|device| device.as_modulated_mut())
+                .map(|modulated| modulated.add_modulator(mod_id, kind));
+            match result {
+                Some(Ok(())) => {
+                    let _ = status_tx.send(EngineStatus::ModulatorAdded {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        kind: kind.id().to_string(),
+                    });
+                }
+                Some(Err(e)) => {
+                    warn!("{}", e);
+                    log_engine_error(status_tx, &e);
+                    unwrap_if_empty(state, channel_id, &device_path);
+                }
+                None => {
+                    let message =
+                        format!("No device at channel {channel_id} path {device_path} to modulate");
+                    warn!("{}", message);
+                    log_engine_error(status_tx, &message);
+                }
+            }
+        }
+        AudioCommand::RemoveModulator {
+            channel_id,
+            device_path,
+            mod_id,
+        } => {
+            let result = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+                .and_then(|device| device.as_modulated_mut())
+                .map(|modulated| modulated.remove_modulator(mod_id));
+            match result {
+                Some(Ok(())) => {
+                    unwrap_if_empty(state, channel_id, &device_path);
+                    let _ = status_tx.send(EngineStatus::ModulatorRemoved {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                    });
+                }
+                Some(Err(e)) => {
+                    warn!("{}", e);
+                    log_engine_error(status_tx, &e);
+                }
+                None => {
+                    let message =
+                        format!("No modulators at channel {channel_id} path {device_path}");
+                    warn!("{}", message);
+                    log_engine_error(status_tx, &message);
+                }
+            }
+        }
+        AudioCommand::SetModulatorParameter {
+            channel_id,
+            device_path,
+            mod_id,
+            param_id,
+            value,
+        } => {
+            let result = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+                .and_then(|device| device.as_modulated_mut())
+                .map(|modulated| modulated.set_modulator_param(mod_id, param_id, value));
+            match result {
+                Some(Ok(value)) => {
+                    let _ = status_tx.send(EngineStatus::ModulatorParamChanged {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        param_id,
+                        value,
+                    });
+                }
+                Some(Err(e)) => {
+                    warn!("{}", e);
+                    log_engine_error(status_tx, &e);
+                }
+                None => {
+                    let message =
+                        format!("No modulators at channel {channel_id} path {device_path}");
+                    warn!("{}", message);
+                    log_engine_error(status_tx, &message);
+                }
+            }
+        }
+        AudioCommand::SetModulatorRoute {
+            channel_id,
+            device_path,
+            mod_id,
+            target,
+            amount,
+        } => {
+            let result = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+                .and_then(|device| device.as_modulated_mut())
+                .map(|modulated| modulated.set_modulator_route(mod_id, &target, amount));
+            match result {
+                Some(Ok(amount)) => {
+                    let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        target,
+                        amount,
+                    });
+                }
+                // A refused route (unknown or non-modulatable target, no such modulator) is
+                // logged and echoed with amount 0, so the UI drops it.
+                Some(Err(e)) => {
+                    warn!("{}", e);
+                    log_engine_error(status_tx, &e);
+                    let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        target,
+                        amount: 0.0,
+                    });
+                }
+                None => {
+                    let message =
+                        format!("No modulators at channel {channel_id} path {device_path}");
+                    warn!("{}", message);
+                    log_engine_error(status_tx, &message);
+                    let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        target,
+                        amount: 0.0,
+                    });
+                }
+            }
+        }
+        AudioCommand::ClearModulators {
+            channel_id,
+            device_path,
+        } => {
+            let Some(channel) = state.channels.get_mut(&channel_id) else {
+                warn!("Channel {} not found for clear modulators", channel_id);
+                return None;
+            };
+            let Some(device) = channel.device_at_path_mut(&device_path) else {
                 warn!(
-                    "Mod route for missing device at channel {} path {}",
+                    "Clear modulators for missing device at channel {} path {}",
                     channel_id, device_path
                 );
                 return None;
             };
-            let amount = if amount.is_finite() {
-                amount.clamp(-1.0, 1.0)
-            } else {
-                0.0
-            };
-            match device.set_mod_route(&source, param_id, amount) {
-                Ok(()) => {
-                    let _ = status_tx.send(EngineStatus::ModRouteChanged {
-                        channel_id,
-                        device_path,
-                        source,
-                        param_id,
-                        amount,
-                    });
-                }
-                Err(e) => warn!("{}", e),
+            if let Some(modulated) = device.as_modulated_mut() {
+                modulated.clear_modulators();
             }
-        }
-        AudioCommand::ClearModRoutes {
-            channel_id,
-            device_path,
-        } => {
-            if let Some(device) = state
-                .channels
-                .get_mut(&channel_id)
-                .and_then(|channel| channel.device_at_path_mut(&device_path))
-            {
-                device.clear_mod_routes();
-                let _ = status_tx.send(EngineStatus::ModRoutesCleared {
-                    channel_id,
-                    device_path,
-                });
-            } else {
-                warn!(
-                    "Clear mod routes for missing device at channel {} path {}",
-                    channel_id, device_path
-                );
-            }
+            let _ = status_tx.send(EngineStatus::ModulatorsCleared {
+                channel_id,
+                device_path,
+            });
+            unwrap_if_empty(state, channel_id, &device_path);
         }
         AudioCommand::SetDeviceActive {
             channel_id,
@@ -2434,21 +2641,14 @@ pub fn process_command(
                     send_parameter_list(status_tx, channel_id, device_path, device, params);
                 }
             }
-            // Routes live in the device, not in the parameters: resend them as clear + sets.
-            if !device.mod_sources().is_empty() {
-                let _ = status_tx.send(EngineStatus::ModRoutesCleared {
-                    channel_id,
-                    device_path,
-                });
-                for route in device.mod_routes() {
-                    let _ = status_tx.send(EngineStatus::ModRouteChanged {
-                        channel_id,
-                        device_path,
-                        source: route.source,
-                        param_id: route.param_id,
-                        amount: route.amount,
-                    });
-                }
+            // Modulators live in the wrapper, not in the parameters: resend them as clear +
+            // adds. The immutable borrow above ends here so we can reach the wrapper.
+            if let Some(device) = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            {
+                resend_modulators(status_tx, channel_id, &device_path, device);
             }
         }
         AudioCommand::DeviceReady {
@@ -2843,6 +3043,116 @@ pub fn process_command(
     None
 }
 
+/// Wrap the device at `device_path` so it can carry modulators. A no-op when it is already
+/// wrapped.
+fn ensure_modulated(
+    state: &mut EngineState,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+) -> Result<(), String> {
+    let sample_rate = state.device_sample_rate;
+    let channel = state
+        .channels
+        .get_mut(&channel_id)
+        .ok_or_else(|| format!("no channel {channel_id}"))?;
+    crate::audio::modulation::wrap_at_path(&mut channel.devices, device_path, sample_rate)
+}
+
+/// Drop the modulator wrapper at `device_path` once it holds no modulators.
+fn unwrap_if_empty(state: &mut EngineState, channel_id: ChannelId, device_path: &DevicePath) {
+    let Some(channel) = state.channels.get_mut(&channel_id) else {
+        return;
+    };
+    let empty = channel
+        .device_at_path_mut(device_path)
+        .and_then(|device| device.as_modulated_mut())
+        .map(|modulated| modulated.modulator_count() == 0)
+        .unwrap_or(false);
+    if empty {
+        let _ = crate::audio::modulation::unwrap_at_path(&mut channel.devices, device_path);
+    }
+}
+
+/// The modulator kinds the engine offers, as the `/builtin/modulator_*` batch: a header with
+/// the count, one info per kind, then a completion.
+pub fn modulator_kind_infos() -> Vec<EngineStatus> {
+    let kind = super::modulation::ModulatorKind::COUNT;
+    let mut out = Vec::with_capacity(kind + 2);
+    out.push(EngineStatus::ModulatorKindsInfo { count: kind });
+    for kind in super::modulation::ModulatorKind::ALL {
+        let params = kind
+            .table()
+            .specs
+            .iter()
+            .map(|spec| BuiltinParamInfo::from(&spec.info()))
+            .collect();
+        out.push(EngineStatus::ModulatorKindInfo {
+            id: kind.id().to_string(),
+            name: kind.name().to_string(),
+            bipolar: kind.bipolar(),
+            params,
+        });
+    }
+    out.push(EngineStatus::ModulatorKindsComplete { count: kind });
+    out
+}
+
+/// Re-send a device's modulators after a missed status: `ModulatorsCleared`, then one
+/// `ModulatorAdded` per modulator, each of its parameters and each route.
+fn resend_modulators(
+    status_tx: &Sender<EngineStatus>,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+    device: &mut dyn super::devices::AudioDevice,
+) {
+    let Some(modulated) = device.as_modulated_mut() else {
+        return;
+    };
+    if modulated.modulator_count() == 0 {
+        return;
+    }
+    let _ = status_tx.send(EngineStatus::ModulatorsCleared {
+        channel_id,
+        device_path: *device_path,
+    });
+    for (mod_id, kind) in modulated.modulator_kinds() {
+        let _ = status_tx.send(EngineStatus::ModulatorAdded {
+            channel_id,
+            device_path: *device_path,
+            mod_id,
+            kind: kind.id().to_string(),
+        });
+        for spec in kind.table().specs {
+            if let Some(value) = modulated.get_modulator_param(mod_id, spec.id) {
+                let _ = status_tx.send(EngineStatus::ModulatorParamChanged {
+                    channel_id,
+                    device_path: *device_path,
+                    mod_id,
+                    param_id: spec.id,
+                    value,
+                });
+            }
+        }
+    }
+    for (mod_id, target, amount) in modulated.modulator_routes() {
+        let _ = status_tx.send(EngineStatus::ModulatorRouteChanged {
+            channel_id,
+            device_path: *device_path,
+            mod_id,
+            target,
+            amount,
+        });
+    }
+}
+
+/// Forward a refused modulator command to Godot's `/log` so the UI can show why.
+fn log_engine_error(status_tx: &Sender<EngineStatus>, message: &str) {
+    let _ = status_tx.send(EngineStatus::LogMessage {
+        level: "error".to_string(),
+        message: message.to_string(),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2933,26 +3243,9 @@ mod tests {
         assert!(device_state_replies(Box::new(delay)).is_empty());
     }
 
-    #[test]
-    fn get_device_state_resends_mod_routes() {
-        let synth = super::super::devices::PolySynthDevice::new(48_000.0);
-        let routes = super::super::devices::AudioDevice::mod_routes(&synth);
-        assert!(!routes.is_empty(), "the default patch has a route");
-        let replies = device_state_replies(Box::new(synth));
-        assert!(matches!(replies[0], EngineStatus::ModRoutesCleared { .. }));
-        assert_eq!(replies.len(), 1 + routes.len());
-        assert!(matches!(
-            &replies[1],
-            EngineStatus::ModRouteChanged { source, param_id, amount, .. }
-                if *source == routes[0].source && *param_id == routes[0].param_id
-                    && *amount == routes[0].amount
-        ));
-    }
-
-    #[test]
-    fn mod_route_commands_apply_and_echo() {
+    /// Channel 2 with one Filter effect, the modulatable target the tests route into.
+    fn modulator_test_state(status_tx: &Sender<EngineStatus>) -> EngineState {
         let mut state = EngineState::default();
-        let (status_tx, status_rx) = crossbeam::channel::unbounded();
         process_command(
             &mut state,
             AudioCommand::CreateChannel {
@@ -2960,63 +3253,217 @@ mod tests {
                 name: "T".to_string(),
             },
             128,
-            &status_tx,
+            status_tx,
         );
-        state.channels.get_mut(&2).unwrap().devices.push(Box::new(
-            super::super::devices::PolySynthDevice::new(48_000.0),
-        ));
+        state.channels.get_mut(&2).unwrap().devices.push(
+            super::super::devices::create_effect("sonara.builtin.filter", 48_000.0, 512)
+                .expect("filter effect"),
+        );
+        state
+    }
+
+    fn modulator_count(state: &mut EngineState) -> usize {
+        state.channels.get_mut(&2).unwrap().devices[0]
+            .as_modulated_mut()
+            .map(|modulated| modulated.modulator_count())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn modulator_commands_wrap_and_echo() {
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let mut state = modulator_test_state(&status_tx);
         while status_rx.try_recv().is_ok() {}
         let path = DevicePath::root(0);
-        let cutoff = 31; // Filter Cutoff
-        let set = |state: &mut EngineState, source: &str, amount: f32| {
-            process_command(
-                state,
-                AudioCommand::SetModRoute {
-                    channel_id: 2,
-                    device_path: path,
-                    source: source.to_string(),
-                    param_id: cutoff,
-                    amount,
-                },
-                128,
-                &status_tx,
-            );
-        };
-        let routes = |state: &EngineState| state.channels[&2].devices[0].mod_routes();
-
-        set(&mut state, "lfo1", 0.5);
-        assert!(routes(&state)
-            .iter()
-            .any(|r| r.source == "lfo1" && r.amount == 0.5));
-        // Out-of-range amounts clamp; the echo carries the applied value.
-        set(&mut state, "lfo1", 4.0);
-        let echoes: Vec<_> = status_rx.try_iter().collect();
-        assert!(matches!(
-            echoes.last(),
-            Some(EngineStatus::ModRouteChanged { amount, .. }) if *amount == 1.0
-        ));
-        set(&mut state, "lfo1", 0.0);
-        assert!(!routes(&state).iter().any(|r| r.source == "lfo1"));
-
-        // A bad source is refused without an echo.
-        while status_rx.try_recv().is_ok() {}
-        set(&mut state, "mod_wheel", 0.5);
-        assert!(status_rx.try_recv().is_err());
 
         process_command(
             &mut state,
-            AudioCommand::ClearModRoutes {
+            AudioCommand::AddModulator {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                kind: "lfo".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        assert_eq!(modulator_count(&mut state), 1, "the device is wrapped");
+        assert!(matches!(
+            status_rx.try_recv(),
+            Ok(EngineStatus::ModulatorAdded { mod_id: 0, kind, .. }) if kind == "lfo"
+        ));
+
+        // LFO Rate (id 10) lands at the requested normalized value.
+        process_command(
+            &mut state,
+            AudioCommand::SetModulatorParameter {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                param_id: 10,
+                value: 0.75,
+            },
+            128,
+            &status_tx,
+        );
+        assert!(matches!(
+            status_rx.try_recv(),
+            Ok(EngineStatus::ModulatorParamChanged { param_id: 10, value, .. })
+                if (value - 0.75).abs() < 1e-6
+        ));
+
+        // Route to Filter Cutoff (id 2); amounts clamp and the echo carries the applied value.
+        process_command(
+            &mut state,
+            AudioCommand::SetModulatorRoute {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                target: "param/2".to_string(),
+                amount: 4.0,
+            },
+            128,
+            &status_tx,
+        );
+        assert!(matches!(
+            status_rx.try_recv(),
+            Ok(EngineStatus::ModulatorRouteChanged { target, amount, .. })
+                if target == "param/2" && amount == 1.0
+        ));
+        assert!(state.channels.get_mut(&2).unwrap().devices[0]
+            .as_modulated_mut()
+            .unwrap()
+            .modulator_routes()
+            .iter()
+            .any(|(_, target, amount)| target == "param/2" && *amount == 1.0));
+
+        // An unknown target is refused: a `/log` error and an echo with amount 0.
+        process_command(
+            &mut state,
+            AudioCommand::SetModulatorRoute {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                target: "param/99".to_string(),
+                amount: 0.5,
+            },
+            128,
+            &status_tx,
+        );
+        let refused: Vec<_> = status_rx.try_iter().collect();
+        assert!(refused
+            .iter()
+            .any(|s| matches!(s, EngineStatus::LogMessage { level, .. } if level == "error")));
+        assert!(refused.iter().any(|s| matches!(
+            s,
+            EngineStatus::ModulatorRouteChanged { target, amount, .. }
+                if target == "param/99" && *amount == 0.0
+        )));
+
+        // Removing the last modulator unwraps the device.
+        process_command(
+            &mut state,
+            AudioCommand::RemoveModulator {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+            },
+            128,
+            &status_tx,
+        );
+        assert_eq!(modulator_count(&mut state), 0);
+        assert!(state.channels.get_mut(&2).unwrap().devices[0]
+            .as_modulated_mut()
+            .is_none());
+    }
+
+    #[test]
+    fn clear_modulators_unwraps() {
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let mut state = modulator_test_state(&status_tx);
+        let path = DevicePath::root(0);
+        process_command(
+            &mut state,
+            AudioCommand::AddModulator {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                kind: "ad".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        while status_rx.try_recv().is_ok() {}
+        process_command(
+            &mut state,
+            AudioCommand::ClearModulators {
                 channel_id: 2,
                 device_path: path,
             },
             128,
             &status_tx,
         );
-        assert!(routes(&state).is_empty());
         assert!(matches!(
             status_rx.try_recv(),
-            Ok(EngineStatus::ModRoutesCleared { .. })
+            Ok(EngineStatus::ModulatorsCleared { .. })
         ));
+        assert!(state.channels.get_mut(&2).unwrap().devices[0]
+            .as_modulated_mut()
+            .is_none());
+    }
+
+    #[test]
+    fn get_device_state_resends_modulators() {
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let mut state = modulator_test_state(&status_tx);
+        let path = DevicePath::root(0);
+        process_command(
+            &mut state,
+            AudioCommand::AddModulator {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                kind: "lfo".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        process_command(
+            &mut state,
+            AudioCommand::SetModulatorRoute {
+                channel_id: 2,
+                device_path: path,
+                mod_id: 0,
+                target: "param/2".to_string(),
+                amount: 0.5,
+            },
+            128,
+            &status_tx,
+        );
+        let (get_tx, get_rx) = crossbeam::channel::unbounded();
+        process_command(
+            &mut state,
+            AudioCommand::GetDeviceState {
+                channel_id: 2,
+                device_path: path,
+            },
+            128,
+            &get_tx,
+        );
+        let replies: Vec<_> = get_rx.try_iter().collect();
+        assert!(matches!(replies[0], EngineStatus::ModulatorsCleared { .. }));
+        assert!(replies.iter().any(|s| matches!(
+            s,
+            EngineStatus::ModulatorAdded { mod_id: 0, kind, .. } if kind == "lfo"
+        )));
+        assert!(replies
+            .iter()
+            .any(|s| matches!(s, EngineStatus::ModulatorParamChanged { param_id: 10, .. })));
+        assert!(replies.iter().any(|s| matches!(
+            s,
+            EngineStatus::ModulatorRouteChanged { target, amount: 0.5, .. }
+                if target == "param/2"
+        )));
     }
 
     /// A project save waits for every `state/save` it sent, so a device without plugin state

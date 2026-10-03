@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::audio::automation::{AutomationPoint, AutomationPointId, AutomationTarget, CurveKind};
+use crate::audio::commands::BuiltinParamInfo;
 use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
 use crate::audio::types::ClipLoadState;
@@ -471,8 +472,10 @@ impl OscServer {
                     }
                 }
             }
-            ["mod", _] => {
-                if let Some(cmd) = parse_mod_command(channel_id, device_path, &action_refs, args) {
+            ["modulator", ..] => {
+                if let Some(cmd) =
+                    parse_modulator_command(channel_id, device_path, &action_refs, args)
+                {
                     command_tx.send(cmd)?;
                 }
             }
@@ -2031,8 +2034,7 @@ impl OscServer {
                 file_type_description,
                 is_container,
                 parameters,
-                mod_sources,
-                default_mod_routes,
+                default_modulators,
             } => {
                 tracing::info!("📨 Sending builtin device info: {} ({})", name, id);
 
@@ -2056,47 +2058,29 @@ impl OscServer {
 
                 args.push(OscType::Int(parameters.len() as i32));
 
-                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values..., module, automatable, modulatable)
-                for param in parameters {
-                    args.push(OscType::Int(param.id as i32));
-                    args.push(OscType::String(param.name));
-                    args.push(OscType::String(param.unit));
-                    let ty_str = match param.param_type {
-                        crate::audio::devices::ParamType::Float => "float",
-                        crate::audio::devices::ParamType::Bool => "bool",
-                        crate::audio::devices::ParamType::Enum => "enum",
-                    };
-                    args.push(OscType::String(ty_str.to_string()));
-                    args.push(OscType::Int(if param.syncable { 1 } else { 0 }));
-                    args.push(OscType::Float(param.min));
-                    args.push(OscType::Float(param.max));
-                    args.push(OscType::Float(param.default));
-                    args.push(OscType::Int(if param.is_logarithmic { 1 } else { 0 }));
-                    args.push(OscType::Float(param.skew));
-                    args.push(OscType::Int(param.enum_values.len() as i32));
-                    for ev in param.enum_values {
-                        args.push(OscType::String(ev));
-                    }
-                    args.push(OscType::String(param.module));
-                    args.push(OscType::Int(if param.is_automation_safe { 1 } else { 0 }));
-                    args.push(OscType::Int(if param.is_modulatable { 1 } else { 0 }));
+                // Add all parameters inline (id, name, unit, type, syncable, min, max, default,
+                // is_log, skew, enum_count, enum_values..., module, automatable, modulatable)
+                for param in &parameters {
+                    push_param_args(&mut args, param);
                 }
 
                 args.push(OscType::Int(if is_container { 1 } else { 0 }));
 
-                // Modulation: source_count, (id, name, bipolar)..., route_count,
-                // (source, param_id, amount)... (the default patch)
-                args.push(OscType::Int(mod_sources.len() as i32));
-                for source in mod_sources {
-                    args.push(OscType::String(source.id));
-                    args.push(OscType::String(source.name));
-                    args.push(OscType::Int(if source.bipolar { 1 } else { 0 }));
-                }
-                args.push(OscType::Int(default_mod_routes.len() as i32));
-                for route in default_mod_routes {
-                    args.push(OscType::String(route.source));
-                    args.push(OscType::Int(route.param_id as i32));
-                    args.push(OscType::Float(route.amount));
+                // Default modulators: count, then (kind, name, params, routes) each.
+                args.push(OscType::Int(default_modulators.len() as i32));
+                for modulator in &default_modulators {
+                    args.push(OscType::String(modulator.kind.id().to_string()));
+                    args.push(OscType::String(modulator.name.clone()));
+                    args.push(OscType::Int(modulator.params.len() as i32));
+                    for (param_id, value) in &modulator.params {
+                        args.push(OscType::Int(*param_id as i32));
+                        args.push(OscType::Float(*value));
+                    }
+                    args.push(OscType::Int(modulator.routes.len() as i32));
+                    for (target, amount) in &modulator.routes {
+                        args.push(OscType::String(target.clone()));
+                        args.push(OscType::Float(*amount));
+                    }
                 }
 
                 ("/builtin/info".to_string(), args)
@@ -2223,24 +2207,78 @@ impl OscServer {
                 info!("📡 Sending OSC: {} [{}]", addr, value);
                 (addr, vec![OscType::Float(value)])
             }
-            EngineStatus::ModRouteChanged {
+            EngineStatus::ModulatorAdded {
                 channel_id,
                 device_path,
-                source,
+                mod_id,
+                kind,
+            } => (
+                device_path.to_osc_addr(channel_id, "modulator/add"),
+                vec![OscType::Int(mod_id as i32), OscType::String(kind)],
+            ),
+            EngineStatus::ModulatorRemoved {
+                channel_id,
+                device_path,
+                mod_id,
+            } => (
+                device_path.to_osc_addr(channel_id, &format!("modulator/{mod_id}/remove")),
+                vec![OscType::Int(mod_id as i32)],
+            ),
+            EngineStatus::ModulatorParamChanged {
+                channel_id,
+                device_path,
+                mod_id,
                 param_id,
+                value,
+            } => (
+                device_path.to_osc_addr(
+                    channel_id,
+                    &format!("modulator/{mod_id}/param/{param_id}/value"),
+                ),
+                vec![OscType::Float(value)],
+            ),
+            EngineStatus::ModulatorRouteChanged {
+                channel_id,
+                device_path,
+                mod_id,
+                target,
                 amount,
             } => (
-                device_path.to_osc_addr(channel_id, "mod/set"),
-                vec![
-                    OscType::String(source),
-                    OscType::Int(param_id as i32),
-                    OscType::Float(amount),
-                ],
+                device_path.to_osc_addr(channel_id, &format!("modulator/{mod_id}/route/set")),
+                vec![OscType::String(target), OscType::Float(amount)],
             ),
-            EngineStatus::ModRoutesCleared {
+            EngineStatus::ModulatorsCleared {
                 channel_id,
                 device_path,
-            } => (device_path.to_osc_addr(channel_id, "mod/clear"), vec![]),
+            } => (
+                device_path.to_osc_addr(channel_id, "modulator/clear"),
+                vec![],
+            ),
+            EngineStatus::ModulatorKindsInfo { count } => (
+                "/builtin/modulator_info".to_string(),
+                vec![OscType::Int(count as i32)],
+            ),
+            EngineStatus::ModulatorKindInfo {
+                id,
+                name,
+                bipolar,
+                params,
+            } => {
+                let mut args = vec![
+                    OscType::String(id),
+                    OscType::String(name),
+                    OscType::Int(if bipolar { 1 } else { 0 }),
+                    OscType::Int(params.len() as i32),
+                ];
+                for param in &params {
+                    push_param_args(&mut args, param);
+                }
+                ("/builtin/modulator_kind".to_string(), args)
+            }
+            EngineStatus::ModulatorKindsComplete { count } => (
+                "/builtin/modulator_complete".to_string(),
+                vec![OscType::Int(count as i32)],
+            ),
             EngineStatus::LogMessage { level, message } => (
                 "/log".to_string(),
                 vec![OscType::String(level), OscType::String(message)],
@@ -3089,32 +3127,98 @@ impl EngineStatsSummary {
     }
 }
 
-/// `{device}/mod/set [s:source, i:param_id, f:amount]` and `{device}/mod/clear`.
-fn parse_mod_command(
+/// Append one parameter's typed descriptor to a `/builtin/*` message.
+fn push_param_args(args: &mut Vec<OscType>, param: &BuiltinParamInfo) {
+    args.push(OscType::Int(param.id as i32));
+    args.push(OscType::String(param.name.clone()));
+    args.push(OscType::String(param.unit.clone()));
+    let ty_str = match param.param_type {
+        crate::audio::devices::ParamType::Float => "float",
+        crate::audio::devices::ParamType::Bool => "bool",
+        crate::audio::devices::ParamType::Enum => "enum",
+    };
+    args.push(OscType::String(ty_str.to_string()));
+    args.push(OscType::Int(if param.syncable { 1 } else { 0 }));
+    args.push(OscType::Float(param.min));
+    args.push(OscType::Float(param.max));
+    args.push(OscType::Float(param.default));
+    args.push(OscType::Int(if param.is_logarithmic { 1 } else { 0 }));
+    args.push(OscType::Float(param.skew));
+    args.push(OscType::Int(param.enum_values.len() as i32));
+    for ev in &param.enum_values {
+        args.push(OscType::String(ev.clone()));
+    }
+    args.push(OscType::String(param.module.clone()));
+    args.push(OscType::Int(if param.is_automation_safe { 1 } else { 0 }));
+    args.push(OscType::Int(if param.is_modulatable { 1 } else { 0 }));
+}
+
+/// `{device}/modulator/...` commands:
+/// - `modulator/add [i:mod_id, s:kind]`
+/// - `modulator/clear`
+/// - `modulator/{mod_id}/remove`
+/// - `modulator/{mod_id}/param/{id}/value [f:norm]`
+/// - `modulator/{mod_id}/route/set [s:target, f:amount]`
+fn parse_modulator_command(
     channel_id: usize,
     device_path: DevicePath,
     action: &[&str],
     args: &[OscType],
 ) -> Option<AudioCommand> {
     match action {
-        ["mod", "set"] => match (args.first(), args.get(1), args.get(2)) {
-            (
-                Some(OscType::String(source)),
-                Some(OscType::Int(param_id)),
-                Some(OscType::Float(amount)),
-            ) if *param_id >= 0 => Some(AudioCommand::SetModRoute {
-                channel_id,
-                device_path,
-                source: source.clone(),
-                param_id: *param_id as u32,
-                amount: *amount,
-            }),
+        ["modulator", "add"] => match (args.first(), args.get(1)) {
+            (Some(OscType::Int(mod_id)), Some(OscType::String(kind))) => u8::try_from(*mod_id)
+                .ok()
+                .map(|mod_id| AudioCommand::AddModulator {
+                    channel_id,
+                    device_path,
+                    mod_id,
+                    kind: kind.clone(),
+                }),
             _ => None,
         },
-        ["mod", "clear"] => Some(AudioCommand::ClearModRoutes {
+        ["modulator", "clear"] => Some(AudioCommand::ClearModulators {
             channel_id,
             device_path,
         }),
+        ["modulator", mod_id, "remove"] => {
+            mod_id
+                .parse::<u8>()
+                .ok()
+                .map(|mod_id| AudioCommand::RemoveModulator {
+                    channel_id,
+                    device_path,
+                    mod_id,
+                })
+        }
+        ["modulator", mod_id, "param", param_id, "value"] => {
+            match (mod_id.parse::<u8>(), param_id.parse::<u32>(), args.first()) {
+                (Ok(mod_id), Ok(param_id), Some(OscType::Float(value))) => {
+                    Some(AudioCommand::SetModulatorParameter {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        param_id,
+                        value: *value,
+                    })
+                }
+                _ => None,
+            }
+        }
+        ["modulator", mod_id, "route", "set"] => {
+            match (mod_id.parse::<u8>(), args.first(), args.get(1)) {
+                (Ok(mod_id), Some(OscType::String(target)), Some(OscType::Float(amount))) => {
+                    Some(AudioCommand::SetModulatorRoute {
+                        channel_id,
+                        device_path,
+                        mod_id,
+                        target: target.clone(),
+                        amount: *amount,
+                    })
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -3254,32 +3358,65 @@ mod tests {
     }
 
     #[test]
-    fn mod_set_and_clear_parse() {
+    fn modulator_commands_parse() {
         let path = DevicePath::root(0);
-        let args = [string("lfo1"), OscType::Int(33), OscType::Float(-0.25)];
-        match parse_mod_command(2, path, &["mod", "set"], &args) {
-            Some(AudioCommand::SetModRoute {
+        let add = [OscType::Int(2), string("lfo")];
+        match parse_modulator_command(2, path, &["modulator", "add"], &add) {
+            Some(AudioCommand::AddModulator {
                 channel_id: 2,
-                source,
-                param_id: 33,
-                amount,
+                mod_id: 2,
+                kind,
                 ..
-            }) => {
-                assert_eq!(source, "lfo1");
-                assert_eq!(amount, -0.25);
-            }
+            }) => assert_eq!(kind, "lfo"),
             other => panic!("unexpected: {:?}", other.is_some()),
         }
         assert!(matches!(
-            parse_mod_command(2, path, &["mod", "clear"], &[]),
-            Some(AudioCommand::ClearModRoutes { channel_id: 2, .. })
+            parse_modulator_command(2, path, &["modulator", "clear"], &[]),
+            Some(AudioCommand::ClearModulators { channel_id: 2, .. })
         ));
-        // Wrong argument types, a negative id and an unknown action are all dropped.
-        let bad = [string("lfo1"), OscType::Float(33.0), OscType::Float(0.5)];
-        assert!(parse_mod_command(2, path, &["mod", "set"], &bad).is_none());
-        let neg = [string("lfo1"), OscType::Int(-1), OscType::Float(0.5)];
-        assert!(parse_mod_command(2, path, &["mod", "set"], &neg).is_none());
-        assert!(parse_mod_command(2, path, &["mod", "bogus"], &[]).is_none());
+        assert!(matches!(
+            parse_modulator_command(2, path, &["modulator", "3", "remove"], &[]),
+            Some(AudioCommand::RemoveModulator { mod_id: 3, .. })
+        ));
+        match parse_modulator_command(
+            2,
+            path,
+            &["modulator", "3", "param", "10", "value"],
+            &[OscType::Float(0.4)],
+        ) {
+            Some(AudioCommand::SetModulatorParameter {
+                mod_id: 3,
+                param_id: 10,
+                value,
+                ..
+            }) => assert_eq!(value, 0.4),
+            other => panic!("unexpected: {:?}", other.is_some()),
+        }
+        match parse_modulator_command(
+            2,
+            path,
+            &["modulator", "3", "route", "set"],
+            &[string("param/2"), OscType::Float(-0.5)],
+        ) {
+            Some(AudioCommand::SetModulatorRoute {
+                mod_id: 3,
+                target,
+                amount,
+                ..
+            }) => {
+                assert_eq!(target, "param/2");
+                assert_eq!(amount, -0.5);
+            }
+            other => panic!("unexpected: {:?}", other.is_some()),
+        }
+        // Wrong argument types, an out-of-range id and an unknown action are all dropped.
+        let bad = [string("lfo"), OscType::Int(2)];
+        assert!(parse_modulator_command(2, path, &["modulator", "add"], &bad).is_none());
+        let big = [OscType::Int(300), string("lfo")];
+        assert!(parse_modulator_command(2, path, &["modulator", "add"], &big).is_none());
+        assert!(parse_modulator_command(2, path, &["modulator", "bogus"], &[]).is_none());
+        // The old mod/* addresses are gone.
+        assert!(parse_modulator_command(2, path, &["mod", "set"], &add).is_none());
     }
 
     #[test]

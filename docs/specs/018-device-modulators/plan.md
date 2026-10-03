@@ -277,7 +277,7 @@ cutoff.
 
 ## Phase 4: commands, OSC and state (engine only)
 
-- [ ] `AudioCommand`s and `osc/server.rs` handlers, all under `/channel/{id}/device/{path}`:
+- [x?] `AudioCommand`s and `osc/server.rs` handlers, all under `/channel/{id}/device/{path}`:
 
   | Address | Args | Effect |
   |---|---|---|
@@ -292,12 +292,12 @@ cutoff.
     canonical param value), as `mod/set` does today.
   - A route whose target can't resolve or isn't modulatable gets an error `/log` and an echo
     with amount 0.
-- [ ] `/builtin/info` replaces `mod_sources` and `default_mod_routes` with `default_modulators`
+- [x?] `/builtin/info` replaces `mod_sources` and `default_mod_routes` with `default_modulators`
   (kind, name, params, routes).
-- [ ] Remove `mod/set`, `mod/clear` and the four ADR-0011 trait methods (after Phase 6 moves
-  PolySynth over).
-- [ ] Device `state/get` includes the modulators, for tests and the AI tools.
-- [ ] `docs/subsystems/osc-protocol.md`: replace the Modulation routes section.
+- [x?] Remove `mod/set` and `mod/clear` (the four ADR-0011 trait methods go with Phase 6, which
+  moves PolySynth over; they are unused by the engine from here).
+- [x?] Device `state/get` includes the modulators, for tests and the AI tools.
+- [x?] `docs/subsystems/osc-protocol.md`: replace the Modulation routes section.
 
 **Done when:** an `oscsend` script can add an LFO to a filter, route it to cutoff and hear it.
 
