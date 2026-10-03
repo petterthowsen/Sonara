@@ -25,6 +25,7 @@ var device: DeviceInstance = null
 var _grid: GridContainer = null
 var _add_button: MenuButton = null
 var _detail: VBoxContainer = null
+var _detail_scroll: ScrollContainer = null
 var _tiles: Array[ModulatorTile] = []
 var _selected_mod_id := -1
 ## Detail controls by parameter id (knobs, dropdowns, toggles), refreshed from the model.
@@ -32,6 +33,8 @@ var _controls: Dictionary = {}
 var _detail_title: Label = null
 var _envelope: Envelope = null
 var _envelope_control: EnvelopeControl = null
+## Modulator the detail column was built for; -1 when it holds no controls to update in place.
+var _detail_mod_id := -1
 
 
 func _ready() -> void:
@@ -111,7 +114,8 @@ func _build_structure() -> void:
 	scroll.add_child(_grid)
 	left.add_child(scroll)
 
-	var detail_scroll := ScrollContainer.new()
+	_detail_scroll = ScrollContainer.new()
+	var detail_scroll := _detail_scroll
 	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_scroll.custom_minimum_size.x = 140
 	_detail = VBoxContainer.new()
@@ -154,7 +158,7 @@ func _rebuild_tiles() -> void:
 		var tile := ModulatorTile.new()
 		_grid.add_child(tile)
 		tile.setup(mod)
-		tile.selected.connect(_on_tile_selected)
+		tile.selected.connect(_on_tile_clicked)
 		_tiles.append(tile)
 	if _selected_mod_id < 0 or device.get_modulator(_selected_mod_id) == null:
 		_selected_mod_id = int(_remembered.get(device.id, device.modulators[0].mod_id if not device.modulators.is_empty() else -1))
@@ -170,11 +174,17 @@ func _clear_tiles() -> void:
 func _refresh_selection() -> void:
 	for tile in _tiles:
 		if tile.modulator != null:
+			tile.set_selected(tile.modulator.mod_id == _selected_mod_id)
 			tile.refresh()
 	_refresh_detail()
 
 
-func _on_tile_selected(mod_id: int) -> void:
+## A tile click: selects it, or deselects it when it already was (which hides the settings).
+func _on_tile_clicked(mod_id: int) -> void:
+	_select(-1 if mod_id == _selected_mod_id else mod_id)
+
+
+func _select(mod_id: int) -> void:
 	_selected_mod_id = mod_id
 	if device != null:
 		_remembered[device.id] = mod_id
@@ -189,12 +199,12 @@ func _on_add_kind(id: int) -> void:
 		return
 	var mod = device.add_modulator(String(popup.get_item_metadata(id)))
 	if mod != null:
-		_on_tile_selected(mod.mod_id)
+		_select(mod.mod_id)
 
 
 func _on_modulator_added(mod: Modulator) -> void:
 	_rebuild_tiles()
-	_on_tile_selected(mod.mod_id)
+	_select(mod.mod_id)
 
 
 func _on_modulator_removed(mod_id: int) -> void:
@@ -212,11 +222,13 @@ func _on_modulator_changed(mod_id: int) -> void:
 		if tile.modulator != null and tile.modulator.mod_id == mod_id:
 			tile.refresh()
 	if mod_id == _selected_mod_id:
-		_refresh_detail()
+		_sync_detail()
 
 
 func _on_route_changed(_mod_id: int, _target: String, _amount: float) -> void:
-	_refresh_selection()
+	for tile in _tiles:
+		if tile.modulator != null:
+			tile.refresh()
 
 
 func _on_device_name_changed(_new_name: String) -> void:
@@ -229,6 +241,7 @@ func _on_device_name_changed(_new_name: String) -> void:
 
 func _clear_detail() -> void:
 	_controls.clear()
+	_detail_mod_id = -1
 	_envelope = null
 	_envelope_control = null
 	_detail_title = null
@@ -238,17 +251,29 @@ func _clear_detail() -> void:
 		child.queue_free()
 
 
+## Push the model's values into the existing controls. Rebuilding here would free the control
+## being dragged (every edit echoes back as `modulator_changed`), so only rebuild when the
+## detail isn't showing the selected modulator.
+func _sync_detail() -> void:
+	var mod := device.get_modulator(_selected_mod_id) if device != null else null
+	if mod == null or _detail_mod_id != mod.mod_id:
+		_refresh_detail()
+		return
+	if _envelope != null:
+		_refresh_envelope(mod)
+	for param in mod.get_parameters():
+		_refresh_param_control(mod, param)
+
+
 func _refresh_detail() -> void:
 	_clear_detail()
 	if _detail == null or device == null:
 		return
 	var mod := device.get_modulator(_selected_mod_id)
+	_detail_scroll.visible = mod != null
 	if mod == null:
-		var hint := Label.new()
-		hint.text = "No modulator selected"
-		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_detail.add_child(hint)
 		return
+	_detail_mod_id = mod.mod_id
 	_detail_title = Label.new()
 	_detail_title.text = mod.name
 	_detail_title.clip_text = true

@@ -9,20 +9,47 @@
 ## units (-1..1), so one full drag across the control moves the amount by 1.0.
 class_name ModDisplay extends RefCounted
 
-## Colors of the modulation sources, by their index in the device's source list.
+## Colors of the modulation sources, by their index in the device's source list. No yellows or
+## oranges: those are the knob value ring's colors and would hide the bound modulation amount.
 const SOURCE_COLORS: Array[Color] = [
-	Color("#f2a33a"),
+	Color("#ef6f9a"),
 	Color("#4cc9f0"),
 	Color("#b5e35a"),
-	Color("#ef6f9a"),
 	Color("#a78bfa"),
-	Color("#f5d547"),
 	Color("#4fd1b0"),
-	Color("#f08a5d"),
+	Color("#f06a6a"),
+	Color("#5b8def"),
+	Color("#d58cf0"),
 ]
 
 ## Alpha of the live-value markers while playing (Phase 6 feeds them).
 const LIVE_MARKER_COLOR := Color(1, 1, 1, 0.9)
+
+
+## Alpha of the body overlay, shared by assign targets and a hovered modulator's bound controls.
+const FILL_ALPHA := 0.28
+
+
+## Overlay on a control's main part (a knob uses `draw_fill_circle`).
+static func draw_fill(item: CanvasItem, rect: Rect2, color: Color) -> void:
+	item.draw_rect(rect, Color(color, FILL_ALPHA), true)
+
+
+static func draw_fill_circle(item: CanvasItem, center: Vector2, radius: float, color: Color) -> void:
+	item.draw_circle(center, radius, Color(color, FILL_ALPHA))
+
+
+## Centered amount readout ("+35 %") over a control's body.
+static func draw_hint_text(item: CanvasItem, rect: Rect2, text: String) -> void:
+	if text.is_empty():
+		return
+	var font := ThemeDB.fallback_font
+	var font_size := clampi(int(minf(rect.size.x, rect.size.y) * 0.32), 8, 12)
+	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var pos := Vector2(rect.get_center().x - width * 0.5,
+		rect.get_center().y + font.get_ascent(font_size) * 0.5 - font.get_descent(font_size) * 0.5)
+	item.draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 3, Color(0, 0, 0, 0.85))
+	item.draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 
 static func source_color(index: int) -> Color:

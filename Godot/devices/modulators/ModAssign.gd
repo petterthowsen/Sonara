@@ -25,6 +25,10 @@ static func holder() -> ModAssign:
 ## Owner of the active modulator (a DeviceInstance), or null when assign mode is off.
 var owner_device = null
 var mod_id := -1
+## Modulator under the mouse in the pane (a DeviceInstance and mod id), or null/-1. Its bindings
+## are shown on the controls it reaches, outside assign mode too.
+var hover_device = null
+var hover_mod_id := -1
 
 
 # ============================================================================
@@ -37,6 +41,31 @@ static func begin(device, id: int) -> void:
 	h.owner_device = device
 	h.mod_id = id
 	h.changed.emit()
+
+
+## Show (or, with `hovered` false, stop showing) the bindings of `id` on `device`.
+static func set_hover(device, id: int, hovered: bool) -> void:
+	var h := holder()
+	if hovered:
+		h.hover_device = device
+		h.hover_mod_id = id
+	elif h.hover_device == device and h.hover_mod_id == id:
+		h.hover_device = null
+		h.hover_mod_id = -1
+	else:
+		return
+	h.changed.emit()
+
+
+## Modulator whose bindings the controls show: the one being assigned, else the hovered one.
+## Returns {device, mod_id}, or {} when there is none.
+static func focus() -> Dictionary:
+	var h := holder()
+	if h.owner_device != null and h.mod_id >= 0:
+		return {"device": h.owner_device, "mod_id": h.mod_id}
+	if h.hover_device != null and h.hover_mod_id >= 0:
+		return {"device": h.hover_device, "mod_id": h.hover_mod_id}
+	return {}
 
 
 ## Leave assign mode.
@@ -208,10 +237,26 @@ static func _refresh_node(node: Control, device, param_id: int) -> void:
 	var param = device.get_parameter(param_id) if device != null else null
 	var live: bool = is_active() and param != null and param.is_modulatable and is_target(device)
 	node.mod_ranges = ranges_for(device, param_id)
+	_refresh_hint(node, device, param_id)
 	node.mod_assign_active = live
 	if live:
 		node.mod_assign_color = active_color()
 		node.mod_assign_amount = amount_for(device, param_id)
+
+
+## Amount readout and colour of the focused modulator's route into this control (cleared when
+## it has none).
+static func _refresh_hint(node: Control, device, param_id: int) -> void:
+	var text := ""
+	var focused := focus()
+	if not focused.is_empty() and is_instance_valid(focused["device"]):
+		var owner = focused["device"]
+		var mod = owner.get_modulator(int(focused["mod_id"]))
+		var target := relative_target(owner, device, param_id)
+		if mod != null and target != "" and mod.routes.has(target) and absf(mod.get_route(target)) > 0.001:
+			text = amount_text(device, param_id, mod.get_route(target))
+			node.mod_hint_color = ModDisplay.source_color(maxi(owner.modulators.find(mod), 0))
+	node.mod_hint_text = text
 
 
 ## Re-emit `changed` so every attached control redraws (the pane calls this after editing a

@@ -151,12 +151,26 @@ var mod_ranges: Array[Dictionary] = []:
 	set(r):
 		mod_ranges = r
 		queue_redraw()
+## Amount readout ("+35 %") and color of the focused modulator's binding to this control, shown
+## while a modulator is hovered or being assigned; empty when this control isn't bound to it.
+var mod_hint_text := "":
+	set(t):
+		mod_hint_text = t
+		queue_redraw()
+
+var mod_hint_color := Color.WHITE:
+	set(c):
+		mod_hint_color = c
+		queue_redraw()
+
 
 ## While true, dragging edits the modulation amount instead of the value.
 var mod_assign_active := false:
 	set(a):
+		# Re-assigning the same value (a refresh mid-drag) must not cancel the drag.
+		if a != mod_assign_active:
+			_dragging = false
 		mod_assign_active = a
-		_dragging = false
 		queue_redraw()
 		_refresh_tooltip()
 
@@ -231,11 +245,11 @@ func _draw() -> void:
 	var line_start: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.3)
 	var line_end: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.9)
 	draw_line(line_start, line_end, knob_line_color, knob_line_width, true)
-	_draw_modulation(center, arc_radius, min_rotation_rad, max_rotation_rad)
+	_draw_modulation(center, arc_radius, knob_radius, min_rotation_rad, max_rotation_rad)
 
 
-## Route arcs just inside the value ring, the live markers on it, and an outline while assigning.
-func _draw_modulation(center: Vector2, arc_radius: float, min_rad: float, max_rad: float) -> void:
+## Route arcs just inside the value ring, the live markers on it, and live markers.
+func _draw_modulation(center: Vector2, arc_radius: float, knob_radius: float, min_rad: float, max_rad: float) -> void:
 	var base := _value_to_normalized(_value)
 	var thin := maxf(arc_width * 0.6, 1.5)
 	var ring := arc_radius - arc_width * 0.5 - thin * 0.5 - 1.0
@@ -254,7 +268,10 @@ func _draw_modulation(center: Vector2, arc_radius: float, min_rad: float, max_ra
 		draw_circle(center + Vector2.from_angle(angle) * arc_radius, maxf(arc_width * 0.5, 1.5),
 			ModDisplay.LIVE_MARKER_COLOR)
 	if mod_assign_active:
-		draw_arc(center, arc_radius + arc_width * 0.5, 0.0, TAU, 48, Color(mod_assign_color, 0.9), 1.5, true)
+		ModDisplay.draw_fill_circle(self, center, knob_radius, mod_assign_color)
+	elif not mod_hint_text.is_empty():
+		ModDisplay.draw_fill_circle(self, center, knob_radius, mod_hint_color)
+	ModDisplay.draw_hint_text(self, Rect2(center - Vector2.ONE * knob_radius, Vector2.ONE * knob_radius * 2.0), mod_hint_text)
 
 
 func _gui_input(event: InputEvent) -> void:

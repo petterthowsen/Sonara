@@ -71,12 +71,26 @@ var mod_ranges: Array[Dictionary] = []:
 	set(r):
 		mod_ranges = r
 		queue_redraw()
+## Amount readout ("+35 %") and color of the focused modulator's binding to this control, shown
+## while a modulator is hovered or being assigned; empty when this control isn't bound to it.
+var mod_hint_text := "":
+	set(t):
+		mod_hint_text = t
+		queue_redraw()
+
+var mod_hint_color := Color.WHITE:
+	set(c):
+		mod_hint_color = c
+		queue_redraw()
+
 
 ## While true, dragging edits the modulation amount instead of the value.
 var mod_assign_active := false:
 	set(a):
+		# Re-assigning the same value (a refresh mid-drag) must not cancel the drag.
+		if a != mod_assign_active:
+			_mod_dragging = false
 		mod_assign_active = a
-		_mod_dragging = false
 		queue_redraw()
 
 var mod_assign_color := Color.WHITE:
@@ -179,7 +193,7 @@ func _draw_level(db: float, alpha: float) -> void:
 		draw_rect(Rect2(0, y_top, size.x, y_zero - y_top), Color(bar_color_clip, bar_color_clip.a * alpha), true)
 
 
-## Route bars down the right edge (beside the handle), live markers, and an assign outline.
+## Route bars down the right edge (beside the handle), and live markers.
 func _draw_modulation() -> void:
 	var base := _db_to_norm(volume_db)
 	for i in mod_ranges.size():
@@ -192,7 +206,10 @@ func _draw_modulation() -> void:
 	for live in mod_live_values:
 		draw_rect(Rect2(0, (1.0 - clampf(live, 0.0, 1.0)) * size.y - 0.5, size.x, 1.5), ModDisplay.LIVE_MARKER_COLOR, true)
 	if mod_assign_active:
-		draw_rect(Rect2(Vector2.ZERO, size), Color(mod_assign_color, 0.9), false, 1.5)
+		ModDisplay.draw_fill(self, Rect2(Vector2.ZERO, size), mod_assign_color)
+	elif not mod_hint_text.is_empty():
+		ModDisplay.draw_fill(self, Rect2(Vector2.ZERO, size), mod_hint_color)
+	ModDisplay.draw_hint_text(self, Rect2(Vector2.ZERO, size), mod_hint_text)
 
 
 ## Assign mode input: drags edit the amount, double-click removes the route.

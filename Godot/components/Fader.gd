@@ -119,6 +119,18 @@ var ghost_value := NAN:
 ## Optional Callable(value: float) -> String. Overrides value_format/unit.
 var value_text_callback: Callable
 @export var fine_drag_scale := FineDrag.DEFAULT_SCALE
+## Amount readout ("+35 %") and color of the focused modulator's binding to this control, shown
+## while a modulator is hovered or being assigned; empty when this control isn't bound to it.
+var mod_hint_text := "":
+	set(t):
+		mod_hint_text = t
+		queue_redraw()
+
+var mod_hint_color := Color.WHITE:
+	set(c):
+		mod_hint_color = c
+		queue_redraw()
+
 
 ## Routes into this value: `{amount, color, source, bipolar}`.
 var mod_ranges: Array[Dictionary] = []:
@@ -128,8 +140,10 @@ var mod_ranges: Array[Dictionary] = []:
 ## While true, dragging edits the modulation amount instead of the value.
 var mod_assign_active := false:
 	set(a):
+		# Re-assigning the same value (a refresh mid-drag) must not cancel the drag.
+		if a != mod_assign_active:
+			_dragging = false
 		mod_assign_active = a
-		_dragging = false
 		queue_redraw()
 		_refresh_tooltip()
 var mod_assign_color := Color.WHITE:
@@ -270,7 +284,7 @@ func _draw() -> void:
 	draw_line(Vector2(cap.position.x + 2.0, value_y), Vector2(cap.end.x - 2.0, value_y), Color(0, 0, 0, 0.45), 1.0)
 
 
-## Route bars down the right edge of the track, live markers, and an outline while assigning.
+## Route bars down the right edge of the track, and live markers.
 func _draw_modulation(track: Rect2) -> void:
 	var base := value_to_position(_value)
 	for i in mod_ranges.size():
@@ -284,7 +298,10 @@ func _draw_modulation(track: Rect2) -> void:
 		draw_rect(Rect2(track.position.x, position_y(clampf(live, 0.0, 1.0)) - 0.5, track.size.x, 1.5),
 			ModDisplay.LIVE_MARKER_COLOR, true)
 	if mod_assign_active:
-		draw_rect(track, Color(mod_assign_color, 0.9), false, 1.5)
+		ModDisplay.draw_fill(self, track, mod_assign_color)
+	elif not mod_hint_text.is_empty():
+		ModDisplay.draw_fill(self, track, mod_hint_color)
+	ModDisplay.draw_hint_text(self, track, mod_hint_text)
 
 
 func _gui_input(event: InputEvent) -> void:

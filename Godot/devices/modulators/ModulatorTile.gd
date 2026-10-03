@@ -1,12 +1,12 @@
 ## One modulator tile in the Modulators pane (spec 018): its name, its colour strip (from
 ## `ModDisplay.SOURCE_COLORS` by tile order) and its wire button.
 ##
-## The wire button toggles assign mode for this modulator and pulses while active. Double-click
-## renames (inline). Right-click opens the tile menu: one entry per route with a disconnect
+## The wire button toggles assign mode for this modulator and pulses while active. A selected tile
+## is highlighted with its colour; clicking it again deselects. Right-click opens the tile menu: one entry per route with a disconnect
 ## action, then Rename / Duplicate / Delete.
 class_name ModulatorTile extends PanelContainer
 
-## The tile was clicked (the pane shows this modulator's detail).
+## The tile was left-clicked (the pane toggles this modulator's detail).
 signal selected(mod_id: int)
 
 const WIRE_ICON := preload("res://assets/icons/cable.svg")
@@ -22,6 +22,8 @@ var _rename: LineEdit = null
 var _wire: Button = null
 var _menu: PopupMenu = null
 var _pulse: Tween = null
+var _style: StyleBoxFlat = null
+var _is_selected := false
 
 
 func setup(mod: Modulator) -> void:
@@ -35,11 +37,11 @@ func setup(mod: Modulator) -> void:
 func _build() -> void:
 	custom_minimum_size = Vector2(86, 42)
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(1, 1, 1, 0.05)
-	style.set_corner_radius_all(3)
-	style.set_content_margin_all(3)
-	add_theme_stylebox_override("panel", style)
+	_style = StyleBoxFlat.new()
+	_style.set_corner_radius_all(3)
+	_style.set_content_margin_all(3)
+	add_theme_stylebox_override("panel", _style)
+	_apply_selected_style()
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
@@ -83,6 +85,17 @@ func _build() -> void:
 	add_child(_menu)
 
 	ModAssign.holder().changed.connect(_sync_wire)
+	mouse_entered.connect(func(): _set_hover(true))
+	# Moving onto the wire button still counts as hovering the tile.
+	mouse_exited.connect(func(): _set_hover(get_global_rect().has_point(get_global_mouse_position())))
+	tree_exiting.connect(func(): _set_hover(false))
+
+
+## Ask the controls this modulator is bound to to show its amounts.
+func _set_hover(on: bool) -> void:
+	if modulator == null or modulator.owner() == null:
+		return
+	ModAssign.set_hover(modulator.owner(), modulator.mod_id, on)
 
 
 ## Name, colour strip and wire state from the model.
@@ -93,8 +106,24 @@ func refresh() -> void:
 		_name_label.text = modulator.name
 	if _strip != null:
 		_strip.color = _color()
+	_apply_selected_style()
 	if _wire != null:
 		_wire.tooltip_text = "Assign %s: click, then drag a control of this device or one of its children" % modulator.name
+
+
+func set_selected(on: bool) -> void:
+	_is_selected = on
+	_apply_selected_style()
+
+
+func _apply_selected_style() -> void:
+	if _style == null:
+		return
+	var accent := _color() if modulator != null else Color.WHITE
+	_style.bg_color = Color(accent, 0.16) if _is_selected else Color(1, 1, 1, 0.05)
+	_style.set_border_width_all(1 if _is_selected else 0)
+	_style.border_color = Color(accent, 0.9)
+	queue_redraw()
 
 
 func _color() -> Color:
@@ -152,12 +181,9 @@ func _gui_input(event: InputEvent) -> void:
 	if modulator == null or not (event is InputEventMouseButton) or not event.pressed:
 		return
 	if event.button_index == MOUSE_BUTTON_RIGHT:
-		selected.emit(modulator.mod_id)
 		_open_menu()
 	elif event.button_index == MOUSE_BUTTON_LEFT:
 		selected.emit(modulator.mod_id)
-		if event.double_click:
-			_start_rename()
 
 
 func _start_rename() -> void:
