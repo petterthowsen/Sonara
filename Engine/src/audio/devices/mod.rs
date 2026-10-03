@@ -24,6 +24,7 @@ mod sampler;
 mod sfizz_device;
 pub mod sfizz_keys;
 mod spectrum_analyzer;
+mod utility;
 
 pub use chain::ChainDevice;
 pub use chorus::ChorusDevice;
@@ -43,6 +44,7 @@ pub use reverb::ReverbDevice;
 pub use sampler::SamplerDevice;
 pub use sfizz_device::SfizzDevice;
 pub use spectrum_analyzer::SpectrumAnalyzerDevice;
+pub use utility::UtilityDevice;
 
 use std::time::{Duration, Instant};
 

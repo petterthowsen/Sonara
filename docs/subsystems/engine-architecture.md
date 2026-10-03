@@ -81,6 +81,7 @@ Engine/src/
       polysynth/         # mod.rs (device, voice pool, stealing), voice.rs (per-voice DSP + modulation),
                          # params.rs (parameter table, slots), modulation.rs (sources, route matrix)
       delay.rs           # Delay effect device
+      utility.rs         # Utility effect (spec 017): gain, balance, width, mono/bass mono, phase invert
       sfizz_device.rs    # SFZ sampler backed by sfizz
       spectrum_analyzer.rs# Utility pass-through FFT analyzer
       clap_host/         # CLAP subprocess adapter (in-use) + legacy in-process adapter.rs (unused)
@@ -162,6 +163,10 @@ Godot/              # Godot 4.7 UI App
 - Godot requests built-in metadata with `/builtin/request`; the engine replies via `AudioCommand::AdvertiseBuiltinDevices` by instantiating each builtin at runtime (`sonara.builtin.polysynth`, `.delay`, `.sfizz`, `.spectrum_analyzer`) and emitting `/builtin/info` messages.
 - Metadata includes channel counts, MIDI capability, file-loading support, and parameter descriptors so the Godot browser can build device assets without hardcoding names or parameters.
 - `PolySynthDevice` is the default polyphonic instrument built on the in-house DSP module (`audio::dsp`) with SIMD-accelerated block mixing. (The old FunDSP prototype has been removed; the `fundsp` dependency in `Cargo.toml` is legacy.)
+- `UtilityDevice` (`sonara.builtin.utility`, spec 017) is a plain effect in `EFFECT_IDS`. Its path is phase invert → bass mono → width → balance → gain × mute, and it passes through bit-exact while every control sits at its default.
+  - Width works in M/S (M = (L+R)/2, S = (L−R)/2). Up to 100 % only the side is scaled (mid = 1, side = w), so narrowing never changes the mono sum. Above 100 %, mid = 1/n and side = w/n with n = √((1 + w²)/2). That keeps the level of uncorrelated M/S constant: 200 % is mid −4 dB, side +2 dB. Mono forces w = 0.
+  - Pan is a balance law. The near side stays at unity, and the far side follows cos(|p|·π/2) to silence at ±100 %.
+  - Bass Mono is a one-crossover `MultibandSplitter` (LR4). The low band is summed to mono and added back to the high band. It fades in and out over the 20 ms ramp, and the splitter runs only while it is on or fading. Phase invert is a smoothed ±1 gain, and Gain's −60 dB floor is silence.
 - `SpectrumAnalyzerDevice` is a stereo utility that mirrors its input to output while queueing FFT frames; it only performs analysis when Godot holds an active `"spectrum"` subscription to keep the audio callback light.
 
 ### Device Data Streams
