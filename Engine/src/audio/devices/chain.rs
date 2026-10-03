@@ -143,6 +143,10 @@ impl AudioDevice for ChainDevice {
         }]
     }
 
+    fn accepts_note_input(&self) -> bool {
+        true
+    }
+
     fn parameters(&self) -> Vec<ParamInfo> {
         vec![ParamInfo {
             id: 0,

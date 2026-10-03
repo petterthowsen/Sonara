@@ -384,6 +384,10 @@ impl<V: DrumVoice + 'static> AudioDevice for DrumHost<V> {
         }]
     }
 
+    fn accepts_note_input(&self) -> bool {
+        true
+    }
+
     fn reset(&mut self) {
         for voice in self.voices.iter_mut() {
             voice.reset();

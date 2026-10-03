@@ -5,10 +5,11 @@
 //! other. Failures are collected per effect and reported together.
 
 use super::{
-    create_effect, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, ParamInfo, ParamType,
-    EFFECT_IDS,
+    create_effect, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, DevicePath, ParamInfo,
+    ParamType, EFFECT_IDS,
 };
 use crate::audio::dsp::test_util::{peak, render, stereo, white_noise};
+use crate::audio::modulation::wrap_at_path;
 
 const SR: f32 = 48_000.0;
 const MAX_FRAMES: usize = 4_096;
@@ -17,6 +18,18 @@ const KNOWN_FAILING: &[(&str, &str)] = &[];
 
 fn make(id: &str) -> Box<dyn AudioDevice> {
     create_effect(id, SR, MAX_FRAMES).unwrap_or_else(|| panic!("{id} is not an effect"))
+}
+
+/// The effect, optionally wrapped in a `ModulatedDevice` with no routes or modulators. A
+/// wrapped device must behave exactly like the bare one (spec 018 Phase 3).
+fn make_for(id: &str, wrapped: bool) -> Box<dyn AudioDevice> {
+    let device = make(id);
+    if !wrapped {
+        return device;
+    }
+    let mut devices: Vec<Box<dyn AudioDevice>> = vec![device];
+    wrap_at_path(&mut devices, &DevicePath::root(0), SR).expect("wrap the effect");
+    devices.pop().expect("wrapped device")
 }
 
 /// Interleaved stereo noise followed by silence.
@@ -59,8 +72,8 @@ fn default_norm(info: &ParamInfo) -> f32 {
     }
 }
 
-fn check_parameters_round_trip(id: &str) -> Result<(), String> {
-    let mut device = make(id);
+fn check_parameters_round_trip(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
     for info in device.parameters() {
         for norm in [0.0, 0.25, 0.5, 0.73, 1.0] {
             device.set_parameter(info.id, norm);
@@ -79,8 +92,8 @@ fn check_parameters_round_trip(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_defaults_match_metadata(id: &str) -> Result<(), String> {
-    let device = make(id);
+fn check_defaults_match_metadata(id: &str, wrapped: bool) -> Result<(), String> {
+    let device = make_for(id, wrapped);
     for info in device.parameters() {
         let got = device.get_parameter(info.id).unwrap_or(f32::NAN);
         let expected = default_norm(&info);
@@ -94,8 +107,8 @@ fn check_defaults_match_metadata(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_bypass_is_bit_exact(id: &str) -> Result<(), String> {
-    let mut device = make(id);
+fn check_bypass_is_bit_exact(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
     device.set_enabled(false);
     let input = noise_then_silence(0.5, 0.0);
     if render(device.as_mut(), &input, &[512]) != input {
@@ -104,8 +117,8 @@ fn check_bypass_is_bit_exact(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_mix_zero_is_bit_exact_dry(id: &str) -> Result<(), String> {
-    let mut device = make(id);
+fn check_mix_zero_is_bit_exact_dry(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
     let Some(mix) = device.parameters().into_iter().find(|p| p.name == "Mix") else {
         return Ok(()); // No Mix parameter.
     };
@@ -119,9 +132,9 @@ fn check_mix_zero_is_bit_exact_dry(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_every_rate_stays_finite(id: &str) -> Result<(), String> {
+fn check_every_rate_stays_finite(id: &str, wrapped: bool) -> Result<(), String> {
     for rate in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
-        let mut device = make(id);
+        let mut device = make_for(id, wrapped);
         device.prepare(rate, MAX_FRAMES);
         let input = noise_then_silence(1.0, 1.0);
         if let Some(bad) = render(device.as_mut(), &input, &[512])
@@ -134,10 +147,10 @@ fn check_every_rate_stays_finite(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_block_size_independence(id: &str) -> Result<(), String> {
+fn check_block_size_independence(id: &str, wrapped: bool) -> Result<(), String> {
     let input = noise_then_silence(1.0, 0.5);
-    let reference = render(make(id).as_mut(), &input, &[512]);
-    let odd = render(make(id).as_mut(), &input, &[1, 37, 256, 4_096]);
+    let reference = render(make_for(id, wrapped).as_mut(), &input, &[512]);
+    let odd = render(make_for(id, wrapped).as_mut(), &input, &[1, 37, 256, 4_096]);
     let worst = reference
         .iter()
         .zip(&odd)
@@ -151,8 +164,8 @@ fn check_block_size_independence(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_reset_clears_the_tail(id: &str) -> Result<(), String> {
-    let mut device = make(id);
+fn check_reset_clears_the_tail(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
     render(device.as_mut(), &noise_then_silence(0.5, 0.0), &[512]);
     device.reset();
     let after = render(device.as_mut(), &noise_then_silence(0.0, 0.5), &[512]);
@@ -165,8 +178,8 @@ fn check_reset_clears_the_tail(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_tail_dies_out(id: &str) -> Result<(), String> {
-    let mut device = make(id);
+fn check_tail_dies_out(id: &str, wrapped: bool) -> Result<(), String> {
+    let mut device = make_for(id, wrapped);
     let output = render(device.as_mut(), &noise_then_silence(1.0, 20.0), &[512]);
     let last_second = &output[output.len() - SR as usize * 2..];
     if peak(last_second) > 1e-6 {
@@ -181,19 +194,19 @@ fn check_tail_dies_out(id: &str) -> Result<(), String> {
 /// A modulation offset must behave exactly like moving the base value by that offset, while
 /// `get_parameter` keeps reporting the untouched base. Checked per modulatable parameter by
 /// comparing a modulated render with a render whose base was moved by the same amount.
-fn check_modulation_offsets(id: &str) -> Result<(), String> {
+fn check_modulation_offsets(id: &str, wrapped: bool) -> Result<(), String> {
     const OFFSET: f32 = 0.2;
     let input = noise_then_silence(0.25, 0.25);
-    for info in make(id).parameters() {
+    for info in make_for(id, wrapped).parameters() {
         if !info.is_modulatable {
             continue;
         }
-        let base = make(id)
+        let base = make_for(id, wrapped)
             .get_parameter(info.id)
             .ok_or_else(|| format!("'{}' has no value", info.name))?;
         let target = (base + OFFSET).clamp(0.0, 1.0);
 
-        let mut modulated = make(id);
+        let mut modulated = make_for(id, wrapped);
         modulated.set_param_mod(info.id, OFFSET);
         let got = modulated.get_parameter(info.id).unwrap_or(f32::NAN);
         if (got - base).abs() > 1e-4 {
@@ -204,7 +217,7 @@ fn check_modulation_offsets(id: &str) -> Result<(), String> {
         }
         let modulated_out = render(modulated.as_mut(), &input, &[512]);
 
-        let mut moved = make(id);
+        let mut moved = make_for(id, wrapped);
         moved.set_parameter(info.id, target);
         let moved_out = render(moved.as_mut(), &input, &[512]);
         if modulated_out != moved_out {
@@ -214,11 +227,11 @@ fn check_modulation_offsets(id: &str) -> Result<(), String> {
             ));
         }
 
-        let mut restored = make(id);
+        let mut restored = make_for(id, wrapped);
         restored.set_param_mod(info.id, OFFSET);
         restored.set_param_mod(info.id, 0.0);
         let restored_out = render(restored.as_mut(), &input, &[512]);
-        let mut plain = make(id);
+        let mut plain = make_for(id, wrapped);
         let plain_out = render(plain.as_mut(), &input, &[512]);
         if restored_out != plain_out {
             return Err(format!("'{}' offset 0 did not restore the base", info.name));
@@ -227,7 +240,7 @@ fn check_modulation_offsets(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-const CHECKS: &[(&str, fn(&str) -> Result<(), String>)] = &[
+const CHECKS: &[(&str, fn(&str, bool) -> Result<(), String>)] = &[
     ("parameters round-trip", check_parameters_round_trip),
     ("modulation offsets", check_modulation_offsets),
     ("defaults match metadata", check_defaults_match_metadata),
@@ -240,10 +253,14 @@ const CHECKS: &[(&str, fn(&str) -> Result<(), String>)] = &[
 ];
 
 /// Every failed check for effect `id`, as "check: reason" lines.
-fn failures(id: &str) -> Vec<String> {
+fn failures(id: &str, wrapped: bool) -> Vec<String> {
     CHECKS
         .iter()
-        .filter_map(|(name, check)| check(id).err().map(|e| format!("{id} — {name}: {e}")))
+        .filter_map(|(name, check)| {
+            check(id, wrapped)
+                .err()
+                .map(|e| format!("{id} — {name}: {e}"))
+        })
         .collect()
 }
 
@@ -256,7 +273,18 @@ fn every_builtin_effect_conforms() {
     let failed: Vec<String> = EFFECT_IDS
         .iter()
         .filter(|id| !is_known_failing(id))
-        .flat_map(|id| failures(id))
+        .flat_map(|id| failures(id, false))
+        .collect();
+    assert!(failed.is_empty(), "\n{}", failed.join("\n"));
+}
+
+/// The same checks over every effect wrapped in a modulator wrapper with no routes: the wrapper
+/// must be transparent.
+#[test]
+fn every_builtin_effect_conforms_wrapped() {
+    let failed: Vec<String> = EFFECT_IDS
+        .iter()
+        .flat_map(|id| failures(id, true))
         .collect();
     assert!(failed.is_empty(), "\n{}", failed.join("\n"));
 }
@@ -267,7 +295,7 @@ fn every_builtin_effect_conforms() {
 #[ignore = "effects on KNOWN_FAILING are expected to fail"]
 fn known_failing_effects_still_fail() {
     for (id, reason) in KNOWN_FAILING {
-        let failed = failures(id);
+        let failed = failures(id, false);
         println!("{id} ({reason}):");
         for line in &failed {
             println!("  {line}");

@@ -624,6 +624,10 @@ impl AudioDevice for SamplerDevice {
         }]
     }
 
+    fn accepts_note_input(&self) -> bool {
+        true
+    }
+
     fn loading_state(&self) -> Option<String> {
         Some(self.loading_state.clone())
     }

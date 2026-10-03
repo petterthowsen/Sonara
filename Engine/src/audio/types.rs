@@ -834,7 +834,9 @@ impl Channel {
                 MidiMessageType::NoteOn => {
                     let is_note_on = event.velocity > 0;
                     for device in self.devices.iter_mut() {
-                        device.mark_activity();
+                        if device.accepts_note_input() {
+                            device.mark_activity();
+                        }
                         device.send_midi_event(
                             event.note,
                             event.velocity,
@@ -845,7 +847,9 @@ impl Channel {
                 }
                 MidiMessageType::NoteOff => {
                     for device in self.devices.iter_mut() {
-                        device.mark_activity();
+                        if device.accepts_note_input() {
+                            device.mark_activity();
+                        }
                         device.send_midi_event(event.note, 0, false, event.frame_offset);
                     }
                 }
@@ -1037,8 +1041,11 @@ impl Channel {
         }
     }
 
-    /// Send MIDI event to the first device (instrument) only with a frame offset.
-    /// Effects in the chain don't receive MIDI.
+    /// Send a MIDI event to every top-level device with a frame offset, like scheduled notes.
+    ///
+    /// Audio effects ignore notes (the trait default); containers forward to their children.
+    /// Only a device that accepts note input, or carries a note-driven modulator, is woken, so
+    /// a sleeping reverb stays asleep (ADR-0014).
     pub fn send_midi_event_to_devices(
         &mut self,
         note: u8,
@@ -1046,12 +1053,11 @@ impl Channel {
         is_note_on: bool,
         frame_offset: usize,
     ) {
-        if let Some(device) = self.devices.first_mut() {
-            device.mark_activity();
-            let section = super::rt_debug::device_name("send_midi_event", device.device_id());
-            super::rt_debug::device_section(section, || {
-                device.send_midi_event(note, velocity, is_note_on, frame_offset)
-            });
+        for device in self.devices.iter_mut() {
+            if device.accepts_note_input() {
+                device.mark_activity();
+            }
+            device.send_midi_event(note, velocity, is_note_on, frame_offset);
         }
     }
 

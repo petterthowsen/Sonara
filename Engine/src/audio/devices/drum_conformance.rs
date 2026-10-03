@@ -7,11 +7,12 @@
 
 use super::param_table::{flatten, linear, slot_table, spec, ParamSpec, ParamTable, ParamValues};
 use super::{
-    create_drum, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, DrumHost, DrumParams,
-    DrumVoice, ParamId, ParamInfo, ParamType, DRUM_IDS, GLOBAL_SPECS,
+    create_drum, enum_to_norm, norm_to_enum, real_to_norm, AudioDevice, DevicePath, DrumHost,
+    DrumParams, DrumVoice, ParamId, ParamInfo, ParamType, DRUM_IDS, GLOBAL_SPECS,
 };
 use crate::audio::dsp::test_util::{peak, time_to_db};
 use crate::audio::dsp::{OneShotEnvelope, Rng, SweepOsc, SweepShape};
+use crate::audio::modulation::wrap_at_path;
 
 const SR: f32 = 48_000.0;
 const MAX_FRAMES: usize = 4_096;
@@ -164,6 +165,23 @@ fn cases() -> Vec<(&'static str, Box<Make>)> {
         .collect();
     cases.push(("test.drum", Box::new(make_test_drum)));
     cases
+}
+
+/// The same cases, each wrapped in a `ModulatedDevice` with no routes: a wrapped drum must
+/// behave exactly like the bare one (spec 018 Phase 3). Note the wrapper keeps being processed
+/// while its device sleeps, so `check_sleeps_and_wakes` is not in the wrapped run.
+fn cases_wrapped() -> Vec<(&'static str, Box<Make>)> {
+    cases()
+        .into_iter()
+        .map(|(id, make)| {
+            let wrapped: Box<Make> = Box::new(move || {
+                let mut devices: Vec<Box<dyn AudioDevice>> = vec![make()];
+                wrap_at_path(&mut devices, &DevicePath::root(0), SR).expect("wrap the drum");
+                devices.pop().expect("wrapped drum")
+            });
+            (id, wrapped)
+        })
+        .collect()
 }
 
 /// Render `total` stereo frames in blocks of `block`, sending each `(frame, note, velocity)`
@@ -452,6 +470,24 @@ fn every_builtin_drum_conforms() {
         .iter()
         .flat_map(|(id, make)| failures(id, make.as_ref()))
         .collect();
+    assert!(failed.is_empty(), "\n{}", failed.join("\n"));
+}
+
+/// Every drum must also pass the checks when wrapped, apart from the sleep check the wrapper
+/// deliberately changes (it stays awake to keep its modulators advancing).
+#[test]
+fn every_builtin_drum_conforms_wrapped() {
+    let mut failed: Vec<String> = Vec::new();
+    for (id, make) in cases_wrapped() {
+        for (name, check) in CHECKS {
+            if *name == "sleeps and wakes" {
+                continue;
+            }
+            if let Err(error) = check(make.as_ref()) {
+                failed.push(format!("{id} — {name}: {error}"));
+            }
+        }
+    }
     assert!(failed.is_empty(), "\n{}", failed.join("\n"));
 }
 

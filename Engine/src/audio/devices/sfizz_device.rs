@@ -726,6 +726,10 @@ impl AudioDevice for SfizzDevice {
         }]
     }
 
+    fn accepts_note_input(&self) -> bool {
+        true
+    }
+
     fn parameters(&self) -> Vec<ParamInfo> {
         let cc_params = self.cc_params.lock().unwrap();
 

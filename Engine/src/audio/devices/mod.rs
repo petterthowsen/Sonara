@@ -431,6 +431,21 @@ pub trait AudioDevice: Send {
         vec![] // Default: no MIDI ports
     }
 
+    /// True when this device accepts note input. The allocation-free companion to
+    /// `midi_ports()` used on the audio thread: a note wakes the device only when this is
+    /// true, or when it carries a note-driven modulator. Devices that report MIDI ports must
+    /// override this with `true`.
+    fn accepts_note_input(&self) -> bool {
+        false
+    }
+
+    /// True when `begin_block` can park (the device processes asynchronously, e.g. a
+    /// subprocess plugin). The modulation wrapper won't split this device's block when it is
+    /// true, so batch processing and frame-stamped parameter events stay intact.
+    fn has_async_blocks(&self) -> bool {
+        false
+    }
+
     /// Get list of parameters
     fn parameters(&self) -> Vec<ParamInfo>;
 
@@ -551,6 +566,13 @@ pub trait AudioDevice: Send {
     /// Get mutable reference to self as `Any` for downcasting
     /// Used to access device-specific methods (e.g. CLAP GUI)
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// Mutable view of this device as a modulation wrapper, if it is one. The wrapper's
+    /// `as_any_mut` deliberately returns the inner device's, so this is the seam the command
+    /// thread and the automation path use to reach a device's modulators.
+    fn as_modulated_mut(&mut self) -> Option<&mut dyn crate::audio::modulation::Modulated> {
+        None
+    }
 
     // === Sleep/Wake System (CPU optimization) ===
 

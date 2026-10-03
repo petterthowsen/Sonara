@@ -137,6 +137,13 @@ pub enum AutomationTarget {
         device_path: DevicePath,
         param_id: u32,
     },
+    /// One parameter of one modulator on a device in the chain
+    /// (`device/{i0}/…/mod/{mod_id}/param/{id}`).
+    ModulatorParam {
+        device_path: DevicePath,
+        mod_id: u8,
+        param_id: u32,
+    },
 }
 
 impl AutomationTarget {
@@ -155,18 +162,37 @@ impl AutomationTarget {
                 .map(|index| AutomationTarget::SendAmount { index }),
             ["device", rest @ ..] => {
                 // rest = i0 [i1 …] "param" param_id
+                //     or i0 [i1 …] "mod" mod_id "param" param_id
                 let param_pos = rest.len().checked_sub(2)?;
                 if rest[param_pos] != "param" || param_pos == 0 {
                     return None;
                 }
                 let param_id = rest[param_pos + 1].parse::<u32>().ok()?;
-                let mut indices = Vec::with_capacity(param_pos);
-                for index in &rest[..param_pos] {
-                    indices.push(index.parse::<usize>().ok()?);
+                let head = &rest[..param_pos];
+                let (indices, mod_id) = match head.split_last() {
+                    Some((last, before)) if before.last() == Some(&"mod") => {
+                        (&before[..before.len() - 1], Some(last.parse::<u8>().ok()?))
+                    }
+                    _ => (head, None),
+                };
+                if indices.is_empty() {
+                    return None;
                 }
-                Some(AutomationTarget::DeviceParam {
-                    device_path: DevicePath::from_indices(indices),
-                    param_id,
+                let mut path_indices = Vec::with_capacity(indices.len());
+                for index in indices {
+                    path_indices.push(index.parse::<usize>().ok()?);
+                }
+                let device_path = DevicePath::try_from_indices(&path_indices)?;
+                Some(match mod_id {
+                    Some(mod_id) => AutomationTarget::ModulatorParam {
+                        device_path,
+                        mod_id,
+                        param_id,
+                    },
+                    None => AutomationTarget::DeviceParam {
+                        device_path,
+                        param_id,
+                    },
                 })
             }
             _ => None,
@@ -184,6 +210,15 @@ impl fmt::Display for AutomationTarget {
                 device_path,
                 param_id,
             } => write!(f, "device/{}/param/{}", device_path, param_id),
+            AutomationTarget::ModulatorParam {
+                device_path,
+                mod_id,
+                param_id,
+            } => write!(
+                f,
+                "device/{}/mod/{}/param/{}",
+                device_path, mod_id, param_id
+            ),
         }
     }
 }
@@ -426,6 +461,30 @@ fn apply_lane_value(lane: &mut AutomationLane, channel: &mut Channel, value: f32
             // justified; a constant lane leaves a sleeping device asleep.
             device.mark_activity();
         }
+        AutomationTarget::ModulatorParam {
+            device_path,
+            mod_id,
+            param_id,
+        } => {
+            let Some(device) = channel.device_at_path_mut(device_path) else {
+                return false;
+            };
+            let result = match device.as_modulated_mut() {
+                Some(modulated) => {
+                    if captured_base.is_none() {
+                        *captured_base = modulated.get_modulator_param(*mod_id, *param_id);
+                    }
+                    modulated
+                        .set_modulator_param(*mod_id, *param_id, value)
+                        .is_ok()
+                }
+                None => false,
+            };
+            if !result {
+                return false;
+            }
+            device.mark_activity();
+        }
     }
 
     *warned_unresolvable = false;
@@ -465,6 +524,25 @@ pub fn release_lane(lane: &mut AutomationLane, channel: &mut Channel) {
                 if let Some(device) = channel.device_at_path_mut(device_path) {
                     device.set_parameter_at(*param_id, base, 0);
                     device.mark_activity();
+                }
+            }
+        }
+        AutomationTarget::ModulatorParam {
+            device_path,
+            mod_id,
+            param_id,
+        } => {
+            if let Some(base) = captured_base.take() {
+                if let Some(device) = channel.device_at_path_mut(device_path) {
+                    let restored = match device.as_modulated_mut() {
+                        Some(modulated) => modulated
+                            .set_modulator_param(*mod_id, *param_id, base)
+                            .is_ok(),
+                        None => false,
+                    };
+                    if restored {
+                        device.mark_activity();
+                    }
                 }
             }
         }
@@ -536,6 +614,8 @@ mod tests {
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
     };
+    use crate::audio::modulation::kinds::ENV_ATTACK;
+    use crate::audio::modulation::{wrap_at_path, ModulatorKind};
     use crate::audio::types::{Channel, PanMode, Send, Track};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -674,6 +754,22 @@ mod tests {
                     param_id: 128,
                 },
             ),
+            (
+                "device/0/mod/2/param/10",
+                AutomationTarget::ModulatorParam {
+                    device_path: DevicePath::from_indices(vec![0]),
+                    mod_id: 2,
+                    param_id: 10,
+                },
+            ),
+            (
+                "device/0/1/mod/0/param/0",
+                AutomationTarget::ModulatorParam {
+                    device_path: DevicePath::from_indices(vec![0, 1]),
+                    mod_id: 0,
+                    param_id: 0,
+                },
+            ),
         ];
 
         for (text, expected) in cases {
@@ -692,6 +788,10 @@ mod tests {
             "device/0/param",
             "device/0/param/x",
             "device/0/1/7",
+            "device/0/mod/param/7",
+            "device/mod/2/param/7",
+            "device/0/mod/300/param/7",
+            "device/0/mod/2/param",
         ] {
             assert!(
                 AutomationTarget::parse(bad).is_none(),
@@ -699,6 +799,48 @@ mod tests {
                 bad
             );
         }
+    }
+
+    /// A `ModulatorParam` lane writes through the wrapper and restores the base on release
+    /// (spec 018 Phase 3).
+    #[test]
+    fn automation_drives_and_releases_a_modulator_parameter() {
+        let mut state = EngineState::default();
+        state.device_sample_rate = SAMPLE_RATE;
+
+        let mut channel = Channel::new(2, "Synth".to_string(), BUFFER_SIZE, SAMPLE_RATE);
+        add_test_device(&mut channel, 0.3);
+        wrap_at_path(&mut channel.devices, &DevicePath::root(0), SAMPLE_RATE).expect("wrap");
+        channel.devices[0]
+            .as_modulated_mut()
+            .expect("wrapped")
+            .add_modulator(0, ModulatorKind::Adsr)
+            .expect("add modulator");
+        state.channels.insert(channel.id, channel);
+        state.tracks.insert(1, Track::new(1, 2));
+
+        let target = AutomationTarget::ModulatorParam {
+            device_path: DevicePath::root(0),
+            mod_id: 0,
+            param_id: ENV_ATTACK,
+        };
+        add_lane(&mut state, "env", target, &[(0, 0.0), (960, 1.0)]);
+
+        let read = |state: &mut EngineState| {
+            state.channels.get_mut(&2).expect("channel 2").devices[0]
+                .as_modulated_mut()
+                .expect("wrapped")
+                .get_modulator_param(0, ENV_ATTACK)
+                .expect("attack")
+        };
+        let base = read(&mut state);
+
+        apply_automation(&mut state, 480);
+        let applied = read(&mut state);
+        assert!((applied - 0.5).abs() < 1e-3, "attack became {applied}");
+
+        release_track_lane(&mut state, 1, "env");
+        assert_eq!(read(&mut state), base, "the base was not restored");
     }
 
     #[test]

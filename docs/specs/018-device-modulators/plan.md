@@ -236,7 +236,7 @@ locked across seeks. A free LFO advances on its own.
 
 ## Phase 3: `ModulatedDevice`, the mono path and MIDI pass-through (engine only)
 
-- [ ] `audio/modulation/host.rs`: `ModulatedDevice { inner, mods: [ModulatorState; 8],
+- [x] `audio/modulation/host.rs`: `ModulatedDevice { inner, mods: [ModulatorState; 8],
   routes: ModMatrix, resolved targets, control buffer, midi queue }`.
   - **Forwarding:** every `AudioDevice` method forwards to `inner`. `as_any_mut`,
     `as_container` and `as_container_mut` return the inner device's.
@@ -252,17 +252,17 @@ locked across seeks. A free LFO advances on its own.
     frame-stamped `PARAM_MOD` events (Phase 5). Until Phase 5, CLAP targets are rejected.
   - Modulators keep advancing while the inner device sleeps.
   - `set_transport` keeps a copy for synced LFOs and forwards it.
-- [ ] Wrap and unwrap happen on the command thread. The wrapper is built with the lock
+- [x] Wrap and unwrap happen on the command thread. The wrapper is built with the lock
   released, then the inner box is swapped in under the lock (two pointer moves). Removing the
   last modulator unwraps the same way and resets the offsets to 0 first.
-- [ ] Routes to a parameter on another modulator are accepted and stored, but not evaluated
+- [x] Routes to a parameter on another modulator are accepted and stored, but not evaluated
   until Phase 9.
-- [ ] `Channel::send_midi_event_to_devices` sends to every top-level device. `mark_activity` is
+- [x] `Channel::send_midi_event_to_devices` sends to every top-level device. `mark_activity` is
   called only where `midi_ports()` is non-empty or the device is a `ModulatedDevice` with a
   note-driven modulator.
-- [ ] `AutomationTarget` parses and formats `device/{path}/mod/{mod_id}/param/{id}`. Applying
+- [x] `AutomationTarget` parses and formats `device/{path}/mod/{mod_id}/param/{id}`. Applying
   and releasing it sets the modulator parameter on the wrapper.
-- [ ] Tests:
+- [x] Tests:
   - a wrapped device behaves identically with no routes (run the conformance suites over
     wrapped devices);
   - an LFO on a delay moves the output;

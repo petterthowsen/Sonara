@@ -346,6 +346,12 @@ impl AudioDevice for SubprocessClapAdapter {
         self.finish_block(inputs, outputs, sample_count);
     }
 
+    /// The plugin processes in a subprocess, so `begin_block` parks; the modulation wrapper
+    /// must not split its blocks (spec 018 Phase 5 sends frame-stamped `PARAM_MOD` events).
+    fn has_async_blocks(&self) -> bool {
+        true
+    }
+
     /// Audio thread. Fill the instance's shared input planes and event array and ring the host's
     /// doorbell, without waiting. Anything that stops a request (not loaded, block too big,
     /// previous request still running, bypassed) leaves a dry block for `finish_block`.

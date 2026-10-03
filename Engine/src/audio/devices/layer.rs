@@ -354,6 +354,10 @@ impl AudioDevice for LayerDevice {
         }]
     }
 
+    fn accepts_note_input(&self) -> bool {
+        true
+    }
+
     fn parameters(&self) -> Vec<ParamInfo> {
         Vec::new()
     }

@@ -15,6 +15,7 @@
 //! path and the `ModulatedDevice` wrapper live in later phases.
 
 pub mod envelope;
+pub mod host;
 pub mod kinds;
 pub mod lfo;
 pub mod matrix;
@@ -26,5 +27,6 @@ pub const MAX_MODULATORS: usize = 8;
 /// Modulation routes one device instance can hold.
 pub const MAX_ROUTES: usize = matrix::MAX_ROUTES;
 
+pub use host::{unwrap_at_path, wrap_at_path, Modulated, ModulatedDevice, CONTROL_STEP};
 pub use kinds::{ModParams, ModulatorKind, MAX_KIND_PARAMS};
 pub use state::ModulatorState;
