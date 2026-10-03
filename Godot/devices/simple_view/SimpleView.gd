@@ -29,8 +29,6 @@ const MIN_ROW_HEIGHT := 32.0
 
 static var logger := Log.make("SimpleView")
 
-## The old modulation-source column; kept hidden until the Modulators tab replaces it (spec 018).
-@onready var _mods: ScrollContainer = $Mods
 @onready var _grid: Control = $Grid
 
 var layout: SimpleLayout = null
@@ -50,7 +48,6 @@ var _built_height := -1.0
 ## its box is drawn over after growing into the free space to its right and below.
 var _group_fit := {}
 func _ready() -> void:
-	_mods.visible = false
 	_grid.resized.connect(_on_grid_resized)
 
 

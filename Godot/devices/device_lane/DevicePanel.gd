@@ -44,6 +44,14 @@ var ccs_pane: Control
 var ccs_scroll: ScrollContainer
 var ccs_box: VBoxContainer
 
+## Modulators tab (spec 018): available for every device, its pane sits beside Parameters/CCs.
+const MODULATORS_ICON := preload("res://assets/icons/cable.svg")
+var modulators_button: Button
+var modulators_pane: Control
+var modulators: ModulatorsPane
+## Small mark in the collapsed left header so modulation is never invisible.
+var _mod_dot: Label
+
 # Content row: [Parameters | CCs | File] [View]
 @onready var content_hbox: HBoxContainer = $VBox/HBox/Content/HBox
 @onready var parameters_pane: Control = $VBox/HBox/Content/HBox/Parameters
@@ -100,15 +108,18 @@ signal request_child_context_menu(child: DeviceInstance)
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
 	_create_cc_tab()
+	_create_modulators_tab()
 	_setup_header_tabs()
 	_create_parameter_lists()
+	_create_mod_dot()
 
-	# Parameters/CCs/File share a ButtonGroup; clicking the active tab collapses its pane.
+	# Parameters/CCs/Modulators/File share a ButtonGroup; clicking the active tab collapses it.
 	params_button.button_group.allow_unpress = true
 	params_button.toggled.connect(_on_tab_toggled.unbind(1))
 	cc_button.toggled.connect(_on_tab_toggled.unbind(1))
+	modulators_button.toggled.connect(_on_tab_toggled.unbind(1))
 	file_button.toggled.connect(_on_tab_toggled.unbind(1))
-	for tab in [params_button, cc_button, file_button]:
+	for tab in [params_button, cc_button, modulators_button, file_button]:
 		tab.pressed.connect(func(): _params_auto_opened = false)
 	view_button.toggled.connect(_on_view_toggled)
 	window_button.toggled.connect(_on_window_toggled)
@@ -156,6 +167,55 @@ func _create_cc_tab() -> void:
 	ccs_box = ccs_scroll.get_node("VBox")
 	for child in ccs_box.get_children():
 		child.queue_free()
+
+
+## Add the Modulators tab button (in the Parameters ButtonGroup) and its pane beside the others.
+## Available for every device: builtins, containers and plugins alike.
+func _create_modulators_tab() -> void:
+	modulators_button = params_button.duplicate()  # keeps the ButtonGroup
+	modulators_button.name = "Modulators"
+	modulators_button.icon = MODULATORS_ICON
+	modulators_button.text = ""
+	modulators_button.tooltip_text = "Modulators"
+	modulators_button.button_pressed = false
+	modulators_button.visible = false
+	tab_buttons.add_child(modulators_button)
+	tab_buttons.move_child(modulators_button, file_button.get_index())
+
+	modulators_pane = PanelContainer.new()
+	modulators_pane.name = "Modulators"
+	modulators_pane.visible = false
+	modulators_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	modulators_pane.add_theme_stylebox_override("panel", parameters_pane.get_theme_stylebox("panel"))
+	content_hbox.add_child(modulators_pane)
+	content_hbox.move_child(modulators_pane, file_box.get_index())
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(200, 0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	modulators_pane.add_child(scroll)
+	modulators = ModulatorsPane.new()
+	scroll.add_child(modulators)
+
+
+## The collapsed header's modulator mark: a small dot, shown only when collapsed and the bound
+## device has modulators, so modulation is never invisible.
+func _create_mod_dot() -> void:
+	_mod_dot = Label.new()
+	_mod_dot.text = "●"
+	_mod_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mod_dot.add_theme_font_size_override("font_size", 11)
+	_mod_dot.add_theme_color_override("font_color", ModDisplay.source_color(0))
+	vertical_name_label.get_parent().add_child(_mod_dot)
+	_mod_dot.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_KEEP_SIZE)
+	_mod_dot.visible = false
+
+
+func _update_mod_dot() -> void:
+	if _mod_dot == null:
+		return
+	_mod_dot.visible = _collapsed and device != null and device.has_modulation()
 
 
 ## Tab bar for the shown view's tabs (`ViewTabs` in the scene), after the name in the top header.
@@ -266,6 +326,14 @@ func _unbind() -> void:
 		device.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
 	if device.name_changed.is_connected(_on_device_name_changed):
 		device.name_changed.disconnect(_on_device_name_changed)
+	if device.modulator_added.is_connected(_on_modulators_changed):
+		device.modulator_added.disconnect(_on_modulators_changed)
+	if device.modulator_removed.is_connected(_on_modulators_changed):
+		device.modulator_removed.disconnect(_on_modulators_changed)
+	if modulators:
+		modulators.unbind()
+	if _mod_dot:
+		_mod_dot.visible = false
 	if device.loading_state_changed.is_connected(_on_device_loading_state_changed):
 		device.loading_state_changed.disconnect(_on_device_loading_state_changed)
 	if device.host_changed.is_connected(_update_header_tooltip):
@@ -423,6 +491,11 @@ func _on_device_name_changed(new_name: String) -> void:
 		_window_popup.title = new_name
 
 
+## A modulator was added or removed: refresh the collapsed-header mark.
+func _on_modulators_changed(_arg = null) -> void:
+	_update_mod_dot()
+
+
 ## Commit an inline rename from the header's SmartLineEdit.
 func _on_name_edited(value) -> void:
 	if device == null:
@@ -466,6 +539,12 @@ func bind_to_device(dev : DeviceInstance):
 			_channel.device_parameters_updated.connect(_on_device_parameters_updated)
 
 	_create_parameter_controls()
+	modulators.bind_to_device(dev)
+	if not dev.modulator_added.is_connected(_on_modulators_changed):
+		dev.modulator_added.connect(_on_modulators_changed)
+	if not dev.modulator_removed.is_connected(_on_modulators_changed):
+		dev.modulator_removed.connect(_on_modulators_changed)
+	_update_mod_dot()
 	_update_cc_tab_visibility()
 	# PanelView = custom UI only (not ParameterList, not container children). A device with no
 	# Panel view of its own still gets one when it qualifies for the generated Simple View.
@@ -590,6 +669,8 @@ func _update_tab_panes() -> void:
 	parameters_pane.visible = params_button.visible and params_button.button_pressed
 	if ccs_pane:
 		ccs_pane.visible = cc_button.visible and cc_button.button_pressed
+	if modulators_pane:
+		modulators_pane.visible = modulators_button.visible and modulators_button.button_pressed
 	file_box.visible = file_button.visible and file_button.button_pressed
 
 
@@ -623,6 +704,7 @@ func _set_collapsed(collapsed: bool) -> void:
 	preset_button.visible = not collapsed
 	name_label.visible = not collapsed
 	vertical_name_label.visible = collapsed
+	_update_mod_dot()
 
 
 ## Show the CCs tab only when this device has unlabeled MIDI CCs.
@@ -641,11 +723,12 @@ func _update_left_pane_visibility() -> void:
 	if device == null:
 		return
 	params_button.visible = not device.get_parameters_in_group("param").is_empty()
+	modulators_button.visible = true
 	# A pressed tab that just disappeared hands over to the first available one.
 	var pressed := params_button.button_group.get_pressed_button()
 	if pressed and not pressed.visible:
 		pressed.set_pressed_no_signal(false)
-		for tab in [params_button, cc_button, file_button]:
+		for tab in [params_button, cc_button, modulators_button, file_button]:
 			if tab.visible:
 				tab.set_pressed_no_signal(true)
 				break

@@ -634,6 +634,33 @@ func _modulator_name_taken(candidate: String) -> bool:
 	return false
 
 
+## Copy `mod_id` (kind, parameters and routes) into a new modulator with the lowest free id.
+## Returns null when the source is missing or the device is full.
+func duplicate_modulator(mod_id: int) -> Modulator:
+	var source := get_modulator(mod_id)
+	if source == null:
+		return null
+	var new_id := _lowest_free_mod_id()
+	if new_id < 0:
+		logger.warn("[%s] Already has the maximum of %d modulators" % [get_display_name(), MAX_MODULATORS])
+		return null
+	var mod := _build_modulator(new_id, source.kind, _unique_modulator_name(source.name),
+		source.params.duplicate(), source.routes.duplicate())
+	if mod == null:
+		return null
+	modulators.append(mod)
+	_expect_mod_echo("add:%d" % new_id)
+	AudioEngineOSC.send(osc_addr("modulator/add"), [new_id, mod.kind])
+	for param_id in mod.params:
+		_expect_mod_echo("param:%d:%d" % [new_id, param_id])
+		_send_modulator_param(mod, param_id, mod.params[param_id])
+	for target in mod.routes:
+		_expect_mod_echo("route:%d:%s" % [new_id, target])
+		AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % new_id), [target, mod.routes[target]])
+	modulator_added.emit(mod)
+	return mod
+
+
 ## Remove `mod_id` and its routes.
 func remove_modulator(mod_id: int) -> void:
 	var index := _modulator_index(mod_id)

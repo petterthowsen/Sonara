@@ -52,6 +52,10 @@ func _on_bind() -> void:
 	_connect_waveform()
 	_sync_envelope_from_device()
 	queue_redraw()
+	ModAssign.attach(_knob_attack, device, _attack_id)
+	ModAssign.attach(_knob_decay, device, _decay_id)
+	ModAssign.attach(_knob_sustain, device, _sustain_id)
+	ModAssign.attach(_knob_release, device, _release_id)
 
 
 ## Stop listening to the bound instance's audio source.

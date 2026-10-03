@@ -143,12 +143,21 @@ are no traits in GDScript, so each implements it; the maths is in `ModDisplay.gd
   `mod_amount_changed(new_amount)` and never `value_changed`. One full-range drag moves the amount
   by 1.0 (normalized units); Shift is fine drag; a double-click emits 0, which removes the route.
   Ctrl-click reset and typed entry are off in assign mode.
-- `mod_amount_text_callback` (Callable(amount) -> String) sets the assign tooltip. `SimpleControl`
+- `mod_amount_text_callback` (Callable(amount) -> String) sets the assign tooltip. `ModAssign.attach`
   gives "+1.2 oct" for logarithmic parameters and "+35 %" otherwise.
 - `mod_live_values` (0..1) draws playback markers. Phase 6 feeds it.
 
+A control joins the contract through `ModAssign.attach(node, device, param_id)` (spec 018):
+`SimpleControl`'s inner knobs/sliders and envelope knobs, `CompactParameterControl`'s slider, and the
+custom EQ/compressor/multiband/sampler knobs call it. It wires `mod_amount_changed` to the active
+modulator's route, feeds `mod_ranges` from `get_routes_into` on the device and every ancestor, and
+sets `mod_assign_active`/colors while assign mode is on. Source colors are
+`ModDisplay.source_color(index)`, by the modulator's index on its owning device (the tile order in
+the Modulators pane). Tests: `tests/test_mod_assign_ui.gd` (the component contract),
+`tests/test_modulators_ui.gd` (the pane, tiles and assign wiring).
+
 `VolumeSlider` and `Volumeter` have the API, but nothing feeds them until channel parameters can be
-modulated. Source colors are `ModDisplay.source_color(index)`. Test: `tests/test_mod_assign_ui.gd`.
+modulated (mixer parameters are out of scope for spec 018).
 
 ## Checklist for a new or changed control
 

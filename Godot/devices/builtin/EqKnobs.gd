@@ -29,6 +29,7 @@ static func configure(knob: RotaryKnob, device: Object, param_id: int, format: S
 		if is_freq:
 			return FreqAxis.format_hz(value) + " Hz"
 		return (format % value) + unit_suffix
+	ModAssign.attach(knob, device, param_id)
 
 
 ## Gain means nothing for cuts, notches and band passes: dim it rather than shifting the layout.

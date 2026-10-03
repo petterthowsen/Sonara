@@ -181,6 +181,7 @@ func _configure_controls() -> void:
 			fader.to_position = func(v: float) -> float: return 1.0 - param.value_to_normalized(v)
 			fader.from_position = func(n: float) -> float: return param.normalized_to_value(1.0 - n)
 		fader.value_text_callback = _fader_text.bind(entry)
+		ModAssign.attach(fader, device, int(entry["id"]))
 	for entry in _knobs:
 		var param := device.get_parameter(int(entry["id"]))
 		if param == null:
@@ -196,10 +197,12 @@ func _configure_controls() -> void:
 		else:
 			knob.value_format = entry["format"]
 			knob.unit = entry["unit"]
+		ModAssign.attach(knob, device, int(entry["id"]))
 	for entry in _sliders:
 		var param := device.get_parameter(int(entry["id"]))
 		if param != null:
 			(entry["slider"] as HorSlider).default_value = param.value_to_normalized(param.default_value)
+			ModAssign.attach(entry["slider"] as HorSlider, device, int(entry["id"]))
 
 
 func _fader_text(value: float, entry: Dictionary) -> String:

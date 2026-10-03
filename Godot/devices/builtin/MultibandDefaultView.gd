@@ -117,6 +117,7 @@ func _configure_knob(knob: RotaryKnob, param_id: int, format: String, unit: Stri
 	knob.value_default = param.default_value
 	knob.value_format = format
 	knob.unit = unit
+	ModAssign.attach(knob, device, param_id)
 
 
 func _on_device_parameter_changed(param_id: int, _value: float) -> void:

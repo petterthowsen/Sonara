@@ -34,6 +34,8 @@ var _inner: Control = null
 var _envelope: Envelope = null
 ## The envelope compound's knobs, in bound-parameter order (same index as `_param_ids`).
 var _env_knobs: Array[RotaryKnob] = []
+## Inner controls exposed to assign mode: `{node, index}` with `index` into the bound params.
+var _mod_targets: Array[Dictionary] = []
 ## Full title on hover when it's trimmed; created on the first bind.
 var _title_overlay: LabelOverlay = null
 ## True while pushing device values into the inner control(s), so their signals don't loop back.
@@ -131,6 +133,7 @@ func _build_inner() -> void:
 	_inner = null
 	_envelope = null
 	_env_knobs.clear()
+	_mod_targets.clear()
 	var kind := String(control_data.get("kind", ""))
 	if kind == SimpleControlKinds.SEGMENTED and not _segments_fit():
 		kind = SimpleControlKinds.DROPDOWN
@@ -165,6 +168,7 @@ func _build_inner() -> void:
 		# Single-parameter controls reveal their full title while hovered, like the title itself.
 		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER]:
 			_title_overlay.add_hover_source(_inner)
+	_collect_mod_targets()
 
 
 func _build_knob() -> RotaryKnob:
@@ -521,3 +525,29 @@ func _sync_division() -> String:
 func _apply_sync_dim() -> void:
 	if _inner != null:
 		_inner.modulate.a = SYNCED_ALPHA if not _sync_division().is_empty() else 1.0
+
+
+# ============================================================================
+# MODULATION (spec 018)
+# ============================================================================
+
+## Hand every modulatable inner control to the shared assign state: a knob/slider/fader's
+## parameter, and each envelope knob's stage. Compounds (XY, EQ band) don't take part.
+func _collect_mod_targets() -> void:
+	if instance == null:
+		return
+	var kind := String(control_data.get("kind", ""))
+	match kind:
+		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER:
+			_attach_mod_target(_inner, 0)
+		SimpleControlKinds.ENVELOPE:
+			for i in _env_knobs.size():
+				_attach_mod_target(_env_knobs[i], i)
+
+
+func _attach_mod_target(node: Control, index: int) -> void:
+	var param := _param(index)
+	if node == null or param == null or not param.is_modulatable:
+		return
+	_mod_targets.append({"node": node, "index": index})
+	ModAssign.attach(node, instance, param.id)

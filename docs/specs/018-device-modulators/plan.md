@@ -384,24 +384,24 @@ cutoff.
 
 ## Phase 8: Modulators UI
 
-- [ ] **Tab:** a Modulators button in the LeftHeader `TabButtons` (in the ButtonGroup, with an
+- [x?] **Tab:** a Modulators button in the LeftHeader `TabButtons` (in the ButtonGroup, with an
   icon from the existing set) opens a `ModulatorsPane` beside Parameters. The tab is available
   for every device, including plugins and containers. Collapsed headers show a small dot when
   `modulators` is non-empty.
-- [ ] **`devices/modulators/ModulatorsPane`**: an `HBox` holding the tile grid
+- [x?] **`devices/modulators/ModulatorsPane`**: an `HBox` holding the tile grid
   (`GridContainer`, 2 columns, plus a **+** `MenuButton` listing the registry's kinds) and a
   detail column.
   - The detail column builds controls from the kind's descriptors with the existing component
     set: `EnvelopeControl` for `adsr` and `ad`, and knobs plus an enum selector for `lfo`.
   - Selecting a tile shows its detail. The selection is remembered per instance in memory.
-- [ ] **`ModulatorTile`**: name label, colour strip (from `ModDisplay.SOURCE_COLORS` by index),
+- [x?] **`ModulatorTile`**: name label, colour strip (from `ModDisplay.SOURCE_COLORS` by index),
   wire `Button`.
   - Toggling the wire button starts or ends assign mode.
   - The pulse is a `Tween` on modulate alpha while active.
   - Double-click renames. Right-click opens a `PopupMenu`: one entry per route
     ("Cutoff +35 %", with a submenu or trailing action to disconnect), a separator, then
     Rename / Duplicate / Delete.
-- [ ] **Assign mode:** a small shared state object (e.g. `devices/modulators/ModAssign.gd`, an
+- [x?] **Assign mode:** a small shared state object (e.g. `devices/modulators/ModAssign.gd`, an
   autoload-free static holder with a signal) holds `{owner: DeviceInstance, mod_id}`.
   - `SimpleControl`, the custom views' knobs and `ParameterList` rows check whether their
     `DeviceInstance` is the owner or one of its descendants, and whether the parameter
@@ -410,13 +410,13 @@ cutoff.
   - Esc, clicking the wire button again, or deleting the modulator ends assign mode.
   - Move the existing SimpleView assign code over to this state and delete what's left of the
     old per-source buttons.
-- [ ] **`ModDisplay` ranges:** controls get their ranges from `get_routes_into(target)` on
+- [x?] **`ModDisplay` ranges:** controls get their ranges from `get_routes_into(target)` on
   every device between them and the root that has modulators (owner chain lookup), so a
   container's LFO shows on a child's knob.
-- [ ] Remove the PolySynth LFO and Filter Env sections from `SynthStrategy` if anything there
+- [x?] Remove the PolySynth LFO and Filter Env sections from `SynthStrategy` if anything there
   still names them. Because the parameters are gone, SimpleView drops them by itself.
-- [ ] Update `docs/subsystems/godot-device-views.md` and `godot-ui-components.md`.
-- [ ] Tests:
+- [x?] Update `docs/subsystems/godot-device-views.md` and `godot-ui-components.md`.
+- [x?] Tests:
   - the pane builds tiles from the model and the + menu adds them;
   - the context menu lists the routes;
   - assign mode reaches a child device's controls but not a sibling's;

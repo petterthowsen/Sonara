@@ -40,6 +40,9 @@ var option_node: OptionButton = null
 var _value_hovered := false
 var _dragging := false
 
+## True once the slider is handed to the shared assign state (spec 018).
+var _mod_bound := false
+
 
 # ============================================================================
 # LIFECYCLE
@@ -66,6 +69,7 @@ func _ready() -> void:
 	if device_instance and parameter:
 		_ensure_control_for_param_type()
 		_update_ui()
+	_bind_mod()
 
 
 # ============================================================================
@@ -95,6 +99,19 @@ func setup(p_device_instance: DeviceInstance, p_parameter_id: int) -> void:
 	if device_instance.parameter_changed.is_connected(_on_parameter_changed):
 		device_instance.parameter_changed.disconnect(_on_parameter_changed)
 	device_instance.parameter_changed.connect(_on_parameter_changed)
+	_bind_mod()
+
+
+## Expose the float slider to assign mode once (spec 018): dragging it then edits the route.
+func _bind_mod() -> void:
+	if _mod_bound or slider_node == null or device_instance == null:
+		return
+	if not is_node_ready():
+		return
+	if parameter == null or parameter.param_type != "float" or not parameter.is_modulatable:
+		return
+	_mod_bound = true
+	ModAssign.attach(slider_node, device_instance, parameter_id)
 
 
 ## Update the displayed value
