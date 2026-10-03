@@ -36,7 +36,7 @@ static func draw_fill(item: CanvasItem, rect: Rect2, color: Color) -> void:
 
 
 static func draw_fill_circle(item: CanvasItem, center: Vector2, radius: float, color: Color) -> void:
-	item.draw_circle(center, radius, Color(color, FILL_ALPHA))
+	item.draw_circle(center, radius, Color(color, FILL_ALPHA), true, -1.0, true)
 
 
 ## Centered amount readout ("+35 %") over a control's body.

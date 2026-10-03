@@ -59,7 +59,7 @@ var _tooltip: ValueTooltip = null
 
 ## Knob radius in pixels, arc included. At 0 the knob fills its rect; above 0 it also sets the
 ## minimum size to fit, and draws centered in any larger rect.
-@export var radius := 0.0:
+@export var radius := 24.0:
 	set(r):
 		radius = maxf(r, 0.0)
 		if radius > 0.0:
@@ -73,7 +73,7 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
-@export var shadow_color := Color.BLACK:
+@export var shadow_color := Color(0.30323273, 0.30323285, 0.30323282, 1):
 	set(c):
 		shadow_color = c
 		if is_inside_tree():
@@ -81,7 +81,7 @@ var _tooltip: ValueTooltip = null
 
 
 ## Thickness of the shadow around the knob, in pixels.
-@export_range(0.0, 10.0, 0.1) var shadow_width := 1.0:
+@export_range(0.0, 10.0, 0.1) var shadow_width := 2.0:
 	set(w):
 		shadow_width = maxf(w, 0.0)
 		if is_inside_tree():
@@ -102,7 +102,7 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
-@export var knob_line_color := Color.LIGHT_GRAY:
+@export var knob_line_color := Color(0.6789437, 0.6789437, 0.6789437, 1):
 	set(c):
 		knob_line_color = c
 		if is_inside_tree():
@@ -120,20 +120,20 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
-@export var arc_width := 3.0:
+@export var arc_width := 6.0:
 	set(w):
 		arc_width = w
 		if is_inside_tree():
 			queue_redraw()
 
 ## Extra pixel spacing between the knob and the value arc, beyond half the arc width.
-@export var arc_offset := 2.0:
+@export var arc_offset := 0.0:
 	set(o):
 		arc_offset = o
 		if is_inside_tree():
 			queue_redraw()
 
-@export var knob_line_width := 2.0:
+@export var knob_line_width := 3.0:
 	set(w):
 		knob_line_width = w
 		if is_inside_tree():
@@ -150,22 +150,11 @@ var _tooltip: ValueTooltip = null
 
 @export_group("Modulation")
 
-## Width of modulation range arcs relative to the value arc (minimum 1.5 px).
-@export_range(0.0, 4.0, 0.05) var mod_range_width_scale := 0.6:
+## Width of the modulation range arc relative to the value arc (minimum 1.5 px). It draws on
+## top of the value arc, centered on the same ring.
+@export_range(0.0, 1.0, 0.05) var mod_range_width_scale := 1.0:
 	set(w):
 		mod_range_width_scale = maxf(w, 0.0)
-		queue_redraw()
-
-## Gap between stacked modulation range arcs, in pixels.
-@export_range(0.0, 8.0, 0.1) var mod_range_spacing := 0.5:
-	set(s):
-		mod_range_spacing = maxf(s, 0.0)
-		queue_redraw()
-
-## Inset of modulation arcs from the value arc, in pixels.
-@export_range(0.0, 8.0, 0.1) var mod_range_inset := 1.0:
-	set(i):
-		mod_range_inset = maxf(i, 0.0)
 		queue_redraw()
 
 ## Live marker radius relative to the value arc width (minimum 1.5 px).
@@ -178,6 +167,42 @@ var _tooltip: ValueTooltip = null
 @export var mod_live_marker_color := ModDisplay.LIVE_MARKER_COLOR:
 	set(c):
 		mod_live_marker_color = c
+		queue_redraw()
+
+@export_subgroup("Preview")
+
+## Draws a fake route from the settings below instead of `mod_ranges`, so the modulation look
+## can be tuned in the inspector (and in the component gallery) without a modulator.
+@export var preview_modulation := false:
+	set(p):
+		preview_modulation = p
+		queue_redraw()
+
+@export_range(-1.0, 1.0, 0.01) var preview_mod_amount := 0.25:
+	set(a):
+		preview_mod_amount = a
+		queue_redraw()
+
+@export var preview_mod_bipolar := false:
+	set(b):
+		preview_mod_bipolar = b
+		queue_redraw()
+
+@export var preview_mod_color := ModDisplay.SOURCE_COLORS[0]:
+	set(c):
+		preview_mod_color = c
+		queue_redraw()
+
+## Shows the focus fill and amount readout, as when the source modulator is hovered.
+@export var preview_mod_focused := false:
+	set(f):
+		preview_mod_focused = f
+		queue_redraw()
+
+## Live marker position (0..1); below 0 hides it.
+@export_range(-0.01, 1.0, 0.01) var preview_mod_live := -0.01:
+	set(l):
+		preview_mod_live = l
 		queue_redraw()
 
 @export_category("Tooltip")
@@ -216,7 +241,8 @@ var value_text_callback: Callable
 ## The value itself doesn't change. See `ModDisplay`.
 signal mod_amount_changed(new_amount: float)
 
-## Routes into this value: `{amount, color, source, bipolar}`, drawn as arcs inside the ring.
+## Routes into this value: `{amount, color, source, bipolar}`. Only the first is drawn, over the
+## value arc; `ModAssign` passes just the focused modulator's route.
 var mod_ranges: Array[Dictionary] = []:
 	set(r):
 		mod_ranges = r
@@ -314,41 +340,45 @@ func _draw() -> void:
 	var knob_radius: float = arc_radius - arc_width - arc_offset
 	var min_rotation_rad: float = deg_to_rad(min_rotation_deg - 90.0)
 	var max_rotation_rad: float = deg_to_rad(max_rotation_deg - 90.0)
-	draw_arc(center, arc_radius, min_rotation_rad, max_rotation_rad, 32, value_arc_bg, arc_width, false)
+	draw_arc(center, arc_radius, min_rotation_rad, max_rotation_rad, 32, value_arc_bg, arc_width, true)
 	var value_angle: float = lerpf(min_rotation_rad, max_rotation_rad, _value_to_normalized(_value))
-	draw_arc(center, arc_radius, min_rotation_rad, value_angle, 32, value_arc_color, arc_width, false)
-	draw_circle(center, knob_radius + shadow_width, shadow_color)
-	draw_circle(center, knob_radius, knob_color)
+	draw_arc(center, arc_radius, min_rotation_rad, value_angle, 32, value_arc_color, arc_width, true)
+	draw_circle(center, knob_radius + shadow_width, shadow_color, true, -1.0, true)
+	draw_circle(center, knob_radius, knob_color, true, -1.0, true)
 	var line_start: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * (0.9 - knob_line_length))
 	var line_end: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.9)
 	draw_line(line_start, line_end, knob_line_color, knob_line_width, true)
 	_draw_modulation(center, arc_radius, knob_radius, min_rotation_rad, max_rotation_rad)
 
 
-## Draw modulation ranges inside the value ring and live-value markers on the ring.
+## Draw the focused route's range over the value arc, live-value markers on the ring, and the
+## focus fill and amount readout on the knob body.
 func _draw_modulation(center: Vector2, arc_radius: float, knob_radius: float, min_rad: float, max_rad: float) -> void:
-	var base := _value_to_normalized(_value)
-	var thin := maxf(arc_width * mod_range_width_scale, 1.5)
-	var ring := arc_radius - arc_width * 0.5 - thin * 0.5 - mod_range_inset
-	for i in mod_ranges.size():
-		var route := mod_ranges[i]
-		var band := ModDisplay.span(base, float(route["amount"]), bool(route.get("bipolar", false)))
-		if band.y - band.x < 0.002:
-			continue
-		var r := ring - i * (thin + mod_range_spacing)
-		if r <= thin:
-			break
-		draw_arc(center, r, lerpf(min_rad, max_rad, band.x), lerpf(min_rad, max_rad, band.y),
-			24, route["color"], thin, true)
-	for live in mod_live_values:
+	var route := {}
+	var live_values := mod_live_values
+	var hint_text := mod_hint_text
+	var hint_color := mod_hint_color
+	if preview_modulation:
+		route = {"amount": preview_mod_amount, "color": preview_mod_color, "bipolar": preview_mod_bipolar}
+		live_values = PackedFloat32Array([preview_mod_live]) if preview_mod_live >= 0.0 else PackedFloat32Array()
+		hint_text = ModDisplay.default_amount_text(preview_mod_amount) if preview_mod_focused else ""
+		hint_color = preview_mod_color
+	elif not mod_ranges.is_empty():
+		route = mod_ranges[0]
+	if not route.is_empty():
+		var band := ModDisplay.span(_value_to_normalized(_value), float(route["amount"]), bool(route.get("bipolar", false)))
+		if band.y - band.x >= 0.002:
+			draw_arc(center, arc_radius, lerpf(min_rad, max_rad, band.x), lerpf(min_rad, max_rad, band.y),
+				24, route["color"], maxf(arc_width * mod_range_width_scale, 1.5), true)
+	for live in live_values:
 		var angle := lerpf(min_rad, max_rad, clampf(live, 0.0, 1.0))
 		draw_circle(center + Vector2.from_angle(angle) * arc_radius,
-			maxf(arc_width * mod_live_marker_radius_scale, 1.5), mod_live_marker_color)
+			maxf(arc_width * mod_live_marker_radius_scale, 1.5), mod_live_marker_color, true, -1.0, true)
 	if mod_assign_active:
 		ModDisplay.draw_fill_circle(self, center, knob_radius, mod_assign_color)
-	elif not mod_hint_text.is_empty():
-		ModDisplay.draw_fill_circle(self, center, knob_radius, mod_hint_color)
-	ModDisplay.draw_hint_text(self, Rect2(center - Vector2.ONE * knob_radius, Vector2.ONE * knob_radius * 2.0), mod_hint_text)
+	elif not hint_text.is_empty():
+		ModDisplay.draw_fill_circle(self, center, knob_radius, hint_color)
+	ModDisplay.draw_hint_text(self, Rect2(center - Vector2.ONE * knob_radius, Vector2.ONE * knob_radius * 2.0), hint_text)
 
 
 func _gui_input(event: InputEvent) -> void:

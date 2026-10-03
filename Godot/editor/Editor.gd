@@ -478,6 +478,7 @@ func save_project(path: String = "") -> bool:
 	is_modified = false
 	history.mark_save_point()
 
+	Sonara.add_recent_project(save_path)
 	project_saved.emit(save_path)
 	logger.info("[Editor] Project saved: ", save_path)
 	return true
@@ -503,6 +504,7 @@ func load_project(path: String) -> bool:
 		return false
 	
 	open_project(loaded_project, path)
+	Sonara.add_recent_project(path)
 	logger.info("[Editor] Project loaded: ", path)
 	return true
 

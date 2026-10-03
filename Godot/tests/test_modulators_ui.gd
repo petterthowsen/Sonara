@@ -30,6 +30,7 @@ func run_tests() -> void:
 	await _test_pane_tiles_and_add()
 	await _test_context_menu_routes()
 	await _test_assign_reaches_child_not_sibling()
+	await _test_control_shows_only_focused_source()
 	await _test_esc_exits_assign()
 	await _test_simple_control_assign()
 	await _test_panel_tab_and_dot()
@@ -204,6 +205,25 @@ func _test_assign_reaches_child_not_sibling() -> void:
 	knob_a.queue_free()
 	knob_b.queue_free()
 	knob_sibling.queue_free()
+
+
+func _test_control_shows_only_focused_source() -> void:
+	_mod_assign.end()
+	var inst = _instance()
+	var lfo = inst.add_modulator("lfo")
+	var env = inst.add_modulator("lfo")
+	inst.set_route_amount(lfo.mod_id, "param/31", 0.3)
+	inst.set_route_amount(env.mod_id, "param/31", -0.2)
+	var knob := _knob()
+	_mod_assign.attach(knob, inst, 31)
+	await process_frame
+	_assert(knob.mod_ranges.is_empty(), "with no modulator focused, the control shows no range")
+	_mod_assign.set_hover(inst, env.mod_id, true)
+	_assert(knob.mod_ranges.size() == 1, "hovering a modulator shows one range")
+	_assert(is_equal_approx(float(knob.mod_ranges[0]["amount"]), -0.2), "and it is the hovered modulator's route")
+	_mod_assign.set_hover(inst, env.mod_id, false)
+	_assert(knob.mod_ranges.is_empty(), "leaving the modulator hides the range again")
+	knob.queue_free()
 
 
 func _test_esc_exits_assign() -> void:

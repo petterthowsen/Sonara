@@ -6,7 +6,7 @@ var logger : Log = Log.make("MainMenu")
 
 enum  MENU { File, Edit, View, AI }
 
-enum FILE { New, Open, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
+enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
@@ -21,6 +21,7 @@ var _current_dialog_mode: DialogMode
 var _pending_import_path: String
 var _file_dialog: FileDialog
 var _view_menu: PopupMenu
+var _recent_menu: PopupMenu
 var _ai_menu: PopupMenu
 var _ai_client: OpenRouterClient
 
@@ -28,6 +29,12 @@ func _ready() -> void:
 	# add file menu items
 	file.add_item("New Project", FILE.New)
 	file.add_item("Open", FILE.Open)
+	_recent_menu = PopupMenu.new()
+	_recent_menu.name = "OpenRecent"
+	file.add_child(_recent_menu)
+	_recent_menu.id_pressed.connect(_on_recent_item_pressed)
+	file.add_submenu_node_item("Open Recent", _recent_menu, FILE.Open_Recent)
+	file.about_to_popup.connect(_rebuild_recent_menu)
 	file.add_item("Close", FILE.Close)
 	file.add_separator("", FILE.Sep1)
 	file.add_item("Save", FILE.Save)
@@ -175,6 +182,36 @@ func _update_undo_redo_menu() -> void:
 		edit.set_item_text(redo_idx, "Redo %s" % hist.redo_name())
 	else:
 		edit.set_item_text(redo_idx, "Redo")
+
+
+# ============================================================================
+# RECENT PROJECTS
+# ============================================================================
+
+## Repopulate Open Recent from the saved list; paths that no longer exist are skipped.
+func _rebuild_recent_menu() -> void:
+	_recent_menu.clear()
+	var paths: Array[String] = []
+	for path in Sonara.get_recent_projects():
+		if FileAccess.file_exists(path):
+			paths.append(path)
+	for i in paths.size():
+		_recent_menu.add_item("%s  —  %s" % [paths[i].get_file().get_basename(), paths[i].get_base_dir()], i)
+		_recent_menu.set_item_metadata(i, paths[i])
+	if not paths.is_empty():
+		_recent_menu.add_separator()
+		_recent_menu.add_item("Clear Recent", paths.size())
+	file.set_item_disabled(file.get_item_index(FILE.Open_Recent), paths.is_empty())
+
+
+func _on_recent_item_pressed(item_id: int) -> void:
+	var index := _recent_menu.get_item_index(item_id)
+	var path = _recent_menu.get_item_metadata(index)
+	if not path is String:
+		Sonara.clear_recent_projects()
+		return
+	if not Sonara.editor.load_project(path):
+		Sonara.remove_recent_project(path)
 
 
 # ============================================================================

@@ -86,6 +86,38 @@ func set_config(key: String, value):
 	else:
 		config[key] = value
 
+const MAX_RECENT_PROJECTS := 5
+
+## Most recently opened or saved project paths, newest first.
+func get_recent_projects() -> Array[String]:
+	var result: Array[String] = []
+	var stored = get_config("recent_projects", [])
+	if stored is Array:
+		for p in stored:
+			if p is String and not p.is_empty():
+				result.append(p)
+	return result
+
+## Move `path` to the front of the recent projects list (capped at MAX_RECENT_PROJECTS) and save.
+func add_recent_project(path: String) -> void:
+	if path.is_empty():
+		return
+	var recent := get_recent_projects()
+	recent.erase(path)
+	recent.push_front(path)
+	set_config("recent_projects", recent.slice(0, MAX_RECENT_PROJECTS))
+	save_config()
+
+func remove_recent_project(path: String) -> void:
+	var recent := get_recent_projects()
+	recent.erase(path)
+	set_config("recent_projects", recent)
+	save_config()
+
+func clear_recent_projects() -> void:
+	set_config("recent_projects", [])
+	save_config()
+
 ## Ensure the configuration directory exists
 func _ensure_config_dir() -> void:
 	var dir = DirAccess.open(OS.get_environment("HOME"))

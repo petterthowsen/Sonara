@@ -163,6 +163,21 @@ static func ranges_for(device, param_id: int) -> Array[Dictionary]:
 	return out
 
 
+## The focused modulator's route into `(device, param_id)` (at most one); empty when no
+## modulator is hovered or being assigned. Controls show one source at a time.
+static func focused_ranges_for(device, param_id: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var focused := focus()
+	if focused.is_empty() or not is_instance_valid(focused["device"]):
+		return out
+	var source := "%s:%d" % [focused["device"].id, int(focused["mod_id"])]
+	for route in ranges_for(device, param_id):
+		if route["source"] == source:
+			out.append(route)
+			break
+	return out
+
+
 ## Amount of the active route into `(device, param_id)`, 0 when there is none.
 static func amount_for(device, param_id: int) -> float:
 	var h := holder()
@@ -236,7 +251,7 @@ static func _refresh_node(node: Control, device, param_id: int) -> void:
 		return
 	var param = device.get_parameter(param_id) if device != null else null
 	var live: bool = is_active() and param != null and param.is_modulatable and is_target(device)
-	node.mod_ranges = ranges_for(device, param_id)
+	node.mod_ranges = focused_ranges_for(device, param_id)
 	_refresh_hint(node, device, param_id)
 	node.mod_assign_active = live
 	if live:
