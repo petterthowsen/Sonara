@@ -7,13 +7,16 @@
 //! resonance, levels and volume are interpolated across the block; everything else is
 //! block-constant.
 
-use super::modulation::{ModMatrix, ModSource};
+use super::modulation::ModSource;
 use super::params::{
     slot_of, SynthParams, AMP_ENV, ATTACK, CUTOFF, CUTOFF_MAX, CUTOFF_MIN, DECAY, FILTER_ENV,
     MAX_UNISON, PARAM_COUNT, RELEASE, SUSTAIN, VOLUME,
 };
 use crate::audio::devices::norm_to_real;
-use crate::audio::dsp::{svf, AdsrEnvelope, FilterMode, Lfo, Oscillator, Svf, SvfCoefs};
+use crate::audio::dsp::{svf, FilterMode, Oscillator, Svf, SvfCoefs};
+use crate::audio::modulation::envelope::AdsrEnvelope;
+use crate::audio::modulation::lfo::Lfo;
+use crate::audio::modulation::matrix::ModMatrix;
 
 pub type Mods = ModMatrix<PARAM_COUNT>;
 

@@ -1407,6 +1407,7 @@ fn collect_sfizz_parameters(
             is_hidden: false,
             is_read_only: false,
             is_bypass: false,
+            is_modulatable: param.is_modulatable,
             module: String::new(),
             enum_values: param.enum_values.clone(),
             unit: param.unit.clone(),

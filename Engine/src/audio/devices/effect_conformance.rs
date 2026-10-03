@@ -178,8 +178,58 @@ fn check_tail_dies_out(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A modulation offset must behave exactly like moving the base value by that offset, while
+/// `get_parameter` keeps reporting the untouched base. Checked per modulatable parameter by
+/// comparing a modulated render with a render whose base was moved by the same amount.
+fn check_modulation_offsets(id: &str) -> Result<(), String> {
+    const OFFSET: f32 = 0.2;
+    let input = noise_then_silence(0.25, 0.25);
+    for info in make(id).parameters() {
+        if !info.is_modulatable {
+            continue;
+        }
+        let base = make(id)
+            .get_parameter(info.id)
+            .ok_or_else(|| format!("'{}' has no value", info.name))?;
+        let target = (base + OFFSET).clamp(0.0, 1.0);
+
+        let mut modulated = make(id);
+        modulated.set_param_mod(info.id, OFFSET);
+        let got = modulated.get_parameter(info.id).unwrap_or(f32::NAN);
+        if (got - base).abs() > 1e-4 {
+            return Err(format!(
+                "'{}' base changed by modulation ({got} != {base})",
+                info.name
+            ));
+        }
+        let modulated_out = render(modulated.as_mut(), &input, &[512]);
+
+        let mut moved = make(id);
+        moved.set_parameter(info.id, target);
+        let moved_out = render(moved.as_mut(), &input, &[512]);
+        if modulated_out != moved_out {
+            return Err(format!(
+                "'{}' modulation differs from moving the base to {target}",
+                info.name
+            ));
+        }
+
+        let mut restored = make(id);
+        restored.set_param_mod(info.id, OFFSET);
+        restored.set_param_mod(info.id, 0.0);
+        let restored_out = render(restored.as_mut(), &input, &[512]);
+        let mut plain = make(id);
+        let plain_out = render(plain.as_mut(), &input, &[512]);
+        if restored_out != plain_out {
+            return Err(format!("'{}' offset 0 did not restore the base", info.name));
+        }
+    }
+    Ok(())
+}
+
 const CHECKS: &[(&str, fn(&str) -> Result<(), String>)] = &[
     ("parameters round-trip", check_parameters_round_trip),
+    ("modulation offsets", check_modulation_offsets),
     ("defaults match metadata", check_defaults_match_metadata),
     ("bypass is bit-exact", check_bypass_is_bit_exact),
     ("Mix 0 is bit-exact dry", check_mix_zero_is_bit_exact_dry),

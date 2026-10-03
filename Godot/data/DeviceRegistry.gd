@@ -155,7 +155,8 @@ func _on_plugin_scan_complete(args: Array) -> void:
 ##  extension_count:Int, each extension:String..., param_count:Int, then param tuples:
 ##  (param_id:Int, name:String, unit:String, type:String, syncable:Int(0|1),
 ##   min:Float, max:Float, default:Float, is_log:Int(0|1), skew:Float, enum_count:Int,
-##   enum_values:String...) ..., is_container:Int, then optionally the modulation block:
+##   enum_values:String..., module:String, automatable:Int(0|1), modulatable:Int(0|1)) ...,
+##  is_container:Int, then optionally the modulation block:
 ##  source_count:Int, (id:String, name:String, bipolar:Int(0|1))..., route_count:Int,
 ##  (source:String, param_id:Int, amount:Float)... (the default patch)]
 func _on_builtin_info_received(args: Array) -> void:
@@ -218,6 +219,9 @@ func _on_builtin_info_received(args: Array) -> void:
 			param.module = String(args[idx])
 			param.is_automation_safe = int(args[idx + 1]) != 0
 			idx += 2
+			if idx < args.size():
+				param.is_modulatable = int(args[idx]) != 0
+				idx += 1
 		device.add_parameter(param)
 
 	if idx < args.size():

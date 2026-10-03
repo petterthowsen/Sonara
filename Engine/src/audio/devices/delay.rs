@@ -409,6 +409,30 @@ impl DelayDevice {
             one_pole_g(self.high_cut.current(), self.sample_rate),
         )
     }
+
+    /// Apply a decoded (real-valued) parameter to the DSP state.
+    fn apply(&mut self, id: ParamId, real: f32) {
+        match id {
+            TIME_L => self.time_ms[0] = real,
+            TIME_R => self.time_ms[1] = real,
+            SYNC_L => self.sync[0] = real as usize,
+            SYNC_R => self.sync[1] = real as usize,
+            LINK => self.link = real >= 0.5,
+            ROUTING => self.set_routing(real as usize),
+            FEEDBACK => self.feedback.set_target(real * 0.01),
+            LOW_CUT => self.low_cut.set_target(real),
+            HIGH_CUT => self.high_cut.set_target(real),
+            MODE => self.tape = real >= 0.5,
+            MOD_RATE => self.mod_rate = real,
+            MOD_DEPTH => self.mod_depth.set_target(real * 0.01),
+            DRIVE => self.drive.set_target(real * 0.01),
+            DUCKING => self.ducking.set_target(real * 0.01),
+            DUCK_RELEASE => self.ducker.set_times(5.0, real, self.sample_rate),
+            WIDTH => self.width.set_target(real * 0.01),
+            MIX => self.mix.set_target(real * 0.01),
+            _ => {}
+        }
+    }
 }
 
 impl AudioDevice for DelayDevice {
@@ -524,26 +548,16 @@ impl AudioDevice for DelayDevice {
             return;
         };
         self.tail.wake();
-        match param_id {
-            TIME_L => self.time_ms[0] = real,
-            TIME_R => self.time_ms[1] = real,
-            SYNC_L => self.sync[0] = real as usize,
-            SYNC_R => self.sync[1] = real as usize,
-            LINK => self.link = real >= 0.5,
-            ROUTING => self.set_routing(real as usize),
-            FEEDBACK => self.feedback.set_target(real * 0.01),
-            LOW_CUT => self.low_cut.set_target(real),
-            HIGH_CUT => self.high_cut.set_target(real),
-            MODE => self.tape = real >= 0.5,
-            MOD_RATE => self.mod_rate = real,
-            MOD_DEPTH => self.mod_depth.set_target(real * 0.01),
-            DRIVE => self.drive.set_target(real * 0.01),
-            DUCKING => self.ducking.set_target(real * 0.01),
-            DUCK_RELEASE => self.ducker.set_times(5.0, real, self.sample_rate),
-            WIDTH => self.width.set_target(real * 0.01),
-            MIX => self.mix.set_target(real * 0.01),
-            _ => {}
-        }
+        self.apply(param_id, real);
+        self.update_tail();
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        let Some((_, real)) = self.params.set_offset(param_id, offset) else {
+            return;
+        };
+        self.tail.wake();
+        self.apply(param_id, real);
         self.update_tail();
     }
 

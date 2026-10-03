@@ -289,6 +289,7 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
             skew: p.skew,
             module: p.module,
             is_automation_safe: p.is_automation_safe,
+            is_modulatable: p.is_modulatable,
         })
         .collect();
 

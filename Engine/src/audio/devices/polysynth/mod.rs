@@ -368,6 +368,22 @@ impl PolySynthDevice {
         }
     }
 
+    /// Follow up on what a parameter change touched (shared by `set_parameter` and
+    /// `set_param_mod`).
+    fn apply_change(&mut self, changed: Changed) {
+        match changed {
+            Changed::Envelope => self.env_dirty = true,
+            Changed::Mode => {
+                // Switching modes mid-note would strand voices: fade everything out.
+                for v in self.voices.iter_mut() {
+                    v.kill();
+                }
+                self.held.clear();
+            }
+            Changed::Other | Changed::None => {}
+        }
+    }
+
     fn apply_envelopes(&mut self) {
         let (a, f) = (self.params.amp_env, self.params.filter_env);
         for v in self.voices.iter_mut() {
@@ -500,17 +516,14 @@ impl AudioDevice for PolySynthDevice {
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         self.sleep_state.mark_activity(); // Wake on parameter change
-        match self.params.set(param_id, value) {
-            Changed::Envelope => self.env_dirty = true,
-            Changed::Mode => {
-                // Switching modes mid-note would strand voices: fade everything out.
-                for v in self.voices.iter_mut() {
-                    v.kill();
-                }
-                self.held.clear();
-            }
-            Changed::Other | Changed::None => {}
-        }
+        let changed = self.params.set(param_id, value);
+        self.apply_change(changed);
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        self.sleep_state.mark_activity();
+        let changed = self.params.set_offset(param_id, offset);
+        self.apply_change(changed);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
@@ -591,7 +604,7 @@ impl AudioDevice for PolySynthDevice {
             .routes()
             .iter()
             .map(|r| ModRoute {
-                source: ModSource::ALL[r.source].id().to_string(),
+                source: ModSource::ALL[r.mod_slot].id().to_string(),
                 param_id: r.param_id,
                 amount: r.amount,
             })
@@ -943,7 +956,10 @@ mod tests {
         let v = &dev.voices[0];
         assert_eq!(v.note, 60);
         assert!(v.gate);
-        assert_ne!(v.amp_env.state(), crate::audio::dsp::AdsrState::Attack);
+        assert_ne!(
+            v.amp_env.state(),
+            crate::audio::modulation::envelope::AdsrState::Attack
+        );
 
         dev.send_midi_event(60, 0, false, 0);
         render(&mut dev, 1);
@@ -966,7 +982,8 @@ mod tests {
             render(&mut dev, 20); // into sustain
             dev.send_midi_event(62, 100, true, 0);
             render(&mut dev, 1);
-            let attacking = dev.voices[0].amp_env.state() == crate::audio::dsp::AdsrState::Attack;
+            let attacking = dev.voices[0].amp_env.state()
+                == crate::audio::modulation::envelope::AdsrState::Attack;
             assert_eq!(attacking, expect_attack, "mode {mode}");
         }
     }
@@ -1229,7 +1246,7 @@ mod tests {
             let mut added = 0;
             for (i, source) in ModSource::ALL.iter().enumerate() {
                 for (j, &id) in floats.iter().enumerate() {
-                    if added < modulation::MAX_ROUTES && (i + j) % 3 == 0 {
+                    if added < crate::audio::modulation::matrix::MAX_ROUTES && (i + j) % 3 == 0 {
                         let amount = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
                         dev.set_mod_route(source.id(), id, amount).unwrap();
                         added += 1;

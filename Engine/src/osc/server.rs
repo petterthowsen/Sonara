@@ -2056,7 +2056,7 @@ impl OscServer {
 
                 args.push(OscType::Int(parameters.len() as i32));
 
-                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values..., module, automatable)
+                // Add all parameters inline (id, name, unit, type, syncable, min, max, default, is_log, skew, enum_count, enum_values..., module, automatable, modulatable)
                 for param in parameters {
                     args.push(OscType::Int(param.id as i32));
                     args.push(OscType::String(param.name));
@@ -2079,6 +2079,7 @@ impl OscServer {
                     }
                     args.push(OscType::String(param.module));
                     args.push(OscType::Int(if param.is_automation_safe { 1 } else { 0 }));
+                    args.push(OscType::Int(if param.is_modulatable { 1 } else { 0 }));
                 }
 
                 args.push(OscType::Int(if is_container { 1 } else { 0 }));
@@ -2144,6 +2145,7 @@ impl OscServer {
                 is_hidden,
                 is_read_only,
                 is_bypass,
+                is_modulatable,
                 module,
                 enum_values,
                 unit,
@@ -2154,9 +2156,11 @@ impl OscServer {
                     crate::audio::devices::ParamType::Bool => "bool",
                     crate::audio::devices::ParamType::Enum => "enum",
                 };
-                // Bitmask: 1 = hidden, 2 = read-only, 4 = bypass
-                let flags =
-                    (is_hidden as i32) | ((is_read_only as i32) << 1) | ((is_bypass as i32) << 2);
+                // Bitmask: 1 = hidden, 2 = read-only, 4 = bypass, 8 = modulatable
+                let flags = (is_hidden as i32)
+                    | ((is_read_only as i32) << 1)
+                    | ((is_bypass as i32) << 2)
+                    | ((is_modulatable as i32) << 3);
 
                 let mut args = vec![
                     OscType::Int(param_id as i32),

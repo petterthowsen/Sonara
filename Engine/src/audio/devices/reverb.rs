@@ -23,10 +23,10 @@ use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, Para
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
-use crate::audio::dsp::lfo::{Lfo, LfoShape};
 use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
+use crate::audio::modulation::lfo::{Lfo, LfoShape};
 
 // === Parameter table ===
 
@@ -1078,6 +1078,13 @@ impl AudioDevice for ReverbDevice {
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         self.sleep.wake();
         if let Some((_, real)) = self.params.set(param_id, value) {
+            self.apply(param_id, real);
+        }
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        self.sleep.wake();
+        if let Some((_, real)) = self.params.set_offset(param_id, offset) {
             self.apply(param_id, real);
         }
     }

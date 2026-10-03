@@ -971,6 +971,13 @@ impl AudioDevice for CompressorDevice {
         }
     }
 
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        if self.values.set_offset(param_id, offset).is_some() {
+            self.apply(param_id);
+            self.sleep.wake();
+        }
+    }
+
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
         self.values.get(param_id)
     }

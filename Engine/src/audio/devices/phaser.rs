@@ -19,10 +19,10 @@ use super::param_table::{
 use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};
-use crate::audio::dsp::lfo::{Lfo, LfoShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::dsp::tempo_sync::{beats_to_hz, sync_beats, SYNC_CHOICES};
+use crate::audio::modulation::lfo::{Lfo, LfoShape};
 use crate::audio::transport::Transport;
 
 /// Phaser module IDs (blocks of ten per module).
@@ -504,6 +504,13 @@ impl AudioDevice for PhaserDevice {
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         if let Some((_slot, real)) = self.values.set(param_id, value) {
+            self.apply(param_id, real);
+            self.sleep.wake();
+        }
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        if let Some((_slot, real)) = self.values.set_offset(param_id, offset) {
             self.apply(param_id, real);
             self.sleep.wake();
         }

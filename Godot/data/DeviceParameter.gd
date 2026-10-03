@@ -60,6 +60,9 @@ var is_read_only: bool = false
 ## Whether this is the device's bypass parameter
 var is_bypass: bool = false
 
+## Whether a modulator can drive this parameter (engine built-ins advertise it).
+var is_modulatable: bool = false
+
 ## CLAP module path, e.g. "Early/Size"; empty if none
 var module: String = ""
 

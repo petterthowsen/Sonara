@@ -261,6 +261,8 @@ pub struct ParamInfo {
     pub is_hidden: bool,
     pub is_read_only: bool,
     pub is_bypass: bool,
+    /// Can a modulator drive this parameter (a float, automatable parameter)?
+    pub is_modulatable: bool,
     /// CLAP module path, e.g. "Early/Size"; "" if none
     pub module: String,
     /// Real value is `min * (max/min)^n` (Hz-like values). Requires `min > 0`; ignores `skew`.
@@ -389,6 +391,12 @@ pub trait AudioDevice: Send {
     fn set_parameter_at(&mut self, param_id: ParamId, value: ParamValue, _frame_offset: usize) {
         self.set_parameter(param_id, value);
     }
+
+    /// Add a normalized modulation offset to `param_id`. The effective value is
+    /// `clamp(base + offset, 0, 1)`; the base is never written (ADR-0014). Called on the audio
+    /// thread for every control step while a route is active, and with 0 when the last route to
+    /// the parameter goes away. Default: the device is not modulatable.
+    fn set_param_mod(&mut self, _param_id: ParamId, _offset: f32) {}
 
     /// Get current parameter value (normalized 0.0-1.0)
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue>;

@@ -85,6 +85,12 @@ impl DrumVoice for TestDrum {
         }
     }
 
+    fn set_param_mod(&mut self, id: ParamId, offset: f32) {
+        if self.values.set_offset(id, offset).is_some() {
+            self.sync();
+        }
+    }
+
     fn get_parameter(&self, id: ParamId) -> Option<f32> {
         self.values.get(id)
     }
@@ -368,8 +374,58 @@ fn check_decay_time_is_measurable(make: &Make) -> Result<(), String> {
     Ok(())
 }
 
+/// A modulation offset must behave exactly like moving the base value by that offset, while
+/// `get_parameter` keeps reporting the untouched base. Compared on a triggered hit.
+fn check_modulation_offsets(make: &Make) -> Result<(), String> {
+    const OFFSET: f32 = 0.2;
+    let total = SR as usize / 4;
+    let hits = [(0usize, 60u8, 100u8)];
+    for info in make().parameters() {
+        if !info.is_modulatable {
+            continue;
+        }
+        let base = make()
+            .get_parameter(info.id)
+            .ok_or_else(|| format!("'{}' has no value", info.name))?;
+        let target = (base + OFFSET).clamp(0.0, 1.0);
+
+        let mut modulated = make();
+        modulated.set_param_mod(info.id, OFFSET);
+        let got = modulated.get_parameter(info.id).unwrap_or(f32::NAN);
+        if (got - base).abs() > 1e-4 {
+            return Err(format!(
+                "'{}' base changed by modulation ({got} != {base})",
+                info.name
+            ));
+        }
+        let modulated_out = render_blocks(modulated.as_mut(), total, 512, &hits);
+
+        let mut moved = make();
+        moved.set_parameter(info.id, target);
+        let moved_out = render_blocks(moved.as_mut(), total, 512, &hits);
+        if modulated_out != moved_out {
+            return Err(format!(
+                "'{}' modulation differs from moving the base to {target}",
+                info.name
+            ));
+        }
+
+        let mut restored = make();
+        restored.set_param_mod(info.id, OFFSET);
+        restored.set_param_mod(info.id, 0.0);
+        let restored_out = render_blocks(restored.as_mut(), total, 512, &hits);
+        let mut plain = make();
+        let plain_out = render_blocks(plain.as_mut(), total, 512, &hits);
+        if restored_out != plain_out {
+            return Err(format!("'{}' offset 0 did not restore the base", info.name));
+        }
+    }
+    Ok(())
+}
+
 const CHECKS: &[(&str, fn(&Make) -> Result<(), String>)] = &[
     ("parameters round-trip", check_parameters_round_trip),
+    ("modulation offsets", check_modulation_offsets),
     ("defaults match metadata", check_defaults_match_metadata),
     ("finite at every rate", check_finite_at_every_rate),
     ("block-size independent", check_block_size_invariance),

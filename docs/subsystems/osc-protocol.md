@@ -361,7 +361,7 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
     f:min, f:max, f:default,
     i:is_logarithmic, f:skew,
     i:enum_count, ...enum_values,
-    s:module, i:automatable
+    s:module, i:automatable, i:modulatable
   ),
   i:is_container,
   i:source_count,
@@ -371,7 +371,7 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 ]
 ```
 - `type`: "float" | "bool" | "enum"
-- `module`: group the parameter belongs to (EQ `Band 1`, `Output`), "" if none; the automation picker prefixes it when a name repeats. `automatable` 0 keeps the parameter out of the picker.
+- `module`: group the parameter belongs to (EQ `Band 1`, `Output`), "" if none; the automation picker prefixes it when a name repeats. `automatable` 0 keeps the parameter out of the picker. `modulatable` 1 means a modulator can drive it (an automatable float).
 - For `enum`, UI renders from `enum_values`. Runtime sets use either `i:index` or equivalent normalized `f`.
 - `is_container`: 1 when the device can own nested children (Chain, Layer, Drum Machine).
 - The modulation block follows `is_container`: the sources the device offers (`bipolar` 1 =
@@ -494,7 +494,7 @@ Responses:
 | 4 | f | Default (real value) |
 | 5 | s | Group: `"param"` or `"cc"` |
 | 6 | s | `param_type`: `"float"`, `"bool"` or `"enum"` |
-| 7 | i | `flags` bitmask: 1 = hidden, 2 = read-only, 4 = bypass |
+| 7 | i | `flags` bitmask: 1 = hidden, 2 = read-only, 4 = bypass, 8 = modulatable |
 | 8 | s | CLAP module path (`/`-separated), empty if none |
 | 9 | i | `enum_count` |
 | 10… | s | `enum_count` enum value labels; the index matches the engine value |

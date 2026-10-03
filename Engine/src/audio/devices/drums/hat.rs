@@ -149,6 +149,12 @@ impl DrumVoice for HatVoice {
         }
     }
 
+    fn set_param_mod(&mut self, id: ParamId, offset: f32) {
+        if self.values.set_offset(id, offset).is_some() {
+            self.sync_params();
+        }
+    }
+
     fn get_parameter(&self, id: ParamId) -> Option<ParamValue> {
         self.values.get(id)
     }

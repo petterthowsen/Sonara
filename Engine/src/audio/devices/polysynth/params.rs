@@ -9,10 +9,10 @@
 
 use super::super::param_table::{flatten, linear, slot_table, spec, Kind, ParamSpec, ParamTable};
 use super::super::{ParamId, ParamInfo};
-pub use crate::audio::dsp::lfo::LfoShape;
-use crate::audio::dsp::lfo::LFO_SHAPES;
 use crate::audio::dsp::tempo_sync::{sync_beats, SYNC_CHOICES};
 use crate::audio::dsp::FilterMode;
+pub use crate::audio::modulation::lfo::LfoShape;
+use crate::audio::modulation::lfo::LFO_SHAPES;
 
 pub const OSC1: ParamId = 0;
 pub const OSC2: ParamId = 10;
@@ -410,6 +410,8 @@ pub enum Changed {
 #[derive(Clone, Copy)]
 pub struct SynthParams {
     norm: [f32; PARAM_COUNT],
+    /// Normalized modulation offset per slot; the effective value is `clamp(norm + offset)`.
+    offset: [f32; PARAM_COUNT],
     pub osc: [OscParams; 2],
     pub noise_level: f32,
     /// 0 = dark, 0.5 = white, 1 = bright.
@@ -460,6 +462,7 @@ impl SynthParams {
         };
         let mut params = Self {
             norm: [0.0; PARAM_COUNT],
+            offset: [0.0; PARAM_COUNT],
             osc: [osc; 2],
             noise_level: 0.0,
             noise_color: 0.5,
@@ -503,11 +506,34 @@ impl SynthParams {
         }
     }
 
-    /// `set` by slot: what modulation uses to decode a voice's modulated copy.
+    /// `set` by slot: store the base value and decode it into the real field it drives.
     pub fn set_slot(&mut self, slot: usize, norm: f32) -> Changed {
+        let norm = SPECS[slot].canonical(norm);
+        self.norm[slot] = norm;
+        self.decode_slot(slot, norm)
+    }
+
+    /// Set the modulation offset of `id` and decode the effective value into its real field.
+    /// Unknown IDs and non-modulatable parameters (enums and bools) change nothing.
+    pub fn set_offset(&mut self, id: ParamId, offset: f32) -> Changed {
+        match slot(id) {
+            Some(s) if SPECS[s].is_modulatable() => {
+                self.offset[s] = offset;
+                self.decode_slot(s, self.effective_norm_at(s))
+            }
+            _ => Changed::None,
+        }
+    }
+
+    /// Effective normalized value at `slot`: the base plus its modulation offset, clamped.
+    pub fn effective_norm_at(&self, slot: usize) -> f32 {
+        (self.norm[slot] + self.offset[slot]).clamp(0.0, 1.0)
+    }
+
+    /// Decode `norm` into the real field it drives, without storing the base.
+    fn decode_slot(&mut self, slot: usize, norm: f32) -> Changed {
         let spec = &SPECS[slot];
         let norm = spec.canonical(norm);
-        self.norm[slot] = norm;
         let real = spec.to_real(norm);
         let id = spec.id;
 
@@ -593,7 +619,7 @@ impl SynthParams {
     fn transpose(&self, base: ParamId) -> f32 {
         let real = |offset: ParamId| {
             let s = slot_of(base + offset);
-            SPECS[s].to_real(self.norm[s])
+            SPECS[s].to_real(self.effective_norm_at(s))
         };
         (real(OCTAVE) - 3.0) * 12.0 + (real(SEMI) - 12.0) + real(FINE) / 100.0
     }

@@ -10,6 +10,7 @@ pub mod io;
 pub mod ipc;
 pub mod midi_types;
 pub mod mixing;
+pub mod modulation;
 pub mod pipewire;
 pub mod processing;
 pub mod render;

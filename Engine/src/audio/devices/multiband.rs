@@ -522,6 +522,12 @@ impl AudioDevice for MultibandDevice {
         }
     }
 
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        if let Some((_, real)) = self.values.set_offset(param_id, offset) {
+            self.apply(param_id, real);
+        }
+    }
+
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
         self.values.get(param_id)
     }

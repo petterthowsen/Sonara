@@ -55,6 +55,11 @@ impl GlobalParams {
         self.values.set(id, norm).is_some()
     }
 
+    /// Store the modulation `offset` for `id` if it is a shared parameter; false otherwise.
+    pub fn set_offset(&mut self, id: ParamId, offset: f32) -> bool {
+        self.values.set_offset(id, offset).is_some()
+    }
+
     /// Normalized value of a shared parameter.
     pub fn get(&self, id: ParamId) -> Option<f32> {
         self.values.get(id)
@@ -63,10 +68,11 @@ impl GlobalParams {
     /// The decoded view the voices read.
     pub fn params(&self) -> DrumParams {
         DrumParams {
-            // Velocity is a 0–100 % linear range, so the normalized value is the 0–1 amount.
-            velocity_sens: self.values.norm_at(0),
+            // Velocity is a 0–100 % linear range, so the normalized value is the 0–1 amount;
+            // all three include any modulation offset.
+            velocity_sens: self.values.effective_norm_at(0),
             output_db: self.values.real(OUTPUT).unwrap_or(0.0),
-            humanize: self.values.norm_at(2),
+            humanize: self.values.effective_norm_at(2),
         }
     }
 }

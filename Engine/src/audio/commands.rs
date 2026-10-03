@@ -34,6 +34,8 @@ pub struct BuiltinParamInfo {
     pub module: String,
     /// False when driving it from the audio thread is unsafe (or it is a UI-only control).
     pub is_automation_safe: bool,
+    /// Can a modulator drive this parameter?
+    pub is_modulatable: bool,
 }
 
 /// What `/audio/config` reports: the running stream, what was asked for, and the PipeWire graph.
@@ -714,6 +716,8 @@ pub enum EngineStatus {
         is_hidden: bool,
         is_read_only: bool,
         is_bypass: bool,
+        /// Can a modulator drive this parameter?
+        is_modulatable: bool,
         /// CLAP module path, e.g. "Early/Size"; "" if none
         module: String,
         enum_values: Vec<String>,
@@ -1023,6 +1027,7 @@ fn send_parameter_list(
             is_hidden: param.is_hidden,
             is_read_only: param.is_read_only,
             is_bypass: param.is_bypass,
+            is_modulatable: param.is_modulatable,
             module: param.module,
             enum_values: param.enum_values,
             unit: param.unit,

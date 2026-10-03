@@ -191,6 +191,7 @@ impl ParamSpec {
             is_hidden: !self.visible,
             is_read_only: false,
             is_bypass: false,
+            is_modulatable: self.is_modulatable(),
             module: self.module.to_string(),
             is_logarithmic: log,
             skew,
@@ -298,6 +299,9 @@ impl ParamTable {
 pub struct ParamValues<const N: usize> {
     table: &'static ParamTable,
     norm: [f32; N],
+    /// Normalized modulation offset per slot. The base in `norm` is never written by modulation;
+    /// the effective value is `clamp(norm + offset)` (ADR-0014).
+    offset: [f32; N],
 }
 
 impl<const N: usize> ParamValues<N> {
@@ -308,38 +312,75 @@ impl<const N: usize> ParamValues<N> {
         for (value, spec) in norm.iter_mut().zip(table.specs) {
             *value = spec.default_norm();
         }
-        Self { table, norm }
+        Self {
+            table,
+            norm,
+            offset: [0.0; N],
+        }
     }
 
     pub fn table(&self) -> &'static ParamTable {
         self.table
     }
 
-    /// Normalized value of `id`, as last set.
-    pub fn get(&self, id: ParamId) -> Option<f32> {
-        self.table.slot(id).map(|s| self.norm[s])
-    }
-
-    /// Normalized value at `slot`.
+    /// Base (unmodulated) normalized value at `slot`.
     pub fn norm_at(&self, slot: usize) -> f32 {
         self.norm[slot]
     }
 
-    /// Real value of `id` (a choice index for enums, 0 or 1 for bools).
-    pub fn real(&self, id: ParamId) -> Option<f32> {
-        self.table
-            .slot(id)
-            .map(|s| self.table.specs[s].to_real(self.norm[s]))
+    /// Base normalized value of `id`, ignoring any modulation offset.
+    pub fn get(&self, id: ParamId) -> Option<f32> {
+        self.table.slot(id).map(|s| self.norm[s])
     }
 
-    /// Store `norm` (canonicalized) and return the slot and the real value it decodes to, or
-    /// None for an unknown ID.
+    /// Effective normalized value of `id`: the base plus its modulation offset, clamped.
+    pub fn effective_norm(&self, id: ParamId) -> Option<f32> {
+        self.table.slot(id).map(|s| self.effective_norm_at(s))
+    }
+
+    /// Effective normalized value at `slot`: the base plus its modulation offset, clamped.
+    pub fn effective_norm_at(&self, slot: usize) -> f32 {
+        (self.norm[slot] + self.offset[slot]).clamp(0.0, 1.0)
+    }
+
+    /// Modulation offset at `slot`, in normalized units.
+    pub fn offset_at(&self, slot: usize) -> f32 {
+        self.offset[slot]
+    }
+
+    /// Real value of `id` with its modulation offset applied (a choice index for enums, 0 or 1
+    /// for bools). Modulation never changes an enum or a bool, so those stay at the base.
+    pub fn real(&self, id: ParamId) -> Option<f32> {
+        let slot = self.table.slot(id)?;
+        Some(self.table.specs[slot].to_real(self.effective_norm_at(slot)))
+    }
+
+    /// Store `norm` (canonicalized) as the base and return the slot and the effective real value
+    /// (base plus any modulation offset) it decodes to, or None for an unknown ID.
     pub fn set(&mut self, id: ParamId, norm: f32) -> Option<(usize, f32)> {
         let slot = self.table.slot(id)?;
         let spec = &self.table.specs[slot];
-        let norm = spec.canonical(norm);
-        self.norm[slot] = norm;
-        Some((slot, spec.to_real(norm)))
+        self.norm[slot] = spec.canonical(norm);
+        Some((slot, spec.to_real(self.effective_norm_at(slot))))
+    }
+
+    /// Set the modulation offset of `id` and return the slot and the resulting effective real
+    /// value. Returns None for an unknown ID or a parameter that isn't modulatable (enums and
+    /// bools never are), so callers skip their `apply`. Offsets are absolute, not additive; the
+    /// base is left untouched.
+    pub fn set_offset(&mut self, id: ParamId, offset: f32) -> Option<(usize, f32)> {
+        let slot = self.table.slot(id)?;
+        let spec = &self.table.specs[slot];
+        if !spec.is_modulatable() {
+            return None;
+        }
+        self.offset[slot] = offset;
+        Some((slot, spec.to_real(self.effective_norm_at(slot))))
+    }
+
+    /// Drop every modulation offset (back to the base).
+    pub fn clear_offsets(&mut self) {
+        self.offset.fill(0.0);
     }
 }
 
@@ -398,5 +439,39 @@ mod tests {
         assert!(infos[3].is_hidden && !infos[3].is_automation_safe);
         assert!(!SPECS[3].is_modulatable());
         assert!(SPECS[0].is_modulatable());
+    }
+
+    #[test]
+    fn offsets_move_the_effective_value_without_touching_the_base() {
+        let mut values = ParamValues::<4>::new(&TABLE);
+        values.set(0, 0.5);
+        let base = values.get(0).unwrap();
+        let real_base = values.real(0).unwrap();
+
+        let (slot, real) = values.set_offset(0, 0.25).unwrap();
+        assert_eq!(slot, 0);
+        assert_eq!(values.get(0), Some(base), "base is untouched");
+        assert!(real > real_base, "the offset raises the effective value");
+        assert!((values.effective_norm_at(0) - (base + 0.25)).abs() < 1e-6);
+        assert_eq!(values.offset_at(0), 0.25);
+
+        values.set_offset(0, 0.0);
+        assert_eq!(
+            values.real(0),
+            Some(real_base),
+            "offset 0 restores the base"
+        );
+
+        // Offsets clamp at the top, and set() returns the effective real.
+        values.set(0, 0.9);
+        let (_, clamped) = values.set_offset(0, 0.5).unwrap();
+        assert_eq!(values.effective_norm_at(0), 1.0);
+        assert_eq!(clamped, TABLE.spec(0).unwrap().to_real(1.0));
+
+        values.clear_offsets();
+        assert_eq!(values.offset_at(0), 0.0);
+        assert_eq!(values.set_offset(42, 0.5), None, "unknown ID");
+        assert_eq!(values.set_offset(1, 0.5), None, "enum is not modulatable");
+        assert_eq!(values.set_offset(10, 0.5), None, "bool is not modulatable");
     }
 }

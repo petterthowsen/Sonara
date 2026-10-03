@@ -6,10 +6,8 @@ pub mod crossover;
 pub mod delay_line;
 pub mod denormal;
 pub mod env_follower;
-pub mod envelope;
 pub mod gain;
 pub mod ladder;
-pub mod lfo;
 pub mod linear_svf;
 pub mod log_spectrum;
 pub mod noise;
@@ -27,8 +25,6 @@ pub mod tempo_sync;
 #[cfg(test)]
 pub mod test_util;
 
-pub use envelope::{AdsrEnvelope, AdsrState};
-pub use lfo::{Lfo, LfoShape};
 pub use noise::{PinkNoise, Rng, WhiteNoise};
 pub use one_shot_env::{BurstEnvelope, OneShotEnvelope};
 pub use oscillator::{fast_sin, Oscillator, Waveform};

@@ -196,7 +196,7 @@ impl SnareVoice {
     /// takes effect on the next block; curves are fixed and only set once in `new`.
     fn sync(&mut self) {
         self.tune_hz = self.values.real(TONE_TUNE).unwrap_or(180.0);
-        self.tune_norm = self.values.get(TONE_TUNE).unwrap_or(0.5);
+        self.tune_norm = self.values.effective_norm(TONE_TUNE).unwrap_or(0.5);
         self.keytrack = self.values.real(TONE_KEYTRACK).unwrap_or(0.0) >= 0.5;
         self.tone_decay = self.values.real(TONE_DECAY).unwrap_or(0.15);
         self.ratio = self.values.real(TONE_RATIO).unwrap_or(1.6);
@@ -357,6 +357,12 @@ impl DrumVoice for SnareVoice {
 
     fn set_parameter(&mut self, id: ParamId, norm: f32) {
         if self.values.set(id, norm).is_some() {
+            self.sync();
+        }
+    }
+
+    fn set_param_mod(&mut self, id: ParamId, offset: f32) {
+        if self.values.set_offset(id, offset).is_some() {
             self.sync();
         }
     }

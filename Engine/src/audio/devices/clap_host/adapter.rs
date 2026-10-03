@@ -356,6 +356,7 @@ impl ClapDeviceAdapter {
                     is_bypass: clap_info
                         .flags
                         .contains(clack_extensions::params::ParamInfoFlags::IS_BYPASS),
+                    is_modulatable: false,
                     module,
                     is_logarithmic: false,
                     skew: 1.0,

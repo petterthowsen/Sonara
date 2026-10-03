@@ -144,7 +144,7 @@ impl KickVoice {
 
     /// Recompute every decoded parameter and hand it to the DSP. Off the per-sample path.
     fn sync(&mut self) {
-        self.tune_norm = self.values.get(0).unwrap_or(0.0);
+        self.tune_norm = self.values.effective_norm(0).unwrap_or(0.0);
         self.tune_hz = self.values.real(0).unwrap_or(41.2);
         self.keytrack = self.values.real(1).unwrap_or(0.0) >= 0.5;
         self.body_decay = self.values.real(2).unwrap_or(0.4);
@@ -178,7 +178,7 @@ impl KickVoice {
         self.amp_env.set_gated(self.gate);
 
         // The click is shorter at a higher tone; the Tick is a fixed 2 ms sine.
-        let tone_norm = self.values.get(21).unwrap_or(0.0);
+        let tone_norm = self.values.effective_norm(21).unwrap_or(0.0);
         let click_decay = match self.click_type {
             ClickType::Noise => 0.010 - 0.008 * tone_norm,
             ClickType::Tick => 0.002,
@@ -272,6 +272,12 @@ impl DrumVoice for KickVoice {
 
     fn set_parameter(&mut self, id: ParamId, norm: f32) {
         if self.values.set(id, norm).is_some() {
+            self.sync();
+        }
+    }
+
+    fn set_param_mod(&mut self, id: ParamId, offset: f32) {
+        if self.values.set_offset(id, offset).is_some() {
             self.sync();
         }
     }

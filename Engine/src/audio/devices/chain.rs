@@ -155,6 +155,7 @@ impl AudioDevice for ChainDevice {
             is_hidden: false,
             is_read_only: false,
             is_bypass: false,
+            is_modulatable: false,
             is_logarithmic: false,
             skew: 1.0,
             display: Vec::new(),

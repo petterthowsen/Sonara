@@ -23,7 +23,6 @@ use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, Para
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
 use crate::audio::dsp::ladder::{Ladder, LadderCoefs, LadderMode};
-use crate::audio::dsp::lfo::{Lfo, LfoShape, LFO_SHAPES};
 use crate::audio::dsp::oversampler::Oversampler;
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::dsp::svf::{
@@ -31,6 +30,7 @@ use crate::audio::dsp::svf::{
     Svf, SvfCoefs,
 };
 use crate::audio::dsp::tempo_sync::{beats_to_hz, sync_beats, SYNC_CHOICES};
+use crate::audio::modulation::lfo::{Lfo, LfoShape, LFO_SHAPES};
 
 // === Parameters ===
 
@@ -480,6 +480,34 @@ impl FilterDevice {
         device
     }
 
+    /// Fold a decoded real value (base plus any modulation offset) into the DSP state.
+    fn apply(&mut self, param_id: ParamId, real: f32) {
+        self.p.apply(param_id, real);
+        let p = self.p;
+        match param_id {
+            FILTER_TYPE | CHARACTER => self.switch_started(p.ty, p.ladder),
+            CUTOFF => self.sm_cutoff.set_target(p.cutoff_log2),
+            RESONANCE => self.sm_resonance.set_target(p.resonance),
+            DRIVE => self.sm_drive.set_target(p.drive_db),
+            QUALITY => {
+                self.oversampler.set_factor(p.oversample);
+                // The control values depend on the rate; recompute at the next frame.
+                self.ctrl_pos = 0;
+                self.primed = false;
+            }
+            LFO_DEPTH => self.sm_depth.set_target(p.depth),
+            LFO_STEREO_PHASE => self.sm_phase.set_target(p.stereo_phase),
+            ENV_AMOUNT => self.sm_amount.set_target(p.env_amount),
+            ENV_ATTACK | ENV_RELEASE => {
+                self.env
+                    .set_times(p.env_attack_ms, p.env_release_ms, self.sample_rate)
+            }
+            MIX => self.sm_mix.set_target(p.mix),
+            GAIN => self.sm_gain.set_target(db_to_gain(p.gain_db)),
+            _ => {}
+        }
+    }
+
     fn switch_started(&mut self, ty: FilterType, ladder: bool) {
         if ty == self.cur.ty && ladder == self.cur.ladder {
             return;
@@ -716,30 +744,15 @@ impl AudioDevice for FilterDevice {
             return;
         };
         self.sleep.wake();
-        self.p.apply(param_id, real);
-        let p = self.p;
-        match param_id {
-            FILTER_TYPE | CHARACTER => self.switch_started(p.ty, p.ladder),
-            CUTOFF => self.sm_cutoff.set_target(p.cutoff_log2),
-            RESONANCE => self.sm_resonance.set_target(p.resonance),
-            DRIVE => self.sm_drive.set_target(p.drive_db),
-            QUALITY => {
-                self.oversampler.set_factor(p.oversample);
-                // The control values depend on the rate; recompute at the next frame.
-                self.ctrl_pos = 0;
-                self.primed = false;
-            }
-            LFO_DEPTH => self.sm_depth.set_target(p.depth),
-            LFO_STEREO_PHASE => self.sm_phase.set_target(p.stereo_phase),
-            ENV_AMOUNT => self.sm_amount.set_target(p.env_amount),
-            ENV_ATTACK | ENV_RELEASE => {
-                self.env
-                    .set_times(p.env_attack_ms, p.env_release_ms, self.sample_rate)
-            }
-            MIX => self.sm_mix.set_target(p.mix),
-            GAIN => self.sm_gain.set_target(db_to_gain(p.gain_db)),
-            _ => {}
-        }
+        self.apply(param_id, real);
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        let Some((_, real)) = self.values.set_offset(param_id, offset) else {
+            return;
+        };
+        self.sleep.wake();
+        self.apply(param_id, real);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {

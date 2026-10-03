@@ -24,10 +24,10 @@ use super::param_table::{
 use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 use crate::audio::dsp::delay_line::{DelayLine, MIN_HERMITE_DELAY};
 use crate::audio::dsp::gain::{dry_wet_gains, MixLaw};
-use crate::audio::dsp::lfo::{Lfo, LfoShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::dsp::tempo_sync::{division_seconds, SYNC_CHOICES};
+use crate::audio::modulation::lfo::{Lfo, LfoShape};
 
 // === Parameters (IDs in blocks of ten per module) ===
 
@@ -509,6 +509,22 @@ impl ChorusDevice {
             param.snap(target);
         }
     }
+
+    /// Apply a decoded (real-valued) parameter to the DSP state.
+    fn apply(&mut self, id: ParamId, real: f32) {
+        match id {
+            MODE => self.set_mode(ChorusMode::from_index(real as usize)),
+            RATE => self.rate.set_target(real),
+            DEPTH => self.depth.set_target(real / 100.0),
+            DELAY => self.delay_ms.set_target(real),
+            FEEDBACK => self.feedback.set_target(real / 100.0),
+            TONE => self.tone_hz.set_target(real),
+            LOW_CUT => self.low_cut_hz.set_target(real),
+            WIDTH => self.width.set_target(real / 100.0),
+            MIX => self.mix.set_target(real / 100.0),
+            _ => {}
+        }
+    }
 }
 
 impl AudioDevice for ChorusDevice {
@@ -624,18 +640,14 @@ impl AudioDevice for ChorusDevice {
         let Some((_, real)) = self.params.set(param_id, value) else {
             return;
         };
-        match param_id {
-            MODE => self.set_mode(ChorusMode::from_index(real as usize)),
-            RATE => self.rate.set_target(real),
-            DEPTH => self.depth.set_target(real / 100.0),
-            DELAY => self.delay_ms.set_target(real),
-            FEEDBACK => self.feedback.set_target(real / 100.0),
-            TONE => self.tone_hz.set_target(real),
-            LOW_CUT => self.low_cut_hz.set_target(real),
-            WIDTH => self.width.set_target(real / 100.0),
-            MIX => self.mix.set_target(real / 100.0),
-            _ => {}
-        }
+        self.apply(param_id, real);
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        let Some((_, real)) = self.params.set_offset(param_id, offset) else {
+            return;
+        };
+        self.apply(param_id, real);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {

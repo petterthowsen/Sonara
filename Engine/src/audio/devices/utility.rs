@@ -342,6 +342,23 @@ impl UtilityDevice {
         self.splitter.reset();
         self.bass_running = self.p.bass_mono;
     }
+
+    /// Apply a decoded (real-valued) parameter to the decoded state and the smoothers.
+    fn apply(&mut self, id: ParamId, real: f32) {
+        self.p.apply(id, real);
+        let p = self.p;
+        match id {
+            GAIN => self.sm_gain.set_target(p.gain),
+            PAN => self.sm_pan.set_target(p.pan),
+            WIDTH | MONO => self.sm_width.set_target(p.width_target()),
+            MUTE => self.sm_mute.set_target(p.mute_target()),
+            BASS_MONO => self.set_bass_mono(p.bass_mono),
+            BASS_MONO_FREQ => self.splitter.set_targets(&[p.bass_hz]),
+            INVERT_L => self.sm_polarity[0].set_target(p.polarity(0)),
+            INVERT_R => self.sm_polarity[1].set_target(p.polarity(1)),
+            _ => {}
+        }
+    }
 }
 
 impl AudioDevice for UtilityDevice {
@@ -372,19 +389,15 @@ impl AudioDevice for UtilityDevice {
             return;
         };
         self.sleep.wake();
-        self.p.apply(param_id, real);
-        let p = self.p;
-        match param_id {
-            GAIN => self.sm_gain.set_target(p.gain),
-            PAN => self.sm_pan.set_target(p.pan),
-            WIDTH | MONO => self.sm_width.set_target(p.width_target()),
-            MUTE => self.sm_mute.set_target(p.mute_target()),
-            BASS_MONO => self.set_bass_mono(p.bass_mono),
-            BASS_MONO_FREQ => self.splitter.set_targets(&[p.bass_hz]),
-            INVERT_L => self.sm_polarity[0].set_target(p.polarity(0)),
-            INVERT_R => self.sm_polarity[1].set_target(p.polarity(1)),
-            _ => {}
-        }
+        self.apply(param_id, real);
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        let Some((_, real)) = self.values.set_offset(param_id, offset) else {
+            return;
+        };
+        self.sleep.wake();
+        self.apply(param_id, real);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {

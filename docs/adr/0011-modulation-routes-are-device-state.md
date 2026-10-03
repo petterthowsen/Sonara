@@ -1,6 +1,8 @@
 # 0011 — Modulation routes are device state; polyphonic sources are evaluated inside the device
 
-Status: accepted
+Status: accepted; superseded in part by 0014 (the "device owns the sources" half). "Routes are
+device state" and "the modulated value sits next to the base and is never written back" still
+hold.
 
 ## Context
 

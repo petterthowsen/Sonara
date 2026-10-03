@@ -50,6 +50,7 @@ pub fn plugin_param_to_info(p: &PluginParameterInfo) -> ParamInfo {
         is_hidden: p.is_hidden,
         is_read_only: p.is_read_only,
         is_bypass: p.is_bypass,
+        is_modulatable: false,
         module: p.module.clone(),
         is_logarithmic: false,
         skew: 1.0,

@@ -336,6 +336,19 @@ impl<V: DrumVoice + 'static> AudioDevice for DrumHost<V> {
         }
     }
 
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        self.wake();
+        if self.globals.set_offset(param_id, offset) {
+            self.params = self.globals.params();
+            self.output_gain
+                .set_target(db_to_gain(self.params.output_db));
+        } else {
+            for voice in self.voices.iter_mut() {
+                voice.set_param_mod(param_id, offset);
+            }
+        }
+    }
+
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
         match self.globals.get(param_id) {
             Some(value) => Some(value),

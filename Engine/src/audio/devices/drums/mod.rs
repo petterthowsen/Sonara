@@ -62,6 +62,10 @@ pub trait DrumVoice: Send {
 
     fn set_parameter(&mut self, id: ParamId, norm: ParamValue);
 
+    /// Modulation offset for `id`, in normalized units; the effective value is the base plus
+    /// the offset. Default no-op for voices without modulatable parameters.
+    fn set_param_mod(&mut self, _id: ParamId, _offset: f32) {}
+
     fn get_parameter(&self, id: ParamId) -> Option<ParamValue>;
 
     /// Per-block parameter view, applied before the block is rendered.
