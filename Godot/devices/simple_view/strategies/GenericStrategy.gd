@@ -33,6 +33,32 @@ func role_weights() -> Dictionary:
 	}
 
 
+## Name keywords of primary controls ("Volume", "Amount", "Mix"): they come first in their group.
+func primary_keywords() -> Array:
+	return ["volume", "vol", "level", "gain", "amount", "mix", "output", "master", "drive",
+		"depth", "intensity", "cutoff", "wave*", "waveform", "type"]
+
+
+## Name keywords of fine-tuning controls ("Fine", "Detune", "Phase"): they come last in their group.
+func fine_keywords() -> Array:
+	return ["fine", "detune", "cents", "semi*", "offset", "phase", "bias", "trim", "skew", "curve",
+		"slope", "smooth*", "jitter", "random*", "velocity", "vel*", "keytrack", "key*"]
+
+
+## Order of an item inside its group: 0 primary, 1 ordinary, 2 fine-tuning. Judged by the item's
+## (section-shortened) label, else its parameter name.
+func priority_tier(item: Dictionary) -> int:
+	var text := String(item.get("label", ""))
+	if text.is_empty():
+		text = String(item.get("name", ""))
+	var tokens := ParamClassifier.name_tokens(text)
+	if ParamClassifier.tokens_match(tokens, primary_keywords()):
+		return 0
+	if ParamClassifier.tokens_match(tokens, fine_keywords()):
+		return 2
+	return 1
+
+
 ## Roles whose float parameters are drawn as a tall `fader` instead of a knob. Empty by default:
 ## a fader is three rows tall, so only strategies for devices that suit it opt in.
 func fader_roles() -> Array[String]:

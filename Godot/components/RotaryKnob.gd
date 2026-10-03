@@ -10,6 +10,8 @@ signal reset_requested
 
 var _value := 0.5
 var _dragging := false
+## Unsnapped position (0–1) a drag has reached; only used while `step` > 0.
+var _drag_normalized := 0.0
 var _hovering := false
 var _tooltip: ValueTooltip = null
 
@@ -34,6 +36,15 @@ var _tooltip: ValueTooltip = null
 		return _value
 
 @export var value_default := 0.5
+
+## When above 0, the value snaps to `min_value` + n × `step` (1.0 for whole numbers); drags
+## accumulate underneath, so slow movements still reach the next step. 0 is continuous.
+@export var step := 0.0:
+	set(s):
+		step = maxf(s, 0.0)
+		_set_value(_value, false)
+		if is_inside_tree():
+			queue_redraw()
 
 ## When true, drag and the arc map the value logarithmically between min and max.
 @export var logarithmic := false:
@@ -218,7 +229,7 @@ func get_value_text() -> String:
 
 
 func _set_value(v: float, emit_change: bool) -> void:
-	var clamped := clampf(v, min_value, max_value)
+	var clamped := _snap(clampf(v, min_value, max_value))
 	if is_equal_approx(_value, clamped):
 		return
 	_value = clamped
@@ -227,6 +238,13 @@ func _set_value(v: float, emit_change: bool) -> void:
 	_refresh_tooltip()
 	if emit_change:
 		value_changed.emit(_value)
+
+
+## `v` rounded to the nearest step from `min_value`, or unchanged when continuous.
+func _snap(v: float) -> float:
+	if step <= 0.0:
+		return v
+	return clampf(min_value + roundf((v - min_value) / step) * step, min_value, max_value)
 
 
 func _draw() -> void:
@@ -295,6 +313,7 @@ func _gui_input(event: InputEvent) -> void:
 					reset_requested.emit()
 				else:
 					_dragging = true
+					_drag_normalized = _value_to_normalized(_value)
 					_refresh_tooltip()
 			else:
 				_dragging = false
@@ -309,6 +328,10 @@ func _gui_input(event: InputEvent) -> void:
 					mod_assign_amount = amount
 					mod_amount_changed.emit(amount)
 					_refresh_tooltip()
+				return
+			if step > 0.0:
+				_drag_normalized = clampf(_drag_normalized - motion.relative.y * drag_sensitivity * drag_scale, 0.0, 1.0)
+				value = _normalized_to_value(_drag_normalized)
 				return
 			var new_n: float = _value_to_normalized(_value) + (-motion.relative.y) * drag_sensitivity * drag_scale
 			value = _normalized_to_value(new_n)

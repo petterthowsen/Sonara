@@ -11,7 +11,7 @@ static var logger := Log.make("SimpleControl")
 const SEGMENT_FONT_SIZE := 13
 ## Horizontal space a segment button needs beyond its label (stylebox margins + separation).
 const SEGMENT_PADDING := 10.0
-## Font size of the value readout (knob tooltip, spin box).
+## Font size of the value readout (knob tooltip).
 const VALUE_FONT_SIZE := 13
 ## Alpha of a control whose value isn't in effect (a Time knob while its Sync is on): greyed,
 ## not hidden, so the ms value stays visible and editable.
@@ -166,7 +166,7 @@ func _build_inner() -> void:
 		_body.add_child(_inner)
 		_inner.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		# Single-parameter controls reveal their full title while hovered, like the title itself.
-		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER]:
+		if kind in [SimpleControlKinds.KNOB, SimpleControlKinds.SPINBOX, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER]:
 			_title_overlay.add_hover_source(_inner)
 	_collect_mod_targets()
 
@@ -252,25 +252,30 @@ func _build_dropdown() -> OptionButton:
 	return dropdown
 
 
-## An enum whose labels are consecutive integers (e.g. an octave, -2…+2), shown as the number.
-## The spin box counts in label values; the enum index is `value - first`.
-func _build_spinbox() -> SpinBox:
-	var spin := SpinBox.new()
+## An enum whose labels are consecutive integers (e.g. an octave, -2…+2), shown as a knob that
+## snaps to whole steps. The knob counts in label values; the enum index is `value - first`.
+func _build_spinbox() -> RotaryKnob:
 	var param := _param(0)
 	var first := _spinbox_first()
-	spin.min_value = first
-	spin.max_value = first + maxi(0, param.enum_values.size() - 1) if param else first
-	spin.step = 1.0
-	spin.rounded = true
-	spin.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	spin.select_all_on_focus = true
-	spin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	spin.get_line_edit().add_theme_font_size_override("font_size", VALUE_FONT_SIZE)
-	spin.value_changed.connect(func(v):
-		var n: int = maxi(1, param.enum_values.size()) if param else 1
+	var count: int = maxi(1, param.enum_values.size()) if param else 1
+	var knob := RotaryKnob.new()
+	knob.min_value = first
+	knob.max_value = first + count - 1
+	knob.step = 1.0
+	knob.value_format = "%d"
+	var default_index := 0
+	if param:
+		default_index = clampi(roundi(param.value_to_normalized(param.default_value) * (count - 1)), 0, count - 1)
+	knob.value_default = first + default_index
+	knob.value_text_callback = func(v):
+		var index := clampi(int(round(v)) - first, 0, count - 1)
+		return String(param.enum_values[index]) if param and not param.enum_values.is_empty() else "%d" % int(v)
+	knob.tooltip_side = RotaryKnob.TooltipSide.BELOW
+	knob.value_font_size = VALUE_FONT_SIZE
+	knob.value_changed.connect(func(v):
 		var index := int(round(v)) - first
-		_commit(0, 0.0 if n <= 1 else float(index) / float(n - 1)))
-	return spin
+		_commit(0, 0.0 if count <= 1 else float(index) / float(count - 1)))
+	return knob
 
 
 ## Value of the first label of an integer enum (0 when it isn't one).
@@ -438,8 +443,7 @@ func _refresh_spinbox() -> void:
 		return
 	var n := maxi(1, param.enum_values.size())
 	var idx := clampi(int(round(_normalized(0) * float(n - 1))), 0, n - 1)
-	# Not set_value_no_signal: that leaves the spin box text stale. `_updating` stops the echo.
-	(_inner as SpinBox).value = _spinbox_first() + idx
+	(_inner as RotaryKnob).set_value_no_signal(_spinbox_first() + idx)
 
 
 func _refresh_envelope() -> void:

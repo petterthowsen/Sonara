@@ -1,5 +1,5 @@
 # test_simple_view_render.gd
-# Simple View rendering in a DevicePanel: integer enums render as a SpinBox bound to the enum
+# Simple View rendering in a DevicePanel: integer enums render as a stepped RotaryKnob bound to the enum
 # index, the view widens to its grid instead of scrolling sideways, and the DevicePanel opens
 # its Parameters tab only for a device without a view. Group boxes grow into free space and spread
 # their controls evenly; pages sit at the left and the view takes each page's width.
@@ -83,18 +83,29 @@ func _find(node: Node, type_name: String) -> Node:
 	return null
 
 
+func _find_knob(node: Node) -> RotaryKnob:
+	for child in node.get_children():
+		if child is RotaryKnob and not child.is_queued_for_deletion():
+			return child
+		var found := _find_knob(child)
+		if found:
+			return found
+	return null
+
+
 func _test_spinbox_for_integer_enum() -> void:
 	var instance: Object = _instance("Spin Synth", [_octave_param(0)])
 	var panel: Control = await _panel_for(instance)
-	var spin: SpinBox = _find(panel._panel_view, "SpinBox")
-	_assert(spin != null, "an integer enum renders as a SpinBox")
+	var spin: RotaryKnob = _find_knob(panel._panel_view)
+	_assert(spin != null and spin.step == 1.0, "an integer enum renders as a stepped RotaryKnob")
 	if spin == null:
 		panel.queue_free()
 		return
-	_assert(spin.min_value == -2.0 and spin.max_value == 2.0, "the spin box spans the labels (-2…+2)")
+	_assert(spin.min_value == -2.0 and spin.max_value == 2.0, "the knob spans the labels (-2…+2)")
 	instance._on_parameter_value_received([1.0], 0)  # engine echo: the only source of refreshes
 	_assert(spin.value == 2.0, "the last enum index shows as +2 (got %s)" % spin.value)
-	spin.value = -1.0
+	spin.value = -0.8  # snaps to whole steps
+	_assert(spin.value == -1.0, "the knob snaps to whole numbers (got %s)" % spin.value)
 	_assert(is_equal_approx(instance.get_parameter_normalized(0), 0.25),
 		"-1 commits enum index 1 of 5 (got %.3f)" % instance.get_parameter_normalized(0))
 	panel.queue_free()

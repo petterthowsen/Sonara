@@ -30,6 +30,10 @@ func run_tests() -> void:
 	_test_main_page_importance()
 	_test_pages_grow_sideways()
 	_test_group_blocks_and_columns()
+	_test_family_is_aligned()
+	_test_group_prefix_is_stripped()
+	_test_primary_controls_first()
+	_test_numbered_modules_form_a_family()
 	_test_families_share_a_page()
 	_test_no_overlap_in_bounds()
 	_test_generate_500_params_under_100ms()
@@ -244,8 +248,9 @@ func _test_builtin_drum_layout() -> void:
 				body.append(c)
 	body.sort_custom(func(a, b):
 		return (a.rect[1] < b.rect[1]) if (a.rect[1] != b.rect[1]) else (a.rect[0] < b.rect[0]))
-	_assert(0 in body[0].params, "Tune sorts first in Body")
-	_assert(2 in body[1].params, "Decay sorts second in Body")
+	_assert(6 in body[0].params and 7 in body[1].params, "Level and Drive (primary) sort first in Body")
+	_assert(0 in body[2].params, "Tune follows them in Body")
+	_assert(2 in body[3].params, "Decay follows Tune in Body")
 
 
 ## The drum Tune knob shows a note name (E0 at 41.2 Hz), and Decay is left alone.
@@ -744,6 +749,82 @@ func _test_apricot_fixture() -> void:
 	var first := order.find("Oscillator 1")
 	_assert(first >= 0 and order.slice(first, first + 3) == ["Oscillator 1", "Oscillator 2", "Oscillator 3"],
 		"oscillator sections stay together %s" % [order])
+
+
+## Inside a group, primary controls (Volume, Amount) come first and fine-tuning ones (Fine, Phase)
+## last, each tier in parameter order.
+func _test_primary_controls_first() -> void:
+	var names := ["Fine", "Shape Bend", "Phase", "Volume", "Pan", "Amount"]
+	var items: Array[Dictionary] = []
+	for i in names.size():
+		items.append({"index": i, "module": "Osc", "importance": 0.5, "label": "", "name": names[i],
+			"kind": SimpleControlKinds.KNOB, "params": [i]})
+	items.append({"index": 6, "module": "Osc", "importance": 0.5, "label": "", "name": "Extra",
+		"kind": SimpleControlKinds.KNOB, "params": [6]})
+	var groups := SimpleLayoutGenerator.group_items(items, GenericStrategy.new())
+	var order: Array = groups[0].items.map(func(it): return it.name)
+	_assert(order == ["Volume", "Amount", "Shape Bend", "Pan", "Extra", "Fine", "Phase"],
+		"primary first, fine-tuning last %s" % [order])
+
+
+## Labels drop the group's own name ("Filter Drive" in Filter → "Drive") unless that would make two
+## labels in the group the same.
+func _test_group_prefix_is_stripped() -> void:
+	var names := ["Filter Cutoff", "Filter Drive", "Filter", "Filter Env Amount", "Drive"]
+	var items: Array[Dictionary] = []
+	for i in names.size():
+		items.append({"index": i, "module": "Filter", "importance": 0.5, "label": "", "name": names[i],
+			"kind": SimpleControlKinds.KNOB, "params": [i]})
+	var groups := SimpleLayoutGenerator.group_items(items, GenericStrategy.new())
+	var shown := {}  # what the control displays: the label, else the parameter name
+	for item in groups[0].items:
+		shown[item.name] = item.label if not item.label.is_empty() else item.name
+	_assert(shown["Filter Cutoff"] == "Cutoff", "prefix dropped %s" % [shown])
+	_assert(shown["Filter"] == "Filter", "a label that is just the group name stays")
+	_assert(shown["Filter Drive"] == "Filter Drive" and shown["Drive"] == "Drive",
+		"ambiguous 'Drive' keeps its full name %s" % [shown])
+	_assert(shown["Filter Env Amount"] == "Env Amount", "multi-word remainder kept")
+
+
+## Numbered module names ("Osc 1", "Osc 2") form a family, so they end up side by side or stacked.
+func _test_numbered_modules_form_a_family() -> void:
+	var items: Array[Dictionary] = []
+	var modules := ["Filter", "Amp Env", "Osc 1", "Osc 2", "Noise"]
+	for i in modules.size() * 2:
+		items.append({"index": i, "module": modules[i / 2], "importance": 0.5, "label": "P%d" % i,
+			"kind": SimpleControlKinds.KNOB, "params": [i]})
+	var groups := SimpleLayoutGenerator.group_items(items, GenericStrategy.new())
+	var titles: Array = groups.map(func(g): return g.title)
+	var osc1 := titles.find("Osc 1")
+	_assert(titles.find("Osc 2") == osc1 + 1, "Osc 1 and Osc 2 are adjacent %s" % [titles])
+	_assert(groups[osc1].family == groups[osc1 + 1].family, "Osc 1 and Osc 2 share a family")
+	var rects := {}
+	for g in GridPacker.pack_pages(groups, 4, 16)[0].groups:
+		rects[g.title] = g.rect
+	_assert(rects["Osc 1"][0] == rects["Osc 2"][0] or rects["Osc 1"][1] == rects["Osc 2"][1],
+		"Osc 1 and Osc 2 aligned %s %s" % [rects["Osc 1"], rects["Osc 2"]])
+
+
+## A family (Oscillator 1, 2) is aligned in one column and singles backfill the column before it,
+## so related groups never sit diagonally: Amp Env + Noise | Osc 1 over Osc 2.
+func _test_family_is_aligned() -> void:
+	var knobs := func(n: int) -> Array:
+		var items := []
+		for i in n:
+			items.append({"kind": SimpleControlKinds.KNOB, "params": [i]})
+		return items
+	var groups := [{"id": "amp", "title": "Amp Env", "page": "Main", "items": knobs.call(4)}]
+	for i in 2:
+		groups.append({"id": "osc%d" % (i + 1), "title": "Osc %d" % (i + 1), "page": "Main",
+			"family": "osc", "items": knobs.call(4)})
+	groups.append({"id": "noise", "title": "Noise", "page": "Main", "items": knobs.call(4)})
+	var rects := {}
+	for g in GridPacker.pack_pages(groups, 4, 12)[0].groups:
+		rects[g.id] = g.rect
+	_assert(rects.osc1[0] == rects.osc2[0] and rects.osc2[1] > rects.osc1[1],
+		"Osc 2 sits under Osc 1 %s %s" % [rects.osc1, rects.osc2])
+	_assert(rects.amp[0] == rects.noise[0] and rects.amp[0] != rects.osc1[0],
+		"Amp Env and Noise share a column %s %s" % [rects.amp, rects.noise])
 
 
 ## A family of groups that doesn't fit beside what's on a page starts a new page, titled after the

@@ -55,6 +55,22 @@ class Columns:
 		return Vector2i(column_x, shelf_y)
 
 
+	## Leave the current column: the next block starts a new one to the right.
+	func break_column() -> void:
+		if is_empty():
+			return
+		column_x += column_w
+		column_w = 0
+		shelf_y = 0
+		shelf_h = 0
+		shelf_used = 0
+
+
+	## True when a block of `size` would land in the column being filled (beside or below).
+	func fits_current_column(size: Vector2i) -> bool:
+		return not is_empty() and copy().place(size).x == column_x
+
+
 	## Right edge a block of `size` would reach if placed next.
 	func right_edge_for(size: Vector2i) -> int:
 		return copy().place(size).x + size.x
@@ -292,7 +308,12 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 	var page: Dictionary = {}
 	var columns: Columns = null
 	var family_end := 0
-	for g in range(groups.size()):
+	groups = groups.duplicate()
+	var g := -1
+	while g + 1 < groups.size():
+		g += 1
+		if g >= family_end and _family_end(groups, g) - g > 1 and columns != null:
+			_backfill_column(groups, g, columns, rows, max_columns)
 		var group: Dictionary = groups[g]
 		var page_title := String(group.title)
 		if g >= family_end:
@@ -304,6 +325,8 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 						and not _groups_fit(family, columns.copy(), rows, max_columns) \
 						and _groups_fit(family, Columns.new(rows), rows, max_columns):
 					columns = null  # start the family on a fresh page
+				if columns != null:
+					columns.break_column()  # a family gets a column of its own, its groups aligned
 		var items: Array = group.items
 		var sizes := _item_sizes(items, rows, max_columns)
 		var start := 0
@@ -327,6 +350,29 @@ static func _pack_section(groups: Array, title: String, rows: int, max_columns: 
 			start += block.count
 			page_title = String(group.title)
 	return pages
+
+
+## Before a family starts a column of its own, move the next single-group block that fits under
+## what the current column already holds to just before the family (`groups[at]`), so the column
+## isn't left half empty. Repeats while something fits.
+static func _backfill_column(groups: Array, at: int, columns: Columns, rows: int, max_columns: int) -> void:
+	var probe := columns.copy()
+	var family_end := _family_end(groups, at)
+	var i := family_end
+	while i < groups.size():
+		var end := _family_end(groups, i)
+		if end - i == 1:
+			var group: Dictionary = groups[i]
+			var block := group_block(_item_sizes(group.items, rows, max_columns), rows, max_columns)
+			if block.count == group.items.size() and probe.fits_current_column(block.size):
+				probe.place(block.size)
+				groups.remove_at(i)
+				groups.insert(at, group)
+				at += 1
+				family_end += 1
+				i = family_end
+				continue
+		i = end
 
 
 ## Index just past the run of groups starting at `start` that share its family (a group without
