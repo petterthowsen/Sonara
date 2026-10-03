@@ -1,0 +1,274 @@
+[gd_scene format=3 uid="uid://ohtufdomjoiq"]
+
+[ext_resource type="Script" uid="uid://dy3wi0jhtutsj" path="res://components/RotaryKnob.gd" id="1_knob"]
+[ext_resource type="Script" uid="uid://cj01gcdnti4sd" path="res://components/gallery/ComponentGallery.gd" id="1_ll067"]
+[ext_resource type="Script" uid="uid://3fglhr4dpof8" path="res://components/Fader.gd" id="2_fader"]
+[ext_resource type="Script" uid="uid://l2x0algtfqv5" path="res://components/HSlider.gd" id="3_hslider"]
+[ext_resource type="Script" uid="uid://cdo41pchcayq7" path="res://components/HDualSlider.gd" id="4_dual"]
+[ext_resource type="Script" uid="uid://78wlr854k3fr" path="res://components/Volumeter.gd" id="5_volumeter"]
+[ext_resource type="Script" uid="uid://tet2lon0ngmd" path="res://components/VSlider.gd" id="6_vslider"]
+[ext_resource type="Script" uid="uid://l5sifv4kcm4n" path="res://components/meter/LevelMeter.gd" id="7_levelmeter"]
+[ext_resource type="PackedScene" uid="uid://de6qmyspkqaw7" path="res://components/meter/Meter.tscn" id="8_meter"]
+[ext_resource type="Script" uid="uid://bx2ui0xrp1myo" path="res://components/XYSlider.gd" id="9_xy"]
+[ext_resource type="Script" uid="uid://c1lqtfptl4l53" path="res://components/SegmentedControl.gd" id="10_segments"]
+[ext_resource type="PackedScene" uid="uid://cj6bkxh40g8w4" path="res://components/EnvelopeControl.tscn" id="11_envelope"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="12_line_edit"]
+
+[node name="ComponentGallery" type="PanelContainer" unique_id=1220882205]
+custom_minimum_size = Vector2(1200, 700)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ll067")
+
+[node name="Flow" type="HFlowContainer" parent="." unique_id=706691020]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/h_separation = 18
+theme_override_constants/v_separation = 18
+
+[node name="KnobCard" type="VBoxContainer" parent="Flow" unique_id=628627355]
+custom_minimum_size = Vector2(148, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/KnobCard" unique_id=1385971996]
+layout_mode = 2
+text = "Rotary Knob"
+horizontal_alignment = 1
+
+[node name="RotaryKnob" type="Control" parent="Flow/KnobCard" unique_id=875132089]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("1_knob")
+max_value = 100.0
+value = 46.735
+value_default = 50.0
+radius = 24.0
+shadow_color = Color(0.19076231, 0.19076234, 0.19076231, 1)
+arc_width = 5.0
+arc_offset = 0.0
+knob_line_width = 3.0
+knob_line_length = 0.7
+mod_range_width_scale = 1.0
+mod_range_spacing = 0.0
+mod_range_inset = 0.0
+mod_live_marker_radius_scale = null
+mod_live_marker_color = Color(1, 1, 1, 0.9019608)
+value_format = "%.0f"
+unit = "%"
+
+[node name="FaderCard" type="VBoxContainer" parent="Flow" unique_id=264157042]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/FaderCard" unique_id=993889802]
+layout_mode = 2
+text = "Fader"
+horizontal_alignment = 1
+
+[node name="Fader" type="Control" parent="Flow/FaderCard" unique_id=1681038085]
+custom_minimum_size = Vector2(44, 176)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("2_fader")
+max_value = 100.0
+value = 64.0
+value_default = 50.0
+fill_origin = nan
+value_format = "%.0f"
+
+[node name="PanCard" type="VBoxContainer" parent="Flow" unique_id=706493230]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/PanCard" unique_id=155197587]
+layout_mode = 2
+text = "Pan Slider"
+horizontal_alignment = 1
+
+[node name="PanSlider" type="Control" parent="Flow/PanCard" unique_id=250945292]
+custom_minimum_size = Vector2(150, 28)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("3_hslider")
+min_value = -100.0
+max_value = 100.0
+value = 34.0
+fill_color = Color(0.384314, 0.301961, 0.6, 1)
+
+[node name="DualPanCard" type="VBoxContainer" parent="Flow" unique_id=843575913]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/DualPanCard" unique_id=1748361323]
+layout_mode = 2
+text = "Dual Pan"
+horizontal_alignment = 1
+
+[node name="DualSlider" type="Control" parent="Flow/DualPanCard" unique_id=468030244]
+custom_minimum_size = Vector2(150, 28)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+script = ExtResource("4_dual")
+a_value = -0.62
+b_value = 0.35
+fill_color = Color(0.384314, 0.301961, 0.6, 1)
+alt_fill_color = Color(0.301961, 0.593015, 0.6, 1)
+
+[node name="VolumeSliderCard" type="VBoxContainer" parent="Flow" unique_id=358018413]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/VolumeSliderCard" unique_id=1896434541]
+layout_mode = 2
+text = "Volume Slider"
+horizontal_alignment = 1
+
+[node name="VolumeSlider" type="Control" parent="Flow/VolumeSliderCard" unique_id=98030570]
+custom_minimum_size = Vector2(28, 176)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("6_vslider")
+value = -9.0
+
+[node name="SmartLineEdit" parent="Flow/VolumeSliderCard/VolumeSlider" unique_id=2032656809 instance=ExtResource("12_line_edit")]
+visible = false
+layout_mode = 0
+anchors_preset = 0
+anchor_top = 0.0
+anchor_right = 0.0
+anchor_bottom = 0.0
+grow_horizontal = 1
+grow_vertical = 1
+
+[node name="LevelMeterCard" type="VBoxContainer" parent="Flow" unique_id=1561134462]
+custom_minimum_size = Vector2(84, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/LevelMeterCard" unique_id=803366839]
+layout_mode = 2
+text = "Level Meter"
+horizontal_alignment = 1
+
+[node name="LevelMeter" type="Control" parent="Flow/LevelMeterCard" unique_id=1518624345]
+custom_minimum_size = Vector2(72, 176)
+layout_mode = 2
+size_flags_horizontal = 4
+script = ExtResource("7_levelmeter")
+bar_count = 2
+scale_side = 1
+display = 2
+readout = 2
+caption = "L / R"
+
+[node name="MixerMeterCard" type="VBoxContainer" parent="Flow" unique_id=21814331]
+custom_minimum_size = Vector2(132, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/MixerMeterCard" unique_id=1663543401]
+layout_mode = 2
+text = "Mixer Meter + Fader"
+horizontal_alignment = 1
+
+[node name="Meter" parent="Flow/MixerMeterCard" unique_id=865709780 instance=ExtResource("8_meter")]
+custom_minimum_size = Vector2(120, 176)
+layout_mode = 2
+peak_left = 0.0
+peak_right = 0.0
+rms_left = 0.0
+rms_right = 0.0
+volume_db = -9.0
+
+[node name="VolumeterCard" type="VBoxContainer" parent="Flow" unique_id=1075605287]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/VolumeterCard" unique_id=10085142]
+layout_mode = 2
+text = "Track Volumeter"
+horizontal_alignment = 1
+
+[node name="Volumeter" type="Control" parent="Flow/VolumeterCard" unique_id=1631868151]
+custom_minimum_size = Vector2(8, 176)
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_default_cursor_shape = 2
+script = ExtResource("5_volumeter")
+volume_db = -12.0
+
+[node name="XYCard" type="VBoxContainer" parent="Flow" unique_id=1318067219]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/XYCard" unique_id=49874666]
+layout_mode = 2
+text = "XY Pad"
+horizontal_alignment = 1
+
+[node name="XYSlider" type="Control" parent="Flow/XYCard" unique_id=904456517]
+custom_minimum_size = Vector2(150, 118)
+layout_mode = 2
+focus_mode = 1
+mouse_filter = 1
+mouse_default_cursor_shape = 2
+script = ExtResource("9_xy")
+value_x = 0.68
+value_y = 0.34
+
+[node name="EnvelopeCard" type="VBoxContainer" parent="Flow" unique_id=292903623]
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/EnvelopeCard" unique_id=332191654]
+layout_mode = 2
+text = "Envelope"
+horizontal_alignment = 1
+
+[node name="EnvelopeControl" parent="Flow/EnvelopeCard" unique_id=645955909 instance=ExtResource("11_envelope")]
+custom_minimum_size = Vector2(180, 126)
+layout_mode = 2
+
+[node name="SegmentsCard" type="VBoxContainer" parent="Flow" unique_id=1039033343]
+custom_minimum_size = Vector2(190, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Flow/SegmentsCard" unique_id=1064916016]
+layout_mode = 2
+text = "Segmented Control"
+horizontal_alignment = 1
+
+[node name="Segments" type="HBoxContainer" parent="Flow/SegmentsCard" unique_id=2021126081]
+custom_minimum_size = Vector2(190, 32)
+layout_mode = 2
+theme_override_constants/separation = 1
+script = ExtResource("10_segments")
+items = PackedStringArray("Clean", "Glue", "Punch")

@@ -124,8 +124,10 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | `meter/MeterBallistics.gd` | dB-domain peak release, hold and RMS smoothing for any meter that draws itself (`push`, `step`, `settled`) |
 | `meter/LevelMeter.gd` | Configurable dB meter: N bars, `display` PEAK/RMS/BOTH, ZONES/SOLID colour, LEVEL or REDUCTION (GR from the top), scale, readout, caption. `push(index, peak_db, rms_db)`; click resets holds |
 
-Controls built on them: `RotaryKnob` (fills its rect, or set `radius`; `value_font_size` for its
-tooltip), `HorSlider` (single) and `HDualSlider` (pan),
+Controls built on them: `RotaryKnob` (Inspector exports grouped into Value, Appearance, Tooltip, and
+Interaction; Appearance includes `arc_offset`, `shadow_width`, `knob_line_length`, plus a Modulation
+subgroup for range-arc width, spacing, inset, and live-marker size/color), `HorSlider` (single) and
+`HDualSlider` (pan),
 `VolumeSlider` (`VSlider.gd`), `Meter` (mixer strip, optional fader), `Volumeter` (track header
 meter and fader), `XYSlider`, and `EnvelopeControl` with the `Envelope` resource (any subset of
 ADSR).
@@ -170,3 +172,7 @@ modulated (mixer parameters are out of scope for spec 018).
 - [ ] Headless test for the behavior (see `tests/test_value_controls.gd`,
       `tests/test_envelope_control.gd`). The headless pointer sits at (0, 0), so place test
       controls elsewhere to avoid spurious hovers.
+
+## Component gallery
+
+Open `Godot/components/ComponentGallery.tscn` in the editor to preview the reusable controls together. Its `PanelContainer` holds an `HFlowContainer` of component cards with fixed sample values; `ComponentGallery.gd` seeds the meters and knob modulation ranges/live markers for a useful static preview. The gallery is presentation-only and does not bind to project or engine state.
