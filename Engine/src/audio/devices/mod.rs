@@ -410,6 +410,14 @@ pub trait AudioDevice: Send {
     /// the parameter goes away. Default: the device is not modulatable.
     fn set_param_mod(&mut self, _param_id: ParamId, _offset: f32) {}
 
+    /// Sample-accurate modulation offset: like [`set_param_mod`](Self::set_param_mod), but the
+    /// offset takes effect at `frame_offset` samples into the upcoming block. Devices that stamp
+    /// events into the block (CLAP plugins) override this; the default ignores the offset and
+    /// goes through `set_param_mod`. The base value is never written (ADR-0014).
+    fn set_param_mod_at(&mut self, param_id: ParamId, offset: f32, _frame_offset: usize) {
+        self.set_param_mod(param_id, offset);
+    }
+
     /// Get current parameter value (normalized 0.0-1.0)
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue>;
 

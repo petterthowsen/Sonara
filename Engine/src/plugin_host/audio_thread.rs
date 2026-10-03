@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use clack_extensions::params::PluginParams;
 use clack_host::events::event_types::{
-    NoteOffEvent, NoteOnEvent, ParamValueEvent, TransportEvent, TransportFlags,
+    NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags,
 };
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{EventFlags, EventHeader, Pckn, UnknownEvent};
@@ -31,10 +31,10 @@ use tracing::{info, warn};
 use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
 use crate::audio::ipc::{
     futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory, EVENT_NOTE_OFF,
-    EVENT_NOTE_ON, EVENT_PARAM,
+    EVENT_NOTE_ON, EVENT_PARAM, EVENT_PARAM_MOD,
 };
 use crate::plugin_host::host::SubprocessHost;
-use crate::plugin_host::state::ParamMap;
+use crate::plugin_host::state::{ParamEntry, ParamMap};
 
 /// How long the audio thread blocks on the doorbell while idle. Commands ring the doorbell too,
 /// so this is only a safety net.
@@ -198,6 +198,7 @@ enum OwnedEvent {
     NoteOn(u32, NoteOnEvent),
     NoteOff(u32, NoteOffEvent),
     Param(u32, ParamValueEvent),
+    ParamMod(u32, ParamModEvent),
 }
 
 impl OwnedEvent {
@@ -205,7 +206,8 @@ impl OwnedEvent {
         match self {
             OwnedEvent::NoteOn(time, _)
             | OwnedEvent::NoteOff(time, _)
-            | OwnedEvent::Param(time, _) => *time,
+            | OwnedEvent::Param(time, _)
+            | OwnedEvent::ParamMod(time, _) => *time,
         }
     }
 
@@ -214,8 +216,22 @@ impl OwnedEvent {
             OwnedEvent::NoteOn(_, event) => event.as_unknown(),
             OwnedEvent::NoteOff(_, event) => event.as_unknown(),
             OwnedEvent::Param(_, event) => event.as_unknown(),
+            OwnedEvent::ParamMod(_, event) => event.as_unknown(),
         }
     }
+}
+
+/// Turn a block `PARAM_MOD` offset into a CLAP event (spec 018 Phase 5). `amount_norm` is in the
+/// engine's normalized units; the event carries plain units (`entry.mod_amount`). The Pckn is a
+/// wildcard, so the offset is global (the whole parameter), not per note or voice.
+fn to_param_mod_event(entry: &ParamEntry, sample_offset: u32, amount_norm: f32) -> ParamModEvent {
+    ParamModEvent::new(
+        sample_offset,
+        entry.clap_id,
+        Pckn::match_all(),
+        entry.mod_amount(amount_norm),
+        Cookie::empty(),
+    )
 }
 
 /// One instance's state on the audio thread.
@@ -586,6 +602,14 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
                         ));
                     }
                 }
+                EVENT_PARAM_MOD => {
+                    if let Some(entry) = slot.param_map.get(event.id) {
+                        scratch.events.push(OwnedEvent::ParamMod(
+                            event.sample_offset,
+                            to_param_mod_event(&entry, event.sample_offset, event.value),
+                        ));
+                    }
+                }
                 _ => {}
             }
         }
@@ -765,5 +789,25 @@ mod transport_tests {
 
         fill_transport_event(&BlockTransport::default(), &mut event);
         assert!(!event.flags.contains(TransportFlags::IS_PLAYING));
+    }
+}
+
+#[cfg(test)]
+mod param_mod_tests {
+    use super::*;
+
+    #[test]
+    fn a_block_param_mod_becomes_a_global_clap_event_in_plain_units() {
+        let entry = ParamEntry {
+            clap_id: ClapId::new(9),
+            min: -12.0,
+            max: 12.0,
+        };
+        let event = to_param_mod_event(&entry, 37, 0.5);
+        assert_eq!(event.param_id(), Some(ClapId::new(9)));
+        assert_eq!(event.header().time(), 37);
+        // Half the range, in plain units; the base value is not part of the amount.
+        assert!((event.amount() - 12.0).abs() < 1e-9);
+        assert!(event.pckn().matches_all(), "the mod is not per-note");
     }
 }

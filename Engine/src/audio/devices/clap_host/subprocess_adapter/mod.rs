@@ -493,6 +493,27 @@ impl AudioDevice for SubprocessClapAdapter {
         ));
     }
 
+    /// Audio thread: queue a modulation offset for the upcoming block at its start (spec 018
+    /// Phase 5). The base value is untouched; `PARAM_MOD` only moves the plugin's own modulation.
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        self.set_param_mod_at(param_id, offset, 0);
+    }
+
+    /// Audio thread: queue a modulation offset taking effect at `frame_offset`. Whole CLAP blocks
+    /// carry one event per control step, so the offsets stay sample-accurate. Dropped while the
+    /// plugin is loading; the wrapper re-sends the current offsets once it is ready.
+    fn set_param_mod_at(&mut self, param_id: ParamId, offset: f32, frame_offset: usize) {
+        if !self.load.is_ready() {
+            return;
+        }
+        if self.input_events.len() >= MAX_BLOCK_EVENTS {
+            self.stats.event_drops += 1;
+            return;
+        }
+        self.input_events
+            .push(BlockEvent::param_mod(frame_offset as u32, param_id, offset));
+    }
+
     /// Command thread: sends the value to the subprocess right away when it can.
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         self.param_values.insert(param_id, value);
@@ -1515,13 +1536,14 @@ mod tests {
 
         adapter.send_midi_event(60, 100, true, 12);
         adapter.set_parameter_at(7, 0.75, 3);
+        adapter.set_param_mod_at(9, 0.5, 40);
 
         let input = vec![0.0f32; 64 * 2];
         let mut output = vec![0.0f32; 64 * 2];
         adapter.process_block(&input, &mut output, 64);
 
         let events = observed.lock().unwrap();
-        assert_eq!(events.len(), 2, "the host saw both events");
+        assert_eq!(events.len(), 3, "the host saw all three events");
         assert_eq!(events[0].kind, crate::audio::ipc::EVENT_NOTE_ON);
         assert_eq!(events[0].note, 60);
         assert_eq!(events[0].sample_offset, 12);
@@ -1529,12 +1551,16 @@ mod tests {
         assert_eq!(events[1].id, 7);
         assert!((events[1].value - 0.75).abs() < 1e-6);
         assert_eq!(events[1].sample_offset, 3);
+        assert_eq!(events[2].kind, crate::audio::ipc::EVENT_PARAM_MOD);
+        assert_eq!(events[2].id, 9);
+        assert!((events[2].value - 0.5).abs() < 1e-6);
+        assert_eq!(events[2].sample_offset, 40);
         drop(events);
 
         // Events belong to one block only.
         let mut output = vec![0.0f32; 64 * 2];
         adapter.process_block(&input, &mut output, 64);
-        assert_eq!(observed.lock().unwrap().len(), 2, "not replayed next block");
+        assert_eq!(observed.lock().unwrap().len(), 3, "not replayed next block");
         assert_eq!(adapter.take_stats().event_drops, 0);
 
         stop.store(true, Ordering::Release);

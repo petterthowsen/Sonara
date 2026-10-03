@@ -2672,6 +2672,11 @@ pub fn process_command(
                             subprocess_device.cache_parameter_value(param_id, value);
                         }
                     }
+                    // A fresh plugin has no modulation offsets; push the current ones again
+                    // (spec 018 Phase 5).
+                    if let Some(modulated) = device.as_modulated_mut() {
+                        modulated.resend_offsets();
+                    }
                     let params = device.parameters();
                     if !params.is_empty() {
                         send_parameter_list(status_tx, channel_id, device_path, device, params);

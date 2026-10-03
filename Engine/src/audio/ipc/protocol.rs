@@ -257,6 +257,8 @@ pub struct PluginParameterInfo {
     pub is_hidden: bool,
     pub is_read_only: bool,
     pub is_bypass: bool,
+    /// CLAP `PARAM_IS_MODULATABLE`: can a modulator drive this parameter? (spec 018 Phase 5)
+    pub is_modulatable: bool,
     /// CLAP module path, e.g. "Early/Size"; "" if none
     pub module: String,
     /// Per-step display labels, only when `is_stepped` and (max-min+1) <= 64; else empty
@@ -353,12 +355,17 @@ pub const EVENT_NOTE_ON: u16 = 1;
 pub const EVENT_NOTE_OFF: u16 = 2;
 /// Parameter change inside a block's event array.
 pub const EVENT_PARAM: u16 = 3;
+/// Modulation offset inside a block's event array (spec 018 Phase 5). The host turns it into a
+/// CLAP `PARAM_MOD` event; `value` is the offset in normalized units and the base value is never
+/// written (ADR-0014).
+pub const EVENT_PARAM_MOD: u16 = 4;
 
 /// One event in a block's input or output event array.
 ///
 /// `sample_offset` is relative to the block start, which makes notes and parameter changes
-/// sample-accurate. `value` is a note velocity or a normalized (0.0–1.0) parameter value; `id` is
-/// the engine's parameter index for parameter events and 0 for notes.
+/// sample-accurate. `value` is a note velocity, a normalized (0.0–1.0) parameter value or a
+/// normalized modulation offset; `id` is the engine's parameter index for parameter events and
+/// 0 for notes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BlockEvent {
@@ -393,6 +400,18 @@ impl BlockEvent {
             note: 0,
             _reserved: 0,
             value: value_01,
+            id: param_id,
+        }
+    }
+
+    /// A modulation offset (normalized units) for `param_id`, taking effect at `sample_offset`.
+    pub fn param_mod(sample_offset: u32, param_id: u32, offset_norm: f32) -> Self {
+        Self {
+            sample_offset,
+            kind: EVENT_PARAM_MOD,
+            note: 0,
+            _reserved: 0,
+            value: offset_norm,
             id: param_id,
         }
     }

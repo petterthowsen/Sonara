@@ -284,6 +284,7 @@ fn print_parameters(instance: &mut PluginInstance<SubprocessHost>) {
             (ParamInfoFlags::IS_HIDDEN, "hidden"),
             (ParamInfoFlags::IS_READONLY, "read-only"),
             (ParamInfoFlags::IS_BYPASS, "bypass"),
+            (ParamInfoFlags::IS_MODULATABLE, "modulatable"),
         ] {
             if info.flags.contains(flag) {
                 flags.push(label);

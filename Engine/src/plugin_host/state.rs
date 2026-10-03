@@ -37,6 +37,13 @@ impl ParamEntry {
     pub fn denormalize(&self, value: f32) -> f64 {
         self.min + value as f64 * (self.max - self.min)
     }
+
+    /// A normalized modulation offset as a plain-value `PARAM_MOD` amount (spec 018 Phase 5).
+    /// This is the distance `denormalize` moves from the base for that offset; linear here, so
+    /// it equals `offset_norm * (max - min)`.
+    pub fn mod_amount(&self, offset_norm: f32) -> f64 {
+        self.denormalize(offset_norm) - self.denormalize(0.0)
+    }
 }
 
 /// Maps between the engine's parameter indices and CLAP ids. Built once from the params
@@ -149,6 +156,19 @@ mod tests {
         let normalized = entry.normalize(0.0);
         assert!((normalized - 0.5).abs() < 1e-6);
         assert!((entry.denormalize(normalized) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mod_amount_is_the_normalized_offset_in_plain_units() {
+        let entry = ParamEntry {
+            clap_id: ClapId::new(7),
+            min: -12.0,
+            max: 12.0,
+        };
+        // Half the range up, a quarter down.
+        assert!((entry.mod_amount(0.5) - 12.0).abs() < 1e-9);
+        assert!((entry.mod_amount(-0.25) + 6.0).abs() < 1e-9);
+        assert_eq!(entry.mod_amount(0.0), 0.0);
     }
 
     #[test]

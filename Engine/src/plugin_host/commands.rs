@@ -541,6 +541,9 @@ pub fn process_command(
                                 is_hidden: clap_info.flags.contains(ParamInfoFlags::IS_HIDDEN),
                                 is_read_only: clap_info.flags.contains(ParamInfoFlags::IS_READONLY),
                                 is_bypass: clap_info.flags.contains(ParamInfoFlags::IS_BYPASS),
+                                is_modulatable: clap_info
+                                    .flags
+                                    .contains(ParamInfoFlags::IS_MODULATABLE),
                                 module,
                                 step_labels,
                                 display,

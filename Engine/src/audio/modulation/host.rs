@@ -121,6 +121,10 @@ pub trait Modulated {
     /// Reset every applied offset back to the base. Called before unwrapping.
     fn reset_offsets(&mut self);
 
+    /// Forget what was applied, so the next control step pushes every current offset again.
+    /// Called when the wrapped device lost its modulation state (a reloaded CLAP plugin).
+    fn resend_offsets(&mut self);
+
     /// Move the wrapped device out (leaving the wrapper empty). Called while unwrapping.
     fn take_inner(&mut self) -> Option<Box<dyn AudioDevice>>;
 }
@@ -249,6 +253,13 @@ impl ModulatedDevice {
 
     /// Advance the modulators and apply the summed offsets. The mono control step.
     fn control_step(&mut self, frames: usize) {
+        self.control_step_impl(frames, 0, false)
+    }
+
+    /// One control step. `base` is the step's frame offset in the block and `stamped` pushes the
+    /// offsets as frame-stamped events (an async inner: a CLAP plugin keeps whole blocks) instead
+    /// of the plain `set_param_mod`.
+    fn control_step_impl(&mut self, frames: usize, base: usize, stamped: bool) {
         self.advance(frames);
 
         let mut acc = [0.0f32; MAX_ROUTES];
@@ -300,7 +311,7 @@ impl ModulatedDevice {
         for i in 0..old_len {
             let target = old[i].0;
             if !plan[..plan_len].iter().any(|(t, _)| *t == target) {
-                self.apply(target, 0.0);
+                self.apply(target, 0.0, base, stamped);
             }
         }
         for i in 0..plan_len {
@@ -316,27 +327,37 @@ impl ModulatedDevice {
                     continue;
                 }
             }
-            self.apply(target, off);
+            self.apply(target, off, base, stamped);
         }
         self.applied = plan;
         self.applied_len = plan_len;
     }
 
-    /// Push one target's offset to the device that owns it.
-    fn apply(&mut self, target: ModTarget, offset: f32) {
+    /// Push one target's offset to the device that owns it, at frame `frame` within the block.
+    /// `stamped` uses `set_param_mod_at` (an async inner's whole block); otherwise the plain
+    /// `set_param_mod`.
+    fn apply(&mut self, target: ModTarget, offset: f32, frame: usize, stamped: bool) {
         match target {
             ModTarget::Own(param_id) => {
                 if offset != 0.0 {
                     self.dev_mut().mark_activity();
                 }
-                self.dev_mut().set_param_mod(param_id, offset);
+                if stamped {
+                    self.dev_mut().set_param_mod_at(param_id, offset, frame);
+                } else {
+                    self.dev_mut().set_param_mod(param_id, offset);
+                }
             }
             ModTarget::Child(path, param_id) => {
                 if let Some(device) = child_at_path_mut(self.dev_mut(), &path) {
                     if offset != 0.0 {
                         device.mark_activity();
                     }
-                    device.set_param_mod(param_id, offset);
+                    if stamped {
+                        device.set_param_mod_at(param_id, offset, frame);
+                    } else {
+                        device.set_param_mod(param_id, offset);
+                    }
                 }
             }
             ModTarget::Modulator(..) => {}
@@ -624,9 +645,10 @@ impl Modulated for ModulatedDevice {
     }
 
     fn reset_offsets(&mut self) {
+        let stamped = self.dev().has_async_blocks();
         let applied = self.applied;
         for i in 0..self.applied_len {
-            self.apply(applied[i].0, 0.0);
+            self.apply(applied[i].0, 0.0, 0, stamped);
         }
         self.applied_len = 0;
         for i in 0..self.external_len {
@@ -634,6 +656,13 @@ impl Modulated for ModulatedDevice {
             self.dev_mut().set_param_mod(param_id, 0.0);
         }
         self.external_len = 0;
+        self.own_len = 0;
+    }
+
+    fn resend_offsets(&mut self) {
+        // Forget what we think is applied: the next control step pushes every current offset
+        // again (the inner device lost its state, e.g. a reloaded CLAP plugin).
+        self.applied_len = 0;
         self.own_len = 0;
     }
 
@@ -691,10 +720,15 @@ impl AudioDevice for ModulatedDevice {
             return false;
         }
         // Asynchronous inner: no splitting. Hand over the notes first, because the plugin
-        // stages them inside its own `begin_block`. The offsets will go out as frame-stamped
-        // `PARAM_MOD` events here (Phase 5).
+        // stages them inside its own `begin_block`, and push the offsets the same way as
+        // frame-stamped `PARAM_MOD` events, one per control step (Phase 5).
         self.deliver_all_midi();
-        self.advance(sample_count);
+        let mut done = 0;
+        while done < sample_count {
+            let frames = (sample_count - done).min(CONTROL_STEP);
+            self.control_step_impl(frames, done, true);
+            done += frames;
+        }
         self.dev_mut().begin_block(inputs, sample_count)
     }
 
@@ -1305,6 +1339,115 @@ mod tests {
         assert!(
             !inner.is_sleeping(),
             "a note-driven modulator did not wake its device"
+        );
+    }
+
+    /// An asynchronous inner (like a CLAP plugin): `begin_block` parks and offsets arrive
+    /// frame-stamped through `set_param_mod_at`.
+    struct AsyncInner {
+        mods: Vec<(ParamId, f32, usize)>,
+    }
+
+    impl AsyncInner {
+        fn new() -> Self {
+            Self { mods: Vec::new() }
+        }
+    }
+
+    impl AudioDevice for AsyncInner {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn begin_block(&mut self, _inputs: &[f32], _sample_count: usize) -> bool {
+            true
+        }
+        fn finish_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn has_async_blocks(&self) -> bool {
+            true
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: f32) {}
+        fn set_param_mod_at(&mut self, param_id: ParamId, offset: f32, frame_offset: usize) {
+            self.mods.push((param_id, offset, frame_offset));
+        }
+        fn get_parameter(&self, _param_id: ParamId) -> Option<f32> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.async"
+        }
+        fn device_name(&self) -> &str {
+            "Async"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Effect
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::Clap
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            TABLE.infos()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn an_async_inner_gets_frame_stamped_offsets_and_a_resend_after_reload() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(AsyncInner::new())];
+        wrap(&mut devices);
+        devices[0]
+            .as_modulated_mut()
+            .unwrap()
+            .add_modulator(0, ModulatorKind::Lfo)
+            .unwrap();
+        devices[0]
+            .as_modulated_mut()
+            .unwrap()
+            .set_modulator_param(0, LFO_RATE, 1.0)
+            .expect("rate");
+        devices[0]
+            .as_modulated_mut()
+            .unwrap()
+            .set_modulator_route(0, "param/0", 0.5)
+            .expect("route");
+
+        let input = vec![0.0f32; 512 * 2];
+        let mut output = vec![0.0f32; 512 * 2];
+        assert!(devices[0].begin_block(&input, 512));
+        devices[0].finish_block(&input, &mut output, 512);
+
+        {
+            let events = &devices[0]
+                .as_any_mut()
+                .downcast_mut::<AsyncInner>()
+                .unwrap()
+                .mods;
+            assert_eq!(events.len(), 8, "one stamped event per control step");
+            for (i, (id, offset, frame)) in events.iter().enumerate() {
+                assert_eq!(*id, 0);
+                assert_eq!(*frame, i * CONTROL_STEP, "events are frame-stamped");
+                assert!(offset.abs() > OFFSET_EPSILON, "the LFO moved the offset");
+            }
+        }
+
+        // A reloaded plugin lost its modulation state: the wrapper pushes the offsets again.
+        devices[0].as_modulated_mut().unwrap().resend_offsets();
+        devices[0]
+            .as_any_mut()
+            .downcast_mut::<AsyncInner>()
+            .unwrap()
+            .mods
+            .clear();
+        assert!(devices[0].begin_block(&input, 512));
+        devices[0].finish_block(&input, &mut output, 512);
+        assert!(
+            !devices[0]
+                .as_any_mut()
+                .downcast_mut::<AsyncInner>()
+                .unwrap()
+                .mods
+                .is_empty(),
+            "offsets were not re-sent after a reload"
         );
     }
 

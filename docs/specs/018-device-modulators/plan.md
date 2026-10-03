@@ -303,20 +303,20 @@ cutoff.
 
 ## Phase 5: CLAP targets (engine and plugin_host)
 
-- [ ] Discovery carries `CLAP_PARAM_IS_MODULATABLE` into `ParamInfo.is_modulatable`.
-- [ ] `ipc/protocol.rs`: `EVENT_PARAM_MOD = 4`, with `BlockEvent::param_mod(offset, id,
+- [x?] Discovery carries `CLAP_PARAM_IS_MODULATABLE` into `ParamInfo.is_modulatable`.
+- [x?] `ipc/protocol.rs`: `EVENT_PARAM_MOD = 4`, with `BlockEvent::param_mod(offset, id,
   amount_norm)`.
-- [ ] `plugin_host/audio_thread.rs` turns it into a `ParamModEvent`:
+- [x?] `plugin_host/audio_thread.rs` turns it into a `ParamModEvent`:
   - the amount is `amount_norm × (max − min)` from the param map entry (confirm the
     normalization is linear; if not, use the difference between the denormalized
     `base + offset` and `base`);
   - the Pckn is a wildcard (−1), meaning global, not per note.
-- [ ] `SubprocessClapAdapter::set_param_mod_at(id, offset, frame)` queues stamped events into
+- [x?] `SubprocessClapAdapter::set_param_mod_at(id, offset, frame)` queues stamped events into
   the block's input events. Removing a route sends a final 0.
-- [ ] After a crash and reload, the wrapper re-sends the current offsets.
-- [ ] Test: a unit test in `plugin_host` for the conversion. Manual: an LFO on a modulatable
+- [x?] After a crash and reload, the wrapper re-sends the current offsets.
+- [x?] Test: a unit test in `plugin_host` for the conversion. Manual: an LFO on a modulatable
   parameter of a known plugin (e.g. Surge XT filter cutoff) moves without the plugin's knob
-  value changing.
+  value changing. *(Unit tests done; the manual plugin check is still pending.)*
 
 **Done when:** CLAP modulation works and parameters without the flag are refused.
 

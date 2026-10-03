@@ -50,7 +50,8 @@ pub fn plugin_param_to_info(p: &PluginParameterInfo) -> ParamInfo {
         is_hidden: p.is_hidden,
         is_read_only: p.is_read_only,
         is_bypass: p.is_bypass,
-        is_modulatable: false,
+        // Enums and bools are never modulatable, even when the plugin sets the flag.
+        is_modulatable: p.is_modulatable && matches!(param_type, ParamType::Float),
         module: p.module.clone(),
         is_logarithmic: false,
         skew: 1.0,
@@ -136,6 +137,7 @@ mod tests {
             is_hidden: false,
             is_read_only: false,
             is_bypass: false,
+            is_modulatable: false,
             module: String::new(),
             step_labels: Vec::new(),
             display: Vec::new(),
@@ -186,6 +188,21 @@ mod tests {
 
         assert_eq!(info.param_type, ParamType::Float);
         assert!(info.enum_values.is_empty());
+    }
+
+    #[test]
+    fn a_modulatable_float_is_a_target_but_a_modulatable_enum_is_not() {
+        let mut p = base_info();
+        p.is_modulatable = true;
+        assert!(plugin_param_to_info(&p).is_modulatable);
+
+        // An enum (or bool) is never a modulation target, whatever the plugin claims.
+        p.is_stepped = true;
+        p.min = 0.0;
+        p.max = 2.0;
+        let stepped = plugin_param_to_info(&p);
+        assert_eq!(stepped.param_type, ParamType::Enum);
+        assert!(!stepped.is_modulatable);
     }
 
     #[test]
