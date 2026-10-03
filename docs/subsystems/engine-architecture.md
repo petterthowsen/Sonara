@@ -71,15 +71,18 @@ Engine/src/
     render/            # Offline rendering: RenderJob, the render thread (worker.rs), WAV output (wav.rs)
     types.rs           # Type definitions: Channel, Track, ProjectSettings, etc.
     midi_types.rs      # MidiEvent, lock-free MidiEventQueue, MidiRouting
+    modulation/        # Device modulators (spec 018): kinds.rs (kind tables), state.rs (per-instance
+                       # runtime), lfo.rs/envelope.rs (shared DSP), matrix.rs (route matrix),
+                       # host.rs (ModulatedDevice wrapper, mono path), voice.rs (VoiceModSpec)
     devices/
-      mod.rs             # AudioDevice trait (incl. mod_sources/set_mod_route), parameter types, DeviceSleepState
+      mod.rs             # AudioDevice trait (incl. supports_voice_modulation/set_voice_modulation), parameter types, DeviceSleepState
       factory.rs         # DeviceFactory: builds devices by type/ID, built-in device metadata;
                          # EFFECT_IDS + create_effect for the built-in effects (spec 012)
       param_table.rs     # Static parameter tables (ParamSpec, flatten, slot_table, ParamValues)
       effect.rs          # Shared effect helpers: pass_through, TailSleep (tail-aware sleep)
       effect_conformance.rs # Tests every EFFECT_IDS entry must pass
-      polysynth/         # mod.rs (device, voice pool, stealing), voice.rs (per-voice DSP + modulation),
-                         # params.rs (parameter table, slots), modulation.rs (sources, route matrix)
+      polysynth/         # mod.rs (device, voice pool, stealing), voice.rs (per-voice DSP + modulators),
+                         # params.rs (parameter table, slots)
       delay.rs           # Delay effect device
       utility.rs         # Utility effect (spec 017): gain, balance, width, mono/bass mono, phase invert
       sfizz_device.rs    # SFZ sampler backed by sfizz

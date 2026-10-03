@@ -11,8 +11,8 @@
 //! - [`matrix`] is the fixed-capacity route matrix: routes point at a modulator slot and a
 //!   target parameter.
 //!
-//! Evaluation is host-side (mono) or device-internal (poly): see ADR-0014. The engine's mono
-//! path and the `ModulatedDevice` wrapper live in later phases.
+//! Evaluation is host-side (mono) or device-internal (poly): see ADR-0014. The mono path lives
+//! in [`host`], and [`voice::VoiceModSpec`] is the snapshot a poly-capable device receives.
 
 pub mod envelope;
 pub mod host;
@@ -20,6 +20,7 @@ pub mod kinds;
 pub mod lfo;
 pub mod matrix;
 pub mod state;
+pub mod voice;
 
 /// Modulators one device instance can hold.
 pub const MAX_MODULATORS: usize = 8;
@@ -30,3 +31,4 @@ pub const MAX_ROUTES: usize = matrix::MAX_ROUTES;
 pub use host::{unwrap_at_path, wrap_at_path, Modulated, ModulatedDevice, CONTROL_STEP};
 pub use kinds::{ModParams, ModulatorKind, MAX_KIND_PARAMS};
 pub use state::ModulatorState;
+pub use voice::VoiceModSpec;

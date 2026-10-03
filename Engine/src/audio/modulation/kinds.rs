@@ -167,7 +167,7 @@ impl ModulatorKind {
 ///
 /// A `Copy`, fixed-capacity mirror of `ParamValues` for the per-kind tables, whose lengths
 /// differ. The unused tail stays at its default and is never read.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModParams {
     kind: ModulatorKind,
     norm: [f32; MAX_KIND_PARAMS],

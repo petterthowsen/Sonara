@@ -18,6 +18,7 @@
 //! (`mod/{mod_id}/param/{id}`, stored but not evaluated until Phase 9).
 
 use super::matrix::ModMatrix;
+use super::voice::{VoiceModSpec, VoiceRoute};
 use super::{ModulatorKind, ModulatorState, MAX_MODULATORS, MAX_ROUTES};
 use crate::audio::devices::container::{
     copy_interleaved, device_at_path_mut, insert_device, remove_device,
@@ -133,6 +134,8 @@ pub trait Modulated {
 pub struct ModulatedDevice {
     /// The wrapped device. `None` only between `take_inner` and the wrapper being dropped.
     inner: Option<Box<dyn AudioDevice>>,
+    /// The inner device evaluates `Own` routes per voice; they skip the mono path.
+    voice_mod: bool,
     sample_rate: f32,
     mods: [Option<ModulatorState>; MAX_MODULATORS],
     /// Routes; a route's `slot` is an index into `targets`.
@@ -159,8 +162,10 @@ pub struct ModulatedDevice {
 impl ModulatedDevice {
     /// Wrap `inner`, which keeps its own sample rate.
     pub fn new(inner: Box<dyn AudioDevice>, sample_rate: f32) -> Self {
+        let voice_mod = inner.supports_voice_modulation();
         Self {
             inner: Some(inner),
+            voice_mod,
             sample_rate: sample_rate.max(1.0),
             mods: [None; MAX_MODULATORS],
             routes: ModMatrix::new(),
@@ -251,6 +256,36 @@ impl ModulatedDevice {
         }
     }
 
+    /// Snapshot the modulator definitions and the routes into the inner device's own parameters
+    /// and hand them to a device that evaluates them per voice. A no-op for every other device.
+    fn push_voice_mod_spec(&mut self) {
+        if !self.voice_mod {
+            return;
+        }
+        let mut spec = VoiceModSpec::empty();
+        for (slot, state) in self.mods.iter().enumerate() {
+            if let Some(state) = state {
+                spec.kinds[slot] = Some(state.kind());
+                spec.params[slot] = *state.params();
+            }
+        }
+        for route in self.routes.routes() {
+            let ModTarget::Own(param_id) = self.targets[route.slot] else {
+                continue;
+            };
+            if spec.route_len == MAX_ROUTES {
+                break;
+            }
+            spec.routes[spec.route_len] = VoiceRoute {
+                mod_slot: route.mod_slot,
+                param_id,
+                amount: route.amount,
+            };
+            spec.route_len += 1;
+        }
+        self.dev_mut().set_voice_modulation(&spec);
+    }
+
     /// Advance the modulators and apply the summed offsets. The mono control step.
     fn control_step(&mut self, frames: usize) {
         self.control_step_impl(frames, 0, false)
@@ -275,6 +310,9 @@ impl ModulatedDevice {
         for &slot in &dests[..dest_len] {
             let target = self.targets[slot];
             match target {
+                // A voice-modulating inner device owns these routes; it got them in the voice
+                // spec. Only an enclosing wrapper's external offset still rides the mono path.
+                ModTarget::Own(_) if self.voice_mod => {}
                 ModTarget::Own(param_id) => {
                     let off = acc[slot];
                     plan[plan_len] = (target, off + self.external_offset(param_id));
@@ -546,6 +584,7 @@ impl Modulated for ModulatedDevice {
             return Err(format!("modulator {mod_id} already exists"));
         }
         self.mods[slot] = Some(ModulatorState::new(kind, self.sample_rate));
+        self.push_voice_mod_spec();
         Ok(())
     }
 
@@ -569,6 +608,7 @@ impl Modulated for ModulatedDevice {
                 .routes
                 .set(route.mod_slot, route.param_id, route.slot, 0.0);
         }
+        self.push_voice_mod_spec();
         Ok(())
     }
 
@@ -576,6 +616,7 @@ impl Modulated for ModulatedDevice {
         self.reset_offsets();
         self.mods = [None; MAX_MODULATORS];
         self.routes.clear();
+        self.push_voice_mod_spec();
     }
 
     fn get_modulator_param(&self, mod_id: u8, param_id: ParamId) -> Option<f32> {
@@ -596,7 +637,9 @@ impl Modulated for ModulatedDevice {
         state
             .set_param(param_id, norm)
             .ok_or_else(|| format!("no parameter {param_id} on modulator {mod_id}"))?;
-        Ok(state.get_param(param_id).unwrap_or(norm))
+        let canonical = state.get_param(param_id).unwrap_or(norm);
+        self.push_voice_mod_spec();
+        Ok(canonical)
     }
 
     fn set_modulator_route(
@@ -618,8 +661,11 @@ impl Modulated for ModulatedDevice {
             .routes
             .routes()
             .iter()
-            .find(|r| r.mod_slot == slot && r.slot == target_slot);
-        Ok(clamped.map(|r| r.amount).unwrap_or(0.0))
+            .find(|r| r.mod_slot == slot && r.slot == target_slot)
+            .map(|r| r.amount)
+            .unwrap_or(0.0);
+        self.push_voice_mod_spec();
+        Ok(clamped)
     }
 
     fn modulator_routes(&self) -> Vec<(u8, String, f32)> {
@@ -657,13 +703,18 @@ impl Modulated for ModulatedDevice {
         }
         self.external_len = 0;
         self.own_len = 0;
+        if self.voice_mod {
+            self.dev_mut().set_voice_modulation(&VoiceModSpec::empty());
+        }
     }
 
     fn resend_offsets(&mut self) {
         // Forget what we think is applied: the next control step pushes every current offset
-        // again (the inner device lost its state, e.g. a reloaded CLAP plugin).
+        // again (the inner device lost its state, e.g. a reloaded CLAP plugin), and a
+        // voice-modulating inner device gets its spec again the same way.
         self.applied_len = 0;
         self.own_len = 0;
+        self.push_voice_mod_spec();
     }
 
     fn take_inner(&mut self) -> Option<Box<dyn AudioDevice>> {
@@ -827,25 +878,12 @@ impl AudioDevice for ModulatedDevice {
         self.dev().parameters()
     }
 
-    fn mod_sources(&self) -> Vec<crate::audio::devices::ModSourceInfo> {
-        self.dev().mod_sources()
+    fn supports_voice_modulation(&self) -> bool {
+        self.dev().supports_voice_modulation()
     }
 
-    fn set_mod_route(
-        &mut self,
-        source: &str,
-        param_id: ParamId,
-        amount: f32,
-    ) -> Result<(), String> {
-        self.dev_mut().set_mod_route(source, param_id, amount)
-    }
-
-    fn clear_mod_routes(&mut self) {
-        self.dev_mut().clear_mod_routes();
-    }
-
-    fn mod_routes(&self) -> Vec<crate::audio::devices::ModRoute> {
-        self.dev().mod_routes()
+    fn set_voice_modulation(&mut self, spec: &VoiceModSpec) {
+        self.dev_mut().set_voice_modulation(spec);
     }
 
     fn parameter_group(&self, param_id: ParamId) -> &'static str {
@@ -890,6 +928,7 @@ impl AudioDevice for ModulatedDevice {
             state.prepare(self.sample_rate);
         }
         self.dev_mut().prepare(sample_rate, max_frames);
+        self.push_voice_mod_spec();
     }
 
     fn is_active(&self) -> bool {
@@ -1339,6 +1378,85 @@ mod tests {
         assert!(
             !inner.is_sleeping(),
             "a note-driven modulator did not wake its device"
+        );
+    }
+
+    /// A device that evaluates its own modulators per voice (like PolySynth): the wrapper hands
+    /// it a `VoiceModSpec` and must not also push those routes as mono offsets.
+    #[derive(Default)]
+    struct VoiceyInner {
+        spec: Option<VoiceModSpec>,
+        mono: Vec<(ParamId, f32)>,
+    }
+
+    impl AudioDevice for VoiceyInner {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn set_parameter(&mut self, _param_id: ParamId, _value: f32) {}
+        fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+            self.mono.push((param_id, offset));
+        }
+        fn get_parameter(&self, _param_id: ParamId) -> Option<f32> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.voicey"
+        }
+        fn device_name(&self) -> &str {
+            "Voicey"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            TABLE.infos()
+        }
+        fn supports_voice_modulation(&self) -> bool {
+            true
+        }
+        fn set_voice_modulation(&mut self, spec: &VoiceModSpec) {
+            self.spec = Some(*spec);
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn a_voice_modulating_inner_gets_the_spec_and_skips_the_mono_path() {
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(VoiceyInner::default())];
+        wrap(&mut devices);
+        {
+            let m = devices[0].as_modulated_mut().unwrap();
+            m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            m.set_modulator_route(0, "param/0", 0.7).expect("route");
+        }
+        {
+            let inner = devices[0]
+                .as_any_mut()
+                .downcast_mut::<VoiceyInner>()
+                .expect("voicey");
+            let spec = inner.spec.expect("spec");
+            assert_eq!(spec.kind(0), Some(ModulatorKind::Lfo));
+            assert_eq!(spec.routes().len(), 1);
+            assert_eq!(spec.routes()[0].param_id, 0);
+            assert!((spec.routes()[0].amount - 0.7).abs() < 1e-6);
+        }
+
+        let input = vec![0.0f32; 64 * 2];
+        let mut output = vec![0.0f32; 64 * 2];
+        devices[0].process_block(&input, &mut output, 64);
+        let inner = devices[0]
+            .as_any_mut()
+            .downcast_mut::<VoiceyInner>()
+            .expect("voicey");
+        assert!(
+            inner.mono.iter().all(|(id, _)| *id != 0),
+            "the mono path also pushed the voice route: {:?}",
+            inner.mono
         );
     }
 

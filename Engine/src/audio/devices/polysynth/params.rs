@@ -1,18 +1,15 @@
 //! PolySynth parameter table and the shared, decoded parameter block voices read from.
 //!
 //! IDs are grouped in blocks of ten per module: Osc 1 = 0.., Osc 2 = 10.., Noise = 20..,
-//! Filter = 30.., Amp Env = 40.., Filter Env = 50.., LFO 1 = 60.., LFO 2 = 70.., Voice = 80..,
-//! Output = 90.
+//! Filter = 30.., Amp Env = 40.., Voice = 80.., Output = 90. Filter Env and the two LFOs are
+//! modulators now (spec 018 Phase 6), not parameters.
 //!
 //! Every parameter also has a *slot*: its index in [`SPECS`]. Modulation routes and the
 //! normalized value array are indexed by slot.
 
 use super::super::param_table::{flatten, linear, slot_table, spec, Kind, ParamSpec, ParamTable};
 use super::super::{ParamId, ParamInfo};
-use crate::audio::dsp::tempo_sync::{sync_beats, SYNC_CHOICES};
 use crate::audio::dsp::FilterMode;
-pub use crate::audio::modulation::lfo::LfoShape;
-use crate::audio::modulation::lfo::LFO_SHAPES;
 
 pub const OSC1: ParamId = 0;
 pub const OSC2: ParamId = 10;
@@ -37,7 +34,6 @@ pub const DRIVE: ParamId = 33;
 pub const KEY_TRACK: ParamId = 34;
 
 pub const AMP_ENV: ParamId = 40;
-pub const FILTER_ENV: ParamId = 50;
 // Offsets inside an envelope block.
 pub const ATTACK: ParamId = 0;
 pub const DECAY: ParamId = 1;
@@ -51,14 +47,6 @@ pub const AMP_DECAY: ParamId = AMP_ENV + DECAY;
 pub const AMP_SUSTAIN: ParamId = AMP_ENV + SUSTAIN;
 #[cfg(test)]
 pub const AMP_RELEASE: ParamId = AMP_ENV + RELEASE;
-
-pub const LFO1: ParamId = 60;
-pub const LFO2: ParamId = 70;
-// Offsets inside an LFO block.
-pub const LFO_SHAPE: ParamId = 0;
-pub const LFO_RATE: ParamId = 1;
-pub const LFO_SYNC: ParamId = 2;
-pub const LFO_RETRIGGER: ParamId = 3;
 
 pub const VOICE_MODE: ParamId = 80;
 pub const POLYPHONY: ParamId = 81;
@@ -98,7 +86,6 @@ const FILTER_MODES: [FilterMode; 4] = [
     FilterMode::Hp12,
     FilterMode::Bp12,
 ];
-const LFO_RETRIGGERS: &[&str] = &["Free", "Note"];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 const POLYPHONY_COUNTS: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
@@ -232,50 +219,6 @@ macro_rules! env_specs {
     };
 }
 
-macro_rules! lfo_specs {
-    ($base:expr, $module:literal) => {
-        [
-            spec(
-                $base + LFO_SHAPE,
-                concat!($module, " Shape"),
-                $module,
-                "",
-                Kind::Enum(LFO_SHAPES),
-                0.0,
-            ),
-            spec(
-                $base + LFO_RATE,
-                concat!($module, " Rate"),
-                $module,
-                "Hz",
-                Kind::Float {
-                    min: 0.02,
-                    max: 40.0,
-                    log: true,
-                    skew: 1.0,
-                },
-                5.0,
-            ),
-            spec(
-                $base + LFO_SYNC,
-                concat!($module, " Sync"),
-                $module,
-                "",
-                Kind::Enum(SYNC_CHOICES),
-                0.0,
-            ),
-            spec(
-                $base + LFO_RETRIGGER,
-                concat!($module, " Retrigger"),
-                $module,
-                "",
-                Kind::Enum(LFO_RETRIGGERS),
-                1.0,
-            ),
-        ]
-    };
-}
-
 #[rustfmt::skip]
 const OSC1_SPECS: [ParamSpec; 9] = osc_specs!(OSC1, "Osc 1", 2.0, 0.0, 0.8);
 #[rustfmt::skip]
@@ -293,12 +236,6 @@ const NOISE_FILTER_SPECS: [ParamSpec; 7] = [
 #[rustfmt::skip]
 const AMP_ENV_SPECS: [ParamSpec; 4] = env_specs!(AMP_ENV, "Amp", "Amp Env", 0.002, 0.3, 1.0, 0.2);
 #[rustfmt::skip]
-const FILTER_ENV_SPECS: [ParamSpec; 4] = env_specs!(FILTER_ENV, "Filter Env", "Filter Env", 0.002, 0.4, 0.0, 0.3);
-#[rustfmt::skip]
-const LFO1_SPECS: [ParamSpec; 4] = lfo_specs!(LFO1, "LFO 1");
-#[rustfmt::skip]
-const LFO2_SPECS: [ParamSpec; 4] = lfo_specs!(LFO2, "LFO 2");
-#[rustfmt::skip]
 const VOICE_OUTPUT_SPECS: [ParamSpec; 5] = [
     spec(VOICE_MODE, "Voice Mode", "Voice", "", Kind::Enum(MODES), 0.0),
     spec(POLYPHONY, "Polyphony", "Voice", "", Kind::Enum(POLYPHONY_COUNTS), 15.0),
@@ -308,7 +245,7 @@ const VOICE_OUTPUT_SPECS: [ParamSpec; 5] = [
 ];
 
 /// Number of real parameters.
-pub const PARAM_COUNT: usize = 9 + 9 + 7 + 4 + 4 + 4 + 4 + 5;
+pub const PARAM_COUNT: usize = 9 + 9 + 7 + 4 + 5;
 
 /// Every parameter, in display order. A parameter's index here is its slot.
 pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
@@ -316,9 +253,6 @@ pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
     &OSC2_SPECS,
     &NOISE_FILTER_SPECS,
     &AMP_ENV_SPECS,
-    &FILTER_ENV_SPECS,
-    &LFO1_SPECS,
-    &LFO2_SPECS,
     &VOICE_OUTPUT_SPECS,
 ]);
 
@@ -376,26 +310,6 @@ pub struct EnvParams {
     pub release: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct LfoParams {
-    pub shape: LfoShape,
-    pub rate_hz: f32,
-    /// Tempo-synced period in quarter-note beats; `None` runs at `rate_hz`.
-    pub sync_beats: Option<f64>,
-    /// Reset the phase on note-on (else voices pick up the device's free-running phase).
-    pub retrigger: bool,
-}
-
-impl LfoParams {
-    /// Rate in Hz at `tempo` BPM.
-    pub fn hz(&self, tempo: f64) -> f64 {
-        match self.sync_beats {
-            Some(beats) => tempo / 60.0 / beats,
-            None => self.rate_hz as f64,
-        }
-    }
-}
-
 /// What a `set` touched, so the device only does the follow-up work that change needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Changed {
@@ -424,8 +338,6 @@ pub struct SynthParams {
     /// 0–1: octaves of cutoff per octave of pitch, pivoting on C3 (60).
     pub key_track: f32,
     pub amp_env: EnvParams,
-    pub filter_env: EnvParams,
-    pub lfo: [LfoParams; 2],
     pub mode: VoiceMode,
     pub polyphony: usize,
     /// Seconds; 0 is off.
@@ -454,12 +366,6 @@ impl SynthParams {
             sustain: 0.0,
             release: 0.0,
         };
-        let lfo = LfoParams {
-            shape: LfoShape::Sine,
-            rate_hz: 1.0,
-            sync_beats: None,
-            retrigger: true,
-        };
         let mut params = Self {
             norm: [0.0; PARAM_COUNT],
             offset: [0.0; PARAM_COUNT],
@@ -472,8 +378,6 @@ impl SynthParams {
             drive_db: 0.0,
             key_track: 0.0,
             amp_env: env,
-            filter_env: env,
-            lfo: [lfo; 2],
             mode: VoiceMode::Poly,
             polyphony: 16,
             glide: 0.0,
@@ -490,12 +394,6 @@ impl SynthParams {
     /// Normalized value of `id`, as last set.
     pub fn get(&self, id: ParamId) -> Option<f32> {
         slot(id).map(|s| self.norm[s])
-    }
-
-    /// Normalized value at `slot`.
-    #[inline]
-    pub fn norm_at(&self, slot: usize) -> f32 {
-        self.norm[slot]
     }
 
     /// Store a normalized value and decode it into the real field it drives.
@@ -552,12 +450,8 @@ impl SynthParams {
         }
 
         let block = id - id % 10;
-        if block == AMP_ENV || block == FILTER_ENV {
-            let env = if block == AMP_ENV {
-                &mut self.amp_env
-            } else {
-                &mut self.filter_env
-            };
+        if block == AMP_ENV {
+            let env = &mut self.amp_env;
             match id % 10 {
                 ATTACK => env.attack = real,
                 DECAY => env.decay = real,
@@ -565,16 +459,6 @@ impl SynthParams {
                 _ => env.release = real,
             }
             return Changed::Envelope;
-        }
-        if block == LFO1 || block == LFO2 {
-            let lfo = &mut self.lfo[((block - LFO1) / 10) as usize];
-            match id % 10 {
-                LFO_SHAPE => lfo.shape = LfoShape::from_index(real as usize),
-                LFO_RATE => lfo.rate_hz = real,
-                LFO_SYNC => lfo.sync_beats = sync_beats(real as usize),
-                _ => lfo.retrigger = real as usize == 1,
-            }
-            return Changed::Other;
         }
 
         match id {

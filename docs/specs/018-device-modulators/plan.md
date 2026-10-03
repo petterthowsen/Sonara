@@ -322,23 +322,23 @@ cutoff.
 
 ## Phase 6: PolySynth on the new system (engine only)
 
-- [ ] New trait method `supports_voice_modulation() -> bool` and
+- [x?] New trait method `supports_voice_modulation() -> bool` and
   `set_voice_modulation(&VoiceModSpec)`. `VoiceModSpec` is a `Copy` snapshot of the kinds,
   params and the routes whose target is the device itself (`param/{id}`).
   - The wrapper calls it on every change to a modulator or route, and skips those routes on
     the mono path.
   - Routes into PolySynth from a container above it stay mono.
-- [ ] PolySynth:
+- [x?] PolySynth:
   - it runs one `ModulatorState` per voice per modulator from the shared DSP;
   - per voice, `mod_norm = clamp(effective_norm (base + mono offset) + Σ poly, 0, 1)`;
   - a free LFO with Retrigger = Free stays phase-locked across voices (one shared phase), as
     it does today.
-- [ ] Remove the Filter Env and LFO 1/2 parameters (50–53, 60–63, 70–73), `ModSource` and the
+- [x?] Remove the Filter Env and LFO 1/2 parameters (50–53, 60–63, 70–73), `ModSource` and the
   old route matrix. Amp Env stays a synth parameter.
-- [ ] `default_modulators` for PolySynth:
+- [x?] `default_modulators` for PolySynth:
   - "Filter Env" (`adsr`, A 2 ms, D 400 ms, S 0, R 300 ms) → Cutoff +0.35;
   - "LFO 1" and "LFO 2" (`lfo`, 5 Hz, Retrigger Note), with no routes.
-- [ ] Tests: port the existing modulation tests. Two notes started 100 ms apart have different
+- [x?] Tests: port the existing modulation tests. Two notes started 100 ms apart have different
   filter-envelope values on the same block. The CPU benchmark (`cpu_full_budget`) stays within
   10 % of the current number.
 

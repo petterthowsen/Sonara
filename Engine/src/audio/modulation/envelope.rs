@@ -73,12 +73,24 @@ impl AdsrEnvelope {
         self.release_coef = coefficient(self.release * sr, FALL_OVERSHOOT);
     }
 
-    /// Set attack, decay, sustain, and release together and recompute rates.
+    /// Set attack, decay, sustain, and release together and recompute rates. A no-op when
+    /// nothing changed, so re-applying the same parameters stays off the powf path.
     pub fn set_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) {
-        self.attack = attack.max(0.0005);
-        self.decay = decay.max(0.0005);
-        self.sustain = sustain.clamp(0.0, 1.0);
-        self.release = release.max(0.0005);
+        let attack = attack.max(0.0005);
+        let decay = decay.max(0.0005);
+        let sustain = sustain.clamp(0.0, 1.0);
+        let release = release.max(0.0005);
+        if attack == self.attack
+            && decay == self.decay
+            && sustain == self.sustain
+            && release == self.release
+        {
+            return;
+        }
+        self.attack = attack;
+        self.decay = decay;
+        self.sustain = sustain;
+        self.release = release;
         self.recalculate_rates();
     }
 

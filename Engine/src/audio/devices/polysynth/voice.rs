@@ -1,24 +1,25 @@
 //! One note slot: up to 16 unison oscillators per oscillator, noise, drive and the filter, the
-//! amp and filter envelopes, two LFOs, glide, and the short fade a stolen voice plays before its
-//! queued note starts.
+//! amp envelope, glide, and the short fade a stolen voice plays before its queued note starts.
 //!
-//! Modulation runs once per control block: sources are sampled at the block start, summed per
-//! routed parameter, and decoded into a stack copy of the parameter block. Pitch, cutoff,
-//! resonance, levels and volume are interpolated across the block; everything else is
-//! block-constant.
+//! Modulation runs once per control block: this voice's modulators are sampled at the block
+//! start, summed per routed parameter, and decoded into a stack copy of the parameter block.
+//! Pitch, cutoff, resonance, levels and volume are interpolated across the block; everything
+//! else is block-constant. A modulator's value is `clamp(base + mono offset + Σ poly, 0, 1)`
+//! (ADR-0014): the mono offset comes from a container's route through `SynthParams::offset`,
+//! the poly sum from the voice's own modulator states.
 
-use super::modulation::ModSource;
 use super::params::{
-    slot_of, SynthParams, AMP_ENV, ATTACK, CUTOFF, CUTOFF_MAX, CUTOFF_MIN, DECAY, FILTER_ENV,
-    MAX_UNISON, PARAM_COUNT, RELEASE, SUSTAIN, VOLUME,
+    slot_of, SynthParams, AMP_ENV, ATTACK, CUTOFF, CUTOFF_MAX, CUTOFF_MIN, DECAY, MAX_UNISON,
+    PARAM_COUNT, RELEASE, SUSTAIN, VOLUME,
 };
 use crate::audio::devices::norm_to_real;
 use crate::audio::dsp::{svf, FilterMode, Oscillator, Svf, SvfCoefs};
 use crate::audio::modulation::envelope::AdsrEnvelope;
-use crate::audio::modulation::lfo::Lfo;
-use crate::audio::modulation::matrix::ModMatrix;
-
-pub type Mods = ModMatrix<PARAM_COUNT>;
+use crate::audio::modulation::kinds::{ModParams, ModulatorKind, LFO_RETRIGGER};
+use crate::audio::modulation::state::ModulatorState;
+use crate::audio::modulation::voice::VoiceModSpec;
+use crate::audio::modulation::MAX_MODULATORS;
+use crate::audio::transport::Transport;
 
 /// Pitch, oscillator frequencies, modulation and the glide advance once per this many frames.
 pub const CONTROL_BLOCK: usize = 32;
@@ -32,8 +33,6 @@ const NOISE_TILT_HZ: f32 = 1_000.0;
 const NOISE_DARK_GAIN: f32 = 3.0;
 /// Keeps PolyBLEP's two-sample correction windows apart.
 const MAX_PHASE_INCREMENT: f64 = 0.24;
-/// The keytrack source reaches ±1 this many semitones either side of C3 (60).
-const KEYTRACK_RANGE: f32 = 60.0;
 /// Small fixed per-sub-voice detune deviations (fraction of each sub-voice's offset), so
 /// unison voices don't beat in lockstep. Index 0 is always the one closest to centre.
 const UNISON_JITTER: [f32; MAX_UNISON] = [
@@ -44,7 +43,6 @@ const UNISON_JITTER: [f32; MAX_UNISON] = [
 const CUTOFF_SLOT: usize = slot_of(CUTOFF);
 const VOLUME_SLOT: usize = slot_of(VOLUME);
 const AMP_ENV_SLOTS: [usize; 4] = env_slots(AMP_ENV);
-const FILTER_ENV_SLOTS: [usize; 4] = env_slots(FILTER_ENV);
 
 const fn env_slots(base: u32) -> [usize; 4] {
     [
@@ -71,25 +69,23 @@ pub struct PendingNote {
 #[derive(Clone, Copy, Debug)]
 pub struct StartCtx {
     pub glide: f32,
-    /// Starting LFO phases: 0 for Retrigger Note, else the device's free-running phase.
-    pub lfo_phase: [f64; 2],
-    /// Per LFO: Retrigger Note, so a re-triggered note restarts the phase too.
-    pub lfo_retrigger: [bool; 2],
+    /// Free-running LFO phase per modulator slot, so a new voice's free LFO joins in phase.
+    pub free_lfo: [f64; MAX_MODULATORS],
 }
 
 /// Everything a voice reads while rendering one span of the block. The slices cover the whole
 /// block and are indexed with the span's frame positions.
 pub struct RenderCtx<'a> {
     pub params: &'a SynthParams,
-    pub mods: &'a Mods,
+    /// The device's modulator definitions and self-targeting routes.
+    pub spec: &'a VoiceModSpec,
     /// Smoothed oscillator levels per frame.
     pub levels: [&'a [f32]; 2],
     pub noise_level: &'a [f32],
-    /// Smoothed base cutoff per frame, normalized.
+    /// Smoothed base cutoff per frame, normalized (mono offset included).
     pub cutoff: &'a [f32],
     pub start: StartCtx,
-    /// BPM, for synced LFOs.
-    pub tempo: f64,
+    pub transport: Transport,
 }
 
 /// Position of sub-voice `k` of `n` across −1..1 (0 for a single voice).
@@ -103,6 +99,26 @@ pub fn unison_position(k: usize, n: usize) -> f32 {
 
 fn note_to_hz(pitch: f32) -> f64 {
     440.0 * 2f64.powf((pitch as f64 - 69.0) / 12.0)
+}
+
+fn build_state(kind: ModulatorKind, params: &ModParams, sample_rate: f32) -> ModulatorState {
+    let mut state = ModulatorState::new(kind, sample_rate);
+    apply_params(&mut state, params);
+    state
+}
+
+/// Push the spec's normalized parameters onto a live state without touching its runtime phase.
+fn apply_params(state: &mut ModulatorState, params: &ModParams) {
+    for spec in state.kind().table().specs {
+        if let Some(norm) = params.get(spec.id) {
+            state.set_param(spec.id, norm);
+        }
+    }
+}
+
+/// A free-running LFO (a new voice seeds its phase from the device's shared phase).
+fn is_free_lfo(state: &ModulatorState) -> bool {
+    state.kind() == ModulatorKind::Lfo && state.get_param(LFO_RETRIGGER).unwrap_or(0.0) < 0.5
 }
 
 /// Per-sub-voice detune ratios and pan gains for one oscillator, kept until the unison count,
@@ -185,9 +201,8 @@ pub struct Voice {
     pub pending: Option<PendingNote>,
     oscs: [[Oscillator; MAX_UNISON]; 2],
     pub amp_env: AdsrEnvelope,
-    /// Only a modulation source.
-    pub filter_env: AdsrEnvelope,
-    pub lfo: [Lfo; 2],
+    /// This voice's modulators, one per device modulator slot (spec 018 Phase 6).
+    pub mods: [Option<ModulatorState>; MAX_MODULATORS],
     /// Left and right. The right one only runs when the voice is actually stereo.
     filters: [Svf; 2],
     /// Current pitch in (fractional) MIDI notes, before oscillator transpose.
@@ -220,8 +235,7 @@ impl Voice {
             pending: None,
             oscs: std::array::from_fn(|_| std::array::from_fn(|_| Oscillator::new())),
             amp_env: AdsrEnvelope::new(sample_rate),
-            filter_env: AdsrEnvelope::new(sample_rate),
-            lfo: [Lfo::default(); 2],
+            mods: std::array::from_fn(|_| None),
             filters: [Svf::new(); 2],
             pitch: 60.0,
             target_pitch: 60.0,
@@ -243,6 +257,23 @@ impl Voice {
             noise_lp: 0.0,
             noise_coef: 1.0 - (-std::f32::consts::TAU * NOISE_TILT_HZ / sample_rate).exp(),
             sample_rate,
+        }
+    }
+
+    /// Match this voice's modulators to the device spec. A slot whose kind is unchanged keeps
+    /// its runtime (phase, envelope stage) and is only re-parameterized.
+    pub fn configure_mods(&mut self, spec: &VoiceModSpec, sample_rate: f32) {
+        for slot in 0..MAX_MODULATORS {
+            match spec.kind(slot) {
+                Some(kind) => {
+                    let params = spec.params[slot];
+                    match &mut self.mods[slot] {
+                        Some(state) if state.kind() == kind => apply_params(state, &params),
+                        other => *other = Some(build_state(kind, &params, sample_rate)),
+                    }
+                }
+                None => self.mods[slot] = None,
+            }
         }
     }
 
@@ -305,17 +336,11 @@ impl Voice {
                 };
             }
         }
-        for i in 0..2 {
-            self.lfo[i].phase = ctx.lfo_phase[i];
-            let held = self.next_noise();
-            self.lfo[i].set_held(held);
-        }
         self.pitch = pending.glide_from.unwrap_or(pending.note as f32);
         self.glide_to(pending.note, ctx.glide);
         self.amp_env.reset();
         self.amp_env.gate_on();
-        self.filter_env.reset();
-        self.filter_env.gate_on();
+        self.trigger_mods(pending.note, pending.velocity, ctx, true);
         if pending.released {
             self.release();
         }
@@ -323,8 +348,8 @@ impl Voice {
 
     /// Retrigger a sounding voice with a new note: gliding from where it is now, and restarting
     /// the envelopes from their current levels only when `retrigger` (Mono, same-note repeats).
-    /// The same flag restarts any LFO whose Retrigger is Note, so a re-triggered note keys its
-    /// LFO just like a fresh note.
+    /// The same flag restarts any note-driven LFO, so a re-triggered note keys its LFO just like
+    /// a fresh note.
     pub fn retrigger(
         &mut self,
         note: u8,
@@ -341,13 +366,23 @@ impl Voice {
         self.glide_to(note, glide_seconds);
         if retrigger {
             self.amp_env.retrigger_from_current();
-            self.filter_env.retrigger_from_current();
-            for i in 0..2 {
-                if ctx.lfo_retrigger[i] {
-                    self.lfo[i].phase = ctx.lfo_phase[i];
-                    let held = self.next_noise();
-                    self.lfo[i].set_held(held);
+        }
+        self.trigger_mods(note, velocity, ctx, retrigger);
+    }
+
+    /// Drive this voice's modulators with a note. `retrigger` gates the envelopes and restarts
+    /// note LFOs; otherwise a legato slide only updates velocity and keytrack.
+    fn trigger_mods(&mut self, note: u8, velocity: f32, ctx: &StartCtx, retrigger: bool) {
+        let vel = (velocity * 127.0).round().clamp(0.0, 127.0) as u8;
+        for (slot, state) in self.mods.iter_mut().enumerate() {
+            let Some(state) = state else { continue };
+            if retrigger {
+                state.gate_voice_on(note, vel);
+                if is_free_lfo(state) {
+                    state.seed_lfo_phase(ctx.free_lfo[slot]);
                 }
+            } else {
+                state.update_note(note, vel);
             }
         }
     }
@@ -367,7 +402,9 @@ impl Voice {
     pub fn release(&mut self) {
         self.gate = false;
         self.amp_env.gate_off();
-        self.filter_env.gate_off();
+        for state in self.mods.iter_mut().flatten() {
+            state.gate_voice_off();
+        }
     }
 
     /// Fade out quickly, then start `pending`.
@@ -402,7 +439,37 @@ impl Voice {
         self.fade = 1.0;
         self.fade_step = 0.0;
         self.amp_env.reset();
-        self.filter_env.reset();
+        for state in self.mods.iter_mut().flatten() {
+            state.reset();
+        }
+    }
+
+    /// Start a queued note if this voice is idle. Returns false when there is nothing to render.
+    pub fn ensure_started(&mut self, ctx: &StartCtx) -> bool {
+        if self.active {
+            return true;
+        }
+        match self.pending {
+            Some(p) => {
+                self.start(p, ctx);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// After a control block: hand a finished fade over to its queued note, or retire a voice
+    /// whose release has finished.
+    pub fn finish_chunk(&mut self, ctx: &StartCtx) {
+        if self.is_fading() && self.fade <= 0.0 {
+            let pending = self.pending;
+            self.reset();
+            if let Some(p) = pending {
+                self.start(p, ctx);
+            }
+        } else if !self.amp_env.is_active() {
+            self.reset();
+        }
     }
 
     /// Filter coefficients for this block, recomputed only when an input changed.
@@ -437,55 +504,9 @@ impl Voice {
         setup
     }
 
-    /// Source values at the current position, indexed by `ModSource::index`.
-    pub fn sources(&self, params: &SynthParams) -> [f32; ModSource::COUNT] {
-        let mut s = [0.0; ModSource::COUNT];
-        s[ModSource::FilterEnv.index()] = self.filter_env.value();
-        s[ModSource::AmpEnv.index()] = self.amp_env.value();
-        s[ModSource::Lfo1.index()] = self.lfo[0].value(params.lfo[0].shape);
-        s[ModSource::Lfo2.index()] = self.lfo[1].value(params.lfo[1].shape);
-        s[ModSource::Velocity.index()] = self.velocity;
-        s[ModSource::Keytrack.index()] =
-            ((self.note as f32 - 60.0) / KEYTRACK_RANGE).clamp(-1.0, 1.0);
-        s
-    }
-
     /// Render this voice over frames `start..end` of the block, adding into the stereo
     /// accumulators (which cover the whole block).
-    pub fn render(
-        &mut self,
-        ctx: &RenderCtx,
-        start: usize,
-        end: usize,
-        out_l: &mut [f32],
-        out_r: &mut [f32],
-    ) {
-        let mut pos = start;
-        while pos < end {
-            if !self.active {
-                // An idle voice holding a queued note (stolen while already silent).
-                match self.pending {
-                    Some(p) => self.start(p, &ctx.start),
-                    None => return,
-                }
-            }
-            let chunk_end = (pos + CONTROL_BLOCK).min(end);
-            self.render_chunk(ctx, pos, chunk_end, out_l, out_r);
-            pos = chunk_end;
-
-            if self.is_fading() && self.fade <= 0.0 {
-                let pending = self.pending;
-                self.reset();
-                if let Some(p) = pending {
-                    self.start(p, &ctx.start);
-                }
-            } else if !self.amp_env.is_active() {
-                self.reset();
-            }
-        }
-    }
-
-    fn render_chunk(
+    pub fn render_chunk(
         &mut self,
         ctx: &RenderCtx,
         start: usize,
@@ -497,46 +518,52 @@ impl Voice {
         let p = ctx.params;
         let sr = self.sample_rate;
 
-        // Modulation: sample the sources at the block start, sum per routed slot, and decode a
-        // modulated copy of the parameters. Unmodulated voices read the shared block directly.
+        // Poly modulation: sample each routed modulator at the block start and sum the routes.
         let mut acc = [0.0f32; PARAM_COUNT];
-        let modulated;
-        let e: &SynthParams = if ctx.mods.is_empty() {
-            p
-        } else {
-            ctx.mods.accumulate(&self.sources(p), &mut acc);
-            let mut eff = *p;
-            for &slot in ctx.mods.dests() {
-                // Cutoff is applied from `acc` against the smoothed base below.
-                if slot != CUTOFF_SLOT {
-                    eff.set_slot(slot, p.norm_at(slot) + acc[slot]);
+        let routes = ctx.spec.routes();
+        if !routes.is_empty() {
+            for route in routes {
+                let Some(state) = self.mods.get(route.mod_slot).and_then(|s| s.as_ref()) else {
+                    continue;
+                };
+                if let Some(slot) = super::params::slot(route.param_id) {
+                    acc[slot] += route.amount * state.value();
                 }
             }
-            if AMP_ENV_SLOTS.iter().any(|&s| ctx.mods.is_routed(s)) {
+        }
+        // Modulators keep running even with no routes, so their state is ready the moment one
+        // appears (and a free LFO stays in phase).
+        for state in self.mods.iter_mut().flatten() {
+            state.advance(n, &ctx.transport);
+        }
+
+        let mut touched = [false; PARAM_COUNT];
+        let modulated;
+        let e: &SynthParams = if routes.is_empty() {
+            p
+        } else {
+            let mut eff = *p;
+            for route in routes {
+                let Some(slot) = super::params::slot(route.param_id) else {
+                    continue;
+                };
+                if slot == CUTOFF_SLOT || touched[slot] {
+                    continue; // cutoff is applied from `acc` below, against its smoothed base
+                }
+                touched[slot] = true;
+                eff.set_slot(
+                    slot,
+                    (p.effective_norm_at(slot) + acc[slot]).clamp(0.0, 1.0),
+                );
+            }
+            if AMP_ENV_SLOTS.iter().any(|&s| touched[s]) {
                 let env = &eff.amp_env;
                 self.amp_env
-                    .set_adsr(env.attack, env.decay, env.sustain, env.release);
-            }
-            if FILTER_ENV_SLOTS.iter().any(|&s| ctx.mods.is_routed(s)) {
-                let env = &eff.filter_env;
-                self.filter_env
                     .set_adsr(env.attack, env.decay, env.sustain, env.release);
             }
             modulated = eff;
             &modulated
         };
-
-        // Advance the modulation sources past this block.
-        for _ in 0..n {
-            self.filter_env.process_sample();
-        }
-        for i in 0..2 {
-            let hz = e.lfo[i].hz(ctx.tempo);
-            if self.lfo[i].advance(hz * n as f64 / sr as f64) {
-                let held = self.next_noise();
-                self.lfo[i].set_held(held);
-            }
-        }
 
         // Pitch for this control block, then advance the glide by its length.
         let pitch = self.pitch;
@@ -557,7 +584,7 @@ impl Voice {
             e.resonance,
             p.filter_mode,
         );
-        let volume = if ctx.mods.is_routed(VOLUME_SLOT) && p.volume_gain > 0.0 {
+        let volume = if touched[VOLUME_SLOT] && p.volume_gain > 0.0 {
             e.volume_gain / p.volume_gain
         } else {
             1.0

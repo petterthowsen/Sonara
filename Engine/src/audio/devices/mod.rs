@@ -274,25 +274,6 @@ pub struct ParamInfo {
     pub display: Vec<f32>,
 }
 
-/// A modulation source a device offers (for the UI's source strip).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModSourceInfo {
-    /// Stable id used over OSC and in saved projects, e.g. `"lfo1"`.
-    pub id: String,
-    pub name: String,
-    /// Runs −1..1 (else 0..1).
-    pub bipolar: bool,
-}
-
-/// One modulation route: `amount` (−1..1, normalized units per unit of source) from `source`
-/// to parameter `param_id`. Routes are device state, not parameters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModRoute {
-    pub source: String,
-    pub param_id: ParamId,
-    pub amount: f32,
-}
-
 /// A modulator a fresh device instance starts with: its kind, display name, normalized
 /// parameters (by the kind's parameter IDs) and its routes (`target string`, amount). Devices
 /// advertise these through `/builtin/info`, so Godot seeds a new instance's modulators from
@@ -471,34 +452,17 @@ pub trait AudioDevice: Send {
 
     // === Modulation (device-internal, per voice) ===
 
-    /// Modulation sources this device offers. Default: none.
-    fn mod_sources(&self) -> Vec<ModSourceInfo> {
-        Vec::new()
+    /// True when this device evaluates its own modulators per voice (PolySynth, spec 018
+    /// Phase 6). The `ModulatedDevice` wrapper then hands it the modulator definitions and
+    /// skips those routes on the mono path. Default: modulation is mono only.
+    fn supports_voice_modulation(&self) -> bool {
+        false
     }
 
-    /// Add, update or (amount 0) remove the route from `source` to `param_id`. Called on the
-    /// command thread under the state lock, so it must be cheap and must not allocate on the
-    /// success path. Default: the device has no modulation.
-    fn set_mod_route(
-        &mut self,
-        source: &str,
-        _param_id: ParamId,
-        _amount: f32,
-    ) -> Result<(), String> {
-        Err(format!(
-            "Device '{}' has no modulation source '{}'",
-            self.device_name(),
-            source
-        ))
-    }
-
-    /// Remove every modulation route. Default: nothing to clear.
-    fn clear_mod_routes(&mut self) {}
-
-    /// The current routes (for state/get and tests). Default: none.
-    fn mod_routes(&self) -> Vec<ModRoute> {
-        Vec::new()
-    }
+    /// Hand over the modulator definitions and the routes that target this device's own
+    /// parameters. Called on the command thread whenever a modulator or route changes, so it
+    /// must be cheap. Default: the device is not voice-modulated.
+    fn set_voice_modulation(&mut self, _spec: &crate::audio::modulation::VoiceModSpec) {}
 
     /// Modulators a fresh instance starts with (the device's default patch, advertised in
     /// `/builtin/info`). Default: none.

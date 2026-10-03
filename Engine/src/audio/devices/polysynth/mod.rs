@@ -1,6 +1,5 @@
 //! PolySynth: two band-limited oscillators with unison, noise, a drive + state-variable filter,
-//! amp and filter envelopes, two LFOs, Poly/Mono/Legato voice modes, glide, and per-voice
-//! modulation routes.
+//! an amp envelope, Poly/Mono/Legato voice modes, glide, and per-voice modulators.
 //!
 //! - One shared [`SynthParams`] block; voices read it every control block, so knob moves reach
 //!   held notes.
@@ -8,29 +7,32 @@
 //!   out of a budget of 64, and notes are further limited by Polyphony.
 //! - Stealing takes a releasing voice (quietest first), else the oldest held note. The stolen
 //!   voice fades for a few ms and then starts the queued note.
-//! - Modulation routes (`modulation.rs`) are device state. Each voice evaluates them once per
-//!   control block; the default patch routes Filter Env → Cutoff.
+//! - Modulators belong to the device *instance* (spec 018 Phase 6): the `ModulatedDevice`
+//!   wrapper owns them and hands over a [`VoiceModSpec`]; each voice runs one [`ModulatorState`]
+//!   per modulator and evaluates the routes into this device's own parameters. Routes into
+//!   PolySynth from an enclosing container arrive as a mono offset on [`SynthParams`].
 
-mod modulation;
 mod params;
 mod voice;
 
 use super::{
-    AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ModRoute, ModSourceInfo, ParamId,
-    ParamInfo, ParamValue, PortFlow,
+    AudioDevice, DefaultModulator, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo,
+    ParamValue, PortFlow,
 };
 use crate::audio::dsp::SmoothedParam;
-use modulation::ModSource;
-use params::{Changed, SynthParams, VoiceMode, CUTOFF, MAX_POLYPHONY, SPECS};
-use voice::{Mods, PendingNote, RenderCtx, StartCtx, Voice};
+use crate::audio::modulation::kinds::{
+    ModulatorKind, ENV_ATTACK, ENV_DECAY, ENV_RELEASE, ENV_SUSTAIN, LFO_RATE, LFO_RETRIGGER,
+};
+use crate::audio::modulation::{ModulatorState, VoiceModSpec, MAX_MODULATORS};
+use crate::audio::transport::Transport;
+use params::{Changed, SynthParams, VoiceMode, CUTOFF, MAX_POLYPHONY};
+use voice::{PendingNote, RenderCtx, StartCtx, Voice};
 
 /// Voices (unison sub-voices) all sounding notes may use together.
 const VOICE_BUDGET: usize = 64;
 /// Scratch size used until `prepare` supplies the real block size.
 const DEFAULT_MAX_FRAMES: usize = 4096;
-/// Tempo synced LFOs use until the first transport arrives.
-const DEFAULT_TEMPO: f64 = 120.0;
-/// The default patch's Filter Env → Cutoff amount.
+/// The default Filter Env → Cutoff amount (real PolySynth's default patch).
 const DEFAULT_FILTER_ENV_AMOUNT: f32 = 0.35;
 
 /// Held keys in press order, for Mono/Legato: releasing the top key returns to the one below.
@@ -82,12 +84,14 @@ pub struct PolySynthDevice {
     held: NoteStack,
     /// Envelope settings changed (or envelope routes went away): push them to every voice.
     env_dirty: bool,
-    mods: Mods,
-    /// Free-running LFO phases that voices with Retrigger Free start from.
-    lfo_phase: [f64; 2],
-    tempo: f64,
-    playing: bool,
-    song_pos_beats: f64,
+    /// The wrapper's modulator definitions and self-targeting routes.
+    voice_spec: VoiceModSpec,
+    /// Device-level free-running LFOs: one per modulator slot that is a Free LFO. A new voice
+    /// seeds its own LFO from `free_phase`, so free LFOs stay phase-locked across voices.
+    free_lfo: [Option<ModulatorState>; MAX_MODULATORS],
+    free_phase: [f64; MAX_MODULATORS],
+    /// Transport as of the coming block, for synced modulator rates.
+    transport: Transport,
 
     level_smoothed: [SmoothedParam; 2],
     noise_smoothed: SmoothedParam,
@@ -124,11 +128,10 @@ impl PolySynthDevice {
             last_note: None,
             held: NoteStack::new(),
             env_dirty: true,
-            mods: Mods::new(),
-            lfo_phase: [0.0; 2],
-            tempo: DEFAULT_TEMPO,
-            playing: false,
-            song_pos_beats: 0.0,
+            voice_spec: VoiceModSpec::empty(),
+            free_lfo: [None; MAX_MODULATORS],
+            free_phase: [0.0; MAX_MODULATORS],
+            transport: Transport::default(),
             level_smoothed: [
                 smoothed(params.osc[0].level, sample_rate),
                 smoothed(params.osc[1].level, sample_rate),
@@ -148,8 +151,6 @@ impl PolySynthDevice {
             cutoff_buf: Vec::new(),
         };
         dev.allocate(sample_rate, DEFAULT_MAX_FRAMES);
-        dev.set_mod_route(ModSource::FilterEnv.id(), CUTOFF, DEFAULT_FILTER_ENV_AMOUNT)
-            .expect("default route");
         dev
     }
 
@@ -158,6 +159,7 @@ impl PolySynthDevice {
         self.voices = (0..MAX_POLYPHONY)
             .map(|i| Voice::new(sample_rate, i as u32 + 1))
             .collect();
+        self.configure_voices();
         let [level0, level1] = &mut self.level_buf;
         for buf in [
             &mut self.mix_l,
@@ -209,17 +211,61 @@ impl PolySynthDevice {
 
     /// What a note starting now needs from the device.
     fn start_ctx(&self) -> StartCtx {
-        let phase = |i: usize| {
-            if self.params.lfo[i].retrigger {
-                0.0
-            } else {
-                self.lfo_phase[i]
-            }
-        };
         StartCtx {
             glide: self.params.glide,
-            lfo_phase: [phase(0), phase(1)],
-            lfo_retrigger: [self.params.lfo[0].retrigger, self.params.lfo[1].retrigger],
+            free_lfo: self.free_phase,
+        }
+    }
+
+    /// Point every voice's modulators at the current spec (used after `allocate`).
+    fn configure_voices(&mut self) {
+        let spec = self.voice_spec;
+        let sample_rate = self.sample_rate;
+        for voice in self.voices.iter_mut() {
+            voice.configure_mods(&spec, sample_rate);
+        }
+    }
+
+    /// Rebuild the device-level free LFOs from the spec, preserving the phase of a slot that is
+    /// still a free LFO (so automating an LFO's rate does not reset it).
+    fn rebuild_free_lfos(&mut self) {
+        for slot in 0..MAX_MODULATORS {
+            let wants_free = self
+                .voice_spec
+                .kind(slot)
+                .is_some_and(|k| k == ModulatorKind::Lfo)
+                && self
+                    .voice_spec
+                    .params(slot)
+                    .map(|p| p.real(LFO_RETRIGGER).unwrap_or(0.0) < 0.5)
+                    .unwrap_or(false);
+            if !wants_free {
+                self.free_lfo[slot] = None;
+                continue;
+            }
+            let params = *self.voice_spec.params(slot).expect("checked above");
+            match &mut self.free_lfo[slot] {
+                Some(state) => {
+                    state.prepare(self.sample_rate);
+                    for spec in state.kind().table().specs {
+                        if let Some(norm) = params.get(spec.id) {
+                            state.set_param(spec.id, norm);
+                        }
+                    }
+                    self.free_phase[slot] = state.lfo_phase();
+                }
+                None => {
+                    self.free_lfo[slot] =
+                        Some(ModulatorState::new(ModulatorKind::Lfo, self.sample_rate));
+                    let state = self.free_lfo[slot].as_mut().unwrap();
+                    for spec in state.kind().table().specs {
+                        if let Some(norm) = params.get(spec.id) {
+                            state.set_param(spec.id, norm);
+                        }
+                    }
+                    self.free_phase[slot] = state.lfo_phase();
+                }
+            }
         }
     }
 
@@ -385,48 +431,48 @@ impl PolySynthDevice {
     }
 
     fn apply_envelopes(&mut self) {
-        let (a, f) = (self.params.amp_env, self.params.filter_env);
+        let a = self.params.amp_env;
         for v in self.voices.iter_mut() {
             v.amp_env.set_adsr(a.attack, a.decay, a.sustain, a.release);
-            v.filter_env
-                .set_adsr(f.attack, f.decay, f.sustain, f.release);
         }
         self.env_dirty = false;
     }
 
-    /// Render every sounding voice over `[start, end)` of the block into the mix buffers.
+    /// Render every sounding voice over `[start, end)` of the block into the mix buffers, in
+    /// control blocks so the free LFOs advance in lockstep with the voices.
     fn render_span(&mut self, start: usize, end: usize) {
-        let ctx = RenderCtx {
-            params: &self.params,
-            mods: &self.mods,
-            levels: [&self.level_buf[0], &self.level_buf[1]],
-            noise_level: &self.noise_buf,
-            cutoff: &self.cutoff_buf,
-            start: self.start_ctx(),
-            tempo: self.tempo,
-        };
-        for voice in self.voices.iter_mut() {
-            if voice.active || voice.pending.is_some() {
-                voice.render(&ctx, start, end, &mut self.mix_l, &mut self.mix_r);
+        let mut pos = start;
+        while pos < end {
+            let chunk_end = (pos + voice::CONTROL_BLOCK).min(end);
+            self.advance_free_lfos(chunk_end - pos);
+            let start_ctx = self.start_ctx();
+            let ctx = RenderCtx {
+                params: &self.params,
+                spec: &self.voice_spec,
+                levels: [&self.level_buf[0], &self.level_buf[1]],
+                noise_level: &self.noise_buf,
+                cutoff: &self.cutoff_buf,
+                start: start_ctx,
+                transport: self.transport,
+            };
+            for voice in self.voices.iter_mut() {
+                if !voice.ensure_started(&ctx.start) {
+                    continue;
+                }
+                voice.render_chunk(&ctx, pos, chunk_end, &mut self.mix_l, &mut self.mix_r);
+                voice.finish_chunk(&ctx.start);
             }
+            pos = chunk_end;
         }
     }
 
-    /// Advance the free-running LFO phases past a block of `frames`. Synced LFOs follow the song
-    /// position while the transport plays.
-    fn advance_lfo_phases(&mut self, frames: usize) {
-        for i in 0..2 {
-            let lfo = &self.params.lfo[i];
-            let phase = &mut self.lfo_phase[i];
-            match lfo.sync_beats {
-                Some(beats) if self.playing => {
-                    *phase = (self.song_pos_beats / beats).rem_euclid(1.0);
-                }
-                _ => {
-                    *phase = (*phase
-                        + lfo.hz(self.tempo) * frames as f64 / self.sample_rate as f64)
-                        .fract();
-                }
+    /// Advance the device-level free LFOs one control block and remember their phases, which a
+    /// fresh voice copies so free LFOs stay phase-locked across voices.
+    fn advance_free_lfos(&mut self, frames: usize) {
+        for slot in 0..MAX_MODULATORS {
+            if let Some(state) = self.free_lfo[slot].as_mut() {
+                state.advance(frames, &self.transport);
+                self.free_phase[slot] = state.lfo_phase();
             }
         }
     }
@@ -462,9 +508,12 @@ impl AudioDevice for PolySynthDevice {
         retarget(&mut self.noise_smoothed, self.params.noise_level);
         self.noise_smoothed
             .fill(&mut self.noise_buf[..sample_count]);
+        // The cutoff smoother carries the *effective* base (mono offset from an enclosing
+        // wrapper included); a voice adds its own poly offset on top.
+        let cutoff_slot = params::slot_of(CUTOFF);
         retarget(
             &mut self.cutoff_smoothed,
-            self.params.get(CUTOFF).unwrap_or(1.0),
+            self.params.effective_norm_at(cutoff_slot),
         );
         self.cutoff_smoothed
             .fill(&mut self.cutoff_buf[..sample_count]);
@@ -501,8 +550,6 @@ impl AudioDevice for PolySynthDevice {
             outputs[i * 2] = self.mix_l[i] * gain;
             outputs[i * 2 + 1] = self.mix_r[i] * gain;
         }
-
-        self.advance_lfo_phases(sample_count);
 
         // Return the (cleared) queue so the next `send_midi_event` doesn't allocate
         events.clear();
@@ -562,71 +609,74 @@ impl AudioDevice for PolySynthDevice {
         params::param_infos()
     }
 
-    fn mod_sources(&self) -> Vec<ModSourceInfo> {
-        ModSource::ALL
-            .iter()
-            .map(|s| ModSourceInfo {
-                id: s.id().to_string(),
-                name: s.name().to_string(),
-                bipolar: s.bipolar(),
-            })
-            .collect()
+    fn supports_voice_modulation(&self) -> bool {
+        true
     }
 
-    fn set_mod_route(
-        &mut self,
-        source: &str,
-        param_id: ParamId,
-        amount: f32,
-    ) -> Result<(), String> {
-        let src = ModSource::from_id(source)
-            .ok_or_else(|| format!("PolySynth has no modulation source '{source}'"))?;
-        let slot = params::slot(param_id)
-            .ok_or_else(|| format!("PolySynth has no parameter {param_id}"))?;
-        if !SPECS[slot].is_modulatable() {
-            return Err(format!(
-                "PolySynth parameter {param_id} ({}) is not modulatable",
-                SPECS[slot].name
-            ));
+    fn set_voice_modulation(&mut self, spec: &VoiceModSpec) {
+        // A route-only change just needs the new route list; the per-voice states and the free
+        // LFOs keep their phase and are re-read every block.
+        let definitions_changed = !self.voice_spec.same_definitions(spec);
+        self.voice_spec = *spec;
+        if definitions_changed {
+            self.rebuild_free_lfos();
+            self.configure_voices();
         }
-        self.mods
-            .set(src.index(), param_id, slot, amount)
-            .map_err(str::to_string)?;
-        // A voice may have been running modulated envelopes: restore the base settings (they are
-        // re-modulated on the next block if routes remain).
-        self.env_dirty = true;
-        Ok(())
     }
 
-    fn clear_mod_routes(&mut self) {
-        self.mods.clear();
-        self.env_dirty = true;
-    }
+    fn default_modulators(&self) -> Vec<DefaultModulator> {
+        let mut out = Vec::new();
 
-    fn mod_routes(&self) -> Vec<ModRoute> {
-        self.mods
-            .routes()
-            .iter()
-            .map(|r| ModRoute {
-                source: ModSource::ALL[r.mod_slot].id().to_string(),
-                param_id: r.param_id,
-                amount: r.amount,
-            })
-            .collect()
-    }
-
-    fn set_transport(&mut self, transport: &crate::audio::transport::Transport) {
-        if transport.tempo > 0.0 {
-            self.tempo = transport.tempo;
+        // "Filter Env": a short pluck (A 2 ms, D 400 ms, S 0, R 300 ms) sweeping the cutoff.
+        let adsr = ModulatorKind::Adsr;
+        let mut params = Vec::new();
+        for (id, real) in [
+            (ENV_ATTACK, 0.002),
+            (ENV_DECAY, 0.4),
+            (ENV_SUSTAIN, 0.0),
+            (ENV_RELEASE, 0.3),
+        ] {
+            if let Some(spec) = adsr.table().specs.iter().find(|s| s.id == id) {
+                params.push((id, spec.to_norm(real)));
+            }
         }
-        self.playing = transport.playing;
-        self.song_pos_beats = transport.song_pos_beats;
+        out.push(DefaultModulator {
+            kind: adsr,
+            name: "Filter Env".to_string(),
+            params,
+            routes: vec![(format!("param/{CUTOFF}"), DEFAULT_FILTER_ENV_AMOUNT)],
+        });
+
+        // "LFO 1" and "LFO 2": 5 Hz, keyed per note, unrouted.
+        for name in ["LFO 1", "LFO 2"] {
+            let mut params = Vec::new();
+            for (id, real) in [(LFO_RATE, 5.0), (LFO_RETRIGGER, 1.0)] {
+                if let Some(spec) = ModulatorKind::Lfo.table().specs.iter().find(|s| s.id == id) {
+                    params.push((id, spec.to_norm(real)));
+                }
+            }
+            out.push(DefaultModulator {
+                kind: ModulatorKind::Lfo,
+                name: name.to_string(),
+                params,
+                routes: Vec::new(),
+            });
+        }
+        out
+    }
+
+    fn set_transport(&mut self, transport: &Transport) {
+        self.transport = *transport;
     }
 
     fn reset(&mut self) {
         for voice in self.voices.iter_mut() {
             voice.reset();
         }
+        for state in self.free_lfo.iter_mut().flatten() {
+            state.reset();
+        }
+        self.free_phase = [0.0; MAX_MODULATORS];
         self.held.clear();
         self.note_counter = 0;
         self.last_note = None;
@@ -636,13 +686,15 @@ impl AudioDevice for PolySynthDevice {
     fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate;
         self.allocate(sample_rate, max_frames.max(DEFAULT_MAX_FRAMES));
+        self.rebuild_free_lfos();
         let p = &self.params;
+        let cutoff_slot = params::slot_of(CUTOFF);
         self.level_smoothed = [
             smoothed(p.osc[0].level, sample_rate),
             smoothed(p.osc[1].level, sample_rate),
         ];
         self.noise_smoothed = smoothed(p.noise_level, sample_rate);
-        self.cutoff_smoothed = smoothed(p.get(CUTOFF).unwrap_or(1.0), sample_rate);
+        self.cutoff_smoothed = smoothed(p.effective_norm_at(cutoff_slot), sample_rate);
         self.volume_smoothed = smoothed(p.volume_gain, sample_rate);
         self.held.clear();
         self.note_counter = 0;
@@ -704,6 +756,50 @@ mod tests {
         let mut dev = PolySynthDevice::new(SR);
         dev.prepare(SR, BLOCK);
         dev
+    }
+
+    use crate::audio::dsp::tempo_sync::index_of;
+    use crate::audio::modulation::kinds::{ModParams, LFO_SHAPE, LFO_SYNC};
+    use crate::audio::modulation::voice::VoiceRoute;
+
+    /// A modulator's normalized parameter block, from `(id, real value)` pairs.
+    fn mod_params(kind: ModulatorKind, values: &[(ParamId, f32)]) -> ModParams {
+        let mut state = ModulatorState::new(kind, SR);
+        for &(id, real) in values {
+            let spec = kind.table().specs.iter().find(|s| s.id == id).unwrap();
+            state.set_param(id, spec.to_norm(real));
+        }
+        *state.params()
+    }
+
+    /// Install a `VoiceModSpec` on the device, as the wrapper would.
+    fn set_spec(
+        dev: &mut PolySynthDevice,
+        mods: &[(usize, ModulatorKind, &[(ParamId, f32)])],
+        routes: &[(usize, ParamId, f32)],
+    ) {
+        let mut spec = VoiceModSpec::empty();
+        for &(slot, kind, values) in mods {
+            spec.kinds[slot] = Some(kind);
+            spec.params[slot] = mod_params(kind, values);
+        }
+        for &(mod_slot, param_id, amount) in routes {
+            spec.routes[spec.route_len] = VoiceRoute {
+                mod_slot,
+                param_id,
+                amount,
+            };
+            spec.route_len += 1;
+        }
+        dev.set_voice_modulation(&spec);
+    }
+
+    /// A voice's LFO phase for modulator `slot`, if that slot is an LFO.
+    fn lfo_phase(dev: &PolySynthDevice, voice: usize, slot: usize) -> f64 {
+        dev.voices[voice].mods[slot]
+            .as_ref()
+            .expect("modulator")
+            .lfo_phase()
     }
 
     fn set_real(dev: &mut PolySynthDevice, id: ParamId, real: f32) {
@@ -1153,35 +1249,65 @@ mod tests {
     }
 
     #[test]
-    fn default_patch_routes_filter_env_to_cutoff() {
+    fn default_modulators_define_the_default_patch() {
         let dev = synth();
-        let routes = dev.mod_routes();
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].source, "filter_env");
-        assert_eq!(routes[0].param_id, CUTOFF);
-        assert!((routes[0].amount - 0.35).abs() < 1e-6);
-        let sources: Vec<String> = dev.mod_sources().into_iter().map(|s| s.id).collect();
-        assert_eq!(
-            sources,
-            [
-                "filter_env",
-                "amp_env",
-                "lfo1",
-                "lfo2",
-                "velocity",
-                "keytrack"
-            ]
-        );
+        let mods = dev.default_modulators();
+        assert_eq!(mods.len(), 3);
+
+        let filter = &mods[0];
+        assert_eq!(filter.kind, ModulatorKind::Adsr);
+        assert_eq!(filter.name, "Filter Env");
+        assert_eq!(filter.routes, vec![(format!("param/{CUTOFF}"), 0.35)]);
+        let get = |id: ParamId| {
+            filter
+                .params
+                .iter()
+                .find(|(p, _)| *p == id)
+                .map(|(_, v)| *v)
+                .unwrap()
+        };
+        let real = |id: ParamId| {
+            ModulatorKind::Adsr
+                .table()
+                .specs
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .to_real(get(id))
+        };
+        assert!((real(ENV_ATTACK) - 0.002).abs() < 1e-5);
+        assert!((real(ENV_DECAY) - 0.4).abs() < 1e-5);
+        assert_eq!(real(ENV_SUSTAIN), 0.0);
+        assert!((real(ENV_RELEASE) - 0.3).abs() < 1e-5);
+
+        for (i, name) in [(1, "LFO 1"), (2, "LFO 2")] {
+            let lfo = &mods[i];
+            assert_eq!(lfo.kind, ModulatorKind::Lfo);
+            assert_eq!(lfo.name, name);
+            assert!(lfo.routes.is_empty());
+        }
     }
 
     #[test]
     fn filter_env_to_cutoff_gives_a_decaying_centroid() {
-        // The "done when" pluck: short Filter Env decay, sustain 0, some resonance.
+        // The "done when" pluck: short envelope decay, sustain 0, some resonance.
         let mut dev = synth();
-        set_real(&mut dev, FILTER_ENV + DECAY, 0.15);
+        set_spec(
+            &mut dev,
+            &[(
+                0,
+                ModulatorKind::Adsr,
+                &[
+                    (ENV_ATTACK, 0.005),
+                    (ENV_DECAY, 0.15),
+                    (ENV_SUSTAIN, 0.0),
+                    (ENV_RELEASE, 0.3),
+                ],
+            )],
+            &[(0, CUTOFF, 0.6)],
+        );
         set_real(&mut dev, CUTOFF, 400.0);
         set_real(&mut dev, RESONANCE, 0.5);
-        dev.set_mod_route("filter_env", CUTOFF, 0.6).unwrap();
         dev.send_midi_event(48, 110, true, 0);
         let out = left(&render(&mut dev, 80)); // ~427 ms
         let window = 2048;
@@ -1195,7 +1321,6 @@ mod tests {
 
         // Without the route the tone doesn't move.
         let mut dev = synth();
-        dev.clear_mod_routes();
         set_real(&mut dev, CUTOFF, 400.0);
         dev.send_midi_event(48, 110, true, 0);
         let out = left(&render(&mut dev, 80));
@@ -1210,10 +1335,57 @@ mod tests {
     }
 
     #[test]
+    fn default_modulators_through_the_wrapper_sweep_the_filter() {
+        // The "done when" path: a PolySynth whose instance text (as Godot would create it) is
+        // installed on the wrapper, driven exactly like the app drives it.
+        use crate::audio::devices::DevicePath;
+        use crate::audio::modulation::wrap_at_path;
+
+        let defaults = PolySynthDevice::new(SR).default_modulators();
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(PolySynthDevice::new(SR))];
+        devices[0].prepare(SR, BLOCK);
+        wrap_at_path(&mut devices, &DevicePath::root(0), SR).unwrap();
+        {
+            let m = devices[0].as_modulated_mut().unwrap();
+            for (i, d) in defaults.iter().enumerate() {
+                let id = i as u8;
+                m.add_modulator(id, d.kind).unwrap();
+                for &(param_id, norm) in &d.params {
+                    m.set_modulator_param(id, param_id, norm).unwrap();
+                }
+                for (target, amount) in &d.routes {
+                    m.set_modulator_route(id, target, *amount).unwrap();
+                }
+            }
+        }
+        devices[0].set_parameter(
+            CUTOFF,
+            real_to_norm(400.0, CUTOFF_MIN, CUTOFF_MAX, true, 1.0),
+        );
+        devices[0].set_parameter(RESONANCE, 0.5);
+        devices[0].send_midi_event(48, 110, true, 0);
+
+        let mut out = vec![0.0; BLOCK * 2];
+        let mut samples = Vec::new();
+        for _ in 0..80 {
+            devices[0].process_block(&[], &mut out, BLOCK);
+            samples.extend_from_slice(&out);
+        }
+        let mono = left(&samples);
+        let window = 2048;
+        let early = centroid(&mono[512..512 + window]);
+        let middle = centroid(&mono[6_000..6_000 + window]);
+        let late = centroid(&mono[16_000..16_000 + window]);
+        assert!(
+            early > middle * 1.3 && middle > late,
+            "centroid should fall: {early:.0} → {middle:.0} → {late:.0} Hz"
+        );
+    }
+
+    #[test]
     fn cutoff_and_filter_type_shape_the_sound() {
         let brightness = |cutoff: f32, filter_type: f32| {
             let mut dev = synth();
-            dev.clear_mod_routes();
             set_real(&mut dev, CUTOFF, cutoff);
             set_real(&mut dev, FILTER_TYPE, filter_type);
             dev.send_midi_event(48, 110, true, 0);
@@ -1237,7 +1409,7 @@ mod tests {
         p.set_slot(level, 0.8 - 2.0);
         assert_eq!(p.osc[0].level, 0.0);
 
-        // Every source into every float parameter at ±1 still renders finite, bounded audio.
+        // Every kind into many float parameters at ±1 still renders finite, bounded audio.
         for sr in [44_100.0, 96_000.0, 192_000.0] {
             let mut dev = PolySynthDevice::new(sr);
             dev.prepare(sr, BLOCK);
@@ -1247,19 +1419,41 @@ mod tests {
                 .filter(|p| p.param_type == ParamType::Float)
                 .map(|p| p.id)
                 .collect();
-            let mut added = 0;
-            for (i, source) in ModSource::ALL.iter().enumerate() {
+            let mut spec = VoiceModSpec::empty();
+            for kind in [
+                ModulatorKind::Lfo,
+                ModulatorKind::Adsr,
+                ModulatorKind::Ad,
+                ModulatorKind::Velocity,
+                ModulatorKind::Keytrack,
+                ModulatorKind::Random,
+            ] {
+                let slot = kind.index();
+                spec.kinds[slot] = Some(kind);
+                spec.params[slot] = mod_params(kind, &[]);
+            }
+            // LFO at 40 Hz, S&H, so it steps through values.
+            spec.params[0] = mod_params(ModulatorKind::Lfo, &[(LFO_RATE, 40.0), (LFO_SHAPE, 4.0)]);
+            let slots = [0usize, 1, 2, 3, 4, 5];
+            'outer: for (i, &slot) in slots.iter().enumerate() {
                 for (j, &id) in floats.iter().enumerate() {
-                    if added < crate::audio::modulation::matrix::MAX_ROUTES && (i + j) % 3 == 0 {
+                    if spec.route_len == crate::audio::modulation::MAX_ROUTES {
+                        break 'outer;
+                    }
+                    if (i + j) % 3 == 0 {
                         let amount = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
-                        dev.set_mod_route(source.id(), id, amount).unwrap();
-                        added += 1;
+                        spec.routes[spec.route_len] = VoiceRoute {
+                            mod_slot: slot,
+                            param_id: id,
+                            amount,
+                        };
+                        spec.route_len += 1;
                     }
                 }
             }
+            assert!(spec.route_len > 0);
+            dev.set_voice_modulation(&spec);
             set_real(&mut dev, RESONANCE, 1.0);
-            set_real(&mut dev, LFO1 + LFO_RATE, 40.0);
-            set_real(&mut dev, LFO1 + LFO_SHAPE, 4.0); // S&H
             for note in [24, 60, 96, 127] {
                 dev.send_midi_event(note, 127, true, 0);
             }
@@ -1270,39 +1464,21 @@ mod tests {
     }
 
     #[test]
-    fn mod_routes_reject_enums_and_unknown_ids() {
-        let mut dev = synth();
-        assert!(dev.set_mod_route("lfo1", FILTER_TYPE, 0.5).is_err(), "enum");
-        assert!(dev.set_mod_route("lfo1", 99, 0.5).is_err(), "unknown param");
-        assert!(
-            dev.set_mod_route("mod_wheel", CUTOFF, 0.5).is_err(),
-            "unknown source"
-        );
-        dev.set_mod_route("lfo1", CUTOFF, 0.25).unwrap();
-        dev.set_mod_route("lfo1", CUTOFF, -0.5).unwrap(); // update
-        assert_eq!(dev.mod_routes().len(), 2);
-        assert_eq!(dev.mod_routes()[1].amount, -0.5);
-        dev.set_mod_route("lfo1", CUTOFF, 0.0).unwrap(); // remove
-        assert_eq!(dev.mod_routes().len(), 1);
-        dev.clear_mod_routes();
-        assert!(dev.mod_routes().is_empty());
-    }
-
-    #[test]
     fn lfo_sync_period_is_the_beat_length_at_120_bpm() {
         let mut dev = synth();
         dev.set_transport(&crate::audio::transport::Transport {
             tempo: 120.0,
             ..Default::default()
         });
-        set_real(&mut dev, LFO1 + LFO_SYNC, 13.0); // 1/4
-        assert_eq!(dev.params.lfo[0].hz(120.0), 2.0);
-        set_real(&mut dev, LFO1 + LFO_SYNC, 14.0); // 1/4 dotted
-        assert!((dev.params.lfo[0].hz(120.0) - 2.0 / 1.5).abs() < 1e-9);
-        set_real(&mut dev, LFO1 + LFO_SYNC, 15.0); // 1/4 triplet
-        assert!((dev.params.lfo[0].hz(120.0) - 3.0).abs() < 1e-9);
-
-        set_real(&mut dev, LFO1 + LFO_SYNC, 13.0);
+        set_spec(
+            &mut dev,
+            &[(
+                0,
+                ModulatorKind::Lfo,
+                &[(LFO_SYNC, index_of("1/4") as f32), (LFO_RETRIGGER, 1.0)],
+            )],
+            &[(0, CUTOFF, 0.5)],
+        );
         dev.send_midi_event(60, 100, true, 0);
         // A quarter note at 120 BPM is 0.5 s: the retriggered LFO is back at phase 0 then,
         // and half-way at 0.25 s.
@@ -1311,15 +1487,12 @@ mod tests {
         for _ in 0..quarter / 400 {
             dev.process_block(&[], &mut out, 200);
         }
-        assert!(
-            (dev.voices[0].lfo[0].phase - 0.5).abs() < 1e-6,
-            "{}",
-            dev.voices[0].lfo[0].phase
-        );
+        let phase = lfo_phase(&dev, 0, 0);
+        assert!((phase - 0.5).abs() < 1e-6, "{phase}");
         for _ in 0..quarter / 400 {
             dev.process_block(&[], &mut out, 200);
         }
-        let phase = dev.voices[0].lfo[0].phase;
+        let phase = lfo_phase(&dev, 0, 0);
         assert!(
             phase < 1e-6 || phase > 1.0 - 1e-6,
             "phase {phase} after one beat"
@@ -1328,50 +1501,100 @@ mod tests {
 
     #[test]
     fn free_lfo_keeps_voices_in_phase_and_note_retrigger_resets() {
-        let mut dev = synth();
-        set_real(&mut dev, LFO1 + LFO_RETRIGGER, 0.0); // Free
-        dev.send_midi_event(60, 100, true, 0);
-        render(&mut dev, 7);
-        dev.send_midi_event(64, 100, true, 0);
-        render(&mut dev, 3);
-        let phases: Vec<f64> = dev
-            .voices
-            .iter()
-            .filter(|v| v.active)
-            .map(|v| v.lfo[0].phase)
-            .collect();
+        let free = |retrigger: f32| {
+            let mut dev = synth();
+            set_spec(
+                &mut dev,
+                &[(
+                    0,
+                    ModulatorKind::Lfo,
+                    &[(LFO_RATE, 5.0), (LFO_RETRIGGER, retrigger)],
+                )],
+                &[(0, CUTOFF, 0.5)],
+            );
+            dev.send_midi_event(60, 100, true, 0);
+            render(&mut dev, 7);
+            dev.send_midi_event(64, 100, true, 0);
+            render(&mut dev, 3);
+            dev.voices
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.active)
+                .map(|(i, _)| lfo_phase(&dev, i, 0))
+                .collect::<Vec<f64>>()
+        };
+
+        // Free: the second voice joins the first's phase.
+        let phases = free(0.0);
         assert_eq!(phases.len(), 2);
         assert!((phases[0] - phases[1]).abs() < 1e-3, "{phases:?}");
 
-        let mut dev = synth(); // Retrigger Note (default)
-        dev.send_midi_event(60, 100, true, 0);
-        render(&mut dev, 7);
-        dev.send_midi_event(64, 100, true, 0);
-        render(&mut dev, 3);
-        let phases: Vec<f64> = dev
-            .voices
-            .iter()
-            .filter(|v| v.active)
-            .map(|v| v.lfo[0].phase)
-            .collect();
+        // Retrigger Note: each voice starts its own phase.
+        let phases = free(1.0);
         assert!((phases[0] - phases[1]).abs() > 0.1, "{phases:?}");
     }
 
     #[test]
+    fn voices_started_apart_hold_different_envelope_values() {
+        // Each voice runs its own modulator state: a note started 100 ms later is at a
+        // different point of the filter-envelope decay.
+        let mut dev = synth();
+        set_spec(
+            &mut dev,
+            &[(
+                0,
+                ModulatorKind::Adsr,
+                &[
+                    (ENV_ATTACK, 0.002),
+                    (ENV_DECAY, 0.4),
+                    (ENV_SUSTAIN, 0.0),
+                    (ENV_RELEASE, 0.3),
+                ],
+            )],
+            &[(0, CUTOFF, 0.35)],
+        );
+        dev.send_midi_event(60, 100, true, 0);
+        render(&mut dev, 18); // ~96 ms
+        dev.send_midi_event(64, 100, true, 0);
+        render(&mut dev, 1);
+
+        let values: Vec<f32> = dev
+            .voices
+            .iter()
+            .filter(|v| v.active && !v.is_fading())
+            .map(|v| v.mods[0].as_ref().expect("filter env").value())
+            .collect();
+        assert_eq!(values.len(), 2, "{values:?}");
+        assert!(
+            (values[0] - values[1]).abs() > 0.05,
+            "both voices share one envelope: {values:?}"
+        );
+    }
+
+    #[test]
     fn retrigger_restarts_note_lfo_in_poly_and_mono() {
-        // LFO 1 Retrigger defaults to Note. Re-triggering the same note (Poly) or a new note
-        // while one sounds (Mono) must restart the LFO, just like a fresh voice does.
+        // Re-triggering the same note (Poly) or a new note while one sounds (Mono) must restart
+        // a Retrigger = Note LFO, just like a fresh voice does.
         for (mode, label) in [(0.0, "poly"), (1.0, "mono")] {
             let mut dev = synth();
             set_real(&mut dev, VOICE_MODE, mode);
+            set_spec(
+                &mut dev,
+                &[(
+                    0,
+                    ModulatorKind::Lfo,
+                    &[(LFO_RATE, 5.0), (LFO_RETRIGGER, 1.0)],
+                )],
+                &[(0, CUTOFF, 0.5)],
+            );
             dev.send_midi_event(60, 100, true, 0);
             render(&mut dev, 4);
-            let before = dev.voices[0].lfo[0].phase;
+            let before = lfo_phase(&dev, 0, 0);
             assert!(before > 0.05, "{label}: LFO should be running: {before}");
 
             dev.send_midi_event(60, 100, true, 0);
             render(&mut dev, 1);
-            let after = dev.voices[0].lfo[0].phase;
+            let after = lfo_phase(&dev, 0, 0);
             assert!(
                 after < 0.05,
                 "{label}: retrigger should restart the LFO, {before} -> {after}"
@@ -1384,11 +1607,17 @@ mod tests {
         // LFO 1 → Osc 1 Fine: a sine's instantaneous frequency must move smoothly (pitch is
         // interpolated across control blocks, not stepped).
         let mut dev = synth();
-        dev.clear_mod_routes();
         set_real(&mut dev, CUTOFF, 20_000.0);
         set_real(&mut dev, OSC1 + WAVE, 0.0); // sine
-        set_real(&mut dev, LFO1 + LFO_RATE, 6.0);
-        dev.set_mod_route("lfo1", OSC1 + FINE, 0.5).unwrap(); // ±100 cents
+        set_spec(
+            &mut dev,
+            &[(
+                0,
+                ModulatorKind::Lfo,
+                &[(LFO_RATE, 6.0), (LFO_RETRIGGER, 1.0)],
+            )],
+            &[(0, OSC1 + FINE, 0.5)], // ±100 cents
+        );
         dev.send_midi_event(69, 127, true, 0);
         render(&mut dev, 4);
         let out = left(&render(&mut dev, 40));
@@ -1419,7 +1648,6 @@ mod tests {
         let brightness_ratio = |key_track: f32| {
             let render_note = |note: u8| {
                 let mut dev = synth();
-                dev.clear_mod_routes();
                 set_real(&mut dev, CUTOFF, 500.0);
                 set_real(&mut dev, KEY_TRACK, key_track);
                 dev.send_midi_event(note, 110, true, 0);
@@ -1437,6 +1665,7 @@ mod tests {
 mod bench {
     use super::params::*;
     use super::*;
+    use crate::audio::modulation::voice::VoiceRoute;
 
     /// Worst case for the budget: 16 notes × unison 4 on both oscillators = 64 voices,
     /// 128 PolyBLEP oscillators, LP 24 (stereo, since unison spreads) and 8 modulation routes.
@@ -1458,21 +1687,39 @@ mod bench {
         set(&mut dev, OSC1 + UNISON, 3);
         set(&mut dev, OSC2 + UNISON, 3);
         dev.set_parameter(OSC2 + LEVEL, 0.5);
-        // The default Filter Env → Cutoff plus seven more, touching every interpolated kind of
-        // destination (cutoff, pitch, level) and some block-constant ones. Routes that switch on
-        // extra DSP (noise, drive) are left out; together they add about 0.5 % more.
-        for (source, id) in [
-            ("lfo1", CUTOFF),
-            ("lfo2", OSC1 + FINE),
-            ("lfo2", OSC2 + FINE),
-            ("velocity", OSC1 + LEVEL),
-            ("lfo1", OSC2 + LEVEL),
-            ("amp_env", OSC2 + PULSE_WIDTH),
-            ("keytrack", RESONANCE),
+        // Eight routes, touching every interpolated kind of destination (cutoff, pitch, level)
+        // and some block-constant ones. Routes that switch on extra DSP (noise, drive) are left
+        // out; together they add about 0.5 % more.
+        let mut spec = VoiceModSpec::empty();
+        for (slot, kind) in [
+            (0, ModulatorKind::Lfo),
+            (1, ModulatorKind::Lfo),
+            (2, ModulatorKind::Adsr),
+            (3, ModulatorKind::Velocity),
+            (4, ModulatorKind::Keytrack),
         ] {
-            dev.set_mod_route(source, id, 0.3).unwrap();
+            spec.kinds[slot] = Some(kind);
+            spec.params[slot] = *ModulatorState::new(kind, SR).params();
         }
-        assert_eq!(dev.mod_routes().len(), 8);
+        for (mod_slot, param_id) in [
+            (0, CUTOFF),
+            (1, OSC1 + FINE),
+            (1, OSC2 + FINE),
+            (3, OSC1 + LEVEL),
+            (0, OSC2 + LEVEL),
+            (2, OSC2 + PULSE_WIDTH),
+            (4, RESONANCE),
+            (4, CUTOFF),
+        ] {
+            spec.routes[spec.route_len] = VoiceRoute {
+                mod_slot,
+                param_id,
+                amount: 0.3,
+            };
+            spec.route_len += 1;
+        }
+        assert_eq!(spec.route_len, 8);
+        dev.set_voice_modulation(&spec);
         for note in 48..64 {
             dev.send_midi_event(note, 100, true, 0);
         }

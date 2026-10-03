@@ -108,8 +108,15 @@ impl ModulatorState {
         self.env.set_adsr(attack, decay, sustain, release);
     }
 
-    /// A note-on: retrigger the kind's note-driven state.
+    /// A note-on: retrigger the kind's note-driven state. The held count drives the mono path's
+    /// "release on the last note-off" rule; a per-voice instance uses
+    /// [`gate_voice_on`](Self::gate_voice_on) instead.
     pub fn note_on(&mut self, note: u8, velocity: u8, _frame: usize) {
+        self.held = self.held.saturating_add(1);
+        self.trigger(note, velocity);
+    }
+
+    fn trigger(&mut self, note: u8, velocity: u8) {
         let velocity = velocity as f32 / 127.0;
         match self.kind {
             ModulatorKind::Lfo => {
@@ -125,7 +132,6 @@ impl ModulatorState {
             ModulatorKind::Keytrack => self.last_note = note as f32,
             ModulatorKind::Random => self.random = self.next_noise(),
         }
-        self.held = self.held.saturating_add(1);
     }
 
     /// A note-off: an envelope releases once the last held note is released.
@@ -137,6 +143,49 @@ impl ModulatorState {
         if self.held == 0 && self.kind == ModulatorKind::Adsr {
             self.env.gate_off();
         }
+    }
+
+    /// Per-voice note-on: this instance follows one voice, so exactly one note is held. Two
+    /// successive calls (a poly same-note repeat, a mono retrigger) restart the envelopes
+    /// without inflating the held count, so a single note-off still releases.
+    pub fn gate_voice_on(&mut self, note: u8, velocity: u8) {
+        self.held = 1;
+        self.trigger(note, velocity);
+    }
+
+    /// Per-voice note-off: gate the envelope off (an `ad` ignores it), as
+    /// [`gate_voice_on`](Self::gate_voice_on) is the per-voice companion to `note_on`.
+    pub fn gate_voice_off(&mut self) {
+        self.held = 0;
+        if self.kind == ModulatorKind::Adsr {
+            self.env.gate_off();
+        }
+    }
+
+    /// Follow a new note without retriggering (a legato slide): velocity and keytrack update,
+    /// envelopes and LFOs are left running.
+    pub fn update_note(&mut self, note: u8, velocity: u8) {
+        match self.kind {
+            ModulatorKind::Velocity => self.velocity = velocity as f32 / 127.0,
+            ModulatorKind::Keytrack => self.last_note = note as f32,
+            _ => {}
+        }
+    }
+
+    /// The LFO phase (0 for a non-LFO kind). Used to seed a voice's free-running LFO.
+    pub fn lfo_phase(&self) -> f64 {
+        self.lfo.phase
+    }
+
+    /// Seed a free-running LFO's phase and draw a fresh sample-and-hold value, so every voice
+    /// that joins has the same phase but its own S&H. Other kinds are left alone.
+    pub fn seed_lfo_phase(&mut self, phase: f64) {
+        if self.kind != ModulatorKind::Lfo {
+            return;
+        }
+        self.lfo.phase = phase.rem_euclid(1.0);
+        let held = self.next_noise();
+        self.lfo.set_held(held);
     }
 
     /// Advance `frames` samples and return the value at the end of the step.
