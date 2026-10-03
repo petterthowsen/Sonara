@@ -160,6 +160,9 @@ func _resolve_lane_target(lane: Object, ch: Object, info: Dictionary, track: Obj
 					_device_params[inst.id] = []
 				_device_params[inst.id].append(target.param_id)
 			return {"parameter": _param_ids[key], "unit": "linear", "kind": "device", "instance": inst, "param_id": target.param_id}
+		4:
+			_report.add(TransferReport.UNSUPPORTED_AUTOMATION, track.name, "modulator parameter")
+			return {}
 	return {}
 
 
@@ -366,8 +369,8 @@ func _write_device(inst: Object) -> void:
 	else:
 		state_path = "plugins/%s.json" % _safe_file_name(inst.id)
 		state_bytes = JSON.stringify(_embed_files_in(inst.to_json()), "\t").to_utf8_buffer()
-		if not inst.mod_routes.is_empty():
-			_report.add(TransferReport.MOD_ROUTES, inst.get_display_name(), "%s (%d routes)" % [dev.name, inst.mod_routes.size()])
+		if not inst.modulators.is_empty():
+			_report.add(TransferReport.MODULATORS, inst.get_display_name(), "%s (%d modulators)" % [dev.name, inst.modulators.size()])
 		# Choke groups live only in a Drum Machine's Sonara state; DAWproject has no mapping.
 		var choked := 0
 		for child in inst.children:

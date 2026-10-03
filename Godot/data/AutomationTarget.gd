@@ -5,12 +5,13 @@ class_name AutomationTarget extends RefCounted
 ## match the engine's `Display` / `AutomationTarget::parse` spelling byte-for-byte, since the
 ## string is what travels over OSC and is persisted in the project file.
 
-enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM }
+enum Kind { CHANNEL_VOLUME, CHANNEL_PAN, SEND_AMOUNT, DEVICE_PARAM, DEVICE_MODULATOR_PARAM }
 
 var kind: Kind = Kind.CHANNEL_VOLUME
 var send_index: int = -1          # SEND_AMOUNT only
-var device_path: Array = []       # DEVICE_PARAM only: indices into channel.devices / .children
-var param_id: int = -1            # DEVICE_PARAM only
+var device_path: Array = []       # DEVICE_PARAM / DEVICE_MODULATOR_PARAM: indices into channel.devices / .children
+var param_id: int = -1            # DEVICE_PARAM / DEVICE_MODULATOR_PARAM only
+var mod_id: int = -1              # DEVICE_MODULATOR_PARAM only
 
 
 static func channel_volume() -> AutomationTarget:
@@ -40,6 +41,16 @@ static func device_param(path: Array, p_param_id: int) -> AutomationTarget:
 	return t
 
 
+## A parameter of a modulator on the device at `path` (spec 018).
+static func device_modulator_param(path: Array, p_mod_id: int, p_param_id: int) -> AutomationTarget:
+	var t := AutomationTarget.new()
+	t.kind = Kind.DEVICE_MODULATOR_PARAM
+	t.device_path = path.duplicate()
+	t.mod_id = p_mod_id
+	t.param_id = p_param_id
+	return t
+
+
 ## Wire spelling: `channel/volume`, `channel/pan`, `channel/send/{index}`,
 ## `device/{i0}[/{i1}...]/param/{param_id}`.
 func _to_string() -> String:
@@ -51,11 +62,18 @@ func _to_string() -> String:
 		Kind.SEND_AMOUNT:
 			return "channel/send/%d" % send_index
 		Kind.DEVICE_PARAM:
-			var indices: Array[String] = []
-			for i in device_path:
-				indices.append(str(i))
-			return "device/%s/param/%d" % ["/".join(indices), param_id]
+			return "device/%s/param/%d" % [_path_string(), param_id]
+		Kind.DEVICE_MODULATOR_PARAM:
+			return "device/%s/mod/%d/param/%d" % [_path_string(), mod_id, param_id]
 	return ""
+
+
+## `i0/i1/...` for the device path, as the wire spelling writes it.
+func _path_string() -> String:
+	var indices: Array[String] = []
+	for i in device_path:
+		indices.append(str(i))
+	return "/".join(indices)
 
 
 ## Parse the target string used by OSC, the `.sonara` file and the AI assistant. Returns null on
@@ -77,6 +95,7 @@ static func parse(s: String) -> AutomationTarget:
 	if parts.size() >= 1 and parts[0] == "device":
 		var rest: Array = parts.slice(1)
 		# rest = i0 [i1 ...] "param" param_id
+		#     or i0 [i1 ...] "mod" mod_id "param" param_id
 		if rest.size() < 3:
 			return null
 		var param_pos: int = rest.size() - 2
@@ -85,12 +104,22 @@ static func parse(s: String) -> AutomationTarget:
 		if not (rest[param_pos + 1] as String).is_valid_int():
 			return null
 		var param_id_val := int(rest[param_pos + 1])
+		var head: Array = rest.slice(0, param_pos)
+		var mod_id_val := -1
+		if head.size() >= 2 and head[head.size() - 2] == "mod":
+			if not (head[head.size() - 1] as String).is_valid_int():
+				return null
+			mod_id_val = int(head[head.size() - 1])
+			head = head.slice(0, head.size() - 2)
+		if head.is_empty():
+			return null
 		var indices: Array = []
-		for i in range(param_pos):
-			var index_str: String = rest[i]
-			if not index_str.is_valid_int():
+		for index_str in head:
+			if not (index_str as String).is_valid_int():
 				return null
 			indices.append(int(index_str))
+		if mod_id_val >= 0:
+			return AutomationTarget.device_modulator_param(indices, mod_id_val, param_id_val)
 		return AutomationTarget.device_param(indices, param_id_val)
 
 	return null
@@ -99,7 +128,7 @@ static func parse(s: String) -> AutomationTarget:
 ## The `DeviceInstance` this target drives, or null for a channel-level target (volume, pan,
 ## send). Returns null when the path no longer resolves (a removed device) - REQ-024.
 func resolve(channel: Object) -> Object:
-	if kind != Kind.DEVICE_PARAM or channel == null:
+	if (kind != Kind.DEVICE_PARAM and kind != Kind.DEVICE_MODULATOR_PARAM) or channel == null:
 		return null
 	var host: Array = channel.devices
 	var instance: Object = null
@@ -123,6 +152,10 @@ func is_resolvable(channel: Object) -> bool:
 		Kind.DEVICE_PARAM:
 			var instance := resolve(channel)
 			return instance != null and instance.get_parameter(param_id) != null
+		Kind.DEVICE_MODULATOR_PARAM:
+			var instance := resolve(channel)
+			var modulator = instance.get_modulator(mod_id) if instance != null else null
+			return modulator != null and modulator.get_parameter(param_id) != null
 	return false
 
 
@@ -149,6 +182,16 @@ func display_name(channel: Object) -> String:
 			var param: Object = instance.get_parameter(param_id)
 			var param_name: String = param_label(instance, param) if param else "Param %d" % param_id
 			return "%s / %s" % [instance.name, param_name]
+		Kind.DEVICE_MODULATOR_PARAM:
+			var instance := resolve(channel)
+			if instance == null:
+				return "Unresolved"
+			var modulator = instance.get_modulator(mod_id)
+			if modulator == null:
+				return "Unresolved"
+			var param: Object = modulator.get_parameter(param_id)
+			var param_name: String = param.name if param else "Param %d" % param_id
+			return "%s / %s / %s" % [instance.name, modulator.name, param_name]
 	return "Unknown"
 
 
@@ -209,6 +252,12 @@ func current_normalized_value(channel: Object) -> float:
 			if instance:
 				return clampf(instance.get_parameter_normalized(param_id), 0.0, 1.0)
 			return 0.5
+		Kind.DEVICE_MODULATOR_PARAM:
+			var instance := resolve(channel)
+			var modulator = instance.get_modulator(mod_id) if instance != null else null
+			if modulator:
+				return clampf(modulator.get_parameter_normalized(param_id), 0.0, 1.0)
+			return 0.5
 	return 0.5
 
 
@@ -227,6 +276,14 @@ func format_value(channel: Object, normalized: float) -> String:
 			var instance := resolve(channel)
 			if instance:
 				var param: Object = instance.get_parameter(param_id)
+				if param:
+					return param.format_value(param.normalized_to_value(normalized))
+			return "%.3f" % normalized
+		Kind.DEVICE_MODULATOR_PARAM:
+			var instance := resolve(channel)
+			var modulator = instance.get_modulator(mod_id) if instance != null else null
+			if modulator:
+				var param: Object = modulator.get_parameter(param_id)
 				if param:
 					return param.format_value(param.normalized_to_value(normalized))
 			return "%.3f" % normalized

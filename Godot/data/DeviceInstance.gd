@@ -31,8 +31,14 @@ signal choke_group_changed(group: int)
 signal slots_changed()
 signal name_changed(new_name: String)
 signal preset_changed()  # preset_name / preset_path changed; see set_preset
-## A modulation route was added, changed or removed (amount 0). See "MODULATION".
-signal mod_route_changed(source: String, param_id: int, amount: float)
+## A modulator was added to this device. See "MODULATORS" (spec 018).
+signal modulator_added(modulator: Modulator)
+## Modulator `mod_id` was removed (with its routes).
+signal modulator_removed(mod_id: int)
+## A modulator's name or one of its parameters changed.
+signal modulator_changed(mod_id: int)
+## One route was added, changed or removed (amount 0): `mod_id` → `target`.
+signal route_changed(mod_id: int, target: String, amount: float)
 
 
 ## ============================================================================
@@ -111,11 +117,15 @@ var sample_source: AudioSourceInfo = null
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
 
-## Modulation routes (device state, not parameters): "source:param_id" -> amount (-1..1).
-## Amount 0 is never stored. Seeded from the device's default patch; see "MODULATION".
-var mod_routes: Dictionary = {}
+## Modulators on this device instance (spec 018). A fresh instance is seeded from the device's
+## `default_modulators`; a loaded project/preset replaces them. See "MODULATORS".
+var modulators: Array[Modulator] = []
 
-## Echoes of our own mod messages still in flight: key ("source:param_id", or MOD_CLEAR_KEY)
+## Capacity of `modulators`, as in the engine (ids 0..7).
+const MAX_MODULATORS := 8
+
+## Echoes of our own modulator messages still in flight, keyed by
+## "add:{id}" / "remove:{id}" / "param:{id}:{pid}" / "route:{id}:{target}" / MOD_CLEAR_KEY
 ## -> [count, first_msec]. Same idea as `_pending_echoes`.
 var _pending_mod_echoes: Dictionary = {}
 const MOD_CLEAR_KEY := "*clear*"
@@ -274,8 +284,9 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 		return
 	for param in get_parameters():
 		parameter_values[param.id] = param.value_to_normalized(param.default_value)
-	for route in device.default_mod_routes:
-		mod_routes[_mod_key(route["source"], route["param_id"])] = float(route["amount"])
+	_seed_default_modulators()
+	child_moved.connect(_on_own_children_moved)
+	child_removed.connect(_on_own_children_removed)
 	Multiband.ensure_chains(self)
 
 
@@ -494,102 +505,263 @@ func contains_device(other: DeviceInstance) -> bool:
 
 
 ## ============================================================================
-## MODULATION
+## MODULATORS
 ## ============================================================================
-## Routes are device state, not parameters: a source (e.g. "lfo1") moves a parameter by
-## `amount` (-1..1, normalized units per unit of source). They are evaluated inside the engine
-## device (per voice) and travel as `{device}/mod/set` / `mod/clear`. Like parameters, the UI
-## only calls the setter; the model sends OSC and emits `mod_route_changed`.
+## A modulator (spec 018) belongs to this device instance: a kind, its own parameters and the
+## routes it drives. Routes are device state, not parameters, and are evaluated in the engine
+## (`{device}/modulator/...`). Like parameters, the UI only calls a setter; the model sends OSC
+## and emits the change signals. The engine's echo only re-emits when it corrects something.
 
-static func _mod_key(source: String, param_id: int) -> String:
-	return "%s:%d" % [source, param_id]
+## Seed a fresh instance from the device's default patch. Never sends OSC: `sync_to_engine`
+## does that once the device is in the engine.
+func _seed_default_modulators() -> void:
+	if device == null:
+		return
+	var next_id := 0
+	for entry in device.default_modulators:
+		if next_id >= MAX_MODULATORS:
+			break
+		var params: Dictionary = {}
+		for param_id in entry.get("params", {}):
+			params[int(param_id)] = clampf(float(entry["params"][param_id]), 0.0, 1.0)
+		var routes: Dictionary = {}
+		for route in entry.get("routes", []):
+			var amount := clampf(float(route.get("amount", 0.0)), -1.0, 1.0)
+			if amount != 0.0:
+				routes[String(route.get("target", ""))] = amount
+		var mod := _build_modulator(next_id, String(entry.get("kind", "")),
+			String(entry.get("name", "")), params, routes)
+		if mod != null:
+			modulators.append(mod)
+			next_id += 1
 
 
-## Sources this device offers: [{id, name, bipolar}].
-func get_mod_sources() -> Array[Dictionary]:
-	return device.mod_sources if device != null else ([] as Array[Dictionary])
+func _build_modulator(mod_id: int, kind: String, mod_name: String, params: Dictionary, routes: Dictionary) -> Modulator:
+	if kind.is_empty():
+		return null
+	var mod := Modulator.new()
+	mod.mod_id = mod_id
+	mod.kind = kind
+	mod.name = mod_name if not mod_name.is_empty() else get_modulator_kind_name(kind)
+	mod.params = params
+	mod.routes = routes
+	mod.set_owner(self)
+	return mod
 
 
+## True when this instance carries any modulator.
 func has_modulation() -> bool:
-	return device != null and device.has_modulation()
+	return not modulators.is_empty()
 
 
-## Amount of the route from `source` to `param_id` (0 when there is none).
-func get_mod_amount(source: String, param_id: int) -> float:
-	return float(mod_routes.get(_mod_key(source, param_id), 0.0))
+func modulator_count() -> int:
+	return modulators.size()
 
 
-## Routes into `param_id`: [{source: String, amount: float}], in source-list order.
-func get_routes_for_param(param_id: int) -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	for src in get_mod_sources():
-		var amount := get_mod_amount(src["id"], param_id)
-		if amount != 0.0:
-			out.append({"source": src["id"], "amount": amount})
+func get_modulator(mod_id: int) -> Modulator:
+	for mod in modulators:
+		if mod.mod_id == mod_id:
+			return mod
+	return null
+
+
+## Kind metadata from the AssetService registry (empty when the kind isn't advertised yet).
+func get_modulator_kind(kind: String) -> Dictionary:
+	var tree := Engine.get_main_loop() as SceneTree
+	var service = tree.root.get_node_or_null("AssetService") if tree != null else null
+	if service != null and service.device_registry != null:
+		return service.device_registry.get_modulator_kind(kind)
+	return {}
+
+
+func get_modulator_kind_name(kind: String) -> String:
+	return String(get_modulator_kind(kind).get("name", kind))
+
+
+func get_modulator_kind_params(kind: String) -> Array[DeviceParameter]:
+	var out: Array[DeviceParameter] = []
+	out.assign(get_modulator_kind(kind).get("params", []))
 	return out
 
 
-## Number of routes leaving `source`.
-func get_route_count_for_source(source: String) -> int:
-	var count := 0
-	for key in mod_routes:
-		if String(key).begins_with(source + ":"):
-			count += 1
-	return count
+## True when the kind is bipolar (−1..1); envelopes and velocity are unipolar.
+func is_modulator_kind_bipolar(kind: String) -> bool:
+	return bool(get_modulator_kind(kind).get("bipolar", false))
 
 
-## Set (or with 0, remove) the route from `source` to `param_id`. Syncs to the engine and emits
-## `mod_route_changed`; the engine's echo only emits again when it corrects the amount.
-func set_mod_amount(source: String, param_id: int, amount: float) -> void:
+## Add a modulator of `kind` with the engine's default parameters. Returns null when the kind is
+## unknown or the device already holds MAX_MODULATORS of them.
+func add_modulator(kind: String) -> Modulator:
+	var info := get_modulator_kind(kind)
+	if info.is_empty():
+		logger.warn("[%s] Unknown modulator kind '%s'" % [get_display_name(), kind])
+		return null
+	var mod_id := _lowest_free_mod_id()
+	if mod_id < 0:
+		logger.warn("[%s] Already has the maximum of %d modulators" % [get_display_name(), MAX_MODULATORS])
+		return null
+	var params: Dictionary = {}
+	for param in get_modulator_kind_params(kind):
+		params[param.id] = param.value_to_normalized(param.default_value)
+	var mod := _build_modulator(mod_id, kind, _unique_modulator_name(get_modulator_kind_name(kind)), params, {})
+	modulators.append(mod)
+	_expect_mod_echo("add:%d" % mod_id)
+	AudioEngineOSC.send(osc_addr("modulator/add"), [mod_id, kind])
+	modulator_added.emit(mod)
+	return mod
+
+
+func _lowest_free_mod_id() -> int:
+	for candidate in range(MAX_MODULATORS):
+		if get_modulator(candidate) == null:
+			return candidate
+	return -1
+
+
+func _unique_modulator_name(base: String) -> String:
+	var candidate := base
+	var suffix := 2
+	while _modulator_name_taken(candidate):
+		candidate = "%s %d" % [base, suffix]
+		suffix += 1
+	return candidate
+
+
+func _modulator_name_taken(candidate: String) -> bool:
+	for mod in modulators:
+		if mod.name == candidate:
+			return true
+	return false
+
+
+## Remove `mod_id` and its routes.
+func remove_modulator(mod_id: int) -> void:
+	var index := _modulator_index(mod_id)
+	if index < 0:
+		return
+	modulators.remove_at(index)
+	_expect_mod_echo("remove:%d" % mod_id)
+	AudioEngineOSC.send(osc_addr("modulator/%d/remove" % mod_id), [])
+	modulator_removed.emit(mod_id)
+
+
+func _modulator_index(mod_id: int) -> int:
+	for i in modulators.size():
+		if modulators[i].mod_id == mod_id:
+			return i
+	return -1
+
+
+## Rename a modulator (kept unique among this device's modulators).
+func rename_modulator(mod_id: int, new_name: String) -> void:
+	var mod := get_modulator(mod_id)
+	if mod == null:
+		return
+	var trimmed := new_name.strip_edges()
+	if trimmed.is_empty():
+		trimmed = get_modulator_kind_name(mod.kind)
+	var unique := _unique_modulator_name(trimmed)
+	if unique == mod.name:
+		return
+	mod.name = unique
+	modulator_changed.emit(mod_id)
+
+
+## Set a modulator parameter (normalized). Bools and enums snap to their canonical value.
+func set_modulator_param(mod_id: int, param_id: int, value: float) -> void:
+	var mod := get_modulator(mod_id)
+	if mod == null:
+		return
+	var canonical := _canonical_mod_param(mod, param_id, value)
+	if is_equal_approx(mod.get_param(param_id), canonical):
+		return
+	mod.params[param_id] = canonical
+	_expect_mod_echo("param:%d:%d" % [mod_id, param_id])
+	_send_modulator_param(mod, param_id, canonical)
+	modulator_changed.emit(mod_id)
+
+
+func _canonical_mod_param(mod: Modulator, param_id: int, value: float) -> float:
+	value = clampf(value, 0.0, 1.0)
+	var param := mod.get_parameter(param_id)
+	if param == null:
+		return value
+	if param.param_type == "bool":
+		return 1.0 if value >= 0.5 else 0.0
+	if param.param_type == "enum":
+		var n := maxi(1, param.enum_values.size())
+		return float(clampi(int(round(value * float(n - 1))), 0, n - 1)) / float(maxi(n - 1, 1))
+	return value
+
+
+func _send_modulator_param(mod: Modulator, param_id: int, value: float) -> void:
+	var param := mod.get_parameter(param_id)
+	var args: Array = [value]
+	if param != null and param.param_type == "bool":
+		args = [1 if value >= 0.5 else 0]
+	elif param != null and param.param_type == "enum":
+		var n := maxi(1, param.enum_values.size())
+		args = [int(round(value * float(n - 1)))]
+	AudioEngineOSC.send(osc_addr("modulator/%d/param/%d/value" % [mod.mod_id, param_id]), args)
+
+
+## Set (or with 0, remove) a route from `mod_id` to `target`. The engine echoes the clamped
+## amount; a route whose target it can't resolve comes back as 0 and is dropped.
+func set_route_amount(mod_id: int, target: String, amount: float) -> void:
+	var mod := get_modulator(mod_id)
+	if mod == null:
+		return
 	amount = clampf(amount, -1.0, 1.0)
 	if absf(amount) < 0.001:
 		amount = 0.0
-	var old := get_mod_amount(source, param_id)
-	if is_equal_approx(old, amount):
+	if is_equal_approx(mod.get_route(target), amount):
 		return
-	_store_mod_amount(source, param_id, amount)
-	_expect_mod_echo(_mod_key(source, param_id))
-	AudioEngineOSC.send(osc_addr("mod/set"), [source, param_id, amount])
-	mod_route_changed.emit(source, param_id, amount)
-
-
-## Remove every route.
-func clear_mod_routes() -> void:
-	if mod_routes.is_empty():
-		return
-	var removed := mod_routes.duplicate()
-	mod_routes.clear()
-	_expect_mod_echo(MOD_CLEAR_KEY)
-	AudioEngineOSC.send(osc_addr("mod/clear"), [])
-	_emit_removed_routes(removed)
-
-
-## Undo step for one mod-amount edit; consecutive drags on the same route merge. The caller
-## records it with `HistoryUtil.record()`, as parameter edits do (the model never does).
-func mod_amount_command(source: String, param_id: int, old_amount: float, new_amount: float) -> PropertyCommand:
-	var cmd := PropertyCommand.new(
-		"Set Modulation Amount",
-		self,
-		"set_mod_amount",
-		[source, param_id, old_amount],
-		[source, param_id, new_amount]
-	)
-	# Same target and setter name, so consecutive drags merge (lambdas never compare equal).
-	return cmd.set_unpack_array(true).set_mergeable(true)
-
-
-func _store_mod_amount(source: String, param_id: int, amount: float) -> void:
-	var key := _mod_key(source, param_id)
 	if amount == 0.0:
-		mod_routes.erase(key)
+		mod.routes.erase(target)
 	else:
-		mod_routes[key] = amount
+		mod.routes[target] = amount
+	_expect_mod_echo("route:%d:%s" % [mod_id, target])
+	AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod_id), [target, amount])
+	route_changed.emit(mod_id, target, amount)
 
 
-func _emit_removed_routes(removed: Dictionary) -> void:
-	for key in removed:
-		var parts := String(key).rsplit(":", true, 1)
-		mod_route_changed.emit(parts[0], int(parts[1]), 0.0)
+## Routes on this device into `target` (relative to this device): one entry per modulator,
+## `{mod_id, name, kind, amount, bipolar, color_index}`. Used by `ModDisplay`; the UI walks the
+## owner chain so a container's modulator shows on a child's knob.
+func get_routes_into(target: String) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for i in modulators.size():
+		var mod := modulators[i]
+		var amount := mod.get_route(target)
+		if amount != 0.0:
+			out.append({
+				"mod_id": mod.mod_id,
+				"name": mod.name,
+				"kind": mod.kind,
+				"amount": amount,
+				"bipolar": is_modulator_kind_bipolar(mod.kind),
+				"color_index": i,
+			})
+	return out
+
+
+## Re-send this device's modulators: clear, then one add per modulator, its parameters and its
+## routes. The device-tree walk calls this again after the children are added, since routes into
+## a child only resolve once it exists.
+func sync_modulators_to_engine() -> void:
+	if not has_modulation():
+		return
+	_expect_mod_echo(MOD_CLEAR_KEY)
+	AudioEngineOSC.send(osc_addr("modulator/clear"), [])
+	for mod in modulators:
+		_expect_mod_echo("add:%d" % mod.mod_id)
+		AudioEngineOSC.send(osc_addr("modulator/add"), [mod.mod_id, mod.kind])
+		for param_id in mod.params:
+			_expect_mod_echo("param:%d:%d" % [mod.mod_id, param_id])
+			_send_modulator_param(mod, param_id, mod.params[param_id])
+		for target in mod.routes:
+			_expect_mod_echo("route:%d:%s" % [mod.mod_id, target])
+			AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod.mod_id), [target, mod.routes[target]])
 
 
 func _expect_mod_echo(key: String) -> void:
@@ -616,38 +788,226 @@ func _consume_mod_echo(key: String) -> bool:
 	return true
 
 
-func _on_mod_set_received(values: Array) -> void:
-	if values.size() < 3:
+## `{device}/modulator/add [i:mod_id, s:kind]` echo, or a `state/get` resend.
+func _on_modulator_add_received(values: Array, _address: String = "") -> void:
+	if values.size() < 2:
 		return
-	var source := String(values[0])
-	var param_id := int(values[1])
-	var amount := float(values[2])
-	if _consume_mod_echo(_mod_key(source, param_id)):
+	var mod_id := int(values[0])
+	var kind := String(values[1])
+	if _consume_mod_echo("add:%d" % mod_id):
 		return
-	if is_equal_approx(get_mod_amount(source, param_id), amount):
+	var existing := get_modulator(mod_id)
+	if existing != null:
+		if existing.kind == kind:
+			return
+		modulators.erase(existing)
+	var params: Dictionary = {}
+	for param in get_modulator_kind_params(kind):
+		params[param.id] = param.value_to_normalized(param.default_value)
+	var mod := _build_modulator(mod_id, kind, get_modulator_kind_name(kind), params, {})
+	if mod == null:
 		return
-	_store_mod_amount(source, param_id, amount)
-	mod_route_changed.emit(source, param_id, amount)
+	modulators.append(mod)
+	modulator_added.emit(mod)
 
 
-func _on_mod_clear_received(_values: Array) -> void:
-	if _consume_mod_echo(MOD_CLEAR_KEY) or mod_routes.is_empty():
+func _on_modulator_remove_received(values: Array, address: String) -> void:
+	var mod_id := _modulator_id_from_address(address)
+	if mod_id < 0 and values.size() >= 1:
+		mod_id = int(values[0])
+	if mod_id < 0:
 		return
-	var removed := mod_routes.duplicate()
-	mod_routes.clear()
-	_emit_removed_routes(removed)
+	if _consume_mod_echo("remove:%d" % mod_id):
+		return
+	var index := _modulator_index(mod_id)
+	if index < 0:
+		return
+	modulators.remove_at(index)
+	modulator_removed.emit(mod_id)
 
 
-## Make the engine's routes match ours: clear, then one set per route.
-func sync_mod_routes_to_engine() -> void:
-	if not has_modulation():
+func _on_modulator_param_received(values: Array, address: String) -> void:
+	if values.size() < 1:
 		return
-	_expect_mod_echo(MOD_CLEAR_KEY)
-	AudioEngineOSC.send(osc_addr("mod/clear"), [])
-	for key in mod_routes:
-		var parts := String(key).rsplit(":", true, 1)
-		_expect_mod_echo(String(key))
-		AudioEngineOSC.send(osc_addr("mod/set"), [parts[0], int(parts[1]), float(mod_routes[key])])
+	var ids := _mod_ids_from_address(address, "param")
+	if ids.size() < 2:
+		return
+	var mod_id: int = ids[0]
+	var param_id: int = ids[1]
+	if _consume_mod_echo("param:%d:%d" % [mod_id, param_id]):
+		return
+	var mod := get_modulator(mod_id)
+	if mod == null:
+		return
+	var value := clampf(float(values[0]), 0.0, 1.0)
+	if is_equal_approx(mod.get_param(param_id), value):
+		return
+	mod.params[param_id] = value
+	modulator_changed.emit(mod_id)
+
+
+func _on_modulator_route_received(values: Array, address: String) -> void:
+	if values.size() < 2:
+		return
+	var mod_id := _modulator_id_from_address(address)
+	if mod_id < 0:
+		return
+	var target := String(values[0])
+	var amount := clampf(float(values[1]), -1.0, 1.0)
+	if absf(amount) < 0.001:
+		amount = 0.0
+	if _consume_mod_echo("route:%d:%s" % [mod_id, target]):
+		return
+	var mod := get_modulator(mod_id)
+	if mod == null:
+		return
+	if is_equal_approx(mod.get_route(target), amount):
+		return
+	if amount == 0.0:
+		mod.routes.erase(target)
+	else:
+		mod.routes[target] = amount
+	route_changed.emit(mod_id, target, amount)
+
+
+func _on_modulator_clear_received(_values: Array, _address: String = "") -> void:
+	if _consume_mod_echo(MOD_CLEAR_KEY) or modulators.is_empty():
+		return
+	var removed_ids: Array[int] = []
+	for mod in modulators:
+		removed_ids.append(mod.mod_id)
+	modulators.clear()
+	for mod_id in removed_ids:
+		modulator_removed.emit(mod_id)
+
+
+## `.../modulator/{mod_id}/...` → mod_id, or −1.
+func _modulator_id_from_address(address: String) -> int:
+	var parts := address.split("/")
+	for i in parts.size():
+		if parts[i] == "modulator" and i + 1 < parts.size() and (parts[i + 1] as String).is_valid_int():
+			return int(parts[i + 1])
+	return -1
+
+
+## From `.../modulator/{id}/param/{p}/value` → [mod_id, param_id] (empty when unparseable).
+func _mod_ids_from_address(address: String, keyword: String) -> Array[int]:
+	var parts := address.split("/")
+	var mod_id := -1
+	var param_id := -1
+	for i in parts.size():
+		if parts[i] == "modulator" and i + 1 < parts.size() and (parts[i + 1] as String).is_valid_int():
+			mod_id = int(parts[i + 1])
+		elif parts[i] == keyword and i + 1 < parts.size() and (parts[i + 1] as String).is_valid_int():
+			param_id = int(parts[i + 1])
+	if mod_id < 0 or param_id < 0:
+		return [] as Array[int]
+	var out: Array[int] = [mod_id, param_id]
+	return out
+
+
+## Called after this device's own children moved; propagated to every ancestor, whose relative
+## paths shifted too.
+func _on_own_children_moved(from_position: int, to_position: int) -> void:
+	_remap_routes_for_move(self, from_position, to_position)
+	var owner := get_parent_device()
+	while owner != null:
+		owner._remap_routes_for_move(self, from_position, to_position)
+		owner = owner.get_parent_device()
+
+
+func _on_own_children_removed(position: int, _device_id: String) -> void:
+	_remap_routes_for_removal(self, position)
+	var owner := get_parent_device()
+	while owner != null:
+		owner._remap_routes_for_removal(self, position)
+		owner = owner.get_parent_device()
+
+
+## Relative index path from this device to `descendant` ([] when it is this device, null when it
+## is not nested inside).
+func relative_index_path(descendant: DeviceInstance) -> Variant:
+	if descendant == self:
+		return []
+	for i in children.size():
+		var sub = children[i].relative_index_path(descendant)
+		if sub != null:
+			var path: Array = [i]
+			path.append_array(sub)
+			return path
+	return null
+
+
+func _remap_routes_for_move(below: DeviceInstance, from_position: int, to_position: int) -> void:
+	var prefix = relative_index_path(below)
+	if prefix == null:
+		return
+	_remap_routes(prefix, from_position, to_position, -1)
+
+
+func _remap_routes_for_removal(below: DeviceInstance, position: int) -> void:
+	var prefix = relative_index_path(below)
+	if prefix == null:
+		return
+	_remap_routes(prefix, -1, -1, position)
+
+
+func _remap_routes(prefix: Array, from_position: int, to_position: int, remove_position: int) -> void:
+	for mod in modulators:
+		for target in mod.routes.keys():
+			var new_target := _reindexed_target(String(target), prefix, from_position, to_position, remove_position)
+			if new_target != target:
+				_remap_route(mod, String(target), new_target)
+
+
+## Rewrite the first child index below `prefix` in a `child/{i.j}/param/{id}` target. Returns the
+## same string when the target doesn't point there, and "" when `remove_position` removes it.
+func _reindexed_target(target: String, prefix: Array, from_position: int, to_position: int, remove_position: int) -> String:
+	var parts := target.split("/")
+	if parts.size() != 4 or parts[0] != "child" or parts[2] != "param":
+		return target
+	var indices: Array[int] = []
+	for piece in parts[1].split("."):
+		if not (piece as String).is_valid_int():
+			return target
+		indices.append(int(piece))
+	if indices.size() <= prefix.size():
+		return target
+	for k in prefix.size():
+		if indices[k] != int(prefix[k]):
+			return target
+	var at := prefix.size()
+	var index: int = indices[at]
+	if remove_position >= 0:
+		if index == remove_position:
+			return ""
+		if index > remove_position:
+			index -= 1
+	else:
+		if index == from_position:
+			index = to_position
+		elif from_position < to_position and index > from_position and index <= to_position:
+			index -= 1
+		elif from_position > to_position and index >= to_position and index < from_position:
+			index += 1
+	indices[at] = index
+	var joined := ".".join(indices.map(func(i): return str(i)))
+	return "child/%s/param/%s" % [joined, parts[3]]
+
+
+## Move a route in the model and tell the engine: drop the old target, set the new one.
+func _remap_route(mod: Modulator, old_target: String, new_target: String) -> void:
+	var amount: float = mod.get_route(old_target)
+	if amount == 0.0:
+		return
+	mod.routes.erase(old_target)
+	if new_target != "":
+		mod.routes[new_target] = amount
+		AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod.mod_id), [new_target, amount])
+	AudioEngineOSC.send(osc_addr("modulator/%d/route/set" % mod.mod_id), [old_target, 0.0])
+	route_changed.emit(mod.mod_id, old_target, 0.0)
+	if new_target != "":
+		route_changed.emit(mod.mod_id, new_target, amount)
 
 
 ## ============================================================================
@@ -1114,8 +1474,11 @@ func connect_to_engine() -> void:
 	# Use wildcard pattern to listen for ALL parameter changes for this device
 	var param_pattern = osc_addr("param/*/value")
 	AudioEngineOSC.listen(param_pattern, _on_parameter_value_received_wildcard)
-	AudioEngineOSC.listen(osc_addr("mod/set"), _on_mod_set_received)
-	AudioEngineOSC.listen(osc_addr("mod/clear"), _on_mod_clear_received)
+	AudioEngineOSC.listen(osc_addr("modulator/add"), _on_modulator_add_received)
+	AudioEngineOSC.listen(osc_addr("modulator/*/remove"), _on_modulator_remove_received)
+	AudioEngineOSC.listen(osc_addr("modulator/*/param/*/value"), _on_modulator_param_received)
+	AudioEngineOSC.listen(osc_addr("modulator/*/route/set"), _on_modulator_route_received)
+	AudioEngineOSC.listen(osc_addr("modulator/clear"), _on_modulator_clear_received)
 
 	sync_slot_to_engine()
 	for child in children:
@@ -1146,8 +1509,11 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(param_count_addr, _on_param_count_received)
 	AudioEngineOSC.unlisten(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.unlisten(param_pattern, _on_parameter_value_received_wildcard)
-	AudioEngineOSC.unlisten(osc_addr("mod/set"), _on_mod_set_received)
-	AudioEngineOSC.unlisten(osc_addr("mod/clear"), _on_mod_clear_received)
+	AudioEngineOSC.unlisten(osc_addr("modulator/add"), _on_modulator_add_received)
+	AudioEngineOSC.unlisten(osc_addr("modulator/*/remove"), _on_modulator_remove_received)
+	AudioEngineOSC.unlisten(osc_addr("modulator/*/param/*/value"), _on_modulator_param_received)
+	AudioEngineOSC.unlisten(osc_addr("modulator/*/route/set"), _on_modulator_route_received)
+	AudioEngineOSC.unlisten(osc_addr("modulator/clear"), _on_modulator_clear_received)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
@@ -1428,7 +1794,7 @@ func _push_restored_parameters_to_engine() -> void:
 ## Sync this device instance's parameters to the audio engine (bulk sync)
 ## TODO: Implement this
 func sync_to_engine() -> void:
-	sync_mod_routes_to_engine()
+	sync_modulators_to_engine()
 	for param_id in parameter_values:
 		var param = get_parameter(param_id)
 		if param and not param.syncable:
@@ -1674,8 +2040,10 @@ func to_json() -> Dictionary:
 	if not preset_name.is_empty():
 		data["preset_name"] = preset_name
 		data["preset_path"] = preset_path
-	if has_modulation():
-		data["mod_routes"] = _mod_routes_to_json()
+	# Always persist modulators for a device that starts with a default patch, so a user who
+	# removed them all comes back with none. A device without defaults omits the key when empty.
+	if not modulators.is_empty() or (device != null and device.has_default_modulators()):
+		data["modulators"] = _modulators_to_json()
 	if not plugin_state.is_empty():
 		data["plugin_state"] = Marshalls.raw_to_base64(plugin_state)
 	var note_map_json = LayerNoteMap.to_json(slot_note_map)
@@ -1684,13 +2052,26 @@ func to_json() -> Dictionary:
 	return data
 
 
-## `[{source, param_id, amount}]`, sorted so saves are stable.
-func _mod_routes_to_json() -> Array:
+## `[{mod_id, kind, name, params: {id: norm}, routes: [{target, amount}]}]`, sorted so saves
+## are stable. Parameter ids and mod_ids travel as strings/ints as JSON requires.
+func _modulators_to_json() -> Array:
 	var out: Array = []
-	for key in mod_routes:
-		var parts := String(key).rsplit(":", true, 1)
-		out.append({"source": parts[0], "param_id": int(parts[1]), "amount": mod_routes[key]})
-	out.sort_custom(func(a, b): return _mod_key(a["source"], a["param_id"]) < _mod_key(b["source"], b["param_id"]))
+	for mod in modulators:
+		var params := {}
+		for param_id in mod.params:
+			params[str(param_id)] = mod.params[param_id]
+		var routes: Array = []
+		for target in mod.routes:
+			routes.append({"target": target, "amount": mod.routes[target]})
+		routes.sort_custom(func(a, b): return String(a["target"]) < String(b["target"]))
+		out.append({
+			"mod_id": mod.mod_id,
+			"kind": mod.kind,
+			"name": mod.name,
+			"params": params,
+			"routes": routes,
+		})
+	out.sort_custom(func(a, b): return int(a["mod_id"]) < int(b["mod_id"]))
 	return out
 
 
@@ -1775,15 +2156,32 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 		instance.parameter_values[param_id] = value
 		instance._restored_parameter_values[param_id] = value
 	
-	# Saved routes replace the default patch (an empty list means the user removed them all);
-	# a project saved before routes existed keeps the defaults.
-	if data.has("mod_routes") and data["mod_routes"] is Array:
-		instance.mod_routes.clear()
-		for route in data["mod_routes"]:
-			if route is Dictionary and route.has("source") and route.has("param_id"):
-				var amount := clampf(float(route.get("amount", 0.0)), -1.0, 1.0)
-				if amount != 0.0:
-					instance.mod_routes[_mod_key(str(route["source"]), int(route["param_id"]))] = amount
+	# Saved modulators replace the seeded defaults (an empty list means the user removed them
+	# all); a project/preset saved before modulators existed keeps the device's defaults.
+	if data.has("modulators") and data["modulators"] is Array:
+		instance.modulators.clear()
+		for entry in data["modulators"]:
+			if not (entry is Dictionary) or not entry.has("kind"):
+				continue
+			var mod_params: Dictionary = {}
+			var saved_params: Variant = entry.get("params", {})
+			if saved_params is Dictionary:
+				for param_key in saved_params:
+					mod_params[int(param_key)] = clampf(float(saved_params[param_key]), 0.0, 1.0)
+			var mod_routes: Dictionary = {}
+			for route in entry.get("routes", []):
+				if route is Dictionary and route.has("target"):
+					var amount := clampf(float(route.get("amount", 0.0)), -1.0, 1.0)
+					if amount != 0.0:
+						mod_routes[str(route["target"])] = amount
+			var mod := instance._build_modulator(
+				int(entry.get("mod_id", instance.modulators.size())),
+				str(entry["kind"]),
+				str(entry.get("name", "")),
+				mod_params,
+				mod_routes)
+			if mod != null:
+				instance.modulators.append(mod)
 
 	# Restore loaded file path (will be reloaded after engine connection)
 	instance.loaded_file_path = data.get("loaded_file_path", "")

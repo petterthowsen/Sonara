@@ -15,7 +15,18 @@ signal device_registered(device: Device)
 ## A batch of registrations or removals finished (builtin advertisement, plugin scan, cache load).
 signal devices_changed(added: Array[Device], removed: Array[Device])
 
+## The engine advertised a (new) modulator kind. See `modulator_kinds` (spec 018).
+signal modulator_kind_registered(kind_id: String)
+
+## The engine's modulator-kind batch finished.
+signal modulator_kinds_changed()
+
 var _devices: Dictionary[String, Device] = {}
+
+## Modulator kinds the engine offers (spec 018), by id:
+## `{id: String, name: String, bipolar: bool, params: Array[DeviceParameter]}`. Kinds are
+## engine-global, not per device; a modulator builds its controls from `params`.
+var modulator_kinds: Dictionary = {}
 
 
 ## Load the plugin cache, listen for engine advertisements and request built-ins.
@@ -25,6 +36,8 @@ func start() -> void:
 	AudioEngineOSC.listen("/plugin/scan_complete", _on_plugin_scan_complete)
 	AudioEngineOSC.listen("/builtin/info", _on_builtin_info_received)
 	AudioEngineOSC.listen("/builtin/complete", _on_builtin_complete)
+	AudioEngineOSC.listen("/builtin/modulator_kind", _on_modulator_kind_received)
+	AudioEngineOSC.listen("/builtin/modulator_complete", _on_modulator_kinds_complete)
 	# Re-request built-ins whenever the engine (re)connects.
 	if not AudioEngineOSC.engine_connected.is_connected(_request_builtin_devices):
 		AudioEngineOSC.engine_connected.connect(_request_builtin_devices)
@@ -40,6 +53,20 @@ func get_device(device_id: String) -> Device:
 func get_devices() -> Array[Device]:
 	var out: Array[Device] = []
 	out.assign(_devices.values())
+	return out
+
+
+## One modulator kind the engine offered, or {} when it isn't advertised (yet).
+func get_modulator_kind(kind_id: String) -> Dictionary:
+	return modulator_kinds.get(kind_id, {})
+
+
+## Every advertised modulator kind, sorted by id for stable UI order.
+func get_modulator_kinds() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for kind in modulator_kinds.values():
+		out.append(kind)
+	out.sort_custom(func(a, b): return String(a["id"]) < String(b["id"]))
 	return out
 
 
@@ -193,77 +220,125 @@ func _on_builtin_info_received(args: Array) -> void:
 	idx += 1
 
 	for _i in range(param_count):
-		if idx + 10 >= args.size():
+		var parsed := _parse_param(args, idx, dev_id)
+		var param: DeviceParameter = parsed[0]
+		if param == null:
 			logger.warn("Truncated parameter data for builtin device %s" % dev_id)
 			break
-		var param := DeviceParameter.new(int(args[idx]), String(args[idx + 1]), String(args[idx + 2]))
-		param.param_type = String(args[idx + 3])
-		param.syncable = int(args[idx + 4]) != 0
-		param.min_value = float(args[idx + 5])
-		param.max_value = float(args[idx + 6])
-		param.default_value = float(args[idx + 7])
-		param.is_logarithmic = int(args[idx + 8]) != 0
-		param.skew = maxf(float(args[idx + 9]), 0.01)
-		var enum_count: int = int(args[idx + 10])
-		idx += 11
-
-		var enum_vals: Array[String] = []
-		for _j in range(enum_count):
-			if idx >= args.size():
-				logger.warn("Missing enum value for param %s on %s" % [param.name, dev_id])
-				break
-			enum_vals.append(String(args[idx]))
-			idx += 1
-		param.enum_values = enum_vals
-		if idx + 1 < args.size():
-			param.module = String(args[idx])
-			param.is_automation_safe = int(args[idx + 1]) != 0
-			idx += 2
-			if idx < args.size():
-				param.is_modulatable = int(args[idx]) != 0
-				idx += 1
+		idx = parsed[1]
 		device.add_parameter(param)
 
 	if idx < args.size():
 		device.is_container = int(args[idx]) != 0
 		idx += 1
 
-	_parse_modulation(device, args, idx)
+	_parse_default_modulators(device, args, idx)
 
 	# Batched: devices_changed fires on /builtin/complete.
 	_register(device)
 
 
-## Modulation block of /builtin/info starting at `idx`. Absent for devices without modulation.
-func _parse_modulation(device: Device, args: Array, idx: int) -> void:
+## Parse one parameter tuple starting at `idx` (the layout `push_param_args` writes). Returns
+## `[DeviceParameter, next_idx]`, or `[null, idx]` when the tuple is truncated.
+func _parse_param(args: Array, idx: int, owner_id: String) -> Array:
+	if idx + 10 >= args.size():
+		return [null, idx]
+	var param := DeviceParameter.new(int(args[idx]), String(args[idx + 1]), String(args[idx + 2]))
+	param.param_type = String(args[idx + 3])
+	param.syncable = int(args[idx + 4]) != 0
+	param.min_value = float(args[idx + 5])
+	param.max_value = float(args[idx + 6])
+	param.default_value = float(args[idx + 7])
+	param.is_logarithmic = int(args[idx + 8]) != 0
+	param.skew = maxf(float(args[idx + 9]), 0.01)
+	var enum_count: int = int(args[idx + 10])
+	idx += 11
+
+	var enum_vals: Array[String] = []
+	for _j in range(enum_count):
+		if idx >= args.size():
+			logger.warn("Missing enum value for param %s on %s" % [param.name, owner_id])
+			break
+		enum_vals.append(String(args[idx]))
+		idx += 1
+	param.enum_values = enum_vals
+	if idx + 1 < args.size():
+		param.module = String(args[idx])
+		param.is_automation_safe = int(args[idx + 1]) != 0
+		idx += 2
+		if idx < args.size():
+			param.is_modulatable = int(args[idx]) != 0
+			idx += 1
+	return [param, idx]
+
+
+## Default-modulator block of /builtin/info starting at `idx`. Absent for devices without a
+## default patch. `{kind, name, params: {id: norm}, routes: [{target, amount}]}`.
+func _parse_default_modulators(device: Device, args: Array, idx: int) -> void:
 	if idx >= args.size():
 		return
-	var source_count := int(args[idx])
+	var count := int(args[idx])
 	idx += 1
-	for _i in range(source_count):
+	for _i in range(count):
 		if idx + 2 >= args.size():
-			logger.warn("Truncated modulation sources for builtin device %s" % device.device_id)
+			logger.warn("Truncated default modulators for builtin device %s" % device.device_id)
 			return
-		device.mod_sources.append({
-			"id": String(args[idx]),
-			"name": String(args[idx + 1]),
-			"bipolar": int(args[idx + 2]) != 0,
-		})
-		idx += 3
-	if idx >= args.size():
+		var modulator := {"kind": String(args[idx]), "name": String(args[idx + 1]), "params": {}, "routes": []}
+		idx += 2
+		var param_count := int(args[idx])
+		idx += 1
+		for _p in range(param_count):
+			if idx + 1 >= args.size():
+				logger.warn("Truncated default modulator params for %s" % device.device_id)
+				return
+			modulator["params"][int(args[idx])] = float(args[idx + 1])
+			idx += 2
+		var route_count := int(args[idx])
+		idx += 1
+		for _r in range(route_count):
+			if idx + 1 >= args.size():
+				logger.warn("Truncated default modulator routes for %s" % device.device_id)
+				return
+			modulator["routes"].append({"target": String(args[idx]), "amount": float(args[idx + 1])})
+			idx += 2
+		device.default_modulators.append(modulator)
+
+
+## ============================================================================
+## MODULATOR KINDS (ENGINE -> GODOT)
+## ============================================================================
+
+## One modulator kind: [id, name, bipolar, param_count, then the same parameter tuples as
+## /builtin/info]. Kinds are engine-global; they arrive in the same /builtin/request batch.
+func _on_modulator_kind_received(args: Array) -> void:
+	if args.size() < 4:
+		logger.warn("Invalid /builtin/modulator_kind message: %s" % str(args))
 		return
-	var route_count := int(args[idx])
-	idx += 1
-	for _i in range(route_count):
-		if idx + 2 >= args.size():
-			logger.warn("Truncated default modulation routes for builtin device %s" % device.device_id)
-			return
-		device.default_mod_routes.append({
-			"source": String(args[idx]),
-			"param_id": int(args[idx + 1]),
-			"amount": float(args[idx + 2]),
-		})
-		idx += 3
+	var kind_id := String(args[0])
+	var entry := {
+		"id": kind_id,
+		"name": String(args[1]),
+		"bipolar": int(args[2]) != 0,
+		"params": [] as Array[DeviceParameter],
+	}
+	var param_count := int(args[3])
+	var idx := 4
+	for _i in range(param_count):
+		var parsed := _parse_param(args, idx, kind_id)
+		var param: DeviceParameter = parsed[0]
+		if param == null:
+			logger.warn("Truncated parameters for modulator kind %s" % kind_id)
+			break
+		idx = parsed[1]
+		entry["params"].append(param)
+	modulator_kinds[kind_id] = entry
+	modulator_kind_registered.emit(kind_id)
+
+
+func _on_modulator_kinds_complete(args: Array) -> void:
+	var count := int(args[0]) if args.size() > 0 else -1
+	logger.info("Modulator kind advertisement complete: %d kinds" % count)
+	modulator_kinds_changed.emit()
 
 
 func _on_builtin_complete(args: Array) -> void:

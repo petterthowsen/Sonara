@@ -34,10 +34,6 @@ var _inner: Control = null
 var _envelope: Envelope = null
 ## The envelope compound's knobs, in bound-parameter order (same index as `_param_ids`).
 var _env_knobs: Array[RotaryKnob] = []
-## Modulation-capable inner controls: `{node, index}` with `index` into the bound params.
-var _mod_targets: Array[Dictionary] = []
-var _assign_source := ""
-var _assign_color := Color.WHITE
 ## Full title on hover when it's trimmed; created on the first bind.
 var _title_overlay: LabelOverlay = null
 ## True while pushing device values into the inner control(s), so their signals don't loop back.
@@ -64,9 +60,7 @@ func bind(p_instance: DeviceInstance, data: Dictionary) -> void:
 	_title.custom_minimum_size.x = 0.0
 	_title.visible = not _title.text.is_empty()
 	_build_inner()
-	_collect_mod_targets()
 	refresh()
-	refresh_mod()
 
 
 ## True when this control shows `param_id` — or follows it: a Time knob also refreshes when its
@@ -137,7 +131,6 @@ func _build_inner() -> void:
 	_inner = null
 	_envelope = null
 	_env_knobs.clear()
-	_mod_targets.clear()
 	var kind := String(control_data.get("kind", ""))
 	if kind == SimpleControlKinds.SEGMENTED and not _segments_fit():
 		kind = SimpleControlKinds.DROPDOWN
@@ -528,114 +521,3 @@ func _sync_division() -> String:
 func _apply_sync_dim() -> void:
 	if _inner != null:
 		_inner.modulate.a = SYNCED_ALPHA if not _sync_division().is_empty() else 1.0
-
-
-## ============================================================================
-## MODULATION
-## ============================================================================
-
-## Fill `_mod_targets` from the inner control: single-parameter knobs and sliders, and the
-## envelope's knobs. Only float parameters can be modulated. The envelope display, XY and EQ band
-## compounds don't take part yet.
-func _collect_mod_targets() -> void:
-	_mod_targets.clear()
-	if instance == null or not instance.has_modulation():
-		return
-	match String(control_data.get("kind", "")):
-		SimpleControlKinds.KNOB, SimpleControlKinds.SLIDER, SimpleControlKinds.FADER:
-			if _is_modulatable(0) and (_inner is RotaryKnob or _inner is HorSlider or _inner is Fader):
-				_mod_targets.append({"node": _inner, "index": 0})
-		SimpleControlKinds.ENVELOPE:
-			for i in _env_knobs.size():
-				if _is_modulatable(i):
-					_mod_targets.append({"node": _env_knobs[i], "index": i})
-	for target in _mod_targets:
-		var node: Control = target["node"]
-		var index: int = target["index"]
-		node.mod_amount_text_callback = _mod_amount_text.bind(index)
-		node.mod_amount_changed.connect(_on_mod_amount_changed.bind(index))
-
-
-func _is_modulatable(index: int) -> bool:
-	var param := _param(index)
-	return param != null and param.param_type == "float"
-
-
-## True when the control can take a route in assign mode.
-func is_modulatable() -> bool:
-	return not _mod_targets.is_empty()
-
-
-## Enter assign mode for `source` (an id from the device's sources), or leave it with "".
-func set_mod_assign(source: String, color: Color = Color.WHITE) -> void:
-	_assign_source = source
-	_assign_color = color
-	for target in _mod_targets:
-		var node: Control = target["node"]
-		node.mod_assign_color = color
-		node.mod_assign_amount = instance.get_mod_amount(source, _param_ids[target["index"]]) if not source.is_empty() else 0.0
-		node.mod_assign_active = not source.is_empty()
-
-
-## Redraw the route arcs and bars from the model's routes.
-func refresh_mod() -> void:
-	if instance == null:
-		return
-	var sources := instance.get_mod_sources()
-	for target in _mod_targets:
-		var node: Control = target["node"]
-		var param_id: int = _param_ids[target["index"]]
-		var ranges: Array[Dictionary] = []
-		for route in instance.get_routes_for_param(param_id):
-			for i in sources.size():
-				if sources[i]["id"] == route["source"]:
-					ranges.append({
-						"amount": route["amount"],
-						"color": ModDisplay.source_color(i),
-						"source": route["source"],
-						"bipolar": bool(sources[i].get("bipolar", false)),
-					})
-		node.mod_ranges = ranges
-		if not _assign_source.is_empty():
-			node.mod_assign_amount = instance.get_mod_amount(_assign_source, param_id)
-
-
-## True when a route from `source` ends in this control.
-func has_route_from(source: String) -> bool:
-	for target in _mod_targets:
-		if instance.get_mod_amount(source, _param_ids[target["index"]]) != 0.0:
-			return true
-	return false
-
-
-## Highlight (or stop highlighting) this control as a target of `source`, e.g. while its button
-## is hovered.
-func set_mod_highlight(source: String, color: Color = Color.WHITE) -> void:
-	for target in _mod_targets:
-		var node: Control = target["node"]
-		if _assign_source.is_empty():
-			node.mod_assign_color = color
-			node.modulate = Color.WHITE if source.is_empty() or has_route_from(source) else Color(1, 1, 1, 0.35)
-
-
-func _on_mod_amount_changed(amount: float, index: int) -> void:
-	if instance == null or _assign_source.is_empty():
-		return
-	var param_id := _param_ids[index]
-	var old := instance.get_mod_amount(_assign_source, param_id)
-	instance.set_mod_amount(_assign_source, param_id, amount)
-	var applied := instance.get_mod_amount(_assign_source, param_id)
-	if not is_equal_approx(old, applied):
-		HistoryUtil.record(instance.mod_amount_command(_assign_source, param_id, old, applied))
-
-
-## Assign tooltip: octaves for a logarithmic (Hz) parameter, else percent of the control's travel.
-func _mod_amount_text(amount: float, index: int) -> String:
-	var param := _param(index)
-	if param != null and param.is_logarithmic:
-		var base := _normalized(index)
-		var low := param.normalized_to_value(base)
-		var high := param.normalized_to_value(clampf(base + amount, 0.0, 1.0))
-		if low > 0.0 and high > 0.0:
-			return "%+.1f oct" % (log(high / low) / log(2.0))
-	return ModDisplay.default_amount_text(amount)

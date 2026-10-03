@@ -1805,7 +1805,8 @@ static func _migrate_slot_automation(project: Project) -> void:
 			continue
 		for lane in track.automation_lanes:
 			var target: AutomationTarget = lane.target
-			if target == null or target.kind != AutomationTarget.Kind.DEVICE_PARAM:
+			if target == null or (target.kind != AutomationTarget.Kind.DEVICE_PARAM
+					and target.kind != AutomationTarget.Kind.DEVICE_MODULATOR_PARAM):
 				continue
 			for wrapped in ch.migrated_slot_paths:
 				if target.device_path.size() >= wrapped.size() and target.device_path.slice(0, wrapped.size()) == wrapped:

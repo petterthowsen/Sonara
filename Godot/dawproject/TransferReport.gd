@@ -37,7 +37,7 @@ const HARDWARE_OUTPUT := "hardware_output"
 const PHASE_INVERT := "phase_invert"
 const PLUGIN_NO_STATE := "plugin_no_state"
 const FILE_MISSING := "file_missing"
-const MOD_ROUTES := "mod_routes"
+const MODULATORS := "modulators"
 const DRUM_CHOKE_GROUP := "drum_choke_group"      # Drum Machine pad choke groups have no DAWproject mapping
 
 ## Text per kind. `{n}` is the count, `{detail}` the distinct details joined by ", ".
@@ -74,7 +74,7 @@ const TEMPLATES: Dictionary = {
 	PHASE_INVERT: "phase invert not exported",
 	PLUGIN_NO_STATE: "{detail} state could not be fetched, exported without it",
 	FILE_MISSING: "{detail}: referenced file not found, not embedded",
-	MOD_ROUTES: "{detail}: modulation routes are kept only in Sonara's own state; other applications ignore them",
+	MODULATORS: "{detail}: modulators are kept only in Sonara's own state; other applications ignore them",
 	DRUM_CHOKE_GROUP: "{detail}: Drum Machine choke groups are kept only in Sonara's own state; other applications ignore them",
 }
 

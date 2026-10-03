@@ -346,15 +346,15 @@ cutoff.
 
 ## Phase 7: Godot model, registry and persistence
 
-- [ ] `data/Modulator.gd` (RefCounted): `mod_id`, `kind`, `name`, `params: Dictionary[int,
+- [x?] `data/Modulator.gd` (RefCounted): `mod_id`, `kind`, `name`, `params: Dictionary[int,
   float]`, `routes: Dictionary[String, float]` (target → amount). The setters go through the
   owning `DeviceInstance`.
-- [ ] `DeviceRegistry`:
+- [x?] `DeviceRegistry`:
   - learns the modulator kinds from `/builtin/modulator_info` and keeps their parameter
     descriptors (as `DeviceParameter`);
   - `Device.default_modulators` replaces `mod_sources` and `default_mod_routes`;
   - `is_modulatable` is stored on `DeviceParameter`.
-- [ ] `DeviceInstance`:
+- [x?] `DeviceInstance`:
   - `modulators: Array[Modulator]`;
   - `add_modulator(kind) -> Modulator` (allocates the lowest free `mod_id`, up to 8),
     `remove_modulator`, `set_modulator_param`, `set_route_amount(mod_id, target, amount)`,
@@ -365,14 +365,14 @@ cutoff.
     routes;
   - new instances copy `default_modulators`;
   - remove `mod_routes` and `get_mod_sources`.
-- [ ] Target strings for nested devices are built relative to the owner:
+- [x?] Target strings for nested devices are built relative to the owner:
   `child/{i.j}/param/{id}`. Moving or removing a descendant rewrites or drops the affected
   routes in the model, which then re-sends them. The engine wrapper keeps paths relative to
   itself, so only moves *inside* the owner change them.
-- [ ] Project save/load, preset save/load (`test_device_presets.gd`), and DAWproject export
+- [x?] Project save/load, preset save/load (`test_device_presets.gd`), and DAWproject export
   (`State` JSON plus the transfer report key `modulators`). The automation lane target
   `device/{path}/mod/{mod_id}/param/{id}` is handled in the automation lane UI's target list.
-- [ ] Tests (`Godot/tests/test_device_modulators.gd`, replacing `test_device_mod_routes.gd`):
+- [x?] Tests (`Godot/tests/test_device_modulators.gd`, replacing `test_device_mod_routes.gd`):
   - add, remove and set send the right OSC;
   - an echo doesn't re-send;
   - project and preset round-trip;

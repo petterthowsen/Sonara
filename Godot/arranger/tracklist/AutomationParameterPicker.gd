@@ -1,8 +1,8 @@
 # AutomationParameterPicker.gd
 # The "what should this lane drive?" dropdown (REQ-015, REQ-016). Built from the track's linked
 # Channel: channel volume, pan, one entry per send, then one submenu per device in
-# `channel.devices` order carrying that device's `"param"` group and its `"cc"` group as two
-# separate groups.
+# `channel.devices` order carrying that device's `"param"` group, its `"cc"` group and, per
+# modulator (spec 018), its parameters, as separate groups.
 #
 # Two kinds of entry are left out: a parameter whose `is_automation_safe` is false (the device
 # says driving it from the audio thread is unsafe), and a parameter that already has a lane on
@@ -14,7 +14,8 @@ static var logger := Log.make("AutomationParameterPicker")
 ## The chosen target. The caller creates the lane, so this stays free of history concerns.
 signal parameter_chosen(track: Track, target: AutomationTarget)
 
-## Item ids in the root menu. Device parameters live in submenus and carry their own ids.
+## Item ids in the root menu. Device and modulator parameters live in submenus and carry their
+## own ids; their targets travel as item metadata.
 const ID_VOLUME := 0
 const ID_PAN := 1
 const ID_SEND_BASE := 100
@@ -24,6 +25,8 @@ var channel: Channel = null
 
 ## Submenu -> the device path its entries address, so one handler serves every device.
 var _submenu_paths: Dictionary = {}
+## Next unique id handed to a device/modulator parameter item in the submenus.
+var _next_item_id: int = 1000
 
 
 func _ready() -> void:
@@ -51,6 +54,7 @@ func _rebuild() -> void:
 	# free_submenus so a rebuild doesn't leak the previous run's submenu nodes.
 	clear(true)
 	_submenu_paths.clear()
+	_next_item_id = 1000
 
 	if not _has_lane(AutomationTarget.channel_volume()):
 		add_item("Volume", ID_VOLUME)
@@ -86,6 +90,8 @@ func _add_device(instance: DeviceInstance, path: Array) -> void:
 
 	entries += _add_param_group(submenu, instance, path, "param", "")
 	entries += _add_param_group(submenu, instance, path, "cc", "CC")
+	for mod in instance.modulators:
+		entries += _add_modulator_group(submenu, instance, path, mod)
 
 	for child_index in range(instance.children.size()):
 		_add_device(instance.children[child_index], path + [child_index])
@@ -108,13 +114,37 @@ func _add_param_group(submenu: PopupMenu, instance: DeviceInstance, path: Array,
 	for param in instance.get_parameters_in_group(group):
 		if not param.is_automation_safe:
 			continue
-		if _has_lane(AutomationTarget.device_param(path, param.id)):
+		var target := AutomationTarget.device_param(path, param.id)
+		if _has_lane(target):
 			continue
 		if added == 0 and not separator_label.is_empty():
 			submenu.add_separator(separator_label)
-		submenu.add_item(AutomationTarget.param_label(instance, param), param.id)
+		_add_target_item(submenu, AutomationTarget.param_label(instance, param), target)
 		added += 1
 	return added
+
+
+## Append one modulator's parameters under its name (spec 018), skipping ones already automated.
+func _add_modulator_group(submenu: PopupMenu, instance: DeviceInstance, path: Array, mod: Modulator) -> int:
+	var added := 0
+	for param in mod.get_parameters():
+		if not param.is_automation_safe:
+			continue
+		var target := AutomationTarget.device_modulator_param(path, mod.mod_id, param.id)
+		if _has_lane(target):
+			continue
+		if added == 0:
+			submenu.add_separator(mod.name)
+		_add_target_item(submenu, param.name, target)
+		added += 1
+	return added
+
+
+## One item with a unique id and its `AutomationTarget` as metadata.
+func _add_target_item(submenu: PopupMenu, label: String, target: AutomationTarget) -> void:
+	submenu.add_item(label, _next_item_id)
+	submenu.set_item_metadata(submenu.get_item_count() - 1, target)
+	_next_item_id += 1
 
 
 ## True when `track` already has a lane driving `target` (REQ-015).
@@ -134,11 +164,14 @@ func _on_root_id_pressed(id: int) -> void:
 		_emit(target)
 
 
-func _on_device_id_pressed(param_id: int, submenu: PopupMenu) -> void:
-	var path: Array = _submenu_paths.get(submenu, [])
-	if path.is_empty():
+func _on_device_id_pressed(id: int, submenu: PopupMenu) -> void:
+	var index := submenu.get_item_index(id)
+	if index < 0:
 		return
-	_emit(AutomationTarget.device_param(path, param_id))
+	var target: AutomationTarget = submenu.get_item_metadata(index)
+	if target == null:
+		return
+	_emit(target)
 
 
 func _emit(target: AutomationTarget) -> void:

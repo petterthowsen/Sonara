@@ -89,13 +89,18 @@ func _test_tags() -> void:
 func _test_builtin_round_trip() -> void:
 	var ch := _channel()
 	var inst := _add(ch, "test.synth")
-	inst.device.mod_sources.assign([{"id": "lfo1", "name": "LFO 1", "bipolar": true}])
 	inst.name = "My Lead"
 	inst.slot_volume = 0.8
 	inst.slot_note = 36
 	inst.choke_group = 3
 	inst.parameter_values[31] = 0.25
-	inst.mod_routes[_inst_script._mod_key("lfo1", 31)] = 0.4
+	var mod = load("res://data/Modulator.gd").new()
+	mod.mod_id = 0
+	mod.kind = "adsr"
+	mod.name = "Filter Env"
+	mod.params = {50: 0.1}
+	mod.routes = {"param/31": 0.4}
+	inst.modulators.append(mod)
 	var preset: Object = _preset_script.capture_now(inst, "Warm Pad", "Peter", "Pad, Warm")
 	_assert(preset.device_id == "test.synth" and preset.device_name == "synth", "device id and name captured")
 	_assert(Array(preset.tags) == ["pad", "warm"], "tags stored normalized")
@@ -110,7 +115,8 @@ func _test_builtin_round_trip() -> void:
 	_assert(copy.name == "Warm Pad", "instance is named after the preset")
 	_assert(copy.id != inst.id and not copy.id.is_empty(), "instance id is fresh")
 	_assert(is_equal_approx(copy.parameter_values.get(31, -1.0), 0.25), "parameter values survive")
-	_assert(is_equal_approx(copy.get_mod_amount("lfo1", 31), 0.4), "mod routes survive")
+	_assert(copy.modulators.size() == 1 and is_equal_approx(copy.modulators[0].get_route("param/31"), 0.4),
+		"modulators survive")
 	_assert(copy.slot_note == -1 and copy.choke_group == 0, "root slot fields are not carried")
 	_assert(inst.name == "My Lead", "the source is untouched")
 

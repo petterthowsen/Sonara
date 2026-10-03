@@ -927,6 +927,8 @@ func _sync_device_tree_to_engine(device_instance: DeviceInstance) -> void:
 	for child in device_instance.children:
 		_send_add_device_osc(child, device_instance)
 		_sync_device_tree_to_engine(child)
+	# Routes into a child only resolve after it exists, so re-send the modulators now.
+	device_instance.sync_modulators_to_engine()
 
 
 func get_device(position: int) -> DeviceInstance:
