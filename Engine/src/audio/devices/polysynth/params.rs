@@ -79,12 +79,14 @@ const SEMIS: &[&str] = &[
 const UNISON_COUNTS: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16",
 ];
-const FILTER_TYPES: &[&str] = &["LP 12", "LP 24", "HP 12", "BP 12"];
-const FILTER_MODES: [FilterMode; 4] = [
+const FILTER_TYPES: &[&str] = &["LP 12", "LP 24", "HP 12", "BP 12", "LP 6", "BP 6"];
+const FILTER_MODES: [FilterMode; 6] = [
     FilterMode::Lp12,
     FilterMode::Lp24,
     FilterMode::Hp12,
     FilterMode::Bp12,
+    FilterMode::Lp6,
+    FilterMode::Bp6,
 ];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 const POLYPHONY_COUNTS: &[&str] = &[

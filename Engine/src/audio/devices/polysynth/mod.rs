@@ -1399,6 +1399,15 @@ mod tests {
             brightness(2_000.0, 2.0) > brightness(2_000.0, 1.0) * 2.0,
             "HP brighter than LP"
         );
+        // The appended types: LP 6 (index 4) rolls off more gently than LP 12 (index 0),
+        // and BP 6 (index 5) keeps the band around the cutoff.
+
+        assert!(
+            brightness(300.0, 4.0) > brightness(300.0, 0.0),
+            "LP 6 brighter than LP 12 at a low cutoff"
+        );
+        let bp6 = brightness(1_000.0, 5.0);
+        assert!(bp6 > 0.0 && bp6.is_finite(), "BP 6 renders: {bp6}");
     }
 
     #[test]

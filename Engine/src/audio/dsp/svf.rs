@@ -28,10 +28,16 @@ const ANTI_DENORMAL: f32 = 1.0e-18;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterMode {
+    /// One-pole low-pass, 6 dB/oct (bilinear-matched to the same `g` as the SVF stages).
+    /// Resonance has no effect; a first-order filter cannot resonate.
+    Lp6,
     Lp12,
     Lp24,
     Hp12,
     Bp12,
+    /// One-pole high-pass into a one-pole low-pass at the same cutoff: 6 dB/oct skirts,
+    /// scaled so the response is unity at the cutoff.
+    Bp6,
     /// Two cascaded high-pass stages tuned like LP 24 (4-pole Butterworth at resonance 0).
     Hp24,
     /// Low plus high: a notch whose width follows resonance.
@@ -93,11 +99,19 @@ pub struct SvfCoefs {
     first: StageCoefs,
     /// The fixed-damping second stage of LP 24.
     second: StageCoefs,
+    /// One-pole feedback and input scale for the 6 dB/oct modes.
+    one_a: f32,
+    one_inv: f32,
 }
 
 impl SvfCoefs {
     #[inline]
     pub fn new(g: f32, k: f32, mode: FilterMode) -> Self {
+        let (one_a, one_inv) = if matches!(mode, FilterMode::Lp6 | FilterMode::Bp6) {
+            ((g - 1.0) / (1.0 + g), g / (1.0 + g))
+        } else {
+            (0.0, 1.0)
+        };
         Self {
             first: StageCoefs::new(g, k),
             second: if mode.is_24() {
@@ -105,8 +119,20 @@ impl SvfCoefs {
             } else {
                 StageCoefs::default()
             },
+            one_a,
+            one_inv,
         }
     }
+}
+
+/// One step of the prewarped bilinear one-pole low-pass built from the same `g` as the SVF
+/// (`cutoff_to_g`): `H(z) = g·(1 + z⁻¹) / ((1 + g) + (g − 1)·z⁻¹)` in direct form II, with
+/// the feedback `a` and output scale `inv` precomputed in [`SvfCoefs::new`].
+/// Returns `(output, new state)`; `w` is the caller-held state.
+#[inline]
+fn one_pole_low(x: f32, w: f32, a: f32, inv: f32) -> (f32, f32) {
+    let w_new = x - a * w;
+    ((w_new + w) * inv, w_new)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -132,6 +158,8 @@ impl Stage {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Svf {
     stages: [Stage; 2],
+    /// Direct-form-II states of the one-pole sections (Lp6 uses the first, Bp6 both).
+    one: [f32; 2],
     /// Low-passed input for resonance compensation.
     lows: f32,
 }
@@ -159,6 +187,11 @@ impl Svf {
         let x = x + ANTI_DENORMAL;
         let c = &coefs.first;
         match mode {
+            FilterMode::Lp6 => {
+                let (y, w) = one_pole_low(x, self.one[0], coefs.one_a, coefs.one_inv);
+                self.one[0] = w;
+                y
+            }
             FilterMode::Lp12 => {
                 let (low, _, _) = self.stages[0].tick(x, c);
                 low + self.compensation(x, comp_coef, resonance)
@@ -171,6 +204,15 @@ impl Svf {
             FilterMode::Hp12 => self.stages[0].tick(x, c).2,
             // Scaled by k so the peak stays at unity gain as the band narrows.
             FilterMode::Bp12 => self.stages[0].tick(x, c).1 * c.k,
+            FilterMode::Bp6 => {
+                let (low, w0) = one_pole_low(x, self.one[0], coefs.one_a, coefs.one_inv);
+                self.one[0] = w0;
+                // High-pass is the input minus the low-pass; a second one-pole low-pass
+                // of that gives the 6 dB/oct band shape. Doubled: 2 × (1/√2)² at the cutoff.
+                let (band, w1) = one_pole_low(x - low, self.one[1], coefs.one_a, coefs.one_inv);
+                self.one[1] = w1;
+                2.0 * band
+            }
             FilterMode::Hp24 => {
                 let (_, _, a) = self.stages[0].tick(x, c);
                 self.stages[1].tick(a, &coefs.second).2
@@ -205,11 +247,13 @@ impl Svf {
 mod tests {
     use super::*;
 
-    const MODES: [FilterMode; 4] = [
+    const MODES: [FilterMode; 6] = [
+        FilterMode::Lp6,
         FilterMode::Lp12,
         FilterMode::Lp24,
         FilterMode::Hp12,
         FilterMode::Bp12,
+        FilterMode::Bp6,
     ];
 
     /// Steady-state RMS gain of a sine at `hz` through a static filter.
@@ -282,6 +326,27 @@ mod tests {
         assert!(gain_at(FilterMode::Hp12, 1_000.0, 0.0, 8_000.0, sr) > 0.95);
         assert!((gain_at(FilterMode::Bp12, 1_000.0, 0.8, 1_000.0, sr) - 1.0).abs() < 0.05);
         assert!(gain_at(FilterMode::Bp12, 1_000.0, 0.8, 8_000.0, sr) < 0.1);
+    }
+
+    #[test]
+    fn lp6_and_bp6_have_the_right_shape() {
+        let sr = 48_000.0;
+        // LP 6: −3 dB at the cutoff, and only −6 dB/oct above it (LP 12 cuts deeper).
+        let at = gain_at(FilterMode::Lp6, 1_000.0, 0.0, 1_000.0, sr);
+        assert!((at - 0.707).abs() < 0.05, "{at}");
+        let oct = gain_at(FilterMode::Lp6, 1_000.0, 0.0, 2_000.0, sr);
+        assert!((oct - 0.447).abs() < 0.05, "octave above: {oct}");
+        assert!(gain_at(FilterMode::Lp6, 1_000.0, 0.0, 60.0, sr) > 0.99);
+        // Resonance is a no-op for a first-order filter.
+        let res = gain_at(FilterMode::Lp6, 1_000.0, 1.0, 1_000.0, sr);
+        assert!((res - 0.707).abs() < 0.05, "with resonance: {res}");
+        // BP 6: unity at the cutoff, −6 dB/oct skirts on both sides.
+        let peak = gain_at(FilterMode::Bp6, 1_000.0, 0.0, 1_000.0, sr);
+        assert!((peak - 1.0).abs() < 0.05, "{peak}");
+        let below = gain_at(FilterMode::Bp6, 1_000.0, 0.0, 100.0, sr);
+        assert!((below - 0.2).abs() < 0.02, "octave below ×3: {below}");
+        let above = gain_at(FilterMode::Bp6, 1_000.0, 0.0, 8_000.0, sr);
+        assert!((above - 0.224).abs() < 0.02, "octave above ×3: {above}");
     }
 
     #[test]
