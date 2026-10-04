@@ -2,7 +2,8 @@
 //!
 //! IDs are grouped in blocks of ten per module: Osc 1 = 0.., Osc 2 = 10.., Noise = 20..,
 //! Filter = 30.., Amp Env = 40.., Voice = 80.., Output = 90. Filter Env and the two LFOs are
-//! modulators now (spec 018 Phase 6), not parameters.
+//! modulators now (spec 018 Phase 6), not parameters. The FM module (phase modulation on the
+//! Osc 1 carrier) uses the Noise block's spare IDs 22–23.
 //!
 //! Every parameter also has a *slot*: its index in [`SPECS`]. Modulation routes and the
 //! normalized value array are indexed by slot.
@@ -24,9 +25,12 @@ pub const UNISON: ParamId = 6;
 pub const UNISON_DETUNE: ParamId = 7;
 pub const UNISON_SPREAD: ParamId = 8;
 
+/// Two-op phase modulation applied to Osc 1's carrier. These live in the Noise block's spare
+/// ID space but form their own module.
+pub const FM_RATIO: ParamId = 22;
+pub const FM_INDEX: ParamId = 23;
 pub const NOISE_LEVEL: ParamId = 20;
 pub const NOISE_COLOR: ParamId = 21;
-
 pub const FILTER_TYPE: ParamId = 30;
 pub const CUTOFF: ParamId = 31;
 pub const RESONANCE: ParamId = 32;
@@ -94,6 +98,26 @@ const POLYPHONY_COUNTS: &[&str] = &[
     "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
     "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
     "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64",
+];
+const FM_RATIOS: &[&str] = &[
+    "1/8", "1/4", "1/3", "1/2", "2/3", "1", "3/2", "2", "3", "4", "5", "6", "7", "8",
+];
+/// Carrier-frequency multiple of each `FM_RATIOS` entry.
+const FM_RATIO_VALUES: [f64; 14] = [
+    0.125,
+    0.25,
+    1.0 / 3.0,
+    0.5,
+    2.0 / 3.0,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    5.0,
+    6.0,
+    7.0,
+    8.0,
 ];
 
 const TIME: Kind = Kind::Float {
@@ -224,6 +248,11 @@ macro_rules! env_specs {
 #[rustfmt::skip]
 const OSC1_SPECS: [ParamSpec; 9] = osc_specs!(OSC1, "Osc 1", 2.0, 0.0, 0.8);
 #[rustfmt::skip]
+const FM_SPECS: [ParamSpec; 2] = [
+    spec(FM_RATIO, "FM Ratio", "FM", "", Kind::Enum(FM_RATIOS), 5.0),
+    spec(FM_INDEX, "FM Index", "FM", "", linear(0.0, 8.0), 0.0),
+];
+#[rustfmt::skip]
 const OSC2_SPECS: [ParamSpec; 9] = osc_specs!(OSC2, "Osc 2", 3.0, 7.0, 0.0);
 #[rustfmt::skip]
 const NOISE_FILTER_SPECS: [ParamSpec; 7] = [
@@ -247,12 +276,13 @@ const VOICE_OUTPUT_SPECS: [ParamSpec; 5] = [
 ];
 
 /// Number of real parameters.
-pub const PARAM_COUNT: usize = 9 + 9 + 7 + 4 + 5;
+pub const PARAM_COUNT: usize = 9 + 9 + 2 + 7 + 4 + 5;
 
 /// Every parameter, in display order. A parameter's index here is its slot.
 pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
     &OSC1_SPECS,
     &OSC2_SPECS,
+    &FM_SPECS,
     &NOISE_FILTER_SPECS,
     &AMP_ENV_SPECS,
     &VOICE_OUTPUT_SPECS,
@@ -346,6 +376,10 @@ pub struct SynthParams {
     pub glide: f32,
     /// Amp velocity sensitivity, 0–1.
     pub velocity_sens: f32,
+    /// Carrier-frequency multiple of the Osc 1 FM modulator.
+    pub fm_ratio: f64,
+    /// Osc 1 phase-modulation depth in radians; 0 is off.
+    pub fm_index: f32,
     pub volume_db: f32,
     /// Linear output gain (0 at the bottom of the range).
     pub volume_gain: f32,
@@ -377,9 +411,11 @@ impl SynthParams {
             filter_mode: FilterMode::Lp24,
             cutoff_hz: CUTOFF_MAX,
             resonance: 0.0,
-            drive_db: 0.0,
             key_track: 0.0,
+            drive_db: 0.0,
             amp_env: env,
+            fm_ratio: 1.0,
+            fm_index: 0.0,
             mode: VoiceMode::Poly,
             polyphony: 16,
             glide: 0.0,
@@ -464,8 +500,9 @@ impl SynthParams {
         }
 
         match id {
+            FM_RATIO => self.fm_ratio = FM_RATIO_VALUES[real as usize],
+            FM_INDEX => self.fm_index = real,
             NOISE_LEVEL => self.noise_level = real,
-            NOISE_COLOR => self.noise_color = real / 100.0,
             FILTER_TYPE => self.filter_mode = FILTER_MODES[real as usize],
             CUTOFF => self.cutoff_hz = real,
             RESONANCE => self.resonance = real,

@@ -103,6 +103,8 @@ pub struct Oscillator {
     pub pulse_width: f64,
     /// Added to `phase_increment` every sample inside `process_block_ramped`.
     increment_step: f64,
+    /// Modulator phase for `process_fm_ramped`, advanced at `ratio`× the carrier increment.
+    pub mod_phase: f64,
 }
 
 impl Oscillator {
@@ -115,6 +117,7 @@ impl Oscillator {
             phase_increment: 0.0,
             pulse_width: 0.5,
             increment_step: 0.0,
+            mod_phase: 0.0,
         }
     }
 
@@ -131,6 +134,7 @@ impl Oscillator {
     /// Reset the oscillator phase to 0
     pub fn reset(&mut self) {
         self.phase = 0.0;
+        self.mod_phase = 0.0;
     }
 
     /// Process a block of samples with the given waveform
@@ -165,6 +169,53 @@ impl Oscillator {
             self.process_block(waveform, output, frames);
         }
         self.phase_increment = target_increment;
+    }
+
+    /// Sine carrier with phase modulation: `sin(2π(phase + index·sin(2π·mod_phase)/2π))`.
+    /// The modulator is phase-locked to the carrier at `ratio`× its increment, and `index`
+    /// ramps linearly from `from_index` to `to_index` across the block, so index modulation
+    /// doesn't step. FM ignores the waveform and pulse-width settings.
+    pub fn process_fm_ramped(
+        &mut self,
+        output: &mut [f32],
+        frames: usize,
+        target_increment: f64,
+        ratio: f64,
+        from_index: f32,
+        to_index: f32,
+    ) {
+        if frames > 0 && target_increment != self.phase_increment {
+            self.increment_step = (target_increment - self.phase_increment) / frames as f64;
+            self.process_fm::<true>(output, frames, ratio, from_index, to_index);
+        } else {
+            self.process_fm::<false>(output, frames, ratio, from_index, to_index);
+        }
+        self.phase_increment = target_increment;
+    }
+
+    fn process_fm<const RAMP: bool>(
+        &mut self,
+        output: &mut [f32],
+        frames: usize,
+        ratio: f64,
+        from_index: f32,
+        to_index: f32,
+    ) {
+        let index_step = if frames > 0 {
+            (to_index - from_index) / frames as f32
+        } else {
+            0.0
+        };
+        let mut index = from_index;
+        for out in output[..frames].iter_mut() {
+            // Deviation in cycles; fast_sin needs a 0..1 phase, so wrap after adding it.
+            let deviation = index as f64 * fast_sin(self.mod_phase) as f64 / std::f64::consts::TAU;
+            *out = fast_sin((self.phase + deviation).rem_euclid(1.0));
+            index += index_step;
+            self.mod_phase += self.phase_increment * ratio;
+            self.mod_phase -= (self.mod_phase >= 1.0) as i32 as f64;
+            self.advance::<RAMP>();
+        }
     }
 
     #[inline]
@@ -423,5 +474,43 @@ mod tests {
         let before = ramped.phase;
         ramped.process_block(2, &mut out, 1);
         assert!((ramped.phase - (before + 0.02).fract()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fm_with_zero_index_matches_plain_sine() {
+        let mut fm = Oscillator::new();
+        let mut sine = Oscillator::new();
+        let mut a = [0.0f32; 64];
+        let mut b = [0.0f32; 64];
+        fm.process_fm_ramped(&mut a, 64, 100.0 / SR, 2.0, 0.0, 0.0);
+        sine.process_block_ramped(0, &mut b, 64, 100.0 / SR);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fm_integer_ratio_is_periodic_bounded_and_not_a_plain_sine() {
+        let hz = 100.0;
+        let mut fm = Oscillator::new();
+        let mut out = vec![0.0f32; SR as usize];
+        // Prime the increment so the block runs at a steady pitch (no ramp from 0).
+        fm.phase_increment = hz / SR;
+        fm.process_fm_ramped(&mut out, SR as usize, hz / SR, 2.0, 4.0, 4.0);
+        assert!(out.iter().all(|s| s.abs() <= 1.0), "sine stays in range");
+        let period = (SR / hz) as usize;
+        for i in period..2 * period {
+            assert!(
+                (out[i] - out[i - period]).abs() < 1e-3,
+                "integer-ratio FM repeats each carrier cycle"
+            );
+        }
+        let mut plain = vec![0.0f32; SR as usize];
+        let mut sine = Oscillator::new();
+        sine.phase_increment = hz / SR;
+        sine.process_block_ramped(0, &mut plain, SR as usize, hz / SR);
+        let energy: f32 = out.iter().zip(&plain).map(|(x, y)| (x - y) * (x - y)).sum();
+        assert!(
+            energy > 1.0,
+            "index 4 must change the waveform, got {energy}"
+        );
     }
 }

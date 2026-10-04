@@ -1,5 +1,6 @@
 //! PolySynth: two band-limited oscillators with unison, noise, a drive + state-variable filter,
-//! an amp envelope, Poly/Mono/Legato voice modes, glide, and per-voice modulators.
+//! an amp envelope, Poly/Mono/Legato voice modes, glide, per-voice modulators, and two-op
+//! phase modulation (FM) on the Osc 1 carrier.
 //!
 //! - One shared [`SynthParams`] block; voices read it every control block, so knob moves reach
 //!   held notes.
@@ -1669,6 +1670,46 @@ mod tests {
         };
         // Tracking lets more of the high note through the same filter.
         assert!(brightness_ratio(100.0) > brightness_ratio(0.0) * 2.0);
+    }
+
+    #[test]
+    fn fm_index_changes_the_render_and_ratio_changes_it_further() {
+        let play = |ratio: f32, index: f32| {
+            let mut dev = synth();
+            set_real(&mut dev, FM_RATIO, ratio);
+            set_real(&mut dev, FM_INDEX, index);
+            dev.send_midi_event(60, 100, true, 0);
+            render(&mut dev, 8)
+        };
+        let off = play(1.0, 0.0);
+        let fm = play(1.0, 4.0);
+        let other_ratio = play(2.0, 4.0);
+        assert!(
+            peak(&off) > 0.01 && peak(&fm) > 0.01,
+            "both should be audible"
+        );
+        let diff = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>();
+        assert!(diff(&off, &fm) > 0.1, "FM index should change the render");
+        assert!(
+            diff(&fm, &other_ratio) > 0.1,
+            "FM ratio should change the render"
+        );
+    }
+
+    #[test]
+    fn fm_index_zero_matches_fm_off() {
+        let play = |fm_on: bool| {
+            let mut dev = synth();
+            set_real(&mut dev, FM_RATIO, 3.0);
+            if fm_on {
+                set_real(&mut dev, FM_INDEX, 0.0);
+            }
+            dev.send_midi_event(60, 100, true, 0);
+            render(&mut dev, 8)
+        };
+        let (off, zero) = (play(false), play(true));
+        // A lone unison voice is deterministic (phase starts at 0), so the renders are identical.
+        assert_eq!(off, zero);
     }
 }
 

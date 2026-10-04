@@ -185,6 +185,8 @@ struct Ramp {
     level_delta: [f32; 2],
     noise_delta: f32,
     volume: f32,
+    /// Block-end FM index (the FM path ramps it per frame between blocks).
+    fm_index: f32,
 }
 
 pub struct Voice {
@@ -246,6 +248,7 @@ impl Voice {
                 level_delta: [0.0; 2],
                 noise_delta: 0.0,
                 volume: 1.0,
+                fm_index: 0.0,
             },
             unison_shape: [None; 2],
             filter_setup: None,
@@ -334,6 +337,7 @@ impl Voice {
                 } else {
                     0.0
                 };
+                self.oscs[o][k].mod_phase = 0.0;
             }
         }
         self.pitch = pending.glide_from.unwrap_or(pending.note as f32);
@@ -598,6 +602,7 @@ impl Voice {
             ],
             noise_delta: e.noise_level - p.noise_level,
             volume,
+            fm_index: e.fm_index,
         };
         if self.fresh {
             self.ramp = target;
@@ -649,7 +654,19 @@ impl Voice {
                     continue;
                 }
                 oscillator.set_pulse_width(osc.pulse_width);
-                oscillator.process_block_ramped(osc.wave, &mut osc_buf[..n], n, increment);
+                // FM replaces Osc 1's waveform with a phase-modulated sine.
+                if o == 0 && e.fm_index > 0.0 {
+                    oscillator.process_fm_ramped(
+                        &mut osc_buf[..n],
+                        n,
+                        increment,
+                        e.fm_ratio,
+                        from.fm_index,
+                        target.fm_index,
+                    );
+                } else {
+                    oscillator.process_block_ramped(osc.wave, &mut osc_buf[..n], n, increment);
+                }
 
                 stereo |= shape.stereo;
                 let (gl, gr) = (shape.gain_l[k], shape.gain_r[k]);
