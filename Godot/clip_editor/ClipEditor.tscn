@@ -173,7 +173,6 @@ horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 script = ExtResource("3_1pvpx")
 note_height = 30
-zoom_sensitivity_v = 3
 scroll_smoothing = 0.41
 
 [node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/MidiEditor" unique_id=1568231527]

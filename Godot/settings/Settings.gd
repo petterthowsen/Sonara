@@ -292,6 +292,16 @@ func _register_all_settings() -> void:
 		"When enabled, a track and its automation lanes share one height in the arranger: resizing the track (or zooming vertically) resizes its lanes, and resizing a lane resizes the track and its other lanes. New lanes start at the track's height.",
 	)).sub("Arranger")
 
+	_register(Setting.new(
+		"behavior/scroll_zoom_sensitivity",
+		"Scroll Zoom Sensitivity",
+		Type.CHOICE,
+		"Normal",
+		CATEGORY_BEHAVIOR,
+		"Zoom speed of the Ctrl/Cmd + scroll (vertical) and Shift + scroll (horizontal) wheel zoom, shared by the arranger timeline and the MIDI editor.\n\n"
+		+ "Slow keeps the previous speed, Normal is about a third faster, Fast is for quick navigation.",
+	)).choices(["Slow", "Normal", "Fast"]).sub("Zoom")
+
 	# --- Appearance ---
 	_register(Setting.new(
 		"appearance/automation_lane_height",

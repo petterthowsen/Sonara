@@ -260,9 +260,11 @@ var scroll_speed_notes = 2
 
 @export var scroll_speed_h = 50
 
-# Zoom sensitivity: multiplier for zoom speed (higher = faster zoom)
-@export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
-@export var zoom_sensitivity_v: int = 1      # Vertical zoom delta per scroll tick
+# Zoom sensitivity: derived live from the shared scroll-zoom sensitivity setting
+# (Settings › Behavior › Zoom), the same one the arranger follows. Vertical keeps
+# its own base (pixels added to the row height per tick); the setting scales it.
+var zoom_sensitivity_h: float = 1.6  # Horizontal zoom multiplier per scroll tick
+var zoom_sensitivity_v: int = 3      # Vertical zoom delta per scroll tick
 @export var pan_zoom_sensitivity: float = 0.5  # Zoom factor per pixel of mouse movement when shift+panning (percentage)
 
 # Horizontal scrolling: the note area is at least min_width_bars wide, reaches
@@ -279,7 +281,7 @@ var _content_width_ticks: int = 0
 var _content_width_queued := false
 
 # Horizontal zoom limits (pixels per beat)
-@export var zoom_min_pixels_per_beat: float = 8.0
+@export var zoom_min_pixels_per_beat: float = 2.0
 @export var zoom_max_pixels_per_beat: float = 4096
 
 # Smooth scrolling: 0 = instant, higher = smoother (0.1-0.3 recommended)
@@ -288,6 +290,10 @@ var _content_width_queued := false
 # Target scroll positions for smooth scrolling
 var target_scroll_vertical: float = 0.0
 var target_scroll_horizontal: float = 0.0
+
+# Target and animation flag for smooth horizontal zooming (like the arranger)
+var target_pixels_per_beat: float = 0.0
+var _h_zoom_anim: bool = false
 
 # Middle mouse button panning state
 var is_panning: bool = false
@@ -322,6 +328,11 @@ func _ready():
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal
+	# grid_helper can still be null here: ClipEditor assigns it after this child's _ready.
+	target_pixels_per_beat = grid_helper.pixels_per_beat if grid_helper else 64.0
+	# Zoom sensitivity follows the shared setting (arranger + MIDI editor)
+	_update_zoom_sensitivity()
+	Settings.setting_changed.connect(_on_setting_changed)
 	lane_layout.row_height = note_height
 	v_piano.layout = lane_layout
 	note_lanes.layout = lane_layout
@@ -364,6 +375,17 @@ func _process(delta: float):
 		# The notes scroll by whole pixels, so grid and ruler must use the same value
 		# or they drift up to a pixel apart from the notes mid-scroll.
 		grid_helper.scroll_position = h_scroll.scroll_horizontal
+
+		# Lerp horizontal zoom toward its target, like the arranger's smooth zoom.
+		# Other writers (programmatic zoom, pan-zoom) sync the target and clear the
+		# flag, so this only runs while a wheel zoom animation is in flight.
+		if _h_zoom_anim:
+			var new_ppb = lerp(grid_helper.pixels_per_beat, target_pixels_per_beat, lerp_factor)
+			if absf(new_ppb - target_pixels_per_beat) < 0.01:
+				grid_helper.pixels_per_beat = target_pixels_per_beat
+				_h_zoom_anim = false
+			else:
+				grid_helper.pixels_per_beat = new_ppb
 
 	else:
 		# Instant scrolling when smoothing is disabled
@@ -629,6 +651,10 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	# Calculate the zoom ratio
 	var zoom_ratio = clamped_ppb / old_pixels_per_beat
 	
+	# Programmatic zoom: cancel any in-flight wheel zoom animation and keep the
+	# target in sync so the lerp in _process doesn't drag the zoom back.
+	target_pixels_per_beat = clamped_ppb
+	_h_zoom_anim = false
 	# Apply zoom (this triggers grid_helper.changed signal)
 	grid_helper.pixels_per_beat = clamped_ppb
 	
@@ -640,7 +666,11 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	
 	# Calculate the new scroll to keep the same content under the mouse
 	var scroll_offset = new_content_x - h_scroll_mouse_pos.x
-	
+
+	# Stick to the origin when already within a beat of it (same rule as the
+	# arranger and _smooth_horizontal_zoom).
+	if old_scroll < old_pixels_per_beat:
+		scroll_offset = 0.0
 	# Snap to zero if we're close to the start (nice UX touch)
 	var snap_threshold = 30.0
 	if scroll_offset > 0 and scroll_offset < snap_threshold:
@@ -651,6 +681,41 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 	grid_helper.scroll_position = target_scroll_horizontal
 
+
+## Smooth (lerped) horizontal zoom anchored at the mouse, matching the arranger's
+## Shift + wheel zoom. Instant when scroll smoothing is disabled.
+func _smooth_horizontal_zoom(factor: float) -> void:
+	if scroll_smoothing <= 0:
+		set_horizontal_zoom(grid_helper.pixels_per_beat * factor)
+		return
+	var old_ppb := grid_helper.pixels_per_beat
+	var new_ppb := clampf(old_ppb * factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
+	if is_equal_approx(new_ppb, old_ppb):
+		return
+	var viewport_width := h_scroll.size.x
+	var mouse_x := clampf(h_scroll.get_local_mouse_position().x, 0.0, viewport_width)
+	var zoom_ratio := new_ppb / old_ppb
+	target_pixels_per_beat = new_ppb
+	# Stick to the origin when we're already within a beat of it (same rule as the
+	# arranger): the mouse-anchored formula would otherwise creep the view away
+	# from the start by mouse_x * (zoom_ratio - 1) pixels.
+	if h_scroll.scroll_horizontal < old_ppb:
+		target_scroll_horizontal = 0.0
+	else:
+		target_scroll_horizontal = maxf(0.0, (h_scroll.scroll_horizontal + mouse_x) * zoom_ratio - mouse_x)
+	_h_zoom_anim = true
+
+
+func _update_zoom_sensitivity() -> void:
+	var choice := str(Settings.get_value(Utils.SCROLL_ZOOM_SENSITIVITY_SETTING))
+	var multiplier := Utils.scroll_zoom_multiplier(choice)
+	zoom_sensitivity_h = multiplier
+	zoom_sensitivity_v = maxi(1, roundi(3.0 * (multiplier / Utils.SCROLL_ZOOM_NORMAL)))
+
+
+func _on_setting_changed(key: String, _value) -> void:
+	if key == Utils.SCROLL_ZOOM_SENSITIVITY_SETTING:
+		_update_zoom_sensitivity()
 	
 
 func _zoom_vertical(delta_note_height: int):
@@ -731,8 +796,8 @@ func _gui_input(event: InputEvent):
 				# alt scroll up: scroll left
 				target_scroll_horizontal = max(0, target_scroll_horizontal - scroll_speed_h)
 			elif event.shift_pressed:
-				# horizontal zoom in
-				set_horizontal_zoom(grid_helper.pixels_per_beat * zoom_sensitivity_h)
+				# horizontal zoom in (smooth, like the arranger)
+				_smooth_horizontal_zoom(zoom_sensitivity_h)
 			elif event.ctrl_pressed:
 				# vertical zoom in
 				_zoom_vertical(zoom_sensitivity_v)
@@ -745,8 +810,8 @@ func _gui_input(event: InputEvent):
 				# alt scroll down: scroll right
 				target_scroll_horizontal += scroll_speed_h
 			elif event.shift_pressed:
-				# horizontal zoom out
-				set_horizontal_zoom(grid_helper.pixels_per_beat / zoom_sensitivity_h)
+				# horizontal zoom out (smooth, like the arranger)
+				_smooth_horizontal_zoom(1.0 / zoom_sensitivity_h)
 			elif event.ctrl_pressed:
 				# vertical zoom out
 				_zoom_vertical(-zoom_sensitivity_v)
@@ -787,6 +852,9 @@ func _gui_input(event: InputEvent):
 
 				# Apply zoom
 				grid_helper.pixels_per_beat = new_ppb
+				# Direct write: cancel any in-flight wheel zoom animation
+				target_pixels_per_beat = new_ppb
+				_h_zoom_anim = false
 
 				# Apply horizontal panning on top of zoom scroll adjustment
 				target_scroll_horizontal = max(0, zoom_scroll - delta.x)

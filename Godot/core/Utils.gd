@@ -112,6 +112,21 @@ static func expand_path(path: String) -> String:
 static func db_to_lin(db: float) -> float:
 	return pow(10.0, db / 20.0)
 
+## Settings key for the shared scroll-zoom sensitivity (Slow / Normal / Fast).
+const SCROLL_ZOOM_SENSITIVITY_SETTING := "behavior/scroll_zoom_sensitivity"
+## Choice -> per-notch horizontal zoom multiplier (pixels-per-beat factor).
+const SCROLL_ZOOM_STEPS := {"Slow": 1.2, "Normal": 1.6, "Fast": 2.2}
+const SCROLL_ZOOM_NORMAL := 1.6
+
+
+## Horizontal zoom multiplier for a sensitivity choice ("Slow" / "Normal" / "Fast").
+## Pure: callers pass the setting value, since autoloads don't resolve in this
+## early-compiled static class. Vertical zoom sensitivities scale by
+## `multiplier / SCROLL_ZOOM_NORMAL`, so Normal keeps the previous vertical feel.
+static func scroll_zoom_multiplier(choice: String) -> float:
+	return float(SCROLL_ZOOM_STEPS.get(choice, SCROLL_ZOOM_NORMAL))
+
+
 
 ## Intelligently shorten text for compact displays
 ## Uses multiple strategies: common abbreviations, first-word shortening, and word selection

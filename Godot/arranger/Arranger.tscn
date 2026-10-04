@@ -90,8 +90,6 @@ grow_vertical = 2
 focus_mode = 1
 script = ExtResource("1_bh1i7")
 scroll_smoothing = 0.4
-zoom_sensitivity_h = 1.2
-zoom_sensitivity_v = 1.4
 zoom_max_pixels_per_beat = 16384.0
 
 [node name="VSplitContainer" type="VSplitContainer" parent="." unique_id=351672174]

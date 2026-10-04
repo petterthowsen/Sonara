@@ -84,12 +84,13 @@ var pan_start_v_scroll: float = 0.0
 @export var scroll_speed_h: int = 100  # Horizontal scroll speed per wheel tick
 @export var scroll_speed_v: int = 90   # Vertical scroll speed per wheel tick
 
-# Zoom sensitivity: multiplier for zoom speed (higher = faster zoom)
-@export var zoom_sensitivity_h: float = 1.1  # Horizontal zoom multiplier per scroll tick
-@export var zoom_sensitivity_v: float = 1.1  # Vertical zoom multiplier per scroll tick (for track heights)
+# Zoom sensitivity: derived live from the shared scroll-zoom sensitivity setting
+# (Settings › Behavior › Zoom). Vertical keeps its own base; the setting scales it.
+var zoom_sensitivity_h: float = 1.6  # Horizontal zoom multiplier per scroll tick
+var zoom_sensitivity_v: float = 1.4  # Vertical zoom multiplier per scroll tick (for track heights)
 
 # Horizontal zoom limits (pixels per beat)
-@export var zoom_min_pixels_per_beat: float = 8.0
+@export var zoom_min_pixels_per_beat: float = 2.0
 @export var zoom_max_pixels_per_beat: float = 512.0
 
 # Target scroll positions for smooth scrolling
@@ -126,6 +127,10 @@ func _ready():
 	target_pixels_per_beat = grid_helper.pixels_per_beat
 	target_track_height = 80.0  # Default, will be updated when project loads
 
+	# Zoom sensitivity follows the shared setting (arranger + MIDI editor)
+	_update_zoom_sensitivity()
+	Settings.setting_changed.connect(_on_setting_changed)
+
 	# Connect add track button
 	add_track_button.pressed.connect(_on_add_track_pressed)
 	add_folder_button.pressed.connect(_on_add_folder_pressed)
@@ -139,6 +144,7 @@ func _ready():
 	tempo_toggle.toggled.connect(func(_pressed: bool): _apply_ruler_row_visibility())
 	time_signature_toggle.toggled.connect(func(_pressed: bool): _apply_ruler_row_visibility())
 	_apply_ruler_row_visibility()
+
 
 	# Set up custom scroll handling by intercepting gui_input on scroll containers
 	v_scroll.gui_input.connect(_on_scroll_container_input.bind(v_scroll))
@@ -209,6 +215,16 @@ func _ready():
 	_update_ruler()
 	_update_playhead_position()
 
+func _update_zoom_sensitivity() -> void:
+	var choice := str(Settings.get_value(Utils.SCROLL_ZOOM_SENSITIVITY_SETTING))
+	var multiplier := Utils.scroll_zoom_multiplier(choice)
+	zoom_sensitivity_h = multiplier
+	zoom_sensitivity_v = 1.4 * (multiplier / Utils.SCROLL_ZOOM_NORMAL)
+
+
+func _on_setting_changed(key: String, _value) -> void:
+	if key == Utils.SCROLL_ZOOM_SENSITIVITY_SETTING:
+		_update_zoom_sensitivity()
 
 func _on_mouse_entered() -> void:
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
