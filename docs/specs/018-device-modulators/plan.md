@@ -427,10 +427,15 @@ and to a reverb mix, disconnect one from the tile menu) works.
 
 ## Phase 9: later additions (separate follow-ups, not v1)
 
-- [ ] Live displays: the LFO wave with a moving dot, the envelope position, and knobs
-  animating their modulated value. This needs a per-device data stream of modulator values
-  and summed offsets at about 20 Hz, subscribed in `_on_view_shown`. It replaces spec 011
-  Phase 6.
+- [x] Live displays: knobs animating their modulated value. The `ModulatedDevice` wrapper
+  streams a `modulation` data type at ~20 Hz: one offset record per own-route target, plus
+  per-voice effective values for a voice-modulating inner (PolySynth, newest voice last),
+  with a heartbeat when nothing is routed. `ModLive` (Godot) subscribes it for every shown
+  device view (and each ancestor with modulators), resolves the record targets, and pushes
+  `mod_live_value` — the knob's value arc, which returns to the set value when no voice is
+  sounding — and `mod_live_values` (the per-voice markers). Tests: engine
+  `modulation_stream_*` in `host.rs`, `Godot/tests/test_mod_live.gd`.
+- [ ] Live displays, the rest: the LFO wave with a moving dot, and the envelope position.
 - [ ] Right-clicking any knob lists the modulators affecting it (name, amount, disconnect),
   built on `get_routes_into`.
 - [ ] Modulator → modulator routes (an envelope driving LFO rate), evaluated in dependency

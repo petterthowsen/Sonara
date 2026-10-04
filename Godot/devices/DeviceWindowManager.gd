@@ -82,7 +82,7 @@ func _open_view_window(dev: DeviceInstance) -> void:
 	popup.min_size = min_size
 	popup.popup_centered(Vector2i(maxi(min_size.x, 300), maxi(min_size.y, 200)))
 	# notify the view it is now visible so it can subscribe
-	view._on_view_shown()
+	view.show_view()
 	_popups[dev] = popup
 	_views[dev] = view
 	_opening.erase(dev)
@@ -110,7 +110,7 @@ func close(dev: DeviceInstance) -> void:
 	# The popup (and the view inside it) may already be gone when the editor
 	# is freed on quit before this manager.
 	if view and is_instance_valid(view):
-		view._on_view_hidden()
+		view.hide_view()
 		view.queue_free()
 	if popup and is_instance_valid(popup):
 		popup.hide()

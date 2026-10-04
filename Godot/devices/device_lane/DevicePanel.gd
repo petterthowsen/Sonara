@@ -971,8 +971,8 @@ func _load_panel_view(dev: DeviceInstance) -> void:
 
 func _clear_panel_view() -> void:
 	if _panel_view:
-		if _panel_view.has_method("_on_view_hidden"):
-			_panel_view._on_view_hidden()
+		if _panel_view.has_method("hide_view"):
+			_panel_view.hide_view()
 		_panel_view.queue_free()
 		_panel_view = null
 
@@ -991,8 +991,8 @@ func _load_companion_view(dev: DeviceInstance) -> void:
 
 func _clear_companion_view() -> void:
 	if _companion_view:
-		if _companion_view.has_method("_on_view_hidden"):
-			_companion_view._on_view_hidden()
+		if _companion_view.has_method("hide_view"):
+			_companion_view.hide_view()
 		_companion_view.queue_free()
 		_companion_view = null
 
@@ -1014,7 +1014,7 @@ func _show_panel_view() -> void:
 
 		logger.info("panel view is ready, calling _on_view_shown...")
 		_panel_view.show()
-		_panel_view._on_view_shown()
+		_panel_view.show_view()
 	
 	if _companion_view and _companion_view.visible:
 		logger.info("hiding companion view")
@@ -1025,7 +1025,7 @@ func _show_panel_view() -> void:
 
 		logger.info("companion view is ready, calling _on_view_hidden...")
 		_companion_view.hide()
-		_companion_view._on_view_hidden()
+		_companion_view.hide_view()
 	
 	_update_view_pane_visibility()
 
@@ -1037,7 +1037,7 @@ func _show_companion_view() -> void:
 
 		logger.info("companion view is ready, calling _on_view_shown...")
 		_companion_view.show()
-		_companion_view._on_view_shown()
+		_companion_view.show_view()
 	
 	if _panel_view and _panel_view.visible:
 		if not _panel_view.is_node_ready():
@@ -1046,7 +1046,7 @@ func _show_companion_view() -> void:
 
 		logger.info("panel view is ready, calling _on_view_hidden...")
 		_panel_view.hide()
-		_panel_view._on_view_hidden()
+		_panel_view.hide_view()
 	
 	_update_view_pane_visibility()
 

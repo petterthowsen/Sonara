@@ -479,6 +479,21 @@ impl PolySynthDevice {
             }
         }
     }
+
+    /// Effective normalized value of `slot` on one voice: the base (mono offset included) plus
+    /// the voice's own routed modulators, clamped, as the `modulation` data stream reports it.
+    fn voice_mod_value(&self, voice: &Voice, param_id: ParamId, slot: usize, base: f32) -> f32 {
+        let mut sum = 0.0;
+        for route in self.voice_spec.routes() {
+            if route.param_id != param_id {
+                continue;
+            }
+            if let Some(state) = voice.mods.get(route.mod_slot).and_then(|s| s.as_ref()) {
+                sum += route.amount * state.value();
+            }
+        }
+        (base + sum).clamp(0.0, 1.0)
+    }
 }
 
 fn retarget(smoother: &mut SmoothedParam, value: f32) {
@@ -625,6 +640,42 @@ impl AudioDevice for PolySynthDevice {
             self.rebuild_free_lfos();
             self.configure_voices();
         }
+    }
+
+    fn live_voice_mod_values(&self, param_id: ParamId, values: &mut [f32]) -> usize {
+        let Some(slot) = params::slot(param_id) else {
+            return 0;
+        };
+        // The mono offset an enclosing wrapper pushed in is part of the base, exactly as
+        // `render_chunk` sees it.
+        let base = self.params.effective_norm_at(slot);
+        // One pass to find the newest voice (largest note-on age); it is reported last, as
+        // the value a knob's arc follows.
+        let mut newest = usize::MAX;
+        let mut newest_age = 0;
+        for (i, v) in self.voices.iter().enumerate() {
+            if v.active && v.age >= newest_age {
+                newest_age = v.age;
+                newest = i;
+            }
+        }
+        let mut written = 0;
+        if values.is_empty() {
+            return 0;
+        }
+        // Leave the last slot for the newest voice, so it always survives the cap.
+        for (i, v) in self.voices.iter().enumerate() {
+            if !v.active || i == newest || written + 1 >= values.len() {
+                continue;
+            }
+            values[written] = self.voice_mod_value(v, param_id, slot, base);
+            written += 1;
+        }
+        if newest != usize::MAX {
+            values[written] = self.voice_mod_value(&self.voices[newest], param_id, slot, base);
+            written += 1;
+        }
+        written
     }
 
     fn default_modulators(&self) -> Vec<DefaultModulator> {

@@ -280,6 +280,14 @@ var mod_assign_amount := 0.0
 
 ## Optional Callable(amount: float) -> String for the assign tooltip (e.g. "+1.2 oct").
 var mod_amount_text_callback: Callable
+## Current effective (modulated) value of the parameter, normalized 0..1, while modulation is
+## moving it; -1 when it isn't. The value arc follows it in real time, while the knob line
+## keeps showing the assigned value, and returns to the set value when the modulation stops
+## (spec 018 Phase 9).
+var mod_live_value := -1.0:
+	set(v):
+		mod_live_value = v
+		queue_redraw()
 
 ## Live modulated positions (0..1) while playing, drawn as dots on the ring.
 var mod_live_values := PackedFloat32Array():
@@ -342,13 +350,26 @@ func _draw() -> void:
 	var max_rotation_rad: float = deg_to_rad(max_rotation_deg - 90.0)
 	draw_arc(center, arc_radius, min_rotation_rad, max_rotation_rad, 32, value_arc_bg, arc_width, true)
 	var value_angle: float = lerpf(min_rotation_rad, max_rotation_rad, _value_to_normalized(_value))
-	draw_arc(center, arc_radius, min_rotation_rad, value_angle, 32, value_arc_color, arc_width, true)
+	# While modulation is moving the parameter the value arc follows the live (modulated)
+	# value; the knob line keeps marking the assigned value.
+	draw_arc(center, arc_radius, min_rotation_rad, _live_arc_angle(min_rotation_rad, max_rotation_rad),
+		32, value_arc_color, arc_width, true)
 	draw_circle(center, knob_radius + shadow_width, shadow_color, true, -1.0, true)
 	draw_circle(center, knob_radius, knob_color, true, -1.0, true)
 	var line_start: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * (0.9 - knob_line_length))
 	var line_end: Vector2 = center + Vector2.from_angle(value_angle) * (knob_radius * 0.9)
 	draw_line(line_start, line_end, knob_line_color, knob_line_width, true)
 	_draw_modulation(center, arc_radius, knob_radius, min_rotation_rad, max_rotation_rad)
+
+## Angle of the live (modulated) value when one is reported, else of the set value.
+func _live_arc_angle(min_rad: float, max_rad: float) -> float:
+	var live := mod_live_value
+	if preview_modulation and preview_mod_live >= 0.0:
+		live = preview_mod_live
+	if live < 0.0:
+		live = _value_to_normalized(_value)
+	return lerpf(min_rad, max_rad, clampf(live, 0.0, 1.0))
+
 
 
 ## Draw the focused route's range over the value arc, live-value markers on the ring, and the

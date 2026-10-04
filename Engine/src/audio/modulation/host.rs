@@ -28,6 +28,12 @@ use crate::audio::modulation::kinds::LFO_RETRIGGER;
 use crate::audio::transport::Transport;
 use tracing::warn;
 
+/// Frames between `modulation` data stream payloads (about 20 Hz).
+const MOD_STREAM_HZ: f32 = 20.0;
+
+/// Per-voice live values reported per parameter of a voice-modulating device.
+const LIVE_VALUES_MAX: usize = 16;
+
 /// Frames between control steps: the mono path updates its offsets this often.
 pub const CONTROL_STEP: usize = 64;
 
@@ -150,7 +156,17 @@ pub struct ModulatedDevice {
     own_len: usize,
     /// Scratch: modulator values for the current step, indexed by modulator slot.
     values: [f32; MAX_MODULATORS],
-    /// What was applied at the last control step, so stale targets can be zeroed.
+    /// This step's own-route contribution per target, for the `modulation` data stream (spec
+    /// 018 Phase 9). Own contributions only: an enclosing wrapper's offset onto this device
+    /// is reported by the wrapper that owns that route.
+    contrib: [(ModTarget, f32); MAX_ROUTES],
+    contrib_len: usize,
+    /// `modulation` data stream state: subscribed, frames since the last payload, and the
+    /// send interval. The stream always sends at that rate while subscribed, even with no
+    /// records, so the UI can drop stale entries.
+    stream_subscribed: bool,
+    stream_frames: usize,
+    stream_interval: usize,
     applied: [(ModTarget, f32); MAX_ROUTES],
     applied_len: usize,
     transport: Transport,
@@ -176,6 +192,11 @@ impl ModulatedDevice {
             own: [(0, 0.0); MAX_ROUTES],
             own_len: 0,
             values: [0.0; MAX_MODULATORS],
+            contrib: [(NO_TARGET, 0.0); MAX_ROUTES],
+            contrib_len: 0,
+            stream_subscribed: false,
+            stream_frames: 0,
+            stream_interval: mod_interval(sample_rate),
             applied: [(NO_TARGET, 0.0); MAX_ROUTES],
             applied_len: 0,
             transport: Transport::default(),
@@ -246,6 +267,84 @@ impl ModulatedDevice {
         Ok(self.target_len - 1)
     }
 
+    /// Record this step's own-route contribution for the `modulation` data stream. One entry
+    /// per distinct target; route destinations are already distinct per target.
+    fn push_contrib(&mut self, target: ModTarget, offset: f32) {
+        for entry in &mut self.contrib[..self.contrib_len] {
+            if entry.0 == target {
+                entry.1 = offset;
+                return;
+            }
+        }
+        if self.contrib_len < MAX_ROUTES {
+            self.contrib[self.contrib_len] = (target, offset);
+            self.contrib_len += 1;
+        }
+    }
+
+    /// Serialize the `modulation` data stream payload (little-endian, spec 018 Phase 9).
+    ///
+    /// One record per own-route target:
+    /// - `kind 0` (offset): the wrapper's own contribution to a mono target, normalized. The
+    ///   UI adds it to its base value, along with every other wrapper's contribution.
+    /// - `kind 1` (values): per-voice effective normalized values of a parameter of a
+    ///   voice-modulating device (PolySynth), one per sounding voice, newest last. These
+    ///   already include the base and every enclosing wrapper's offset, so the UI uses them
+    ///   as-is and ignores `kind 0` records for the same parameter.
+    ///
+    /// The target is `depth` child indices (0 for the device's own parameter) plus the
+    /// parameter ID, relative to this device, exactly as a route target is spelled. The
+    /// payload is sent even with no records, as a heartbeat so the UI can drop stale entries.
+    fn modulation_payload(&mut self) -> Vec<u8> {
+        // Distinct own parameters a voice-modulating device evaluates per voice.
+        let mut poly_ids = [0u32; MAX_ROUTES];
+        let mut poly_len = 0;
+        if self.voice_mod {
+            for route in self.routes.routes() {
+                if let ModTarget::Own(param_id) = self.targets[route.slot] {
+                    let known = poly_ids[..poly_len].iter().any(|id| *id == param_id);
+                    if !known && poly_len < poly_ids.len() {
+                        poly_ids[poly_len] = param_id;
+                        poly_len += 1;
+                    }
+                }
+            }
+        }
+        let contrib = self.contrib;
+        let contrib_len = self.contrib_len;
+        let mut bytes = Vec::with_capacity(2 + MAX_ROUTES * (8 + LIVE_VALUES_MAX * 4));
+        bytes.extend_from_slice(&((contrib_len + poly_len) as u16).to_le_bytes());
+        for i in 0..contrib_len {
+            let (target, offset) = contrib[i];
+            bytes.push(0);
+            // The target's child path, in u16 indices, as a route target spells it.
+            if let ModTarget::Child(path, _) = target {
+                bytes.push(path.depth() as u8);
+                for index in path.indices() {
+                    bytes.extend_from_slice(&(*index as u16).to_le_bytes());
+                }
+            } else {
+                bytes.push(0);
+            }
+            bytes.extend_from_slice(target.param_id().to_le_bytes().as_slice());
+            bytes.push(1);
+            bytes.extend_from_slice(offset.to_le_bytes().as_slice());
+        }
+        for j in 0..poly_len {
+            let id = poly_ids[j];
+            let mut values = [0.0f32; LIVE_VALUES_MAX];
+            let count = self.dev().live_voice_mod_values(id, values.as_mut_slice());
+            bytes.push(1);
+            bytes.push(0);
+            bytes.extend_from_slice(id.to_le_bytes().as_slice());
+            bytes.push(count as u8);
+            for value in values.iter().take(count) {
+                bytes.extend_from_slice(value.to_le_bytes().as_slice());
+            }
+        }
+        bytes
+    }
+
     /// Advance every modulator by `frames` and store the values, without applying them.
     fn advance(&mut self, frames: usize) {
         for (i, slot) in self.mods.iter_mut().enumerate() {
@@ -310,6 +409,8 @@ impl ModulatedDevice {
         let mut plan = [(NO_TARGET, 0.0f32); MAX_ROUTES];
         let mut plan_len = 0;
         self.own_len = 0;
+        self.contrib_len = 0;
+        self.stream_frames += frames;
         for &slot in &dests[..dest_len] {
             let target = self.targets[slot];
             match target {
@@ -322,10 +423,12 @@ impl ModulatedDevice {
                     plan_len += 1;
                     self.own[self.own_len] = (param_id, off);
                     self.own_len += 1;
+                    self.push_contrib(target, off);
                 }
                 ModTarget::Child(..) => {
                     plan[plan_len] = (target, acc[slot]);
                     plan_len += 1;
+                    self.push_contrib(target, acc[slot]);
                 }
                 // Phase 9: modulator-to-modulator routes are stored but not evaluated.
                 ModTarget::Modulator(..) => {}
@@ -515,6 +618,11 @@ fn window(start_frame: usize, frames: usize, len: usize) -> std::ops::Range<usiz
     let start = (start_frame * 2).min(len);
     let end = ((start_frame + frames) * 2).min(len);
     start..end.max(start)
+}
+
+/// Frames between `modulation` stream payloads at `sample_rate`.
+fn mod_interval(sample_rate: f32) -> usize {
+    ((sample_rate.max(1.0)) / MOD_STREAM_HZ) as usize
 }
 
 /// The device at a path relative to `device`, walking its containers. An empty path is the
@@ -927,6 +1035,7 @@ impl AudioDevice for ModulatedDevice {
 
     fn prepare(&mut self, sample_rate: f32, max_frames: usize) {
         self.sample_rate = sample_rate.max(1.0);
+        self.stream_interval = mod_interval(self.sample_rate);
         for state in self.mods.iter_mut().flatten() {
             state.prepare(self.sample_rate);
         }
@@ -989,10 +1098,19 @@ impl AudioDevice for ModulatedDevice {
     }
 
     fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        if data_type == "modulation" {
+            self.stream_subscribed = true;
+            self.stream_frames = 0;
+            return Ok(());
+        }
         self.dev_mut().subscribe_data(data_type)
     }
 
     fn unsubscribe_data(&mut self, data_type: &str) {
+        if data_type == "modulation" {
+            self.stream_subscribed = false;
+            return;
+        }
         self.dev_mut().unsubscribe_data(data_type);
     }
 
@@ -1012,7 +1130,16 @@ impl AudioDevice for ModulatedDevice {
         self.dev_mut().apply_data_build(built)
     }
 
+    /// The wrapper owns the `modulation` stream (spec 018 Phase 9); every other type belongs
+    /// to the wrapped device.
     fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        if self.stream_subscribed {
+            if self.stream_frames < self.stream_interval {
+                return None;
+            }
+            self.stream_frames = 0;
+            return Some(("modulation".to_string(), self.modulation_payload()));
+        }
         self.dev_mut().poll_device_data()
     }
 }
@@ -1069,7 +1196,7 @@ mod tests {
         ParamInfo,
     };
     use crate::audio::dsp::test_util::{render, stereo, white_noise};
-    use crate::audio::modulation::kinds::{ENV_ATTACK, LFO_RATE};
+    use crate::audio::modulation::kinds::{ENV_ATTACK, ENV_RELEASE, LFO_RATE};
     use crate::audio::types::Channel;
     use std::any::Any;
     use std::time::Duration;
@@ -1638,5 +1765,182 @@ mod tests {
             .downcast_mut::<Sleepy>()
             .expect("inner");
         assert_eq!(inner.last_mod, Some(0.0), "the offset was not reset");
+    }
+
+    /// Decode a `modulation` payload into `(kind, child path, param id, values)` records.
+    fn decode_modulation(bytes: &[u8]) -> Vec<(u8, Vec<usize>, u32, Vec<f32>)> {
+        let mut out = Vec::new();
+        if bytes.len() < 2 {
+            return out;
+        }
+        let count = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
+        let mut at = 2;
+        for _ in 0..count {
+            let kind = bytes[at];
+            let depth = bytes[at + 1] as usize;
+            at += 2;
+            let mut path = Vec::new();
+            for _ in 0..depth {
+                path.push(u16::from_le_bytes([bytes[at], bytes[at + 1]]) as usize);
+                at += 2;
+            }
+            let param = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            at += 4;
+            let n = bytes[at] as usize;
+            at += 1;
+            let mut values = Vec::new();
+            for _ in 0..n {
+                values.push(f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()));
+                at += 4;
+            }
+            out.push((kind, path, param, values));
+        }
+        out
+    }
+
+    #[test]
+    fn modulation_stream_reports_lfo_offsets_and_heartbeats() {
+        let input = stereo(&white_noise(4_800, 0.5, 5));
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![delay()];
+        wrap(&mut devices);
+        {
+            let modulated = devices[0].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            modulated
+                .set_modulator_param(0, LFO_RATE, 1.0)
+                .expect("rate");
+            modulated
+                .set_modulator_route(0, "param/41", 0.7)
+                .expect("route");
+        }
+        devices[0].subscribe_data("modulation").expect("subscribe");
+
+        // Nothing until the send interval has passed.
+        assert!(devices[0].poll_device_data().is_none());
+
+        render(devices[0].as_mut(), &input, &[512]);
+        let (data_type, bytes) = devices[0].poll_device_data().expect("payload");
+        assert_eq!(data_type, "modulation");
+        let records = decode_modulation(&bytes);
+        assert_eq!(records.len(), 1, "records: {records:?}");
+        let (kind, path, param, values) = &records[0];
+        assert_eq!(*kind, 0, "an own mono route is an offset record");
+        assert!(path.is_empty());
+        assert_eq!(*param, DELAY_MIX);
+        assert_eq!(values.len(), 1);
+        assert!(
+            values[0].abs() <= 0.7 + 1e-6,
+            "offset {values:?} exceeds the route amount"
+        );
+
+        // Rate-limited to the interval: the next poll waits for more frames.
+        assert!(devices[0].poll_device_data().is_none());
+
+        // Removing the route leaves a heartbeat payload (no records), so the UI can drop
+        // the stale entry instead of keeping the last offset forever.
+        devices[0]
+            .as_modulated_mut()
+            .unwrap()
+            .set_modulator_route(0, "param/41", 0.0)
+            .expect("unroute");
+        render(devices[0].as_mut(), &input, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("heartbeat");
+        assert!(
+            decode_modulation(&bytes).is_empty(),
+            "an unrouted modulator still reported"
+        );
+
+        devices[0].unsubscribe_data("modulation");
+        render(devices[0].as_mut(), &input, &[512]);
+        assert!(
+            devices[0].poll_device_data().is_none(),
+            "an unsubscribed stream still sent"
+        );
+    }
+
+    #[test]
+    fn modulation_stream_reports_child_paths_for_nested_targets() {
+        let input = stereo(&white_noise(4_800, 0.5, 11));
+        let mut layer = LayerDevice::new(MAX_FRAMES);
+        layer.insert_child(0, delay());
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(layer)];
+        wrap(&mut devices);
+        {
+            let modulated = devices[0].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Lfo).unwrap();
+            modulated
+                .set_modulator_route(0, "child/0/param/41", 0.7)
+                .expect("route");
+        }
+        devices[0].subscribe_data("modulation").expect("subscribe");
+        render(devices[0].as_mut(), &input, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("payload");
+        let records = decode_modulation(&bytes);
+        assert_eq!(records.len(), 1, "records: {records:?}");
+        assert_eq!(records[0].0, 0);
+        assert_eq!(records[0].1, vec![0], "the child path is reported");
+        assert_eq!(records[0].2, DELAY_MIX);
+    }
+
+    #[test]
+    fn modulation_stream_reports_per_voice_values_on_polysynth() {
+        use crate::audio::devices::PolySynthDevice;
+
+        // PolySynth's Amp Env release, so a released voice is gone within the test's render.
+        const AMP_RELEASE: ParamId = 43;
+        /// PolySynth's Filter Cutoff.
+        const CUTOFF: ParamId = 31;
+
+        let silence = stereo(&[0.0f32; 4_800]);
+        let mut devices: Vec<Box<dyn AudioDevice>> = vec![Box::new(PolySynthDevice::new(SR))];
+        devices[0].prepare(SR, MAX_FRAMES);
+        wrap(&mut devices);
+        devices[0].set_parameter(CUTOFF, 0.2);
+        devices[0].set_parameter(AMP_RELEASE, 0.0);
+        {
+            let modulated = devices[0].as_modulated_mut().unwrap();
+            modulated.add_modulator(0, ModulatorKind::Adsr).unwrap();
+            modulated
+                .set_modulator_param(0, ENV_RELEASE, 0.0)
+                .expect("release");
+            modulated
+                .set_modulator_route(0, "param/31", 0.5)
+                .expect("route");
+        }
+        devices[0].subscribe_data("modulation").expect("subscribe");
+
+        // Idle: the parameter is reported with no values, so the UI's arc returns to base.
+        render(devices[0].as_mut(), &silence, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("idle payload");
+        let records = decode_modulation(&bytes);
+        assert_eq!(records.len(), 1, "records: {records:?}");
+        let (kind, path, param, values) = &records[0];
+        assert_eq!((*kind, path.as_slice(), *param), (1, &[][..], CUTOFF));
+        assert!(values.is_empty(), "values reported while idle: {values:?}");
+
+        // One held note: one voice, one effective value above the base (0.2).
+        devices[0].send_midi_event(60, 100, true, 0);
+        render(devices[0].as_mut(), &silence, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("note payload");
+        let records = decode_modulation(&bytes);
+        assert_eq!(records.len(), 1, "records: {records:?}");
+        let (kind, _, _, values) = &records[0];
+        assert_eq!(*kind, 1, "a voice-modulated parameter is a values record");
+        assert_eq!(values.len(), 1, "values: {values:?}");
+        assert!(
+            values[0] > 0.2 && values[0] <= 1.0,
+            "effective cutoff {values:?} left the base range"
+        );
+
+        // Note off and the (fast) releases done: the values are gone again.
+        devices[0].send_midi_event(60, 0, false, 0);
+        render(devices[0].as_mut(), &silence, &[512]);
+        let (_, bytes) = devices[0].poll_device_data().expect("released payload");
+        let records = decode_modulation(&bytes);
+        assert_eq!(records.len(), 1, "records: {records:?}");
+        assert!(
+            records[0].3.is_empty(),
+            "values reported after release: {records:?}"
+        );
     }
 }

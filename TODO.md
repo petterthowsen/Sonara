@@ -35,7 +35,7 @@ Phased plan for this section, plugin hosting rework and audio device settings: `
 - [ ] Remove the shared `Arc<Mutex<EngineState>>` (phase 2): the audio thread should own its state and drain a lock-free command queue, with removed objects sent back to be dropped off-thread
   - [ ] Phase 1, partly verified live (CLAP on a bus, large clip import during playback): slow commands (plugin scan, device create/drop, plugin GUI/activation IPC) run outside the lock in `CommandWorker`; the callback uses a bounded `try_lock` and outputs silence
 - [x?] Audio thread allocations still left: unbounded status channel sends, `process_device_chain` sleep-change Vec, `audio_playback_positions` insert (String clone) on clip start, `poll_parameter_changes` sets a socket read timeout every buffer per CLAP plugin (Phase 1 of the stability plan; verify with `SONARA_FEATURES=rt-debug`)
-  - [ ] Known left: `poll_device_data` (spectrum analyzer) allocates its payload while a view is subscribed
+  - [ ] Known left: `poll_device_data` allocates its payload while a view is subscribed (spectrum analyzer; the modulation wrapper's `modulation` stream likewise, ~20 Hz)
   - [ ] Removed, needs live verification: per-buffer Vecs/HashMaps and buffer clones in `process_audio`/`mix_and_output`, debug `info!` logging in the callback
 - [ ] CPU affinity for audio thread and plugin processing
 - [ ] Realtime thread priority configuration
@@ -226,7 +226,7 @@ Verified headless (`tests/test_device_panel_selection.gd`); panes open/close thr
 - [ ] Modulation
   - [ ] Basic modulation, similar to Bitwig: allow any channel and device parameter to be modulatable
   - [ ] Device modulators (LFO, envelopes, velocity… on any device instance, targeting its own and nested params, incl. CLAP): spec `docs/specs/018-device-modulators/plan.md`
-  - [x?] Device modulation routes (PolySynth v2, spec `docs/specs/011-polysynth-v2/`): engine + OSC + Godot model done (phase 4); assign UI in SimpleView done (phase 5, [x?]: manual check pending); live display is phase 6
+  - [x?] Device modulation routes (PolySynth v2, spec `docs/specs/011-polysynth-v2/`): engine + OSC + Godot model done (phase 4); assign UI in SimpleView done (phase 5, [x?]: manual check pending); live display done (phase 6 / spec 018 Phase 9: knob arcs follow the modulated value over the engine's `modulation` data stream, `ModLive` feeds them, covered by `tests/test_mod_live.gd`; needs a live check)
   - [ ] Phase 1: track automation lanes for channel and device parameters (incl. MIDI CCs) — spec `docs/specs/003-automation/`
 
 ### UI / Quality of Life

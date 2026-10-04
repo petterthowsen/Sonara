@@ -218,6 +218,7 @@ static func attach(node: Control, device, param_id: int) -> void:
 	if node.get_meta("mod_attached", false):
 		return
 	node.set_meta("mod_attached", true)
+	ModLive.attach(node, device, param_id)
 	if "mod_amount_text_callback" in node:
 		node.set("mod_amount_text_callback", func(amount) -> String:
 			return amount_text(device, param_id, amount))

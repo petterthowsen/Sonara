@@ -19,6 +19,15 @@
 - Incoming `{osc_path}/data` messages emit `device_data_received(osc_path, data_type, blob)` so views can decode custom payloads; FFT analyzers also emit `device_spectrum_received(osc_path, spectrum)` with a ready-to-use `PackedFloat32Array`. Compare `osc_path` to `DeviceInstance.osc_path()`.
 - Device visuals extend `DeviceView`, subscribe in `_on_view_shown()`, and must disconnect in `_on_view_hidden()` to avoid leaving the audio engine in a subscribed state when the UI hides the scene.
 
+**Modulation live values** (spec 018 Phase 9) ride the same channel with `data_type`
+`"modulation"`: `ModLive` (in `devices/modulators/`) subscribes the device's stream and every
+ancestor's that has modulators while any view of the device is shown, decodes the payload
+(`ModLive._decode` documents the format) and pushes `mod_live_value`/`mod_live_values` to the
+controls registered by `ModAssign.attach`. The arc returns to the knob's set value whenever
+the stream reports nothing for the parameter. Views don't subscribe this stream themselves;
+`DeviceView.show_view`/`hide_view` drive it. Only device views (Simple View and the custom panel
+and window views) do today; the Parameters/CCs lists and the compact panels don't subscribe yet.
+
 ### Engine Log Relay
 - The audio engine forwards WARN/ERROR records via `/log` with `[String level, String message]`; level is `"warn"` or `"error"`.
 - `AudioEngineOSC` emits `engine_log_message(level, message)` on receipt and mirrors WARN/ERROR into the Godot output log so designers see runtime issues without tailing files.

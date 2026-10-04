@@ -12,7 +12,7 @@
 
 ## DeviceInstance Factory
 - `DeviceViewFactory.create(instance, type)` (`devices/DeviceViewFactory.gd`) instantiates the registered PackedScene, asserts the node extends `DeviceView`, sets the `view_type`, and returns it; callers should treat `null` as "view unsupported".
-- Device views implement `_on_bind()` to wire signals and use `_on_view_shown()`/`_on_view_hidden()` for data subscriptions to keep OSC listeners scoped to visibility.
+- Device views implement `_on_bind()` to wire signals and use `_on_view_shown()`/`_on_view_hidden()` for data subscriptions to keep OSC listeners scoped to visibility. Panels and the window manager call the `DeviceView.show_view()`/`hide_view()` wrappers instead: they also drive the modulation live feed (`ModLive`, spec 018 Phase 9) around the subclass hooks.
 
 ## Drops and channel lookup
 - Every device drop goes through `DeviceDropUtil`. Device drags carry a `DeviceDrag` payload (`DeviceDrag.start(self, inst)` in `_get_drag_data`); `DeviceDropUtil` unwraps it, so its functions also take a bare `DeviceInstance` or `Asset`.

@@ -147,7 +147,11 @@ are no traits in GDScript, so each implements it; the maths is in `ModDisplay.gd
   Ctrl-click reset and typed entry are off in assign mode.
 - `mod_amount_text_callback` (Callable(amount) -> String) sets the assign tooltip. `ModAssign.attach`
   gives "+1.2 oct" for logarithmic parameters and "+35 %" otherwise.
-- `mod_live_values` (0..1) draws playback markers. Phase 6 feeds it.
+- `mod_live_value` (0..1, -1 for none) is the current effective (modulated) value: on
+  RotaryKnob the value arc follows it in real time while the knob line stays at the assigned
+  value, and it returns to the set value when no voice is modulating (spec 018 Phase 9).
+  `mod_live_values` (0..1) draws playback markers, one per sounding voice. `ModLive` feeds
+  both from the engine's `modulation` data stream.
 
 A control joins the contract through `ModAssign.attach(node, device, param_id)` (spec 018):
 `SimpleControl`'s inner knobs/sliders and envelope knobs, `CompactParameterControl`'s slider, and the

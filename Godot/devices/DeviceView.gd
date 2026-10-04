@@ -88,13 +88,26 @@ func select_header_tab(_index: int) -> void:
 	pass
 
 
-## Called when view becomes visible (subscribe to data streams)
+
+## Called by the panel and window manager whenever this view becomes visible: drives the
+## modulation live feed (spec 018 Phase 9) and then the subclass subscription hook.
+func show_view() -> void:
+	ModLive.view_shown(device)
+	_on_view_shown()
+
+
+## Called by the panel and window manager whenever this view becomes hidden: the subclass
+## unsubscribes, then the modulation live feed stops watching the device.
+func hide_view() -> void:
+	_on_view_hidden()
+	ModLive.view_hidden(device)
+
+
 ## Override to subscribe to device data (e.g., spectrum, oscilloscope)
 func _on_view_shown() -> void:
 	pass
 
 
-## Called when view becomes hidden (unsubscribe)
 ## Override to unsubscribe from device data
 func _on_view_hidden() -> void:
 	pass

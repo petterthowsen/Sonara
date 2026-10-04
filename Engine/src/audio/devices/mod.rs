@@ -464,6 +464,16 @@ pub trait AudioDevice: Send {
     /// must be cheap. Default: the device is not voice-modulated.
     fn set_voice_modulation(&mut self, _spec: &crate::audio::modulation::VoiceModSpec) {}
 
+    /// Fill `values` with the current effective (modulated) normalized value of `param_id`,
+    /// one entry per sounding voice, the newest voice last, and return how many were written.
+    /// Only devices that evaluate their own modulators per voice
+    /// ([`Self::supports_voice_modulation`]) report values; the `ModulatedDevice` wrapper asks
+    /// at the `modulation` data stream's rate, on the audio thread, so this must not allocate.
+    /// Default: no values.
+    fn live_voice_mod_values(&self, _param_id: ParamId, _values: &mut [f32]) -> usize {
+        0
+    }
+
     /// Modulators a fresh instance starts with (the device's default patch, advertised in
     /// `/builtin/info`). Default: none.
     fn default_modulators(&self) -> Vec<DefaultModulator> {

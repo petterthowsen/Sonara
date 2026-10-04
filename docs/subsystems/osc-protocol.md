@@ -627,6 +627,8 @@ after subscribing.
 - `"oscilloscope"` - Time-domain waveform (future)
 - `"phase"` - Stereo phase correlation (future)
 - `"lufs"` - Integrated loudness (future)
+- `"modulation"` - Live modulation values (spec 018 Phase 9), produced by the
+  `ModulatedDevice` wrapper of a device that carries modulators, not the device itself
 
 **Device Data Stream (Rust → Godot):**
 ```
@@ -638,6 +640,24 @@ after subscribing.
   - Array length depends on FFT size (e.g., 1025 bins for 2048 FFT)
   - Update rate: ~20Hz when subscribed
   - Range: typically -60dB to +12dB
+- **Modulation**: little-endian, sent at ~20 Hz while subscribed even with no records, so
+  the UI can drop stale entries (a heartbeat):
+  ```
+  u16 record_count
+  per record:
+    u8  kind: 0 = offset, 1 = values
+    u8  depth: 0 = a parameter of the device itself, else the child-path length
+    depth × u16  child indices, as a route target spells them
+    u32 param_id
+    u8  value_count
+    value_count × f32 values (little-endian)
+  ```
+  - `offset` (kind 0): one value, the wrapper's own normalized contribution to the target.
+    The UI sums the offsets of every wrapper in the chain onto the parameter's base value.
+  - `values` (kind 1): the effective normalized value per sounding voice of a parameter of
+    a voice-modulating device (PolySynth), newest voice last; `value_count` 0 means no voice
+    is sounding. These already include the base and every enclosing wrapper's offset, so
+    the UI uses them as-is and ignores `offset` records for the same parameter.
 
 **Example Usage:**
 ```gdscript
