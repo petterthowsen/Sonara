@@ -69,6 +69,10 @@ impl NoteStack {
         self.len.checked_sub(1).map(|i| self.notes[i])
     }
 
+    fn contains(&self, note: u8) -> bool {
+        self.notes[..self.len].contains(&note)
+    }
+
     fn clear(&mut self) {
         self.len = 0;
     }
@@ -270,8 +274,10 @@ impl PolySynthDevice {
         }
     }
 
-    fn glide_from(&self) -> Option<f32> {
-        if self.params.glide > 0.0 {
+    /// Where a new note glides from. With Glide Scope `Connected`, only when the previous
+    /// note was still held when this one started; a detached note-on jumps straight in.
+    fn glide_from(&self, connected: bool) -> Option<f32> {
+        if self.params.glide > 0.0 && (connected || !self.params.glide_only_connected) {
             self.last_note
         } else {
             None
@@ -291,12 +297,16 @@ impl PolySynthDevice {
         let age = self.next_age();
         let start = self.start_ctx();
 
+        // Poly tracks held keys too, so "connected" (the previous note still held) can gate
+        // glide just as the Mono/Legato note stack does.
+        let connected = self.last_note.is_some_and(|n| self.held.contains(n as u8));
+        self.held.push(note);
         let unison = self.unison_counts();
         let pending = PendingNote {
             note,
             velocity,
             age,
-            glide_from: self.glide_from(),
+            glide_from: self.glide_from(connected),
             unison,
             released: false,
         };
@@ -358,17 +368,35 @@ impl PolySynthDevice {
         let age = self.next_age();
         let glide = self.params.glide;
         let legato = self.params.mode == VoiceMode::Legato;
+        // With Glide Scope `Connected`, a press that arrives while nothing is held starts on
+        // its own pitch instead of sliding from wherever the releasing voice is.
+        let glide_secs = if was_held || !self.params.glide_only_connected {
+            glide
+        } else {
+            0.0
+        };
         let start = self.start_ctx();
         let voice = &mut self.voices[0];
         if voice.active && !voice.is_fading() {
             // Legato only slides while another key is held; Mono always retriggers.
-            voice.retrigger(note, velocity, age, glide, !(legato && was_held), &start);
+            voice.retrigger(
+                note,
+                velocity,
+                age,
+                glide_secs,
+                !(legato && was_held),
+                &start,
+            );
         } else {
             let pending = PendingNote {
                 note,
                 velocity,
                 age,
-                glide_from: if glide > 0.0 { self.last_note } else { None },
+                glide_from: if glide > 0.0 && (was_held || !self.params.glide_only_connected) {
+                    self.last_note
+                } else {
+                    None
+                },
                 unison: [self.params.osc[0].unison, self.params.osc[1].unison],
                 released: false,
             };
@@ -383,6 +411,7 @@ impl PolySynthDevice {
     fn note_off(&mut self, note: u8) {
         match self.params.mode {
             VoiceMode::Poly => {
+                self.held.remove(note);
                 for v in self.voices.iter_mut() {
                     if let Some(p) = v.pending.as_mut().filter(|p| p.note == note) {
                         p.released = true;
@@ -1232,6 +1261,62 @@ mod tests {
             .find(|v| v.active && v.note == 60)
             .unwrap();
         assert_eq!(v.pitch, 60.0);
+    }
+
+    #[test]
+    fn glide_scope_connected_gates_poly_glide() {
+        let mut dev = synth();
+        set_real(&mut dev, GLIDE, 0.2);
+        set_real(&mut dev, GLIDE_SCOPE, 1.0);
+        dev.send_midi_event(48, 100, true, 0);
+        render(&mut dev, 1);
+        dev.send_midi_event(60, 100, true, 0); // 48 still held: connected
+        render(&mut dev, 1);
+        let v = dev
+            .voices
+            .iter()
+            .find(|v| v.active && v.note == 60)
+            .unwrap();
+        assert!(
+            v.pitch > 48.0 && v.pitch < 49.0,
+            "overlapping press should glide: {}",
+            v.pitch
+        );
+
+        dev.send_midi_event(48, 0, false, 0);
+        dev.send_midi_event(60, 0, false, 0);
+        render(&mut dev, 1);
+        dev.send_midi_event(67, 100, true, 0); // nothing held: detached
+        render(&mut dev, 1);
+        let v = dev
+            .voices
+            .iter()
+            .find(|v| v.active && v.note == 67)
+            .unwrap();
+        assert_eq!(
+            v.pitch, 67.0,
+            "detached press should start on its own pitch, not glide from 60"
+        );
+    }
+
+    #[test]
+    fn glide_scope_connected_first_mono_press_jumps() {
+        let mut dev = synth();
+        set_real(&mut dev, VOICE_MODE, 1.0);
+        set_real(&mut dev, GLIDE, 0.2);
+        set_real(&mut dev, GLIDE_SCOPE, 1.0);
+        dev.send_midi_event(48, 100, true, 0);
+        render(&mut dev, 1);
+        dev.send_midi_event(48, 0, false, 0);
+        render(&mut dev, 40); // release (200 ms) finishes, the voice goes idle
+        dev.send_midi_event(67, 100, true, 0);
+        render(&mut dev, 1);
+        let v = &dev.voices[0];
+        assert!(v.active, "voice should sound");
+        assert_eq!(
+            v.pitch, 67.0,
+            "a press from silence should jump, not glide from the old note"
+        );
     }
 
     fn rms(samples: impl Iterator<Item = f32>) -> f32 {

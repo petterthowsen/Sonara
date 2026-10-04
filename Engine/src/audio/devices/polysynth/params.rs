@@ -55,6 +55,7 @@ pub const AMP_RELEASE: ParamId = AMP_ENV + RELEASE;
 pub const VOICE_MODE: ParamId = 80;
 pub const POLYPHONY: ParamId = 81;
 pub const GLIDE: ParamId = 82;
+pub const GLIDE_SCOPE: ParamId = 84;
 pub const VELOCITY: ParamId = 83;
 
 pub const VOLUME: ParamId = 90;
@@ -93,6 +94,10 @@ const FILTER_MODES: [FilterMode; 6] = [
     FilterMode::Bp6,
 ];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
+/// `Always` glides from the last note however it was released; `Connected` glides only when
+/// the previous note is still held when the new one starts (TB-303 style), and otherwise
+/// starts each detached note on its own pitch.
+const GLIDE_SCOPES: &[&str] = &["Always", "Connected"];
 const POLYPHONY_COUNTS: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
     "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
@@ -267,16 +272,17 @@ const NOISE_FILTER_SPECS: [ParamSpec; 7] = [
 #[rustfmt::skip]
 const AMP_ENV_SPECS: [ParamSpec; 4] = env_specs!(AMP_ENV, "Amp", "Amp Env", 0.002, 0.3, 1.0, 0.2);
 #[rustfmt::skip]
-const VOICE_OUTPUT_SPECS: [ParamSpec; 5] = [
+const VOICE_OUTPUT_SPECS: [ParamSpec; 6] = [
     spec(VOICE_MODE, "Voice Mode", "Voice", "", Kind::Enum(MODES), 0.0),
     spec(POLYPHONY, "Polyphony", "Voice", "", Kind::Enum(POLYPHONY_COUNTS), 15.0),
     spec(GLIDE, "Glide", "Voice", "s", Kind::Float { min: 0.0, max: 1.0, log: false, skew: 3.0 }, 0.0),
+    spec(GLIDE_SCOPE, "Glide Scope", "Voice", "", Kind::Enum(GLIDE_SCOPES), 0.0),
     spec(VELOCITY, "Velocity", "Voice", "%", linear(0.0, 100.0), 70.0),
     spec(VOLUME, "Volume", "Output", "dB", Kind::Float { min: VOLUME_MIN_DB, max: 6.0, log: false, skew: 0.5 }, -6.0),
 ];
 
 /// Number of real parameters.
-pub const PARAM_COUNT: usize = 9 + 9 + 2 + 7 + 4 + 5;
+pub const PARAM_COUNT: usize = 9 + 9 + 2 + 7 + 4 + 6;
 
 /// Every parameter, in display order. A parameter's index here is its slot.
 pub const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
@@ -374,6 +380,9 @@ pub struct SynthParams {
     pub polyphony: usize,
     /// Seconds; 0 is off.
     pub glide: f32,
+    /// True when Glide Scope is `Connected`: glide only between overlapping notes, never
+    /// into a detached note-on (TB-303 style).
+    pub glide_only_connected: bool,
     /// Amp velocity sensitivity, 0–1.
     pub velocity_sens: f32,
     /// Carrier-frequency multiple of the Osc 1 FM modulator.
@@ -419,6 +428,7 @@ impl SynthParams {
             mode: VoiceMode::Poly,
             polyphony: 16,
             glide: 0.0,
+            glide_only_connected: false,
             velocity_sens: 0.0,
             volume_db: 0.0,
             volume_gain: 1.0,
@@ -524,6 +534,7 @@ impl SynthParams {
             }
             POLYPHONY => self.polyphony = real as usize + 1,
             GLIDE => self.glide = real,
+            GLIDE_SCOPE => self.glide_only_connected = real as usize == 1,
             VELOCITY => self.velocity_sens = real / 100.0,
             VOLUME => {
                 self.volume_db = real;
