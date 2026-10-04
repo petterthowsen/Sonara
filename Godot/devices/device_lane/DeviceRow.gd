@@ -12,7 +12,9 @@ const PANEL_MARGIN := 12
 ## A panel in this row (or in a slot nested in it) asked for its context menu. `in_slot` is true
 ## for a device inside a container slot.
 signal context_menu_requested(device_instance: DeviceInstance, in_slot: bool)
-
+## Selection clicks from any panel in this row (see DeviceLaneItem); the lane owns the selection.
+signal selection_requested(panel: DevicePanel, additive: bool, range_select: bool)
+signal selection_released(panel: DevicePanel)
 ## Space above each panel. The root row leaves room for the color strips of the slots in it.
 var panel_top_inset := 0
 
@@ -41,6 +43,8 @@ func sync(list: Array[DeviceInstance]) -> void:
 			item = DeviceLaneItem.new()
 			item.setup(list[i], panel_top_inset, in_slot)
 			item.context_menu_requested.connect(context_menu_requested.emit)
+			item.selection_requested.connect(selection_requested.emit)
+			item.selection_released.connect(selection_released.emit)
 			add_child(item)
 		move_child(item, i)
 
@@ -65,4 +69,16 @@ func items() -> Array[DeviceLaneItem]:
 	for child in get_children():
 		if child is DeviceLaneItem and not child.is_queued_for_deletion():
 			out.append(child)
+	return out
+
+
+## Panels in this row and every slot open inside it, in display order.
+func collect_panels() -> Array[DevicePanel]:
+	var out: Array[DevicePanel] = []
+	for child in get_children():
+		if child is DeviceLaneItem and not child.is_queued_for_deletion():
+			if child.panel:
+				out.append(child.panel)
+			for group in child.slot_groups():
+				out.append_array(group.row.collect_panels())
 	return out

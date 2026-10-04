@@ -300,6 +300,68 @@ static func drop_instance(
 		return
 	HistoryUtil.execute(DeviceRelocateCommand.new(channel, inst, to_parent, to_position))
 
+## Move a dragged selection (`DeviceDrag.devices`, in visual order) into `to_parent` at
+## `to_position` as one undo step. Only a selection already living in the target host on this
+## channel moves as a block; anything else (mixed hosts, slot or band parents, transfers)
+## reduces to moving the primary device alone through `drop_instance`. Returns true when a
+## move was committed.
+static func drop_selection(
+	channel: Channel,
+	insts: Array,
+	to_parent: DeviceInstance,
+	to_position: int
+) -> bool:
+	var list: Array[DeviceInstance] = []
+	for d in insts:
+		if d is DeviceInstance:
+			list.append(d)
+	var primary := list[0] if not list.is_empty() else null
+	if primary == null:
+		return false
+	if list.size() == 1 or Multiband.is_multiband(to_parent) or SlotChain.is_slot_parent(to_parent):
+		drop_instance(channel, primary, to_parent, to_position)
+		return true
+	var host: Array[DeviceInstance] = to_parent.children if to_parent else channel.devices
+	var moving := list.filter(func(d): return host.has(d)) as Array[DeviceInstance]
+	if moving.size() != list.size():
+		drop_instance(channel, primary, to_parent, to_position)
+		return true
+	for inst in list:
+		if inst.get_channel() != channel or not can_drop_instance_on_host(channel, inst, to_parent):
+			drop_instance(channel, primary, to_parent, to_position)
+			return true
+	# Final order: the host without the moving devices, with them (in their current order)
+	# inserted where the drop pointed. Positions past the end, or at a moving device itself,
+	# count the non-moving devices before the drop point.
+	var rest: Array[DeviceInstance] = []
+	var before := 0
+	var at: int = clampi(to_position, 0, host.size())
+	for i in host.size():
+		if moving.has(host[i]):
+			continue
+		if i < at:
+			before += 1
+		rest.append(host[i])
+	var final: Array[DeviceInstance] = []
+	final.append_array(rest.slice(0, before))
+	final.append_array(moving)
+	final.append_array(rest.slice(before))
+	# One move per device that is out of place, applied left to right; each command's from/to is
+	# taken against the order the previous ones already produced, so undo in reverse restores it.
+	var cmds: Array[Command] = []
+	var current: Array[DeviceInstance] = host.duplicate()
+	for i in final.size():
+		var from := current.find(final[i])
+		if from == i:
+			continue
+		cmds.append(DeviceMoveCommand.new(channel, from, i, to_parent))
+		current.remove_at(from)
+		current.insert(i, final[i])
+	if cmds.is_empty():
+		return false
+	HistoryUtil.execute_many("Move Devices", cmds)
+	return true
+
 
 ## Commands that move `inst` into Layer or Drum Machine `parent` as a new slot at `position` (on
 ## pad `note` for a Drum Machine, -1 = next free): an empty slot chain, then the device into it.

@@ -171,13 +171,17 @@ func is_noop(data: Variant, position: int = -1) -> bool:
 func drop(data: Variant, position: int = -1) -> bool:
 	if not can_drop(data, position) or is_noop(data, position):
 		return false
+	var drag: DeviceDrag = data if data is DeviceDrag else null
 	data = DeviceDrag.unwrap(data)
 	if pad_note >= 0:
 		DeviceDropUtil.drop_on_drum_pad(channel, slot_owner, pad_note, data)
 	elif parent == null and PadLane.is_pad_lane(channel):
 		PadLane.drop(channel, data, position)
 	elif data is DeviceInstance:
-		DeviceDropUtil.drop_instance(channel, data, parent, position)
+		if drag != null and drag.devices.size() > 1:
+			DeviceDropUtil.drop_selection(channel, drag.devices, parent, position)
+		else:
+			DeviceDropUtil.drop_instance(channel, data, parent, position)
 	elif data is Asset:
 		DeviceDropUtil.drop_asset(channel, data, position, parent)
 	return true

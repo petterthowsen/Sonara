@@ -6,6 +6,10 @@ class_name DeviceLaneItem extends HBoxContainer
 const DevicePanelScene: PackedScene = preload("res://devices/device_lane/DevicePanel.tscn")
 
 signal context_menu_requested(device_instance: DeviceInstance, in_slot: bool)
+## A panel in this item (or a slot in it) reported a selection click or release; the lane owns
+## the selection, these carry it up.
+signal selection_requested(panel: DevicePanel, additive: bool, range_select: bool)
+signal selection_released(panel: DevicePanel)
 
 var device: DeviceInstance = null
 var panel: DevicePanel = null
@@ -38,6 +42,8 @@ func setup(inst: DeviceInstance, top_inset: int, in_slot: bool) -> void:
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	panel.request_context_menu.connect(_on_panel_context_menu)
 	panel.request_child_context_menu.connect(_on_child_context_menu)
+	panel.select_requested.connect(selection_requested.emit)
+	panel.select_released.connect(selection_released.emit)
 	margin.add_child(panel)
 	panel.bind_to_device(inst)
 	if not inst.is_container():
@@ -106,6 +112,8 @@ func _sync_groups() -> void:
 			group = DeviceSlotGroup.new()
 			group.setup(device, keys[i], _in_slot)
 			group.context_menu_requested.connect(context_menu_requested.emit)
+			group.selection_requested.connect(selection_requested.emit)
+			group.selection_released.connect(selection_released.emit)
 			add_child(group)
 			_groups[keys[i]] = group
 		move_child(group, i + 1)

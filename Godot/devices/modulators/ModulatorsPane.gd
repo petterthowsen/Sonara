@@ -23,6 +23,7 @@ static var _remembered: Dictionary = {}
 var device: DeviceInstance = null
 
 var _grid: GridContainer = null
+var _grid_scroll: ChevronScrollContainer = null
 var _add_button: MenuButton = null
 var _detail: VBoxContainer = null
 var _detail_scroll: ScrollContainer = null
@@ -105,14 +106,20 @@ func _build_structure() -> void:
 	header.add_child(_add_button)
 	left.add_child(header)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# The tile list pages with chevron buttons (as the mixer's sends do); the selected modulator's
+	# settings stay a separate panel to the right.
+	_grid_scroll = ChevronScrollContainer.new()
+	_grid_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_grid_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_grid_scroll.follow_focus = true
+	_grid_scroll.snap_to_items = true
+	_grid_scroll.reserve_button_space = true
+	_grid_scroll.fade_hidden_items = true
 	_grid = GridContainer.new()
 	_grid.columns = TILE_COLUMNS
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_grid)
-	left.add_child(scroll)
+	_grid_scroll.add_child(_grid)
+	left.add_child(_grid_scroll)
 
 	_detail_scroll = ScrollContainer.new()
 	var detail_scroll := _detail_scroll

@@ -27,6 +27,13 @@ var _drop_indicator: DropIndicator = null
 ## A drum pad return shows its pad lane (pad device + own devices), rebuilt on every change.
 var _pad_lane := PadLaneWatcher.new()
 var current_project: Project = null  # Track which project we're listening to
+## Devices whose panels this lane selected (see DevicePanel.select_requested). Dragging one of
+## them moves the whole block (DeviceDrag.devices).
+signal device_selection_changed(selected: Array[DeviceInstance])
+var selected_devices: Array[DeviceInstance] = []
+var _selection_anchor: DeviceInstance = null
+## Multi-selected device of the last press; on release without a drag the block collapses to it.
+var _pending_single: DeviceInstance = null
 
 func _ready():
 	# Root panels start below the color strip of the slots beside them, so the two line up.
@@ -37,8 +44,10 @@ func _ready():
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
 	set_process(false)
 	_create_parent_header()
-	_pad_lane.changed.connect(_on_pad_lane_changed)
-	clear()
+	drop_host.attach(self, devices, false)
+	drop_host.trailing_margin = DeviceRow.PANEL_MARGIN
+	devices.selection_requested.connect(_on_panel_select_requested)
+	devices.selection_released.connect(_on_panel_select_released)
 	
 	# No editor in headless tests: the lane is bound directly.
 	if Sonara.editor == null:
@@ -129,8 +138,12 @@ func clear():
 	_clear_devices()
 
 
+## Empty the lane, its panels and the device selection.
 func _clear_devices() -> void:
 	devices.clear()
+	selected_devices.clear()
+	_selection_anchor = null
+	_pending_single = null
 
 
 ## Show the channel's devices (a pad return's pad lane) in order, keeping panels that stay.
@@ -138,7 +151,7 @@ func _sync_devices() -> void:
 	if channel == null:
 		return
 	devices.sync(PadLane.devices(channel) if _pad_lane.active() else channel.devices)
-
+	_refresh_selection()
 
 func _on_pad_lane_changed() -> void:
 	if _pad_lane.active():
@@ -299,6 +312,81 @@ func _on_device_context_menu_requested(device_instance : DeviceInstance, in_slot
 	var c_size = device_context_menu.get_contents_minimum_size()
 	device_context_menu.popup(Rect2(c_pos, c_size))
 	device_context_menu.show()
+
+# ============================================================================
+# DEVICE SELECTION
+# ============================================================================
+
+## A panel was clicked: plain clicks select one device, ctrl/cmd adds or removes, shift takes
+## the visual range from the anchor. A plain click on part of a multi-selection keeps the block
+## (so the drag moves it all) and collapses on release.
+func _on_panel_select_requested(panel: DevicePanel, additive: bool, range_select: bool) -> void:
+	var inst := panel.device
+	if inst == null:
+		return
+	_pending_single = null
+	if not additive and not range_select and selected_devices.size() > 1 and selected_devices.has(inst):
+		_pending_single = inst
+		return
+	if additive:
+		if selected_devices.has(inst):
+			selected_devices.erase(inst)
+		else:
+			selected_devices.append(inst)
+		_selection_anchor = inst
+	elif range_select and _selection_anchor != null:
+		selected_devices = _devices_in_visual_range(_selection_anchor, inst)
+	else:
+		if not (selected_devices.size() == 1 and selected_devices[0] == inst):
+			selected_devices = [inst]
+		_selection_anchor = inst
+	_refresh_selection()
+	device_selection_changed.emit(selected_devices.duplicate())
+
+
+## The click was released: a multi-selection held for a drag collapses to the clicked device.
+func _on_panel_select_released(panel: DevicePanel) -> void:
+	var inst := panel.device
+	if inst != null and inst == _pending_single:
+		selected_devices = [inst]
+		_selection_anchor = inst
+		_refresh_selection()
+		device_selection_changed.emit(selected_devices.duplicate())
+	_pending_single = null
+
+
+## Devices shown between `a` and `b` in this lane (inclusive), or `b` alone when there is no
+## order between them.
+func _devices_in_visual_range(a: DeviceInstance, b: DeviceInstance) -> Array[DeviceInstance]:
+	var order := devices.collect_panels().map(func(p): return p.device)
+	var start := order.find(a)
+	var end := order.find(b)
+	if start < 0 or end < 0:
+		return [b]
+	if start > end:
+		var t := start
+		start = end
+		end = t
+	return order.slice(start, end + 1)
+
+
+## Drop devices no longer shown and push the selection onto the panels.
+func _refresh_selection() -> void:
+	var shown := devices.collect_panels().map(func(p): return p.device)
+	selected_devices = selected_devices.filter(func(d): return d != null and shown.has(d)) as Array[DeviceInstance]
+	if not shown.has(_selection_anchor):
+		_selection_anchor = null
+	if not shown.has(_pending_single):
+		_pending_single = null
+	for panel in devices.collect_panels():
+		panel.is_selected = selected_devices.has(panel.device)
+
+
+## The lane's selection when it contains `inst` (for DeviceDrag.start), else empty.
+func selection_containing(inst: DeviceInstance) -> Array[DeviceInstance]:
+	if not selected_devices.has(inst):
+		return []
+	return selected_devices.duplicate()
 
 
 # ============================================================================

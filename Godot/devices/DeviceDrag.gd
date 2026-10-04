@@ -8,6 +8,9 @@ signal drag_completed(data: DeviceDrag)
 
 var source: Control = null
 var device: DeviceInstance = null
+## Every device moving together (the selection the drag started from); `device` is the one under
+## the pointer. Defaults to just `device`.
+var devices: Array[DeviceInstance] = []
 var preview: Control = null
 
 ## True after a drop changed something.
@@ -15,9 +18,20 @@ var did_commit: bool = false
 
 
 ## Bind the preview's lifetime to this drag payload.
-func _init(_source: Control, _device: DeviceInstance, _preview: Control) -> void:
+func _init(
+	_source: Control,
+	_device: DeviceInstance,
+	_preview: Control,
+	_devices: Array = []
+) -> void:
 	source = _source
 	device = _device
+	if not _devices.is_empty():
+		for d in _devices:
+			if d != null:
+				devices.append(d)
+	elif _device != null:
+		devices = [_device]
 	preview = _preview
 	if preview:
 		preview.tree_exiting.connect(_on_tree_exiting)
@@ -30,13 +44,24 @@ func _on_tree_exiting() -> void:
 	drag_completed.emit(self)
 
 
-## Start dragging `inst` from `source`: set the preview and dim the source in place.
+## Start dragging `inst` from `source`: set the preview and dim the source in place. Devices in
+## `co_selected` move with it when `inst` is one of them (a DeviceLane selection).
 ## Call from `_get_drag_data`.
-static func start(source: Control, inst: DeviceInstance) -> DeviceDrag:
+static func start(
+	source: Control,
+	inst: DeviceInstance,
+	co_selected: Array = []
+) -> DeviceDrag:
 	if source == null or inst == null:
 		return null
-	var ghost := make_preview(inst)
-	var drag := DeviceDrag.new(source, inst, ghost)
+	var moving: Array[DeviceInstance] = [inst]
+	if co_selected.has(inst):
+		moving.clear()
+		for d in co_selected:
+			if d != null:
+				moving.append(d)
+	var ghost := make_preview(inst, moving.size() - 1)
+	var drag := DeviceDrag.new(source, inst, ghost, moving)
 	source.set_drag_preview(ghost)
 	source.modulate.a = 0.5
 	return drag
@@ -49,11 +74,23 @@ static func unwrap(data: Variant) -> Variant:
 	return data
 
 
-## Ghost label that follows the cursor.
-static func make_preview(inst: DeviceInstance) -> Control:
+## Every DeviceInstance of a drag payload moving together, or `data` alone when it is one.
+static func unwrap_all(data: Variant) -> Array[DeviceInstance]:
+	var out: Array[DeviceInstance] = []
+	if data is DeviceDrag:
+		out.append_array((data as DeviceDrag).devices)
+	elif data is DeviceInstance:
+		out.append(data)
+	return out
+
+
+## Ghost label that follows the cursor. `extra` counts further devices moving with this one.
+static func make_preview(inst: DeviceInstance, extra := 0) -> Control:
 	var ghost := PanelContainer.new()
 	var label_node := Label.new()
 	label_node.text = inst.get_display_name() if inst else "Device"
+	if extra > 0:
+		label_node.text += "  +%d" % extra
 	label_node.add_theme_font_size_override("font_size", 12)
 	ghost.add_child(label_node)
 	var style := StyleBoxFlat.new()

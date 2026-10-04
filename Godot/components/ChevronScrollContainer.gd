@@ -268,7 +268,9 @@ func _step_target(vertical: bool, direction: int) -> float:
 		current = _tween_target
 	var max_scroll := _max_scroll(vertical)
 	var page := _bar(vertical).page
-	var edges: Array[Vector2] = _item_edges(vertical) if snap_to_items else []
+	var edges: Array[Vector2] = []
+	if snap_to_items:
+		edges = _item_edges(vertical)
 
 	if edges.is_empty():
 		return clampf(current + direction * page * page_fraction, 0.0, max_scroll)
@@ -311,7 +313,9 @@ func _item_rect(item: Control, content: Control) -> Rect2:
 
 
 ## Fade each item toward full opacity when wholly inside the view, else toward
-## `hidden_item_alpha`. Only starts a tween when an item's target changes.
+## `hidden_item_alpha`. An item too large for the view along an enabled axis can never be
+## wholly inside, so it stays opaque instead of vanishing. Only starts a tween when an
+## item's target changes.
 func _update_item_fades() -> void:
 	var content := _content()
 	if content == null:
@@ -323,11 +327,14 @@ func _update_item_fades() -> void:
 		if fade_hidden_items:
 			var r := _item_rect(item, content)
 			var inside := true
+			var can_fit := true
 			if vertical_scroll_mode != SCROLL_MODE_DISABLED:
 				inside = r.position.y >= view.position.y - 0.5 and r.end.y <= view.end.y + 0.5
+				can_fit = item.size.y <= view.size.y + 0.5
 			if horizontal_scroll_mode != SCROLL_MODE_DISABLED:
 				inside = inside and r.position.x >= view.position.x - 0.5 and r.end.x <= view.end.x + 0.5
-			target = 1.0 if inside else hidden_item_alpha
+				can_fit = can_fit and item.size.x <= view.size.x + 0.5
+			target = 1.0 if inside or not can_fit else hidden_item_alpha
 		if is_equal_approx(float(item.get_meta(&"_fade_target", 1.0)), target):
 			continue
 		item.set_meta(&"_fade_target", target)

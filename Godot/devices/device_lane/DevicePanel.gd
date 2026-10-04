@@ -11,6 +11,13 @@ const ICON_VIEW_CLOSED := preload("res://assets/icons/chevron-left.svg")
 ## Widest the device name gets while view tabs share the header with it.
 const NAME_MAX_WIDTH := 140.0
 
+## Panel border, and the selection border with the look of MixerChannel and TrackItem.
+const BORDER_COLOR := Color("#525252")
+const BORDER_COLOR_SELECTED := Color("#999999")
+const BORDER_WIDTH_SELECTED := 2
+## Seconds a pane (View, Parameters/CCs/Modulators/File) takes to slide open/closed and fade.
+const PANE_ANIM_DURATION := 0.15
+
 var logger : Log = Log.make("DevicePanel")
 
 ## Top header: light and name. Drops onto it go onto the device.
@@ -18,7 +25,7 @@ var logger : Log = Log.make("DevicePanel")
 
 # light button toggles inactive/active and enabled/disabled
 @onready var device_light: DeviceLightButton = $VBox/TopHeader/HBox/DeviceLight
-@onready var name_label : SmartLineEdit = $VBox/TopHeader/HBox/Name
+@onready var name_label : Label = $VBox/TopHeader/HBox/Name
 
 ## Opens the preset menu (save, load, show in browser).
 @onready var preset_button: Button = $VBox/TopHeader/HBox/Preset
@@ -28,6 +35,7 @@ var logger : Log = Log.make("DevicePanel")
 
 # Left header: View and Window toggles, then the Parameters/CCs/File tabs (one ButtonGroup)
 ## Device name written vertically in the left header while the View is closed.
+@onready var left_header : PanelContainer = $VBox/HBox/LeftHeader
 @onready var vertical_name_label: Label = $VBox/HBox/LeftHeader/VBox/Name/Label
 @onready var tab_buttons : BoxContainer = $VBox/HBox/LeftHeader/VBox/TabButtons
 @onready var view_button: Button = $VBox/HBox/LeftHeader/VBox/View
@@ -38,11 +46,25 @@ var logger : Log = Log.make("DevicePanel")
 @onready var params_button : Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Parameters
 @onready var file_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/File
 
+## True while the DeviceLane selected this panel's device (white border, like the mixer).
+var is_selected := false:
+	set(selected):
+		is_selected = selected
+		if _panel_style:
+			_panel_style.border_color = BORDER_COLOR_SELECTED if selected else _border_base
+			_panel_style.set_border_width_all(BORDER_WIDTH_SELECTED if selected else _border_base_width)
+## Per-instance copy of the panel stylebox, so the selection border is this panel's alone.
+## The base border is captured from the duplicate, so deselect restores the scene's exact look.
+var _panel_style: StyleBoxFlat = null
+var _border_base := BORDER_COLOR
+var _border_base_width := 1
 ## MIDI CC tab (duplicated from Parameters at runtime until it gets its own icon)
 var cc_button: Button
 var ccs_pane: Control
 var ccs_scroll: ScrollContainer
 var ccs_box: VBoxContainer
+## Clipping wrapper per animatable pane (see _wrap_pane), so pane show/hide slides the layout.
+var _pane_wraps := {}
 
 ## Modulators tab (spec 018): available for every device, its pane sits beside Parameters/CCs.
 const MODULATORS_ICON := preload("res://assets/icons/cable.svg")
@@ -100,15 +122,29 @@ var _syncing_tabs := false
 signal request_context_menu()
 ## The Panel view asked for the context menu of one of the device's slot chains.
 signal request_child_context_menu(child: DeviceInstance)
+## Left click (left header, top header or panel background). The DeviceLane owns the selection;
+## ctrl/cmd = additive, shift = range. Released without a drag collapses a multi-selection.
+signal select_requested(panel: DevicePanel, additive: bool, range_select: bool)
+signal select_released(panel: DevicePanel)
 
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
+	# Own copy of the panel stylebox: the selection border must not select every panel.
+	# The base border comes from the duplicate, so deselect restores the scene's exact color.
+	_panel_style = (get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
+	_border_base = _panel_style.border_color
+	_border_base_width = _panel_style.get_border_width(SIDE_TOP)
+	add_theme_stylebox_override("panel", _panel_style)
 	DeviceWindowManager.state_changed.connect(_on_window_state_changed)
 	_create_cc_tab()
 	_create_modulators_tab()
 	_setup_header_tabs()
 	_create_parameter_lists()
 	_create_mod_dot()
+	# Panes animate through clipped reveal wrappers, so their opening and closing slides the
+	# whole panel layout instead of only fading in place.
+	for pane in [parameters_pane, ccs_pane, modulators_pane, file_box, view_pane]:
+		_wrap_pane(pane)
 
 	# Parameters/CCs/Modulators/File share a ButtonGroup; clicking the active tab collapses it.
 	params_button.button_group.allow_unpress = true
@@ -128,8 +164,8 @@ func _ready() -> void:
 	file_load_button.pressed.connect(_on_load_file_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
 
-	# Inline rename of the device instance via the header's SmartLineEdit
-	name_label.value_changed.connect(_on_name_edited)
+	# The header shows the name as a plain Label (mouse PASS, so clicks and drags pass through);
+	# renaming goes through the context menu (DeviceActions.rename).
 
 	# Initial state: only the View open. The Parameters tab opens by itself only for a device
 	# with no view (`_apply_default_tab`).
@@ -137,10 +173,15 @@ func _ready() -> void:
 	_update_tab_panes()
 
 	# Drag the device from the header and content areas; drops resolve through DeviceDropTarget.
+	# The left header lets clicks pass through to this panel (selection) and drags forward like
+	# the top header, so it works as a drag handle too.
+	left_header.mouse_filter = Control.MOUSE_FILTER_PASS
 	header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+	left_header.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	parameters_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	ccs_scroll.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
 	file_box.set_drag_forwarding(_get_drag_data, _can_drop_data, _drop_data)
+
 
 
 ## Duplicate the Parameters tab button and pane to make a CCs tab for MIDI CCs.
@@ -176,8 +217,10 @@ func _create_modulators_tab() -> void:
 	modulators_button.tooltip_text = "Modulators"
 	modulators_button.button_pressed = false
 	modulators_button.visible = false
-	tab_buttons.add_child(modulators_button)
-	tab_buttons.move_child(modulators_button, file_button.get_index())
+	# Below the View (show/hide) toggle, at the top of the left header.
+	var left_column: BoxContainer = view_button.get_parent()
+	left_column.add_child(modulators_button)
+	left_column.move_child(modulators_button, view_button.get_index() + 1)
 
 	modulators_pane = PanelContainer.new()
 	modulators_pane.name = "Modulators"
@@ -187,13 +230,8 @@ func _create_modulators_tab() -> void:
 	content_hbox.add_child(modulators_pane)
 	content_hbox.move_child(modulators_pane, file_box.get_index())
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(200, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.follow_focus = true
-	modulators_pane.add_child(scroll)
 	modulators = ModulatorsPane.new()
-	scroll.add_child(modulators)
+	modulators_pane.add_child(modulators)
 
 
 ## The collapsed header's modulator mark: a small dot, shown only when collapsed and the bound
@@ -263,9 +301,8 @@ func _fit_name_to_tabs() -> void:
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_label.custom_minimum_size.x = 0
 		return
-	var label: Label = name_label.get_node("Label")
-	var font := label.get_theme_font("font")
-	var width := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+	var font := name_label.get_theme_font("font")
+	var width := font.get_string_size(name_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_label.get_theme_font_size("font_size")).x
 	name_label.size_flags_horizontal = Control.SIZE_FILL
 	name_label.custom_minimum_size.x = minf(ceilf(width) + 4.0, NAME_MAX_WIDTH)
 
@@ -300,6 +337,11 @@ func _gui_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 			request_context_menu.emit()
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				select_requested.emit(self, mb.ctrl_pressed or mb.meta_pressed, mb.shift_pressed)
+			else:
+				select_released.emit(self)
 
 
 ## Release engine subscriptions and popups when the panel is freed (e.g.
@@ -479,7 +521,7 @@ func _on_reload_pressed() -> void:
 ## Refresh the header when the instance is renamed.
 func _on_device_name_changed(new_name: String) -> void:
 	if name_label:
-		name_label.set_value(new_name)
+		name_label.text = new_name
 		vertical_name_label.text = new_name
 		_fit_name_to_tabs()
 
@@ -489,13 +531,7 @@ func _on_modulators_changed(_arg = null) -> void:
 	_update_mod_dot()
 
 
-## Commit an inline rename from the header's SmartLineEdit.
-func _on_name_edited(value) -> void:
-	if device == null:
-		return
-	var new_name := DeviceActions.rename(device, str(value))
-	name_label.set_value(new_name)
-	vertical_name_label.text = new_name
+
 
 
 func bind_to_device(dev : DeviceInstance):
@@ -505,7 +541,7 @@ func bind_to_device(dev : DeviceInstance):
 	if not is_node_ready():
 		await ready
 	device_light.bind_to_device_instance(dev)
-	name_label.set_value(dev.get_display_name())
+	name_label.text = dev.get_display_name()
 	vertical_name_label.text = dev.get_display_name()
 	if not dev.name_changed.is_connected(_on_device_name_changed):
 		dev.name_changed.connect(_on_device_name_changed)
@@ -658,12 +694,104 @@ func _on_tab_toggled() -> void:
 
 ## Show the pane of the pressed tab; a hidden tab never shows its pane.
 func _update_tab_panes() -> void:
-	parameters_pane.visible = params_button.visible and params_button.button_pressed
+	_animate_pane(parameters_pane, params_button.visible and params_button.button_pressed)
 	if ccs_pane:
-		ccs_pane.visible = cc_button.visible and cc_button.button_pressed
+		_animate_pane(ccs_pane, cc_button.visible and cc_button.button_pressed)
 	if modulators_pane:
-		modulators_pane.visible = modulators_button.visible and modulators_button.button_pressed
-	file_box.visible = file_button.visible and file_button.button_pressed
+		_animate_pane(modulators_pane, modulators_button.visible and modulators_button.button_pressed)
+	_animate_pane(file_box, file_button.visible and file_button.button_pressed)
+
+## Show or hide `pane` through its reveal wrapper: `reveal` tweens between 0 and 1, so the
+## wrapper's width (and so the whole panel layout) slides while the pane fades. The pane is
+## drawn at full size and clipped, like a drawer. Tweens live on the pane; a re-toggle kills
+## the running one and continues from where it is.
+func _animate_pane(pane: Control, show: bool) -> void:
+	if pane == null:
+		return
+	var wrap: PaneReveal = _pane_wraps.get(pane)
+	if wrap == null:
+		pane.visible = show
+		return
+	var tween: Tween = pane.get_meta(&"pane_tween") if pane.has_meta(&"pane_tween") else null
+	var running := tween != null and tween.is_valid()
+	if running:
+		tween.kill()
+	# Already fully shown or fully hidden: nothing to animate.
+	if not running and show and wrap.visible and is_equal_approx(wrap.reveal, 1.0):
+		return
+	if not running and not show and not wrap.visible:
+		return
+	if show:
+		wrap.visible = true
+		pane.visible = true
+		tween = pane.create_tween()
+		tween.set_parallel(true)
+		tween.tween_property(wrap, "reveal", 1.0, PANE_ANIM_DURATION)
+		tween.tween_property(pane, "modulate:a", 1.0, PANE_ANIM_DURATION).from(0.0)
+		tween.chain().tween_callback(_pane_shown.bind(pane))
+	elif wrap.visible:
+		tween = pane.create_tween()
+		tween.set_parallel(true)
+		tween.tween_property(wrap, "reveal", 0.0, PANE_ANIM_DURATION)
+		tween.tween_property(pane, "modulate:a", 0.0, PANE_ANIM_DURATION)
+		tween.chain().tween_callback(_pane_hidden.bind(pane))
+	pane.set_meta(&"pane_tween", tween)
+
+
+## Put `pane` inside a clipping PaneReveal in its place, so its opening and closing can slide.
+func _wrap_pane(pane: Control) -> void:
+	if pane == null or not content_hbox.is_ancestor_of(pane):
+		return
+	var wrap := PaneReveal.new()
+	wrap.name = String(pane.name) + "Reveal"
+	wrap.clip_contents = true
+	wrap.mouse_filter = Control.MOUSE_FILTER_PASS
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrap.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	wrap.reveal = 1.0 if pane.visible else 0.0
+	wrap.visible = pane.visible
+	content_hbox.add_child(wrap)
+	content_hbox.move_child(wrap, pane.get_index())
+	pane.size_flags_horizontal = Control.SIZE_FILL
+	pane.size_flags_vertical = Control.SIZE_FILL
+	content_hbox.remove_child(pane)
+	wrap.add_child(pane)
+	_pane_wraps[pane] = wrap
+
+
+## A show animation finished: fully revealed.
+func _pane_shown(pane: Control) -> void:
+	var wrap: PaneReveal = _pane_wraps.get(pane)
+	if wrap:
+		wrap.reveal = 1.0
+	pane.modulate.a = 1.0
+
+
+## A hide animation finished: take the pane and its wrapper out of the layout, ready for next time.
+func _pane_hidden(pane: Control) -> void:
+	pane.visible = false
+	pane.modulate.a = 1.0
+	var wrap: PaneReveal = _pane_wraps.get(pane)
+	if wrap:
+		wrap.visible = false
+		wrap.reveal = 0.0
+
+
+## Take `pane` out of the layout at once, without an animation (a device with nothing to show).
+func _hide_pane_now(pane: Control) -> void:
+	if pane == null:
+		return
+	if pane.has_meta(&"pane_tween"):
+		var tween: Tween = pane.get_meta(&"pane_tween")
+		if tween and tween.is_valid():
+			tween.kill()
+	var wrap: PaneReveal = _pane_wraps.get(pane)
+	if wrap:
+		wrap.visible = false
+		wrap.reveal = 0.0
+	pane.visible = false
+	pane.modulate.a = 1.0
+
 
 
 ## View toggle: show or hide the custom UI pane.
@@ -674,7 +802,10 @@ func _on_view_toggled(_pressed: bool) -> void:
 ## The View pane shows when toggled on and a Panel or Companion view is loaded.
 func _update_view_pane_visibility() -> void:
 	var has_view := _panel_view != null or _companion_view != null
-	view_pane.visible = has_view and view_button.button_pressed
+	if has_view:
+		_animate_pane(view_pane, view_button.button_pressed)
+	else:
+		_hide_pane_now(view_pane)
 	_set_collapsed(view_button.visible and not view_button.button_pressed)
 	_update_header_tabs()
 	_update_reload_button_visibility()
@@ -786,7 +917,9 @@ func _on_file_selected(path: String) -> void:
 
 ## Start a device drag (a DeviceDrag payload). Nothing moves until the drop.
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	return DeviceDrag.start(self, device)
+	var root := DeviceDropTarget.find_root(self)
+	var lane := root as DeviceLane
+	return DeviceDrag.start(self, device, lane.selection_containing(device) if lane else [])
 
 
 ## Resolve from the pointer in the enclosing device lane: insert beside this panel, or onto its

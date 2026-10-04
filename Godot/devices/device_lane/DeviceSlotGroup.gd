@@ -29,6 +29,9 @@ const BANNER_REACH := 32.0
 const EMPTY_WIDTH := 200.0
 
 signal context_menu_requested(device_instance: DeviceInstance, in_slot: bool)
+## Selection clicks from the panels in this slot (see DeviceLaneItem).
+signal selection_requested(panel: DevicePanel, additive: bool, range_select: bool)
+signal selection_released(panel: DevicePanel)
 
 var container: DeviceInstance = null
 var key := ""
@@ -58,7 +61,8 @@ func setup(p_container: DeviceInstance, p_key: String, p_nested := false) -> voi
 
 	row = DeviceRow.new()
 	row.in_slot = true
-	row.context_menu_requested.connect(context_menu_requested.emit)
+	row.selection_requested.connect(selection_requested.emit)
+	row.selection_released.connect(selection_released.emit)
 	add_child(row)
 
 	_empty_hint = Label.new()

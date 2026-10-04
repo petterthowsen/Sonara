@@ -185,26 +185,28 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] Bug: clicking the light (enable/bypass) button on `DevicePanel` in the device lane doesn't seem to work.
 - [ ] Device lane: for each device, add an animated signal icon on its left side that flashes black then green on audio and blue on MIDI
 - [ ] All devices should have their own volume control
-- [x?] Devices should be freely renamable, with uniqueness enforced per-channel (auto-suffix on collision, like track/channel names above). Inline SmartLineEdit (double-click) on the device lane and compact panels, plus the context menu, all through `DeviceActions.rename`. Uniqueness is per host (siblings in a container), which is what `Channel/Device/Child` paths need
+- [x?] Devices should be freely renamable, with uniqueness enforced per-channel (auto-suffix on collision, like track/channel names above). Inline SmartLineEdit (double-click) on the compact panels, the context menu everywhere, all through `DeviceActions.rename`. Uniqueness is per host (siblings in a container), which is what `Channel/Device/Child` paths need. The DevicePanel header now shows a plain Label (mouse PASS); the lane's inline edit was removed in favour of the context menu
 
 #### DevicePanel
 
 - [ ] Bug: sometimes, when moving a device, its device light ends up in a buggy state (off) though it keeps working
-- [ ] Bug: when moving the EQ builtin to another position in the chain or elsewhere, sometimes the analyzer stops working. Workaround: open and close the auxiliary window
-- [ ] LeftHeader should work as a drag handle, as TopHeader does
-- [ ] Name in TopHeader
-- [ ] DevicePanel should be selectable, with a white selection border like MixerChannel and TrackItem have. Additionally:
-- [ ] Allow selecting and moving multiple devices at the same time; ctrl+click and shift+click to select multiple
-- [ ] Animate showing/hiding device controls
+- [ ] Bug: when moving the EQ builtin to another position in the chain or elsewhere, sometimes the analyzer stops working. Workaround is to open and close the auxiliary window
+
+- [x?] LeftHeader works as a drag handle (drag forwarding + `MOUSE_FILTER_PASS`, like TopHeader)
+- [x?] DevicePanel is selectable, with a white selection border like MixerChannel and TrackItem.
+  - [x?] Selecting and moving multiple devices at the same time; ctrl+click and shift+click select multiple (lane-owned selection, block drags move in one undo step; mixed hosts/slots reduce to the primary device)
+- [x?] Animate showing/hiding device controls: panes slide the whole panel layout while fading (`DevicePanel._animate_pane` + `components/PaneReveal.gd`, 0.15 s)
+  - [x?] Animate toggling the modulators and parameter list panels (same slide + fade)
+- [x?] Move the device modulators toggle below the device show/hide toggle
+- [x?] Modulators: the tile list pages through a `ChevronScrollContainer` (as SendsPanel does); the options panel stays a separate panel to the right
+
+Verified headless (`tests/test_device_panel_selection.gd`); panes open/close through `components/PaneReveal.gd` (reveal tween slides the layout, pane fades); still to check live in the editor.
 
 #### DevicePanel Modulators
 
-- [ ] Move the device modulators toggle below the device show/hide toggle
-- [ ] Modulators panel can use our custom paged scroll container (the one used for SendsPanel)
 - [ ] Modulator options panel should never scroll
   - [ ] When sync is on, hide the rate control
   - [ ] Retrigger can be a checkbox
-- [ ] Animate toggling the modulators and parameter list panels
 
 #### Plugins
 

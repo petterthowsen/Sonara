@@ -2,7 +2,6 @@
 
 [ext_resource type="Script" uid="uid://cunh2531s2yw" path="res://devices/device_lane/DevicePanel.gd" id="1_v0u3q"]
 [ext_resource type="Script" uid="uid://7wqrxxf5crw" path="res://components/DeviceLightButton.gd" id="2_1cidk"]
-[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="3_smle"]
 [ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="5_d6wny"]
 [ext_resource type="Texture2D" uid="uid://df4gh0kqrb8va" path="res://assets/icons/sliders-horizontal.svg" id="5_n5ici"]
 [ext_resource type="Texture2D" uid="uid://d1puoqnbbabs5" path="res://assets/icons/file.svg" id="5_ohvca"]
@@ -47,8 +46,6 @@ gradient = SubResource("Gradient_jx3fc")
 fill = 1
 fill_from = Vector2(0.4957265, 0.5)
 fill_to = Vector2(0.14529915, 0.14102565)
-
-[sub_resource type="LabelSettings" id="LabelSettings_r4rlf"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_d6wny"]
 content_margin_left = 10.0
@@ -135,7 +132,7 @@ corner_detail = 5
 
 [node name="Device" type="PanelContainer" unique_id=1822906056]
 custom_minimum_size = Vector2(0, 350)
-offset_right = 296.0
+offset_right = 346.0
 offset_bottom = 350.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
 script = ExtResource("1_v0u3q")
@@ -179,21 +176,12 @@ icon = ExtResource("9_preset")
 flat = true
 expand_icon = true
 
-[node name="Name" parent="VBox/TopHeader/HBox" unique_id=547742797 instance=ExtResource("3_smle")]
-custom_minimum_size = Vector2(50, 0)
+[node name="Name" type="Label" parent="VBox/TopHeader/HBox" unique_id=547742797]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
-value_type = 1
-display_format = "%s"
-
-[node name="Label" parent="VBox/TopHeader/HBox/Name" index="0" unique_id=448001948]
-label_settings = SubResource("LabelSettings_r4rlf")
-horizontal_alignment = 0
-clip_text = true
-
-[node name="LineEdit" parent="VBox/TopHeader/HBox/Name" index="1" unique_id=1087718571]
-alignment = 0
+text = "Device Name"
+vertical_alignment = 1
 
 [node name="ViewTabs" type="TabBar" parent="VBox/TopHeader/HBox" unique_id=896160528]
 custom_minimum_size = Vector2(180, 0)
@@ -243,22 +231,23 @@ icon = ExtResource("5_d6wny")
 [node name="Name" type="Control" parent="VBox/HBox/LeftHeader/VBox" unique_id=990993931]
 layout_mode = 2
 size_flags_vertical = 3
+mouse_filter = 1
 
 [node name="Label" type="Label" parent="VBox/HBox/LeftHeader/VBox/Name" unique_id=922953410]
-visible = false
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -14.0
-offset_top = 45.5
-offset_right = 88.0
-offset_bottom = 68.5
+offset_left = -13.0
+offset_top = 64.5
+offset_right = 112.59503
+offset_bottom = 87.5
 grow_horizontal = 2
 grow_vertical = 2
 rotation = -1.5707964
+mouse_filter = 1
 text = "Device Name"
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -371,5 +360,3 @@ file_mode = 0
 display_mode = 1
 access = 2
 filters = PackedStringArray("*.sfz")
-
-[editable path="VBox/TopHeader/HBox/Name"]
