@@ -291,16 +291,6 @@ impl PolySynthDevice {
         let age = self.next_age();
         let start = self.start_ctx();
 
-        // The same key again: retrigger its voice in place (from its current level).
-        if let Some(v) = self
-            .voices
-            .iter_mut()
-            .find(|v| v.active && !v.is_fading() && v.note == note)
-        {
-            v.retrigger(note, velocity, age, 0.0, true, &start);
-            return;
-        }
-
         let unison = self.unison_counts();
         let pending = PendingNote {
             note,
@@ -310,6 +300,20 @@ impl PolySynthDevice {
             unison,
             released: false,
         };
+
+        // The same key again: fade the sounding voice out over the steal fade and give the
+        // repeat a fresh voice with a full attack — the drum retrigger crossfade (spec 013).
+        // Retriggering in place would restart the amp envelope from its current level, which
+        // is at the peak while the note sounds, so the attack would be skipped entirely.
+        if let Some(v) = self
+            .voices
+            .iter_mut()
+            .find(|v| v.active && !v.is_fading() && v.note == note)
+        {
+            v.steal(pending);
+            return;
+        }
+
         let cost = unison[0].max(unison[1]);
         let polyphony = self.params.polyphony;
 
@@ -1140,6 +1144,41 @@ mod tests {
                 == crate::audio::modulation::envelope::AdsrState::Attack;
             assert_eq!(attacking, expect_attack, "mode {mode}");
         }
+    }
+
+    #[test]
+    fn poly_same_note_repeat_gets_a_fresh_attack() {
+        use crate::audio::modulation::envelope::AdsrState;
+        let mut dev = synth();
+        set_real(&mut dev, AMP_ATTACK, 0.05);
+        set_real(&mut dev, AMP_SUSTAIN, 1.0); // worst case: the level sits at the peak
+        set_real(&mut dev, FM_INDEX, 4.0); // the reported repro: two-op FM on Osc 1
+        set_real(&mut dev, FM_RATIO, 6.0); // enum index of "2", a carrier-frequency multiple
+        dev.send_midi_event(60, 100, true, 0);
+        render(&mut dev, 20); // into sustain
+        assert_eq!(
+            dev.voices
+                .iter()
+                .find(|v| v.active && !v.is_fading() && v.note == 60)
+                .unwrap()
+                .amp_env
+                .value(),
+            1.0
+        );
+
+        dev.send_midi_event(60, 100, true, 0);
+        render(&mut dev, 1); // the 4 ms steal fade completes, the queued note starts
+        let v = dev
+            .voices
+            .iter()
+            .find(|v| v.active && !v.is_fading() && v.note == 60)
+            .unwrap();
+        assert_eq!(v.amp_env.state(), AdsrState::Attack);
+        assert!(
+            v.amp_env.value() < 0.2,
+            "attack should start over, not continue from the peak: {}",
+            v.amp_env.value()
+        );
     }
 
     #[test]

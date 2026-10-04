@@ -122,8 +122,18 @@ impl AdsrEnvelope {
         self.retrigger_from_current();
     }
 
-    /// Start a new attack from wherever the envelope is now (no jump to zero).
+    /// Start a new attack from wherever the envelope is now (no jump to zero). The attack
+    /// coefficient is re-timed so the rise from the current level to the peak still takes the
+    /// full attack time: the default coefficient is sized for a 0→1 travel, so retriggering
+    /// from a high level (a same-note repeat during the decay or release) would cross the
+    /// peak within a few samples — or on the first sample at the peak — sounding instant.
     pub fn retrigger_from_current(&mut self) {
+        // Rising the last sliver from the peak still takes the full attack, rather than
+        // skipping the stage outright when the level is exactly 1.0.
+        let start = self.current_value.clamp(0.0, 1.0 - 1.0e-4);
+        let samples = (self.attack * self.sample_rate).max(1.0);
+        self.attack_coef =
+            (ATTACK_OVERSHOOT / (1.0 + ATTACK_OVERSHOOT - start)).powf(1.0 / samples);
         self.state = AdsrState::Attack;
     }
 
@@ -295,6 +305,31 @@ mod tests {
         assert!(
             after >= before && after - before < 0.1,
             "{before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn retrigger_from_a_high_level_takes_the_full_attack() {
+        // A same-note repeat can land while the level is at (or near) the peak. The attack
+        // must still last its set time instead of crossing the peak on the first sample.
+        let mut env = AdsrEnvelope::new(SR);
+        env.set_adsr(0.05, 0.01, 1.0, 0.1);
+        env.gate_on();
+        for _ in 0..(SR * 0.06) as usize {
+            env.process_sample(); // into sustain: the level sits at the peak
+        }
+        assert_eq!(env.value(), 1.0);
+        env.gate_off();
+        for _ in 0..64 {
+            env.process_sample(); // barely into the release, still near the peak
+        }
+        let level = env.value();
+        env.retrigger_from_current();
+        assert_within_5_percent(samples_in_state(&mut env, AdsrState::Attack), 0.05);
+        assert!(
+            env.value() >= level,
+            "no jump down: {level} -> {}",
+            env.value()
         );
     }
 
