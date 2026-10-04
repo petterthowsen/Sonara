@@ -462,6 +462,8 @@ impl PolySynthDevice {
                 voice.render_chunk(&ctx, pos, chunk_end, &mut self.mix_l, &mut self.mix_r);
                 voice.finish_chunk(&ctx.start);
             }
+            // Keep the block-start transport moving so synced LFOs follow the song position.
+            self.transport.advance(chunk_end - pos, self.sample_rate);
             pos = chunk_end;
         }
     }

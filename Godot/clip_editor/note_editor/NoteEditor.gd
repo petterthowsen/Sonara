@@ -252,9 +252,23 @@ func handle_key_input(event: InputEventKey) -> void:
 # ============================================================================
 # NOTE PLACEMENT
 # ============================================================================
+## Whether left-click note placement should also set the selection range to the
+## new note's span (default off). Node lookup, not the bare autoload name, so
+## headless test scripts that load() this file still compile.
+func _placement_sets_range() -> bool:
+	var settings := get_node_or_null("/root/Settings")
+	return settings != null and settings.get_value("midi_editor/note_placement_sets_range")
+
+
 func _place_note_at_position(pos: Vector2) -> VisualNote:
 	"""Place a MIDI note at the given position."""
 	logger.debug("placing note at ", pos.y)
+
+	# With the "placement sets range" setting off, an existing time range survives
+	# placement: remember it, since clear_selection resets the range ticks.
+	var keep_range := not _placement_sets_range()
+	var saved_range := Vector2i(selection_manager.box_selection_start_tick,
+		selection_manager.box_selection_end_tick) if keep_range and selection_manager.has_range() else Vector2i.ZERO
 
 	# Clear selection before placing new note
 	selection_manager.clear_selection()
@@ -273,7 +287,11 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	# A new note is one grid step long (REQ-019), in both views: the current snap
 	# interval is the finest visible grid line, so zooming in lets you write 16ths.
-	var new_note_length := last_note_length if last_note_length > 0 else get_snap_interval()
+	# In Drum View a hit is always one step: a length remembered from a piano-roll
+	# resize would cut every following hit on the row when the overlap is cleared.
+	var new_note_length := get_snap_interval()
+	if not layout.is_folded() and last_note_length > 0:
+		new_note_length = last_note_length
 
 	var end_tick = tick_position + new_note_length
 
@@ -331,7 +349,14 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 
 	# Select the newly placed note (uses coordinate conversion callback)
 	_history_commit("Place Note")
-	selection_manager.select_note(note_instance)
+	# Placement can leave the selection range at the note's span, but only when the
+	# user asked for it (default: off, so placing doesn't move the range).
+	var with_range := _placement_sets_range()
+	selection_manager.select_note(note_instance, with_range)
+	if not with_range and saved_range != Vector2i.ZERO:
+		selection_manager.box_selection_start_tick = saved_range.x
+		selection_manager.box_selection_end_tick = saved_range.y
+		selection_manager.selection_changed.emit(selection_manager.selected_notes)
 	queue_redraw()
 
 	# Wait for drag to start

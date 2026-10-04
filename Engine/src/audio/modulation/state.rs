@@ -33,6 +33,8 @@ pub struct ModulatorState {
     sample_rate: f32,
     /// LFO phase and sample-and-hold value.
     lfo: Lfo,
+    /// Whole cycle count of a synced LFO at the last step, so S&H draws on each new cycle.
+    synced_cycle: f64,
     /// Envelope stage and level (`adsr` and `ad`).
     env: AdsrEnvelope,
     /// Notes currently held, so an envelope releases on the last note-off.
@@ -51,6 +53,7 @@ impl ModulatorState {
             params: ModParams::new(kind),
             sample_rate: sample_rate.max(1.0),
             lfo: Lfo::default(),
+            synced_cycle: f64::NAN,
             env: AdsrEnvelope::new(sample_rate),
             held: 0,
             last_note: 60.0,
@@ -197,7 +200,19 @@ impl ModulatorState {
                 let sync = sync_beats(self.params.real(LFO_SYNC).unwrap_or(0.0) as usize);
                 match sync {
                     Some(beats) if transport.playing => {
-                        self.lfo.phase = (transport.song_pos_beats / beats).rem_euclid(1.0);
+                        // `transport` is the position at the step's start; the value is the one
+                        // at its end.
+                        let seconds = frames as f64 / self.sample_rate as f64;
+                        let pos = transport.song_pos_beats + seconds * transport.tempo / 60.0;
+                        let cycle = pos / beats;
+                        let phase = cycle.rem_euclid(1.0);
+                        // A new cycle (or a seek) draws a new sample-and-hold value.
+                        if cycle.floor() != self.synced_cycle {
+                            self.synced_cycle = cycle.floor();
+                            let held = self.next_noise();
+                            self.lfo.set_held(held);
+                        }
+                        self.lfo.phase = phase;
                     }
                     _ => {
                         let hz = match sync {
@@ -253,6 +268,7 @@ impl ModulatorState {
         self.velocity = 0.0;
         self.random = 0.0;
         self.lfo = Lfo::default();
+        self.synced_cycle = f64::NAN;
         self.env.reset();
     }
 
@@ -342,6 +358,24 @@ mod tests {
         set_real(&mut state, LFO_SYNC, index_of("1/4.") as f32);
         state.advance((SR * 0.75 * 0.5) as usize, &t); // half a dotted-quarter
         assert!((state.lfo.phase - 0.5).abs() < 1e-6, "{}", state.lfo.phase);
+    }
+
+    #[test]
+    fn a_synced_lfo_while_playing_reads_the_end_of_the_step_and_redraws_sample_and_hold() {
+        let mut state = ModulatorState::new(ModulatorKind::Lfo, SR);
+        set_real(&mut state, LFO_SYNC, index_of("1/4") as f32);
+        set_real(&mut state, LFO_SHAPE, 4.0); // S&H
+
+        // A quarter of a beat in from beat 0.
+        state.advance((SR * 0.125) as usize, &transport(120.0, true, 0.0));
+        assert!((state.lfo.phase - 0.25).abs() < 1e-6, "{}", state.lfo.phase);
+        let first = state.value();
+
+        // Same cycle: the held value stays; the next beat draws a new one.
+        state.advance(64, &transport(120.0, true, 0.5));
+        assert_eq!(state.value(), first, "redrew within a cycle");
+        state.advance(64, &transport(120.0, true, 1.0));
+        assert_ne!(state.value(), first, "no new value on the next cycle");
     }
 
     #[test]

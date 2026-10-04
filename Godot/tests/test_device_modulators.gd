@@ -169,7 +169,7 @@ func _test_add_remove_set_and_osc() -> void:
 		osc._pending_sends.clear()
 	inst.set_modulator_param(0, 20, 0.4)
 	_assert(is_equal_approx(mod.get_param(20), 0.5), "enum snaps to a canonical index (%s)" % mod.get_param(20))
-	_assert(_sent_once("/modulator/0/param/20/value", [1]), "enum sends its index")
+	_assert(_sent_float("/modulator/0/param/20/value", 0.5), "enum sends its normalized value as a float")
 
 	if osc:
 		osc._pending_sends.clear()
@@ -200,6 +200,14 @@ func _sent_once(address_suffix: String, args: Array) -> bool:
 	for item in _modulator_messages():
 		if str(item.address).ends_with(address_suffix):
 			return item.args == args
+	return false
+
+
+## The engine accepts only a float argument here, so the type is checked, not just the value.
+func _sent_float(address_suffix: String, value: float) -> bool:
+	for item in _modulator_messages():
+		if str(item.address).ends_with(address_suffix):
+			return item.args.size() == 1 and typeof(item.args[0]) == TYPE_FLOAT and is_equal_approx(item.args[0], value)
 	return false
 
 

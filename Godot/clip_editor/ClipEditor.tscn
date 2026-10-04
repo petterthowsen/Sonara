@@ -3,9 +3,6 @@
 [ext_resource type="Script" uid="uid://dbjpmyrlq40bu" path="res://clip_editor/note_editor/NoteEditor.gd" id="1_4hncn"]
 [ext_resource type="Script" uid="uid://dk008cpfvxe6" path="res://clip_editor/ClipEditor.gd" id="1_lqnrn"]
 [ext_resource type="Script" uid="uid://cbkvqmm63yl6a" path="res://components/RulerStack.gd" id="2_q0vl8"]
-[ext_resource type="Texture2D" path="res://assets/icons/layers.svg" id="layers_icon"]
-[ext_resource type="Texture2D" path="res://assets/icons/eye.svg" id="eye_icon"]
-[ext_resource type="Texture2D" path="res://assets/icons/pencil.svg" id="pencil_icon"]
 [ext_resource type="PackedScene" uid="uid://bnyr34msk4b3r" path="res://clip_editor/tracklist/ClipEditorTrackList.tscn" id="2_ytm0k"]
 [ext_resource type="Script" uid="uid://ci0l6fv1meoma" path="res://clip_editor/MidiEditor.gd" id="3_1pvpx"]
 [ext_resource type="Script" uid="uid://cbm1a7m6w8hij" path="res://clip_editor/DrumRowHeader.gd" id="4_drumhd"]
@@ -14,6 +11,9 @@
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
 [ext_resource type="Texture2D" uid="uid://1sdwj750u4bc" path="res://assets/icons/headphones.svg" id="10_audit"]
+[ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="eye_icon"]
+[ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="layers_icon"]
+[ext_resource type="Texture2D" uid="uid://ccmf42o4fqto1" path="res://assets/icons/pencil.svg" id="pencil_icon"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1nvnf"]
 bg_color = Color(0.09239999, 0.09654, 0.12, 0.5019608)
@@ -78,38 +78,38 @@ custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_4hncn")
 
-[node name="HeaderMargin" type="MarginContainer" parent="HSplit/LeftPanel/VBox/Header"]
+[node name="HeaderMargin" type="MarginContainer" parent="HSplit/LeftPanel/VBox/Header" unique_id=1223651339]
 layout_mode = 2
 theme_override_constants/margin_left = 8
 theme_override_constants/margin_right = 8
 
-[node name="HeaderRow" type="HBoxContainer" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin"]
+[node name="HeaderRow" type="HBoxContainer" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin" unique_id=1283120631]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="AllVisibleToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+[node name="AllVisibleToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow" unique_id=296223898]
 custom_minimum_size = Vector2(26, 26)
 layout_mode = 2
 size_flags_vertical = 4
-focus_mode = 0
 tooltip_text = "Show or hide all tracks"
+focus_mode = 0
 icon = ExtResource("eye_icon")
 flat = true
 icon_alignment = 1
 expand_icon = true
 
-[node name="TracksLabel" type="Label" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+[node name="TracksLabel" type="Label" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow" unique_id=791605999]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Tracks"
 vertical_alignment = 1
 
-[node name="AllEditableToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow"]
+[node name="AllEditableToggle" type="Button" parent="HSplit/LeftPanel/VBox/Header/HeaderMargin/HeaderRow" unique_id=222747709]
 custom_minimum_size = Vector2(26, 26)
 layout_mode = 2
 size_flags_vertical = 4
-focus_mode = 0
 tooltip_text = "Make all tracks editable or not"
+focus_mode = 0
 icon = ExtResource("pencil_icon")
 flat = true
 icon_alignment = 1
@@ -149,7 +149,7 @@ toggle_mode = true
 icon = ExtResource("layers_icon")
 flat = true
 
-[node name="ClipNameLabel" type="Label" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions"]
+[node name="ClipNameLabel" type="Label" parent="HSplit/MainPanel/VBox/PanelContainer/MainHeader/MainOptions" unique_id=1980881076]
 layout_mode = 2
 size_flags_horizontal = 3
 vertical_alignment = 1
@@ -230,9 +230,9 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("6_j0nq3")
-bar_line_color = Color(0.25, 0.25, 0.25, 1)
-beat_line_color = Color(0.1875, 0.1875, 0.1875, 1)
-subdivision_line_color = Color(0.14453125, 0.14453125, 0.14453125, 1)
+bar_line_color = Color(1, 1, 1, 0.29411766)
+beat_line_color = Color(0.9607843, 0.9607843, 0.9607843, 0.21568628)
+subdivision_line_color = Color(1, 1, 1, 0.11764706)
 
 [node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=291536170]
 layout_mode = 1

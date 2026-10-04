@@ -26,6 +26,7 @@
 - [ ] Read MIDI input directly in the engine instead of through Godot (Godot adds up to a frame of jitter)
 - [x?] Make sample rate and buffer size configurable: Settings › Audio › Output (device, sample rate, buffer size) applies live; the engine prepares devices and re-activates plugins for a new rate, reloads clips, lists the device's output pairs for master (1000 = 1/2, 1001 = 3/4, …) and grows its buffer when PipeWire's quantum doesn't fit. See `docs/engine-stability-plan.md` Phase 7
   - [ ] Live check through the Godot UI: switch device, 44.1 ↔ 48 kHz and buffer size during playback; clips at the right pitch, plugins keep their state, settings survive a restart
+- [ ] Bug: modulator LFO phase does not work
 
 ### Audio Thread
 
@@ -93,6 +94,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 - [x?] Increase the maximum horizontal zoom in the timeline. Arranger max is now 16384 px/beat (was 4096), about 1.5 samples per pixel at 120 BPM / 48 kHz. The grid still stops at 1/8-beat lines, so at full zoom snapping is coarse relative to the view.
 - [x?] Arranger track list: wire up the IO routing menu button on `TrackItem`. It sets the track channel's output route (Master or a bus/group) and shares its list with the mixer strip's output button via `mixer/ChannelOutputMenu.gd`. Locked while the channel sits in a folder/group; disabled on unrouted tracks. Covered by `Godot/tests/test_track_io_button.gd`.
+- [ ] Increase the amount of allowed zoom out in the timeline
 - [ ] Chord track: design & implement chord track with visual notations
 - [x] Bug: when an automation lane is visible, Ctrl+C, Ctrl+V and Ctrl+D don't work on clips. Seems to occur specifically when a curve point is selected (likely the automation curve point steals the shortcut/focus).
 - [x?] Bug: Due to recent changes to TrackItem, they sometimes change heights on their own due to control re-layout. This currently does not update height of tracks in the timeline itself. `TrackItem._sync_layout_height()` (run on `NOTIFICATION_RESIZED` and `content_box.minimum_size_changed`) pushes a wrapping-forced height through `Track.height`, so the timeline lane and clips follow; the height the user last set is remembered and restored once the panel is wide enough again, and any explicit height change (drag, Ctrl+scroll zoom, undo) clears that memory. Skipped while the fold animation clips the row (`fold_clip`), then re-run when the clip is removed. Also re-run on every `Track.height` write, so a vertical zoom, undo or a small stored height (which the container would silently floor at the header's content minimum without changing the header's realized size) cannot leave the timeline lane shorter than its header. Covered headlessly by `Godot/tests/test_track_item_height_sync.gd` (wrapping, restore, explicit resize, shrink-below-floor); live check of narrowing/widening the TracksPanel pending. Same for automation lanes: `AutomationLaneHeader` clamps `AutomationLane.height` up to its content floor (the 20 px `set_height` minimum is below the label/button floor), so the timeline `AutomationLaneRow` is never shorter than its header; covered by `Godot/tests/test_automation_lane_height.gd`.
@@ -138,6 +140,10 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 ### Clip Editor / Note Editor
 
+- [x?] Bug: in drum view mode, inserted notes are too long and can sometimes end up replacing many notes. A length remembered from a piano-roll resize (`NoteEditor.last_note_length`) followed the user into Drum View, where the long insert's overlap cut removed the following hits on the row. Drum View now always inserts one grid step; the remembered length still applies in the piano roll. Covered by `test_drum_view.gd` (`_test_drum_insert_ignores_piano_roll_length`); needs a live pass
+- [ ] Drum view: notes are hard to select. Draw/insert them as long as the smallest snap interval at the current zoom. Add a toggle at the bottom of the editor for this behavior; the inverted case makes them as small as the smallest snap interval (clarify: the toggle off may mean the note's actual length)
+- [ ] Bug: velocity of new notes is wrong. New notes should inherit the last velocity used, or the velocity of the last clicked note
+
 #### Multi track editing
 
 - [ ] Improve design of the track list. active/selected should use white border, to be cohesive with arranger's trackitem and mixer's mixerchannel styling.
@@ -180,6 +186,25 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] Device lane: for each device, add an animated signal icon on its left side that flashes black then green on audio and blue on MIDI
 - [ ] All devices should have their own volume control
 - [x?] Devices should be freely renamable, with uniqueness enforced per-channel (auto-suffix on collision, like track/channel names above). Inline SmartLineEdit (double-click) on the device lane and compact panels, plus the context menu, all through `DeviceActions.rename`. Uniqueness is per host (siblings in a container), which is what `Channel/Device/Child` paths need
+
+#### DevicePanel
+
+- [ ] Bug: sometimes, when moving a device, its device light ends up in a buggy state (off) though it keeps working
+- [ ] Bug: when moving the EQ builtin to another position in the chain or elsewhere, sometimes the analyzer stops working. Workaround: open and close the auxiliary window
+- [ ] LeftHeader should work as a drag handle, as TopHeader does
+- [ ] Name in TopHeader
+- [ ] DevicePanel should be selectable, with a white selection border like MixerChannel and TrackItem have. Additionally:
+- [ ] Allow selecting and moving multiple devices at the same time; ctrl+click and shift+click to select multiple
+- [ ] Animate showing/hiding device controls
+
+#### DevicePanel Modulators
+
+- [ ] Move the device modulators toggle below the device show/hide toggle
+- [ ] Modulators panel can use our custom paged scroll container (the one used for SendsPanel)
+- [ ] Modulator options panel should never scroll
+  - [ ] When sync is on, hide the rate control
+  - [ ] Retrigger can be a checkbox
+- [ ] Animate toggling the modulators and parameter list panels
 
 #### Plugins
 

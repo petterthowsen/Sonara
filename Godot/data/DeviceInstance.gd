@@ -721,15 +721,10 @@ func _canonical_mod_param(mod: Modulator, param_id: int, value: float) -> float:
 	return value
 
 
+## Always the normalized float (enums and bools included): the engine takes only `f:normalized`
+## and drops any other argument type.
 func _send_modulator_param(mod: Modulator, param_id: int, value: float) -> void:
-	var param := mod.get_parameter(param_id)
-	var args: Array = [value]
-	if param != null and param.param_type == "bool":
-		args = [1 if value >= 0.5 else 0]
-	elif param != null and param.param_type == "enum":
-		var n := maxi(1, param.enum_values.size())
-		args = [int(round(value * float(n - 1)))]
-	AudioEngineOSC.send(osc_addr("modulator/%d/param/%d/value" % [mod.mod_id, param_id]), args)
+	AudioEngineOSC.send(osc_addr("modulator/%d/param/%d/value" % [mod.mod_id, param_id]), [float(value)])
 
 
 ## Set (or with 0, remove) a route from `mod_id` to `target`. The engine echoes the clamped

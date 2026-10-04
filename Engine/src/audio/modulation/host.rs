@@ -254,6 +254,9 @@ impl ModulatedDevice {
                 None => 0.0,
             };
         }
+        // The transport is a block-start snapshot; move it with the steps so a synced LFO
+        // follows the song position through the block.
+        self.transport.advance(frames, self.sample_rate);
     }
 
     /// Snapshot the modulator definitions and the routes into the inner device's own parameters
@@ -1129,6 +1132,38 @@ mod tests {
         // The base is untouched: get_parameter still reports the unmodulated value.
         let base = devices[0].get_parameter(DELAY_MIX).unwrap();
         assert!((base - 0.3).abs() < 1e-6, "base moved to {base}");
+    }
+
+    #[test]
+    fn a_synced_lfo_moves_through_the_block_while_playing() {
+        use crate::audio::dsp::tempo_sync::{index_of, SYNC_CHOICES};
+        use crate::audio::modulation::kinds::{LFO_SHAPE, LFO_SYNC};
+
+        let mut m = ModulatedDevice::new(delay(), SR);
+        m.add_modulator(0, ModulatorKind::Lfo).unwrap();
+        // Saw, so the value maps straight to the phase.
+        m.set_modulator_param(0, LFO_SHAPE, 2.0 / 4.0)
+            .expect("shape");
+        let sync = index_of("1/4") as f32 / (SYNC_CHOICES.len() - 1) as f32;
+        m.set_modulator_param(0, LFO_SYNC, sync).expect("sync");
+        // One block-start snapshot, as the engine hands over: playing at 120 BPM from beat 0.
+        m.set_transport(&Transport {
+            tempo: 120.0,
+            playing: true,
+            song_pos_beats: 0.0,
+            ..Default::default()
+        });
+
+        // A quarter at 120 BPM is 24,000 frames; walk half of it in control steps.
+        let mut last = f32::NEG_INFINITY;
+        for step in 1..=(12_000 / CONTROL_STEP) {
+            m.control_step(CONTROL_STEP);
+            let value = m.values[0];
+            assert!(value > last, "step {step}: the LFO stalled at {value}");
+            last = value;
+        }
+        // Half a cycle in: the saw is at its midpoint (−1..1).
+        assert!(last.abs() < 0.01, "saw at {last} after half a beat");
     }
 
     #[test]

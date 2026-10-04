@@ -59,6 +59,22 @@ impl Transport {
             time_sig_den: seg.denominator,
         }
     }
+
+    /// Move the snapshot `frames` samples forward (song position, seconds and a tempo ramp), so
+    /// a device that steps through its block in pieces sees the position at each piece. A no-op
+    /// while stopped. The next block's snapshot replaces it.
+    pub fn advance(&mut self, frames: usize, sample_rate: f32) {
+        if !self.playing || frames == 0 {
+            return;
+        }
+        let n = frames as f64;
+        let seconds = n / sample_rate.max(1.0) as f64;
+        // Mean tempo over the step, for a linear ramp.
+        let mean_tempo = self.tempo + self.tempo_inc * n * 0.5;
+        self.song_pos_beats += seconds * mean_tempo / 60.0;
+        self.song_pos_seconds += seconds;
+        self.tempo += self.tempo_inc * n;
+    }
 }
 
 #[cfg(test)]

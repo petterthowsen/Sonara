@@ -97,6 +97,9 @@ var _named_clip: Clip = null
 
 func _ready():
 	grid_helper = GridHelper.new()
+	# The MIDI editor grid follows its own spacing setting, independent of the
+	# arranger's (a piano roll wants a finer grid than the timeline).
+	grid_helper.spacing_setting = GridHelper.MIDI_EDITOR_SPACING_SETTING
 	
 	# Connect GridHelper signals
 	grid_helper.changed.connect(_on_grid_helper_changed)

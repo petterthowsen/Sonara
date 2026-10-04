@@ -275,6 +275,15 @@ func _register_all_settings() -> void:
 	)).sub("Selection")
 
 	_register(Setting.new(
+		"midi_editor/note_placement_sets_range",
+		"Note Placement Sets Selection Range",
+		Type.BOOL,
+		false,
+		CATEGORY_BEHAVIOR,
+		"When enabled, creating a note (left-click in the MIDI editor) also makes a range selection covering the new note's span. When disabled, placing a note leaves any existing time range alone.",
+	)).sub("MIDI Editor")
+
+	_register(Setting.new(
 		"arranger/sync_track_and_lane_height",
 		"Sync Track and Automation Lane Height",
 		Type.BOOL,
@@ -298,7 +307,15 @@ func _register_all_settings() -> void:
 		Type.INT,
 		10,
 		CATEGORY_APPEARANCE,
-		"Smallest gap, in pixels, between grid lines in the arranger and clip editor. Beats and finer subdivisions appear only once zoomed in far enough to keep this gap. Snapping follows the finest visible line.",
+		"Smallest gap, in pixels, between grid lines in the arranger. Beats and finer subdivisions appear only once zoomed in far enough to keep this gap. Snapping follows the finest visible line.",
+	)).sub("Grid").range(4, 64, 1)
+	_register(Setting.new(
+		"appearance/midi_editor_min_line_spacing",
+		"Minimum Grid Line Spacing (MIDI Editor)",
+		Type.INT,
+		16,
+		CATEGORY_APPEARANCE,
+		"Smallest gap, in pixels, between grid lines in the clip editor's MIDI editor, independent of the arranger's. Beats and finer subdivisions appear only once zoomed in far enough to keep this gap. Snapping follows the finest visible line.",
 	)).sub("Grid").range(4, 64, 1)
 	_register(Setting.new(
 		"appearance/waveform_style",

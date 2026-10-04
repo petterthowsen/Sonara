@@ -30,6 +30,7 @@ func run_tests() -> void:
 	await _test_scene_loads()
 	await _test_drum_view_rows()
 	await _test_row_stepping()
+	await _test_drum_insert_ignores_piano_roll_length()
 	await _test_mode_switch_keeps_selection()
 	await _test_empty_drum_view()
 	await _test_hit_markers_do_not_overlap()
@@ -169,6 +170,61 @@ func _test_row_stepping() -> void:
 
 	midi.drum_view = false
 	await process_frame
+
+
+## A length remembered from a piano-roll resize must not follow the user into Drum
+## View: a hit is one grid step (REQ-019), and a longer inserted note would cut
+## every following hit on the row when its overlap is cleared.
+func _test_drum_insert_ignores_piano_roll_length() -> void:
+	var editor := _get_editor()
+	var setup := _drum_project([36], [])
+	editor.midi_editor.bind_to_clip_instance(setup.clip_instance)
+	await process_frame
+	await process_frame
+
+	var midi = editor.midi_editor
+	var ne = midi.note_editor
+	var snap: int = ne.get_snap_interval()
+
+	# Piano roll: resize a note to many steps, which is what last_note_length remembers.
+	midi.drum_view = false
+	await process_frame
+	var drum_clip = setup.clip_instance.clip
+	var long_note = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, 100, 0, snap)
+	await process_frame
+	var vn = ne.get_visual_note(long_note.id)
+	var handle: Vector2 = vn.position + Vector2(vn.size.x - 1.0, 2.0)
+	ne._on_resize_started(vn, handle)
+	ne._on_resize_updated(vn, handle + Vector2(midi.grid_helper.ticks_to_pixels(snap * 8), 0.0))
+	ne._on_resize_ended(vn)
+	await process_frame
+	_assert(long_note.duration_ticks > snap,
+		"the piano-roll resize is remembered (%d ticks)" % long_note.duration_ticks)
+
+	# Drum View: a hit beyond the resized note's reach, then an insert before it.
+	# With the bug, the remembered length followed the insert and the overlap cut
+	# removed the later hit.
+	midi.drum_view = true
+	await process_frame
+	await process_frame
+	var later = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, 90, snap * 12, snap)
+	await process_frame
+	var placed = ne._place_note_at_position(
+		Vector2(midi.grid_helper.ticks_to_pixels(snap * 10), midi.lane_layout.pitch_to_y_center(36)))
+	await process_frame
+	_assert(placed != null and placed.midi_note_data != null, "a hit is placed after a piano-roll resize")
+	if placed and placed.midi_note_data:
+		_assert(placed.midi_note_data.duration_ticks == snap,
+			"REQ-019: the hit is one grid step (%d), not the remembered %d"
+				% [placed.midi_note_data.duration_ticks, long_note.duration_ticks])
+	_assert(later in drum_clip.midi_notes,
+		"the hit at tick %d survives the insertion" % later.start_tick)
+
+	midi.drum_view = false
+	await process_frame
+	# The remembered piano-roll length is session-wide by design; clear it so the
+	# following suites see fresh one-step placements again.
+	ne.last_note_length = 0
 
 
 func _test_mode_switch_keeps_selection() -> void:

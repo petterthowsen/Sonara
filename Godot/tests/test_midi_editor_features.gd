@@ -36,6 +36,7 @@ func run_tests() -> void:
 	await _test_duplicate_drag_without_move_cancels()
 	_test_label_font_size()
 	await _test_placed_note_length_follows_grid()
+	await _test_placement_range_setting()
 	await _test_clip_editor_ruler_regions()
 
 
@@ -247,6 +248,48 @@ func _test_placed_note_length_follows_grid() -> void:
 
 	editor.queue_free()
 	await process_frame
+
+
+## The "note placement sets range" setting: default off leaves the range alone,
+## on makes the range the new note's span.
+func _test_placement_range_setting() -> void:
+	var settings: Object = root.get_node("Settings")
+	var key := "midi_editor/note_placement_sets_range"
+	var original: Variant = settings.get_value(key)
+
+	var project: Object = _project_script.new()
+	var pair: Dictionary = project.create_instrument_track("Synth")
+	var clip: Object = project.create_clip("Riff")
+	project.add_clip(clip)
+	var inst: Object = pair.track.create_clip_instance(clip, 0, 7680)
+
+	var editor: Object = _note_editor_script.new()
+	editor.set_grid_helper(_grid_helper_script.new())
+	root.add_child(editor)
+	editor.bind(inst)
+	await process_frame
+
+	var y: float = editor.layout.pitch_to_y_center(72)
+	var sm: Object = editor.selection_manager
+
+	settings.set_value(key, false)
+	var vn = editor._place_note_at_position(Vector2(0.0, y))
+	await process_frame
+	_assert(vn != null and sm.selected_notes.size() == 1, "off: the placed note is selected")
+	_assert(not sm.has_range(), "off: placement does not set a range")
+
+	editor.selection_manager.clear_selection()
+	settings.set_value(key, true)
+	vn = editor._place_note_at_position(Vector2(editor.get_snap_interval() * 2.0, y))
+	await process_frame
+	var nd = vn.midi_note_data if vn else null
+	_assert(sm.has_range() and sm.box_selection_start_tick == nd.start_tick
+		and sm.box_selection_end_tick == nd.start_tick + nd.duration_ticks,
+		"on: the range is the placed note's span: %d-%d" % [sm.box_selection_start_tick, sm.box_selection_end_tick])
+
+	editor.queue_free()
+	await process_frame
+	settings.set_value(key, original)
 
 
 ## Clip mode: the ruler is in clip-content ticks and shades the instance's played window.

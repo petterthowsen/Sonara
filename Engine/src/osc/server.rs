@@ -3202,7 +3202,13 @@ fn parse_modulator_command(
                         value: *value,
                     })
                 }
-                _ => None,
+                _ => {
+                    warn!(
+                        "Ignoring modulator/{mod_id}/param/{param_id}/value: expected one float \
+                         (normalized), got {args:?}"
+                    );
+                    None
+                }
             }
         }
         ["modulator", mod_id, "route", "set"] => {

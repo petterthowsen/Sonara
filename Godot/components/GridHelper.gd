@@ -79,8 +79,8 @@ func _emit_scale_changed() -> void:
 ## Minimum on-screen gap in pixels between adjacent grid lines. Beat lines, then
 ## 1/2, 1/4, 1/8 and 1/16 beat subdivisions (8th, 16th, 32nd and 64th notes),
 ## appear (and become snap targets) only once their spacing reaches this. Bar
-## lines always show. At runtime this follows the
-## "appearance/grid_min_line_spacing" setting.
+## lines always show. At runtime this follows the instance's `spacing_setting`
+## key (below).
 @export var min_line_spacing: float = 10.0:
 	set(v):
 		if min_line_spacing != v:
@@ -94,7 +94,20 @@ func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4, tempo_val
 	tempo = tempo_val
 	_follow_spacing_setting()
 
+## Settings key an instance follows for min_line_spacing. The arranger's timeline
+## and rulers use the default; the clip editor's MIDI editor follows its own key,
+## so the two views can want different gaps.
 const SPACING_SETTING := "appearance/grid_min_line_spacing"
+const MIDI_EDITOR_SPACING_SETTING := "appearance/midi_editor_min_line_spacing"
+
+## The key this instance follows (see SPACING_SETTING). Setting it re-reads the
+## value and keeps tracking changes of the new key.
+var spacing_setting: String = SPACING_SETTING:
+	set(key):
+		if spacing_setting == key:
+			return
+		spacing_setting = key
+		_follow_spacing_setting()
 
 func _follow_spacing_setting() -> void:
 	"""Take min_line_spacing from Settings and track live changes (not in the Godot editor)."""
@@ -105,11 +118,12 @@ func _follow_spacing_setting() -> void:
 	var settings: Node = tree.root.get_node_or_null("Settings") if tree else null
 	if settings == null:
 		return
-	min_line_spacing = float(settings.get_value(SPACING_SETTING))
-	settings.setting_changed.connect(_on_setting_changed)
+	min_line_spacing = float(settings.get_value(spacing_setting))
+	if not settings.setting_changed.is_connected(_on_setting_changed):
+		settings.setting_changed.connect(_on_setting_changed)
 
 func _on_setting_changed(key: String, value) -> void:
-	if key == SPACING_SETTING:
+	if key == spacing_setting:
 		min_line_spacing = float(value)
 
 static func from_project(p : Project) -> GridHelper:

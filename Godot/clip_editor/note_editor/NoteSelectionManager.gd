@@ -218,8 +218,12 @@ func select_all(notes: Array[VisualNote]) -> void:
 	selection_changed.emit(selected_notes)
 
 
-func select_note(note: VisualNote) -> void:
-	"""Select a single note (clears previous selection)."""
+func select_note(note: VisualNote, with_range: bool = true) -> void:
+	"""Select a single note (clears previous selection).
+
+	`with_range` also sets the selection range to the note's span; note placement
+	passes the user's "placement sets range" setting here.
+	"""
 	# Clear all previous selections
 	for n in selected_notes:
 		if is_instance_valid(n):
@@ -231,7 +235,7 @@ func select_note(note: VisualNote) -> void:
 	note.set_selected(true)
 
 	# Set selection range using coordinate conversion callback
-	if note.midi_note_data:
+	if with_range and note.midi_note_data:
 		var pos = get_note_song_position.call(note)
 		box_selection_start_tick = pos["start_tick"]
 		box_selection_end_tick = pos["end_tick"]

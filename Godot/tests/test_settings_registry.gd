@@ -27,6 +27,20 @@ func run_tests() -> void:
 	_test_type_enum_parity()
 	_test_custom_control_scene()
 	_test_search()
+	_test_grid_spacing_defaults()
+
+
+## The two grid spacing settings exist with their intended defaults; the MIDI
+## editor's key is what its ClipEditor GridHelper instance follows.
+func _test_grid_spacing_defaults() -> void:
+	var arranger = _settings.get_setting("appearance/grid_min_line_spacing")
+	var midi = _settings.get_setting("appearance/midi_editor_min_line_spacing")
+	_assert(arranger != null and arranger.default == 10,
+		"the arranger grid spacing defaults to 10")
+	_assert(midi != null and midi.default == 16,
+		"the MIDI editor grid spacing defaults to 16")
+	_assert(midi.min_val == arranger.min_val and midi.max_val == arranger.max_val,
+		"both share the same pixel range (%d-%d)" % [arranger.min_val, arranger.max_val])
 
 
 func _test_builder_helpers() -> void:
