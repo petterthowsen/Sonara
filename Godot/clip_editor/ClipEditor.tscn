@@ -222,6 +222,7 @@ note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
 
 [node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1240778112]
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

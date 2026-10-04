@@ -67,10 +67,8 @@ var _mod_dot: Label
 @onready var file_status_label: Label = $VBox/HBox/Content/HBox/File/VBox/StatusLabel
 @onready var file_load_button: Button = $VBox/HBox/Content/HBox/File/VBox/LoadButton
 
-# Device window popup (Window view)
-# set in _get_window()
-# freed in _close_window()
-var _window_popup: Window = null
+# The device window popup (native GUI or Window view) is owned by the global
+# DeviceWindowManager so it survives track switches and panel rebuilds.
 
 var device : DeviceInstance
 ## Channel whose device_parameters_updated this panel listens to.
@@ -80,8 +78,6 @@ var loaded_file_path: String = ""
 ## View state
 var _panel_view: DeviceView = null
 var _companion_view: DeviceView = null
-var _window_view: DeviceView = null
-var _window_open: bool = false
 
 ## Universal parameter lists (Parameters and CCs tabs)
 var _param_list: ParameterList
@@ -107,6 +103,7 @@ signal request_child_context_menu(child: DeviceInstance)
 
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
+	DeviceWindowManager.state_changed.connect(_on_window_state_changed)
 	_create_cc_tab()
 	_create_modulators_tab()
 	_setup_header_tabs()
@@ -308,7 +305,7 @@ func _gui_input(event: InputEvent) -> void:
 ## Release engine subscriptions and popups when the panel is freed (e.g.
 ## DeviceLane.clear()/_on_channel_device_removed(), or a parent being freed).
 ## Without this, custom views (like the spectrum analyzer) never get
-## _on_view_hidden() and the window popup outlives the panel.
+## _on_view_hidden(). Device windows are exempt: DeviceWindowManager owns them.
 ## Not _exit_tree(): DockHost reparents docks, which would wipe the parameter
 ## controls with nothing to rebuild them.
 func _notification(what: int) -> void:
@@ -320,10 +317,8 @@ func _notification(what: int) -> void:
 func _unbind() -> void:
 	if device == null:
 		return
-	if _window_open:
-		_close_window()
-	if device.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
-		device.plugin_gui_closed.disconnect(_on_plugin_gui_closed)
+	# The window popup stays open: it is owned by DeviceWindowManager, keyed by
+	# device, and survives this panel being freed (e.g. a track switch).
 	if device.name_changed.is_connected(_on_device_name_changed):
 		device.name_changed.disconnect(_on_device_name_changed)
 	if device.modulator_added.is_connected(_on_modulators_changed):
@@ -487,8 +482,6 @@ func _on_device_name_changed(new_name: String) -> void:
 		name_label.set_value(new_name)
 		vertical_name_label.text = new_name
 		_fit_name_to_tabs()
-	if _window_popup:
-		_window_popup.title = new_name
 
 
 ## A modulator was added or removed: refresh the collapsed-header mark.
@@ -556,13 +549,12 @@ func bind_to_device(dev : DeviceInstance):
 	_update_view_toggle_visibility()
 	_update_view_pane_visibility()
 
-	# Window toggle visibility (native GUI or Window view scene)
+	# Window toggle visibility (native GUI or Window view scene); the pressed
+	# state mirrors a window that is already open for this device.
 	window_button.visible = dev.device.has_gui() or dev.device.has_window_view()
-	window_button.set_pressed_no_signal(false)
-
-	# Listen for GUI closed events from engine
-	if not dev.plugin_gui_closed.is_connected(_on_plugin_gui_closed):
-		dev.plugin_gui_closed.connect(_on_plugin_gui_closed)
+	window_button.set_pressed_no_signal(DeviceWindowManager.is_open(dev))
+	if DeviceWindowManager.is_open(dev):
+		_apply_window_state()
 
 	# Configure file tab visibility and file dialog
 	_configure_file_loading()
@@ -677,14 +669,6 @@ func _update_tab_panes() -> void:
 ## View toggle: show or hide the custom UI pane.
 func _on_view_toggled(_pressed: bool) -> void:
 	_update_view_pane_visibility()
-
-
-## Window toggle: native plugin GUI or the Window view popup.
-func _on_window_toggled(pressed: bool) -> void:
-	if pressed:
-		_open_window()
-	else:
-		_close_window()
 
 
 ## The View pane shows when toggled on and a Panel or Companion view is loaded.
@@ -939,126 +923,36 @@ func _hide_companion_show_panel() -> void:
 
 
 func _show_right_pane_current() -> void:
-	if _window_open and _companion_view:
+	if device and DeviceWindowManager.is_open(device) and _companion_view:
 		_show_companion_view()
 	else:
 		_show_panel_view()
 
 
-## Get or create the popup that hosts the Window view
-func _get_window() -> Window:
-	# create window if not already created
-	if not _window_popup:
-		var popup := Window.new()
-		popup.name = "DeviceWindow_%s" % device.get_display_name()
-		popup.unresizable = false
-		popup.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
-		popup.handle_input_locally = false # we want to still accept input events the window doesn't handle.
-		popup.size = Vector2i(300, 200) # initial size
-		popup.title = device.get_display_name()
-		popup.always_on_top = true # always on top of other windows
-		popup.wrap_controls = true # sized by content
-		popup.force_native = false # not native
-		popup.minimize_disabled = true # cannot minimize
-		popup.maximize_disabled = true # cannot maximize
-		popup.close_requested.connect(_on_window_request_close)
-		_window_popup = popup
-
-	# return window
-	return _window_popup
-
-
-## Device window: native plugin GUI or the Window view scene
-func _open_window() -> void:
-	if not device:
-		return
-	
-	if device.device.has_gui():
-		device.open_gui()
-		_window_open = true
-		_apply_window_state()
-		return
-	
-	if device.device.has_window_view():
-		# create window view
-		_window_view = DeviceViewFactory.create(device, Device.ViewType.Window)
-		
-		# add window view to popup
-		var popup = _get_window()
-		popup.add_child(_window_view)
-		_window_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		
-		# bind window view to device
-		_window_view.bind_to_device(device)
-
-		# add window to editor
-		Sonara.editor.add_child(popup)
-
-		# wait for window view to be ready
-		if not _window_view.is_node_ready():
-			await _window_view.ready
-
-		# show window
-		# Size the popup to the view's minimum: a fixed 300x200 left the EQ cut off until reopened.
-		var min_size := Vector2i(_window_view.get_combined_minimum_size())
-		popup.min_size = min_size
-		popup.popup_centered(Vector2i(maxi(min_size.x, 300), maxi(min_size.y, 200)))
-		# notify window view it is now visible so it can subscribe
-		_window_view._on_view_shown()
-
-		# set window open flag
-		_window_open = true
-		_apply_window_state()
-
-
-func _on_window_request_close() -> void:
-	_close_window()
-
-
-## Handle plugin GUI closed notification from engine
-func _on_plugin_gui_closed() -> void:
-	logger.info("Plugin GUI closed notification received")
-	_window_open = false
-	window_button.set_pressed_no_signal(false)
-	_apply_window_state()
-
-
-func _close_window() -> void:
+func _on_window_toggled(pressed: bool) -> void:
 	if device == null:
 		return
-	# has plugin gui?
-	if device.device.has_gui():
-		device.close_gui()
-		_window_open = false
-		_apply_window_state()
+	if pressed:
+		DeviceWindowManager.open(device)
+	else:
+		DeviceWindowManager.close(device)
+
+
+## A device window opened or closed (from any panel or the window's own close
+## button): refresh the toggle and the companion view when it is this device's.
+func _on_window_state_changed(dev: DeviceInstance) -> void:
+	if dev != device:
 		return
-
-	# has window view?
-	if _window_view and _window_open:
-		# The popup (and the view inside it) may already be gone when the
-		# editor is freed on quit before this panel.
-		if is_instance_valid(_window_view):
-			_window_view._on_view_hidden()
-			_window_view.queue_free()
-		_window_view = null
-
-		if is_instance_valid(_window_popup):
-			_window_popup.hide()
-			if _window_popup.get_parent():
-				_window_popup.get_parent().remove_child(_window_popup)
-			_window_popup.queue_free()
-		_window_popup = null
-	
-	_window_open = false
 	_apply_window_state()
 
 
 func _apply_window_state() -> void:
-	if _window_open and device and device.device.has_companion_view():
+	var open := device != null and DeviceWindowManager.is_open(device)
+	if open and device.device.has_companion_view():
 		if _companion_view == null:
 			_load_companion_view(device)
 		_show_companion_view()
 	else:
 		_hide_companion_show_panel()
 
-	window_button.set_pressed_no_signal(_window_open)
+	window_button.set_pressed_no_signal(open)
