@@ -895,6 +895,8 @@ func _on_track_mode_toggle_toggled(pressed: bool):
 	_update_mode_ui()
 
 	if track_mode:
+		# Clip mode's clip (if any) decides which track to show and where to scroll.
+		var from_clip: ClipInstance = bound_clip_instance
 		# Ensure tracks list is populated: prefer last seen track list
 		if not last_track_mode_tracks.is_empty():
 			selected_tracks = last_track_mode_tracks.duplicate()
@@ -902,19 +904,72 @@ func _on_track_mode_toggle_toggled(pressed: bool):
 			for clip_inst in selected_clips:
 				if clip_inst and clip_inst.track and not selected_tracks.has(clip_inst.track):
 					selected_tracks.append(clip_inst.track)
+		if from_clip and from_clip.track:
+			last_track_mode_selected_track = from_clip.track
 		_bind_track_mode()
+		_focus_track_mode_on(from_clip)
 		log.info("  - Switched to TRACK mode (%d tracks)" % [selected_tracks.size()])
 	else:
-		# Switching to clip-mode: focus last active clip of current selected track
+		# Switching to clip-mode: the clip nearest the last interacted note, else the first one
 		var current_t = midi_editor.current_track if midi_editor else last_track_mode_selected_track
 		if not current_t and not selected_tracks.is_empty():
 			current_t = selected_tracks[0]
-		var target_clip = _select_last_active_clip_for_track(current_t)
+		var target_clip := _nearest_clip_for_clip_mode(current_t)
 		if target_clip:
+			current_t = target_clip.track
 			selected_clips = [target_clip]
 			selected_tracks = [current_t] as Array[Track] if current_t else [] as Array[Track]
+			last_active_clip_by_track[current_t] = target_clip
 		_bind_clip_mode()
 		log.info("  - Switched to CLIP mode (clip_id=%s, track='%s')" % [str(selected_clips[0].id) if not selected_clips.is_empty() else "null", current_t.name if current_t else "null"])
+
+
+## Track mode was entered from clip mode: make the clip's track visible, editable and current,
+## then scroll to the clip, or to the track's first clip when there was none.
+func _focus_track_mode_on(clip: ClipInstance) -> void:
+	var track: Track = clip.track if clip and clip.track else midi_editor.current_track
+	if track and _listed_tracks().has(track):
+		_suppress_toggle_apply = true
+		track_toggles.set_on(track, TrackToggleState.Kind.VISIBLE, true)
+		track_toggles.set_on(track, TrackToggleState.Kind.EDITABLE, true)
+		_suppress_toggle_apply = false
+		last_track_mode_selected_track = track
+		_apply_track_toggles(track)
+		_refresh_all_toggles()
+	var target := clip
+	if not target and track:
+		target = _first_clip(track)
+	if target:
+		midi_editor.scroll_to_song_tick(target.start_ticks)
+
+
+func _first_clip(track: Track) -> ClipInstance:
+	var first: ClipInstance = null
+	for ci in track.clip_instances:
+		if first == null or ci.start_ticks < first.start_ticks:
+			first = ci
+	return first
+
+
+## The clip of the last interacted track (else `fallback_track`) nearest to the last interacted
+## position; the track's first clip when nothing was interacted with.
+func _nearest_clip_for_clip_mode(fallback_track: Track) -> ClipInstance:
+	var track: Track = midi_editor.last_interaction_track
+	if not track or not track.clip_instances.size():
+		track = fallback_track
+	if not track:
+		return null
+	var tick: int = midi_editor.last_interaction_song_tick
+	if tick < 0 or track != midi_editor.last_interaction_track:
+		return _first_clip(track)
+	var best: ClipInstance = null
+	var best_dist := 0
+	for ci in track.clip_instances:
+		var dist := maxi(maxi(ci.start_ticks - tick, tick - ci.get_end_ticks()), 0)
+		if best == null or dist < best_dist:
+			best = ci
+			best_dist = dist
+	return best
 
 
 func _on_track_selector_track_selected(track: Track, additive := false):

@@ -664,6 +664,13 @@ func frame_clip_instance() -> void:
 	target_scroll_horizontal = max(0.0, grid_helper.ticks_to_pixels(range_start))
 
 
+## Scroll horizontally so `song_tick` is at the left edge (track mode: ticks are song ticks).
+func scroll_to_song_tick(song_tick: int) -> void:
+	if not grid_helper:
+		return
+	target_scroll_horizontal = maxf(0.0, grid_helper.ticks_to_pixels(maxi(0, song_tick)))
+
+
 func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	"""Set horizontal zoom level while maintaining the visual position under the mouse cursor."""
 	if not grid_helper:
@@ -1019,6 +1026,12 @@ var _ctrl_press_note: VisualNote = null
 var _ctrl_press_pos: Vector2 = Vector2.ZERO
 
 
+## Song tick and track of the last left press in the note area (a note or empty space), or
+## -1 / null. ClipEditor uses it to pick the clip to focus when switching modes.
+var last_interaction_song_tick: int = -1
+var last_interaction_track: Track = null
+
+
 func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseButton) -> void:
 	"""Handle left mouse button press for note editing."""
 	var active_editor = get_active_note_editor()
@@ -1043,6 +1056,11 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 		if not clicked_note:
 			accept_event()
 			return
+
+	if grid_helper:
+		var press_tick := grid_helper.pixels_to_ticks(note_editor_pos.x)
+		last_interaction_song_tick = _editor_to_song_ticks(active_editor, press_tick)
+		last_interaction_track = _editor_track(active_editor)
 
 	if clicked_note:
 		# Clicking on a note
