@@ -146,12 +146,15 @@ func _ready():
 	set_process(false)
 
 	# Connect UI signals
+	# Paint region is the strip's own column, not the whole strip: a group's strip also
+	# contains its nested children, so sweeping a child's button would hit the parent.
+	var own_column: Control = $HBox/VBox
 	if solo_toggle:
 		solo_toggle.toggled.connect(_on_solo_toggled)
-		solo_toggle.drag_region = self
+		solo_toggle.drag_region = own_column
 	if mute_toggle:
 		mute_toggle.toggled.connect(_on_mute_toggled)
-		mute_toggle.drag_region = self
+		mute_toggle.drag_region = own_column
 	if arm_toggle:
 		arm_toggle.toggled.connect(_on_arm_toggled)
 	if bottom_volume_slider:

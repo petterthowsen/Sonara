@@ -313,7 +313,7 @@ toggle_mode = true
 text = "S"
 script = ExtResource("dragtoggle_btn")
 drag_group = &"solo"
-drag_region = NodePath("../../../../../../../..")
+drag_region = NodePath("../../../../../..")
 
 [node name="MuteToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=1401776336 node_paths=PackedStringArray("drag_region")]
 custom_minimum_size = Vector2(22, 0)
@@ -325,7 +325,7 @@ toggle_mode = true
 text = "M"
 script = ExtResource("dragtoggle_btn")
 drag_group = &"mute"
-drag_region = NodePath("../../../../../../../..")
+drag_region = NodePath("../../../../../..")
 
 [node name="Panning" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=657729377]
 layout_mode = 2
