@@ -2,14 +2,15 @@
 
 [ext_resource type="Script" uid="uid://1gf5ybe13hnj" path="res://mixer/Mixer.gd" id="1_yu81n"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="2_64am7"]
+[ext_resource type="PackedScene" uid="uid://d2pk5lsj80cg4" path="res://mixer/MixerChannel.tscn" id="3_6eek7"]
 [ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="3_wr7tj"]
 [ext_resource type="PackedScene" uid="uid://c07tx27b6f3o" path="res://mixer/ChannelContextMenu.tscn" id="4_wr7tj"]
-[ext_resource type="Texture2D" path="res://assets/icons/move-horizontal.svg" id="icon_sizemode"]
-[ext_resource type="Texture2D" path="res://assets/icons/panel-right.svg" id="icon_compact"]
-[ext_resource type="Texture2D" path="res://assets/icons/cable.svg" id="icon_io"]
-[ext_resource type="Texture2D" path="res://assets/icons/send.svg" id="icon_sends"]
-[ext_resource type="Texture2D" path="res://assets/icons/chart-no-axes-column.svg" id="icon_bigmeters"]
-[ext_resource type="Texture2D" path="res://assets/icons/plug.svg" id="icon_devices"]
+[ext_resource type="Texture2D" uid="uid://cq347cpeq3dbl" path="res://assets/icons/chart-no-axes-column.svg" id="icon_bigmeters"]
+[ext_resource type="Texture2D" uid="uid://c11gvx4xeua2s" path="res://assets/icons/panel-right.svg" id="icon_compact"]
+[ext_resource type="Texture2D" uid="uid://dwtirg4ynlfmm" path="res://assets/icons/plug.svg" id="icon_devices"]
+[ext_resource type="Texture2D" uid="uid://c2o0kitrsi84r" path="res://assets/icons/cable.svg" id="icon_io"]
+[ext_resource type="Texture2D" uid="uid://dvu8w412chpls" path="res://assets/icons/send.svg" id="icon_sends"]
+[ext_resource type="Texture2D" uid="uid://dnluriorqc0gn" path="res://assets/icons/move-horizontal.svg" id="icon_sizemode"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_64am7"]
 bg_color = Color(0.20703125, 0.20703125, 0.20703125, 1)
@@ -17,6 +18,24 @@ expand_margin_left = 2.0
 expand_margin_right = 2.0
 shadow_size = 1
 shadow_offset = Vector2(-2, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ob6v3"]
+resource_local_to_scene = true
+bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 2
+border_width_bottom = 1
+border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6eek7"]
+resource_local_to_scene = true
+bg_color = Color(0.1254902, 0.1254902, 0.1254902, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 2
+border_width_bottom = 1
+border_color = Color(0.3203125, 0.3203125, 0.3203125, 1)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yu81n"]
 content_margin_left = 4.0
@@ -64,6 +83,10 @@ layout_mode = 2
 theme_override_constants/separation = 0
 script = ExtResource("2_64am7")
 
+[node name="MixerChannel" parent="HSplit/LeftPane/HBox/Channels" unique_id=381553760 instance=ExtResource("3_6eek7")]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ob6v3")
+
 [node name="Options" type="CenterContainer" parent="HSplit/LeftPane/HBox" unique_id=1449261426]
 layout_mode = 2
 
@@ -100,6 +123,10 @@ size_flags_horizontal = 8
 theme_override_constants/separation = 0
 script = ExtResource("2_64am7")
 
+[node name="MixerChannel2" parent="HSplit/RightPane/HBox/Channels" unique_id=1911403220 instance=ExtResource("3_6eek7")]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_6eek7")
+
 [node name="Toolbar" type="PanelContainer" parent="." unique_id=209310589]
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_yu81n")
@@ -111,41 +138,41 @@ layout_mode = 2
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="SizeMode" type="Button" parent="Toolbar/HBox/Toggles"]
+[node name="SizeMode" type="Button" parent="Toolbar/HBox/Toggles" unique_id=2007153255]
 layout_mode = 2
-text = "Medium"
 tooltip_text = "Strip width: cycle narrow / medium / wide"
+text = "Medium"
 icon = ExtResource("icon_sizemode")
 
 [node name="Compact" type="Button" parent="Toolbar/HBox/Toggles" unique_id=404125249]
 layout_mode = 2
-toggle_mode = true
 tooltip_text = "Compact layout (devices and sends in a side pane on the selected strip)"
+toggle_mode = true
 icon = ExtResource("icon_compact")
 
 [node name="IO" type="Button" parent="Toolbar/HBox/Toggles" unique_id=1544949243]
 layout_mode = 2
-toggle_mode = true
 tooltip_text = "Show I/O routing"
+toggle_mode = true
 icon = ExtResource("icon_io")
 
 [node name="Sends" type="Button" parent="Toolbar/HBox/Toggles" unique_id=1339419404]
 layout_mode = 2
-toggle_mode = true
 tooltip_text = "Show sends"
+toggle_mode = true
 icon = ExtResource("icon_sends")
 
-[node name="Devices" type="Button" parent="Toolbar/HBox/Toggles"]
+[node name="Devices" type="Button" parent="Toolbar/HBox/Toggles" unique_id=569490513]
 layout_mode = 2
+tooltip_text = "Show device list (hidden in narrow width)"
 toggle_mode = true
 button_pressed = true
-tooltip_text = "Show device list (hidden in narrow width)"
 icon = ExtResource("icon_devices")
 
 [node name="BigMeters" type="Button" parent="Toolbar/HBox/Toggles" unique_id=374127531]
 layout_mode = 2
-toggle_mode = true
 tooltip_text = "Big meters and faders"
+toggle_mode = true
 icon = ExtResource("icon_bigmeters")
 
 [node name="ChannelContextMenu" parent="." unique_id=839567157 instance=ExtResource("4_wr7tj")]

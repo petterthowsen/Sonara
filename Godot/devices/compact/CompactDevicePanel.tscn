@@ -31,6 +31,11 @@ fill = 1
 fill_from = Vector2(0.4957265, 0.5)
 fill_to = Vector2(0.14529915, 0.14102565)
 
+[sub_resource type="LabelSettings" id="LabelSettings_ngmsh"]
+font_size = 12
+shadow_size = 2
+shadow_color = Color(0, 0, 0, 0.6745098)
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_o5nab"]
 content_margin_left = 2.0
 content_margin_top = 4.0
@@ -45,8 +50,8 @@ corner_radius_bottom_left = 3
 corner_detail = 5
 
 [node name="CompactDevicePanel" type="VBoxContainer" unique_id=401728466]
-offset_right = 56.0
-offset_bottom = 128.0
+offset_right = 136.0
+offset_bottom = 131.0
 script = ExtResource("1_6d71u")
 collapsed = true
 
@@ -84,19 +89,22 @@ value_type = 1
 display_format = "%s"
 
 [node name="Label" parent="Header/HBoxContainer/Name" index="0" unique_id=448001948]
-text = "testsets tset set"
+text = "Device Name"
+label_settings = SubResource("LabelSettings_ngmsh")
 horizontal_alignment = 0
 autowrap_mode = 1
 clip_text = true
 
 [node name="CollapseToggle" type="Button" parent="Header/HBoxContainer" unique_id=517518463]
-custom_minimum_size = Vector2(24, 0)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_horizontal = 8
 focus_mode = 0
 toggle_mode = true
 icon = ExtResource("5_chevron_right")
 flat = true
+icon_alignment = 1
+expand_icon = true
 script = ExtResource("4_toggle")
 icon_default = ExtResource("5_chevron_right")
 icon_pressed = ExtResource("6_chevron_down")

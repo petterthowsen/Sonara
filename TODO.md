@@ -83,10 +83,12 @@ Enabled status is similar to visibility except it deactivates all the devices on
 To make it possible to bring them back, two toggles at the bottom of the Arranger and the Mixer, using a suitable icon.
 ### Mixer & Tracks
 
-- [x?] Master track doesn't accept device drops on its device lane and compact device list. Master track should accept devices. `DeviceDropUtil.device_fits_channel` now lets effects (and moved devices) onto master; instruments are still refused (master has the default INSTRUMENT type, so it is excluded by id). The engine already runs master's chain as a route target.
 - [x?] Bug: moving a device sometimes leaves a stray device visual on the DeviceLane; it goes away when switching channel. `Channel.device_removed` passes the device *type* id, but `DeviceLane` matched it against instance ids, so a move into a container never removed the root panel. The compact `ChannelDeviceList` matched by position after reindexing and could free the wrong panel. Both now drop panels whose device left `channel.devices`.
-- [x?] MixerChannel: the name label should ellipsize mid-word, so long words don't widen the channel. Name label now uses character ellipsis (`OVERRUN_TRIM_ELLIPSIS`). The actual widening came from the sends panel: a long bus name under a send knob set every strip's width (244 px for a 26-char name). Send labels are now 44 px with an ellipsis and a tooltip.
 - [x?] Sync the scroll position of the sends container across MixerChannels (`MixerChannel._shared_sends_scroll`, like the shared VSplit offset)
+- [ ] Improve `ChevronScrollContainer` and how it works in `MixerChannel`'s `SendsPanel`:
+  - [ ] Add an option to only show chevrons buttons on hover
+  - [ ] Ensure items are centered
+- [x] Bug: `MixerChannel`: when big meters are toggled and sends are hidden, big meters don't expand to the available space. The main VSplit is now hidden when devices and sends are both hidden, and the bottom meter/fader loses its height cap when nothing else expands.
 
 
 ### Arranger & Timeline
@@ -102,15 +104,17 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [x] Arranger track list footer: right-aligned toggles for automation (hides every automation lane row in both columns and the header automation buttons) and routing (hides the header IO button). Stored in `Project.arranger_view` and saved with the project. Covered by `Godot/tests/test_arranger_view_toggles.gd`.
 - [x] Bug: clicking a track header did not deselect the other tracks when the clicked track was already part of a multi-selection. The block is still kept on press so it can be dragged; releasing without a drag now selects only the clicked track. Covered by `Godot/tests/test_arranger_view_toggles.gd`.
 - [x] Bug: changing track color does not update the timeline background color. Not a bug: the lane tint does follow the color; it is just faint (`TimelineTrack` keeps the track color's hue/saturation at `bg_color` brightness and 50% alpha).
+- [x] Bug: timeline horizontal zoom jitter when zooming in at a > 0 horizontal scroll: the scroll position jitters when zooming in
+  - [x] Markers also jitter their lengths and their labels
 
 ### Clips
 
 - [x?] UX: moving timeline clips around needs improvement. Dragging a clip to another track should move it there live during the drag, not just on drop.
-- [x] Bug: timeline horizontal zoom jitter when zooming in at a > 0 horizontal scroll: the scroll position jitters when zooming in
-  - [x] Markers also jitter their lengths and their labels
 - [x?] Shift+click while dragging a clip should bypass grid snap.
 - [x] Double-clicking to place a clip starts moving it straight away: keep the button held and drag it into place; the release records the move (a separate undo step from the creation). Covered by `Godot/tests/test_clip_placement_drag.gd`.
 - [x] Resize several clips at once: dragging an edge of a clip in a multi-selection moves that edge on every selected clip by the same snapped delta, each clamped to its own neighbours, as one undo step. Covered by `Godot/tests/test_clip_group_resize.gd`.
+- [ ] Bug: timeline clips: zooming in/out seems to cause MIDI clip notes to flash, presumably due to them being re-rendered (consider debouncing)
+- [ ] Bug: timeline audio clips: on project load, waveforms are not always loaded correctly (stuck in "loading waveform...", which also coincidentally overflows the clip instance)
 
 #### Phase 1: Clip instance awareness and unused clips (complex)
 
@@ -225,11 +229,7 @@ Verified headless (`tests/test_device_panel_selection.gd`); panes open/close thr
 
 ### Hardware & MIDI
 
-- [ ] Modulation
-  - [ ] Basic modulation, similar to Bitwig: allow any channel and device parameter to be modulatable
-  - [ ] Device modulators (LFO, envelopes, velocity… on any device instance, targeting its own and nested params, incl. CLAP): spec `docs/specs/018-device-modulators/plan.md`
-  - [x?] Device modulation routes (PolySynth v2, spec `docs/specs/011-polysynth-v2/`): engine + OSC + Godot model done (phase 4); assign UI in SimpleView done (phase 5, [x?]: manual check pending); live display done (phase 6 / spec 018 Phase 9: knob arcs follow the modulated value over the engine's `modulation` data stream, `ModLive` feeds them, covered by `tests/test_mod_live.gd`; needs a live check)
-  - [ ] Phase 1: track automation lanes for channel and device parameters (incl. MIDI CCs) — spec `docs/specs/003-automation/`
+- [ ] Hardware MIDI controller support
 
 ### UI / Quality of Life
 
@@ -259,7 +259,7 @@ Verified headless (`tests/test_device_panel_selection.gd`); panes open/close thr
 
 Design notes: `docs/ai-integration.md`, clip DSL: `docs/clip-text-format.md`
 
-- [ ] `analyze` tool: render a range offline and return a per-bar loudness/band grid of the master and channels (see `docs/analyze-plan.md`; needs offline rendering first)
+- [x] `analyze` tool: render a range offline and return a per-bar loudness/band grid of the master and channels (see `docs/analyze-plan.md`; needs offline rendering first)
 - [ ] Allow the AI to ask questions via a tool with multiple choice answers (but always with a custom answer option), optionally tagging a clip, track, channel. The question will then be presented to the user and the element highlighted in the chat (if clicked, select and make visible/scroll toward it in mixerchannel or timeline (and switch arranger/mix/edit view if needed).
   - [ ] Actually, could also implement link system that both assistant and user can use via some simple syntax maybe URL style? clip://some-clip and it is rendered as a clickable badge? 
 - [ ] Implement conversation compaction — when triggered, send the conversation to a compaction model with instructions to summarize it, focusing on the important bits. Add configuration settings to Settings/AI menu (threshold and what model to use). Compaction prompt can be a .md file with a {conversation} variable maybe?
