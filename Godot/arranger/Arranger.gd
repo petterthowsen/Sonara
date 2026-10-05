@@ -310,6 +310,11 @@ func _process(delta: float) -> void:
 			grid_helper.scroll_position = anchored_scroll
 			target_scroll_horizontal = anchored_scroll
 		else:
+			if abs(current_ppb - target_pixels_per_beat) > 0.01:
+				var new_ppb = lerp(current_ppb, target_pixels_per_beat, lerp_factor)
+				if abs(new_ppb - target_pixels_per_beat) <= 0.01:
+					new_ppb = target_pixels_per_beat
+				timeline.set_zoom(new_ppb)
 			var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
 			if abs(new_h_scroll - target_scroll_horizontal) < 0.5:
 				new_h_scroll = target_scroll_horizontal
@@ -404,8 +409,12 @@ func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollConta
 				var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
 				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 
-				if near_origin and not _zoom_anchor_active:
-					# Lock to origin - keep scroll at 0
+				var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
+				if near_origin and (not _zoom_anchor_active or origin_anchored):
+					# Lock to origin: anchor beat 0 at x 0 so the scroll stays at 0
+					_zoom_anchor_beat = 0.0
+					_zoom_anchor_x = 0.0
+					_zoom_anchor_active = true
 					target_scroll_horizontal = 0
 				else:
 					# Keep the anchor beat while a zoom is running (re-deriving it from the
