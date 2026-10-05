@@ -447,6 +447,43 @@ impl OscServer {
                     window_handle,
                 })?;
             }
+            // SPIKE: embed the plugin's host window into a Godot window (see window_manager)
+            ["gui", "embed"] | ["gui", "bounds"] => {
+                let ints: Vec<i64> = args
+                    .iter()
+                    .filter_map(|a| match a {
+                        OscType::Int(i) => Some(*i as i64),
+                        OscType::Long(l) => Some(*l),
+                        OscType::Float(f) => Some(*f as i64),
+                        _ => None,
+                    })
+                    .collect();
+                let process_key = device_path.to_window_key(channel_id);
+                let is_embed = action_refs.last() == Some(&"embed");
+                // embed: xid x y w h [sx sy]; bounds: x y w h [sx sy]
+                let off = if is_embed { 1 } else { 0 };
+                if ints.len() < off + 4 {
+                    warn!("gui/embed|bounds: expected {} ints, got {:?}", off + 4, args);
+                } else {
+                    let rect = crate::window_manager::EmbedRect {
+                        x: ints[off] as i32,
+                        y: ints[off + 1] as i32,
+                        width: ints[off + 2].max(1) as u32,
+                        height: ints[off + 3].max(1) as u32,
+                        scroll_x: ints.get(off + 4).copied().unwrap_or(0) as i32,
+                        scroll_y: ints.get(off + 5).copied().unwrap_or(0) as i32,
+                    };
+                    if is_embed {
+                        window_manager.embed_window(&process_key, ints[0] as u64, rect);
+                    } else {
+                        window_manager.set_embed_bounds(&process_key, rect);
+                    }
+                }
+            }
+            ["gui", "unembed"] => {
+                let process_key = device_path.to_window_key(channel_id);
+                window_manager.unembed_window(&process_key);
+            }
             ["gui", "close"] => {
                 let process_key = device_path.to_window_key(channel_id);
                 window_manager.destroy_window(&process_key);
@@ -1967,11 +2004,17 @@ impl OscServer {
                     OscType::Int(pid as i32),
                 ],
             ),
-            EngineStatus::PluginGuiResizeRequest { .. } => {
-                // GUI resize is handled by the main loop with access to WindowManager
-                // No need to send it to Godot
-                return;
-            }
+            // The main loop also resizes the host window; Godot needs the size to lay out an
+            // embedded GUI (SPIKE).
+            EngineStatus::PluginGuiResizeRequest {
+                channel_id,
+                device_path,
+                width,
+                height,
+            } => (
+                device_path.to_osc_addr(channel_id, "gui/size"),
+                vec![OscType::Int(width as i32), OscType::Int(height as i32)],
+            ),
             EngineStatus::PluginGuiClosed {
                 channel_id,
                 device_path,

@@ -7,7 +7,7 @@
 //! Uses a dedicated thread running winit's event_loop.run() for proper
 //! X11 event handling. Plugins create their own child windows and GL contexts.
 
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -36,6 +36,31 @@ enum WindowCommand {
     Show { process_key: String },
     /// Destroy a window
     Destroy { process_key: String },
+    /// SPIKE: reparent the host window into a foreign X11 window (e.g. Godot's) at a rect
+    Embed {
+        process_key: String,
+        parent_xid: u64,
+        rect: EmbedRect,
+    },
+    /// SPIKE: move/resize an embedded host window; scroll offsets the plugin's child window
+    Bounds {
+        process_key: String,
+        rect: EmbedRect,
+    },
+    /// SPIKE: reparent the host window back to the root window (floating)
+    Unembed { process_key: String },
+}
+
+/// Viewport of an embedded host window, in the parent window's coordinates.
+/// `scroll_x`/`scroll_y` shift the plugin's own window inside it.
+#[derive(Clone, Copy, Debug)]
+pub struct EmbedRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scroll_x: i32,
+    pub scroll_y: i32,
 }
 
 /// Manages plugin GUI windows using winit
@@ -161,6 +186,35 @@ impl WindowManager {
         });
     }
 
+    /// SPIKE: embed the host window into `parent_xid` (an X11 window from another process)
+    pub fn embed_window(&mut self, process_key: &str, parent_xid: u64, rect: EmbedRect) {
+        info!(
+            "Requesting embed of {} into 0x{:x} at {:?}",
+            process_key, parent_xid, rect
+        );
+        self.send(WindowCommand::Embed {
+            process_key: process_key.to_string(),
+            parent_xid,
+            rect,
+        });
+    }
+
+    /// SPIKE: update the viewport of an embedded host window
+    pub fn set_embed_bounds(&mut self, process_key: &str, rect: EmbedRect) {
+        self.send(WindowCommand::Bounds {
+            process_key: process_key.to_string(),
+            rect,
+        });
+    }
+
+    /// SPIKE: return an embedded host window to the root window
+    pub fn unembed_window(&mut self, process_key: &str) {
+        info!("Requesting unembed of {}", process_key);
+        self.send(WindowCommand::Unembed {
+            process_key: process_key.to_string(),
+        });
+    }
+
     /// No-op for compatibility (winit thread handles events automatically)
     pub fn pump_events(&mut self) {
         // Events are handled automatically by the winit thread
@@ -176,6 +230,225 @@ impl WindowManager {
 /// Simplified window holder (plugin creates its own GL context as needed)
 struct WindowHolder {
     window: Window,
+    /// SPIKE: Some while reparented into a foreign window. Plugin resize requests then
+    /// leave the host window alone: it is a viewport sized by the embedder.
+    embedded: Option<EmbedRect>,
+}
+
+fn x11_handle(window: &Window) -> Option<u64> {
+    window
+        .window_handle()
+        .ok()
+        .and_then(|wh| match wh.as_raw() {
+            RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
+            RawWindowHandle::Xcb(xcb) => Some(xcb.window.get() as u64),
+            _ => None,
+        })
+}
+
+/// SPIKE: X11 reparenting on winit's own Xlib connection, so our requests are ordered
+/// with winit's (map/unmap/resize). winit installs a non-fatal Xlib error handler.
+mod x11_embed {
+    use super::EmbedRect;
+    use std::os::raw::{c_int, c_ulong};
+    use std::time::{Duration, Instant};
+    use tracing::{info, warn};
+    use x11::xlib;
+
+    pub type Display = *mut xlib::Display;
+
+    unsafe fn parent_of(dpy: Display, win: c_ulong) -> Option<(c_ulong, c_ulong, Vec<c_ulong>)> {
+        let mut root = 0;
+        let mut parent = 0;
+        let mut children: *mut c_ulong = std::ptr::null_mut();
+        let mut n = 0u32;
+        if xlib::XQueryTree(dpy, win, &mut root, &mut parent, &mut children, &mut n) == 0 {
+            return None;
+        }
+        let kids = if children.is_null() {
+            Vec::new()
+        } else {
+            let v = std::slice::from_raw_parts(children, n as usize).to_vec();
+            xlib::XFree(children as *mut _);
+            v
+        };
+        Some((root, parent, kids))
+    }
+
+    /// Unmap `win` and wait until the WM has let go of it (parent is root again).
+    /// A WM reparents managed toplevels into a frame window; reparenting out of that
+    /// frame behind its back would race with it reparenting the window back on unmap.
+    unsafe fn withdraw(dpy: Display, win: c_ulong) {
+        let screen = xlib::XDefaultScreen(dpy);
+        xlib::XWithdrawWindow(dpy, win, screen);
+        xlib::XSync(dpy, 0);
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(500) {
+            match parent_of(dpy, win) {
+                Some((root, parent, _)) if root == parent => {
+                    info!("withdrawn after {:?}", start.elapsed());
+                    return;
+                }
+                None => return,
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        warn!("WM did not release window 0x{:x} within 500 ms", win);
+    }
+
+    // XShape (libXext); the x11 crate has no bindings for it.
+    const SHAPE_BOUNDING: c_int = 0;
+    const SHAPE_SET: c_int = 0;
+    const UNSORTED: c_int = 0;
+    #[link(name = "Xext")]
+    extern "C" {
+        fn XShapeCombineRectangles(
+            dpy: Display,
+            dest: c_ulong,
+            dest_kind: c_int,
+            x_off: c_int,
+            y_off: c_int,
+            rects: *mut xlib::XRectangle,
+            n_rects: c_int,
+            op: c_int,
+            ordering: c_int,
+        );
+        fn XShapeCombineMask(
+            dpy: Display,
+            dest: c_ulong,
+            dest_kind: c_int,
+            x_off: c_int,
+            y_off: c_int,
+            src: c_ulong,
+            op: c_int,
+        );
+    }
+
+    unsafe fn size_of(dpy: Display, win: c_ulong) -> (u32, u32) {
+        let (mut root, mut x, mut y, mut w, mut h, mut bw, mut depth) = (0, 0, 0, 0, 0, 0, 0);
+        xlib::XGetGeometry(
+            dpy, win, &mut root, &mut x, &mut y, &mut w, &mut h, &mut bw, &mut depth,
+        );
+        (w, h)
+    }
+
+    /// Godot (4.7) selects SubstructureNotify on its windows and takes a ConfigureNotify from
+    /// any direct child as a resize of the window itself. So the host window always covers the
+    /// whole parent at (0,0): its ConfigureNotify then carries Godot's real size and is ignored.
+    /// The viewport is a bounding shape (clips drawing and input), and the plugin's own window
+    /// (a grandchild, invisible to Godot) moves inside it for position and scrolling.
+    pub unsafe fn embed(
+        dpy: Display,
+        win: c_ulong,
+        parent: c_ulong,
+        rect: EmbedRect,
+        managed: bool,
+    ) {
+        if managed {
+            withdraw(dpy, win);
+        }
+        // Godot holds SubstructureRedirect on its windows and drops the redirected map and
+        // configure requests. Override-redirect windows bypass the redirect.
+        set_override_redirect(dpy, win, true);
+        // Resize only while the window is not a child of some other Godot window: Godot would
+        // take that ConfigureNotify as its own resize. A floating window is sized before the
+        // reparent (Godot never sees a wrong size); an embedded one after (its new parent sees
+        // its own size and ignores it).
+        apply_shape(dpy, win, rect);
+        let (pw, ph) = size_of(dpy, parent);
+        if managed {
+            xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
+        }
+        // Reparenting a mapped child unmaps and remaps it by itself.
+        xlib::XReparentWindow(dpy, win, parent, 0, 0);
+        if !managed {
+            xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
+        }
+        if managed {
+            xlib::XMapRaised(dpy, win);
+        }
+        xlib::XSync(dpy, 0);
+        info!(
+            "embedded 0x{:x} into 0x{:x} ({}x{}, now parent {:?})",
+            win,
+            parent,
+            pw,
+            ph,
+            parent_of(dpy, win).map(|p| p.1)
+        );
+    }
+
+    unsafe fn set_override_redirect(dpy: Display, win: c_ulong, on: bool) {
+        let mut attrs: xlib::XSetWindowAttributes = std::mem::zeroed();
+        attrs.override_redirect = on as i32;
+        xlib::XChangeWindowAttributes(dpy, win, xlib::CWOverrideRedirect, &mut attrs);
+    }
+
+    /// Clip to the viewport and place the plugin's window in it, offset by the scroll.
+    unsafe fn apply_shape(dpy: Display, win: c_ulong, rect: EmbedRect) {
+        let mut r = xlib::XRectangle {
+            x: rect.x as i16,
+            y: rect.y as i16,
+            width: rect.width.max(1) as u16,
+            height: rect.height.max(1) as u16,
+        };
+        XShapeCombineRectangles(
+            dpy,
+            win,
+            SHAPE_BOUNDING,
+            0,
+            0,
+            &mut r,
+            1,
+            SHAPE_SET,
+            UNSORTED,
+        );
+        if let Some((_, _, kids)) = parent_of(dpy, win) {
+            for kid in kids {
+                xlib::XMoveWindow(dpy, kid, rect.x - rect.scroll_x, rect.y - rect.scroll_y);
+            }
+        }
+    }
+
+    pub unsafe fn apply_bounds(dpy: Display, win: c_ulong, rect: EmbedRect) {
+        apply_shape(dpy, win, rect);
+        // Track the parent's size (Godot sends bounds after every layout change). Only resize
+        // when it differs: the ConfigureNotify then reports the parent's actual size.
+        if let Some((_, parent, _)) = parent_of(dpy, win) {
+            let (pw, ph) = size_of(dpy, parent);
+            if size_of(dpy, win) != (pw, ph) {
+                xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
+            }
+        }
+        xlib::XFlush(dpy);
+    }
+
+    pub unsafe fn unembed(dpy: Display, win: c_ulong, was_mapped: bool) {
+        let root = xlib::XDefaultRootWindow(dpy);
+        if was_mapped {
+            xlib::XUnmapWindow(dpy, win);
+        }
+        // Back under the WM: it must manage (and decorate) the window again.
+        set_override_redirect(dpy, win, false);
+        xlib::XReparentWindow(dpy, win, root, 100, 100);
+        // Unshaped, sized to the plugin's window again.
+        XShapeCombineMask(dpy, win, SHAPE_BOUNDING, 0, 0, 0, SHAPE_SET);
+        if let Some((_, _, kids)) = parent_of(dpy, win) {
+            if let Some(&kid) = kids.first() {
+                let (w, h) = size_of(dpy, kid);
+                xlib::XResizeWindow(dpy, win, w.max(1), h.max(1));
+            }
+            for kid in kids {
+                xlib::XMoveWindow(dpy, kid, 0, 0);
+            }
+        }
+        if was_mapped {
+            // Not override-redirect, so the WM picks it up (MapRequest) and decorates it again.
+            xlib::XMapRaised(dpy, win);
+        }
+        xlib::XSync(dpy, 0);
+        info!("unembedded 0x{:x}", win);
+    }
 }
 
 /// Create a simple winit window (plugin creates its own GL context if needed)
@@ -199,7 +472,16 @@ fn create_window(
 
     info!("✅ Window created");
 
-    Ok(WindowHolder { window })
+    Ok(WindowHolder {
+        window,
+        embedded: None,
+    })
+}
+
+enum EmbedOp {
+    Embed(String, u64, EmbedRect),
+    Bounds(String, EmbedRect),
+    Unembed(String),
 }
 
 /// Background thread function that runs winit event loop
@@ -225,6 +507,7 @@ fn run_window_thread(
     let mut pending_creates: Vec<(String, u32, u32, SyncSender<Option<u64>>)> = Vec::new();
     let mut pending_resizes: Vec<(String, u32, u32)> = Vec::new();
     let mut pending_destroys: Vec<String> = Vec::new();
+    let mut pending_embeds: Vec<EmbedOp> = Vec::new();
 
     #[allow(deprecated)]
     let result = event_loop.run(move |event, event_loop_target| {
@@ -255,6 +538,19 @@ fn run_window_thread(
                 }
                 WindowCommand::Destroy { process_key } => {
                     pending_destroys.push(process_key);
+                }
+                WindowCommand::Embed {
+                    process_key,
+                    parent_xid,
+                    rect,
+                } => {
+                    pending_embeds.push(EmbedOp::Embed(process_key, parent_xid, rect));
+                }
+                WindowCommand::Bounds { process_key, rect } => {
+                    pending_embeds.push(EmbedOp::Bounds(process_key, rect));
+                }
+                WindowCommand::Unembed { process_key } => {
+                    pending_embeds.push(EmbedOp::Unembed(process_key));
                 }
             }
         }
@@ -324,6 +620,13 @@ fn run_window_thread(
                 // Resize windows
                 for (process_key, width, height) in pending_resizes.drain(..) {
                     if let Some(window_holder) = windows.get(&process_key) {
+                        if window_holder.embedded.is_some() {
+                            info!(
+                                "🔄 Plugin {} wants {}x{}; embedded, host viewport unchanged",
+                                process_key, width, height
+                            );
+                            continue;
+                        }
                         info!(
                             "🔄 Resizing window: {} to {}x{}",
                             process_key, width, height
@@ -333,6 +636,60 @@ fn run_window_thread(
                             .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
                     } else {
                         error!("Cannot resize window {}: not found", process_key);
+                    }
+                }
+
+                // SPIKE: embed / bounds / unembed
+                if !pending_embeds.is_empty() {
+                    let dpy = match event_loop_target.display_handle().map(|h| h.as_raw()) {
+                        Ok(RawDisplayHandle::Xlib(h)) => h
+                            .display
+                            .map(|d| d.as_ptr() as x11_embed::Display)
+                            .unwrap_or(std::ptr::null_mut()),
+                        other => {
+                            error!("Embedding needs an Xlib display, got {:?}", other);
+                            std::ptr::null_mut()
+                        }
+                    };
+                    for op in pending_embeds.drain(..) {
+                        if dpy.is_null() {
+                            continue;
+                        }
+                        let key = match &op {
+                            EmbedOp::Embed(k, ..) | EmbedOp::Bounds(k, _) | EmbedOp::Unembed(k) => {
+                                k
+                            }
+                        };
+                        let Some(holder) = windows.get_mut(key) else {
+                            error!("Embed op for unknown window {}", key);
+                            continue;
+                        };
+                        let Some(xid) = x11_handle(&holder.window) else {
+                            continue;
+                        };
+                        let mapped = holder.window.is_visible().unwrap_or(false);
+                        unsafe {
+                            match op {
+                                EmbedOp::Embed(_, parent, rect) => {
+                                    // Only a mapped toplevel is WM-managed; an embedded window
+                                    // moves between parents without the WM's involvement.
+                                    let managed = mapped && holder.embedded.is_none();
+                                    x11_embed::embed(dpy, xid as _, parent as _, rect, managed);
+                                    holder.embedded = Some(rect);
+                                }
+                                EmbedOp::Bounds(_, rect) => {
+                                    if holder.embedded.is_some() {
+                                        x11_embed::apply_bounds(dpy, xid as _, rect);
+                                        holder.embedded = Some(rect);
+                                    }
+                                }
+                                EmbedOp::Unembed(_) => {
+                                    if holder.embedded.take().is_some() {
+                                        x11_embed::unembed(dpy, xid as _, mapped);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

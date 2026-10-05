@@ -16,6 +16,13 @@ var _views: Dictionary = {}
 var _guis: Dictionary = {}
 ## Devices whose popup view is still loading (open() awaited its ready signal)
 var _opening: Dictionary = {}
+## SPIKE: plugin GUI embedding (F9)
+var _spike := preload("res://devices/PluginEmbedSpike.gd").new()
+
+
+func _ready() -> void:
+	if not Utils.is_test_mode():
+		add_child(_spike)
 
 
 func is_open(dev: DeviceInstance) -> bool:
@@ -37,6 +44,7 @@ func open(dev: DeviceInstance) -> void:
 	if dev.device.has_gui():
 		_guis[dev] = true
 		dev.open_gui()
+		_spike.on_gui_opened(dev)
 		_watch(dev)
 		state_changed.emit(dev)
 		return
@@ -96,6 +104,7 @@ func close(dev: DeviceInstance) -> void:
 	if _guis.has(dev):
 		_guis.erase(dev)
 		_unwatch(dev)
+		_spike.before_close(dev)
 		dev.close_gui()
 		state_changed.emit(dev)
 		return
@@ -175,6 +184,7 @@ func _window_title(dev: DeviceInstance) -> String:
 
 func _on_plugin_gui_closed(dev: DeviceInstance) -> void:
 	logger.info("Plugin GUI closed notification received for %s" % dev.get_display_name())
+	_spike.on_gui_closed(dev)
 	_guis.erase(dev)
 	_unwatch(dev)
 	state_changed.emit(dev)
