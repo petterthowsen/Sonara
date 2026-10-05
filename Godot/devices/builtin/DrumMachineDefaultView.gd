@@ -4,28 +4,38 @@ class_name DrumMachineDefaultView extends DeviceView
 
 const ICON_HIDE_SLOT: Texture2D = preload("res://assets/icons/chevron-left.svg")
 
+const PAD_MENU_SCENE: PackedScene = preload("res://devices/container/DrumPadContextMenu.tscn")
 const PAGE_SIZE := 16
 const COLS := 4
 const FIRST_NOTE := 36
 
 @onready var _page_label: Label = $Pager/PageLabel
-@onready var _grid: GridContainer = $Grid
+@onready var _grid: GridContainer = $Body/Grid
+@onready var _strip: DrumPadStrip = $Body/PadStrip
 @onready var _prev_button: Button = $Pager/Prev
 @onready var _next_button: Button = $Pager/Next
 
 var _pads: Array[DrumPad] = []
+var _pad_menu: DrumPadContextMenu = null
 var _base_note: int = FIRST_NOTE
 ## Hides the open pad slot; visible while one is open.
 var _hide_slot_button: Button = null
 var _sounding_notes: Dictionary = {}
+## Pad selection (view state, not persisted). The primary pad is the one whose slot is open.
+var _selected_notes: Array[int] = []
+var _primary_note: int = -1
+## Notes that held a pad at the last rebuild, to tell a removed pad from an empty selected one.
+var _occupied: Dictionary = {}
+## True while a group move runs, so the intermediate rebuilds keep the (already shifted) selection.
+var _moving: bool = false
 ## Children whose slot_changed/loading_state_changed are connected. Kept so a child
 ## removed from the machine gets disconnected instead of dangling (see _sync_child_signals).
 var _tracked_children: Array[DeviceInstance] = []
 
 
-## Keep the pad grid usable beside the parameter list.
+## Keep the pad grid and the pad strip usable beside the parameter list.
 func _get_minimum_size() -> Vector2:
-	return Vector2(240, 220)
+	return Vector2(300, 220)
 
 
 ## Wire pager buttons and collect the scene pads.
@@ -82,9 +92,11 @@ func _on_unbind() -> void:
 			child.slot_changed.disconnect(_on_children_changed)
 		if child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.disconnect(_on_children_changed)
-		if child.choke_group_changed.is_connected(_on_children_changed):
-			child.choke_group_changed.disconnect(_on_children_changed)
+		if child.choke_targets_changed.is_connected(_on_children_changed):
+			child.choke_targets_changed.disconnect(_on_children_changed)
 	_tracked_children.clear()
+	if _strip:
+		_strip.unbind()
 
 
 ## Release any pads still held when the view is hidden.
@@ -129,6 +141,8 @@ func _rebuild() -> void:
 		for child in device.children:
 			by_note[child.slot_note] = child
 	var open_note := _open_note()
+	if not _moving:
+		_reconcile_selection(open_note, by_note)
 	if _hide_slot_button:
 		_hide_slot_button.visible = open_note >= 0
 	var end_note := mini(_base_note + PAGE_SIZE - 1, 127)
@@ -141,8 +155,48 @@ func _rebuild() -> void:
 		var note := _base_note + from_bottom * COLS + col
 		var child: DeviceInstance = by_note.get(note, null)
 		_pads[i].setup(note, child, device)
-		_pads[i].set_selected(note == open_note)
+		_pads[i].set_selected(_selected_notes.has(note), note == _primary_note)
+		_pads[i].co_selected = _selected_children(by_note)
 		_pads[i].tooltip_text = _pad_tooltip(child)
+		_pads[i].set_color_strip(device.slot_color(DeviceInstance.pad_slot_key(note)) if child else Color.TRANSPARENT)
+	_strip.bind_pad(device, by_note.get(_primary_note, null))
+
+
+## The open slot is the primary pad: follow it when it changes outside this view, and drop
+## selected pads whose device was removed.
+func _reconcile_selection(open_note: int, by_note: Dictionary) -> void:
+	if open_note >= 0 and not _selected_notes.has(open_note):
+		_selected_notes = [open_note]
+	if open_note >= 0:
+		_primary_note = open_note
+	elif _primary_note >= 0 and not _selected_notes.has(_primary_note):
+		_primary_note = -1
+	var kept: Array[int] = []
+	for n in _selected_notes:
+		if n == _primary_note or not _occupied.has(n) or by_note.has(n):
+			kept.append(n)
+	_selected_notes = kept
+	if _primary_note >= 0 and not _selected_notes.has(_primary_note):
+		_primary_note = -1
+	_occupied = by_note.duplicate()
+
+
+## Devices on the selected pads.
+func _selected_children(by_note: Dictionary) -> Array[DeviceInstance]:
+	var out: Array[DeviceInstance] = []
+	for n in _selected_notes:
+		if by_note.has(n):
+			out.append(by_note[n])
+	return out
+
+
+## Notes of the current selection (primary last-clicked).
+func selected_notes() -> Array[int]:
+	return _selected_notes.duplicate()
+
+
+func primary_note() -> int:
+	return _primary_note
 
 
 ## Keep slot/loading subscriptions exactly on the machine's current children, so a
@@ -157,8 +211,8 @@ func _sync_child_signals() -> void:
 				child.slot_changed.disconnect(_on_children_changed)
 			if child.loading_state_changed.is_connected(_on_children_changed):
 				child.loading_state_changed.disconnect(_on_children_changed)
-			if child.choke_group_changed.is_connected(_on_children_changed):
-				child.choke_group_changed.disconnect(_on_children_changed)
+			if child.choke_targets_changed.is_connected(_on_children_changed):
+				child.choke_targets_changed.disconnect(_on_children_changed)
 	_tracked_children.clear()
 	for child in current:
 		_tracked_children.append(child)
@@ -166,20 +220,53 @@ func _sync_child_signals() -> void:
 			child.slot_changed.connect(_on_children_changed)
 		if not child.loading_state_changed.is_connected(_on_children_changed):
 			child.loading_state_changed.connect(_on_children_changed)
-		if not child.choke_group_changed.is_connected(_on_children_changed):
-			child.choke_group_changed.connect(_on_children_changed)
+		if not child.choke_targets_changed.is_connected(_on_children_changed):
+			child.choke_targets_changed.connect(_on_children_changed)
 
 
-## Open the pad's slot in the device lane; an empty pad's slot takes drops onto its note.
-func _on_pad_activated(note: int) -> void:
-	if device:
-		device.set_slot_open(DeviceInstance.pad_slot_key(note), true)
+## Click selects the pad and opens its slot (an empty pad's slot takes drops onto its note).
+## Ctrl-click toggles it in the selection; shift-click selects the range from the primary pad.
+func _on_pad_activated(note: int, modifiers: int = 0) -> void:
+	if device == null:
+		return
+	var ctrl := (modifiers & (KEY_MASK_CTRL | KEY_MASK_META)) != 0
+	var shift := (modifiers & KEY_MASK_SHIFT) != 0
+	if shift and _primary_note >= 0:
+		_selected_notes.clear()
+		for n in range(mini(_primary_note, note), maxi(_primary_note, note) + 1):
+			_selected_notes.append(n)
+		_rebuild()
+		return
+	if ctrl:
+		if _selected_notes.has(note):
+			_selected_notes.erase(note)
+			if note == _primary_note:
+				_primary_note = _selected_notes.back() if not _selected_notes.is_empty() else -1
+				if _primary_note >= 0:
+					device.set_slot_open(DeviceInstance.pad_slot_key(_primary_note), true)
+			_rebuild()
+			return
+		_selected_notes.append(note)
+	else:
+		_selected_notes = [note]
+	_primary_note = note
+	device.set_slot_open(DeviceInstance.pad_slot_key(note), true)
+	# Opening an already-open slot emits nothing, so refresh the borders ourselves.
+	_rebuild()
 
 
 func _on_pad_context(note: int) -> void:
 	var child := _child_for_note(note)
-	if child:
-		child_context_menu_requested.emit(child)
+	if child == null:
+		return
+	# A right-click outside the selection selects that pad first.
+	if not _selected_notes.has(note):
+		_on_pad_activated(note, 0)
+	if _pad_menu == null:
+		_pad_menu = PAD_MENU_SCENE.instantiate()
+		add_child(_pad_menu)
+	_pad_menu.bind_to_pad(device, child)
+	_pad_menu.popup(Rect2i(Vector2i(get_global_mouse_position()), Vector2i(_pad_menu.get_contents_minimum_size())))
 
 
 ## Send a note-on to this drum machine's channel at the pad's click velocity.
@@ -209,6 +296,24 @@ func _release_all_sounding() -> void:
 func _on_pad_drop(note: int, data: Variant) -> void:
 	if device == null:
 		return
+	if DeviceDropUtil.is_group_drag(device, data):
+		var drag := data as DeviceDrag
+		var delta := note - drag.device.slot_note
+		if DeviceDropUtil.group_move_plan(device, drag.devices, delta).is_empty():
+			return
+		# The selection follows the moved pads; set it first, as the move rebuilds this view.
+		_moving = true
+		var shifted: Array[int] = []
+		for n in _selected_notes:
+			shifted.append(n + delta)
+		_selected_notes = shifted
+		if _primary_note >= 0:
+			_primary_note += delta
+		_occupied.clear()
+		DeviceDropUtil.drop_on_drum_pad(device.get_channel(), device, note, data)
+		_moving = false
+		_rebuild()
+		return
 	DeviceDropUtil.drop_on_drum_pad(device.get_channel(), device, note, data)
 	var child := _child_for_note(note)
 	if child:
@@ -226,11 +331,17 @@ func _child_for_note(note: int) -> DeviceInstance:
 	return null
 
 
-## Pad tooltip: the device name and, when set, its choke group.
+## Pad tooltip: the device name and, when set, the pads it chokes and the pads that choke it.
 func _pad_tooltip(child: DeviceInstance) -> String:
 	if child == null:
 		return ""
 	var text := child.get_display_name()
-	if child.choke_group > 0:
-		text += "\nChoke group %d" % child.choke_group
+	var names := func(pads: Array[DeviceInstance]) -> String:
+		return ", ".join(pads.map(func(p): return p.get_display_name()))
+	var chokes := device.choke_target_pads(child)
+	if not chokes.is_empty():
+		text += "\nChokes: " + names.call(chokes)
+	var choked_by := device.choked_by(child)
+	if not choked_by.is_empty():
+		text += "\nChoked by: " + names.call(choked_by)
 	return text

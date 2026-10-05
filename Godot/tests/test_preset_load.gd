@@ -108,7 +108,12 @@ func _test_slot_fields_survive() -> void:
 	ch.add_device(pad, -1, drum)
 	var slot: Object = drum.children[0]
 	slot.slot_note = 40
-	slot.choke_group = 3
+	slot.choke_targets = PackedStringArray(["0000000001"])
+	# A sibling pad that chokes this one must follow the replacement instance.
+	var other_pad: Object = _instance_script.new(_device("test.fx.pad2", _device_script.DeviceCategory.Effect), ch.id, -1)
+	ch.add_device(other_pad, -1, drum)
+	var sibling: Object = drum.children[1]
+	sibling.choke_targets = PackedStringArray([slot.id])
 	slot.slot_volume = 0.8
 	slot.slot_mute = true
 	slot.return_channel_id = 77
@@ -117,11 +122,13 @@ func _test_slot_fields_survive() -> void:
 	cmd.do()
 	var now: Object = drum.children[0]
 	_assert(now == fresh, "the slot chain is replaced")
-	_assert(now.slot_note == 40 and now.choke_group == 3, "pad note and choke group carry over")
+	_assert(now.slot_note == 40 and Array(now.choke_targets) == ["0000000001"], "pad note and choke targets carry over")
+	_assert(Array(sibling.choke_targets) == [fresh.id], "a sibling's choke target follows the new instance")
 	_assert(is_equal_approx(now.slot_volume, 0.8) and now.slot_mute, "slot mix carries over")
 	_assert(now.return_channel_id == 77, "the pad return id carries over")
 	cmd.undo()
 	_assert(drum.children[0] == slot and slot.slot_note == 40, "undo restores the old slot chain")
+	_assert(Array(sibling.choke_targets) == [slot.id], "undo points the sibling back at the old slot chain")
 
 
 func _test_preset_tracking() -> void:

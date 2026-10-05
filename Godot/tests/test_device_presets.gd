@@ -92,7 +92,7 @@ func _test_builtin_round_trip() -> void:
 	inst.name = "My Lead"
 	inst.slot_volume = 0.8
 	inst.slot_note = 36
-	inst.choke_group = 3
+	inst.choke_targets = PackedStringArray(["0000000001"])
 	inst.parameter_values[31] = 0.25
 	var mod = load("res://data/Modulator.gd").new()
 	mod.mod_id = 0
@@ -104,7 +104,7 @@ func _test_builtin_round_trip() -> void:
 	var preset: Object = _preset_script.capture_now(inst, "Warm Pad", "Peter", "Pad, Warm")
 	_assert(preset.device_id == "test.synth" and preset.device_name == "synth", "device id and name captured")
 	_assert(Array(preset.tags) == ["pad", "warm"], "tags stored normalized")
-	for key in ["name", "slot_volume", "slot_note", "choke_group", "id"]:
+	for key in ["name", "slot_volume", "slot_note", "choke_targets", "id"]:
 		_assert(not preset.device.has(key), "root field '%s' is dropped" % key)
 	var loaded := _roundtrip(preset)
 	_assert(loaded != null and loaded.name == "Warm Pad" and loaded.author == "Peter", "header survives JSON")
@@ -117,7 +117,7 @@ func _test_builtin_round_trip() -> void:
 	_assert(is_equal_approx(copy.parameter_values.get(31, -1.0), 0.25), "parameter values survive")
 	_assert(copy.modulators.size() == 1 and is_equal_approx(copy.modulators[0].get_route("param/31"), 0.4),
 		"modulators survive")
-	_assert(copy.slot_note == -1 and copy.choke_group == 0, "root slot fields are not carried")
+	_assert(copy.slot_note == -1 and copy.choke_targets.is_empty(), "root slot fields are not carried")
 	_assert(inst.name == "My Lead", "the source is untouched")
 
 
@@ -159,8 +159,9 @@ func _test_drum_machine() -> void:
 	for note in [36, 38]:
 		var pad: Object = _inst_script.new(_device("test.fx.pad%d" % note), ch.id, -1)
 		pad.slot_note = note
-		pad.choke_group = 2 if note == 38 else 0
 		add_cmd.new(ch, pad, -1, drum).do()
+	# The pad on 38 chokes the pad on 36; ids are refreshed in the preset, so compare by note.
+	drum.children[1].choke_targets = PackedStringArray([drum.children[0].id])
 	var preset: Object = _preset_script.capture_now(drum, "Kit")
 	var copy: Object = _roundtrip(preset).instantiate(ch.id)
 	_assert(copy != null and copy.children.size() == drum.children.size(), "pads survive")
@@ -170,14 +171,13 @@ func _test_drum_machine() -> void:
 	var chokes: Array = []
 	for slot in copy.children:
 		notes.append(slot.slot_note)
-		chokes.append(slot.choke_group)
+		chokes.append(copy.choke_target_pads(slot).map(func(p): return p.slot_note))
 	var src_notes: Array = []
-	var src_chokes: Array = []
 	for slot in drum.children:
 		src_notes.append(slot.slot_note)
-		src_chokes.append(slot.choke_group)
 	_assert(notes == src_notes, "pad notes survive: %s vs %s" % [notes, src_notes])
-	_assert(chokes == src_chokes, "choke groups survive: %s vs %s" % [chokes, src_chokes])
+	_assert(chokes == [[], [36]], "choke targets follow the fresh pad ids: %s" % [chokes])
+	_assert(copy.children[0].id != drum.children[0].id, "pad ids are fresh")
 
 
 func _test_clap_state_blob() -> void:

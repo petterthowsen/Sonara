@@ -37,7 +37,7 @@ const PHASE_INVERT := "phase_invert"
 const PLUGIN_NO_STATE := "plugin_no_state"
 const FILE_MISSING := "file_missing"
 const MODULATORS := "modulators"
-const DRUM_CHOKE_GROUP := "drum_choke_group"      # Drum Machine pad choke groups have no DAWproject mapping
+const DRUM_CHOKE := "drum_choke"                  # Drum Machine pad choke targets have no DAWproject mapping
 
 ## Text per kind. `{n}` is the count, `{detail}` the distinct details joined by ", ".
 const TEMPLATES: Dictionary = {
@@ -73,7 +73,7 @@ const TEMPLATES: Dictionary = {
 	PLUGIN_NO_STATE: "{detail} state could not be fetched, exported without it",
 	FILE_MISSING: "{detail}: referenced file not found, not embedded",
 	MODULATORS: "{detail}: modulators are kept only in Sonara's own state; other applications ignore them",
-	DRUM_CHOKE_GROUP: "{detail}: Drum Machine choke groups are kept only in Sonara's own state; other applications ignore them",
+	DRUM_CHOKE: "{detail}: Drum Machine choke targets are kept only in Sonara's own state; other applications ignore them",
 }
 
 var _entries: Array[Dictionary] = []

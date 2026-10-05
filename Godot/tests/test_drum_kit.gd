@@ -1,6 +1,6 @@
 # test_drum_kit.gd
 # Headless test for the Drum Machine "Synth Kit" preset (spec 013, Phase 4 wrap-up): five pads on
-# their GM notes, both hats in choke group 1, and the open hat ringing longer than the closed one.
+# their GM notes, the two hats choking each other, and the open hat ringing longer than the closed one.
 # Run: godot --headless --path Godot -s tests/test_drum_kit.gd -- --test
 #
 # DrumKit, DeviceInstance, Channel and Project reach autoloads, so they are loaded with load()
@@ -84,14 +84,18 @@ func _test_synth_kit() -> void:
 		return
 
 	var notes: Array = []
-	var groups: Array = []
 	var names: Array = []
 	for child in drum.children:
 		notes.append(child.slot_note)
-		groups.append(child.choke_group)
 		names.append(child.get_display_name())
 	_assert(notes == [36, 38, 39, 42, 46], "GM notes 36/38/39/42/46 (%s)" % [notes])
-	_assert(groups == [0, 0, 0, 1, 1], "both hats choke together (%s)" % [groups])
+	var closed_hat: Object = drum.children[3]
+	var open_hat: Object = drum.children[4]
+	_assert(Array(closed_hat.choke_targets) == [open_hat.id] and Array(open_hat.choke_targets) == [closed_hat.id],
+		"the hats choke each other (%s, %s)" % [closed_hat.choke_targets, open_hat.choke_targets])
+	for i in range(3):
+		_assert(drum.children[i].choke_targets.is_empty() and drum.choked_by(drum.children[i]).is_empty(),
+			"%s has no choke targets" % names[i])
 	_assert(names == ["Kick", "Snare", "Clap", "Closed Hat", "Open Hat"], "pad names (%s)" % [names])
 
 	# The two hats are the same device: the preset sets Decay so one is short and one rings.

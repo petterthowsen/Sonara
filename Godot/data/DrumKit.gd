@@ -1,6 +1,6 @@
 ## The Drum Machine's "Synth Kit" preset (spec 013, Phase 4 wrap-up): the four drum voices laid
-## out on their GM note numbers, with both hats in choke group 1 so a closed hat silences the
-## open one. The notes are the GM numbers, which are the same whatever the octave naming.
+## out on their GM note numbers, with the two hats choking each other so a closed hat silences
+## the open one. The notes are the GM numbers, which are the same whatever the octave naming.
 ##
 ## The two hats are the same device with different Decay, so the preset also sets that parameter:
 ## a kit of five identical hats would not play a pattern.
@@ -11,14 +11,15 @@ const DRUM_MACHINE_ID := "sonara.builtin.drum_machine"
 ## Hat Decay (parameters.rs ID 11).
 const HAT_DECAY := 11
 
-## One pad: `id` is the built-in device, `note` its GM note, `choke_group` 0 = none, `name` the
-## pad's display name and `decay` (optional) the drum's own Decay in seconds.
+## One pad: `id` is the built-in device, `note` its GM note, `name` the pad's display name,
+## `choke` (optional) the names of the kit pads it chokes and `decay` (optional) the drum's own
+## Decay in seconds.
 const SYNTH_KIT: Array[Dictionary] = [
-	{"id": "sonara.builtin.kick", "note": 36, "choke_group": 0, "name": "Kick"},
-	{"id": "sonara.builtin.snare", "note": 38, "choke_group": 0, "name": "Snare"},
-	{"id": "sonara.builtin.clap", "note": 39, "choke_group": 0, "name": "Clap"},
-	{"id": "sonara.builtin.hat", "note": 42, "choke_group": 1, "name": "Closed Hat", "decay": 0.06},
-	{"id": "sonara.builtin.hat", "note": 46, "choke_group": 1, "name": "Open Hat", "decay": 0.6},
+	{"id": "sonara.builtin.kick", "note": 36, "name": "Kick"},
+	{"id": "sonara.builtin.snare", "note": 38, "name": "Snare"},
+	{"id": "sonara.builtin.clap", "note": 39, "name": "Clap"},
+	{"id": "sonara.builtin.hat", "note": 42, "name": "Closed Hat", "choke": ["Open Hat"], "decay": 0.06},
+	{"id": "sonara.builtin.hat", "note": 46, "name": "Open Hat", "choke": ["Closed Hat"], "decay": 0.6},
 ]
 
 
@@ -42,6 +43,7 @@ static func apply(
 		registry = device_registry()
 
 	var cmds: Array[Command] = []
+	var entries: Array[Dictionary] = []
 	for entry in SYNTH_KIT:
 		var device: Device = registry.get_device(entry.id) if registry else null
 		if device == null:
@@ -49,18 +51,30 @@ static func apply(
 			continue
 		var inst := DeviceInstance.new(device, channel.id, -1)
 		inst.name = entry.name
-		# Both travel onto the slot chain the add wraps this in (see SlotChain.wrap_device).
+		# The note travels onto the slot chain the add wraps this in (see SlotChain.wrap_device).
 		inst.slot_note = entry.note
-		inst.choke_group = entry.choke_group
 		var cmd := DeviceAddCommand.new(channel, inst, -1, drum_machine)
 		cmds.append(cmd)
 		pads.append(cmd.device_instance)
+		entries.append(entry)
+
+	# Choke targets are pad ids, so resolve the kit's pad names once every slot chain exists. They
+	# are set before the add, so they reach the engine with the pads and undo with them.
+	var by_name := {}
+	for i in range(pads.size()):
+		by_name[entries[i].name] = pads[i]
+	for i in range(pads.size()):
+		var targets := PackedStringArray()
+		for target_name in entries[i].get("choke", []):
+			if by_name.has(target_name):
+				targets.append(by_name[target_name].id)
+		pads[i].choke_targets = targets
 
 	HistoryUtil.execute_many("Load Synth Kit", cmds)
 
 	# The pads exist now; set each drum's Decay (the open hat rings, the closed one doesn't).
 	for i in range(pads.size()):
-		var decay: float = SYNTH_KIT[i].get("decay", 0.0)
+		var decay: float = entries[i].get("decay", 0.0)
 		if decay > 0.0:
 			_set_real_param(pads[i], HAT_DECAY, decay)
 	return pads

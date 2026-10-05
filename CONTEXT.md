@@ -51,7 +51,9 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **Hit** — one trigger of a drum voice. A note-on starts a fresh voice (phase reset, so every hit sounds the same) while the previous voice fades out over 3 ms; note-off is ignored unless the drum has a gate mode.
 - **Punch** — a drum's pitch envelope (the Kick's and Snare's `Punch` and `Punch Time` controls): the body starts `Punch` semitones above its tune and falls to it over `Punch Time`. Rendered with `dsp::sweep_osc`.
 - **Keytrack root** — the note a keytracked drum plays at exactly its Tune (Kick C1/36, Snare D1/38); other notes transpose from it, so Tune means the same with Keytrack on or off.
-- **Choke group** — a Drum Machine pad group (1–8; 0 = none). A note-on in a group chokes every other pad in it, so a closed hat cuts an open one.
+- **Choke target** — a Drum Machine pad that another pad's note-on chokes, so a closed hat cuts an open one. Directed: a pad lists its own targets (ADR-0015).
+- **Choked by** — the pads that list a given pad as a choke target. Derived from the other pads' targets, never stored.
+- **Choke group** — retired (ADR-0012). Old projects' groups load as mutual choke targets.
 
 ## Modulation
 

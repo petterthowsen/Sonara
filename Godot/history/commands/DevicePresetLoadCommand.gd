@@ -48,6 +48,9 @@ func do() -> void:
 		channel.remove_device(idx, parent)
 	_pass_slot_return()
 	channel.add_device(new_device, position, parent)
+	# Sibling pads target pads by id, so point them at the new instance.
+	if parent != null:
+		parent.replace_choke_target_id(old_device.id, new_device.id)
 
 
 func undo() -> void:
@@ -55,6 +58,8 @@ func undo() -> void:
 		return
 	channel.remove_device_instance(new_device)
 	channel.add_device(old_device, position, parent)
+	if parent != null:
+		parent.replace_choke_target_id(new_device.id, old_device.id)
 
 
 ## Slot fields and the user's own name move to the new instance (first run only).
@@ -63,7 +68,7 @@ func _carry_context() -> void:
 	new_device.slot_mute = old_device.slot_mute
 	new_device.slot_solo = old_device.slot_solo
 	new_device.slot_note = old_device.slot_note
-	new_device.choke_group = old_device.choke_group
+	new_device.choke_targets = old_device.choke_targets.duplicate()
 	new_device.slot_note_map = old_device.slot_note_map.duplicate()
 	new_device.slot_separate_out = old_device.slot_separate_out
 	new_device.return_channel_id = old_device.return_channel_id

@@ -85,7 +85,7 @@ static func capture_now(inst: DeviceInstance, preset_name: String = "", preset_a
 	var data := inst.to_json()
 	DeviceInstance.refresh_ids_in_json(data, 0)
 	for key in ["name", "position", "slot_volume", "slot_mute", "slot_solo", "slot_note",
-			"choke_group", "slot_note_map", "slot_separate_out", "preset_name", "preset_path"]:
+			"choke_targets", "slot_note_map", "slot_separate_out", "preset_name", "preset_path"]:
 		data.erase(key)
 	_strip_open_slots(data)
 	preset.device = data

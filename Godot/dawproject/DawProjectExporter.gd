@@ -371,13 +371,13 @@ func _write_device(inst: Object) -> void:
 		state_bytes = JSON.stringify(_embed_files_in(inst.to_json()), "\t").to_utf8_buffer()
 		if not inst.modulators.is_empty():
 			_report.add(TransferReport.MODULATORS, inst.get_display_name(), "%s (%d modulators)" % [dev.name, inst.modulators.size()])
-		# Choke groups live only in a Drum Machine's Sonara state; DAWproject has no mapping.
+		# Choke targets live only in a Drum Machine's Sonara state; DAWproject has no mapping.
 		var choked := 0
 		for child in inst.children:
-			if int(child.choke_group) > 0:
+			if not inst.choke_target_pads(child).is_empty():
 				choked += 1
 		if choked > 0:
-			_report.add(TransferReport.DRUM_CHOKE_GROUP, inst.get_display_name(), "%s (%d pads)" % [dev.name, choked])
+			_report.add(TransferReport.DRUM_CHOKE, inst.get_display_name(), "%s (%d pads)" % [dev.name, choked])
 	_w.open("ClapPlugin" if is_clap else "BuiltinDevice", attrs)
 	_w.open("Parameters")
 	for param_id in _device_params.get(inst.id, []):

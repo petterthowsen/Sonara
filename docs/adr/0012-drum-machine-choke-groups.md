@@ -1,6 +1,7 @@
 # 0012 — Drum Machine choke groups
 
-Status: accepted
+Status: superseded by 0015 (choke targets). The `choke(frame_offset)` seam and the 3 ms fade
+still apply; only the group model was replaced.
 
 ## Context
 

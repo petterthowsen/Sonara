@@ -519,8 +519,11 @@ static func can_drop_on_drum_pad(
 	data: Variant,
 	occupied: DeviceInstance,
 	channel: Channel = null,
-	container: DeviceInstance = null
+	container: DeviceInstance = null,
+	note := -1
 ) -> bool:
+	if container != null and note >= 0 and is_group_drag(container, data):
+		return not group_move_plan(container, (data as DeviceDrag).devices, note - (data as DeviceDrag).device.slot_note).is_empty()
 	data = DeviceDrag.unwrap(data)
 	if data is DeviceInstance:
 		var inst := data as DeviceInstance
@@ -551,6 +554,10 @@ static func drop_on_drum_pad(
 ) -> void:
 	if channel == null or container == null:
 		return
+	if is_group_drag(container, data):
+		var drag := data as DeviceDrag
+		move_drum_pads(container, drag.devices, note - drag.device.slot_note)
+		return
 	data = DeviceDrag.unwrap(data)
 	var occupied := _child_for_note(container, note)
 	if data is DeviceInstance:
@@ -577,6 +584,52 @@ static func drop_on_drum_pad(
 		return
 	device_instance.slot_note = note
 	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1, container))
+
+
+## True when `data` drags several pads of `container` together.
+static func is_group_drag(container: DeviceInstance, data: Variant) -> bool:
+	if not data is DeviceDrag:
+		return false
+	var drag := data as DeviceDrag
+	if drag.devices.size() < 2 or drag.device == null:
+		return false
+	for d in drag.devices:
+		if d.get_parent_device() != container:
+			return false
+	return true
+
+
+## Pads of `container` moved together by `delta` notes, in an order that never puts two on one
+## note. Empty when the move is refused: no shift, a destination outside 0-127, or a destination
+## held by a pad that is not part of the move.
+static func group_move_plan(container: DeviceInstance, moving: Array[DeviceInstance], delta: int) -> Array[DeviceInstance]:
+	var plan: Array[DeviceInstance] = []
+	if container == null or delta == 0 or moving.is_empty():
+		return plan
+	for pad in moving:
+		var target := pad.slot_note + delta
+		if target < 0 or target > 127:
+			return plan
+		var holder := _child_for_note(container, target)
+		if holder != null and not moving.has(holder):
+			return plan
+	plan.append_array(moving)
+	# Moving up, the highest pad goes first so its destination is already free; down is the reverse.
+	plan.sort_custom(func(a: DeviceInstance, b: DeviceInstance) -> bool:
+		return a.slot_note > b.slot_note if delta > 0 else a.slot_note < b.slot_note)
+	return plan
+
+
+## Move `moving` pads by `delta` notes as one undo step (see group_move_plan). False if refused.
+static func move_drum_pads(container: DeviceInstance, moving: Array[DeviceInstance], delta: int) -> bool:
+	var plan := group_move_plan(container, moving, delta)
+	if plan.is_empty():
+		return false
+	var cmds: Array[Command] = []
+	for pad in plan:
+		cmds.append(PropertyCommand.new("Move Drum Pad", pad, "set_slot_note", pad.slot_note, pad.slot_note + delta))
+	HistoryUtil.execute(MacroCommand.new("Move Drum Pads", cmds))
+	return true
 
 
 ## Move `inst` onto `note`. A pad moved onto another pad swaps notes with it; a device joins the

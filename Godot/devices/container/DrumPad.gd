@@ -5,7 +5,8 @@ class_name DrumPad extends PanelContainer
 const VELOCITY_Y_LOW := 0.20
 const VELOCITY_Y_HIGH := 0.80
 
-signal activated(note: int)
+## `modifiers` is the click's key mask (KEY_MASK_CTRL / KEY_MASK_SHIFT); the view decides what it means.
+signal activated(note: int, modifiers: int)
 signal triggered(note: int, velocity: int)
 signal released(note: int)
 signal drop_requested(note: int, data: Variant)
@@ -18,22 +19,43 @@ var container: DeviceInstance = null
 
 @onready var _note_label: Label = $VBox/Note
 @onready var _name_label: Label = $VBox/Name
+## Pad chrome: dark gray fill, 1 px light gray border; selection uses DevicePanel's border color.
+const FILL_EMPTY := Color(0.10, 0.10, 0.11)
+const FILL_FILLED := Color(0.17, 0.17, 0.18)
+const FILL_HIT := Color(0.34, 0.34, 0.36)
+const BORDER_IDLE := Color(0.55, 0.55, 0.57)
+const CORNER_RADIUS := 2
+const COLOR_STRIP_HEIGHT := 3.0
+
 var _idle_style: StyleBoxFlat = null
 var _filled_style: StyleBoxFlat = null
 var _selected_style: StyleBoxFlat = null
 var _hit_style: StyleBoxFlat = null
 var _selected: bool = false
+var _strip: Control = null
+var _strip_color := Color.TRANSPARENT
 var _pressed: bool = false
 var _sounding: bool = false
 var _drag_started: bool = false
+var _primary: bool = false
+var _primary_style: StyleBoxFlat = null
+var _press_modifiers: int = 0
+## Pads of the selection this pad drags along with when it is part of it (set by the view).
+var co_selected: Array[DeviceInstance] = []
 
 
 ## Apply pad chrome once the scene labels are ready.
 func _ready() -> void:
-	_idle_style = _make_style(Color(0.14, 0.14, 0.16, 0.95))
-	_filled_style = _make_style(Color(0.2, 0.24, 0.3, 0.98))
-	_selected_style = _make_style(Color(0.32, 0.42, 0.55, 1.0))
-	_hit_style = _make_style(Color(0.45, 0.58, 0.72, 1.0))
+	_idle_style = _make_style(FILL_EMPTY)
+	_filled_style = _make_style(FILL_FILLED)
+	_selected_style = _make_style(FILL_FILLED, DevicePanel.BORDER_COLOR_SELECTED, DevicePanel.BORDER_WIDTH_SELECTED)
+	_hit_style = _make_style(FILL_HIT)
+	_primary_style = _make_style(FILL_FILLED, Color.WHITE, DevicePanel.BORDER_WIDTH_SELECTED)
+	# The color strip is an overlay child so it draws above the panel stylebox.
+	_strip = Control.new()
+	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_strip.draw.connect(_draw_strip)
+	add_child(_strip)
 	add_theme_stylebox_override("panel", _idle_style)
 	# Pads take device drops themselves; the device lane shows no insert target over them.
 	add_to_group(DeviceDropTarget.OWN_DROPS_GROUP)
@@ -51,10 +73,23 @@ func setup(p_note: int, p_child: DeviceInstance, p_container: DeviceInstance = n
 		_refresh()
 
 
-## Highlight when this pad's child is shown in the folder.
-func set_selected(on: bool) -> void:
+## Selected pads get the light border; the primary pad (the one whose slot is open) a white one.
+func set_selected(on: bool, primary := false) -> void:
 	_selected = on
+	_primary = on and primary
 	_apply_style()
+
+
+## Slot color shown as a thin strip along the top edge (alpha 0 = none).
+func set_color_strip(color: Color) -> void:
+	_strip_color = color
+	if _strip:
+		_strip.queue_redraw()
+
+
+func _draw_strip() -> void:
+	if _strip_color.a > 0.0:
+		_strip.draw_rect(Rect2(1, 1, _strip.size.x - 2, COLOR_STRIP_HEIGHT), _strip_color)
 
 
 ## Update labels and fill style from the bound child.
@@ -79,6 +114,8 @@ func _apply_style() -> void:
 	var style := _idle_style
 	if _sounding:
 		style = _hit_style
+	elif _primary:
+		style = _primary_style
 	elif _selected:
 		style = _selected_style
 	elif child:
@@ -87,11 +124,13 @@ func _apply_style() -> void:
 		add_theme_stylebox_override("panel", style)
 
 
-## Build a rounded pad background.
-func _make_style(color: Color) -> StyleBoxFlat:
+## Build a pad background with a border.
+func _make_style(color: Color, border: Color = BORDER_IDLE, border_width := 1) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = color
-	box.set_corner_radius_all(4)
+	box.border_color = border
+	box.set_border_width_all(border_width)
+	box.set_corner_radius_all(CORNER_RADIUS)
 	box.set_content_margin_all(4)
 	return box
 
@@ -119,11 +158,12 @@ func _gui_input(event: InputEvent) -> void:
 		if mb.pressed:
 			_pressed = true
 			_drag_started = false
+			_press_modifiers = mb.get_modifiers_mask() & (KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_MASK_META)
 			_start_preview(mb.position.y)
 		else:
 			_stop_preview()
 			if _pressed and not _drag_started:
-				activated.emit(note)
+				activated.emit(note, _press_modifiers)
 			_pressed = false
 
 
@@ -171,18 +211,23 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 		return null
 	_drag_started = true
 	_stop_preview()
-	var preview := _make_drag_preview()
+	var moving: Array[DeviceInstance] = []
+	if _selected and co_selected.size() > 1 and co_selected.has(child):
+		moving.append_array(co_selected)
+	var preview := _make_drag_preview(moving.size() - 1)
 	set_drag_preview(preview)
-	return DeviceDrag.new(self, child, preview)
+	return DeviceDrag.new(self, child, preview, moving)
 
 
 ## Preview shown while dragging a pad's device.
-func _make_drag_preview() -> Control:
+func _make_drag_preview(extra := 0) -> Control:
 	var preview := PanelContainer.new()
 	var label := Label.new()
 	label.text = child.get_display_name() if child else Midi.midi_to_note_name(note)
+	if extra > 0:
+		label.text += "  +%d" % extra
 	label.add_theme_font_size_override("font_size", 12)
-	preview.add_theme_stylebox_override("panel", _make_style(Color(0.2, 0.24, 0.3, 0.95)))
+	preview.add_theme_stylebox_override("panel", _make_style(FILL_FILLED))
 	preview.add_child(label)
 	return preview
 
@@ -191,7 +236,7 @@ func _make_drag_preview() -> Control:
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	var inst := container if container else child
 	var channel := inst.get_channel() if inst else null
-	return DeviceDropUtil.can_drop_on_drum_pad(data, child, channel, container)
+	return DeviceDropUtil.can_drop_on_drum_pad(data, child, channel, container, note)
 
 
 ## Forward the drop to DrumMachineDefaultView, which applies it and focuses the pad.

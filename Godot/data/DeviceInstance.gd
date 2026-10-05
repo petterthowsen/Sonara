@@ -25,8 +25,8 @@ signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
 signal child_moved(from_position: int, to_position: int)
 signal slot_changed()
-## A Drum Machine pad's choke group changed (0 = none, 1–8). See "DRUM CHOKE GROUPS".
-signal choke_group_changed(group: int)
+## A Drum Machine pad's choke targets changed (sibling pad ids). See "DRUM CHOKE TARGETS".
+signal choke_targets_changed()
 ## A container slot opened, closed or changed color (see "CONTAINER SLOTS").
 signal slots_changed()
 signal name_changed(new_name: String)
@@ -92,9 +92,13 @@ var slot_separate_out: bool = false
 ## MIDI note for a Drum Machine child (-1 = unset, engine assigns).
 var slot_note: int = -1
 
-## Choke group for a Drum Machine pad (0 = none, 1–8): a note-on in a group chokes every other
-## pad in it. Lives on the pad's own instance; see "DRUM CHOKE GROUPS".
-var choke_group: int = 0
+## Choke targets for a Drum Machine pad: the `id`s of sibling pads a note-on here chokes
+## (directed, ADR 0015). Lives on the pad's own instance; see "DRUM CHOKE TARGETS".
+var choke_targets: PackedStringArray = PackedStringArray()
+
+## Legacy choke group (0 = none) read from a project saved before choke targets; the Drum Machine
+## turns it into mutual targets after loading its pads (`_migrate_choke_groups`), then clears it.
+var _legacy_choke_group: int = 0
 
 ## Container slots: color per slot key (random on first use) and the keys shown in the device lane.
 ## Saved with the project; see "CONTAINER SLOTS".
@@ -287,6 +291,7 @@ func _init(p_device: Device, p_channel_id: int, p_position: int, p_active: bool 
 	_seed_default_modulators()
 	child_moved.connect(_on_own_children_moved)
 	child_removed.connect(_on_own_children_removed)
+	child_added.connect(_on_own_child_added)
 	Multiband.ensure_chains(self)
 
 
@@ -944,6 +949,15 @@ func _on_own_children_removed(position: int, _device_id: String) -> void:
 	while owner != null:
 		owner._remap_routes_for_removal(self, position)
 		owner = owner.get_parent_device()
+	# A removed pad's note must leave every mask; its id stays in the targets so undo restores it.
+	if _is_drum_machine():
+		resend_choke_masks()
+
+
+## A pad that comes back (undo of a removal) may be the target of its siblings.
+func _on_own_child_added(_child: DeviceInstance, _position: int) -> void:
+	if _is_drum_machine():
+		resend_choke_masks()
 
 
 ## Relative index path from this device to `descendant` ([] when it is this device, null when it
@@ -1831,11 +1845,6 @@ func sync_to_engine() -> void:
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [idx])
 		else:
 			AudioEngineOSC.send(osc_addr("param/%d" % param_id), [normalized_value])
-	# A Drum Machine pad re-sends its choke group so a reload restores it (the note itself goes
-	# through sync_slot_to_engine() in the device-tree walk).
-	var choke_addr := _drum_pad_addr("choke")
-	if choke_addr != "":
-		AudioEngineOSC.send(choke_addr, [choke_group])
 
 
 ## Sync a single parameter to the audio engine
@@ -1904,9 +1913,10 @@ func sync_slot_to_engine() -> void:
 			_send_layer_slot(action)
 	elif parent.device.device_id == "sonara.builtin.drum_machine" and slot_note >= 0:
 		AudioEngineOSC.send(parent.osc_addr("slot/%d/note" % position), [slot_note])
+		_send_choke_targets()
 
 
-## OSC address for a control (`note`, `choke`) on this Drum Machine pad, or "" when this
+## OSC address for a control (`note`, `choke_targets`) on this Drum Machine pad, or "" when this
 ## instance is not a pad (its parent is not a Drum Machine, or it has no note yet).
 func _drum_pad_addr(action: String) -> String:
 	var parent := get_parent_device()
@@ -1994,18 +2004,130 @@ func audition_slot(note: int, velocity: int, is_note_on: bool) -> void:
 
 ## Assign the MIDI note this Drum Machine child responds to.
 func set_slot_note(note: int) -> void:
+	var old_note := slot_note
 	slot_note = clampi(note, 0, 127)
+	var parent := get_parent_device()
+	if parent != null and parent._is_drum_machine():
+		parent._rekey_pad_slot(old_note, slot_note)
 	sync_slot_to_engine()
+	# Masks are note-based, so every pad that targets this one needs its new note.
+	if parent != null and parent._is_drum_machine() and old_note != slot_note:
+		parent.resend_choke_masks()
 	slot_changed.emit()
 
 
-## Set this Drum Machine pad's choke group (0 = none, 1–8) and tell the engine.
-func set_choke_group(group: int) -> void:
-	choke_group = clampi(group, 0, 8)
-	var addr := _drum_pad_addr("choke")
+## A pad's slot key is note-based, so moving the pad carries its color and open state to the new key.
+func _rekey_pad_slot(old_note: int, new_note: int) -> void:
+	if old_note == new_note or old_note < 0:
+		return
+	var old_key := pad_slot_key(old_note)
+	var new_key := pad_slot_key(new_note)
+	if _slot_colors.has(old_key):
+		_slot_colors[new_key] = _slot_colors[old_key]
+		_slot_colors.erase(old_key)
+	var open_at := _open_slots.find(old_key)
+	if open_at >= 0:
+		_open_slots.remove_at(open_at)
+		if not _open_slots.has(new_key):
+			_open_slots.append(new_key)
+
+
+## ============================================================================
+## DRUM CHOKE TARGETS
+## ============================================================================
+## Each pad stores the ids of the sibling pads its note-on chokes; "choked by" is derived from the
+## siblings (ADR 0015). The engine gets a 128-bit note mask per pad, so every mask is re-sent
+## whenever a pad's note changes or a pad is added or removed.
+
+## Replace this pad's choke targets (sibling ids; its own id and duplicates are dropped).
+func set_choke_targets(ids: PackedStringArray) -> void:
+	var clean := PackedStringArray()
+	for target_id in ids:
+		if target_id != id and not clean.has(target_id):
+			clean.append(target_id)
+	if clean == choke_targets:
+		return
+	choke_targets = clean
+	_send_choke_targets()
+	choke_targets_changed.emit()
+
+
+## Add or remove `target_id` from this pad's choke targets, as one undo step.
+func toggle_choke_target(target_id: String, on: bool) -> void:
+	if target_id == id or choke_targets.has(target_id) == on:
+		return
+	var next := choke_targets.duplicate()
+	if on:
+		next.append(target_id)
+	else:
+		next.remove_at(next.find(target_id))
+	HistoryUtil.execute_property("Set Choke Target", self, "set_choke_targets", choke_targets.duplicate(), next)
+
+
+## Sibling pads that choke `child` (its "choked by" list), in pad order.
+func choked_by(child: DeviceInstance) -> Array[DeviceInstance]:
+	var out: Array[DeviceInstance] = []
+	for other in children:
+		if other != child and other.choke_targets.has(child.id):
+			out.append(other)
+	return out
+
+
+## Sibling pads `child` chokes, in pad order (stale ids of removed pads are skipped).
+func choke_target_pads(child: DeviceInstance) -> Array[DeviceInstance]:
+	var out: Array[DeviceInstance] = []
+	for other in children:
+		if other != child and child.choke_targets.has(other.id):
+			out.append(other)
+	return out
+
+
+## `child`'s choke targets as the engine's 16-byte little-endian note mask (bit k = note k).
+func choke_mask_for(child: DeviceInstance) -> PackedByteArray:
+	var mask := PackedByteArray()
+	mask.resize(16)
+	for other in choke_target_pads(child):
+		if other.slot_note >= 0 and other.slot_note <= 127:
+			mask[other.slot_note >> 3] |= 1 << (other.slot_note & 7)
+	return mask
+
+
+## Send every pad's choke mask (Drum Machine only).
+func resend_choke_masks() -> void:
+	if not _is_drum_machine():
+		return
+	for child in children:
+		child._send_choke_targets()
+
+
+## Send this pad's choke mask (no-op unless it is a Drum Machine pad with a note).
+func _send_choke_targets() -> void:
+	var addr := _drum_pad_addr("choke_targets")
 	if addr != "":
-		AudioEngineOSC.send(addr, [choke_group])
-	choke_group_changed.emit(choke_group)
+		AudioEngineOSC.send(addr, [get_parent_device().choke_mask_for(self)])
+
+
+## Point every pad that targets `old_id` at `new_id` instead (a pad replaced by another instance).
+func replace_choke_target_id(old_id: String, new_id: String) -> void:
+	for child in children:
+		var at := child.choke_targets.find(old_id)
+		if at >= 0:
+			var next := child.choke_targets.duplicate()
+			next[at] = new_id
+			child.set_choke_targets(next)
+
+
+## Projects saved with choke groups: give each pad in a group every other member as a target.
+func _migrate_choke_groups() -> void:
+	for child in children:
+		if child._legacy_choke_group <= 0:
+			continue
+		for other in children:
+			if other != child and other._legacy_choke_group == child._legacy_choke_group \
+					and not child.choke_targets.has(other.id):
+				child.choke_targets.append(other.id)
+	for child in children:
+		child._legacy_choke_group = 0
 
 
 ## Next unused pad note from C1 upward (Drum Machine containers only).
@@ -2036,6 +2158,15 @@ func set_preset(p_name: String, p_path: String = "") -> void:
 	preset_changed.emit()
 
 
+## Choke targets to save: inside a Drum Machine only the ids of current siblings (a removed pad's
+## id is kept in memory for undo, but not saved).
+func _choke_targets_to_json() -> Array:
+	var parent := get_parent_device()
+	if parent == null:
+		return Array(choke_targets)
+	return parent.choke_target_pads(self).map(func(p): return p.id)
+
+
 ## Serialize to JSON
 func to_json() -> Dictionary:
 	var data := {
@@ -2053,7 +2184,7 @@ func to_json() -> Dictionary:
 		"slot_mute": slot_mute,
 		"slot_solo": slot_solo,
 		"slot_note": slot_note,
-		"choke_group": choke_group,
+		"choke_targets": _choke_targets_to_json(),
 		"slot_separate_out": slot_separate_out,
 		"return_channel_id": return_channel_id,
 		"return_channel_ids": return_channel_ids.duplicate(),
@@ -2111,9 +2242,22 @@ static func refresh_ids_in_json(device_data: Dictionary, channel_id: int) -> voi
 	device_data["channel_id"] = channel_id
 	device_data["return_channel_id"] = -1
 	device_data["return_channel_ids"] = []
+	# Children get fresh ids right away so sibling references (pad choke targets) can follow them.
+	var new_ids := {}
 	for child_data in device_data.get("children", []):
 		if child_data is Dictionary:
+			var old_id := str(child_data.get("id", ""))
 			refresh_ids_in_json(child_data, channel_id)
+			child_data["id"] = str(randi_range(0, 2147483647)).pad_zeros(10)
+			if not old_id.is_empty():
+				new_ids[old_id] = child_data["id"]
+	for child_data in device_data.get("children", []):
+		if child_data is Dictionary and child_data.has("choke_targets"):
+			var targets: Array = []
+			for target_id in child_data["choke_targets"]:
+				if new_ids.has(str(target_id)):
+					targets.append(new_ids[str(target_id)])
+			child_data["choke_targets"] = targets
 
 
 ## Ask every loaded CLAP plugin under `roots` for its current state so `to_json()` saves it. Waits
@@ -2211,7 +2355,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.slot_mute = bool(data.get("slot_mute", false))
 	instance.slot_solo = bool(data.get("slot_solo", false))
 	instance.slot_note = int(data.get("slot_note", -1))
-	instance.choke_group = clampi(int(data.get("choke_group", 0)), 0, 8)
+	instance.choke_targets = PackedStringArray(Array(data.get("choke_targets", [])).map(func(t): return str(t)))
+	instance._legacy_choke_group = clampi(int(data.get("choke_group", 0)), 0, 8)
 	instance.slot_note_map = LayerNoteMap.from_json(data.get("slot_note_map", null))
 	instance.slot_separate_out = bool(data.get("slot_separate_out", false))
 	instance.return_channel_id = int(data.get("return_channel_id", -1))
@@ -2232,6 +2377,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 				instance.children.append(child)
 	instance._slots_from_json(data.get("slots", {}))
 	instance._wrap_slot_children()
+	if instance._is_drum_machine():
+		instance._migrate_choke_groups()
 	Multiband.ensure_chains(instance)  # a Multiband FX saved with fewer than six bands
 
 	return instance

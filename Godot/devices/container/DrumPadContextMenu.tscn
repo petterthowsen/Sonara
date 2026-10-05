@@ -1,0 +1,54 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://devices/container/DrumPadContextMenu.gd" id="1_pad"]
+[ext_resource type="PackedScene" uid="uid://cpgs8hy6ujmxj" path="res://components/SmartLineEdit.tscn" id="2_edit"]
+
+[node name="DrumPadContextMenu" type="PopupPanel"]
+theme_type_variation = &"ContextMenu"
+oversampling_override = 1.0
+script = ExtResource("1_pad")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 192.0
+offset_bottom = 120.0
+theme_override_constants/separation = 2
+
+[node name="Header" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="ColorPicker" type="ColorPickerButton" parent="VBoxContainer/Header"]
+custom_minimum_size = Vector2(28, 28)
+layout_mode = 2
+edit_alpha = false
+edit_intensity = false
+
+[node name="Label" parent="VBoxContainer/Header" instance=ExtResource("2_edit")]
+custom_minimum_size = Vector2(120, 22)
+layout_mode = 2
+size_flags_horizontal = 3
+value_type = 1
+display_format = "%s"
+
+[node name="Separator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="ChokeTargets" type="MenuButton" parent="VBoxContainer"]
+layout_mode = 2
+tooltip_text = "Pads that go silent when this pad is hit"
+text = "Choke targets ▸"
+alignment = 0
+
+[node name="ChokedBy" type="MenuButton" parent="VBoxContainer"]
+layout_mode = 2
+tooltip_text = "Pads that silence this pad when they are hit"
+text = "Choked by ▸"
+alignment = 0
+
+[node name="Separator2" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="Remove" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Remove Pad"

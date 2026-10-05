@@ -540,6 +540,8 @@ func bind_to_device(dev : DeviceInstance):
 
 	if not is_node_ready():
 		await ready
+		if device != dev:
+			return
 	device_light.bind_to_device_instance(dev)
 	name_label.text = dev.get_display_name()
 	vertical_name_label.text = dev.get_display_name()
@@ -579,6 +581,8 @@ func bind_to_device(dev : DeviceInstance):
 	# Panel view of its own still gets one when it qualifies for the generated Simple View.
 	if dev.device.has_panel_view() or dev.device.uses_simple_view(dev.get_parameters()):
 		await _load_panel_view(dev)
+		if device != dev or not is_inside_tree():
+			return
 		_show_right_pane_current()
 	else:
 		_clear_panel_and_companion()
@@ -639,7 +643,10 @@ func _refresh_panel_view_for_params() -> void:
 		return
 	_update_view_toggle_visibility()
 	if _panel_view == null and (device.device.has_panel_view() or device.device.uses_simple_view(device.get_parameters())):
-		await _load_panel_view(device)
+		var dev := device
+		await _load_panel_view(dev)
+		if device != dev or not is_inside_tree():
+			return
 		_show_right_pane_current()
 	_update_view_pane_visibility()
 	_apply_default_tab()
@@ -801,6 +808,8 @@ func _on_view_toggled(_pressed: bool) -> void:
 
 ## The View pane shows when toggled on and a Panel or Companion view is loaded.
 func _update_view_pane_visibility() -> void:
+	if not is_node_ready():
+		return
 	var has_view := _panel_view != null or _companion_view != null
 	if has_view:
 		_animate_pane(view_pane, view_button.button_pressed)

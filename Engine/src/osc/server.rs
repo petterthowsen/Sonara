@@ -687,21 +687,22 @@ impl OscServer {
                     }
                 }
             }
-            ["slot", slot_str, "choke"] => {
-                if let Ok(slot) = slot_str.parse::<usize>() {
-                    let group = match args.first() {
-                        Some(OscType::Int(g)) => Some(*g as u8),
-                        Some(OscType::Float(g)) => Some(*g as u8),
-                        _ => None,
-                    };
-                    if let Some(group) = group {
-                        command_tx.send(AudioCommand::SetDrumSlotChoke {
+            ["slot", slot_str, "choke_targets"] => {
+                match (slot_str.parse::<usize>(), args.first()) {
+                    (Ok(slot), Some(OscType::Blob(bytes))) if bytes.len() == 16 => {
+                        let mut le = [0u8; 16];
+                        le.copy_from_slice(bytes);
+                        command_tx.send(AudioCommand::SetDrumSlotChokeTargets {
                             channel_id,
                             device_path,
                             slot,
-                            group,
+                            mask: u128::from_le_bytes(le),
                         })?;
                     }
+                    _ => warn!(
+                        "Drum choke_targets on channel {} path {} slot {} needs a 16-byte blob",
+                        channel_id, device_path, slot_str
+                    ),
                 }
             }
             _ => {

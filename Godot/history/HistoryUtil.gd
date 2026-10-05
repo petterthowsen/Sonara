@@ -16,9 +16,12 @@ static func execute(cmd: Command) -> void:
 		Sonara.editor.execute_command(cmd)
 	else:
 		cmd.do()
+		if test_recorder.is_valid():
+			test_recorder.call(cmd)
 
 
-## Headless tests have no Editor to record into: set this to receive the commands instead.
+## Headless tests have no Editor to record into: set this to receive the commands instead
+## (record) or as well (execute, after the command ran).
 static var test_recorder: Callable = Callable()
 
 

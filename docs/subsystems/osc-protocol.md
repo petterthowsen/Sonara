@@ -199,7 +199,7 @@ Top-level device addresses are unchanged. Nested devices (inside Chain/Layer) in
 | `/channel/{id}/device/{path}/slot/{n}/mute` | `i:0_or_1` | Layer slot mute |
 | `/channel/{id}/device/{path}/slot/{n}/solo` | `i:0_or_1` | Layer slot solo (any solo mutes non-soloed slots) |
 | `/channel/{id}/device/{path}/slot/{n}/note` | `i:midi` | Drum Machine: MIDI note that triggers child `n` |
-| `/channel/{id}/device/{path}/slot/{n}/choke` | `i:group` | Drum Machine: choke group of child `n` (0 = none, 1–8). A note-on on a slot chokes the other slots in the same non-zero group; out-of-range is logged and ignored |
+| `/channel/{id}/device/{path}/slot/{n}/choke_targets` | `b:16_bytes` | Drum Machine: choke targets of child `n` as a little-endian `u128` note mask (bit *k* = the slot on note *k*). A note-on on the slot chokes every other slot whose note bit is set; its own bit is ignored. Any other length is logged and ignored |
 | `/channel/{id}/device/{path}/slot/{n}/note_map` | `b:128_bytes` | Layer slot note map: byte *k* = output note for input note *k*, 255 = slot ignores it. Identity = the full map (default). Any other length is logged and ignored |
 | `/channel/{id}/device/{path}/slot/{n}/separate_out` | `i:0_or_1` | Layer slot audio goes to extra bus *n* (its return channel, see `/channel/{id}/aux_out`) instead of the Layer output. Only when the Layer is the channel's first device |
 | `/channel/{id}/device/{path}/slot/{n}/audition` | `i:note, i:velocity, i:on` | Play a note on Layer slot `n` directly, bypassing its note map (mapping window) |
@@ -351,9 +351,11 @@ A re-advertised parameter list keeps Godot's current values and sends them back 
 - Parallel mix like Layer. MIDI is routed to the child whose `/slot/{n}/note` matches (unique notes; default C1 / 36 upward).
 - Empty drum machine is silence. A pad may hold any device (Sampler, Chain, CLAP, …).
 - No device-level params. Per-child note via `/slot/{n}/note`.
-- Choke groups (closed/open hats) via `/slot/{n}/choke`. Group 0 = none, 1–8 are groups; a
-  note-on chokes every other slot in the same group with a ~3 ms fade starting at the same frame
-  offset as the note (see ADR-0012).
+- Choke targets (closed/open hats) via `/slot/{n}/choke_targets`, a 16-byte note mask per slot.
+  The relation is directed: a note-on chokes every other slot whose note is in the triggering
+  slot's mask, with a ~3 ms fade starting at the same frame offset as the note. Godot stores
+  targets by pad id and re-sends every mask when a pad's note changes or a pad is added or
+  removed (see ADR-0015, which supersedes ADR-0012).
 
 ##### Built-in Parameter Advertisement (Rust → Godot)
 `/builtin/info` sends device metadata and typed parameter descriptors:

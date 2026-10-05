@@ -549,13 +549,13 @@ pub enum AudioCommand {
         slot: usize,
         note: u8,
     },
-    /// Set a Drum Machine slot's choke group (0 = none, 1–8). A note-on chokes the other slots
-    /// in the same group.
-    SetDrumSlotChoke {
+    /// Set a Drum Machine slot's choke targets as a note mask (bit k = the slot on note k). A
+    /// note-on on this slot chokes every other slot whose note bit is set.
+    SetDrumSlotChokeTargets {
         channel_id: ChannelId,
         device_path: DevicePath,
         slot: usize,
-        group: u8,
+        mask: u128,
     },
     /// Replace a Layer slot's note map (byte n = output note for input n, 255 = unmapped).
     SetLayerSlotNoteMap {
@@ -2973,11 +2973,11 @@ pub fn process_command(
             }
         }
 
-        AudioCommand::SetDrumSlotChoke {
+        AudioCommand::SetDrumSlotChokeTargets {
             channel_id,
             device_path,
             slot,
-            group,
+            mask,
         } => {
             if let Some(channel) = state.channels.get_mut(&channel_id) {
                 if let Some(device) = channel.device_at_path_mut(&device_path) {
@@ -2985,10 +2985,10 @@ pub fn process_command(
                         .as_any_mut()
                         .downcast_mut::<super::devices::DrumMachineDevice>()
                     {
-                        if !drum.set_slot_choke_group(slot, group) {
+                        if !drum.set_slot_choke_targets(slot, mask) {
                             warn!(
-                                "Drum slot {} choke group {} rejected at channel {} path {}",
-                                slot, group, channel_id, device_path
+                                "Drum slot {} choke targets {:#x} rejected at channel {} path {}",
+                                slot, mask, channel_id, device_path
                             );
                         }
                     } else {

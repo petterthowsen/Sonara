@@ -17,18 +17,19 @@ pub struct DrumSlot {
     pub device: Box<dyn AudioDevice>,
     /// MIDI note that routes to this child. Unique within the drum machine.
     pub note: u8,
-    /// Choke group: 0 = none, 1–8 = closed/open hat style group. A note-on on this slot chokes
-    /// every other slot in the same group.
-    pub choke_group: u8,
+    /// Choke targets as a note mask: bit *k* set means a note-on on this slot chokes the slot on
+    /// note *k*. Directed (A choking B does not make B choke A) and note-based, so it survives
+    /// slot reorders. The slot's own bit is ignored.
+    pub choke_targets: u128,
 }
 
 impl DrumSlot {
-    /// Wrap `device` and assign `note`; the slot starts in choke group 0 (none).
+    /// Wrap `device` and assign `note`; the slot starts with no choke targets.
     pub fn new(device: Box<dyn AudioDevice>, note: u8) -> Self {
         Self {
             device,
             note,
-            choke_group: 0,
+            choke_targets: 0,
         }
     }
 }
@@ -76,19 +77,15 @@ impl DrumMachineDevice {
         }
     }
 
-    /// The choke group of slot `index`, or `None` if there is no such slot.
-    pub fn slot_choke_group(&self, index: usize) -> Option<u8> {
-        self.slots.get(index).map(|s| s.choke_group)
+    /// The choke target mask of slot `index`, or `None` if there is no such slot.
+    pub fn slot_choke_targets(&self, index: usize) -> Option<u128> {
+        self.slots.get(index).map(|s| s.choke_targets)
     }
 
-    /// Set slot `index`'s choke group. Accepts 0 (none) through 8; returns false otherwise or if
-    /// the slot does not exist.
-    pub fn set_slot_choke_group(&mut self, index: usize, group: u8) -> bool {
-        if group > 8 {
-            return false;
-        }
+    /// Set slot `index`'s choke target note mask; returns false if the slot does not exist.
+    pub fn set_slot_choke_targets(&mut self, index: usize, mask: u128) -> bool {
         if let Some(slot) = self.slots.get_mut(index) {
-            slot.choke_group = group;
+            slot.choke_targets = mask;
             true
         } else {
             false
@@ -215,12 +212,13 @@ impl AudioDevice for DrumMachineDevice {
         let Some(index) = self.slots.iter().position(|s| s.note == note) else {
             return;
         };
-        // A note-on chokes every other slot in the same non-zero group, at the same offset.
+        // A note-on chokes every other slot whose note is in this slot's target mask, at the
+        // same offset.
         if matches!(event, NoteEvent::On { .. }) {
-            let group = self.slots[index].choke_group;
-            if group != 0 {
+            let mask = self.slots[index].choke_targets;
+            if mask != 0 {
                 for (i, slot) in self.slots.iter_mut().enumerate() {
-                    if i != index && slot.choke_group == group {
+                    if i != index && mask & (1u128 << slot.note.min(127)) != 0 {
                         slot.device.choke(frame_offset);
                     }
                 }
@@ -502,8 +500,23 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn note_on_chokes_only_same_group_siblings() {
+    fn note_on(dm: &mut DrumMachineDevice, key: u8, frame_offset: usize) {
+        dm.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key,
+                velocity: 0.8,
+            },
+            frame_offset,
+        );
+    }
+
+    fn mask(notes: &[u8]) -> u128 {
+        notes.iter().fold(0u128, |m, n| m | (1u128 << n))
+    }
+
+    /// Three capture pads on notes 36, 38 and 40.
+    fn three_pads() -> DrumMachineDevice {
         let mut dm = DrumMachineDevice::new(8);
         dm.insert_child(0, Box::new(ChokeCapture::new()));
         dm.insert_child(1, Box::new(ChokeCapture::new()));
@@ -512,26 +525,49 @@ mod tests {
         assert!(dm.set_slot_note(2, 40));
         assert!(dm.set_slot_note(1, 38));
         assert!(dm.set_slot_note(0, 36));
-        assert!(dm.set_slot_choke_group(0, 1));
-        assert!(dm.set_slot_choke_group(1, 1));
-        assert!(dm.set_slot_choke_group(2, 2));
+        dm
+    }
 
-        dm.send_note_event(
-            &NoteEvent::On {
-                note_id: 1,
-                key: 36,
-                velocity: 0.8,
-            },
-            5,
-        );
+    #[test]
+    fn note_on_chokes_only_targets_at_the_trigger_offset() {
+        let mut dm = three_pads();
+        assert_eq!(dm.slot_choke_targets(0), Some(0));
+        assert!(dm.set_slot_choke_targets(0, mask(&[38])));
+        assert!(!dm.set_slot_choke_targets(5, mask(&[38])));
+
+        note_on(&mut dm, 36, 5);
 
         assert_eq!(capture(&mut dm, 0).hits, vec![36]);
         assert!(capture(&mut dm, 0).choked.is_empty());
         assert!(capture(&mut dm, 1).hits.is_empty());
         assert_eq!(capture(&mut dm, 1).choked, vec![5]);
         assert!(capture(&mut dm, 2).choked.is_empty());
+    }
 
-        // A note-off does not choke.
+    #[test]
+    fn choke_targets_are_directed() {
+        let mut dm = three_pads();
+        assert!(dm.set_slot_choke_targets(0, mask(&[38])));
+
+        // B (38) does not target A (36), so B's note-on leaves A alone.
+        note_on(&mut dm, 38, 2);
+        assert!(capture(&mut dm, 0).choked.is_empty());
+
+        // Once B targets A, it chokes it.
+        assert!(dm.set_slot_choke_targets(1, mask(&[36])));
+        note_on(&mut dm, 38, 4);
+        assert_eq!(capture(&mut dm, 0).choked, vec![4]);
+    }
+
+    #[test]
+    fn own_bit_is_ignored_and_note_off_never_chokes() {
+        let mut dm = three_pads();
+        assert!(dm.set_slot_choke_targets(0, mask(&[36, 38])));
+
+        note_on(&mut dm, 36, 1);
+        assert!(capture(&mut dm, 0).choked.is_empty());
+        assert_eq!(capture(&mut dm, 1).choked, vec![1]);
+
         dm.send_note_event(
             &NoteEvent::Off {
                 note_id: 1,
@@ -540,32 +576,21 @@ mod tests {
             },
             7,
         );
-        assert_eq!(capture(&mut dm, 1).choked, vec![5]);
+        assert_eq!(capture(&mut dm, 1).choked, vec![1]);
     }
 
     #[test]
-    fn choke_group_0_is_none_and_range_is_rejected() {
-        let mut dm = DrumMachineDevice::new(8);
-        dm.insert_child(0, Box::new(ChokeCapture::new()));
-        dm.insert_child(1, Box::new(ChokeCapture::new()));
-        assert!(dm.set_slot_note(0, 36));
-        assert!(dm.set_slot_note(1, 38));
-        assert_eq!(dm.slot_choke_group(0), Some(0));
-        assert!(dm.set_slot_choke_group(0, 8));
-        assert!(!dm.set_slot_choke_group(0, 9));
-        assert_eq!(dm.slot_choke_group(0), Some(8));
-        assert!(!dm.set_slot_choke_group(5, 1));
+    fn choke_masks_survive_slot_reorder() {
+        let mut dm = three_pads();
+        // Pad on 36 targets the pad on 40.
+        assert!(dm.set_slot_choke_targets(0, mask(&[40])));
+        // Move the 40 pad to the front: indices change, notes do not.
+        dm.move_child(2, 0);
+        assert_eq!(dm.slot(0).unwrap().note, 40);
+        assert_eq!(dm.slot(1).unwrap().note, 36);
 
-        // Group 0 never chokes.
-        assert!(dm.set_slot_choke_group(0, 0));
-        dm.send_note_event(
-            &NoteEvent::On {
-                note_id: 1,
-                key: 36,
-                velocity: 0.8,
-            },
-            3,
-        );
-        assert!(capture(&mut dm, 1).choked.is_empty());
+        note_on(&mut dm, 36, 3);
+        assert_eq!(capture(&mut dm, 0).choked, vec![3]);
+        assert!(capture(&mut dm, 2).choked.is_empty());
     }
 }
