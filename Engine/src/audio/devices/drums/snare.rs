@@ -1,28 +1,28 @@
 //! Snare drum (spec 013, Phase 2): `sonara.builtin.snare`.
 //!
 //! Three layers are summed:
-//! - **Tone**: two sine modes (the drumhead). They share one pitch envelope — a fast drop from
-//!   `base * 2^(Sweep/12)` down to `base` over Sweep Time — and each has its own amplitude
-//!   envelope. Mode 2 is tuned to `Tune * Mode 2 Ratio` and decays `0.7x` as fast; Mode Balance
-//!   crossfades the two.
-//! - **Snares**: white noise through a mono SVF, blending a band-pass at Color (Q from Width)
-//!   with a high-pass at Color. Width 0 is a narrow band-pass, 1 leans on the high-pass. The
-//!   layer has its own decay envelope with a slightly fast curve.
+//! - **Body**: two sine modes (the drumhead). They share one pitch envelope (**Punch**: a fast
+//!   drop from `base * 2^(Punch/12)` down to `base` over Punch Time), and each has its own
+//!   amplitude envelope. Mode 2 sits at a membrane's first overtone (`1.6x` Tune) and decays
+//!   `0.7x` as fast; **Overtone** crossfades the two.
+//! - **Snappy** (the wires): white noise through a mono SVF, an even blend of a band-pass and a
+//!   high-pass at Snappy Tone, with its own decay envelope on a slightly fast curve.
 //! - **Snap**: a short [`ClickLayer`] noise transient.
 //!
-//! Drive is applied to the sum of Tone and Snares only (never the Snap). Velocity brightness,
-//! scaled by the shared velocity sensitivity, lifts the Snares Color (up to one octave) and the
-//! Snap level, so at sensitivity 0 velocity only changes level (through the host curve).
+//! The **Snappy** knob balances the body against the wires, like a 909's Tone/Snappy: at 50 %
+//! both play at full level, below that the wires fade out, above it the body does.
 //!
-//! Parameters carry one `module` per Simple View section, using the drum vocabulary the generator
-//! (and the Kick) expect: `Body` (Tone, plus Drive, which shapes that sum), `Noise` (Snares),
-//! `Click` (Snap) and the shared `Global`. Every section holds at least two controls, so the
-//! generated layout has no singleton group.
+//! Drive is applied to the sum of Body and Snappy only (never the Snap). Velocity darkens soft
+//! hits, scaled by the shared velocity sensitivity: it lowers the Snappy Tone (up to one octave)
+//! and the Snap level, so a full-velocity hit sounds as the knobs are set.
+//!
+//! Tune is always the pitch of the reference note D1 (MIDI 38); with Keytrack on, other notes
+//! transpose from there.
 
 use super::layers::{ClickLayer, ClickType, DriveStage};
 use super::{DrumParams, DrumVoice, GLOBAL_SPECS};
 use crate::audio::devices::param_table::{
-    flatten, linear, log, slot_table, spec, ParamSpec, ParamTable, ParamValues,
+    flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
 };
 use crate::audio::devices::ParamId;
 use crate::audio::dsp::svf::{cutoff_to_g, resonance_to_k};
@@ -31,85 +31,73 @@ use crate::audio::dsp::{
 };
 
 // Parameter IDs, grouped in tens by module.
-const TONE_TUNE: ParamId = 0;
-const TONE_KEYTRACK: ParamId = 1;
-const TONE_DECAY: ParamId = 2;
-const TONE_RATIO: ParamId = 3;
-const TONE_BALANCE: ParamId = 4;
-const TONE_SWEEP: ParamId = 5;
-const TONE_SWEEP_TIME: ParamId = 6;
-const TONE_LEVEL: ParamId = 7;
-const SNARES_LEVEL: ParamId = 10;
-const SNARES_DECAY: ParamId = 11;
-const SNARES_COLOR: ParamId = 12;
-const SNARES_WIDTH: ParamId = 13;
-const SNAP_LEVEL: ParamId = 20;
-const SNAP_TONE: ParamId = 21;
-const BODY_DRIVE: ParamId = 30;
+const TUNE: ParamId = 0;
+const DECAY: ParamId = 1;
+const OVERTONE: ParamId = 2;
+const DRIVE: ParamId = 3;
+const KEYTRACK: ParamId = 4;
+const PUNCH: ParamId = 10;
+const PUNCH_TIME: ParamId = 11;
+const SNAPPY: ParamId = 20;
+const SNAPPY_DECAY: ParamId = 21;
+const SNAPPY_TONE: ParamId = 22;
+const SNAP: ParamId = 30;
+const SNAP_TONE: ParamId = 31;
 
-const OWN: [ParamSpec; 15] = [
-    spec(TONE_TUNE, "Tune", "Body", "Hz", log(80.0, 400.0), 180.0),
+const OWN: [ParamSpec; 12] = [
+    spec(TUNE, "Tune", "Snare", "Hz", log(80.0, 400.0), 180.0),
+    spec(DECAY, "Decay", "Snare", "s", log(0.02, 0.8), 0.15),
+    spec(OVERTONE, "Overtone", "Snare", "%", linear(0.0, 100.0), 40.0),
+    spec(DRIVE, "Drive", "Snare", "dB", linear(0.0, 24.0), 0.0),
+    spec(KEYTRACK, "Keytrack", "Snare", "", Kind::Bool, 0.0),
+    spec(PUNCH, "Punch", "Punch", "st", linear(0.0, 12.0), 3.0),
     spec(
-        TONE_KEYTRACK,
-        "Keytrack",
-        "Body",
-        "",
-        crate::audio::devices::param_table::Kind::Bool,
-        0.0,
-    ),
-    spec(TONE_DECAY, "Decay", "Body", "s", log(0.02, 0.8), 0.15),
-    spec(
-        TONE_RATIO,
-        "Mode 2 Ratio",
-        "Body",
-        "x",
-        linear(1.2, 2.5),
-        1.6,
-    ),
-    spec(
-        TONE_BALANCE,
-        "Mode Balance",
-        "Body",
-        "",
-        linear(0.0, 1.0),
-        0.4,
-    ),
-    spec(TONE_SWEEP, "Sweep", "Body", "st", linear(0.0, 12.0), 3.0),
-    spec(
-        TONE_SWEEP_TIME,
-        "Sweep Time",
-        "Body",
+        PUNCH_TIME,
+        "Punch Time",
+        "Punch",
         "s",
         log(0.005, 0.1),
         0.02,
     ),
-    spec(TONE_LEVEL, "Level", "Body", "", linear(0.0, 1.0), 0.7),
-    spec(SNARES_LEVEL, "Level", "Noise", "", linear(0.0, 1.0), 0.8),
-    spec(SNARES_DECAY, "Decay", "Noise", "s", log(0.03, 1.5), 0.22),
+    spec(SNAPPY, "Snappy", "Snappy", "%", linear(0.0, 100.0), 55.0),
     spec(
-        SNARES_COLOR,
-        "Color",
-        "Noise",
+        SNAPPY_DECAY,
+        "Snappy Decay",
+        "Snappy",
+        "s",
+        log(0.03, 1.5),
+        0.22,
+    ),
+    spec(
+        SNAPPY_TONE,
+        "Snappy Tone",
+        "Snappy",
         "Hz",
         log(1000.0, 12000.0),
         5000.0,
     ),
-    spec(SNARES_WIDTH, "Width", "Noise", "", linear(0.0, 1.0), 0.5),
-    spec(SNAP_LEVEL, "Level", "Click", "", linear(0.0, 1.0), 0.4),
+    spec(SNAP, "Snap", "Snap", "%", linear(0.0, 100.0), 40.0),
     spec(
         SNAP_TONE,
-        "Tone",
-        "Click",
+        "Snap Tone",
+        "Snap",
         "Hz",
         log(2000.0, 10000.0),
         6000.0,
     ),
-    spec(BODY_DRIVE, "Drive", "Body", "dB", linear(0.0, 24.0), 0.0),
 ];
-const SPECS: [ParamSpec; 18] = flatten(&[&OWN, &GLOBAL_SPECS]);
+const SPECS: [ParamSpec; 15] = flatten(&[&OWN, &GLOBAL_SPECS]);
 const SLOTS: [u8; 100] = slot_table(&SPECS);
 static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
+/// With Keytrack on, this note plays exactly Tune (D1, the GM snare note).
+const KEYTRACK_ROOT: u8 = 38;
+/// Mode 2's pitch: an ideal membrane's first overtone sits at about 1.59x the fundamental.
+const MODE2_RATIO: f32 = 1.6;
+/// Level of the body and of the wires when the Snappy balance gives them full level.
+const LAYER_GAIN: f32 = 0.8;
+/// The wires blend the band-pass and high-pass outputs evenly (the band-pass Q follows).
+const WIRE_WIDTH: f32 = 0.5;
 /// Fixed noise seed so every hit of a fresh voice is identical (the snares are a repeated
 /// transient, not a free-running bed).
 const NOISE_SEED: u32 = 0x51A1_5EED;
@@ -124,15 +112,20 @@ const SNARES_CURVE: f32 = -0.2;
 /// Render chunk: bounds the preallocated drive scratch so any block length works.
 const CHUNK: usize = 256;
 
-/// MIDI note to frequency, A4 = 69.
+/// Body and wire gains for a Snappy balance `s` (0–1): both full at 0.5, one fading out
+/// towards either end.
 #[inline]
-fn note_hz(note: u8) -> f32 {
-    440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+fn snappy_gains(s: f32) -> (f32, f32) {
+    let s = s.clamp(0.0, 1.0);
+    (
+        LAYER_GAIN * (2.0 * (1.0 - s)).min(1.0),
+        LAYER_GAIN * (2.0 * s).min(1.0),
+    )
 }
 
 /// The snare voice: see the module docs for the synthesis.
 pub struct SnareVoice {
-    values: ParamValues<18>,
+    values: ParamValues<15>,
     params: DrumParams,
     sample_rate: f32,
 
@@ -143,10 +136,8 @@ pub struct SnareVoice {
     amp_env1: OneShotEnvelope,
     amp_env2: OneShotEnvelope,
     tune_hz: f32,
-    tune_norm: f32,
     keytrack: bool,
     tone_decay: f32,
-    ratio: f32,
     mode_balance: f32,
     sweep_st: f32,
     sweep_time: f32,
@@ -161,7 +152,6 @@ pub struct SnareVoice {
     snares_level: f32,
     snares_decay: f32,
     color_hz: f32,
-    width: f32,
     snares_res: f32,
     /// Color with this hit's velocity brightness applied.
     snares_cutoff: f32,
@@ -195,24 +185,21 @@ impl SnareVoice {
     /// Read every scalar parameter. Envelope times are re-derived here too, so a parameter change
     /// takes effect on the next block; curves are fixed and only set once in `new`.
     fn sync(&mut self) {
-        self.tune_hz = self.values.real(TONE_TUNE).unwrap_or(180.0);
-        self.tune_norm = self.values.effective_norm(TONE_TUNE).unwrap_or(0.5);
-        self.keytrack = self.values.real(TONE_KEYTRACK).unwrap_or(0.0) >= 0.5;
-        self.tone_decay = self.values.real(TONE_DECAY).unwrap_or(0.15);
-        self.ratio = self.values.real(TONE_RATIO).unwrap_or(1.6);
-        self.mode_balance = self.values.real(TONE_BALANCE).unwrap_or(0.4);
-        self.sweep_st = self.values.real(TONE_SWEEP).unwrap_or(3.0);
-        self.sweep_time = self.values.real(TONE_SWEEP_TIME).unwrap_or(0.02);
-        self.tone_level = self.values.real(TONE_LEVEL).unwrap_or(0.7);
-        self.snares_level = self.values.real(SNARES_LEVEL).unwrap_or(0.8);
-        self.snares_decay = self.values.real(SNARES_DECAY).unwrap_or(0.22);
-        self.color_hz = self.values.real(SNARES_COLOR).unwrap_or(5000.0);
-        self.width = self.values.real(SNARES_WIDTH).unwrap_or(0.5);
-        self.snap_level = self.values.real(SNAP_LEVEL).unwrap_or(0.4);
+        self.tune_hz = self.values.real(TUNE).unwrap_or(180.0);
+        self.keytrack = self.values.real(KEYTRACK).unwrap_or(0.0) >= 0.5;
+        self.tone_decay = self.values.real(DECAY).unwrap_or(0.15);
+        self.mode_balance = self.values.real(OVERTONE).unwrap_or(40.0) / 100.0;
+        self.sweep_st = self.values.real(PUNCH).unwrap_or(3.0);
+        self.sweep_time = self.values.real(PUNCH_TIME).unwrap_or(0.02);
+        let snappy = self.values.real(SNAPPY).unwrap_or(55.0) / 100.0;
+        (self.tone_level, self.snares_level) = snappy_gains(snappy);
+        self.snares_decay = self.values.real(SNAPPY_DECAY).unwrap_or(0.22);
+        self.color_hz = self.values.real(SNAPPY_TONE).unwrap_or(5000.0);
+        self.snap_level = self.values.real(SNAP).unwrap_or(40.0) / 100.0;
         self.snap_tone = self.values.real(SNAP_TONE).unwrap_or(6000.0);
-        self.drive_db = self.values.real(BODY_DRIVE).unwrap_or(0.0);
+        self.drive_db = self.values.real(DRIVE).unwrap_or(0.0);
 
-        let res = (1.0 - self.width).clamp(0.0, 1.0);
+        let res = 1.0 - WIRE_WIDTH;
         if (res - self.snares_res).abs() > 1e-6 {
             self.snares_res = res;
             self.filter_dirty = true;
@@ -248,9 +235,10 @@ impl SnareVoice {
             .set_decay(self.snares_decay * self.decay_scale);
     }
 
-    /// Color with velocity brightness: `+sens * v` octaves (0 at sensitivity 0).
+    /// Snappy Tone with velocity brightness: `−sens * (1 − v)` octaves, so a full-velocity hit
+    /// (or sensitivity 0) plays the knob's value and softer hits are darker.
     fn update_cutoff(&mut self) {
-        let octaves = self.params.velocity_sens * self.velocity;
+        let octaves = -self.params.velocity_sens * (1.0 - self.velocity);
         let cutoff = self.color_hz * 2f32.powf(octaves);
         if (cutoff - self.snares_cutoff).abs() > 1e-4 {
             self.snares_cutoff = cutoff;
@@ -304,10 +292,8 @@ impl DrumVoice for SnareVoice {
             amp_env1,
             amp_env2,
             tune_hz: 180.0,
-            tune_norm: 0.5,
             keytrack: false,
             tone_decay: 0.15,
-            ratio: 1.6,
             mode_balance: 0.4,
             sweep_st: 3.0,
             sweep_time: 0.02,
@@ -319,7 +305,6 @@ impl DrumVoice for SnareVoice {
             snares_level: 0.8,
             snares_decay: 0.22,
             color_hz: 5000.0,
-            width: 0.5,
             snares_res: 0.5,
             snares_cutoff: 5000.0,
             coefs: SvfCoefs::default(),
@@ -384,13 +369,13 @@ impl DrumVoice for SnareVoice {
         let cents = humanize * 10.0 * rng.bipolar();
         self.decay_scale = 1.0 + humanize * 0.05 * rng.bipolar();
 
-        // Keytrack off: base is Tune. On: Tune is a ±12 st offset from the incoming note.
-        let base = if self.keytrack {
-            note_hz(note) * 2f32.powf((self.tune_norm - 0.5) * 2.0)
+        // Tune is the pitch of the root note; Keytrack transposes the other notes from it.
+        let transpose = if self.keytrack {
+            (note as f32 - KEYTRACK_ROOT as f32) / 12.0
         } else {
-            self.tune_hz
+            0.0
         };
-        self.base_hz = base * 2f32.powf(cents / 1200.0);
+        self.base_hz = self.tune_hz * 2f32.powf(transpose + cents / 1200.0);
 
         self.update_cutoff();
         if self.filter_dirty {
@@ -419,7 +404,7 @@ impl DrumVoice for SnareVoice {
         let mb = self.mode_balance;
         let tone_level = self.tone_level;
         let snares_level = self.snares_level;
-        let width = self.width;
+        let width = WIRE_WIDTH;
         let coefs = self.coefs;
         // A layer at Level 0 (or with an idle envelope) is skipped entirely, so it costs nothing
         // and doesn't keep the voice awake. An envelope that is idle at the start of a call stays
@@ -460,7 +445,7 @@ impl DrumVoice for SnareVoice {
                             0.0
                         };
                         let s1 = self.osc1.next(SweepShape::Sine, f1, sr);
-                        let s2 = self.osc2.next(SweepShape::Sine, f1 * self.ratio, sr);
+                        let s2 = self.osc2.next(SweepShape::Sine, f1 * MODE2_RATIO, sr);
                         mix += (s1 * a1 * (1.0 - mb) + s2 * a2 * mb) * tone_level;
                     }
                     if snares_on {
@@ -605,18 +590,17 @@ mod tests {
         (num / den) as f32
     }
 
-    /// (a) The Tone layer has partials at Tune and Tune * Ratio, each a local peak.
+    /// (a) The Body layer has partials at Tune and at the overtone, each a local peak.
     #[test]
     fn tone_partials_are_at_tune_and_tune_times_ratio() {
         let mut v = voice();
-        set_real(&mut v, TONE_LEVEL, 1.0);
-        set_real(&mut v, SNARES_LEVEL, 0.0);
-        set_real(&mut v, SNAP_LEVEL, 0.0);
-        set_real(&mut v, TONE_DECAY, 0.8);
-        set_real(&mut v, TONE_BALANCE, 0.5);
+        set_real(&mut v, SNAPPY, 0.0); // body only
+        set_real(&mut v, SNAP, 0.0);
+        set_real(&mut v, DECAY, 0.8);
+        set_real(&mut v, OVERTONE, 50.0);
 
         let tune = 180.0f32;
-        let ratio = 1.6f32;
+        let ratio = MODE2_RATIO;
         let signal = hit(&mut v, (SR * 0.8) as usize, 60, 1.0);
         // The pitch sweep is over by 0.3 s; measure the steady tail.
         let tail = &signal[(SR * 0.3) as usize..];
@@ -633,15 +617,14 @@ mod tests {
         }
     }
 
-    /// (b) The Snares layer decays to −60 dB within 5 % of its Decay setting.
+    /// (b) The Snappy layer decays to −60 dB within 5 % of its Decay setting.
     #[test]
     fn snares_decay_to_minus_60_db() {
         let mut v = voice();
-        set_real(&mut v, TONE_LEVEL, 0.0);
-        set_real(&mut v, SNAP_LEVEL, 0.0);
-        set_real(&mut v, SNARES_LEVEL, 1.0);
+        set_real(&mut v, SNAPPY, 100.0); // wires only
+        set_real(&mut v, SNAP, 0.0);
         let decay = 0.5f32;
-        set_real(&mut v, SNARES_DECAY, decay);
+        set_real(&mut v, SNAPPY_DECAY, decay);
 
         let signal = hit(&mut v, SR as usize, 60, 1.0);
         let envelope = abs_envelope(&signal, 480);
@@ -652,19 +635,17 @@ mod tests {
         );
     }
 
-    /// (c) Color raises the spectral centroid of the noise layer monotonically.
+    /// (c) Snappy Tone raises the spectral centroid of the noise layer monotonically.
     #[test]
     fn snares_color_raises_spectral_centroid() {
         let colors = [2000.0f32, 5000.0, 9000.0];
         let mut centroids = Vec::new();
         for &color in &colors {
             let mut v = voice();
-            set_real(&mut v, TONE_LEVEL, 0.0);
-            set_real(&mut v, SNAP_LEVEL, 0.0);
-            set_real(&mut v, SNARES_LEVEL, 1.0);
-            set_real(&mut v, SNARES_DECAY, 1.0);
-            set_real(&mut v, SNARES_WIDTH, 0.0);
-            set_real(&mut v, SNARES_COLOR, color);
+            set_real(&mut v, SNAPPY, 100.0);
+            set_real(&mut v, SNAP, 0.0);
+            set_real(&mut v, SNAPPY_DECAY, 1.0);
+            set_real(&mut v, SNAPPY_TONE, color);
             let signal = hit(&mut v, (SR * 0.3) as usize, 60, 1.0);
             centroids.push(centroid(&signal));
         }
@@ -672,6 +653,35 @@ mod tests {
             centroids[0] < centroids[1] && centroids[1] < centroids[2],
             "centroids not monotonic: {centroids:?}"
         );
+    }
+
+    /// (e) Keytrack: the root note (D1) plays Tune, and an octave up plays twice Tune.
+    #[test]
+    fn keytrack_transposes_from_tune_at_the_root() {
+        for (note, expected) in [(KEYTRACK_ROOT, 180.0f32), (KEYTRACK_ROOT + 12, 360.0)] {
+            let mut v = voice();
+            set_real(&mut v, KEYTRACK, 1.0);
+            set_real(&mut v, SNAPPY, 0.0);
+            set_real(&mut v, SNAP, 0.0);
+            set_real(&mut v, OVERTONE, 0.0);
+            set_real(&mut v, DECAY, 0.8);
+            let signal = hit(&mut v, (SR * 0.8) as usize, note, 1.0);
+            let tail = &signal[(SR * 0.3) as usize..];
+            let here = tone_amplitude(tail, expected, SR);
+            let off = tone_amplitude(tail, expected * 1.06, SR);
+            assert!(
+                here > off * 2.0,
+                "note {note}: {here} at {expected} Hz vs {off}"
+            );
+        }
+    }
+
+    /// (f) Snappy is a balance: 50 % plays both layers at full level, the ends play one.
+    #[test]
+    fn snappy_balances_body_and_wires() {
+        assert_eq!(snappy_gains(0.5), (LAYER_GAIN, LAYER_GAIN));
+        assert_eq!(snappy_gains(0.0), (LAYER_GAIN, 0.0));
+        assert_eq!(snappy_gains(1.0), (0.0, LAYER_GAIN));
     }
 
     /// (d) Determinism: the same seed gives bit-identical hits.

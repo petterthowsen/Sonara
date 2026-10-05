@@ -49,7 +49,8 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 ## Drum instruments
 
 - **Hit** — one trigger of a drum voice. A note-on starts a fresh voice (phase reset, so every hit sounds the same) while the previous voice fades out over 3 ms; note-off is ignored unless the drum has a gate mode.
-- **Sweep** — a drum's pitch envelope: the body starts `Sweep` semitones above its tune and falls to it over `Sweep Time`. Rendered with `dsp::sweep_osc`.
+- **Punch** — a drum's pitch envelope (the Kick's and Snare's `Punch` and `Punch Time` controls): the body starts `Punch` semitones above its tune and falls to it over `Punch Time`. Rendered with `dsp::sweep_osc`.
+- **Keytrack root** — the note a keytracked drum plays at exactly its Tune (Kick C1/36, Snare D1/38); other notes transpose from it, so Tune means the same with Keytrack on or off.
 - **Choke group** — a Drum Machine pad group (1–8; 0 = none). A note-on in a group chokes every other pad in it, so a closed hat cuts an open one.
 
 ## Modulation

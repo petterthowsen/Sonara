@@ -1,8 +1,9 @@
 //! Hat (`sonara.builtin.hat`, spec 013, Phase 3): the 808 approach.
 //!
 //! Six band-limited pulse oscillators at the 808 inharmonic ratios, summed and mixed with white
-//! noise by Metal/Noise, then a resonant band-pass at Tone, a 12 dB high-pass at Low Cut and a
-//! one-shot amp envelope. Everything the audio callback touches is preallocated in `new()`;
+//! noise by Metal, then a resonant band-pass at Tone (Ring is its resonance), a 12 dB high-pass
+//! and a one-shot amp envelope. The high-pass follows Tone: **Body** sets how far below Tone it
+//! sits (0 % = at Tone, thin; 100 % = two octaves below, full), so the two can never cancel out. Everything the audio callback touches is preallocated in `new()`;
 //! `render()` chunks its buffer so any block size works and never allocates.
 //!
 //! Closed and open hats are two instances of this voice with different Decay, choked together by
@@ -20,32 +21,23 @@ use crate::audio::dsp::{FilterMode, OneShotEnvelope, Oscillator, Rng, Svf, SvfCo
 // === Parameters ===
 
 const TUNE: ParamId = 0;
-const METAL: ParamId = 1;
-const TONE: ParamId = 2;
-const RESONANCE: ParamId = 3;
-const LOW_CUT: ParamId = 4;
-const ATTACK: ParamId = 10;
-const DECAY: ParamId = 11;
-const CURVE: ParamId = 12;
+const DECAY: ParamId = 1;
+const SHAPE: ParamId = 2;
+const TONE: ParamId = 10;
+const METAL: ParamId = 11;
+const RING: ParamId = 12;
+const BODY: ParamId = 13;
 
-const OWN: [ParamSpec; 8] = [
-    spec(TUNE, "Tune", "Metal", "x", linear(0.5, 2.0), 1.0),
-    spec(METAL, "Metal/Noise", "Metal", "", linear(0.0, 1.0), 0.3),
-    spec(TONE, "Tone", "Metal", "Hz", log(3_000.0, 12_000.0), 8_000.0),
-    spec(RESONANCE, "Resonance", "Metal", "", linear(0.0, 1.0), 0.3),
-    spec(
-        LOW_CUT,
-        "Low Cut",
-        "Filter",
-        "Hz",
-        log(2_000.0, 12_000.0),
-        6_000.0,
-    ),
-    spec(ATTACK, "Attack", "Amp", "s", linear(0.0, 0.005), 0.0),
-    spec(DECAY, "Decay", "Amp", "s", log(0.01, 2.0), 0.06),
-    spec(CURVE, "Curve", "Amp", "", linear(-1.0, 1.0), -0.3),
+const OWN: [ParamSpec; 7] = [
+    spec(TUNE, "Tune", "Hat", "st", linear(-12.0, 12.0), 0.0),
+    spec(DECAY, "Decay", "Hat", "s", log(0.01, 2.0), 0.06),
+    spec(SHAPE, "Shape", "Hat", "%", linear(-100.0, 100.0), -30.0),
+    spec(TONE, "Tone", "Tone", "Hz", log(3_000.0, 12_000.0), 8_000.0),
+    spec(METAL, "Metal", "Tone", "%", linear(0.0, 100.0), 30.0),
+    spec(RING, "Ring", "Tone", "%", linear(0.0, 100.0), 30.0),
+    spec(BODY, "Body", "Tone", "%", linear(0.0, 100.0), 20.0),
 ];
-const SPECS: [ParamSpec; 11] = flatten(&[&OWN, &GLOBAL_SPECS]);
+const SPECS: [ParamSpec; 10] = flatten(&[&OWN, &GLOBAL_SPECS]);
 const SLOTS: [u8; 93] = slot_table(&SPECS);
 static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
@@ -61,13 +53,15 @@ const METAL_SCALE: f32 = 1.0 / 6.0;
 const CHUNK: usize = 512;
 /// Seed for the white-noise generator; reset on every trigger so hits are reproducible.
 const NOISE_SEED: u32 = 0x5A17_1B3D;
-/// Velocity raises Tone by up to half an octave, scaled by Velocity sensitivity.
+/// Softer hits lower Tone by up to half an octave, scaled by Velocity sensitivity.
 const VELOCITY_BRIGHTNESS_OCTAVES: f32 = 0.5;
+/// At Body 100 % the high-pass sits this many octaves below Tone.
+const BODY_OCTAVES: f32 = 2.0;
 
 /// The 808-style hat/cymbal voice.
 pub struct HatVoice {
     sample_rate: f32,
-    values: ParamValues<11>,
+    values: ParamValues<10>,
     params: DrumParams,
 
     oscs: [Oscillator; 6],
@@ -81,10 +75,12 @@ pub struct HatVoice {
     metal: f32,
     tone: f32,
     resonance: f32,
-    low_cut: f32,
+    body: f32,
     decay: f32,
     /// Tone of the current hit, after velocity brightness. Set at trigger.
     hit_tone_hz: f32,
+    /// High-pass cutoff of the current hit: Body octaves below its tone.
+    hit_low_cut_hz: f32,
 
     // Preallocated scratch: one oscillator's block, and the six-partial sum.
     osc_buf: Vec<f32>,
@@ -94,16 +90,15 @@ pub struct HatVoice {
 impl HatVoice {
     /// Re-decode the cached parameter values from the normalized table.
     fn sync_params(&mut self) {
-        self.tune = self.values.real(TUNE).unwrap_or(1.0);
-        self.metal = self.values.real(METAL).unwrap_or(0.3);
+        self.tune = 2f32.powf(self.values.real(TUNE).unwrap_or(0.0) / 12.0);
+        self.metal = self.values.real(METAL).unwrap_or(30.0) / 100.0;
         self.tone = self.values.real(TONE).unwrap_or(8_000.0);
-        self.resonance = self.values.real(RESONANCE).unwrap_or(0.3);
-        self.low_cut = self.values.real(LOW_CUT).unwrap_or(6_000.0);
-        let attack = self.values.real(ATTACK).unwrap_or(0.0);
+        self.resonance = self.values.real(RING).unwrap_or(30.0) / 100.0;
+        self.body = self.values.real(BODY).unwrap_or(20.0) / 100.0;
         self.decay = self.values.real(DECAY).unwrap_or(0.06);
-        let curve = self.values.real(CURVE).unwrap_or(-0.3);
+        let curve = self.values.real(SHAPE).unwrap_or(-30.0) / 100.0;
 
-        self.env.set_attack(attack);
+        self.env.set_attack(0.0);
         self.env.set_decay(self.decay);
         self.env.set_curve(curve);
     }
@@ -124,9 +119,10 @@ impl DrumVoice for HatVoice {
             metal: 0.3,
             tone: 8_000.0,
             resonance: 0.3,
-            low_cut: 6_000.0,
+            body: 0.2,
             decay: 0.06,
             hit_tone_hz: 8_000.0,
+            hit_low_cut_hz: 6_000.0,
             osc_buf: vec![0.0; CHUNK],
             acc: vec![0.0; CHUNK],
         };
@@ -172,9 +168,12 @@ impl DrumVoice for HatVoice {
         let pitch_scale = 2f32.powf(cents / 1200.0);
         let decay_scale = 1.0 + humanize * 0.05 * rng.bipolar();
 
-        // Velocity brightness scales with sensitivity, so at 0 the hit is velocity-independent.
-        let bright = 2f32.powf(VELOCITY_BRIGHTNESS_OCTAVES * sens * velocity.clamp(0.0, 1.0));
+        // Velocity brightness scales with sensitivity, so at 0 the hit is velocity-independent;
+        // a full-velocity hit plays Tone and softer hits are darker.
+        let soft = 1.0 - velocity.clamp(0.0, 1.0);
+        let bright = 2f32.powf(-VELOCITY_BRIGHTNESS_OCTAVES * sens * soft);
         self.hit_tone_hz = (self.tone * bright).clamp(20.0, self.sample_rate * 0.45);
+        self.hit_low_cut_hz = self.hit_tone_hz * 2f32.powf(-BODY_OCTAVES * self.body);
 
         let tune = self.tune * pitch_scale;
         for (osc, (&ratio, &offset)) in self
@@ -209,11 +208,11 @@ impl DrumVoice for HatVoice {
         );
         let bp_comp = compensation_coef(self.hit_tone_hz, sr);
         let hp_coefs = SvfCoefs::new(
-            cutoff_to_g(self.low_cut, sr),
+            cutoff_to_g(self.hit_low_cut_hz, sr),
             resonance_to_k(0.0, FilterMode::Hp12),
             FilterMode::Hp12,
         );
-        let hp_comp = compensation_coef(self.low_cut, sr);
+        let hp_comp = compensation_coef(self.hit_low_cut_hz, sr);
 
         let resonance = self.resonance;
         let metal = self.metal;
@@ -289,10 +288,10 @@ mod tests {
         db.iter().copied().fold(f32::MIN, f32::max)
     }
 
-    /// (a) The 12 dB high-pass at Low Cut leaves no tonal energy below Low Cut − 1 octave.
+    /// (a) The 12 dB high-pass leaves no tonal energy an octave below its cutoff.
     ///
-    /// The six metal partials are all below Low Cut/2 (3 kHz at the default 6 kHz), so they
-    /// must be more than 40 dB below the passband peak.
+    /// The six metal partials are all below half the default cutoff (Body 20 % puts it about
+    /// 6 kHz, under the 8 kHz Tone), so they must be more than 40 dB below the passband peak.
     #[test]
     fn high_pass_removes_the_metal_partials_below_low_cut_octave() {
         let mut voice = HatVoice::new(SR);
@@ -322,7 +321,7 @@ mod tests {
     #[test]
     fn pulse_oscillators_do_not_alias_at_double_tune() {
         let mut voice = HatVoice::new(SR);
-        voice.set_parameter(TUNE, 1.0); // 2x
+        voice.set_parameter(TUNE, 1.0); // +12 st: 2x
         voice.set_parameter(METAL, 1.0); // noise off: isolate the oscillators
         voice.set_parameter(DECAY, 1.0); // 2 s: a long, slowly varying envelope
         voice.trigger(42, 1.0, &mut Rng::new(13));
@@ -355,6 +354,41 @@ mod tests {
             "folded components only {:.1} dB below the peak",
             peak - worst
         );
+    }
+
+    /// (d) Body follows Tone: the high-pass sits Body · 2 octaves below the hit's tone, and a
+    /// full-velocity hit plays Tone itself.
+    #[test]
+    fn body_sets_the_high_pass_relative_to_tone() {
+        let mut voice = HatVoice::new(SR);
+        voice.set_params(&DrumParams {
+            velocity_sens: 1.0,
+            output_db: 0.0,
+            humanize: 0.0,
+        });
+        voice.set_parameter(TONE, 0.0); // 3 kHz, the lowest Tone
+        voice.set_parameter(BODY, 0.5); // one octave below
+        voice.trigger(42, 1.0, &mut Rng::new(1));
+        assert!(
+            (voice.hit_tone_hz - 3_000.0).abs() < 1.0,
+            "{}",
+            voice.hit_tone_hz
+        );
+        assert!(
+            (voice.hit_low_cut_hz - 1_500.0).abs() < 1.0,
+            "{}",
+            voice.hit_low_cut_hz
+        );
+
+        // A soft hit is darker, and the high-pass moves down with it.
+        voice.trigger(42, 0.0, &mut Rng::new(1));
+        let expected = 3_000.0 * 2f32.powf(-VELOCITY_BRIGHTNESS_OCTAVES);
+        assert!(
+            (voice.hit_tone_hz - expected).abs() < 1.0,
+            "{}",
+            voice.hit_tone_hz
+        );
+        assert!((voice.hit_low_cut_hz - expected / 2.0).abs() < 1.0);
     }
 
     /// (c) Two voices given the same seed, parameters and hit produce identical samples.

@@ -200,36 +200,32 @@ func _test_compounds_stay_in_their_module() -> void:
 	_assert(envs == [[10, 11], [12, 13]], "envelope parts stay in their module %s" % [envs])
 
 
-## The Phase 1 Kick parameter table: modules drive grouping, so the layout shows the device's own
-## sections (Body, Punch, Click, Noise, Mode, Global) with Tune and Decay as the large knobs.
+## The built-in Kick's parameter table: modules drive grouping, so the layout shows the device's
+## own sections in playing order (Kick, Punch, Click, Noise, then 808 and the shared Global block
+## last), and each section keeps the table's order with Tune first and Keytrack last.
 func _test_builtin_drum_layout() -> void:
 	var params: Array = []
 	var add := func(p: DeviceParameter, module: String) -> void:
 		p.module = module
 		params.append(p)
-	# Tune and Decay come first: they are the large knobs and sort first within Body.
-	add.call(_float(0, "Tune", "Hz", 20.0, 200.0), "Body")
-	add.call(_float(2, "Decay", "ms", 30.0, 3000.0), "Body")
-	add.call(_bool(1, "Keytrack"), "Body")
-	add.call(_float(3, "Curve", "", -1.0, 1.0), "Body")
-	add.call(_float(4, "Amp Attack", "ms", 0.0, 10.0), "Body")
-	add.call(_float(5, "Start Phase", "°", 0.0, 90.0), "Body")
-	add.call(_float(6, "Level"), "Body")
-	add.call(_float(7, "Drive", "dB", 0.0, 24.0), "Body")
-	add.call(_float(10, "Sweep", "st", 0.0, 48.0), "Punch")
-	add.call(_float(11, "Sweep Time", "ms", 5.0, 200.0), "Punch")
-	add.call(_float(20, "Level"), "Click")
-	add.call(_float(21, "Tone", "Hz", 1000.0, 8000.0), "Click")
-	add.call(_enum(22, "Type", 2), "Click")
-	add.call(_float(30, "Level"), "Noise")
-	add.call(_float(31, "Decay", "ms", 10.0, 1000.0), "Noise")
-	add.call(_float(32, "Color", "Hz", 200.0, 12000.0), "Noise")
-	add.call(_bool(40, "Gate"), "Mode")
-	add.call(_float(41, "Gate Release", "ms", 10.0, 2000.0), "Mode")
-	add.call(_float(42, "Glide", "ms", 0.0, 500.0), "Mode")
-	add.call(_float(90, "Velocity"), "Global")
+	add.call(_float(0, "Tune", "Hz", 20.0, 200.0), "Kick")
+	add.call(_float(1, "Decay", "s", 0.03, 3.0), "Kick")
+	add.call(_float(2, "Shape", "%", -100.0, 100.0), "Kick")
+	add.call(_float(3, "Drive", "dB", 0.0, 24.0), "Kick")
+	add.call(_bool(4, "Keytrack"), "Kick")
+	add.call(_float(10, "Punch", "st", 0.0, 48.0), "Punch")
+	add.call(_float(11, "Punch Time", "s", 0.005, 0.2), "Punch")
+	add.call(_float(20, "Click", "%", 0.0, 100.0), "Click")
+	add.call(_float(21, "Click Tone", "Hz", 1000.0, 8000.0), "Click")
+	add.call(_enum(22, "Click Type", 2), "Click")
+	add.call(_float(30, "Noise", "%", 0.0, 100.0), "Noise")
+	add.call(_float(31, "Noise Tone", "Hz", 200.0, 12000.0), "Noise")
+	add.call(_bool(40, "Gate"), "808")
+	add.call(_float(41, "Release", "s", 0.01, 2.0), "808")
+	add.call(_float(42, "Glide", "s", 0.0, 0.5), "808")
+	add.call(_float(90, "Velocity", "%", 0.0, 100.0), "Global")
 	add.call(_float(91, "Output", "dB", -60.0, 12.0), "Global")
-	add.call(_float(92, "Humanize"), "Global")
+	add.call(_float(92, "Humanize", "%", 0.0, 100.0), "Global")
 
 	var device := _device("sonara.builtin.kick", "Kick", Device.DeviceCategory.Instrument)
 	_assert(DeviceKind.infer(device) == DeviceKind.DRUM, "Kick → drum")
@@ -237,20 +233,32 @@ func _test_builtin_drum_layout() -> void:
 	_assert(layout.kind == DeviceKind.DRUM, "generated with the Drum strategy")
 	_check_layout(layout, params, "Kick")
 
-	var tune := _find(layout, 0)
-	var decay := _find(layout, 2)
-	_assert(tune.group_title == "Body", "Tune is in the Body module (%s)" % tune.group_title)
-	_assert(decay.group_title == "Body", "Decay is in the Body module (%s)" % decay.group_title)
-	var body: Array = []
+	var titles: Array[String] = []
 	for page in layout.pages:
-		for c in page.controls:
-			if c.get("group", "") == tune.group:
-				body.append(c)
-	body.sort_custom(func(a, b):
-		return (a.rect[1] < b.rect[1]) if (a.rect[1] != b.rect[1]) else (a.rect[0] < b.rect[0]))
-	_assert(6 in body[0].params and 7 in body[1].params, "Level and Drive (primary) sort first in Body")
-	_assert(0 in body[2].params, "Tune follows them in Body")
-	_assert(2 in body[3].params, "Decay follows Tune in Body")
+		for g in page.groups:
+			titles.append(String(g.title))
+	_assert(titles == ["Kick", "Punch", "Click", "Noise", "808", "Global"],
+		"drum sections in playing order, Global last %s" % [titles])
+
+	var tune := _find(layout, 0)
+	_assert(tune.group_title == "Kick", "Tune is in the Kick section (%s)" % tune.group_title)
+	var order := func(group: String) -> Array:
+		var controls: Array = []
+		for page in layout.pages:
+			for c in page.controls:
+				if c.get("group", "") == group:
+					controls.append(c)
+		controls.sort_custom(func(a, b):
+			return (a.rect[1] < b.rect[1]) if (a.rect[1] != b.rect[1]) else (a.rect[0] < b.rect[0]))
+		var ids: Array = []
+		for c in controls:
+			ids.append_array(c.params)
+		return ids
+	var kick_ids: Array = order.call(tune.group)
+	_assert(kick_ids.front() == 0 and kick_ids.back() == 4, "Tune leads the Kick section, Keytrack trails %s" % [kick_ids])
+	var punch_ids: Array = order.call(_find(layout, 10).group)
+	_assert(punch_ids == [10, 11], "Punch comes before Punch Time %s" % [punch_ids])
+	_assert(_find(layout, 11).control.get("label", "") == "Time", "Punch Time reads as Time in Punch")
 
 
 ## The drum Tune knob shows a note name (E0 at 41.2 Hz), and Decay is left alone.
@@ -270,6 +278,10 @@ func _test_drum_tune_note_name() -> void:
 	_assert(not strategy.decorate_control(decay_knob, params).has("unit"), "Decay keeps its ms unit")
 	var keytrack_control := {"kind": SimpleControlKinds.TOGGLE, "params": [1], "rect": [2, 0, 1, 1]}
 	_assert(not strategy.decorate_control(keytrack_control, params).has("unit"), "a bool Keytrack control is untouched")
+	# The Hat's Tune is a transpose in semitones, not a pitch: it keeps its own unit.
+	var hat_tune := _float(3, "Tune", "st", -12.0, 12.0)
+	var hat_knob := {"kind": SimpleControlKinds.KNOB, "params": [3], "rect": [0, 0, 1, 1]}
+	_assert(not strategy.decorate_control(hat_knob, [hat_tune]).has("unit"), "a Tune in semitones is not a note")
 
 
 func _test_control_kinds() -> void:

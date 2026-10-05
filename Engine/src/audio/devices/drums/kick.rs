@@ -2,11 +2,15 @@
 //!
 //! Three layers are summed: a swept-sine **Body**, a short **Click** transient and a filtered
 //! **Noise** layer. The Body is driven by [`DriveStage`] after its amplitude envelope; a
-//! [`DcBlocker`] cleans the sum, since the 90° start phase and the drive both introduce DC.
+//! [`DcBlocker`] cleans the sum, since the body's start phase and the drive both introduce DC.
 //!
-//! Tuning: with **Keytrack** off the Body plays **Tune**; with it on the Body tracks the incoming
-//! note and Tune becomes an offset in semitones (`st = (tune_norm − 0.5) · 48`, so Tune at norm
-//! 0.5 is 0 st, ±24 st at the ends), matching the PolySynth convention where MIDI 60 = C3.
+//! The controls are musical rather than per-layer: **Punch** is the pitch drop at the start of
+//! the hit, **Click** sets the click layer and, over its upper half, how hard the body starts
+//! (its start phase, 0° at 50 % up to 90° at 100 %), and the Noise layer's decay follows the
+//! body's Decay.
+//!
+//! Tuning: **Tune** is always the pitch you hear on the reference note C1 (MIDI 36). With
+//! **Keytrack** on, other notes transpose from there, so the knob means the same in both modes.
 //!
 //! **Gate** mode makes the amplitude envelope sustain while the note is held and release on
 //! note-off (an 808 bass), and **Glide** (Gate + Keytrack only) slides the pitch exponentially to
@@ -24,51 +28,107 @@ use crate::audio::dsp::{
     sweep_hz, FilterMode, OneShotEnvelope, PinkNoise, Rng, Svf, SvfCoefs, SweepOsc, SweepShape,
 };
 
-/// Body module (IDs 0–9).
-const BODY: [ParamSpec; 8] = [
-    spec(0, "Tune", "Body", "Hz", log(20.0, 200.0), 41.2),
-    spec(1, "Keytrack", "Body", "", Kind::Bool, 0.0),
-    spec(2, "Decay", "Body", "s", log(0.03, 3.0), 0.4),
-    spec(3, "Curve", "Body", "", linear(-1.0, 1.0), 0.0),
-    spec(4, "Attack", "Body", "s", linear(0.0, 0.01), 0.0),
-    spec(5, "Start Phase", "Body", "deg", linear(0.0, 90.0), 0.0),
-    spec(6, "Level", "Body", "", linear(0.0, 1.0), 1.0),
-    spec(7, "Drive", "Body", "dB", linear(0.0, 24.0), 0.0),
+// Parameter IDs, grouped in tens by module.
+const TUNE: ParamId = 0;
+const DECAY: ParamId = 1;
+const SHAPE: ParamId = 2;
+const DRIVE: ParamId = 3;
+const KEYTRACK: ParamId = 4;
+const PUNCH: ParamId = 10;
+const PUNCH_TIME: ParamId = 11;
+const CLICK: ParamId = 20;
+const CLICK_TONE: ParamId = 21;
+const CLICK_TYPE: ParamId = 22;
+const NOISE: ParamId = 30;
+const NOISE_TONE: ParamId = 31;
+const GATE: ParamId = 40;
+const RELEASE: ParamId = 41;
+const GLIDE: ParamId = 42;
+
+/// Kick module (IDs 0–9): the drum itself.
+const KICK: [ParamSpec; 5] = [
+    spec(TUNE, "Tune", "Kick", "Hz", log(20.0, 200.0), 41.2),
+    spec(DECAY, "Decay", "Kick", "s", log(0.03, 3.0), 0.4),
+    spec(SHAPE, "Shape", "Kick", "%", linear(-100.0, 100.0), 0.0),
+    spec(DRIVE, "Drive", "Kick", "dB", linear(0.0, 24.0), 0.0),
+    spec(KEYTRACK, "Keytrack", "Kick", "", Kind::Bool, 0.0),
 ];
 
-/// Punch module (IDs 10–19).
-const PUNCH: [ParamSpec; 2] = [
-    spec(10, "Sweep", "Punch", "st", linear(0.0, 48.0), 24.0),
-    spec(11, "Sweep Time", "Punch", "s", log(0.005, 0.2), 0.04),
+/// Punch module (IDs 10–19): the pitch drop.
+const PUNCH_SPECS: [ParamSpec; 2] = [
+    spec(PUNCH, "Punch", "Punch", "st", linear(0.0, 48.0), 24.0),
+    spec(
+        PUNCH_TIME,
+        "Punch Time",
+        "Punch",
+        "s",
+        log(0.005, 0.2),
+        0.04,
+    ),
 ];
 
 /// Click module (IDs 20–29).
 const CLICK_TYPES: &[&str] = &["Noise", "Tick"];
-const CLICK: [ParamSpec; 3] = [
-    spec(20, "Level", "Click", "", linear(0.0, 1.0), 0.3),
-    spec(21, "Tone", "Click", "Hz", log(1000.0, 8000.0), 3000.0),
-    spec(22, "Type", "Click", "", Kind::Enum(CLICK_TYPES), 0.0),
+const CLICK_SPECS: [ParamSpec; 3] = [
+    spec(CLICK, "Click", "Click", "%", linear(0.0, 100.0), 30.0),
+    spec(
+        CLICK_TONE,
+        "Click Tone",
+        "Click",
+        "Hz",
+        log(1000.0, 8000.0),
+        3000.0,
+    ),
+    spec(
+        CLICK_TYPE,
+        "Click Type",
+        "Click",
+        "",
+        Kind::Enum(CLICK_TYPES),
+        0.0,
+    ),
 ];
 
 /// Noise module (IDs 30–39).
-const NOISE: [ParamSpec; 3] = [
-    spec(30, "Level", "Noise", "", linear(0.0, 1.0), 0.0),
-    spec(31, "Decay", "Noise", "s", log(0.01, 1.0), 0.08),
-    spec(32, "Color", "Noise", "Hz", log(200.0, 12000.0), 4000.0),
+const NOISE_SPECS: [ParamSpec; 2] = [
+    spec(NOISE, "Noise", "Noise", "%", linear(0.0, 100.0), 0.0),
+    spec(
+        NOISE_TONE,
+        "Noise Tone",
+        "Noise",
+        "Hz",
+        log(200.0, 12000.0),
+        4000.0,
+    ),
 ];
 
-/// Mode module (IDs 40–49).
-const MODE: [ParamSpec; 3] = [
-    spec(40, "Gate", "Mode", "", Kind::Bool, 0.0),
-    spec(41, "Release", "Mode", "s", log(0.01, 2.0), 0.2),
-    spec(42, "Glide", "Mode", "s", linear(0.0, 0.5), 0.0),
+/// 808 module (IDs 40–49): sustained, gliding bass kicks.
+const MODE_808: [ParamSpec; 3] = [
+    spec(GATE, "Gate", "808", "", Kind::Bool, 0.0),
+    spec(RELEASE, "Release", "808", "s", log(0.01, 2.0), 0.2),
+    spec(GLIDE, "Glide", "808", "s", linear(0.0, 0.5), 0.0),
 ];
 
-const SPECS: [ParamSpec; 22] = flatten(&[&BODY, &PUNCH, &CLICK, &NOISE, &MODE, &GLOBAL_SPECS]);
+const SPECS: [ParamSpec; 18] = flatten(&[
+    &KICK,
+    &PUNCH_SPECS,
+    &CLICK_SPECS,
+    &NOISE_SPECS,
+    &MODE_808,
+    &GLOBAL_SPECS,
+]);
 /// ID → slot lookup. `100` is above the highest ID (92, the last global).
 const SLOTS: [u8; 100] = slot_table(&SPECS);
 static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
+/// With Keytrack on, this note plays exactly Tune (C1, the GM kick note).
+const KEYTRACK_ROOT: u8 = 36;
+/// The Noise layer decays this fraction of the body's Decay.
+const NOISE_DECAY_RATIO: f32 = 0.2;
+/// Body start phase at full Click: a sine starting at its peak is the hardest attack.
+const MAX_START_PHASE: f32 = 90.0;
+/// Click above this amount also hardens the body's start; below it the body starts at 0°.
+const START_PHASE_FROM: f32 = 0.5;
 /// Fixed resonance of the Noise layer's band-pass.
 const NOISE_RESONANCE: f32 = 0.4;
 /// Body frames processed per inner chunk, so the drive stage never needs a block-sized buffer.
@@ -78,7 +138,7 @@ const DC_HZ: f32 = 5.0;
 
 /// The synthesized kick voice.
 pub struct KickVoice {
-    values: ParamValues<22>,
+    values: ParamValues<18>,
     params: DrumParams,
     sample_rate: f32,
 
@@ -103,14 +163,11 @@ pub struct KickVoice {
     dc: DcBlocker,
 
     // Decoded parameters (refreshed in `sync`, off the per-sample path).
-    tune_norm: f32,
     tune_hz: f32,
     keytrack: bool,
     body_decay: f32,
     body_curve: f32,
-    body_attack: f32,
     start_phase: f32,
-    body_level: f32,
     drive_db: f32,
     sweep_st: f32,
     sweep_time: f32,
@@ -136,49 +193,43 @@ pub struct KickVoice {
 }
 
 impl KickVoice {
-    /// Frequency of a MIDI note, with A4 (69) = 440 Hz.
-    #[inline]
-    fn note_hz(note: u8) -> f32 {
-        440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
-    }
-
     /// Recompute every decoded parameter and hand it to the DSP. Off the per-sample path.
     fn sync(&mut self) {
-        self.tune_norm = self.values.effective_norm(0).unwrap_or(0.0);
-        self.tune_hz = self.values.real(0).unwrap_or(41.2);
-        self.keytrack = self.values.real(1).unwrap_or(0.0) >= 0.5;
-        self.body_decay = self.values.real(2).unwrap_or(0.4);
-        self.body_curve = self.values.real(3).unwrap_or(0.0);
-        self.body_attack = self.values.real(4).unwrap_or(0.0);
-        self.start_phase = self.values.real(5).unwrap_or(0.0);
-        self.body_level = self.values.real(6).unwrap_or(1.0);
-        self.drive_db = self.values.real(7).unwrap_or(0.0);
-        self.sweep_st = self.values.real(10).unwrap_or(24.0);
-        self.sweep_time = self.values.real(11).unwrap_or(0.04);
-        self.click_level = self.values.real(20).unwrap_or(0.3);
-        self.click_tone = self.values.real(21).unwrap_or(3_000.0);
-        self.click_type = if self.values.real(22).unwrap_or(0.0) >= 0.5 {
+        self.tune_hz = self.values.real(TUNE).unwrap_or(41.2);
+        self.keytrack = self.values.real(KEYTRACK).unwrap_or(0.0) >= 0.5;
+        self.body_decay = self.values.real(DECAY).unwrap_or(0.4);
+        self.body_curve = self.values.real(SHAPE).unwrap_or(0.0) / 100.0;
+        self.drive_db = self.values.real(DRIVE).unwrap_or(0.0);
+        self.sweep_st = self.values.real(PUNCH).unwrap_or(24.0);
+        self.sweep_time = self.values.real(PUNCH_TIME).unwrap_or(0.04);
+        self.click_level = self.values.real(CLICK).unwrap_or(30.0) / 100.0;
+        self.click_tone = self.values.real(CLICK_TONE).unwrap_or(3_000.0);
+        self.click_type = if self.values.real(CLICK_TYPE).unwrap_or(0.0) >= 0.5 {
             ClickType::Tick
         } else {
             ClickType::Noise
         };
-        self.noise_level = self.values.real(30).unwrap_or(0.0);
-        self.noise_decay = self.values.real(31).unwrap_or(0.08);
-        self.noise_color = self.values.real(32).unwrap_or(4_000.0);
-        self.gate = self.values.real(40).unwrap_or(0.0) >= 0.5;
-        self.release_s = self.values.real(41).unwrap_or(0.2);
-        self.glide_s = self.values.real(42).unwrap_or(0.0);
+        self.noise_level = self.values.real(NOISE).unwrap_or(0.0) / 100.0;
+        self.noise_color = self.values.real(NOISE_TONE).unwrap_or(4_000.0);
+        self.gate = self.values.real(GATE).unwrap_or(0.0) >= 0.5;
+        self.release_s = self.values.real(RELEASE).unwrap_or(0.2);
+        self.glide_s = self.values.real(GLIDE).unwrap_or(0.0);
+        // Click is the whole attack: the click layer, plus (over its upper half) how hard the
+        // body starts.
+        let hardness = ((self.click_level - START_PHASE_FROM) / (1.0 - START_PHASE_FROM)).max(0.0);
+        self.start_phase = MAX_START_PHASE * hardness;
+        self.noise_decay = (self.body_decay * NOISE_DECAY_RATIO).clamp(0.01, 1.0);
 
         self.pitch_env.set_decay(self.sweep_time);
         self.pitch_env.set_curve(0.0);
-        self.amp_env.set_attack(self.body_attack);
+        self.amp_env.set_attack(0.0);
         self.amp_env.set_decay(self.body_decay);
         self.amp_env.set_curve(self.body_curve);
         self.amp_env.set_release(self.release_s);
         self.amp_env.set_gated(self.gate);
 
         // The click is shorter at a higher tone; the Tick is a fixed 2 ms sine.
-        let tone_norm = self.values.effective_norm(21).unwrap_or(0.0);
+        let tone_norm = self.values.effective_norm(CLICK_TONE).unwrap_or(0.0);
         let click_decay = match self.click_type {
             ClickType::Noise => 0.010 - 0.008 * tone_norm,
             ClickType::Tick => 0.002,
@@ -224,14 +275,11 @@ impl DrumVoice for KickVoice {
             noise_comp: 0.0,
             noise_env: OneShotEnvelope::new(sample_rate),
             dc: DcBlocker::new(DC_HZ, sample_rate),
-            tune_norm: 0.5,
             tune_hz: 41.2,
             keytrack: false,
             body_decay: 0.4,
             body_curve: 0.0,
-            body_attack: 0.0,
             start_phase: 0.0,
-            body_level: 1.0,
             drive_db: 0.0,
             sweep_st: 24.0,
             sweep_time: 0.04,
@@ -297,14 +345,13 @@ impl DrumVoice for KickVoice {
         let cents = humanize * 10.0 * rng.bipolar();
         let decay_scale = 1.0 + humanize * 0.05 * rng.bipolar();
 
-        // Tuning. Keytrack off: base = Tune. On: base = note_hz · 2^(st/12), where Tune is an
-        // offset of ±24 st around norm 0.5 (0 st).
-        let base = if self.keytrack {
-            let st = (self.tune_norm - 0.5) * 48.0;
-            Self::note_hz(note) * 2f32.powf(st / 12.0)
+        // Tuning: Tune is the pitch of the root note; Keytrack transposes the other notes from it.
+        let transpose = if self.keytrack {
+            (note as f32 - KEYTRACK_ROOT as f32) / 12.0
         } else {
-            self.tune_hz
-        } * 2f32.powf(cents / 1200.0);
+            0.0
+        };
+        let base = self.tune_hz * 2f32.powf(transpose + cents / 1200.0);
 
         // Glide (Gate + Keytrack only): slide exponentially from the previous hit's base.
         self.glide_pos = 0.0;
@@ -366,9 +413,7 @@ impl DrumVoice for KickVoice {
                         base
                     };
                     self.body_scratch[i] =
-                        self.body_osc.next(SweepShape::Sine, hz, self.sample_rate)
-                            * amp
-                            * self.body_level;
+                        self.body_osc.next(SweepShape::Sine, hz, self.sample_rate) * amp;
                 }
                 self.drive.process(&mut self.body_scratch[..n]);
                 for i in 0..n {
@@ -444,6 +489,11 @@ mod tests {
 
     const SR: f32 = 48_000.0;
 
+    /// Frequency of a MIDI note, with A4 (69) = 440 Hz.
+    fn note_hz(note: u8) -> f32 {
+        440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+    }
+
     /// Set a parameter by its real value (via the spec's own scaling).
     fn set_real(voice: &mut KickVoice, id: ParamId, real: f32) {
         let spec = KickVoice::specs()
@@ -509,42 +559,44 @@ mod tests {
     #[test]
     fn first_window_starts_a_fourth_higher() {
         let mut v = voice(0.0);
-        v.set_parameter(0, 0.5); // Tune at 0 st
-        set_real(&mut v, 1, 1.0); // Keytrack on
-        set_real(&mut v, 11, 0.2); // Sweep Time 200 ms
-        set_real(&mut v, 20, 0.0); // Click off, so only the body's pitch is measured
-        set_real(&mut v, 30, 0.0); // Noise off
+        set_real(&mut v, TUNE, note_hz(KEYTRACK_ROOT)); // the root plays its own note
+        set_real(&mut v, KEYTRACK, 1.0);
+        set_real(&mut v, PUNCH_TIME, 0.2); // 200 ms
+        set_real(&mut v, CLICK, 0.0); // Click off, so only the body's pitch is measured
+        set_real(&mut v, NOISE, 0.0);
         v.trigger(84, 1.0, &mut Rng::new(1));
         let sig = render_voice(&mut v, 4_800);
 
-        let base = KickVoice::note_hz(84);
+        let base = note_hz(84);
         let early = instantaneous_freq(&sig[..24], SR);
         let ratio = early / base;
         assert!((ratio - 4.0).abs() < 0.12, "ratio {ratio}");
     }
 
-    /// (c) Keytrack tunes the body to the note when Tune is at 0 st.
+    /// (c) Keytrack: the root note (C1) plays Tune, and an octave up plays twice Tune.
     #[test]
-    fn keytrack_tunes_to_the_note() {
-        let mut v = voice(0.0);
-        v.set_parameter(0, 0.5);
-        set_real(&mut v, 1, 1.0);
-        v.trigger(60, 1.0, &mut Rng::new(1));
-        let sig = render_voice(&mut v, (0.5 * SR) as usize);
-        let tail = &sig[(0.2 * SR) as usize..(0.35 * SR) as usize];
-        let f = instantaneous_freq(tail, SR);
-        let expected = 440.0 * 2f32.powf((60.0 - 69.0) / 12.0);
-        assert!((f - expected).abs() / expected < 0.01, "{f} Hz");
+    fn keytrack_transposes_from_tune_at_the_root() {
+        let tail_hz = |note: u8| {
+            let mut v = voice(0.0);
+            set_real(&mut v, KEYTRACK, 1.0);
+            v.trigger(note, 1.0, &mut Rng::new(1));
+            let sig = render_voice(&mut v, (0.5 * SR) as usize);
+            instantaneous_freq(&sig[(0.2 * SR) as usize..(0.35 * SR) as usize], SR)
+        };
+        let root = tail_hz(KEYTRACK_ROOT);
+        assert!((root - 41.2).abs() / 41.2 < 0.01, "root {root} Hz");
+        let octave = tail_hz(KEYTRACK_ROOT + 12);
+        assert!((octave - 82.4).abs() / 82.4 < 0.01, "octave {octave} Hz");
     }
 
     /// (d) Curve 0 reaches −60 dB at the set decay time, within 5 %.
     #[test]
     fn body_decay_reaches_minus_60_db() {
         let mut v = voice(0.0);
-        set_real(&mut v, 30, 0.0); // Noise off
-        set_real(&mut v, 20, 0.0); // Click off
-        set_real(&mut v, 10, 0.0); // no sweep: a steady tail
-        set_real(&mut v, 2, 0.5); // Body Decay 500 ms
+        set_real(&mut v, NOISE, 0.0);
+        set_real(&mut v, CLICK, 0.0);
+        set_real(&mut v, PUNCH, 0.0); // no sweep: a steady tail
+        set_real(&mut v, DECAY, 0.5); // 500 ms
         v.trigger(36, 1.0, &mut Rng::new(1));
         let sig = render_voice(&mut v, (1.2 * SR) as usize);
         let t = time_to_db(&sig, -60.0, SR);
@@ -565,18 +617,17 @@ mod tests {
         assert!((peak(&sa) - peak(&sb)).abs() < 1e-9);
     }
 
-    /// (e) At full sensitivity the host's velocity curve gives about −12 dB at velocity 64.
-    /// The body level is kept low so the host's `soft_clip` stays linear and does not skew the
-    /// peak ratio.
+    /// (e) At full sensitivity the host's velocity curve follows `v²`: halving the velocity
+    /// is about −12 dB. Velocities 64 and 32 keep the peaks low enough that the host's
+    /// `soft_clip` stays linear and does not skew the ratio.
     #[test]
     fn velocity_curve_scales_the_peak() {
         let make = |sens_norm: f32, vel: u8| {
             let mut host = DrumHost::<KickVoice>::new(SR, 4_096);
             host.prepare(SR, 4_096);
             host.set_parameter(90, sens_norm); // Velocity
-            host.set_parameter(6, KickVoice::specs()[6].to_norm(0.1)); // Body Level 0.1
-            host.set_parameter(20, 0.0); // Click off
-            host.set_parameter(30, 0.0); // Noise off
+            host.set_parameter(CLICK, 0.0);
+            host.set_parameter(NOISE, 0.0);
             left(&render_host(&mut host, 2_048, 36, vel))
         };
 
@@ -584,19 +635,22 @@ mod tests {
         let loud = peak(&make(0.0, 127));
         assert!((quiet - loud).abs() < 1e-6, "{quiet} vs {loud}");
 
-        let loud = peak(&make(1.0, 127));
         let mid = peak(&make(1.0, 64));
-        let ratio_db = to_db(mid / loud);
+        let soft = peak(&make(1.0, 32));
+        let ratio_db = to_db(soft / mid);
         assert!((ratio_db + 12.0).abs() < 1.5, "{ratio_db} dB");
     }
 
     /// (f) The click's energy above 1 kHz is concentrated in the first 10 ms.
     #[test]
     fn click_energy_above_1khz_is_early() {
+        // A short, low, unswept body: after the 1 kHz high-pass almost only the click remains.
         let mut v = voice(0.0);
-        set_real(&mut v, 6, 0.0); // Body off, so only the click remains
-        set_real(&mut v, 30, 0.0); // Noise off
-        set_real(&mut v, 20, 1.0); // Click Level 1
+        set_real(&mut v, TUNE, 20.0);
+        set_real(&mut v, DECAY, 0.03);
+        set_real(&mut v, PUNCH, 0.0);
+        set_real(&mut v, NOISE, 0.0);
+        set_real(&mut v, CLICK, 100.0);
         v.trigger(36, 1.0, &mut Rng::new(1));
         let sig = render_voice(&mut v, (0.1 * SR) as usize);
 
@@ -624,13 +678,12 @@ mod tests {
     #[test]
     fn high_drive_does_not_alias() {
         let mut v = voice(0.0);
-        set_real(&mut v, 0, 197.0); // Tune
-        set_real(&mut v, 6, 1.0); // Body Level
-        set_real(&mut v, 7, 24.0); // Drive
-        set_real(&mut v, 10, 0.0); // no sweep
-        set_real(&mut v, 20, 0.0); // Click off
-        set_real(&mut v, 30, 0.0); // Noise off
-        set_real(&mut v, 2, 3.0); // long decay
+        set_real(&mut v, TUNE, 197.0);
+        set_real(&mut v, DRIVE, 24.0);
+        set_real(&mut v, PUNCH, 0.0); // no sweep
+        set_real(&mut v, CLICK, 0.0);
+        set_real(&mut v, NOISE, 0.0);
+        set_real(&mut v, DECAY, 3.0); // long decay
         v.trigger(36, 1.0, &mut Rng::new(1));
         let sig = render_voice(&mut v, (1.5 * SR) as usize);
 
@@ -660,10 +713,10 @@ mod tests {
     #[test]
     fn gate_mode_holds_and_releases() {
         let mut v = voice(0.0);
-        set_real(&mut v, 40, 1.0); // Gate on
-        set_real(&mut v, 20, 0.0); // Click off
-        set_real(&mut v, 30, 0.0); // Noise off
-        set_real(&mut v, 41, 0.2); // Release 200 ms
+        set_real(&mut v, GATE, 1.0);
+        set_real(&mut v, CLICK, 0.0);
+        set_real(&mut v, NOISE, 0.0);
+        set_real(&mut v, RELEASE, 0.2); // 200 ms
         v.trigger(36, 1.0, &mut Rng::new(1));
 
         let held = render_voice(&mut v, (1.1 * SR) as usize);
