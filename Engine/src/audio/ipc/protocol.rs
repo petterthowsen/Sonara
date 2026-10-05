@@ -359,6 +359,9 @@ pub const EVENT_PARAM: u16 = 3;
 /// CLAP `PARAM_MOD` event; `value` is the offset in normalized units and the base value is never
 /// written (ADR-0014).
 pub const EVENT_PARAM_MOD: u16 = 4;
+/// Choke every sounding note (Drum Machine choke targets). The host turns it into a CLAP
+/// `NOTE_CHOKE` with a wildcard Pckn; `note`, `value` and `id` are unused.
+pub const EVENT_NOTE_CHOKE: u16 = 5;
 
 /// One event in a block's input or output event array.
 ///
@@ -409,6 +412,18 @@ impl BlockEvent {
             _reserved: 0,
             value: value_01,
             id: param_id,
+        }
+    }
+
+    /// Choke every sounding note at `sample_offset`.
+    pub fn choke(sample_offset: u32) -> Self {
+        Self {
+            sample_offset,
+            kind: EVENT_NOTE_CHOKE,
+            note: 0,
+            _reserved: 0,
+            value: 0.0,
+            id: 0,
         }
     }
 

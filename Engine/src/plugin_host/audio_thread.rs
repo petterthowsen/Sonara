@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use clack_extensions::params::PluginParams;
 use clack_host::events::event_types::{
-    NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags,
+    NoteChokeEvent, NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent,
+    TransportFlags,
 };
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{EventFlags, EventHeader, Pckn, UnknownEvent};
@@ -30,8 +31,8 @@ use tracing::{info, warn};
 
 use crate::audio::ipc::protocol::TRANSPORT_FLAG_PLAYING;
 use crate::audio::ipc::{
-    futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory, EVENT_NOTE_OFF,
-    EVENT_NOTE_ON, EVENT_PARAM, EVENT_PARAM_MOD,
+    futex, BlockEvent, BlockTransport, HostSharedMemory, InstanceId, SharedMemory,
+    EVENT_NOTE_CHOKE, EVENT_NOTE_OFF, EVENT_NOTE_ON, EVENT_PARAM, EVENT_PARAM_MOD,
 };
 use crate::plugin_host::host::SubprocessHost;
 use crate::plugin_host::state::{ParamEntry, ParamMap};
@@ -197,6 +198,7 @@ impl AudioThreadHandle {
 enum OwnedEvent {
     NoteOn(u32, NoteOnEvent),
     NoteOff(u32, NoteOffEvent),
+    NoteChoke(u32, NoteChokeEvent),
     Param(u32, ParamValueEvent),
     ParamMod(u32, ParamModEvent),
 }
@@ -206,6 +208,7 @@ impl OwnedEvent {
         match self {
             OwnedEvent::NoteOn(time, _)
             | OwnedEvent::NoteOff(time, _)
+            | OwnedEvent::NoteChoke(time, _)
             | OwnedEvent::Param(time, _)
             | OwnedEvent::ParamMod(time, _) => *time,
         }
@@ -215,6 +218,7 @@ impl OwnedEvent {
         match self {
             OwnedEvent::NoteOn(_, event) => event.as_unknown(),
             OwnedEvent::NoteOff(_, event) => event.as_unknown(),
+            OwnedEvent::NoteChoke(_, event) => event.as_unknown(),
             OwnedEvent::Param(_, event) => event.as_unknown(),
             OwnedEvent::ParamMod(_, event) => event.as_unknown(),
         }
@@ -590,6 +594,11 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
                 EVENT_NOTE_OFF => scratch.events.push(OwnedEvent::NoteOff(
                     event.sample_offset,
                     NoteOffEvent::new(event.sample_offset, note_pckn, event.value as f64),
+                )),
+                // A wildcard Pckn chokes every sounding note on every port and channel.
+                EVENT_NOTE_CHOKE => scratch.events.push(OwnedEvent::NoteChoke(
+                    event.sample_offset,
+                    NoteChokeEvent::new(event.sample_offset, Pckn::match_all()),
                 )),
                 EVENT_PARAM => {
                     if let Some(entry) = slot.param_map.get(event.id) {

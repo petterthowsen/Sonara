@@ -510,6 +510,17 @@ impl AudioDevice for SubprocessClapAdapter {
         ));
     }
 
+    /// Drum Machine choke: a CLAP `NOTE_CHOKE` for every sounding note at `frame_offset`. Plugins
+    /// that ignore `NOTE_CHOKE` keep ringing.
+    fn choke(&mut self, frame_offset: usize) {
+        if self.input_events.len() >= MAX_BLOCK_EVENTS {
+            self.stats.event_drops += 1;
+            return;
+        }
+        self.input_events
+            .push(BlockEvent::choke(frame_offset as u32));
+    }
+
     /// Audio thread: queue a modulation offset for the upcoming block at its start (spec 018
     /// Phase 5). The base value is untouched; `PARAM_MOD` only moves the plugin's own modulation.
     fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
@@ -1571,13 +1582,14 @@ mod tests {
         );
         adapter.set_parameter_at(7, 0.75, 3);
         adapter.set_param_mod_at(9, 0.5, 40);
+        adapter.choke(30);
 
         let input = vec![0.0f32; 64 * 2];
         let mut output = vec![0.0f32; 64 * 2];
         adapter.process_block(&input, &mut output, 64);
 
         let events = observed.lock().unwrap();
-        assert_eq!(events.len(), 3, "the host saw all three events");
+        assert_eq!(events.len(), 4, "the host saw all four events");
         assert_eq!(events[0].kind, crate::audio::ipc::EVENT_NOTE_ON);
         assert_eq!(events[0].note, 60);
         assert_eq!(events[0].id, 77);
@@ -1591,12 +1603,14 @@ mod tests {
         assert_eq!(events[2].id, 9);
         assert!((events[2].value - 0.5).abs() < 1e-6);
         assert_eq!(events[2].sample_offset, 40);
+        assert_eq!(events[3].kind, crate::audio::ipc::EVENT_NOTE_CHOKE);
+        assert_eq!(events[3].sample_offset, 30);
         drop(events);
 
         // Events belong to one block only.
         let mut output = vec![0.0f32; 64 * 2];
         adapter.process_block(&input, &mut output, 64);
-        assert_eq!(observed.lock().unwrap().len(), 3, "not replayed next block");
+        assert_eq!(observed.lock().unwrap().len(), 4, "not replayed next block");
         assert_eq!(adapter.take_stats().event_drops, 0);
 
         stop.store(true, Ordering::Release);

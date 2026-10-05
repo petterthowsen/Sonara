@@ -34,6 +34,8 @@ use voice::{PendingNote, RenderCtx, StartCtx, Voice};
 const VOICE_BUDGET: usize = 64;
 /// Scratch size used until `prepare` supplies the real block size.
 const DEFAULT_MAX_FRAMES: usize = 4096;
+/// Sentinel key in the queued MIDI list marking a choke (real keys are 0–127).
+const CHOKE_KEY: u8 = 255;
 /// The default Filter Env → Cutoff amount (real PolySynth's default patch).
 const DEFAULT_FILTER_ENV_AMOUNT: f32 = 0.35;
 
@@ -409,6 +411,14 @@ impl PolySynthDevice {
         }
     }
 
+    /// Fade every voice out over the steal fade and forget held keys (Drum Machine choke).
+    fn choke_voices(&mut self) {
+        for v in self.voices.iter_mut() {
+            v.kill();
+        }
+        self.held.clear();
+    }
+
     fn note_off(&mut self, note: u8, release: f32) {
         match self.params.mode {
             VoiceMode::Poly => {
@@ -587,7 +597,9 @@ impl AudioDevice for PolySynthDevice {
                 self.render_span(cursor, span_end);
                 cursor = span_end;
             }
-            if is_on {
+            if note == CHOKE_KEY {
+                self.choke_voices();
+            } else if is_on {
                 self.note_on(note, value);
             } else {
                 self.note_off(note, value);
@@ -617,6 +629,12 @@ impl AudioDevice for PolySynthDevice {
                 self.queued_midi.push((frame_offset, key, release, false))
             }
             NoteEvent::Expression { .. } => {}
+        }
+    }
+
+    fn choke(&mut self, frame_offset: usize) {
+        if self.queued_midi.len() < self.queued_midi.capacity() {
+            self.queued_midi.push((frame_offset, CHOKE_KEY, 0.0, false));
         }
     }
 
@@ -1938,6 +1956,25 @@ mod tests {
         let (off, zero) = (play(false), play(true));
         // A lone unison voice is deterministic (phase starts at 0), so the renders are identical.
         assert_eq!(off, zero);
+    }
+
+    #[test]
+    fn choke_fades_held_notes_out_and_the_next_note_still_plays() {
+        let mut dev = synth();
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(64, 100), 0);
+        assert!(peak(&render(&mut dev, 4)) > 0.01, "chord sounds");
+
+        dev.choke(10);
+        render(&mut dev, 1);
+        assert!(
+            peak(&render(&mut dev, 2)) == 0.0,
+            "silent after the choke fade"
+        );
+        assert!(dev.voices.iter().all(|v| !v.active));
+
+        dev.send_note_event(&NoteEvent::test_on(67, 100), 0);
+        assert!(peak(&render(&mut dev, 4)) > 0.01, "a later note plays");
     }
 }
 

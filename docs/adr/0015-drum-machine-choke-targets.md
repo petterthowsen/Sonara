@@ -31,6 +31,10 @@ would only give two ways to say the same thing.
   set in the triggering slot's mask, at the same frame offset (same fixed-cost scan as 0012). The
   slot's own bit is ignored, and a note-off never chokes.
 - `AudioDevice::choke` and the 3 ms `DrumHost` fade are unchanged from 0012.
+- Devices that honour a choke: the built-in drums (3 ms fade), Sampler (declick fade), PolySynth
+  (steal fade), and CLAP plugins, which get a wildcard `NOTE_CHOKE` (block event
+  `EVENT_NOTE_CHOKE`). Containers (Chain, Layer, Multiband, the modulation wrapper) pass it to
+  their children. Sfizz and plugins that ignore `NOTE_CHOKE` keep ringing.
 - Projects saved with choke groups migrate on load: every pad in a non-zero group gets every
   other member of that group as a target, and the `choke_group` field is dropped.
 

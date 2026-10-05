@@ -516,6 +516,12 @@ impl AudioDevice for MultibandDevice {
         }
     }
 
+    fn choke(&mut self, frame_offset: usize) {
+        for child in &mut self.children {
+            child.choke(frame_offset);
+        }
+    }
+
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         if let Some((_, real)) = self.values.set(param_id, value) {
             self.apply(param_id, real);
