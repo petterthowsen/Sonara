@@ -106,6 +106,8 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 ### Clips
 
 - [x?] UX: moving timeline clips around needs improvement. Dragging a clip to another track should move it there live during the drag, not just on drop.
+- [x] Bug: timeline horizontal zoom jitter when zooming in at a > 0 horizontal scroll: the scroll position jitters when zooming in
+  - [x] Markers also jitter their lengths and their labels
 - [x?] Shift+click while dragging a clip should bypass grid snap.
 - [x] Double-clicking to place a clip starts moving it straight away: keep the button held and drag it into place; the release records the move (a separate undo step from the creation). Covered by `Godot/tests/test_clip_placement_drag.gd`.
 - [x] Resize several clips at once: dragging an edge of a clip in a multi-selection moves that edge on every selected clip by the same snapped delta, each clamped to its own neighbours, as one undo step. Covered by `Godot/tests/test_clip_group_resize.gd`.
