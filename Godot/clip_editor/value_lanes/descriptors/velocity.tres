@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="NoteValueDescriptor" format=3]
+
+[ext_resource type="Script" path="res://clip_editor/value_lanes/NoteValueDescriptor.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+key = "vel"
+display_name = "Velocity"
+property = "velocity"
+min_value = 0.007874
+max_value = 1.0
+default_value = 0.787402
+anchor = 0

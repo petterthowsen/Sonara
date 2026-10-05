@@ -7,6 +7,13 @@ class_name NoteEditor extends NoteContainer
 ## positions, so MidiEditor (which owns the range overlays) can refresh them.
 signal key_input_handled
 
+## The user touched a note (selected it alone, started dragging or resizing it): its values
+## become the starting values of the next note drawn.
+signal note_touched(note: MidiNoteData)
+
+## Starting velocity and release of new notes. MidiEditor hands its shared instance down.
+var next_values := NextNoteValues.new()
+
 # Selection manager
 var selection_manager: NoteSelectionManager
 
@@ -71,6 +78,12 @@ func _ready():
 	# Provide coordinate conversion callback to selection manager
 	# This allows it to work in the correct coordinate space without tight coupling
 	selection_manager.get_note_song_position = get_note_song_position
+	selection_manager.selection_changed.connect(_on_selection_touched)
+
+
+func _on_selection_touched(notes: Array[VisualNote]) -> void:
+	if notes.size() == 1 and notes[0].midi_note_data:
+		note_touched.emit(notes[0].midi_note_data)
 
 
 # Override set_grid_helper to also update selection manager
@@ -297,7 +310,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var note_id: int = target_clip.allocate_note_id()
 
 	# Add note to clip
-	var note_data = target_clip.add_midi_note(note_id, midi_note_num, MidiNoteData.DEFAULT_VELOCITY, tick_position, new_note_length)
+	var note_data = target_clip.add_midi_note(note_id, midi_note_num, next_values.velocity, tick_position, new_note_length, next_values.release)
 	if note_data == null:
 		push_error("[NoteEditor] Failed to add note after cutting overlaps")
 		_history_clip_snapshots.clear()
@@ -348,6 +361,7 @@ func _on_drag_started(note: VisualNote, click_position: Vector2) -> void:
 	# If note not selected, select it
 	if note not in selection_manager.selected_notes:
 		selection_manager.select_note(note)
+	note_touched.emit(note.midi_note_data)
 
 	dragging_note = note
 	drag_start_midi_note = note.midi_note_data.note
@@ -592,6 +606,7 @@ func _on_resize_started(note: VisualNote, click_position: Vector2) -> void:
 
 	if note not in selection_manager.selected_notes:
 		selection_manager.select_note(note)
+	note_touched.emit(note.midi_note_data)
 
 	resizing_note = note
 	resize_start_duration = note.midi_note_data.duration_ticks

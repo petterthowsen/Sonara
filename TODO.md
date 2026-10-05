@@ -150,7 +150,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 
 - [x?] Bug: in drum view mode, inserted notes are too long and can sometimes end up replacing many notes. A length remembered from a piano-roll resize (`NoteEditor.last_note_length`) followed the user into Drum View, where the long insert's overlap cut removed the following hits on the row. Drum View now always inserts one grid step; the remembered length still applies in the piano roll. Covered by `test_drum_view.gd` (`_test_drum_insert_ignores_piano_roll_length`); needs a live pass
 - [ ] Drum view: notes are hard to select. Draw/insert them as long as the smallest snap interval at the current zoom. Add a toggle at the bottom of the editor for this behavior; the inverted case makes them as small as the smallest snap interval (clarify: the toggle off may mean the note's actual length)
-- [ ] Bug: velocity of new notes is wrong. New notes should inherit the last velocity used, or the velocity of the last clicked note (spec 019, REQ-028)
+- [x?] Bug: velocity of new notes is wrong. New notes should inherit the last velocity used, or the velocity of the last clicked note (spec 019, REQ-028)
 - [ ] Note values and the value lane: float velocity and release velocity, sounding-note ids through the device interface, a `release` modulator, and a value lane pane under the MIDI editor (paint, line, offset and scale gestures, Set/Randomize/Scale transforms, drum row selection). Expression curves come in a later spec. Spec `docs/specs/019-note-values/`
   - [ ] Phase A: foundation (engine, model, OSC, DAWproject `rel`)
   - [ ] Phase B: UI (value lanes, row selection, new-note values)

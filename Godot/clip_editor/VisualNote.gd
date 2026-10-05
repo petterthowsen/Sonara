@@ -133,6 +133,11 @@ func set_color(color: Color) -> void:
 	_update_visual()
 
 
+## Brighten the note while the pointer is over its value lane stem.
+func set_value_hover(on: bool) -> void:
+	self_modulate = Color(1.3, 1.3, 1.3) if on else Color.WHITE
+
+
 func set_selected(selected: bool) -> void:
 	"""Set selection state."""
 	is_selected = selected

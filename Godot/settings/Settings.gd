@@ -302,6 +302,15 @@ func _register_all_settings() -> void:
 		+ "Slow keeps the previous speed, Normal is about a third faster, Fast is for quick navigation.",
 	)).choices(["Slow", "Normal", "Fast"]).sub("Zoom")
 
+	_register(Setting.new(
+		"clip_editor/note_value_display",
+		"Note Value Display",
+		Type.CHOICE,
+		"0–127",
+		CATEGORY_APPEARANCE,
+		"How the clip editor's value lanes and the next-note readout show velocity and release: as MIDI values (0–127) or as a percentage. Values are stored the same either way.",
+	)).choices(["0–127", "Percent"]).sub("Clip Editor")
+
 	# --- Appearance ---
 	_register(Setting.new(
 		"appearance/automation_lane_height",
@@ -676,7 +685,7 @@ func get_shortcut_list() -> Array[Dictionary]:
 	"""
 	var groups: Array[Dictionary] = [
 		{ "name" = "Transport", "actions" = ["play", "pause", "pause_here", "stop_here", "toggle_computer_keyboard"] },
-		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_secondary_mixer", "toggle_device_lane", "toggle_assistant"] },
+		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_note_value_lanes", "toggle_secondary_mixer", "toggle_device_lane", "toggle_assistant"] },
 		{ "name" = "Edit", "actions" = ["ui_undo", "ui_redo", "ui_duplicate", "ui_delete"] },
 		{ "name" = "Keyboard", "actions" = ["keyboard_transpose_up", "keyboard_transpose_down", "keyboard_velocity_up", "keyboard_velocity_down"] },
 	]

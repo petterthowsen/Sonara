@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="NoteValueDescriptor" format=3]
+
+[ext_resource type="Script" path="res://clip_editor/value_lanes/NoteValueDescriptor.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+key = "rel"
+display_name = "Release"
+property = "release"
+min_value = 0.0
+max_value = 1.0
+default_value = 0.5
+anchor = 1

@@ -23,7 +23,13 @@ signal track_mode_track_selected(track: Track)
 ## clip-content ticks in clip mode, song ticks in track mode (see _ruler_to_song_ticks).
 @onready var ruler: RulerStack = $HSplit/MainPanel/VBox/PanelContainer/VBox/Ruler
 
-@onready var midi_editor = $HSplit/MainPanel/VBox/MidiEditor
+@onready var midi_editor: MidiEditor = $HSplit/MainPanel/VBox/EditorSplit/MidiEditor
+
+## Velocity / release lanes under the note area (docs/specs/019-note-values).
+@onready var value_pane: NoteValuePane = $HSplit/MainPanel/VBox/EditorSplit/NoteValuePane
+@onready var value_lanes_toggle: Button = $BottomPanel/Toolbar/ValueLanesToggle
+## Velocity the next drawn note gets (the last touched note's, or what the user typed).
+@onready var next_value_spin: SpinBox = $BottomPanel/Toolbar/NextValue
 
 @onready var audition_toggle: Button = $BottomPanel/Toolbar/AuditionToggle
 const AUDITION_CONFIG_KEY := "clip_editor/audition"
@@ -133,6 +139,7 @@ func _ready():
 	audition_toggle.toggled.connect(_on_audition_toggled)
 	
 	_setup_note_map_toolbar()
+	_setup_value_lanes()
 
 	_editor = Sonara.editor
 	if _editor:
@@ -178,6 +185,46 @@ func _on_editor_clips_selected(clips: Array[ClipInstance], multi_track: bool):
 	# If we're already visible, bind immediately
 	if is_visible_in_tree():
 		_bind_pending_clips()
+
+
+## Bind the value pane (the grid helper is set by now) and its toolbar toggle.
+func _setup_value_lanes() -> void:
+	value_pane.bind(midi_editor)
+	value_lanes_toggle.set_pressed_no_signal(value_pane.visible)
+	value_lanes_toggle.toggled.connect(value_pane.set_lanes_visible)
+	value_pane.note_touched.connect(midi_editor.next_note_values.take_from)
+	_setup_next_value()
+
+
+## The toolbar readout of the next note's velocity: shows it and edits it without touching
+## any note. Follows the display-format setting (0–127 or percent).
+func _setup_next_value() -> void:
+	next_value_spin.value_changed.connect(_on_next_value_edited)
+	midi_editor.next_note_values.changed.connect(_refresh_next_value)
+	Settings.setting_changed.connect(func(key, _v): if key == "clip_editor/note_value_display": _refresh_next_value())
+	_refresh_next_value()
+
+
+func _next_value_scale() -> float:
+	return 100.0 if NoteValueDescriptors.display_mode() == NoteValueDescriptor.DISPLAY_PERCENT else 127.0
+
+
+func _refresh_next_value() -> void:
+	var scale_to := _next_value_scale()
+	next_value_spin.min_value = roundf(MidiNoteData.MIN_VELOCITY * scale_to) if scale_to == 127.0 else 1.0
+	next_value_spin.max_value = scale_to
+	next_value_spin.suffix = "%" if scale_to == 100.0 else ""
+	next_value_spin.set_value_no_signal(roundf(midi_editor.next_note_values.velocity * scale_to))
+
+
+func _on_next_value_edited(v: float) -> void:
+	midi_editor.next_note_values.velocity = v / _next_value_scale()
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if is_visible_in_tree() and event.is_action_pressed("toggle_note_value_lanes"):
+		value_lanes_toggle.button_pressed = not value_lanes_toggle.button_pressed
+		get_viewport().set_input_as_handled()
 
 
 func _on_audition_toggled(on: bool) -> void:

@@ -4,6 +4,10 @@
 @tool
 class_name VPiano extends Control
 
+## Ctrl+click on a key: select the notes of that pitch (Shift adds them to the selection).
+## A plain click auditions the key, so this one doesn't.
+signal key_select_requested(note: int, additive: bool)
+
 ## Shared pitch <-> row <-> Y math, handed down by MidiEditor. Defaults to its own
 ## chromatic layout so the @tool preview still renders in the Godot editor.
 var layout: LaneLayout = LaneLayout.chromatic():
@@ -216,7 +220,12 @@ func _gui_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
-				_press_at(mb.position)
+				if mb.is_command_or_control_pressed():
+					var picked := get_note_at_position(mb.position)
+					if picked >= 0:
+						key_select_requested.emit(picked, mb.shift_pressed)
+				else:
+					_press_at(mb.position)
 			else:
 				_release_pressed()
 			accept_event()

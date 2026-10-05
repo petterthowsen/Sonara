@@ -1,0 +1,20 @@
+[gd_scene format=3 uid="uid://dprtnv5sqv7i0"]
+
+[ext_resource type="Script" uid="uid://hgq5h4wyvpxa" path="res://clip_editor/value_lanes/NoteValueTransformDialog.gd" id="1_chox3"]
+
+[node name="NoteValueTransformDialog" type="ConfirmationDialog" unique_id=1767401102]
+title = "Transform"
+ok_button_text = "Apply"
+script = ExtResource("1_chox3")
+
+[node name="VBox" type="VBoxContainer" parent="." unique_id=2008783495]
+
+[node name="PromptLabel" type="Label" parent="VBox" unique_id=351362346]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+text = "Value:"
+autowrap_mode = 3
+
+[node name="AmountSpinBox" type="SpinBox" parent="VBox" unique_id=129483992]
+layout_mode = 2
+max_value = 127.0

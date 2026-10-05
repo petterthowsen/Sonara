@@ -230,7 +230,7 @@ until every device is migrated, and T-009 deletes the shim.
 
 ## Phase B: UI
 
-- [ ] **T-017** [REQ-020] Add the note value descriptors and the display setting.
+- [x?] **T-017** [REQ-020] Add the note value descriptors and the display setting.
   - _Files_: `Godot/clip_editor/value_lanes/NoteValueDescriptor.gd`,
     `NoteValueDescriptors.gd`, `descriptors/velocity.tres`, `descriptors/release.tres`
     (created via MCP), `Godot/settings/Settings.gd` (`clip_editor/note_value_display`)
@@ -239,7 +239,7 @@ until every device is migrated, and T-009 deletes the shim.
     as "100", or "79%" in percent mode.
   - _Depends on_: T-016
 
-- [ ] **T-018** [REQ-021, REQ-022, REQ-023, REQ-026] Write the pure edit and transform maths.
+- [x?] **T-018** [REQ-021, REQ-022, REQ-023, REQ-026] Write the pure edit and transform maths.
   - _Files_: `Godot/clip_editor/value_lanes/ValueLaneEdits.gd`, `NoteValueTransforms.gd`
   - _Output_: `value_at_y`, `offset`, `scale`, `line_value`, `stems_at_x`, `set_all`,
     `randomize`, `scale_around_mean`, each clamped per descriptor.
@@ -251,7 +251,7 @@ until every device is migrated, and T-009 deletes the shim.
     - seeded Randomize stays within ±0.1
   - _Depends on_: T-017
 
-- [ ] **T-019** [REQ-015, REQ-016] Build the pane and lane scenes and wire them into the clip editor.
+- [x?] **T-019** [REQ-015, REQ-016] Build the pane and lane scenes and wire them into the clip editor.
   - _Files_: `Godot/clip_editor/value_lanes/NoteValuePane.tscn` + `.gd`, `ValueLane.tscn` +
     `.gd`, `ValueLaneStemArea.gd` (empty `_draw` for now), `Godot/clip_editor/ClipEditor.tscn`
     (via MCP: `EditorSplit` VSplitContainer holding `MidiEditor` and a `NoteValuePane` instance;
@@ -263,12 +263,15 @@ until every device is migrated, and T-009 deletes the shim.
     - "+ Lane" adds and the close button removes.
     - Heights and visibility persist in `clip_editor/value_lanes`.
     - The header column tracks `MidiEditor.key_column_width_changed`.
+  - _Note_: `pane_height` is not persisted: the pane's height follows its lanes, and each lane's
+    height is saved. The `.tres` descriptors were written as text (the editor was in play mode),
+    and the scenes were built with MCP. No MCP screenshot of the scenes yet.
   - _Verify_: `Godot/tests/run_all.sh value_lane_pane` passes. The new `test_value_lane_pane.gd`
     covers toggle, add, close, re-create, and project JSON unchanged. The scenes open cleanly in
     the Godot editor with visible defaults (MCP screenshot).
   - _Depends on_: T-017
 
-- [ ] **T-020** [REQ-017, REQ-018, REQ-019] Draw the stems.
+- [x?] **T-020** [REQ-017, REQ-018, REQ-019] Draw the stems.
   - _Files_: `Godot/clip_editor/MidiEditor.gd` (`value_stems()`, `key_column_width_changed`,
     hover cross-highlight), `Godot/clip_editor/value_lanes/ValueLaneStemArea.gd` (draw, culling,
     redraw signals), `Godot/clip_editor/VisualNote.gd` (`set_value_hover`),
@@ -284,7 +287,7 @@ until every device is migrated, and T-009 deletes the shim.
     stem counts.
   - _Depends on_: T-019
 
-- [ ] **T-021** [REQ-021, REQ-022, REQ-023, REQ-024, REQ-025] Implement the lane gestures.
+- [x?] **T-021** [REQ-021, REQ-022, REQ-023, REQ-024, REQ-025] Implement the lane gestures.
   - _Files_: `Godot/clip_editor/value_lanes/ValueLaneStemArea.gd`,
     `Godot/history/commands/ClipNotesStateCommand.gd` (use `capture_many` / `commit_many`)
   - _Output_:
@@ -302,7 +305,7 @@ until every device is migrated, and T-009 deletes the shim.
     - undo restores the values
   - _Depends on_: T-018, T-020
 
-- [ ] **T-022** [REQ-026] Add the transforms menu and dialog.
+- [x?] **T-022** [REQ-026] Add the transforms menu and dialog.
   - _Files_: `Godot/clip_editor/value_lanes/NoteValueTransformDialog.tscn` (via MCP) + script,
     `ValueLane.gd` (menu → dialog → `NoteValueTransforms`)
   - _Output_: Set…, Randomize… and Scale… act on the selection, or on every editable note when
@@ -311,7 +314,7 @@ until every device is migrated, and T-009 deletes the shim.
     dialog: Set 0.5 on all notes with no selection, and undo.
   - _Depends on_: T-021
 
-- [ ] **T-023** [REQ-027] Select a row's notes from the drum row header and the piano keys.
+- [x?] **T-023** [REQ-027] Select a row's notes from the drum row header and the piano keys.
   - _Files_: `Godot/clip_editor/DrumRowHeader.gd` (`row_select_requested`),
     `Godot/components/VPiano.gd` (`key_select_requested` on Ctrl+click, no audition),
     `Godot/clip_editor/MidiEditor.gd` (handlers)
@@ -322,7 +325,7 @@ until every device is migrated, and T-009 deletes the shim.
     three rows, a Shift-add, and a piano Ctrl-click.
   - _Depends on_: T-016
 
-- [ ] **T-024** [REQ-028] New notes inherit the last touched note's values.
+- [x?] **T-024** [REQ-028] New notes inherit the last touched note's values.
   - _Files_: `Godot/clip_editor/MidiEditor.gd` (`NextNoteValues`), `note_editor/NoteEditor.gd`
     (`note_touched`; placement reads next values), `value_lanes/ValueLaneStemArea.gd` (emits
     touched), `Godot/clip_editor/ClipEditor.tscn` (via MCP: toolbar `NextValue` SpinBox),
@@ -335,7 +338,7 @@ until every device is migrated, and T-009 deletes the shim.
     touches 0.3 / 0.7 and draws, then changes the readout and draws.
   - _Depends on_: T-021
 
-- [ ] **T-025** [Non-functional] Check the clip editor's performance with the pane visible.
+- [x?] **T-025** [Non-functional] Check the clip editor's performance with the pane visible.
   - _Files_: `Godot/tests/test_clip_editor_performance.gd` (add a variant with the pane visible)
   - _Output_: the existing budgets hold with one velocity lane shown.
   - _Verify_: `Godot/tests/run_all.sh clip_editor_performance` passes.

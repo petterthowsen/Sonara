@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://rsimi15r4va3" path="res://clip_editor/GridRenderer.gd" id="6_j0nq3"]
 [ext_resource type="Script" uid="uid://gc7b75pk6fst" path="res://clip_editor/MidiEditorOverlays.gd" id="9_ytm0k"]
 [ext_resource type="Texture2D" uid="uid://1sdwj750u4bc" path="res://assets/icons/headphones.svg" id="10_audit"]
+[ext_resource type="PackedScene" uid="uid://cu5kdhb7wxo8" path="res://clip_editor/value_lanes/NoteValuePane.tscn" id="14_wamqs"]
 [ext_resource type="Texture2D" uid="uid://iuil1npac1nc" path="res://assets/icons/eye.svg" id="eye_icon"]
 [ext_resource type="Texture2D" uid="uid://dwmdytxnxceax" path="res://assets/icons/layers.svg" id="layers_icon"]
 [ext_resource type="Texture2D" uid="uid://ccmf42o4fqto1" path="res://assets/icons/pencil.svg" id="pencil_icon"]
@@ -166,23 +167,35 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 0
 script = ExtResource("2_q0vl8")
 
-[node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox" unique_id=700905690]
+[node name="EditorSplit" type="VSplitContainer" parent="HSplit/MainPanel/VBox" unique_id=1097190514]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox/EditorSplit" unique_id=700905690]
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 script = ExtResource("3_1pvpx")
 note_height = 30
+scroll_speed_v = null
+scroll_speed_h = null
+pan_zoom_sensitivity = null
+min_width_bars = null
+extra_width_bars = null
+scroll_growth_bars = null
+zoom_min_pixels_per_beat = null
+zoom_max_pixels_per_beat = null
 scroll_smoothing = 0.41
 
-[node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/MidiEditor" unique_id=1568231527]
+[node name="HBox" type="HBoxContainer" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor" unique_id=1568231527]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 0
 metadata/_edit_lock_ = true
 
-[node name="VPiano" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1490754119]
+[node name="VPiano" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox" unique_id=1490754119]
 z_index = 1
 layout_mode = 2
 mouse_filter = 1
@@ -194,19 +207,19 @@ key_color_border = Color(0.08235294, 0.08235294, 0.08235294, 1)
 border_width = 3.0
 border_color = Color(0.33333334, 0.33333334, 0.33333334, 1)
 
-[node name="DrumRowHeader" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1671283626]
+[node name="DrumRowHeader" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox" unique_id=1671283626]
 visible = false
 z_index = 1
 layout_mode = 2
 mouse_filter = 1
 script = ExtResource("4_drumhd")
 
-[node name="NoteArea" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox" unique_id=1239250274]
+[node name="NoteArea" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox" unique_id=1239250274]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 
-[node name="NoteLanes" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1649689557]
+[node name="NoteLanes" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=1649689557]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -220,7 +233,7 @@ note_lane_color_white = Color(0.13671875, 0.13671875, 0.13671875, 1)
 note_lane_color_black = Color(0.08984375, 0.08984375, 0.08984375, 1)
 border_color = Color(0.08235294, 0.08235294, 0.08235294, 1)
 
-[node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1240778112]
+[node name="GridRenderer" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=1240778112]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -233,7 +246,7 @@ bar_line_color = Color(1, 1, 1, 0.29411766)
 beat_line_color = Color(0.9607843, 0.9607843, 0.9607843, 0.21568628)
 subdivision_line_color = Color(1, 1, 1, 0.11764706)
 
-[node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=291536170]
+[node name="HScroll" type="ScrollContainer" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=291536170]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -244,14 +257,14 @@ mouse_filter = 2
 horizontal_scroll_mode = 3
 vertical_scroll_mode = 0
 
-[node name="NoteEditor" type="Container" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea/HScroll" unique_id=1955060567]
+[node name="NoteEditor" type="Container" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea/HScroll" unique_id=1955060567]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 focus_mode = 1
 script = ExtResource("1_4hncn")
 
-[node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=1376379667]
+[node name="Playhead" type="TextureRect" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=1376379667]
 z_index = 2
 custom_minimum_size = Vector2(3, 0)
 layout_mode = 1
@@ -262,7 +275,7 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("GradientTexture1D_ytm0k")
 
-[node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/MidiEditor/HBox/NoteArea" unique_id=386059293]
+[node name="Overlays" type="Control" parent="HSplit/MainPanel/VBox/EditorSplit/MidiEditor/HBox/NoteArea" unique_id=386059293]
 z_index = 2
 layout_mode = 1
 anchors_preset = 15
@@ -272,6 +285,9 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("9_ytm0k")
+
+[node name="NoteValuePane" parent="HSplit/MainPanel/VBox/EditorSplit" unique_id=48912712 instance=ExtResource("14_wamqs")]
+layout_mode = 2
 
 [node name="BottomPanel" type="PanelContainer" parent="." unique_id=1605161909]
 layout_mode = 2
@@ -322,3 +338,17 @@ layout_mode = 2
 tooltip_text = "Audition notes: clicking a note plays it on the track's instrument"
 toggle_mode = true
 icon = ExtResource("10_audit")
+
+[node name="ValueLanesToggle" type="Button" parent="BottomPanel/Toolbar" unique_id=1734026615]
+layout_mode = 2
+tooltip_text = "Show the velocity and release lanes below the notes"
+toggle_mode = true
+text = "Value Lanes"
+
+[node name="NextValue" type="SpinBox" parent="BottomPanel/Toolbar" unique_id=1540317795]
+layout_mode = 2
+tooltip_text = "Velocity of the next note you draw. It follows the last note you touched."
+min_value = 1.0
+max_value = 127.0
+value = 100.0
+prefix = "New note vel "

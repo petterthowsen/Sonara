@@ -18,9 +18,15 @@ static func execute(cmd: Command) -> void:
 		cmd.do()
 
 
+## Headless tests have no Editor to record into: set this to receive the commands instead.
+static var test_recorder: Callable = Callable()
+
+
 ## Record an already-applied gesture via the editor, marking the project dirty.
 static func record(cmd: Command) -> void:
-	if Sonara and Sonara.editor:
+	if test_recorder.is_valid():
+		test_recorder.call(cmd)
+	elif Sonara and Sonara.editor:
 		Sonara.editor.record_command(cmd)
 
 

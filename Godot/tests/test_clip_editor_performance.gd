@@ -25,6 +25,7 @@ func run_tests() -> void:
 	await _test_shared_width_grows_in_chunks()
 	await _test_notes_share_styleboxes()
 	await _test_note_id_index()
+	await _test_value_lane_visible()
 
 
 func _typed_tracks(items: Array) -> Array:
@@ -176,5 +177,31 @@ func _test_note_id_index() -> void:
 	clip.remove_midi_note(nd)
 	_assert(editor.get_visual_note(nd.id) == null, "a removed note is no longer found by id")
 	_assert(editor.selection_manager.selected_notes.is_empty(), "a removed note leaves the selection")
+	ctx.clip_editor.queue_free()
+	await process_frame
+
+
+## The value lane pane is on by default, so every test above already runs with it. This one
+## checks it explicitly: scrolling still leaves notes alone (the lane only redraws), the lane's
+## stems are the current track's notes only (no context stems), and loop repeats are ghosts.
+func _test_value_lane_visible() -> void:
+	var ctx := await _setup()
+	var midi: Object = ctx.midi
+	var pane: Object = ctx.clip_editor.value_pane
+	_assert(pane.visible and pane.lanes.size() == 1, "one value lane is visible")
+	var before := _reposition_calls(midi)
+	for i in 5:
+		midi.h_scroll.scroll_horizontal = 100 * (i + 1)
+		midi.grid_helper.scroll_position = midi.h_scroll.scroll_horizontal
+		await process_frame
+	_assert(_reposition_calls(midi) == before, "scrolling with the lane visible repositions no notes")
+	var stems: Array = midi.value_stems()
+	_assert(stems.size() == 3, "track mode: stems only for the current track's 3 notes, none for the context track (%d)" % stems.size())
+	ctx.tracks[0].clip_instances[0].set_loop(true, 0, 3840)
+	await process_frame
+	await process_frame
+	stems = midi.value_stems()
+	var ghosts := stems.filter(func(st): return st["ghost"]).size()
+	_assert(stems.size() == 12 and ghosts == 9, "a looping instance adds ghost stems for its repeats (%d stems, %d ghosts)" % [stems.size(), ghosts])
 	ctx.clip_editor.queue_free()
 	await process_frame

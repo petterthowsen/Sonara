@@ -11,6 +11,10 @@ class_name DrumRowHeader extends Control
 signal key_pressed(note: int, velocity: int)
 signal key_released(note: int)
 
+## A left click on a row: select that row's notes (Shift adds them to the selection).
+## The click still auditions the row like a key.
+signal row_select_requested(row: int, additive: bool)
+
 ## Shared pitch <-> row <-> Y math, handed down by MidiEditor.
 var layout: LaneLayout = LaneLayout.chromatic():
 	set(l):
@@ -140,6 +144,8 @@ func _gui_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				_press_at(mb.position)
+				if layout.row_count() > 0 and mb.position.y >= 0 and mb.position.y < layout.total_height():
+					row_select_requested.emit(layout.y_to_row(mb.position.y), mb.shift_pressed)
 			else:
 				_release_pressed()
 			accept_event()

@@ -232,6 +232,22 @@ signal view_state_changed
 ## The user clicked the empty-Drum-View hint (REQ-023).
 signal note_map_editor_requested
 
+## Width of the key column (piano keys or Drum View row names) changed. The value lanes below
+## keep their header column the same width so stems line up with the notes.
+signal key_column_width_changed(width: float)
+
+## The note under the pointer changed (the note area or a value lane stem), for the
+## cross-highlight between the two.
+signal hovered_note_changed(note: MidiNoteData)
+
+## The note the pointer is over in the note area or a value lane, or null.
+var hovered_note_data: MidiNoteData = null
+## Velocity and release of the next note drawn: the last touched note's (shared by the editors).
+var next_note_values := NextNoteValues.new()
+var _last_hover_mouse := Vector2(-1.0, -1.0)
+var _hover_from_area := false
+var _last_key_column_width := -1.0
+
 ## Hint shown when Drum View has no rows to draw. Built in code because it only
 ## ever appears in this one state.
 var _empty_hint: Button = null
@@ -365,6 +381,12 @@ func _ready():
 	drum_row_header.layout = lane_layout
 	drum_row_header.key_pressed.connect(_on_piano_key_pressed)
 	drum_row_header.key_released.connect(_on_piano_key_released)
+	v_piano.key_select_requested.connect(_select_pitch)
+	drum_row_header.row_select_requested.connect(_on_row_select_requested)
+	v_piano.resized.connect(_emit_key_column_width)
+	drum_row_header.resized.connect(_emit_key_column_width)
+	v_piano.visibility_changed.connect(_emit_key_column_width)
+	drum_row_header.visibility_changed.connect(_emit_key_column_width)
 	_note_map_watcher.changed.connect(_on_note_map_changed)
 	visibility_changed.connect(_on_visibility_changed)
 	_apply_view_mode()
@@ -1473,6 +1495,9 @@ func _configure_note_editor(editor: NoteEditor) -> void:
 	# range overlays are ours, so refresh them when that changed the selection.
 	if not editor.key_input_handled.is_connected(_update_selection_overlays):
 		editor.key_input_handled.connect(_update_selection_overlays)
+	editor.next_values = next_note_values
+	if not editor.note_touched.is_connected(next_note_values.take_from):
+		editor.note_touched.connect(next_note_values.take_from)
 	editor.note_height = note_height
 	editor.cursor_position_ticks = cursor_position_ticks
 	if grid_helper:
@@ -1503,6 +1528,125 @@ func _update_hovered_key() -> void:
 			if y >= 0.0 and y < lane_layout.total_height():
 				note = lane_layout.y_to_pitch(y)
 	header.hovered_note = note
+	_update_hovered_note(hovered)
+
+
+# ============================================================================
+# VALUE LANES (docs/specs/019-note-values)
+# ============================================================================
+
+## Current width of the visible key column.
+func key_column_width() -> float:
+	var header: Control = drum_row_header if drum_view else v_piano
+	return header.size.x
+
+
+func _emit_key_column_width() -> void:
+	var w := key_column_width()
+	if not is_equal_approx(w, _last_key_column_width):
+		_last_key_column_width = w
+		key_column_width_changed.emit(w)
+
+
+## One entry per visible, editable note shown by the note editors, for the value lanes:
+## visual, note_data, clip, color, ghost, selected, x_start and x_end. x are in the
+## coordinates of the HScroll (its scrolled content is shifted, so the scroll is included).
+## Context notes (other tracks) are not in note_editors, so they get no stems. A stem is a
+## ghost when it is a loop repeat or another instance's visual of a note already listed.
+func value_stems() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var seen: Dictionary = {}
+	var folded := lane_layout.is_folded()
+	for editor in note_editors:
+		if editor == null:
+			continue
+		var color: Color = editor.note_color if track_mode else Color(0.3, 0.6, 0.9)
+		var selected: Array[VisualNote] = editor.selection_manager.selected_notes if editor.selection_manager else ([] as Array[VisualNote])
+		for vn in editor.get_all_visual_notes():
+			var nd := vn.midi_note_data
+			var x0 := editor.position.x + vn.position.x  # the editor's own position already carries the scroll
+			var x1 := x0 + (editor.ticks_to_pixels(nd.duration_ticks) if folded else vn.size.x)
+			var ghost := vn.repeat_pass > 0 or seen.has(nd)
+			seen[nd] = true
+			out.append({
+				"visual": vn,
+				"note_data": nd,
+				"clip": editor._clip_for_visual_note(vn),
+				"color": color,
+				"ghost": ghost,
+				"selected": vn in selected,
+				"x_start": x0,
+				"x_end": x1,
+			})
+	return out
+
+
+func _on_row_select_requested(row: int, additive: bool) -> void:
+	var pitch := lane_layout.pitch_at_row(row)
+	if pitch >= 0:
+		_select_pitch(pitch, additive)
+
+
+## Select the editable notes of `pitch` (a drum row is one pitch). `additive` keeps the
+## current selection too.
+func _select_pitch(pitch: int, additive: bool) -> void:
+	var editor := get_active_note_editor()
+	if editor == null or editor.selection_manager == null:
+		return
+	var picked: Array[VisualNote] = []
+	if additive:
+		picked.append_array(editor.selection_manager.selected_notes)
+	for vn in editor.get_all_visual_notes():
+		if vn.midi_note_data.note == pitch and vn not in picked:
+			picked.append(vn)
+	editor.selection_manager.select_all(picked)
+	_update_selection_overlays()
+
+
+## Union of the selected notes of every note editor.
+func selected_note_data() -> Array[MidiNoteData]:
+	var out: Array[MidiNoteData] = []
+	for editor in note_editors:
+		if editor == null or editor.selection_manager == null:
+			continue
+		for vn in editor.selection_manager.selected_notes:
+			if vn.midi_note_data and vn.midi_note_data not in out:
+				out.append(vn.midi_note_data)
+	return out
+
+
+## Highlight `nd` in the note area (a stem under the pointer), or clear with null.
+func set_hovered_note(nd: MidiNoteData) -> void:
+	if nd == hovered_note_data:
+		return
+	hovered_note_data = nd
+	for editor in note_editors:
+		if editor == null:
+			continue
+		for child in editor.get_children():
+			if child is VisualNote:
+				child.set_value_hover(nd != null and child.midi_note_data == nd)
+	hovered_note_changed.emit(nd)
+
+
+## Follows the pointer over the note area. Only re-tests when the mouse moved.
+func _update_hovered_note(hovered: Control) -> void:
+	var over_area := hovered != null and note_area.is_ancestor_of(hovered) and not is_panning
+	if not over_area:
+		if _hover_from_area:
+			_hover_from_area = false
+			set_hovered_note(null)
+		return
+	var mouse := get_global_mouse_position()
+	if mouse == _last_hover_mouse:
+		return
+	_last_hover_mouse = mouse
+	var editor := get_active_note_editor()
+	if editor == null:
+		return
+	var vn := editor.get_note_at_position(editor.make_canvas_position_local(mouse))
+	_hover_from_area = vn != null
+	set_hovered_note(vn.midi_note_data if vn else null)
 
 
 # ============================================================================
