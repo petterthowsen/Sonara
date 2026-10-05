@@ -304,10 +304,8 @@ func _process(delta: float) -> void:
 			if abs(new_ppb - target_pixels_per_beat) <= 0.01:
 				new_ppb = target_pixels_per_beat
 				_zoom_anchor_active = false
-			timeline.set_zoom(new_ppb)
 			var anchored_scroll := roundi(maxf(0.0, _zoom_anchor_beat * new_ppb - _zoom_anchor_x))
-			h_scroll.scroll_horizontal = anchored_scroll
-			grid_helper.scroll_position = anchored_scroll
+			_apply_zoom_and_scroll(new_ppb, anchored_scroll)
 			target_scroll_horizontal = anchored_scroll
 		else:
 			if abs(current_ppb - target_pixels_per_beat) > 0.01:
@@ -348,11 +346,11 @@ func _process(delta: float) -> void:
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
 		_last_applied_v_scroll = v_scroll.scroll_vertical
 		# Instant zoom
-		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:
-			timeline.set_zoom(target_pixels_per_beat)
 		if _zoom_anchor_active:
-			target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * grid_helper.pixels_per_beat - _zoom_anchor_x)
+			target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * target_pixels_per_beat - _zoom_anchor_x)
 			_zoom_anchor_active = false
+		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:
+			_apply_zoom_and_scroll(target_pixels_per_beat, roundi(target_scroll_horizontal))
 		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
 		grid_helper.scroll_position = roundi(target_scroll_horizontal)
 
@@ -369,6 +367,20 @@ func _process(delta: float) -> void:
 	_update_ruler()
 	_update_playhead_position()
 	_update_scrollbar()
+
+## Apply a zoom level and the horizontal scroll that goes with it in the same frame.
+## The ScrollContainer clamps scroll_horizontal to its scrollbar range, and its deferred
+## layout pass sizes that range from a content size it caches in _get_minimum_size(),
+## which still holds the timeline's previous width at that point. Zooming in near the end
+## of the timeline then clamps the scroll on some frames and not others, and the view
+## jumps. So size the timeline for the new scroll first, refresh the cached size, and lay
+## the container out before scrolling.
+func _apply_zoom_and_scroll(ppb: float, scroll: int) -> void:
+	grid_helper.scroll_position = scroll
+	timeline.set_zoom(ppb)
+	h_scroll.get_combined_minimum_size()
+	h_scroll.notification(Container.NOTIFICATION_SORT_CHILDREN)
+	h_scroll.scroll_horizontal = scroll
 
 # ============================================================================
 # INPUT HANDLING
@@ -391,42 +403,9 @@ func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollConta
 		# Shift + Scroll = Horizontal zoom
 		if event.shift_pressed:
 			if grid_helper:
-				# Calculate the zoom point - use cursor position for better UX
-				# Get cursor position relative to the h_scroll viewport
-				var viewport_width = h_scroll.size.x
-				var local_mouse_x = h_scroll.get_local_mouse_position().x
-
-				# Clamp to visible viewport bounds
-				var zoom_point_x = clamp(local_mouse_x, 0.0, viewport_width)
-
-				# Convert to timeline pixel position (scroll_offset + local position)
-				var zoom_pixel_x = h_scroll.scroll_horizontal + zoom_point_x
-
-				# Check if scroll position is close to origin (within 1 beat worth of pixels)
-				var near_origin = h_scroll.scroll_horizontal < grid_helper.pixels_per_beat
-
-				# Calculate target zoom using zoom_sensitivity_h
-				var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
-				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
-
-				var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
-				if near_origin and (not _zoom_anchor_active or origin_anchored):
-					# Lock to origin: anchor beat 0 at x 0 so the scroll stays at 0
-					_zoom_anchor_beat = 0.0
-					_zoom_anchor_x = 0.0
-					_zoom_anchor_active = true
-					target_scroll_horizontal = 0
-				else:
-					# Keep the anchor beat while a zoom is running (re-deriving it from the
-					# half-animated view would compound rounding); start a new one otherwise.
-					if not _zoom_anchor_active or absf(_zoom_anchor_x - zoom_point_x) > 1.0:
-						_zoom_anchor_beat = zoom_pixel_x / grid_helper.pixels_per_beat
-						_zoom_anchor_x = zoom_point_x
-					_zoom_anchor_active = true
-					target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * target_pixels_per_beat - _zoom_anchor_x)
-
-				# Update ruler when zoom changes
-				_update_ruler()
+				# Zoom around the cursor, clamped to the visible viewport
+				var zoom_point_x = clamp(h_scroll.get_local_mouse_position().x, 0.0, h_scroll.size.x)
+				_zoom_horizontally(is_scroll_up, zoom_point_x)
 				scroll_container.accept_event()
 		# Ctrl + Scroll = Vertical zoom (track heights)
 		elif event.ctrl_pressed:
@@ -444,6 +423,39 @@ func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollConta
 				var scroll_delta = -scroll_speed_v if is_scroll_up else scroll_speed_v
 				target_scroll_vertical = max(0, target_scroll_vertical + scroll_delta)
 				scroll_container.accept_event()
+
+## One shift+wheel step of horizontal zoom, keeping the beat under `zoom_point_x` (pixels
+## from the left edge of the timeline viewport) in place.
+func _zoom_horizontally(is_scroll_up: bool, zoom_point_x: float) -> void:
+	# Convert to timeline pixel position (scroll_offset + local position)
+	var zoom_pixel_x = h_scroll.scroll_horizontal + zoom_point_x
+
+	# Check if scroll position is close to origin (within 1 beat worth of pixels)
+	var near_origin = h_scroll.scroll_horizontal < grid_helper.pixels_per_beat
+
+	# Calculate target zoom using zoom_sensitivity_h
+	var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
+	target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
+
+	var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
+	if near_origin and (not _zoom_anchor_active or origin_anchored):
+		# Lock to origin: anchor beat 0 at x 0 so the scroll stays at 0
+		_zoom_anchor_beat = 0.0
+		_zoom_anchor_x = 0.0
+		_zoom_anchor_active = true
+		target_scroll_horizontal = 0
+	else:
+		# Keep the anchor beat while a zoom is running (re-deriving it from the
+		# half-animated view would compound rounding); start a new one otherwise.
+		if not _zoom_anchor_active or absf(_zoom_anchor_x - zoom_point_x) > 1.0:
+			_zoom_anchor_beat = zoom_pixel_x / grid_helper.pixels_per_beat
+			_zoom_anchor_x = zoom_point_x
+		_zoom_anchor_active = true
+		target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * target_pixels_per_beat - _zoom_anchor_x)
+
+	# Update ruler when zoom changes
+	_update_ruler()
+
 
 func _on_h_scroll_changed(_value: float) -> void:
 	"""Update ruler and playhead when horizontal scroll changes."""
