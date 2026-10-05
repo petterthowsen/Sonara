@@ -135,7 +135,7 @@ func _clip(pitches: Array) -> Object:
 	var clip: Object = _clip_script.new()
 	var id := 1
 	for p in pitches:
-		clip.add_midi_note(id, int(p), 100, 0, 240)
+		clip.add_midi_note(id, int(p), MidiNoteData.from_midi_velocity(100), 0, 240)
 		id += 1
 	return clip
 

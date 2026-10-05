@@ -79,7 +79,7 @@ func _same_notes(a: Array, b: Array) -> bool:
 		var y: Dictionary = b[i]
 		if x.get("id") != y.get("id") or x.get("note") != y.get("note"):
 			return false
-		if x.get("velocity") != y.get("velocity"):
+		if x.get("velocity") != y.get("velocity") or x.get("release") != y.get("release"):
 			return false
 		if x.get("start_tick") != y.get("start_tick") or x.get("duration_ticks") != y.get("duration_ticks"):
 			return false

@@ -820,7 +820,7 @@ func pitches_sounding_at(tick: int, only_played: bool = true) -> Dictionary:
 		var nd: MidiNoteData = child.midi_note_data
 		var pos := get_note_song_position(child)
 		if tick >= pos.start_tick and tick < pos.end_tick:
-			out[nd.note] = maxi(out.get(nd.note, 0), nd.velocity)
+			out[nd.note] = maxf(out.get(nd.note, 0.0), nd.velocity)
 	return out
 
 

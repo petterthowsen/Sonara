@@ -209,7 +209,7 @@ func _test_fixture_clips() -> void:
 	var keys: Array = clip.midi_notes.map(func(n): return n.note)
 	keys.sort()
 	_assert(keys == [60, 62, 63, 67], "note keys 60 62 63 67")
-	_assert(clip.midi_notes.all(func(n): return n.velocity == 100), "velocity 100")
+	_assert(clip.midi_notes.all(func(n): return MidiNoteData.to_midi_velocity(n.velocity) == 100), "velocity 100")
 	_assert(project.get_clip(instances[1].clip_id) != clip, "the two clips have separate content")
 
 	var crash_track: Object = project.get_channel_paired_track(_by_channel(project, "crash_cymbal_crash_01"))
@@ -381,7 +381,7 @@ func _test_report_items() -> void:
 	var report: TransferReport = r.report
 	for kind in [
 		TransferReport.PLUGIN_FORMAT, TransferReport.CLAP_MISSING, TransferReport.GENERIC_DEVICE, TransferReport.FOREIGN_BUILTIN,
-		TransferReport.WARP_APPROXIMATED, TransferReport.NOTE_CHANNEL, TransferReport.NOTE_RELEASE, TransferReport.NOTE_EXPRESSION,
+		TransferReport.WARP_APPROXIMATED, TransferReport.NOTE_CHANNEL, TransferReport.NOTE_EXPRESSION,
 		TransferReport.CLIP_AUTOMATION, TransferReport.EXPRESSION_AUTOMATION, TransferReport.UNSUPPORTED_AUTOMATION,
 		TransferReport.CROSSFADE, TransferReport.VCA, TransferReport.SCENE_CLIP, TransferReport.MONO_CHANNEL,
 		TransferReport.BUS_CLIP, TransferReport.SIGNATURE_OFF_BAR,
@@ -392,6 +392,9 @@ func _test_report_items() -> void:
 	var project: Object = _project_script.from_json(r.project_json)
 	_assert(_by_channel(project, "Lead") != null and _by_channel(project, "Loop") != null and _by_channel(project, "Mono") != null, "tracks still import")
 	var lead: Object = project.get_channel_paired_track(_by_channel(project, "Lead"))
+	var lead_notes: Array = project.get_clip(lead.clip_instances[0].clip_id).midi_notes
+	_assert(lead_notes.size() == 3 and absf(lead_notes[0].velocity - 0.5) < 1e-9, "vel imported at full precision")
+	_assert(absf(lead_notes[1].release - 0.9) < 1e-9 and absf(lead_notes[0].release - 0.5) < 1e-9, "rel imported")
 	_assert(lead.clip_instances.size() == 1, "clip-automation clip is dropped, the notes clip stays")
 	var loop_track: Object = project.get_channel_paired_track(_by_channel(project, "Loop"))
 	_assert(loop_track.clip_instances.size() == 2, "both audio clips imported")

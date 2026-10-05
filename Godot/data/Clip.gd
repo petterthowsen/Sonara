@@ -195,7 +195,7 @@ func max_note_id() -> int:
 	return mx
 
 
-func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, duration: int) -> MidiNoteData:
+func add_midi_note(note_id: int, note: int, velocity: float, start_tick: int, duration: int, release: float = MidiNoteData.DEFAULT_RELEASE) -> MidiNoteData:
 	"""Add a MIDI note to the clip. note_id must be unique (see allocate_note_id)."""
 	var end_tick = start_tick + duration
 	
@@ -213,6 +213,7 @@ func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, dura
 	midi_note.id = note_id
 	midi_note.note = note
 	midi_note.velocity = velocity
+	midi_note.release = release
 	midi_note.start_tick = start_tick
 	midi_note.duration_ticks = duration
 	midi_notes.append(midi_note)
@@ -223,7 +224,7 @@ func add_midi_note(note_id: int, note: int, velocity: int, start_tick: int, dura
 
 	# Sync note to audio engine
 	var osc_path = "/clip/%s/add_note" % id
-	AudioEngineOSC.send(osc_path, [note_id, note, start_tick, duration, velocity])
+	AudioEngineOSC.send(osc_path, [note_id, note, start_tick, duration, midi_note.velocity, midi_note.release])
 
 	modified_date = Time.get_unix_time_from_system()
 	midi_note_added.emit(midi_note)
@@ -239,7 +240,8 @@ func add_midi_note_data(note_data: MidiNoteData) -> MidiNoteData:
 		note_data.note,
 		note_data.velocity,
 		note_data.start_tick,
-		note_data.duration_ticks
+		note_data.duration_ticks,
+		note_data.release
 	)
 
 
@@ -273,7 +275,7 @@ func update_midi_note(midi_note: MidiNoteData) -> void:
 	# Sync to audio engine if clip exists on engine
 	if _synced_to_engine:
 		var osc_path = "/clip/%s/update_note" % id
-		AudioEngineOSC.send(osc_path, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity])
+		AudioEngineOSC.send(osc_path, [midi_note.id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks, midi_note.velocity, midi_note.release])
 		logger.info("[Clip] Updated note %d in clip %s: pitch=%d start=%d dur=%d" % [midi_note.id, id, midi_note.note, midi_note.start_tick, midi_note.duration_ticks])
 	else:
 		push_warning("[Clip] Attempted to update note %d but clip %s not synced to engine!" % [midi_note.id, id])
@@ -352,10 +354,8 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 				[existing_note.id, existing_note.start_tick, existing_end_tick, new_start_tick, new_end_tick])
 			
 			# Create the "after" portion (keep original ID for the first part)
-			var after_note = MidiNoteData.new()
+			var after_note = existing_note.duplicate_note()
 			after_note.id = allocate_note_id.call()
-			after_note.note = existing_note.note
-			after_note.velocity = existing_note.velocity
 			after_note.start_tick = new_end_tick
 			after_note.duration_ticks = existing_end_tick - new_end_tick
 			notes_to_add.append(after_note)
@@ -396,7 +396,7 @@ func cut_overlapping_notes_at_pitch(pitch: int, new_start_tick: int, new_end_tic
 		midi_notes.append(new_note)
 		if _synced_to_engine:
 			var osc_path = "/clip/%s/add_note" % id
-			AudioEngineOSC.send(osc_path, [new_note.id, new_note.note, new_note.start_tick, new_note.duration_ticks, new_note.velocity])
+			AudioEngineOSC.send(osc_path, [new_note.id, new_note.note, new_note.start_tick, new_note.duration_ticks, new_note.velocity, new_note.release])
 		midi_note_added.emit(new_note)
 	
 	if not affected_notes.is_empty():

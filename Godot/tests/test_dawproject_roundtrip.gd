@@ -97,7 +97,8 @@ func _lane_of(track: Object, kind: int) -> Object:
 func _notes_of(clip: Object) -> Array:
 	var out: Array = []
 	for n in clip.midi_notes:
-		out.append([n.note, n.start_tick, n.duration_ticks, n.velocity])
+		# Velocity to 1e-9: the XML text parse can differ from the float in its last bit.
+		out.append([n.note, n.start_tick, n.duration_ticks, roundi(n.velocity * 1e9), roundi(n.release * 1e9)])
 	out.sort()
 	return out
 
@@ -165,7 +166,7 @@ func _test_round_trip() -> void:
 	var riff: Object = project.create_clip("Riff", _clip_script.ClipType.MIDI)
 	riff.content_length_ticks = 3840
 	for i in 4:
-		riff.add_midi_note(project.allocate_note_id(), 60 + i, 90 + i, i * 960, 480 + i * 10)
+		riff.add_midi_note(project.allocate_note_id(), 60 + i, MidiNoteData.from_midi_velocity(90 + i), i * 960, 480 + i * 10)
 	lead.track.create_clip_instance(riff, 0, 3840)
 	lead.track.create_clip_instance(riff, 3840, 3840)
 	lead.track.create_clip_instance(riff, 7680, 3840)
@@ -283,7 +284,7 @@ func _test_round_trip() -> void:
 		_assert(g_instances[3].clip_id != g_instances[0].clip_id, "the transposed instance has its own clip")
 		var shared: Object = got.get_clip(g_instances[0].clip_id)
 		_assert(_notes_of(shared) == _notes_of(riff), "notes: key, start, duration and velocity exact")
-		var expected_transposed := _notes_of(riff).map(func(n): return [n[0] + 2, n[1], n[2], n[3]])
+		var expected_transposed := _notes_of(riff).map(func(n): return [n[0] + 2, n[1], n[2], n[3], n[4]])
 		_assert(_notes_of(got.get_clip(g_instances[3].clip_id)) == expected_transposed, "transposed instance holds transposed notes")
 		_assert(g_instances[1].start_ticks == 3840 and g_instances[1].duration_ticks == 3840, "instance position and length")
 

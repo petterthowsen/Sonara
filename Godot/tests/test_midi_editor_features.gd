@@ -47,7 +47,7 @@ func _typed_instances(instances: Array) -> Array:
 func _test_clip_allocates_note_ids() -> void:
 	var clip: Object = _clip_script.new()
 	_assert(clip.allocate_note_id() == 1, "an empty standalone clip starts at id 1")
-	clip.add_midi_note(7, 60, 100, 0, 240)
+	clip.add_midi_note(7, 60, MidiNoteData.from_midi_velocity(100), 0, 240)
 	_assert(clip.allocate_note_id() == 8, "a standalone clip hands out one above its highest id")
 
 	var loose: Object = load("res://data/MidiNote.gd").new()
@@ -59,7 +59,7 @@ func _test_clip_allocates_note_ids() -> void:
 func _test_project_adopts_clip_ids() -> void:
 	var project: Object = _project_script.new()
 	var clip: Object = _clip_script.new()
-	clip.add_midi_note(41, 60, 100, 0, 240)
+	clip.add_midi_note(41, 60, MidiNoteData.from_midi_velocity(100), 0, 240)
 	var loose: Object = load("res://data/MidiNote.gd").new()
 	clip.midi_notes.append(loose)
 	project.add_clip(clip)
@@ -90,8 +90,8 @@ func _test_track_mode_honours_clip_offset() -> void:
 	project.add_clip(clip)
 	var inst: Object = pair.track.create_clip_instance(clip, 3840, 1920)
 	inst.clip_offset = 960
-	clip.add_midi_note(clip.allocate_note_id(), 60, 100, 0, 240)     # trimmed away
-	clip.add_midi_note(clip.allocate_note_id(), 62, 100, 960, 240)   # first played note
+	clip.add_midi_note(clip.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 240)     # trimmed away
+	clip.add_midi_note(clip.allocate_note_id(), 62, MidiNoteData.from_midi_velocity(100), 960, 240)   # first played note
 
 	var gh: Object = _grid_helper_script.new()
 	var editor: Object = _note_editor_script.new()
@@ -117,9 +117,9 @@ func _test_pitches_sounding_at() -> void:
 	var inst: Object = pair.track.create_clip_instance(clip, 0, 3840)
 	inst.clip_offset = 480
 	inst.duration_ticks = 960
-	clip.add_midi_note(clip.allocate_note_id(), 60, 90, 0, 960)
-	clip.add_midi_note(clip.allocate_note_id(), 64, 80, 0, 960)
-	clip.add_midi_note(clip.allocate_note_id(), 67, 70, 960, 480)
+	clip.add_midi_note(clip.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(90), 0, 960)
+	clip.add_midi_note(clip.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(80), 0, 960)
+	clip.add_midi_note(clip.allocate_note_id(), 67, MidiNoteData.from_midi_velocity(70), 960, 480)
 
 	var editor: Object = _note_editor_script.new()
 	editor.set_grid_helper(_grid_helper_script.new())
@@ -128,7 +128,7 @@ func _test_pitches_sounding_at() -> void:
 	await process_frame
 
 	var at_600: Dictionary = editor.pitches_sounding_at(600)
-	_assert(at_600.size() == 2 and at_600.get(60) == 90 and at_600.get(64) == 80,
+	_assert(at_600.size() == 2 and is_equal_approx(at_600.get(60, 0.0), MidiNoteData.from_midi_velocity(90)) and is_equal_approx(at_600.get(64, 0.0), MidiNoteData.from_midi_velocity(80)),
 		"the chord under tick 600 with velocities: %s" % str(at_600))
 	_assert(editor.pitches_sounding_at(100).is_empty(), "nothing plays before the clip offset")
 	_assert(editor.pitches_sounding_at(100, false).size() == 2, "a preview still hears trimmed notes")
@@ -144,8 +144,8 @@ func _make_selected_pair() -> Array:
 	var clip: Object = project.create_clip("Riff")
 	project.add_clip(clip)
 	var inst: Object = pair.track.create_clip_instance(clip, 0, 7680)
-	clip.add_midi_note(clip.allocate_note_id(), 60, 100, 0, 480)
-	clip.add_midi_note(clip.allocate_note_id(), 64, 100, 480, 480)
+	clip.add_midi_note(clip.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 480)
+	clip.add_midi_note(clip.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(100), 480, 480)
 
 	var editor: Object = _note_editor_script.new()
 	var gh: Object = _grid_helper_script.new()

@@ -67,7 +67,7 @@ func _add(clip: StubClip, id: int, pitch: int, start: int, dur: int, vel: int) -
 	n.note = pitch
 	n.start_tick = start
 	n.duration_ticks = dur
-	n.velocity = vel
+	n.velocity = MidiNoteData.from_midi_velocity(vel)
 	clip.midi_notes.append(n)
 
 
@@ -122,7 +122,7 @@ func _test_drum_grid_roundtrip() -> void:
 	_assert(bool(applied.get("ok", false)), "unmodified write ok")
 	_assert((applied.get("changes", []) as Array).is_empty(), "read → write is a no-op")
 	_assert(clip.midi_notes.size() == 2, "still two notes")
-	_assert(clip.midi_notes[0].velocity == 121, "velocity preserved")
+	_assert(MidiNoteData.to_midi_velocity(clip.midi_notes[0].velocity) == 121, "velocity preserved")
 
 
 func _test_grid_diff_preserves_velocity() -> void:
@@ -131,7 +131,7 @@ func _test_grid_diff_preserves_velocity() -> void:
 	var ser: Dictionary = _clip_text.serialize(clip, {"kind": "drums", "ppq": 960})
 	var applied: Dictionary = _clip_text.apply(clip, null, str(ser.get("text", "")), {"kind": "drums", "ppq": 960})
 	_assert(bool(applied.get("ok", false)) and (applied.get("changes", []) as Array).is_empty(), "off-curve vel kept on no-op")
-	_assert(clip.midi_notes[0].velocity == 100, "velocity still 100")
+	_assert(MidiNoteData.to_midi_velocity(clip.midi_notes[0].velocity) == 100, "velocity still 100")
 	var empty := _clip("Hats2", 1)
 	var grid := """clip Hats2   type drums   res 1/16   bars 1-1
         |1 e & a|2 e & a|3 e & a|4 e & a|
@@ -141,7 +141,7 @@ HAT     |3 . . .|. . . .|. . . .|. . . .|
 	_assert(bool(add_r.get("ok", false)), "new hat ok")
 	_assert(empty.midi_notes.size() == 1, "one hat added")
 	_assert(empty.midi_notes[0].note == 42, "hat pitch")
-	_assert(empty.midi_notes[0].velocity == ClipTextKey.tier_to_velocity(3), "new note uses tier curve")
+	_assert(MidiNoteData.to_midi_velocity(empty.midi_notes[0].velocity) == ClipTextKey.tier_to_velocity(3), "new note uses tier curve")
 
 
 func _test_pitched_grid() -> void:
@@ -160,7 +160,7 @@ func _test_event_ops() -> void:
 	_add(clip, 7, 36, 0, 960, 104)
 	var r: Dictionary = _clip_text.apply(clip, null, "vel n7 88\nmove n7 +1/16\nlen n7 1/8", {"kind": "events", "ppq": 960})
 	_assert(bool(r.get("ok", false)), "ops apply")
-	_assert(clip.midi_notes[0].velocity == 88, "vel op")
+	_assert(MidiNoteData.to_midi_velocity(clip.midi_notes[0].velocity) == 88, "vel op")
 	_assert(clip.midi_notes[0].start_tick == 240, "move +1/16")
 	_assert(clip.midi_notes[0].duration_ticks == 480, "len 1/8")
 	var del: Dictionary = _clip_text.apply(clip, null, "del n7", {"kind": "events", "ppq": 960})
@@ -246,8 +246,8 @@ func _test_city_pop_keys_regressions() -> void:
 		{"kind": "pitched", "ppq": 960})
 	_assert(bool(r.get("ok", false)), "add lines under kind=pitched are ops: %s" % r.get("error", ""))
 	_assert(keys.midi_notes.size() == 7, "chord shorthand adds every pitch")
-	_assert(keys.midi_notes[0].duration_ticks == 1920 and keys.midi_notes[0].velocity == 80, "chord dur/vel")
-	_assert(keys.midi_notes[6].velocity == 100, "velocity is optional")
+	_assert(keys.midi_notes[0].duration_ticks == 1920 and MidiNoteData.to_midi_velocity(keys.midi_notes[0].velocity) == 80, "chord dur/vel")
+	_assert(MidiNoteData.to_midi_velocity(keys.midi_notes[6].velocity) == 100, "velocity is optional")
 
 	# Swapped pitch/duration: the error names the line and the syntax.
 	var bad: Dictionary = _clip_text.apply(_clip("x", 1), null,

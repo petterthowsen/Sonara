@@ -72,7 +72,7 @@ func _drum_project(pad_notes: Array, note_pitches: Array) -> Dictionary:
 	var ci: Object = track.create_clip_instance(clip, 0, 3840)
 	var note_id := 1
 	for p in note_pitches:
-		clip.add_midi_note(note_id, int(p), 100, 0, 240)
+		clip.add_midi_note(note_id, int(p), MidiNoteData.from_midi_velocity(100), 0, 240)
 		note_id += 1
 	return {"project": project, "track": track, "channel": ch, "clip_instance": ci}
 
@@ -190,7 +190,7 @@ func _test_drum_insert_ignores_piano_roll_length() -> void:
 	midi.drum_view = false
 	await process_frame
 	var drum_clip = setup.clip_instance.clip
-	var long_note = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, 100, 0, snap)
+	var long_note = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, MidiNoteData.from_midi_velocity(100), 0, snap)
 	await process_frame
 	var vn = ne.get_visual_note(long_note.id)
 	var handle: Vector2 = vn.position + Vector2(vn.size.x - 1.0, 2.0)
@@ -207,7 +207,7 @@ func _test_drum_insert_ignores_piano_roll_length() -> void:
 	midi.drum_view = true
 	await process_frame
 	await process_frame
-	var later = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, 90, snap * 12, snap)
+	var later = drum_clip.add_midi_note(drum_clip.allocate_note_id(), 36, MidiNoteData.from_midi_velocity(90), snap * 12, snap)
 	await process_frame
 	var placed = ne._place_note_at_position(
 		Vector2(midi.grid_helper.ticks_to_pixels(snap * 10), midi.lane_layout.pitch_to_y_center(36)))
@@ -371,7 +371,7 @@ func _test_adjacent_hits_never_overlap() -> void:
 	var clip: Object = setup.clip_instance.clip
 	# Four back-to-back sixteenths on one pad, the tightest legal packing.
 	for i in 4:
-		clip.add_midi_note(i + 1, 36, 100, i * 240, 240)
+		clip.add_midi_note(i + 1, 36, MidiNoteData.from_midi_velocity(100), i * 240, 240)
 
 	var midi = editor.midi_editor
 	midi.bind_to_clip_instance(setup.clip_instance)

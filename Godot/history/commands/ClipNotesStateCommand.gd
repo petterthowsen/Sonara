@@ -52,22 +52,55 @@ static func _same_fields(a: Array, b: Array) -> bool:
 	for i in a.size():
 		var x: Dictionary = a[i]
 		var y: Dictionary = b[i]
-		for key in ["id", "note", "velocity", "start_tick", "duration_ticks"]:
-			if x[key] != y[key]:
-				return false
+		if x["id"] != y["id"] or not MidiNoteData.values_equal(x, y):
+			return false
+	return true
+
+
+## Snapshot every clip in `clips` (call before a gesture mutates them). Returns {Clip: snapshot}.
+static func capture_many(clips: Array) -> Dictionary:
+	var out: Dictionary = {}
+	for c in clips:
+		if c is Clip and not out.has(c):
+			out[c] = capture_clip_notes(c)
+	return out
+
+
+## Record one undo step for every clip in `before` (from capture_many) whose notes changed.
+static func commit_many(action_name: String, before: Dictionary) -> void:
+	var cmds: Array[Command] = []
+	for c in before.keys():
+		var b: Array = before[c]
+		var after: Array = capture_clip_notes(c)
+		if snapshots_equal(b, after):
+			continue
+		cmds.append(ClipNotesStateCommand.new(action_name, c, b, after))
+	if cmds.is_empty():
+		return
+	HistoryUtil.record_many(action_name, cmds)
+
+
+## Compare two note snapshots for equality (id + values), ignoring order.
+static func snapshots_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	var by_id: Dictionary = {}
+	for snap in b:
+		by_id[snap["id"]] = snap
+	for snap in a:
+		if not by_id.has(snap["id"]):
+			return false
+		if not MidiNoteData.values_equal(snap, by_id[snap["id"]]):
+			return false
 	return true
 
 
 ## Deep-copy fields of a MidiNoteData into a dictionary (keeps object ref).
 static func _snapshot_note(note: MidiNoteData) -> Dictionary:
-	return {
-		"ref": note,
-		"id": note.id,
-		"note": note.note,
-		"velocity": note.velocity,
-		"start_tick": note.start_tick,
-		"duration_ticks": note.duration_ticks,
-	}
+	var snap := note.values()
+	snap["ref"] = note
+	snap["id"] = note.id
+	return snap
 
 
 ## Apply the after snapshot (redo / initial record already applied).
@@ -100,10 +133,7 @@ func _restore(state: Array) -> void:
 		var note: MidiNoteData = snap["ref"]
 		# Ensure fields match snapshot (ref may have been mutated since capture)
 		note.id = snap["id"]
-		note.note = snap["note"]
-		note.velocity = snap["velocity"]
-		note.start_tick = snap["start_tick"]
-		note.duration_ticks = snap["duration_ticks"]
+		note.apply_values(snap)
 
 		var existing: MidiNoteData = null
 		for n in clip.midi_notes:
@@ -116,10 +146,7 @@ func _restore(state: Array) -> void:
 		else:
 			if existing != note:
 				# Same id, different object — copy fields onto the live object
-				existing.note = note.note
-				existing.velocity = note.velocity
-				existing.start_tick = note.start_tick
-				existing.duration_ticks = note.duration_ticks
+				existing.copy_values_from(note)
 				clip.update_midi_note(existing)
 			else:
 				clip.update_midi_note(note)

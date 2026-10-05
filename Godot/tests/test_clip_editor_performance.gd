@@ -48,10 +48,10 @@ func _setup() -> Dictionary:
 		project.add_clip(clip)
 		clips.append(clip)
 		track.create_clip_instance(clip, 0, 4 * 3840)
-		clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 480)
-		clip.add_midi_note(project.allocate_note_id(), 64, 100, 960, 480)
+		clip.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 480)
+		clip.add_midi_note(project.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(100), 960, 480)
 		if i == 0:
-			clip.add_midi_note(project.allocate_note_id(), 67, 20, 1920, 480)
+			clip.add_midi_note(project.allocate_note_id(), 67, MidiNoteData.from_midi_velocity(20), 1920, 480)
 		tracks.append(track)
 	var clip_editor: Control = _clip_editor_scene.instantiate()
 	root.add_child(clip_editor)
@@ -163,7 +163,7 @@ func _test_note_id_index() -> void:
 	var ctx := await _setup()
 	var editor: Object = ctx.midi.get_active_note_editor()
 	var clip: Object = ctx.clips[0]
-	var nd: Object = clip.add_midi_note(ctx.project.allocate_note_id(), 72, 100, 2880, 480)
+	var nd: Object = clip.add_midi_note(ctx.project.allocate_note_id(), 72, MidiNoteData.from_midi_velocity(100), 2880, 480)
 	var vn: VisualNote = editor.get_visual_note(nd.id)
 	_assert(vn != null and vn.midi_note_data == nd, "a reactively added note is found by id")
 	_assert(editor.get_clip_instance_for_note(nd.id) == ctx.tracks[0].clip_instances[0], "its clip instance is found by id")

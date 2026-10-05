@@ -37,7 +37,7 @@ func _midi_clip(project: Object, name: String, notes: Array, length: int) -> Obj
 		nn.note = n[0]
 		nn.start_tick = n[1]
 		nn.duration_ticks = n[2]
-		nn.velocity = 100
+		nn.velocity = MidiNoteData.from_midi_velocity(100)
 		clip.midi_notes.append(nn)
 	project.add_clip(clip)
 	return clip

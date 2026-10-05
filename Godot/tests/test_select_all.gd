@@ -68,8 +68,8 @@ func _test_ctrl_a_selects_all_notes() -> void:
 	editor.bind_to_clips(_typed_instances([inst]), pair.track)
 	await process_frame
 
-	clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
-	clip.add_midi_note(project.allocate_note_id(), 64, 100, 480, 240)
+	clip.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 240)
+	clip.add_midi_note(project.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(100), 480, 240)
 	await process_frame
 
 	var all_notes: Array = editor.get_all_visual_notes()
@@ -107,8 +107,8 @@ func _test_ctrl_a_through_viewport() -> void:
 	var clip: Object = project.create_clip("Riff")
 	project.add_clip(clip)
 	var inst: Object = pair.track.create_clip_instance(clip, 0, 3840)
-	clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
-	clip.add_midi_note(project.allocate_note_id(), 64, 100, 480, 240)
+	clip.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 240)
+	clip.add_midi_note(project.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(100), 480, 240)
 
 	var midi: Object = editor.midi_editor
 	var note_editor: Object = midi.note_editor
@@ -146,13 +146,13 @@ func _test_ctrl_a_track_mode_focus() -> void:
 
 	var clip_a: Object = project.create_clip("Ca")
 	project.add_clip(clip_a)
-	clip_a.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
+	clip_a.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 240)
 	var inst_a: Object = a.track.create_clip_instance(clip_a, 0, 3840)
 
 	var clip_b: Object = project.create_clip("Cb")
 	project.add_clip(clip_b)
-	clip_b.add_midi_note(project.allocate_note_id(), 67, 100, 0, 240)
-	clip_b.add_midi_note(project.allocate_note_id(), 69, 100, 480, 240)
+	clip_b.add_midi_note(project.allocate_note_id(), 67, MidiNoteData.from_midi_velocity(100), 0, 240)
+	clip_b.add_midi_note(project.allocate_note_id(), 69, MidiNoteData.from_midi_velocity(100), 480, 240)
 	var inst_b: Object = b.track.create_clip_instance(clip_b, 0, 3840)
 
 	editor._on_editor_clips_selected(_typed_instances([inst_a, inst_b]), true)

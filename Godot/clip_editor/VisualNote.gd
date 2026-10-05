@@ -148,9 +148,9 @@ func _update_visual() -> void:
 	
 	# Always apply velocity-based brightness if we have note data
 	if midi_note_data:
-		# Map velocity (1-127) to brightness (0.2-0.8)
+		# Map velocity (1/127..1) to brightness (0.2-0.8)
 		var velocity = midi_note_data.velocity
-		var velocity_normalized = (velocity - 1) / 126.0  # Normalize to 0.0-1.0
+		var velocity_normalized = (velocity * 127.0 - 1.0) / 126.0  # Normalize to 0.0-1.0
 		velocity_normalized = roundf(velocity_normalized * (VELOCITY_SHADES - 1)) / (VELOCITY_SHADES - 1)
 		var brightness = lerp(0.2, 0.8, velocity_normalized)
 		

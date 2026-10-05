@@ -291,8 +291,8 @@ func _fills_for(t: Track) -> PackedColorArray:
 	return fills
 
 
-static func _shade_of(velocity: int) -> int:
-	var normalized := (velocity - 1) / 126.0
+static func _shade_of(velocity: float) -> int:
+	var normalized := (velocity * 127.0 - 1.0) / 126.0
 	return clampi(roundi(normalized * (VisualNote.VELOCITY_SHADES - 1)), 0, VisualNote.VELOCITY_SHADES - 1)
 
 

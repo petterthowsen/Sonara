@@ -43,6 +43,9 @@ var enabled_devices: Array[int] = []
 
 var virtual_keyboard_enabled: bool = true
 var keyboard_transpose: int = 0  # Semitone offset (default 0 = Q is C3)
+## Release velocity for note-offs we generate (a typed keyboard has none): 64 = the 0.5 default.
+const NOTE_OFF_RELEASE := 64
+
 var keyboard_velocity: int = 100  # Default velocity (0-127)
 var active_keyboard_notes: Dictionary = {}  # action_name -> midi_note
 
@@ -255,7 +258,7 @@ func _release_active_keyboard_notes() -> void:
 		return
 	for note_name in active_keyboard_notes.keys():
 		var note = active_keyboard_notes[note_name]
-		emit_virtual_midi_note(note, 0, false)
+		emit_virtual_midi_note(note, NOTE_OFF_RELEASE, false)
 	active_keyboard_notes.clear()
 
 
@@ -355,7 +358,7 @@ func handle_virtual_note(note_name: String, pressed: bool):
 		if active_keyboard_notes.has(note_name):
 			var note = active_keyboard_notes[note_name]
 			active_keyboard_notes.erase(note_name)
-			emit_virtual_midi_note(note, 0, false)
+			emit_virtual_midi_note(note, NOTE_OFF_RELEASE, false)
 
 
 func emit_virtual_midi_note(note: int, velocity: int, is_note_on: bool):
@@ -433,7 +436,7 @@ func send_note_to_channel(channel_id: int, note: int, velocity: int, is_note_on:
 		"message": MIDI_MESSAGE_NOTE_ON if is_note_on else MIDI_MESSAGE_NOTE_OFF,
 		"channel": 0,
 		"pitch": note,
-		"velocity": velocity if is_note_on else 0,
+		"velocity": velocity if is_note_on else NOTE_OFF_RELEASE,
 	})
 
 

@@ -81,7 +81,7 @@ func _teardown(ctx: Dictionary) -> void:
 func _test_note_added_only_to_its_own_clip() -> void:
 	var ctx := await _setup()
 	var note_id: int = ctx.project.allocate_note_id()
-	ctx.clip_a.add_midi_note(note_id, 48, 100, 240, 240)
+	ctx.clip_a.add_midi_note(note_id, 48, MidiNoteData.from_midi_velocity(100), 240, 240)
 	await process_frame
 
 	var visuals := _visuals_for(ctx.editor, note_id)
@@ -100,7 +100,7 @@ func _test_repeated_instances_of_same_clip_both_get_visuals() -> void:
 	await process_frame
 
 	var note_id: int = ctx.project.allocate_note_id()
-	ctx.clip_a.add_midi_note(note_id, 48, 100, 240, 240)
+	ctx.clip_a.add_midi_note(note_id, 48, MidiNoteData.from_midi_velocity(100), 240, 240)
 	await process_frame
 
 	var visuals := _visuals_for(ctx.editor, note_id)
@@ -111,7 +111,7 @@ func _test_repeated_instances_of_same_clip_both_get_visuals() -> void:
 func _test_erase_removes_note_from_correct_clip() -> void:
 	var ctx := await _setup()
 	var note_id: int = ctx.project.allocate_note_id()
-	ctx.clip_a.add_midi_note(note_id, 48, 100, 240, 240)
+	ctx.clip_a.add_midi_note(note_id, 48, MidiNoteData.from_midi_velocity(100), 240, 240)
 	await process_frame
 
 	var visuals := _visuals_for(ctx.editor, note_id)
@@ -131,7 +131,7 @@ func _test_erase_removes_note_from_correct_clip() -> void:
 func _test_remove_from_wrong_clip_is_rejected() -> void:
 	var ctx := await _setup()
 	var note_id: int = ctx.project.allocate_note_id()
-	var note: Object = ctx.clip_a.add_midi_note(note_id, 48, 100, 240, 240)
+	var note: Object = ctx.clip_a.add_midi_note(note_id, 48, MidiNoteData.from_midi_velocity(100), 240, 240)
 
 	_assert(ctx.clip_b.remove_midi_note(note) == false, "removing a note via a clip that doesn't own it reports failure")
 	_assert(ctx.clip_a.midi_notes.size() == 1, "the note survives a removal aimed at the wrong clip")

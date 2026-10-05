@@ -112,7 +112,7 @@ func _fill_clip(project: Object, clip: Object, count: int, clip_len: int, rng: R
 			continue
 		spans.append([start, start + length])
 		by_pitch[pitch] = spans
-		clip.add_midi_note(project.allocate_note_id(), pitch, rng.randi_range(1, 127), start, length)
+		clip.add_midi_note(project.allocate_note_id(), pitch, MidiNoteData.from_midi_velocity(rng.randi_range(1, 127)), start, length)
 		added += 1
 	return added
 

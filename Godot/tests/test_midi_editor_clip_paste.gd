@@ -80,8 +80,8 @@ func _test_copy_notes_paste_on_other_track() -> void:
 	var a: Dictionary = project.create_instrument_track("A")
 	var b: Dictionary = project.create_instrument_track("B")
 	var inst_a: Object = _add_clip(project, a.track, BAR, BAR)
-	inst_a.clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 240)
-	inst_a.clip.add_midi_note(project.allocate_note_id(), 64, 90, 480, 240)
+	inst_a.clip.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 240)
+	inst_a.clip.add_midi_note(project.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(90), 480, 240)
 	var inst_b: Object = _add_clip(project, b.track, 0, 4 * BAR)
 	await _open(editor, [inst_a, inst_b], true)
 
@@ -137,8 +137,8 @@ func _test_copy_edited_clips_paste_creates_clip() -> void:
 	var a: Dictionary = project.create_instrument_track("A")
 	var b: Dictionary = project.create_instrument_track("B")
 	var inst_a: Object = _add_clip(project, a.track, 2 * BAR, 5 * BAR)
-	inst_a.clip.add_midi_note(project.allocate_note_id(), 48, 100, 0, 480)
-	inst_a.clip.add_midi_note(project.allocate_note_id(), 50, 100, 4 * BAR + 960, 480)
+	inst_a.clip.add_midi_note(project.allocate_note_id(), 48, MidiNoteData.from_midi_velocity(100), 0, 480)
+	inst_a.clip.add_midi_note(project.allocate_note_id(), 50, MidiNoteData.from_midi_velocity(100), 4 * BAR + 960, 480)
 	var inst_b: Object = _add_clip(project, b.track, 0, BAR)
 	await _open(editor, [inst_a, inst_b], true)
 
@@ -182,7 +182,7 @@ func _test_range_carries_over_to_another_clip() -> void:
 	var a: Dictionary = project.create_instrument_track("A")
 	var b: Dictionary = project.create_instrument_track("B")
 	var inst_a: Object = _add_clip(project, a.track, BAR, 2 * BAR)
-	inst_a.clip.add_midi_note(project.allocate_note_id(), 72, 100, 960, 240)
+	inst_a.clip.add_midi_note(project.allocate_note_id(), 72, MidiNoteData.from_midi_velocity(100), 960, 240)
 	var inst_b: Object = _add_clip(project, b.track, 0, 4 * BAR)
 
 	await _open(editor, [inst_a], false)

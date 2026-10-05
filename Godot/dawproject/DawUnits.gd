@@ -40,14 +40,6 @@ static func normalized_to_pan(n: float) -> float:
 	return clampf(n, 0.0, 1.0) * 2.0 - 1.0
 
 
-static func velocity_to_normalized(velocity: int) -> float:
-	return float(velocity) / 127.0
-
-
-static func normalized_to_velocity(n: float) -> int:
-	return clampi(roundi(n * 127.0), 1, 127)
-
-
 static func ticks_to_beats(ticks: int) -> float:
 	return float(ticks) / float(PPQ)
 

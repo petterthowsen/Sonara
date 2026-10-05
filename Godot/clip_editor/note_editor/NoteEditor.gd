@@ -100,10 +100,7 @@ func unbind():
 
 ## Begin capturing note-list snapshots for the given clips (call before mutating).
 func _history_begin_clips(clips: Array) -> void:
-	_history_clip_snapshots.clear()
-	for c in clips:
-		if c is Clip and not _history_clip_snapshots.has(c):
-			_history_clip_snapshots[c] = ClipNotesStateCommand.capture_clip_notes(c)
+	_history_clip_snapshots = ClipNotesStateCommand.capture_many(clips)
 
 
 ## Capture snapshots for every clip owning the selected notes.
@@ -122,35 +119,9 @@ func _history_begin_selection() -> void:
 func _history_commit(action_name: String) -> void:
 	if _history_clip_snapshots.is_empty():
 		return
-	var cmds: Array[Command] = []
-	for clip in _history_clip_snapshots.keys():
-		var before: Array = _history_clip_snapshots[clip]
-		var after: Array = ClipNotesStateCommand.capture_clip_notes(clip)
-		if _history_snapshots_equal(before, after):
-			continue
-		cmds.append(ClipNotesStateCommand.new(action_name, clip, before, after))
-	_history_clip_snapshots.clear()
-	if cmds.is_empty():
-		return
-	HistoryUtil.record_many(action_name, cmds)
-
-
-## Compare two note snapshots for equality (id + fields).
-func _history_snapshots_equal(a: Array, b: Array) -> bool:
-	if a.size() != b.size():
-		return false
-	var by_id: Dictionary = {}
-	for snap in b:
-		by_id[snap["id"]] = snap
-	for snap in a:
-		if not by_id.has(snap["id"]):
-			return false
-		var other = by_id[snap["id"]]
-		if snap["note"] != other["note"] or snap["velocity"] != other["velocity"]:
-			return false
-		if snap["start_tick"] != other["start_tick"] or snap["duration_ticks"] != other["duration_ticks"]:
-			return false
-	return true
+	var before := _history_clip_snapshots
+	_history_clip_snapshots = {}
+	ClipNotesStateCommand.commit_many(action_name, before)
 
 
 # ============================================================================
@@ -326,7 +297,7 @@ func _place_note_at_position(pos: Vector2) -> VisualNote:
 	var note_id: int = target_clip.allocate_note_id()
 
 	# Add note to clip
-	var note_data = target_clip.add_midi_note(note_id, midi_note_num, 100, tick_position, new_note_length)
+	var note_data = target_clip.add_midi_note(note_id, midi_note_num, MidiNoteData.DEFAULT_VELOCITY, tick_position, new_note_length)
 	if note_data == null:
 		push_error("[NoteEditor] Failed to add note after cutting overlaps")
 		_history_clip_snapshots.clear()
@@ -454,15 +425,16 @@ func _on_drag_updated(note: VisualNote, mouse_pos_local: Vector2) -> void:
 
 	if alt_pressed:
 		# Alt mode: Control velocity
-		var velocity_delta = int(-delta_y / 2.0)
+		# 2 px per 1/127 step, as before the velocity went float.
+		var velocity_delta := int(-delta_y / 2.0) / 127.0
 
 		for sel_note in edited:
 			var start_pos = drag_start_positions.get(sel_note.midi_note_data.id)
 			if not start_pos:
 				continue
 
-			var start_velocity = start_pos.get("velocity", 100)
-			var new_velocity = clamp(start_velocity + velocity_delta, 1, 127)
+			var start_velocity: float = start_pos.get("velocity", MidiNoteData.DEFAULT_VELOCITY)
+			var new_velocity := clampf(start_velocity + velocity_delta, MidiNoteData.MIN_VELOCITY, 1.0)
 
 			sel_note.midi_note_data.velocity = new_velocity
 
@@ -543,7 +515,7 @@ func _on_drag_ended(note: VisualNote) -> void:
 			if sel_note.midi_note_data.start_tick != start_pos.start_tick or sel_note.midi_note_data.note != start_pos.note:
 				any_changes = true
 				break
-			if sel_note.midi_note_data.velocity != start_pos.get("velocity", 100):
+			if sel_note.midi_note_data.velocity != start_pos.get("velocity", MidiNoteData.DEFAULT_VELOCITY):
 				any_changes = true
 				break
 		if start_duration != null and sel_note.midi_note_data.duration_ticks != start_duration:
@@ -1149,9 +1121,7 @@ func start_duplicate_drag(grabbed: VisualNote, mouse_pos_local: Vector2) -> bool
 			continue
 		var nd: MidiNoteData = src.midi_note_data
 		var copy := MidiNoteData.new()
-		copy.note = nd.note
-		copy.velocity = nd.velocity
-		copy.duration_ticks = nd.duration_ticks
+		copy.copy_values_from(nd)
 		# Where this visual shows it: a loop repeat's pass, not the note's first one.
 		copy.start_tick = get_note_song_position(src).start_tick
 		var vn: VisualNote = visual_note_scene.instantiate()
@@ -1230,7 +1200,7 @@ func finish_duplicate_drag() -> void:
 		var local := ci.song_to_played_content_ticks(nd.start_tick) if multi_clip_mode else nd.start_tick
 		local = maxi(0, local)
 		target_clip.cut_overlapping_notes_at_pitch(nd.note, local, local + nd.duration_ticks, target_clip.allocate_note_id)
-		var new_note := target_clip.add_midi_note(target_clip.allocate_note_id(), nd.note, nd.velocity, local, nd.duration_ticks)
+		var new_note := target_clip.add_midi_note(target_clip.allocate_note_id(), nd.note, nd.velocity, local, nd.duration_ticks, nd.release)
 		if new_note:
 			added.append([new_note, ci, nd.start_tick])
 
@@ -1327,8 +1297,7 @@ func _transfer_note_between_clips(note_data: MidiNoteData, source: ClipInstance,
 	# Create a copy of the note data for the destination clip
 	var new_note = MidiNoteData.new()
 	new_note.id = dest.clip.allocate_note_id()
-	new_note.note = note_data.note
-	new_note.velocity = note_data.velocity
+	new_note.copy_values_from(note_data)
 	new_note.start_tick = dest_local_position
 	new_note.duration_ticks = note_data.duration_ticks
 

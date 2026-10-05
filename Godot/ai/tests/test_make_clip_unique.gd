@@ -135,5 +135,5 @@ func _test_detached_clip_is_independent() -> void:
 	_assert(new_clip.id != orig_clip.id, "detached clip has its own id")
 
 	# Editing the detached clip's note must not touch the original clip's notes.
-	new_clip.midi_notes[0].velocity = 42
-	_assert(orig_clip.midi_notes[0].velocity != 42, "editing the detached clip leaves the original clip alone")
+	new_clip.midi_notes[0].velocity = MidiNoteData.from_midi_velocity(42)
+	_assert(orig_clip.midi_notes[0].velocity != MidiNoteData.from_midi_velocity(42), "editing the detached clip leaves the original clip alone")

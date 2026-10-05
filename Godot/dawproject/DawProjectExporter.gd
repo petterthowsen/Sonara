@@ -563,11 +563,14 @@ func _write_notes(clip: Object, content_id: String, transpose: int) -> void:
 	var notes: Array = clip.midi_notes.duplicate()
 	notes.sort_custom(func(a, b): return a.start_tick < b.start_tick)
 	for n in notes:
-		_w.leaf("Note", {
+		var note_attrs := {
 			"time": DawUnits.ticks_to_beats(n.start_tick), "duration": DawUnits.ticks_to_beats(n.duration_ticks),
 			"channel": 0, "key": clampi(n.note + transpose, 0, 127),
-			"vel": DawUnits.velocity_to_normalized(n.velocity),
-		})
+			"vel": String.num(n.velocity, 17),  # full precision: a 7-bit velocity must come back exact
+		}
+		if not is_equal_approx(n.release, MidiNoteData.DEFAULT_RELEASE):
+			note_attrs["rel"] = String.num(n.release, 17)
+		_w.leaf("Note", note_attrs)
 	_w.close()
 
 

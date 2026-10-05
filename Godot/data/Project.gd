@@ -36,6 +36,11 @@ signal arranger_view_changed(key: String, value: bool)
 # ============================================================================
 
 # Time and tempo
+## Project file format. 2 = note values stored as normalized `vel` / `rel` (spec 019).
+const FORMAT_VERSION := 2
+## Format version this project was loaded from (1 when the file had none).
+var format_version: int = FORMAT_VERSION
+
 var tempo: float = 120.0
 var time_numerator: int = 4
 var time_denominator: int = 4
@@ -555,7 +560,8 @@ func _sync_clip_to_engine(clip: Clip) -> void:
 				note.note,
 				note.start_tick,
 				note.duration_ticks,
-				note.velocity
+				note.velocity,
+				note.release
 			])
 	else:
 		# Sync audio data (if audio clip)
@@ -1697,6 +1703,7 @@ func to_json() -> Dictionary:
 		clips_array.append(clips[clip_id].to_json())
 
 	return {
+		"format_version": FORMAT_VERSION,
 		"tempo": tempo,
 		"time_numerator": time_numerator,
 		"time_denominator": time_denominator,
@@ -1723,6 +1730,8 @@ func to_json() -> Dictionary:
 # Deserialize from JSON
 static func from_json(data: Dictionary) -> Project:
 	var project = Project.new()
+	# Missing = version 1 (notes stored `velocity` as 0-127; MidiNoteData.from_json migrates by key).
+	project.format_version = int(data.get("format_version", 1))
 	project.tempo = data.get("tempo", 120.0)
 	project.time_numerator = data.get("time_numerator", 4)
 	project.time_denominator = data.get("time_denominator", 4)

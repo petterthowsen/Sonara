@@ -159,9 +159,9 @@ static func apply(clip: Object, project: Object, parsed: Dictionary, opts: Dicti
 				keep_ids[old.id] = true
 				var old_char := _tier_char(old.velocity)
 				if spec.char != old_char:
-					old.velocity = ClipTextKey.tier_to_velocity(spec.tier)
+					old.velocity = MidiNoteData.from_midi_velocity(ClipTextKey.tier_to_velocity(spec.tier))
 					_touch_note(clip, old)
-					changes.append("vel %s → %d" % [ClipTextKey.pitch_name(old.note), old.velocity])
+					changes.append("vel %s → %d" % [ClipTextKey.pitch_name(old.note), MidiNoteData.to_midi_velocity(old.velocity)])
 				var new_dur: int = spec.steps * step_ticks
 				if old.duration_ticks != new_dur:
 					old.duration_ticks = new_dur
@@ -494,13 +494,13 @@ static func _on_grid_notes(clip: Object, pitch: int, step_ticks: int) -> Diction
 	return out
 
 
-static func _tier_char(velocity: int) -> String:
-	return str(ClipTextKey.velocity_to_tier(velocity))
+static func _tier_char(velocity: float) -> String:
+	return str(ClipTextKey.velocity_to_tier(MidiNoteData.to_midi_velocity(velocity)))
 
 
 static func _add_note(clip: Object, project: Object, pitch: int, start: int, dur: int, tier: int) -> MidiNoteData:
 	var nid := _next_id(clip, project)
-	var vel := ClipTextKey.tier_to_velocity(tier)
+	var vel := MidiNoteData.from_midi_velocity(ClipTextKey.tier_to_velocity(tier))
 	if clip.is_synced_to_engine():
 		return clip.add_midi_note(nid, pitch, vel, start, dur)
 	var n := MidiNoteData.new()

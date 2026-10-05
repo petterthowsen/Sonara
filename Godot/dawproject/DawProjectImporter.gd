@@ -889,15 +889,16 @@ func _import_notes(clip_json: Dictionary, notes: DawXml.El, p: Dictionary) -> vo
 		var channel := int(n.get_float("channel"))
 		if channel != 0:
 			_report.add(TransferReport.NOTE_CHANNEL, subject, str(channel))
-		if n.has_attr("rel") and absf(n.get_float("rel") - n.get_float("vel", 0.787402)) > 1e-4:
-			_report.add(TransferReport.NOTE_RELEASE, subject)
 		if not n.children.is_empty():
 			_report.add(TransferReport.NOTE_EXPRESSION, subject)
-		clip_json["midi_notes"].append({
+		var note_json := {
 			"id": _next_note_id, "note": clampi(int(n.get_float("key")), 0, 127),
-			"velocity": DawUnits.normalized_to_velocity(n.get_float("vel", 100.0 / 127.0)),
+			"vel": clampf(n.get_float("vel", MidiNoteData.DEFAULT_VELOCITY), MidiNoteData.MIN_VELOCITY, 1.0),
 			"start_tick": start, "duration_ticks": duration,
-		})
+		}
+		if n.has_attr("rel"):
+			note_json["rel"] = clampf(n.get_float("rel"), 0.0, 1.0)
+		clip_json["midi_notes"].append(note_json)
 		_next_note_id += 1
 		end_tick = maxi(end_tick, start + duration)
 	clip_json["content_length_ticks"] = end_tick

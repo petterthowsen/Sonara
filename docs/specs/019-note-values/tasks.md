@@ -140,7 +140,7 @@ until every device is migrated, and T-009 deletes the shim.
 
 ## Phase A2: Godot model and interop
 
-- [ ] **T-010** [REQ-001, REQ-002, REQ-003] Make the note model float and give it value helpers.
+- [x?] **T-010** [REQ-001, REQ-002, REQ-003] Make the note model float and give it value helpers.
   - _Files_: `Godot/data/MidiNote.gd`
   - _Output_:
     - Float `velocity` (asserts on values ≥ 2, clamps to [1/127, 1]) and `release` (clamps to
@@ -154,16 +154,18 @@ until every device is migrated, and T-009 deletes the shim.
     covers the `velocity` 100 / 1 fixture and the key assertions).
   - _Depends on_: —
 
-- [ ] **T-011** [REQ-001] Update the test suite's integer velocities.
+- [x?] **T-011** [REQ-001] Update the test suite's integer velocities.
   - _Files_: `Godot/tests/*.gd` (about 50 `add_midi_note(…, <int>, …)` and `.velocity = <int>`
     sites)
   - _Output_: tests pass velocities through `MidiNoteData.from_midi_velocity(n)`.
   - _Verify_: `grep -rnE "add_midi_note\([^)]*, [0-9]+, [0-9]+, [0-9]+\)" Godot/tests` is
     empty. Full `Godot/tests/run_all.sh` passes (except tests that depend on T-012–T-015,
     which are listed in the task note when marking `[x?]`).
+  - _Note_: full run is green apart from `clip_editor_track_list`, `timeline_erase_drag` and
+    `value_controls`, which also fail on the untouched branch.
   - _Depends on_: T-010
 
-- [ ] **T-012** [REQ-002, REQ-004, REQ-006] Make Clip and Project sync and save the new values.
+- [x?] **T-012** [REQ-002, REQ-004, REQ-006] Make Clip and Project sync and save the new values.
   - _Files_: `Godot/data/Clip.gd` (`add_midi_note(…, velocity: float, …, release := DEFAULT)`,
     `update_midi_note`, split via `copy_values_from`), `Godot/data/Project.gd` (sync loop,
     `format_version: 2` in `to_json`, read in `from_json`)
@@ -174,7 +176,7 @@ until every device is migrated, and T-009 deletes the shim.
     `_pending_sends` payload types (`float` at index 4 and 5) and `format_version`.
   - _Depends on_: T-010
 
-- [ ] **T-013** [REQ-005] Route every copy and snapshot site through the note helpers.
+- [x?] **T-013** [REQ-005] Route every copy and snapshot site through the note helpers.
   - _Files_: `Godot/data/NoteSelection.gd`, `Godot/history/commands/ClipNotesStateCommand.gd`
     (snapshots via `values()`; new `capture_many` / `commit_many`),
     `Godot/history/commands/MakeClipUniqueCommand.gd`, `Godot/history/ClipMergeActions.gd`,
@@ -189,7 +191,7 @@ until every device is migrated, and T-009 deletes the shim.
       quantize and undo/redo with `vel` 0.3 / `rel` 0.8.
   - _Depends on_: T-012
 
-- [ ] **T-014** [REQ-005, REQ-009] Update the remaining velocity consumers.
+- [x?] **T-014** [REQ-005, REQ-009] Update the remaining velocity consumers.
   - _Files_: `Godot/clip_editor/VisualNote.gd`, `note_editor/ContextNotesLayer.gd`,
     `note_editor/NoteEditor.gd` (Alt-drag in 1/127 steps), `Godot/clip_editor/MidiEditor.gd`
     (`_start_preview_note` takes float), `Godot/midi/MidiManager.gd` (note-off velocity 64),
@@ -202,7 +204,7 @@ until every device is migrated, and T-009 deletes the shim.
     along with `Godot/ai/tests`. Then the full `Godot/tests/run_all.sh`.
   - _Depends on_: T-011, T-013
 
-- [ ] **T-015** [REQ-014] Import and export release velocity in DAWproject.
+- [x?] **T-015** [REQ-014] Import and export release velocity in DAWproject.
   - _Files_: `Godot/dawproject/DawProjectImporter.gd`, `DawProjectExporter.gd`,
     `TransferReport.gd` (drop `NOTE_RELEASE`), `DawUnits.gd` (drop the unused velocity
     helpers), `Godot/tests/test_dawproject_import.gd`, `test_dawproject_export.gd`,

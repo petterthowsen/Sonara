@@ -63,7 +63,7 @@ func _add_clip(project: Object, track: Object, start: int, length: int) -> Objec
 	project.add_clip(clip)
 	var beat: int = project.ppq
 	for i in length / beat:
-		clip.add_midi_note(project.allocate_note_id(), 60 + i % 12, 100, i * beat, beat / 2)
+		clip.add_midi_note(project.allocate_note_id(), 60 + i % 12, MidiNoteData.from_midi_velocity(100), i * beat, beat / 2)
 	return track.create_clip_instance(clip, start, length)
 
 

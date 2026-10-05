@@ -54,12 +54,12 @@ func _make_project() -> Dictionary:
 	var b: Object = project.create_instrument_track("B").track
 	var clip_a: Object = project.create_clip("Ca")
 	project.add_clip(clip_a)
-	clip_a.add_midi_note(project.allocate_note_id(), 60, 100, 0, 480)
-	clip_a.add_midi_note(project.allocate_note_id(), 64, 20, 960, 480)
+	clip_a.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 480)
+	clip_a.add_midi_note(project.allocate_note_id(), 64, MidiNoteData.from_midi_velocity(20), 960, 480)
 	var ci_a: Object = a.create_clip_instance(clip_a, 0, 3840)
 	var clip_b: Object = project.create_clip("Cb")
 	project.add_clip(clip_b)
-	clip_b.add_midi_note(project.allocate_note_id(), 72, 100, 0, 480)
+	clip_b.add_midi_note(project.allocate_note_id(), 72, MidiNoteData.from_midi_velocity(100), 0, 480)
 	var ci_b: Object = b.create_clip_instance(clip_b, 3840, 3840)
 	return {"project": project, "a": a, "b": b, "clip_a": clip_a, "clip_b": clip_b, "ci_a": ci_a, "ci_b": ci_b}
 
@@ -184,7 +184,7 @@ func _test_index_invalidation() -> void:
 	_assert(layer.index_builds == builds, "searching again reuses the index")
 
 	# Added
-	var added: Object = p.clip_a.add_midi_note(p.project.allocate_note_id(), 67, 100, 480, 240)
+	var added: Object = p.clip_a.add_midi_note(p.project.allocate_note_id(), 67, MidiNoteData.from_midi_velocity(100), 480, 240)
 	_assert(changed_count[0] == 1, "adding a note signals notes_changed")
 	_assert(layer.note_at(_center(parts, added, p.ci_a)).get("data") == added, "an added note is found")
 	# Changed
@@ -205,9 +205,9 @@ func _test_unsorted_clip_and_long_note() -> void:
 	var parts := _make_layer([p.a, p.b])
 	var layer: Control = parts.layer
 	# Notes added out of order, one long one starting far left of the rest.
-	var late: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 50, 100, 3000, 240)
-	var long_note: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 55, 100, 100, 2800)
-	var early: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 45, 100, 10, 240)
+	var late: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 50, MidiNoteData.from_midi_velocity(100), 3000, 240)
+	var long_note: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 55, MidiNoteData.from_midi_velocity(100), 100, 2800)
+	var early: Object = p.clip_b.add_midi_note(p.project.allocate_note_id(), 45, MidiNoteData.from_midi_velocity(100), 10, 240)
 	for nd in [late, long_note, early]:
 		_assert(layer.note_at(_center(parts, nd, p.ci_b)).get("data") == nd, "note at pitch %d is found in an unsorted clip" % nd.note)
 	# Far right end of the long note: found although it starts thousands of ticks earlier.
@@ -227,7 +227,7 @@ func _test_one_editor_for_many_tracks() -> void:
 		project.add_clip(clip)
 		edited.append(track.create_clip_instance(clip, 0, 4 * 3840))
 		for n in 20:
-			clip.add_midi_note(project.allocate_note_id(), 40 + n, 100, n * 480, 240)
+			clip.add_midi_note(project.allocate_note_id(), 40 + n, MidiNoteData.from_midi_velocity(100), n * 480, 240)
 		tracks.append(track)
 	var clip_editor: Control = _clip_editor_scene.instantiate()
 	root.add_child(clip_editor)
@@ -258,7 +258,7 @@ func _test_one_editor_for_many_tracks() -> void:
 
 	# Editing the active track's note moves it in the editor; a context track's edit redraws.
 	var context_clip: Object = edited[7].clip
-	context_clip.add_midi_note(project.allocate_note_id(), 90, 100, 0, 240)
+	context_clip.add_midi_note(project.allocate_note_id(), 90, MidiNoteData.from_midi_velocity(100), 0, 240)
 	var hit: Dictionary = midi.context_layer.note_at(_placement_script.note_rect(context_clip.midi_notes[-1],
 			edited[7].content_origin_ticks(), midi.lane_layout, midi.grid_helper).get_center())
 	_assert(hit.get("track") == tracks[7], "a note added to a context track can be hit at once")

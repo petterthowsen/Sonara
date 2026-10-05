@@ -57,8 +57,7 @@ func _duplicate_clip(source: Clip) -> Clip:
 		for note in source.midi_notes:
 			var nn := MidiNoteData.new()
 			nn.id = project.allocate_note_id()
-			nn.note = note.note
-			nn.velocity = note.velocity
+			nn.copy_values_from(note)
 			nn.start_tick = note.start_tick
 			nn.duration_ticks = note.duration_ticks
 			new_clip.midi_notes.append(nn)

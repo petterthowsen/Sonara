@@ -75,7 +75,7 @@ func _note(project: Object, pitch: int, start: int, length: int) -> Object:
 	var n: Object = load("res://data/MidiNote.gd").new()
 	n.id = project.allocate_note_id()
 	n.note = pitch
-	n.velocity = 100
+	n.velocity = MidiNoteData.from_midi_velocity(100)
 	n.start_tick = start
 	n.duration_ticks = length
 	return n

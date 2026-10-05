@@ -43,7 +43,7 @@ func _setup() -> Dictionary:
 		instances.append(track.create_clip_instance(clip, i * 3840, 3840))
 
 	var note_id: int = project.allocate_note_id()
-	clip.add_midi_note(note_id, 60, 100, 960, 240)
+	clip.add_midi_note(note_id, 60, MidiNoteData.from_midi_velocity(100), 960, 240)
 
 	var editor = _editor_script.new()
 	editor.set_grid_helper(_grid_helper_script.new())

@@ -250,7 +250,9 @@ func _make_midi_clip(project: Object, name: String) -> Object:
 	var clip: Object = project.create_clip(name, _clip_script.ClipType.MIDI)
 	clip.content_length_ticks = 3840
 	for i in 4:
-		var n: Object = clip.add_midi_note(project.allocate_note_id(), 60 + i, 100, i * 960, 960)
+		var n: Object = clip.add_midi_note(project.allocate_note_id(), 60 + i, MidiNoteData.from_midi_velocity(100), i * 960, 960)
+		if i == 1:
+			n.release = 0.2
 	return clip
 
 
@@ -317,6 +319,8 @@ func _test_clips() -> void:
 	var note0: DawXml.El = first_notes.children_named("Note")[0]
 	_assert(note0.get_attr("key") == "60" and note0.get_float("time") == 0.0 and note0.get_float("duration") == 1.0 and note0.get_attr("channel") == "0", "note key/time/duration/channel")
 	_assert(absf(note0.get_float("vel") - 100.0 / 127.0) < 1e-5, "velocity 100 -> 0.787402")
+	_assert(not note0.has_attr("rel"), "a default release is not written")
+	_assert(absf(first_notes.children_named("Note")[1].get_float("rel") - 0.2) < 1e-6, "a non-default release is written as rel")
 	var tr_el: DawXml.El = clip_els[3]
 	_assert(not tr_el.has_attr("reference") and tr_el.child("Notes") != null and not tr_el.child("Notes").has_attr("id"), "transposed instance writes inline notes")
 	_assert(tr_el.child("Notes").children_named("Note")[0].get_attr("key") == "62", "notes transposed by 2")

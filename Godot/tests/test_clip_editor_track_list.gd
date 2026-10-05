@@ -339,7 +339,7 @@ func _make_midi_setup() -> Dictionary:
 		var ci: Object = pair.track.create_clip_instance(clip, 0, 3840)
 		var pitches := [60, 64] if key == "a" else [60, 72]
 		for pitch in pitches:
-			clip.add_midi_note(project.allocate_note_id(), pitch, 100, 0, 480)
+			clip.add_midi_note(project.allocate_note_id(), pitch, MidiNoteData.from_midi_velocity(100), 0, 480)
 		out[key] = pair.track
 		out["ci_" + key] = ci
 	var clip_editor: Control = _clip_editor_scene.instantiate()
@@ -525,7 +525,7 @@ func _make_editor_setup(n: int) -> Dictionary:
 		var clip: Object = project.create_clip("Clip" + char(65 + i))
 		project.add_clip(clip)
 		cis.append(pair.track.create_clip_instance(clip, 0, 3840))
-		clip.add_midi_note(project.allocate_note_id(), 60, 100, 0, 480)
+		clip.add_midi_note(project.allocate_note_id(), 60, MidiNoteData.from_midi_velocity(100), 0, 480)
 		tracks.append(pair.track)
 	var editor: Control = _clip_editor_scene.instantiate()
 	root.add_child(editor)

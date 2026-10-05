@@ -1681,14 +1681,14 @@ func _get_preview_channel_id() -> int:
 	return t.default_channel_id if t else -1
 
 
-func _start_preview_note(note: int, velocity: int) -> void:
+func _start_preview_note(note: int, velocity: float) -> void:
 	_stop_preview_note()
 	var channel_id := _get_preview_channel_id()
 	if channel_id < 0:
 		return
 	_preview_note = note
 	_preview_channel_id = channel_id
-	MidiManager.send_note_to_channel(channel_id, note, velocity, true)
+	MidiManager.send_note_to_channel(channel_id, note, MidiNoteData.to_midi_velocity(velocity), true)
 
 
 func _stop_preview_note() -> void:
@@ -1720,12 +1720,12 @@ func _start_chord_preview(tick: int) -> void:
 	_chord_preview_channel_id = channel_id
 	for pitch in chord:
 		_chord_preview_notes.append(pitch)
-		MidiManager.send_note_to_channel(channel_id, pitch, chord[pitch], true)
+		MidiManager.send_note_to_channel(channel_id, pitch, MidiNoteData.to_midi_velocity(chord[pitch]), true)
 
 
 func _stop_chord_preview() -> void:
 	for pitch in _chord_preview_notes:
-		MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, 0, false)
+		MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, MidiManager.NOTE_OFF_RELEASE, false)
 	_chord_preview_notes.clear()
 	_chord_preview_channel_id = -1
 
@@ -1791,7 +1791,7 @@ func _update_active_keys() -> void:
 
 
 func _on_piano_key_pressed(note: int, velocity: int) -> void:
-	_start_preview_note(note, velocity)
+	_start_preview_note(note, MidiNoteData.from_midi_velocity(velocity))
 
 
 func _on_piano_key_released(note: int) -> void:

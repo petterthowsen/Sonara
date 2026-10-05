@@ -25,7 +25,7 @@ static func serialize(clip: Object, opts: Dictionary) -> String:
 		var at := ClipTextTime.format_bbt(n.start_tick, ppq, numerator, denominator)
 		var pitch := ClipTextKey.pitch_name(n.note, opts.get("key", {}))
 		var dur := ClipTextTime.format_duration(n.duration_ticks, ppq)
-		lines.append("%s  %s  %s  %s  v%d" % [nid, at, pitch, dur, n.velocity])
+		lines.append("%s  %s  %s  %s  v%d" % [nid, at, pitch, dur, MidiNoteData.to_midi_velocity(n.velocity)])
 	return "\n".join(lines)
 
 
@@ -169,8 +169,8 @@ static func _op_add(
 		if note == null:
 			return "could not add %s at %s (overlaps a note of the same pitch)" % [Midi.midi_to_note_name(pitch), toks[1]]
 		# Preserve exact velocity (not the tier curve) for event-list writes.
-		if note.velocity != vel:
-			note.velocity = clampi(vel, 1, 127)
+		if MidiNoteData.to_midi_velocity(note.velocity) != vel:
+			note.velocity = MidiNoteData.from_midi_velocity(vel)
 			ClipTextGrid._touch_note(clip, note)
 		changes.append("add n%d %s" % [note.id, Midi.midi_to_note_name(pitch)])
 	return ""
@@ -224,9 +224,9 @@ static func _op_vel(clip: Object, toks: PackedStringArray, changes: Array) -> St
 	var vel := _parse_vel(toks[2])
 	if vel < 0:
 		return "Bad velocity: %s" % toks[2]
-	note.velocity = clampi(vel, 1, 127)
+	note.velocity = MidiNoteData.from_midi_velocity(vel)
 	ClipTextGrid._touch_note(clip, note)
-	changes.append("vel %s %d" % [toks[1], note.velocity])
+	changes.append("vel %s %d" % [toks[1], MidiNoteData.to_midi_velocity(note.velocity)])
 	return ""
 
 

@@ -104,8 +104,8 @@ static func _append_played_notes(project: Project, dest: Clip, inst: ClipInstanc
 				continue
 			var nn := MidiNoteData.new()
 			nn.id = project.allocate_note_id()
+			nn.copy_values_from(note)
 			nn.note = clampi(note.note + inst.transpose, 0, 127)
-			nn.velocity = note.velocity
 			nn.start_tick = shift + seg.x + (s - content_from)
 			nn.duration_ticks = e - s
 			dest.midi_notes.append(nn)

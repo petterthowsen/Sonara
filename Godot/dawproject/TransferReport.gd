@@ -11,7 +11,6 @@ const FOREIGN_BUILTIN := "foreign_builtin"        # another vendor's BuiltinDevi
 const SONARA_DEVICE_MISSING := "sonara_device_missing"
 const WARP_APPROXIMATED := "warp_approximated"
 const NOTE_CHANNEL := "note_channel"
-const NOTE_RELEASE := "note_release"
 const NOTE_EXPRESSION := "note_expression"
 const CLIP_AUTOMATION := "clip_automation"
 const EXPRESSION_AUTOMATION := "expression_automation"
@@ -49,7 +48,6 @@ const TEMPLATES: Dictionary = {
 	SONARA_DEVICE_MISSING: "Sonara device {detail} is not available, skipped",
 	WARP_APPROXIMATED: "{n} audio clips with more than two warp markers approximated by a constant stretch",
 	NOTE_CHANNEL: "{n} notes on MIDI channel {detail} moved to channel 0",
-	NOTE_RELEASE: "{n} notes with a release velocity lost it",
 	NOTE_EXPRESSION: "{n} per-note expression lanes dropped",
 	CLIP_AUTOMATION: "{n} clip-level automation lanes dropped",
 	EXPRESSION_AUTOMATION: "{n} expression automation lanes ({detail}) dropped",

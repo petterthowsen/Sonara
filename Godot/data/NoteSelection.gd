@@ -50,7 +50,7 @@ static func from_visual_notes(visual_notes: Array[VisualNote]) -> NoteSelection:
 		var relative_note = MidiNoteData.new()
 		relative_note.id = -1  # Will be assigned when pasted
 		relative_note.note = note_data.note
-		relative_note.velocity = note_data.velocity
+		relative_note.copy_values_from(note_data)
 		relative_note.start_tick = note_data.start_tick - min_tick  # Relative position
 		relative_note.duration_ticks = note_data.duration_ticks
 		
@@ -76,7 +76,7 @@ static func from_visual_notes_with_range(visual_notes: Array[VisualNote], p_star
 		var relative_note = MidiNoteData.new()
 		relative_note.id = -1  # Will be assigned when pasted
 		relative_note.note = note_data.note
-		relative_note.velocity = note_data.velocity
+		relative_note.copy_values_from(note_data)
 		relative_note.start_tick = note_data.start_tick - p_start_tick  # Relative to selection start
 		relative_note.duration_ticks = note_data.duration_ticks
 		
@@ -99,7 +99,7 @@ static func from_positioned_notes(visual_notes: Array[VisualNote], p_start_tick:
 		var relative_note = MidiNoteData.new()
 		relative_note.id = -1  # Will be assigned when pasted
 		relative_note.note = note_data.note
-		relative_note.velocity = note_data.velocity
+		relative_note.copy_values_from(note_data)
 		relative_note.start_tick = int(pos["start_tick"]) - p_start_tick
 		relative_note.duration_ticks = note_data.duration_ticks
 		relative_notes.append(relative_note)
@@ -126,7 +126,7 @@ static func from_midi_notes(midi_notes: Array[MidiNoteData]) -> NoteSelection:
 		var relative_note = MidiNoteData.new()
 		relative_note.id = -1  # Will be assigned when pasted
 		relative_note.note = note_data.note
-		relative_note.velocity = note_data.velocity
+		relative_note.copy_values_from(note_data)
 		relative_note.start_tick = note_data.start_tick - min_tick  # Relative position
 		relative_note.duration_ticks = note_data.duration_ticks
 		
@@ -144,7 +144,7 @@ func get_notes_at_position(new_start_tick: int) -> Array[MidiNoteData]:
 		var new_note = MidiNoteData.new()
 		new_note.id = -1  # Will be assigned by caller
 		new_note.note = note.note
-		new_note.velocity = note.velocity
+		new_note.copy_values_from(note)
 		new_note.start_tick = new_start_tick + note.start_tick  # Add new offset
 		new_note.duration_ticks = note.duration_ticks
 		
@@ -165,7 +165,7 @@ func duplicate() -> NoteSelection:
 		var dup_note = MidiNoteData.new()
 		dup_note.id = note.id
 		dup_note.note = note.note
-		dup_note.velocity = note.velocity
+		dup_note.copy_values_from(note)
 		dup_note.start_tick = note.start_tick
 		dup_note.duration_ticks = note.duration_ticks
 		dup_notes.append(dup_note)
