@@ -714,6 +714,21 @@ history behind the compressor's meters and scrolling display. It arrives through
 - `CompressorData.decode()` in Godot splits the blob into `{count, in_peak_db, out_peak_db,
   gr_db, summary}`. `summary` maps the names above to dB, and is empty when the blob has none.
 
+#### Sampler playheads stream (`sonara.builtin.sampler`)
+
+Data type `"playheads"`: where each sounding voice is in the file, for the sample display. It
+arrives through `device_data_received` as a `PackedByteArray`, little-endian: a `u32` count, then
+`count` records of three `f32`s:
+
+- `position`: 0–1 over the whole file (not the play region). Same scale in reverse; points never flip.
+- `velocity`: signed file-fractions per second (direction × rate), so the UI can extrapolate
+  between packets. 0 for a voice holding at the end of a non-looping region.
+- `level`: envelope × voice gain, 0–1, for the playhead's opacity.
+
+The engine sends a record about every 33 ms of audio while a voice sounds (at most 64 × 12 + 4
+bytes), and one record with `count = 0` after the last voice ends so the UI clears promptly.
+Nothing is sent while idle. `poll_device_data` returns a fresh `Vec`, like the other streams.
+
 #### Example Usage
 ```gdscript
 # Add polysynth + delay to channel 2

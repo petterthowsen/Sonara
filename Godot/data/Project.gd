@@ -424,7 +424,11 @@ func _on_audiofile_decode_ready(args: Array) -> void:
 		return
 	var req_id := str(args[0])
 	var source := _waveform_for_req(req_id)
-	if source == null or not source.apply_decode_ready(args):
+	if source == null:
+		logger.warn("[Project] decode/ready for untracked req %s dropped" % req_id)
+		return
+	logger.info("[Project] decode/ready req=%s" % req_id)
+	if not source.apply_decode_ready(args):
 		return
 	var clip := _get_clip_by_req_id(req_id)
 	if clip:
@@ -453,8 +457,11 @@ func _on_audiofile_waveform_ready(args: Array) -> void:
 		push_error("[Project] Waveform ready: need 2 args, got %d" % args.size())
 		return
 	var source := _waveform_for_req(str(args[0]))
-	if source:
-		source.apply_waveform_ready(args)
+	if source == null:
+		logger.warn("[Project] waveform/ready for untracked req %s dropped" % str(args[0]))
+		return
+	logger.info("[Project] waveform/ready req=%s path=%s" % [str(args[0]), str(args[1])])
+	source.apply_waveform_ready(args)
 
 
 func _on_audiofile_progress(args: Array) -> void:

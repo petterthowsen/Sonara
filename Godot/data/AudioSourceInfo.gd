@@ -105,6 +105,7 @@ func share_from(other: AudioSourceInfo) -> void:
 
 
 func _set_data(d: WaveformData) -> void:
+	logger.info("_set_data: new=%s same=%s ready=%s" % [d != null, data == d, d != null and d.is_ready()])
 	if data == d:
 		if d != null and d.is_ready():
 			waveform_ready.emit()

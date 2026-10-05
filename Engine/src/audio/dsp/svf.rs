@@ -42,6 +42,9 @@ pub enum FilterMode {
     Hp24,
     /// Low plus high: a notch whose width follows resonance.
     Notch,
+    /// Two cascaded band-pass stages at the same cutoff and damping, each scaled by `k`, so the
+    /// peak stays near unity while the skirts fall at 12 dB/oct per side.
+    Bp24,
 }
 
 impl FilterMode {
@@ -116,6 +119,8 @@ impl SvfCoefs {
             first: StageCoefs::new(g, k),
             second: if mode.is_24() {
                 StageCoefs::new(g, K_BUTTER4_B)
+            } else if mode == FilterMode::Bp24 {
+                StageCoefs::new(g, k)
             } else {
                 StageCoefs::default()
             },
@@ -216,6 +221,11 @@ impl Svf {
             FilterMode::Hp24 => {
                 let (_, _, a) = self.stages[0].tick(x, c);
                 self.stages[1].tick(a, &coefs.second).2
+            }
+            FilterMode::Bp24 => {
+                let (_, a, _) = self.stages[0].tick(x, c);
+                let second = &coefs.second;
+                self.stages[1].tick(a * c.k, second).1 * second.k
             }
             // Low + high = input minus the band-pass term.
             FilterMode::Notch => {
@@ -368,6 +378,18 @@ mod tests {
         assert!(drive(1.0, gain, blend) <= 1.0);
         assert!(drive(0.1, gain, blend) > 0.5, "drive boosts quiet input");
     }
+    #[test]
+    fn bp24_is_steeper_than_bp12_with_unity_peak() {
+        let sr = 48_000.0;
+        let peak = gain_at(FilterMode::Bp24, 1_000.0, 0.5, 1_000.0, sr);
+        assert!((peak - 1.0).abs() < 0.05, "{peak}");
+        for hz in [500.0, 2_000.0] {
+            let bp12 = gain_at(FilterMode::Bp12, 1_000.0, 0.5, hz, sr);
+            let bp24 = gain_at(FilterMode::Bp24, 1_000.0, 0.5, hz, sr);
+            assert!(bp24 < bp12 * 0.8, "{hz} Hz: bp24 {bp24} vs bp12 {bp12}");
+        }
+    }
+
     #[test]
     fn hp24_and_notch_have_the_right_shape() {
         let sr = 48_000.0;

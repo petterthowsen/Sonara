@@ -1,14 +1,34 @@
-//! Single-sample MIDI instrument: pitch, speed, polyphony, region, and ADSR.
+//! Single-sample MIDI instrument: pitch, speed, polyphony, region, loop, per-voice filter, ADSR.
+//!
+//! - Start, End, Loop Start and Loop End are stored raw (normalized over the whole file) and
+//!   ordered/clamped at use time by [`resolve_regions`], so restoring a state where several of
+//!   them move at once doesn't depend on the order the values arrive in.
+//! - Loop Off plays Start→End (End→Start when Reverse) and ends with a short declick; it never
+//!   reads past the boundary. Loop On wraps inside the loop; Ping-Pong bounces. With any loop on,
+//!   note-off releases even in One-shot. Points stay in file space whatever the direction.
+//! - The crossfade blends the loop's tail with the material just before Loop Start (just after
+//!   Loop End when reversed). Ping-Pong is already continuous, so it ignores the crossfade.
+//! - The filter runs per voice (key tracking is per note) in chunks of [`FILTER_CHUNK`] frames.
+//! - Data stream `"playheads"`: `u32 count` then `count` × (`f32 position` 0–1 over the whole
+//!   file, `f32 velocity` signed file-fractions per second, `f32 level` 0–1), every ~33 ms of
+//!   audio, plus one `count = 0` frame when the last voice ends.
 
-use super::container::{gain_to_normalized, normalized_to_gain};
+use super::param_table::{
+    flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
+};
 use super::{
     has_audio_signal, AudioDevice, DeviceCategory, DevicePath, DeviceSleepState, DeviceVariant,
-    FileLoadingSupport, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
+    FileLoadingSupport, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
+use crate::audio::dsp::smoothing::SmoothedParam;
+use crate::audio::dsp::svf::{
+    compensation_coef, cutoff_to_g, resonance_to_k, FilterMode, Svf, SvfCoefs,
+};
 use crate::audio::midi_types::NoteEvent;
 use crate::audio::modulation::envelope::{AdsrEnvelope, AdsrState};
 use crossbeam::channel::Sender;
+use std::f32::consts::FRAC_PI_2;
 use tracing::{info, warn};
 
 const MAX_VOICES: usize = 64;
@@ -25,26 +45,360 @@ const DEFAULT_ATTACK: f32 = 0.001;
 const DEFAULT_DECAY: f32 = 0.001;
 const DEFAULT_SUSTAIN: f32 = 1.0;
 const DEFAULT_RELEASE: f32 = 0.01;
-const PARAM_VOLUME: ParamId = 0;
-const PARAM_TUNE: ParamId = 1;
-const PARAM_SPEED: ParamId = 2;
-const PARAM_ROOT: ParamId = 3;
-const PARAM_KEY_TRACK: ParamId = 4;
-const PARAM_PLAY_MODE: ParamId = 5;
-const PARAM_VELOCITY: ParamId = 6;
-const PARAM_START: ParamId = 7;
-const PARAM_END: ParamId = 8;
-const PARAM_ATTACK: ParamId = 9;
-const PARAM_DECAY: ParamId = 10;
-const PARAM_SUSTAIN: ParamId = 11;
-const PARAM_RELEASE: ParamId = 12;
-const PARAM_VOICES: ParamId = 13;
+/// Shortest play region and loop, in frames.
+const MIN_REGION_FRAMES: f64 = 2.0;
+const MIN_LOOP_FRAMES: f64 = 4.0;
+/// Fade at the end of a non-looping region.
+const DECLICK_SECONDS: f32 = 0.002;
+/// Frames between filter coefficient updates.
+const FILTER_CHUNK: usize = 32;
+const FILTER_RAMP_MS: f32 = 5.0;
+/// Audio between `"playheads"` records.
+const PLAYHEAD_INTERVAL_SECONDS: f32 = 0.033;
+const PLAYHEAD_RECORD_BYTES: usize = 12;
+
+pub const PARAM_VOLUME: ParamId = 0;
+pub const PARAM_TUNE: ParamId = 1;
+pub const PARAM_SPEED: ParamId = 2;
+pub const PARAM_ROOT: ParamId = 3;
+pub const PARAM_KEY_TRACK: ParamId = 4;
+pub const PARAM_PLAY_MODE: ParamId = 5;
+pub const PARAM_VELOCITY: ParamId = 6;
+pub const PARAM_START: ParamId = 7;
+pub const PARAM_END: ParamId = 8;
+pub const PARAM_ATTACK: ParamId = 9;
+pub const PARAM_DECAY: ParamId = 10;
+pub const PARAM_SUSTAIN: ParamId = 11;
+pub const PARAM_RELEASE: ParamId = 12;
+pub const PARAM_VOICES: ParamId = 13;
+pub const PARAM_FINE: ParamId = 14;
+pub const PARAM_REVERSE: ParamId = 20;
+pub const PARAM_LOOP_MODE: ParamId = 21;
+pub const PARAM_LOOP_START: ParamId = 22;
+pub const PARAM_LOOP_END: ParamId = 23;
+pub const PARAM_CROSSFADE: ParamId = 24;
+pub const PARAM_FILTER_TYPE: ParamId = 30;
+pub const PARAM_CUTOFF: ParamId = 31;
+pub const PARAM_RESONANCE: ParamId = 32;
+pub const PARAM_FILTER_KEY_TRACK: ParamId = 33;
+
+const PLAY_MODES: &[&str] = &["One-shot", "Gated"];
+const LOOP_MODES: &[&str] = &["Off", "On", "Ping-Pong"];
+const FILTER_TYPES: &[&str] = &["Off", "LP12", "LP24", "BP12", "BP24", "HP12", "HP24"];
+
+const AMP_MODULE: [ParamSpec; 6] = [
+    spec(PARAM_VOLUME, "Volume", "Amp", "", linear(0.0, 2.0), 1.0),
+    spec(PARAM_VELOCITY, "Velocity", "Amp", "", linear(0.0, 1.0), 1.0),
+    spec(
+        PARAM_ATTACK,
+        "Attack",
+        "Amp",
+        "s",
+        linear(TIME_MIN, TIME_MAX),
+        DEFAULT_ATTACK,
+    ),
+    spec(
+        PARAM_DECAY,
+        "Decay",
+        "Amp",
+        "s",
+        linear(TIME_MIN, TIME_MAX),
+        DEFAULT_DECAY,
+    ),
+    spec(
+        PARAM_SUSTAIN,
+        "Sustain",
+        "Amp",
+        "",
+        linear(0.0, 1.0),
+        DEFAULT_SUSTAIN,
+    ),
+    spec(
+        PARAM_RELEASE,
+        "Release",
+        "Amp",
+        "s",
+        linear(TIME_MIN, TIME_MAX),
+        DEFAULT_RELEASE,
+    ),
+];
+
+const PITCH_MODULE: [ParamSpec; 4] = [
+    spec(
+        PARAM_TUNE,
+        "Tune",
+        "Pitch",
+        "st",
+        linear(-TUNE_RANGE, TUNE_RANGE),
+        0.0,
+    ),
+    spec(
+        PARAM_FINE,
+        "Fine",
+        "Pitch",
+        "ct",
+        linear(-100.0, 100.0),
+        0.0,
+    ),
+    spec(
+        PARAM_ROOT,
+        "Root",
+        "Pitch",
+        "note",
+        linear(0.0, 127.0),
+        DEFAULT_ROOT as f32,
+    ),
+    spec(PARAM_KEY_TRACK, "Key Track", "Pitch", "", Kind::Bool, 0.0),
+];
+
+const PLAYBACK_MODULE: [ParamSpec; 6] = [
+    // Speed is shown in %; the normalized curve is the old 0.25–4x log range.
+    spec(
+        PARAM_SPEED,
+        "Speed",
+        "Playback",
+        "%",
+        log(SPEED_MIN * 100.0, SPEED_MAX * 100.0),
+        100.0,
+    ),
+    spec(
+        PARAM_PLAY_MODE,
+        "Play Mode",
+        "Playback",
+        "",
+        Kind::Enum(PLAY_MODES),
+        0.0,
+    ),
+    spec(PARAM_START, "Start", "Playback", "", linear(0.0, 1.0), 0.0),
+    spec(PARAM_END, "End", "Playback", "", linear(0.0, 1.0), 1.0),
+    spec(
+        PARAM_VOICES,
+        "Voices",
+        "Playback",
+        "",
+        linear(VOICES_MIN as f32, MAX_VOICES as f32),
+        DEFAULT_VOICES as f32,
+    ),
+    spec(PARAM_REVERSE, "Reverse", "Playback", "", Kind::Bool, 0.0),
+];
+
+const LOOP_MODULE: [ParamSpec; 4] = [
+    spec(
+        PARAM_LOOP_MODE,
+        "Loop Mode",
+        "Loop",
+        "",
+        Kind::Enum(LOOP_MODES),
+        0.0,
+    ),
+    spec(
+        PARAM_LOOP_START,
+        "Loop Start",
+        "Loop",
+        "",
+        linear(0.0, 1.0),
+        0.0,
+    ),
+    spec(
+        PARAM_LOOP_END,
+        "Loop End",
+        "Loop",
+        "",
+        linear(0.0, 1.0),
+        1.0,
+    ),
+    spec(
+        PARAM_CROSSFADE,
+        "Crossfade",
+        "Loop",
+        "%",
+        linear(0.0, 100.0),
+        0.0,
+    ),
+];
+
+const FILTER_MODULE: [ParamSpec; 4] = [
+    spec(
+        PARAM_FILTER_TYPE,
+        "Filter Type",
+        "Filter",
+        "",
+        Kind::Enum(FILTER_TYPES),
+        0.0,
+    ),
+    spec(
+        PARAM_CUTOFF,
+        "Cutoff",
+        "Filter",
+        "Hz",
+        log(20.0, 20_000.0),
+        1_000.0,
+    ),
+    spec(
+        PARAM_RESONANCE,
+        "Resonance",
+        "Filter",
+        "%",
+        linear(0.0, 100.0),
+        0.0,
+    ),
+    spec(
+        PARAM_FILTER_KEY_TRACK,
+        "Filter Key Track",
+        "Filter",
+        "%",
+        linear(0.0, 100.0),
+        0.0,
+    ),
+];
+
+const PARAM_COUNT: usize = 24;
+const SPECS: [ParamSpec; PARAM_COUNT] = flatten(&[
+    &AMP_MODULE,
+    &PITCH_MODULE,
+    &PLAYBACK_MODULE,
+    &LOOP_MODULE,
+    &FILTER_MODULE,
+]);
+const SLOTS: [u8; 34] = slot_table(&SPECS);
+static TABLE: ParamTable = ParamTable::new(&SPECS, &SLOTS);
 
 /// Playback mode: one-shot ignores note-off; gated fades out on note-off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlayMode {
     OneShot,
     Gated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopMode {
+    Off,
+    On,
+    PingPong,
+}
+
+/// Decoded (real-valued) parameters.
+#[derive(Clone, Copy, Debug)]
+struct Params {
+    volume: f32,
+    /// Semitones.
+    tune: f32,
+    /// Cents.
+    fine: f32,
+    /// Playback rate multiplier (1 = native).
+    speed: f32,
+    root: u8,
+    key_track: bool,
+    play_mode: PlayMode,
+    velocity_amount: f32,
+    start: f32,
+    end: f32,
+    reverse: bool,
+    loop_mode: LoopMode,
+    loop_start: f32,
+    loop_end: f32,
+    /// Crossfade as a fraction of the loop length.
+    crossfade: f32,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+    voices: usize,
+    filter: Option<FilterMode>,
+    cutoff_hz: f32,
+    /// 0..1.
+    resonance: f32,
+    /// 0..1.
+    filter_key_track: f32,
+}
+
+impl Params {
+    fn from_values(values: &ParamValues<PARAM_COUNT>) -> Self {
+        let mut p = Self {
+            volume: 1.0,
+            tune: 0.0,
+            fine: 0.0,
+            speed: 1.0,
+            root: DEFAULT_ROOT,
+            key_track: false,
+            play_mode: PlayMode::OneShot,
+            velocity_amount: 1.0,
+            start: 0.0,
+            end: 1.0,
+            reverse: false,
+            loop_mode: LoopMode::Off,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            crossfade: 0.0,
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
+            voices: DEFAULT_VOICES,
+            filter: None,
+            cutoff_hz: 1_000.0,
+            resonance: 0.0,
+            filter_key_track: 0.0,
+        };
+        for spec in &SPECS {
+            if let Some(real) = values.real(spec.id) {
+                p.apply(spec.id, real);
+            }
+        }
+        p
+    }
+
+    fn apply(&mut self, id: ParamId, real: f32) {
+        match id {
+            PARAM_VOLUME => self.volume = real,
+            PARAM_TUNE => self.tune = real,
+            PARAM_FINE => self.fine = real,
+            PARAM_SPEED => self.speed = real * 0.01,
+            PARAM_ROOT => self.root = real.round().clamp(0.0, 127.0) as u8,
+            PARAM_KEY_TRACK => self.key_track = real >= 0.5,
+            PARAM_PLAY_MODE => {
+                self.play_mode = if real >= 0.5 {
+                    PlayMode::Gated
+                } else {
+                    PlayMode::OneShot
+                }
+            }
+            PARAM_VELOCITY => self.velocity_amount = real,
+            PARAM_START => self.start = real,
+            PARAM_END => self.end = real,
+            PARAM_REVERSE => self.reverse = real >= 0.5,
+            PARAM_LOOP_MODE => {
+                self.loop_mode = match real as usize {
+                    0 => LoopMode::Off,
+                    1 => LoopMode::On,
+                    _ => LoopMode::PingPong,
+                }
+            }
+            PARAM_LOOP_START => self.loop_start = real,
+            PARAM_LOOP_END => self.loop_end = real,
+            PARAM_CROSSFADE => self.crossfade = real * 0.01,
+            PARAM_ATTACK => self.attack = real,
+            PARAM_DECAY => self.decay = real,
+            PARAM_SUSTAIN => self.sustain = real,
+            PARAM_RELEASE => self.release = real,
+            PARAM_VOICES => self.voices = (real.round() as usize).clamp(VOICES_MIN, MAX_VOICES),
+            PARAM_FILTER_TYPE => {
+                self.filter = match real as usize {
+                    1 => Some(FilterMode::Lp12),
+                    2 => Some(FilterMode::Lp24),
+                    3 => Some(FilterMode::Bp12),
+                    4 => Some(FilterMode::Bp24),
+                    5 => Some(FilterMode::Hp12),
+                    6 => Some(FilterMode::Hp24),
+                    _ => None,
+                }
+            }
+            PARAM_CUTOFF => self.cutoff_hz = real,
+            PARAM_RESONANCE => self.resonance = real * 0.01,
+            PARAM_FILTER_KEY_TRACK => self.filter_key_track = real * 0.01,
+            _ => {}
+        }
+    }
 }
 
 /// Decoded interleaved PCM. `sample_rate` is the buffer rate, which may differ from the device.
@@ -55,15 +409,95 @@ struct SampleBuffer {
     sample_rate: f32,
 }
 
-/// One voice reading the loaded sample through an ADSR amplitude envelope.
+/// Play region, loop and crossfade lengths in sample frames, ordered and clamped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Regions {
+    /// `[start, end)`.
+    pub play: (f64, f64),
+    /// `[start, end)`, inside `play`.
+    pub loop_: (f64, f64),
+    /// Forward crossfade length: capped by half the loop and by the material before Loop Start.
+    pub xfade_fwd: f64,
+    /// Reverse crossfade length: capped by half the loop and by the material after Loop End.
+    pub xfade_rev: f64,
+}
+
+impl Regions {
+    const EMPTY: Regions = Regions {
+        play: (0.0, 0.0),
+        loop_: (0.0, 0.0),
+        xfade_fwd: 0.0,
+        xfade_rev: 0.0,
+    };
+
+    fn loop_len(&self) -> f64 {
+        self.loop_.1 - self.loop_.0
+    }
+}
+
+fn ordered(a: f32, b: f32) -> (f64, f64) {
+    let (a, b) = (a.clamp(0.0, 1.0) as f64, b.clamp(0.0, 1.0) as f64);
+    (a.min(b), a.max(b))
+}
+
+/// Order and clamp the raw points: `start < end`, the loop inside `[start, end]` with a minimum
+/// length, and the crossfade (`crossfade` is a fraction of the loop) capped per direction.
+pub fn resolve_regions(
+    frames: usize,
+    start: f32,
+    end: f32,
+    loop_start: f32,
+    loop_end: f32,
+    crossfade: f32,
+) -> Regions {
+    if frames == 0 {
+        return Regions::EMPTY;
+    }
+    let max = frames as f64;
+    let (s, e) = ordered(start, end);
+    let (mut a, mut b) = (s * max, e * max);
+    if b - a < MIN_REGION_FRAMES {
+        b = (a + MIN_REGION_FRAMES).min(max);
+        a = (b - MIN_REGION_FRAMES).max(0.0);
+    }
+    let (ls, le) = ordered(loop_start, loop_end);
+    let mut l0 = (ls * max).clamp(a, b);
+    let mut l1 = (le * max).clamp(a, b);
+    let min_loop = MIN_LOOP_FRAMES.min(b - a);
+    if l1 - l0 < min_loop {
+        l1 = l0 + min_loop;
+        if l1 > b {
+            l1 = b;
+            l0 = b - min_loop;
+        }
+    }
+    let len = l1 - l0;
+    let wanted = (crossfade.clamp(0.0, 1.0) as f64 * len).min(len * 0.5);
+    Regions {
+        play: (a, b),
+        loop_: (l0, l1),
+        xfade_fwd: wanted.min(l0),
+        xfade_rev: wanted.min(max - l1),
+    }
+}
+
+/// One voice reading the loaded sample through a filter and an ADSR amplitude envelope.
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
     note: u8,
     position: f64,
+    /// Frames of PCM per output frame, always positive; `direction` gives the sign.
     increment: f64,
+    /// +1 or −1 (flips on a Ping-Pong bounce).
+    direction: f64,
+    in_loop: bool,
+    /// Hit the end of a non-looping region: holding there while `fade` runs to 0.
+    ending: bool,
+    fade: f32,
     gain: f32,
     envelope: AdsrEnvelope,
+    filters: [Svf; 2],
     age: u64,
 }
 
@@ -75,8 +509,13 @@ impl Voice {
             note: 0,
             position: 0.0,
             increment: 1.0,
+            direction: 1.0,
+            in_loop: false,
+            ending: false,
+            fade: 1.0,
             gain: 0.0,
             envelope: AdsrEnvelope::new(sample_rate),
+            filters: [Svf::new(); 2],
             age: 0,
         }
     }
@@ -87,37 +526,97 @@ impl Voice {
     }
 }
 
-/// Built-in Sampler: MIDI-triggered playback of one loaded audio file.
-pub struct SamplerDevice {
-    sample: Option<SampleBuffer>,
-    voices: [Voice; MAX_VOICES],
-    voice_count: usize,
-    /// (frame_offset, key, velocity or release, is_note_on)
-    queued_midi: Vec<(usize, u8, f32, bool)>,
-    midi_scratch: Vec<(usize, u8, f32, bool)>,
-    sample_rate: f32,
-    volume: f32,
-    tune: f32,
-    speed: f32,
+/// Is `pos` inside the loop for a voice moving in `direction`?
+fn inside_loop(pos: f64, direction: f64, l: (f64, f64)) -> bool {
+    if direction > 0.0 {
+        pos >= l.0 && pos < l.1
+    } else {
+        pos > l.0 && pos <= l.1
+    }
+}
+
+/// Move `v` by one output frame and apply the loop / region boundary rules.
+fn advance(v: &mut Voice, r: &Regions, mode: LoopMode) {
+    if v.ending {
+        return;
+    }
+    v.position += v.increment * v.direction;
+    if mode != LoopMode::Off {
+        let l = r.loop_;
+        if !v.in_loop && inside_loop(v.position, v.direction, l) {
+            v.in_loop = true;
+        }
+        if v.in_loop {
+            match mode {
+                LoopMode::On => {
+                    let outside = if v.direction > 0.0 {
+                        v.position >= l.1 || v.position < l.0
+                    } else {
+                        v.position > l.1 || v.position < l.0
+                    };
+                    if outside {
+                        v.position = l.0 + (v.position - l.0).rem_euclid(r.loop_len());
+                    }
+                }
+                _ => {
+                    if v.direction > 0.0 && v.position >= l.1 {
+                        v.position = 2.0 * l.1 - v.position;
+                        v.direction = -1.0;
+                    } else if v.direction < 0.0 && v.position < l.0 {
+                        v.position = 2.0 * l.0 - v.position;
+                        v.direction = 1.0;
+                    }
+                    v.position = v.position.clamp(l.0, l.1);
+                }
+            }
+            return;
+        }
+    }
+    if v.direction > 0.0 && v.position >= r.play.1 {
+        v.ending = true;
+        v.position = (r.play.1 - 1.0).max(r.play.0);
+    } else if v.direction < 0.0 && v.position <= r.play.0 {
+        v.ending = true;
+        v.position = r.play.0;
+    }
+}
+
+/// The voice's stereo output frame at its position, with the loop crossfade applied.
+fn read_voice(sample: &SampleBuffer, v: &Voice, r: &Regions, mode: LoopMode) -> (f32, f32) {
+    let (l, rt) = interpolate_frame(sample, v.position);
+    if mode != LoopMode::On || !v.in_loop {
+        return (l, rt);
+    }
+    let len = r.loop_len();
+    let (xf, dist, other) = if v.direction > 0.0 {
+        (r.xfade_fwd, r.loop_.1 - v.position, v.position - len)
+    } else {
+        (r.xfade_rev, v.position - r.loop_.0, v.position + len)
+    };
+    if xf <= 0.0 || dist >= xf {
+        return (l, rt);
+    }
+    let t = (1.0 - dist / xf).clamp(0.0, 1.0) as f32 * FRAC_PI_2;
+    let (out_gain, in_gain) = (t.cos(), t.sin());
+    let (l2, r2) = interpolate_frame(sample, other);
+    (l * out_gain + l2 * in_gain, rt * out_gain + r2 * in_gain)
+}
+
+/// Cutoff for `note`: `cutoff * 2^(key_track * (note - root) / 12)`.
+pub fn tracked_cutoff(cutoff_hz: f32, key_track: f32, note: u8, root: u8) -> f32 {
+    cutoff_hz * 2.0_f32.powf(key_track * (note as f32 - root as f32) / 12.0)
+}
+
+/// Everything the voice renderer needs besides the voices themselves.
+struct RenderCtx<'a> {
+    sample: &'a SampleBuffer,
+    regions: Regions,
+    loop_mode: LoopMode,
+    filter: Option<FilterMode>,
+    filter_key_track: f32,
     root: u8,
-    key_track: bool,
-    play_mode: PlayMode,
-    velocity_amount: f32,
-    start: f32,
-    end: f32,
-    attack: f32,
-    decay: f32,
-    sustain: f32,
-    release: f32,
-    enabled: bool,
-    sleep_state: DeviceSleepState,
-    channel_id: usize,
-    device_path: DevicePath,
-    status_tx: Option<Sender<EngineStatus>>,
-    current_req_id: String,
-    /// Last state sent on `loading_state`, re-sent when Godot asks (`state/get`).
-    loading_state: String,
-    time_counter: u64,
+    sample_rate: f32,
+    fade_step: f32,
 }
 
 /// Pitch/speed ratio: `speed * 2^((tune + keytrack*(note-root))/12)`.
@@ -136,92 +635,95 @@ pub fn sample_rate_ratio(sample_rate: f32, device_sample_rate: f32) -> f64 {
     sample_rate.max(1.0) as f64 / device_sample_rate.max(1.0) as f64
 }
 
-/// Map a normalized 0–1 value onto a logarithmic speed range.
-fn speed_from_normalized(value: f32) -> f32 {
-    let t = value.clamp(0.0, 1.0);
-    SPEED_MIN * (SPEED_MAX / SPEED_MIN).powf(t)
-}
-
-/// Inverse of [`speed_from_normalized`].
-fn speed_to_normalized(speed: f32) -> f32 {
-    let clamped = speed.clamp(SPEED_MIN, SPEED_MAX);
-    (clamped / SPEED_MIN).log(SPEED_MAX / SPEED_MIN)
-}
-
-/// Map a normalized 0–1 value onto the ADSR time range in seconds.
-fn time_from_normalized(value: f32) -> f32 {
-    TIME_MIN + value.clamp(0.0, 1.0) * (TIME_MAX - TIME_MIN)
-}
-
-/// Inverse of [`time_from_normalized`].
-fn time_to_normalized(seconds: f32) -> f32 {
-    ((seconds - TIME_MIN) / (TIME_MAX - TIME_MIN)).clamp(0.0, 1.0)
-}
-
-/// Map a normalized 0–1 value onto the integer Voices range.
-fn voices_from_normalized(value: f32) -> usize {
-    let span = (MAX_VOICES - VOICES_MIN) as f32;
-    let n = (value.clamp(0.0, 1.0) * span).round() as usize + VOICES_MIN;
-    n.clamp(VOICES_MIN, MAX_VOICES)
-}
-
-/// Inverse of [`voices_from_normalized`].
-fn voices_to_normalized(count: usize) -> f32 {
-    let c = count.clamp(VOICES_MIN, MAX_VOICES);
-    (c - VOICES_MIN) as f32 / (MAX_VOICES - VOICES_MIN) as f32
-}
-
-/// Inclusive start frame and exclusive end frame for the playback region.
-fn region_frames(frames: usize, start: f32, end: f32) -> (f64, f64) {
-    if frames == 0 {
-        return (0.0, 0.0);
-    }
-    let max = frames as f64;
-    let mut a = (start.clamp(0.0, 1.0) as f64) * max;
-    let mut b = (end.clamp(0.0, 1.0) as f64) * max;
-    if b <= a {
-        b = (a + 1.0).min(max);
-        if b <= a {
-            a = (b - 1.0).max(0.0);
-        }
-    }
-    (a, b)
-}
-
-/// Mix active voices into `outputs` for `len` frames starting at `start`.
+/// Mix active voices into `outputs` for `len` frames starting at `start`, in filter chunks.
 fn render_active_voices(
-    sample: &SampleBuffer,
+    ctx: &RenderCtx,
     voices: &mut [Voice],
-    region_end: f64,
+    cutoff: &mut SmoothedParam,
+    resonance: &mut SmoothedParam,
     outputs: &mut [f32],
     start: usize,
     len: usize,
 ) {
-    for voice in voices {
-        if !voice.active {
-            continue;
+    let mut done = 0;
+    while done < len {
+        let n = FILTER_CHUNK.min(len - done);
+        for _ in 1..n {
+            cutoff.next();
+            resonance.next();
         }
-        for i in 0..len {
-            if !voice.active {
-                break;
-            }
-            let env = voice.envelope.process_sample();
-            let (l, r) = interpolate_frame(sample, voice.position);
-            let g = voice.gain * env;
-            let idx = (start + i) * 2;
-            if idx + 1 < outputs.len() {
-                outputs[idx] += l * g;
-                outputs[idx + 1] += r * g;
-            }
-            voice.position += voice.increment;
-            if voice.position >= region_end {
-                voice.envelope.gate_off();
-            }
-            if !voice.envelope.is_active() {
-                voice.active = false;
+        let (cut, res) = (cutoff.next(), resonance.next());
+        for voice in voices.iter_mut().filter(|v| v.active) {
+            let filter = ctx.filter.map(|mode| {
+                let hz = tracked_cutoff(cut, ctx.filter_key_track, voice.note, ctx.root);
+                let coefs = SvfCoefs::new(
+                    cutoff_to_g(hz, ctx.sample_rate),
+                    resonance_to_k(res, mode),
+                    mode,
+                );
+                (mode, coefs, compensation_coef(hz * 0.5, ctx.sample_rate))
+            });
+            for i in 0..n {
+                if !voice.active {
+                    break;
+                }
+                let env = voice.envelope.process_sample();
+                let (mut l, mut r) = read_voice(ctx.sample, voice, &ctx.regions, ctx.loop_mode);
+                if let Some((mode, coefs, comp)) = &filter {
+                    l = voice.filters[0].process(l, *mode, coefs, *comp, res);
+                    r = voice.filters[1].process(r, *mode, coefs, *comp, res);
+                }
+                let g = voice.gain * env * voice.fade;
+                let idx = (start + done + i) * 2;
+                if idx + 1 < outputs.len() {
+                    outputs[idx] += l * g;
+                    outputs[idx + 1] += r * g;
+                }
+                advance(voice, &ctx.regions, ctx.loop_mode);
+                if voice.ending {
+                    voice.fade -= ctx.fade_step;
+                    if voice.fade <= 0.0 {
+                        voice.active = false;
+                    }
+                }
+                if !voice.envelope.is_active() {
+                    voice.active = false;
+                }
             }
         }
+        done += n;
     }
+}
+
+/// Built-in Sampler: MIDI-triggered playback of one loaded audio file.
+pub struct SamplerDevice {
+    sample: Option<SampleBuffer>,
+    voices: [Voice; MAX_VOICES],
+    voice_count: usize,
+    /// (frame_offset, key, velocity or release, is_note_on)
+    queued_midi: Vec<(usize, u8, f32, bool)>,
+    midi_scratch: Vec<(usize, u8, f32, bool)>,
+    sample_rate: f32,
+    values: ParamValues<PARAM_COUNT>,
+    p: Params,
+    regions: Regions,
+    cutoff: SmoothedParam,
+    resonance: SmoothedParam,
+    /// A pitch parameter changed: recompute the increment of sounding voices next block.
+    pitch_dirty: bool,
+    enabled: bool,
+    sleep_state: DeviceSleepState,
+    channel_id: usize,
+    device_path: DevicePath,
+    status_tx: Option<Sender<EngineStatus>>,
+    current_req_id: String,
+    /// Last state sent on `loading_state`, re-sent when Godot asks (`state/get`).
+    loading_state: String,
+    time_counter: u64,
+    playheads_subscribed: bool,
+    frames_since_poll: usize,
+    /// The last `"playheads"` record had voices, so an empty one still has to go out.
+    playheads_sent_voices: bool,
 }
 
 /// Linearly interpolate one stereo frame from interleaved PCM.
@@ -262,26 +764,21 @@ impl SamplerDevice {
         status_tx: Option<Sender<EngineStatus>>,
     ) -> Self {
         let sample_rate = sample_rate.max(1.0);
+        let values = ParamValues::new(&TABLE);
+        let p = Params::from_values(&values);
         Self {
             sample: None,
             voices: [Voice::idle(sample_rate); MAX_VOICES],
-            voice_count: DEFAULT_VOICES,
+            voice_count: p.voices,
             queued_midi: Vec::with_capacity(MIDI_EVENT_CAP),
             midi_scratch: Vec::with_capacity(MIDI_EVENT_CAP),
             sample_rate,
-            volume: 1.0,
-            tune: 0.0,
-            speed: 1.0,
-            root: DEFAULT_ROOT,
-            key_track: true,
-            play_mode: PlayMode::OneShot,
-            velocity_amount: 1.0,
-            start: 0.0,
-            end: 1.0,
-            attack: DEFAULT_ATTACK,
-            decay: DEFAULT_DECAY,
-            sustain: DEFAULT_SUSTAIN,
-            release: DEFAULT_RELEASE,
+            values,
+            p,
+            regions: Regions::EMPTY,
+            cutoff: SmoothedParam::new(p.cutoff_hz, sample_rate, FILTER_RAMP_MS),
+            resonance: SmoothedParam::new(p.resonance, sample_rate, FILTER_RAMP_MS),
+            pitch_dirty: false,
             enabled: true,
             sleep_state: DeviceSleepState::new(),
             channel_id,
@@ -290,6 +787,9 @@ impl SamplerDevice {
             current_req_id: String::new(),
             loading_state: "idle".to_string(),
             time_counter: 0,
+            playheads_subscribed: false,
+            frames_since_poll: 0,
+            playheads_sent_voices: false,
         }
     }
 
@@ -339,6 +839,7 @@ impl SamplerDevice {
             frames,
             sample_rate: (sample_rate as f32).max(1.0),
         });
+        self.refresh_regions();
         self.sleep_state.mark_activity();
         self.emit_loading("ready", req_id);
     }
@@ -377,7 +878,63 @@ impl SamplerDevice {
         for voice in &mut self.voices {
             voice
                 .envelope
-                .set_adsr(self.attack, self.decay, self.sustain, self.release);
+                .set_adsr(self.p.attack, self.p.decay, self.p.sustain, self.p.release);
+        }
+    }
+
+    /// Re-resolve the play region, loop and crossfade from the raw points.
+    fn refresh_regions(&mut self) {
+        let frames = self.sample.as_ref().map_or(0, |s| s.frames);
+        let p = &self.p;
+        self.regions = resolve_regions(
+            frames,
+            p.start,
+            p.end,
+            p.loop_start,
+            p.loop_end,
+            p.crossfade,
+        );
+    }
+
+    /// Sample frames per output frame for `note` at the current pitch settings.
+    fn increment_for(&self, note: u8, sample_rate: f32) -> f64 {
+        let p = &self.p;
+        playback_increment(p.speed, p.tune + p.fine / 100.0, p.key_track, note, p.root)
+            * sample_rate_ratio(sample_rate, self.sample_rate)
+    }
+
+    /// Recompute the pitch of sounding voices after Tune, Fine, Speed, Root or Key Track moved.
+    fn refresh_pitch(&mut self) {
+        let Some(sample_rate) = self.sample.as_ref().map(|s| s.sample_rate) else {
+            return;
+        };
+        for i in 0..self.voice_count {
+            if self.voices[i].active {
+                let inc = self.increment_for(self.voices[i].note, sample_rate);
+                if inc > 0.0 {
+                    self.voices[i].increment = inc;
+                }
+            }
+        }
+    }
+
+    /// Apply a decoded parameter value and its side effects.
+    fn apply(&mut self, id: ParamId, real: f32) {
+        self.p.apply(id, real);
+        match id {
+            PARAM_TUNE | PARAM_FINE | PARAM_SPEED | PARAM_ROOT | PARAM_KEY_TRACK => {
+                self.pitch_dirty = true
+            }
+            PARAM_START | PARAM_END | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_CROSSFADE => {
+                self.refresh_regions()
+            }
+            PARAM_ATTACK | PARAM_DECAY | PARAM_SUSTAIN | PARAM_RELEASE => {
+                self.apply_envelope_params()
+            }
+            PARAM_VOICES => self.set_voice_count(self.p.voices),
+            PARAM_CUTOFF => self.cutoff.set_target(self.p.cutoff_hz),
+            PARAM_RESONANCE => self.resonance.set_target(self.p.resonance),
+            _ => {}
         }
     }
 
@@ -423,31 +980,41 @@ impl SamplerDevice {
         let Some(sample) = self.sample.as_ref() else {
             return;
         };
-        let (region_start, _) = region_frames(sample.frames, self.start, self.end);
-        let increment = playback_increment(self.speed, self.tune, self.key_track, note, self.root)
-            * sample_rate_ratio(sample.sample_rate, self.sample_rate);
-        let vel_gain = (1.0 - self.velocity_amount) + self.velocity_amount * velocity;
+        let increment = self.increment_for(note, sample.sample_rate);
+        let r = self.regions;
+        let direction = if self.p.reverse { -1.0 } else { 1.0 };
+        let position = if self.p.reverse {
+            (r.play.1 - 1.0).max(r.play.0)
+        } else {
+            r.play.0
+        };
+        let vel_gain = (1.0 - self.p.velocity_amount) + self.p.velocity_amount * velocity;
         if increment <= 0.0 {
             return;
         }
         let mut envelope = AdsrEnvelope::new(self.sample_rate);
-        envelope.set_adsr(self.attack, self.decay, self.sustain, self.release);
+        envelope.set_adsr(self.p.attack, self.p.decay, self.p.sustain, self.p.release);
         envelope.gate_on();
         self.time_counter = self.time_counter.wrapping_add(1);
         self.voices[idx] = Voice {
             active: true,
             note,
-            position: region_start,
+            position,
             increment,
-            gain: self.volume * vel_gain,
+            direction,
+            in_loop: inside_loop(position, direction, r.loop_),
+            ending: false,
+            fade: 1.0,
+            gain: self.p.volume * vel_gain,
             envelope,
+            filters: [Svf::new(); 2],
             age: self.time_counter,
         };
         self.sleep_state.mark_activity();
     }
 
     fn note_off(&mut self, note: u8) {
-        if self.play_mode != PlayMode::Gated {
+        if self.p.play_mode != PlayMode::Gated && self.p.loop_mode == LoopMode::Off {
             return;
         }
         if let Some(idx) = self.find_held_voice_for_note(note) {
@@ -459,12 +1026,22 @@ impl SamplerDevice {
         let Some(sample) = self.sample.as_ref() else {
             return;
         };
-        let region_end = region_frames(sample.frames, self.start, self.end).1;
+        let ctx = RenderCtx {
+            sample,
+            regions: self.regions,
+            loop_mode: self.p.loop_mode,
+            filter: self.p.filter,
+            filter_key_track: self.p.filter_key_track,
+            root: self.p.root,
+            sample_rate: self.sample_rate,
+            fade_step: 1.0 / (DECLICK_SECONDS * self.sample_rate).max(1.0),
+        };
         let limit = self.voice_count;
         render_active_voices(
-            sample,
+            &ctx,
             &mut self.voices[..limit],
-            region_end,
+            &mut self.cutoff,
+            &mut self.resonance,
             outputs,
             start,
             len,
@@ -479,6 +1056,26 @@ impl SamplerDevice {
             self.note_off(note);
         }
     }
+
+    /// One `"playheads"` record per sounding voice (see the module docs).
+    fn playheads_payload(&self) -> Vec<u8> {
+        let frames = self.sample.as_ref().map_or(0, |s| s.frames).max(1) as f64;
+        let rate_ratio = self.sample_rate as f64;
+        let voices = || self.voices[..self.voice_count].iter().filter(|v| v.active);
+        let count = voices().count();
+        let mut bytes = Vec::with_capacity(4 + count * PLAYHEAD_RECORD_BYTES);
+        bytes.extend_from_slice(&(count as u32).to_le_bytes());
+        for v in voices() {
+            let position = (v.position / frames).clamp(0.0, 1.0) as f32;
+            let moving = if v.ending { 0.0 } else { v.direction };
+            let velocity = (moving * v.increment * rate_ratio / frames) as f32;
+            let level = (v.envelope.value() * v.gain * v.fade).clamp(0.0, 1.0);
+            for value in [position, velocity, level] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes
+    }
 }
 
 impl AudioDevice for SamplerDevice {
@@ -489,6 +1086,11 @@ impl AudioDevice for SamplerDevice {
         if !self.enabled {
             return;
         }
+        if self.pitch_dirty {
+            self.pitch_dirty = false;
+            self.refresh_pitch();
+        }
+        self.frames_since_poll = self.frames_since_poll.saturating_add(sample_count);
 
         std::mem::swap(&mut self.queued_midi, &mut self.midi_scratch);
         self.queued_midi.clear();
@@ -534,76 +1136,23 @@ impl AudioDevice for SamplerDevice {
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
+        let Some((_, real)) = self.values.set(param_id, value) else {
+            return;
+        };
         self.sleep_state.mark_activity();
-        match param_id {
-            PARAM_VOLUME => self.volume = normalized_to_gain(value),
-            PARAM_TUNE => self.tune = value.clamp(0.0, 1.0) * (TUNE_RANGE * 2.0) - TUNE_RANGE,
-            // Speed: logarithmic 0.25–4x. Matches DeviceParameter.gd when is_logarithmic.
-            PARAM_SPEED => self.speed = speed_from_normalized(value),
-            PARAM_ROOT => self.root = (value.clamp(0.0, 1.0) * 127.0).round() as u8,
-            PARAM_KEY_TRACK => self.key_track = value >= 0.5,
-            PARAM_PLAY_MODE => {
-                self.play_mode = if value >= 0.5 {
-                    PlayMode::Gated
-                } else {
-                    PlayMode::OneShot
-                };
-            }
-            PARAM_VOICES => self.set_voice_count(voices_from_normalized(value)),
-            PARAM_VELOCITY => self.velocity_amount = value.clamp(0.0, 1.0),
-            PARAM_START => {
-                self.start = value.clamp(0.0, 1.0);
-                if self.start >= self.end {
-                    self.start = (self.end - 0.001).max(0.0);
-                }
-            }
-            PARAM_END => {
-                self.end = value.clamp(0.0, 1.0);
-                if self.end <= self.start {
-                    self.end = (self.start + 0.001).min(1.0);
-                }
-            }
-            PARAM_ATTACK => {
-                self.attack = time_from_normalized(value);
-                self.apply_envelope_params();
-            }
-            PARAM_DECAY => {
-                self.decay = time_from_normalized(value);
-                self.apply_envelope_params();
-            }
-            PARAM_SUSTAIN => {
-                self.sustain = value.clamp(0.0, 1.0);
-                self.apply_envelope_params();
-            }
-            PARAM_RELEASE => {
-                self.release = time_from_normalized(value);
-                self.apply_envelope_params();
-            }
-            _ => {}
-        }
+        self.apply(param_id, real);
+    }
+
+    fn set_param_mod(&mut self, param_id: ParamId, offset: f32) {
+        let Some((_, real)) = self.values.set_offset(param_id, offset) else {
+            return;
+        };
+        self.sleep_state.mark_activity();
+        self.apply(param_id, real);
     }
 
     fn get_parameter(&self, param_id: ParamId) -> Option<ParamValue> {
-        match param_id {
-            PARAM_VOLUME => Some(gain_to_normalized(self.volume)),
-            PARAM_TUNE => Some((self.tune + TUNE_RANGE) / (TUNE_RANGE * 2.0)),
-            PARAM_SPEED => Some(speed_to_normalized(self.speed)),
-            PARAM_ROOT => Some(self.root as f32 / 127.0),
-            PARAM_KEY_TRACK => Some(if self.key_track { 1.0 } else { 0.0 }),
-            PARAM_PLAY_MODE => Some(match self.play_mode {
-                PlayMode::OneShot => 0.0,
-                PlayMode::Gated => 1.0,
-            }),
-            PARAM_VOICES => Some(voices_to_normalized(self.voice_count)),
-            PARAM_VELOCITY => Some(self.velocity_amount),
-            PARAM_START => Some(self.start),
-            PARAM_END => Some(self.end),
-            PARAM_ATTACK => Some(time_to_normalized(self.attack)),
-            PARAM_DECAY => Some(time_to_normalized(self.decay)),
-            PARAM_SUSTAIN => Some(self.sustain),
-            PARAM_RELEASE => Some(time_to_normalized(self.release)),
-            _ => None,
-        }
+        self.values.get(param_id)
     }
 
     fn device_id(&self) -> &str {
@@ -653,288 +1202,7 @@ impl AudioDevice for SamplerDevice {
     }
 
     fn parameters(&self) -> Vec<ParamInfo> {
-        vec![
-            ParamInfo {
-                id: PARAM_VOLUME,
-                name: "Volume".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 2.0,
-                default: 1.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_TUNE,
-                name: "Tune".to_string(),
-                unit: "st".to_string(),
-                min: -TUNE_RANGE,
-                max: TUNE_RANGE,
-                default: 0.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_SPEED,
-                name: "Speed".to_string(),
-                unit: "x".to_string(),
-                min: SPEED_MIN,
-                max: SPEED_MAX,
-                default: 1.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: true,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_ROOT,
-                name: "Root".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 127.0,
-                default: DEFAULT_ROOT as f32,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_KEY_TRACK,
-                name: "Key Track".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: 1.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Bool,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_PLAY_MODE,
-                name: "Play Mode".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: 0.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Enum,
-                syncable: true,
-                enum_values: vec!["One-shot".to_string(), "Gated".to_string()],
-            },
-            ParamInfo {
-                id: PARAM_VOICES,
-                name: "Voices".to_string(),
-                unit: String::new(),
-                min: VOICES_MIN as f32,
-                max: MAX_VOICES as f32,
-                default: DEFAULT_VOICES as f32,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_VELOCITY,
-                name: "Velocity".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: 1.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_START,
-                name: "Start".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: 0.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_END,
-                name: "End".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: 1.0,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_ATTACK,
-                name: "Attack".to_string(),
-                unit: "s".to_string(),
-                min: TIME_MIN,
-                max: TIME_MAX,
-                default: DEFAULT_ATTACK,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_DECAY,
-                name: "Decay".to_string(),
-                unit: "s".to_string(),
-                min: TIME_MIN,
-                max: TIME_MAX,
-                default: DEFAULT_DECAY,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_SUSTAIN,
-                name: "Sustain".to_string(),
-                unit: String::new(),
-                min: 0.0,
-                max: 1.0,
-                default: DEFAULT_SUSTAIN,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-            ParamInfo {
-                id: PARAM_RELEASE,
-                name: "Release".to_string(),
-                unit: "s".to_string(),
-                min: TIME_MIN,
-                max: TIME_MAX,
-                default: DEFAULT_RELEASE,
-                is_automation_safe: true,
-                is_hidden: false,
-                is_read_only: false,
-                is_bypass: false,
-                is_modulatable: false,
-                is_logarithmic: false,
-                skew: 1.0,
-                display: Vec::new(),
-                module: String::new(),
-                param_type: ParamType::Float,
-                syncable: true,
-                enum_values: Vec::new(),
-            },
-        ]
+        TABLE.infos()
     }
 
     fn reset(&mut self) {
@@ -948,6 +1216,8 @@ impl AudioDevice for SamplerDevice {
     fn prepare(&mut self, sample_rate: f32, _max_frames: usize) {
         self.sample_rate = sample_rate.max(1.0);
         self.voices = [Voice::idle(self.sample_rate); MAX_VOICES];
+        self.cutoff.set_ramp(self.sample_rate, FILTER_RAMP_MS);
+        self.resonance.set_ramp(self.sample_rate, FILTER_RAMP_MS);
         self.queued_midi.clear();
         self.midi_scratch.clear();
     }
@@ -978,11 +1248,104 @@ impl AudioDevice for SamplerDevice {
     fn update_sleep_state(&mut self, has_audio_activity: bool) -> bool {
         self.sleep_state.check_activity(has_audio_activity)
     }
+
+    fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        if data_type != "playheads" {
+            return Err(format!("Sampler does not support '{data_type}' data"));
+        }
+        if !self.playheads_subscribed {
+            self.playheads_subscribed = true;
+            self.frames_since_poll = 0;
+            self.playheads_sent_voices = false;
+        }
+        self.sleep_state.mark_activity();
+        Ok(())
+    }
+
+    fn unsubscribe_data(&mut self, data_type: &str) {
+        if data_type == "playheads" {
+            self.playheads_subscribed = false;
+        }
+    }
+
+    /// See the module docs for the payload. A record with no voices goes out once, after the
+    /// last voice ended.
+    fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        let interval = (self.sample_rate * PLAYHEAD_INTERVAL_SECONDS) as usize;
+        if !self.playheads_subscribed || self.frames_since_poll < interval {
+            return None;
+        }
+        self.frames_since_poll = 0;
+        let bytes = self.playheads_payload();
+        let has_voices = bytes[0] != 0;
+        if !has_voices && !self.playheads_sent_voices {
+            return None;
+        }
+        self.playheads_sent_voices = has_voices;
+        Some(("playheads".to_string(), bytes))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Reference mappings the table must keep (saved projects store these normalized values).
+    fn speed_from_normalized(value: f32) -> f32 {
+        SPEED_MIN * (SPEED_MAX / SPEED_MIN).powf(value.clamp(0.0, 1.0))
+    }
+    fn time_from_normalized(value: f32) -> f32 {
+        TIME_MIN + value.clamp(0.0, 1.0) * (TIME_MAX - TIME_MIN)
+    }
+    fn voices_from_normalized(value: f32) -> usize {
+        let span = (MAX_VOICES - VOICES_MIN) as f32;
+        (value.clamp(0.0, 1.0) * span).round() as usize + VOICES_MIN
+    }
+    fn voices_to_normalized(count: usize) -> f32 {
+        (count - VOICES_MIN) as f32 / (MAX_VOICES - VOICES_MIN) as f32
+    }
+    fn norm_of(id: ParamId, real: f32) -> f32 {
+        TABLE.spec(id).unwrap().to_norm(real)
+    }
+
+    fn device() -> SamplerDevice {
+        SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None)
+    }
+
+    /// Mono ramp `frame / frames` loaded at the device rate.
+    fn ramp_device(frames: usize) -> SamplerDevice {
+        let mut d = device();
+        let samples = (0..frames).map(|i| i as f32 / frames as f32).collect();
+        d.set_sample("r", samples, 1, 48_000);
+        d
+    }
+
+    fn render(d: &mut SamplerDevice, frames: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(frames * 2);
+        let mut left = frames;
+        while left > 0 {
+            let n = left.min(256);
+            let mut block = vec![0.0; n * 2];
+            d.process_block(&[], &mut block, n);
+            out.extend_from_slice(&block);
+            left -= n;
+        }
+        out
+    }
+
+    fn rms(interleaved: &[f32]) -> f32 {
+        (interleaved.iter().map(|x| x * x).sum::<f32>() / interleaved.len() as f32).sqrt()
+    }
+
+    fn voice_at(position: f64, direction: f64) -> Voice {
+        let mut v = Voice::idle(48_000.0);
+        v.active = true;
+        v.position = position;
+        v.direction = direction;
+        v
+    }
+
+    // === Pre-existing behavior ===
 
     #[test]
     fn key_track_transposes_from_root() {
@@ -1014,9 +1377,50 @@ mod tests {
             (normalized - 0.5).abs() < 1e-5,
             "unity speed must be OSC 0.5 (log), not linear (1.0-0.25)/(4-0.25)=0.2"
         );
-        assert!((speed_from_normalized(0.5) - 1.0).abs() < 1e-5);
-        let linear_of_default = (1.0 - SPEED_MIN) / (SPEED_MAX - SPEED_MIN);
-        assert!((speed_from_normalized(linear_of_default) - 1.0).abs() > 0.4);
+        assert!((sampler.p.speed - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn preexisting_ids_keep_their_normalized_mapping() {
+        let mut d = SamplerDevice::new_for_metadata();
+        for n in [0.0_f32, 0.2, 0.5, 0.8, 1.0] {
+            d.set_parameter(PARAM_VOLUME, n);
+            assert!((d.p.volume - n * 2.0).abs() < 1e-5);
+            d.set_parameter(PARAM_TUNE, n);
+            assert!((d.p.tune - (n * 48.0 - 24.0)).abs() < 1e-4);
+            d.set_parameter(PARAM_SPEED, n);
+            let want = speed_from_normalized(n);
+            assert!((d.p.speed - want).abs() < 1e-4 * want.max(1.0), "{n}");
+            d.set_parameter(PARAM_ROOT, n);
+            assert_eq!(d.p.root, (n * 127.0).round() as u8);
+            d.set_parameter(PARAM_VELOCITY, n);
+            assert!((d.p.velocity_amount - n).abs() < 1e-6);
+            d.set_parameter(PARAM_VOICES, n);
+            assert_eq!(d.p.voices, voices_from_normalized(n));
+            assert_eq!(d.voice_count, voices_from_normalized(n));
+            for id in [PARAM_ATTACK, PARAM_DECAY, PARAM_RELEASE] {
+                d.set_parameter(id, n);
+            }
+            let want = time_from_normalized(n);
+            assert!((d.p.attack - want).abs() < 1e-5);
+            assert!((d.p.decay - want).abs() < 1e-5);
+            assert!((d.p.release - want).abs() < 1e-5);
+            d.set_parameter(PARAM_SUSTAIN, n);
+            assert!((d.p.sustain - n).abs() < 1e-6);
+            d.set_parameter(PARAM_PLAY_MODE, n);
+            assert_eq!(d.p.play_mode == PlayMode::Gated, n >= 0.5);
+            d.set_parameter(PARAM_KEY_TRACK, n);
+            assert_eq!(d.p.key_track, n >= 0.5);
+            for id in [
+                PARAM_VOLUME,
+                PARAM_TUNE,
+                PARAM_SPEED,
+                PARAM_VELOCITY,
+                PARAM_SUSTAIN,
+            ] {
+                assert!((d.get_parameter(id).unwrap() - n).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]
@@ -1058,12 +1462,6 @@ mod tests {
     }
 
     #[test]
-    fn region_rejects_inverted_start_end() {
-        let (a, b) = region_frames(100, 0.8, 0.2);
-        assert!(b > a);
-    }
-
-    #[test]
     fn attack_fades_in_from_silence() {
         let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
         sampler.set_sample("r", vec![1.0; 256], 2, 48_000);
@@ -1075,20 +1473,6 @@ mod tests {
             out[0].abs() < out[14].abs(),
             "attack should rise across the block"
         );
-    }
-
-    #[test]
-    fn sample_end_triggers_release() {
-        let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
-        sampler.set_parameter(PARAM_RELEASE, 1.0);
-        sampler.set_sample("r", vec![0.5, 0.5], 2, 48_000);
-        sampler.note_on(60, 1.0);
-        let mut out = vec![0.0; 8];
-        sampler.process_block(&[], &mut out, 4);
-        assert!(sampler
-            .voices
-            .iter()
-            .any(|v| v.active && v.envelope.state() == AdsrState::Release));
     }
 
     #[test]
@@ -1128,5 +1512,436 @@ mod tests {
 
         sampler.note_on(60, 1.0);
         assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
+    }
+
+    // === New parameters ===
+
+    #[test]
+    fn key_track_defaults_off_and_fine_is_a_cent_per_hundredth() {
+        let mut d = ramp_device(100);
+        assert!(!d.p.key_track);
+        assert_eq!(d.get_parameter(PARAM_KEY_TRACK), Some(0.0));
+        d.note_on(72, 1.0);
+        let plain = d.voices.iter().find(|v| v.active).unwrap().increment;
+        assert!(
+            (plain - 1.0).abs() < 1e-9,
+            "off: the note doesn't transpose"
+        );
+
+        d.set_parameter(PARAM_FINE, norm_of(PARAM_FINE, 100.0));
+        d.note_on(60, 1.0);
+        let fine = d
+            .voices
+            .iter()
+            .filter(|v| v.active)
+            .last()
+            .unwrap()
+            .increment;
+        assert!((fine - 2.0_f64.powf(1.0 / 12.0)).abs() < 1e-6, "{fine}");
+    }
+
+    #[test]
+    fn new_params_have_their_documented_defaults() {
+        let d = SamplerDevice::new_for_metadata();
+        let infos = d.parameters();
+        let default_of = |id| infos.iter().find(|i| i.id == id).unwrap().default;
+        assert_eq!(default_of(PARAM_ROOT), 60.0);
+        assert_eq!(default_of(PARAM_CUTOFF), 1_000.0);
+        assert_eq!(default_of(PARAM_SPEED), 100.0);
+        assert_eq!(d.p.loop_mode, LoopMode::Off);
+        assert!(d.p.filter.is_none());
+        assert_eq!(infos.len(), PARAM_COUNT);
+        assert_eq!(
+            infos.iter().find(|i| i.id == PARAM_ROOT).unwrap().unit,
+            "note"
+        );
+    }
+
+    // === Regions ===
+
+    #[test]
+    fn start_end_restore_is_order_independent() {
+        let mut d = ramp_device(1000);
+        d.set_parameter(PARAM_START, 0.5);
+        d.set_parameter(PARAM_END, 0.6);
+        d.set_parameter(PARAM_START, 0.7);
+        d.set_parameter(PARAM_END, 0.9);
+        assert_eq!(d.get_parameter(PARAM_START), Some(0.7));
+        assert!((d.regions.play.0 - 700.0).abs() < 1e-3);
+        assert!((d.regions.play.1 - 900.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn region_rejects_inverted_start_end() {
+        let r = resolve_regions(100, 0.8, 0.2, 0.0, 1.0, 0.0);
+        assert!(r.play.1 > r.play.0);
+        assert!((r.play.0 - 20.0).abs() < 1e-3 && (r.play.1 - 80.0).abs() < 1e-3);
+        let tiny = resolve_regions(100, 0.5, 0.5, 0.0, 1.0, 0.0);
+        assert!(tiny.play.1 - tiny.play.0 >= MIN_REGION_FRAMES);
+    }
+
+    #[test]
+    fn loop_is_clamped_into_the_play_region() {
+        let r = resolve_regions(1000, 0.2, 0.8, 0.0, 1.0, 0.0);
+        assert!((r.loop_.0 - 200.0).abs() < 1e-3 && (r.loop_.1 - 800.0).abs() < 1e-3);
+        let r = resolve_regions(1000, 0.2, 0.8, 0.9, 0.95, 0.0);
+        assert!(r.loop_.0 >= r.play.0 && r.loop_.1 <= r.play.1);
+        assert!(r.loop_len() >= MIN_LOOP_FRAMES);
+        let r = resolve_regions(1000, 0.2, 0.8, 0.6, 0.4, 0.0);
+        assert!(
+            (r.loop_.0 - 400.0).abs() < 1e-3 && (r.loop_.1 - 600.0).abs() < 1e-3,
+            "inverted loop points are ordered"
+        );
+    }
+
+    // === Voice state machine ===
+
+    #[test]
+    fn loop_off_stops_at_the_boundary_without_reading_past() {
+        let r = resolve_regions(100, 0.2, 0.5, 0.0, 1.0, 0.0);
+        let mut v = voice_at(r.play.0, 1.0);
+        for _ in 0..100 {
+            advance(&mut v, &r, LoopMode::Off);
+            assert!(v.position < r.play.1);
+        }
+        assert!(v.ending);
+
+        let mut v = voice_at(r.play.1 - 1.0, -1.0);
+        for _ in 0..100 {
+            advance(&mut v, &r, LoopMode::Off);
+            assert!(v.position >= r.play.0);
+        }
+        assert!(v.ending);
+    }
+
+    #[test]
+    fn sample_end_declicks_and_ends_the_voice() {
+        let mut d = device();
+        d.set_sample("r", vec![0.5, 0.5], 2, 48_000);
+        d.note_on(60, 1.0);
+        render(&mut d, 8);
+        assert!(d.voices.iter().any(|v| v.active && v.ending));
+        render(&mut d, 400);
+        assert!(!d.voices.iter().any(|v| v.active), "ended after the fade");
+    }
+
+    #[test]
+    fn loop_on_wraps_forward_and_reverse() {
+        let r = resolve_regions(100, 0.0, 1.0, 0.3, 0.4, 0.0);
+        let mut v = voice_at(20.0, 1.0);
+        let mut entered = false;
+        for _ in 0..200 {
+            advance(&mut v, &r, LoopMode::On);
+            entered |= v.in_loop;
+            if v.in_loop {
+                assert!(
+                    v.position >= 29.999 && v.position < 40.001,
+                    "{}",
+                    v.position
+                );
+            }
+            assert!(!v.ending);
+        }
+        assert!(entered);
+
+        let mut v = voice_at(99.0, -1.0);
+        let mut entered = false;
+        for _ in 0..200 {
+            advance(&mut v, &r, LoopMode::On);
+            entered |= v.in_loop;
+            if v.in_loop {
+                assert!(
+                    v.position >= 29.999 && v.position <= 40.001,
+                    "{}",
+                    v.position
+                );
+            }
+            assert!(!v.ending && v.direction < 0.0);
+        }
+        assert!(entered);
+    }
+
+    #[test]
+    fn ping_pong_bounces_between_the_loop_points() {
+        for start_dir in [1.0, -1.0] {
+            let r = resolve_regions(100, 0.0, 1.0, 0.3, 0.4, 0.0);
+            let mut v = voice_at(if start_dir > 0.0 { 20.0 } else { 99.0 }, start_dir);
+            let mut flips = 0;
+            let mut last = v.direction;
+            for _ in 0..200 {
+                advance(&mut v, &r, LoopMode::PingPong);
+                if v.in_loop {
+                    assert!(v.position >= 29.999 && v.position <= 40.001);
+                }
+                if v.direction != last {
+                    flips += 1;
+                    last = v.direction;
+                }
+                assert!(!v.ending);
+            }
+            assert!(flips >= 3, "dir {start_dir}: {flips} bounces");
+        }
+    }
+
+    #[test]
+    fn loop_survives_shrinking_and_catches_a_late_voice() {
+        // A voice past a shrunk loop end wraps back inside with rem_euclid.
+        let r = resolve_regions(100, 0.0, 1.0, 0.3, 0.4, 0.0);
+        let mut v = voice_at(39.5, 1.0);
+        v.in_loop = true;
+        let small = resolve_regions(100, 0.0, 1.0, 0.3, 0.34, 0.0);
+        advance(&mut v, &small, LoopMode::On);
+        assert!(v.position >= 30.0 && v.position < 34.0, "{}", v.position);
+        // A voice before the loop plays into it when the loop turns on.
+        let mut v = voice_at(10.0, 1.0);
+        for _ in 0..30 {
+            advance(&mut v, &r, LoopMode::On);
+        }
+        assert!(v.in_loop);
+    }
+
+    #[test]
+    fn note_off_releases_a_looping_one_shot_and_the_loop_runs_through_release() {
+        let mut d = ramp_device(100);
+        d.set_parameter(PARAM_LOOP_MODE, 0.5);
+        d.set_parameter(PARAM_RELEASE, norm_of(PARAM_RELEASE, 0.5));
+        d.note_on(60, 1.0);
+        render(&mut d, 256);
+        d.note_off(60);
+        let tail = render(&mut d, 4_800);
+        let v = d.voices.iter().find(|v| v.active).unwrap();
+        assert_eq!(v.envelope.state(), AdsrState::Release);
+        assert!(!v.ending, "still looping, not ended");
+        assert!(rms(&tail[tail.len() - 400..]) > 0.0);
+    }
+
+    #[test]
+    fn reverse_starts_at_the_end_and_plays_backwards() {
+        let mut d = ramp_device(1000);
+        d.set_parameter(PARAM_REVERSE, 1.0);
+        d.note_on(60, 1.0);
+        let out = render(&mut d, 300);
+        // The ramp falls: the later (post-attack) output is lower than the earlier.
+        assert!(out[2 * 200] > out[2 * 290]);
+        assert!(out[2 * 290] > 0.0);
+    }
+
+    // === Crossfade ===
+
+    fn max_step_across_wrap(mode: LoopMode, xfade: f32) -> f32 {
+        let frames = 1000;
+        let samples: Vec<f32> = (0..frames).map(|i| i as f32 / frames as f32).collect();
+        let s = SampleBuffer {
+            samples,
+            channels: 1,
+            frames,
+            sample_rate: 48_000.0,
+        };
+        let r = resolve_regions(frames, 0.0, 1.0, 0.4, 0.6, xfade);
+        let mut v = voice_at(450.0, 1.0);
+        v.in_loop = true;
+        let mut last = read_voice(&s, &v, &r, mode).0;
+        let mut worst = 0.0f32;
+        for _ in 0..600 {
+            advance(&mut v, &r, mode);
+            let now = read_voice(&s, &v, &r, mode).0;
+            worst = worst.max((now - last).abs());
+            last = now;
+        }
+        worst
+    }
+
+    #[test]
+    fn crossfade_zero_is_a_hard_jump_and_positive_is_continuous() {
+        assert!(max_step_across_wrap(LoopMode::On, 0.0) > 0.15);
+        assert!(max_step_across_wrap(LoopMode::On, 0.5) < 0.02);
+    }
+
+    #[test]
+    fn crossfade_is_capped_by_the_loop_and_the_material_outside_it() {
+        let r = resolve_regions(1000, 0.0, 1.0, 0.0, 0.5, 1.0);
+        assert_eq!(r.xfade_fwd, 0.0, "nothing before frame 0");
+        assert_eq!(r.xfade_rev, 250.0, "half the loop");
+        let r = resolve_regions(1000, 0.0, 1.0, 0.1, 0.9, 1.0);
+        assert!((r.xfade_fwd - 100.0).abs() < 1e-3);
+        assert!((r.xfade_rev - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn ping_pong_ignores_the_crossfade() {
+        assert!(max_step_across_wrap(LoopMode::PingPong, 1.0) < 0.005);
+        let s = SampleBuffer {
+            samples: (0..100).map(|i| i as f32).collect(),
+            channels: 1,
+            frames: 100,
+            sample_rate: 48_000.0,
+        };
+        let r = resolve_regions(100, 0.0, 1.0, 0.2, 0.8, 1.0);
+        let mut v = voice_at(79.0, 1.0);
+        v.in_loop = true;
+        assert_eq!(read_voice(&s, &v, &r, LoopMode::PingPong).0, 79.0);
+    }
+
+    // === Live pitch ===
+
+    #[test]
+    fn pitch_params_move_sounding_voices() {
+        let mut d = ramp_device(10_000);
+        d.note_on(60, 1.0);
+        render(&mut d, 16);
+        assert!((d.voices[0].increment - 1.0).abs() < 1e-9);
+        d.set_parameter(PARAM_TUNE, 1.0);
+        render(&mut d, 16);
+        assert!((d.voices[0].increment - 4.0).abs() < 1e-6);
+        d.set_parameter(PARAM_SPEED, norm_of(PARAM_SPEED, 200.0));
+        render(&mut d, 16);
+        assert!((d.voices[0].increment - 8.0).abs() < 1e-4);
+    }
+
+    // === Filter ===
+
+    fn sine_device(hz: f32) -> SamplerDevice {
+        let mut d = device();
+        let samples = (0..48_000)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin())
+            .collect();
+        d.set_sample("r", samples, 1, 48_000);
+        d
+    }
+
+    #[test]
+    fn lp12_attenuates_a_high_sine_and_off_is_a_bypass() {
+        let mut dry = sine_device(5_000.0);
+        dry.note_on(60, 1.0);
+        let dry_out = render(&mut dry, 9_600);
+
+        let mut wet = sine_device(5_000.0);
+        wet.set_parameter(PARAM_FILTER_TYPE, 1.0 / 6.0);
+        wet.set_parameter(PARAM_CUTOFF, norm_of(PARAM_CUTOFF, 200.0));
+        wet.note_on(60, 1.0);
+        let wet_out = render(&mut wet, 9_600);
+        let (dry_rms, wet_rms) = (rms(&dry_out[9_600..]), rms(&wet_out[9_600..]));
+        assert!(dry_rms > 0.3, "{dry_rms}");
+        assert!(wet_rms < dry_rms * 0.05, "{wet_rms} vs {dry_rms}");
+    }
+
+    #[test]
+    fn filter_key_track_follows_the_pitch_from_the_root() {
+        assert!((tracked_cutoff(1_000.0, 1.0, 72, 60) - 2_000.0).abs() < 0.5);
+        assert!((tracked_cutoff(1_000.0, 1.0, 48, 60) - 500.0).abs() < 0.5);
+        assert!((tracked_cutoff(1_000.0, 0.5, 72, 60) - 1_414.2).abs() < 1.0);
+        assert!((tracked_cutoff(1_000.0, 0.0, 96, 60) - 1_000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn switching_filter_types_while_sounding_stays_finite() {
+        let mut d = device();
+        let mut rng = 1u32;
+        let noise: Vec<f32> = (0..48_000)
+            .map(|_| {
+                rng ^= rng << 13;
+                rng ^= rng >> 17;
+                rng ^= rng << 5;
+                rng as i32 as f32 / i32::MAX as f32
+            })
+            .collect();
+        d.set_sample("r", noise, 1, 48_000);
+        d.set_parameter(PARAM_RESONANCE, 1.0);
+        d.set_parameter(PARAM_LOOP_MODE, 0.5);
+        for n in 0..8 {
+            d.note_on(48 + n * 3, 1.0);
+        }
+        for step in 0..64 {
+            d.set_parameter(PARAM_FILTER_TYPE, (step % 7) as f32 / 6.0);
+            d.set_parameter(PARAM_CUTOFF, (step % 5) as f32 / 4.0);
+            let out = render(&mut d, 64);
+            assert!(
+                out.iter().all(|x| x.is_finite() && x.abs() < 100.0),
+                "{step}"
+            );
+        }
+    }
+
+    /// Worst case: 64 looping voices through LP24. Run with `--release -- --ignored`.
+    #[test]
+    #[ignore]
+    fn sixty_four_voice_filter_cost() {
+        let mut d = sine_device(220.0);
+        d.set_parameter(PARAM_VOICES, 1.0);
+        d.set_parameter(PARAM_LOOP_MODE, 0.5);
+        d.set_parameter(PARAM_FILTER_TYPE, 2.0 / 6.0);
+        d.set_parameter(PARAM_FILTER_KEY_TRACK, 1.0);
+        for n in 0..64 {
+            d.note_on(30 + n, 1.0);
+        }
+        let blocks = 1_000;
+        let mut out = vec![0.0; 512 * 2];
+        let t = std::time::Instant::now();
+        for _ in 0..blocks {
+            d.process_block(&[], &mut out, 512);
+        }
+        let per_block = t.elapsed().as_secs_f64() / blocks as f64;
+        let budget = 512.0 / 48_000.0;
+        println!(
+            "64 voices: {:.1}% of the block budget",
+            100.0 * per_block / budget
+        );
+        assert!(per_block < budget * 0.5);
+    }
+
+    // === Playheads stream ===
+
+    fn decode(bytes: &[u8]) -> Vec<[f32; 3]> {
+        let count = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+        assert_eq!(bytes.len(), 4 + count * PLAYHEAD_RECORD_BYTES);
+        (0..count)
+            .map(|i| {
+                let f = |k: usize| {
+                    let at = 4 + i * PLAYHEAD_RECORD_BYTES + k * 4;
+                    f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+                };
+                [f(0), f(1), f(2)]
+            })
+            .collect()
+    }
+
+    fn poll_after(d: &mut SamplerDevice, frames: usize) -> Option<Vec<u8>> {
+        render(d, frames);
+        d.poll_device_data().map(|(kind, bytes)| {
+            assert_eq!(kind, "playheads");
+            bytes
+        })
+    }
+
+    #[test]
+    fn playheads_stream_reports_every_voice() {
+        let mut d = ramp_device(48_000);
+        assert!(d.subscribe_data("spectrum").is_err());
+        d.subscribe_data("playheads").unwrap();
+        d.note_on(60, 1.0);
+        d.note_on(64, 1.0);
+        let first = decode(&poll_after(&mut d, 2_048).expect("record"));
+        assert_eq!(first.len(), 2);
+        let second = decode(&poll_after(&mut d, 2_048).expect("record"));
+        for (a, b) in first.iter().zip(&second) {
+            assert!(b[0] > a[0], "positions advance: {a:?} -> {b:?}");
+            assert!(a[1] > 0.0 && (0.0..=1.0).contains(&a[2]));
+        }
+        d.unsubscribe_data("playheads");
+        assert!(poll_after(&mut d, 2_048).is_none());
+    }
+
+    #[test]
+    fn playheads_stream_sends_one_empty_record_when_the_last_voice_ends() {
+        let mut d = device();
+        d.set_sample("r", vec![0.5; 3_000], 1, 48_000);
+        d.subscribe_data("playheads").unwrap();
+        assert!(poll_after(&mut d, 2_048).is_none(), "nothing to say yet");
+        d.note_on(60, 1.0);
+        let playing = decode(&poll_after(&mut d, 2_048).expect("record"));
+        assert_eq!(playing.len(), 1);
+        let ended = decode(&poll_after(&mut d, 2_048).expect("empty record"));
+        assert!(ended.is_empty());
+        assert!(poll_after(&mut d, 2_048).is_none(), "only once");
     }
 }

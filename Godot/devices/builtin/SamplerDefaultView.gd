@@ -1,137 +1,171 @@
-## Sampler panel: sample waveform, start/end region, ADSR graph, and knobs.
+## Panel view of the built-in Sampler: an interactive `SampleDisplay` (play and loop points,
+## live playheads) over rows of controls grouped as Playback, Pitch, Loop, Filter and Amp.
+##
+## The controls are built in `_build` and bound to parameters by name, so the layout doesn't
+## depend on parameter ids. Everything goes through `DeviceInstance` (never OSC directly). Dragging
+## a display point applies live and records one undo step when the drag ends.
+##
+## While shown, the view subscribes to the device's `"playheads"` data stream.
 class_name SamplerDefaultView extends DeviceView
 
+static var logger := Log.make("SamplerView")
+
 const ENVELOPE_HEIGHT := 56.0
-const KNOB_ROW_HEIGHT := 52.0
+const GROUP_TITLE_COLOR := Color(0.62, 0.62, 0.68)
+const DIMMED := 0.4
+const PLAYHEAD_STREAM := "playheads"
+## Display points → the parameter that stores them.
+const POINT_PARAMS := {
+	SampleDisplay.Point.PLAY_START: "Start",
+	SampleDisplay.Point.PLAY_END: "End",
+	SampleDisplay.Point.LOOP_START: "Loop Start",
+	SampleDisplay.Point.LOOP_END: "Loop End",
+}
+## Knobs: [parameter name, caption]. The format comes from `_knob_text`.
+const KNOBS_PLAYBACK := [["Speed", "Speed"], ["Voices", "Voices"], ["Velocity", "Vel"]]
+const KNOBS_PITCH := [["Root", "Root"], ["Tune", "Tune"], ["Fine", "Fine"]]
+const KNOBS_FILTER := [["Cutoff", "Cutoff"], ["Resonance", "Res"], ["Filter Key Track", "Key"]]
+const KNOBS_AMP := [["Attack", "A"], ["Decay", "D"], ["Sustain", "S"], ["Release", "R"], ["Volume", "Vol"]]
+const TIME_KNOBS := ["Attack", "Decay", "Release"]
 
-@onready var _waveform_area: Control = $Waveform
-@onready var _waveform_view: WaveformView = $Waveform/WaveformView
-@onready var _envelope_control: EnvelopeControl = $EnvelopeControl
-@onready var _knob_attack: RotaryKnob = $KnobRow/Attack/Knob
-@onready var _knob_decay: RotaryKnob = $KnobRow/Decay/Knob
-@onready var _knob_sustain: RotaryKnob = $KnobRow/Sustain/Knob
-@onready var _knob_release: RotaryKnob = $KnobRow/Release/Knob
+var display: SampleDisplay
+var envelope_control: EnvelopeControl
 
-var _start_id: int = -1
-var _end_id: int = -1
-var _attack_id: int = -1
-var _decay_id: int = -1
-var _sustain_id: int = -1
-var _release_id: int = -1
+var _knobs: Dictionary[String, LabeledKnob] = {}
+var _segments: Dictionary[String, SegmentedControl] = {}
+var _checks: Dictionary[String, CheckBox] = {}
 var _envelope: Envelope = null
-var _syncing_envelope := false
+var _syncing := false
+var _built := false
+var _bound_source: AudioSourceInfo = null
+var _shown := false
+var _subscribed := false
+## Drag in progress on the display: {which, param_id, old}.
+var _drag := {}
 
 
-## Wire the scene envelope and knobs as soon as the view enters the tree.
 func _ready() -> void:
+	_build()
+	if device != null:
+		_setup()
+
+
+func _exit_tree() -> void:
+	_set_subscribed(false)
+
+
+# ============================================================================
+# BUILD
+# ============================================================================
+
+func _build() -> void:
+	if _built:
+		return
+	_built = true
+	display = SampleDisplay.new()
+	display.name = "SampleDisplay"
+	display.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	display.point_drag_started.connect(_on_point_drag_started)
+	display.point_dragged.connect(_on_point_dragged)
+	display.point_drag_ended.connect(_on_point_drag_ended)
+	add_child(display)
+
+	var top := _row()
+	top.add_child(_group("Playback", [
+		_stack([_segment("Play Mode", ["One-shot", "Gated"]), _check("Reverse")]),
+		_knob_row(KNOBS_PLAYBACK),
+	]))
+	top.add_child(_group("Pitch", [_knob_row(KNOBS_PITCH), _check("Key Track")]))
+	top.add_child(_group("Loop", [
+		_stack([_segment("Loop Mode", ["Off", "On", "Ping-Pong"])]),
+		_knob_row([["Crossfade", "Xfade"]]),
+	]))
+	add_child(top)
+
+	var bottom := _row()
+	var filter := VBoxContainer.new()
+	filter.add_child(_segment("Filter Type", ["Off", "LP12", "LP24", "BP12", "BP24", "HP12", "HP24"]))
+	filter.add_child(_knob_row(KNOBS_FILTER))
+	bottom.add_child(_group("Filter", [filter]))
+	envelope_control = (load("res://components/EnvelopeControl.tscn") as PackedScene).instantiate()
+	envelope_control.custom_minimum_size = Vector2(110, ENVELOPE_HEIGHT)
+	envelope_control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bottom.add_child(_group("Amp", [envelope_control, _knob_row(KNOBS_AMP)]))
+	add_child(bottom)
 	_setup_envelope()
-	_setup_knobs()
-	# The view's own resize: it is laid out after its slot, so its width is current here.
-	if _waveform_view and not _waveform_view.resized.is_connected(_on_waveform_area_resized):
-		_waveform_view.resized.connect(_on_waveform_area_resized)
 
 
-## Leave room below the waveform for the ADSR graph and knobs.
-func _get_minimum_size() -> Vector2:
-	return Vector2(220, 72.0 + _adsr_stack_height())
+func _row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	return row
 
 
-## Bind start/end and ADSR parameters, then refresh waveform and envelope.
-func _on_bind() -> void:
-	if not is_node_ready():
-		await ready
-	if device == null:
-		return
-	_start_id = device.get_parameter_id_by_name("Start")
-	_end_id = device.get_parameter_id_by_name("End")
-	_attack_id = device.get_parameter_id_by_name("Attack")
-	_decay_id = device.get_parameter_id_by_name("Decay")
-	_sustain_id = device.get_parameter_id_by_name("Sustain")
-	_release_id = device.get_parameter_id_by_name("Release")
-	_ensure_waveform()
-	_connect_waveform()
-	_sync_envelope_from_device()
-	queue_redraw()
-	ModAssign.attach(_knob_attack, device, _attack_id)
-	ModAssign.attach(_knob_decay, device, _decay_id)
-	ModAssign.attach(_knob_sustain, device, _sustain_id)
-	ModAssign.attach(_knob_release, device, _release_id)
+## A titled group; `children` sit side by side under the title.
+func _group(title: String, children: Array) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 1)
+	var label := Label.new()
+	label.text = title
+	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_color_override("font_color", GROUP_TITLE_COLOR)
+	box.add_child(label)
+	var inner := HBoxContainer.new()
+	inner.add_theme_constant_override("separation", 6)
+	for child in children:
+		inner.add_child(child)
+	box.add_child(inner)
+	return box
 
 
-## Stop listening to the bound instance's audio source.
-func _on_unbind() -> void:
-	var src: AudioSourceInfo = device.sample_source
-	if src == null:
-		return
-	if src.waveform_ready.is_connected(_on_waveform_changed):
-		src.waveform_ready.disconnect(_on_waveform_changed)
-	if src.metadata_changed.is_connected(_on_waveform_changed):
-		src.metadata_changed.disconnect(_on_waveform_changed)
+func _stack(children: Array) -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	for child in children:
+		box.add_child(child)
+	return box
 
 
-## Reconnect waveform listeners and refresh the envelope when the panel is shown.
-func _on_view_shown() -> void:
-	_connect_waveform()
-	_sync_envelope_from_device()
-	queue_redraw()
+func _knob_row(entries: Array) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	for entry in entries:
+		var knob := LabeledKnob.new()
+		knob.text = entry[1]
+		knob.label_width = 40.0
+		knob.knob_size = Vector2(30, 30)
+		knob.label.add_theme_font_size_override("font_size", 10)
+		knob.knob.value_changed.connect(_on_knob_changed.bind(entry[0]))
+		knob.knob.reset_requested.connect(_on_knob_reset.bind(entry[0]))
+		row.add_child(knob)
+		_knobs[entry[0]] = knob
+	return row
 
 
-## Keep the envelope editor and region overlay in sync with parameter changes.
-func _on_device_parameter_changed(_param_id: int, _value: float) -> void:
-	_sync_envelope_from_device()
-	queue_redraw()
+func _segment(param_name: String, labels: Array) -> SegmentedControl:
+	var segment := SegmentedControl.new()
+	segment.set_items(PackedStringArray(labels))
+	segment.font_size = 10
+	segment.selected_changed.connect(_on_segment_selected.bind(param_name))
+	_segments[param_name] = segment
+	return segment
 
 
-## Create an AudioSourceInfo on the instance if the engine has not supplied one yet.
-func _ensure_waveform() -> void:
-	if device and device.sample_source == null:
-		device.sample_source = AudioSourceInfo.new()
+func _check(param_name: String) -> CheckBox:
+	var check := CheckBox.new()
+	check.text = param_name
+	check.add_theme_font_size_override("font_size", 10)
+	check.toggled.connect(_on_check_toggled.bind(param_name))
+	_checks[param_name] = check
+	return check
 
 
-## Listen for metadata and peak data so the panel redraws.
-func _connect_waveform() -> void:
-	_ensure_waveform()
-	if device == null or device.sample_source == null:
-		return
-	var src: AudioSourceInfo = device.sample_source
-	if not src.waveform_ready.is_connected(_on_waveform_changed):
-		src.waveform_ready.connect(_on_waveform_changed)
-	if not src.metadata_changed.is_connected(_on_waveform_changed):
-		src.metadata_changed.connect(_on_waveform_changed)
-	_update_waveform_view()
-
-
-## Refresh the waveform view and the region overlay.
-func _on_waveform_changed() -> void:
-	_update_waveform_view()
-	queue_redraw()
-
-
-func _on_waveform_area_resized() -> void:
-	_update_waveform_view()
-	queue_redraw()
-
-
-## Show the whole sample: frame 0 at the left edge, the last frame at the right.
-func _update_waveform_view() -> void:
-	if _waveform_view == null:
-		return
-	var src: AudioSourceInfo = device.sample_source if device else null
-	_waveform_view.data = src.data if src else null
-	if _waveform_view.is_data_ready() and _waveform_view.size.x > 0.0:
-		_waveform_view.start_frame = 0.0
-		_waveform_view.frames_per_pixel = float(src.data.frames) / _waveform_view.size.x
-
-
-## Configure the scene envelope resource and listen for handle edits.
 func _setup_envelope() -> void:
-	if _envelope_control == null:
-		push_error("SamplerDefaultView missing EnvelopeControl")
-		return
-	_envelope = _envelope_control.envelope
+	_envelope = envelope_control.envelope
 	if _envelope == null:
 		_envelope = Envelope.new()
-		_envelope_control.envelope = _envelope
+		envelope_control.envelope = _envelope
 	_envelope.min_attack = 0.001
 	_envelope.max_attack = 2.0
 	_envelope.min_decay = 0.001
@@ -139,174 +173,319 @@ func _setup_envelope() -> void:
 	_envelope.min_release = 0.001
 	_envelope.max_release = 2.0
 	_envelope.set_adsr(0.001, 0.001, 1.0, 0.01)
-	_envelope.attack_changed.connect(_on_envelope_attack_changed)
-	_envelope.decay_changed.connect(_on_envelope_decay_changed)
-	_envelope.sustain_changed.connect(_on_envelope_sustain_changed)
-	_envelope.release_changed.connect(_on_envelope_release_changed)
+	_envelope.attack_changed.connect(_on_envelope_changed.bind("Attack"))
+	_envelope.decay_changed.connect(_on_envelope_changed.bind("Decay"))
+	_envelope.sustain_changed.connect(_on_envelope_changed.bind("Sustain"))
+	_envelope.release_changed.connect(_on_envelope_changed.bind("Release"))
 
 
-## Height of the envelope graph plus the knob row.
-func _adsr_stack_height() -> float:
-	return ENVELOPE_HEIGHT + KNOB_ROW_HEIGHT
+# ============================================================================
+# BINDING
+# ============================================================================
+
+func _on_bind() -> void:
+	if is_node_ready():
+		_setup()
 
 
-## Attach formatters and value listeners to the scene ADSR knobs.
-func _setup_knobs() -> void:
-	if _knob_attack == null:
-		push_error("SamplerDefaultView missing ADSR knobs")
+## Everything that needs both the scene and the device.
+func _setup() -> void:
+	_configure_knobs()
+	for knob_name in _knobs:
+		var id := device.get_parameter_id_by_name(knob_name)
+		ModAssign.attach(_knobs[knob_name].knob, device, id)
+	device.sample_source_changed.connect(_bind_source)
+	device.loading_state_changed.connect(_on_loading_state_changed)
+	_bind_source()
+	_refresh()
+
+
+func _on_unbind() -> void:
+	_set_subscribed(false)
+	_unbind_source()
+	if device != null:
+		if device.sample_source_changed.is_connected(_bind_source):
+			device.sample_source_changed.disconnect(_bind_source)
+		if device.loading_state_changed.is_connected(_on_loading_state_changed):
+			device.loading_state_changed.disconnect(_on_loading_state_changed)
+	if display != null:
+		display.clear_playheads()
+
+
+## Point each knob at its parameter's range, curve and text.
+func _configure_knobs() -> void:
+	for knob_name in _knobs:
+		var param := device.get_parameter(device.get_parameter_id_by_name(knob_name))
+		var knob: RotaryKnob = _knobs[knob_name].knob
+		if param == null:
+			continue
+		knob.min_value = param.min_value
+		knob.max_value = param.max_value
+		knob.logarithmic = param.is_logarithmic or knob_name in TIME_KNOBS
+		knob.value_default = param.default_value
+		knob.step = 1.0 if knob_name in ["Root", "Voices"] else 0.0
+		knob.value_text_callback = _knob_text.bind(knob_name)
+
+
+## The knob's readout for `value` (real units).
+static func _knob_text(value: float, param_name: String) -> String:
+	match param_name:
+		"Speed", "Crossfade", "Resonance", "Filter Key Track":
+			return "%d%%" % roundi(value)
+		"Velocity", "Sustain":
+			return "%d%%" % roundi(value * 100.0)
+		"Tune":
+			return "%+.1f st" % value
+		"Fine":
+			return "%+d ct" % roundi(value)
+		"Root":
+			return Midi.midi_to_note_name(roundi(value))
+		"Voices":
+			return "%d" % roundi(value)
+		"Cutoff":
+			return "%.2f kHz" % (value / 1000.0) if value >= 1000.0 else "%d Hz" % roundi(value)
+		"Volume":
+			return "-inf dB" if value <= 0.0001 else "%+.1f dB" % (20.0 * log(value) / log(10.0))
+		"Attack", "Decay", "Release":
+			return "%.1f ms" % (value * 1000.0) if value < 1.0 else "%.2f s" % value
+	return "%.2f" % value
+
+
+func _on_device_parameter_changed(_param_id: int, _value: float) -> void:
+	if is_node_ready():
+		_refresh()
+
+
+## Copy every parameter onto the controls and the display, without echoing back.
+func _refresh() -> void:
+	if device == null or not is_node_ready():
 		return
-	_knob_attack.value_text_callback = _format_envelope_time
-	_knob_decay.value_text_callback = _format_envelope_time
-	_knob_sustain.value_text_callback = _format_envelope_sustain
-	_knob_release.value_text_callback = _format_envelope_time
-	_knob_attack.value_changed.connect(_on_attack_knob_changed)
-	_knob_decay.value_changed.connect(_on_decay_knob_changed)
-	_knob_sustain.value_changed.connect(_on_sustain_knob_changed)
-	_knob_release.value_changed.connect(_on_release_knob_changed)
-
-
-## Format attack/decay/release as milliseconds or seconds.
-func _format_envelope_time(seconds: float) -> String:
-	if seconds < 1.0:
-		return "%.1f ms" % (seconds * 1000.0)
-	return "%.2f s" % seconds
-
-
-## Format sustain as a percentage.
-func _format_envelope_sustain(level: float) -> String:
-	return "%d%%" % roundi(level * 100.0)
-
-
-## Copy device ADSR values onto the envelope resource without echoing back.
-func _sync_envelope_from_device() -> void:
-	if device == null or _envelope == null:
-		return
-	_syncing_envelope = true
+	_syncing = true
+	for knob_name in _knobs:
+		var id := device.get_parameter_id_by_name(knob_name)
+		if id >= 0:
+			_knobs[knob_name].knob.set_value_no_signal(device.get_parameter_real(id))
+	for param_name in _segments:
+		var id := device.get_parameter_id_by_name(param_name)
+		if id >= 0:
+			_segments[param_name].set_selected_no_signal(int(device.get_parameter_real(id)))
+	for param_name in _checks:
+		var id := device.get_parameter_id_by_name(param_name)
+		if id >= 0:
+			_checks[param_name].set_pressed_no_signal(device.get_parameter_real(id) >= 0.5)
 	_envelope.set_adsr(
-		device.get_parameter_real(_attack_id) if _attack_id >= 0 else 0.001,
-		device.get_parameter_real(_decay_id) if _decay_id >= 0 else 0.001,
-		device.get_parameter_real(_sustain_id) if _sustain_id >= 0 else 1.0,
-		device.get_parameter_real(_release_id) if _release_id >= 0 else 0.01
-	)
-	_sync_knobs_from_envelope()
-	_syncing_envelope = false
+		_real("Attack", 0.001), _real("Decay", 0.001), _real("Sustain", 1.0), _real("Release", 0.01))
+	_syncing = false
+	_refresh_display()
+	_update_enabled()
 
 
-## Push envelope stage values onto the knobs without emitting.
-func _sync_knobs_from_envelope() -> void:
-	if _envelope == null:
+func _real(param_name: String, fallback: float) -> float:
+	var id := device.get_parameter_id_by_name(param_name)
+	return device.get_parameter_real(id) if id >= 0 else fallback
+
+
+func _refresh_display() -> void:
+	# While a point is dragged the display is ahead of the (echoing) device; leave it alone.
+	if _drag.is_empty():
+		display.play_start = _real("Start", 0.0)
+		display.play_end = _real("End", 1.0)
+		display.loop_start = _real("Loop Start", 0.0)
+		display.loop_end = _real("Loop End", 1.0)
+	display.loop_mode = int(_real("Loop Mode", 0.0))
+	display.xfade = _real("Crossfade", 0.0) / 100.0
+	display.reverse = _real("Reverse", 0.0) >= 0.5
+
+
+## Crossfade only applies to Loop On; the filter knobs only when a filter type is chosen.
+func _update_enabled() -> void:
+	_set_enabled(_knobs["Crossfade"], int(_real("Loop Mode", 0.0)) == SampleDisplay.LoopMode.ON)
+	var filter_on := int(_real("Filter Type", 0.0)) != 0
+	for knob_name in ["Cutoff", "Resonance", "Filter Key Track"]:
+		_set_enabled(_knobs[knob_name], filter_on)
+
+
+func _set_enabled(knob: LabeledKnob, enabled: bool) -> void:
+	knob.modulate.a = 1.0 if enabled else DIMMED
+	knob.knob.mouse_filter = Control.MOUSE_FILTER_STOP if enabled else Control.MOUSE_FILTER_IGNORE
+
+
+# ============================================================================
+# CONTROL HANDLERS
+# ============================================================================
+
+func _on_knob_changed(value: float, param_name: String) -> void:
+	_set_real(param_name, value)
+
+
+func _on_knob_reset(param_name: String) -> void:
+	if device == null:
 		return
-	if _knob_attack:
-		_knob_attack.set_value_no_signal(_envelope.attack)
-	if _knob_decay:
-		_knob_decay.set_value_no_signal(_envelope.decay)
-	if _knob_sustain:
-		_knob_sustain.set_value_no_signal(_envelope.sustain)
-	if _knob_release:
-		_knob_release.set_value_no_signal(_envelope.release)
+	var param := device.get_parameter(device.get_parameter_id_by_name(param_name))
+	if param != null:
+		device.set_parameter_real(param.id, param.default_value)
+
+
+func _on_segment_selected(index: int, param_name: String) -> void:
+	_set_real(param_name, float(index))
+
+
+func _on_check_toggled(pressed: bool, param_name: String) -> void:
+	_set_real(param_name, 1.0 if pressed else 0.0)
+
+
+func _set_real(param_name: String, value: float) -> void:
+	if _syncing or device == null:
+		return
+	var id := device.get_parameter_id_by_name(param_name)
+	if id >= 0:
+		device.set_parameter_real(id, value)
 
 
 ## Apply an envelope stage to the device and record a mergeable undo step.
-func _commit_envelope_param(param_id: int, value: float) -> void:
-	if _syncing_envelope or device == null or param_id < 0:
+func _on_envelope_changed(value: float, param_name: String) -> void:
+	var param_id := device.get_parameter_id_by_name(param_name) if device != null else -1
+	if _syncing or param_id < 0:
 		return
 	var old_value := device.get_parameter_normalized(param_id)
 	device.set_parameter_real(param_id, value)
 	var new_value := device.get_parameter_normalized(param_id)
-	if abs(new_value - old_value) < 0.0001:
+	if absf(new_value - old_value) < 0.0001:
 		return
-	var cmd := PropertyCommand.new(
-		"Set Parameter",
-		device,
-		"",
-		[param_id, old_value],
-		[param_id, new_value]
-	)
+	var cmd := PropertyCommand.new("Set Parameter", device, "", [param_id, old_value], [param_id, new_value])
 	cmd.set_callable(func(id, v): device.set_parameter_normalized(id, v)).set_unpack_array(true).set_mergeable(true)
 	HistoryUtil.record(cmd)
 
 
-## Push envelope attack time to the sampler Attack parameter.
-func _on_envelope_attack_changed(value: float) -> void:
-	_commit_envelope_param(_attack_id, value)
-	if _knob_attack:
-		_knob_attack.set_value_no_signal(value)
+# ============================================================================
+# DISPLAY POINTS
+# ============================================================================
 
-
-## Push envelope decay time to the sampler Decay parameter.
-func _on_envelope_decay_changed(value: float) -> void:
-	_commit_envelope_param(_decay_id, value)
-	if _knob_decay:
-		_knob_decay.set_value_no_signal(value)
-
-
-## Push envelope sustain level to the sampler Sustain parameter.
-func _on_envelope_sustain_changed(value: float) -> void:
-	_commit_envelope_param(_sustain_id, value)
-	if _knob_sustain:
-		_knob_sustain.set_value_no_signal(value)
-
-
-## Push envelope release time to the sampler Release parameter.
-func _on_envelope_release_changed(value: float) -> void:
-	_commit_envelope_param(_release_id, value)
-	if _knob_release:
-		_knob_release.set_value_no_signal(value)
-
-
-## Apply attack from the knob onto the shared envelope resource.
-func _on_attack_knob_changed(value: float) -> void:
-	if _envelope:
-		_envelope.attack = value
-
-
-## Apply decay from the knob onto the shared envelope resource.
-func _on_decay_knob_changed(value: float) -> void:
-	if _envelope:
-		_envelope.decay = value
-
-
-## Apply sustain from the knob onto the shared envelope resource.
-func _on_sustain_knob_changed(value: float) -> void:
-	if _envelope:
-		_envelope.sustain = value
-
-
-## Apply release from the knob onto the shared envelope resource.
-func _on_release_knob_changed(value: float) -> void:
-	if _envelope:
-		_envelope.release = value
-
-
-## Draw the empty/loading message and the start/end region over the WaveformView.
-func _draw() -> void:
-	var rect := _waveform_rect()
-	if _waveform_view == null or not _waveform_view.is_data_ready():
-		var msg := "Drop an audio file" if device == null or device.loaded_file_path.is_empty() else "Loading…"
-		draw_string(
-			ThemeDB.fallback_font,
-			Vector2(8, rect.position.y + rect.size.y * 0.5 + 4),
-			msg,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			-1,
-			13,
-			Color(0.7, 0.7, 0.75, 0.85)
-		)
+func _on_point_drag_started(which: int) -> void:
+	if device == null:
 		return
-	var start_n := device.get_parameter_normalized(_start_id) if _start_id >= 0 else 0.0
-	var end_n := device.get_parameter_normalized(_end_id) if _end_id >= 0 else 1.0
-	var x0 := rect.position.x + rect.size.x * start_n
-	var x1 := rect.position.x + rect.size.x * end_n
-	if start_n > 0.001:
-		draw_rect(Rect2(rect.position, Vector2(x0 - rect.position.x, rect.size.y)), Color(0, 0, 0, 0.45), true)
-	if end_n < 0.999:
-		draw_rect(Rect2(Vector2(x1, rect.position.y), Vector2(rect.end.x - x1, rect.size.y)), Color(0, 0, 0, 0.45), true)
-	draw_line(Vector2(x0, rect.position.y), Vector2(x0, rect.end.y), Color(0.95, 0.85, 0.4, 0.9), 1.0)
-	draw_line(Vector2(x1, rect.position.y), Vector2(x1, rect.end.y), Color(0.95, 0.85, 0.4, 0.9), 1.0)
+	var id := device.get_parameter_id_by_name(POINT_PARAMS[which])
+	_drag = {"which": which, "param_id": id, "old": device.get_parameter_normalized(id)}
 
 
-## Local rect of the scene waveform slot, falling back to the area above ADSR.
-func _waveform_rect() -> Rect2:
-	if _waveform_area:
-		return Rect2(_waveform_area.position, _waveform_area.size)
-	return Rect2(Vector2.ZERO, Vector2(size.x, maxf(size.y - _adsr_stack_height(), 1.0)))
+func _on_point_dragged(which: int, value: float) -> void:
+	if device == null:
+		return
+	var id := device.get_parameter_id_by_name(POINT_PARAMS[which])
+	if id >= 0:
+		device.set_parameter_normalized(id, value)
+
+
+## One undo step for the whole drag.
+func _on_point_drag_ended(_which: int) -> void:
+	var drag := _drag
+	_drag = {}
+	if device == null or drag.is_empty() or int(drag["param_id"]) < 0:
+		return
+	var id: int = drag["param_id"]
+	var new_value := device.get_parameter_normalized(id)
+	if absf(new_value - float(drag["old"])) < 0.0001:
+		return
+	var cmd := PropertyCommand.new(
+		"Move Sample Point", device, "", [id, drag["old"]], [id, new_value])
+	cmd.set_callable(func(pid, v): device.set_parameter_normalized(pid, v)).set_unpack_array(true)
+	HistoryUtil.record(cmd)
+
+
+# ============================================================================
+# WAVEFORM
+# ============================================================================
+
+## Follow `device.sample_source`, including when the object is replaced and not just refilled.
+func _bind_source() -> void:
+	_unbind_source()
+	if device == null:
+		return
+	if device.sample_source == null:
+		device.sample_source = AudioSourceInfo.new()
+		return # the assignment emitted sample_source_changed, which rebinds
+	_bound_source = device.sample_source
+	_bound_source.waveform_ready.connect(_update_waveform)
+	_bound_source.metadata_changed.connect(_update_waveform)
+	_update_waveform()
+
+
+func _unbind_source() -> void:
+	if _bound_source != null:
+		if _bound_source.waveform_ready.is_connected(_update_waveform):
+			_bound_source.waveform_ready.disconnect(_update_waveform)
+		if _bound_source.metadata_changed.is_connected(_update_waveform):
+			_bound_source.metadata_changed.disconnect(_update_waveform)
+	_bound_source = null
+
+
+func _on_loading_state_changed(_state: String) -> void:
+	_update_waveform()
+
+
+func _update_waveform() -> void:
+	if display == null:
+		return
+	var source := _bound_source
+	display.data = source.data if source != null else null
+	display.duration = source.audio_duration_seconds if source != null else 0.0
+	display.frames = source.audio_frames if source != null else 0
+	var ready := display.data != null and display.data.is_ready()
+	if ready:
+		display.placeholder = ""
+	else:
+		var empty := device == null or device.loaded_file_path.is_empty()
+		display.placeholder = "Drop an audio file" if empty else "Loading…"
+
+
+# ============================================================================
+# PLAYHEADS
+# ============================================================================
+
+func _on_view_shown() -> void:
+	_shown = true
+	if is_node_ready():
+		_update_waveform()
+	_set_subscribed(true)
+
+
+func _on_view_hidden() -> void:
+	_shown = false
+	_set_subscribed(false)
+	if display != null:
+		display.clear_playheads()
+
+
+func _set_subscribed(want: bool) -> void:
+	want = want and _shown and device != null
+	if want == _subscribed:
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	var osc: Node = tree.root.get_node_or_null("AudioEngineOSC") if tree != null else null
+	if osc == null:
+		return
+	if want:
+		osc.subscribe_device_data(device.osc_path(), PLAYHEAD_STREAM)
+		if not osc.device_data_received.is_connected(_on_data_received):
+			osc.device_data_received.connect(_on_data_received)
+	else:
+		if device != null:
+			osc.unsubscribe_device_data(device.osc_path(), PLAYHEAD_STREAM)
+		if osc.device_data_received.is_connected(_on_data_received):
+			osc.device_data_received.disconnect(_on_data_received)
+	_subscribed = want
+
+
+func _on_data_received(osc_path: String, data_type: String, blob: PackedByteArray) -> void:
+	if data_type != PLAYHEAD_STREAM or device == null or osc_path != device.osc_path():
+		return
+	apply_playheads(blob)
+
+
+## Feed a `"playheads"` blob to the display (also what the tests call).
+func apply_playheads(blob: PackedByteArray, now_ms: int = Time.get_ticks_msec()) -> void:
+	var decoded := SampleDisplay.decode_playheads(blob)
+	if int(decoded["count"]) == 0:
+		display.clear_playheads()
+	else:
+		display.apply_playhead_packet(decoded, now_ms)

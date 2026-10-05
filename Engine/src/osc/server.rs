@@ -2593,7 +2593,7 @@ impl OscServer {
                 req_id,
                 peak_file_path,
             } => {
-                debug!(
+                info!(
                     request_id = %req_id,
                     peak_file_path = %peak_file_path,
                     "AudioFileService waveform ready"

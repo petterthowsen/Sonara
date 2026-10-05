@@ -13,6 +13,8 @@ static var logger := Log.make("DeviceInstance")
 signal parameter_changed(param_id: int, value: float)
 signal enabled_changed(enabled: bool)
 signal active_changed(active: bool)
+## `sample_source` was replaced by another object (views rebind their waveform listeners).
+signal sample_source_changed()
 signal parameters_updated()  # Emitted when parameter list changes (e.g., SFZ file loaded)
 signal key_labels_changed()  # SFZ key labels / keyswitches (re)loaded; see key_labels
 signal loading_state_changed(state: String)  # "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
@@ -116,7 +118,12 @@ var return_channel_ids: Array[int] = []
 var detached_returns: Dictionary[int, Channel] = {}
 
 ## Decoded metadata and peak data when this instance is a Sampler (or other sample-loading device).
-var sample_source: AudioSourceInfo = null
+var sample_source: AudioSourceInfo = null:
+	set(source):
+		if sample_source == source:
+			return
+		sample_source = source
+		sample_source_changed.emit()
 
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
@@ -1869,7 +1876,7 @@ func sync_parameter_to_engine(param_id: int) -> void:
 
 
 ## Load a file into this device (SFZ or audio sample).
-func load_file(file_path: String) -> void:
+func load_file(file_path: String, attempt: int = 0) -> void:
 	if not device.supports_file_loading:
 		push_error("[DeviceInstance] Device %s does not support file loading" % device.name)
 		return
@@ -1891,6 +1898,27 @@ func load_file(file_path: String) -> void:
 	AudioEngineOSC.send(osc_addr("load_file"), [file_path, req_id])
 	# Also set locally: if the engine's own "loading" is dropped, the re-check still runs.
 	_set_loading_state("loading")
+	_watch_waveform(file_path, attempt)
+
+
+## Project load bursts overflow Godot's UDP receive buffer, dropping `/audiofile/*` replies.
+## If the waveform hasn't arrived shortly after a sample load, ask the engine again.
+const WAVEFORM_RETRY_SEC := 2.0
+const WAVEFORM_MAX_RETRIES := 3
+
+func _watch_waveform(file_path: String, attempt: int) -> void:
+	if attempt >= WAVEFORM_MAX_RETRIES or Utils.is_test_mode():
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null or not file_path.get_extension().to_lower() in ["wav", "flac", "ogg", "mp3", "aif", "aiff"]:
+		return
+	await tree.create_timer(WAVEFORM_RETRY_SEC).timeout
+	if loaded_file_path != file_path:
+		return
+	if sample_source != null and sample_source.data != null and sample_source.data.is_ready():
+		return
+	logger.warn("No waveform for %s after %.0fs; retrying (%d)" % [file_path, WAVEFORM_RETRY_SEC, attempt + 1])
+	load_file(file_path, attempt + 1)
 
 
 ## Remember `file_path` for an instance that is not on a channel yet. Channel.add_device()
