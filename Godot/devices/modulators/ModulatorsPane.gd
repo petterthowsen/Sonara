@@ -125,6 +125,10 @@ func _build_structure() -> void:
 	var detail_scroll := _detail_scroll
 	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_scroll.custom_minimum_size.x = 140
+	# Never scrolls: with both modes disabled the container's minimum size follows its content, so the
+	# panel grows to fit however many options the modulator has.
+	detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_detail = VBoxContainer.new()
 	_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_detail.add_theme_constant_override("separation", 6)

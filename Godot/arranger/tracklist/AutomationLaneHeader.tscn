@@ -5,12 +5,12 @@
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 resource_local_to_scene = true
-content_margin_left = 18.0
+content_margin_left = 22.0
 content_margin_top = 2.0
 content_margin_right = 4.0
 content_margin_bottom = 2.0
 bg_color = Color(0.13, 0.13, 0.13, 1)
-border_width_left = 12
+border_width_left = 20
 border_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
 
 [sub_resource type="LabelSettings" id="LabelSettings_doj3m"]

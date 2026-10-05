@@ -59,6 +59,9 @@ var mouse_hovered := false
 signal volume_changed(volume : float)
 
 var is_adjusting := false
+## Motion multiplier for a normal drag (1.0 = follows the mouse). Small volumeters can use a lower value.
+@export_range(0.01, 1.0, 0.01) var drag_scale := 1.0
+## Extra multiplier on top of `drag_scale` while Shift is held.
 @export var fine_drag_scale := FineDrag.DEFAULT_SCALE
 var _fine_drag := FineDrag.new()
 
@@ -227,7 +230,7 @@ func _mod_gui_input(event: InputEvent) -> void:
 			_refresh_mod_tooltip()
 		accept_event()
 	elif event is InputEventMouseMotion and _mod_dragging and size.y > 0.0:
-		var scale := fine_drag_scale if event.shift_pressed else 1.0
+		var scale := drag_scale * (fine_drag_scale if event.shift_pressed else 1.0)
 		var amount := ModDisplay.step_amount(mod_assign_amount, -event.relative.y / size.y * scale)
 		if not is_equal_approx(amount, mod_assign_amount):
 			mod_assign_amount = amount
@@ -264,13 +267,15 @@ func _gui_input(event: InputEvent) -> void:
 				accept_event()
 				return
 			is_adjusting = true
-			_set_volume_from_y(_fine_drag.begin(event.position).y)
+			# Relative drag: grab the handle where it is instead of jumping to the pointer.
+			_fine_drag.begin_at(Vector2(event.position.x, _db_to_y(volume_db)), event.position)
 			accept_event()
 		elif is_adjusting:
 			is_adjusting = false
 			queue_redraw()
 			_refresh_tooltip()
 	elif event is InputEventMouseMotion and is_adjusting:
+		_fine_drag.normal_scale = drag_scale
 		_fine_drag.scale = fine_drag_scale
 		var point := _fine_drag.update(event.position, event.shift_pressed, Rect2(Vector2.ZERO, size))
 		_set_volume_from_y(point.y)

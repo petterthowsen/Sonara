@@ -14,7 +14,7 @@
 [ext_resource type="Script" uid="uid://c5hc8g1r5wo5i" path="res://mixer/MixerChannelChildren.gd" id="9_an1hh"]
 [ext_resource type="Script" uid="uid://db6dy45eqhgrv" path="res://mixer/ChannelsBox.gd" id="10_8wi2u"]
 [ext_resource type="Script" uid="uid://cv2bu0k4y0j80" path="res://mixer/PanControl.gd" id="11_panctl"]
-[ext_resource type="Script" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
+[ext_resource type="Script" uid="uid://dqv5jd1spvtcs" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_x6p0d"]
 resource_local_to_scene = true
@@ -249,8 +249,8 @@ fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
 layout_mode = 2
 size_flags_vertical = 3
-split_offsets = PackedInt32Array(239)
-split_offset = 239
+split_offsets = PackedInt32Array(190)
+split_offset = 190
 
 [node name="DeviceList" parent="HBox/VBox/MainAndSideBox/MainPane/VSplit" unique_id=2101730065 instance=ExtResource("8_xa46q")]
 custom_minimum_size = Vector2(0, 48)
@@ -303,7 +303,7 @@ size_flags_horizontal = 3
 alignment = 1
 last_wrap_alignment = 2
 
-[node name="SoloToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=4408635]
+[node name="SoloToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=4408635 node_paths=PackedStringArray("drag_region")]
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -313,8 +313,9 @@ toggle_mode = true
 text = "S"
 script = ExtResource("dragtoggle_btn")
 drag_group = &"solo"
+drag_region = NodePath("../../../../../../../..")
 
-[node name="MuteToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=1401776336]
+[node name="MuteToggle" type="Button" parent="HBox/VBox/MainAndSideBox/MainPane/Controls/FlowContainer/SoloMute" unique_id=1401776336 node_paths=PackedStringArray("drag_region")]
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -324,6 +325,7 @@ toggle_mode = true
 text = "M"
 script = ExtResource("dragtoggle_btn")
 drag_group = &"mute"
+drag_region = NodePath("../../../../../../../..")
 
 [node name="Panning" type="PanelContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=657729377]
 layout_mode = 2
@@ -403,6 +405,7 @@ tick_font_size = 14
 fader_bg_color = Color(0.14642392, 0.11433411, 0.23046875, 1)
 volume_db = -6.0
 fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
+fader_handle_height = 12.0
 
 [node name="Fader" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1988525762 groups=["mixer_channel_fader"]]
 visible = false
@@ -438,8 +441,8 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-split_offsets = PackedInt32Array(239)
-split_offset = 239
+split_offsets = PackedInt32Array(190)
+split_offset = 190
 
 [node name="ChildrenClip" type="Control" parent="HBox" unique_id=470089134]
 visible = false

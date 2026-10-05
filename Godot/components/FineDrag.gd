@@ -9,6 +9,8 @@ class_name FineDrag extends RefCounted
 const DEFAULT_SCALE := 0.15
 
 var scale := DEFAULT_SCALE
+## Motion multiplier for a normal drag. Shift multiplies `scale` on top of it.
+var normal_scale := 1.0
 var _point := Vector2.ZERO
 var _last_mouse := Vector2.ZERO
 
@@ -29,7 +31,7 @@ func begin(mouse: Vector2) -> Vector2:
 func update(mouse: Vector2, fine: bool, bounds := Rect2()) -> Vector2:
 	var delta := mouse - _last_mouse
 	_last_mouse = mouse
-	_point += delta * (scale if fine else 1.0)
+	_point += delta * (normal_scale * scale if fine else normal_scale)
 	if bounds.has_area():
 		_point = _point.clamp(bounds.position, bounds.end)
 	return _point

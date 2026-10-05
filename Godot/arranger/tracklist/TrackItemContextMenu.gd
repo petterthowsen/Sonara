@@ -15,16 +15,16 @@ const ROUTE_NEW := TrackRouteChannelCommand.CREATE_NEW
 @onready var color_picker_button: ColorPickerButton = $VBoxContainer/ColorAndName/ColorPickerButton
 @onready var name_label: SmartLineEdit = $VBoxContainer/ColorAndName/Name
 @onready var delete_button: Button = $VBoxContainer/Buttons/Delete
+@onready var delete_with_channel_button: Button = $VBoxContainer/Buttons/DeleteWithChannel
+@onready var duplicate_button: Button = $VBoxContainer/Buttons/Duplicate
+@onready var duplicate_with_channel_button: Button = $VBoxContainer/Buttons/DuplicateWithChannel
+@onready var bus_link_option: OptionButton = $VBoxContainer/BusLink
+@onready var channel_route_option: OptionButton = $VBoxContainer/ChannelRoute
 
 var current_track: Track = null
 var current_project: Project = null
 ## Every track the menu acts on (the selection); a single entry for a single track.
 var current_tracks: Array[Track] = []
-var duplicate_button: Button = null
-var delete_with_channel_button: Button = null
-var duplicate_with_channel_button: Button = null
-var bus_link_option: OptionButton = null
-var channel_route_option: OptionButton = null
 
 
 func _ready() -> void:
@@ -35,79 +35,18 @@ func _ready() -> void:
 		color_picker_button.edit_alpha = false
 		color_picker_button.edit_intensity = false
 		color_picker_button.pressed.connect(_on_color_picker_pressed)
-	if delete_button:
-		delete_button.pressed.connect(_on_delete_pressed.bind(false))
-	_ensure_action_buttons()
-	_ensure_bus_link_control()
-	_ensure_channel_route_control()
-	hide()
-
-
-## Add Delete & Channel and the duplicate buttons next to the scene's Delete button.
-## Duplicate actions come first, destructive Delete actions last.
-func _ensure_action_buttons() -> void:
-	if duplicate_button or delete_button == null:
-		return
-	var buttons := delete_button.get_parent()
-	delete_with_channel_button = _make_button(buttons, _on_delete_pressed.bind(true))
-	duplicate_button = _make_button(buttons, _on_duplicate_pressed.bind(false))
-	duplicate_with_channel_button = _make_button(buttons, _on_duplicate_pressed.bind(true))
-	# Scene order is [Delete], then the three above: move the two duplicate buttons to the top.
-	buttons.move_child(duplicate_button, 0)
-	buttons.move_child(duplicate_with_channel_button, 1)
-
-
-func _make_button(parent: Node, on_pressed: Callable) -> Button:
-	var button := Button.new()
-	button.alignment = delete_button.alignment
-	button.flat = delete_button.flat
-	button.pressed.connect(on_pressed)
-	parent.add_child(button)
-	return button
-
-
-## Add the bus-link dropdown above Delete (folders only).
-func _ensure_bus_link_control() -> void:
-	if bus_link_option:
-		return
-	var vbox := $VBoxContainer as VBoxContainer
-	if vbox == null:
-		return
-	bus_link_option = OptionButton.new()
-	bus_link_option.name = "BusLink"
-	bus_link_option.fit_to_longest_item = false
-	bus_link_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	delete_button.pressed.connect(_on_delete_pressed.bind(false))
+	delete_with_channel_button.pressed.connect(_on_delete_pressed.bind(true))
+	duplicate_button.pressed.connect(_on_duplicate_pressed.bind(false))
+	duplicate_with_channel_button.pressed.connect(_on_duplicate_pressed.bind(true))
 	bus_link_option.item_selected.connect(_on_bus_link_selected)
-	bus_link_option.tooltip_text = "Link this folder to a mixer bus (Folder Bus)"
-	var popup := bus_link_option.get_popup()
-	popup.exclusive = false
-	popup.transient = false
-	var buttons := vbox.get_node_or_null("Buttons")
-	var insert_at := buttons.get_index() if buttons else vbox.get_child_count()
-	vbox.add_child(bus_link_option)
-	vbox.move_child(bus_link_option, insert_at)
-
-
-## Add the channel-routing dropdown above Delete (instrument/audio tracks only).
-func _ensure_channel_route_control() -> void:
-	if channel_route_option:
-		return
-	var vbox := $VBoxContainer as VBoxContainer
-	if vbox == null:
-		return
-	channel_route_option = OptionButton.new()
-	channel_route_option.name = "ChannelRoute"
-	channel_route_option.fit_to_longest_item = false
-	channel_route_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	channel_route_option.item_selected.connect(_on_channel_route_selected)
-	channel_route_option.tooltip_text = "Mixer channel this track plays through"
-	var popup := channel_route_option.get_popup()
-	popup.exclusive = false
-	popup.transient = false
-	var buttons := vbox.get_node_or_null("Buttons")
-	var insert_at := buttons.get_index() if buttons else vbox.get_child_count()
-	vbox.add_child(channel_route_option)
-	vbox.move_child(channel_route_option, insert_at)
+	# The dropdown popups must not steal focus from (and close) this menu.
+	for option in [bus_link_option, channel_route_option]:
+		var popup: PopupMenu = option.get_popup()
+		popup.exclusive = false
+		popup.transient = false
+	hide()
 
 
 ## Connect the nested ColorPicker once it exists so drags apply while the menu stays open.
@@ -171,7 +110,6 @@ func is_multi() -> bool:
 
 ## Label and show the delete/duplicate buttons for the bound tracks.
 func _update_action_buttons() -> void:
-	_ensure_action_buttons()
 	var multi := is_multi()
 	var any_channel := false
 	var any_duplicable := false
@@ -215,9 +153,6 @@ func _unbind() -> void:
 
 ## Fill the bus dropdown: None, New Bus, then existing buses.
 func _rebuild_bus_link_menu() -> void:
-	_ensure_bus_link_control()
-	if bus_link_option == null:
-		return
 	var is_folder := current_track != null and current_track.type == Track.TrackType.FOLDER
 	bus_link_option.visible = is_folder
 	if not is_folder:
@@ -255,7 +190,7 @@ func _select_bus_item(item_id: int) -> void:
 
 ## Apply None / New Bus / existing bus to the bound folder track.
 func _on_bus_link_selected(index: int) -> void:
-	if current_track == null or current_project == null or bus_link_option == null:
+	if current_track == null or current_project == null:
 		return
 	if current_track.type != Track.TrackType.FOLDER:
 		return
@@ -281,9 +216,6 @@ func _on_bus_link_selected(index: int) -> void:
 
 ## Fill the channel dropdown: None, New Channel, then every strip a track may play through.
 func _rebuild_channel_route_menu() -> void:
-	_ensure_channel_route_control()
-	if channel_route_option == null:
-		return
 	# Folders use the bus dropdown; a group's channel is its identity and stays put.
 	var routable := current_track != null and (
 		current_track.type == Track.TrackType.INSTRUMENT
@@ -328,7 +260,7 @@ func _select_channel_route_item(item_id: int) -> void:
 
 ## Apply None / New Channel / existing channel to the bound track.
 func _on_channel_route_selected(index: int) -> void:
-	if current_track == null or current_project == null or channel_route_option == null:
+	if current_track == null or current_project == null:
 		return
 	var item_id := channel_route_option.get_item_id(index)
 	if item_id == ROUTE_NEW:

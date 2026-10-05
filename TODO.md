@@ -152,25 +152,6 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [ ] Drum view: notes are hard to select. Draw/insert them as long as the smallest snap interval at the current zoom. Add a toggle at the bottom of the editor for this behavior; the inverted case makes them as small as the smallest snap interval (clarify: the toggle off may mean the note's actual length)
 - [ ] Bug: velocity of new notes is wrong. New notes should inherit the last velocity used, or the velocity of the last clicked note
 
-#### Multi track editing
-
-- [ ] Improve design of the track list. active/selected should use white border, to be cohesive with arranger's trackitem and mixer's mixerchannel styling.
-- [ ] tracks in track list should be ordered the same as the timeline
-- [ ] by default, the track list should show all enabled+visible (when enable/visibility is implemented) tracks
-- [ ] tracks could have a checkbox to show/hide their notes
-- [ ] by default, show all tracks
-
-- [x?] Note editor: dragging the end of a note to adjust its length seems to floor the drag instead of rounding it, so it doesn't "feel right". `_snapped_duration` now rounds to the nearest grid step (still min one step).
-- [x?] Piano roll: black keys use a white background, so the note-hover overlay is barely visible on them. `VPiano` now darkens light keys on hover instead of lightening them.
-- [x?] Bug: the blue vertical range line at the start of the clip renders off-screen. The markers track content X correctly (projected note position == marker X), but `MidiEditorOverlays` had no clipping, so a marker scrolled left of the note area painted over the piano keys / outside the editor. Fixed with `clip_contents = true` in `_ready()`.
-  - bug still present: issue is that it isn't visible. maybe fix is draw +1 px to the right?
-  - Markers are now inset by half their width (start drawn right of the edge, end left of it), so a start marker at x = 0 is no longer half-clipped.
-
-- [ ] Consider Modifier+right-click to open context menu in NoteEditor?
-- [x?] should probably add a gray line between E/F and between B/C
-- [x?] Clip editor track list: every instrument track is listed with an eye and a pencil toggle (drag to paint, Shift+click solo, revert), hidden tracks aren't drawn, clicking another editable track's note switches to that track, right-click erases across tracks, and the header shows the clip name in clip mode with an icon mode toggle. Spec `docs/specs/007-clip-editor-track-list/`. Implemented and covered headless; needs the live pass (T-012 in tasks.md)
-- [x?] Clip editor track-mode performance (`docs/clip-editor-performance-plan.md`, phases 1 and 2): scrolling no longer repositions notes, and only the active track has note nodes; the other visible tracks are drawn and hit-tested from data by `ContextNotesLayer`. Headless benchmark: binding 100 tracks x 500 notes went from 10.9 s to 0.14 s. Needs a live pass: drawing of the dimmed tracks, clicking one to switch, right-click erase across tracks, Drum View with many tracks, and the hand cursor over other tracks' notes
-
 ### Devices
 
 - [/] Drum synths: four built-in drum instruments (Kick, Snare, Hat, Clap) sharing `Engine/src/audio/devices/drums/` and the `audio/dsp/` drum blocks. Spec `docs/specs/013-drum-synths/`
