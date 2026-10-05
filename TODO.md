@@ -106,7 +106,7 @@ To make it possible to bring them back, two toggles at the bottom of the Arrange
 - [x] Bug: changing track color does not update the timeline background color. Not a bug: the lane tint does follow the color; it is just faint (`TimelineTrack` keeps the track color's hue/saturation at `bg_color` brightness and 50% alpha).
 - [x] Bug: timeline horizontal zoom jitter when zooming in at a > 0 horizontal scroll: the scroll position jitters when zooming in
 - [x] Bug: timeline horizontal zoom did nothing within a beat of scroll 0 (regression from the jitter fix: the origin lock never set a zoom anchor, so the zoom was never applied). The origin lock is now an anchor at beat 0 / x 0.
-- [x?] MIDI editor scroll/zoom robustness: middle-mouse pan and wheel scroll clamp their targets (no more overscroll dead zone); Ctrl+wheel vertical zoom adjusts the scrollbar max before scrolling so it no longer snaps when zooming in; Shift+wheel horizontal zoom uses the arranger's cursor-anchor approach (no jitter, locks to origin near 0).
+- [x] MIDI editor scroll/zoom robustness: middle-mouse pan and wheel scroll clamp their targets (no more overscroll dead zone); Ctrl+wheel vertical zoom adjusts the scrollbar max before scrolling so it no longer snaps when zooming in; Shift+wheel horizontal zoom uses the arranger's cursor-anchor approach (no jitter, locks to origin near 0).
   - [x] Markers also jitter their lengths and their labels
 
 ### Clips
