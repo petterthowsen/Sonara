@@ -102,6 +102,13 @@ var target_scroll_horizontal: float = 0.0
 var target_pixels_per_beat: float = 0.0  # Horizontal zoom target
 var target_track_height: float = 0.0     # Vertical zoom target (average height)
 
+# Horizontal zoom anchor: the (fractional) beat under the cursor stays at _zoom_anchor_x while
+# zooming. The scroll is derived from the current zoom every frame instead of being lerped
+# separately, otherwise scroll and zoom disagree mid-animation and the view jitters.
+var _zoom_anchor_active: bool = false
+var _zoom_anchor_beat: float = 0.0
+var _zoom_anchor_x: float = 0.0
+
 # Active zoom flags (to prevent interference with manual resizing)
 var _is_zooming_vertically: bool = false
 
@@ -289,19 +296,26 @@ func _process(delta: float) -> void:
 		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
 		_last_applied_v_scroll = v_scroll.scroll_vertical
 
-		# Lerp horizontal scroll
-		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
-		if abs(new_h_scroll - target_scroll_horizontal) < 0.5:
-			new_h_scroll = target_scroll_horizontal
-		var rounded_h_scroll = roundi(new_h_scroll)
-		h_scroll.scroll_horizontal = rounded_h_scroll
-		grid_helper.scroll_position = rounded_h_scroll
-
-		# Lerp horizontal zoom (pixels per beat)
+		# Lerp horizontal zoom (pixels per beat). While a zoom is running the scroll follows
+		# the anchor; otherwise it lerps toward its target.
 		var current_ppb = grid_helper.pixels_per_beat
-		var new_ppb = lerp(current_ppb, target_pixels_per_beat, lerp_factor)
-		if abs(new_ppb - target_pixels_per_beat) > 0.01:  # Only update if difference is significant
+		if _zoom_anchor_active:
+			var new_ppb = lerp(current_ppb, target_pixels_per_beat, lerp_factor)
+			if abs(new_ppb - target_pixels_per_beat) <= 0.01:
+				new_ppb = target_pixels_per_beat
+				_zoom_anchor_active = false
 			timeline.set_zoom(new_ppb)
+			var anchored_scroll := roundi(maxf(0.0, _zoom_anchor_beat * new_ppb - _zoom_anchor_x))
+			h_scroll.scroll_horizontal = anchored_scroll
+			grid_helper.scroll_position = anchored_scroll
+			target_scroll_horizontal = anchored_scroll
+		else:
+			var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
+			if abs(new_h_scroll - target_scroll_horizontal) < 0.5:
+				new_h_scroll = target_scroll_horizontal
+			var rounded_h_scroll = roundi(new_h_scroll)
+			h_scroll.scroll_horizontal = rounded_h_scroll
+			grid_helper.scroll_position = rounded_h_scroll
 
 		# Lerp vertical zoom (track heights) - only if actively zooming
 		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
@@ -328,12 +342,14 @@ func _process(delta: float) -> void:
 		# Instant scrolling/zooming when smoothing is disabled
 		v_scroll.scroll_vertical = int(target_scroll_vertical)
 		_last_applied_v_scroll = v_scroll.scroll_vertical
-		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-		grid_helper.scroll_position = roundi(target_scroll_horizontal)
-
 		# Instant zoom
 		if abs(grid_helper.pixels_per_beat - target_pixels_per_beat) > 0.01:
 			timeline.set_zoom(target_pixels_per_beat)
+		if _zoom_anchor_active:
+			target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * grid_helper.pixels_per_beat - _zoom_anchor_x)
+			_zoom_anchor_active = false
+		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
+		grid_helper.scroll_position = roundi(target_scroll_horizontal)
 
 		# Instant vertical zoom - only if actively zooming
 		if _is_zooming_vertically and current_project and current_project.tracks.size() > 0:
@@ -382,25 +398,23 @@ func _on_scroll_container_input(event: InputEvent, scroll_container: ScrollConta
 				var zoom_pixel_x = h_scroll.scroll_horizontal + zoom_point_x
 
 				# Check if scroll position is close to origin (within 1 beat worth of pixels)
-				var one_beat_pixels = grid_helper.pixels_per_beat
-				var near_origin = h_scroll.scroll_horizontal < one_beat_pixels
+				var near_origin = h_scroll.scroll_horizontal < grid_helper.pixels_per_beat
 
 				# Calculate target zoom using zoom_sensitivity_h
 				var zoom_factor = zoom_sensitivity_h if is_scroll_up else (1.0 / zoom_sensitivity_h)
 				target_pixels_per_beat = clamp(grid_helper.pixels_per_beat * zoom_factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
 
-				# Adjust scroll position to keep content under cursor
-				# Note: scroll adjustment needs to account for the eventual zoom change
-				# For now, we adjust based on target zoom to prevent drift
-				if near_origin:
+				if near_origin and not _zoom_anchor_active:
 					# Lock to origin - keep scroll at 0
 					target_scroll_horizontal = 0
 				else:
-					# Calculate expected position after zoom
-					var zoom_ratio = target_pixels_per_beat / grid_helper.pixels_per_beat
-					var new_content_x = zoom_pixel_x * zoom_ratio
-					var new_scroll = new_content_x - zoom_point_x
-					target_scroll_horizontal = max(0.0, new_scroll)
+					# Keep the anchor beat while a zoom is running (re-deriving it from the
+					# half-animated view would compound rounding); start a new one otherwise.
+					if not _zoom_anchor_active or absf(_zoom_anchor_x - zoom_point_x) > 1.0:
+						_zoom_anchor_beat = zoom_pixel_x / grid_helper.pixels_per_beat
+						_zoom_anchor_x = zoom_point_x
+					_zoom_anchor_active = true
+					target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * target_pixels_per_beat - _zoom_anchor_x)
 
 				# Update ruler when zoom changes
 				_update_ruler()
