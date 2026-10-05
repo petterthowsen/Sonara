@@ -2,9 +2,9 @@
 
 [ext_resource type="Script" uid="uid://d27gntn05n6fw" path="res://devices/device_lane/DeviceLane.gd" id="1_2f6nw"]
 [ext_resource type="Script" uid="uid://vmf6gxbc760o" path="res://components/VerticalLabel.gd" id="2_oh1x1"]
-[ext_resource type="Script" path="res://devices/device_lane/DeviceRow.gd" id="4_row"]
 [ext_resource type="PackedScene" uid="uid://brth8uue4ow8b" path="res://devices/device_lane/DevicePanel.tscn" id="3_m4540"]
 [ext_resource type="PackedScene" uid="uid://boiwqcg0flbqw" path="res://devices/DeviceContextMenu.tscn" id="3_oh1x1"]
+[ext_resource type="Script" uid="uid://5pl22hq43jly" path="res://devices/device_lane/DeviceRow.gd" id="4_row"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ktvss"]
 bg_color = Color(0.34023225, 0.68359375, 0.28038025, 1)
@@ -13,8 +13,10 @@ corner_radius_bottom_left = 3
 
 [node name="DeviceLane" type="HBoxContainer" unique_id=680950558]
 custom_minimum_size = Vector2(0, 76.585)
-offset_right = 394.0
-offset_bottom = 208.0
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 370.0
+grow_horizontal = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 0
 script = ExtResource("1_2f6nw")
@@ -38,14 +40,14 @@ font_size = 20
 [node name="Content" type="MarginContainer" parent="." unique_id=824630520]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 4
-theme_override_constants/margin_right = 8
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 0
 theme_override_constants/margin_bottom = 0
 
 [node name="ScrollContainer" type="ScrollContainer" parent="Content" unique_id=1650099144]
 layout_mode = 2
-theme_override_constants/scrollbar_h_separation = 8
+theme_override_constants/scrollbar_h_separation = 6
 theme_override_constants/scrollbar_v_separation = 8
 follow_focus = true
 horizontal_scroll_mode = 2
@@ -55,7 +57,7 @@ vertical_scroll_mode = 0
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-theme_override_constants/separation = 16
+theme_override_constants/separation = 24
 script = ExtResource("4_row")
 
 [node name="Device" parent="Content/ScrollContainer/Devices" unique_id=1637582136 instance=ExtResource("3_m4540")]
