@@ -111,6 +111,9 @@ var _zoom_anchor_x: float = 0.0
 
 # Active zoom flags (to prevent interference with manual resizing)
 var _is_zooming_vertically: bool = false
+var _vzoom_anchor_units: float = 0.0   # content y under the cursor, in average-track-heights
+var _last_vzoom_target: float = -1.0
+var _vzoom_anchor_vy: float = 0.0      # that point's y inside the viewport
 
 ## Ctrl+A twice within this window promotes the selection from the active track to all tracks.
 const SELECT_ALL_DOUBLE_TAP_MS := 400
@@ -293,7 +296,10 @@ func _process(delta: float) -> void:
 		var max_v_scroll := maxf(0.0, vbar.max_value - vbar.page)
 		if target_scroll_vertical > max_v_scroll:
 			target_scroll_vertical = max_v_scroll
-		v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
+		# During a height zoom the scroll is set in lockstep with the heights below; lerping it
+		# separately lags behind the content and jitters.
+		if not _is_zooming_vertically:
+			v_scroll.scroll_vertical = int(lerp(float(v_scroll.scroll_vertical), target_scroll_vertical, lerp_factor))
 		_last_applied_v_scroll = v_scroll.scroll_vertical
 
 		# Lerp horizontal zoom (pixels per beat). While a zoom is running the scroll follows
@@ -335,9 +341,11 @@ func _process(delta: float) -> void:
 			if abs(new_avg_height - target_track_height) < 1.0:
 				_apply_track_heights(int(target_track_height))
 				_is_zooming_vertically = false
+				_apply_vzoom_scroll(target_track_height)
 			else:
 				var step: int = ceili(new_avg_height) if target_track_height > current_avg_height else floori(new_avg_height)
 				_apply_track_heights(step)
+				_apply_vzoom_scroll(float(step))
 				# Stop if layout floors (TrackItem content minimums) kept heights from moving.
 				if absf(_average_track_height() - current_avg_height) < 0.01:
 					_is_zooming_vertically = false
@@ -599,26 +607,49 @@ func _zoom_tracks_vertically(zoom_in: bool) -> void:
 	var new_height = avg_height * zoom_factor
 
 	# Get minimum height from TrackItem (check first available TrackItem)
+	# Use the header's real content floor (it grows when a narrow tracks panel wraps the
+	# controls); get_minimum_size() would include the current height and never shrink.
 	var min_height = 30.0  # Fallback minimum
 	if track_list:
 		for child in track_list.get_children():
 			if child is TrackItem:
-				min_height = max(min_height, child.get_minimum_size().y)
-				break
+				min_height = max(min_height, float(child._content_min_height()))
 
 	# Clamp to reasonable bounds and set as target
 	# Heights are integers, so keep the target integral: the lerp can then land on it exactly.
 	target_track_height = roundf(clamp(new_height, min_height, 200.0))
 
+	# Already at the limit (or the step rounds to no change): nothing to zoom, so don't
+	# run the scroll compensation or it would shift the view for no height change.
+	if absf(target_track_height - avg_height) < 0.5:
+		return
+	# A zoom is already heading for this exact target (e.g. held at the max): leave it alone.
+	if _is_zooming_vertically and is_equal_approx(target_track_height, _last_vzoom_target):
+		return
+	_last_vzoom_target = target_track_height
+
 	if avg_height > 0.0 and v_scroll:
-		var applied_height := target_track_height
-		var viewport_y := clampf(v_scroll.get_local_mouse_position().y, 0.0, v_scroll.size.y)
-		var zoom_point_y := float(v_scroll.scroll_vertical) + viewport_y
-		var zoom_ratio: float = applied_height / avg_height
-		target_scroll_vertical = maxf(0.0, zoom_point_y * zoom_ratio - viewport_y)
+		# Anchor the point under the cursor once per zoom gesture, in units of track height, so
+		# repeated wheel ticks mid-lerp don't compound against a lagging scroll position.
+		if not _is_zooming_vertically:
+			_vzoom_anchor_vy = clampf(v_scroll.get_local_mouse_position().y, 0.0, v_scroll.size.y)
+			_vzoom_anchor_units = (float(v_scroll.scroll_vertical) + _vzoom_anchor_vy) / avg_height
+		target_scroll_vertical = maxf(0.0, _vzoom_anchor_units * target_track_height - _vzoom_anchor_vy)
 
 	# Enable vertical zoom interpolation
 	_is_zooming_vertically = true
+
+
+## Put the anchored point back under the cursor for the given height, in the same frame the
+## heights changed. Layout is forced first so the scroll range already covers the new content
+## (otherwise the ScrollContainer clamps the value and the view jitters).
+func _apply_vzoom_scroll(height: float) -> void:
+	var scroll := maxf(0.0, _vzoom_anchor_units * height - _vzoom_anchor_vy)
+	v_scroll.get_combined_minimum_size()
+	v_scroll.notification(Container.NOTIFICATION_SORT_CHILDREN)
+	v_scroll.scroll_vertical = roundi(scroll)
+	target_scroll_vertical = float(v_scroll.scroll_vertical)
+	_last_applied_v_scroll = v_scroll.scroll_vertical
 
 
 func _average_track_height() -> float:
