@@ -1,6 +1,7 @@
-## One lane of the value pane: a header column (name, scale, menu, close) and a stem area.
+## One lane of the value pane: a resize grip on top, then a header column (name, scale, menu,
+## close) and a stem area.
 ## Built from ValueLane.tscn.
-class_name ValueLane extends VBoxContainer
+class_name ValueLane extends PanelContainer
 
 signal close_requested(lane: ValueLane)
 ## The lane's height changed (the resize grip), so the pane persists it.
@@ -14,19 +15,25 @@ const MENU_SET := 0
 const MENU_RANDOMIZE := 1
 const MENU_SCALE := 2
 
-@onready var row: HBoxContainer = $Row
-@onready var header: PanelContainer = $Row/LaneHeader
-@onready var name_label: Label = $Row/LaneHeader/VBox/NameLabel
-@onready var max_label: Label = $Row/LaneHeader/VBox/MaxLabel
-@onready var min_label: Label = $Row/LaneHeader/VBox/MinLabel
-@onready var menu_button: MenuButton = $Row/LaneHeader/VBox/HBox/MenuButton
-@onready var close_button: Button = $Row/LaneHeader/VBox/HBox/CloseButton
-@onready var stem_area: ValueLaneStemArea = $Row/StemArea
-@onready var resize_grip: Control = $ResizeGrip
+@onready var row: HBoxContainer = $VBox/Row
+@onready var header: PanelContainer = $VBox/Row/LaneHeader
+@onready var name_label: Label = $VBox/Row/LaneHeader/VBox/NameLabel
+@onready var max_label: Label = $VBox/Row/LaneHeader/VBox/MaxLabel
+@onready var min_label: Label = $VBox/Row/LaneHeader/VBox/MinLabel
+@onready var menu_button: MenuButton = $VBox/Row/LaneHeader/VBox/HBox/MenuButton
+@onready var close_button: Button = $VBox/Row/LaneHeader/VBox/HBox/CloseButton
+@onready var stem_area: ValueLaneStemArea = $VBox/Row/StemArea
+@onready var resize_grip: Control = $VBox/ResizeGrip
 @onready var transform_dialog: NoteValueTransformDialog = $TransformDialog
 
 var descriptor: NoteValueDescriptor = null
 var midi_editor: MidiEditor = null
+## The stored height. The top lane fills the pane, so its row follows the editor split and
+## the pane writes the result back here.
+var _height := 96.0
+## The top lane: expands to whatever height the pane gets from the editor split, which also
+## stands in for its grip.
+var fills := false
 var _grip_dragging := false
 var _grip_press_y := 0.0
 var _grip_press_height := 0.0
@@ -65,11 +72,32 @@ func set_header_width(w: float) -> void:
 
 
 func lane_height() -> float:
-	return row.custom_minimum_size.y
+	return _height
+
+
+## The smallest the row can be: never below what the header column needs, or the row would
+## be taller than its stored height and a grip drag would start from the wrong place.
+func min_row_height() -> float:
+	return maxf(MIN_HEIGHT, header.get_combined_minimum_size().y)
 
 
 func set_lane_height(h: float) -> void:
-	row.custom_minimum_size.y = clampf(h, MIN_HEIGHT, MAX_HEIGHT)
+	_height = clampf(h, min_row_height(), MAX_HEIGHT)
+	_apply_height()
+
+
+func set_fills(on: bool) -> void:
+	fills = on
+	var flags := Control.SIZE_EXPAND_FILL if on else Control.SIZE_FILL
+	size_flags_vertical = flags
+	$VBox.size_flags_vertical = flags
+	row.size_flags_vertical = flags
+	resize_grip.visible = not on
+	_apply_height()
+
+
+func _apply_height() -> void:
+	row.custom_minimum_size.y = min_row_height() if fills else _height
 
 
 func _refresh_header() -> void:
@@ -77,6 +105,7 @@ func _refresh_header() -> void:
 		return
 	var mode := NoteValueDescriptors.display_mode()
 	name_label.text = descriptor.display_name
+	name_label.tooltip_text = descriptor.display_name
 	max_label.text = descriptor.format_extreme(descriptor.max_value, mode)
 	min_label.text = descriptor.format_extreme(descriptor.min_value, mode)
 
@@ -132,10 +161,12 @@ func _on_grip_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_grip_dragging = event.pressed
 		_grip_press_y = event.global_position.y
-		_grip_press_height = lane_height()
+		_grip_press_height = row.size.y
 		if not event.pressed:
 			height_changed.emit()
 		accept_event()
 	elif event is InputEventMouseMotion and _grip_dragging:
-		set_lane_height(_grip_press_height + event.global_position.y - _grip_press_y)
+		# The grip is the lane's top edge and the lanes sit at the bottom of the pane, so
+		# dragging up grows the lane and the edge stays under the pointer.
+		set_lane_height(_grip_press_height - (event.global_position.y - _grip_press_y))
 		accept_event()

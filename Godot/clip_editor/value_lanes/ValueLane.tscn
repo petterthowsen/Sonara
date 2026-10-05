@@ -4,76 +4,106 @@
 [ext_resource type="Script" uid="uid://s72bkedrvd5c" path="res://clip_editor/value_lanes/ValueLaneStemArea.gd" id="2_so2cf"]
 [ext_resource type="PackedScene" uid="uid://dprtnv5sqv7i0" path="res://clip_editor/value_lanes/NoteValueTransformDialog.tscn" id="3_so2cf"]
 
-[node name="ValueLane" type="VBoxContainer" unique_id=956966196]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_so2cf"]
+content_margin_right = 3.0
+bg_color = Color(0.1254902, 0.1254902, 0.16470589, 0.3529412)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_grip"]
+color = Color(0.3032328, 0.30323285, 0.30323276, 1)
+thickness = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4kjny"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
+border_width_right = 1
+border_color = Color(0.3032328, 0.30323285, 0.30323276, 1)
+corner_detail = 5
+
+[node name="ValueLane" type="PanelContainer" unique_id=1742175985]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_right = -1152.0
-offset_bottom = -786.0
+offset_bottom = -894.0
 grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 3
-size_flags_vertical = 3
-theme_override_constants/separation = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_so2cf")
 script = ExtResource("1_pbbm6")
 
-[node name="Row" type="HBoxContainer" parent="." unique_id=1830790264]
-custom_minimum_size = Vector2(0, 96)
+[node name="VBox" type="VBoxContainer" parent="." unique_id=1633571060]
 layout_mode = 2
-size_flags_vertical = 3
 theme_override_constants/separation = 0
 
-[node name="LaneHeader" type="PanelContainer" parent="Row" unique_id=817795265]
+[node name="ResizeGrip" type="Panel" parent="VBox" unique_id=1127924102]
+custom_minimum_size = Vector2(0, 1.7)
+layout_mode = 2
+mouse_default_cursor_shape = 9
+theme_override_styles/panel = SubResource("StyleBoxLine_grip")
+
+[node name="Row" type="HBoxContainer" parent="VBox" unique_id=1830790264]
+custom_minimum_size = Vector2(0, 96)
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="LaneHeader" type="PanelContainer" parent="VBox/Row" unique_id=817795265]
 custom_minimum_size = Vector2(60, 0)
 layout_mode = 2
 theme_type_variation = &"PrimaryPanel"
+theme_override_styles/panel = SubResource("StyleBoxFlat_4kjny")
 
-[node name="VBox" type="VBoxContainer" parent="Row/LaneHeader" unique_id=1372186195]
+[node name="VBox" type="VBoxContainer" parent="VBox/Row/LaneHeader" unique_id=1372186195]
 layout_mode = 2
 
-[node name="NameLabel" type="Label" parent="Row/LaneHeader/VBox" unique_id=699486975]
+[node name="NameLabel" type="Label" parent="VBox/Row/LaneHeader/VBox" unique_id=699486975]
 layout_mode = 2
+mouse_filter = 1
 text = "Velocity"
+clip_text = true
+text_overrun_behavior = 3
 
-[node name="MaxLabel" type="Label" parent="Row/LaneHeader/VBox" unique_id=1701807824]
+[node name="MaxLabel" type="Label" parent="VBox/Row/LaneHeader/VBox" unique_id=1701807824]
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
 text = "127"
 
-[node name="Spacer" type="Control" parent="Row/LaneHeader/VBox" unique_id=1447697572]
+[node name="Spacer" type="Control" parent="VBox/Row/LaneHeader/VBox" unique_id=1447697572]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="MinLabel" type="Label" parent="Row/LaneHeader/VBox" unique_id=511572988]
+[node name="MinLabel" type="Label" parent="VBox/Row/LaneHeader/VBox" unique_id=511572988]
 layout_mode = 2
 theme_override_font_sizes/font_size = 10
 text = "1"
 
-[node name="HBox" type="HBoxContainer" parent="Row/LaneHeader/VBox" unique_id=801541188]
+[node name="HBox" type="HBoxContainer" parent="VBox/Row/LaneHeader/VBox" unique_id=801541188]
 layout_mode = 2
 
-[node name="MenuButton" type="MenuButton" parent="Row/LaneHeader/VBox/HBox" unique_id=107321776]
+[node name="MenuButton" type="MenuButton" parent="VBox/Row/LaneHeader/VBox/HBox" unique_id=107321776]
 layout_mode = 2
 tooltip_text = "Set, Randomize or Scale the values"
 text = "⋮"
 
-[node name="CloseButton" type="Button" parent="Row/LaneHeader/VBox/HBox" unique_id=439659434]
+[node name="CloseButton" type="Button" parent="VBox/Row/LaneHeader/VBox/HBox" unique_id=439659434]
 layout_mode = 2
 tooltip_text = "Close this lane"
 text = "×"
 flat = true
 
-[node name="StemArea" type="Panel" parent="Row" unique_id=290020508]
+[node name="StemArea" type="Control" parent="VBox/Row" unique_id=1490744256]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("2_so2cf")
 
-[node name="ResizeGrip" type="Control" parent="." unique_id=1127924102]
-custom_minimum_size = Vector2(0, 4)
-layout_mode = 2
-mouse_default_cursor_shape = 9
-
 [node name="TransformDialog" parent="." unique_id=1767401102 instance=ExtResource("3_so2cf")]
 oversampling_override = 1.0
-size = Vector2i(276, 110)
+size = Vector2i(276, 115)

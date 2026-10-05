@@ -32,6 +32,10 @@ var _selected_mod_id := -1
 ## Detail controls by parameter id (knobs, dropdowns, toggles), refreshed from the model.
 var _controls: Dictionary = {}
 var _detail_title: Label = null
+## Per-parameter controls (caption + control) and the columns they are flowed into.
+var _param_boxes: Array[Control] = []
+var _param_columns: HBoxContainer = null
+var _laying_out := false
 var _envelope: Envelope = null
 var _envelope_control: EnvelopeControl = null
 ## Modulator the detail column was built for; -1 when it holds no controls to update in place.
@@ -125,10 +129,12 @@ func _build_structure() -> void:
 	var detail_scroll := _detail_scroll
 	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_scroll.custom_minimum_size.x = 140
-	# Never scrolls: with both modes disabled the container's minimum size follows its content, so the
-	# panel grows to fit however many options the modulator has.
+	# Width follows the content (horizontal disabled). Height must not: it is the budget the options
+	# are flowed into columns against (see _layout_param_columns), so the pane grows wider, not taller.
+	# SHOW_NEVER keeps the minimum height at 0 without ever showing a scrollbar.
 	detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	detail_scroll.resized.connect(_layout_param_columns)
 	_detail = VBoxContainer.new()
 	_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_detail.add_theme_constant_override("separation", 6)
@@ -256,6 +262,8 @@ func _clear_detail() -> void:
 	_envelope = null
 	_envelope_control = null
 	_detail_title = null
+	_param_columns = null
+	_param_boxes.clear()
 	if _detail == null:
 		return
 	for child in _detail.get_children():
@@ -294,8 +302,12 @@ func _refresh_detail() -> void:
 	if kind == "adsr" or kind == "ad":
 		_build_envelope_detail(mod)
 	else:
+		_param_columns = HBoxContainer.new()
+		_param_columns.add_theme_constant_override("separation", 10)
+		_detail.add_child(_param_columns)
 		for param in _ordered_params(kind, mod.get_parameters()):
 			_build_param_control(mod, param)
+		_layout_param_columns.call_deferred()
 		if _controls.is_empty():
 			var none := Label.new()
 			none.text = "No settings"
@@ -356,8 +368,38 @@ func _build_param_control(mod: Modulator, param: DeviceParameter) -> void:
 		knob.value_changed.connect(func(v: float): mod.set_param(param.id, v))
 		_controls[param.id] = knob
 		column.add_child(knob)
-	_detail.add_child(column)
+	_param_boxes.append(column)
 	_refresh_param_control(mod, param)
+
+
+## Flow the parameter controls into columns that fit the pane's height, so a modulator with many
+## options (LFO) widens the pane instead of overflowing it.
+func _layout_param_columns() -> void:
+	if _laying_out or _param_columns == null or not is_instance_valid(_param_columns) \
+			or _param_boxes.is_empty():
+		return
+	_laying_out = true
+	for column in _param_columns.get_children():
+		for box in column.get_children():
+			column.remove_child(box)
+		_param_columns.remove_child(column)
+		column.free()
+	var budget := _detail_scroll.size.y - _detail_title.get_combined_minimum_size().y \
+			- float(_detail.get_theme_constant("separation"))
+	if _detail_scroll.size.y <= 0.0:
+		budget = INF
+	var column: VBoxContainer = null
+	var used := 0.0
+	for box in _param_boxes:
+		var h := box.get_combined_minimum_size().y
+		if column == null or (used + h > budget and column.get_child_count() > 0):
+			column = VBoxContainer.new()
+			column.add_theme_constant_override("separation", 6)
+			_param_columns.add_child(column)
+			used = 0.0
+		column.add_child(box)
+		used += h + 6.0
+	_laying_out = false
 
 
 func _refresh_param_control(mod: Modulator, param: DeviceParameter) -> void:

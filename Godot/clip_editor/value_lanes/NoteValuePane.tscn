@@ -2,35 +2,62 @@
 
 [ext_resource type="Script" uid="uid://uwd3tg2p4umu" path="res://clip_editor/value_lanes/NoteValuePane.gd" id="1_ir1r0"]
 [ext_resource type="PackedScene" uid="uid://dqibxyk3org87" path="res://clip_editor/value_lanes/ValueLane.tscn" id="2_v2x1a"]
+[ext_resource type="Texture2D" uid="uid://cbhc861t3h6le" path="res://assets/icons/plus.svg" id="2_ybfe6"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_v2x1a"]
+bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3019608, 0.3019608, 0.3019608, 1)
+corner_detail = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ybfe6"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
+border_width_top = 2
+border_width_right = 2
+border_color = Color(0.3019608, 0.3019608, 0.3019608, 1)
+corner_detail = 1
 
 [node name="NoteValuePane" type="PanelContainer" unique_id=2056048388]
 offset_right = 384.0
 offset_bottom = 91.0
-theme_type_variation = &"PrimaryPanel"
+theme_override_styles/panel = SubResource("StyleBoxFlat_v2x1a")
 script = ExtResource("1_ir1r0")
 
-[node name="VBox" type="VBoxContainer" parent="." unique_id=752995278]
+[node name="HBox" type="HBoxContainer" parent="." unique_id=752995278]
 layout_mode = 2
-
-[node name="Header" type="PanelContainer" parent="VBox" unique_id=1246728355]
-layout_mode = 2
-
-[node name="HBox" type="HBoxContainer" parent="VBox/Header" unique_id=1033847161]
-layout_mode = 2
-
-[node name="HeaderSpacer" type="Control" parent="VBox/Header/HBox" unique_id=708091611]
-custom_minimum_size = Vector2(60, 0)
-layout_mode = 2
-
-[node name="AddLaneButton" type="MenuButton" parent="VBox/Header/HBox" unique_id=980673417]
-layout_mode = 2
-tooltip_text = "Add a value lane"
-text = "+ Lane"
-
-[node name="Lanes" type="VBoxContainer" parent="VBox" unique_id=446019401]
-layout_mode = 2
-size_flags_vertical = 3
 theme_override_constants/separation = 0
 
-[node name="ValueLane" parent="VBox/Lanes" unique_id=956966196 instance=ExtResource("2_v2x1a")]
+[node name="Header" type="PanelContainer" parent="HBox" unique_id=120994377]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_ybfe6")
+
+[node name="VBox" type="VBoxContainer" parent="HBox/Header" unique_id=1246728355]
+layout_mode = 2
+
+[node name="AddLaneButton" type="MenuButton" parent="HBox/Header/VBox" unique_id=980673417]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+tooltip_text = "Add a value lane"
+icon = ExtResource("2_ybfe6")
+icon_alignment = 1
+expand_icon = true
+
+[node name="Lanes" type="VBoxContainer" parent="HBox" unique_id=446019401]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 0
+alignment = 2
+
+[node name="ValueLane" parent="HBox/Lanes" unique_id=956966196 instance=ExtResource("2_v2x1a")]
+layout_mode = 2
+
+[node name="ValueLane2" parent="HBox/Lanes" unique_id=952664301 instance=ExtResource("2_v2x1a")]
 layout_mode = 2

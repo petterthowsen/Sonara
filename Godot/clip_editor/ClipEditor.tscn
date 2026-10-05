@@ -45,6 +45,11 @@ corner_radius_top_right = 3
 corner_radius_bottom_right = 3
 corner_detail = 5
 
+[sub_resource type="ImageTexture" id="ImageTexture_splitgrab"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_splitbar"]
+bg_color = Color(0.3032328, 0.30323285, 0.30323276, 1)
+
 [sub_resource type="Gradient" id="Gradient_aar7r"]
 colors = PackedColorArray(1, 1, 1, 0, 1, 1, 1, 1)
 
@@ -170,6 +175,10 @@ script = ExtResource("2_q0vl8")
 [node name="EditorSplit" type="VSplitContainer" parent="HSplit/MainPanel/VBox" unique_id=1097190514]
 layout_mode = 2
 size_flags_vertical = 3
+theme_override_constants/separation = 2
+theme_override_constants/minimum_grab_thickness = 8
+theme_override_icons/grabber = SubResource("ImageTexture_splitgrab")
+theme_override_styles/split_bar_background = SubResource("StyleBoxFlat_splitbar")
 
 [node name="MidiEditor" type="ScrollContainer" parent="HSplit/MainPanel/VBox/EditorSplit" unique_id=700905690]
 layout_mode = 2

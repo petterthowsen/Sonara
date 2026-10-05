@@ -3,7 +3,7 @@
 ## gestures (paint, offset, scale, line, reset, exact value). The maths lives in
 ## ValueLaneEdits; the stems come from MidiEditor.value_stems(), so they sit exactly under
 ## the notes they belong to.
-class_name ValueLaneStemArea extends Panel
+class_name ValueLaneStemArea extends Control
 
 ## A gesture ended on `note` (it becomes the "last touched note" for new notes).
 signal note_touched(note: MidiNoteData)
@@ -38,18 +38,42 @@ var _clip_by_note: Dictionary = {}  # MidiNoteData -> Clip
 var _originals: Dictionary = {}  # MidiNoteData -> float
 ## Everything touched by the gesture, for the refresh and the engine sync on release.
 var _touched: Dictionary = {}  # MidiNoteData -> Clip
+## The stems a paint drag holds: they keep following the pointer's y wherever it goes until it
+## crosses another stem, which takes over.
+var _grabbed: Array[MidiNoteData] = []
 var _before: Dictionary = {}
 var _line_end := Vector2.ZERO
 var _moved := false
 var _hovered: MidiNoteData = null
 var _tooltip: ValueTooltip = null
 var _last_audition_velocity := -1
+## Mirrors the note area's playhead; drawn above the stems.
+var _playhead: TextureRect = null
 
 
 func _ready() -> void:
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_tooltip = ValueTooltip.attach(self)
+	_playhead = TextureRect.new()
+	_playhead.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_playhead.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_playhead.stretch_mode = TextureRect.STRETCH_SCALE
+	_playhead.visible = false
+	add_child(_playhead)
+
+
+## Follow the note area's playhead (it moves every frame during playback).
+func _process(_delta: float) -> void:
+	if midi_editor == null or _playhead == null:
+		return
+	var src: TextureRect = midi_editor.playhead
+	_playhead.visible = src.visible
+	if not src.visible:
+		return
+	_playhead.texture = src.texture
+	_playhead.position = Vector2(src.global_position.x - global_position.x, 0.0)
+	_playhead.size = Vector2(src.size.x, size.y)
 
 
 ## Follow `editor`: redraw whenever the notes, the selection, the zoom or the scroll change.
@@ -117,25 +141,67 @@ func _current_stems() -> Array[Dictionary]:
 func _draw() -> void:
 	if midi_editor == null or descriptor == null:
 		return
+	draw_rect(Rect2(Vector2.ZERO, size), midi_editor.note_lanes.note_lane_color_white)
+	_draw_grid()
+	# The hovered stem goes last, so the other stems of its chord don't cover it.
+	var hovered: Array[Dictionary] = []
 	for stem in _current_stems():
-		var x := stem_x(stem)
-		if x < -HEAD_SIZE or x > size.x + HEAD_SIZE:
-			continue
-		var nd: MidiNoteData = stem["note_data"]
-		var top := stem_top(descriptor.get_value(nd))
-		var color: Color = Utils.display_color(stem["color"])
-		var width := STEM_WIDTH
-		if stem["ghost"]:
-			color.a = 0.35
-		if stem["selected"]:
-			color = color.lightened(0.35)
-			width += 1.0
-		if nd == midi_editor.hovered_note_data:
-			color = Color.WHITE
-		draw_line(Vector2(x, size.y), Vector2(x, top), color, width)
-		draw_rect(Rect2(x - HEAD_SIZE * 0.5, top - HEAD_SIZE * 0.5, HEAD_SIZE, HEAD_SIZE), color)
+		if stem["note_data"] == midi_editor.hovered_note_data:
+			hovered.append(stem)
+		else:
+			_draw_stem(stem, false)
+	for stem in hovered:
+		_draw_stem(stem, true)
 	if _gesture == Gesture.LINE and _moved:
 		draw_line(_press_pos, _line_end, Color(1, 1, 1, 0.8), 1.5)
+
+
+func _draw_stem(stem: Dictionary, hovered: bool) -> void:
+	var x := stem_x(stem)
+	if x < 0.0 or x > size.x:
+		return
+	# A stem on the very edge (a note at tick 0) would be half clipped: nudge it inside.
+	var edge := HEAD_SIZE * 0.5
+	x = clampf(x, edge, size.x - edge)
+	var nd: MidiNoteData = stem["note_data"]
+	var top := stem_top(descriptor.get_value(nd))
+	var color: Color = Utils.display_color(stem["color"])
+	var width := STEM_WIDTH
+	if stem["ghost"]:
+		color.a = 0.35
+	if stem["selected"]:
+		color = color.lightened(0.35)
+		width += 1.0
+	if hovered:
+		color = Color.WHITE
+	draw_line(Vector2(x, size.y), Vector2(x, top), color, width)
+	draw_rect(Rect2(x - edge, top - edge, HEAD_SIZE, HEAD_SIZE), color)
+
+
+## The note area's grid lines, in its colours, behind the stems.
+func _draw_grid() -> void:
+	var gh := midi_editor.grid_helper
+	var renderer := midi_editor.grid_renderer
+	if gh == null or renderer == null or not renderer.visible:
+		return
+	var off := _origin_offset()
+	for line in gh.get_visible_grid_lines(-off, size.x - off):
+		var x: float = line.x + off
+		if x < 0.0 or x > size.x:
+			continue
+		match line.type:
+			GridHelper.GridLineType.BAR:
+				_draw_grid_line(x, GridRenderer.BAR_LINE_WIDTH, renderer.bar_line_color)
+			GridHelper.GridLineType.BEAT:
+				_draw_grid_line(x, GridRenderer.BEAT_LINE_WIDTH, renderer.beat_line_color)
+			GridHelper.GridLineType.SUBDIVISION:
+				_draw_grid_line(x, GridRenderer.SUBDIVISION_LINE_WIDTH, renderer.subdivision_line_color)
+
+
+## Same pixel-snapped line as GridRenderer._draw_grid_line.
+func _draw_grid_line(x: float, width: float, color: Color) -> void:
+	var left := roundf(x) - floorf(width * 0.5)
+	draw_rect(Rect2(left, 0.0, width, size.y), color, true, -1.0, false)
 
 
 # ============================================================================
@@ -163,14 +229,21 @@ func _chord_at(x0: float, x1: float) -> Array[MidiNoteData]:
 	return out
 
 
-## Note of the stem nearest x (within tolerance), or null.
-func _note_near(x: float) -> MidiNoteData:
-	var best: MidiNoteData = null
+## Note of the stem nearest `pos` x (within tolerance), or null. Of a chord's stems (the same
+## x), the one whose head is nearest `pos` y.
+func _note_near(pos: Vector2) -> MidiNoteData:
+	var stems := midi_editor.value_stems()
 	var best_d := CHORD_TOLERANCE + 0.001
-	for stem in midi_editor.value_stems():
-		var d := absf(stem_x(stem) - x)
-		if d < best_d:
-			best_d = d
+	for stem in stems:
+		best_d = minf(best_d, absf(stem_x(stem) - pos.x))
+	var best: MidiNoteData = null
+	var best_dy := INF
+	for stem in stems:
+		if absf(stem_x(stem) - pos.x) > best_d + 1.0:
+			continue
+		var dy := absf(stem_top(descriptor.get_value(stem["note_data"])) - pos.y)
+		if dy < best_dy:
+			best_dy = dy
 			best = stem["note_data"]
 	return best
 
@@ -212,6 +285,7 @@ func _begin(event: InputEventMouseButton) -> void:
 	_moved = false
 	_touched.clear()
 	_originals.clear()
+	_grabbed.clear()
 	_last_audition_velocity = -1
 	_fine.begin(event.position)
 	_last_point = event.position
@@ -285,7 +359,7 @@ func _notification(what: int) -> void:
 
 
 func _update_hover(pos: Vector2) -> void:
-	var nd := _note_near(pos.x)
+	var nd := _note_near(pos)
 	if nd != _hovered:
 		_hovered = nd
 		midi_editor.set_hovered_note(nd)
@@ -316,10 +390,19 @@ func _paint(from: Vector2, to: Vector2) -> void:
 	var p1 := Vector2(to.x, ValueLaneEdits.value_at_y(to.y, size.y, descriptor))
 	var lo := minf(from.x, to.x) - CHORD_TOLERANCE
 	var hi := maxf(from.x, to.x) + CHORD_TOLERANCE
+	var last_x := NAN
 	for stem in _stems:
 		var x := stem_x(stem)
 		if x >= lo and x <= hi:
 			_write_value(stem["note_data"], ValueLaneEdits.line_value(p0, p1, x, descriptor))
+			if is_nan(last_x) or absf(x - to.x) < absf(last_x - to.x):
+				last_x = x
+	# The stems crossed last (nearest the pointer) are held from now on, and the held ones
+	# follow the pointer even once it has left them.
+	if not is_nan(last_x):
+		_grabbed = _chord_at(last_x, last_x)
+	for nd in _grabbed:
+		_write_value(nd, p1.y)
 
 
 func _apply_offset(dy: float) -> void:
@@ -391,6 +474,7 @@ func _commit() -> void:
 	ClipNotesStateCommand.commit_many(HISTORY_NAME % descriptor.display_name, _before)
 	_before = {}
 	_stems = []
+	_grabbed.clear()
 	_clip_by_note.clear()
 	_touched.clear()
 	_originals.clear()

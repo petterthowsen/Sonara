@@ -287,9 +287,12 @@ size_flags_vertical = 3
 script = ExtResource("8_hi76l")
 
 [node name="Inspector" type="PanelContainer" parent="VBoxContainer/Middle/LeftRightSplit/LeftCenterSplit/LeftDock" unique_id=938710415]
-layout_mode = 0
-offset_right = 103.0
-offset_bottom = 890.0
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 size_flags_horizontal = 3
 theme_type_variation = &"PrimaryPanel"
 
@@ -410,12 +413,7 @@ theme_type_variation = &"PrimaryPanel"
 layout_mode = 2
 
 [node name="AssistantPanel" parent="VBoxContainer/Middle/LeftRightSplit/RightDock" unique_id=1299192409 instance=ExtResource("12_cnodj")]
-layout_mode = 0
-anchors_preset = 0
-anchor_right = 0.0
-anchor_bottom = 0.0
-grow_horizontal = 1
-grow_vertical = 1
+layout_mode = 1
 
 [node name="Bottom" type="VBoxContainer" parent="VBoxContainer" unique_id=365378792]
 layout_mode = 2

@@ -1,5 +1,7 @@
 ## The strip below the note area that holds the value lanes. Which lanes are open, and their
 ## heights, are an editor preference (config `clip_editor/value_lanes`), not project data.
+## The pane's height comes from the editor split above it: the top lane fills it (the split
+## is that lane's grip), the other lanes keep their own heights.
 class_name NoteValuePane extends PanelContainer
 
 const CONFIG_KEY := "clip_editor/value_lanes"
@@ -9,11 +11,12 @@ const LANE_SCENE := preload("res://clip_editor/value_lanes/ValueLane.tscn")
 ## Emitted when a lane was touched by an edit gesture (the last touched note).
 signal note_touched(note: MidiNoteData)
 
-@onready var header_spacer: Control = $VBox/Header/HBox/HeaderSpacer
-@onready var add_lane_button: MenuButton = $VBox/Header/HBox/AddLaneButton
-@onready var lanes_box: VBoxContainer = $VBox/Lanes
+@onready var add_lane_button: MenuButton = $HBox/Header/VBox/AddLaneButton
+@onready var lanes_box: VBoxContainer = $HBox/Lanes
 
 var midi_editor: MidiEditor = null
+## The editor split this pane sits at the bottom of (null when used on its own).
+var _split: SplitContainer = null
 var lanes: Array[ValueLane] = []
 var _loading := false
 
@@ -22,19 +25,32 @@ func _ready() -> void:
 	add_lane_button.get_popup().id_pressed.connect(_on_add_lane_id)
 	add_lane_button.about_to_popup.connect(_rebuild_add_menu)
 	_rebuild_add_menu()
-	
+	lanes_box.sort_children.connect(_align_lanes)
+	visibility_changed.connect(_align_lanes)
+	visibility_changed.connect(func(): _sync_split.call_deferred())
+	# A lane below the top one grew or shrank (its grip), or one was added or removed.
+	minimum_size_changed.connect(func(): _sync_split.call_deferred())
+
 	# clear lanes in the scene
 	for child in lanes_box.get_children():
 		if child is ValueLane:
+			lanes_box.remove_child(child)  # now, or it holds the pane's height for a frame
 			child.queue_free()
 
 
 ## Follow `editor` and restore the persisted lanes. Called once by ClipEditor.
 func bind(editor: MidiEditor) -> void:
 	midi_editor = editor
-	editor.key_column_width_changed.connect(_on_key_column_width_changed)
-	_on_key_column_width_changed(editor.key_column_width())
+	_split = get_parent() as SplitContainer
+	if _split:
+		_split.dragged.connect(func(_o): _capture_top_height.call_deferred())
+		_split.drag_ended.connect(func():
+			_capture_top_height()
+			_save())
+	# The note area moves when the key column (piano / drum rows) changes width.
+	editor.note_area.item_rect_changed.connect(func(): _align_lanes.call_deferred())
 	_load()
+	_relayout()
 
 
 func is_lanes_visible() -> bool:
@@ -44,6 +60,7 @@ func is_lanes_visible() -> bool:
 ## Show or hide the whole pane and remember it.
 func set_lanes_visible(on: bool) -> void:
 	visible = on
+	_sync_split.call_deferred()
 	_save()
 
 
@@ -62,11 +79,11 @@ func add_lane(key: String, height := DEFAULT_LANE_HEIGHT) -> ValueLane:
 	lanes_box.add_child(lane)
 	lane.setup(d, midi_editor)
 	lane.set_lane_height(height)
-	lane.set_header_width(midi_editor.key_column_width() if midi_editor else 0.0)
 	lane.close_requested.connect(remove_lane)
 	lane.height_changed.connect(_save)
 	lane.note_touched.connect(func(n): note_touched.emit(n))
 	lanes.append(lane)
+	_relayout()
 	_save()
 	_rebuild_add_menu()
 	return lane
@@ -77,6 +94,7 @@ func remove_lane(lane: ValueLane) -> void:
 		return
 	lanes.erase(lane)
 	lane.queue_free()
+	_relayout()
 	_save()
 	_rebuild_add_menu()
 
@@ -98,10 +116,48 @@ func _on_add_lane_id(id: int) -> void:
 	add_lane(key)
 
 
-func _on_key_column_width_changed(w: float) -> void:
-	header_spacer.custom_minimum_size.x = w
+## Size each lane's header so its stem area starts exactly where the note area does: the
+## pane's own margin and "+" column come out of the key column's width.
+func _align_lanes() -> void:
+	if midi_editor == null or not is_visible_in_tree():
+		return
+	var target := midi_editor.note_area.global_position.x
 	for l in lanes:
-		l.set_header_width(w)
+		if l.is_node_ready() and not l.is_queued_for_deletion():
+			l.set_header_width(target - l.header.global_position.x)
+
+
+# ============================================================================
+# HEIGHT (the editor split sizes the top lane)
+# ============================================================================
+
+func _relayout() -> void:
+	for i in lanes.size():
+		lanes[i].set_fills(i == 0)
+	_sync_split.call_deferred()
+
+
+## Move the split so the top lane gets its stored height. The pane doesn't expand, so a split
+## offset of -h gives it h pixels, and its minimum holds the top lane's row at its floor.
+func _sync_split() -> void:
+	if _split == null or lanes.is_empty() or not is_visible_in_tree():
+		return
+	var top: ValueLane = lanes[0]
+	var want := roundi(get_combined_minimum_size().y + top.lane_height() - top.min_row_height())
+	if _split.split_offset != -want:
+		_split.split_offset = -want
+
+
+func _capture_top_height() -> void:
+	if not lanes.is_empty() and is_visible_in_tree():
+		lanes[0].set_lane_height(_top_row_height())
+
+
+## The top lane's row height from the pane's own size: the pane's minimum holds that row at
+## its floor, so everything above the minimum is the top lane's. (Its row may not be laid out
+## yet right after the split moved.)
+func _top_row_height() -> float:
+	return lanes[0].min_row_height() + size.y - get_combined_minimum_size().y
 
 
 # ============================================================================

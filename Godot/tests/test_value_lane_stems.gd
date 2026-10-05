@@ -36,6 +36,15 @@ func _test_alignment() -> void:
 	await rig.build([0, 960, 1920, 2880], [0.2, 0.4, 0.6, 0.8])
 	_assert(rig.midi_editor.value_stems().size() == 4, "one stem per note")
 	_assert(_aligned(rig), "stems start at their notes")
+	_assert(_near(rig.stem_x_of(0), 0.0), "the tick 0 stem is on the stem area's left edge, not left of it (%s)" % rig.stem_x_of(0))
+	rig.midi_editor.playhead_ticks = 960
+	await process_frame
+	var ph: Control = rig.midi_editor.playhead
+	var mirror: Control = rig.area()._playhead
+	_assert(mirror.visible and _near(mirror.global_position.x, ph.global_position.x), "the lane shows the playhead where the note area does")
+	rig.midi_editor.playhead_ticks = -1
+	await process_frame
+	_assert(not mirror.visible, "and hides it with the note area's")
 	rig.midi_editor.grid_helper.pixels_per_beat = 120.0
 	for _i in 3:
 		await process_frame
@@ -75,3 +84,14 @@ func _test_selection_and_hover() -> void:
 	_assert(lit == 1, "hovering a stem highlights its note")
 	rig.midi_editor.set_hovered_note(null)
 	await rig.cleanup()
+
+	# A chord: the stem whose head is nearest the pointer is the hovered one.
+	var chord = Rig.new(self)
+	await chord.build([0, 0], [0.2, 0.9])
+	var a = chord.area()
+	var cx: float = chord.stem_x_of(0)
+	a._update_hover(Vector2(cx, a.stem_top(0.2)))
+	_assert(chord.midi_editor.hovered_note_data == chord.note(0), "hovering a chord's low stem picks it")
+	a._update_hover(Vector2(cx, a.stem_top(0.9)))
+	_assert(chord.midi_editor.hovered_note_data == chord.note(1), "hovering its high stem picks that one")
+	await chord.cleanup()

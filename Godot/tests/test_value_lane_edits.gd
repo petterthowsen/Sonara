@@ -106,6 +106,16 @@ func _test_paint() -> void:
 	rig.drag(a, Vector2(x0, _y_of(rig, 0.5)), [Vector2((x0 + x2) * 0.5, _y_of(rig, 0.5)), Vector2(x2, _y_of(rig, 0.5))])
 	_assert(_near(rig.note(0).velocity, 0.5) and _near(rig.note(1).velocity, 0.5) and _near(rig.note(2).velocity, 0.5), "a drag paints every stem it crosses")
 	_assert(rig.history.size() == 1, "still one undo step")
+
+	# A pressed stem keeps following the pointer after it leaves the stem, until the pointer
+	# crosses another stem, which takes over.
+	var x1: float = rig.stem_x_of(1)
+	rig.drag(a, Vector2(x0, _y_of(rig, 0.5)), [Vector2(x0 + 20.0, _y_of(rig, 0.6))])
+	_assert(_near(rig.note(0).velocity, 0.6), "the pressed stem follows the pointer off it (%s)" % rig.note(0).velocity)
+	_assert(_near(rig.note(1).velocity, 0.5), "and leaves the next stem alone")
+	rig.drag(a, Vector2(x0, _y_of(rig, 0.5)), [Vector2(x1, _y_of(rig, 0.4)), Vector2(x1 + 20.0, _y_of(rig, 0.7))])
+	_assert(_near(rig.note(1).velocity, 0.7), "a crossed stem takes over the hold (%s)" % rig.note(1).velocity)
+	_assert(not _near(rig.note(0).velocity, 0.7), "and the first stem is let go")
 	await rig.cleanup()
 
 	# A chord: two notes at one tick are painted together.
