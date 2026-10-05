@@ -181,7 +181,8 @@ func _ready():
 		side_vsplit.dragged.connect(_on_vsplit_dragged)
 		side_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
 	_apply_shared_vsplit_offset()
-	if sends_panel:
+	# SendsPanel isn't a @tool script, so in the editor it is only a placeholder instance.
+	if sends_panel and not Engine.is_editor_hint():
 		# Clamp straight from resized: sends_panel.size is only fresh there, and a stale size
 		# makes the correction overshoot and the divider jump back while dragging.
 		sends_panel.resized.connect(_clamp_vsplit_to_sends)
@@ -202,9 +203,10 @@ func _ready():
 		if not Engine.is_editor_hint():
 			foldout_toggle.visible = false
 	if children_slide:
-		if children_slide.contents_changed.is_connected(_update_size_for_mode) == false:
-			children_slide.contents_changed.connect(_update_size_for_mode)
+		# MixerChannelChildren isn't a @tool script, so in the editor it is only a placeholder.
 		if not Engine.is_editor_hint():
+			if children_slide.contents_changed.is_connected(_update_size_for_mode) == false:
+				children_slide.contents_changed.connect(_update_size_for_mode)
 			children_clip.visible = false
 
 	# output routing menu
@@ -639,7 +641,7 @@ var _vsplit_snap_tween: Tween
 ## After a manual divider drag, ease the divider to where the sends show whole knob rows, then
 ## line the scroll up with a row so none is cut off at the top either.
 func _snap_vsplit_to_send_rows() -> void:
-	if sends_panel == null or not sends_panel.is_visible_in_tree():
+	if sends_panel == null or Engine.is_editor_hint() or not sends_panel.is_visible_in_tree():
 		return
 	var vsplit := sends_panel.get_parent() as VSplitContainer
 	if vsplit == null:
@@ -675,6 +677,8 @@ func _queue_clamp_vsplit_to_sends() -> void:
 
 ## Height this strip's sends need to show every knob at its current width.
 func _sends_needed_height() -> float:
+	if Engine.is_editor_hint():
+		return 0.0
 	return maxf(sends_panel.needed_height(sends_panel.size.x), sends_panel.custom_minimum_size.y)
 
 

@@ -5,7 +5,7 @@
 [ext_resource type="Script" uid="uid://car1nicfbtoru" path="res://arranger/tracklist/TrackListContextMenu.gd" id="3_hwtjl"]
 [ext_resource type="PackedScene" uid="uid://b6v5v4pwwjg0w" path="res://arranger/tracklist/TrackItemContextMenu.tscn" id="4_q580v"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1meqt"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_q580v"]
 resource_local_to_scene = true
 bg_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
 border_color = Color(0, 0, 0, 0)
@@ -22,7 +22,7 @@ script = ExtResource("1_0le0t")
 
 [node name="Track" parent="." unique_id=240971037 instance=ExtResource("2_0le0t")]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_1meqt")
+theme_override_styles/panel = SubResource("StyleBoxFlat_q580v")
 
 [node name="TrackListContextMenu" type="PopupMenu" parent="." unique_id=314695138]
 oversampling_override = 1.0
@@ -30,3 +30,4 @@ theme_type_variation = &"ContextMenuList"
 script = ExtResource("3_hwtjl")
 
 [node name="TrackItemContextMenu" parent="." unique_id=1719893711 instance=ExtResource("4_q580v")]
+visible = false
