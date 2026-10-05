@@ -150,9 +150,9 @@ func _draw() -> void:
 	NestingStripes.draw(self, _ancestors, size.y)
 	if track:
 		var track_color := Utils.display_color(track.color)
-		# A folder/group's own stripe uses the true track color, like the one its children draw for it.
-		if track.can_contain_tracks():
-			draw_rect(Rect2(_ancestors.size() * NestingStripes.WIDTH, 0.0, NestingStripes.WIDTH, size.y), track_color)
+		# Every track's own stripe uses the true track color, like the one its children and
+		# automation lanes draw for it.
+		draw_rect(Rect2(_ancestors.size() * NestingStripes.WIDTH, 0.0, NestingStripes.WIDTH, size.y), track_color)
 		# Thin divider so neighbouring items of the same color stay distinguishable.
 		draw_rect(Rect2(0.0, size.y - 1.0, size.x, 1.0), track_color.darkened(0.1))
 	if not is_selected and not is_active:
@@ -614,10 +614,9 @@ func _update_nesting_indent() -> void:
 	var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
 	var inset := _ancestors.size() * NestingStripes.WIDTH
 	stylebox.border_width_left = inset
-	# A folder/group leaves one stripe of its own background left of the meter, lining up with
-	# the stripe its children draw for it, so the header reads as flowing down into them.
-	# -1 falls back to the border width.
-	stylebox.content_margin_left = inset + NestingStripes.WIDTH if track.can_contain_tracks() else -1
+	# Every track leaves one stripe of its own color left of the meter, lining up with the stripe
+	# its children and automation lanes draw for it, so the header reads as flowing down into them.
+	stylebox.content_margin_left = inset + NestingStripes.WIDTH
 	queue_redraw()
 
 

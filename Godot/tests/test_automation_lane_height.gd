@@ -14,7 +14,7 @@ func suite_name() -> String:
 
 func run_tests() -> void:
 	var lane_script: GDScript = load("res://data/AutomationLane.gd")
-	var header_script: GDScript = load("res://arranger/tracklist/AutomationLaneHeader.gd")
+	var header_scene: PackedScene = load("res://arranger/tracklist/AutomationLaneHeader.tscn")
 	var row_script: GDScript = load("res://arranger/timeline/AutomationLaneRow.gd")
 
 	var lane: Object = lane_script.new("l1", null)
@@ -28,7 +28,7 @@ func run_tests() -> void:
 	column.custom_minimum_size.x = 320
 	root.add_child(column)
 
-	var header: Control = header_script.new()
+	var header: Control = header_scene.instantiate()
 	column.add_child(header)
 
 	var row: Control = row_script.new()

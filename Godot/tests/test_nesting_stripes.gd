@@ -63,17 +63,17 @@ func _test_nested_rows_stripe_every_ancestor() -> void:
 
 	_assert(item._ancestors == [t.outer, t.inner], "track item stripes: outer then inner")
 	_assert(_item_inset(t.a) == 2 * WIDTH, "track item reserves two stripes")
-	_assert(header._ancestors == [t.outer, t.inner], "lane header stripes: outer then inner")
+	_assert(header._ancestors == [t.outer, t.inner, t.a], "lane header stripes: ancestors, then its own track")
 	var style := header.get_theme_stylebox("panel") as StyleBoxFlat
-	_assert(style.border_width_left == 2 * WIDTH + 10,
-		"lane header reserves two stripes plus its own band")
+	_assert(style.border_width_left == 3 * WIDTH,
+		"lane header reserves the ancestors' stripes plus its track's")
 	_assert(_item_inset(t.outer) == 0, "top-level folder has no inset")
 
-	# A folder's meter starts one stripe past its inset, so its own background fills the column
-	# its children's stripe continues; a plain track's meter sits right after the stripes.
+	# Every track's meter starts one stripe past its inset, so its own background fills the column
+	# its children's (and automation lanes') stripe continues.
 	_assert(_meter_x(t.outer) == WIDTH, "top-level folder meter sits after its own column")
 	_assert(_meter_x(t.inner) == 2 * WIDTH, "nested folder meter sits after inset + own column")
-	_assert(_meter_x(t.a) == 2 * WIDTH, "plain track meter sits right after its stripes")
+	_assert(_meter_x(t.a) == 3 * WIDTH, "plain track meter sits after inset + own column")
 
 
 func _test_moving_enclosing_folder_updates_descendants() -> void:
@@ -85,6 +85,6 @@ func _test_moving_enclosing_folder_updates_descendants() -> void:
 
 	_assert(_list._find_track_item(t.a)._ancestors == [t.inner], "track item follows moved folder")
 	_assert(_item_inset(t.a) == WIDTH, "track item inset shrinks to one stripe")
-	_assert(header._ancestors == [t.inner], "lane header follows moved folder")
+	_assert(header._ancestors == [t.inner, t.a], "lane header follows moved folder")
 	var style := header.get_theme_stylebox("panel") as StyleBoxFlat
-	_assert(style.border_width_left == WIDTH + 10, "lane header inset shrinks")
+	_assert(style.border_width_left == 2 * WIDTH, "lane header inset shrinks")

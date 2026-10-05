@@ -1,0 +1,65 @@
+[gd_scene format=3 uid="uid://cbn61cgog4hf5"]
+
+[ext_resource type="Script" uid="uid://b6dw3g1hrxcen" path="res://arranger/tracklist/AutomationLaneHeader.gd" id="1_header"]
+[ext_resource type="Texture2D" uid="uid://bcmn5jer86wdt" path="res://assets/icons/trash.svg" id="2_ms4x3"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+resource_local_to_scene = true
+content_margin_left = 18.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0.13, 0.13, 0.13, 1)
+border_width_left = 12
+border_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_doj3m"]
+font_size = 10
+font_color = Color(0.70380783, 0.70380783, 0.70380783, 1)
+
+[node name="AutomationLaneHeader" type="PanelContainer" unique_id=1]
+offset_right = 141.0
+offset_bottom = 28.0
+size_flags_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+script = ExtResource("1_header")
+
+[node name="Content" type="HBoxContainer" parent="." unique_id=2]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 2
+
+[node name="Label" type="Label" parent="Content" unique_id=3]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Track / Param"
+label_settings = SubResource("LabelSettings_doj3m")
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="BypassButton" type="Button" parent="Content" unique_id=4]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Bypass this automation lane."
+focus_mode = 0
+theme_override_font_sizes/font_size = 10
+toggle_mode = true
+text = "M"
+
+[node name="DeleteButton" type="Button" parent="Content" unique_id=5]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Delete this lane"
+focus_mode = 0
+icon = ExtResource("2_ms4x3")
+icon_alignment = 1
+expand_icon = true
+
+[connection signal="toggled" from="Content/BypassButton" to="." method="_on_bypass_toggled"]
+[connection signal="pressed" from="Content/DeleteButton" to="." method="_on_delete_pressed"]

@@ -11,13 +11,19 @@
 [ext_resource type="Texture2D" uid="uid://cb3h3qix2kgkm" path="res://assets/icons/spline.svg" id="9_yavxh"]
 [ext_resource type="Script" uid="uid://3jmrbwrbnxpg" path="res://components/CollapsingBoxContainer.gd" id="10_xkg54"]
 [ext_resource type="Script" uid="uid://cghgduhqvbyfn" path="res://components/CollapsingFlowContainer.gd" id="11_yavxh"]
-[ext_resource type="Script" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
+[ext_resource type="Script" uid="uid://dqv5jd1spvtcs" path="res://components/DragToggleButton.gd" id="dragtoggle_btn"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_vc4i6"]
 resource_local_to_scene = true
+content_margin_left = 12.0
 bg_color = Color(0.76171875, 0.31837463, 0.31837463, 1)
 border_color = Color(0, 0, 0, 0)
 corner_detail = 5
+
+[sub_resource type="LabelSettings" id="LabelSettings_3uo1d"]
+font_size = 14
+shadow_size = 2
+shadow_color = Color(0, 0, 0, 0.6745098)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xkg54"]
 content_margin_left = 4.0
@@ -73,9 +79,9 @@ corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
 [node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
-custom_minimum_size = Vector2(100, 36)
-offset_right = 272.0
-offset_bottom = 36.0
+custom_minimum_size = Vector2(100, 24)
+offset_right = 233.0
+offset_bottom = 29.0
 size_flags_vertical = 0
 focus_mode = 1
 mouse_filter = 1
@@ -120,7 +126,6 @@ theme_override_constants/margin_bottom = 0
 
 [node name="CollapsingFlowContainer" type="Container" parent="VBoxContainer/HBox/MarginContainer" unique_id=507819453]
 layout_mode = 2
-size_flags_horizontal = 3
 script = ExtResource("11_yavxh")
 separation = 2
 line_separation = 2
@@ -128,6 +133,7 @@ alignment = 2
 min_visible_children = 3
 
 [node name="FoldoutToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1603561735]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_vertical = 4
 theme_override_constants/h_separation = 0
@@ -135,8 +141,8 @@ theme_override_font_sizes/font_size = 24
 toggle_mode = true
 icon = ExtResource("4_v1xsl")
 flat = true
-icon_alignment = 2
-vertical_icon_alignment = 0
+vertical_icon_alignment = 2
+expand_icon = true
 script = ExtResource("5_mscrg")
 icon_default = ExtResource("4_v1xsl")
 icon_pressed = ExtResource("6_ru4rj")
@@ -151,6 +157,7 @@ mouse_filter = 1
 value_type = 1
 
 [node name="Label" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/Label" index="0" unique_id=448001948]
+label_settings = SubResource("LabelSettings_3uo1d")
 horizontal_alignment = 0
 autowrap_mode = 1
 clip_text = true
@@ -165,7 +172,8 @@ max_length = 200
 
 [node name="CollapsingBoxContainer" type="Container" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=575408220]
 layout_mode = 2
-size_flags_horizontal = 10
+size_flags_horizontal = 3
+size_flags_vertical = 3
 size_flags_stretch_ratio = 2.0
 script = ExtResource("10_xkg54")
 separation = 2
@@ -174,32 +182,38 @@ min_visible_children = 3
 metadata/_custom_type_script = "uid://3jmrbwrbnxpg"
 
 [node name="ArmToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=888555712]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 focus_mode = 0
+theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
 toggle_mode = true
 text = "R"
+icon_alignment = 1
+expand_icon = true
 
 [node name="SoloToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=77424576]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
 theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_font_sizes/font_size = 12
 theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
 toggle_mode = true
 text = "S"
+icon_alignment = 1
 script = ExtResource("dragtoggle_btn")
 drag_group = &"solo"
 
 [node name="MuteToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer/CollapsingBoxContainer" unique_id=1775177518]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
 theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
+theme_override_font_sizes/font_size = 12
 theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
 toggle_mode = true
 text = "M"
@@ -207,7 +221,7 @@ script = ExtResource("dragtoggle_btn")
 drag_group = &"mute"
 
 [node name="AutomationMenuButton" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1871101369]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 2.0
 tooltip_text = "Automation lanes"
@@ -218,13 +232,15 @@ icon_alignment = 1
 expand_icon = true
 
 [node name="AutomationToggle" type="Button" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=1780963887]
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 2.0
 focus_mode = 0
 theme_override_font_sizes/font_size = 10
 toggle_mode = true
 icon = ExtResource("9_ru4rj")
+icon_alignment = 1
+expand_icon = true
 script = ExtResource("5_mscrg")
 icon_default = ExtResource("9_ru4rj")
 icon_pressed = ExtResource("7_ru4rj")
@@ -232,6 +248,7 @@ icon_pressed = ExtResource("7_ru4rj")
 [node name="IOButton" type="MenuButton" parent="VBoxContainer/HBox/MarginContainer/CollapsingFlowContainer" unique_id=2048027707]
 custom_minimum_size = Vector2(64, 32)
 layout_mode = 2
+size_flags_vertical = 10
 focus_mode = 0
 theme_override_font_sizes/font_size = 10
 text = "Master"

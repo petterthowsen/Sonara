@@ -3,9 +3,7 @@
 # delete button, and the same bottom-gutter resize gesture as TrackItem - except that it writes
 # `lane.height` instead of `track.height` (REQ-013, REQ-017).
 #
-# Built in code rather than from a .tscn: nothing authors this row in the editor, and the timeline
-# side (AutomationLaneRow) is code-built too, so keeping both in one file each keeps the two
-# halves of a row readable side by side. `TimelineTrack` is instantiated the same way.
+# Layout lives in AutomationLaneHeader.tscn; instantiate that scene rather than calling `new()`.
 class_name AutomationLaneHeader extends PanelContainer
 
 static var logger := Log.make("AutomationLaneHeader")
@@ -23,12 +21,12 @@ var current_project: Project = null
 ## The track's enclosing folders/groups, outermost first; drawn as the left-edge inset stripes.
 var _ancestors: Array[Track] = []
 
-var _label: Label = null
-var _bypass_button: Button = null
-var _delete_button: Button = null
+@onready var _label: Label = %Label
+@onready var _bypass_button: Button = %BypassButton
+@onready var _delete_button: Button = %DeleteButton
 ## The row's content, kept so `_content_min_height()` can measure it without the ratchet of the
 ## node's own `custom_minimum_size` (which is the current `lane.height`).
-var _content: HBoxContainer = null
+@onready var _content: HBoxContainer = %Content
 
 var _is_resizing: bool = false
 var _resize_start_y: float = 0.0
@@ -37,8 +35,8 @@ var _resize_start_height: int = 0
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_build_ui()
+	# A theme font or button change can raise the content floor: keep the lane height above it.
+	_content.minimum_size_changed.connect(_clamp_lane_height)
 	_refresh()
 
 
@@ -54,54 +52,6 @@ func _draw() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
 		_unbind()
-
-
-func _build_ui() -> void:
-	if _label != null:
-		return
-
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.13, 0.13, 0.13, 1.0)
-	style.content_margin_left = 6.0
-	style.content_margin_right = 4.0
-	style.content_margin_top = 2.0
-	style.content_margin_bottom = 2.0
-	add_theme_stylebox_override("panel", style)
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 2)
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(row)
-	_content = row
-	# A theme font or button change can raise the content floor: keep the lane height above it.
-	_content.minimum_size_changed.connect(_clamp_lane_height)
-
-	_label = Label.new()
-	_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_label.clip_text = true
-	_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(_label)
-
-	_bypass_button = Button.new()
-	_bypass_button.text = "B"
-	_bypass_button.toggle_mode = true
-	_bypass_button.focus_mode = Control.FOCUS_NONE
-	_bypass_button.custom_minimum_size = Vector2(20, 16)
-	_bypass_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_bypass_button.tooltip_text = "Bypass this lane (the parameter returns to its base value)"
-	_bypass_button.toggled.connect(_on_bypass_toggled)
-	row.add_child(_bypass_button)
-
-	_delete_button = Button.new()
-	_delete_button.text = "x"
-	_delete_button.focus_mode = Control.FOCUS_NONE
-	_delete_button.custom_minimum_size = Vector2(20, 16)
-	_delete_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_delete_button.tooltip_text = "Delete this lane"
-	_delete_button.pressed.connect(_on_delete_pressed)
-	row.add_child(_delete_button)
 
 
 # ============================================================================
@@ -123,7 +73,6 @@ func bind_to_lane(p_lane: AutomationLane, p_track: Track, project: Project) -> v
 		track.color_changed.connect(_on_track_color_changed)
 		track.parent_changed.connect(_on_track_parent_changed)
 
-	_build_ui()
 	_refresh()
 
 
@@ -171,8 +120,8 @@ func _refresh() -> void:
 
 
 ## Tint the row from the track color (a shade darker than the track header) and indent it one
-## level deeper so a lane reads as belonging to the track above it: the ancestors' stripes
-## (drawn in _draw), then a narrower band in the track's own color.
+## level deeper so a lane reads as belonging to the track above it: the stripes of the
+## ancestors and of the track itself (drawn in _draw) continue down the left edge.
 func _update_style() -> void:
 	var style := get_theme_stylebox("panel") as StyleBoxFlat
 	if style == null or track == null:
@@ -180,12 +129,14 @@ func _update_style() -> void:
 	var c := Utils.automation_lane_color(track.color, lane.resolved)
 	style.bg_color = c
 
-	_set_ancestors(NestingStripes.ancestors_of(track, current_project))
-	style.border_width_left = _ancestors.size() * NestingStripes.WIDTH + 10
+	# The owning track's stripe is the last one, so the lane sits inside its track.
+	var chain := NestingStripes.ancestors_of(track, current_project)
+	chain.append(track)
+	_set_ancestors(chain)
+	style.border_width_left = _ancestors.size() * NestingStripes.WIDTH
 	# An explicit margin overrides the border-width default, so add the reserved inset back or the
 	# label draws over the nesting stripes.
 	style.content_margin_left = style.border_width_left + 6.0
-	style.border_color = Utils.display_color(track.color)
 	queue_redraw()
 
 

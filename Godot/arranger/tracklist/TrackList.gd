@@ -10,6 +10,7 @@ var logger : Log = Log.make("TrackList")
 
 # Scene to instantiate for each track
 const track_item_scene: PackedScene = preload("res://arranger/tracklist/TrackItem.tscn")
+const LANE_HEADER_SCENE: PackedScene = preload("res://arranger/tracklist/AutomationLaneHeader.tscn")
 
 # context menu to show when right-clicking empty area
 @onready var context_menu: TrackListContextMenu = $TrackListContextMenu
@@ -698,7 +699,7 @@ func _ensure_lane_header(track: Track, lane: AutomationLane) -> AutomationLaneHe
 	if is_instance_valid(existing):
 		return existing
 
-	var header := AutomationLaneHeader.new()
+	var header := LANE_HEADER_SCENE.instantiate() as AutomationLaneHeader
 	add_child(header)
 	header.bind_to_lane(lane, track, current_project)
 	header.bypass_toggled.connect(_on_lane_bypass_toggled)
