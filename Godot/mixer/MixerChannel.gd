@@ -167,6 +167,13 @@ func _ready():
 	if title:
 		title.value_changed.connect(_on_title_value_changed)
 
+	_volume_max_height = volume.custom_maximum_size.y
+	_volume_stretch_ratio = volume.size_flags_stretch_ratio
+	big_meter.visibility_changed.connect(_update_volume_max_height)
+	if device_list:
+		device_list.visibility_changed.connect(_update_main_vsplit_visibility)
+	if sends_panel:
+		sends_panel.visibility_changed.connect(_update_main_vsplit_visibility)
 	if main_vsplit:
 		main_vsplit.dragged.connect(_on_vsplit_dragged)
 		main_vsplit.drag_ended.connect(_snap_vsplit_to_send_rows)
@@ -623,6 +630,9 @@ func _set_shared_vsplit_offset(offset: int) -> void:
 	get_tree().call_group("mixer_channel", "_apply_shared_vsplit_offset")
 
 
+var _volume_max_height := 300.0
+var _volume_stretch_ratio := 0.7
+
 const VSPLIT_SNAP_DURATION := 0.15
 var _vsplit_snap_tween: Tween
 
@@ -738,15 +748,35 @@ func _apply_layout_mode() -> void:
 		LayoutMode.TALL:
 			_reparent_into(device_list, main_vsplit)
 			_reparent_into(sends_panel, main_vsplit)
-			main_vsplit.show()
+			_update_main_vsplit_visibility()
 			if side_pane:
 				side_pane.visible = false
 				side_pane.custom_minimum_size.x = 0
 		LayoutMode.COMPACT:
 			_reparent_into(device_list, side_vsplit)
 			_reparent_into(sends_panel, side_vsplit)
-			main_vsplit.hide()
+			_update_main_vsplit_visibility()
 			_update_side_pane()
+
+
+## Tall mode: hide the main VSplit when neither devices nor sends are shown, so the big meter
+## takes the freed space. Compact mode keeps it hidden (its children live in the SidePane).
+func _update_main_vsplit_visibility() -> void:
+	if main_vsplit == null:
+		return
+	var want := strip_layout_mode == LayoutMode.TALL and (device_list.visible or sends_panel.visible)
+	if main_vsplit.visible != want:
+		main_vsplit.visible = want
+	_update_volume_max_height()
+
+
+## With nothing else expanding (no VSplit, no big meter), let the bottom meter/fader fill the strip.
+func _update_volume_max_height() -> void:
+	if volume == null or big_meter == null:
+		return
+	var fill := not main_vsplit.visible and not big_meter.visible
+	volume.custom_maximum_size.y = -1.0 if fill else _volume_max_height
+	volume.size_flags_stretch_ratio = 1.0 if fill else _volume_stretch_ratio
 
 
 ## Move `node` under `new_parent`, preserving it (no-op if already there).
