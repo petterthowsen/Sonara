@@ -321,6 +321,14 @@ static func drop_selection(
 	if list.size() == 1 or Multiband.is_multiband(to_parent) or SlotChain.is_slot_parent(to_parent):
 		drop_instance(channel, primary, to_parent, to_position)
 		return true
+	# A selection from another channel transfers as a block, in order, at the drop point.
+	if list.all(func(d): return d.get_channel() != channel and can_drop_instance_on_host(channel, d, to_parent)):
+		var transfers: Array[Command] = []
+		for i in list.size():
+			var at := -1 if to_position < 0 else to_position + i
+			transfers.append(DeviceTransferCommand.new(list[i], channel, to_parent, at))
+		HistoryUtil.execute_many("Move Devices", transfers)
+		return true
 	var host: Array[DeviceInstance] = to_parent.children if to_parent else channel.devices
 	var moving := list.filter(func(d): return host.has(d)) as Array[DeviceInstance]
 	if moving.size() != list.size():

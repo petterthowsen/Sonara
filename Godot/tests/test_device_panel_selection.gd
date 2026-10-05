@@ -34,6 +34,7 @@ func run_tests() -> void:
 	await _test_drag_carries_the_selection()
 	await _test_left_header_is_a_drag_handle()
 	await _test_drop_selection_moves_the_block()
+	await _test_drop_selection_across_channels()
 	await _test_selection_border()
 	await _test_modulators_toggle_and_scroll()
 	await _test_chevron_scroll()
@@ -207,6 +208,17 @@ func _test_drop_selection_moves_the_block() -> void:
 	_assert(_names(ch.devices) == ["c", "b", "d", "layer", "a"],
 		"a mixed selection moves only the primary device: %s" % str(_names(ch.devices)))
 	_assert(_names(layer.children) == ["inside"], "the container keeps its child")
+
+
+func _test_drop_selection_across_channels() -> void:
+	var ch: Object = _fresh_project()
+	var a := _fx(ch, "a")
+	var b := _fx(ch, "b")
+	var other: Object = _project.create_instrument_track("Other").channel
+	var x := _fx(other, "x")
+	_drop_util.drop_selection(other, [a, b], null, 0)
+	_assert(_names(other.devices) == ["a", "b", "x"] and ch.devices.is_empty(),
+		"a selection from another channel transfers as a block: %s / %s" % [str(_names(other.devices)), str(_names(ch.devices))])
 
 
 func _fresh_device(id: String, container := false) -> Object:

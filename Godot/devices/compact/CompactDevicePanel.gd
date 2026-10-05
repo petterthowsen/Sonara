@@ -17,6 +17,11 @@ var logger : Log = Log.make("CompactDevicePanel")
 @onready var name_label : SmartLineEdit = $Header/HBoxContainer/Name
 @onready var collapse_button : ToggleIconButton = $Header/HBoxContainer/CollapseToggle
 
+const BORDER_COLOR_SELECTED := Color("#999999")
+const BORDER_WIDTH_SELECTED := 2
+
+const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
+
 # ============================================================================
 # PROPERTIES
 # ============================================================================
@@ -31,11 +36,26 @@ var logger : Log = Log.make("CompactDevicePanel")
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null
 var _hovered := false
+var _header_style: StyleBoxFlat = null
+var _border_base := Color.BLACK
+var _border_base_widths: Array[int] = []
+
+## True while the ChannelDeviceList selected this panel's device (same border as DevicePanel).
+var is_selected := false:
+	set(selected):
+		is_selected = selected
+		_apply_selection_border()
+var _button_hovered := false
+var _name_hovered := false
 
 # ============================================================================
 # SIGNALS
 # ============================================================================
 signal request_context_menu()
+## Left click. The ChannelDeviceList owns the selection; ctrl/cmd = additive, shift = range.
+## Released without a drag collapses a multi-selection.
+signal select_requested(panel: CompactDevicePanel, additive: bool, range_select: bool)
+signal select_released(panel: CompactDevicePanel)
 
 
 # ============================================================================
@@ -43,8 +63,22 @@ signal request_context_menu()
 # ============================================================================
 
 func _ready() -> void:
+	# Own copy of the header stylebox so the selection border doesn't select every panel.
+	_header_style = (header.get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
+	_border_base = _header_style.border_color
+	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+		_border_base_widths.append(_header_style.get_border_width(side))
+	header.add_theme_stylebox_override("panel", _header_style)
+	_apply_selection_border()
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
 	collapse_button.set_state(not collapsed)
+	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
+	collapse_button.mouse_entered.connect(_set_button_hovered.bind(true))
+	collapse_button.mouse_exited.connect(_set_button_hovered.bind(false))
+	# Rename lives in the context menu; the name is a shift+click window target instead.
+	name_label.edit_via_click = false
+	name_label.mouse_entered.connect(_set_name_hovered.bind(true))
+	name_label.mouse_exited.connect(_set_name_hovered.bind(false))
 	name_label.value_changed.connect(_on_name_edited)
 	# Fires for children too (Godot 4.2+), so the whole panel counts as hovered.
 	mouse_entered.connect(_set_hovered.bind(true))
@@ -73,15 +107,34 @@ func _unbind() -> void:
 	device_instance = null
 
 
+func _apply_selection_border() -> void:
+	if _header_style == null:
+		return
+	_header_style.border_color = BORDER_COLOR_SELECTED if is_selected else _border_base
+	var sides := [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]
+	for i in sides.size():
+		_header_style.set_border_width(sides[i], BORDER_WIDTH_SELECTED if is_selected else _border_base_widths[i])
+
+
 func _gui_input(event: InputEvent) -> void:
-	"""Handle GUI input: single-click selects the channel, double-click opens the device."""
+	"""Handle GUI input: click selects the device (and channel), double-click opens the device."""
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.double_click:
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.shift_pressed \
+				and _name_hovered and _can_open_window():
+			DeviceWindowManager.toggle(device_instance)
+			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.double_click:
 			_on_double_clicked()
 			accept_event()
-		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			_select_channel(mb.ctrl_pressed)
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				var additive := mb.ctrl_pressed or mb.meta_pressed
+				select_requested.emit(self, additive, mb.shift_pressed)
+				if not additive and not mb.shift_pressed:
+					_select_channel()
+			else:
+				select_released.emit(self)
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 			request_context_menu.emit()
 
@@ -169,10 +222,48 @@ func _update_ui_visibility() -> void:
 	# The chevron only shows on hover, and only for devices with parameters. Hidden, it
 	# takes no space, so the name gets the full header width.
 	var has_params := _has_parameters()
-	collapse_button.visible = has_params and _hovered
+	collapse_button.visible = (has_params or _can_open_window()) and _hovered
 	# Only the parameters panel itself is forced hidden when hide_parameters is set
 	# (channel not selected).
 	parameters.visible = has_params and not hide_parameters and not collapsed
+
+
+func _can_open_window() -> bool:
+	return device_instance != null and device_instance.device != null \
+		and (device_instance.device.has_gui() or device_instance.device.has_window_view())
+
+
+## Shift over the collapse button turns it into an "open window" button.
+func _set_button_hovered(hovered: bool) -> void:
+	_button_hovered = hovered
+	set_process(hovered or _name_hovered or _pointer_inside())
+	_refresh_collapse_icon()
+
+
+func _set_name_hovered(hovered: bool) -> void:
+	_name_hovered = hovered
+	set_process(hovered or _button_hovered or _pointer_inside())
+	_refresh_collapse_icon()
+
+
+func _refresh_collapse_icon() -> void:
+	if (_button_hovered or _name_hovered) and Input.is_key_pressed(KEY_SHIFT) and _can_open_window():
+		collapse_button.icon = ICON_WINDOW
+		collapse_button.tooltip_text = "Open External Window"
+	else:
+		collapse_button.set_state(not collapsed)
+		collapse_button.tooltip_text = ""
+
+
+## Shift+click opens (or closes) the plugin GUI / device window instead of folding.
+func _on_collapse_button_gui_input(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb and mb.button_index == MOUSE_BUTTON_LEFT and mb.shift_pressed and _can_open_window():
+		if mb.pressed:
+			DeviceWindowManager.toggle(device_instance)
+		# Swallow press and release so the button doesn't toggle.
+		collapse_button.accept_event()
+		collapse_button.release_focus()
 
 
 func _has_parameters() -> bool:
@@ -185,7 +276,7 @@ func _set_hovered(hovered: bool) -> void:
 	if not hovered and _pointer_inside():
 		set_process(true)
 		return
-	set_process(false)
+	set_process(_button_hovered or _name_hovered)
 	if _hovered == hovered:
 		return
 	_hovered = hovered
@@ -193,7 +284,9 @@ func _set_hovered(hovered: bool) -> void:
 
 
 func _process(_delta: float) -> void:
-	if not _pointer_inside():
+	if _button_hovered or _name_hovered:
+		_refresh_collapse_icon()
+	if _hovered and not _pointer_inside():
 		_set_hovered(false)
 
 
@@ -243,12 +336,8 @@ func _on_double_clicked() -> void:
 	# Wait a frame for the DeviceLane to update with the new channel
 	await get_tree().process_frame
 	
-	# Find the corresponding DevicePanel in the DeviceLane and grab focus
-	var device_panel: DevicePanel = Sonara.editor.device_lane.find_device_panel(device_instance)
-	if device_panel:
-		device_panel.grab_focus()
-		logger.info("Grabbed focus on DevicePanel for device: %s" % device_instance.device.name)
-	else:
+	# Select the device in the lane and scroll it into view
+	if not Sonara.editor.device_lane.reveal_device(device_instance):
 		push_warning("[CompactDevicePanel] Could not find DevicePanel for device: %s" % device_instance.device.name)
 
 
@@ -258,7 +347,12 @@ func _on_double_clicked() -> void:
 
 ## Start a device drag (a DeviceDrag payload). Nothing moves until the drop.
 func _get_drag_data(_at_position: Vector2) -> Variant:
-	return DeviceDrag.start(self, device_instance)
+	var list: ChannelDeviceList = null
+	var node := get_parent()
+	while node and not list:
+		list = node as ChannelDeviceList
+		node = node.get_parent()
+	return DeviceDrag.start(self, device_instance, list.selection_containing(device_instance) if list else [])
 
 
 ## Resolve from the pointer in the enclosing device list: insert beside this panel, or onto its

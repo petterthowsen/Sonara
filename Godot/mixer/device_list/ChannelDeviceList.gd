@@ -15,6 +15,9 @@ const CompactDevicePanelScene = preload("res://devices/compact/CompactDevicePane
 ## Space between compact panels, in pixels.
 const PANEL_GAP := 2
 
+## Every list, so a selection in one clears the others (one selection across channels).
+const LISTS_GROUP := "channel_device_lists"
+
 @onready var scroll_container : ScrollContainer = $ScrollContainer
 @onready var vbox : VBoxContainer = $ScrollContainer/VBoxContainer
 @onready var device_context_menu: DeviceContextMenu = $DeviceContextMenu
@@ -41,6 +44,15 @@ var _drop_indicator: DropIndicator = null
 var _pad_lane := PadLaneWatcher.new()
 
 
+## Devices whose panels this list selected (see CompactDevicePanel.select_requested). Dragging one
+## of them moves the whole block (DeviceDrag.devices).
+signal device_selection_changed(selected: Array[DeviceInstance])
+var selected_devices: Array[DeviceInstance] = []
+var _selection_anchor: DeviceInstance = null
+## Multi-selected device of the last press; on release without a drag the block collapses to it.
+var _pending_single: DeviceInstance = null
+
+
 # ============================================================================
 # LIFECYCLE
 # ============================================================================
@@ -53,6 +65,7 @@ func _ready() -> void:
 		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	drop_host.attach(self, vbox, true)
 	add_to_group(DeviceDropTarget.ROOT_GROUP)
+	add_to_group(LISTS_GROUP)
 	set_process(false)
 	_pad_lane.changed.connect(_on_pad_lane_changed)
 	if scroll_container:
@@ -102,6 +115,8 @@ func _populate_devices() -> void:
 				parent.remove_child(panel)
 			panel.queue_free()
 	device_panels.clear()
+	selected_devices.clear()
+	_selection_anchor = null
 	for n in vbox.get_children():
 		vbox.remove_child(n)
 		n.queue_free() 
@@ -148,6 +163,8 @@ func _add_device_panel(device_instance: DeviceInstance, position: int) -> void:
 	
 	# listen to right-click
 	panel.request_context_menu.connect(_on_device_panel_request_context_menu.bind(device_instance))
+	panel.select_requested.connect(_on_panel_select_requested)
+	panel.select_released.connect(_on_panel_select_released)
 	
 	# Track the panel
 	device_panels[device_instance.id] = panel
@@ -167,6 +184,7 @@ func _remove_stale_device_panels() -> void:
 			if panel.get_parent():
 				panel.get_parent().remove_child(panel)
 			panel.queue_free()
+	_refresh_selection()
 
 
 # ============================================================================
@@ -214,6 +232,107 @@ func _select_channel(multi := false) -> void:
 	if channel == null or Engine.is_editor_hint():
 		return
 	Sonara.editor.mixer.select_channel(channel, multi)
+
+
+# ============================================================================
+# DEVICE SELECTION
+# ============================================================================
+
+## Mirrors DeviceLane: plain click selects one device, ctrl/cmd adds or removes, shift takes the
+## visual range from the anchor. A plain click on part of a multi-selection keeps the block (so
+## the drag moves it all) and collapses on release.
+func _on_panel_select_requested(panel: CompactDevicePanel, additive: bool, range_select: bool) -> void:
+	var inst := panel.device_instance
+	if inst == null:
+		return
+	_pending_single = null
+	if not additive and not range_select and selected_devices.size() > 1 and selected_devices.has(inst):
+		_pending_single = inst
+		return
+	if additive:
+		if selected_devices.has(inst):
+			selected_devices.erase(inst)
+		else:
+			selected_devices.append(inst)
+		_selection_anchor = inst
+	elif range_select and _selection_anchor != null:
+		selected_devices = _devices_in_visual_range(_selection_anchor, inst)
+	else:
+		if not (selected_devices.size() == 1 and selected_devices[0] == inst):
+			selected_devices = [inst]
+		_selection_anchor = inst
+	_clear_other_lists()
+	_refresh_selection()
+	device_selection_changed.emit(selected_devices.duplicate())
+
+
+## Clear the selection in every other list; a drag only carries devices of one channel.
+func _clear_other_lists() -> void:
+	for other in get_tree().get_nodes_in_group(LISTS_GROUP):
+		if other != self and other.selected_devices.size() > 0:
+			other.clear_selection()
+
+
+func clear_selection() -> void:
+	selected_devices.clear()
+	_selection_anchor = null
+	_pending_single = null
+	_refresh_selection()
+	device_selection_changed.emit(selected_devices.duplicate())
+
+
+func _on_panel_select_released(panel: CompactDevicePanel) -> void:
+	var inst := panel.device_instance
+	if inst != null and inst == _pending_single:
+		selected_devices = [inst]
+		_selection_anchor = inst
+		_refresh_selection()
+		device_selection_changed.emit(selected_devices.duplicate())
+	_pending_single = null
+
+
+func _devices_in_visual_range(a: DeviceInstance, b: DeviceInstance) -> Array[DeviceInstance]:
+	var order: Array = []
+	for child in vbox.get_children():
+		if child is CompactDevicePanel and not child.is_queued_for_deletion():
+			order.append(child.device_instance)
+	var start := order.find(a)
+	var end := order.find(b)
+	if start < 0 or end < 0:
+		return [b]
+	if start > end:
+		var t := start
+		start = end
+		end = t
+	var out: Array[DeviceInstance] = []
+	out.assign(order.slice(start, end + 1))
+	return out
+
+
+## Drop devices no longer shown and push the selection onto the panels.
+func _refresh_selection() -> void:
+	var shown: Array[DeviceInstance] = []
+	for panel in device_panels.values():
+		if is_instance_valid(panel) and not panel.is_queued_for_deletion():
+			shown.append(panel.device_instance)
+	selected_devices = selected_devices.filter(func(d): return d != null and shown.has(d)) as Array[DeviceInstance]
+	if not shown.has(_selection_anchor):
+		_selection_anchor = null
+	for panel in device_panels.values():
+		if is_instance_valid(panel):
+			panel.is_selected = selected_devices.has(panel.device_instance)
+
+
+## The list's selection when it contains `inst` (for DeviceDrag.start), else empty.
+func selection_containing(inst: DeviceInstance) -> Array[DeviceInstance]:
+	if not selected_devices.has(inst):
+		return []
+	# Visual order, as drop_selection expects.
+	var out: Array[DeviceInstance] = []
+	for child in vbox.get_children():
+		if child is CompactDevicePanel and selected_devices.has(child.device_instance):
+			out.append(child.device_instance)
+	return out
 
 
 # ============================================================================

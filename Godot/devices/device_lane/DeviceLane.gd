@@ -34,6 +34,7 @@ var selected_devices: Array[DeviceInstance] = []
 var _selection_anchor: DeviceInstance = null
 ## Multi-selected device of the last press; on release without a drag the block collapses to it.
 var _pending_single: DeviceInstance = null
+var _scroll_tween: Tween = null
 
 func _ready():
 	# Root panels start below the color strip of the slots beside them, so the two line up.
@@ -201,6 +202,35 @@ func _add_device(_device_instance : DeviceInstance, _position : int):
 ## Panel showing `device_instance`, at the root or inside an open container slot.
 func find_device_panel(device_instance : DeviceInstance) -> DevicePanel:
 	return devices.find_panel(device_instance)
+
+
+## Select `device_instance` alone and smoothly scroll the lane so its panel is in view.
+## Returns false when no panel shows it.
+func reveal_device(device_instance: DeviceInstance, duration := 0.2) -> bool:
+	var panel := find_device_panel(device_instance)
+	if panel == null:
+		return false
+	selected_devices = [device_instance]
+	_selection_anchor = device_instance
+	_refresh_selection()
+	device_selection_changed.emit(selected_devices.duplicate())
+	panel.grab_focus()
+
+	var scroll: ScrollContainer = $Content/ScrollContainer
+	var left := panel.global_position.x - devices.global_position.x
+	var right := left + panel.size.x
+	var target := scroll.scroll_horizontal
+	if left < scroll.scroll_horizontal:
+		target = int(left)
+	elif right > scroll.scroll_horizontal + scroll.size.x:
+		target = int(right - scroll.size.x)
+	target = clampi(target, 0, maxi(0, int(devices.size.x - scroll.size.x)))
+	if _scroll_tween:
+		_scroll_tween.kill()
+	_scroll_tween = create_tween()
+	_scroll_tween.tween_property(scroll, "scroll_horizontal", target, duration) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	return true
 
 
 ## A device left the root chain (removed, nested into a container or moved to another channel).
