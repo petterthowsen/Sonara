@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use super::devices::container::ChainCursor;
-use super::types::{ChannelId, MidiNote, MidiVelocity, Tick, TrackId};
+use super::types::{ChannelId, MidiNote, NoteId, Tick, TrackId};
 
 /// Most tick boundaries one buffer can cross at 8192 frames (one per frame, plus the start tick).
 const MAX_TICK_EVENTS: usize = 8193;
@@ -17,8 +17,16 @@ const MAX_NOTE_EVENTS: usize = 1024;
 /// Channels expected before the per-buffer channel lists have to grow.
 const MAX_CHANNELS: usize = 1024;
 
-/// A clip note event collected for one tick: (track, note, velocity, is_note_on).
-pub type NoteEvent = (TrackId, MidiNote, MidiVelocity, bool);
+/// A clip note event collected for one tick. `key` includes the instance transpose.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipNoteEvent {
+    pub track_id: TrackId,
+    pub clip_note_id: NoteId,
+    pub key: MidiNote,
+    pub velocity: f32,
+    pub release: f32,
+    pub is_on: bool,
+}
 
 /// Engine-wide scratch lists reused by `process_audio` and `mix_and_output` every buffer.
 pub struct RenderScratch {
@@ -27,7 +35,7 @@ pub struct RenderScratch {
     /// Ticks advanced per frame in the current buffer, from the tempo map.
     pub frame_tick_rates: Vec<f64>,
     /// Clip note events collected for the current tick.
-    pub note_events: Vec<NoteEvent>,
+    pub note_events: Vec<ClipNoteEvent>,
     /// Channel IDs for the current buffer, so mixing passes can look channels up by ID.
     pub channel_ids: Vec<ChannelId>,
     /// Channels whose device chain is waiting on a plugin that began a block, in park order.

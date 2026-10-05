@@ -6,6 +6,7 @@ use super::{
     FileLoadingSupport, MidiPort, ParamId, ParamInfo, ParamType, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
+use crate::audio::midi_types::NoteEvent;
 use crate::audio::modulation::envelope::{AdsrEnvelope, AdsrState};
 use crossbeam::channel::Sender;
 use tracing::{info, warn};
@@ -91,8 +92,9 @@ pub struct SamplerDevice {
     sample: Option<SampleBuffer>,
     voices: [Voice; MAX_VOICES],
     voice_count: usize,
-    queued_midi: Vec<(usize, u8, u8, bool)>,
-    midi_scratch: Vec<(usize, u8, u8, bool)>,
+    /// (frame_offset, key, velocity or release, is_note_on)
+    queued_midi: Vec<(usize, u8, f32, bool)>,
+    midi_scratch: Vec<(usize, u8, f32, bool)>,
     sample_rate: f32,
     volume: f32,
     tune: f32,
@@ -414,7 +416,7 @@ impl SamplerDevice {
         })
     }
 
-    fn note_on(&mut self, note: u8, velocity: u8) {
+    fn note_on(&mut self, note: u8, velocity: f32) {
         let Some(idx) = self.allocate_voice() else {
             return;
         };
@@ -424,8 +426,7 @@ impl SamplerDevice {
         let (region_start, _) = region_frames(sample.frames, self.start, self.end);
         let increment = playback_increment(self.speed, self.tune, self.key_track, note, self.root)
             * sample_rate_ratio(sample.sample_rate, self.sample_rate);
-        let vel = (velocity as f32) / 127.0;
-        let vel_gain = (1.0 - self.velocity_amount) + self.velocity_amount * vel;
+        let vel_gain = (1.0 - self.velocity_amount) + self.velocity_amount * velocity;
         if increment <= 0.0 {
             return;
         }
@@ -470,9 +471,10 @@ impl SamplerDevice {
         );
     }
 
-    fn apply_midi(&mut self, note: u8, velocity: u8, is_on: bool) {
-        if is_on && velocity > 0 {
-            self.note_on(note, velocity);
+    /// Apply a queued event. The sampler has no use for release velocity yet.
+    fn apply_midi(&mut self, note: u8, value: f32, is_on: bool) {
+        if is_on {
+            self.note_on(note, value);
         } else {
             self.note_off(note);
         }
@@ -518,12 +520,16 @@ impl AudioDevice for SamplerDevice {
             .check_activity(active || has_audio_signal(&outputs[..interleaved]));
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        let queued = match *event {
+            NoteEvent::On { key, velocity, .. } => (frame_offset, key, velocity, true),
+            NoteEvent::Off { key, release, .. } => (frame_offset, key, release, false),
+            NoteEvent::Expression { .. } => return,
+        };
         if self.queued_midi.len() >= MIDI_EVENT_CAP {
             return;
         }
-        self.queued_midi
-            .push((frame_offset, note, velocity, is_note_on));
+        self.queued_midi.push(queued);
         self.sleep_state.mark_activity();
     }
 
@@ -1023,7 +1029,7 @@ mod tests {
     fn mismatched_sample_rate_slows_or_speeds_root_playback() {
         let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
         sampler.set_sample("r", vec![0.5; 8], 2, 44_100);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         let voice = sampler.voices.iter().find(|v| v.active).unwrap();
         let expected = 44_100.0 / 48_000.0;
         assert!((voice.increment - expected).abs() < 1e-9);
@@ -1033,7 +1039,7 @@ mod tests {
     fn one_shot_ignores_note_off() {
         let mut sampler = SamplerDevice::new_for_metadata();
         sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         sampler.note_off(60);
         assert!(sampler.voices.iter().any(|v| v.is_held()));
     }
@@ -1043,7 +1049,7 @@ mod tests {
         let mut sampler = SamplerDevice::new_for_metadata();
         sampler.set_parameter(PARAM_PLAY_MODE, 1.0);
         sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         sampler.note_off(60);
         assert!(sampler
             .voices
@@ -1061,7 +1067,7 @@ mod tests {
     fn attack_fades_in_from_silence() {
         let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
         sampler.set_sample("r", vec![1.0; 256], 2, 48_000);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         let mut out = vec![0.0; 16];
         sampler.process_block(&[], &mut out, 8);
         assert!(out[0].abs() < 0.1, "first sample should be near silence");
@@ -1076,7 +1082,7 @@ mod tests {
         let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
         sampler.set_parameter(PARAM_RELEASE, 1.0);
         sampler.set_sample("r", vec![0.5, 0.5], 2, 48_000);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         let mut out = vec![0.0; 8];
         sampler.process_block(&[], &mut out, 4);
         assert!(sampler
@@ -1113,14 +1119,14 @@ mod tests {
     fn retrigger_overlaps_until_voice_limit() {
         let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
         sampler.set_sample("r", vec![0.5; 8], 2, 48_000);
-        sampler.note_on(60, 127);
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
+        sampler.note_on(60, 1.0);
         assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 2);
 
         sampler.set_parameter(PARAM_VOICES, voices_to_normalized(1));
         assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
 
-        sampler.note_on(60, 127);
+        sampler.note_on(60, 1.0);
         assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
     }
 }

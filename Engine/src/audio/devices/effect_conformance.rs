@@ -9,6 +9,7 @@ use super::{
     ParamType, EFFECT_IDS,
 };
 use crate::audio::dsp::test_util::{peak, render, stereo, white_noise};
+use crate::audio::midi_types::{NoteEvent, NoteExpression};
 use crate::audio::modulation::wrap_at_path;
 
 const SR: f32 = 48_000.0;
@@ -287,6 +288,39 @@ fn every_builtin_effect_conforms_wrapped() {
         .flat_map(|id| failures(id, true))
         .collect();
     assert!(failed.is_empty(), "\n{}", failed.join("\n"));
+}
+
+/// A per-note expression for a note nobody started; every effect must ignore it (REQ-013).
+const EXPRESSION: NoteEvent = NoteEvent::Expression {
+    note_id: 1,
+    key: 60,
+    kind: NoteExpression::Timbre,
+    value: 0.8,
+};
+
+#[test]
+fn expression_event_is_ignored_by_every_effect() {
+    let input = noise_then_silence(0.5, 0.1);
+    let mut failed = Vec::new();
+    for id in EFFECT_IDS {
+        for wrapped in [false, true] {
+            let reference = render(make_for(id, wrapped).as_mut(), &input, &[512]);
+            let mut device = make_for(id, wrapped);
+            let mut output = vec![0.0; input.len()];
+            for (block_in, block_out) in input.chunks(1024).zip(output.chunks_mut(1024)) {
+                device.send_note_event(&EXPRESSION, 7);
+                device.process_block(block_in, block_out, block_in.len() / 2);
+            }
+            if output != reference {
+                failed.push(format!("{id} (wrapped: {wrapped})"));
+            }
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "an expression event changed the output of: {}",
+        failed.join(", ")
+    );
 }
 
 /// Shows why the known-failing effects fail, and fails once one of them passes (so it can come

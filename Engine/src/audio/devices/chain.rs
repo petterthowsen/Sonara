@@ -8,6 +8,7 @@ use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamType,
     ParamValue, PortFlow,
 };
+use crate::audio::midi_types::NoteEvent;
 
 /// Built-in Chain: sequential child processing plus a post-chain volume.
 pub struct ChainDevice {
@@ -98,10 +99,10 @@ impl AudioDevice for ChainDevice {
         outputs[..interleaved].copy_from_slice(src);
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         for child in &mut self.children {
             child.mark_activity();
-            child.send_midi_event(note, velocity, is_note_on, frame_offset);
+            child.send_note_event(event, frame_offset);
         }
     }
 
@@ -233,7 +234,7 @@ mod tests {
             }
         }
 
-        fn send_midi_event(&mut self, _n: u8, _v: u8, _on: bool, _f: usize) {
+        fn send_note_event(&mut self, _event: &NoteEvent, _f: usize) {
             self.midi_hits += 1;
         }
 
@@ -313,7 +314,14 @@ mod tests {
         let mut chain = ChainDevice::new(8);
         chain.insert_child(0, Box::new(GainDevice::new(1.0)));
         chain.insert_child(1, Box::new(GainDevice::new(1.0)));
-        chain.send_midi_event(60, 100, true, 0);
+        chain.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 0.8,
+            },
+            0,
+        );
         let hits: Vec<usize> = (0..2)
             .map(|i| {
                 chain

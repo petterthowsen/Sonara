@@ -24,6 +24,7 @@ use crate::audio::devices::container::{
     copy_interleaved, device_at_path_mut, insert_device, remove_device,
 };
 use crate::audio::devices::{AudioDevice, DeviceContainer, DevicePath, ParamId};
+use crate::audio::midi_types::NoteEvent;
 use crate::audio::modulation::kinds::LFO_RETRIGGER;
 use crate::audio::transport::Transport;
 use tracing::warn;
@@ -37,26 +38,26 @@ const LIVE_VALUES_MAX: usize = 16;
 /// Frames between control steps: the mono path updates its offsets this often.
 pub const CONTROL_STEP: usize = 64;
 
-/// Notes the wrapper holds between a `send_midi_event` and the block that consumes them.
+/// Notes the wrapper holds between a `send_note_event` and the block that consumes them.
 const MIDI_QUEUE: usize = 256;
 
 /// Smallest offset change worth pushing to a device (below it the parameter ramp would just be
 /// restarted for nothing).
 const OFFSET_EPSILON: f32 = 1e-7;
 
-/// A queued note, with the frame offset it was sent with.
+/// A queued note event, with the frame offset it was sent with.
 #[derive(Clone, Copy)]
 struct QueuedMidi {
-    note: u8,
-    velocity: u8,
-    is_note_on: bool,
+    event: NoteEvent,
     frame_offset: usize,
 }
 
 const NO_MIDI: QueuedMidi = QueuedMidi {
-    note: 0,
-    velocity: 0,
-    is_note_on: false,
+    event: NoteEvent::Off {
+        note_id: 0,
+        key: 0,
+        release: 0.0,
+    },
     frame_offset: 0,
 };
 
@@ -518,12 +519,7 @@ impl ModulatedDevice {
             let event = self.midi[read];
             if event.frame_offset < end {
                 let offset = event.frame_offset.saturating_sub(base);
-                self.dev_mut().send_midi_event(
-                    event.note,
-                    event.velocity,
-                    event.is_note_on,
-                    offset,
-                );
+                self.dev_mut().send_note_event(&event.event, offset);
                 read += 1;
             } else {
                 self.midi[write] = event;
@@ -538,12 +534,8 @@ impl ModulatedDevice {
     fn deliver_all_midi(&mut self) {
         for i in 0..self.midi_len {
             let event = self.midi[i];
-            self.dev_mut().send_midi_event(
-                event.note,
-                event.velocity,
-                event.is_note_on,
-                event.frame_offset,
-            );
+            self.dev_mut()
+                .send_note_event(&event.event, event.frame_offset);
         }
         self.midi_len = 0;
     }
@@ -902,19 +894,17 @@ impl AudioDevice for ModulatedDevice {
         self.dev().extra_output_bus_count()
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         for state in self.mods.iter_mut().flatten() {
-            if is_note_on {
-                state.note_on(note, velocity, frame_offset);
-            } else {
-                state.note_off(note, frame_offset);
+            match *event {
+                NoteEvent::On { key, velocity, .. } => state.note_on(key, velocity, frame_offset),
+                NoteEvent::Off { key, release, .. } => state.note_off(key, release, frame_offset),
+                NoteEvent::Expression { .. } => {}
             }
         }
         if self.midi_len < MIDI_QUEUE {
             self.midi[self.midi_len] = QueuedMidi {
-                note,
-                velocity,
-                is_note_on,
+                event: *event,
                 frame_offset,
             };
             self.midi_len += 1;
@@ -1334,7 +1324,7 @@ mod tests {
         let input = vec![0.0f32; 512 * 2];
         let mut plain = create_drum("sonara.builtin.kick", SR, MAX_FRAMES).expect("kick");
         let mut out_plain = vec![0.0f32; 512 * 2];
-        plain.send_midi_event(60, 100, true, 100);
+        plain.send_note_event(&NoteEvent::test_on(60, 100), 100);
         plain.process_block(&input, &mut out_plain, 512);
 
         let mut devices: Vec<Box<dyn AudioDevice>> =
@@ -1347,7 +1337,7 @@ mod tests {
             .add_modulator(0, ModulatorKind::Lfo)
             .unwrap();
         let mut out_wrapped = vec![0.0f32; 512 * 2];
-        devices[0].send_midi_event(60, 100, true, 100);
+        devices[0].send_note_event(&NoteEvent::test_on(60, 100), 100);
         devices[0].process_block(&input, &mut out_wrapped, 512);
 
         assert_eq!(onset(&out_plain), Some(100));
@@ -1475,7 +1465,7 @@ mod tests {
         fn accepts_note_input(&self) -> bool {
             self.accepts
         }
-        fn send_midi_event(&mut self, _note: u8, _velocity: u8, _on: bool, _offset: usize) {
+        fn send_note_event(&mut self, _event: &NoteEvent, _offset: usize) {
             self.notes += 1;
         }
         fn is_sleeping(&self) -> bool {
@@ -1506,7 +1496,14 @@ mod tests {
             device.update_sleep_state(false);
         }
 
-        channel.send_midi_event_to_devices(60, 100, true, 0);
+        channel.send_note_event_to_devices(
+            &crate::audio::NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 100.0 / 127.0,
+            },
+            0,
+        );
 
         // The plain devices got the note straight away.
         for i in 0..2 {
@@ -1746,7 +1743,7 @@ mod tests {
             .set_modulator_route(0, "param/0", 0.5)
             .unwrap();
         // The envelope has to be gated for it to produce a value.
-        devices[0].send_midi_event(60, 100, true, 0);
+        devices[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
         let input = vec![0.0f32; 64 * 2];
         let mut output = vec![0.0f32; 64 * 2];
         devices[0].process_block(&input, &mut output, 64);
@@ -1919,7 +1916,7 @@ mod tests {
         assert!(values.is_empty(), "values reported while idle: {values:?}");
 
         // One held note: one voice, one effective value above the base (0.2).
-        devices[0].send_midi_event(60, 100, true, 0);
+        devices[0].send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(devices[0].as_mut(), &silence, &[512]);
         let (_, bytes) = devices[0].poll_device_data().expect("note payload");
         let records = decode_modulation(&bytes);
@@ -1933,7 +1930,7 @@ mod tests {
         );
 
         // Note off and the (fast) releases done: the values are gone again.
-        devices[0].send_midi_event(60, 0, false, 0);
+        devices[0].send_note_event(&NoteEvent::test_off(60), 0);
         render(devices[0].as_mut(), &silence, &[512]);
         let (_, bytes) = devices[0].poll_device_data().expect("released payload");
         let records = decode_modulation(&bytes);

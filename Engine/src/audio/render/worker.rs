@@ -736,7 +736,8 @@ mod tests {
             clip.midi_notes.push(ClipNote {
                 id: i as _,
                 note,
-                velocity: 100,
+                velocity: 100.0 / 127.0,
+                release: crate::audio::DEFAULT_RELEASE,
                 start_tick,
                 duration_ticks,
             });
@@ -899,7 +900,8 @@ mod tests {
             clip.midi_notes.push(ClipNote {
                 id: 0,
                 note: 108,
-                velocity: 100,
+                velocity: 100.0 / 127.0,
+                release: crate::audio::DEFAULT_RELEASE,
                 start_tick: 0,
                 duration_ticks: 4 * BAR,
             });
@@ -1017,7 +1019,6 @@ mod tests {
                 self.cancel.store(true, Ordering::Release);
             }
         }
-        fn send_midi_event(&mut self, _: u8, _: u8, _: bool, _: usize) {}
         fn set_parameter(&mut self, _: ParamId, _: ParamValue) {}
         fn get_parameter(&self, _: ParamId) -> Option<ParamValue> {
             None
@@ -1082,7 +1083,6 @@ mod tests {
 
     impl AudioDevice for Loading {
         fn process_block(&mut self, _: &[f32], _: &mut [f32], _: usize) {}
-        fn send_midi_event(&mut self, _: u8, _: u8, _: bool, _: usize) {}
         fn set_parameter(&mut self, _: ParamId, _: ParamValue) {}
         fn get_parameter(&self, _: ParamId) -> Option<ParamValue> {
             None

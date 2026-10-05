@@ -19,6 +19,7 @@ use super::kinds::{
 use super::lfo::{Lfo, LfoShape};
 use crate::audio::devices::ParamId;
 use crate::audio::dsp::tempo_sync::sync_beats;
+use crate::audio::midi_types::DEFAULT_RELEASE;
 use crate::audio::transport::Transport;
 
 /// The keytrack source reaches ±1 this many semitones either side of C3 (60), as in PolySynth.
@@ -41,6 +42,8 @@ pub struct ModulatorState {
     held: u16,
     last_note: f32,
     velocity: f32,
+    /// The latched release velocity (`release` kind).
+    release: f32,
     random: f32,
     /// xorshift state; never zero.
     rng: u32,
@@ -58,6 +61,7 @@ impl ModulatorState {
             held: 0,
             last_note: 60.0,
             velocity: 0.0,
+            release: DEFAULT_RELEASE,
             random: 0.0,
             rng: (kind.index() as u32 + 1).wrapping_mul(0x9E37_79B9) | 1,
         };
@@ -114,13 +118,12 @@ impl ModulatorState {
     /// A note-on: retrigger the kind's note-driven state. The held count drives the mono path's
     /// "release on the last note-off" rule; a per-voice instance uses
     /// [`gate_voice_on`](Self::gate_voice_on) instead.
-    pub fn note_on(&mut self, note: u8, velocity: u8, _frame: usize) {
+    pub fn note_on(&mut self, note: u8, velocity: f32, _frame: usize) {
         self.held = self.held.saturating_add(1);
         self.trigger(note, velocity);
     }
 
-    fn trigger(&mut self, note: u8, velocity: u8) {
-        let velocity = velocity as f32 / 127.0;
+    fn trigger(&mut self, note: u8, velocity: f32) {
         match self.kind {
             ModulatorKind::Lfo => {
                 if self.params.real(LFO_RETRIGGER).unwrap_or(0.0) >= 0.5 {
@@ -134,11 +137,17 @@ impl ModulatorState {
             ModulatorKind::Velocity => self.velocity = velocity,
             ModulatorKind::Keytrack => self.last_note = note as f32,
             ModulatorKind::Random => self.random = self.next_noise(),
+            ModulatorKind::Release => self.release = DEFAULT_RELEASE,
         }
     }
 
-    /// A note-off: an envelope releases once the last held note is released.
-    pub fn note_off(&mut self, _note: u8, _frame: usize) {
+    /// A note-off: an envelope releases once the last held note is released, and a `release`
+    /// modulator latches this note-off's release velocity.
+    pub fn note_off(&mut self, _note: u8, release: f32, _frame: usize) {
+        if self.kind == ModulatorKind::Release {
+            self.release = release;
+            return;
+        }
         if !self.kind.is_envelope() {
             return;
         }
@@ -151,25 +160,27 @@ impl ModulatorState {
     /// Per-voice note-on: this instance follows one voice, so exactly one note is held. Two
     /// successive calls (a poly same-note repeat, a mono retrigger) restart the envelopes
     /// without inflating the held count, so a single note-off still releases.
-    pub fn gate_voice_on(&mut self, note: u8, velocity: u8) {
+    pub fn gate_voice_on(&mut self, note: u8, velocity: f32) {
         self.held = 1;
         self.trigger(note, velocity);
     }
 
     /// Per-voice note-off: gate the envelope off (an `ad` ignores it), as
     /// [`gate_voice_on`](Self::gate_voice_on) is the per-voice companion to `note_on`.
-    pub fn gate_voice_off(&mut self) {
+    pub fn gate_voice_off(&mut self, release: f32) {
         self.held = 0;
-        if self.kind == ModulatorKind::Adsr {
-            self.env.gate_off();
+        match self.kind {
+            ModulatorKind::Adsr => self.env.gate_off(),
+            ModulatorKind::Release => self.release = release,
+            _ => {}
         }
     }
 
     /// Follow a new note without retriggering (a legato slide): velocity and keytrack update,
     /// envelopes and LFOs are left running.
-    pub fn update_note(&mut self, note: u8, velocity: u8) {
+    pub fn update_note(&mut self, note: u8, velocity: f32) {
         match self.kind {
-            ModulatorKind::Velocity => self.velocity = velocity as f32 / 127.0,
+            ModulatorKind::Velocity => self.velocity = velocity,
             ModulatorKind::Keytrack => self.last_note = note as f32,
             _ => {}
         }
@@ -239,6 +250,7 @@ impl ModulatorState {
             ModulatorKind::Velocity => self.velocity,
             ModulatorKind::Keytrack => self.keytrack(),
             ModulatorKind::Random => self.random,
+            ModulatorKind::Release => self.release,
         }
     }
 
@@ -254,6 +266,7 @@ impl ModulatorState {
             ModulatorKind::Velocity => self.velocity,
             ModulatorKind::Keytrack => self.keytrack(),
             ModulatorKind::Random => self.random,
+            ModulatorKind::Release => self.release,
         }
     }
 
@@ -266,6 +279,7 @@ impl ModulatorState {
         self.held = 0;
         self.last_note = 60.0;
         self.velocity = 0.0;
+        self.release = DEFAULT_RELEASE;
         self.random = 0.0;
         self.lfo = Lfo::default();
         self.synced_cycle = f64::NAN;
@@ -387,7 +401,7 @@ mod tests {
         let t = transport(120.0, false, 0.0);
         note.advance(4_800, &t); // 0.1 s at 2 Hz = 0.2 cycles
         assert!(note.lfo.phase > 0.1, "{}", note.lfo.phase);
-        note.note_on(60, 100, 0);
+        note.note_on(60, 100.0 / 127.0, 0);
         assert!((note.lfo.phase - 0.25).abs() < 1e-9, "{}", note.lfo.phase);
 
         // Retrigger Free: a note-on leaves the phase running.
@@ -396,7 +410,7 @@ mod tests {
         free.advance(4_800, &t);
         let before = free.lfo.phase;
         assert!(before > 0.1, "{before}");
-        free.note_on(60, 100, 0);
+        free.note_on(60, 100.0 / 127.0, 0);
         assert_eq!(free.lfo.phase, before);
     }
 
@@ -408,18 +422,18 @@ mod tests {
             set_real(&mut adsr, ENV_DECAY, time);
             set_real(&mut adsr, ENV_SUSTAIN, 0.4);
             set_real(&mut adsr, ENV_RELEASE, time);
-            adsr.note_on(60, 100, 0);
+            adsr.note_on(60, 100.0 / 127.0, 0);
             assert_within_5_percent(samples_in_state(&mut adsr, AdsrState::Attack), time);
             assert_within_5_percent(samples_in_state(&mut adsr, AdsrState::Decay), time);
             assert!((adsr.value() - 0.4).abs() < 1e-6);
-            adsr.note_off(60, 0);
+            adsr.note_off(60, DEFAULT_RELEASE, 0);
             assert_within_5_percent(samples_in_state(&mut adsr, AdsrState::Release), time);
             assert!(!adsr.env.is_active());
 
             let mut ad = ModulatorState::new(ModulatorKind::Ad, SR);
             set_real(&mut ad, ENV_ATTACK, time);
             set_real(&mut ad, ENV_DECAY, time);
-            ad.note_on(60, 100, 0);
+            ad.note_on(60, 100.0 / 127.0, 0);
             assert_within_5_percent(samples_in_state(&mut ad, AdsrState::Attack), time);
             assert_within_5_percent(samples_in_state(&mut ad, AdsrState::Decay), time);
             assert_eq!(ad.value(), 0.0, "ad decays to silence");
@@ -433,27 +447,53 @@ mod tests {
         set_real(&mut adsr, ENV_ATTACK, 0.001);
         set_real(&mut adsr, ENV_DECAY, 0.01);
         set_real(&mut adsr, ENV_SUSTAIN, 0.5);
-        adsr.note_on(60, 100, 0);
-        adsr.note_on(64, 100, 0);
+        adsr.note_on(60, 100.0 / 127.0, 0);
+        adsr.note_on(64, 100.0 / 127.0, 0);
         let t = transport(120.0, false, 0.0);
         adsr.advance(2_000, &t); // past attack + decay into sustain
-        adsr.note_off(60, 0);
+        adsr.note_off(60, DEFAULT_RELEASE, 0);
         assert_eq!(adsr.env.state(), AdsrState::Sustain, "one note still held");
-        adsr.note_off(64, 0);
+        adsr.note_off(64, DEFAULT_RELEASE, 0);
         assert_eq!(adsr.env.state(), AdsrState::Release);
 
         // A note-on while an envelope is running retriggers the attack.
-        adsr.note_on(67, 100, 0);
+        adsr.note_on(67, 100.0 / 127.0, 0);
         assert_eq!(adsr.env.state(), AdsrState::Attack);
 
         // AD is one-shot: note-off never releases it.
         let mut ad = ModulatorState::new(ModulatorKind::Ad, SR);
         set_real(&mut ad, ENV_ATTACK, 0.01);
         set_real(&mut ad, ENV_DECAY, 0.2);
-        ad.note_on(60, 100, 0);
+        ad.note_on(60, 100.0 / 127.0, 0);
         ad.advance(480, &t); // past the attack
-        ad.note_off(60, 0);
+        ad.note_off(60, DEFAULT_RELEASE, 0);
         assert_ne!(ad.env.state(), AdsrState::Release);
+    }
+
+    #[test]
+    fn release_modulator_latches_on_note_off() {
+        let t = transport(120.0, false, 0.0);
+
+        // Per voice: the default while held, the note-off's release after it.
+        let mut voice = ModulatorState::new(ModulatorKind::Release, SR);
+        voice.gate_voice_on(60, 0.8);
+        assert_eq!(voice.advance(64, &t), DEFAULT_RELEASE);
+        voice.gate_voice_off(0.9);
+        assert_eq!(voice.advance(64, &t), 0.9);
+        // The next note starts from the default again.
+        voice.gate_voice_on(62, 0.8);
+        assert_eq!(voice.value(), DEFAULT_RELEASE);
+
+        // Mono: every note-off latches its release.
+        let mut mono = ModulatorState::new(ModulatorKind::Release, SR);
+        mono.note_on(60, 0.8, 0);
+        assert_eq!(mono.advance(64, &t), DEFAULT_RELEASE);
+        mono.note_off(60, 0.2, 0);
+        assert_eq!(mono.advance(64, &t), 0.2);
+        mono.note_on(64, 0.8, 0);
+        assert_eq!(mono.value(), DEFAULT_RELEASE);
+        mono.reset();
+        assert_eq!(mono.value(), DEFAULT_RELEASE);
     }
 
     #[test]
@@ -461,24 +501,24 @@ mod tests {
         let t = transport(120.0, false, 0.0);
 
         let mut key = ModulatorState::new(ModulatorKind::Keytrack, SR);
-        key.note_on(60, 100, 0);
+        key.note_on(60, 100.0 / 127.0, 0);
         assert_eq!(key.advance(64, &t), 0.0, "C3 is the pivot");
-        key.note_on(120, 100, 0);
+        key.note_on(120, 100.0 / 127.0, 0);
         assert_eq!(key.advance(64, &t), 1.0, "+60 semitones");
-        key.note_on(0, 100, 0);
+        key.note_on(0, 100.0 / 127.0, 0);
         assert_eq!(key.advance(64, &t), -1.0, "−60 semitones");
 
         let mut vel = ModulatorState::new(ModulatorKind::Velocity, SR);
-        vel.note_on(60, 127, 0);
+        vel.note_on(60, 1.0, 0);
         assert_eq!(vel.advance(64, &t), 1.0);
-        vel.note_on(60, 64, 0);
+        vel.note_on(60, 64.0 / 127.0, 0);
         assert!((vel.advance(64, &t) - 64.0 / 127.0).abs() < 1e-6);
 
         let mut random = ModulatorState::new(ModulatorKind::Random, SR);
-        random.note_on(60, 100, 0);
+        random.note_on(60, 100.0 / 127.0, 0);
         let first = random.advance(64, &t);
         assert!((-1.0..=1.0).contains(&first));
-        random.note_on(62, 100, 0);
+        random.note_on(62, 100.0 / 127.0, 0);
         assert_ne!(random.advance(64, &t), first, "new value per note-on");
     }
 

@@ -292,6 +292,7 @@ tooltip_text = "Note map for this channel"
 text = "Note Map"
 
 [node name="NoteMapPopup" type="PopupMenu" parent="BottomPanel/Toolbar/NoteMapButton" unique_id=1658372459]
+oversampling_override = 1.0
 theme_type_variation = &"ContextMenuList"
 
 [node name="NoteMapLoad" type="Button" parent="BottomPanel/Toolbar" unique_id=1947069938]

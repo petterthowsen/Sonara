@@ -48,6 +48,8 @@ pub use utility::UtilityDevice;
 
 use std::time::{Duration, Instant};
 
+use super::midi_types::NoteEvent;
+
 /// Off-lock work requested by [`AudioDevice::configure_data`]: the command thread runs it with
 /// the state lock released and passes its product to [`AudioDevice::apply_data_build`].
 pub type DataBuild = Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>;
@@ -346,20 +348,14 @@ pub trait AudioDevice: Send {
         }
     }
 
-    /// Send a MIDI event to this device with a frame offset within the upcoming block
+    /// A note event taking effect `frame_offset` samples into the coming block
+    /// (0 <= frame_offset < sample_count of the next `process_block`). Devices queue it and
+    /// apply it while generating audio.
     ///
-    /// The `frame_offset` is the sample index in the current processing block at which the
-    /// event must take effect (0 <= frame_offset < sample_count of the next `process_block`).
-    /// Devices should queue these events and apply them when generating audio.
-    fn send_midi_event(
-        &mut self,
-        _note: u8,
-        _velocity: u8,
-        _is_note_on: bool,
-        _frame_offset: usize,
-    ) {
-        // Default: ignore MIDI (effects don't need it)
-    }
+    /// Velocity and release are normalized 0–1. Containers forward the event with the same
+    /// `note_id` (only `key` may change). Devices that don't handle expressions drop them, and
+    /// effects ignore notes altogether (the default).
+    fn send_note_event(&mut self, _event: &NoteEvent, _frame_offset: usize) {}
 
     /// Fade out any sounding voice over ~3 ms starting `frame_offset` samples into the coming
     /// block (Drum Machine choke groups). Default: no-op.

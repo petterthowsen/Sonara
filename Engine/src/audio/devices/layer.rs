@@ -7,9 +7,13 @@ use super::container::{
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
+use crate::audio::midi_types::{NoteEvent, SoundingNoteId, AUDITION_NOTE_ID};
 
 /// Slot note map entry for an input note the slot ignores (and an empty `held` entry).
 pub const NOTE_NONE: u8 = 255;
+
+/// `held` entry for an input note with nothing sounding.
+const NOT_HELD: (u8, SoundingNoteId) = (NOTE_NONE, 0);
 
 /// Identity note map: every input note goes to the same output note.
 fn full_note_map() -> [u8; 128] {
@@ -28,9 +32,10 @@ pub struct LayerSlot {
     pub solo: bool,
     /// Input note -> output note sent to `device` (`NOTE_NONE` = not mapped).
     pub note_map: [u8; 128],
-    /// Input note -> output note its sounding note-on went to (`NOTE_NONE` = not held).
-    /// Note-offs route through this, so remapping mid-note can't strand a note.
-    pub held: [u8; 128],
+    /// Input note -> (output note, sounding-note id) of its sounding note-on (`NOTE_NONE` = not
+    /// held). Note-offs route through this, so remapping mid-note can't strand a note, and a
+    /// retrigger releases the earlier note with its own id.
+    pub held: [(u8, SoundingNoteId); 128],
     /// When true (and the Layer is a multi-out source), audio goes to this slot's extra bus.
     pub separate_out: bool,
 }
@@ -44,7 +49,7 @@ impl LayerSlot {
             mute: false,
             solo: false,
             note_map: full_note_map(),
-            held: [NOTE_NONE; 128],
+            held: [NOT_HELD; 128],
             separate_out: false,
         }
     }
@@ -146,8 +151,21 @@ impl LayerDevice {
         is_note_on: bool,
     ) -> bool {
         if let Some(slot) = self.slots.get_mut(index) {
+            let event = if is_note_on && velocity > 0 {
+                NoteEvent::On {
+                    note_id: AUDITION_NOTE_ID,
+                    key: note,
+                    velocity: velocity as f32 / 127.0,
+                }
+            } else {
+                NoteEvent::Off {
+                    note_id: AUDITION_NOTE_ID,
+                    key: note,
+                    release: crate::audio::midi_types::DEFAULT_RELEASE,
+                }
+            };
             slot.device.mark_activity();
-            slot.device.send_midi_event(note, velocity, is_note_on, 0);
+            slot.device.send_note_event(&event, 0);
             true
         } else {
             false
@@ -292,34 +310,44 @@ impl AudioDevice for LayerDevice {
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        let input = (note & 0x7f) as usize;
-        // A note-on with velocity 0 is a note-off.
-        let is_note_on = is_note_on && velocity > 0;
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        let input = (event.key() & 0x7f) as usize;
+        let note_id = event.note_id();
         for slot in &mut self.slots {
-            if is_note_on {
-                let out = slot.note_map[input];
-                if out == NOTE_NONE {
-                    continue;
+            match *event {
+                NoteEvent::On { .. } => {
+                    let out = slot.note_map[input];
+                    if out == NOTE_NONE {
+                        continue;
+                    }
+                    slot.device.mark_activity();
+                    // Retrigger while held: release the earlier note first, with its own id.
+                    let (prev_key, prev_id) = slot.held[input];
+                    if prev_key != NOTE_NONE {
+                        let release = NoteEvent::Off {
+                            note_id: prev_id,
+                            key: prev_key,
+                            release: crate::audio::midi_types::DEFAULT_RELEASE,
+                        };
+                        slot.device.send_note_event(&release, frame_offset);
+                    }
+                    slot.held[input] = (out, note_id);
+                    slot.device
+                        .send_note_event(&event.with_key(out), frame_offset);
                 }
-                slot.device.mark_activity();
-                // Retrigger while held: release the previous output first.
-                let prev = slot.held[input];
-                if prev != NOTE_NONE {
-                    slot.device.send_midi_event(prev, 0, false, frame_offset);
+                NoteEvent::Off { .. } | NoteEvent::Expression { .. } => {
+                    // Only the note that's held: an earlier note was released at the retrigger.
+                    let (out, held_id) = slot.held[input];
+                    if out == NOTE_NONE || held_id != note_id {
+                        continue;
+                    }
+                    if matches!(event, NoteEvent::Off { .. }) {
+                        slot.held[input] = NOT_HELD;
+                    }
+                    slot.device.mark_activity();
+                    slot.device
+                        .send_note_event(&event.with_key(out), frame_offset);
                 }
-                slot.held[input] = out;
-                slot.device
-                    .send_midi_event(out, velocity, true, frame_offset);
-            } else {
-                let out = slot.held[input];
-                if out == NOTE_NONE {
-                    continue;
-                }
-                slot.held[input] = NOTE_NONE;
-                slot.device.mark_activity();
-                slot.device
-                    .send_midi_event(out, velocity, false, frame_offset);
             }
         }
     }
@@ -365,7 +393,7 @@ impl AudioDevice for LayerDevice {
     fn reset(&mut self) {
         for slot in &mut self.slots {
             slot.device.reset();
-            slot.held = [NOTE_NONE; 128];
+            slot.held = [NOT_HELD; 128];
         }
         self.mix_buffer.fill(0.0);
         self.child_buffer.fill(0.0);
@@ -406,6 +434,7 @@ impl AudioDevice for LayerDevice {
 mod tests {
     use super::*;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+    use crate::audio::midi_types::DEFAULT_RELEASE;
 
     struct GainDevice {
         gain: f32,
@@ -458,10 +487,26 @@ mod tests {
         }
     }
 
-    /// (note, velocity, is_note_on, frame_offset) as the slot device received it.
-    type MidiLog = std::sync::Arc<std::sync::Mutex<Vec<(u8, u8, bool, usize)>>>;
+    /// (event, frame_offset) as the slot device received it.
+    type MidiLog = std::sync::Arc<std::sync::Mutex<Vec<(NoteEvent, usize)>>>;
 
-    /// Records MIDI events and outputs silence.
+    fn on(note_id: SoundingNoteId, key: u8, velocity: f32) -> NoteEvent {
+        NoteEvent::On {
+            note_id,
+            key,
+            velocity,
+        }
+    }
+
+    fn off(note_id: SoundingNoteId, key: u8, release: f32) -> NoteEvent {
+        NoteEvent::Off {
+            note_id,
+            key,
+            release,
+        }
+    }
+
+    /// Records note events and outputs silence.
     struct MidiRecorder {
         log: MidiLog,
     }
@@ -472,11 +517,8 @@ mod tests {
             outputs[..n].fill(0.0);
         }
 
-        fn send_midi_event(&mut self, note: u8, velocity: u8, on: bool, frame_offset: usize) {
-            self.log
-                .lock()
-                .unwrap()
-                .push((note, velocity, on, frame_offset));
+        fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+            self.log.lock().unwrap().push((*event, frame_offset));
         }
 
         fn set_parameter(&mut self, _id: ParamId, _value: ParamValue) {}
@@ -519,7 +561,7 @@ mod tests {
         log
     }
 
-    fn events(log: &MidiLog) -> Vec<(u8, u8, bool, usize)> {
+    fn events(log: &MidiLog) -> Vec<(NoteEvent, usize)> {
         log.lock().unwrap().clone()
     }
 
@@ -584,9 +626,9 @@ mod tests {
         let mut layer = LayerDevice::new(8);
         let log = add_recorder(&mut layer, 0);
         for n in 0..128u8 {
-            layer.send_midi_event(n, 100, true, 0);
+            layer.send_note_event(&on(n as u32 + 1, n, 0.8), 0);
         }
-        let got: Vec<u8> = events(&log).iter().map(|e| e.0).collect();
+        let got: Vec<u8> = events(&log).iter().map(|e| e.0.key()).collect();
         assert_eq!(got, (0..128u8).collect::<Vec<_>>());
     }
 
@@ -599,10 +641,23 @@ mod tests {
         layer.set_slot_note_map(0, &map_of(&[(36, 36)]));
         layer.set_slot_note_map(1, &map_of(&[(36, 49)]));
         layer.set_slot_note_map(2, &map_of(&[]));
-        layer.send_midi_event(36, 90, true, 17);
-        assert_eq!(events(&a), vec![(36, 90, true, 17)]);
-        assert_eq!(events(&b), vec![(49, 90, true, 17)]);
+        layer.send_note_event(&on(1, 36, 0.7), 17);
+        assert_eq!(events(&a), vec![(on(1, 36, 0.7), 17)]);
+        assert_eq!(events(&b), vec![(on(1, 49, 0.7), 17)]);
         assert!(events(&c).is_empty());
+    }
+
+    #[test]
+    fn layer_keeps_note_id_through_remap() {
+        let mut layer = LayerDevice::new(8);
+        let b = add_recorder(&mut layer, 0);
+        layer.set_slot_note_map(0, &map_of(&[(60, 36)]));
+        layer.send_note_event(&on(42, 60, 0.5039), 0);
+        layer.send_note_event(&off(42, 60, 0.25), 9);
+        assert_eq!(
+            events(&b),
+            vec![(on(42, 36, 0.5039), 0), (off(42, 36, 0.25), 9)]
+        );
     }
 
     #[test]
@@ -610,20 +665,20 @@ mod tests {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
         layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
-        layer.send_midi_event(36, 100, true, 0);
+        layer.send_note_event(&on(1, 36, 0.8), 0);
         layer.set_slot_note_map(0, &map_of(&[(36, 51)]));
-        layer.send_midi_event(36, 0, false, 5);
-        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 5)]);
+        layer.send_note_event(&off(1, 36, 0.5), 5);
+        assert_eq!(events(&b), vec![(on(1, 49, 0.8), 0), (off(1, 49, 0.5), 5)]);
     }
 
     #[test]
     fn layer_note_off_reaches_slot_unmapped_mid_note() {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
-        layer.send_midi_event(40, 100, true, 0);
+        layer.send_note_event(&on(1, 40, 0.8), 0);
         layer.set_slot_note_map(0, &map_of(&[]));
-        layer.send_midi_event(40, 0, false, 0);
-        assert_eq!(events(&b), vec![(40, 100, true, 0), (40, 0, false, 0)]);
+        layer.send_note_event(&off(1, 40, 0.5), 0);
+        assert_eq!(events(&b), vec![(on(1, 40, 0.8), 0), (off(1, 40, 0.5), 0)]);
     }
 
     #[test]
@@ -632,52 +687,65 @@ mod tests {
         let a = add_recorder(&mut layer, 0);
         let b = add_recorder(&mut layer, 1);
         layer.set_slot_note_map(1, &map_of(&[(36, 49)]));
-        layer.send_midi_event(36, 100, true, 0);
+        layer.send_note_event(&on(1, 36, 0.8), 0);
         layer.move_child(1, 0);
         layer.set_slot_note_map(0, &map_of(&[(36, 60)]));
-        layer.send_midi_event(36, 0, false, 0);
-        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 0)]);
-        assert_eq!(events(&a), vec![(36, 100, true, 0), (36, 0, false, 0)]);
+        layer.send_note_event(&off(1, 36, 0.5), 0);
+        assert_eq!(events(&b), vec![(on(1, 49, 0.8), 0), (off(1, 49, 0.5), 0)]);
+        assert_eq!(events(&a), vec![(on(1, 36, 0.8), 0), (off(1, 36, 0.5), 0)]);
     }
 
     #[test]
-    fn layer_retrigger_releases_previous_output() {
+    fn layer_retrigger_releases_held_id() {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
         layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
-        layer.send_midi_event(36, 100, true, 0);
+        layer.send_note_event(&on(1, 36, 0.8), 0);
         layer.set_slot_note_map(0, &map_of(&[(36, 51)]));
-        layer.send_midi_event(36, 80, true, 3);
-        layer.send_midi_event(36, 0, false, 4);
+        layer.send_note_event(&on(2, 36, 0.6), 3);
+        // The first note's own off was already sent at the retrigger, so it's dropped.
+        layer.send_note_event(&off(1, 36, 0.9), 4);
+        layer.send_note_event(&off(2, 36, 0.2), 5);
         assert_eq!(
             events(&b),
             vec![
-                (49, 100, true, 0),
-                (49, 0, false, 3),
-                (51, 80, true, 3),
-                (51, 0, false, 4)
+                (on(1, 49, 0.8), 0),
+                (off(1, 49, DEFAULT_RELEASE), 3),
+                (on(2, 51, 0.6), 3),
+                (off(2, 51, 0.2), 5)
             ]
         );
     }
 
     #[test]
-    fn layer_velocity_zero_note_on_is_note_off() {
+    fn layer_forwards_expression_for_held_note_only() {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
-        layer.set_slot_note_map(0, &map_of(&[(36, 49)]));
-        layer.send_midi_event(36, 100, true, 0);
-        layer.send_midi_event(36, 0, true, 1);
-        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 1)]);
+        layer.set_slot_note_map(0, &map_of(&[(60, 36)]));
+        let expression = |note_id| NoteEvent::Expression {
+            note_id,
+            key: 60,
+            kind: crate::audio::midi_types::NoteExpression::Pressure,
+            value: 0.3,
+        };
+        layer.send_note_event(&expression(1), 0);
+        layer.send_note_event(&on(1, 60, 0.8), 0);
+        layer.send_note_event(&expression(1), 2);
+        layer.send_note_event(&expression(7), 2);
+        assert_eq!(
+            events(&b),
+            vec![(on(1, 36, 0.8), 0), (expression(1).with_key(36), 2)]
+        );
     }
 
     #[test]
     fn layer_reset_forgets_held_notes() {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
-        layer.send_midi_event(36, 100, true, 0);
+        layer.send_note_event(&on(1, 36, 0.8), 0);
         layer.reset();
-        layer.send_midi_event(36, 0, false, 0);
-        assert_eq!(events(&b), vec![(36, 100, true, 0)]);
+        layer.send_note_event(&off(1, 36, 0.5), 0);
+        assert_eq!(events(&b), vec![(on(1, 36, 0.8), 0)]);
     }
 
     #[test]
@@ -685,12 +753,18 @@ mod tests {
         let mut layer = LayerDevice::new(8);
         let b = add_recorder(&mut layer, 0);
         layer.set_slot_note_map(0, &map_of(&[]));
-        assert!(layer.audition_slot(0, 49, 100, true));
+        assert!(layer.audition_slot(0, 49, 127, true));
         assert!(layer.audition_slot(0, 49, 0, false));
         assert!(!layer.audition_slot(3, 49, 100, true));
-        assert_eq!(events(&b), vec![(49, 100, true, 0), (49, 0, false, 0)]);
+        assert_eq!(
+            events(&b),
+            vec![
+                (on(AUDITION_NOTE_ID, 49, 1.0), 0),
+                (off(AUDITION_NOTE_ID, 49, DEFAULT_RELEASE), 0)
+            ]
+        );
         // Auditioning doesn't touch held notes: a Layer note-off on 49 reaches nothing.
-        layer.send_midi_event(49, 0, false, 0);
+        layer.send_note_event(&off(AUDITION_NOTE_ID, 49, 0.5), 0);
         assert_eq!(events(&b).len(), 2);
     }
 

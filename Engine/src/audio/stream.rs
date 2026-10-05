@@ -872,7 +872,14 @@ mod tests {
         let mut synth = PolySynthDevice::new(48_000.0);
         synth.prepare(48_000.0, MAX_BLOCK_FRAMES);
         channel.devices.push(Box::new(synth));
-        channel.send_midi_event_to_devices(60, 100, true, 0);
+        channel.send_note_event_to_devices(
+            &crate::audio::NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 100.0 / 127.0,
+            },
+            0,
+        );
         state.channels.insert(2, channel);
         state.set_is_playing(true);
         let rendering = state.rendering.clone();

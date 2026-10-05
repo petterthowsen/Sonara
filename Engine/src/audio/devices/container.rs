@@ -693,6 +693,7 @@ mod tests {
     use crate::audio::devices::{
         DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
     };
+    use crate::audio::midi_types::NoteEvent;
 
     struct GainDevice {
         gain: f32,
@@ -716,7 +717,7 @@ mod tests {
             }
         }
 
-        fn send_midi_event(&mut self, _note: u8, _velocity: u8, _is_on: bool, _frame: usize) {
+        fn send_note_event(&mut self, _event: &NoteEvent, _frame: usize) {
             self.midi_count += 1;
         }
 

@@ -17,6 +17,7 @@ use crate::audio::devices::{
 use crate::audio::dsp::gain::db_to_gain;
 use crate::audio::dsp::saturate::soft_clip;
 use crate::audio::dsp::{Rng, SmoothedParam};
+use crate::audio::midi_types::NoteEvent;
 
 /// Trigger events queued for a single block.
 const EVENT_CAPACITY: usize = 64;
@@ -47,8 +48,8 @@ pub struct DrumHost<V: DrumVoice + 'static> {
     params: DrumParams,
     output_gain: SmoothedParam,
 
-    /// Queued MIDI: `(frame_offset, note, velocity, is_on)`.
-    events: [(usize, u8, u8, bool); EVENT_CAPACITY],
+    /// Queued notes: `(frame_offset, key, velocity or release, is_on)`.
+    events: [(usize, u8, f32, bool); EVENT_CAPACITY],
     event_count: usize,
 
     /// Choke requests queued for this block (frame offsets within the coming block).
@@ -93,7 +94,7 @@ impl<V: DrumVoice + 'static> DrumHost<V> {
                 sample_rate,
                 SmoothedParam::DEFAULT_RAMP_MS,
             ),
-            events: [(0, 0, 0, false); EVENT_CAPACITY],
+            events: [(0, 0, 0.0, false); EVENT_CAPACITY],
             event_count: 0,
             chokes: [0; CHOKE_CAPACITY],
             choke_count: 0,
@@ -130,8 +131,7 @@ impl<V: DrumVoice + 'static> DrumHost<V> {
     }
 
     /// Start a hit in the idle slot; the sounding slot fades out.
-    fn trigger(&mut self, note: u8, velocity: u8) {
-        let v = velocity as f32 / 127.0;
+    fn trigger(&mut self, note: u8, v: f32) {
         // A stale fading slot is done: reuse it.
         if let Some(previous) = self.fading.take() {
             self.voices[previous].reset();
@@ -245,15 +245,15 @@ impl<V: DrumVoice + 'static> AudioDevice for DrumHost<V> {
         self.events[..count].sort_unstable_by_key(|event| event.0);
         let mut cursor = 0usize;
         for i in 0..count {
-            let (offset, note, velocity, is_on) = self.events[i];
+            let (offset, note, value, is_on) = self.events[i];
             let end = offset.min(frames);
             if end > cursor {
                 self.render_span(cursor, end);
                 cursor = end;
             }
-            if is_on && velocity > 0 {
-                self.trigger(note, velocity);
-            } else if !is_on {
+            if is_on {
+                self.trigger(note, value);
+            } else {
                 self.release();
             }
         }
@@ -309,12 +309,17 @@ impl<V: DrumVoice + 'static> AudioDevice for DrumHost<V> {
         self.sleeping = self.quiet_samples as f32 >= SLEEP_SECONDS * self.sample_rate;
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        let queued = match *event {
+            NoteEvent::On { key, velocity, .. } => (frame_offset, key, velocity, true),
+            NoteEvent::Off { key, release, .. } => (frame_offset, key, release, false),
+            NoteEvent::Expression { .. } => return,
+        };
         if self.event_count < EVENT_CAPACITY {
-            self.events[self.event_count] = (frame_offset, note, velocity, is_note_on);
+            self.events[self.event_count] = queued;
             self.event_count += 1;
         }
-        if is_note_on && velocity > 0 {
+        if queued.3 {
             self.wake();
         }
     }
@@ -469,6 +474,7 @@ mod tests {
     use crate::audio::devices::param_table::ParamSpec;
     use crate::audio::devices::{AudioDevice, ParamId, ParamValue};
     use crate::audio::dsp::Rng;
+    use crate::audio::midi_types::NoteEvent;
 
     /// A voice that holds a steady level while active, so any drop to silence must come from
     /// the choke fade, not the voice's own envelope.
@@ -540,7 +546,7 @@ mod tests {
         host.prepare(sr, block);
 
         // A hit at frame 0, then a choke at the same offset.
-        host.send_midi_event(36, 127, true, 0);
+        host.send_note_event(&NoteEvent::test_on(36, 127), 0);
         host.choke(0);
 
         let total_blocks = sr as usize / block + 2; // just over one second

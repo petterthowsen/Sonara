@@ -11,6 +11,7 @@ use crate::audio::ipc::{
     futex, BlockEvent, BlockTransport, HostAssignment, InstanceId, PluginCommand, ProcessManager,
     MAX_BLOCK_EVENTS,
 };
+use crate::audio::midi_types::NoteEvent;
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -480,15 +481,31 @@ impl AudioDevice for SubprocessClapAdapter {
         }
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    /// Notes go to the plugin with the engine's sounding-note id as the CLAP `note_id`.
+    /// Expressions aren't carried over IPC yet and are dropped.
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        let (note_id, key, value, is_note_on) = match *event {
+            NoteEvent::On {
+                note_id,
+                key,
+                velocity,
+            } => (note_id, key, velocity, true),
+            NoteEvent::Off {
+                note_id,
+                key,
+                release,
+            } => (note_id, key, release, false),
+            NoteEvent::Expression { .. } => return,
+        };
         if self.input_events.len() >= MAX_BLOCK_EVENTS {
             self.stats.event_drops += 1;
             return;
         }
         self.input_events.push(BlockEvent::note(
             frame_offset as u32,
-            note,
-            velocity as f32 / 127.0,
+            note_id,
+            key,
+            value,
             is_note_on,
         ));
     }
@@ -1534,7 +1551,24 @@ mod tests {
         clock.publish(Instant::now(), Duration::from_secs(1));
         let mut adapter = SubprocessClapAdapter::new_for_test(load, clock, 48_000.0, 64);
 
-        adapter.send_midi_event(60, 100, true, 12);
+        adapter.send_note_event(
+            &NoteEvent::On {
+                note_id: 77,
+                key: 60,
+                velocity: 0.5039,
+            },
+            12,
+        );
+        // Expressions don't reach the plugin yet.
+        adapter.send_note_event(
+            &NoteEvent::Expression {
+                note_id: 77,
+                key: 60,
+                kind: crate::audio::midi_types::NoteExpression::Pressure,
+                value: 0.4,
+            },
+            20,
+        );
         adapter.set_parameter_at(7, 0.75, 3);
         adapter.set_param_mod_at(9, 0.5, 40);
 
@@ -1546,6 +1580,8 @@ mod tests {
         assert_eq!(events.len(), 3, "the host saw all three events");
         assert_eq!(events[0].kind, crate::audio::ipc::EVENT_NOTE_ON);
         assert_eq!(events[0].note, 60);
+        assert_eq!(events[0].id, 77);
+        assert_eq!(events[0].value, 0.5039);
         assert_eq!(events[0].sample_offset, 12);
         assert_eq!(events[1].kind, crate::audio::ipc::EVENT_PARAM);
         assert_eq!(events[1].id, 7);

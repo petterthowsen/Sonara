@@ -363,9 +363,10 @@ pub const EVENT_PARAM_MOD: u16 = 4;
 /// One event in a block's input or output event array.
 ///
 /// `sample_offset` is relative to the block start, which makes notes and parameter changes
-/// sample-accurate. `value` is a note velocity, a normalized (0.0–1.0) parameter value or a
-/// normalized modulation offset; `id` is the engine's parameter index for parameter events and
-/// 0 for notes.
+/// sample-accurate. `value` is a note's velocity (note-on) or release velocity (note-off), a
+/// normalized (0.0–1.0) parameter value or a normalized modulation offset; `id` is the engine's
+/// parameter index for parameter events and the sounding-note id for notes (the CLAP
+/// `note_id`). Note expressions aren't sent over IPC yet.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BlockEvent {
@@ -378,7 +379,14 @@ pub struct BlockEvent {
 }
 
 impl BlockEvent {
-    pub fn note(sample_offset: u32, note: u8, velocity_01: f32, is_note_on: bool) -> Self {
+    /// A note-on (`value` = velocity) or note-off (`value` = release velocity), both 0–1.
+    pub fn note(
+        sample_offset: u32,
+        note_id: u32,
+        key: u8,
+        value_01: f32,
+        is_note_on: bool,
+    ) -> Self {
         Self {
             sample_offset,
             kind: if is_note_on {
@@ -386,10 +394,10 @@ impl BlockEvent {
             } else {
                 EVENT_NOTE_OFF
             },
-            note,
+            note: key,
             _reserved: 0,
-            value: velocity_01,
-            id: 0,
+            value: value_01,
+            id: note_id,
         }
     }
 
@@ -521,6 +529,22 @@ impl Default for Doorbell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_event_note_round_trips_id() {
+        let on = BlockEvent::note(12, 4321, 60, 0.5039, true);
+        assert_eq!(
+            (on.sample_offset, on.kind, on.note, on.value, on.id),
+            (12, EVENT_NOTE_ON, 60, 0.5039, 4321)
+        );
+        let off = BlockEvent::note(40, 4321, 60, 0.25, false);
+        assert_eq!(
+            (off.sample_offset, off.kind, off.note, off.value, off.id),
+            (40, EVENT_NOTE_OFF, 60, 0.25, 4321)
+        );
+        // The layout the plugin host reads is unchanged.
+        assert_eq!(std::mem::size_of::<BlockEvent>(), 16);
+    }
 
     #[test]
     fn log_file_names_are_safe() {

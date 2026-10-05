@@ -1265,30 +1265,19 @@ impl OscServer {
                 }
             }
             ["clip", id_str, "add_note"] => {
-                if let (
-                    Some(OscType::Int(note_id)),
-                    Some(OscType::Int(note)),
-                    Some(OscType::Int(start_tick)),
-                    Some(OscType::Int(duration)),
-                    Some(OscType::Int(velocity)),
-                ) = (
-                    args.get(0),
-                    args.get(1),
-                    args.get(2),
-                    args.get(3),
-                    args.get(4),
-                ) {
+                if let Some(n) = parse_clip_note_args(addr, args) {
                     info!(
-                        "Add note to clip {}: note_id {} note {} at tick {} duration {}",
-                        id_str, note_id, note, start_tick, duration
+                        "Add note to clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
+                        id_str, n.note_id, n.note, n.start_tick, n.duration_ticks, n.velocity, n.release
                     );
                     command_tx.send(AudioCommand::AddNoteToClip {
                         clip_id: id_str.to_string(),
-                        note_id: *note_id as u64,
-                        note: *note as u8,
-                        start_tick: *start_tick as i64,
-                        duration_ticks: *duration as i64,
-                        velocity: *velocity as u8,
+                        note_id: n.note_id,
+                        note: n.note,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                        velocity: n.velocity,
+                        release: n.release,
                     })?;
                 }
             }
@@ -1302,30 +1291,19 @@ impl OscServer {
                 }
             }
             ["clip", id_str, "update_note"] => {
-                if let (
-                    Some(OscType::Int(note_id)),
-                    Some(OscType::Int(note)),
-                    Some(OscType::Int(start_tick)),
-                    Some(OscType::Int(duration)),
-                    Some(OscType::Int(velocity)),
-                ) = (
-                    args.get(0),
-                    args.get(1),
-                    args.get(2),
-                    args.get(3),
-                    args.get(4),
-                ) {
+                if let Some(n) = parse_clip_note_args(addr, args) {
                     info!(
-                        "Update note in clip {}: note_id {} note {} at tick {} duration {}",
-                        id_str, note_id, note, start_tick, duration
+                        "Update note in clip {}: note_id {} note {} at tick {} duration {} vel {} rel {}",
+                        id_str, n.note_id, n.note, n.start_tick, n.duration_ticks, n.velocity, n.release
                     );
                     command_tx.send(AudioCommand::UpdateClipNote {
                         clip_id: id_str.to_string(),
-                        note_id: *note_id as u64,
-                        note: *note as u8,
-                        start_tick: *start_tick as i64,
-                        duration_ticks: *duration as i64,
-                        velocity: *velocity as u8,
+                        note_id: n.note_id,
+                        note: n.note,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                        velocity: n.velocity,
+                        release: n.release,
                     })?;
                 }
             }
@@ -2775,6 +2753,58 @@ fn generate_device_request_id(channel_id: usize, device_path: &DevicePath) -> St
 /// `/track/{id}/automation/{lane_id}/add_point` and `.../update_point`.
 /// Parse `/transport/tempo_map` args (`i:tick, f:bpm` pairs). The flag is true when a trailing
 /// or mistyped value was dropped.
+/// Arguments of `/clip/{id}/add_note` and `/clip/{id}/update_note`.
+#[derive(Debug, PartialEq)]
+struct ClipNoteArgs {
+    note_id: u64,
+    note: u8,
+    start_tick: i64,
+    duration_ticks: i64,
+    velocity: f32,
+    release: f32,
+}
+
+/// Parse `i:note_id i:note i:start_tick i:duration f:vel f:rel`. Any other shape (an old Godot
+/// build still sending an int velocity, say) logs a warning instead of being dropped silently.
+fn parse_clip_note_args(addr: &str, args: &[OscType]) -> Option<ClipNoteArgs> {
+    if let [OscType::Int(note_id), OscType::Int(note), OscType::Int(start_tick), OscType::Int(duration), OscType::Float(velocity), OscType::Float(release)] =
+        args
+    {
+        return Some(ClipNoteArgs {
+            note_id: *note_id as u64,
+            note: (*note).clamp(0, 127) as u8,
+            start_tick: *start_tick as i64,
+            duration_ticks: *duration as i64,
+            velocity: velocity.clamp(0.0, 1.0),
+            release: release.clamp(0.0, 1.0),
+        });
+    }
+    warn!(
+        "{}: expected args (i i i i f f), got ({})",
+        addr,
+        osc_arg_types(args)
+    );
+    None
+}
+
+/// OSC type tags of `args` separated by spaces (`"i i f"`), for warnings.
+fn osc_arg_types(args: &[OscType]) -> String {
+    args.iter()
+        .map(|arg| match arg {
+            OscType::Int(_) => "i",
+            OscType::Float(_) => "f",
+            OscType::String(_) => "s",
+            OscType::Blob(_) => "b",
+            OscType::Long(_) => "h",
+            OscType::Double(_) => "d",
+            OscType::Bool(true) => "T",
+            OscType::Bool(false) => "F",
+            _ => "?",
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn parse_tempo_map_args(args: &[OscType]) -> (Vec<(i64, f32)>, bool) {
     let mut points = Vec::with_capacity(args.len() / 2);
     let mut dropped = args.len() % 2 == 1;
@@ -3423,6 +3453,39 @@ mod tests {
         assert!(parse_modulator_command(2, path, &["modulator", "bogus"], &[]).is_none());
         // The old mod/* addresses are gone.
         assert!(parse_modulator_command(2, path, &["mod", "set"], &add).is_none());
+    }
+
+    #[test]
+    fn clip_note_args_parse_floats_and_reject_old_shape() {
+        let args = vec![
+            OscType::Int(3),
+            OscType::Int(60),
+            OscType::Int(0),
+            OscType::Int(480),
+            OscType::Float(0.5039),
+            OscType::Float(0.25),
+        ];
+        assert_eq!(
+            parse_clip_note_args("/clip/x/add_note", &args),
+            Some(ClipNoteArgs {
+                note_id: 3,
+                note: 60,
+                start_tick: 0,
+                duration_ticks: 480,
+                velocity: 0.5039,
+                release: 0.25,
+            })
+        );
+
+        let old = vec![
+            OscType::Int(1),
+            OscType::Int(60),
+            OscType::Int(0),
+            OscType::Int(480),
+            OscType::Int(100),
+        ];
+        assert_eq!(parse_clip_note_args("/clip/x/add_note", &old), None);
+        assert_eq!(osc_arg_types(&old), "i i i i i");
     }
 
     #[test]

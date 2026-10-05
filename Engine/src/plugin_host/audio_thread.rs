@@ -579,14 +579,17 @@ fn process_request(slot: &mut InstanceSlot, scratch: &mut Scratch, doorbell: &Ho
         let events = memory.input_events();
         for event in &events[..count] {
             let pckn = Pckn::new(0u16, 0u16, event.note as u16, event.note as u32);
+            // Notes carry the engine's sounding-note id, so overlapping notes on one key stay
+            // apart; the value is the velocity (on) or release velocity (off).
+            let note_pckn = Pckn::new(0u16, 0u16, event.note as u16, event.id);
             match event.kind {
                 EVENT_NOTE_ON => scratch.events.push(OwnedEvent::NoteOn(
                     event.sample_offset,
-                    NoteOnEvent::new(event.sample_offset, pckn, event.value as f64),
+                    NoteOnEvent::new(event.sample_offset, note_pckn, event.value as f64),
                 )),
                 EVENT_NOTE_OFF => scratch.events.push(OwnedEvent::NoteOff(
                     event.sample_offset,
-                    NoteOffEvent::new(event.sample_offset, pckn, event.value as f64),
+                    NoteOffEvent::new(event.sample_offset, note_pckn, event.value as f64),
                 )),
                 EVENT_PARAM => {
                     if let Some(entry) = slot.param_map.get(event.id) {

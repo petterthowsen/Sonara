@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(shm.input()[0], 1.5);
         assert_eq!(shm.output()[0], -2.0);
 
-        shm.input_events()[0] = BlockEvent::note(3, 60, 0.5, true);
+        shm.input_events()[0] = BlockEvent::note(3, 1, 60, 0.5, true);
         shm.output_events()[0] = BlockEvent::param(1, 7, 0.25);
         assert_eq!(shm.input_events()[0].kind, EVENT_NOTE_ON);
         assert_eq!(shm.output_events()[0].kind, EVENT_PARAM);

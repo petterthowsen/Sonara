@@ -80,7 +80,7 @@ const AD_SPECS: [ParamSpec; 2] = [
 const AD_SLOTS: [u8; 20] = slot_table(&AD_SPECS);
 static AD_TABLE: ParamTable = ParamTable::new(&AD_SPECS, &AD_SLOTS);
 
-/// Velocity, keytrack and random have no settings.
+/// Velocity, release, keytrack and random have no settings.
 static EMPTY_TABLE: ParamTable = ParamTable::new(&[], &[]);
 
 /// The kinds a modulator can be. The polarity (bipolar vs unipolar) is fixed per kind.
@@ -92,10 +92,12 @@ pub enum ModulatorKind {
     Velocity,
     Keytrack,
     Random,
+    /// The note-off's release velocity: `DEFAULT_RELEASE` until the note is released.
+    Release,
 }
 
 impl ModulatorKind {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
     pub const ALL: [ModulatorKind; Self::COUNT] = [
         ModulatorKind::Lfo,
         ModulatorKind::Adsr,
@@ -103,6 +105,7 @@ impl ModulatorKind {
         ModulatorKind::Velocity,
         ModulatorKind::Keytrack,
         ModulatorKind::Random,
+        ModulatorKind::Release,
     ];
 
     /// Stable id used over OSC and in saved projects.
@@ -114,6 +117,7 @@ impl ModulatorKind {
             ModulatorKind::Velocity => "velocity",
             ModulatorKind::Keytrack => "keytrack",
             ModulatorKind::Random => "random",
+            ModulatorKind::Release => "release",
         }
     }
 
@@ -125,6 +129,7 @@ impl ModulatorKind {
             ModulatorKind::Velocity => "Velocity",
             ModulatorKind::Keytrack => "Keytrack",
             ModulatorKind::Random => "Random",
+            ModulatorKind::Release => "Release",
         }
     }
 
@@ -151,9 +156,10 @@ impl ModulatorKind {
             ModulatorKind::Lfo => &LFO_TABLE,
             ModulatorKind::Adsr => &ADSR_TABLE,
             ModulatorKind::Ad => &AD_TABLE,
-            ModulatorKind::Velocity | ModulatorKind::Keytrack | ModulatorKind::Random => {
-                &EMPTY_TABLE
-            }
+            ModulatorKind::Velocity
+            | ModulatorKind::Keytrack
+            | ModulatorKind::Random
+            | ModulatorKind::Release => &EMPTY_TABLE,
         }
     }
 
@@ -265,6 +271,7 @@ mod tests {
             ModulatorKind::Velocity,
             ModulatorKind::Keytrack,
             ModulatorKind::Random,
+            ModulatorKind::Release,
         ] {
             let mut p = ModParams::new(kind);
             assert!(p.table().is_empty());

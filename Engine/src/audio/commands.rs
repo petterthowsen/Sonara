@@ -250,7 +250,8 @@ pub enum AudioCommand {
         note: MidiNote,
         start_tick: Tick,
         duration_ticks: Tick,
-        velocity: MidiVelocity,
+        velocity: f32,
+        release: f32,
     },
     RemoveNoteFromClip {
         clip_id: ClipId,
@@ -262,7 +263,8 @@ pub enum AudioCommand {
         note: MidiNote,
         start_tick: Tick,
         duration_ticks: Tick,
-        velocity: MidiVelocity,
+        velocity: f32,
+        release: f32,
     },
     BeginLoadAudioClip {
         clip_id: ClipId,
@@ -1687,6 +1689,7 @@ pub fn process_command(
             start_tick,
             duration_ticks,
             velocity,
+            release,
         } => {
             if let Some(clip) = state.clips.get_mut(&clip_id) {
                 // Check if note with this ID already exists (protect against duplicate OSC messages)
@@ -1700,6 +1703,7 @@ pub fn process_command(
                         id: note_id,
                         note,
                         velocity,
+                        release,
                         start_tick,
                         duration_ticks,
                     };
@@ -1745,6 +1749,7 @@ pub fn process_command(
             start_tick,
             duration_ticks,
             velocity,
+            release,
         } => {
             if let Some(clip) = state.clips.get_mut(&clip_id) {
                 // Check for duplicate notes with same ID (shouldn't happen but let's be defensive)
@@ -1776,6 +1781,7 @@ pub fn process_command(
                     clip_note.start_tick = start_tick;
                     clip_note.duration_ticks = duration_ticks;
                     clip_note.velocity = velocity;
+                    clip_note.release = release;
                     // Recalculate content length
                     clip.content_length_ticks = clip
                         .midi_notes
@@ -3187,6 +3193,75 @@ mod tests {
             );
             assert_eq!(state.channels[&2].pan_width, expected);
         }
+    }
+
+    #[test]
+    fn modulator_kind_listing_advertises_release() {
+        let infos = modulator_kind_infos();
+        assert!(matches!(
+            infos.first(),
+            Some(EngineStatus::ModulatorKindsInfo { count: 7 })
+        ));
+        let release = infos.iter().find_map(|info| match info {
+            EngineStatus::ModulatorKindInfo {
+                id,
+                name,
+                bipolar,
+                params,
+            } if id == "release" => Some((name.clone(), *bipolar, params.len())),
+            _ => None,
+        });
+        assert_eq!(release, Some(("Release".to_string(), false, 0)));
+    }
+
+    #[test]
+    fn clip_note_command_stores_float_values() {
+        let mut state = EngineState::default();
+        let (status_tx, _status_rx) = crossbeam::channel::unbounded();
+        let clip_id = "c".to_string();
+        process_command(
+            &mut state,
+            AudioCommand::CreateClip {
+                id: clip_id.clone(),
+                name: "C".to_string(),
+                clip_type: "midi".to_string(),
+            },
+            128,
+            &status_tx,
+        );
+        process_command(
+            &mut state,
+            AudioCommand::AddNoteToClip {
+                clip_id: clip_id.clone(),
+                note_id: 1,
+                note: 60,
+                start_tick: 0,
+                duration_ticks: 480,
+                velocity: 0.5039,
+                release: 0.25,
+            },
+            128,
+            &status_tx,
+        );
+        let note = &state.clips[&clip_id].midi_notes[0];
+        assert_eq!((note.velocity, note.release), (0.5039, 0.25));
+
+        process_command(
+            &mut state,
+            AudioCommand::UpdateClipNote {
+                clip_id: clip_id.clone(),
+                note_id: 1,
+                note: 62,
+                start_tick: 0,
+                duration_ticks: 480,
+                velocity: 0.75,
+                release: 0.9,
+            },
+            128,
+            &status_tx,
+        );
+        let note = &state.clips[&clip_id].midi_notes[0];
+        assert_eq!((note.note, note.velocity, note.release), (62, 0.75, 0.9));
     }
 
     /// A channel 2 whose only device is `device`, plus the status receiver for `GetDeviceState`.

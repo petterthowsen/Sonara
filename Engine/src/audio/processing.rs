@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use super::commands::EngineState;
 use super::devices::apply_transport;
+use super::render_scratch::ClipNoteEvent;
 use super::rt_debug;
 use super::tempo_map::fill_tick_rates;
 use super::transport::Transport;
@@ -163,12 +164,14 @@ pub fn process_audio(
                                             + instance.transpose as i16)
                                             .clamp(0, 127)
                                             as MidiNote;
-                                        note_events.push((
-                                            *track_id,
-                                            transposed_note,
-                                            clip_note.velocity,
-                                            false,
-                                        ));
+                                        note_events.push(ClipNoteEvent {
+                                            track_id: *track_id,
+                                            clip_note_id: clip_note.id,
+                                            key: transposed_note,
+                                            velocity: clip_note.velocity,
+                                            release: clip_note.release,
+                                            is_on: false,
+                                        });
                                     }
                                 }
                             }
@@ -189,12 +192,14 @@ pub fn process_audio(
 
                                 // Note On
                                 if is_within_instance && clip_note.start_tick == content_pos {
-                                    note_events.push((
-                                        *track_id,
-                                        transposed_note,
-                                        clip_note.velocity,
-                                        true,
-                                    ));
+                                    note_events.push(ClipNoteEvent {
+                                        track_id: *track_id,
+                                        clip_note_id: clip_note.id,
+                                        key: transposed_note,
+                                        velocity: clip_note.velocity,
+                                        release: clip_note.release,
+                                        is_on: true,
+                                    });
                                 }
 
                                 // Note Off at the written end, or clipped to the instance right edge
@@ -204,12 +209,14 @@ pub fn process_audio(
                                     && clip_note.start_tick < content_pos
                                     && note_end > content_pos;
                                 if note_off_at_written_end || note_off_clipped_to_instance {
-                                    note_events.push((
-                                        *track_id,
-                                        transposed_note,
-                                        clip_note.velocity,
-                                        false,
-                                    ));
+                                    note_events.push(ClipNoteEvent {
+                                        track_id: *track_id,
+                                        clip_note_id: clip_note.id,
+                                        key: transposed_note,
+                                        velocity: clip_note.velocity,
+                                        release: clip_note.release,
+                                        is_on: false,
+                                    });
                                 }
                             }
                         }
@@ -217,10 +224,10 @@ pub fn process_audio(
                 }
             }
 
-            for &(track_id, note, velocity, is_on) in &note_events {
-                if let Some(track) = state.tracks.get_mut(&track_id) {
+            for event in &note_events {
+                if let Some(track) = state.tracks.get_mut(&event.track_id) {
                     if let Some(channel) = state.channels.get_mut(&track.channel_id) {
-                        channel.send_clip_note(note, velocity, is_on, frame_offset);
+                        channel.send_clip_note(event, frame_offset);
                     }
                 }
             }
@@ -507,7 +514,7 @@ fn collect_tick_events(
 mod tests {
     use super::*;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
-    use crate::audio::midi_types::MidiEvent;
+    use crate::audio::midi_types::{MidiEvent, NoteEvent};
     use crate::audio::tempo_map::TempoMap;
     use std::time::Duration;
 
@@ -583,15 +590,16 @@ mod tests {
         assert_eq!(events[0], (7680, 0));
     }
 
-    /// Instrument that records the notes it receives as (note, is_note_on).
+    /// Instrument that records the notes it receives as (key, is_note_on).
     struct NoteRecorder {
         notes: std::sync::Arc<std::sync::Mutex<Vec<(u8, bool)>>>,
     }
 
     impl crate::audio::devices::AudioDevice for NoteRecorder {
         fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
-        fn send_midi_event(&mut self, note: u8, _velocity: u8, is_note_on: bool, _offset: usize) {
-            self.notes.lock().unwrap().push((note, is_note_on));
+        fn send_note_event(&mut self, event: &NoteEvent, _offset: usize) {
+            let is_note_on = matches!(event, NoteEvent::On { .. });
+            self.notes.lock().unwrap().push((event.key(), is_note_on));
         }
         fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
         fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
@@ -620,6 +628,17 @@ mod tests {
         }
     }
 
+    fn clip_event(clip_note_id: NoteId, key: u8, is_on: bool) -> ClipNoteEvent {
+        ClipNoteEvent {
+            track_id: 1,
+            clip_note_id,
+            key,
+            velocity: 100.0 / 127.0,
+            release: crate::audio::DEFAULT_RELEASE,
+            is_on,
+        }
+    }
+
     #[test]
     fn releasing_clip_notes_sends_one_note_off_per_held_note() {
         let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -628,11 +647,11 @@ mod tests {
             notes: notes.clone(),
         }));
 
-        // Two overlapping instances of note 60, one of 64 that already ended
-        channel.send_clip_note(60, 100, true, 0);
-        channel.send_clip_note(60, 100, true, 0);
-        channel.send_clip_note(64, 100, true, 0);
-        channel.send_clip_note(64, 100, false, 0);
+        // Two overlapping instances of clip note 1 (key 60), and note 2 (key 64) that already ended
+        channel.send_clip_note(&clip_event(1, 60, true), 0);
+        channel.send_clip_note(&clip_event(1, 60, true), 0);
+        channel.send_clip_note(&clip_event(2, 64, true), 0);
+        channel.send_clip_note(&clip_event(2, 64, false), 0);
         notes.lock().unwrap().clear();
 
         channel.release_clip_notes();
@@ -640,9 +659,144 @@ mod tests {
 
         // The clip's own note-off after a stop is dropped, and a second release sends nothing
         notes.lock().unwrap().clear();
-        channel.send_clip_note(60, 100, false, 0);
+        channel.send_clip_note(&clip_event(1, 60, false), 0);
         channel.release_clip_notes();
         assert!(notes.lock().unwrap().is_empty());
+    }
+
+    /// Instrument that records every note event it receives with its frame offset.
+    struct NoteProbe {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(NoteEvent, usize)>>>,
+    }
+
+    impl crate::audio::devices::AudioDevice for NoteProbe {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+            self.events.lock().unwrap().push((*event, frame_offset));
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.note_probe"
+        }
+        fn device_name(&self) -> &str {
+            "Note Probe"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Play `instances` of one clip holding `note` on a probe channel until `until_tick`,
+    /// returning every event with its absolute frame.
+    fn play_clip_to_probe(
+        note: ClipNote,
+        instances: &[(Tick, Tick)],
+        until_tick: Tick,
+    ) -> Vec<(NoteEvent, usize)> {
+        const BLOCK: usize = 64;
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut state = EngineState::default();
+        let mut channel = Channel::new(2, "Probe".to_string(), BLOCK, 48_000.0);
+        channel.devices.push(Box::new(NoteProbe {
+            events: events.clone(),
+        }));
+        state.channels.insert(2, channel);
+
+        let mut clip = Clip::new("c".to_string(), "c".to_string(), ClipType::Midi);
+        clip.content_length_ticks = note.start_tick + note.duration_ticks;
+        clip.midi_notes.push(note);
+        state.clips.insert("c".to_string(), clip);
+        let mut track = Track::new(1, 2);
+        for (i, &(start, duration)) in instances.iter().enumerate() {
+            track.clip_instances.push(ClipInstance::new(
+                format!("i{i}"),
+                "c".to_string(),
+                start,
+                duration,
+            ));
+        }
+        state.tracks.insert(1, track);
+
+        state.set_is_playing(true);
+        state.request_playhead_midi_dispatch();
+        let mut absolute = Vec::new();
+        let mut block_start = 0;
+        while state.get_current_tick() < until_tick {
+            process_audio(&mut state, BLOCK, 48_000.0, Instant::now());
+            for (event, offset) in events.lock().unwrap().drain(..) {
+                absolute.push((event, block_start + offset));
+            }
+            block_start += BLOCK;
+        }
+        absolute
+    }
+
+    #[test]
+    fn clip_note_reaches_device_with_float_values() {
+        let note = ClipNote {
+            id: 7,
+            note: 60,
+            velocity: 0.5039,
+            release: 0.25,
+            start_tick: 0,
+            duration_ticks: 480,
+        };
+        let events = play_clip_to_probe(note, &[(0, 960)], 960);
+        assert_eq!(events.len(), 2, "{events:?}");
+
+        let (on, on_frame) = events[0];
+        let (off, off_frame) = events[1];
+        assert!(matches!(on, NoteEvent::On { key: 60, velocity, .. } if velocity == 0.5039));
+        assert!(matches!(off, NoteEvent::Off { key: 60, release, .. } if release == 0.25));
+        assert_eq!(on.note_id(), off.note_id());
+        assert_ne!(on.note_id(), 0);
+        // 120 BPM at 48 kHz: 960 ticks per 24000 frames, so tick 480 lands on frame 12000.
+        assert_eq!(on_frame, 0);
+        assert!(
+            off_frame.abs_diff(12_000) <= 1,
+            "note-off at frame {off_frame}"
+        );
+    }
+
+    #[test]
+    fn overlapping_instances_get_distinct_note_ids() {
+        let note = ClipNote {
+            id: 1,
+            note: 60,
+            velocity: 0.8,
+            release: 0.5,
+            start_tick: 0,
+            duration_ticks: 960,
+        };
+        // The second instance starts while the first instance's note still sounds.
+        let events = play_clip_to_probe(note, &[(0, 960), (480, 960)], 1500);
+        let ons: Vec<_> = events
+            .iter()
+            .filter(|(e, _)| matches!(e, NoteEvent::On { .. }))
+            .collect();
+        let offs: Vec<_> = events
+            .iter()
+            .filter(|(e, _)| matches!(e, NoteEvent::Off { .. }))
+            .collect();
+        assert_eq!((ons.len(), offs.len()), (2, 2), "{events:?}");
+        assert_ne!(ons[0].0.note_id(), ons[1].0.note_id());
+        // The first instance ends first, so each off pairs with its own on.
+        assert_eq!(offs[0].0.note_id(), ons[0].0.note_id());
+        assert_eq!(offs[1].0.note_id(), ons[1].0.note_id());
+        assert!(offs[0].1 < offs[1].1);
     }
 
     #[test]
@@ -661,7 +815,8 @@ mod tests {
             clip.midi_notes.push(ClipNote {
                 id: i as _,
                 note,
-                velocity: 100,
+                velocity: 100.0 / 127.0,
+                release: crate::audio::DEFAULT_RELEASE,
                 start_tick: i as Tick * 960,
                 duration_ticks: 960,
             });
@@ -832,8 +987,6 @@ mod tests {
 
     impl crate::audio::devices::AudioDevice for TransportRecorder {
         fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
-        fn send_midi_event(&mut self, _note: u8, _velocity: u8, _is_note_on: bool, _offset: usize) {
-        }
         fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
         fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
             None

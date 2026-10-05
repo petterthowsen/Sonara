@@ -1,7 +1,10 @@
+use super::active_notes::{ActiveNotes, NoteSource};
 use super::devices::container::{ChainCursor, ChainStep};
 use super::devices::AudioDevice;
-use super::midi_types::{create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting};
-use super::render_scratch::MixBuffers;
+use super::midi_types::{
+    create_midi_queue, MidiEvent, MidiEventQueue, MidiRouting, NoteEvent, DEFAULT_RELEASE,
+};
+use super::render_scratch::{ClipNoteEvent, MixBuffers};
 /// Value kind for setting device parameters
 #[derive(Debug, Clone, Copy)]
 pub enum ParamSetValue {
@@ -321,9 +324,6 @@ pub struct PanCoefficients {
 /// MIDI note number (0-127)
 pub type MidiNote = u8;
 
-/// MIDI velocity (0-127)
-pub type MidiVelocity = u8;
-
 /// Position in ticks
 pub type Tick = i64;
 
@@ -360,7 +360,10 @@ const MAX_SLEEP_CHANGES: usize = 64;
 pub struct ClipNote {
     pub id: NoteId,
     pub note: MidiNote,
-    pub velocity: MidiVelocity,
+    /// Note-on velocity, normalized (0, 1].
+    pub velocity: f32,
+    /// Release velocity, normalized [0, 1]. Defaults to `DEFAULT_RELEASE`.
+    pub release: f32,
     pub start_tick: Tick, // Relative to clip start (0-based)
     pub duration_ticks: Tick,
 }
@@ -538,9 +541,10 @@ pub struct Channel {
     // Device chain for processing (instruments or effects)
     pub devices: Vec<Box<dyn AudioDevice>>,
 
-    /// Clip notes sounding on this channel, counted per MIDI note. Stop, pause and seek
-    /// release them with note-offs instead of resetting devices, so releases and tails ring out.
-    pub held_clip_notes: [u8; 128],
+    /// Notes sounding on this channel (clip and live), each with its sounding-note id. Stop,
+    /// pause and seek release the clip notes with note-offs instead of resetting devices, so
+    /// releases and tails ring out.
+    pub active_notes: ActiveNotes,
 
     // MIDI routing configuration
     pub midi_routing: MidiRouting,
@@ -567,6 +571,20 @@ pub struct Channel {
 
     /// Scratch buffers and flags used by `mix_and_output`
     pub mix: MixBuffers,
+}
+
+/// Send a note event to every device in `devices`, waking those that take note input.
+fn send_note_event_to(
+    devices: &mut [Box<dyn AudioDevice>],
+    event: &NoteEvent,
+    frame_offset: usize,
+) {
+    for device in devices.iter_mut() {
+        if device.accepts_note_input() {
+            device.mark_activity();
+        }
+        device.send_note_event(event, frame_offset);
+    }
 }
 
 /// Gain smoothing coefficient for a 5 ms one-pole filter: alpha = 1 - exp(-1 / (tau * rate)).
@@ -614,7 +632,7 @@ impl Channel {
             current_gain: initial_gain,
             smoothing_alpha,
             devices: Vec::new(),
-            held_clip_notes: [0; 128],
+            active_notes: ActiveNotes::new(),
             midi_routing: MidiRouting::default(),
             midi_queue: create_midi_queue(),
             // Preallocated so the audio thread doesn't allocate while scheduling
@@ -822,38 +840,42 @@ impl Channel {
         }
     }
 
-    /// Forward scheduled MIDI for this buffer to every device on the channel.
+    /// Turn this buffer's scheduled live MIDI into note events for the channel's devices.
+    ///
+    /// A note-on with velocity > 0 starts a note at `v/127`. A note-off ends it with release
+    /// `v/127`, and a note-on with velocity 0 ends it with `DEFAULT_RELEASE`.
     fn dispatch_scheduled_midi(&mut self) {
-        if self.scheduled_midi_events.is_empty() {
-            return;
-        }
-        for event in &self.scheduled_midi_events {
-            use super::midi_types::MidiMessageType;
+        use super::midi_types::MidiMessageType;
 
-            match event.message_type {
-                MidiMessageType::NoteOn => {
-                    let is_note_on = event.velocity > 0;
-                    for device in self.devices.iter_mut() {
-                        if device.accepts_note_input() {
-                            device.mark_activity();
-                        }
-                        device.send_midi_event(
-                            event.note,
-                            event.velocity,
-                            is_note_on,
-                            event.frame_offset,
-                        );
+        for i in 0..self.scheduled_midi_events.len() {
+            let event = &self.scheduled_midi_events[i];
+            let source = NoteSource::Live {
+                midi_channel: event.midi_channel,
+            };
+            let (key, frame_offset) = (event.note, event.frame_offset);
+            let value = event.velocity as f32 / 127.0;
+            // `None` starts a note; `Some(release)` ends one.
+            let ends_with = match (event.message_type, event.velocity) {
+                (MidiMessageType::NoteOn, 0) => Some(DEFAULT_RELEASE),
+                (MidiMessageType::NoteOn, _) => None,
+                (MidiMessageType::NoteOff, _) => Some(value),
+                _ => continue,
+            };
+            match ends_with {
+                None => {
+                    let (evicted, on) =
+                        self.active_notes
+                            .note_on(source, key, value, DEFAULT_RELEASE);
+                    if let Some(off) = evicted {
+                        self.send_note_event_to_devices(&off, frame_offset);
+                    }
+                    self.send_note_event_to_devices(&on, frame_offset);
+                }
+                Some(release) => {
+                    if let Some(off) = self.active_notes.note_off(source, key, Some(release)) {
+                        self.send_note_event_to_devices(&off, frame_offset);
                     }
                 }
-                MidiMessageType::NoteOff => {
-                    for device in self.devices.iter_mut() {
-                        if device.accepts_note_input() {
-                            device.mark_activity();
-                        }
-                        device.send_midi_event(event.note, 0, false, event.frame_offset);
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -1011,54 +1033,44 @@ impl Channel {
         step
     }
 
-    /// Send a note from clip playback, counting it so `release_clip_notes` can end it.
-    pub fn send_clip_note(
-        &mut self,
-        note: u8,
-        velocity: u8,
-        is_note_on: bool,
-        frame_offset: usize,
-    ) {
-        let held = &mut self.held_clip_notes[(note & 0x7f) as usize];
-        if is_note_on {
-            *held = held.saturating_add(1);
-        } else if *held == 0 {
-            return; // Already released by stop or seek
-        } else {
-            *held -= 1;
+    /// Send a note from clip playback. The note-on gets a sounding-note id from `active_notes`,
+    /// and the note-off finds it by clip-note id. A note-off with no sounding note (already
+    /// released by stop or seek) is dropped.
+    pub fn send_clip_note(&mut self, event: &ClipNoteEvent, frame_offset: usize) {
+        let source = NoteSource::Clip {
+            clip_note_id: event.clip_note_id,
+        };
+        if event.is_on {
+            let (evicted, on) =
+                self.active_notes
+                    .note_on(source, event.key, event.velocity, event.release);
+            if let Some(off) = evicted {
+                self.send_note_event_to_devices(&off, frame_offset);
+            }
+            self.send_note_event_to_devices(&on, frame_offset);
+        } else if let Some(off) = self
+            .active_notes
+            .note_off(source, event.key, Some(event.release))
+        {
+            self.send_note_event_to_devices(&off, frame_offset);
         }
-        self.send_midi_event_to_devices(note, velocity, is_note_on, frame_offset);
     }
 
-    /// Send a note-off for every clip note still sounding (once per overlapping note-on).
+    /// Send a note-off for every clip note still sounding, with the release it started with.
     /// Live MIDI isn't touched, so keys held on a controller keep playing.
     pub fn release_clip_notes(&mut self) {
-        for note in 0..128u8 {
-            let held = std::mem::take(&mut self.held_clip_notes[note as usize]);
-            for _ in 0..held {
-                self.send_midi_event_to_devices(note, 0, false, 0);
-            }
-        }
+        let devices = &mut self.devices;
+        self.active_notes
+            .release_clip(|off| send_note_event_to(devices, &off, 0));
     }
 
-    /// Send a MIDI event to every top-level device with a frame offset, like scheduled notes.
+    /// Send a note event to every top-level device with a frame offset, like scheduled notes.
     ///
     /// Audio effects ignore notes (the trait default); containers forward to their children.
     /// Only a device that accepts note input, or carries a note-driven modulator, is woken, so
     /// a sleeping reverb stays asleep (ADR-0014).
-    pub fn send_midi_event_to_devices(
-        &mut self,
-        note: u8,
-        velocity: u8,
-        is_note_on: bool,
-        frame_offset: usize,
-    ) {
-        for device in self.devices.iter_mut() {
-            if device.accepts_note_input() {
-                device.mark_activity();
-            }
-            device.send_midi_event(note, velocity, is_note_on, frame_offset);
-        }
+    pub fn send_note_event_to_devices(&mut self, event: &NoteEvent, frame_offset: usize) {
+        send_note_event_to(&mut self.devices, event, frame_offset);
     }
 
     /// Set a device parameter by path.
@@ -1404,6 +1416,104 @@ mod meter_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
+    use crate::audio::midi_types::MidiMessageType;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    /// Instrument that records every note event it receives.
+    struct NoteProbe {
+        events: Arc<Mutex<Vec<NoteEvent>>>,
+    }
+
+    impl AudioDevice for NoteProbe {
+        fn process_block(&mut self, _inputs: &[f32], _outputs: &mut [f32], _sample_count: usize) {}
+        fn send_note_event(&mut self, event: &NoteEvent, _frame_offset: usize) {
+            self.events.lock().unwrap().push(*event);
+        }
+        fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
+        fn get_parameter(&self, _param_id: ParamId) -> Option<ParamValue> {
+            None
+        }
+        fn device_id(&self) -> &str {
+            "test.note_probe"
+        }
+        fn device_name(&self) -> &str {
+            "Note Probe"
+        }
+        fn device_category(&self) -> DeviceCategory {
+            DeviceCategory::Instrument
+        }
+        fn device_variant(&self) -> DeviceVariant {
+            DeviceVariant::BuiltIn
+        }
+        fn parameters(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn reset(&mut self) {}
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Dispatch `midi` as one buffer of live MIDI and return what the probe received.
+    fn dispatch_live(midi: &[(MidiMessageType, u8, u8)]) -> Vec<NoteEvent> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut channel = Channel::new(2, "Probe".to_string(), 64, 48_000.0);
+        channel.devices.push(Box::new(NoteProbe {
+            events: events.clone(),
+        }));
+        for &(message_type, note, velocity) in midi {
+            channel.scheduled_midi_events.push(MidiEvent {
+                message_type,
+                midi_channel: 0,
+                note,
+                velocity,
+                received_at: Instant::now(),
+                frame_offset: 0,
+            });
+        }
+        channel.dispatch_scheduled_midi();
+        let received = events.lock().unwrap().clone();
+        received
+    }
+
+    #[test]
+    fn live_note_off_carries_release() {
+        let events = dispatch_live(&[
+            (MidiMessageType::NoteOn, 60, 127),
+            (MidiMessageType::NoteOff, 60, 32),
+        ]);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(matches!(events[0], NoteEvent::On { key: 60, velocity, .. } if velocity == 1.0));
+        assert_eq!(
+            events[1],
+            NoteEvent::Off {
+                note_id: events[0].note_id(),
+                key: 60,
+                release: 32.0 / 127.0
+            }
+        );
+    }
+
+    #[test]
+    fn live_note_on_zero_is_release_default() {
+        let events = dispatch_live(&[
+            (MidiMessageType::NoteOn, 60, 100),
+            (MidiMessageType::NoteOn, 60, 0),
+            // A note-off with nothing sounding on its key is dropped.
+            (MidiMessageType::NoteOff, 61, 64),
+        ]);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(
+            events[1],
+            NoteEvent::Off {
+                note_id: events[0].note_id(),
+                key: 60,
+                release: DEFAULT_RELEASE
+            }
+        );
+    }
 
     #[test]
     fn wrap_content_tick_folds_into_loop_region() {

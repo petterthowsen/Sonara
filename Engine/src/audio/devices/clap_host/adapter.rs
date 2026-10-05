@@ -6,6 +6,7 @@ use super::host_impl::{
     SonaraHost, SonaraHostAudioProcessor, SonaraHostMainThread, SonaraHostShared,
 };
 use super::PluginError;
+use crate::audio::midi_types::NoteEvent;
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, PluginGui};
 use clack_host::events::event_types::*;
 use clack_host::events::UnknownEvent;
@@ -511,23 +512,33 @@ impl AudioDevice for ClapDeviceAdapter {
         self.output_event_buffer.clear();
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        if is_note_on {
-            // Create and store note-on event
-            let event = NoteOnEvent::new(
-                frame_offset as u32, // Sample offset (frame-accurate timing)
-                Pckn::new(0u16, 0u16, note as u16, note as u32), // Port, channel, key, note_id
-                velocity as f64 / 127.0, // Normalize velocity
-            );
-            self.note_on_events.push(event);
-        } else {
-            // Create and store note-off event
-            let event = NoteOffEvent::new(
-                frame_offset as u32,
-                Pckn::new(0u16, 0u16, note as u16, note as u32),
-                velocity as f64 / 127.0,
-            );
-            self.note_off_events.push(event);
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        match *event {
+            NoteEvent::On {
+                note_id,
+                key,
+                velocity,
+            } => {
+                let event = NoteOnEvent::new(
+                    frame_offset as u32, // Sample offset (frame-accurate timing)
+                    Pckn::new(0u16, 0u16, key as u16, note_id), // Port, channel, key, note_id
+                    velocity as f64,
+                );
+                self.note_on_events.push(event);
+            }
+            NoteEvent::Off {
+                note_id,
+                key,
+                release,
+            } => {
+                let event = NoteOffEvent::new(
+                    frame_offset as u32,
+                    Pckn::new(0u16, 0u16, key as u16, note_id),
+                    release as f64,
+                );
+                self.note_off_events.push(event);
+            }
+            NoteEvent::Expression { .. } => {}
         }
     }
 

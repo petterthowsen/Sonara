@@ -61,8 +61,9 @@ pub struct PendingNote {
     pub age: u64,
     pub glide_from: Option<f32>,
     pub unison: [usize; 2],
-    /// A note-off arrived during the fade: release as soon as the note starts.
-    pub released: bool,
+    /// A note-off arrived during the fade: release (with this release velocity) as soon as the
+    /// note starts.
+    pub released: Option<f32>,
 }
 
 /// Device state a note needs when it starts.
@@ -345,8 +346,8 @@ impl Voice {
         self.amp_env.reset();
         self.amp_env.gate_on();
         self.trigger_mods(pending.note, pending.velocity, ctx, true);
-        if pending.released {
-            self.release();
+        if let Some(release) = pending.released {
+            self.release(release);
         }
     }
 
@@ -377,16 +378,15 @@ impl Voice {
     /// Drive this voice's modulators with a note. `retrigger` gates the envelopes and restarts
     /// note LFOs; otherwise a legato slide only updates velocity and keytrack.
     fn trigger_mods(&mut self, note: u8, velocity: f32, ctx: &StartCtx, retrigger: bool) {
-        let vel = (velocity * 127.0).round().clamp(0.0, 127.0) as u8;
         for (slot, state) in self.mods.iter_mut().enumerate() {
             let Some(state) = state else { continue };
             if retrigger {
-                state.gate_voice_on(note, vel);
+                state.gate_voice_on(note, velocity);
                 if is_free_lfo(state) {
                     state.seed_lfo_phase(ctx.free_lfo[slot]);
                 }
             } else {
-                state.update_note(note, vel);
+                state.update_note(note, velocity);
             }
         }
     }
@@ -403,11 +403,13 @@ impl Voice {
         }
     }
 
-    pub fn release(&mut self) {
+    /// Gate the note off. `release` is the note-off's release velocity, which the voice's
+    /// `release` modulators latch.
+    pub fn release(&mut self, release: f32) {
         self.gate = false;
         self.amp_env.gate_off();
         for state in self.mods.iter_mut().flatten() {
-            state.gate_voice_off();
+            state.gate_voice_off(release);
         }
     }
 

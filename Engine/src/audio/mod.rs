@@ -1,3 +1,4 @@
+pub mod active_notes;
 pub mod analysis;
 pub mod automation;
 pub mod block_clock;

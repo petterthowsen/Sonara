@@ -21,6 +21,7 @@ use super::{
     ParamValue, PortFlow,
 };
 use crate::audio::dsp::SmoothedParam;
+use crate::audio::midi_types::NoteEvent;
 use crate::audio::modulation::kinds::{
     ModulatorKind, ENV_ATTACK, ENV_DECAY, ENV_RELEASE, ENV_SUSTAIN, LFO_RATE, LFO_RETRIGGER,
 };
@@ -109,7 +110,8 @@ pub struct PolySynthDevice {
     sleep_state: super::DeviceSleepState,
 
     /// Queued MIDI for frame-accurate scheduling within the next block.
-    queued_midi: Vec<(usize, u8, u8, bool)>,
+    /// (frame_offset, key, velocity or release, is_note_on)
+    queued_midi: Vec<(usize, u8, f32, bool)>,
 
     // Scratch, sized in `prepare`.
     mix_l: Vec<f32>,
@@ -284,8 +286,7 @@ impl PolySynthDevice {
         }
     }
 
-    fn note_on(&mut self, note: u8, velocity: u8) {
-        let velocity = velocity as f32 / 127.0;
+    fn note_on(&mut self, note: u8, velocity: f32) {
         match self.params.mode {
             VoiceMode::Poly => self.note_on_poly(note, velocity),
             VoiceMode::Mono | VoiceMode::Legato => self.note_on_mono(note, velocity),
@@ -308,7 +309,7 @@ impl PolySynthDevice {
             age,
             glide_from: self.glide_from(connected),
             unison,
-            released: false,
+            released: None,
         };
 
         // The same key again: fade the sounding voice out over the steal fade and give the
@@ -398,7 +399,7 @@ impl PolySynthDevice {
                     None
                 },
                 unison: [self.params.osc[0].unison, self.params.osc[1].unison],
-                released: false,
+                released: None,
             };
             if voice.active {
                 voice.steal(pending);
@@ -408,15 +409,15 @@ impl PolySynthDevice {
         }
     }
 
-    fn note_off(&mut self, note: u8) {
+    fn note_off(&mut self, note: u8, release: f32) {
         match self.params.mode {
             VoiceMode::Poly => {
                 self.held.remove(note);
                 for v in self.voices.iter_mut() {
                     if let Some(p) = v.pending.as_mut().filter(|p| p.note == note) {
-                        p.released = true;
+                        p.released = Some(release);
                     } else if v.gate && !v.is_fading() && v.note == note {
-                        v.release();
+                        v.release(release);
                     }
                 }
             }
@@ -430,7 +431,7 @@ impl PolySynthDevice {
                 if let Some(p) = voice.pending.as_mut().filter(|p| p.note == note) {
                     match self.held.top() {
                         Some(top) => p.note = top,
-                        None => p.released = true,
+                        None => p.released = Some(release),
                     }
                     return;
                 }
@@ -442,7 +443,7 @@ impl PolySynthDevice {
                         let velocity = voice.velocity;
                         voice.retrigger(top, velocity, age, glide, retrigger, &start);
                     }
-                    None => voice.release(),
+                    None => voice.release(release),
                 }
             }
         }
@@ -580,16 +581,16 @@ impl AudioDevice for PolySynthDevice {
 
         // Render in spans between event offsets so note on/off are applied with sample accuracy
         let mut cursor = 0usize;
-        for &(offset, note, velocity, is_on) in events.iter() {
+        for &(offset, note, value, is_on) in events.iter() {
             let span_end = offset.min(sample_count);
             if span_end > cursor {
                 self.render_span(cursor, span_end);
                 cursor = span_end;
             }
-            if is_on && velocity > 0 {
-                self.note_on(note, velocity);
+            if is_on {
+                self.note_on(note, value);
             } else {
-                self.note_off(note);
+                self.note_off(note, value);
             }
         }
         if cursor < sample_count {
@@ -602,14 +603,21 @@ impl AudioDevice for PolySynthDevice {
             outputs[i * 2 + 1] = self.mix_r[i] * gain;
         }
 
-        // Return the (cleared) queue so the next `send_midi_event` doesn't allocate
+        // Return the (cleared) queue so the next `send_note_event` doesn't allocate
         events.clear();
         self.queued_midi = events;
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
-        self.queued_midi
-            .push((frame_offset, note, velocity, is_note_on));
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        match *event {
+            NoteEvent::On { key, velocity, .. } => {
+                self.queued_midi.push((frame_offset, key, velocity, true))
+            }
+            NoteEvent::Off { key, release, .. } => {
+                self.queued_midi.push((frame_offset, key, release, false))
+            }
+            NoteEvent::Expression { .. } => {}
+        }
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -835,6 +843,7 @@ mod tests {
     use super::params::*;
     use super::*;
     use crate::audio::devices::{enum_to_norm, real_to_norm, ParamType};
+    use crate::audio::midi_types::DEFAULT_RELEASE;
 
     const SR: f32 = 48_000.0;
     const BLOCK: usize = 256;
@@ -1005,13 +1014,13 @@ mod tests {
     fn note_renders_then_releases_to_silence() {
         let mut dev = synth();
         dev.set_parameter(AMP_RELEASE, 0.0); // shortest release
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         assert!(
             peak(&render(&mut dev, 8)) > 0.01,
             "note on should be audible"
         );
 
-        dev.send_midi_event(60, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(60), 0);
         render(&mut dev, 16); // let the release finish
         assert_eq!(peak(&render(&mut dev, 4)), 0.0, "silent after release");
     }
@@ -1022,7 +1031,7 @@ mod tests {
         let cap = dev.mix_l.len();
         let frames = cap + 100;
         let mut out = vec![0.0; frames * 2];
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         dev.process_block(&[], &mut out, frames);
         assert_eq!(dev.mix_l.len(), cap);
     }
@@ -1033,12 +1042,12 @@ mod tests {
         set_real(&mut dev, OSC1 + UNISON, 6.0); // 7 voices
         set_real(&mut dev, OSC2 + UNISON, 2.0); // 3 voices; cost is the max
         set_real(&mut dev, POLYPHONY, 63.0);
-        dev.send_midi_event(40, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(40, 100), 0);
         render(&mut dev, 1);
         assert_eq!(dev.usage(), (7, 1));
 
         for note in 41..56 {
-            dev.send_midi_event(note, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(note, 100), 0);
         }
         // Check at every block while stolen voices hand over.
         for _ in 0..8 {
@@ -1062,7 +1071,7 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, POLYPHONY, 3.0); // 4 notes
         for note in 60..66 {
-            dev.send_midi_event(note, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(note, 100), 0);
         }
         render(&mut dev, 4);
         assert_eq!(sounding_notes(&dev), vec![62, 63, 64, 65]);
@@ -1074,18 +1083,18 @@ mod tests {
         set_real(&mut dev, POLYPHONY, 3.0); // 4 notes
         set_real(&mut dev, AMP_RELEASE, 5.0);
         for note in [60, 62, 64, 65] {
-            dev.send_midi_event(note, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(note, 100), 0);
             render(&mut dev, 1);
         }
         // 62 is released (and quieter than the held notes); 60 is the oldest held.
-        dev.send_midi_event(62, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(62), 0);
         render(&mut dev, 4);
-        dev.send_midi_event(67, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(67, 100), 0);
         render(&mut dev, 4);
         assert_eq!(sounding_notes(&dev), vec![60, 64, 65, 67]);
 
         // With nothing releasing, the oldest held note goes.
-        dev.send_midi_event(69, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(69, 100), 0);
         render(&mut dev, 4);
         assert_eq!(sounding_notes(&dev), vec![64, 65, 67, 69]);
     }
@@ -1094,9 +1103,9 @@ mod tests {
     fn stolen_voice_fades_instead_of_jumping() {
         let mut dev = synth();
         set_real(&mut dev, POLYPHONY, 0.0); // 1 note
-        dev.send_midi_event(48, 127, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 127), 0);
         render(&mut dev, 8);
-        dev.send_midi_event(60, 127, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 127), 0);
         let out = render(&mut dev, 2);
         // Largest sample-to-sample step stays that of a steady saw at these levels; a hard cut
         // would jump by the full amplitude.
@@ -1115,9 +1124,9 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, POLYPHONY, 1.0); // 2 notes
                                             // Three notes inside one block: the first is the oldest and gets stolen.
-        dev.send_midi_event(60, 100, true, 0);
-        dev.send_midi_event(64, 100, true, 10);
-        dev.send_midi_event(67, 100, true, 20);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(64, 100), 10);
+        dev.send_note_event(&NoteEvent::test_on(67, 100), 20);
         render(&mut dev, 2);
         assert_eq!(sounding_notes(&dev), vec![64, 67]);
     }
@@ -1127,18 +1136,18 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, VOICE_MODE, 2.0);
         for note in [60, 64, 67] {
-            dev.send_midi_event(note, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(note, 100), 0);
             render(&mut dev, 1);
         }
         assert_eq!(dev.voices[0].note, 67);
         // Releasing a key that isn't sounding changes nothing audible.
-        dev.send_midi_event(64, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(64), 0);
         render(&mut dev, 1);
         assert_eq!(dev.voices[0].note, 67);
         assert!(dev.voices[0].gate);
 
         // Releasing the top returns to 60 (not the released 64), without an envelope restart.
-        dev.send_midi_event(67, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(67), 0);
         render(&mut dev, 1);
         let v = &dev.voices[0];
         assert_eq!(v.note, 60);
@@ -1148,7 +1157,7 @@ mod tests {
             crate::audio::modulation::envelope::AdsrState::Attack
         );
 
-        dev.send_midi_event(60, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(60), 0);
         render(&mut dev, 1);
         assert!(!dev.voices[0].gate);
         assert!(
@@ -1165,9 +1174,9 @@ mod tests {
             set_real(&mut dev, AMP_ATTACK, 0.05);
             set_real(&mut dev, AMP_DECAY, 0.01);
             set_real(&mut dev, AMP_SUSTAIN, 0.3); // below 1, so an attack has somewhere to go
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 20); // into sustain
-            dev.send_midi_event(62, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(62, 100), 0);
             render(&mut dev, 1);
             let attacking = dev.voices[0].amp_env.state()
                 == crate::audio::modulation::envelope::AdsrState::Attack;
@@ -1183,7 +1192,7 @@ mod tests {
         set_real(&mut dev, AMP_SUSTAIN, 1.0); // worst case: the level sits at the peak
         set_real(&mut dev, FM_INDEX, 4.0); // the reported repro: two-op FM on Osc 1
         set_real(&mut dev, FM_RATIO, 6.0); // enum index of "2", a carrier-frequency multiple
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 20); // into sustain
         assert_eq!(
             dev.voices
@@ -1195,7 +1204,7 @@ mod tests {
             1.0
         );
 
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 1); // the 4 ms steal fade completes, the queued note starts
         let v = dev
             .voices
@@ -1215,11 +1224,11 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, VOICE_MODE, 1.0);
         set_real(&mut dev, GLIDE, 0.1);
-        dev.send_midi_event(48, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 100), 0);
         render(&mut dev, 1);
         assert_eq!(dev.voices[0].pitch, 48.0);
 
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         let glide_frames = (0.1 * SR) as usize; // 4800
         let mut frames = 0;
         let mut out = vec![0.0; 64 * 2];
@@ -1241,8 +1250,8 @@ mod tests {
     fn poly_glides_from_the_last_note_and_zero_glide_jumps() {
         let mut dev = synth();
         set_real(&mut dev, GLIDE, 0.2);
-        dev.send_midi_event(48, 100, true, 0);
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 1);
         let v = dev
             .voices
@@ -1252,8 +1261,8 @@ mod tests {
         assert!(v.pitch > 48.0 && v.pitch < 49.0, "pitch {}", v.pitch);
 
         let mut dev = synth();
-        dev.send_midi_event(48, 100, true, 0);
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 100), 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 1);
         let v = dev
             .voices
@@ -1268,9 +1277,9 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, GLIDE, 0.2);
         set_real(&mut dev, GLIDE_SCOPE, 1.0);
-        dev.send_midi_event(48, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 100), 0);
         render(&mut dev, 1);
-        dev.send_midi_event(60, 100, true, 0); // 48 still held: connected
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0); // 48 still held: connected
         render(&mut dev, 1);
         let v = dev
             .voices
@@ -1283,10 +1292,10 @@ mod tests {
             v.pitch
         );
 
-        dev.send_midi_event(48, 0, false, 0);
-        dev.send_midi_event(60, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(48), 0);
+        dev.send_note_event(&NoteEvent::test_off(60), 0);
         render(&mut dev, 1);
-        dev.send_midi_event(67, 100, true, 0); // nothing held: detached
+        dev.send_note_event(&NoteEvent::test_on(67, 100), 0); // nothing held: detached
         render(&mut dev, 1);
         let v = dev
             .voices
@@ -1305,11 +1314,11 @@ mod tests {
         set_real(&mut dev, VOICE_MODE, 1.0);
         set_real(&mut dev, GLIDE, 0.2);
         set_real(&mut dev, GLIDE_SCOPE, 1.0);
-        dev.send_midi_event(48, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 100), 0);
         render(&mut dev, 1);
-        dev.send_midi_event(48, 0, false, 0);
+        dev.send_note_event(&NoteEvent::test_off(48), 0);
         render(&mut dev, 40); // release (200 ms) finishes, the voice goes idle
-        dev.send_midi_event(67, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(67, 100), 0);
         render(&mut dev, 1);
         let v = &dev.voices[0];
         assert!(v.active, "voice should sound");
@@ -1328,7 +1337,7 @@ mod tests {
         let mut dev = synth();
         set_real(&mut dev, OSC1 + UNISON, 6.0);
         set_real(&mut dev, OSC1 + UNISON_SPREAD, spread_percent);
-        dev.send_midi_event(57, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(57, 100), 0);
         render(&mut dev, 2); // skip the attack
         render(&mut dev, 40)
     }
@@ -1356,7 +1365,7 @@ mod tests {
     #[test]
     fn single_oscillator_is_centred() {
         let mut dev = synth();
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         let out = render(&mut dev, 4);
         assert!(out.chunks(2).all(|f| (f[0] - f[1]).abs() < 1e-6));
     }
@@ -1364,7 +1373,7 @@ mod tests {
     #[test]
     fn pitch_knobs_reach_held_notes() {
         let mut dev = synth();
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 1);
         let before = dev.voices[0].pitch + dev.params.osc[0].transpose;
         set_real(&mut dev, OSC1 + SEMI, 19.0); // +7
@@ -1380,7 +1389,7 @@ mod tests {
             set_real(&mut dev, OSC1 + LEVEL, 0.0);
             set_real(&mut dev, NOISE_LEVEL, 1.0);
             set_real(&mut dev, NOISE_COLOR, color);
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             let out = render(&mut dev, 8);
             let level = rms(out.iter().copied());
             assert!(level > 0.02 && level < 1.0, "color {color}: rms {level}");
@@ -1390,7 +1399,7 @@ mod tests {
     #[test]
     fn mode_change_silences_held_notes() {
         let mut dev = synth();
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 2);
         set_real(&mut dev, VOICE_MODE, 1.0);
         render(&mut dev, 2);
@@ -1486,7 +1495,7 @@ mod tests {
         );
         set_real(&mut dev, CUTOFF, 400.0);
         set_real(&mut dev, RESONANCE, 0.5);
-        dev.send_midi_event(48, 110, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 110), 0);
         let out = left(&render(&mut dev, 80)); // ~427 ms
         let window = 2048;
         let early = centroid(&out[512..512 + window]);
@@ -1500,7 +1509,7 @@ mod tests {
         // Without the route the tone doesn't move.
         let mut dev = synth();
         set_real(&mut dev, CUTOFF, 400.0);
-        dev.send_midi_event(48, 110, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(48, 110), 0);
         let out = left(&render(&mut dev, 80));
         let (a, b) = (
             centroid(&out[512..512 + window]),
@@ -1541,7 +1550,7 @@ mod tests {
             real_to_norm(400.0, CUTOFF_MIN, CUTOFF_MAX, true, 1.0),
         );
         devices[0].set_parameter(RESONANCE, 0.5);
-        devices[0].send_midi_event(48, 110, true, 0);
+        devices[0].send_note_event(&NoteEvent::test_on(48, 110), 0);
 
         let mut out = vec![0.0; BLOCK * 2];
         let mut samples = Vec::new();
@@ -1566,7 +1575,7 @@ mod tests {
             let mut dev = synth();
             set_real(&mut dev, CUTOFF, cutoff);
             set_real(&mut dev, FILTER_TYPE, filter_type);
-            dev.send_midi_event(48, 110, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(48, 110), 0);
             render(&mut dev, 4);
             centroid(&left(&render(&mut dev, 16)))
         };
@@ -1614,6 +1623,7 @@ mod tests {
                 ModulatorKind::Velocity,
                 ModulatorKind::Keytrack,
                 ModulatorKind::Random,
+                ModulatorKind::Release,
             ] {
                 let slot = kind.index();
                 spec.kinds[slot] = Some(kind);
@@ -1621,7 +1631,7 @@ mod tests {
             }
             // LFO at 40 Hz, S&H, so it steps through values.
             spec.params[0] = mod_params(ModulatorKind::Lfo, &[(LFO_RATE, 40.0), (LFO_SHAPE, 4.0)]);
-            let slots = [0usize, 1, 2, 3, 4, 5];
+            let slots = [0usize, 1, 2, 3, 4, 5, 6];
             'outer: for (i, &slot) in slots.iter().enumerate() {
                 for (j, &id) in floats.iter().enumerate() {
                     if spec.route_len == crate::audio::modulation::MAX_ROUTES {
@@ -1642,12 +1652,55 @@ mod tests {
             dev.set_voice_modulation(&spec);
             set_real(&mut dev, RESONANCE, 1.0);
             for note in [24, 60, 96, 127] {
-                dev.send_midi_event(note, 127, true, 0);
+                dev.send_note_event(&NoteEvent::test_on(note, 127), 0);
             }
             let out = render(&mut dev, 40);
             assert!(out.iter().all(|s| s.is_finite()), "non-finite at {sr}");
             assert!(peak(&out) < 20.0, "peak {} at {sr}", peak(&out));
         }
+    }
+
+    #[test]
+    fn polysynth_release_modulator_sees_release() {
+        let mut dev = synth();
+        set_spec(&mut dev, &[(0, ModulatorKind::Release, &[])], &[]);
+        let release_of = |dev: &PolySynthDevice, note: u8| {
+            let voice = dev
+                .voices
+                .iter()
+                .find(|v| v.active && v.note == note)
+                .expect("sounding voice");
+            voice.mods[0].as_ref().expect("release modulator").value()
+        };
+
+        for key in [60, 64] {
+            dev.send_note_event(
+                &NoteEvent::On {
+                    note_id: key as u32,
+                    key,
+                    velocity: 0.8,
+                },
+                0,
+            );
+        }
+        render(&mut dev, 1);
+        assert_eq!(release_of(&dev, 60), DEFAULT_RELEASE, "held: the default");
+        assert_eq!(release_of(&dev, 64), DEFAULT_RELEASE);
+
+        // Each voice latches its own note-off's release while its tail rings.
+        for (key, release) in [(60, 0.9), (64, 0.2)] {
+            dev.send_note_event(
+                &NoteEvent::Off {
+                    note_id: key as u32,
+                    key,
+                    release,
+                },
+                0,
+            );
+        }
+        render(&mut dev, 1);
+        assert_eq!(release_of(&dev, 60), 0.9);
+        assert_eq!(release_of(&dev, 64), 0.2);
     }
 
     #[test]
@@ -1666,7 +1719,7 @@ mod tests {
             )],
             &[(0, CUTOFF, 0.5)],
         );
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         // A quarter note at 120 BPM is 0.5 s: the retriggered LFO is back at phase 0 then,
         // and half-way at 0.25 s.
         let quarter = (SR * 0.5) as usize;
@@ -1699,9 +1752,9 @@ mod tests {
                 )],
                 &[(0, CUTOFF, 0.5)],
             );
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 7);
-            dev.send_midi_event(64, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(64, 100), 0);
             render(&mut dev, 3);
             dev.voices
                 .iter()
@@ -1740,9 +1793,9 @@ mod tests {
             )],
             &[(0, CUTOFF, 0.35)],
         );
-        dev.send_midi_event(60, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
         render(&mut dev, 18); // ~96 ms
-        dev.send_midi_event(64, 100, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(64, 100), 0);
         render(&mut dev, 1);
 
         let values: Vec<f32> = dev
@@ -1774,12 +1827,12 @@ mod tests {
                 )],
                 &[(0, CUTOFF, 0.5)],
             );
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 4);
             let before = lfo_phase(&dev, 0, 0);
             assert!(before > 0.05, "{label}: LFO should be running: {before}");
 
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 1);
             let after = lfo_phase(&dev, 0, 0);
             assert!(
@@ -1805,7 +1858,7 @@ mod tests {
             )],
             &[(0, OSC1 + FINE, 0.5)], // ±100 cents
         );
-        dev.send_midi_event(69, 127, true, 0);
+        dev.send_note_event(&NoteEvent::test_on(69, 127), 0);
         render(&mut dev, 4);
         let out = left(&render(&mut dev, 40));
         // Zero-crossing intervals (in samples) vary, but neighbouring ones barely differ.
@@ -1837,7 +1890,7 @@ mod tests {
                 let mut dev = synth();
                 set_real(&mut dev, CUTOFF, 500.0);
                 set_real(&mut dev, KEY_TRACK, key_track);
-                dev.send_midi_event(note, 110, true, 0);
+                dev.send_note_event(&NoteEvent::test_on(note, 110), 0);
                 render(&mut dev, 4);
                 rms(render(&mut dev, 16).into_iter())
             };
@@ -1853,7 +1906,7 @@ mod tests {
             let mut dev = synth();
             set_real(&mut dev, FM_RATIO, ratio);
             set_real(&mut dev, FM_INDEX, index);
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 8)
         };
         let off = play(1.0, 0.0);
@@ -1879,7 +1932,7 @@ mod tests {
             if fm_on {
                 set_real(&mut dev, FM_INDEX, 0.0);
             }
-            dev.send_midi_event(60, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(60, 100), 0);
             render(&mut dev, 8)
         };
         let (off, zero) = (play(false), play(true));
@@ -1948,7 +2001,7 @@ mod bench {
         assert_eq!(spec.route_len, 8);
         dev.set_voice_modulation(&spec);
         for note in 48..64 {
-            dev.send_midi_event(note, 100, true, 0);
+            dev.send_note_event(&NoteEvent::test_on(note, 100), 0);
         }
         let mut out = vec![0.0; FRAMES * 2];
         let blocks = (SR as usize * 10) / FRAMES; // 10 s of audio

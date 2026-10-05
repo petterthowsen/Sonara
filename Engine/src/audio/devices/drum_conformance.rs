@@ -12,6 +12,7 @@ use super::{
 };
 use crate::audio::dsp::test_util::{peak, time_to_db};
 use crate::audio::dsp::{OneShotEnvelope, Rng, SweepOsc, SweepShape};
+use crate::audio::midi_types::{NoteEvent, NoteExpression};
 use crate::audio::modulation::wrap_at_path;
 
 const SR: f32 = 48_000.0;
@@ -198,13 +199,50 @@ fn render_blocks(
         let frames = block.min(total - pos);
         for &(at, note, velocity) in hits {
             if at >= pos && at < pos + frames {
-                device.send_midi_event(note, velocity, true, at - pos);
+                device.send_note_event(&NoteEvent::test_on(note, velocity), at - pos);
             }
         }
         device.process_block(&[], &mut out[pos * 2..(pos + frames) * 2], frames);
         pos += frames;
     }
     out
+}
+
+/// A hit at frame 0, rendered in 256-frame blocks, with an expression event for that hit's
+/// note in every block when `expressions` is set.
+fn render_hit(device: &mut dyn AudioDevice, expressions: bool) -> Vec<f32> {
+    const BLOCK: usize = 256;
+    let hit = NoteEvent::test_on(60, 100);
+    let mut out = vec![0.0; (SR as usize / 2) * 2];
+    device.send_note_event(&hit, 0);
+    for block in out.chunks_mut(BLOCK * 2) {
+        if expressions {
+            let expression = NoteEvent::Expression {
+                note_id: hit.note_id(),
+                key: hit.key(),
+                kind: NoteExpression::Pressure,
+                value: 0.7,
+            };
+            device.send_note_event(&expression, 5);
+        }
+        device.process_block(&[], block, block.len() / 2);
+    }
+    out
+}
+
+/// Every drum ignores a per-note expression event: the output is bit-identical (REQ-013).
+#[test]
+fn expression_event_is_ignored_by_every_drum() {
+    let mut failed = Vec::new();
+    for (id, make) in cases().into_iter().chain(cases_wrapped()) {
+        let reference = render_hit(make().as_mut(), false);
+        if peak(&reference) == 0.0 {
+            failed.push(format!("{id}: the hit is silent"));
+        } else if render_hit(make().as_mut(), true) != reference {
+            failed.push(format!("{id}: an expression event changed the output"));
+        }
+    }
+    assert!(failed.is_empty(), "\n{}", failed.join("\n"));
 }
 
 /// The normalized value a parameter should read back after being set to `norm`.
@@ -330,7 +368,7 @@ fn check_sleeps_and_wakes(make: &Make) -> Result<(), String> {
         return Err(format!("{bad} while asleep (expected exact 0)"));
     }
     // A new note wakes it.
-    device.send_midi_event(60, 120, true, 0);
+    device.send_note_event(&NoteEvent::test_on(60, 120), 0);
     if device.is_sleeping() {
         return Err("a hit did not wake the device".into());
     }

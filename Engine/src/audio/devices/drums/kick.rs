@@ -440,6 +440,7 @@ mod tests {
     use crate::audio::dsp::test_util::{
         instantaneous_freq, left, peak, spectrum_db, time_to_db, to_db,
     };
+    use crate::audio::midi_types::NoteEvent;
 
     const SR: f32 = 48_000.0;
 
@@ -477,7 +478,7 @@ mod tests {
     /// Render `frames` stereo frames through a host, with one note-on at frame 0.
     fn render_host(host: &mut DrumHost<KickVoice>, frames: usize, note: u8, vel: u8) -> Vec<f32> {
         let mut out = vec![0.0f32; frames * 2];
-        host.send_midi_event(note, vel, true, 0);
+        host.send_note_event(&NoteEvent::test_on(note, vel), 0);
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(512);

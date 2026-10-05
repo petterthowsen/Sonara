@@ -330,6 +330,85 @@ fn builtin_device_info(device: &dyn AudioDevice) -> EngineStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::devices::container::DeviceContainer;
+    use crate::audio::dsp::test_util::peak;
+    use crate::audio::midi_types::{NoteEvent, NoteExpression};
+
+    /// A note on key 36 held for a quarter second, rendered in 256-frame blocks, with an
+    /// expression event for it in every block when `expressions` is set.
+    fn render_note(device: &mut dyn AudioDevice, expressions: bool) -> Vec<f32> {
+        const SR: f32 = 48_000.0;
+        const BLOCK: usize = 256;
+        device.prepare(SR, BLOCK);
+        let on = NoteEvent::test_on(36, 100);
+        let silence = [0.0; BLOCK * 2];
+        let mut out = vec![0.0; (SR as usize / 2) * 2];
+        device.send_note_event(&on, 0);
+        for (i, block) in out.chunks_mut(BLOCK * 2).enumerate() {
+            if expressions {
+                let expression = NoteEvent::Expression {
+                    note_id: on.note_id(),
+                    key: on.key(),
+                    kind: NoteExpression::Pitch,
+                    value: 2.0,
+                };
+                device.send_note_event(&expression, 3);
+            }
+            if i == 47 {
+                device.send_note_event(&NoteEvent::test_off(36), 0);
+            }
+            device.process_block(&silence[..block.len()], block, block.len() / 2);
+        }
+        out
+    }
+
+    /// The built-ins that aren't covered by the effect and drum conformance runs: instruments
+    /// and containers ignore a per-note expression event (REQ-013). The ones that make no sound
+    /// without a loaded file (Sampler, sfizz) must still take the event without panicking.
+    #[test]
+    fn expression_event_is_ignored_by_instruments_and_containers() {
+        const SR: f32 = 48_000.0;
+        type Make = fn() -> Box<dyn AudioDevice>;
+        fn with_synth(mut container: Box<dyn AudioDevice>) -> Box<dyn AudioDevice> {
+            container
+                .as_container_mut()
+                .expect("container")
+                .insert_child(0, Box::new(PolySynthDevice::new(SR)));
+            container
+        }
+        let cases: [(&str, bool, Make); 8] = [
+            ("polysynth", true, || Box::new(PolySynthDevice::new(SR))),
+            ("sampler", false, || {
+                Box::new(SamplerDevice::new_for_metadata())
+            }),
+            ("sfizz", false, || {
+                Box::new(SfizzDevice::new_for_metadata(SR))
+            }),
+            ("spectrum_analyzer", false, || {
+                Box::new(SpectrumAnalyzerDevice::new(SR))
+            }),
+            ("chain", true, || {
+                with_synth(Box::new(ChainDevice::new(512)))
+            }),
+            ("layer", true, || {
+                with_synth(Box::new(LayerDevice::new(512)))
+            }),
+            ("drum_machine", true, || {
+                with_synth(Box::new(DrumMachineDevice::new(512)))
+            }),
+            ("multiband", false, || {
+                Box::new(MultibandDevice::new(SR, 512))
+            }),
+        ];
+        for (name, sounds, make) in cases {
+            let reference = render_note(make().as_mut(), false);
+            assert_eq!(peak(&reference) > 0.0, sounds, "{name}: unexpected level");
+            assert!(
+                render_note(make().as_mut(), true) == reference,
+                "{name}: an expression event changed the output"
+            );
+        }
+    }
 
     #[test]
     fn multiband_is_advertised_as_an_effect_container() {

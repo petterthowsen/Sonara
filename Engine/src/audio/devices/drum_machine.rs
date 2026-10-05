@@ -6,6 +6,7 @@ use super::container::{
 use super::{
     AudioDevice, DeviceCategory, DeviceVariant, MidiPort, ParamId, ParamInfo, ParamValue, PortFlow,
 };
+use crate::audio::midi_types::NoteEvent;
 
 /// Default first pad note (C1).
 const FIRST_PAD_NOTE: u8 = 36;
@@ -209,12 +210,13 @@ impl AudioDevice for DrumMachineDevice {
         }
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
+        let note = event.key();
         let Some(index) = self.slots.iter().position(|s| s.note == note) else {
             return;
         };
         // A note-on chokes every other slot in the same non-zero group, at the same offset.
-        if is_note_on && velocity > 0 {
+        if matches!(event, NoteEvent::On { .. }) {
             let group = self.slots[index].choke_group;
             if group != 0 {
                 for (i, slot) in self.slots.iter_mut().enumerate() {
@@ -226,8 +228,7 @@ impl AudioDevice for DrumMachineDevice {
         }
         let slot = &mut self.slots[index];
         slot.device.mark_activity();
-        slot.device
-            .send_midi_event(note, velocity, is_note_on, frame_offset);
+        slot.device.send_note_event(event, frame_offset);
     }
 
     fn set_parameter(&mut self, _param_id: ParamId, _value: ParamValue) {}
@@ -313,7 +314,7 @@ mod tests {
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
 
     struct NoteCapture {
-        hits: Vec<u8>,
+        hits: Vec<NoteEvent>,
     }
 
     impl NoteCapture {
@@ -328,9 +329,9 @@ mod tests {
             outputs[..count].fill(0.1);
         }
 
-        fn send_midi_event(&mut self, note: u8, _v: u8, is_on: bool, _f: usize) {
-            if is_on {
-                self.hits.push(note);
+        fn send_note_event(&mut self, event: &NoteEvent, _f: usize) {
+            if matches!(event, NoteEvent::On { .. }) {
+                self.hits.push(*event);
             }
         }
 
@@ -374,14 +375,20 @@ mod tests {
         dm.insert_child(1, Box::new(NoteCapture::new()));
         assert!(dm.set_slot_note(0, 36));
         assert!(dm.set_slot_note(1, 38));
-        dm.send_midi_event(38, 100, true, 0);
+        let hit = NoteEvent::On {
+            note_id: 9,
+            key: 38,
+            velocity: 0.5039,
+        };
+        dm.send_note_event(&hit, 0);
         let child = dm
             .child_mut(1)
             .unwrap()
             .as_any_mut()
             .downcast_mut::<NoteCapture>()
             .unwrap();
-        assert_eq!(child.hits, vec![38]);
+        // Forwarded unchanged, sounding-note id included.
+        assert_eq!(child.hits, vec![hit]);
         let child0 = dm
             .child_mut(0)
             .unwrap()
@@ -444,9 +451,9 @@ mod tests {
             outputs[..count].fill(0.1);
         }
 
-        fn send_midi_event(&mut self, note: u8, _v: u8, is_on: bool, _f: usize) {
-            if is_on {
-                self.hits.push(note);
+        fn send_note_event(&mut self, event: &NoteEvent, _f: usize) {
+            if matches!(event, NoteEvent::On { .. }) {
+                self.hits.push(event.key());
             }
         }
 
@@ -509,7 +516,14 @@ mod tests {
         assert!(dm.set_slot_choke_group(1, 1));
         assert!(dm.set_slot_choke_group(2, 2));
 
-        dm.send_midi_event(36, 100, true, 5);
+        dm.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 36,
+                velocity: 0.8,
+            },
+            5,
+        );
 
         assert_eq!(capture(&mut dm, 0).hits, vec![36]);
         assert!(capture(&mut dm, 0).choked.is_empty());
@@ -518,7 +532,14 @@ mod tests {
         assert!(capture(&mut dm, 2).choked.is_empty());
 
         // A note-off does not choke.
-        dm.send_midi_event(36, 0, false, 7);
+        dm.send_note_event(
+            &NoteEvent::Off {
+                note_id: 1,
+                key: 36,
+                release: 0.5,
+            },
+            7,
+        );
         assert_eq!(capture(&mut dm, 1).choked, vec![5]);
     }
 
@@ -537,7 +558,14 @@ mod tests {
 
         // Group 0 never chokes.
         assert!(dm.set_slot_choke_group(0, 0));
-        dm.send_midi_event(36, 100, true, 3);
+        dm.send_note_event(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 36,
+                velocity: 0.8,
+            },
+            3,
+        );
         assert!(capture(&mut dm, 1).choked.is_empty());
     }
 }

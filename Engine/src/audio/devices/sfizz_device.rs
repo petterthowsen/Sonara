@@ -9,6 +9,7 @@ use super::{
     ParamInfo, ParamType, ParamValue, PortFlow,
 };
 use crate::audio::commands::EngineStatus;
+use crate::audio::midi_types::{to_u7, NoteEvent};
 use crossbeam::channel::Sender;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -115,8 +116,8 @@ pub struct SfizzDevice {
     device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
 
-    // Queued MIDI events (frame-accurate within next block)
-    queued_midi: Vec<(usize, u8, u8, bool)>,
+    // Queued notes (frame-accurate within next block): (offset, key, velocity or release, is_on)
+    queued_midi: Vec<(usize, u8, f32, bool)>,
 
     // Pending parameter changes (queued when try_lock fails)
     pending_param_changes: Vec<(u8, f32)>,
@@ -571,7 +572,7 @@ impl AudioDevice for SfizzDevice {
 
         let mut cursor = 0usize;
         for i in 0..self.queued_midi.len() {
-            let (offset, note, velocity, is_on) = self.queued_midi[i];
+            let (offset, note, value, is_on) = self.queued_midi[i];
             let clamped_offset = std::cmp::min(offset, sample_count);
             if clamped_offset > cursor {
                 render_stereo(
@@ -582,11 +583,12 @@ impl AudioDevice for SfizzDevice {
                 cursor = clamped_offset;
             }
 
-            // Apply event exactly at this frame
+            // Apply event exactly at this frame. The binding takes 7-bit values.
+            let value = binding_value(value, is_on);
             if is_on {
-                synth_guard.0.note_on(note, velocity);
+                synth_guard.0.note_on(note, value);
             } else {
-                synth_guard.0.note_off(note, velocity);
+                synth_guard.0.note_off(note, value);
             }
         }
         self.queued_midi.clear();
@@ -613,10 +615,17 @@ impl AudioDevice for SfizzDevice {
         }
     }
 
-    fn send_midi_event(&mut self, note: u8, velocity: u8, is_note_on: bool, frame_offset: usize) {
+    fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         // Queue event for sample-accurate application in next process_block
-        self.queued_midi
-            .push((frame_offset, note, velocity, is_note_on));
+        match *event {
+            NoteEvent::On { key, velocity, .. } => {
+                self.queued_midi.push((frame_offset, key, velocity, true))
+            }
+            NoteEvent::Off { key, release, .. } => {
+                self.queued_midi.push((frame_offset, key, release, false))
+            }
+            NoteEvent::Expression { .. } => {}
+        }
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -864,9 +873,52 @@ impl AudioDevice for SfizzDevice {
     }
 }
 
+/// A normalized velocity or release as the 7-bit value the sfizz binding takes. A note-on never
+/// goes below 1, which sfizz would read as a note-off.
+fn binding_value(value: f32, is_note_on: bool) -> u8 {
+    let v7 = to_u7(value);
+    if is_note_on {
+        v7.max(1)
+    } else {
+        v7
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sfizz_release_reaches_binding() {
+        let mut device = SfizzDevice::new_for_metadata(48_000.0);
+        device.send_note_event(
+            &NoteEvent::On {
+                note_id: 3,
+                key: 60,
+                velocity: 0.5039,
+            },
+            4,
+        );
+        device.send_note_event(
+            &NoteEvent::Off {
+                note_id: 3,
+                key: 60,
+                release: 0.2,
+            },
+            9,
+        );
+        assert_eq!(
+            device.queued_midi,
+            vec![(4, 60, 0.5039, true), (9, 60, 0.2, false)]
+        );
+        // Quantized at the binding: 0.5039 → 64, release 0.2 → 25 and 0.9 → 114.
+        assert_eq!(binding_value(0.5039, true), 64);
+        assert_eq!(binding_value(0.2, false), 25);
+        assert_eq!(binding_value(0.9, false), 114);
+        // A note-on never reaches sfizz as velocity 0; a release of 0 does.
+        assert_eq!(binding_value(0.001, true), 1);
+        assert_eq!(binding_value(0.0, false), 0);
+    }
 
     #[test]
     fn labeled_ccs_stay_on_param_tab_unlabeled_standards_go_to_cc_tab() {
