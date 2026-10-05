@@ -291,9 +291,16 @@ var _content_width_queued := false
 var target_scroll_vertical: float = 0.0
 var target_scroll_horizontal: float = 0.0
 
-# Target and animation flag for smooth horizontal zooming (like the arranger)
+# Target for smooth horizontal zooming (like the arranger)
 var target_pixels_per_beat: float = 0.0
-var _h_zoom_anim: bool = false
+
+# Horizontal zoom anchor: the (fractional) beat under the cursor stays at _zoom_anchor_x while
+# a wheel zoom animates. The scroll is derived from the current zoom every frame instead of
+# being lerped separately, otherwise scroll and zoom disagree mid-animation and the view jitters.
+# Beat 0 at x 0 locks the view to the origin.
+var _zoom_anchor_active: bool = false
+var _zoom_anchor_beat: float = 0.0
+var _zoom_anchor_x: float = 0.0
 
 # Middle mouse button panning state
 var is_panning: bool = false
@@ -363,35 +370,32 @@ func _ready():
 	_apply_view_mode()
 
 func _process(delta: float):
+	# The vertical extent is fixed by the rows, so the target never needs to go past it.
+	# (Horizontal content grows while scrolling, so that target is clamped at input instead.)
+	target_scroll_vertical = clampf(target_scroll_vertical, 0.0, _max_scroll_v())
+
 	# Smooth scroll interpolation
 	if scroll_smoothing > 0:
-		# Lerp vertical scroll
 		var lerp_factor = 1.0 - pow(scroll_smoothing, delta * 60.0)
-		scroll_vertical = int(lerp(float(scroll_vertical), target_scroll_vertical, lerp_factor))
+		scroll_vertical = _step_toward(scroll_vertical, target_scroll_vertical, lerp_factor)
 
-		# Lerp horizontal scroll
-		var new_h_scroll = lerp(float(h_scroll.scroll_horizontal), target_scroll_horizontal, lerp_factor)
-		h_scroll.scroll_horizontal = int(new_h_scroll)
-		# The notes scroll by whole pixels, so grid and ruler must use the same value
-		# or they drift up to a pixel apart from the notes mid-scroll.
-		grid_helper.scroll_position = h_scroll.scroll_horizontal
-
-		# Lerp horizontal zoom toward its target, like the arranger's smooth zoom.
-		# Other writers (programmatic zoom, pan-zoom) sync the target and clear the
-		# flag, so this only runs while a wheel zoom animation is in flight.
-		if _h_zoom_anim:
+		# Lerp horizontal zoom toward its target, like the arranger's smooth zoom. While a
+		# wheel zoom runs the scroll follows the anchor; otherwise it lerps toward its target.
+		if _zoom_anchor_active:
 			var new_ppb = lerp(grid_helper.pixels_per_beat, target_pixels_per_beat, lerp_factor)
 			if absf(new_ppb - target_pixels_per_beat) < 0.01:
-				grid_helper.pixels_per_beat = target_pixels_per_beat
-				_h_zoom_anim = false
-			else:
-				grid_helper.pixels_per_beat = new_ppb
+				new_ppb = target_pixels_per_beat
+				_zoom_anchor_active = false
+			grid_helper.pixels_per_beat = new_ppb
+			target_scroll_horizontal = roundi(maxf(0.0, _zoom_anchor_beat * new_ppb - _zoom_anchor_x))
+			_set_h_scroll(target_scroll_horizontal, true)
+		else:
+			_set_h_scroll(_step_toward(h_scroll.scroll_horizontal, target_scroll_horizontal, lerp_factor))
 
 	else:
 		# Instant scrolling when smoothing is disabled
-		scroll_vertical = int(target_scroll_vertical)
-		h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-		grid_helper.scroll_position = h_scroll.scroll_horizontal
+		scroll_vertical = roundi(target_scroll_vertical)
+		_set_h_scroll(target_scroll_horizontal)
 
 
 	# The context layer draws only what is on screen; tell it what that is.
@@ -401,6 +405,39 @@ func _process(delta: float):
 	_update_playhead_position()
 	_update_hovered_key()
 	_update_active_keys()
+
+
+## One smoothing step from current toward target, landing exactly on it once within half a
+## pixel (truncating instead would stall short of the target).
+func _step_toward(current: int, target: float, lerp_factor: float) -> int:
+	var v := lerpf(float(current), target, lerp_factor)
+	if absf(v - target) < 0.5:
+		v = target
+	return roundi(v)
+
+
+func _max_scroll_v() -> float:
+	var vbar := get_v_scroll_bar()
+	return maxf(0.0, vbar.max_value - vbar.page)
+
+
+func _max_scroll_h() -> float:
+	var hbar := h_scroll.get_h_scroll_bar()
+	return maxf(0.0, hbar.max_value - hbar.page)
+
+
+## Scroll the note area horizontally and keep the grid and ruler on the same whole pixel
+## (otherwise they drift up to a pixel apart from the notes mid-scroll). Zooming in widens the
+## content synchronously (scale_changed), but the scrollbar only learns the new width at the
+## next layout pass, so a zoom passes zooming = true to raise its max first, or the scroll
+## gets clamped to the old width.
+func _set_h_scroll(px: float, zooming := false) -> void:
+	var hbar := h_scroll.get_h_scroll_bar()
+	var pos := roundi(maxf(0.0, px))
+	if zooming and pos + hbar.page > hbar.max_value:
+		hbar.max_value = pos + hbar.page
+	h_scroll.scroll_horizontal = pos
+	grid_helper.scroll_position = h_scroll.scroll_horizontal
 
 
 func unbind():
@@ -654,7 +691,7 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	# Programmatic zoom: cancel any in-flight wheel zoom animation and keep the
 	# target in sync so the lerp in _process doesn't drag the zoom back.
 	target_pixels_per_beat = clamped_ppb
-	_h_zoom_anim = false
+	_zoom_anchor_active = false
 	# Apply zoom (this triggers grid_helper.changed signal)
 	grid_helper.pixels_per_beat = clamped_ppb
 	
@@ -678,8 +715,7 @@ func set_horizontal_zoom(new_pixels_per_beat: float) -> void:
 	
 	# Apply scroll immediately (bypassing smooth scrolling for zoom)
 	target_scroll_horizontal = max(0, scroll_offset)
-	h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-	grid_helper.scroll_position = target_scroll_horizontal
+	_set_h_scroll(target_scroll_horizontal, true)
 
 
 ## Smooth (lerped) horizontal zoom anchored at the mouse, matching the arranger's
@@ -688,22 +724,28 @@ func _smooth_horizontal_zoom(factor: float) -> void:
 	if scroll_smoothing <= 0:
 		set_horizontal_zoom(grid_helper.pixels_per_beat * factor)
 		return
-	var old_ppb := grid_helper.pixels_per_beat
-	var new_ppb := clampf(old_ppb * factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
-	if is_equal_approx(new_ppb, old_ppb):
+	# Step from the running target so quick wheel ticks accumulate instead of being lost.
+	var base_ppb := target_pixels_per_beat if _zoom_anchor_active else grid_helper.pixels_per_beat
+	var new_ppb := clampf(base_ppb * factor, zoom_min_pixels_per_beat, zoom_max_pixels_per_beat)
+	if is_equal_approx(new_ppb, base_ppb):
 		return
 	var viewport_width := h_scroll.size.x
 	var mouse_x := clampf(h_scroll.get_local_mouse_position().x, 0.0, viewport_width)
-	var zoom_ratio := new_ppb / old_ppb
+	var scroll := float(h_scroll.scroll_horizontal)
+	var origin_anchored := _zoom_anchor_active and _zoom_anchor_beat == 0.0 and _zoom_anchor_x == 0.0
+	# Stick to the origin when we're already within a beat of it (same rule as the arranger):
+	# the mouse-anchored formula would otherwise creep the view away from the start.
+	if scroll < grid_helper.pixels_per_beat and (not _zoom_anchor_active or origin_anchored):
+		_zoom_anchor_beat = 0.0
+		_zoom_anchor_x = 0.0
+	elif not _zoom_anchor_active or absf(_zoom_anchor_x - mouse_x) > 1.0:
+		# Keep the anchor beat while a zoom is running (re-deriving it from the half-animated
+		# view would compound rounding); start a new one otherwise.
+		_zoom_anchor_beat = (scroll + mouse_x) / grid_helper.pixels_per_beat
+		_zoom_anchor_x = mouse_x
+	_zoom_anchor_active = true
 	target_pixels_per_beat = new_ppb
-	# Stick to the origin when we're already within a beat of it (same rule as the
-	# arranger): the mouse-anchored formula would otherwise creep the view away
-	# from the start by mouse_x * (zoom_ratio - 1) pixels.
-	if h_scroll.scroll_horizontal < old_ppb:
-		target_scroll_horizontal = 0.0
-	else:
-		target_scroll_horizontal = maxf(0.0, (h_scroll.scroll_horizontal + mouse_x) * zoom_ratio - mouse_x)
-	_h_zoom_anim = true
+	target_scroll_horizontal = maxf(0.0, _zoom_anchor_beat * new_ppb - _zoom_anchor_x)
 
 
 func _update_zoom_sensitivity() -> void:
@@ -721,7 +763,9 @@ func _on_setting_changed(key: String, _value) -> void:
 func _zoom_vertical(delta_note_height: int):
 	"""Zoom vertically while maintaining the visual position of notes at the mouse cursor."""
 	var note_editor_mouse_pos = note_editor.get_local_mouse_position()
-	
+	var old_scroll := float(scroll_vertical)
+	var old_total_height := lane_layout.total_height()
+
 	# Store the old note height for ratio calculation
 	var old_note_height = note_height
 	
@@ -745,9 +789,15 @@ func _zoom_vertical(delta_note_height: int):
 	# Calculate the scroll offset needed to keep the note under the mouse
 	var scroll_offset = new_note_y - note_editor_mouse_pos.y
 	
+	# The rows have their new height now, but the scrollbar only learns the new content height
+	# at the next layout pass. Grow or shrink its max by the same amount first, otherwise
+	# zooming in clamps the scroll to the old height and the view snaps.
+	var vbar := get_v_scroll_bar()
+	vbar.max_value += lane_layout.total_height() - old_total_height
+
 	# Apply scroll immediately (bypassing smooth scrolling for zoom)
-	target_scroll_vertical = max(0, scroll_vertical + scroll_offset)
-	scroll_vertical = int(target_scroll_vertical)
+	target_scroll_vertical = clampf(old_scroll + scroll_offset, 0.0, _max_scroll_v())
+	scroll_vertical = roundi(target_scroll_vertical)
 
 
 
@@ -781,8 +831,12 @@ func _gui_input(event: InputEvent):
 				# Start panning
 				is_panning = true
 				pan_start_mouse_pos = event.position
-				pan_start_scroll_v = target_scroll_vertical
-				pan_start_scroll_h = target_scroll_horizontal
+				# Start from what is on screen: the targets may still be animating
+				pan_start_scroll_v = scroll_vertical
+				pan_start_scroll_h = h_scroll.scroll_horizontal
+				if _zoom_anchor_active and grid_helper:
+					target_pixels_per_beat = grid_helper.pixels_per_beat
+					_zoom_anchor_active = false
 				pan_start_pixels_per_beat = grid_helper.pixels_per_beat if grid_helper else 0.0
 				pan_start_h_scroll_mouse_pos = h_scroll.get_local_mouse_position()
 				accept_event()
@@ -808,7 +862,7 @@ func _gui_input(event: InputEvent):
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if event.alt_pressed:
 				# alt scroll down: scroll right
-				target_scroll_horizontal += scroll_speed_h
+				target_scroll_horizontal = clampf(target_scroll_horizontal + scroll_speed_h, 0.0, maxf(_max_scroll_h(), target_scroll_horizontal))
 			elif event.shift_pressed:
 				# horizontal zoom out (smooth, like the arranger)
 				_smooth_horizontal_zoom(1.0 / zoom_sensitivity_h)
@@ -817,7 +871,7 @@ func _gui_input(event: InputEvent):
 				_zoom_vertical(-zoom_sensitivity_v)
 			else:
 				# scroll down
-				target_scroll_vertical += scroll_speed_v
+				target_scroll_vertical = minf(target_scroll_vertical + scroll_speed_v, _max_scroll_v())
 			accept_event()
 
 		# Delegate left/right mouse buttons to note editor
@@ -854,7 +908,7 @@ func _gui_input(event: InputEvent):
 				grid_helper.pixels_per_beat = new_ppb
 				# Direct write: cancel any in-flight wheel zoom animation
 				target_pixels_per_beat = new_ppb
-				_h_zoom_anim = false
+				_zoom_anchor_active = false
 
 				# Apply horizontal panning on top of zoom scroll adjustment
 				target_scroll_horizontal = max(0, zoom_scroll - delta.x)
@@ -863,13 +917,12 @@ func _gui_input(event: InputEvent):
 				target_scroll_vertical = pan_start_scroll_v
 			else:
 				# Normal panning: Update scroll positions (negative delta because we're moving the viewport opposite to mouse movement)
-				target_scroll_horizontal = max(0, pan_start_scroll_h - delta.x)
-				target_scroll_vertical = max(0, pan_start_scroll_v - delta.y)
+				target_scroll_horizontal = clampf(pan_start_scroll_h - delta.x, 0.0, _max_scroll_h())
+				target_scroll_vertical = clampf(pan_start_scroll_v - delta.y, 0.0, _max_scroll_v())
 
 			# For panning, apply immediately for better responsiveness
-			h_scroll.scroll_horizontal = int(target_scroll_horizontal)
-			scroll_vertical = int(target_scroll_vertical)
-			grid_helper.scroll_position = target_scroll_horizontal
+			_set_h_scroll(target_scroll_horizontal, event.shift_pressed)
+			scroll_vertical = roundi(target_scroll_vertical)
 
 
 			accept_event()
