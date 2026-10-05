@@ -106,6 +106,12 @@ impl AudioDevice for ChainDevice {
         }
     }
 
+    fn choke(&mut self, frame_offset: usize) {
+        for child in &mut self.children {
+            child.choke(frame_offset);
+        }
+    }
+
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
         if param_id == 0 {
             self.volume = normalized_to_gain(value);

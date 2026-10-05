@@ -11,6 +11,7 @@ func run_tests() -> void:
 	_test_ascii_roundtrip()
 	_test_utf8_roundtrip_keeps_following_args()
 	_test_utf8_address()
+	_test_blob_has_size_prefix()
 
 
 func _roundtrip(address: String, args: Array) -> Array:
@@ -44,3 +45,14 @@ func _test_utf8_roundtrip_keeps_following_args() -> void:
 func _test_utf8_address() -> void:
 	var got := _roundtrip("/preset/Café", [])
 	_assert(got[0] == "/preset/Café", "utf8 address survives: %s" % got[0])
+
+
+func _test_blob_has_size_prefix() -> void:
+	var client := OSCClient.new()
+	var blob := PackedByteArray([1, 2, 3, 4, 5, 6])
+	var packet: PackedByteArray = client.prepare_message("/b", [blob])
+	client.free()
+	# "/b\0\0" + ",b\0\0" + int32 size (big-endian) + data padded to 4 bytes
+	_assert(packet.size() == 4 + 4 + 4 + 8, "blob packet size: %d" % packet.size())
+	_assert(packet.slice(8, 12) == PackedByteArray([0, 0, 0, 6]), "blob carries big-endian size prefix")
+	_assert(packet.slice(12, 18) == blob, "blob data follows the prefix")

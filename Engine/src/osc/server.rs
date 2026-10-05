@@ -248,12 +248,18 @@ impl OscServer {
                     }
 
                     // Parse OSC packet
-                    if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
-                        if let Err(e) =
-                            self.handle_packet(packet, &command_tx, &log_writers, window_manager)
-                        {
-                            warn!("Error handling OSC packet: {}", e);
+                    match rosc::decoder::decode_udp(&buf[..size]) {
+                        Ok((_, packet)) => {
+                            if let Err(e) = self.handle_packet(
+                                packet,
+                                &command_tx,
+                                &log_writers,
+                                window_manager,
+                            ) {
+                                warn!("Error handling OSC packet: {}", e);
+                            }
                         }
+                        Err(e) => warn!("Dropped undecodable OSC packet ({} bytes): {:?}", size, e),
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -3280,6 +3286,21 @@ fn sfz_key_info_args(keys: &[(u8, bool, String)], ranges: &[(u8, u8)]) -> Vec<Os
 
 #[cfg(test)]
 mod tests {
+    /// rosc 0.10 demanded 4 padding bytes after a blob already on a 4-byte boundary, so every
+    /// 16-byte Drum Machine choke mask was dropped as undecodable.
+    #[test]
+    fn decodes_word_aligned_blob() {
+        use rosc::{OscPacket, OscType};
+        let mut packet = b"/b\0\0,b\0\0".to_vec();
+        packet.extend_from_slice(&16u32.to_be_bytes());
+        packet.extend_from_slice(&[7u8; 16]);
+        let (_, decoded) = rosc::decoder::decode_udp(&packet).expect("blob decodes");
+        let OscPacket::Message(msg) = decoded else {
+            panic!("expected a message");
+        };
+        assert_eq!(msg.args, vec![OscType::Blob(vec![7u8; 16])]);
+    }
+
     #[test]
     fn sfz_key_info_args_layout() {
         use rosc::OscType;

@@ -310,6 +310,12 @@ impl AudioDevice for LayerDevice {
         outputs[..interleaved].copy_from_slice(&self.mix_buffer[..interleaved]);
     }
 
+    fn choke(&mut self, frame_offset: usize) {
+        for slot in &mut self.slots {
+            slot.device.choke(frame_offset);
+        }
+    }
+
     fn send_note_event(&mut self, event: &NoteEvent, frame_offset: usize) {
         let input = (event.key() & 0x7f) as usize;
         let note_id = event.note_id();

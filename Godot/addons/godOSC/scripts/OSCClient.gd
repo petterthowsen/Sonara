@@ -80,6 +80,11 @@ func prepare_message(osc_address : String, args : Array):
 				while fmod(pack.size(), 4):
 					pack.append(0)
 			TYPE_PACKED_BYTE_ARRAY:
+				# OSC blobs are an int32 big-endian size followed by the data, padded to 4 bytes.
+				var size_prefix := PackedByteArray([0, 0, 0, 0])
+				size_prefix.encode_s32(0, arg.size())
+				size_prefix.reverse()
+				pack.append_array(size_prefix)
 				pack.append_array(arg)
 				while fmod(pack.size(), 4):
 					pack.append(0)

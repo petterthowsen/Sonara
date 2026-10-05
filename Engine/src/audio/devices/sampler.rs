@@ -50,6 +50,8 @@ const MIN_REGION_FRAMES: f64 = 2.0;
 const MIN_LOOP_FRAMES: f64 = 4.0;
 /// Fade at the end of a non-looping region.
 const DECLICK_SECONDS: f32 = 0.002;
+/// Sentinel key in the queued MIDI list marking a choke (real keys are 0–127).
+const CHOKE_KEY: u8 = 255;
 /// Frames between filter coefficient updates.
 const FILTER_CHUNK: usize = 32;
 const FILTER_RAMP_MS: f32 = 5.0;
@@ -1013,6 +1015,16 @@ impl SamplerDevice {
         self.sleep_state.mark_activity();
     }
 
+    /// Fade every sounding voice out over the declick time (Drum Machine choke).
+    fn choke_voices(&mut self) {
+        for voice in self.voices[..self.voice_count]
+            .iter_mut()
+            .filter(|v| v.active)
+        {
+            voice.ending = true;
+        }
+    }
+
     fn note_off(&mut self, note: u8) {
         if self.p.play_mode != PlayMode::Gated && self.p.loop_mode == LoopMode::Off {
             return;
@@ -1050,7 +1062,9 @@ impl SamplerDevice {
 
     /// Apply a queued event. The sampler has no use for release velocity yet.
     fn apply_midi(&mut self, note: u8, value: f32, is_on: bool) {
-        if is_on {
+        if note == CHOKE_KEY {
+            self.choke_voices();
+        } else if is_on {
             self.note_on(note, value);
         } else {
             self.note_off(note);
@@ -1133,6 +1147,12 @@ impl AudioDevice for SamplerDevice {
         }
         self.queued_midi.push(queued);
         self.sleep_state.mark_activity();
+    }
+
+    fn choke(&mut self, frame_offset: usize) {
+        if self.queued_midi.len() < MIDI_EVENT_CAP {
+            self.queued_midi.push((frame_offset, CHOKE_KEY, 0.0, false));
+        }
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {
@@ -1512,6 +1532,18 @@ mod tests {
 
         sampler.note_on(60, 1.0);
         assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 1);
+    }
+
+    #[test]
+    fn choke_fades_sounding_voices_to_silence() {
+        let mut d = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+        d.set_sample("c", vec![0.5; 48_000], 1, 48_000);
+        d.note_on(60, 1.0);
+        render(&mut d, 256);
+        d.choke(0);
+        let out = render(&mut d, 512);
+        assert!(out[out.len() - 64..].iter().all(|s| *s == 0.0));
+        assert!(!d.any_voice_active());
     }
 
     // === New parameters ===

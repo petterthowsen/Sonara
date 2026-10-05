@@ -30,7 +30,7 @@ realfft = "3"      # Optimized real-valued FFT for spectrum analysis
 sfizz = { git = "https://github.com/petterthowsen/rust-sfizz" }
 
 # OSC communication
-rosc = "0.10"
+rosc = "0.11"
 
 # Utilities
 anyhow = "1.0"

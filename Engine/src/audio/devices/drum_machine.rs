@@ -593,4 +593,44 @@ mod tests {
         assert_eq!(capture(&mut dm, 0).choked, vec![3]);
         assert!(capture(&mut dm, 2).choked.is_empty());
     }
+
+    #[test]
+    fn choke_reaches_a_sampler_inside_a_pad_chain() {
+        use crate::audio::devices::chain::ChainDevice;
+        use crate::audio::devices::sampler::SamplerDevice;
+        use crate::audio::devices::DevicePath;
+
+        // Pads as Godot builds them: a chain per slot holding a Sampler.
+        let mut dm = DrumMachineDevice::new(256);
+        for i in 0..2 {
+            let mut sampler = SamplerDevice::new(48_000.0, 0, DevicePath::root(0), None);
+            sampler.set_sample("hat", vec![0.5; 96_000], 1, 48_000);
+            let mut chain = ChainDevice::new(256);
+            chain.insert_child(0, Box::new(sampler));
+            dm.insert_child(i, Box::new(chain));
+        }
+        assert!(dm.set_slot_note(1, 46));
+        assert!(dm.set_slot_note(0, 42));
+        assert!(dm.set_slot_choke_targets(0, mask(&[46])));
+        let peak = |dm: &mut DrumMachineDevice| {
+            let mut out = vec![0.0f32; 512];
+            dm.process_block(&[0.0; 512], &mut out, 256);
+            out.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+        };
+
+        note_on(&mut dm, 46, 0);
+        assert!(peak(&mut dm) > 0.1, "open hat sounds");
+        note_on(&mut dm, 42, 0);
+        for _ in 0..4 {
+            peak(&mut dm);
+        }
+        let mut open = vec![0.0f32; 512];
+        dm.child_mut(1)
+            .unwrap()
+            .process_block(&[0.0; 512], &mut open, 256);
+        assert!(
+            open.iter().all(|s| *s == 0.0),
+            "closed hat choked the open hat"
+        );
+    }
 }
