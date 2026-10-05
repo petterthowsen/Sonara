@@ -81,7 +81,7 @@ cargo build --release --bins   # engine + plugin_host (both needed for CLAP)
 cargo test
 cargo fmt
 
-Godot/tests/run_all.sh         # Godot tests (headless), from the repo root
+Godot/tests/run_all.sh         # Godot tests (headless, parallel; optional name filters, -jN), from the repo root
 ```
 
 `Engine/test_osc.sh`, `test_plugin_osc.sh` and `test_sfizz.sh` are OSC smoke tests against a
