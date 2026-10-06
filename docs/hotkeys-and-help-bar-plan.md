@@ -12,7 +12,7 @@ Phase 2 depends on Phase 1. The help bar reads its labels, contexts and current 
 - [x?] Phase 1a: Action registry + `Hotkeys` autoload (bindings applied to `InputMap` from Settings)
 - [x?] Phase 1b: Migrate call sites to registry actions (no behavior change)
 - [x?] Phase 1c: Settings › Shortcuts page with key capture and conflict warnings
-- [ ] Phase 2a: Context resolution (hover + focus + interaction state)
+- [x?] Phase 2a: Context resolution (hover + focus + interaction state)
 - [ ] Phase 2b: Gesture declarations and the `HelpBar` component
 - [ ] Phase 2c: Wire contexts into the editors and generic controls
 

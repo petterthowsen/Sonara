@@ -10,6 +10,10 @@ extends Node
 ## Emitted after the InputMap entries of one action were rebuilt.
 signal bindings_changed(action_id: String)
 
+## Emitted when the help context (or the held modifier mask) changes. *ctx* is a context or
+## state id from HotkeyActions; *modifiers* is a mask of the held KEY_MASK_CTRL/SHIFT/ALT/META.
+signal help_context_changed(ctx: String, modifiers: int)
+
 ## Two presses of the same key within this window count as a double tap.
 const DOUBLE_TAP_MS := 400
 const SETTING_PREFIX := "shortcuts/"
@@ -24,12 +28,29 @@ var _last_press: Dictionary = {}
 ## parent action id -> the event that completed a double tap (must not start a new one).
 var _double_consumed: Dictionary = {}
 
+const META_KEY := "hotkey_context"
+const MOD_MASK := KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_MASK_ALT | KEY_MASK_META
+## Mouse motion is re-resolved at most this often.
+const RESOLVE_INTERVAL_MSEC := 50
+
+## Current help context and held modifiers, as last emitted.
+var help_context := "global"
+var help_modifiers := 0
+## Interaction state stack, oldest first: { "owner": Object, "state": String }.
+var _states: Array[Dictionary] = []
+var _held_mods := 0
+var _motion_dirty := false
+var _last_resolve_msec := 0
+
 
 func _ready() -> void:
 	for a in HotkeyActions.ACTIONS:
 		if not a.has("double_tap_of"):
 			_apply(a.id)
 	Settings.setting_changed.connect(_on_setting_changed)
+	if not Utils.is_test_mode():
+		get_viewport().gui_focus_changed.connect(func(_c): resolve_help_context())
+	set_process(not Utils.is_test_mode())
 
 
 func _on_setting_changed(key: String, _value) -> void:
@@ -152,3 +173,99 @@ func find_conflicts(id: String, chord: String) -> Array[String]:
 		if chord in get_chords(a.id):
 			result.append(a.id)
 	return result
+
+
+# ---------------------------------------------------------------------------
+# HELP CONTEXT (what is the pointer over / what is going on right now)
+# ---------------------------------------------------------------------------
+
+## Mark *control* and its descendants as belonging to context *ctx*. Call once in `_ready`.
+func set_context(control: Control, ctx: String) -> void:
+	if not HotkeyActions.CONTEXTS.has(ctx):
+		push_warning("Hotkeys.set_context: unknown context '%s'" % ctx)
+	control.set_meta(META_KEY, ctx)
+
+
+## Start an interaction state (a drag, box select, ...). It wins over hover until
+## end_state(owner). One entry per owner: beginning again replaces the previous state.
+func begin_state(owner: Object, state: String) -> void:
+	if not HotkeyActions.STATES.has(state):
+		push_warning("Hotkeys.begin_state: unknown state '%s'" % state)
+		return
+	_remove_state(owner)
+	_states.append({"owner": owner, "state": state})
+	resolve_help_context()
+
+
+## End the state *owner* started. Unknown owners are ignored.
+func end_state(owner: Object) -> void:
+	if _remove_state(owner):
+		resolve_help_context()
+
+
+func _remove_state(owner: Object) -> bool:
+	for i in range(_states.size() - 1, -1, -1):
+		if _states[i].owner == owner:
+			_states.remove_at(i)
+			return true
+	return false
+
+
+## The context for *hovered*, applying the overrides: text focus, then the newest live
+## interaction state, then the nearest ancestor of *hovered* that declared a context.
+## Pure apart from pruning states whose owner was freed.
+func _resolve_for(hovered: Control, focus_owner: Control = null) -> String:
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return "text"
+	for i in range(_states.size() - 1, -1, -1):
+		if is_instance_valid(_states[i].owner):
+			return _states[i].state
+		_states.remove_at(i)
+	var node: Node = hovered
+	while node:
+		if node.has_meta(META_KEY):
+			return node.get_meta(META_KEY)
+		node = node.get_parent()
+	return "global"
+
+
+func _live_context() -> String:
+	var tree := get_tree()
+	if tree == null:
+		return "global"
+	var main := tree.root
+	if not main.has_focus():
+		for w in main.get_children():
+			if w is FrameWindow and w.has_focus():
+				return "device_panel"
+	return _resolve_for(main.gui_get_hovered_control(), main.gui_get_focus_owner())
+
+
+## Recompute the context and emit help_context_changed if it or the modifiers changed.
+func resolve_help_context() -> void:
+	_motion_dirty = false
+	_last_resolve_msec = Time.get_ticks_msec()
+	_set_help(_live_context(), _held_mods)
+
+
+func _set_help(ctx: String, mods: int) -> void:
+	if ctx == help_context and mods == help_modifiers:
+		return
+	help_context = ctx
+	help_modifiers = mods
+	help_context_changed.emit(ctx, mods)
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		_motion_dirty = true
+	if event is InputEventWithModifiers:
+		var mods: int = event.get_modifiers_mask() & MOD_MASK
+		if mods != _held_mods:
+			_held_mods = mods
+			resolve_help_context()
+
+
+func _process(_delta: float) -> void:
+	if _motion_dirty and Time.get_ticks_msec() - _last_resolve_msec >= RESOLVE_INTERVAL_MSEC:
+		resolve_help_context()

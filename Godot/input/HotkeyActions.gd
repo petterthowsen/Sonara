@@ -177,6 +177,18 @@ const CONTEXTS := {
 	"sampler_zones": "device_panel",
 	"layer_mapping": "global",
 	"computer_keyboard": "global",
+	# A text control has focus: the help bar shows nothing but Escape/Enter hints.
+	"text": "global",
+}
+
+## Interaction states (a gesture in progress, see Hotkeys.begin_state): id -> parent context.
+## A state's chain is the state itself followed by its parent context's chain.
+const STATES := {
+	"clip_drag": "arranger",
+	"clip_resize": "arranger",
+	"box_select": "workspace",
+	"note_drag": "clip_editor",
+	"value_lane_draw": "clip_editor",
 }
 
 const CONTEXT_LABELS := {
@@ -189,6 +201,7 @@ const CONTEXT_LABELS := {
 	"sampler_zones": "Sampler zones",
 	"layer_mapping": "Layer mapping",
 	"computer_keyboard": "Computer keyboard",
+	"text": "Text input",
 }
 
 static var _by_id: Dictionary = {}
@@ -207,9 +220,13 @@ static func is_double_tap(id: String) -> bool:
 	return get_action(id).has("double_tap_of")
 
 
-## *ctx*, its parent, ... up to "global". Empty for an unknown context.
+## *ctx*, its parent, ... up to "global". Empty for an unknown context. A state id comes first,
+## followed by its parent context's chain.
 static func context_chain(ctx: String) -> Array[String]:
 	var chain: Array[String] = []
+	if STATES.has(ctx):
+		chain.append(ctx)
+		ctx = STATES[ctx]
 	while CONTEXTS.has(ctx):
 		chain.append(ctx)
 		ctx = CONTEXTS[ctx]
