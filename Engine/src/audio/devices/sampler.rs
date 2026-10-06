@@ -583,7 +583,7 @@ impl Zone {
         );
     }
 
-    /// Take a multisample zone's settings. Zones always key-track from their root (REQ-018).
+    /// Take a multisample zone's settings. Key tracking follows the device Key Track parameter.
     fn apply_settings(&mut self, s: &ZoneSettings) {
         self.ranges = s.ranges;
         self.root = s.root;
@@ -597,7 +597,6 @@ impl Zone {
         self.loop_end = s.loop_end;
         self.crossfade = s.crossfade;
         self.group_id = s.group_id;
-        self.key_track = true;
         self.resolve_regions();
     }
 }
@@ -1317,7 +1316,7 @@ impl SamplerDevice {
         let Some(sample) = zone.sample.as_ref() else {
             return 0.0;
         };
-        playback_increment(self.p.speed, zone.tune, zone.key_track, note, zone.root)
+        playback_increment(self.p.speed, zone.tune, self.p.key_track, note, zone.root)
             * sample_rate_ratio(sample.sample_rate, self.sample_rate)
     }
 
@@ -2500,14 +2499,18 @@ mod tests {
     }
 
     #[test]
-    fn zone_root_key_tracks_regardless_of_param() {
-        // REQ-018: Key Track off, a zone with root C3 plays E3 four semitones up.
+    fn zone_key_track_follows_device_param() {
+        // REQ-018: Key Track defaults off, so a zone plays at its natural pitch; switched on, a
+        // zone with root C3 plays E3 four semitones up.
         let mut d = multi();
         assert!(!d.p.key_track);
         add_zone(&mut d, 1, zone_settings((60, 64), (1, 127), 60), 1_000);
         d.note_on(64, 1.0);
-        let inc = d.voices.iter().find(|v| v.active).unwrap().increment;
-        assert!((inc - 2.0_f64.powf(4.0 / 12.0)).abs() < 1e-9, "{inc}");
+        let inc = |d: &SamplerDevice| d.voices.iter().find(|v| v.active).unwrap().increment;
+        assert!((inc(&d) - 1.0).abs() < 1e-9, "{}", inc(&d));
+        d.set_parameter(PARAM_KEY_TRACK, 1.0);
+        render(&mut d, 16);
+        assert!((inc(&d) - 2.0_f64.powf(4.0 / 12.0)).abs() < 1e-9, "{}", inc(&d));
     }
 
     #[test]

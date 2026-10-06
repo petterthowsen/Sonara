@@ -536,7 +536,7 @@ func _test_view_multisample() -> void:
 	model.set_focus(b.id)
 	_assert(is_equal_approx(view._knobs["Root"].knob.value, 67.0), "focusing B shows its root (G3)")
 	_assert(view.display.title == "B_G3", "the title follows focus")
-	_assert(not view._checks["Key Track"].visible, "Key Track hides in multisample mode")
+	_assert(view._checks["Key Track"].visible, "Key Track stays visible in multisample mode")
 	_assert(view._badges.all(func(badge) -> bool: return badge.visible), "the per-zone groups show the Sample badge")
 
 	# Turning Root edits only the focused zone, through a mergeable zone snapshot.

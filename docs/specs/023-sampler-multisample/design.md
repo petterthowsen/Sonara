@@ -252,7 +252,7 @@ file and is cleared when converting to multisample (restored by undo).
 | File | Change |
 |---|---|
 | `Godot/devices/builtin/sampler/SampleDisplay.gd` | `title` property (zone name label, top-left, clipped, emits `title_clicked` when clicked). Optional placeholder action button (`placeholder_action` text, `placeholder_action_pressed` signal) for "Create Multisample". `_can_drop_data`/`_drop_data` for `Asset` or `Array` of audio assets, emitting `assets_dropped(assets)`. Still knows nothing about `DeviceInstance` |
-| `Godot/devices/builtin/SamplerDefaultView.gd` | `@export var show_display := true` (false = Companion). In multisample mode: the display shows the focused zone's source, title and points; `ZONE_FIELDS` retargets Root/Tune/Fine/Reverse/Loop Mode/Crossfade and the display points to the focused zone through `SamplerMultisample.set_zone_fields`, with a mergeable zone-snapshot undo; those groups get a "Sample" badge in the zone accent color; Key Track is hidden. Companion + multisample: a `ZoneStrip` replaces the display. Listens to `mode_changed`, `focus_changed`, `zone_changed`. Handles `assets_dropped` and the placeholder action. Context menu on the display: "Convert to Multisample" / "Convert to Single Sample" |
+| `Godot/devices/builtin/SamplerDefaultView.gd` | `@export var show_display := true` (false = Companion). In multisample mode: the display shows the focused zone's source, title and points; `ZONE_FIELDS` retargets Root/Tune/Fine/Reverse/Loop Mode/Crossfade and the display points to the focused zone through `SamplerMultisample.set_zone_fields`, with a mergeable zone-snapshot undo; those groups get a "Sample" badge in the zone accent color; Key Track stays visible and drives zones. Companion + multisample: a `ZoneStrip` replaces the display. Listens to `mode_changed`, `focus_changed`, `zone_changed`. Handles `assets_dropped` and the placeholder action. Context menu on the display: "Convert to Multisample" / "Convert to Single Sample" |
 | `Godot/devices/builtin/SamplerCompanionView.tscn` (new) | Root with `SamplerDefaultView.gd`, `show_display = false` |
 | `Godot/devices/builtin/SamplerWindowView.gd` / `.tscn` (new) | `DeviceView`: `MultisampleEditor` (hidden in single mode) above a `SampleDisplay` bound like the Panel's (shared helper below). Playheads subscription in `_on_view_shown` / `_on_view_hidden` |
 | `Godot/devices/builtin/sampler/SampleDisplayBinder.gd` (new) | Moved out of `SamplerDefaultView`: source binding, `_update_waveform`, playhead subscription, point-drag commits (param or focused zone). Used by the Panel and Window views so they behave the same (REQ-003) |
@@ -303,7 +303,7 @@ file and is cleared when converting to multisample (restored by undo).
     - `single_mode_unchanged_through_zone_path` (existing tests stay green, plus a render
       comparison against a fixture)
     - `multisample_plays_matching_zone_only`
-    - `zone_root_key_tracks_regardless_of_param` (REQ-018)
+    - `zone_key_track_follows_device_param` (REQ-018)
     - `device_tune_ignored_in_multisample` (REQ-017)
     - `note_off_releases_all_stacked_voices`
     - `voices_cap_counts_zone_voices` (REQ-019)

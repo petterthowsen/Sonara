@@ -346,14 +346,12 @@ func _refresh() -> void:
 	_update_enabled()
 
 
-## Multisample mode: the per-zone controls show the focused zone, marked as such, and Key Track
-## hides. Single mode: everything back to the parameters (already copied by `_refresh`).
+## Multisample mode: the per-zone controls show the focused zone, marked as such. Single mode: everything back to the parameters (already copied by `_refresh`).
 func _refresh_zone_controls() -> void:
 	var multi := multisample_active()
 	var zone := focused_zone()
 	for badge in _badges:
 		badge.visible = multi
-	_checks["Key Track"].visible = not multi
 	var reverse := _checks["Reverse"]
 	if multi:
 		reverse.add_theme_color_override("font_color", ZONE_ACCENT)

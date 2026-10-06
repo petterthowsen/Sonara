@@ -151,10 +151,12 @@ Loop Start, Loop End and Crossfade shall have no effect on playback in this mode
 
 #### REQ-018 — Key tracking per zone
 
-WHILE in multisample mode, a zone's pitch shall follow the played note relative to the zone's
-root key, whatever the device Key Track parameter is set to.
+WHILE in multisample mode and the device Key Track parameter is on, a zone's pitch shall follow
+the played note relative to the zone's root key. Key Track is off by default, and zones then play
+at their natural pitch.
 
-- **Acceptance:** a zone with root C3 covering C3–E3 plays E3 four semitones up.
+- **Acceptance:** with Key Track on, a zone with root C3 covering C3–E3 plays E3 four semitones
+  up. With it off, E3 plays the sample unshifted.
 
 #### REQ-019 — Note-off and voices
 
