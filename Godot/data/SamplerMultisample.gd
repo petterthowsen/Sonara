@@ -113,12 +113,12 @@ func _clear() -> void:
 
 # --- zones -----------------------------------------------------------------
 
-## Add one zone per audio file, laid out as in REQ-020 (roots from the file names, keys from
-## `at_key` when it is >= 0). Returns the new zone ids.
+## Add one zone per audio file in default name order, laid out as in REQ-020 (roots from the file
+## names, keys from `at_key` when it is >= 0). Returns the new zone ids.
 func add_files(paths: Array, at_key: int = -1) -> Array[int]:
 	var new_zones: Array[SamplerZone] = []
 	var roots: Array = []
-	for path in paths:
+	for path in ZoneLayout.sorted_paths(paths):
 		new_zones.append(SamplerZone.new(0, str(path)))
 		roots.append(ZoneLayout.parse_root(str(path).get_file()))
 	return place_zones(new_zones, roots, at_key)
@@ -163,6 +163,51 @@ func set_zone_fields(zone_id: int, values: Dictionary) -> void:
 func set_zones_fields(changes: Dictionary) -> void:
 	for zone_id in changes:
 		set_zone_fields(int(zone_id), changes[zone_id])
+
+
+## Move the zones `ids` (kept in their current relative order) to sit just before zone
+## `before_id`, or to the end when it is 0 or one of `ids`. List order is what the batch
+## operations distribute in.
+func reorder_zones(ids: Array, before_id: int = 0) -> void:
+	var moving: Array[SamplerZone] = []
+	for zone in zones:
+		if ids.has(zone.id):
+			moving.append(zone)
+	if moving.is_empty():
+		return
+	var rest: Array[SamplerZone] = []
+	for zone in zones:
+		if not moving.has(zone):
+			rest.append(zone)
+	var at := rest.size()
+	for i in rest.size():
+		if rest[i].id == before_id:
+			at = i
+			break
+	var next: Array[SamplerZone] = []
+	next.append_array(rest.slice(0, at))
+	next.append_array(moving)
+	next.append_array(rest.slice(at))
+	if next.map(func(z: SamplerZone): return z.id) != zones.map(func(z: SamplerZone): return z.id):
+		zones = next
+		zones_changed.emit()
+
+
+## Put `ids` in default name order (`ZoneLayout.sorted_by_name`), into the list slots they occupy.
+func sort_zones_by_name(ids: Array) -> void:
+	var picked: Array = zones.filter(func(z: SamplerZone): return ids.has(z.id))
+	var sorted := ZoneLayout.sorted_by_name(picked)
+	var slot := 0
+	var next: Array[SamplerZone] = []
+	for zone in zones:
+		if ids.has(zone.id):
+			next.append(sorted[slot])
+			slot += 1
+		else:
+			next.append(zone)
+	if next.map(func(z: SamplerZone): return z.id) != zones.map(func(z: SamplerZone): return z.id):
+		zones = next
+		zones_changed.emit()
 
 
 func remove_zones(ids: Array) -> void:

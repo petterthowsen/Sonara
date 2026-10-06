@@ -112,7 +112,7 @@ static func drop_files(inst: DeviceInstance, paths: Array, at_key: int = -1) -> 
 		if not inst.loaded_file_path.is_empty():
 			new_zones.append(zone_from_params(inst))
 			roots.append(new_zones[0].root)
-		for path in paths:
+		for path in ZoneLayout.sorted_paths(paths):
 			new_zones.append(SamplerZone.new(0, str(path)))
 			roots.append(ZoneLayout.parse_root(str(path).get_file()))
 		model.place_zones(new_zones, roots, at_key)
@@ -194,6 +194,11 @@ static func delete_zones(inst: DeviceInstance, ids: Array) -> void:
 	edit(inst, "Delete Samples", func(m: SamplerMultisample): m.remove_zones(ids))
 
 
+## Drag-reorder in the sample list: `ids` go just before zone `before_id` (0 = the end).
+static func reorder_zones(inst: DeviceInstance, ids: Array, before_id: int) -> void:
+	edit(inst, "Reorder Samples", func(m: SamplerMultisample): m.reorder_zones(ids, before_id))
+
+
 static func move_to_group(inst: DeviceInstance, ids: Array, group_id: int) -> void:
 	edit(inst, "Move to Group", func(m: SamplerMultisample): m.move_to_group(ids, group_id))
 
@@ -240,7 +245,7 @@ static func set_group_fields(inst: DeviceInstance, group_id: int, values: Dictio
 
 const BATCH_OPS := [
 	"assign_velocity", "assign_note", "distribute_velocity", "distribute_notes",
-	"set_root_from_name", "move_to_group", "delete",
+	"flip_velocity", "mirror_notes", "set_root_from_name", "sort_by_name", "move_to_group", "delete",
 ]
 
 const BATCH_LABELS := {
@@ -248,46 +253,61 @@ const BATCH_LABELS := {
 	"assign_note": "Assign Note",
 	"distribute_velocity": "Distribute on Velocity",
 	"distribute_notes": "Distribute on Notes",
+	"flip_velocity": "Flip Velocity",
+	"mirror_notes": "Mirror Notes",
 	"set_root_from_name": "Set Root from Name",
+	"sort_by_name": "Sort by Name",
 	"move_to_group": "Move to Group",
 	"delete": "Delete Samples",
 }
 
 
-## Apply batch operation `op` to the zones `ids` as one undo step. `opts`: `lo`, `hi`, `stretch`
-## and `slice` for the range operations, `group` for "move_to_group". `ids` keep the order the
-## caller gives them (list order for velocity distribution).
-static func apply_batch(inst: DeviceInstance, op: String, ids: Array, opts: Dictionary = {}) -> void:
-	var model := inst.multisample
-	if model == null or not model.active or not op in BATCH_OPS:
-		return
+## The zone changes batch operation `op` makes to the zones `ids`, `{zone_id: fields}`. Pure: the
+## dialog previews it, `apply_batch` records it. `opts`: `lo`, `hi`, `stretch`, `slice` and
+## `reverse` for the range operations. `ids` keep the order the caller gives them (list order).
+static func batch_changes(model: SamplerMultisample, op: String, ids: Array, opts: Dictionary = {}) -> Dictionary:
 	var selected: Array = []
 	for zone_id in ids:
 		var zone := model.get_zone(int(zone_id))
 		if zone:
 			selected.append(zone)
-	if selected.is_empty():
-		return
-	if op == "delete":
-		delete_zones(inst, ids)
-		return
-	if op == "move_to_group":
-		move_to_group(inst, ids, int(opts.get("group", 0)))
-		return
 	var lo := int(opts.get("lo", 1))
 	var hi := int(opts.get("hi", 127))
 	var stretch := bool(opts.get("stretch", true))
 	var slice := int(opts.get("slice", 1))
-	var changes := {}
+	var reverse := bool(opts.get("reverse", false))
 	match op:
 		"assign_velocity":
-			changes = ZoneLayout.assign_velocity(selected, lo, hi)
+			return ZoneLayout.assign_velocity(selected, lo, hi)
 		"assign_note":
-			changes = ZoneLayout.assign_note(selected, lo, hi)
+			return ZoneLayout.assign_note(selected, lo, hi)
 		"distribute_velocity":
-			changes = ZoneLayout.distribute_velocity(selected, lo, hi, stretch, slice)
+			return ZoneLayout.distribute_velocity(selected, lo, hi, stretch, slice, reverse)
 		"distribute_notes":
-			changes = ZoneLayout.distribute_notes(selected, lo, hi, stretch, slice)
+			return ZoneLayout.distribute_notes(selected, lo, hi, stretch, slice, reverse)
+		"flip_velocity":
+			return ZoneLayout.flip_velocity(selected)
+		"mirror_notes":
+			return ZoneLayout.mirror_notes(selected)
 		"set_root_from_name":
-			changes = ZoneLayout.set_root_from_name(selected)
-	set_zones_fields(inst, BATCH_LABELS[op], changes)
+			return ZoneLayout.set_root_from_name(selected)
+	return {}
+
+
+## Apply batch operation `op` to the zones `ids` as one undo step. `opts` as in `batch_changes`,
+## plus `group` for "move_to_group".
+static func apply_batch(inst: DeviceInstance, op: String, ids: Array, opts: Dictionary = {}) -> void:
+	var model := inst.multisample
+	if model == null or not model.active or not op in BATCH_OPS:
+		return
+	if ids.filter(func(zone_id) -> bool: return model.get_zone(int(zone_id)) != null).is_empty():
+		return
+	match op:
+		"delete":
+			delete_zones(inst, ids)
+		"move_to_group":
+			move_to_group(inst, ids, int(opts.get("group", 0)))
+		"sort_by_name":
+			edit(inst, BATCH_LABELS[op], func(m: SamplerMultisample): m.sort_zones_by_name(ids))
+		_:
+			set_zones_fields(inst, BATCH_LABELS[op], batch_changes(model, op, ids, opts))

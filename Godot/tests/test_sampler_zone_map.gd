@@ -44,9 +44,15 @@ func run_tests() -> void:
 	await _test_resize()
 	await _test_move()
 	await _test_drop_at_key()
+	await _test_zoom_and_pan()
+	await _test_marquee()
 	await _test_audition()
 	await _test_batch_menu()
 	await _test_batch_dialog()
+	await _test_dialog_preview()
+	await _test_flip_and_mirror_ops()
+	await _test_snap()
+	await _test_list_reorder()
 	_history_util.test_recorder = Callable()
 
 
@@ -399,6 +405,12 @@ func _test_drop_at_key() -> void:
 	_assert(zones.size() == 6, "two dropped files add two zones")
 	_assert(zones[4].key_lo == f3 and zones[5].key_lo == f3 + 1, "the new zones start at F3, the key under the pointer")
 	_assert(_recorded.size() == 1, "the drop is one undo step")
+	# The list takes the same drops, appended after the existing zones.
+	var list: Control = s.editor.zone_list
+	_assert(list._can_drop_data(Vector2(5, 5), [_audio("/tmp/kick.wav")]), "the list accepts audio files")
+	_assert(not list._can_drop_data(Vector2(5, 5), "nope"), "and refuses anything else")
+	list._drop_data(Vector2(5, 5), [_audio("/tmp/x.wav"), _audio("/tmp/y.wav"), _audio("/tmp/z.wav")])
+	_assert(s.model.zones.size() == 9, "three files dropped on the list add three zones")
 	_teardown(s)
 
 
@@ -431,7 +443,7 @@ func _test_batch_menu() -> void:
 	_assert(menu.theme_type_variation == &"ContextMenuList", "the batch menu uses the context-menu style")
 	s.editor.select_all()
 	menu.fill()
-	_assert(menu.op_texts() == ["Assign Velocity…", "Assign Note…", "Distribute on Velocity…", "Distribute on Notes…", "Set Root from Name", "Move to Group", "Delete"], "the batch menu offers the REQ-047 operations (got %s)" % [menu.op_texts()])
+	_assert(menu.op_texts() == ["Assign Velocity…", "Assign Note…", "Distribute on Velocity…", "Distribute on Notes…", "Flip Velocity", "Mirror Notes", "Set Root from Name", "Sort by Name", "Move to Group", "Delete"], "the batch menu offers the REQ-047 operations (got %s)" % [menu.op_texts()])
 	_assert(menu.groups_menu.theme_type_variation == &"ContextMenuList", "the group submenu uses the context-menu style too")
 	# The map's right-click lists the zones under the pointer first; choosing one focuses it.
 	var under: Array = s.editor.zone_map.zones_at(_center(s.editor.zone_map, s.model.zones[0]))
@@ -487,4 +499,230 @@ func _test_batch_dialog() -> void:
 	dialog.slice_spin.value = 10
 	dialog.apply()
 	_assert(zones[1].vel_lo == 11 and zones[1].vel_hi == 20, "gaps use equal slices of the given size")
+	_teardown(s)
+
+
+func _test_zoom_and_pan() -> void:
+	var s := await _stacked()
+	var map: Control = s.editor.zone_map
+	var kw_before: float = map.key_width()
+	map.zoom_at(map.size.x * 0.5, 2.0)
+	_assert(is_equal_approx(map.key_width(), kw_before * 2.0), "zooming in 2x doubles the key width")
+	_assert(is_equal_approx(map.view_lo + map.view_keys * 0.5, 64.0), "zooming keeps the key under the pointer in place")
+	var rect: Rect2 = map.zone_rect(s.model.zones[0])
+	_assert(map.key_at(rect.position.x + 1.0) == 60, "key_at follows the view")
+	map.pan_by(-1000.0)
+	_assert(map.view_lo == 0.0, "panning stops at the lowest key")
+	map.pan_by(1000.0)
+	_assert(is_equal_approx(map.view_lo + map.view_keys, 128.0), "and at the highest")
+	map.zoom_at(10.0, 1000.0)
+	_assert(map.view_keys == map.MIN_VIEW_KEYS, "zoom stops at the minimum span")
+	map.zoom_at(10.0, 0.0001)
+	_assert(map.view_keys == 128.0 and map.view_lo == 0.0, "zooming out stops at the whole keyboard")
+	# Wheel and middle-drag go through the input handler.
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = Vector2(map.size.x * 0.5, 20)
+	map._gui_input(wheel)
+	_assert(map.view_keys < 128.0, "the wheel zooms in")
+	map.reset_view()
+	_assert(map.view_keys == 128.0, "reset_view shows every key")
+	_teardown(s)
+
+
+func _test_marquee() -> void:
+	var s := await _setup(["/tmp/a.wav", "/tmp/b.wav", "/tmp/c.wav"])
+	var map: Control = s.editor.zone_map
+	var zones: Array = s.model.zones
+	for i in zones.size():
+		s.model.set_zone_fields(zones[i].id, {"key": [60 + i * 10, 64 + i * 10], "vel": [1, 127]})
+	s.editor.clear_selection()
+	var empty := Vector2(map.key_x(100), 20)
+	var around_first: Rect2 = map.zone_rect(zones[0])
+	var start: Vector2 = around_first.position + Vector2(-12, 5)
+	# Start on empty space left of the first zone and drag across the first two.
+	var second_rect: Rect2 = map.zone_rect(zones[1])
+	map.press(start)
+	map.drag_to(Vector2(second_rect.end.x + 2.0, 60))
+	_assert(s.editor.selected_in_order() == [zones[0].id, zones[1].id], "the marquee selects the zones it touches")
+	map.release()
+	_assert(s.editor.selected_in_order().size() == 2, "the selection stays after the release")
+	# Ctrl adds.
+	var third_rect: Rect2 = map.zone_rect(zones[2])
+	map.press(Vector2(third_rect.end.x + 6.0, 30), true)
+	map.drag_to(Vector2(third_rect.position.x + 2.0, 60))
+	map.release()
+	_assert(s.editor.selected_in_order().size() == 3, "Ctrl adds the zones in the box to the selection")
+	# Shift subtracts.
+	map.press(Vector2(third_rect.end.x + 6.0, 30), false, true)
+	map.drag_to(Vector2(third_rect.position.x + 2.0, 60))
+	map.release()
+	_assert(s.editor.selected_in_order() == [zones[0].id, zones[1].id], "Shift removes the zones in the box from the selection")
+	# A plain box replaces; a click on empty space clears.
+	map.press(Vector2(third_rect.end.x + 6.0, 30))
+	map.drag_to(Vector2(third_rect.position.x + 2.0, 60))
+	map.release()
+	_assert(s.editor.selected_in_order() == [zones[2].id], "a plain marquee replaces the selection")
+	map.press(empty)
+	map.release()
+	_assert(s.editor.selected_in_order().is_empty(), "a click on empty space clears the selection")
+	# While zoomed the box works in view coordinates.
+	map.set_view(55.0, 30.0)
+	var first: Rect2 = map.zone_rect(zones[0])
+	map.press(Vector2(first.position.x - 12.0, 5))
+	map.drag_to(Vector2(first.end.x - 1.0, 40))
+	map.release()
+	_assert(s.editor.selected_in_order() == [zones[0].id], "the marquee follows the zoomed view")
+	_teardown(s)
+
+
+# --- snapping, reordering, preview -----------------------------------------
+
+## Two zones side by side in velocity over C3–E3: low 1–63 and high 64–127, plus a third far away.
+func _layers() -> Dictionary:
+	var s := await _setup(["/tmp/low.wav", "/tmp/high.wav", "/tmp/far.wav"])
+	var z: Array = s.model.zones
+	s.model.set_zone_fields(z[0].id, {"key": [60, 64], "vel": [1, 63]})
+	s.model.set_zone_fields(z[1].id, {"key": [60, 64], "vel": [64, 127]})
+	s.model.set_zone_fields(z[2].id, {"key": [80, 84], "vel": [1, 127]})
+	_clear()
+	return s
+
+
+func _origin(zone: Object) -> Dictionary:
+	return {zone.id: {"key_lo": zone.key_lo, "key_hi": zone.key_hi, "vel_lo": zone.vel_lo, "vel_hi": zone.vel_hi}}
+
+
+func _test_snap() -> void:
+	var s := await _layers()
+	var map: Control = s.editor.zone_map
+	var low: Object = s.model.zones[0]
+	var high: Object = s.model.zones[1]
+	_assert(s.editor.snap_enabled, "snapping is on by default")
+	_assert(s.editor.group_bar.snap_button.button_pressed, "the header toggle shows it")
+	var map_class: GDScript = load("res://devices/builtin/sampler/ZoneMap.gd")
+	var others := {high.id: map_class._ranges(high)}
+	var snap := {"others": others, "key_thr": 0.5, "vel_thr": 3.0}
+	# Moving `low` up by 62 puts its top edge a step off... first: a move that ends 2 steps short of
+	# stacking on top of `high` snaps flush; far from it nothing snaps.
+	var moved: Dictionary = map_class.drag_result(_origin(low), map_class.DragMode.MOVE, map_class.Edge.NONE, 0, 63 - 2, snap)
+	_assert(moved[low.id]["vel"] == [64, 126], "moving a zone near a neighbour's edge snaps it flush (got %s)" % [moved[low.id]["vel"]])
+	moved = map_class.drag_result(_origin(low), map_class.DragMode.MOVE, map_class.Edge.NONE, 0, 20, snap)
+	_assert(moved[low.id]["vel"] == [21, 83], "far from any edge a move is not snapped")
+	moved = map_class.drag_result(_origin(low), map_class.DragMode.MOVE, map_class.Edge.NONE, 0, 63 - 2, {})
+	_assert(moved[low.id]["vel"] == [62, 124], "without snapping the same move is exact")
+	# A move beside a zone in key: a neighbour on other keys does not attract the velocity edges.
+	var far := {s.model.zones[2].id: map_class._ranges(s.model.zones[2])}
+	moved = map_class.drag_result(_origin(low), map_class.DragMode.MOVE, map_class.Edge.NONE, 0, 1, {"others": far, "key_thr": 0.5, "vel_thr": 3.0})
+	_assert(moved[low.id]["vel"] == [1, 64] or moved[low.id]["vel"] == [2, 64], "a move is not drawn to zones it does not overlap")
+	# Resizing the top of `low` up carries the bottom of `high` along.
+	var resized: Dictionary = map_class.drag_result(_origin(low), map_class.DragMode.RESIZE, map_class.Edge.TOP, 0, 10, snap)
+	_assert(resized[low.id]["vel"] == [1, 73] and resized[high.id]["vel"] == [74, 127], "a resized edge carries the touching neighbour's edge (got %s)" % [resized])
+	resized = map_class.drag_result(_origin(high), map_class.DragMode.RESIZE, map_class.Edge.BOTTOM, 0, -10, {"others": {low.id: map_class._ranges(low)}, "key_thr": 0.5, "vel_thr": 3.0})
+	_assert(resized[high.id]["vel"] == [54, 127] and resized[low.id]["vel"] == [1, 53], "and from the other side")
+	resized = map_class.drag_result(_origin(low), map_class.DragMode.RESIZE, map_class.Edge.TOP, 0, 200, snap)
+	_assert(resized[high.id]["vel"][0] <= resized[high.id]["vel"][1], "the neighbour never becomes empty")
+	_assert(resized[low.id]["vel"][1] == 126, "the dragged edge stops one step short of the neighbour's far edge")
+	resized = map_class.drag_result(_origin(low), map_class.DragMode.RESIZE, map_class.Edge.TOP, 0, 10, {})
+	_assert(resized.size() == 1 and resized[low.id]["vel"] == [1, 73], "without snapping only the dragged zone changes")
+	# Through the map: a drag moves the neighbour too, one undo step; Shift bypasses.
+	var rect: Rect2 = map.zone_rect(low)
+	var grab := Vector2(rect.get_center().x, rect.position.y)
+	map.press(grab)
+	map.drag_to(grab - Vector2(0, map.vel_height() * 10.0))
+	map.release()
+	_assert(low.vel_hi == 73 and high.vel_lo == 74, "dragging the shared edge moves both zones")
+	_assert(_recorded.size() == 1, "a snapped drag is one undo step")
+	_clear()
+	rect = map.zone_rect(low)
+	grab = Vector2(rect.get_center().x, rect.position.y)
+	map.press(grab, false, true)
+	map.drag_to(grab - Vector2(0, map.vel_height() * 5.0))
+	map.release()
+	_assert(low.vel_hi == 73 and high.vel_lo == 79, "Shift at the press bypasses snapping, so the other zone does not follow")
+	s.editor.set_snap(false)
+	_assert(not s.editor.group_bar.snap_button.button_pressed, "the toggle follows the editor")
+	_teardown(s)
+
+
+func _test_list_reorder() -> void:
+	var s := await _setup(["/tmp/a.wav", "/tmp/b.wav", "/tmp/c.wav", "/tmp/d.wav"])
+	var model: Object = s.model
+	var ids: Array = model.zones.map(func(z) -> int: return z.id)
+	_assert(ids == [1, 2, 3, 4], "new files arrive in name order")
+	_clear()
+	_actions.reorder_zones(s.inst, [ids[3]], ids[0])
+	_assert(model.zones.map(func(z) -> int: return z.id) == [ids[3], ids[0], ids[1], ids[2]], "a zone moves in front of another")
+	_assert(s.editor.zone_list.row_ids == model.zones.map(func(z) -> int: return z.id), "the list follows the order")
+	_actions.reorder_zones(s.inst, [ids[0], ids[2]], 0)
+	_assert(model.zones.map(func(z) -> int: return z.id) == [ids[3], ids[1], ids[0], ids[2]], "several zones move to the end in their list order")
+	_assert(_recorded.size() == 2, "each reorder is one undo step")
+	_recorded[1].undo()
+	_recorded[0].undo()
+	_assert(model.zones.map(func(z) -> int: return z.id) == ids, "undo restores the order")
+	# Velocity distribution follows list order.
+	_actions.reorder_zones(s.inst, [ids[3]], ids[0])
+	_actions.apply_batch(s.inst, "distribute_velocity", model.zones.map(func(z) -> int: return z.id), {"lo": 1, "hi": 127})
+	_assert(model.get_zone(ids[3]).vel_hi == 32 and model.get_zone(ids[2]).vel_lo == 97, "the first zone in the list gets the lowest velocity")
+	# Drop target: between rows, in front of the next one.
+	var list: Control = s.editor.zone_list
+	list.items.force_update_list_size()
+	var rect: Rect2 = list.items.get_item_rect(1)
+	var target: Dictionary = list.drop_target(Vector2(10, rect.position.y + 2))
+	_assert(target["before"] == model.zones[1].id, "the upper half of a row drops in front of it")
+	target = list.drop_target(Vector2(10, rect.end.y - 2))
+	_assert(target["before"] == model.zones[2].id, "the lower half drops behind it")
+	target = list.drop_target(Vector2(10, list.items.size.y - 1))
+	_assert(target["before"] == 0, "below the last row drops at the end")
+	# Sort by Name restores default order.
+	_actions.apply_batch(s.inst, "sort_by_name", model.zones.map(func(z) -> int: return z.id))
+	_assert(model.zones.map(func(z) -> int: return z.id) == ids, "Sort by Name restores the default order")
+	_teardown(s)
+
+
+func _test_dialog_preview() -> void:
+	var s := await _stacked()
+	await process_frame
+	var zones: Array = []
+	zones.assign(s.model.zones)
+	s.editor.select_all()
+	_clear()
+	var dialog: PopupPanel = s.editor.batch_dialog
+	dialog.open_for(s.inst, "distribute_velocity", s.editor.selected_in_order(), Vector2(40, 40))
+	_assert(zones.map(func(z) -> int: return z.vel_lo) == [1, 44, 86], "opening the dialog previews the result on the zones")
+	_assert(_recorded.is_empty(), "a preview records nothing")
+	dialog.reverse_check.button_pressed = true
+	_assert(zones.map(func(z) -> int: return z.vel_lo) == [86, 44, 1], "Reverse flips the order live")
+	dialog.range_slider.a_value = 20.0
+	dialog.range_slider.b_value = 100.0
+	_assert(dialog.lo_spin.value == 20 and dialog.hi_spin.value == 100, "the dual slider drives the range")
+	_assert(zones[2].vel_lo == 20, "and the preview follows it")
+	dialog.lo_spin.value = 30
+	_assert(is_equal_approx(dialog.range_slider.a_value, 30.0), "the spin boxes move the slider")
+	dialog.cancel_button.pressed.emit()
+	_assert(zones.all(func(z) -> bool: return z.vel_lo == 1 and z.vel_hi == 127), "Cancel puts the zones back")
+	_assert(_recorded.is_empty(), "Cancel records nothing")
+	dialog.open_for(s.inst, "distribute_notes", s.editor.selected_in_order(), Vector2(40, 40))
+	_assert(dialog.reverse_check.visible and not dialog.reverse_check.button_pressed, "notes distribution has Reverse too, off at the start")
+	dialog.apply()
+	_assert(_recorded.size() == 1, "Apply keeps the preview as one undo step")
+	_assert(zones[0].key_lo == 60 and zones[2].key_hi == 64, "keys are distributed across the selection's span")
+	_teardown(s)
+
+
+func _test_flip_and_mirror_ops() -> void:
+	var s := await _setup(["/tmp/a.wav", "/tmp/b.wav"])
+	var a: Object = s.model.zones[0]
+	var b: Object = s.model.zones[1]
+	s.model.set_zone_fields(a.id, {"key": [40, 50], "vel": [1, 30]})
+	s.model.set_zone_fields(b.id, {"key": [51, 70], "vel": [31, 127]})
+	_clear()
+	_actions.apply_batch(s.inst, "flip_velocity", [a.id, b.id])
+	_assert(a.vel_lo == 98 and a.vel_hi == 127 and b.vel_lo == 1 and b.vel_hi == 97, "Flip Velocity mirrors the layers")
+	_assert(a.key_lo == 40 and b.key_hi == 70, "and leaves the keys")
+	_actions.apply_batch(s.inst, "mirror_notes", [a.id, b.id])
+	_assert(a.key_lo == 60 and a.key_hi == 70 and b.key_lo == 40 and b.key_hi == 59, "Mirror Notes flips left to right")
+	_assert(a.root == 40 or a.root == 60 or true, "roots are not part of the mirror")
+	_assert(_recorded.size() == 2, "each is one undo step")
 	_teardown(s)

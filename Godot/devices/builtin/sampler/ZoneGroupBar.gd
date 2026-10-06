@@ -12,6 +12,7 @@ enum MenuId { RENAME, DELETE, PLAY_MODE, GAIN }
 
 @onready var chips: HBoxContainer = %Chips
 @onready var add_button: Button = %AddButton
+@onready var snap_button: Button = %SnapButton
 @onready var group_menu: PopupMenu = %GroupMenu
 @onready var play_mode_menu: PopupMenu = %PlayModeMenu
 @onready var gain_popup: PopupPanel = %GainPopup
@@ -33,6 +34,9 @@ func _ready() -> void:
 	add_button.pressed.connect(func() -> void:
 		if editor and editor.device:
 			SamplerActions.add_group(editor.device))
+	snap_button.toggled.connect(func(on: bool) -> void:
+		if editor:
+			editor.set_snap(on))
 	var knob := gain_knob.knob
 	knob.min_value = 0.0
 	knob.max_value = 2.0
@@ -48,6 +52,8 @@ func bind(p_editor: MultisampleEditor) -> void:
 	editor = p_editor
 	_link(editor.model.groups_changed, rebuild)
 	_link(editor.visible_groups_changed, rebuild)
+	_link(editor.snap_changed, _sync_snap)
+	_sync_snap()
 	rebuild()
 
 ## Connect `fn` to `sig` until `unbind()`.
@@ -62,6 +68,10 @@ func unbind() -> void:
 			(link[0] as Signal).disconnect(link[1])
 	_links.clear()
 	editor = null
+
+
+func _sync_snap() -> void:
+	snap_button.set_pressed_no_signal(editor.snap_enabled)
 
 
 func model() -> SamplerMultisample:

@@ -1,7 +1,9 @@
 ## The range popup for the assign and distribute batch operations (spec 023, REQ-047): low and
 ## high values (note names shown for keys), "Single value" for the assign operations, Stretch or
-## Gaps (with the slice size) for the distribute ones, and Apply. The layout lives in
-## `ZoneBatchDialog.tscn`. Apply is one undo step (`SamplerActions.apply_batch`).
+## Gaps (with the slice size) and Reverse for the distribute ones, and Apply. A dual slider sets
+## the range too. While the dialog is open the result shows on the zone map as a preview; Apply
+## keeps it as one undo step, and closing any other way puts the zones back. The layout lives in
+## `ZoneBatchDialog.tscn`.
 class_name ZoneBatchDialog extends PopupPanel
 
 enum Split { STRETCH, GAPS }
@@ -14,6 +16,8 @@ const ASSIGN_OPS := ["assign_velocity", "assign_note"]
 @onready var hi_spin: SpinBox = %HiSpin
 @onready var lo_note: Label = %LoNote
 @onready var hi_note: Label = %HiNote
+@onready var range_slider: HDualSlider = %RangeSlider
+@onready var reverse_check: CheckBox = %ReverseCheck
 @onready var single_check: CheckBox = %SingleCheck
 @onready var mode_row: HBoxContainer = %ModeRow
 @onready var mode_option: OptionButton = %ModeOption
@@ -25,6 +29,8 @@ const ASSIGN_OPS := ["assign_velocity", "assign_note"]
 var device: DeviceInstance = null
 var op := ""
 var ids: Array = []
+## The Sampler state when the preview began; empty when no preview is running.
+var _session := {}
 
 
 func _enter_tree() -> void:
@@ -33,12 +39,16 @@ func _enter_tree() -> void:
 
 
 func _ready() -> void:
-	lo_spin.value_changed.connect(func(_v: float) -> void: _update_rows())
-	hi_spin.value_changed.connect(func(_v: float) -> void: _update_rows())
+	lo_spin.value_changed.connect(func(_v: float) -> void: _on_spin_changed())
+	hi_spin.value_changed.connect(func(_v: float) -> void: _on_spin_changed())
+	range_slider.values_changed.connect(_on_slider_changed)
 	single_check.toggled.connect(func(_on: bool) -> void: _update_rows())
+	reverse_check.toggled.connect(func(_on: bool) -> void: _update_rows())
+	slice_spin.value_changed.connect(func(_v: float) -> void: _update_rows())
 	mode_option.item_selected.connect(func(_i: int) -> void: _update_rows())
 	apply_button.pressed.connect(apply)
 	cancel_button.pressed.connect(hide)
+	popup_hide.connect(_end_preview)
 
 
 func is_key_op() -> bool:
@@ -71,6 +81,10 @@ func configure(inst: DeviceInstance, p_op: String, p_ids: Array) -> void:
 		start_hi = hi
 	lo_spin.set_value_no_signal(start_lo)
 	hi_spin.set_value_no_signal(start_hi)
+	range_slider.min_value = lo
+	range_slider.max_value = hi
+	range_slider.set_values_no_signal(start_lo, start_hi)
+	reverse_check.set_pressed_no_signal(false)
 	single_check.set_pressed_no_signal(false)
 	single_check.visible = op in ASSIGN_OPS
 	mode_row.visible = not op in ASSIGN_OPS
@@ -81,8 +95,41 @@ func configure(inst: DeviceInstance, p_op: String, p_ids: Array) -> void:
 
 
 func open_for(inst: DeviceInstance, p_op: String, p_ids: Array, screen_position: Vector2) -> void:
+	_end_preview()
 	configure(inst, p_op, p_ids)
+	if device != null and device.multisample != null:
+		_session = SamplerActions.begin_edit(device)
 	popup(Rect2i(Vector2i(screen_position), Vector2i.ZERO))
+	_update_rows()
+
+
+func _on_spin_changed() -> void:
+	range_slider.set_values_no_signal(lo_spin.value, hi_spin.value)
+	_update_rows()
+
+
+func _on_slider_changed(a: float, b: float) -> void:
+	lo_spin.set_value_no_signal(roundf(a))
+	hi_spin.set_value_no_signal(roundf(b))
+	_update_rows()
+
+
+## Show the operation's result on the zones without recording anything.
+func _preview() -> void:
+	if _session.is_empty() or device == null or device.multisample == null:
+		return
+	var changes := SamplerActions.batch_changes(device.multisample, op, ids, options())
+	device.multisample.set_zones_fields(changes)
+
+
+## Close the preview: put the zones back as they were unless Apply kept it.
+func _end_preview() -> void:
+	if _session.is_empty():
+		return
+	var state := _session
+	_session = {}
+	if device != null:
+		SamplerActions.apply_state(device, state)
 
 
 func _update_rows() -> void:
@@ -93,6 +140,7 @@ func _update_rows() -> void:
 	hi_note.text = Midi.midi_to_note_name(int(hi_spin.value))
 	hi_spin.editable = not (single_check.visible and single_check.button_pressed)
 	slice_row.visible = mode_row.visible and mode_option.selected == Split.GAPS
+	_preview()
 
 
 ## The `SamplerActions.apply_batch` options the controls describe.
@@ -105,10 +153,16 @@ func options() -> Dictionary:
 		"lo": lo, "hi": hi,
 		"stretch": mode_option.selected != Split.GAPS,
 		"slice": int(slice_spin.value),
+		"reverse": mode_row.visible and reverse_check.button_pressed,
 	}
 
 
 func apply() -> void:
-	if device != null and not ids.is_empty():
+	if not _session.is_empty():
+		_preview()
+		var state := _session
+		_session = {}
+		SamplerActions.end_edit(device, SamplerActions.BATCH_LABELS.get(op, op), state)
+	elif device != null and not ids.is_empty():
 		SamplerActions.apply_batch(device, op, ids, options())
 	hide()

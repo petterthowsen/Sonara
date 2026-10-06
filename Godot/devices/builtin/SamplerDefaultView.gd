@@ -400,7 +400,8 @@ func _real(param_name: String, fallback: float) -> float:
 	return device.get_parameter_real(id) if id >= 0 else fallback
 
 
-## Crossfade only applies to Loop On; the filter knobs only when a filter type is chosen.
+## Crossfade only applies to Loop On; the filter knobs only when a filter type is chosen; Root only
+## with Key Track.
 func _update_enabled() -> void:
 	var zone := focused_zone()
 	var loop_mode := zone.loop_mode if zone else int(_real("Loop Mode", 0.0))
@@ -408,6 +409,8 @@ func _update_enabled() -> void:
 	var filter_on := int(_real("Filter Type", 0.0)) != 0
 	for knob_name in ["Cutoff", "Resonance", "Filter Key Track"]:
 		_set_enabled(_knobs[knob_name], filter_on)
+	# Without Key Track the sample plays at its original pitch; Tune and Fine offset from there.
+	_set_enabled(_knobs["Root"], int(_real("Key Track", 0.0)) != 0)
 
 
 func _set_enabled(knob: LabeledKnob, enabled: bool) -> void:

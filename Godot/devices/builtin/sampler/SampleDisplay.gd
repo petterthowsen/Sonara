@@ -90,6 +90,12 @@ var reverse := false:
 	set(v):
 		reverse = v
 		_redraw()
+## Linear gain the waveform is drawn at, so a louder sample looks taller (the view clips at full scale).
+var gain := 1.0:
+	set(v):
+		gain = v
+		if _wave:
+			_wave.gain = v
 ## Length of the file in seconds, for the drag read-out. 0 hides the time.
 var duration := 0.0
 ## Length of the file in frames (at the playback rate), for the minimum gaps. 0 when unknown.
@@ -151,6 +157,7 @@ func _init() -> void:
 	_wave.placeholder_text = ""
 	_wave.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_wave.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wave.gain = gain
 	add_child(_wave)
 	_overlay = Control.new()
 	_overlay.name = "Overlay"

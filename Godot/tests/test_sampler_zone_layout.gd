@@ -24,6 +24,8 @@ func run_tests() -> void:
 	_test_distribute_uneven()
 	_test_distribute_notes()
 	_test_set_root_from_name()
+	_test_reverse_flip_mirror()
+	_test_name_order()
 
 
 func _zones(count: int, roots: Array = []) -> Array:
@@ -139,3 +141,33 @@ func _test_set_root_from_name() -> void:
 	zs[2].set_path("/x/Piano_G3.wav")
 	var r: Dictionary = _layout.set_root_from_name(zs)
 	_assert(r.size() == 2 and r[1] == {"root": 60} and r[3] == {"root": 67}, "set_root_from_name changes only zones with a note in the name (%s)" % [r])
+
+
+func _test_reverse_flip_mirror() -> void:
+	var zs := _zones(4)
+	var rev: Dictionary = _layout.distribute_velocity(zs, 1, 127, true, 1, true)
+	_assert(rev[zs[3].id]["vel_lo"] == 1 and rev[zs[0].id]["vel_hi"] == 127, "reverse hands the lowest slice to the last zone")
+	var notes: Dictionary = _layout.distribute_notes(_zones(3, [60, 62, 64]), 60, 68, true, 1, true)
+	_assert(notes[3]["key_lo"] == 60 and notes[1]["key_hi"] == 68, "reverse on notes: the highest root gets the lowest keys")
+	var a: Object = _zone.new(1, "/tmp/a.wav")
+	var b: Object = _zone.new(2, "/tmp/b.wav")
+	a.apply_fields({"key": [10, 19], "vel": [1, 40]})
+	b.apply_fields({"key": [20, 49], "vel": [41, 127]})
+	var flipped: Dictionary = _layout.flip_velocity([a, b])
+	_assert(flipped[1] == {"vel_lo": 88, "vel_hi": 127} and flipped[2] == {"vel_lo": 1, "vel_hi": 87}, "flip_velocity mirrors around the span")
+	var mirrored: Dictionary = _layout.mirror_notes([a, b])
+	_assert(mirrored[1] == {"key_lo": 40, "key_hi": 49} and mirrored[2] == {"key_lo": 10, "key_hi": 39}, "mirror_notes mirrors around the span")
+	_assert(_layout.flip_velocity([]).is_empty(), "nothing to flip")
+
+
+func _test_name_order() -> void:
+	var names := ["snare_10", "snare_2", "Kick", "kick_high", "kick_low", "kick_mid", "pad_top", "pad_bottom", "pad_middle"]
+	var objs := names.map(func(n): return {"name": n})
+	var sorted: Array = _layout.sorted_by_name(objs).map(func(o): return o["name"])
+	_assert(sorted == ["kick_low", "Kick", "kick_mid", "kick_high", "pad_bottom", "pad_middle", "pad_top", "snare_2", "snare_10"],
+		"names sort naturally with low/mid/high words ordering a group (a plain name counts as mid) (got %s)" % [sorted])
+	var words := ["x_start", "x_min", "x_max", "x_hard", "x_medium"]
+	_assert(_layout.order_key("x_start")["rank"] == -1 and _layout.order_key("x_medium")["rank"] == 0 and _layout.order_key("x_hard")["rank"] == 1, "word lists map to ranks")
+	_assert(_layout.order_key("lowpass")["rank"] == 0, "only whole words count")
+	var paths: Array = _layout.sorted_paths(["/x/b10.wav", "/y/b2.wav", "/z/A.wav"])
+	_assert(paths == ["/z/A.wav", "/y/b2.wav", "/x/b10.wav"], "dropped files sort by file name, not folder")

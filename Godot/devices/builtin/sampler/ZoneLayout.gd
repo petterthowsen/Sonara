@@ -113,20 +113,25 @@ static func assign_note(zones: Array, lo: int, hi: int) -> Dictionary:
 ## Split `lo`..`hi` across the zones in the given order without changing key ranges.
 ## `stretch`: contiguous slices that fill the range. Otherwise equal slices of `slice` steps
 ## from `lo`, the rest of the range left empty.
-static func distribute_velocity(zones: Array, lo: int, hi: int, stretch := true, slice := 1) -> Dictionary:
+static func distribute_velocity(zones: Array, lo: int, hi: int, stretch := true, slice := 1, reverse := false) -> Dictionary:
 	var rng := _ordered(lo, hi, VEL_MIN, VEL_MAX)
-	var slices := slice_range(zones.size(), rng[0], rng[1], stretch, slice)
+	var ordered := zones.duplicate()
+	if reverse:
+		ordered.reverse()
+	var slices := slice_range(ordered.size(), rng[0], rng[1], stretch, slice)
 	var out := {}
-	for i in zones.size():
-		out[zones[i].id] = {"vel_lo": slices[i][0], "vel_hi": slices[i][1]}
+	for i in ordered.size():
+		out[ordered[i].id] = {"vel_lo": slices[i][0], "vel_hi": slices[i][1]}
 	return out
 
 
 ## Split `lo`..`hi` across the zones ordered by root key (list order for equal roots) without
-## changing velocity ranges. `stretch` and `slice` as in `distribute_velocity`.
-static func distribute_notes(zones: Array, lo: int, hi: int, stretch := true, slice := 1) -> Dictionary:
+## changing velocity ranges. `stretch`, `slice` and `reverse` as in `distribute_velocity`.
+static func distribute_notes(zones: Array, lo: int, hi: int, stretch := true, slice := 1, reverse := false) -> Dictionary:
 	var rng := _ordered(lo, hi, KEY_MIN, KEY_MAX)
 	var sorted := _sorted_by_root(zones)
+	if reverse:
+		sorted.reverse()
 	var slices := slice_range(sorted.size(), rng[0], rng[1], stretch, slice)
 	var out := {}
 	for i in sorted.size():
@@ -142,6 +147,107 @@ static func set_root_from_name(zones: Array) -> Dictionary:
 		if root >= 0:
 			out[zone.id] = {"root": root}
 	return out
+
+
+## Mirror the velocity ranges around the middle of the zones' combined velocity span: the lowest
+## layer becomes the highest. Key ranges stay.
+static func flip_velocity(zones: Array) -> Dictionary:
+	var out := {}
+	if zones.is_empty():
+		return out
+	var lo := VEL_MAX
+	var hi := VEL_MIN
+	for zone in zones:
+		lo = mini(lo, zone.vel_lo)
+		hi = maxi(hi, zone.vel_hi)
+	for zone in zones:
+		out[zone.id] = {"vel_lo": lo + hi - zone.vel_hi, "vel_hi": lo + hi - zone.vel_lo}
+	return out
+
+
+## Mirror the key ranges around the middle of the zones' combined key span, left to right. Roots
+## and velocity ranges stay.
+static func mirror_notes(zones: Array) -> Dictionary:
+	var out := {}
+	if zones.is_empty():
+		return out
+	var lo := KEY_MAX
+	var hi := KEY_MIN
+	for zone in zones:
+		lo = mini(lo, zone.key_lo)
+		hi = maxi(hi, zone.key_hi)
+	for zone in zones:
+		out[zone.id] = {"key_lo": lo + hi - zone.key_hi, "key_hi": lo + hi - zone.key_lo}
+	return out
+
+
+# --- ordering ----------------------------------------------------------------
+
+## Words in a sample name that say where it sits in the velocity range, lowest to highest.
+const _LOW_WORDS := ["low", "min", "start", "bottom", "soft"]
+const _MID_WORDS := ["mid", "medium", "middle"]
+const _HIGH_WORDS := ["hard", "high", "max", "top"]
+
+static var _word_re: RegEx = null
+
+
+## -1 for a low word, 0 for a mid word or none, 1 for a high word, per `_LOW_WORDS` etc.
+static func _word_rank(word: String) -> int:
+	if word in _LOW_WORDS:
+		return -1
+	if word in _HIGH_WORDS:
+		return 1
+	return 0
+
+
+## The sort key of a sample name: `base` is the name without its extension and without the
+## low/mid/high words (so `kick_low` and `kick_high` pair up), `rank` is -1, 0 or 1.
+static func order_key(sample_name: String) -> Dictionary:
+	if _word_re == null:
+		_word_re = RegEx.create_from_string("[A-Za-z]+|\\d+")
+	var rank := 0
+	var kept: PackedStringArray = []
+	for m in _word_re.search_all(sample_name):
+		var word := m.get_string().to_lower()
+		if word in _LOW_WORDS or word in _MID_WORDS or word in _HIGH_WORDS:
+			if rank == 0:
+				rank = _word_rank(word)
+		else:
+			kept.append(m.get_string())
+	return {"base": " ".join(kept), "rank": rank}
+
+
+## Default sample order: natural, case-insensitive name order (`kick2` before `kick10`), where
+## low, mid and high words sort a name inside its group of otherwise equal names.
+static func name_less(a: String, b: String) -> bool:
+	var ka := order_key(a)
+	var kb := order_key(b)
+	var c := String(ka["base"]).naturalnocasecmp_to(String(kb["base"]))
+	if c != 0:
+		return c < 0
+	if ka["rank"] != kb["rank"]:
+		return ka["rank"] < kb["rank"]
+	return a.naturalnocasecmp_to(b) < 0
+
+
+## `zones` (or anything with a `name`) in default order. Stable.
+static func sorted_by_name(zones: Array) -> Array:
+	var indexed: Array = []
+	for i in zones.size():
+		indexed.append([zones[i], i])
+	indexed.sort_custom(func(x, y) -> bool:
+		if name_less(x[0].name, y[0].name):
+			return true
+		if name_less(y[0].name, x[0].name):
+			return false
+		return x[1] < y[1])
+	return indexed.map(func(e): return e[0])
+
+
+## File `paths` in default order of their names (a drop's files arrive in any order).
+static func sorted_paths(paths: Array) -> Array:
+	var named := paths.map(func(path): return {"name": str(path).get_file().get_basename(), "path": path})
+	return sorted_by_name(named).map(func(e): return e["path"])
 
 
 ## `count` inclusive `[lo, hi]` slices of `lo`..`hi`, never empty:

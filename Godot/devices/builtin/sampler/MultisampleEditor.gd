@@ -10,6 +10,7 @@ class_name MultisampleEditor extends VBoxContainer
 
 signal selection_changed()
 signal visible_groups_changed()
+signal snap_changed()
 
 ## `click_zone` modes: a plain click, Ctrl-click and Shift-click.
 enum SelectMode { REPLACE, TOGGLE, RANGE }
@@ -29,6 +30,8 @@ var model: SamplerMultisample = null
 var selected_ids: Array[int] = []
 ## Group ids whose zones show; empty shows every zone ("All").
 var visible_groups: Array[int] = []
+## Zone drags snap to neighbouring zones (header toggle; Shift bypasses). View-local, on by default.
+var snap_enabled := true
 
 
 func _ready() -> void:
@@ -65,6 +68,12 @@ func _bind_children() -> void:
 	zone_list.bind(self)
 	zone_map.bind(self)
 	batch_menu.bind(self)
+
+
+func set_snap(on: bool) -> void:
+	if snap_enabled != on:
+		snap_enabled = on
+		snap_changed.emit()
 
 
 # --- visibility ------------------------------------------------------------

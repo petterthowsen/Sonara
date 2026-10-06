@@ -12,7 +12,10 @@ const OP_TEXTS := {
 	"assign_note": "Assign Note…",
 	"distribute_velocity": "Distribute on Velocity…",
 	"distribute_notes": "Distribute on Notes…",
+	"flip_velocity": "Flip Velocity",
+	"mirror_notes": "Mirror Notes",
 	"set_root_from_name": "Set Root from Name",
+	"sort_by_name": "Sort by Name",
 	"move_to_group": "Move to Group",
 	"delete": "Delete",
 }

@@ -973,18 +973,36 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 		logger.info("Drop event for asset: %s" % data.path)
 
 
-func _get_drag_data_tree(_at_position: Vector2) -> Variant:
+func _get_drag_data_tree(at_position: Vector2) -> Variant:
 	var tree = _trees[_current_tab]
-	var selected = tree.get_selected()
-	if not selected:
-		return null
-	
-	var asset = selected.get_metadata(0)
-	if not asset is Asset or asset.is_unavailable():
-		return null
-	
-	asset_requested_drag.emit(asset)
-	return asset
+	var clicked: TreeItem = tree.get_item_at_position(at_position)
+
+	# Collect every selected asset (the tree is multi-select), like the list view does.
+	var assets: Array[Asset] = []
+	var item: TreeItem = tree.get_next_selected(null)
+	var clicked_is_selected := false
+	while item:
+		var asset = item.get_metadata(0)
+		if asset is Asset and not asset.is_unavailable():
+			assets.append(asset)
+		if item == clicked:
+			clicked_is_selected = true
+		item = tree.get_next_selected(item)
+
+	# Dragging an unselected item drags just that item.
+	if clicked and not clicked_is_selected:
+		assets.clear()
+		var asset = clicked.get_metadata(0)
+		if asset is Asset and not asset.is_unavailable():
+			assets.append(asset)
+
+	for asset in assets:
+		asset_requested_drag.emit(asset)
+	if assets.size() == 1:
+		return assets[0]
+	elif assets.size() > 1:
+		return assets
+	return null
 
 
 func _on_tree_item_selected(asset_type: Asset.TYPE) -> void:

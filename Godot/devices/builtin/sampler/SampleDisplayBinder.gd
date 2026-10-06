@@ -14,6 +14,10 @@
 class_name SampleDisplayBinder extends RefCounted
 
 const PLAYHEAD_STREAM := "playheads"
+## Binders subscribed per device path. The engine keeps one flag for the stream, so the Panel and
+## Window views of one Sampler must not switch it off for each other: it is switched off with the
+## last binder.
+static var _subscribers := {}
 ## Display points → the parameter that stores them.
 const POINT_PARAMS := {
 	SampleDisplay.Point.PLAY_START: "Start",
@@ -39,6 +43,7 @@ var _model: SamplerMultisample = null
 var _bound_source: AudioSourceInfo = null
 var _shown := false
 var _subscribed := false
+var _subscribed_path := ""
 ## Drag in progress on the display: {which, param_id, old} or, on a zone, {which, zone_id, old}.
 var _drag := {}
 var _focus_menu: PopupMenu = null
@@ -121,11 +126,13 @@ func refresh() -> void:
 			display.play_end = zone.end
 			display.loop_start = zone.loop_start
 			display.loop_end = zone.loop_end
+		display.gain = zone.gain if zone else 1.0
 		display.loop_mode = (zone.loop_mode if zone else 0) as SampleDisplay.LoopMode
 		display.xfade = zone.crossfade if zone else 0.0
 		display.reverse = zone.reverse if zone else false
 		return
 	display.title = ""
+	display.gain = _real("Volume", 1.0)
 	if _drag.is_empty():
 		display.play_start = _real("Start", 0.0)
 		display.play_end = _real("End", 1.0)
@@ -379,13 +386,20 @@ func _set_subscribed(want: bool) -> void:
 	var osc: Node = tree.root.get_node_or_null("AudioEngineOSC") if tree != null else null
 	if osc == null:
 		return
+	var path := device.osc_path() if want else _subscribed_path
 	if want:
-		osc.subscribe_device_data(device.osc_path(), PLAYHEAD_STREAM)
+		_subscribed_path = path
+		_subscribers[path] = int(_subscribers.get(path, 0)) + 1
+		osc.subscribe_device_data(path, PLAYHEAD_STREAM)
 		if not osc.device_data_received.is_connected(_on_data_received):
 			osc.device_data_received.connect(_on_data_received)
 	else:
-		if device != null:
-			osc.unsubscribe_device_data(device.osc_path(), PLAYHEAD_STREAM)
+		var remaining := int(_subscribers.get(path, 0)) - 1
+		if remaining > 0:
+			_subscribers[path] = remaining
+		else:
+			_subscribers.erase(path)
+			osc.unsubscribe_device_data(path, PLAYHEAD_STREAM)
 		if osc.device_data_received.is_connected(_on_data_received):
 			osc.device_data_received.disconnect(_on_data_received)
 	_subscribed = want
