@@ -167,7 +167,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 4 — docs
 
-- [ ] **T-016** [REQ-018–025] ADR 0016.
+- [x] **T-016** [REQ-018–025] ADR 0016.
   - _Files_: `docs/adr/0016-plugin-guis-embed-via-x11-reparenting.md`
   - _Output_: The ADR records:
     - The decision and the rejected alternatives.
@@ -176,13 +176,13 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: The ADR exists, and the design's ADR references resolve.
   - _Depends on_: T-004
 
-- [ ] **T-017** [REQ-all] OSC protocol doc.
+- [x] **T-017** [REQ-all] OSC protocol doc.
   - _Files_: `docs/subsystems/osc-protocol.md`
   - _Output_: Every new and changed GUI message, with its arguments and direction.
   - _Verify_: Every address in the design's two OSC tables appears in the doc.
   - _Depends on_: T-004
 
-- [ ] **T-018** [REQ-all] Subsystem docs, glossary, backlog.
+- [x] **T-018** [REQ-all] Subsystem docs, glossary, backlog.
   - _Files_: `docs/subsystems/engine-plugin-architecture.md`, `docs/subsystems/godot-device-views.md`, `CONTEXT.md`, `TODO.md`
   - _Output_:
     - The embedding lifecycle and the new IPC commands.

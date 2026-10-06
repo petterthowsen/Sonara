@@ -487,15 +487,59 @@ packets). Paths are absolute. Godot uses `user://plugin_state/`.
 - **enable**: Bypass device (zero-latency, maintains state)
 
 **Plugin GUI Control (CLAP plugins only)**
+
+Godot → engine (`{device}` = `/channel/{id}/device/{path}`):
 ```
-/channel/{id}/device/{position}/gui/open
-/channel/{id}/device/{position}/gui/close
+{device}/gui/open                                   # floating: the engine's own OS window
+{device}/gui/open [i:parent_xid, i:x, i:y, i:w, i:h]  # embedded into a Godot window from the start
+{device}/gui/embed [i:parent_xid, i:x, i:y, i:w, i:h, (i:scroll_x, i:scroll_y)]
+{device}/gui/bounds [i:x, i:y, i:w, i:h, (i:scroll_x, i:scroll_y)]
+{device}/gui/unembed
+{device}/gui/visible [i:visible]
+{device}/gui/size [i:w, i:h]
+{device}/gui/close
 ```
-- Opens/closes floating plugin GUI window
-- Only works for CLAP plugins that support the GUI extension
-- Can be called while plugin is activated and processing audio
-- GUI state is managed by the plugin, not the host
-- The engine sends `{device}/gui/closed` (no args) when a GUI window closes on the engine side (user closed it, or a hosting-mode move)
+- **open** without args opens the GUI in a floating window, as before spec 022. With args, the
+  engine's host window is embedded into the X11 window `parent_xid` before it is first mapped, so
+  no floating window flashes. The rect is the viewport in that window's pixels. Opening an open
+  GUI reuses its window and shows it again.
+- **embed** moves an open GUI's host window into another Godot window (attach, detach, tab
+  tear-off) without reopening it. Scroll defaults to 0.
+- **bounds** sets the viewport (window pixels) and the scroll offset of the GUI inside it. A GUI
+  larger than the viewport is clipped; scrolling moves it.
+- **unembed** makes an embedded host window a floating OS window again (embedding switched off).
+- **visible** hides (`0`) or shows (`1`) the GUI without closing it, for a hidden tab or frame:
+  CLAP `gui.hide()`/`show()` plus unmapping or mapping the host window.
+- **size** asks a resizable plugin to resize. The plugin host runs `adjust_size` then `set_size`,
+  and the size the plugin settles on comes back as `gui/size`.
+- **close** first unmaps the host window and reparents it to the root (so Godot can free its window
+  without destroying the plugin's), then closes the GUI. The host window is destroyed once the
+  plugin confirms.
+- Arguments are ints; longs and floats are accepted too. A short or malformed list is logged as a
+  warning and ignored (`gui/open` then opens floating).
+- Embedding needs X11 and is experimental (ADR 0016). Godot sends embed args only when
+  `plugins/embed_gui` is on and available.
+- Can be called while the plugin is active and processing audio. GUI state is managed by the
+  plugin, not the host.
+
+Engine → Godot:
+```
+{device}/gui/opened [i:w, i:h, i:resizable, i:floating]
+{device}/gui/size [i:w, i:h]
+{device}/gui/embedded [i:parent_xid]
+{device}/gui/closed
+```
+- **opened** follows every successful open: the GUI's size, whether it accepts resizes, and
+  `floating=1` when the plugin refused embedded mode and runs in its own window (the engine then
+  destroys the unused host window).
+- **size** reports the GUI's current size after a `gui/size` request, and when the plugin resizes
+  itself.
+- **embedded** confirms that the host window is now in `parent_xid` (`0` = in no Godot window),
+  once the X server has the reparent. Sent after an embedded `gui/open`, `gui/embed`,
+  `gui/unembed`, and the release on `gui/close`. Godot destroys a native window's X window when it
+  hides it, so a frame window that holds plugin GUIs waits for this before it hides or is freed.
+- **closed** (no args) is sent when a GUI closes on the engine side: the user closed its floating
+  window, a hosting-mode move, or after `gui/close`.
 
 **Query Parameters** (built-in and plugins)
 ```

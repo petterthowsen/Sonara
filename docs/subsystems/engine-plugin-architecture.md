@@ -72,7 +72,7 @@
 
 ## IPC Commands
 
-- Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui, SaveState/LoadState, SetRenderMode.
+- Engine issues Initialize, Activate(`sample_rate`), StartProcessing, Shutdown, Reset, OpenGui/CloseGui, SetGuiVisible, SetGuiSize, SaveState/LoadState, SetRenderMode.
 - `Activate` carries the sample rate and re-activates (deactivate → activate) when the rate changes; the reply reports the plugin's latency. `GetParameterInfo` rebuilds and republishes the parameter map.
 - `SetParameter` is fire-and-forget: while the plugin is processing the main thread queues it to the audio thread, which applies it at offset 0 of the next block; while stopped it is applied with `params.flush()`.
 - `Reset` is handled on the audio thread (CLAP requires it there) and clears queued events. `Unload` removes one instance from a shared host. `Shutdown` exits the whole host process.
@@ -87,11 +87,20 @@
 
 ## GUI Support
 
-- `WindowManager` (winit thread) creates and tracks host windows. `OscServer` requests a window, receives the X11 handle, then calls `AudioCommand::OpenPluginGui` so `SubprocessClapAdapter::open_gui_with_handle()` can forward that handle through IPC (`PluginCommand::OpenGui { window_handle }`). Plugins that ignore the handle still work in floating mode.
-- Initial sizing and resizability come from CLAP host API: adapter queries `gui_ext.get_size()`/`can_resize()` and forwards the dimensions to the main thread via `EngineStatus::PluginGuiResizeRequest`. The OSC main loop resizes + shows the window before the user ever sees it.
-- Runtime resize requests flow `HostGui::request_resize()` → `PluginEvent::GuiResizeRequest` → command thread tick → `EngineStatus::PluginGuiResizeRequest` → main loop → `WindowManager::resize_window()`. All GUI-related statuses are handled in the main loop and are not forwarded back to Godot.
-- Close lifecycle is synchronized: engine only destroys the window after the subprocess responds with `PluginResponse::GuiClosed`, which emits `EngineStatus::PluginGuiClosed`. User-initiated closes originate from the window thread, which triggers `AudioCommand::ClosePluginGui` and waits for the same acknowledgment to avoid X11 errors.
+- `WindowManager` (winit thread, `window_manager.rs`) owns one **host window** per open GUI, keyed by the device's window key. `OscServer` creates it on `gui/open`, gets its X11 handle, and sends `AudioCommand::OpenPluginGui`; `SubprocessClapAdapter::open_gui_with_handle()` forwards the handle over IPC (`PluginCommand::OpenGui { window_handle }`). The host window stays the plugin's CLAP parent for as long as the GUI is open.
+- The plugin host opens the GUI embedded in that handle. A plugin that doesn't support embedded mode opens floating instead (`open_plugin_gui` falls back), and `PluginResponse::GuiOpened { width, height, is_resizable, floating }` says so. Asking for an already open GUI reports its real size.
+- `SetGuiVisible { visible }` calls CLAP `gui.show()`/`hide()`. `SetGuiSize { width, height }` runs `adjust_size` → `set_size` → `get_size` and answers `PluginResponse::GuiSize`. Both are `AudioCommand`s (`SetPluginGuiVisible`, `SetPluginGuiSize`) that the command thread runs with the state lock released, like `open_plugin_gui`.
+- Statuses: `EngineStatus::PluginGuiOpened { width, height, resizable, floating }` after every open (forwarded as `gui/opened`), `PluginGuiResizeRequest` when the plugin resizes or a size request settles (forwarded as `gui/size`), and `PluginGuiClosed` (`gui/closed`). The main loop also acts on them: it resizes a floating host window to the plugin, shows the host window once the GUI is open, and destroys the unused host window when an open came back `floating`. Runtime resizes flow `HostGui::request_resize()` → `PluginEvent::GuiResizeRequest` → command thread tick → `EngineStatus::PluginGuiResizeRequest`.
+- Close lifecycle is synchronized: the engine destroys the host window only after the subprocess answers `PluginResponse::GuiClosed` (`EngineStatus::PluginGuiClosed`). A user closing a floating window starts on the window thread, which sends `AudioCommand::ClosePluginGui` and waits for the same answer, to avoid X11 errors.
 - `SubprocessClapAdapter` keeps `gui_open` state, resets it even on IPC errors, and sends a final `PluginGuiClosed` in `Drop` so orphaned windows are reclaimed if the device is removed or the adapter is dropped unexpectedly.
+
+### Embedding into Godot windows (spec 022, ADR 0016)
+
+- Experimental, X11 only, behind the `plugins/embed_gui` setting. The host window is reparented into the X11 window of the Godot window that shows the device frame; only the host window moves, so attach, detach and tab switches never reopen the GUI.
+- `HostWindow` holds the window, its embed state (`Embed { parent, rect: EmbedRect }`) and its visibility. `update_mapping` alone decides whether it is mapped (shown by the GUI opening, and not hidden with `SetVisible`).
+- `WindowCommand`s: `Create` (can embed before the first map), `Embed`, `Bounds`, `Unembed`, `SetVisible`, `Release`, `Resize`, `Show`, `Destroy`. `Embed`, `Unembed` and `Release` answer once the X server has the reparent (`XSync`), and `WindowManager::embed_window`/`unembed_window`/`release_window` wait for that (1 s bound). The OSC server then sends `gui/embedded parent_xid` (0 = out of Godot's windows), which Godot waits for before it hides or frees a window: hiding a native Godot window destroys its X window and every child in it.
+- `mod x11_embed` works on winit's own Xlib connection, so its requests are ordered with winit's. It keeps Godot 4.7's X11 behaviour in check: the host window is override-redirect (Godot drops redirected map/configure requests), always covers its whole Godot parent at (0,0) (Godot takes a direct child's ConfigureNotify as its own resize), and is clipped to the viewport by an XShape bounding region. Position and scrolling move the plugin's own window inside it. `withdraw` takes a floating host window away from the WM before its first embed, with a bounded wait. An embedded host window ignores the plugin's resize requests: the viewport stays where Godot put it.
+- `gui/close` sends `Release` first (unmap, reparent to the root while unmapped), then `ClosePluginGui`.
 
 ## Failure Handling
 

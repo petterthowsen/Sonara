@@ -84,6 +84,8 @@ Subsystem deep-dives live in `docs/subsystems/`; decision records in `docs/adr/`
 - **GridHelper** — the shared tempo/zoom/scroll/snap object converting ticks ↔ pixels; views share one instance.
 - **Note map** — labels/colours per pitch on a channel (`NONE`/`AUTO`/`NAMED` mode). Labels only, never sent to the engine. An Auto map comes from the first Drum Machine (pad names) or zoned Layer (slot names per mapped input note) on the root chain.
 - **Device view** — Godot visual for a device, one of four types: Panel, Window, Companion, Compact; all extend `DeviceView.gd`. **SimpleView** is the generated-panel fallback.
+- **Device frame** — a Sonara-drawn device window: title bar, a tab per device, and the selected device's page (`devices/frame/DeviceFrame.gd`). **Floating** in its own borderless window, or **attached** to the Primary area (one at a time). Owned by `DeviceWindowManager`. A **channel frame** holds a channel's top-level chain devices as tabs (the "Per channel" grouping); a **torn-off** tab becomes a frame of its own.
+- **Embedded plugin GUI** — a CLAP plugin's GUI shown inside a device frame: the engine reparents its **host window** (the plugin's CLAP parent) into the Godot window, so the GUI is never reopened when the frame moves. Experimental and X11 only (`plugins/embed_gui`, ADR-0016).
 - **Asset provider** — pluggable source of browser assets (files, SFZ, devices) behind `AssetService`; keyed by absolute path or device ID.
 - **Settings** — the registered-settings layer over the raw `Sonara.get_config`/`set_config` JSON store at `~/.config/sonara/config.json`; defaults live only in `Settings._register_all_settings()`.
 
