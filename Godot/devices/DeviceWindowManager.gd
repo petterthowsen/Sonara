@@ -31,6 +31,9 @@ var _standalone: Dictionary = {}
 ## Hosts the attached frame; the Editor registers itself. Implements attach_frame(frame),
 ## detach_frame(frame) and show_attached_frame().
 var attach_host: Object = null
+## Whether a frame was attached when it last closed: (owner device or channel) -> bool. A frame
+## opens in the mode it was last in; without an entry, built-ins attach and plugins float.
+var _last_attached: Dictionary = {}
 ## Signal connections per watched object: Object -> Array of [Signal, Callable]
 var _watches: Dictionary = {}
 ## Frame windows waiting for their plugin GUIs to move out before they hide or are freed
@@ -102,13 +105,20 @@ func open(dev: DeviceInstance) -> void:
 		dev.open_gui()
 		_after_change()
 		return
+	var target: DeviceFrame
+	var created := false
 	if grouped:
 		if channel_frame == null:
 			channel_frame = _create_frame(ch, null, _chain_devices(ch))
+			created = true
 		channel_frame.select_device(dev)
-		_raise(channel_frame)
+		target = channel_frame
 	else:
-		_raise(_create_frame(null, dev, [dev]))
+		target = _create_frame(null, dev, [dev])
+		created = true
+	if created and _wants_attached(target, dev):
+		attach(target)
+	_raise(target)
 	_after_change()
 
 
@@ -135,6 +145,7 @@ func close_frame(frame: DeviceFrame) -> void:
 	if not _frames.has(frame):
 		return
 	_frames.erase(frame)
+	_last_attached[_memory_key(frame)] = frame == _attached
 	var devs := frame.get_devices()
 	frame.close_all()
 	var window: FrameWindow = _windows.get(frame)
@@ -253,6 +264,20 @@ func tear_off(from: DeviceFrame, dev: DeviceInstance, screen_pos: Vector2i) -> D
 # ============================================================================
 # Frames
 # ============================================================================
+
+func _memory_key(frame: DeviceFrame) -> Object:
+	return frame.owner_device if frame.owner_device else frame.channel
+
+
+## A new frame opens attached when it was attached last time; first time, built-ins attach.
+func _wants_attached(frame: DeviceFrame, dev: DeviceInstance) -> bool:
+	if attach_host == null or not frame.can_attach():
+		return false
+	var key := _memory_key(frame)
+	if _last_attached.has(key):
+		return _last_attached[key]
+	return not dev.device.has_gui()
+
 
 func _own_frame(dev: DeviceInstance) -> DeviceFrame:
 	for frame in _frames:

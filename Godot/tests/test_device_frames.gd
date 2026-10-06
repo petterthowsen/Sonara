@@ -67,6 +67,7 @@ func run_tests() -> void:
 	await _test_frame_chrome()
 	await _test_frame_pages()
 	await _test_tab_click_does_not_tear_off()
+	await _test_remembers_attach_mode()
 	await _test_per_channel()
 	await _test_chain_edits()
 	await _test_per_device()
@@ -258,6 +259,29 @@ func _test_tab_click_does_not_tear_off() -> void:
 # DeviceWindowManager (T-010)
 # ============================================================================
 
+func _test_remembers_attach_mode() -> void:
+	_set_grouping("Per channel")
+	var c := _channel_with_chain()
+	_manager.open(c.eq)
+	await process_frame
+	var frame: Object = _manager.get_frames()[0]
+	_manager.detach(frame)
+	_manager.close_frame(frame)
+	await process_frame
+	_manager.open(c.eq)
+	await process_frame
+	_assert(_manager.get_attached_frame() == null, "a frame closed while floating reopens floating")
+	frame = _manager.get_frames()[0]
+	_manager.attach(frame)
+	_manager.close_frame(frame)
+	await process_frame
+	_manager.open(c.eq)
+	await process_frame
+	_assert(_manager.get_attached_frame() != null, "a frame closed while attached reopens attached")
+	_manager.close_all()
+	await process_frame
+
+
 func _test_per_channel() -> void:
 	_set_grouping("Per channel")
 	var c := _channel_with_chain()
@@ -270,6 +294,9 @@ func _test_per_channel() -> void:
 	_assert(_titles(frame) == ["EQ", "Spectrum"], "tabs for the chain devices with something to show (got %s)" % [_titles(frame)])
 	_assert(frame.get_active_device() == c.eq, "EQ selected")
 	_assert(frame.get_title() == "Lead", "a channel frame is titled by its channel (got %s)" % frame.get_title())
+	_assert(_manager.get_attached_frame() == frame, "a built-in's frame opens attached by default")
+	_manager.detach(frame)
+	await process_frame
 	var window: Window = _manager.get_window_for(frame)
 	_assert(window != null and window.visible and frame.get_parent() == window, "the frame shows in its own window")
 	_manager.open(c.spectrum)
@@ -438,6 +465,9 @@ func _test_window_min_size() -> void:
 	await process_frame
 	await process_frame
 	var frame: Object = _manager.get_frames()[0]
+	_manager.detach(frame)
+	await process_frame
+	await process_frame
 	var window: Window = _manager.get_window_for(frame)
 	var min_now := Vector2i(frame.get_combined_minimum_size().ceil())
 	_assert(window.min_size == min_now, "window min_size follows the frame (%s vs %s)" % [window.min_size, min_now])

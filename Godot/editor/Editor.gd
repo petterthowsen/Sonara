@@ -155,6 +155,8 @@ var current_view: View = View.ARRANGER
 var attached_frame: DeviceFrame = null
 ## View to return to when the attached frame is hidden or detached.
 var _view_before_device: View = View.ARRANGER
+## View the attached frame belongs to: it shows only there and comes back when returning to it.
+var _frame_view: View = View.ARRANGER
 
 # ============================================================================
 # LIFECYCLE
@@ -727,11 +729,14 @@ func _apply_time_signature_silent(value: Array) -> void:
 
 func switch_view() -> void:
 	"""Toggle between arranger and mixer views."""
-	if current_view == View.ARRANGER:
-		current_view = View.MIXER
+	var base := _view_before_device if current_view == View.DEVICE else current_view
+	var target := View.MIXER if base == View.ARRANGER else View.ARRANGER
+	if attached_frame and _frame_view == target:
+		_view_before_device = target
+		current_view = View.DEVICE
 	else:
-		current_view = View.ARRANGER
-	
+		current_view = target
+
 	_update_view_visibility()
 	logger.info("[Editor] Switched to ", View.keys()[current_view], " view")
 
@@ -782,6 +787,7 @@ func show_attached_frame() -> void:
 	if attached_frame == null or current_view == View.DEVICE:
 		return
 	_view_before_device = current_view
+	_frame_view = current_view
 	current_view = View.DEVICE
 	_update_view_visibility()
 
