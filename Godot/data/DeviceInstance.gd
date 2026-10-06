@@ -128,6 +128,12 @@ var sample_source: AudioSourceInfo = null:
 		sample_source = source
 		sample_source_changed.emit()
 
+## Multisample state of a Sampler (spec 023): null until it first needs it. Zones, groups and
+## the mode live here, not in parameters. See `ensure_multisample()`.
+var multisample: SamplerMultisample = null
+
+const SAMPLER_ID := "sonara.builtin.sampler"
+
 ## Current parameter values (normalized 0.0-1.0)
 var parameter_values: Dictionary[int, float] = {}
 
@@ -1591,6 +1597,8 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(osc_addr("modulator/*/param/*/value"), _on_modulator_param_received)
 	AudioEngineOSC.listen(osc_addr("modulator/*/route/set"), _on_modulator_route_received)
 	AudioEngineOSC.listen(osc_addr("modulator/clear"), _on_modulator_clear_received)
+	if is_sampler():
+		AudioEngineOSC.listen(osc_addr("zone/*/loading_state"), _on_zone_loading_state_received)
 
 	sync_slot_to_engine()
 	for child in children:
@@ -1626,6 +1634,8 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(osc_addr("modulator/*/param/*/value"), _on_modulator_param_received)
 	AudioEngineOSC.unlisten(osc_addr("modulator/*/route/set"), _on_modulator_route_received)
 	AudioEngineOSC.unlisten(osc_addr("modulator/clear"), _on_modulator_clear_received)
+	if is_sampler():
+		AudioEngineOSC.unlisten(osc_addr("zone/*/loading_state"), _on_zone_loading_state_received)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
 	AudioEngineOSC.unlisten(osc_addr("gui/opened"), _on_gui_opened_received)
@@ -1673,6 +1683,17 @@ func _on_loading_state_received(values: Array) -> void:
 				push_error("[DeviceInstance %s] Loading failed: %s" % [device.name, loading_state])
 			elif loading_state == "ready":
 				logger.info("[%s] Loading complete" % device.name)
+
+
+## `{device}/zone/{zid}/loading_state`: `loading`, `ready` or `failed:{reason}` for one zone.
+func _on_zone_loading_state_received(values: Array, address: String) -> void:
+	if multisample == null or values.is_empty():
+		return
+	var parts := address.split("/")
+	var at := parts.rfind("zone")
+	if at < 0 or at + 1 >= parts.size() or not parts[at + 1].is_valid_int():
+		return
+	multisample.set_zone_loading_state(int(parts[at + 1]), str(values[0]))
 
 
 func _on_gui_closed_received(_values: Array) -> void:
@@ -1943,6 +1964,12 @@ func _push_restored_parameters_to_engine() -> void:
 ## TODO: Implement this
 func sync_to_engine() -> void:
 	sync_modulators_to_engine()
+	_sync_params_to_engine()
+	if multisample != null:
+		multisample.sync_to_engine()
+
+
+func _sync_params_to_engine() -> void:
 	for param_id in parameter_values:
 		var param = get_parameter(param_id)
 		if param and not param.syncable:
@@ -1984,6 +2011,10 @@ func sync_parameter_to_engine(param_id: int) -> void:
 func load_file(file_path: String, attempt: int = 0) -> void:
 	if not device.supports_file_loading:
 		push_error("[DeviceInstance] Device %s does not support file loading" % device.name)
+		return
+
+	if multisample != null and multisample.active:
+		multisample.add_files([file_path])
 		return
 
 	logger.info("Loading file into %s: %s" % [device.name, file_path])
@@ -2034,6 +2065,24 @@ func queue_file_load(file_path: String) -> void:
 		push_error("[DeviceInstance] Device %s does not support file loading" % (device.name if device else "?"))
 		return
 	loaded_file_path = file_path
+
+
+## True for the built-in Sampler.
+func is_sampler() -> bool:
+	return device != null and device.id == SAMPLER_ID
+
+
+## The Sampler's multisample model, created (and bound to this instance) on first use.
+func ensure_multisample() -> SamplerMultisample:
+	if multisample == null:
+		multisample = SamplerMultisample.new()
+		multisample.bind(self)
+	return multisample
+
+
+## Play `note` on this device only, bypassing the channel (Sampler zone map piano).
+func audition(note: int, velocity: int, is_note_on: bool) -> void:
+	AudioEngineOSC.send(osc_addr("audition"), [note, velocity, 1 if is_note_on else 0])
 
 
 ## Send Layer/Drum slot controls to the engine (no-op for other parents).
@@ -2335,6 +2384,8 @@ func to_json() -> Dictionary:
 	var note_map_json = LayerNoteMap.to_json(slot_note_map)
 	if note_map_json != null:
 		data["slot_note_map"] = note_map_json
+	if multisample != null and (multisample.active or not multisample.zones.is_empty()):
+		data["multisample"] = multisample.to_json()
 	return data
 
 
@@ -2495,6 +2546,8 @@ static func from_json(data: Dictionary) -> DeviceInstance:
 	instance.return_channel_id = int(data.get("return_channel_id", -1))
 	var extra_ids = data.get("return_channel_ids", [])
 	instance.return_channel_ids.assign(extra_ids)
+	if data.get("multisample") is Dictionary and instance.is_sampler():
+		instance.ensure_multisample().load_json(data["multisample"])
 	var state_b64 := str(data.get("plugin_state", ""))
 	if not state_b64.is_empty():
 		instance.plugin_state = Marshalls.base64_to_raw(state_b64)

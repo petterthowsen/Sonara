@@ -32,6 +32,7 @@ func run_tests() -> void:
 	await _test_insert_between_panels()
 	await _test_drop_in_place_is_noop()
 	await _test_file_drops_onto_loader()
+	await _test_multi_file_drop_onto_sampler()
 	await _test_empty_list_outlines()
 	await _test_rejected_drags_resolve_to_nothing()
 	await _test_drag_restores_source()
@@ -143,6 +144,26 @@ func _test_file_drops_onto_loader() -> void:
 	_assert(target.device == sampler and target.outline and target.indicator_rect == header, "outlines the sampler header")
 	var mp3: Object = _drop_target.resolve(_list, _asset(_asset_script.TYPE.Audio, "/tmp/kick.mp3"), header.get_center())
 	_assert(not mp3.is_valid(), "unsupported file shows no target")
+
+
+## A multi-selection from the Browser (an Array of Assets) goes onto a Sampler as zones (spec 023).
+func _test_multi_file_drop_onto_sampler() -> void:
+	var s := await _setup([])
+	var sampler: Object = _device_instance_script.new(_device("sonara.builtin.sampler", _device_script.DeviceCategory.Instrument, ".wav"), s.channel.id, -1)
+	s.channel.add_device(sampler)
+	await process_frame
+	await process_frame
+	var header: Rect2 = _panel(sampler).header.get_global_rect()
+	var files: Array = [_asset(_asset_script.TYPE.Audio, "/tmp/a.wav"), _asset(_asset_script.TYPE.Audio, "/tmp/b.wav")]
+	var target: Object = _drop_target.resolve(_list, files, header.get_center())
+	_assert(target.kind == _drop_target.Kind.ONTO and target.device == sampler, "an Array of audio assets on a sampler header goes onto it: %d" % target.kind)
+	var mixed: Array = [files[0], _asset(_asset_script.TYPE.Midi, "/tmp/x.mid")]
+	_assert(not _drop_target.resolve(_list, mixed, header.get_center()).is_valid(), "a selection with a non-audio asset shows no target")
+	var plain: Object = _device_instance_script.new(_device("test.sampler", _device_script.DeviceCategory.Instrument, ".wav"), s.channel.id, -1)
+	s.channel.add_device(plain)
+	await process_frame
+	await process_frame
+	_assert(not _drop_target.resolve(_list, files, _panel(plain).header.get_global_rect().get_center()).is_valid(), "an Array doesn't drop on a device that isn't a Sampler")
 
 
 func _test_empty_list_outlines() -> void:

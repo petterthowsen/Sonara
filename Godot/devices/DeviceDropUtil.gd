@@ -430,11 +430,27 @@ static func find_file_loading_descendant(inst: DeviceInstance) -> DeviceInstance
 	return null
 
 
+## The audio files in `data` (one Asset, or the Array[Asset] of a multi-selection) that a Sampler
+## can load as zones. Empty for anything else, including a list that holds a non-audio asset.
+static func audio_assets_for_sampler(inst: DeviceInstance, data: Variant) -> Array[Asset]:
+	var out: Array[Asset] = []
+	if inst == null or not inst.is_sampler():
+		return out
+	var items: Array = data if data is Array else [data]
+	for item in items:
+		if not (item is Asset) or not can_drop_file_on_device(inst, item) or (item as Asset).type != Asset.TYPE.Audio:
+			return [] as Array[Asset]
+		out.append(item)
+	return out
+
+
 ## Whether `data` can be dropped onto the device panel for `inst`: a child for a container, or a file to load.
 static func can_drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 	data = DeviceDrag.unwrap(data)
 	if inst == null:
 		return false
+	if data is Array:
+		return not audio_assets_for_sampler(inst, data).is_empty()
 	if is_preset_for_device(inst, data):
 		return true
 	if inst.is_container() and can_drop_on_container(inst.get_channel(), inst, data):
@@ -462,6 +478,10 @@ static func drop_on_device(inst: DeviceInstance, data: Variant) -> bool:
 	if inst.is_container() and can_drop_on_container(channel, inst, data):
 		drop_on_container(channel, inst, data)
 		return true
+	var samples := audio_assets_for_sampler(inst, data)
+	if not samples.is_empty():
+		SamplerActions.drop_files(inst, samples.map(func(a: Asset): return a.path))
+		return false
 	if data is Asset and can_drop_file_on_device(inst, data):
 		inst.load_file((data as Asset).path)
 	return false

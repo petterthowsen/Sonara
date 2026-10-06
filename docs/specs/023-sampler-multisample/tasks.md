@@ -148,7 +148,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
 
 ## Phase 3 — Godot model and logic
 
-- [ ] **T-013** [REQ-025, REQ-027, REQ-031, REQ-032] `SamplerZone`, `SamplerZoneGroup` and
+- [x?] **T-013** [REQ-025, REQ-027, REQ-031, REQ-032] `SamplerZone`, `SamplerZoneGroup` and
   `SamplerMultisample`: data, signals, setters sending OSC through the owner's `osc_addr`,
   `to_json`/`from_json`, `sync_to_engine`, `to_osc_args` matching the 19-arg layout.
   - _Files_: `Godot/data/SamplerZone.gd`, `Godot/data/SamplerZoneGroup.gd`,
@@ -158,7 +158,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     expected OSC (captured), JSON round-trip, and deleting a group moves its zones to Ungrouped.
   - _Depends on_: — (contract from design.md)
 
-- [ ] **T-014** [REQ-027, REQ-028] `DeviceInstance` and `Project` integration: `multisample` var,
+- [x?] **T-014** [REQ-027, REQ-028] `DeviceInstance` and `Project` integration: `multisample` var,
   JSON (omitted when unused), `sync_to_engine()` hook after the params, `load_file()` delegation
   in multisample mode, `audition()`, zone `loading_state` routing, and
   `Project.track_source_request` + `_waveform_for_req` lookup. Zone loads use the waveform retry.
@@ -170,7 +170,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     still pass.
   - _Depends on_: T-013
 
-- [ ] **T-015** [REQ-026] Snapshot undo: `snapshot()`, `restore()` diffing by zone id (set only
+- [x?] **T-015** [REQ-026] Snapshot undo: `snapshot()`, `restore()` diffing by zone id (set only
   for changed zones, remove for gone ones, load + set for new or re-pathed ones), and the
   single-zone snapshot for mergeable knob edits.
   - _Files_: `Godot/data/SamplerMultisample.gd`
@@ -179,7 +179,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     undo/redo of add, move and remove restores the exact JSON.
   - _Depends on_: T-013
 
-- [ ] **T-016** [REQ-020, REQ-047] `ZoneLayout`: `parse_root`, `layout` (halfway, consecutive
+- [x?] **T-016** [REQ-020, REQ-047] `ZoneLayout`: `parse_root`, `layout` (halfway, consecutive
   fallback, mixed, `at_key`), `assign_velocity`, `assign_note`, `distribute_velocity`,
   `distribute_notes` (stretch/gaps), `set_root_from_name`.
   - _Files_: `Godot/devices/builtin/sampler/ZoneLayout.gd` (new)
@@ -192,7 +192,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     - uneven splits, and more zones than steps
   - _Depends on_: —
 
-- [ ] **T-017** [REQ-011–015, REQ-047] `SamplerActions` (drop, convert both ways, batch, delete,
+- [x?] **T-017** [REQ-011–015, REQ-047] `SamplerActions` (drop, convert both ways, batch, delete,
   move to group: one undo step each) and `DeviceDropUtil` accepting `Array` of audio assets for a
   Sampler.
   - _Files_: `Godot/devices/builtin/sampler/SamplerActions.gd` (new),

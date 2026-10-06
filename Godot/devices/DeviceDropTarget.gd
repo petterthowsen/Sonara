@@ -46,7 +46,7 @@ func is_valid() -> bool:
 
 ## True for data a device row can take.
 static func accepts(data: Variant) -> bool:
-	return data is DeviceDrag or data is Asset
+	return data is DeviceDrag or data is Asset or (data is Array and not (data as Array).is_empty() and (data as Array)[0] is Asset)
 
 
 ## Resolve the target for `data` at global `mouse` inside `root`.
@@ -81,6 +81,8 @@ static func resolve(root: Control, data: Variant, mouse: Vector2) -> DeviceDropT
 			if inst.is_container() and target._try_onto(p, inst, data, header):
 				return target
 			if payload is Asset and DeviceDropUtil.can_drop_file_on_device(inst, payload) and target._try_onto(p, inst, data, header):
+				return target
+			if payload is Array and DeviceDropUtil.can_drop_on_device(inst, payload) and target._try_onto(p, inst, data, header):
 				return target
 		target._try_insert(row_host, list, i + 1 if along > start + length * 0.5 else i, data)
 		return target

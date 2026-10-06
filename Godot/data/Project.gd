@@ -85,6 +85,9 @@ var next_marker_id: int = 1
 var _clip_request_lookup: Dictionary = {}  # clip_id -> req_id
 var _request_clip_lookup: Dictionary = {}  # req_id -> clip_id
 var _request_device_lookup: Dictionary = {}  # req_id -> DeviceInstance
+## AudioFileService request id -> AudioSourceInfo for sources that no clip or device owns directly
+## (Sampler multisample zones).
+var _request_source_lookup: Dictionary = {}
 var _osc_listener_registry: Array = []
 
 # Unique ID management
@@ -347,6 +350,13 @@ func track_device_request(device: DeviceInstance, req_id: String) -> void:
 	_request_device_lookup[req_id] = device
 
 
+## Remember which AudioSourceInfo an AudioFileService request fills (a Sampler zone's waveform).
+func track_source_request(source: AudioSourceInfo, req_id: String) -> void:
+	if source == null or req_id.is_empty():
+		return
+	_request_source_lookup[req_id] = source
+
+
 func _get_device_by_req_id(req_id: String) -> DeviceInstance:
 	if _request_device_lookup.has(req_id):
 		return _request_device_lookup[req_id] as DeviceInstance
@@ -442,7 +452,7 @@ func _waveform_for_req(req_id: String) -> AudioSourceInfo:
 		return clip.audio_source
 	var inst := _get_device_by_req_id(req_id)
 	if inst == null:
-		return null
+		return _request_source_lookup.get(req_id) as AudioSourceInfo
 	if inst.sample_source == null:
 		inst.sample_source = AudioSourceInfo.new()
 	return inst.sample_source
