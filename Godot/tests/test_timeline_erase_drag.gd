@@ -97,6 +97,8 @@ func _test_empty_timeline_arms() -> void:
 	# Below the lane row, still inside the timeline: the erase gesture must still start.
 	var below := Vector2(rect.position.x + 4.0, rect.end.y + 40.0)
 	_assert(timeline.get_global_rect().has_point(below), "the probe point is inside the timeline")
+	# The gesture only arms while the pointer hovers the timeline; headless has no hover.
+	timeline.pointer_over_override = true
 	_right_press(timeline, below)
 	_assert(timeline._erase_pressed,
 		"right-press outside every lane row still arms the erase drag")

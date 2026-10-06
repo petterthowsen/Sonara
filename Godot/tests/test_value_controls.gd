@@ -103,8 +103,11 @@ func _test_volumeter_drag_and_range() -> void:
 	meter.set_volume_no_signal(12.0)
 	_assert(meter.volume_db == 6.0, "volume clamps to db_top (6 dB) everywhere")
 
-	meter._gui_input(_button(Vector2(6, 66), true))
-	_assert(is_equal_approx(meter.volume_db, -27.0), "press at mid height maps to the middle of -60..6 (got %s)" % meter.volume_db)
+	# Relative drag: pressing grabs the handle (at 6 dB, the top) without moving the value.
+	meter._gui_input(_button(Vector2(6, 0), true))
+	_assert(is_equal_approx(meter.volume_db, 6.0), "press grabs the handle without jumping (got %s)" % meter.volume_db)
+	meter._gui_input(_motion(Vector2(6, 66), false))
+	_assert(is_equal_approx(meter.volume_db, -27.0), "dragging to mid height maps to the middle of -60..6 (got %s)" % meter.volume_db)
 	_assert(meter._tooltip != null and meter._tooltip.visible, "tooltip shows while adjusting")
 	_assert(meter._tooltip._label.text == "-27.0 dB", "tooltip shows the volume in dB")
 	meter._gui_input(_motion(Vector2(6, 0), true))

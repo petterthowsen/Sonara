@@ -602,12 +602,14 @@ func _test_selection_follows_editability() -> void:
 
 	# Selecting hidden C makes it visible and editable (REQ-030).
 	_assert(not st.is_on(t[2], 0), "C starts hidden")
-	ce.track_selector._on_item_pressed(t[2])
+	ce.track_selector._on_item_pressed(false, t[2])
 	_assert(st.is_on(t[2], 0) and st.is_on(t[2], 1), "selecting C makes it visible and editable")
 	_assert(midi.current_track == t[2] and _editor_tracks(midi).has(t[2]), "C is active and drawn")
 	_assert(emitted.has(t[2]), "track_mode_track_selected emitted for C")
 
-	# Hiding the selected track moves the selection to the first editable one.
+	# Hiding the selected track moves the selection to the first editable one. A plain click left
+	# C as the only editable track, so make A editable again first.
+	st.set_on(t[0], 1, true)
 	st.set_on(t[2], 0, false)
 	_assert(midi.current_track == t[0], "hiding the selected track selects the first editable")
 

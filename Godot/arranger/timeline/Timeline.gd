@@ -683,7 +683,13 @@ func _erase_along(from: Vector2, to: Vector2) -> void:
 ## `_input` sees every click, including ones on UI stacked over the timeline's rect (device
 ## panels, popups). Only arm the erase gesture when the control actually under the pointer is
 ## the timeline or one of its descendants.
+## Tests only: headless viewports never report a hovered control.
+var pointer_over_override := false
+
+
 func _is_pointer_over_timeline() -> bool:
+	if pointer_over_override:
+		return true
 	var hovered := get_viewport().gui_get_hovered_control()
 	return hovered != null and (hovered == self or is_ancestor_of(hovered))
 
