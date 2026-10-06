@@ -10,7 +10,9 @@ use super::automation::{
     AutomationLane, AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
 use super::block_clock::BlockClock;
+use super::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
 use super::devices::DevicePath;
+use super::midi_types::{NoteEvent, AUDITION_NOTE_ID};
 use super::render_scratch::RenderScratch;
 use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
@@ -413,14 +415,17 @@ pub enum AudioCommand {
         device_path: DevicePath,
         file_path: String,
     },
+    /// `zone_id` targets a Sampler multisample zone instead of its single sample.
     BeginLoadDeviceSample {
         channel_id: ChannelId,
         device_path: DevicePath,
+        zone_id: Option<u32>,
         req_id: String,
     },
     LoadDeviceSample {
         channel_id: ChannelId,
         device_path: DevicePath,
+        zone_id: Option<u32>,
         req_id: String,
         samples: Vec<f32>,
         sample_rate: u32,
@@ -429,8 +434,56 @@ pub enum AudioCommand {
     FailDeviceSampleLoad {
         channel_id: ChannelId,
         device_path: DevicePath,
+        zone_id: Option<u32>,
         req_id: String,
         message: String,
+    },
+    /// Switch a Sampler between single-sample and multisample mode (spec 023).
+    SetSamplerMode {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        multisample: bool,
+    },
+    /// Create or replace a Sampler zone's settings.
+    SetSamplerZone {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        zone_id: u32,
+        settings: ZoneSettings,
+    },
+    RemoveSamplerZone {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        zone_id: u32,
+    },
+    /// Create or replace a Sampler zone group (`group_id` 0 = Ungrouped).
+    SetSamplerZoneGroup {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        group_id: u32,
+        gain: f32,
+        mute: bool,
+        solo: bool,
+        play_mode: GroupPlayMode,
+    },
+    RemoveSamplerZoneGroup {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        group_id: u32,
+    },
+    /// Which zone's voices the Sampler's `"playheads"` stream reports.
+    SetSamplerFocus {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        zone_id: u32,
+    },
+    /// Play a note into one device directly (the Sampler zone map's piano).
+    AuditionDevice {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        note: u8,
+        velocity: u8,
+        is_note_on: bool,
     },
     DeviceReady {
         channel_id: ChannelId,
@@ -659,6 +712,13 @@ pub enum EngineStatus {
         channel_id: ChannelId,
         device_path: DevicePath,
         state: String, // "idle", "loading", "ready", "failed:{error}", "crashed:{reason}"
+    },
+    /// A Sampler multisample zone's load state: "idle", "loading", "ready" or "failed:{error}".
+    SamplerZoneLoadingState {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        zone_id: u32,
+        state: String,
     },
     /// A plugin host process died or stopped responding. `reason` is one line (signal or exit
     /// code), `stderr` is the tail of what the host printed, `pid` is the host's process id.
@@ -1103,6 +1163,34 @@ fn with_layer(
             "Layer slot {} not found at channel {} path {}",
             slot, channel_id, device_path
         );
+    }
+}
+
+/// Run `apply` on the Sampler at `device_path`, warning when the channel or device is missing or
+/// isn't a Sampler.
+fn with_sampler(
+    state: &mut EngineState,
+    channel_id: ChannelId,
+    device_path: &DevicePath,
+    apply: impl FnOnce(&mut super::devices::SamplerDevice),
+) {
+    let Some(device) = state
+        .channels
+        .get_mut(&channel_id)
+        .and_then(|channel| channel.device_at_path_mut(device_path))
+    else {
+        warn!("No device at channel {} path {}", channel_id, device_path);
+        return;
+    };
+    match device
+        .as_any_mut()
+        .downcast_mut::<super::devices::SamplerDevice>()
+    {
+        Some(sampler) => apply(sampler),
+        None => warn!(
+            "Device at channel {} path {} is not a Sampler",
+            channel_id, device_path
+        ),
     }
 }
 
@@ -2561,64 +2649,113 @@ pub fn process_command(
         AudioCommand::BeginLoadDeviceSample {
             channel_id,
             device_path,
+            zone_id,
             req_id,
-        } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    if let Some(sampler) = device
-                        .as_any_mut()
-                        .downcast_mut::<super::devices::SamplerDevice>()
-                    {
-                        sampler.begin_sample_load(req_id);
-                    } else {
-                        warn!(
-                            "Device at channel {} path {} is not a Sampler",
-                            channel_id, device_path
-                        );
-                    }
-                }
-            }
-        }
+        } => with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
+            Some(zone_id) => sampler.begin_zone_load(zone_id, req_id),
+            None => sampler.begin_sample_load(req_id),
+        }),
         AudioCommand::LoadDeviceSample {
             channel_id,
             device_path,
+            zone_id,
             req_id,
             samples,
             sample_rate,
             channels,
-        } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    if let Some(sampler) = device
-                        .as_any_mut()
-                        .downcast_mut::<super::devices::SamplerDevice>()
-                    {
-                        sampler.set_sample(&req_id, samples, channels, sample_rate);
-                    } else {
-                        warn!(
-                            "Device at channel {} path {} is not a Sampler",
-                            channel_id, device_path
-                        );
-                    }
-                }
+        } => with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
+            Some(zone_id) => {
+                sampler.set_zone_sample(zone_id, &req_id, samples, channels, sample_rate)
             }
-        }
+            None => sampler.set_sample(&req_id, samples, channels, sample_rate),
+        }),
         AudioCommand::FailDeviceSampleLoad {
             channel_id,
             device_path,
+            zone_id,
             req_id,
             message,
+        } => with_sampler(state, channel_id, &device_path, |sampler| match zone_id {
+            Some(zone_id) => sampler.fail_zone_load(zone_id, &req_id, &message),
+            None => sampler.fail_sample_load(&req_id, &message),
+        }),
+        AudioCommand::SetSamplerMode {
+            channel_id,
+            device_path,
+            multisample,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.set_multisample(multisample)
+        }),
+        AudioCommand::SetSamplerZone {
+            channel_id,
+            device_path,
+            zone_id,
+            settings,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.set_zone(zone_id, &settings)
+        }),
+        AudioCommand::RemoveSamplerZone {
+            channel_id,
+            device_path,
+            zone_id,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.remove_zone(zone_id)
+        }),
+        AudioCommand::SetSamplerZoneGroup {
+            channel_id,
+            device_path,
+            group_id,
+            gain,
+            mute,
+            solo,
+            play_mode,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.set_zone_group(group_id, gain, mute, solo, play_mode)
+        }),
+        AudioCommand::RemoveSamplerZoneGroup {
+            channel_id,
+            device_path,
+            group_id,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.remove_zone_group(group_id)
+        }),
+        AudioCommand::SetSamplerFocus {
+            channel_id,
+            device_path,
+            zone_id,
+        } => with_sampler(state, channel_id, &device_path, |sampler| {
+            sampler.set_focus(zone_id)
+        }),
+        AudioCommand::AuditionDevice {
+            channel_id,
+            device_path,
+            note,
+            velocity,
+            is_note_on,
         } => {
-            if let Some(channel) = state.channels.get_mut(&channel_id) {
-                if let Some(device) = channel.device_at_path_mut(&device_path) {
-                    if let Some(sampler) = device
-                        .as_any_mut()
-                        .downcast_mut::<super::devices::SamplerDevice>()
-                    {
-                        sampler.fail_sample_load(&req_id, &message);
-                    }
+            let Some(device) = state
+                .channels
+                .get_mut(&channel_id)
+                .and_then(|channel| channel.device_at_path_mut(&device_path))
+            else {
+                warn!("No device at channel {} path {}", channel_id, device_path);
+                return None;
+            };
+            let event = if is_note_on && velocity > 0 {
+                NoteEvent::On {
+                    note_id: AUDITION_NOTE_ID,
+                    key: note,
+                    velocity: velocity as f32 / 127.0,
                 }
-            }
+            } else {
+                NoteEvent::Off {
+                    note_id: AUDITION_NOTE_ID,
+                    key: note,
+                    release: crate::audio::midi_types::DEFAULT_RELEASE,
+                }
+            };
+            device.mark_activity();
+            device.send_note_event(&event, 0);
         }
         AudioCommand::GetPluginParameters {
             channel_id,
@@ -2681,6 +2818,12 @@ pub fn process_command(
                 .get_mut(&channel_id)
                 .and_then(|channel| channel.device_at_path_mut(&device_path))
             {
+                if let Some(sampler) = device
+                    .as_any_mut()
+                    .downcast_mut::<super::devices::SamplerDevice>()
+                {
+                    sampler.resend_zone_states();
+                }
                 resend_modulators(status_tx, channel_id, &device_path, device);
             }
         }
@@ -3346,6 +3489,131 @@ mod tests {
             &replies[0],
             EngineStatus::DeviceLoadingStateChanged { channel_id: 2, state, .. } if state == "loading"
         ));
+    }
+
+    #[test]
+    fn sampler_zone_commands_route_to_device() {
+        use super::super::devices::sampler_zones::{ZoneRanges, ZoneSettings};
+        let mut state = EngineState::default();
+        let (status_tx, status_rx) = crossbeam::channel::unbounded();
+        let mut run = |state: &mut EngineState, cmd| {
+            process_command(state, cmd, 128, &status_tx);
+        };
+        run(
+            &mut state,
+            AudioCommand::CreateChannel {
+                id: 2,
+                name: "T".to_string(),
+            },
+        );
+        let sampler = super::super::devices::SamplerDevice::new(
+            48_000.0,
+            2,
+            DevicePath::root(0),
+            Some(status_tx.clone()),
+        );
+        state
+            .channels
+            .get_mut(&2)
+            .unwrap()
+            .devices
+            .push(Box::new(sampler));
+        let path = DevicePath::root(0);
+        run(
+            &mut state,
+            AudioCommand::SetSamplerMode {
+                channel_id: 2,
+                device_path: path.clone(),
+                multisample: true,
+            },
+        );
+        run(
+            &mut state,
+            AudioCommand::SetSamplerZone {
+                channel_id: 2,
+                device_path: path.clone(),
+                zone_id: 5,
+                settings: ZoneSettings {
+                    ranges: ZoneRanges::new((60, 72), (1, 127), (0, 0), (0, 0)),
+                    ..ZoneSettings::default()
+                },
+            },
+        );
+        run(
+            &mut state,
+            AudioCommand::BeginLoadDeviceSample {
+                channel_id: 2,
+                device_path: path.clone(),
+                zone_id: Some(5),
+                req_id: "z5".to_string(),
+            },
+        );
+        run(
+            &mut state,
+            AudioCommand::LoadDeviceSample {
+                channel_id: 2,
+                device_path: path.clone(),
+                zone_id: Some(5),
+                req_id: "z5".to_string(),
+                samples: vec![0.5; 48_000],
+                sample_rate: 48_000,
+                channels: 1,
+            },
+        );
+        let zone_states: Vec<(u32, String)> = status_rx
+            .try_iter()
+            .filter_map(|s| match s {
+                EngineStatus::SamplerZoneLoadingState { zone_id, state, .. } => {
+                    Some((zone_id, state))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            zone_states,
+            vec![(5, "loading".to_string()), (5, "ready".to_string())]
+        );
+
+        let audition = |note, is_note_on| AudioCommand::AuditionDevice {
+            channel_id: 2,
+            device_path: DevicePath::root(0),
+            note,
+            velocity: 100,
+            is_note_on,
+        };
+        let peak = |state: &mut EngineState| {
+            let device = &mut state.channels.get_mut(&2).unwrap().devices[0];
+            let mut out = vec![0.0f32; 512];
+            device.process_block(&[0.0; 512], &mut out, 256);
+            out.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+        };
+        run(&mut state, audition(40, true));
+        assert_eq!(peak(&mut state), 0.0, "outside the zone");
+        run(&mut state, audition(64, true));
+        assert!(peak(&mut state) > 0.1, "the zone plays");
+
+        // state/get resends the zone's state; removing the zone silences it.
+        run(
+            &mut state,
+            AudioCommand::GetDeviceState {
+                channel_id: 2,
+                device_path: path.clone(),
+            },
+        );
+        assert!(status_rx.try_iter().any(|s| matches!(
+            s,
+            EngineStatus::SamplerZoneLoadingState { zone_id: 5, ref state, .. } if state == "ready"
+        )));
+        run(
+            &mut state,
+            AudioCommand::RemoveSamplerZone {
+                channel_id: 2,
+                device_path: path,
+                zone_id: 5,
+            },
+        );
+        peak(&mut state);
+        assert_eq!(peak(&mut state), 0.0);
     }
 
     #[test]

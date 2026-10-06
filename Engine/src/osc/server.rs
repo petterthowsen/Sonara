@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::audio::automation::{AutomationPoint, AutomationPointId, AutomationTarget, CurveKind};
 use crate::audio::commands::BuiltinParamInfo;
+use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneRanges, ZoneSettings};
 use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
 use crate::audio::types::ClipLoadState;
@@ -38,6 +39,8 @@ struct PendingClip {
 struct PendingDevice {
     channel_id: usize,
     device_path: DevicePath,
+    /// A Sampler multisample zone, or None for the device's own sample.
+    zone_id: Option<u32>,
     source_path: String,
 }
 
@@ -470,6 +473,7 @@ impl OscServer {
                         self.begin_device_sample_load(
                             channel_id,
                             device_path,
+                            None,
                             file_path.clone(),
                             req_id,
                             command_tx,
@@ -713,6 +717,114 @@ impl OscServer {
                     device_path,
                 })?;
             }
+            // Sampler multisample (spec 023)
+            ["multisample"] => match args.first().and_then(osc_int) {
+                Some(on) => command_tx.send(AudioCommand::SetSamplerMode {
+                    channel_id,
+                    device_path,
+                    multisample: on != 0,
+                })?,
+                None => warn!("multisample needs an int, got {:?}", args),
+            },
+            ["zone", zid, "set"] => match (zid.parse::<u32>(), parse_zone_set(args)) {
+                (Ok(zone_id), Ok(settings)) => command_tx.send(AudioCommand::SetSamplerZone {
+                    channel_id,
+                    device_path,
+                    zone_id,
+                    settings,
+                })?,
+                (zone_id, settings) => warn!(
+                    "Bad zone/{}/set on channel {} path {}: {:?} {:?}",
+                    zid,
+                    channel_id,
+                    device_path,
+                    zone_id.err(),
+                    settings.err()
+                ),
+            },
+            ["zone", zid, "load_file"] => match (zid.parse::<u32>(), args.first()) {
+                (Ok(zone_id), Some(OscType::String(file_path)))
+                    if is_audio_sample_path(file_path) =>
+                {
+                    let req_id = match args.get(1) {
+                        Some(OscType::String(id)) if !id.is_empty() => id.clone(),
+                        _ => generate_device_request_id(channel_id, &device_path),
+                    };
+                    self.begin_device_sample_load(
+                        channel_id,
+                        device_path,
+                        Some(zone_id),
+                        file_path.clone(),
+                        req_id,
+                        command_tx,
+                    )?;
+                }
+                _ => warn!(
+                    "Bad zone/{}/load_file on channel {} path {}: {:?}",
+                    zid, channel_id, device_path, args
+                ),
+            },
+            ["zone", zid, "remove"] => match zid.parse::<u32>() {
+                Ok(zone_id) => command_tx.send(AudioCommand::RemoveSamplerZone {
+                    channel_id,
+                    device_path,
+                    zone_id,
+                })?,
+                Err(_) => warn!("Bad zone id in zone/{}/remove", zid),
+            },
+            ["zone_group", gid, "set"] => match (gid.parse::<u32>(), parse_zone_group_set(args)) {
+                (Ok(group_id), Ok((gain, mute, solo, play_mode))) => {
+                    command_tx.send(AudioCommand::SetSamplerZoneGroup {
+                        channel_id,
+                        device_path,
+                        group_id,
+                        gain,
+                        mute,
+                        solo,
+                        play_mode,
+                    })?
+                }
+                (group_id, group) => warn!(
+                    "Bad zone_group/{}/set on channel {} path {}: {:?} {:?}",
+                    gid,
+                    channel_id,
+                    device_path,
+                    group_id.err(),
+                    group.err()
+                ),
+            },
+            ["zone_group", gid, "remove"] => match gid.parse::<u32>() {
+                Ok(group_id) => command_tx.send(AudioCommand::RemoveSamplerZoneGroup {
+                    channel_id,
+                    device_path,
+                    group_id,
+                })?,
+                Err(_) => warn!("Bad group id in zone_group/{}/remove", gid),
+            },
+            ["focus_zone"] => match args.first().and_then(osc_int) {
+                Some(zone_id) => command_tx.send(AudioCommand::SetSamplerFocus {
+                    channel_id,
+                    device_path,
+                    zone_id: zone_id.clamp(0, u32::MAX as i64) as u32,
+                })?,
+                None => warn!("focus_zone needs an int, got {:?}", args),
+            },
+            ["audition"] => match (
+                args.first().and_then(osc_int),
+                args.get(1).and_then(osc_int),
+                args.get(2).and_then(osc_int),
+            ) {
+                (Some(note), Some(velocity), Some(on)) => {
+                    command_tx.send(AudioCommand::AuditionDevice {
+                        channel_id,
+                        device_path,
+                        note: note.clamp(0, 127) as u8,
+                        velocity: velocity.clamp(0, 127) as u8,
+                        is_note_on: on != 0,
+                    })?
+                }
+                _ => warn!("audition needs note velocity on, got {:?}", args),
+            },
             ["slot", slot_str, "volume"] => {
                 if let (Ok(slot), Some(OscType::Float(volume))) =
                     (slot_str.parse::<usize>(), args.first())
@@ -2036,6 +2148,15 @@ impl OscServer {
                 device_path.to_osc_addr(channel_id, "loading_state"),
                 vec![OscType::String(state)],
             ),
+            EngineStatus::SamplerZoneLoadingState {
+                channel_id,
+                device_path,
+                zone_id,
+                state,
+            } => (
+                device_path.to_osc_addr(channel_id, &format!("zone/{zone_id}/loading_state")),
+                vec![OscType::String(state)],
+            ),
             EngineStatus::DeviceCrashed {
                 channel_id,
                 device_path,
@@ -2608,18 +2729,20 @@ impl OscServer {
         format!("clip:{}:{}", clip_id, now)
     }
 
-    /// Submit an AudioFileService decode for a sampler device and track the request.
+    /// Submit an AudioFileService decode for a sampler device (or one of its zones) and track
+    /// the request.
     fn begin_device_sample_load(
         &self,
         channel_id: usize,
         device_path: DevicePath,
+        zone_id: Option<u32>,
         file_path: String,
         req_id: String,
         command_tx: &Sender<AudioCommand>,
     ) -> Result<()> {
         info!(
-            "Requesting sample load for channel {} device {} (req_id={}) from {}",
-            channel_id, device_path, req_id, file_path
+            "Requesting sample load for channel {} device {} zone {:?} (req_id={}) from {}",
+            channel_id, device_path, zone_id, req_id, file_path
         );
         {
             let mut pending = self.pending_device_loads.lock().unwrap();
@@ -2628,6 +2751,7 @@ impl OscServer {
                 PendingDevice {
                     channel_id,
                     device_path: device_path.clone(),
+                    zone_id,
                     source_path: file_path.clone(),
                 },
             );
@@ -2635,6 +2759,7 @@ impl OscServer {
         command_tx.send(AudioCommand::BeginLoadDeviceSample {
             channel_id,
             device_path: device_path.clone(),
+            zone_id,
             req_id: req_id.clone(),
         })?;
         match self.audio_file_service.lock() {
@@ -2650,6 +2775,7 @@ impl OscServer {
                     let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
                         channel_id,
                         device_path,
+                        zone_id,
                         req_id,
                         message: err.to_string(),
                     });
@@ -2661,6 +2787,7 @@ impl OscServer {
                 let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
                     channel_id,
                     device_path,
+                    zone_id,
                     req_id,
                     message: "AudioFileService unavailable".to_string(),
                 });
@@ -2729,6 +2856,7 @@ impl OscServer {
                     let command = AudioCommand::LoadDeviceSample {
                         channel_id: pending_device.channel_id,
                         device_path: pending_device.device_path,
+                        zone_id: pending_device.zone_id,
                         req_id: req_id.clone(),
                         samples,
                         sample_rate,
@@ -2790,6 +2918,7 @@ impl OscServer {
                     let _ = command_tx.send(AudioCommand::FailDeviceSampleLoad {
                         channel_id: pending_device.channel_id,
                         device_path: pending_device.device_path,
+                        zone_id: pending_device.zone_id,
                         req_id: req_id.clone(),
                         message: message.clone(),
                     });
@@ -2957,6 +3086,79 @@ fn osc_int(arg: &OscType) -> Option<i64> {
         OscType::Long(l) => Some(*l),
         OscType::Float(f) => Some(*f as i64),
         _ => None,
+    }
+}
+
+fn osc_float(arg: &OscType) -> Option<f32> {
+    match arg {
+        OscType::Float(f) => Some(*f),
+        OscType::Double(d) => Some(*d as f32),
+        OscType::Int(i) => Some(*i as f32),
+        OscType::Long(l) => Some(*l as f32),
+        _ => None,
+    }
+}
+
+/// Argument count of `zone/{zid}/set`.
+const ZONE_SET_ARGS: usize = 19;
+
+/// Parse `zone/{zid}/set`: `key_lo key_hi vel_lo vel_hi root tune gain start end reverse
+/// loop_mode loop_start loop_end crossfade key_fade_lo key_fade_hi vel_fade_lo vel_fade_hi
+/// group_id` (see `docs/subsystems/osc-protocol.md`). Ranges are clamped and ordered, the rest
+/// clamped into range.
+fn parse_zone_set(args: &[OscType]) -> Result<ZoneSettings, String> {
+    if args.len() < ZONE_SET_ARGS {
+        return Err(format!(
+            "expected {} args, got {}",
+            ZONE_SET_ARGS,
+            args.len()
+        ));
+    }
+    let int = |i: usize| {
+        osc_int(&args[i])
+            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .ok_or_else(|| format!("arg {} is not a number: {:?}", i, args[i]))
+    };
+    let float = |i: usize| {
+        osc_float(&args[i]).ok_or_else(|| format!("arg {} is not a number: {:?}", i, args[i]))
+    };
+    Ok(ZoneSettings {
+        ranges: ZoneRanges::new(
+            (int(0)?, int(1)?),
+            (int(2)?, int(3)?),
+            (int(14)?, int(15)?),
+            (int(16)?, int(17)?),
+        ),
+        root: int(4)?.clamp(0, 127) as u8,
+        tune: float(5)?,
+        gain: float(6)?,
+        start: float(7)?,
+        end: float(8)?,
+        reverse: int(9)? != 0,
+        loop_mode: int(10)?.clamp(0, 2) as u8,
+        loop_start: float(11)?,
+        loop_end: float(12)?,
+        crossfade: float(13)?,
+        group_id: int(18)?.max(0) as u32,
+    }
+    .sanitized())
+}
+
+/// Parse `zone_group/{gid}/set`: `gain mute solo play_mode`.
+fn parse_zone_group_set(args: &[OscType]) -> Result<(f32, bool, bool, GroupPlayMode), String> {
+    match (
+        args.first().and_then(osc_float),
+        args.get(1).and_then(osc_int),
+        args.get(2).and_then(osc_int),
+        args.get(3).and_then(osc_int),
+    ) {
+        (Some(gain), Some(mute), Some(solo), Some(mode)) => Ok((
+            gain,
+            mute != 0,
+            solo != 0,
+            GroupPlayMode::from_index(mode as i32),
+        )),
+        _ => Err(format!("expected gain mute solo play_mode, got {:?}", args)),
     }
 }
 
@@ -3574,6 +3776,79 @@ mod tests {
             panic!("expected a message");
         };
         assert_eq!(msg.args, vec![OscType::Blob(vec![7u8; 16])]);
+    }
+
+    fn zone_args(values: [f32; 19]) -> Vec<rosc::OscType> {
+        use rosc::OscType;
+        // Ints where Godot sends ints (see parse_zone_set).
+        const FLOATS: [usize; 7] = [5, 6, 7, 8, 11, 12, 13];
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                if FLOATS.contains(&i) {
+                    OscType::Float(*v)
+                } else {
+                    OscType::Int(*v as i32)
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn zone_osc_parses_nineteen_args() {
+        use crate::audio::devices::sampler_zones::ZoneRanges;
+        let args = zone_args([
+            48.0, 62.0, 1.0, 64.0, 60.0, -1.5, 0.8, 0.1, 0.9, 1.0, 2.0, 0.3, 0.6, 0.25, 2.0, 3.0,
+            0.0, 10.0, 4.0,
+        ]);
+        let s = super::parse_zone_set(&args).unwrap();
+        assert_eq!(
+            s.ranges,
+            ZoneRanges::new((48, 62), (1, 64), (2, 3), (0, 10))
+        );
+        assert_eq!(s.root, 60);
+        assert_eq!((s.tune, s.gain, s.start, s.end), (-1.5, 0.8, 0.1, 0.9));
+        assert!(s.reverse);
+        assert_eq!(s.loop_mode, 2);
+        assert_eq!((s.loop_start, s.loop_end, s.crossfade), (0.3, 0.6, 0.25));
+        assert_eq!(s.group_id, 4);
+    }
+
+    #[test]
+    fn zone_osc_clamps_and_orders() {
+        let args = zone_args([
+            90.0, 300.0, 127.0, 0.0, 200.0, 99.0, -2.0, -1.0, 2.0, 0.0, 9.0, 0.0, 1.0, 5.0, 0.0,
+            0.0, 0.0, 0.0, -3.0,
+        ]);
+        let s = super::parse_zone_set(&args).unwrap();
+        assert_eq!((s.ranges.key_lo, s.ranges.key_hi), (90, 127));
+        assert_eq!((s.ranges.vel_lo, s.ranges.vel_hi), (1, 127));
+        assert_eq!(s.root, 127);
+        assert_eq!((s.tune, s.gain, s.start, s.end), (48.0, 0.0, 0.0, 1.0));
+        assert_eq!((s.loop_mode, s.crossfade, s.group_id), (2, 1.0, 0));
+    }
+
+    #[test]
+    fn zone_osc_rejects_short_and_bad_args() {
+        use rosc::OscType;
+        let mut args = zone_args([0.0; 19]);
+        assert!(super::parse_zone_set(&args[..18]).is_err());
+        args[3] = OscType::String("loud".into());
+        assert!(super::parse_zone_set(&args).is_err());
+        let group = [
+            OscType::Float(0.5),
+            OscType::Int(0),
+            OscType::Int(1),
+            OscType::Int(1),
+        ];
+        let (gain, mute, solo, mode) = super::parse_zone_group_set(&group).unwrap();
+        assert_eq!((gain, mute, solo), (0.5, false, true));
+        assert_eq!(
+            mode,
+            crate::audio::devices::sampler_zones::GroupPlayMode::RoundRobin
+        );
+        assert!(super::parse_zone_group_set(&group[..3]).is_err());
     }
 
     #[test]

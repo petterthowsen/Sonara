@@ -21,6 +21,7 @@ mod phaser;
 mod polysynth;
 mod reverb;
 mod sampler;
+pub mod sampler_zones;
 mod sfizz_device;
 pub mod sfizz_keys;
 mod spectrum_analyzer;

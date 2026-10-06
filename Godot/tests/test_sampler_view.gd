@@ -36,6 +36,7 @@ func run_tests() -> void:
 	_test_playhead_decode()
 	_test_playhead_extrapolation()
 	await _test_view()
+	await _test_window_and_companion()
 
 
 func _make_display() -> Control:
@@ -357,7 +358,7 @@ func _test_view() -> void:
 	third.data = swapped.data
 	third.waveform_ready.emit()
 	_assert(display.data == swapped.data, "events of the new source reach the display")
-	_assert(not source.waveform_ready.is_connected(view._update_waveform), "the old source is released")
+	_assert(not source.waveform_ready.is_connected(view._binder._update_waveform), "the old source is released")
 
 	# Playheads reach the display; an empty record clears them.
 	view.apply_playheads(_playhead_blob([[0.5, 0.0, 1.0]]), 1000)
@@ -365,3 +366,48 @@ func _test_view() -> void:
 	view.apply_playheads(_playhead_blob([]))
 	_assert(display.playheads.is_empty(), "an empty playheads record clears them")
 	view.queue_free()
+
+
+## Window and Companion views, built the way the device frame and panel do (spec 023, T-002/T-003).
+func _test_window_and_companion() -> void:
+	var instance := _make_instance()
+	var dev: Object = instance.device
+	var factory: GDScript = load("res://devices/DeviceViewFactory.gd")
+	factory.register_builtin_views(dev)
+	var panel: Control = factory.create(instance, _device_script.ViewType.Panel)
+	var companion: Control = factory.create(instance, _device_script.ViewType.Companion)
+	var window: Control = factory.create(instance, _device_script.ViewType.Window)
+	_assert(companion != null, "the factory returns a Sampler Companion view")
+	_assert(window != null, "the factory returns a Sampler Window view")
+	if companion == null or window == null or panel == null:
+		return
+	for v in [panel, companion, window]:
+		root.add_child(v)
+		v.bind_to_device(instance)
+	await process_frame
+	_assert(companion.display == null, "the Companion view has no display")
+	_assert(panel.display != null, "the Panel view keeps its display")
+	_assert(companion._knobs.keys() == panel._knobs.keys(), "Companion knobs equal the Panel's")
+	_assert(companion._segments.keys() == panel._segments.keys(), "Companion segments equal the Panel's")
+	_assert(companion._checks.keys() == panel._checks.keys(), "Companion checks equal the Panel's")
+	_assert(window.display != null, "the Window view has a display")
+
+	# A Start drag in the Window view shows on the Companion view's Start-driven display state.
+	window.size = Vector2(1000, 300)
+	await process_frame
+	_history_util.test_recorder = func(_cmd) -> void: pass
+	window.display.begin_drag(_sd.Point.PLAY_START, Vector2(0, 5))
+	window.display.drag_to(Vector2(500, 5))
+	window.display.end_drag()
+	_history_util.test_recorder = Callable()
+	_assert(is_equal_approx(instance.get_parameter_real(7), 0.5), "a Window display drag writes Start")
+	_assert(is_equal_approx(panel.display.play_start, 0.5), "the Panel's display follows the Window's drag")
+
+	# And a Companion edit reaches the Window display.
+	companion._segments["Loop Mode"].selected = 1
+	_assert(window.display.loop_mode == _sd.LoopMode.ON, "a Companion Loop Mode edit reaches the Window display")
+
+	window.apply_playheads(_playhead_blob([[0.5, 0.0, 1.0]]), 1000)
+	_assert(window.display.playheads.size() == 1, "the Window view feeds playheads to its display")
+	for v in [panel, companion, window]:
+		v.queue_free()

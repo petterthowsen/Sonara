@@ -1,5 +1,11 @@
-//! Single-sample MIDI instrument: pitch, speed, polyphony, region, loop, per-voice filter, ADSR.
+//! Sampler MIDI instrument: pitch, speed, polyphony, region, loop, per-voice filter, ADSR.
 //!
+//! - Every voice plays a [`Zone`]: PCM, resolved regions and per-sample settings. Single-sample
+//!   mode has one implicit zone, `single`, rebuilt from the device parameters. Multisample mode
+//!   (spec 023) holds up to [`MAX_ZONES`] zones sent by Godot as real-unit snapshots; at note-on
+//!   [`select_zones`] picks the matching ones (ranges, group mute/solo, round robin/random) and
+//!   each starts a voice keyed from the zone's root. A note-off releases every voice its note-on
+//!   started. Device Root/Tune/Fine/Start/End/Reverse/Loop/Crossfade only feed `single`.
 //! - Start, End, Loop Start and Loop End are stored raw (normalized over the whole file) and
 //!   ordered/clamped at use time by [`resolve_regions`], so restoring a state where several of
 //!   them move at once doesn't depend on the order the values arrive in.
@@ -11,10 +17,15 @@
 //! - The filter runs per voice (key tracking is per note) in chunks of [`FILTER_CHUNK`] frames.
 //! - Data stream `"playheads"`: `u32 count` then `count` × (`f32 position` 0–1 over the whole
 //!   file, `f32 velocity` signed file-fractions per second, `f32 level` 0–1), every ~33 ms of
-//!   audio, plus one `count = 0` frame when the last voice ends.
+//!   audio, plus one `count = 0` frame when the last voice ends. In multisample mode only the
+//!   focused zone's voices are listed, normalized over that zone's file.
 
 use super::param_table::{
     flatten, linear, log, slot_table, spec, Kind, ParamSpec, ParamTable, ParamValues,
+};
+use super::sampler_zones::{
+    select_zones, velocity_to_midi, GroupPlayMode, SelectableZone, ZoneGroup, ZoneRanges,
+    ZoneSettings, MAX_GROUPS, MAX_ZONES, UNGROUPED,
 };
 use super::{
     has_audio_signal, AudioDevice, DeviceCategory, DevicePath, DeviceSleepState, DeviceVariant,
@@ -58,6 +69,8 @@ const FILTER_RAMP_MS: f32 = 5.0;
 /// Audio between `"playheads"` records.
 const PLAYHEAD_INTERVAL_SECONDS: f32 = 0.033;
 const PLAYHEAD_RECORD_BYTES: usize = 12;
+/// `Voice::zone` of the implicit single-mode zone.
+const SINGLE_ZONE: u16 = u16::MAX;
 
 pub const PARAM_VOLUME: ParamId = 0;
 pub const PARAM_TUNE: ParamId = 1;
@@ -279,6 +292,16 @@ enum LoopMode {
     PingPong,
 }
 
+impl LoopMode {
+    fn from_index(index: usize) -> Self {
+        match index {
+            0 => LoopMode::Off,
+            1 => LoopMode::On,
+            _ => LoopMode::PingPong,
+        }
+    }
+}
+
 /// Decoded (real-valued) parameters.
 #[derive(Clone, Copy, Debug)]
 struct Params {
@@ -369,13 +392,7 @@ impl Params {
             PARAM_START => self.start = real,
             PARAM_END => self.end = real,
             PARAM_REVERSE => self.reverse = real >= 0.5,
-            PARAM_LOOP_MODE => {
-                self.loop_mode = match real as usize {
-                    0 => LoopMode::Off,
-                    1 => LoopMode::On,
-                    _ => LoopMode::PingPong,
-                }
-            }
+            PARAM_LOOP_MODE => self.loop_mode = LoopMode::from_index(real as usize),
             PARAM_LOOP_START => self.loop_start = real,
             PARAM_LOOP_END => self.loop_end = real,
             PARAM_CROSSFADE => self.crossfade = real * 0.01,
@@ -409,6 +426,18 @@ struct SampleBuffer {
     channels: usize,
     frames: usize,
     sample_rate: f32,
+}
+
+impl SampleBuffer {
+    fn new(samples: Vec<f32>, channels: usize, sample_rate: u32) -> Self {
+        let channels = channels.max(1);
+        Self {
+            frames: samples.len() / channels,
+            samples,
+            channels,
+            sample_rate: (sample_rate as f32).max(1.0),
+        }
+    }
 }
 
 /// Play region, loop and crossfade lengths in sample frames, ordered and clamped.
@@ -483,11 +512,128 @@ pub fn resolve_regions(
     }
 }
 
-/// One voice reading the loaded sample through a filter and an ADSR amplitude envelope.
+/// One playable sample and everything a voice reads from it besides the device-wide settings.
+struct Zone {
+    /// Godot's zone id (unused for the single-mode zone).
+    id: u32,
+    sample: Option<SampleBuffer>,
+    regions: Regions,
+    /// Raw points, 0–1 over the file, resolved into `regions`.
+    start: f32,
+    end: f32,
+    loop_start: f32,
+    loop_end: f32,
+    /// Fraction of the loop.
+    crossfade: f32,
+    loop_mode: LoopMode,
+    reverse: bool,
+    root: u8,
+    /// Semitones, fine tune included.
+    tune: f32,
+    key_track: bool,
+    gain: f32,
+    ranges: ZoneRanges,
+    group_id: u32,
+    /// Index of `group_id` in `SamplerDevice::groups`, or 0 (Ungrouped) while it's missing.
+    group_index: usize,
+    /// Load in flight, so stale AFS completions can be ignored.
+    req_id: String,
+    /// Last state sent on `loading_state` (`zone/{zid}/loading_state` for a multisample zone).
+    loading_state: String,
+}
+
+impl Zone {
+    fn empty(id: u32) -> Self {
+        Self {
+            id,
+            sample: None,
+            regions: Regions::EMPTY,
+            start: 0.0,
+            end: 1.0,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            crossfade: 0.0,
+            loop_mode: LoopMode::Off,
+            reverse: false,
+            root: DEFAULT_ROOT,
+            tune: 0.0,
+            key_track: false,
+            gain: 1.0,
+            ranges: ZoneRanges::default(),
+            group_id: UNGROUPED,
+            group_index: 0,
+            req_id: String::new(),
+            loading_state: "idle".to_string(),
+        }
+    }
+
+    fn frames(&self) -> usize {
+        self.sample.as_ref().map_or(0, |s| s.frames)
+    }
+
+    /// Re-resolve the play region, loop and crossfade from the raw points.
+    fn resolve_regions(&mut self) {
+        self.regions = resolve_regions(
+            self.frames(),
+            self.start,
+            self.end,
+            self.loop_start,
+            self.loop_end,
+            self.crossfade,
+        );
+    }
+
+    /// Take a multisample zone's settings. Zones always key-track from their root (REQ-018).
+    fn apply_settings(&mut self, s: &ZoneSettings) {
+        self.ranges = s.ranges;
+        self.root = s.root;
+        self.tune = s.tune;
+        self.gain = s.gain;
+        self.start = s.start;
+        self.end = s.end;
+        self.reverse = s.reverse;
+        self.loop_mode = LoopMode::from_index(s.loop_mode as usize);
+        self.loop_start = s.loop_start;
+        self.loop_end = s.loop_end;
+        self.crossfade = s.crossfade;
+        self.group_id = s.group_id;
+        self.key_track = true;
+        self.resolve_regions();
+    }
+}
+
+impl SelectableZone for Zone {
+    fn ranges(&self) -> &ZoneRanges {
+        &self.ranges
+    }
+
+    fn group_index(&self) -> usize {
+        self.group_index
+    }
+
+    fn is_playable(&self) -> bool {
+        self.sample.is_some()
+    }
+}
+
+/// The zone a voice plays: `single` for [`SINGLE_ZONE`], else `zones[index]`.
+fn zone_at<'a>(single: &'a Zone, zones: &'a [Zone], index: u16) -> Option<&'a Zone> {
+    if index == SINGLE_ZONE {
+        Some(single)
+    } else {
+        zones.get(index as usize)
+    }
+}
+
+/// One voice reading its zone's sample through a filter and an ADSR amplitude envelope.
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
     note: u8,
+    /// [`SINGLE_ZONE`] or an index into `SamplerDevice::zones`.
+    zone: u16,
+    /// The note-on that started it: a note-off releases all of one note-on's stacked voices.
+    trigger: u64,
     position: f64,
     /// Frames of PCM per output frame, always positive; `direction` gives the sign.
     increment: f64,
@@ -509,6 +655,8 @@ impl Voice {
         Self {
             active: false,
             note: 0,
+            zone: SINGLE_ZONE,
+            trigger: 0,
             position: 0.0,
             increment: 1.0,
             direction: 1.0,
@@ -611,12 +759,10 @@ pub fn tracked_cutoff(cutoff_hz: f32, key_track: f32, note: u8, root: u8) -> f32
 
 /// Everything the voice renderer needs besides the voices themselves.
 struct RenderCtx<'a> {
-    sample: &'a SampleBuffer,
-    regions: Regions,
-    loop_mode: LoopMode,
+    single: &'a Zone,
+    zones: &'a [Zone],
     filter: Option<FilterMode>,
     filter_key_track: f32,
-    root: u8,
     sample_rate: f32,
     fade_step: f32,
 }
@@ -656,8 +802,14 @@ fn render_active_voices(
         }
         let (cut, res) = (cutoff.next(), resonance.next());
         for voice in voices.iter_mut().filter(|v| v.active) {
+            let Some((zone, sample)) = zone_at(ctx.single, ctx.zones, voice.zone)
+                .and_then(|z| z.sample.as_ref().map(|s| (z, s)))
+            else {
+                voice.active = false;
+                continue;
+            };
             let filter = ctx.filter.map(|mode| {
-                let hz = tracked_cutoff(cut, ctx.filter_key_track, voice.note, ctx.root);
+                let hz = tracked_cutoff(cut, ctx.filter_key_track, voice.note, zone.root);
                 let coefs = SvfCoefs::new(
                     cutoff_to_g(hz, ctx.sample_rate),
                     resonance_to_k(res, mode),
@@ -670,7 +822,7 @@ fn render_active_voices(
                     break;
                 }
                 let env = voice.envelope.process_sample();
-                let (mut l, mut r) = read_voice(ctx.sample, voice, &ctx.regions, ctx.loop_mode);
+                let (mut l, mut r) = read_voice(sample, voice, &zone.regions, zone.loop_mode);
                 if let Some((mode, coefs, comp)) = &filter {
                     l = voice.filters[0].process(l, *mode, coefs, *comp, res);
                     r = voice.filters[1].process(r, *mode, coefs, *comp, res);
@@ -681,7 +833,7 @@ fn render_active_voices(
                     outputs[idx] += l * g;
                     outputs[idx + 1] += r * g;
                 }
-                advance(voice, &ctx.regions, ctx.loop_mode);
+                advance(voice, &zone.regions, zone.loop_mode);
                 if voice.ending {
                     voice.fade -= ctx.fade_step;
                     if voice.fade <= 0.0 {
@@ -697,9 +849,24 @@ fn render_active_voices(
     }
 }
 
-/// Built-in Sampler: MIDI-triggered playback of one loaded audio file.
+/// Built-in Sampler: MIDI-triggered playback of one audio file, or of zones in multisample mode.
 pub struct SamplerDevice {
-    sample: Option<SampleBuffer>,
+    /// The single-sample mode zone, rebuilt from the parameters.
+    single: Zone,
+    multisample: bool,
+    /// Multisample zones. Capacity [`MAX_ZONES`] is reserved when the mode turns on, so the
+    /// audio thread never sees it grow.
+    zones: Vec<Zone>,
+    /// Zone groups, Ungrouped first. Reserved to [`MAX_GROUPS`] with the zones.
+    groups: Vec<ZoneGroup>,
+    any_solo: bool,
+    /// Zone indices matching the current note-on, capacity [`MAX_ZONES`].
+    match_scratch: Vec<u16>,
+    /// xorshift state for Random groups.
+    rng: u32,
+    /// Zone id whose voices the `"playheads"` stream reports in multisample mode.
+    focused_zone: u32,
+    trigger_counter: u64,
     voices: [Voice; MAX_VOICES],
     voice_count: usize,
     /// (frame_offset, key, velocity or release, is_note_on)
@@ -708,7 +875,6 @@ pub struct SamplerDevice {
     sample_rate: f32,
     values: ParamValues<PARAM_COUNT>,
     p: Params,
-    regions: Regions,
     cutoff: SmoothedParam,
     resonance: SmoothedParam,
     /// A pitch parameter changed: recompute the increment of sounding voices next block.
@@ -718,9 +884,6 @@ pub struct SamplerDevice {
     channel_id: usize,
     device_path: DevicePath,
     status_tx: Option<Sender<EngineStatus>>,
-    current_req_id: String,
-    /// Last state sent on `loading_state`, re-sent when Godot asks (`state/get`).
-    loading_state: String,
     time_counter: u64,
     playheads_subscribed: bool,
     frames_since_poll: usize,
@@ -768,8 +931,16 @@ impl SamplerDevice {
         let sample_rate = sample_rate.max(1.0);
         let values = ParamValues::new(&TABLE);
         let p = Params::from_values(&values);
-        Self {
-            sample: None,
+        let mut device = Self {
+            single: Zone::empty(0),
+            multisample: false,
+            zones: Vec::new(),
+            groups: Vec::new(),
+            any_solo: false,
+            match_scratch: Vec::new(),
+            rng: 0x9e37_79b9,
+            focused_zone: 0,
+            trigger_counter: 0,
             voices: [Voice::idle(sample_rate); MAX_VOICES],
             voice_count: p.voices,
             queued_midi: Vec::with_capacity(MIDI_EVENT_CAP),
@@ -777,7 +948,6 @@ impl SamplerDevice {
             sample_rate,
             values,
             p,
-            regions: Regions::EMPTY,
             cutoff: SmoothedParam::new(p.cutoff_hz, sample_rate, FILTER_RAMP_MS),
             resonance: SmoothedParam::new(p.resonance, sample_rate, FILTER_RAMP_MS),
             pitch_dirty: false,
@@ -786,13 +956,13 @@ impl SamplerDevice {
             channel_id,
             device_path,
             status_tx,
-            current_req_id: String::new(),
-            loading_state: "idle".to_string(),
             time_counter: 0,
             playheads_subscribed: false,
             frames_since_poll: 0,
             playheads_sent_voices: false,
-        }
+        };
+        device.refresh_single_zone();
+        device
     }
 
     /// Metadata-only instance used when advertising built-ins.
@@ -802,15 +972,15 @@ impl SamplerDevice {
 
     /// Mark this device as loading `req_id` so stale AFS completions can be ignored.
     pub fn begin_sample_load(&mut self, req_id: String) {
-        self.current_req_id = req_id.clone();
         info!(
             "Sampler begin load channel={} path={} req={}",
             self.channel_id, self.device_path, req_id
         );
-        self.emit_loading("loading", &req_id);
+        self.single.req_id = req_id;
+        self.emit_loading("loading");
     }
 
-    /// Replace the playable buffer. Voices are killed because they pointed at the old PCM.
+    /// Replace the single-mode buffer. Voices are killed because they pointed at the old PCM.
     pub fn set_sample(
         &mut self,
         req_id: &str,
@@ -818,54 +988,296 @@ impl SamplerDevice {
         channels: usize,
         sample_rate: u32,
     ) {
-        if !self.current_req_id.is_empty() && self.current_req_id != req_id {
+        if !self.single.req_id.is_empty() && self.single.req_id != req_id {
             warn!(
                 "Ignoring stale sampler load (expected {}, got {})",
-                self.current_req_id, req_id
+                self.single.req_id, req_id
             );
             return;
         }
-        let ch = channels.max(1);
-        let frames = if ch > 0 { samples.len() / ch } else { 0 };
+        let sample = SampleBuffer::new(samples, channels, sample_rate);
         info!(
             "Sampler ready: {} frames, {} ch, {} Hz ({} samples)",
-            frames,
-            ch,
+            sample.frames,
+            sample.channels,
             sample_rate,
-            samples.len()
+            sample.samples.len()
         );
         self.reset_voices();
-        self.sample = Some(SampleBuffer {
-            samples,
-            channels: ch,
-            frames,
-            sample_rate: (sample_rate as f32).max(1.0),
-        });
-        self.refresh_regions();
+        self.single.sample = Some(sample);
+        self.single.resolve_regions();
         self.sleep_state.mark_activity();
-        self.emit_loading("ready", req_id);
+        self.emit_loading("ready");
     }
 
     /// Record a failed load without dropping a previously ready sample.
     pub fn fail_sample_load(&mut self, req_id: &str, message: &str) {
-        if !self.current_req_id.is_empty() && self.current_req_id != req_id {
+        if !self.single.req_id.is_empty() && self.single.req_id != req_id {
             return;
         }
         warn!("Sampler load failed: {}", message);
-        self.emit_loading(&format!("failed:{}", message), req_id);
+        self.emit_loading(&format!("failed:{}", message));
     }
 
-    fn emit_loading(&mut self, state: &str, req_id: &str) {
-        self.loading_state = state.to_string();
+    fn emit_loading(&mut self, state: &str) {
+        self.single.loading_state = state.to_string();
         if let Some(tx) = &self.status_tx {
             let _ = tx.send(EngineStatus::DeviceLoadingStateChanged {
                 channel_id: self.channel_id,
                 device_path: self.device_path.clone(),
                 state: state.to_string(),
             });
-            let _ = req_id;
         }
     }
+
+    // === Multisample mode ===
+
+    /// Switch modes. Voices are killed either way. On reserves the zone, group and match
+    /// capacity; off drops the zones and groups (and their PCM).
+    pub fn set_multisample(&mut self, on: bool) {
+        if on == self.multisample {
+            return;
+        }
+        info!(
+            "Sampler channel={} path={} multisample={}",
+            self.channel_id, self.device_path, on
+        );
+        self.reset_voices();
+        self.multisample = on;
+        self.any_solo = false;
+        if on {
+            self.zones = Vec::with_capacity(MAX_ZONES);
+            self.groups = Vec::with_capacity(MAX_GROUPS);
+            self.groups.push(ZoneGroup::new(UNGROUPED));
+            self.match_scratch = Vec::with_capacity(MAX_ZONES);
+        } else {
+            self.zones = Vec::new();
+            self.groups = Vec::new();
+            self.match_scratch = Vec::new();
+        }
+    }
+
+    fn zone_index(&self, id: u32) -> Option<usize> {
+        self.zones.iter().position(|z| z.id == id)
+    }
+
+    fn group_index_of(&self, id: u32) -> usize {
+        self.groups.iter().position(|g| g.id == id).unwrap_or(0)
+    }
+
+    /// Point every zone at its group's index again after groups were added or removed.
+    fn relink_groups(&mut self) {
+        for i in 0..self.zones.len() {
+            self.zones[i].group_index = self.group_index_of(self.zones[i].group_id);
+        }
+    }
+
+    /// Kill the voices playing zone `index` (before its PCM is replaced or it is removed).
+    fn kill_zone_voices(&mut self, index: u16) {
+        let sample_rate = self.sample_rate;
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.active && v.zone == index)
+        {
+            *voice = Voice::idle(sample_rate);
+        }
+    }
+
+    /// Create or replace zone `id`'s settings. Its PCM, if any, is kept.
+    pub fn set_zone(&mut self, id: u32, settings: &ZoneSettings) {
+        if !self.multisample {
+            warn!("Sampler zone {} set ignored: not in multisample mode", id);
+            return;
+        }
+        let settings = settings.sanitized();
+        let group_index = self.group_index_of(settings.group_id);
+        let zone = match self.zone_index(id) {
+            Some(index) => &mut self.zones[index],
+            None if self.zones.len() >= MAX_ZONES => {
+                warn!("Sampler zone {} dropped: already {} zones", id, MAX_ZONES);
+                return;
+            }
+            None => {
+                self.zones.push(Zone::empty(id));
+                self.zones.last_mut().expect("just pushed")
+            }
+        };
+        zone.apply_settings(&settings);
+        zone.group_index = group_index;
+        self.pitch_dirty = true;
+    }
+
+    /// Remove zone `id` and its voices. The last zone moves into its index.
+    pub fn remove_zone(&mut self, id: u32) {
+        let Some(index) = self.zone_index(id) else {
+            warn!("Sampler zone {} remove ignored: no such zone", id);
+            return;
+        };
+        let (removed, last) = (index as u16, (self.zones.len() - 1) as u16);
+        self.kill_zone_voices(removed);
+        for voice in self.voices.iter_mut().filter(|v| v.zone == last) {
+            voice.zone = removed;
+        }
+        for group in &mut self.groups {
+            group.remap_zone(removed, last);
+        }
+        self.zones.swap_remove(index);
+    }
+
+    /// Create or replace group `id`.
+    pub fn set_zone_group(
+        &mut self,
+        id: u32,
+        gain: f32,
+        mute: bool,
+        solo: bool,
+        play_mode: GroupPlayMode,
+    ) {
+        if !self.multisample {
+            warn!("Sampler group {} set ignored: not in multisample mode", id);
+            return;
+        }
+        match self.groups.iter().position(|g| g.id == id) {
+            Some(index) => self.groups[index].set(gain, mute, solo, play_mode),
+            None if self.groups.len() >= MAX_GROUPS => {
+                warn!(
+                    "Sampler group {} dropped: already {} groups",
+                    id, MAX_GROUPS
+                );
+                return;
+            }
+            None => {
+                let mut group = ZoneGroup::new(id);
+                group.set(gain, mute, solo, play_mode);
+                self.groups.push(group);
+                self.relink_groups();
+            }
+        }
+        self.any_solo = self.groups.iter().any(|g| g.solo);
+    }
+
+    /// Remove group `id`. Its zones fall back to Ungrouped, which can't be removed.
+    pub fn remove_zone_group(&mut self, id: u32) {
+        if id == UNGROUPED {
+            warn!("Sampler: Ungrouped can't be removed");
+            return;
+        }
+        let Some(index) = self.groups.iter().position(|g| g.id == id) else {
+            return;
+        };
+        self.groups.remove(index);
+        for zone in self.zones.iter_mut().filter(|z| z.group_id == id) {
+            zone.group_id = UNGROUPED;
+        }
+        self.relink_groups();
+        self.any_solo = self.groups.iter().any(|g| g.solo);
+    }
+
+    /// Report only zone `id`'s voices on the `"playheads"` stream.
+    pub fn set_focus(&mut self, id: u32) {
+        self.focused_zone = id;
+    }
+
+    /// Mark zone `id` as loading `req_id`.
+    pub fn begin_zone_load(&mut self, id: u32, req_id: String) {
+        let Some(index) = self.zone_index(id) else {
+            warn!("Sampler zone {} load ignored: no such zone", id);
+            return;
+        };
+        info!(
+            "Sampler begin zone load channel={} path={} zone={} req={}",
+            self.channel_id, self.device_path, id, req_id
+        );
+        self.zones[index].req_id = req_id;
+        self.emit_zone_loading(index, "loading".to_string());
+    }
+
+    /// Replace zone `id`'s PCM. Stale requests and unknown zones are ignored, and the old PCM
+    /// is freed here, on the command thread.
+    pub fn set_zone_sample(
+        &mut self,
+        id: u32,
+        req_id: &str,
+        samples: Vec<f32>,
+        channels: usize,
+        sample_rate: u32,
+    ) {
+        let Some(index) = self.zone_index(id) else {
+            warn!("Ignoring sampler zone load for unknown zone {}", id);
+            return;
+        };
+        let zone = &self.zones[index];
+        if !zone.req_id.is_empty() && zone.req_id != req_id {
+            warn!(
+                "Ignoring stale sampler zone {} load (expected {}, got {})",
+                id, zone.req_id, req_id
+            );
+            return;
+        }
+        self.kill_zone_voices(index as u16);
+        let zone = &mut self.zones[index];
+        zone.sample = Some(SampleBuffer::new(samples, channels, sample_rate));
+        zone.resolve_regions();
+        let bytes: usize = self
+            .zones
+            .iter()
+            .filter_map(|z| z.sample.as_ref())
+            .map(|s| s.samples.len() * std::mem::size_of::<f32>())
+            .sum();
+        info!(
+            "Sampler zone {} ready: {} frames; {} zones hold {:.1} MB of PCM",
+            id,
+            self.zones[index].frames(),
+            self.zones.len(),
+            bytes as f64 / 1_000_000.0
+        );
+        self.sleep_state.mark_activity();
+        self.emit_zone_loading(index, "ready".to_string());
+    }
+
+    /// Record a failed zone load. The zone stays (silent if it never loaded, REQ-028).
+    pub fn fail_zone_load(&mut self, id: u32, req_id: &str, message: &str) {
+        let Some(index) = self.zone_index(id) else {
+            return;
+        };
+        let zone = &self.zones[index];
+        if !zone.req_id.is_empty() && zone.req_id != req_id {
+            return;
+        }
+        warn!("Sampler zone {} load failed: {}", id, message);
+        self.emit_zone_loading(index, format!("failed:{}", message));
+    }
+
+    fn emit_zone_loading(&mut self, index: usize, state: String) {
+        let zone = &mut self.zones[index];
+        zone.loading_state = state.clone();
+        if let Some(tx) = &self.status_tx {
+            let _ = tx.send(EngineStatus::SamplerZoneLoadingState {
+                channel_id: self.channel_id,
+                device_path: self.device_path.clone(),
+                zone_id: zone.id,
+                state,
+            });
+        }
+    }
+
+    /// Send every zone's loading state again (Godot's `state/get`).
+    pub fn resend_zone_states(&self) {
+        let Some(tx) = &self.status_tx else {
+            return;
+        };
+        for zone in &self.zones {
+            let _ = tx.send(EngineStatus::SamplerZoneLoadingState {
+                channel_id: self.channel_id,
+                device_path: self.device_path.clone(),
+                zone_id: zone.id,
+                state: zone.loading_state.clone(),
+            });
+        }
+    }
+
+    // === Voices ===
 
     fn reset_voices(&mut self) {
         self.voices = [Voice::idle(self.sample_rate); MAX_VOICES];
@@ -884,38 +1296,44 @@ impl SamplerDevice {
         }
     }
 
-    /// Re-resolve the play region, loop and crossfade from the raw points.
-    fn refresh_regions(&mut self) {
-        let frames = self.sample.as_ref().map_or(0, |s| s.frames);
-        let p = &self.p;
-        self.regions = resolve_regions(
-            frames,
-            p.start,
-            p.end,
-            p.loop_start,
-            p.loop_end,
-            p.crossfade,
-        );
+    /// Copy the per-sample parameters into the single-mode zone and re-resolve its regions.
+    fn refresh_single_zone(&mut self) {
+        let (p, zone) = (&self.p, &mut self.single);
+        zone.start = p.start;
+        zone.end = p.end;
+        zone.loop_start = p.loop_start;
+        zone.loop_end = p.loop_end;
+        zone.crossfade = p.crossfade;
+        zone.loop_mode = p.loop_mode;
+        zone.reverse = p.reverse;
+        zone.root = p.root;
+        zone.tune = p.tune + p.fine / 100.0;
+        zone.key_track = p.key_track;
+        zone.resolve_regions();
     }
 
-    /// Sample frames per output frame for `note` at the current pitch settings.
-    fn increment_for(&self, note: u8, sample_rate: f32) -> f64 {
-        let p = &self.p;
-        playback_increment(p.speed, p.tune + p.fine / 100.0, p.key_track, note, p.root)
-            * sample_rate_ratio(sample_rate, self.sample_rate)
-    }
-
-    /// Recompute the pitch of sounding voices after Tune, Fine, Speed, Root or Key Track moved.
-    fn refresh_pitch(&mut self) {
-        let Some(sample_rate) = self.sample.as_ref().map(|s| s.sample_rate) else {
-            return;
+    /// Sample frames per output frame for `note` played from `zone`, 0 without PCM.
+    fn increment_for(&self, note: u8, zone: &Zone) -> f64 {
+        let Some(sample) = zone.sample.as_ref() else {
+            return 0.0;
         };
+        playback_increment(self.p.speed, zone.tune, zone.key_track, note, zone.root)
+            * sample_rate_ratio(sample.sample_rate, self.sample_rate)
+    }
+
+    /// Recompute the pitch of sounding voices after Speed or a zone's pitch settings moved.
+    fn refresh_pitch(&mut self) {
         for i in 0..self.voice_count {
-            if self.voices[i].active {
-                let inc = self.increment_for(self.voices[i].note, sample_rate);
-                if inc > 0.0 {
-                    self.voices[i].increment = inc;
-                }
+            let voice = self.voices[i];
+            if !voice.active {
+                continue;
+            }
+            let Some(zone) = zone_at(&self.single, &self.zones, voice.zone) else {
+                continue;
+            };
+            let inc = self.increment_for(voice.note, zone);
+            if inc > 0.0 {
+                self.voices[i].increment = inc;
             }
         }
     }
@@ -925,11 +1343,11 @@ impl SamplerDevice {
         self.p.apply(id, real);
         match id {
             PARAM_TUNE | PARAM_FINE | PARAM_SPEED | PARAM_ROOT | PARAM_KEY_TRACK => {
+                self.refresh_single_zone();
                 self.pitch_dirty = true
             }
-            PARAM_START | PARAM_END | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_CROSSFADE => {
-                self.refresh_regions()
-            }
+            PARAM_START | PARAM_END | PARAM_LOOP_START | PARAM_LOOP_END | PARAM_CROSSFADE
+            | PARAM_REVERSE | PARAM_LOOP_MODE => self.refresh_single_zone(),
             PARAM_ATTACK | PARAM_DECAY | PARAM_SUSTAIN | PARAM_RELEASE => {
                 self.apply_envelope_params()
             }
@@ -951,16 +1369,6 @@ impl SamplerDevice {
         self.voice_count = count;
     }
 
-    /// Oldest held voice playing `note`, so gated note-off pairs with note-on.
-    fn find_held_voice_for_note(&self, note: u8) -> Option<usize> {
-        self.voices[..self.voice_count]
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.is_held() && v.note == note)
-            .min_by_key(|(_, v)| v.age)
-            .map(|(i, _)| i)
-    }
-
     /// Free slot in the polyphony pool, or steal a releasing then oldest voice.
     fn allocate_voice(&self) -> Option<usize> {
         let pool = &self.voices[..self.voice_count];
@@ -976,21 +1384,60 @@ impl SamplerDevice {
     }
 
     fn note_on(&mut self, note: u8, velocity: f32) {
+        let vel_gain = (1.0 - self.p.velocity_amount) + self.p.velocity_amount * velocity;
+        self.trigger_counter = self.trigger_counter.wrapping_add(1);
+        if !self.multisample {
+            self.start_voice(
+                SINGLE_ZONE,
+                note,
+                self.p.volume * vel_gain,
+                self.trigger_counter,
+            );
+            return;
+        }
+        let vel = velocity_to_midi(velocity);
+        select_zones(
+            &self.zones,
+            &mut self.groups,
+            self.any_solo,
+            note,
+            vel,
+            &mut self.rng,
+            &mut self.match_scratch,
+        );
+        for k in 0..self.match_scratch.len() {
+            let index = self.match_scratch[k];
+            let zone = &self.zones[index as usize];
+            let fade = zone.ranges.gain(note, vel);
+            if fade <= 0.0 {
+                continue;
+            }
+            let group_gain = self.groups.get(zone.group_index).map_or(1.0, |g| g.gain);
+            let gain = self.p.volume * vel_gain * zone.gain * group_gain * fade;
+            self.start_voice(index, note, gain, self.trigger_counter);
+        }
+    }
+
+    /// Start a voice playing `zone_index` ([`SINGLE_ZONE`] or a zone index), unless the zone has
+    /// no PCM.
+    fn start_voice(&mut self, zone_index: u16, note: u8, gain: f32, trigger: u64) {
         let Some(idx) = self.allocate_voice() else {
             return;
         };
-        let Some(sample) = self.sample.as_ref() else {
+        let Some(zone) = zone_at(&self.single, &self.zones, zone_index) else {
             return;
         };
-        let increment = self.increment_for(note, sample.sample_rate);
-        let r = self.regions;
-        let direction = if self.p.reverse { -1.0 } else { 1.0 };
-        let position = if self.p.reverse {
+        if zone.sample.is_none() {
+            return;
+        }
+        let increment = self.increment_for(note, zone);
+        let r = zone.regions;
+        let direction = if zone.reverse { -1.0 } else { 1.0 };
+        let position = if zone.reverse {
             (r.play.1 - 1.0).max(r.play.0)
         } else {
             r.play.0
         };
-        let vel_gain = (1.0 - self.p.velocity_amount) + self.p.velocity_amount * velocity;
         if increment <= 0.0 {
             return;
         }
@@ -1001,13 +1448,15 @@ impl SamplerDevice {
         self.voices[idx] = Voice {
             active: true,
             note,
+            zone: zone_index,
+            trigger,
             position,
             increment,
             direction,
             in_loop: inside_loop(position, direction, r.loop_),
             ending: false,
             fade: 1.0,
-            gain: self.p.volume * vel_gain,
+            gain,
             envelope,
             filters: [Svf::new(); 2],
             age: self.time_counter,
@@ -1025,26 +1474,37 @@ impl SamplerDevice {
         }
     }
 
+    /// Release the held voices of `note`'s oldest note-on that note-off applies to: Gated, or
+    /// a zone with a loop.
     fn note_off(&mut self, note: u8) {
-        if self.p.play_mode != PlayMode::Gated && self.p.loop_mode == LoopMode::Off {
+        let gated = self.p.play_mode == PlayMode::Gated;
+        let (single, zones) = (&self.single, &self.zones);
+        let releases = |v: &Voice| {
+            v.is_held()
+                && v.note == note
+                && (gated
+                    || zone_at(single, zones, v.zone).is_some_and(|z| z.loop_mode != LoopMode::Off))
+        };
+        let pool = &self.voices[..self.voice_count];
+        let Some(trigger) = pool.iter().filter(|v| releases(v)).map(|v| v.trigger).min() else {
             return;
-        }
-        if let Some(idx) = self.find_held_voice_for_note(note) {
-            self.voices[idx].envelope.gate_off();
+        };
+        for i in 0..self.voice_count {
+            if self.voices[i].trigger == trigger && releases(&self.voices[i]) {
+                self.voices[i].envelope.gate_off();
+            }
         }
     }
 
     fn render_voices(&mut self, outputs: &mut [f32], start: usize, len: usize) {
-        let Some(sample) = self.sample.as_ref() else {
+        if !self.multisample && self.single.sample.is_none() {
             return;
-        };
+        }
         let ctx = RenderCtx {
-            sample,
-            regions: self.regions,
-            loop_mode: self.p.loop_mode,
+            single: &self.single,
+            zones: &self.zones,
             filter: self.p.filter,
             filter_key_track: self.p.filter_key_track,
-            root: self.p.root,
             sample_rate: self.sample_rate,
             fade_step: 1.0 / (DECLICK_SECONDS * self.sample_rate).max(1.0),
         };
@@ -1071,11 +1531,24 @@ impl SamplerDevice {
         }
     }
 
-    /// One `"playheads"` record per sounding voice (see the module docs).
+    /// One `"playheads"` record per sounding voice of the shown zone (see the module docs).
     fn playheads_payload(&self) -> Vec<u8> {
-        let frames = self.sample.as_ref().map_or(0, |s| s.frames).max(1) as f64;
+        let (shown, frames) = if self.multisample {
+            match self.zone_index(self.focused_zone) {
+                Some(index) => (index as u16, self.zones[index].frames()),
+                // No voice plays SINGLE_ZONE in multisample mode.
+                None => (SINGLE_ZONE, 0),
+            }
+        } else {
+            (SINGLE_ZONE, self.single.frames())
+        };
+        let frames = frames.max(1) as f64;
         let rate_ratio = self.sample_rate as f64;
-        let voices = || self.voices[..self.voice_count].iter().filter(|v| v.active);
+        let voices = || {
+            self.voices[..self.voice_count]
+                .iter()
+                .filter(move |v| v.active && v.zone == shown)
+        };
         let count = voices().count();
         let mut bytes = Vec::with_capacity(4 + count * PLAYHEAD_RECORD_BYTES);
         bytes.extend_from_slice(&(count as u32).to_le_bytes());
@@ -1204,7 +1677,7 @@ impl AudioDevice for SamplerDevice {
     }
 
     fn loading_state(&self) -> Option<String> {
-        Some(self.loading_state.clone())
+        Some(self.single.loading_state.clone())
     }
 
     fn file_loading_support(&self) -> Option<FileLoadingSupport> {
@@ -1599,8 +2072,8 @@ mod tests {
         d.set_parameter(PARAM_START, 0.7);
         d.set_parameter(PARAM_END, 0.9);
         assert_eq!(d.get_parameter(PARAM_START), Some(0.7));
-        assert!((d.regions.play.0 - 700.0).abs() < 1e-3);
-        assert!((d.regions.play.1 - 900.0).abs() < 1e-3);
+        assert!((d.single.regions.play.0 - 700.0).abs() < 1e-3);
+        assert!((d.single.regions.play.1 - 900.0).abs() < 1e-3);
     }
 
     #[test]
@@ -1975,5 +2448,505 @@ mod tests {
         let ended = decode(&poll_after(&mut d, 2_048).expect("empty record"));
         assert!(ended.is_empty());
         assert!(poll_after(&mut d, 2_048).is_none(), "only once");
+    }
+
+    // === Multisample (spec 023) ===
+
+    fn multi() -> SamplerDevice {
+        let mut d = device();
+        d.set_multisample(true);
+        d
+    }
+
+    fn zone_settings(key: (i32, i32), vel: (i32, i32), root: u8) -> ZoneSettings {
+        ZoneSettings {
+            ranges: ZoneRanges::new(key, vel, (0, 0), (0, 0)),
+            root,
+            ..ZoneSettings::default()
+        }
+    }
+
+    /// Zone `id` with `frames` of constant `value`, loaded at the device rate.
+    fn add_zone(d: &mut SamplerDevice, id: u32, settings: ZoneSettings, frames: usize) {
+        d.set_zone(id, &settings);
+        d.set_zone_sample(id, "", vec![0.5; frames], 1, 48_000);
+    }
+
+    /// Zone ids of the sounding voices, in voice order.
+    fn sounding(d: &SamplerDevice) -> Vec<u32> {
+        d.voices
+            .iter()
+            .filter(|v| v.active)
+            .map(|v| d.zones[v.zone as usize].id)
+            .collect()
+    }
+
+    #[test]
+    fn multisample_plays_matching_zone_only() {
+        // REQ-016: A = C3–B3 @ 1–64, B = C3–B3 @ 65–127.
+        let mut d = multi();
+        add_zone(&mut d, 1, zone_settings((60, 71), (1, 64), 60), 48_000);
+        add_zone(&mut d, 2, zone_settings((60, 71), (65, 127), 60), 48_000);
+        d.note_on(64, 40.0 / 127.0);
+        assert_eq!(sounding(&d), vec![1]);
+        d.reset();
+        d.note_on(64, 100.0 / 127.0);
+        assert_eq!(sounding(&d), vec![2]);
+        d.reset();
+        d.note_on(40, 1.0);
+        assert!(sounding(&d).is_empty(), "outside every zone");
+        d.note_on(60, 1.0);
+        assert!(rms(&render(&mut d, 512)) > 0.1);
+    }
+
+    #[test]
+    fn zone_root_key_tracks_regardless_of_param() {
+        // REQ-018: Key Track off, a zone with root C3 plays E3 four semitones up.
+        let mut d = multi();
+        assert!(!d.p.key_track);
+        add_zone(&mut d, 1, zone_settings((60, 64), (1, 127), 60), 1_000);
+        d.note_on(64, 1.0);
+        let inc = d.voices.iter().find(|v| v.active).unwrap().increment;
+        assert!((inc - 2.0_f64.powf(4.0 / 12.0)).abs() < 1e-9, "{inc}");
+    }
+
+    #[test]
+    fn device_tune_ignored_in_multisample() {
+        // REQ-017: device Root/Tune/Fine don't reach a zone; its own tune and the device-wide
+        // Speed do, also on sounding voices.
+        let mut d = multi();
+        d.set_parameter(PARAM_TUNE, 1.0);
+        d.set_parameter(PARAM_FINE, 1.0);
+        d.set_parameter(PARAM_ROOT, 0.0);
+        let mut s = zone_settings((0, 127), (1, 127), 60);
+        s.tune = 0.5;
+        add_zone(&mut d, 1, s, 48_000);
+        d.note_on(60, 1.0);
+        let inc = |d: &SamplerDevice| d.voices.iter().find(|v| v.active).unwrap().increment;
+        assert!((inc(&d) - 2.0_f64.powf(0.5 / 12.0)).abs() < 1e-6);
+        d.set_parameter(PARAM_TUNE, 0.0);
+        d.set_parameter(PARAM_SPEED, norm_of(PARAM_SPEED, 200.0));
+        render(&mut d, 16);
+        assert!((inc(&d) - 2.0 * 2.0_f64.powf(0.5 / 12.0)).abs() < 1e-4);
+        s.tune = 12.0;
+        d.set_zone(1, &s);
+        render(&mut d, 16);
+        assert!(
+            (inc(&d) - 4.0).abs() < 1e-4,
+            "zone edits move sounding voices"
+        );
+    }
+
+    #[test]
+    fn note_off_releases_all_stacked_voices() {
+        let mut d = multi();
+        d.set_parameter(PARAM_PLAY_MODE, 1.0);
+        add_zone(&mut d, 1, zone_settings((0, 127), (1, 127), 60), 48_000);
+        add_zone(&mut d, 2, zone_settings((0, 127), (1, 127), 60), 48_000);
+        d.note_on(60, 1.0);
+        d.note_on(60, 1.0);
+        assert_eq!(sounding(&d).len(), 4);
+        d.note_off(60);
+        let released = |d: &SamplerDevice| {
+            d.voices
+                .iter()
+                .filter(|v| v.active && v.envelope.state() == AdsrState::Release)
+                .map(|v| v.trigger)
+                .collect::<Vec<_>>()
+        };
+        let first = released(&d);
+        assert_eq!(first.len(), 2, "both voices of the first note-on");
+        assert_eq!(first[0], first[1]);
+        d.note_off(60);
+        assert_eq!(released(&d).len(), 4);
+    }
+
+    #[test]
+    fn note_off_releases_a_looping_zone_in_one_shot() {
+        let mut d = multi();
+        let mut looping = zone_settings((0, 127), (1, 127), 60);
+        looping.loop_mode = 1;
+        add_zone(&mut d, 1, looping, 48_000);
+        add_zone(&mut d, 2, zone_settings((0, 127), (1, 127), 60), 48_000);
+        d.note_on(60, 1.0);
+        d.note_off(60);
+        let states: Vec<(u32, AdsrState)> = d
+            .voices
+            .iter()
+            .filter(|v| v.active)
+            .map(|v| (d.zones[v.zone as usize].id, v.envelope.state()))
+            .collect();
+        assert!(states.contains(&(1, AdsrState::Release)), "{states:?}");
+        assert!(states
+            .iter()
+            .any(|&(id, st)| id == 2 && st != AdsrState::Release));
+    }
+
+    #[test]
+    fn voices_cap_counts_zone_voices() {
+        // REQ-019: Voices = 2, two stacked zones: the second note steals both older voices.
+        let mut d = multi();
+        d.set_parameter(PARAM_VOICES, voices_to_normalized(2));
+        add_zone(&mut d, 1, zone_settings((0, 127), (1, 127), 60), 48_000);
+        add_zone(&mut d, 2, zone_settings((0, 127), (1, 127), 60), 48_000);
+        d.note_on(60, 1.0);
+        assert_eq!(sounding(&d).len(), 2);
+        d.note_on(62, 1.0);
+        let notes: Vec<u8> = d
+            .voices
+            .iter()
+            .filter(|v| v.active)
+            .map(|v| v.note)
+            .collect();
+        assert_eq!(notes, vec![62, 62]);
+    }
+
+    #[test]
+    fn remove_zone_remaps_voices() {
+        let mut d = multi();
+        for (id, key) in [(10, 60), (11, 62), (12, 64)] {
+            add_zone(
+                &mut d,
+                id,
+                zone_settings((key, key), (1, 127), key as u8),
+                48_000,
+            );
+        }
+        for key in [60, 62, 64] {
+            d.note_on(key, 1.0);
+        }
+        d.remove_zone(10);
+        assert_eq!(d.zones.len(), 2);
+        let mut playing: Vec<(u32, u8)> = d
+            .voices
+            .iter()
+            .filter(|v| v.active)
+            .map(|v| (d.zones[v.zone as usize].id, v.note))
+            .collect();
+        playing.sort();
+        assert_eq!(
+            playing,
+            vec![(11, 62), (12, 64)],
+            "voices follow the moved zone"
+        );
+        assert!(rms(&render(&mut d, 256)) > 0.0);
+        d.remove_zone(12);
+        d.remove_zone(99);
+        assert_eq!(sounding(&d), vec![11]);
+    }
+
+    #[test]
+    fn mode_switch_kills_voices() {
+        let mut d = ramp_device(48_000);
+        d.note_on(60, 1.0);
+        d.set_multisample(true);
+        assert!(!d.any_voice_active());
+        add_zone(&mut d, 1, zone_settings((0, 127), (1, 127), 60), 48_000);
+        d.note_on(60, 1.0);
+        d.set_multisample(true);
+        assert!(d.any_voice_active(), "same mode again is a no-op");
+        d.set_multisample(false);
+        assert!(!d.any_voice_active());
+        assert!(d.zones.is_empty() && d.groups.is_empty());
+        d.set_zone(1, &zone_settings((0, 127), (1, 127), 60));
+        assert!(d.zones.is_empty(), "zones need multisample mode");
+        d.note_on(60, 1.0);
+        assert_eq!(d.voices.iter().filter(|v| v.active).count(), 1);
+        assert_eq!(
+            d.voices.iter().find(|v| v.active).unwrap().zone,
+            SINGLE_ZONE
+        );
+    }
+
+    #[test]
+    fn groups_gain_mute_and_removal() {
+        let mut d = multi();
+        let mut soft = zone_settings((0, 127), (1, 127), 60);
+        soft.group_id = 3;
+        add_zone(&mut d, 1, soft, 48_000);
+        add_zone(&mut d, 2, zone_settings((0, 127), (1, 127), 60), 48_000);
+        assert_eq!(
+            d.zones[0].group_index, 0,
+            "missing group falls back to Ungrouped"
+        );
+        d.set_zone_group(3, 0.5, false, false, GroupPlayMode::All);
+        assert_eq!(d.zones[0].group_index, 1, "relinked when the group arrives");
+        d.note_on(60, 1.0);
+        let gains: Vec<(u32, f32)> = d
+            .voices
+            .iter()
+            .filter(|v| v.active)
+            .map(|v| (d.zones[v.zone as usize].id, v.gain))
+            .collect();
+        assert_eq!(gains, vec![(1, 0.5), (2, 1.0)]);
+        d.reset();
+        d.set_zone_group(3, 0.5, false, true, GroupPlayMode::All);
+        d.note_on(60, 1.0);
+        assert_eq!(sounding(&d), vec![1], "solo");
+        d.reset();
+        d.remove_zone_group(3);
+        assert!(!d.any_solo);
+        assert_eq!(
+            (d.zones[0].group_id, d.zones[0].group_index),
+            (UNGROUPED, 0)
+        );
+        d.note_on(60, 1.0);
+        assert_eq!(sounding(&d), vec![1, 2]);
+        d.remove_zone_group(UNGROUPED);
+        assert_eq!(d.groups.len(), 1);
+    }
+
+    #[test]
+    fn velocity_fade_scales_the_voice() {
+        // REQ-030 example: velocity 1–80 with a fade-out of 20, hit at 70.
+        let mut d = multi();
+        let mut s = zone_settings((0, 127), (1, 80), 60);
+        s.ranges = ZoneRanges::new((0, 127), (1, 80), (0, 0), (0, 20));
+        add_zone(&mut d, 1, s, 48_000);
+        d.note_on(60, 70.0 / 127.0);
+        let v = d.voices.iter().find(|v| v.active).unwrap();
+        assert!((v.gain - (FRAC_PI_2 * 0.5).cos() * (70.0 / 127.0)).abs() < 1e-5);
+        d.reset();
+        d.note_on(60, 80.0 / 127.0);
+        assert!(!d.any_voice_active(), "silent at the faded edge: no voice");
+    }
+
+    /// 512 zones (four per key) and 64 note-ons stay far inside one block's budget.
+    #[test]
+    fn many_zones_note_on_is_bounded() {
+        let mut d = multi();
+        d.set_parameter(PARAM_VOICES, 1.0);
+        for id in 0..MAX_ZONES as u32 {
+            let key = (id / 4) as i32;
+            add_zone(
+                &mut d,
+                id,
+                zone_settings((key, key), (1, 127), key as u8),
+                64,
+            );
+        }
+        assert_eq!(d.zones.len(), MAX_ZONES);
+        let cap = d.match_scratch.capacity();
+        let t = std::time::Instant::now();
+        for n in 0..64u8 {
+            d.note_on(n * 2, 1.0);
+        }
+        let elapsed = t.elapsed();
+        assert_eq!(d.match_scratch.capacity(), cap);
+        assert_eq!(d.voices.iter().filter(|v| v.active).count(), MAX_VOICES);
+        // Generous for debug builds; release is orders of magnitude faster.
+        assert!(elapsed.as_millis() < 50, "{elapsed:?}");
+    }
+
+    #[test]
+    fn stale_zone_load_ignored() {
+        let mut d = multi();
+        d.set_zone(1, &zone_settings((0, 127), (1, 127), 60));
+        d.begin_zone_load(1, "new".to_string());
+        d.set_zone_sample(1, "old", vec![0.5; 100], 1, 48_000);
+        assert!(d.zones[0].sample.is_none(), "stale request ignored");
+        d.set_zone_sample(7, "new", vec![0.5; 100], 1, 48_000);
+        assert_eq!(d.zones.len(), 1, "unknown zone ignored");
+        d.set_zone_sample(1, "new", vec![0.5; 100], 1, 48_000);
+        assert_eq!(d.zones[0].frames(), 100);
+        assert_eq!(d.zones[0].loading_state, "ready");
+    }
+
+    #[test]
+    fn playheads_only_focused_zone() {
+        // REQ-024: a chord across two zones shows only the focused zone's voices.
+        let mut d = multi();
+        add_zone(&mut d, 1, zone_settings((0, 63), (1, 127), 60), 24_000);
+        add_zone(&mut d, 2, zone_settings((64, 127), (1, 127), 72), 48_000);
+        d.subscribe_data("playheads").unwrap();
+        d.note_on(60, 1.0);
+        d.note_on(62, 1.0);
+        d.note_on(72, 1.0);
+        d.set_focus(1);
+        let heads = decode(&poll_after(&mut d, 2_048).expect("record"));
+        assert_eq!(heads.len(), 2);
+        // ~2_048 frames into a 24_000-frame zone, not normalized over zone 2's 48_000.
+        assert!((heads[0][0] - 2_048.0 / 24_000.0).abs() < 0.01, "{heads:?}");
+        d.set_focus(2);
+        assert_eq!(decode(&poll_after(&mut d, 2_048).unwrap()).len(), 1);
+        d.set_focus(9);
+        assert!(decode(&poll_after(&mut d, 2_048).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn failed_zone_is_silent_others_play() {
+        let (tx, rx) = crossbeam::channel::unbounded();
+        let mut d = SamplerDevice::new(48_000.0, 2, DevicePath::root(0), Some(tx));
+        d.set_multisample(true);
+        d.set_zone(1, &zone_settings((0, 63), (1, 127), 60));
+        d.set_zone(2, &zone_settings((64, 127), (1, 127), 72));
+        d.begin_zone_load(1, "a".to_string());
+        d.begin_zone_load(2, "b".to_string());
+        d.fail_zone_load(1, "a", "file not found");
+        d.set_zone_sample(2, "b", vec![0.5; 48_000], 1, 48_000);
+        let states: Vec<(u32, String)> = rx
+            .try_iter()
+            .filter_map(|s| match s {
+                EngineStatus::SamplerZoneLoadingState { zone_id, state, .. } => {
+                    Some((zone_id, state))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(states.contains(&(1, "failed:file not found".to_string())));
+        assert!(states.contains(&(2, "ready".to_string())));
+        d.note_on(60, 1.0);
+        assert!(!d.any_voice_active(), "the failed zone is silent");
+        d.note_on(72, 1.0);
+        assert_eq!(sounding(&d), vec![2]);
+        d.resend_zone_states();
+        assert_eq!(rx.try_iter().count(), 2, "state/get resends every zone");
+    }
+
+    // === Single-mode fixture (spec 023 T-005) ===
+
+    /// Per-block (bit hash, RMS) of a fixed single-mode render: two scenarios covering a
+    /// reversed crossfaded loop through LP24 with key tracking and a mid-note pitch change, and
+    /// a forward Ping-Pong loop in a trimmed region with a gated release. Recorded on the code
+    /// before the zone refactor, so the zone path must reproduce it bit for bit.
+    fn single_mode_fixture() -> Vec<(u64, f32)> {
+        let on = |key, velocity| NoteEvent::On {
+            note_id: 0,
+            key,
+            velocity,
+        };
+        let off = |key| NoteEvent::Off {
+            note_id: 0,
+            key,
+            release: 0.5,
+        };
+        let samples: Vec<f32> = (0..24_000)
+            .flat_map(|i| {
+                let t = i as f32 / 48_000.0;
+                let l = (std::f32::consts::TAU * 220.0 * t).sin() * 0.6 + (i % 97) as f32 / 400.0;
+                let r = (std::f32::consts::TAU * 331.0 * t).sin() * 0.5 - (i % 53) as f32 / 300.0;
+                [l, r]
+            })
+            .collect();
+        let mut blocks = Vec::new();
+        let mut run = |d: &mut SamplerDevice, step: &dyn Fn(&mut SamplerDevice, usize)| {
+            for block in 0..24 {
+                step(d, block);
+                let mut out = vec![0.0f32; 256 * 2];
+                d.process_block(&[], &mut out, 256);
+                let mut hash = 0xcbf2_9ce4_8422_2325u64;
+                for x in &out {
+                    hash = (hash ^ x.to_bits() as u64).wrapping_mul(0x100_0000_01b3);
+                }
+                blocks.push((hash, rms(&out)));
+            }
+        };
+
+        let mut a = device();
+        a.set_sample("a", samples.clone(), 2, 44_100);
+        a.set_parameter(PARAM_KEY_TRACK, 1.0);
+        a.set_parameter(PARAM_REVERSE, 1.0);
+        a.set_parameter(PARAM_LOOP_MODE, 0.5);
+        a.set_parameter(PARAM_LOOP_START, 0.3);
+        a.set_parameter(PARAM_LOOP_END, 0.6);
+        a.set_parameter(PARAM_CROSSFADE, norm_of(PARAM_CROSSFADE, 30.0));
+        a.set_parameter(PARAM_FILTER_TYPE, 2.0 / 6.0);
+        a.set_parameter(PARAM_CUTOFF, norm_of(PARAM_CUTOFF, 2_000.0));
+        a.set_parameter(PARAM_RESONANCE, 0.4);
+        a.set_parameter(PARAM_FILTER_KEY_TRACK, 0.5);
+        a.set_parameter(PARAM_ROOT, norm_of(PARAM_ROOT, 57.0));
+        run(&mut a, &|d, block| match block {
+            0 => {
+                d.send_note_event(&on(60, 0.8), 17);
+                d.send_note_event(&on(67, 0.5), 130);
+            }
+            6 => d.set_parameter(PARAM_TUNE, norm_of(PARAM_TUNE, 3.0)),
+            9 => d.set_parameter(PARAM_FINE, norm_of(PARAM_FINE, -40.0)),
+            12 => d.send_note_event(&off(60), 64),
+            14 => d.set_parameter(PARAM_CUTOFF, norm_of(PARAM_CUTOFF, 600.0)),
+            _ => {}
+        });
+
+        let mut b = device();
+        b.set_sample("b", samples, 2, 48_000);
+        b.set_parameter(PARAM_PLAY_MODE, 1.0);
+        b.set_parameter(PARAM_START, 0.1);
+        b.set_parameter(PARAM_END, 0.7);
+        b.set_parameter(PARAM_LOOP_MODE, 1.0);
+        b.set_parameter(PARAM_LOOP_START, 0.2);
+        b.set_parameter(PARAM_LOOP_END, 0.25);
+        b.set_parameter(PARAM_VELOCITY, 0.5);
+        b.set_parameter(PARAM_RELEASE, norm_of(PARAM_RELEASE, 0.05));
+        run(&mut b, &|d, block| match block {
+            0 => d.send_note_event(&on(48, 1.0), 0),
+            3 => d.send_note_event(&on(72, 0.3), 200),
+            8 => d.set_parameter(PARAM_SPEED, norm_of(PARAM_SPEED, 150.0)),
+            10 => d.send_note_event(&off(48), 10),
+            16 => d.send_note_event(&off(72), 0),
+            _ => {}
+        });
+        blocks
+    }
+
+    /// Block hashes of [`single_mode_fixture`], recorded before the zone refactor.
+    const SINGLE_MODE_FIXTURE: [u64; 48] = [
+        14206959556813367124,
+        17739970396413959311,
+        16375157930753748474,
+        7602148075931357404,
+        6082375776345269119,
+        15203502640084660737,
+        15949397729668078016,
+        6042357849161996924,
+        852704725007154123,
+        670701819617410879,
+        12734231012316984580,
+        9561008414411622059,
+        15775830726042474405,
+        420039192125132452,
+        13113945623445414435,
+        17631944859054756961,
+        11536535370512420425,
+        1208451133442155396,
+        3431255463954417967,
+        17325285220867068646,
+        17479275945307132020,
+        18140119704573567085,
+        17017164475258079043,
+        16355768676671113191,
+        6492222591069766020,
+        5825699738955252143,
+        13718680342333316252,
+        6719355808529577290,
+        17381493052313732927,
+        4591614688271898581,
+        5731359738487504240,
+        52773419609060268,
+        16372273707863486210,
+        4576185814297321848,
+        12237556130485292987,
+        15237157378695495744,
+        3298634046225823811,
+        130937475898819506,
+        4757032436453216695,
+        15448315486338422620,
+        18275370344189011179,
+        13458987673212643287,
+        13340110937421438874,
+        11029006805787110254,
+        2295699601456801913,
+        6090403448540165059,
+        16384491379877320832,
+        6305337554215224320,
+    ];
+
+    #[test]
+    fn single_mode_unchanged_through_zone_path() {
+        let blocks = single_mode_fixture();
+        assert!(blocks.iter().any(|b| b.1 > 0.01), "the fixture makes sound");
+        for (i, ((hash, rms), want)) in blocks.iter().zip(SINGLE_MODE_FIXTURE).enumerate() {
+            assert_eq!(*hash, want, "block {i} changed (rms now {rms})");
+        }
+        assert_eq!(blocks.len(), SINGLE_MODE_FIXTURE.len());
     }
 }

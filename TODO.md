@@ -8,6 +8,7 @@
 - [ ] Full audit of `Engine/` for the same: module layout, oversized files (e.g. `osc/server.rs`), duplicated logic, dead code and unused dependencies
 - [ ] migrate TODO.md to gh issues.
 - [x?] Sampler v2: loop modes with crossfade, reverse, per-voice filter, fine tune, root note, interactive sample display. Engine (phase 1) is `[x?]` except 1.9 (waveform loading reliability: logging added, waiting on a repro log); Godot UI (phase 2) is `[x?]` except the 1.9 resend hook in 2.6. Spec: `docs/specs/021-sampler-v2/`
+- [ ] Sampler multisample: Window and Companion views, multisample mode with zones (key/velocity ranges, per-zone settings), groups (gain/mute/solo, round robin/random), zone crossfades, multisample editor (group bar, sample list, zone map, batch operations). Spec: `docs/specs/023-sampler-multisample/`. Follow-up: spec 024 Sampler group outputs
 ## Audio Engine
 
 ### Mixing & Playback

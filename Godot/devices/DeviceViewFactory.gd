@@ -16,8 +16,10 @@ const BUILTIN_PANEL_SCENES := {
 const BUILTIN_WINDOW_SCENES := {
 	"sonara.builtin.spectrum_analyzer": preload("res://devices/builtin/SpectrumAnalyzerDefaultView.tscn"),
 	"sonara.builtin.eq": preload("res://devices/builtin/EqDefaultView.tscn"),
+	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerWindowView.tscn"),
 }
 const BUILTIN_COMPANION_SCENES := {
+	"sonara.builtin.sampler": preload("res://devices/builtin/SamplerCompanionView.tscn"),
 	"sonara.builtin.eq": preload("res://devices/builtin/EqBandsCompanionView.tscn"),
 }
 const BUILTIN_COMPACT_SCENES := {}
