@@ -267,6 +267,7 @@ static func ensure_pad_return(
 	ch.aux_bus_index = bus_index
 	pad.return_channel_id = ch.id
 	_bind_pad(project, pad)
+	_bind_pad_return(project, drum, pad, ch)
 	return ch
 
 
@@ -631,11 +632,71 @@ static func _bind_pad(project: Project, pad: DeviceInstance) -> void:
 static func _unbind_pad(pad: DeviceInstance) -> void:
 	if pad == null:
 		return
+	_unbind_pad_return(pad)
 	for sig in [pad.name_changed, pad.slot_changed]:
 		for conn in (sig as Signal).get_connections():
 			var cb: Callable = conn.get("callable")
 			if cb.is_valid() and cb.get_method() in ["_on_pad_name_changed", "_on_pad_slot_changed"]:
 				(sig as Signal).disconnect(cb)
+
+
+## Keep a Drum Machine pad and its return in step: same name and colour, whichever changes (the
+## pad slot and its child channel are one thing). The pad's current name and colour win when
+## binding. The pad's rename → return direction is `_on_pad_name_changed` (see `_bind_pad`).
+static func _bind_pad_return(project: Project, drum: DeviceInstance, pad: DeviceInstance, ch: Channel) -> void:
+	var key := DeviceInstance.pad_slot_key(pad.slot_note)
+	if ch.color != drum.slot_color(key):
+		ch.set_color(drum.slot_color(key))
+	var links: Array = [
+		[ch.name_changed, _on_pad_return_renamed.bind(pad)],
+		[ch.color_changed, _on_pad_return_recolored.bind(drum, pad)],
+	]
+	for link in links:
+		(link[0] as Signal).connect(link[1])
+	_pad_links[pad.get_instance_id()] = links
+	# One follower per Drum Machine (bind()s of the same method count as one connection).
+	var follower := _on_drum_slots_changed.bind(project, drum)
+	if not drum.slots_changed.is_connected(follower):
+		drum.slots_changed.connect(follower)
+
+
+## Return-channel connections made by _bind_pad_return, by pad instance id.
+static var _pad_links: Dictionary = {}
+
+
+static func _unbind_pad_return(pad: DeviceInstance) -> void:
+	var links: Array = _pad_links.get(pad.get_instance_id(), [])
+	for link in links:
+		var sig: Signal = link[0]
+		if not sig.is_null() and sig.is_connected(link[1]):
+			sig.disconnect(link[1])
+	_pad_links.erase(pad.get_instance_id())
+
+
+## The pad's return was renamed (mixer, undo): the pad takes the name.
+static func _on_pad_return_renamed(new_name: String, pad: DeviceInstance) -> void:
+	if pad and pad.name != new_name:
+		pad.set_name(new_name)
+
+
+## The pad's return was recoloured: the pad slot takes the colour.
+static func _on_pad_return_recolored(color: Color, drum: DeviceInstance, pad: DeviceInstance) -> void:
+	if drum == null or pad == null:
+		return
+	var key := DeviceInstance.pad_slot_key(pad.slot_note)
+	if drum.slot_color(key) != color:
+		drum.set_slot_color(key, color)
+
+
+## Pad colours changed on the Drum Machine: each pad's return takes its pad's colour.
+static func _on_drum_slots_changed(project: Project, drum: DeviceInstance) -> void:
+	if project == null or drum == null:
+		return
+	for pad in drum.children:
+		var ch := project.get_channel_by_id(pad.return_channel_id)
+		var color := drum.slot_color(DeviceInstance.pad_slot_key(pad.slot_note))
+		if ch and ch.is_pad_return() and ch.color != color:
+			ch.set_color(color)
 
 
 ## Rename the pad return when the pad device is renamed.

@@ -77,6 +77,10 @@ signal view_changed(view: int)  # Editor.View
 @onready var transport_position_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Position
 @onready var transport_time_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Time
 
+@onready var arrange_button: Button = $VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons/Arrange
+@onready var mix_button: Button = $VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons/Mix
+@onready var edit_button: Button = $VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons/Edit
+
 # Center area is a Vsplit of primary (large, top) and secondary (below, short) panels
 # - Primary: Arranger/Mixer/ClipEditor (switchable)
 # - Secondary: can show device lane, mini clip editor or mini mixer (switchable)
@@ -205,6 +209,14 @@ func _connect_ui_signals():
 	play_button.toggled.connect(_on_play_toggled)
 	stop_button.pressed.connect(_on_stop_pressed)
 	
+	# View buttons: one ButtonGroup so exactly one stays pressed
+	var view_group := ButtonGroup.new()
+	for button in [arrange_button, mix_button, edit_button]:
+		button.button_group = view_group
+	arrange_button.pressed.connect(set_view.bind(View.ARRANGER))
+	mix_button.pressed.connect(set_view.bind(View.MIXER))
+	edit_button.pressed.connect(set_view.bind(View.EDITOR))
+
 	# Tempo/time signature
 	tempo_spinbox.value_changed.connect(_on_tempo_changed)
 	time_signature_edit.text_submitted.connect(_on_time_signature_changed)
@@ -727,6 +739,23 @@ func _apply_time_signature_silent(value: Array) -> void:
 # VIEW MANAGEMENT
 # ============================================================================
 
+## Show `target` (ARRANGER, MIXER or EDITOR) in the Primary area. An attached device
+## frame comes back when `target` is the view it belongs to, as in switch_view().
+func set_view(target: View) -> void:
+	var base := _view_before_device if current_view == View.DEVICE else current_view
+	if target == base and (current_view != View.DEVICE or target == _frame_view):
+		# Already showing it; re-sync the buttons in case the press toggled them.
+		_update_view_buttons()
+		return
+	if attached_frame and _frame_view == target:
+		_view_before_device = target
+		current_view = View.DEVICE
+	else:
+		current_view = target
+	_update_view_visibility()
+	logger.info("[Editor] Switched to ", View.keys()[current_view], " view")
+
+
 func switch_view() -> void:
 	"""Toggle between arranger and mixer views."""
 	var base := _view_before_device if current_view == View.DEVICE else current_view
@@ -1000,6 +1029,14 @@ func ticks_to_seconds(ticks: int) -> float:
 	return project.tempo_map.seconds_at_tick(ticks, project.tempo, project.ppq)
 
 
+## Highlight the button for the current view (the device frame counts as the view it replaced).
+func _update_view_buttons() -> void:
+	var base := _view_before_device if current_view == View.DEVICE else current_view
+	arrange_button.set_pressed_no_signal(base == View.ARRANGER)
+	mix_button.set_pressed_no_signal(base == View.MIXER)
+	edit_button.set_pressed_no_signal(base == View.EDITOR)
+
+
 func _update_view_visibility() -> void:
 	"""Update visibility of arranger and mixer based on current view."""
 	arranger.visible = (current_view == View.ARRANGER)
@@ -1007,6 +1044,7 @@ func _update_view_visibility() -> void:
 	clip_editor.visible = (current_view == View.EDITOR)
 	if attached_frame:
 		attached_frame.visible = (current_view == View.DEVICE)
+	_update_view_buttons()
 	view_changed.emit(current_view)
 
 	if clip_editor.visible:
