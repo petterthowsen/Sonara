@@ -210,7 +210,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
 
 ## Phase 4 — Godot UI
 
-- [ ] **T-018** [REQ-010, REQ-021] `SampleDisplay`: `title` with `title_clicked`, an optional
+- [x?] **T-018** [REQ-010, REQ-021] `SampleDisplay`: `title` with `title_clicked`, an optional
   placeholder action button with `placeholder_action_pressed`, and `_can_drop_data` /
   `_drop_data` for `Asset` / `Array` emitting `assets_dropped`.
   - _Files_: `Godot/devices/builtin/sampler/SampleDisplay.gd`
@@ -219,7 +219,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     placeholder, and a drop emits the assets. Existing SampleDisplay cases are unchanged.
   - _Depends on_: T-001
 
-- [ ] **T-019** [REQ-010, REQ-013, REQ-014, REQ-017, REQ-021, REQ-022] `SamplerDefaultView`
+- [x?] **T-019** [REQ-010, REQ-013, REQ-014, REQ-017, REQ-021, REQ-022] `SamplerDefaultView`
   in multisample mode:
   - the display follows the focused zone (source, title, points)
   - `ZONE_FIELDS` retargets Root/Tune/Fine/Reverse/Loop Mode/Crossfade with mergeable undo
@@ -238,7 +238,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     - the placeholder button converts (REQ-010)
   - _Depends on_: T-017, T-018
 
-- [ ] **T-020** [REQ-023] `ZoneStrip`, shown in the Companion view's display slot in multisample
+- [x?] **T-020** [REQ-023] `ZoneStrip`, shown in the Companion view's display slot in multisample
   mode.
   - _Files_: `Godot/devices/builtin/sampler/ZoneStrip.gd` (new),
     `Godot/devices/builtin/SamplerDefaultView.gd`
@@ -248,7 +248,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     edit changes the zone and records one undo step.
   - _Depends on_: T-019
 
-- [ ] **T-021** [REQ-040, REQ-041, REQ-025, REQ-031, REQ-032] `MultisampleEditor` (layout,
+- [x?] **T-021** [REQ-040, REQ-041, REQ-025, REQ-031, REQ-032] `MultisampleEditor` (layout,
   selection, visible groups) and `ZoneGroupBar` (click/Ctrl-click filter, M/S toggles, right-click
   rename/delete/play mode/gain, "+").
   - _Files_: `Godot/devices/builtin/sampler/MultisampleEditor.gd`,
@@ -260,7 +260,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     - the editor is hidden in single mode and shown after converting
   - _Depends on_: T-017, T-003
 
-- [ ] **T-022** [REQ-042, REQ-048] `ZoneList`: search, `SELECT_MULTI` selection shared with the
+- [x?] **T-022** [REQ-042, REQ-048] `ZoneList`: search, `SELECT_MULTI` selection shared with the
   editor, focus on click, missing zones dimmed with a tooltip, Delete / Ctrl+A.
   - _Files_: `Godot/devices/builtin/sampler/ZoneList.gd` (new)
   - _Output_: a working sample list.
@@ -268,7 +268,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     selection shows in the editor's `selected_ids`, and Delete removes the zones in one undo.
   - _Depends on_: T-021
 
-- [ ] **T-023** [REQ-043, REQ-044] `ZoneMap` drawing and hit testing: grid, rects, colors,
+- [x?] **T-023** [REQ-043, REQ-044] `ZoneMap` drawing and hit testing: grid, rects, colors,
   rotated clipped labels, key strip, and the `zones_at` / `edge_at` helpers.
   - _Files_: `Godot/devices/builtin/sampler/ZoneMap.gd` (new)
   - _Output_: the map renders zones.
@@ -276,7 +276,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     edges, the label-rotation decision is correct, and key strip velocity rises with height.
   - _Depends on_: T-021
 
-- [ ] **T-024** [REQ-043, REQ-045, REQ-046, REQ-015, REQ-048] `ZoneMap` interaction: select with
+- [x?] **T-024** [REQ-043, REQ-045, REQ-046, REQ-015, REQ-048] `ZoneMap` interaction: select with
   Ctrl/Shift, click cycling, move and resize drags (one undo), resize cursors, a right-click menu
   listing the zones under the pointer, key-strip audition with release on mouse-up, file drops
   at the key under the pointer, Delete / Ctrl+A.
@@ -291,7 +291,7 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     - key-strip press/release calls `audition` on and off
   - _Depends on_: T-023
 
-- [ ] **T-025** [REQ-047] `ZoneBatchMenu` and `ZoneBatchDialog`, wired into the map and list
+- [x?] **T-025** [REQ-047] `ZoneBatchMenu` and `ZoneBatchDialog`, wired into the map and list
   context menus.
   - _Files_: `Godot/devices/builtin/sampler/ZoneBatchMenu.gd`,
     `Godot/devices/builtin/sampler/ZoneBatchDialog.gd` (new),
@@ -301,6 +301,18 @@ engine task and `Godot/tests/run_all.sh sampler` after each Godot task.
     and applying the dialog for "Distribute on velocity" on four zones gives the REQ-047 example
     in one undo.
   - _Depends on_: T-024, T-022
+  - _Status_ (Phase 4, 2026-10-06): `Godot/tests/run_all.sh sampler` is green, including the new
+    `test_sampler_zone_map.gd` (94 assertions) and the spec 023 cases in `test_sampler_view.gd`.
+    The full suite passes except three tests that also fail on the base commit
+    (`test_clip_editor_track_list`, `test_timeline_erase_drag`, `test_value_controls`). The editor
+    pieces are scenes: `MultisampleEditor.tscn`, `ZoneGroupBar.tscn` + `ZoneGroupChip.tscn`,
+    `ZoneList.tscn`, `ZoneStrip.tscn`, `ZoneBatchDialog.tscn`, and `SamplerWindowView.tscn` (a
+    `VSplitContainer` of editor and display). The batch menu is a `PopupMenu` node in the editor
+    scene. Choices beyond the design: the binder owns the focus menu, the "Convert to …"
+    right-click menu, drops and the placeholder button, so the Panel and Window views share
+    them. `SamplerActions.begin_edit` / `end_edit` record zone drags and the group gain popup as
+    one step each. The batch dialog uses the `ContextMenu` `PopupPanel` variation (`PrimaryPanel`
+    is a `PanelContainer` type). Not yet seen in the running app.
 
 ## Phase 5 — Docs
 

@@ -1,17 +1,23 @@
-## Window view of the built-in Sampler: the interactive `SampleDisplay` (play and loop handles,
-## playheads) filling the view, bound through the same `SampleDisplayBinder` as the Panel view.
-## The controls live in the Companion view (`SamplerDefaultView` with `show_display` off).
+## Window view of the built-in Sampler: the `MultisampleEditor` (group bar, sample list, zone map;
+## multisample mode only) above the interactive `SampleDisplay` (play and loop handles,
+## playheads), bound through the same `SampleDisplayBinder` as the Panel view. In single-sample
+## mode the editor is hidden and the display fills the view (REQ-040). The controls live in the
+## Companion view (`SamplerDefaultView` with `show_display` off). Layout: `SamplerWindowView.tscn`.
 class_name SamplerWindowView extends DeviceView
 
-var display: SampleDisplay
+@onready var display: SampleDisplay = %SampleDisplay
+@onready var editor: MultisampleEditor = %MultisampleEditor
 
 var _binder: SampleDisplayBinder = null
+var _model: SamplerMultisample = null
 
 
 func _ready() -> void:
-	_build()
+	_binder = SampleDisplayBinder.new(display)
+	# Inside a device lane panel the display takes file drops itself.
+	display.add_to_group(DeviceDropTarget.OWN_DROPS_GROUP)
 	if device != null:
-		_binder.bind(device)
+		_setup()
 
 
 func _exit_tree() -> void:
@@ -19,24 +25,37 @@ func _exit_tree() -> void:
 		_binder.release_stream()
 
 
-func _build() -> void:
-	if display != null:
-		return
-	display = SampleDisplay.new()
-	display.name = "SampleDisplay"
-	display.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_binder = SampleDisplayBinder.new(display)
-	add_child(display)
-
-
 func _on_bind() -> void:
 	if is_node_ready():
-		_binder.bind(device)
+		_setup()
+
+
+func _setup() -> void:
+	_binder.bind(device)
+	editor.bind(device)
+	_unbind_model()
+	_model = device.ensure_multisample()
+	_model.mode_changed.connect(_update_mode)
+	_update_mode()
 
 
 func _on_unbind() -> void:
 	if _binder != null:
 		_binder.unbind()
+	if editor != null:
+		editor.unbind()
+	_unbind_model()
+
+
+func _unbind_model() -> void:
+	if _model != null and _model.mode_changed.is_connected(_update_mode):
+		_model.mode_changed.disconnect(_update_mode)
+	_model = null
+
+
+## The editor shows only in multisample mode.
+func _update_mode() -> void:
+	editor.visible = _model != null and _model.active
 
 
 func _on_device_parameter_changed(_param_id: int, _value: float) -> void:

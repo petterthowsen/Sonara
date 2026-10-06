@@ -1,0 +1,159 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneStrip.gd" id="1_strip"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="2_knob"]
+
+[node name="ZoneStrip" type="HBoxContainer"]
+custom_minimum_size = Vector2(0, 64)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+script = ExtResource("1_strip")
+
+[node name="Info" type="VBoxContainer" parent="."]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="NameEdit" type="LineEdit" parent="Info"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Name of the focused sample"
+theme_override_font_sizes/font_size = 11
+placeholder_text = "No sample"
+
+[node name="GroupOption" type="OptionButton" parent="Info"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Group of the focused sample"
+theme_override_font_sizes/font_size = 10
+fit_to_longest_item = false
+
+[node name="KeysGroup" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="KeysGroup"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Keys"
+
+[node name="Knobs" type="HBoxContainer" parent="KeysGroup"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="KeyLo" type="VBoxContainer" parent="KeysGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Low"
+
+[node name="KeyHi" type="VBoxContainer" parent="KeysGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "High"
+
+[node name="VelocityGroup" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="VelocityGroup"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Velocity"
+
+[node name="Knobs" type="HBoxContainer" parent="VelocityGroup"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="VelLo" type="VBoxContainer" parent="VelocityGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Low"
+
+[node name="VelHi" type="VBoxContainer" parent="VelocityGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "High"
+
+[node name="GainGroup" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="GainGroup"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Gain"
+
+[node name="Knobs" type="HBoxContainer" parent="GainGroup"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Gain" type="VBoxContainer" parent="GainGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Gain"
+
+[node name="FadesGroup" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 1
+
+[node name="Title" type="Label" parent="FadesGroup"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 10
+text = "Fades"
+
+[node name="Knobs" type="HBoxContainer" parent="FadesGroup"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="KeyFadeLo" type="VBoxContainer" parent="FadesGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Key In"
+
+[node name="KeyFadeHi" type="VBoxContainer" parent="FadesGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Key Out"
+
+[node name="VelFadeLo" type="VBoxContainer" parent="FadesGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Vel In"
+
+[node name="VelFadeHi" type="VBoxContainer" parent="FadesGroup/Knobs"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 38.0
+knob_size = Vector2(28, 28)
+text = "Vel Out"

@@ -1,6 +1,8 @@
 # Sampler panel: SampleDisplay hit-testing and drag constraints, playhead decoding and
 # extrapolation, and the scene-based view (one undo step per point drag, loop overlay hidden with
-# Loop Off, waveform shown once ready, also after the sample source is swapped).
+# Loop Off, waveform shown once ready, also after the sample source is swapped). Spec 023: the
+# display's title, placeholder action and drops, and the views in multisample mode (per-zone
+# controls follow focus, the focus menu, the zone strip in the Companion view).
 # Run: godot --headless --path Godot -s tests/test_sampler_view.gd -- --test
 extends TestBase
 
@@ -35,8 +37,12 @@ func run_tests() -> void:
 	_test_crossfade_ramp()
 	_test_playhead_decode()
 	_test_playhead_extrapolation()
+	_test_display_title_and_action()
+	_test_display_drop()
 	await _test_view()
 	await _test_window_and_companion()
+	await _test_view_multisample()
+	await _test_zone_strip()
 
 
 func _make_display() -> Control:
@@ -299,7 +305,7 @@ func _test_view() -> void:
 	await process_frame
 	var display: Control = view.display
 	_assert(display != null, "the view builds its display")
-	_assert(display.placeholder == "Drop an audio file", "an empty sampler shows the drop placeholder")
+	_assert(display.placeholder == "Drop sample(s) here", "an empty sampler shows the drop placeholder")
 
 	# Values reach the controls and the display.
 	instance.set_parameter_real(7, 0.25)
@@ -410,4 +416,209 @@ func _test_window_and_companion() -> void:
 	window.apply_playheads(_playhead_blob([[0.5, 0.0, 1.0]]), 1000)
 	_assert(window.display.playheads.size() == 1, "the Window view feeds playheads to its display")
 	for v in [panel, companion, window]:
+		v.queue_free()
+
+
+# ============================================================================
+# SPEC 023: DISPLAY TITLE, PLACEHOLDER ACTION, DROPS
+# ============================================================================
+
+func _click(pos: Vector2, button := MOUSE_BUTTON_LEFT) -> InputEventMouseButton:
+	var click := InputEventMouseButton.new()
+	click.button_index = button
+	click.pressed = true
+	click.position = pos
+	return click
+
+
+func _test_display_title_and_action() -> void:
+	var d := _make_display()
+	var clicks := [0]
+	d.title_clicked.connect(func() -> void: clicks[0] += 1)
+	_assert(d.title_rect() == Rect2(), "no title, no title rect")
+	d._gui_input(_click(Vector2(20, 8)))
+	_assert(clicks[0] == 0, "no title, no title click")
+	d.title = "Piano_C3"
+	var rect: Rect2 = d.title_rect()
+	_assert(rect.size.x > 0.0 and rect.position.x >= 8.0, "the title sits at the top left, clear of the Start handle")
+	d._gui_input(_click(rect.get_center()))
+	_assert(clicks[0] == 1, "clicking the title emits title_clicked")
+	d._gui_input(_click(Vector2(500, 50)))
+	_assert(clicks[0] == 1, "clicking elsewhere doesn't")
+	var font := ThemeDB.fallback_font
+	var cut: String = _sd.fit_text("A rather long sample name", font, 11, 60.0)
+	_assert(cut.ends_with("…") and font.get_string_size(cut, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x <= 60.0, "long labels are cut to fit with an ellipsis")
+	_assert(_sd.fit_text("Kick", font, 11, 200.0) == "Kick", "short labels stay whole")
+
+	var pressed := [0]
+	d.placeholder_action_pressed.connect(func() -> void: pressed[0] += 1)
+	d.placeholder_action = "Create Multisample"
+	_assert(not d.is_placeholder_action_visible(), "no button without a placeholder")
+	d.placeholder = "Drop sample(s) here"
+	_assert(d.is_placeholder_action_visible(), "the button shows with the placeholder")
+	d._action_button.pressed.emit()
+	_assert(pressed[0] == 1, "the button emits placeholder_action_pressed")
+	d.placeholder = ""
+	_assert(not d.is_placeholder_action_visible(), "the button hides with the placeholder")
+
+	var menus: Array = []
+	d.context_menu_requested.connect(func(at: Vector2) -> void: menus.append(at))
+	d._gui_input(_click(Vector2(300, 40), MOUSE_BUTTON_RIGHT))
+	_assert(menus == [Vector2(300, 40)], "a right click requests the context menu")
+	d.queue_free()
+
+
+func _test_display_drop() -> void:
+	var d := _make_display()
+	var asset_script: GDScript = load("res://browser/Asset.gd")
+	var audio: Object = asset_script.new()
+	audio.type = asset_script.TYPE.Audio
+	audio.path = "/tmp/a.wav"
+	var midi: Object = asset_script.new()
+	midi.type = asset_script.TYPE.Midi
+	midi.path = "/tmp/a.mid"
+	var dropped: Array = []
+	d.assets_dropped.connect(func(assets: Array) -> void: dropped.append(assets))
+	_assert(d._can_drop_data(Vector2.ZERO, audio), "one audio asset can drop")
+	_assert(d._can_drop_data(Vector2.ZERO, [audio, audio]), "several audio assets can drop")
+	_assert(not d._can_drop_data(Vector2.ZERO, midi), "a MIDI asset can't")
+	_assert(not d._can_drop_data(Vector2.ZERO, [audio, midi]), "a mixed selection can't")
+	d._drop_data(Vector2.ZERO, audio)
+	_assert(dropped.size() == 1 and dropped[0].size() == 1 and dropped[0][0] == audio, "a drop emits the assets as an array")
+	d.accepts_drops = false
+	_assert(not d._can_drop_data(Vector2.ZERO, audio), "accepts_drops off refuses drops")
+	d.queue_free()
+
+
+# ============================================================================
+# SPEC 023: VIEWS IN MULTISAMPLE MODE
+# ============================================================================
+
+## A Sampler instance in multisample mode with zones A (root C3) and B (root G3).
+func _multisample_instance() -> Object:
+	var instance := _make_instance()
+	var model: Object = instance.ensure_multisample()
+	model.add_files(["/tmp/A_C3.wav", "/tmp/B_G3.wav"])
+	return instance
+
+
+func _test_view_multisample() -> void:
+	var recorded: Array = []
+	_history_util.test_recorder = func(cmd) -> void: recorded.append(cmd)
+
+	# REQ-010: the empty Sampler's button converts.
+	var empty := _make_instance()
+	var view: Control = (load("res://devices/builtin/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	root.add_child(view)
+	view.bind_to_device(empty)
+	await process_frame
+	_assert(view.display.placeholder_action == "Create Multisample", "an empty Sampler offers Create Multisample")
+	view.display.placeholder_action_pressed.emit()
+	_assert(empty.multisample.active and empty.multisample.zones.is_empty(), "the button switches to an empty multisample")
+	_assert(recorded.size() == 1, "creating the multisample is one undo step")
+	_assert(view.display.placeholder_action == "", "no Create button once in multisample mode")
+	view.queue_free()
+
+	var instance := _multisample_instance()
+	var model: Object = instance.multisample
+	var a: Object = model.zones[0]
+	var b: Object = model.zones[1]
+	view = (load("res://devices/builtin/SamplerDefaultView.tscn") as PackedScene).instantiate()
+	root.add_child(view)
+	view.bind_to_device(instance)
+	await process_frame
+	recorded.clear()
+
+	# REQ-022: per-zone controls follow focus; REQ-021: the display shows the focused zone.
+	model.set_focus(a.id)
+	_assert(is_equal_approx(view._knobs["Root"].knob.value, 60.0), "focusing A shows its root (C3) on the Root knob")
+	_assert(view.display.title == "A_C3", "the display title is the focused zone's name")
+	model.set_focus(b.id)
+	_assert(is_equal_approx(view._knobs["Root"].knob.value, 67.0), "focusing B shows its root (G3)")
+	_assert(view.display.title == "B_G3", "the title follows focus")
+	_assert(not view._checks["Key Track"].visible, "Key Track hides in multisample mode")
+	_assert(view._badges.all(func(badge) -> bool: return badge.visible), "the per-zone groups show the Sample badge")
+
+	# Turning Root edits only the focused zone, through a mergeable zone snapshot.
+	var root_param: float = instance.get_parameter_real(3)
+	view._knobs["Root"].knob.value = 65.0
+	_assert(b.root == 65 and a.root == 60, "turning Root edits only the focused zone")
+	_assert(is_equal_approx(instance.get_parameter_real(3), root_param), "the Root parameter is untouched")
+	view._knobs["Root"].knob.value = 66.0
+	_assert(recorded.size() == 2 and recorded[0].can_merge(recorded[1]), "Root edits on one zone merge into one undo step")
+	view._segments["Loop Mode"].selected = 1
+	_assert(b.loop_mode == 1 and view.display.loop_mode == _sd.LoopMode.ON, "Loop Mode edits the zone and reaches the display")
+	view._knobs["Crossfade"].knob.value = 40.0
+	_assert(is_equal_approx(b.crossfade, 0.4), "Crossfade % becomes a zone fraction")
+
+	# A display drag edits the focused zone's start, one undo step.
+	recorded.clear()
+	view.size = Vector2(1000, 500)
+	await process_frame
+	view.display.begin_drag(_sd.Point.PLAY_START, Vector2(0, 5))
+	view.display.drag_to(Vector2(200, 5))
+	view.display.drag_to(Vector2(300, 5))
+	view.display.end_drag()
+	_assert(is_equal_approx(b.start, 0.3) and is_equal_approx(a.start, 0.0), "a point drag moves the focused zone's start only")
+	_assert(recorded.size() == 1, "a zone point drag is one undo step (got %d)" % recorded.size())
+	if recorded.size() == 1:
+		recorded[0].undo()
+		_assert(is_equal_approx(b.start, 0.0), "undo restores the zone's start")
+
+	# The focus menu lists zones by root and changes focus.
+	model.set_zone_fields(a.id, {"root": 70})
+	var menu: PopupMenu = view._binder.fill_focus_menu()
+	_assert(menu.theme_type_variation == &"ContextMenuList", "the focus menu uses the context-menu style")
+	_assert(menu.item_count == 2 and menu.get_item_id(0) == b.id and menu.get_item_id(1) == a.id, "the focus menu lists zones by root key")
+	menu.id_pressed.emit(a.id)
+	_assert(model.focused_zone_id == a.id, "choosing a zone in the menu focuses it")
+
+	# The right-click menu offers the conversion that applies.
+	var mode_menu: PopupMenu = view._binder.fill_mode_menu()
+	_assert(mode_menu.item_count == 1 and mode_menu.get_item_text(0) == "Convert to Single Sample", "multisample mode offers Convert to Single Sample")
+	_history_util.test_recorder = Callable()
+	view.queue_free()
+
+
+func _test_zone_strip() -> void:
+	var recorded: Array = []
+	_history_util.test_recorder = func(cmd) -> void: recorded.append(cmd)
+	var instance := _make_instance()
+	var dev: Object = instance.device
+	var factory: GDScript = load("res://devices/DeviceViewFactory.gd")
+	factory.register_builtin_views(dev)
+	var panel: Control = factory.create(instance, _device_script.ViewType.Panel)
+	var companion: Control = factory.create(instance, _device_script.ViewType.Companion)
+	for v in [panel, companion]:
+		root.add_child(v)
+		v.bind_to_device(instance)
+	await process_frame
+	_assert(panel.zone_strip == null, "the Panel view has no zone strip")
+	_assert(companion.zone_strip != null and not companion.zone_strip.visible, "the Companion's zone strip hides in single mode")
+	instance.ensure_multisample().add_files(["/tmp/A_C3.wav", "/tmp/B_G3.wav"])
+	await process_frame
+	var strip: Control = companion.zone_strip
+	_assert(strip.visible, "the zone strip shows in Companion + multisample")
+	var model: Object = instance.multisample
+	var focused: Object = model.focused_zone()
+	_assert(strip.name_edit.text == focused.name, "the strip shows the focused zone's name")
+	recorded.clear()
+	strip.knobs["Gain"].knob.value = 0.5
+	_assert(is_equal_approx(focused.gain, 0.5), "a strip gain edit changes the zone")
+	_assert(recorded.size() == 1, "the edit records one undo step")
+	strip.knobs["VelLo"].knob.value = 40.0
+	_assert(focused.vel_lo == 40, "the velocity range is editable")
+	var other: Object = model.zones[1]
+	model.set_focus(other.id)
+	_assert(strip.name_edit.text == other.name and is_equal_approx(strip.knobs["Gain"].knob.value, 1.0), "the strip follows focus")
+	recorded.clear()
+	strip.name_edit.text = "Renamed"
+	strip._commit_name()
+	_assert(other.name == "Renamed" and recorded.size() == 1, "renaming is one undo step")
+	var group_id: int = model.add_group("Soft")
+	strip.group_option.select(strip.group_option.get_item_index(group_id))
+	strip.group_option.item_selected.emit(strip.group_option.get_item_index(group_id))
+	_assert(other.group_id == group_id, "the group dropdown moves the zone")
+	_history_util.test_recorder = Callable()
+	for v in [panel, companion]:
 		v.queue_free()

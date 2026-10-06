@@ -1,8 +1,10 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://devices/builtin/SamplerWindowView.gd" id="1_sampwin"]
+[ext_resource type="PackedScene" path="res://devices/builtin/sampler/MultisampleEditor.tscn" id="2_editor"]
+[ext_resource type="Script" path="res://devices/builtin/sampler/SampleDisplay.gd" id="3_display"]
 
-[node name="SamplerWindowView" type="Control"]
+[node name="SamplerWindowView" type="VSplitContainer"]
 custom_minimum_size = Vector2(320, 160)
 layout_mode = 3
 anchors_preset = 15
@@ -11,3 +13,16 @@ anchor_bottom = 1.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_sampwin")
+
+[node name="MultisampleEditor" parent="." instance=ExtResource("2_editor")]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="SampleDisplay" type="Control" parent="."]
+unique_name_in_owner = true
+clip_contents = true
+custom_minimum_size = Vector2(120, 64)
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("3_display")

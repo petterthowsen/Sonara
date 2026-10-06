@@ -1,0 +1,61 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneGroupChip.gd" id="1_chip"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_solo"]
+bg_color = Color(0.8, 0.65333337, 0, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_mute"]
+bg_color = Color(0.8, 0.41333333, 0, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[node name="ZoneGroupChip" type="HBoxContainer"]
+theme_override_constants/separation = 1
+script = ExtResource("1_chip")
+
+[node name="NameButton" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 11
+toggle_mode = true
+text = "Group"
+
+[node name="NameEdit" type="LineEdit" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(60, 20)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+
+[node name="Mute" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(18, 20)
+layout_mode = 2
+tooltip_text = "Mute: this group's samples don't play"
+focus_mode = 0
+theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_font_sizes/font_size = 10
+theme_override_styles/pressed = SubResource("StyleBoxFlat_mute")
+toggle_mode = true
+text = "M"
+
+[node name="Solo" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(18, 20)
+layout_mode = 2
+tooltip_text = "Solo: while any group is soloed, only soloed groups play"
+focus_mode = 0
+theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
+theme_override_font_sizes/font_size = 10
+theme_override_styles/pressed = SubResource("StyleBoxFlat_solo")
+toggle_mode = true
+text = "S"

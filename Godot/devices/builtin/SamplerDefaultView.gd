@@ -7,6 +7,11 @@
 ##
 ## The display's source, points and playheads are handled by a `SampleDisplayBinder`, shared with
 ## the Window view. With `show_display` off (the Companion view) there is no display and no binder.
+##
+## Multisample mode (spec 023): the per-zone controls (`ZONE_FIELDS`) show and edit the focused
+## zone through `SamplerActions.set_zone_fields` (mergeable undo) and carry a "Sample" badge, Key
+## Track is hidden (zones always key-track), and the Companion view shows a `ZoneStrip` where the
+## Panel view has its display.
 class_name SamplerDefaultView extends DeviceView
 
 static var logger := Log.make("SamplerView")
@@ -20,12 +25,24 @@ const KNOBS_PITCH := [["Root", "Root"], ["Tune", "Tune"], ["Fine", "Fine"]]
 const KNOBS_FILTER := [["Cutoff", "Cutoff"], ["Resonance", "Res"], ["Filter Key Track", "Key"]]
 const KNOBS_AMP := [["Attack", "A"], ["Decay", "D"], ["Sustain", "S"], ["Release", "R"], ["Volume", "Vol"]]
 const TIME_KNOBS := ["Attack", "Decay", "Release"]
+## Parameters that edit the focused zone in multisample mode → the zone field (REQ-022).
+const ZONE_FIELDS := {
+	"Root": "root", "Tune": "tune", "Fine": "fine",
+	"Reverse": "reverse", "Loop Mode": "loop_mode", "Crossfade": "crossfade",
+}
+## Groups whose controls all edit the focused zone get the "Sample" badge.
+const ZONE_GROUPS := ["Pitch", "Loop"]
+const ZONE_ACCENT := Color(0.95, 0.66, 0.3)
+const ZONE_TOOLTIP := "Edits the focused sample (multisample mode)"
+const ZONE_STRIP_SCENE := preload("res://devices/builtin/sampler/ZoneStrip.tscn")
 
 ## False for the Companion view: every control, but no waveform.
 @export var show_display := true
 
 var display: SampleDisplay
 var envelope_control: EnvelopeControl
+## Companion view only: the focused zone's ranges, gain and fades in multisample mode.
+var zone_strip: ZoneStrip
 
 var _knobs: Dictionary[String, LabeledKnob] = {}
 var _segments: Dictionary[String, SegmentedControl] = {}
@@ -34,6 +51,8 @@ var _envelope: Envelope = null
 var _syncing := false
 var _built := false
 var _binder: SampleDisplayBinder = null
+var _model: SamplerMultisample = null
+var _badges: Array[Badge] = []
 
 
 func _ready() -> void:
@@ -61,6 +80,12 @@ func _build() -> void:
 		display.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_binder = SampleDisplayBinder.new(display)
 		add_child(display)
+		# The display takes file drops itself; no device-lane insert target over it.
+		display.add_to_group(DeviceDropTarget.OWN_DROPS_GROUP)
+	else:
+		zone_strip = ZONE_STRIP_SCENE.instantiate()
+		zone_strip.visible = false
+		add_child(zone_strip)
 
 	var top := _row()
 	top.add_child(_group("Playback", [
@@ -97,11 +122,23 @@ func _row() -> HBoxContainer:
 func _group(title: String, children: Array) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 1)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 4)
 	var label := Label.new()
 	label.text = title
 	label.add_theme_font_size_override("font_size", 10)
 	label.add_theme_color_override("font_color", GROUP_TITLE_COLOR)
-	box.add_child(label)
+	header.add_child(label)
+	if title in ZONE_GROUPS:
+		var badge := Badge.new()
+		badge.text = "Sample"
+		badge.font_size = 8
+		badge.color = ZONE_ACCENT
+		badge.tooltip_text = ZONE_TOOLTIP
+		badge.visible = false
+		header.add_child(badge)
+		_badges.append(badge)
+	box.add_child(header)
 	var inner := HBoxContainer.new()
 	inner.add_theme_constant_override("separation", 6)
 	for child in children:
@@ -188,12 +225,55 @@ func _setup() -> void:
 		ModAssign.attach(_knobs[knob_name].knob, device, id)
 	if _binder != null:
 		_binder.bind(device)
+	if zone_strip != null:
+		zone_strip.bind(device)
+	_bind_model()
 	_refresh()
 
 
 func _on_unbind() -> void:
 	if _binder != null:
 		_binder.unbind()
+	if zone_strip != null:
+		zone_strip.unbind()
+	_unbind_model()
+
+
+func _bind_model() -> void:
+	_unbind_model()
+	_model = device.ensure_multisample()
+	_model.mode_changed.connect(_refresh)
+	_model.focus_changed.connect(_on_model_focus_changed)
+	_model.zone_changed.connect(_on_model_zone_changed)
+	_model.zones_changed.connect(_refresh)
+
+
+func _unbind_model() -> void:
+	if _model == null:
+		return
+	_model.mode_changed.disconnect(_refresh)
+	_model.focus_changed.disconnect(_on_model_focus_changed)
+	_model.zone_changed.disconnect(_on_model_zone_changed)
+	_model.zones_changed.disconnect(_refresh)
+	_model = null
+
+
+func _on_model_focus_changed(_zone_id: int) -> void:
+	_refresh()
+
+
+func _on_model_zone_changed(zone_id: int) -> void:
+	if _model != null and zone_id == _model.focused_zone_id:
+		_refresh()
+
+
+func multisample_active() -> bool:
+	return _model != null and _model.active
+
+
+## The zone the per-zone controls edit, or null outside multisample mode.
+func focused_zone() -> SamplerZone:
+	return _model.focused_zone() if multisample_active() else null
 
 
 ## Point each knob at its parameter's range, curve and text.
@@ -259,10 +339,62 @@ func _refresh() -> void:
 			_checks[param_name].set_pressed_no_signal(device.get_parameter_real(id) >= 0.5)
 	_envelope.set_adsr(
 		_real("Attack", 0.001), _real("Decay", 0.001), _real("Sustain", 1.0), _real("Release", 0.01))
+	_refresh_zone_controls()
 	_syncing = false
 	if _binder != null:
 		_binder.refresh()
 	_update_enabled()
+
+
+## Multisample mode: the per-zone controls show the focused zone, marked as such, and Key Track
+## hides. Single mode: everything back to the parameters (already copied by `_refresh`).
+func _refresh_zone_controls() -> void:
+	var multi := multisample_active()
+	var zone := focused_zone()
+	for badge in _badges:
+		badge.visible = multi
+	_checks["Key Track"].visible = not multi
+	var reverse := _checks["Reverse"]
+	if multi:
+		reverse.add_theme_color_override("font_color", ZONE_ACCENT)
+		reverse.tooltip_text = ZONE_TOOLTIP
+	else:
+		reverse.remove_theme_color_override("font_color")
+		reverse.tooltip_text = ""
+	if zone_strip != null:
+		zone_strip.visible = multi
+	if zone == null:
+		return
+	for param_name in ZONE_FIELDS:
+		var value := zone_value(zone, param_name)
+		if _knobs.has(param_name):
+			_knobs[param_name].knob.set_value_no_signal(value)
+		elif _segments.has(param_name):
+			_segments[param_name].set_selected_no_signal(int(value))
+		elif _checks.has(param_name):
+			_checks[param_name].set_pressed_no_signal(value >= 0.5)
+
+
+## A zone field in the units of the parameter that shows it (Crossfade in %, booleans as 0/1).
+static func zone_value(zone: SamplerZone, param_name: String) -> float:
+	var v: Variant = zone.get(ZONE_FIELDS[param_name])
+	if v is bool:
+		return 1.0 if v else 0.0
+	if param_name == "Crossfade":
+		return float(v) * 100.0
+	return float(v)
+
+
+## The zone field value for a control value in parameter units.
+static func zone_field_value(param_name: String, value: float) -> Variant:
+	match param_name:
+		"Reverse":
+			return value >= 0.5
+		"Crossfade":
+			return value / 100.0
+		"Root", "Loop Mode":
+			return roundi(value)
+	return value
 
 
 func _real(param_name: String, fallback: float) -> float:
@@ -272,7 +404,9 @@ func _real(param_name: String, fallback: float) -> float:
 
 ## Crossfade only applies to Loop On; the filter knobs only when a filter type is chosen.
 func _update_enabled() -> void:
-	_set_enabled(_knobs["Crossfade"], int(_real("Loop Mode", 0.0)) == SampleDisplay.LoopMode.ON)
+	var zone := focused_zone()
+	var loop_mode := zone.loop_mode if zone else int(_real("Loop Mode", 0.0))
+	_set_enabled(_knobs["Crossfade"], loop_mode == SampleDisplay.LoopMode.ON)
 	var filter_on := int(_real("Filter Type", 0.0)) != 0
 	for knob_name in ["Cutoff", "Resonance", "Filter Key Track"]:
 		_set_enabled(_knobs[knob_name], filter_on)
@@ -294,6 +428,10 @@ func _on_knob_changed(value: float, param_name: String) -> void:
 func _on_knob_reset(param_name: String) -> void:
 	if device == null:
 		return
+	if multisample_active() and ZONE_FIELDS.has(param_name):
+		var field: String = ZONE_FIELDS[param_name]
+		_set_zone_field(param_name, zone_value_default(field, param_name))
+		return
 	var param := device.get_parameter(device.get_parameter_id_by_name(param_name))
 	if param != null:
 		device.set_parameter_real(param.id, param.default_value)
@@ -310,9 +448,26 @@ func _on_check_toggled(pressed: bool, param_name: String) -> void:
 func _set_real(param_name: String, value: float) -> void:
 	if _syncing or device == null:
 		return
+	if multisample_active() and ZONE_FIELDS.has(param_name):
+		_set_zone_field(param_name, value)
+		return
 	var id := device.get_parameter_id_by_name(param_name)
 	if id >= 0:
 		device.set_parameter_real(id, value)
+
+
+## Edit the focused zone from a control (`value` in parameter units). Mergeable undo.
+func _set_zone_field(param_name: String, value: float) -> void:
+	var zone := focused_zone()
+	if zone == null:
+		return
+	SamplerActions.set_zone_fields(device, zone.id, {ZONE_FIELDS[param_name]: zone_field_value(param_name, value)})
+
+
+## A zone field's default, in the units of the parameter that shows it.
+static func zone_value_default(field: String, param_name: String) -> float:
+	var v: Variant = SamplerZone.NUMERIC_DEFAULTS.get(field, 0.0)
+	return float(v) * 100.0 if param_name == "Crossfade" else float(v)
 
 
 ## Apply an envelope stage to the device and record a mergeable undo step.

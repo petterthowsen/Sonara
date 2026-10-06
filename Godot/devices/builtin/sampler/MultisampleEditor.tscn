@@ -1,0 +1,52 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/sampler/MultisampleEditor.gd" id="1_editor"]
+[ext_resource type="PackedScene" path="res://devices/builtin/sampler/ZoneGroupBar.tscn" id="2_bar"]
+[ext_resource type="PackedScene" path="res://devices/builtin/sampler/ZoneList.tscn" id="3_list"]
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneMap.gd" id="4_map"]
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneBatchMenu.gd" id="5_menu"]
+[ext_resource type="PackedScene" path="res://devices/builtin/sampler/ZoneBatchDialog.tscn" id="6_dialog"]
+
+[node name="MultisampleEditor" type="VBoxContainer"]
+custom_minimum_size = Vector2(320, 160)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 2.0
+theme_override_constants/separation = 4
+script = ExtResource("1_editor")
+
+[node name="ZoneGroupBar" parent="." instance=ExtResource("2_bar")]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Split" type="HSplitContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+split_offset = 0
+
+[node name="ZoneList" parent="Split" instance=ExtResource("3_list")]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+
+[node name="ZoneMap" type="Control" parent="Split"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 1
+script = ExtResource("4_map")
+
+[node name="ZoneBatchMenu" type="PopupMenu" parent="."]
+unique_name_in_owner = true
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+script = ExtResource("5_menu")
+
+[node name="GroupsMenu" type="PopupMenu" parent="ZoneBatchMenu"]
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+
+[node name="ZoneBatchDialog" parent="." instance=ExtResource("6_dialog")]
+unique_name_in_owner = true
+visible = false

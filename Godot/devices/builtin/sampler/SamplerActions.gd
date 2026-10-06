@@ -72,6 +72,17 @@ static func _record(inst: DeviceInstance, label: String, old_state: Dictionary) 
 	HistoryUtil.record(SamplerStateCommand.new(label, inst, old_state, new_state))
 
 
+## Start a continuous edit (a zone drag, a group gain popup): the state to hand to `end_edit`
+## once the gesture ends. Changes in between go straight to the model.
+static func begin_edit(inst: DeviceInstance) -> Dictionary:
+	return capture_state(inst)
+
+
+## Record everything since `begin_edit` as one undo step (nothing when nothing changed).
+static func end_edit(inst: DeviceInstance, label: String, old_state: Dictionary) -> void:
+	_record(inst, label, old_state)
+
+
 ## Run `change` on the model as one undo step. The generic form behind the helpers below.
 static func edit(inst: DeviceInstance, label: String, change: Callable) -> void:
 	var old_state := capture_state(inst)

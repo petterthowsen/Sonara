@@ -1,0 +1,132 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneBatchDialog.gd" id="1_dialog"]
+
+[node name="ZoneBatchDialog" type="PopupPanel"]
+theme_type_variation = &"ContextMenu"
+oversampling_override = 1.0
+size = Vector2i(300, 150)
+visible = true
+script = ExtResource("1_dialog")
+
+[node name="Margin" type="MarginContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Distribute on Velocity"
+
+[node name="Range" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="FromLabel" type="Label" parent="Margin/VBox/Range"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "From"
+
+[node name="LoSpin" type="SpinBox" parent="Margin/VBox/Range"]
+unique_name_in_owner = true
+layout_mode = 2
+max_value = 127.0
+rounded = true
+
+[node name="LoNote" type="Label" parent="Margin/VBox/Range"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 11
+text = "C-2"
+
+[node name="ToLabel" type="Label" parent="Margin/VBox/Range"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "To"
+
+[node name="HiSpin" type="SpinBox" parent="Margin/VBox/Range"]
+unique_name_in_owner = true
+layout_mode = 2
+max_value = 127.0
+value = 127.0
+rounded = true
+
+[node name="HiNote" type="Label" parent="Margin/VBox/Range"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.68, 1)
+theme_override_font_sizes/font_size = 11
+text = "G8"
+
+[node name="SingleCheck" type="CheckBox" parent="Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Give every sample the same single key or velocity"
+theme_override_font_sizes/font_size = 11
+text = "Single value"
+
+[node name="ModeRow" type="HBoxContainer" parent="Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ModeOption" type="OptionButton" parent="Margin/VBox/ModeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Stretch: slices fill the range with no gaps. Gaps: equal slices of the given size, the rest of the range left empty."
+theme_override_font_sizes/font_size = 11
+selected = 0
+item_count = 2
+popup/item_0/text = "Stretch"
+popup/item_0/id = 0
+popup/item_1/text = "Gaps"
+popup/item_1/id = 1
+
+[node name="SliceRow" type="HBoxContainer" parent="Margin/VBox/ModeRow"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="SliceLabel" type="Label" parent="Margin/VBox/ModeRow/SliceRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Slice size"
+
+[node name="SliceSpin" type="SpinBox" parent="Margin/VBox/ModeRow/SliceRow"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 128.0
+value = 1.0
+rounded = true
+
+[node name="Buttons" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 6
+alignment = 2
+
+[node name="Cancel" type="Button" parent="Margin/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Cancel"
+
+[node name="Apply" type="Button" parent="Margin/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Apply"

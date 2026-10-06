@@ -11,12 +11,24 @@
 ## the loop handles stay inside the play region and the play handles can't cross a loop handle
 ## that lies strictly inside it (one sitting on the play point, like the default 0..1 loop, or
 ## outside it is clamped by the engine and doesn't block). Shift drags finely, a double click resets a point to its default.
+##
+## Spec 023 adds a clickable `title` (the focused zone's name, `title_clicked`), an optional
+## placeholder action button (`placeholder_action`, `placeholder_action_pressed`), a right-click
+## request (`context_menu_requested`) and audio-asset drops (`assets_dropped`).
 class_name SampleDisplay extends Control
 
 signal point_drag_started(which: int)
 ## `value` is the new normalized position, already constrained.
 signal point_dragged(which: int, value: float)
 signal point_drag_ended(which: int)
+## The title label was clicked.
+signal title_clicked()
+## The placeholder action button was pressed.
+signal placeholder_action_pressed()
+## Right click on the display, at `position` (local).
+signal context_menu_requested(position: Vector2)
+## One audio Asset or several were dropped; always an Array.
+signal assets_dropped(assets: Array)
 
 enum Point { PLAY_START, PLAY_END, LOOP_START, LOOP_END }
 enum LoopMode { OFF, ON, PING_PONG }
@@ -28,6 +40,12 @@ const BACKGROUND := Color(0.08, 0.08, 0.1)
 const DIM_COLOR := Color(0, 0, 0, 0.45)
 const LOOP_FILL_ALPHA := 0.12
 const PLACEHOLDER_COLOR := Color(0.7, 0.7, 0.75, 0.85)
+const TITLE_COLOR := Color(0.92, 0.92, 0.95)
+const TITLE_BG := Color(0, 0, 0, 0.55)
+const TITLE_FONT_SIZE := 11
+## The title sits clear of the Play Start handle at the left edge.
+const TITLE_MARGIN := Vector2(12, 3)
+const TITLE_PAD := 4.0
 
 const HANDLE_SIZE := 8.0
 const HIT_BAND := 5.0
@@ -76,11 +94,25 @@ var reverse := false:
 var duration := 0.0
 ## Length of the file in frames (at the playback rate), for the minimum gaps. 0 when unknown.
 var frames := 0
-## Drawn centered while there is no waveform ("Drop an audio file", "Loading…").
+## Drawn centered while there is no waveform ("Drop sample(s) here", "Loading…").
 var placeholder := "":
 	set(v):
 		placeholder = v
+		_update_action_button()
 		_redraw()
+## Text of a button shown under the placeholder ("Create Multisample"); empty hides it.
+var placeholder_action := "":
+	set(v):
+		placeholder_action = v
+		_update_action_button()
+## Label drawn at the top left (the focused zone's name); empty hides it. Clicking it emits
+## `title_clicked`.
+var title := "":
+	set(v):
+		title = v
+		_redraw()
+## Whether audio assets dropped here emit `assets_dropped`.
+var accepts_drops := true
 
 var data: WaveformData = null:
 	set(d):
@@ -92,6 +124,7 @@ var data: WaveformData = null:
 		if _wave:
 			_wave.data = d
 		_fit_waveform()
+		_update_action_button()
 		_redraw()
 
 ## Current playhead positions (normalized) and levels (0..1), after extrapolation.
@@ -100,6 +133,7 @@ var playhead_levels := PackedFloat32Array()
 
 var _wave: WaveformView
 var _overlay: Control
+var _action_button: Button
 var _hover := -1
 var _dragging := -1
 var _fine := FineDrag.new()
@@ -124,7 +158,14 @@ func _init() -> void:
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.draw.connect(_draw_overlay)
 	add_child(_overlay)
+	_action_button = Button.new()
+	_action_button.name = "PlaceholderAction"
+	_action_button.visible = false
+	_action_button.focus_mode = Control.FOCUS_NONE
+	_action_button.pressed.connect(func() -> void: placeholder_action_pressed.emit())
+	add_child(_action_button)
 	resized.connect(_fit_waveform)
+	resized.connect(_place_action_button)
 	set_process(false)
 
 
@@ -138,7 +179,35 @@ func _draw() -> void:
 
 func _on_data_loaded(_ok := true) -> void:
 	_fit_waveform()
+	_update_action_button()
 	_redraw()
+
+
+func is_waveform_ready() -> bool:
+	return data != null and data.is_ready()
+
+
+## The placeholder action button shows only while the placeholder does.
+func _update_action_button() -> void:
+	if _action_button == null:
+		return
+	_action_button.text = placeholder_action
+	_action_button.visible = not placeholder_action.is_empty() and not placeholder.is_empty() and not is_waveform_ready()
+	_place_action_button()
+
+
+func is_placeholder_action_visible() -> bool:
+	return _action_button != null and _action_button.visible
+
+
+func _place_action_button() -> void:
+	if _action_button == null or not _action_button.visible:
+		return
+	_action_button.reset_size()
+	var button_size := _action_button.get_combined_minimum_size()
+	_action_button.size = button_size
+	_action_button.position = Vector2(
+		roundf((size.x - button_size.x) * 0.5), roundf(size.y * 0.5 + 6.0))
 
 
 func waveform_view() -> WaveformView:
@@ -287,11 +356,18 @@ func _hit_distance(which: int, pos: Vector2) -> float:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
+		if button.button_index == MOUSE_BUTTON_RIGHT and button.pressed and _dragging < 0:
+			accept_event()
+			context_menu_requested.emit(button.position)
+			return
 		if button.button_index != MOUSE_BUTTON_LEFT:
 			return
 		if button.pressed:
 			var which := hit_test(button.position)
 			if which < 0:
+				if title_rect().has_point(button.position):
+					accept_event()
+					title_clicked.emit()
 				return
 			accept_event()
 			if button.double_click:
@@ -308,6 +384,9 @@ func _gui_input(event: InputEvent) -> void:
 			drag_to(motion.position, motion.shift_pressed)
 		else:
 			_set_hover(hit_test(motion.position))
+			if _hover < 0:
+				mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND \
+						if title_rect().has_point(motion.position) else Control.CURSOR_ARROW
 
 
 func _notification(what: int) -> void:
@@ -474,7 +553,11 @@ func _draw_overlay() -> void:
 	if data == null or not data.is_ready():
 		if not placeholder.is_empty():
 			var font := ThemeDB.fallback_font
-			o.draw_string(font, Vector2(8, size.y * 0.5 + 4), placeholder, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, PLACEHOLDER_COLOR)
+			if _action_button.visible:
+				o.draw_string(font, Vector2(0, size.y * 0.5 - 4), placeholder, HORIZONTAL_ALIGNMENT_CENTER, size.x, 13, PLACEHOLDER_COLOR)
+			else:
+				o.draw_string(font, Vector2(8, size.y * 0.5 + 4), placeholder, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, PLACEHOLDER_COLOR)
+		_draw_title(o)
 		return
 	var w := size.x
 	var h := size.y
@@ -497,6 +580,7 @@ func _draw_overlay() -> void:
 		o.draw_line(Vector2(x, 0), Vector2(x, h), Color(PLAYHEAD_COLOR, alpha), 1.0)
 	if _dragging >= 0:
 		_draw_readout(o, _dragging)
+	_draw_title(o)
 
 
 func _draw_loop(o: Control, w: float, h: float) -> void:
@@ -542,6 +626,69 @@ func _draw_readout(o: Control, which: int) -> void:
 	var y := HANDLE_SIZE + 4.0 if which < Point.LOOP_START else size.y - HANDLE_SIZE - 20.0
 	o.draw_rect(Rect2(x, y, width, 16), Color(0, 0, 0, 0.75))
 	o.draw_string(font, Vector2(x + 4, y + 12), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+
+
+## Where the title label is drawn (and clicked), clipped to the display. Empty without a title.
+func title_rect() -> Rect2:
+	if title.is_empty():
+		return Rect2()
+	var font := ThemeDB.fallback_font
+	var text_width := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_FONT_SIZE).x
+	var width := minf(text_width + TITLE_PAD * 2.0, maxf(size.x - TITLE_MARGIN.x * 2.0, 0.0))
+	return Rect2(TITLE_MARGIN, Vector2(width, TITLE_FONT_SIZE + 6.0))
+
+
+func _draw_title(o: Control) -> void:
+	var rect := title_rect()
+	if rect.size.x <= TITLE_PAD * 2.0:
+		return
+	var font := ThemeDB.fallback_font
+	o.draw_rect(rect, TITLE_BG)
+	var text := fit_text(title, font, TITLE_FONT_SIZE, rect.size.x - TITLE_PAD * 2.0)
+	o.draw_string(font, rect.position + Vector2(TITLE_PAD, TITLE_FONT_SIZE + 1.0), text,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_FONT_SIZE, TITLE_COLOR)
+
+
+## `text` cut to fit `max_width` pixels, ending in an ellipsis when cut; "" when not even one
+## character fits. Canvas draws can't clip, so labels trim themselves (also the zone map's).
+static func fit_text(text: String, font: Font, font_size: int, max_width: float) -> String:
+	if font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= max_width:
+		return text
+	var lo := 0
+	var hi := text.length()
+	while lo < hi:
+		var mid := (lo + hi + 1) / 2
+		var candidate := text.left(mid) + "…"
+		if font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= max_width:
+			lo = mid
+		else:
+			hi = mid - 1
+	return text.left(lo) + "…" if lo > 0 else ""
+
+
+# ============================================================================
+# DROPS
+# ============================================================================
+
+## The audio Assets in `data` (one Asset or an Array of them), or [] when anything else is in it.
+static func audio_assets_in(data: Variant) -> Array:
+	var items: Array = data if data is Array else [data]
+	if items.is_empty():
+		return []
+	for item in items:
+		if not (item is Asset) or (item as Asset).type != Asset.TYPE.Audio:
+			return []
+	return items.duplicate()
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	return accepts_drops and not audio_assets_in(data).is_empty()
+
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	var assets := audio_assets_in(data)
+	if not assets.is_empty():
+		assets_dropped.emit(assets)
 
 
 ## `seconds` as mm:ss.mmm.

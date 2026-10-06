@@ -1,0 +1,80 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://devices/builtin/sampler/ZoneGroupBar.gd" id="1_bar"]
+[ext_resource type="Script" uid="uid://bp66xc5wekmgh" path="res://components/LabeledKnob.gd" id="2_knob"]
+
+[node name="ZoneGroupBar" type="HBoxContainer"]
+theme_override_constants/separation = 6
+script = ExtResource("1_bar")
+
+[node name="Scroll" type="ScrollContainer" parent="."]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+vertical_scroll_mode = 0
+
+[node name="Chips" type="HBoxContainer" parent="Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AddButton" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(22, 20)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Add a group"
+focus_mode = 0
+theme_override_font_sizes/font_size = 12
+text = "+"
+
+[node name="GroupMenu" type="PopupMenu" parent="."]
+unique_name_in_owner = true
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+item_count = 3
+item_0/text = "Rename"
+item_0/id = 0
+item_1/text = "Delete"
+item_1/id = 1
+item_2/id = 100
+item_2/separator = true
+
+[node name="PlayModeMenu" type="PopupMenu" parent="GroupMenu"]
+unique_name_in_owner = true
+oversampling_override = 1.0
+theme_type_variation = &"ContextMenuList"
+item_count = 3
+item_0/text = "All"
+item_0/checkable = 2
+item_0/id = 0
+item_1/text = "Round robin"
+item_1/checkable = 2
+item_1/id = 1
+item_2/text = "Random"
+item_2/checkable = 2
+item_2/id = 2
+
+[node name="GainPopup" type="PopupPanel" parent="."]
+unique_name_in_owner = true
+theme_type_variation = &"ContextMenu"
+oversampling_override = 1.0
+size = Vector2i(72, 76)
+
+[node name="Margin" type="MarginContainer" parent="GainPopup"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 6
+
+[node name="GainKnob" type="VBoxContainer" parent="GainPopup/Margin"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_knob")
+label_width = 56.0
+text = "Gain"
