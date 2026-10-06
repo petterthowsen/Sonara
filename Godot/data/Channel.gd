@@ -818,10 +818,11 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 	removed_device.set_channel(null)
 	_reindex_host(host)
 
+	# Listeners get the instance id (as the signals document), not the device type id
 	if parent:
-		parent.child_removed.emit(position, device_id)
+		parent.child_removed.emit(position, removed_device.id)
 	else:
-		device_removed.emit(position, device_id)
+		device_removed.emit(position, removed_device.id)
 	logger.info("[%d] Device removed: %s" % [id, device_id])
 	AuxReturnSync.on_device_removed(get_project(), self, removed_device, parent)
 

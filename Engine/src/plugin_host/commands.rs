@@ -7,7 +7,7 @@ use std::os::fd::{IntoRawFd, OwnedFd};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use clack_extensions::gui::{GuiSize, PluginGui};
+use clack_extensions::gui::GuiSize;
 use clack_extensions::latency::PluginLatency;
 use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
 use clack_extensions::render::{PluginRender, RenderMode};
@@ -26,7 +26,8 @@ use crate::audio::ipc::{
 
 use crate::plugin_host::audio_thread::AudioThreadHandle;
 use crate::plugin_host::operations::{
-    close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui,
+    close_plugin_gui, has_plugin_gui, load_plugin, open_plugin_gui, plugin_gui_state,
+    set_plugin_gui_size, set_plugin_gui_visible,
 };
 use crate::plugin_host::state::{ParamMap, PluginState};
 use crate::plugin_host::value_text;
@@ -110,6 +111,7 @@ pub fn process_command(
                 instance,
                 shared,
                 gui_open: false,
+                gui_floating: false,
                 activated: false,
                 processing: false,
                 sample_rate,
@@ -134,38 +136,26 @@ pub fn process_command(
                 window_handle
             );
             if let Some(ref mut state) = plugin_state {
-                if state.gui_open {
-                    info!("GUI already open, returning GuiOpened");
-                    // Query current size for consistency
-                    let mut handle = state.instance.plugin_handle();
-                    if let Some(gui_ext) = handle.get_extension::<PluginGui>() {
-                        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
-                            width: 800,
-                            height: 600,
-                        });
-                        let is_resizable = gui_ext.can_resize(&mut handle);
-                        return Some(PluginResponse::GuiOpened {
-                            width: size.width,
-                            height: size.height,
-                            is_resizable,
-                        });
-                    }
-                    return Some(PluginResponse::GuiOpened {
-                        width: 800,
-                        height: 600,
-                        is_resizable: true,
-                    });
-                }
-
-                info!("Attempting to open GUI...");
-                match open_plugin_gui(&mut state.instance, window_handle) {
-                    Ok((width, height, is_resizable)) => {
+                let result = if state.gui_open {
+                    info!("GUI already open, returning its current state");
+                    plugin_gui_state(&mut state.instance, state.gui_floating)
+                } else {
+                    info!("Attempting to open GUI...");
+                    open_plugin_gui(&mut state.instance, window_handle)
+                };
+                match result {
+                    Ok(gui) => {
                         state.gui_open = true;
-                        info!("✅ GUI opened successfully, returning GuiOpened response with size {}x{} (resizable: {})", width, height, is_resizable);
+                        state.gui_floating = gui.floating;
+                        info!(
+                            "✅ GUI open, returning GuiOpened with size {}x{} (resizable: {}, floating: {})",
+                            gui.width, gui.height, gui.resizable, gui.floating
+                        );
                         Some(PluginResponse::GuiOpened {
-                            width,
-                            height,
-                            is_resizable,
+                            width: gui.width,
+                            height: gui.height,
+                            is_resizable: gui.resizable,
+                            floating: gui.floating,
                         })
                     }
                     Err(e) => {
@@ -190,6 +180,7 @@ pub fn process_command(
                 match close_plugin_gui(&mut state.instance) {
                     Ok(()) => {
                         state.gui_open = false;
+                        state.gui_floating = false;
                         info!("GUI closed successfully");
                         Some(PluginResponse::GuiClosed)
                     }
@@ -201,6 +192,30 @@ pub fn process_command(
                 })
             }
         }
+
+        PluginCommand::SetGuiVisible { visible } => match plugin_state {
+            Some(ref mut state) if state.gui_open => {
+                gui_size_response(set_plugin_gui_visible(&mut state.instance, visible))
+            }
+            Some(_) => Some(PluginResponse::GuiError {
+                error: "GUI is not open".to_string(),
+            }),
+            None => Some(PluginResponse::GuiError {
+                error: "Plugin not initialized".to_string(),
+            }),
+        },
+
+        PluginCommand::SetGuiSize { width, height } => match plugin_state {
+            Some(ref mut state) if state.gui_open => {
+                gui_size_response(set_plugin_gui_size(&mut state.instance, width, height))
+            }
+            Some(_) => Some(PluginResponse::GuiError {
+                error: "GUI is not open".to_string(),
+            }),
+            None => Some(PluginResponse::GuiError {
+                error: "Plugin not initialized".to_string(),
+            }),
+        },
 
         PluginCommand::HasGui => {
             let supported = if let Some(ref mut state) = plugin_state {
@@ -677,6 +692,17 @@ pub fn process_command(
 }
 
 /// Stop processing on the audio thread and deactivate the instance on the main thread.
+/// `GuiSize` for a GUI operation's result, `GuiError` if it failed
+fn gui_size_response(result: Result<GuiSize, String>) -> Option<PluginResponse> {
+    Some(match result {
+        Ok(size) => PluginResponse::GuiSize {
+            width: size.width,
+            height: size.height,
+        },
+        Err(error) => PluginResponse::GuiError { error },
+    })
+}
+
 fn deactivate_plugin(state: &mut PluginState, audio: &AudioThreadHandle) {
     if let Some(stopped) = audio.take_processor(state.instance_id) {
         state.instance.deactivate(stopped);

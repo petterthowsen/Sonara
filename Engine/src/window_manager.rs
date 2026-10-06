@@ -6,6 +6,11 @@
 //!
 //! Uses a dedicated thread running winit's event_loop.run() for proper
 //! X11 event handling. Plugins create their own child windows and GL contexts.
+//!
+//! A host window is either a floating toplevel or embedded: reparented into a window of another
+//! process (a Godot window), clipped to a viewport inside it (ADR 0016). The plugin's own window
+//! stays a child of the host window throughout, so embedding, moving between Godot windows and
+//! returning to floating never close the plugin GUI.
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::collections::HashMap;
@@ -13,47 +18,79 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use tracing::{error, info, warn};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{EventLoopBuilder, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, EventLoopBuilder, EventLoopProxy};
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
 
-/// Commands sent to the window manager thread
+/// Commands sent to the window manager thread. They are applied in the order they were sent.
 enum WindowCommand {
-    /// Create a new window
+    /// Create a host window (or reuse the existing one for this key), embedded into a foreign
+    /// window before it is first mapped when `embed` is given
     Create {
         process_key: String,
         width: u32,
         height: u32,
+        embed: Option<(u64, EmbedRect)>,
         response: SyncSender<Option<u64>>,
     },
-    /// Resize an existing window
+    /// Resize a floating window to the plugin's size (ignored while embedded)
     Resize {
         process_key: String,
         width: u32,
         height: u32,
     },
-    /// Show a window (make visible)
+    /// The plugin GUI is open in this window: map it, unless it was hidden with `SetVisible`
     Show { process_key: String },
-    /// Destroy a window
-    Destroy { process_key: String },
-    /// SPIKE: reparent the host window into a foreign X11 window (e.g. Godot's) at a rect
+    /// Show or hide the window (an embedded GUI on a hidden tab, for instance)
+    SetVisible { process_key: String, visible: bool },
+    /// Reparent the window into a foreign X11 window at a viewport. `done` is answered once
+    /// the X server has the reparent (or dropped when there is no such window).
     Embed {
         process_key: String,
         parent_xid: u64,
         rect: EmbedRect,
+        done: SyncSender<()>,
     },
-    /// SPIKE: move/resize an embedded host window; scroll offsets the plugin's child window
+    /// New viewport (and scroll offset) of an embedded window
     Bounds {
         process_key: String,
         rect: EmbedRect,
     },
-    /// SPIKE: reparent the host window back to the root window (floating)
-    Unembed { process_key: String },
+    /// Back to a floating toplevel
+    Unembed {
+        process_key: String,
+        done: SyncSender<()>,
+    },
+    /// Unmap the window and, if embedded, reparent it to the root while unmapped. Sent before
+    /// the plugin GUI closes, so the embedder can free its window without destroying the
+    /// plugin's window under it, and nothing flashes on screen.
+    Release {
+        process_key: String,
+        done: SyncSender<()>,
+    },
+    /// Destroy the window (after the plugin closed its GUI)
+    Destroy { process_key: String },
+}
+
+impl WindowCommand {
+    fn process_key(&self) -> &str {
+        match self {
+            WindowCommand::Create { process_key, .. }
+            | WindowCommand::Resize { process_key, .. }
+            | WindowCommand::Show { process_key }
+            | WindowCommand::SetVisible { process_key, .. }
+            | WindowCommand::Embed { process_key, .. }
+            | WindowCommand::Bounds { process_key, .. }
+            | WindowCommand::Unembed { process_key, .. }
+            | WindowCommand::Release { process_key, .. }
+            | WindowCommand::Destroy { process_key } => process_key,
+        }
+    }
 }
 
 /// Viewport of an embedded host window, in the parent window's coordinates.
 /// `scroll_x`/`scroll_y` shift the plugin's own window inside it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EmbedRect {
     pub x: i32,
     pub y: i32,
@@ -115,12 +152,19 @@ impl WindowManager {
         true
     }
 
-    /// Create a window and return its X11 handle
-    /// This blocks until the window is created (or creation fails)
-    pub fn create_window(&mut self, process_key: String, width: u32, height: u32) -> Option<u64> {
+    /// Create a window and return its X11 handle. With `embed` (parent XID and viewport) the
+    /// window is reparented into the parent before it is ever mapped, so no floating window
+    /// flashes. This blocks until the window is created (or creation fails).
+    pub fn create_window(
+        &mut self,
+        process_key: String,
+        width: u32,
+        height: u32,
+        embed: Option<(u64, EmbedRect)>,
+    ) -> Option<u64> {
         info!(
-            "Requesting window creation for process: {} ({}x{})",
-            process_key, width, height
+            "Requesting window creation for process: {} ({}x{}, embed: {:?})",
+            process_key, width, height, embed
         );
 
         let (response_tx, response_rx) = sync_channel(1);
@@ -129,6 +173,7 @@ impl WindowManager {
             process_key: process_key.clone(),
             width,
             height,
+            embed,
             response: response_tx,
         }) {
             return None;
@@ -154,7 +199,7 @@ impl WindowManager {
         }
     }
 
-    /// Resize an existing window and make it visible
+    /// Resize a floating window to the plugin's size (embedded windows keep their viewport)
     pub fn resize_window(&mut self, process_key: &str, width: u32, height: u32) {
         info!(
             "Requesting window resize for process: {} to {}x{}",
@@ -168,12 +213,25 @@ impl WindowManager {
         });
     }
 
-    /// Show a window (make it visible)
+    /// The plugin GUI opened in this window: map it unless it is hidden
     pub fn show_window(&mut self, process_key: &str) {
         info!("Requesting window show for process: {}", process_key);
 
         self.send(WindowCommand::Show {
             process_key: process_key.to_string(),
+        });
+    }
+
+    /// Show or hide a window
+    pub fn set_window_visible(&mut self, process_key: &str, visible: bool) {
+        info!(
+            "Requesting window {} for process: {}",
+            if visible { "show" } else { "hide" },
+            process_key
+        );
+        self.send(WindowCommand::SetVisible {
+            process_key: process_key.to_string(),
+            visible,
         });
     }
 
@@ -186,20 +244,23 @@ impl WindowManager {
         });
     }
 
-    /// SPIKE: embed the host window into `parent_xid` (an X11 window from another process)
-    pub fn embed_window(&mut self, process_key: &str, parent_xid: u64, rect: EmbedRect) {
+    /// Embed the host window into `parent_xid` (an X11 window from another process). Returns
+    /// once the X server has the reparent: true when the window exists and was moved.
+    pub fn embed_window(&mut self, process_key: &str, parent_xid: u64, rect: EmbedRect) -> bool {
         info!(
             "Requesting embed of {} into 0x{:x} at {:?}",
             process_key, parent_xid, rect
         );
+        let (done, rx) = sync_channel(1);
         self.send(WindowCommand::Embed {
             process_key: process_key.to_string(),
             parent_xid,
             rect,
-        });
+            done,
+        }) && Self::wait_done(rx)
     }
 
-    /// SPIKE: update the viewport of an embedded host window
+    /// Update the viewport of an embedded host window
     pub fn set_embed_bounds(&mut self, process_key: &str, rect: EmbedRect) {
         self.send(WindowCommand::Bounds {
             process_key: process_key.to_string(),
@@ -207,12 +268,40 @@ impl WindowManager {
         });
     }
 
-    /// SPIKE: return an embedded host window to the root window
-    pub fn unembed_window(&mut self, process_key: &str) {
+    /// Return an embedded host window to the root window (floating)
+    /// Returns once it is out of its embedder (true when the window exists).
+    pub fn unembed_window(&mut self, process_key: &str) -> bool {
         info!("Requesting unembed of {}", process_key);
+        let (done, rx) = sync_channel(1);
         self.send(WindowCommand::Unembed {
             process_key: process_key.to_string(),
-        });
+            done,
+        }) && Self::wait_done(rx)
+    }
+
+    /// Hide the window and take it out of its embedder before the plugin GUI closes. Returns
+    /// once it is out (true when the window exists), so the embedder can free its window.
+    pub fn release_window(&mut self, process_key: &str) -> bool {
+        info!("Requesting release of {}", process_key);
+        let (done, rx) = sync_channel(1);
+        self.send(WindowCommand::Release {
+            process_key: process_key.to_string(),
+            done,
+        }) && Self::wait_done(rx)
+    }
+
+    /// Wait for the winit thread to finish a command. Bounded: the X calls have their own
+    /// bounded waits (withdraw), so this only trips if the thread is stuck.
+    fn wait_done(rx: Receiver<()>) -> bool {
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(()) => true,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                warn!("Window thread didn't finish an embed command within 1 s");
+                false
+            }
+            // Sender dropped: no such window
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => false,
+        }
     }
 
     /// No-op for compatibility (winit thread handles events automatically)
@@ -227,12 +316,60 @@ impl WindowManager {
     }
 }
 
-/// Simplified window holder (plugin creates its own GL context as needed)
-struct WindowHolder {
+/// Where an embedded host window lives
+#[derive(Clone, Copy, Debug)]
+struct Embed {
+    parent: u64,
+    rect: EmbedRect,
+}
+
+/// A plugin's host window (the plugin creates its own child window and GL context in it)
+struct HostWindow {
     window: Window,
-    /// SPIKE: Some while reparented into a foreign window. Plugin resize requests then
-    /// leave the host window alone: it is a viewport sized by the embedder.
-    embedded: Option<EmbedRect>,
+    xid: u64,
+    /// Some while reparented into a foreign window. Plugin resize requests then leave the host
+    /// window alone: it is a viewport sized by the embedder.
+    embed: Option<Embed>,
+    /// Wanted visibility (`SetVisible`); cleared by `Release` and by the user closing it
+    visible: bool,
+    /// The plugin GUI opened in it (`Show`). The window stays unmapped until then.
+    shown: bool,
+    /// Whether it is mapped. Tracked here: winit's `is_visible` stays false until the MapNotify.
+    mapped: bool,
+}
+
+impl HostWindow {
+    /// Map or unmap the window to match `visible && shown`. Mapping goes through winit so its
+    /// own visibility state stays right; the X11 embedding calls leave the mapped state as is.
+    fn update_mapping(&mut self) {
+        let want = self.visible && self.shown;
+        if want != self.mapped {
+            self.window.set_visible(want);
+            self.mapped = want;
+        }
+    }
+
+    unsafe fn embed(&mut self, dpy: x11_embed::Display, parent: u64, rect: EmbedRect) {
+        match self.embed {
+            // Same parent: only the viewport changes (a reparent would unmap and remap it)
+            Some(e) if e.parent == parent => x11_embed::apply_bounds(dpy, self.xid as _, rect),
+            current => x11_embed::embed(
+                dpy,
+                self.xid as _,
+                parent as _,
+                rect,
+                current.is_none(),
+                self.mapped,
+            ),
+        }
+        self.embed = Some(Embed { parent, rect });
+    }
+
+    unsafe fn unembed(&mut self, dpy: x11_embed::Display) {
+        if self.embed.take().is_some() {
+            x11_embed::unembed(dpy, self.xid as _, self.mapped);
+        }
+    }
 }
 
 fn x11_handle(window: &Window) -> Option<u64> {
@@ -246,8 +383,22 @@ fn x11_handle(window: &Window) -> Option<u64> {
         })
 }
 
-/// SPIKE: X11 reparenting on winit's own Xlib connection, so our requests are ordered
-/// with winit's (map/unmap/resize). winit installs a non-fatal Xlib error handler.
+/// winit's Xlib display, for the embedding calls. None (and an error logged) on other backends.
+fn xlib_display(event_loop: &ActiveEventLoop) -> Option<x11_embed::Display> {
+    match event_loop.display_handle().map(|h| h.as_raw()) {
+        Ok(RawDisplayHandle::Xlib(h)) => h.display.map(|d| d.as_ptr() as x11_embed::Display),
+        other => {
+            error!("Embedding needs an Xlib display, got {:?}", other);
+            None
+        }
+    }
+}
+
+/// X11 reparenting on winit's own Xlib connection, so our requests are ordered with winit's
+/// (map/unmap/resize). winit installs a non-fatal Xlib error handler.
+///
+/// None of these functions change whether the window is mapped: `HostWindow::update_mapping`
+/// owns that, through winit.
 mod x11_embed {
     use super::EmbedRect;
     use std::os::raw::{c_int, c_ulong};
@@ -275,18 +426,23 @@ mod x11_embed {
         Some((root, parent, kids))
     }
 
-    /// Unmap `win` and wait until the WM has let go of it (parent is root again).
-    /// A WM reparents managed toplevels into a frame window; reparenting out of that
-    /// frame behind its back would race with it reparenting the window back on unmap.
-    unsafe fn withdraw(dpy: Display, win: c_ulong) {
-        let screen = xlib::XDefaultScreen(dpy);
-        xlib::XWithdrawWindow(dpy, win, screen);
+    /// Take a toplevel away from the WM: unmap it if `mapped`, then wait until the WM has let
+    /// go of it (parent is root again). A WM reparents managed toplevels into a frame window;
+    /// reparenting out of that frame behind its back would race with it reparenting the window
+    /// back on unmap. A window that was never mapped returns at once.
+    unsafe fn withdraw(dpy: Display, win: c_ulong, mapped: bool) {
+        if mapped {
+            let screen = xlib::XDefaultScreen(dpy);
+            xlib::XWithdrawWindow(dpy, win, screen);
+        }
         xlib::XSync(dpy, 0);
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(500) {
             match parent_of(dpy, win) {
                 Some((root, parent, _)) if root == parent => {
-                    info!("withdrawn after {:?}", start.elapsed());
+                    if mapped {
+                        info!("withdrawn after {:?}", start.elapsed());
+                    }
                     return;
                 }
                 None => return,
@@ -332,6 +488,9 @@ mod x11_embed {
         (w, h)
     }
 
+    /// Reparent `win` into `parent` (a window of another process) and clip it to `rect`.
+    /// `from_toplevel`: it is a floating window now (otherwise it moves from another embedder).
+    ///
     /// Godot (4.7) selects SubstructureNotify on its windows and takes a ConfigureNotify from
     /// any direct child as a resize of the window itself. So the host window always covers the
     /// whole parent at (0,0): its ConfigureNotify then carries Godot's real size and is ignored.
@@ -342,29 +501,32 @@ mod x11_embed {
         win: c_ulong,
         parent: c_ulong,
         rect: EmbedRect,
-        managed: bool,
+        from_toplevel: bool,
+        mapped: bool,
     ) {
-        if managed {
-            withdraw(dpy, win);
+        if from_toplevel {
+            withdraw(dpy, win, mapped);
         }
         // Godot holds SubstructureRedirect on its windows and drops the redirected map and
         // configure requests. Override-redirect windows bypass the redirect.
         set_override_redirect(dpy, win, true);
+        set_black_background(dpy, win);
         // Resize only while the window is not a child of some other Godot window: Godot would
         // take that ConfigureNotify as its own resize. A floating window is sized before the
         // reparent (Godot never sees a wrong size); an embedded one after (its new parent sees
         // its own size and ignores it).
         apply_shape(dpy, win, rect);
         let (pw, ph) = size_of(dpy, parent);
-        if managed {
+        if from_toplevel {
             xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
         }
         // Reparenting a mapped child unmaps and remaps it by itself.
         xlib::XReparentWindow(dpy, win, parent, 0, 0);
-        if !managed {
+        if !from_toplevel {
             xlib::XResizeWindow(dpy, win, pw.max(1), ph.max(1));
         }
-        if managed {
+        // A withdrawn toplevel has to be mapped again, now as a child.
+        if from_toplevel && mapped {
             xlib::XMapRaised(dpy, win);
         }
         xlib::XSync(dpy, 0);
@@ -376,6 +538,17 @@ mod x11_embed {
             ph,
             parent_of(dpy, win).map(|p| p.1)
         );
+    }
+
+    /// winit leaves the background unset, so viewport pixels the plugin's window doesn't cover
+    /// (a viewport larger than the plugin) would show whatever was drawn there before.
+    unsafe fn set_black_background(dpy: Display, win: c_ulong) {
+        let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
+        xlib::XGetWindowAttributes(dpy, win, &mut attrs);
+        // An ARGB (depth 32) visual needs an opaque alpha, or the gap is see-through
+        let black: c_ulong = if attrs.depth == 32 { 0xff00_0000 } else { 0 };
+        xlib::XSetWindowBackground(dpy, win, black);
+        xlib::XClearWindow(dpy, win);
     }
 
     unsafe fn set_override_redirect(dpy: Display, win: c_ulong, on: bool) {
@@ -423,9 +596,12 @@ mod x11_embed {
         xlib::XFlush(dpy);
     }
 
-    pub unsafe fn unembed(dpy: Display, win: c_ulong, was_mapped: bool) {
+    /// Reparent `win` back to the root as a WM-managed toplevel, unshaped and sized to the
+    /// plugin's window. A `mapped` window is mapped again (the WM decorates it); an unmapped
+    /// one stays unmapped.
+    pub unsafe fn unembed(dpy: Display, win: c_ulong, mapped: bool) {
         let root = xlib::XDefaultRootWindow(dpy);
-        if was_mapped {
+        if mapped {
             xlib::XUnmapWindow(dpy, win);
         }
         // Back under the WM: it must manage (and decorate) the window again.
@@ -442,7 +618,7 @@ mod x11_embed {
                 xlib::XMoveWindow(dpy, kid, 0, 0);
             }
         }
-        if was_mapped {
+        if mapped {
             // Not override-redirect, so the WM picks it up (MapRequest) and decorates it again.
             xlib::XMapRaised(dpy, win);
         }
@@ -453,11 +629,11 @@ mod x11_embed {
 
 /// Create a simple winit window (plugin creates its own GL context if needed)
 fn create_window(
-    event_loop_target: &winit::event_loop::ActiveEventLoop,
+    event_loop_target: &ActiveEventLoop,
     process_key: &str,
     width: u32,
     height: u32,
-) -> Result<WindowHolder, String> {
+) -> Result<HostWindow, String> {
     info!("🪟 Creating window: {} ({}x{})", process_key, width, height);
 
     let window_attributes = Window::default_attributes()
@@ -469,19 +645,154 @@ fn create_window(
     let window = event_loop_target
         .create_window(window_attributes)
         .map_err(|e| format!("Failed to create window: {}", e))?;
+    let xid = x11_handle(&window).ok_or("Failed to get X11 handle for window")?;
 
-    info!("✅ Window created");
+    info!("✅ Window created: 0x{:x}", xid);
 
-    Ok(WindowHolder {
+    Ok(HostWindow {
         window,
-        embedded: None,
+        xid,
+        embed: None,
+        visible: true,
+        shown: false,
+        mapped: false,
     })
 }
 
-enum EmbedOp {
-    Embed(String, u64, EmbedRect),
-    Bounds(String, EmbedRect),
-    Unembed(String),
+/// Apply one command on the winit thread
+fn apply_command(
+    cmd: WindowCommand,
+    windows: &mut HashMap<String, HostWindow>,
+    event_loop_target: &ActiveEventLoop,
+) {
+    if let WindowCommand::Create {
+        process_key,
+        width,
+        height,
+        embed,
+        response,
+    } = cmd
+    {
+        // Reuse an existing window (e.g. the GUI is already open, or a close never finished)
+        let host = match windows.entry(process_key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                warn!(
+                    "⚠️  Window {} already exists, reusing existing window",
+                    entry.key()
+                );
+                let host = entry.into_mut();
+                host.visible = true;
+                if host.embed.is_none() && embed.is_none() {
+                    let _ = host
+                        .window
+                        .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                }
+                host
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                match create_window(event_loop_target, entry.key(), width, height) {
+                    Ok(host) => entry.insert(host),
+                    Err(e) => {
+                        error!("Failed to create window: {}", e);
+                        let _ = response.send(None);
+                        return;
+                    }
+                }
+            }
+        };
+        if let Some((parent, rect)) = embed {
+            match xlib_display(event_loop_target) {
+                Some(dpy) => unsafe { host.embed(dpy, parent, rect) },
+                None => error!("Cannot embed 0x{:x}: no Xlib display", host.xid),
+            }
+        }
+        let _ = response.send(Some(host.xid));
+        return;
+    }
+
+    let key = cmd.process_key().to_string();
+    if let WindowCommand::Destroy { .. } = cmd {
+        if windows.remove(&key).is_some() {
+            info!("🗑️  Destroyed window: {}", key);
+        }
+        return;
+    }
+    let Some(host) = windows.get_mut(&key) else {
+        // Late commands for a window already destroyed are expected (bounds after close)
+        info!("Window command for unknown window {}", key);
+        return;
+    };
+
+    match cmd {
+        WindowCommand::Resize { width, height, .. } => {
+            if let Some(embed) = host.embed {
+                info!(
+                    "🔄 Plugin {} wants {}x{}; embedded, host viewport unchanged",
+                    key, width, height
+                );
+                // A plugin may replace its window when it resizes
+                if let Some(dpy) = xlib_display(event_loop_target) {
+                    unsafe { x11_embed::apply_bounds(dpy, host.xid as _, embed.rect) };
+                }
+            } else {
+                info!("🔄 Resizing window: {} to {}x{}", key, width, height);
+                let _ = host
+                    .window
+                    .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+            }
+        }
+        WindowCommand::Show { .. } => {
+            // Embedded before the GUI opened: the plugin's window didn't exist yet, so it sits
+            // at (0,0) instead of in the viewport
+            if let (Some(embed), Some(dpy)) = (host.embed, xlib_display(event_loop_target)) {
+                unsafe { x11_embed::apply_bounds(dpy, host.xid as _, embed.rect) };
+            }
+            host.shown = true;
+            host.update_mapping();
+            info!("👁️  Showing window: {} (mapped: {})", key, host.mapped);
+        }
+        WindowCommand::SetVisible { visible, .. } => {
+            host.visible = visible;
+            host.update_mapping();
+        }
+        WindowCommand::Embed {
+            parent_xid,
+            rect,
+            done,
+            ..
+        } => {
+            if let Some(dpy) = xlib_display(event_loop_target) {
+                unsafe { host.embed(dpy, parent_xid, rect) };
+            }
+            let _ = done.send(());
+        }
+        WindowCommand::Bounds { rect, .. } => {
+            if let (Some(embed), Some(dpy)) = (host.embed.as_mut(), xlib_display(event_loop_target))
+            {
+                embed.rect = rect;
+                unsafe { x11_embed::apply_bounds(dpy, host.xid as _, rect) };
+            }
+        }
+        WindowCommand::Unembed { done, .. } => {
+            if host.embed.is_some() {
+                if let Some(dpy) = xlib_display(event_loop_target) {
+                    unsafe { host.unembed(dpy) };
+                }
+            }
+            let _ = done.send(());
+        }
+        WindowCommand::Release { done, .. } => {
+            host.visible = false;
+            host.update_mapping();
+            if host.embed.is_some() {
+                if let Some(dpy) = xlib_display(event_loop_target) {
+                    unsafe { host.unembed(dpy) };
+                }
+            }
+            let _ = done.send(());
+        }
+        WindowCommand::Create { .. } | WindowCommand::Destroy { .. } => unreachable!(),
+    }
 }
 
 /// Background thread function that runs winit event loop
@@ -503,201 +814,20 @@ fn run_window_thread(
     };
     let _ = proxy_tx.send(Some(event_loop.create_proxy()));
 
-    let mut windows: HashMap<String, WindowHolder> = HashMap::new();
-    let mut pending_creates: Vec<(String, u32, u32, SyncSender<Option<u64>>)> = Vec::new();
-    let mut pending_resizes: Vec<(String, u32, u32)> = Vec::new();
-    let mut pending_destroys: Vec<String> = Vec::new();
-    let mut pending_embeds: Vec<EmbedOp> = Vec::new();
+    let mut windows: HashMap<String, HostWindow> = HashMap::new();
+    let mut pending: Vec<WindowCommand> = Vec::new();
 
     #[allow(deprecated)]
     let result = event_loop.run(move |event, event_loop_target| {
-        // Process commands from main thread
-        while let Ok(cmd) = command_rx.try_recv() {
-            match cmd {
-                WindowCommand::Create {
-                    process_key,
-                    width,
-                    height,
-                    response,
-                } => {
-                    pending_creates.push((process_key, width, height, response));
-                }
-                WindowCommand::Resize {
-                    process_key,
-                    width,
-                    height,
-                } => {
-                    pending_resizes.push((process_key, width, height));
-                }
-                WindowCommand::Show { process_key } => {
-                    // Show window immediately
-                    if let Some(window_holder) = windows.get(&process_key) {
-                        window_holder.window.set_visible(true);
-                        info!("👁️  Showing window: {}", process_key);
-                    }
-                }
-                WindowCommand::Destroy { process_key } => {
-                    pending_destroys.push(process_key);
-                }
-                WindowCommand::Embed {
-                    process_key,
-                    parent_xid,
-                    rect,
-                } => {
-                    pending_embeds.push(EmbedOp::Embed(process_key, parent_xid, rect));
-                }
-                WindowCommand::Bounds { process_key, rect } => {
-                    pending_embeds.push(EmbedOp::Bounds(process_key, rect));
-                }
-                WindowCommand::Unembed { process_key } => {
-                    pending_embeds.push(EmbedOp::Unembed(process_key));
-                }
-            }
-        }
+        // Collect commands from the main thread; they are applied in order below
+        pending.extend(command_rx.try_iter());
 
         match event {
             // UserEvent is the wakeup from WindowManager::send; handle it like NewEvents so a
             // command drained mid-iteration is still applied without waiting for another event.
             Event::NewEvents(_) | Event::UserEvent(()) => {
-                // Create pending windows
-                for (process_key, width, height, response) in pending_creates.drain(..) {
-                    // Check if window already exists (e.g., close failed and window wasn't destroyed)
-                    if let Some(existing_window) = windows.get(&process_key) {
-                        warn!(
-                            "⚠️  Window {} already exists, reusing existing window",
-                            process_key
-                        );
-                        let handle = existing_window.window.window_handle().ok().and_then(|wh| {
-                            match wh.as_raw() {
-                                RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
-                                RawWindowHandle::Xcb(xcb) => Some(xcb.window.get() as u64),
-                                _ => None,
-                            }
-                        });
-
-                        if let Some(h) = handle {
-                            info!("✅ Reusing existing window: 0x{:x}", h);
-                            let _ = response.send(Some(h));
-                            // Resize and show the existing window
-                            let _ = existing_window
-                                .window
-                                .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
-                            existing_window.window.set_visible(true);
-                        } else {
-                            error!("Failed to get X11 handle for existing window");
-                            let _ = response.send(None);
-                        }
-                        continue;
-                    }
-
-                    match create_window(event_loop_target, &process_key, width, height) {
-                        Ok(window_holder) => {
-                            // Get X11 handle
-                            let handle = window_holder.window.window_handle().ok().and_then(|wh| {
-                                match wh.as_raw() {
-                                    RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
-                                    RawWindowHandle::Xcb(xcb) => Some(xcb.window.get() as u64),
-                                    _ => None,
-                                }
-                            });
-
-                            if let Some(h) = handle {
-                                info!("✅ Window created successfully: 0x{:x}", h);
-                                let _ = response.send(Some(h));
-                                windows.insert(process_key, window_holder);
-                            } else {
-                                error!("Failed to get X11 handle for window");
-                                let _ = response.send(None);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to create window: {}", e);
-                            let _ = response.send(None);
-                        }
-                    }
-                }
-
-                // Resize windows
-                for (process_key, width, height) in pending_resizes.drain(..) {
-                    if let Some(window_holder) = windows.get(&process_key) {
-                        if window_holder.embedded.is_some() {
-                            info!(
-                                "🔄 Plugin {} wants {}x{}; embedded, host viewport unchanged",
-                                process_key, width, height
-                            );
-                            continue;
-                        }
-                        info!(
-                            "🔄 Resizing window: {} to {}x{}",
-                            process_key, width, height
-                        );
-                        let _ = window_holder
-                            .window
-                            .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
-                    } else {
-                        error!("Cannot resize window {}: not found", process_key);
-                    }
-                }
-
-                // SPIKE: embed / bounds / unembed
-                if !pending_embeds.is_empty() {
-                    let dpy = match event_loop_target.display_handle().map(|h| h.as_raw()) {
-                        Ok(RawDisplayHandle::Xlib(h)) => h
-                            .display
-                            .map(|d| d.as_ptr() as x11_embed::Display)
-                            .unwrap_or(std::ptr::null_mut()),
-                        other => {
-                            error!("Embedding needs an Xlib display, got {:?}", other);
-                            std::ptr::null_mut()
-                        }
-                    };
-                    for op in pending_embeds.drain(..) {
-                        if dpy.is_null() {
-                            continue;
-                        }
-                        let key = match &op {
-                            EmbedOp::Embed(k, ..) | EmbedOp::Bounds(k, _) | EmbedOp::Unembed(k) => {
-                                k
-                            }
-                        };
-                        let Some(holder) = windows.get_mut(key) else {
-                            error!("Embed op for unknown window {}", key);
-                            continue;
-                        };
-                        let Some(xid) = x11_handle(&holder.window) else {
-                            continue;
-                        };
-                        let mapped = holder.window.is_visible().unwrap_or(false);
-                        unsafe {
-                            match op {
-                                EmbedOp::Embed(_, parent, rect) => {
-                                    // Only a mapped toplevel is WM-managed; an embedded window
-                                    // moves between parents without the WM's involvement.
-                                    let managed = mapped && holder.embedded.is_none();
-                                    x11_embed::embed(dpy, xid as _, parent as _, rect, managed);
-                                    holder.embedded = Some(rect);
-                                }
-                                EmbedOp::Bounds(_, rect) => {
-                                    if holder.embedded.is_some() {
-                                        x11_embed::apply_bounds(dpy, xid as _, rect);
-                                        holder.embedded = Some(rect);
-                                    }
-                                }
-                                EmbedOp::Unembed(_) => {
-                                    if holder.embedded.take().is_some() {
-                                        x11_embed::unembed(dpy, xid as _, mapped);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Destroy windows
-                for process_key in pending_destroys.drain(..) {
-                    if windows.remove(&process_key).is_some() {
-                        info!("🗑️  Destroyed window: {}", process_key);
-                    }
+                for cmd in pending.drain(..) {
+                    apply_command(cmd, &mut windows, event_loop_target);
                 }
             }
             Event::WindowEvent { window_id, event } => {
@@ -713,8 +843,9 @@ fn run_window_thread(
                         if let Some(key) = key {
                             info!("Window close requested by user: {}", key);
                             // Hide the window immediately so user sees it close
-                            if let Some(window_holder) = windows.get(&key) {
-                                window_holder.window.set_visible(false);
+                            if let Some(host) = windows.get_mut(&key) {
+                                host.visible = false;
+                                host.update_mapping();
                             }
                             // Notify OSC server so it can tell plugin to cleanup
                             // OSC will send Destroy command after plugin confirms close

@@ -91,11 +91,40 @@ pub fn load_plugin(
     Ok((bundle, instance, shared))
 }
 
-/// Open plugin GUI
+/// An opened plugin GUI, as reported back to the engine
+#[derive(Debug, Clone, Copy)]
+pub struct OpenedGui {
+    pub width: u32,
+    pub height: u32,
+    pub resizable: bool,
+    /// The plugin runs in its own window (asked to, or it refused embedded mode)
+    pub floating: bool,
+}
+
+/// Size and resizability of an open GUI
+fn current_gui(
+    gui_ext: &PluginGui,
+    handle: &mut PluginMainThreadHandle,
+    floating: bool,
+) -> OpenedGui {
+    let size = gui_ext.get_size(handle).unwrap_or(GuiSize {
+        width: 800,
+        height: 600,
+    });
+    OpenedGui {
+        width: size.width,
+        height: size.height,
+        resizable: gui_ext.can_resize(handle),
+        floating,
+    }
+}
+
+/// Open plugin GUI. With a window handle the GUI is embedded into it; a plugin that only
+/// supports floating mode then opens in its own window instead, and `floating` says so.
 pub fn open_plugin_gui(
     instance: &mut PluginInstance<SubprocessHost>,
     window_handle: Option<u64>,
-) -> Result<(u32, u32, bool), String> {
+) -> Result<OpenedGui, String> {
     let mut handle = instance.plugin_handle();
 
     info!("🎨 Step 1: Getting GUI extension...");
@@ -112,43 +141,44 @@ pub fn open_plugin_gui(
     };
     info!("✅ Using GUI API: {:?}", api_type);
 
-    // Determine mode based on whether we have a window handle
-    let config = if window_handle.is_some() {
-        info!("🎨 Step 3: Using embedded mode with provided window handle");
-        GuiConfiguration {
-            api_type,
-            is_floating: false,
+    // Embedded when we have a window handle and the plugin supports it, floating otherwise
+    let embedded = GuiConfiguration {
+        api_type,
+        is_floating: false,
+    };
+    let config = match window_handle {
+        Some(_) if gui_ext.is_api_supported(&mut handle, embedded) => {
+            info!("🎨 Step 3: Using embedded mode with provided window handle");
+            embedded
         }
-    } else {
-        info!("🎨 Step 3: Using floating mode (no window handle provided)");
-        GuiConfiguration {
-            api_type,
-            is_floating: true,
+        Some(_) => {
+            warn!(
+                "⚠️ Plugin does not support {:?} in embedded mode; falling back to floating",
+                api_type
+            );
+            GuiConfiguration {
+                api_type,
+                is_floating: true,
+            }
+        }
+        None => {
+            info!("🎨 Step 3: Using floating mode (no window handle provided)");
+            GuiConfiguration {
+                api_type,
+                is_floating: true,
+            }
         }
     };
 
-    // Check if plugin supports the chosen mode
-    info!(
-        "🎨 Step 4: Checking if plugin supports {:?} (floating={})...",
-        api_type, config.is_floating
-    );
-    if !gui_ext.is_api_supported(&mut handle, config) {
-        error!(
-            "❌ Plugin does not support {:?} in {} mode",
-            api_type,
-            if config.is_floating {
-                "floating"
-            } else {
-                "embedded"
-            }
-        );
+    if config.is_floating && !gui_ext.is_api_supported(&mut handle, config) {
+        error!("❌ Plugin does not support {:?} in floating mode", api_type);
         return Err(format!(
             "Plugin does not support {:?} GUI API in {} mode",
             api_type,
-            if config.is_floating {
-                "floating"
+            if window_handle.is_some() {
+                "embedded or floating"
             } else {
-                "embedded"
+                "floating"
             }
         ));
     }
@@ -209,17 +239,13 @@ pub fn open_plugin_gui(
         info!("✅ Plugin GUI opened successfully (embedded mode)");
 
         // Return the plugin's actual size and resizability so the engine can configure the window
-        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
-            width: 800,
-            height: 600,
-        });
-        let is_resizable = gui_ext.can_resize(&mut handle);
+        let opened = current_gui(&gui_ext, &mut handle, false);
         info!(
             "🎨 Final plugin size: {}x{} (resizable: {})",
-            size.width, size.height, is_resizable
+            opened.width, opened.height, opened.resizable
         );
 
-        Ok((size.width, size.height, is_resizable))
+        Ok(opened)
     } else {
         // Floating mode - plugin manages its own window
         info!("🎨 Step 5: Setting transient window (for floating mode)...");
@@ -262,14 +288,79 @@ pub fn open_plugin_gui(
         // Return the plugin's size and resizability (for consistency)
         let mut handle = instance.plugin_handle();
         let gui_ext: PluginGui = handle.get_extension().unwrap();
-        let size = gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
-            width: 800,
-            height: 600,
-        });
-        let is_resizable = gui_ext.can_resize(&mut handle);
-
-        Ok((size.width, size.height, is_resizable))
+        Ok(current_gui(&gui_ext, &mut handle, true))
     }
+}
+
+/// Size and resizability of an open GUI (`floating` as it was opened)
+pub fn plugin_gui_state(
+    instance: &mut PluginInstance<SubprocessHost>,
+    floating: bool,
+) -> Result<OpenedGui, String> {
+    let mut handle = instance.plugin_handle();
+    let gui_ext: PluginGui = handle
+        .get_extension()
+        .ok_or("Plugin does not support GUI extension")?;
+    Ok(current_gui(&gui_ext, &mut handle, floating))
+}
+
+/// Show or hide an open GUI. Returns its current size.
+pub fn set_plugin_gui_visible(
+    instance: &mut PluginInstance<SubprocessHost>,
+    visible: bool,
+) -> Result<GuiSize, String> {
+    let mut handle = instance.plugin_handle();
+    let gui_ext: PluginGui = handle
+        .get_extension()
+        .ok_or("Plugin does not support GUI extension")?;
+    let result = if visible {
+        gui_ext.show(&mut handle)
+    } else {
+        gui_ext.hide(&mut handle)
+    };
+    // Advisory for embedded GUIs, like show() at open (the engine also unmaps the host window)
+    if let Err(e) = result {
+        warn!(
+            "⚠️ Plugin returned false from gui.{}() ({}); continuing",
+            if visible { "show" } else { "hide" },
+            e
+        );
+    }
+    Ok(gui_ext.get_size(&mut handle).unwrap_or(GuiSize {
+        width: 800,
+        height: 600,
+    }))
+}
+
+/// Ask a resizable GUI to take `width`×`height`: `adjust_size` picks the closest size the
+/// plugin accepts, `set_size` applies it. Returns the size the plugin reports afterwards.
+pub fn set_plugin_gui_size(
+    instance: &mut PluginInstance<SubprocessHost>,
+    width: u32,
+    height: u32,
+) -> Result<GuiSize, String> {
+    let mut handle = instance.plugin_handle();
+    let gui_ext: PluginGui = handle
+        .get_extension()
+        .ok_or("Plugin does not support GUI extension")?;
+    let requested = GuiSize { width, height };
+    if gui_ext.can_resize(&mut handle) {
+        let size = gui_ext
+            .adjust_size(&mut handle, requested)
+            .unwrap_or(requested);
+        if let Err(e) = gui_ext.set_size(&mut handle, size) {
+            warn!(
+                "⚠️ Plugin refused GUI size {}x{}: {}",
+                size.width, size.height, e
+            );
+        }
+    } else {
+        info!(
+            "Plugin GUI is not resizable; ignoring size request {}x{}",
+            width, height
+        );
+    }
+    Ok(gui_ext.get_size(&mut handle).unwrap_or(requested))
 }
 
 /// Close plugin GUI

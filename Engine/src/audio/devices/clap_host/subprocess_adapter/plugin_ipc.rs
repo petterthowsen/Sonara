@@ -81,10 +81,20 @@ impl PluginIpcHandle {
         }
     }
 
-    /// Open the plugin GUI, embedded in `window_handle` when given.
-    /// Returns (width, height, is_resizable).
-    pub fn open_gui(&self, window_handle: Option<u64>) -> Result<(u32, u32, bool), String> {
+    /// Open the plugin GUI, embedded in `window_handle` when given (and the plugin supports
+    /// it). On an already-open GUI this reports its current state.
+    pub fn open_gui(&self, window_handle: Option<u64>) -> Result<gui::OpenedGui, String> {
         gui::open_gui(&self.connection()?, &self.device_name, window_handle)
+    }
+
+    /// Show or hide the open GUI. Returns its size.
+    pub fn set_gui_visible(&self, visible: bool) -> Result<(u32, u32), String> {
+        gui::set_gui_visible(&self.connection()?, visible)
+    }
+
+    /// Ask the open GUI to resize. Returns the size it settled on.
+    pub fn set_gui_size(&self, width: u32, height: u32) -> Result<(u32, u32), String> {
+        gui::set_gui_size(&self.connection()?, width, height)
     }
 
     /// Close the plugin GUI.

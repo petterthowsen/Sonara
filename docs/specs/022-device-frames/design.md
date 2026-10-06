@@ -114,6 +114,7 @@ nothing flashes (REQ-023).
 |---|---|---|
 | `{device}/gui/opened` | `w:i h:i resizable:i floating:i` | Sent after every successful open. `floating=1` when the plugin refused embedded mode and runs in its own window (REQ-024). |
 | `{device}/gui/size` | `w:i h:i` | Current GUI size: after a `gui/size` request, and when the plugin resizes itself. |
+| `{device}/gui/embedded` | `parent_xid:i` | The host window is now in `parent_xid` (0 = in no Godot window). Sent after an embedded `gui/open`, `gui/embed`, `gui/unembed`, and the release on `gui/close`, once the X server has the reparent. Godot destroys a native window's X window when it hides it, so a frame window hides or is freed only after its plugin GUIs have moved out. |
 
 ### Engine internals
 

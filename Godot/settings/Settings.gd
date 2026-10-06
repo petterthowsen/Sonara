@@ -36,6 +36,9 @@ class Setting:
 	var options: Array = []
 	var sub_category: String = ""
 	var control_scene: String = ""
+	## Returns false where the setting can't apply (see available_if); empty = always available.
+	var available_check: Callable = Callable()
+	var unavailable_reason: String = ""
 
 	func _init(p_key: String, p_label: String, p_type: Type, p_default, p_category: String, p_description: String = ""):
 		key = p_key
@@ -66,6 +69,17 @@ class Setting:
 	func scene(path: String) -> Setting:
 		control_scene = path
 		return self
+
+	## Make the setting available only while `check` returns true; otherwise the dialog shows it
+	## disabled with `reason`. The stored value is kept either way: consumers combine
+	## get_value() with the same check. Returns self for chaining.
+	func available_if(check: Callable, reason: String) -> Setting:
+		available_check = check
+		unavailable_reason = reason
+		return self
+
+	func is_available() -> bool:
+		return not available_check.is_valid() or bool(available_check.call())
 
 
 signal setting_changed(key: String, value)
@@ -230,6 +244,17 @@ func _register_all_settings() -> void:
 		"When enabled, holding the right mouse button and dragging over clips in the arranger deletes them. "
 		+ "A plain right-click still opens the clip menu.",
 	)).sub("Arranger")
+
+	# --- Behavior: Devices ---
+	_register(Setting.new(
+		"devices/window_grouping",
+		"Device Windows",
+		Type.CHOICE,
+		"Per channel",
+		CATEGORY_BEHAVIOR,
+		"Per channel: a channel's devices share one window, with a tab per device.\n\n"
+		+ "Per device: every device opens in its own window. Devices inside a container always get their own window. Applies to windows opened afterwards.",
+	)).sub("Devices").choices(["Per channel", "Per device"])
 
 	# --- Behavior: Selection ---
 	_register(Setting.new(
@@ -416,6 +441,15 @@ func _register_all_settings() -> void:
 		+ "Individually runs plugins on separate cores; grouped modes run each group on one core.\n\n"
 		+ "Changes apply right away: loaded plugins are moved and keep their state. A plugin set to \"Always host individually\" in its device menu ignores this.",
 	)).sub("Plugins").choices(["Individually", "By plug-in", "By vendor", "Together"])
+	_register(Setting.new(
+		"plugins/embed_gui",
+		"Embed Plugin Windows (Experimental)",
+		Type.BOOL,
+		false,
+		CATEGORY_AUDIO,
+		"Show CLAP plugin GUIs inside Sonara's device windows, and in the main window when a device window is attached, instead of in their own windows.\n\n"
+		+ "Experimental, and only on the X11 display server. A plugin that can't be embedded still opens in its own window.",
+	)).sub("Plugins").available_if(_is_x11, "Needs the X11 display server (Sonara is running on %s)." % DisplayServer.get_name())
 
 	# --- AI / OpenRouter ---
 	_register(Setting.new(
@@ -516,6 +550,10 @@ func _register_all_settings() -> void:
 	)).sub("Debug").range(0, 2000, 50)
 
 
+static func _is_x11() -> bool:
+	return DisplayServer.get_name() == "X11"
+
+
 func _register(s: Setting) -> Setting:
 	_settings[s.key] = s
 	return s
@@ -607,6 +645,12 @@ func get_setting(key: String) -> Setting:
 	return _settings.get(key)
 
 
+func is_available(key: String) -> bool:
+	"""False when *key* is registered with available_if() and its check fails here."""
+	var s = _settings.get(key)
+	return s != null and s.is_available()
+
+
 func get_value(key: String):
 	"""Read a value from config, falling back to the registered default."""
 	var s = _settings.get(key)
@@ -685,7 +729,7 @@ func get_shortcut_list() -> Array[Dictionary]:
 	"""
 	var groups: Array[Dictionary] = [
 		{ "name" = "Transport", "actions" = ["play", "pause", "pause_here", "stop_here", "toggle_computer_keyboard"] },
-		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_note_value_lanes", "toggle_secondary_mixer", "toggle_device_lane", "toggle_assistant"] },
+		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_note_value_lanes", "toggle_secondary_mixer", "toggle_device_lane", "toggle_device_frame", "toggle_assistant"] },
 		{ "name" = "Edit", "actions" = ["ui_undo", "ui_redo", "ui_duplicate", "ui_delete"] },
 		{ "name" = "Keyboard", "actions" = ["keyboard_transpose_up", "keyboard_transpose_down", "keyboard_velocity_up", "keyboard_velocity_down"] },
 	]

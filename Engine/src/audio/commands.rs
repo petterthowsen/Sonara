@@ -505,6 +505,22 @@ pub enum AudioCommand {
         device_path: DevicePath,
     },
 
+    /// Show or hide an open plugin GUI (CLAP `gui.show()`/`gui.hide()`)
+    SetPluginGuiVisible {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        visible: bool,
+    },
+
+    /// Ask a resizable plugin GUI to take this size. Answered with `PluginGuiResizeRequest`
+    /// carrying the size the plugin settled on.
+    SetPluginGuiSize {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        width: u32,
+        height: u32,
+    },
+
     // Device data subscriptions
     SubscribeDeviceData {
         channel_id: ChannelId,
@@ -683,6 +699,17 @@ pub enum EngineStatus {
     },
 
     // Plugin GUI events
+    /// A plugin GUI is open (sent after every successful open, also of an already-open GUI).
+    /// `floating`: it runs in its own window instead of the host window it was given.
+    PluginGuiOpened {
+        channel_id: ChannelId,
+        device_path: DevicePath,
+        width: u32,
+        height: u32,
+        resizable: bool,
+        floating: bool,
+    },
+    /// The GUI's size: the plugin resized itself, or settled on a size after `SetPluginGuiSize`
     PluginGuiResizeRequest {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -2817,6 +2844,22 @@ pub fn process_command(
             } else {
                 warn!("Channel {} not found for close plugin GUI", channel_id);
             }
+        }
+        // The command worker handles these for subprocess plugins, the only ones they apply to
+        AudioCommand::SetPluginGuiVisible {
+            channel_id,
+            device_path,
+            ..
+        }
+        | AudioCommand::SetPluginGuiSize {
+            channel_id,
+            device_path,
+            ..
+        } => {
+            warn!(
+                "Plugin GUI visibility/size: no subprocess plugin at channel {} device {}",
+                channel_id, device_path
+            );
         }
         AudioCommand::SubscribeDeviceData {
             channel_id,

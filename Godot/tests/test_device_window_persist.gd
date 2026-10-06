@@ -1,4 +1,4 @@
-# Device windows (the floating popups opened from a device panel's Window
+# Device windows (the floating frames opened from a device panel's Window
 # toggle) are owned by the global DeviceWindowManager, keyed by DeviceInstance.
 # The DeviceLane frees and rebuilds its panels on every track switch; an open
 # window must survive that and keep living, and a fresh panel for the same
@@ -60,11 +60,9 @@ func _test_window_survives_panel_rebuild() -> void:
 	await process_frame
 	_assert(manager.is_open(inst), "manager reports the window open")
 	_assert(panel.window_button.button_pressed, "panel toggle pressed after opening")
-	var popup: Window = null
-	for child in root.get_children():
-		if child is Window and child.name.begins_with("DeviceWindow_"):
-			popup = child
-	_assert(popup != null, "popup window exists under the root")
+	var frame: Object = manager.get_frame(inst)
+	var popup: Window = manager.get_window_for(frame) if frame else null
+	_assert(popup != null and popup.get_parent() == root, "frame window exists under the root")
 	_assert(popup.visible, "popup window visible")
 
 	# Simulate a track switch: the old panel is freed, a new one binds the device.

@@ -88,6 +88,13 @@ impl OscServer {
 
         // GUI events from audio thread that need window manager access
         enum GuiEvent {
+            Opened {
+                channel_id: usize,
+                device_path: DevicePath,
+                width: u32,
+                height: u32,
+                floating: bool,
+            },
             Resize {
                 channel_id: usize,
                 device_path: DevicePath,
@@ -137,6 +144,22 @@ impl OscServer {
                             *frames,
                             (*frames_min, *frames_max, *peak_frames),
                         ),
+                        EngineStatus::PluginGuiOpened {
+                            channel_id,
+                            device_path,
+                            width,
+                            height,
+                            floating,
+                            ..
+                        } => {
+                            let _ = gui_event_tx.send(GuiEvent::Opened {
+                                channel_id: *channel_id,
+                                device_path: device_path.clone(),
+                                width: *width,
+                                height: *height,
+                                floating: *floating,
+                            });
+                        }
                         EngineStatus::PluginGuiResizeRequest {
                             channel_id,
                             device_path,
@@ -191,7 +214,29 @@ impl OscServer {
             // Check for GUI events
             while let Ok(event) = gui_event_rx.try_recv() {
                 match event {
-                    GuiEvent::Resize {
+                    // The plugin refused to embed and opened its own window: the host window
+                    // it was given is unused.
+                    GuiEvent::Opened {
+                        channel_id,
+                        device_path,
+                        floating: true,
+                        ..
+                    } => {
+                        let process_key = device_path.to_window_key(channel_id);
+                        info!(
+                            "Plugin GUI {} opened floating, destroying its unused host window",
+                            process_key
+                        );
+                        window_manager.destroy_window(&process_key);
+                    }
+                    GuiEvent::Opened {
+                        channel_id,
+                        device_path,
+                        width,
+                        height,
+                        floating: false,
+                    }
+                    | GuiEvent::Resize {
                         channel_id,
                         device_path,
                         width,
@@ -438,55 +483,96 @@ impl OscServer {
                     }
                 }
             }
+            // Optional `parent_xid x y w h`: embed the host window before it is first mapped
             ["gui", "open"] => {
                 let process_key = device_path.to_window_key(channel_id);
-                let window_handle = window_manager.create_window(process_key, 800, 600);
+                let embed = if args.is_empty() {
+                    None
+                } else {
+                    let embed = parse_embed_args(args, true);
+                    if embed.is_none() {
+                        warn!(
+                            "gui/open: expected parent_xid x y w h, got {:?}; opening floating",
+                            args
+                        );
+                    }
+                    embed
+                };
+                let window_handle = window_manager.create_window(process_key, 800, 600, embed);
+                if let (Some(_), Some((parent_xid, _))) = (window_handle, embed) {
+                    self.send_gui_embedded(channel_id, &device_path, parent_xid);
+                }
                 command_tx.send(AudioCommand::OpenPluginGui {
                     channel_id,
                     device_path,
                     window_handle,
                 })?;
             }
-            // SPIKE: embed the plugin's host window into a Godot window (see window_manager)
-            ["gui", "embed"] | ["gui", "bounds"] => {
-                let ints: Vec<i64> = args
-                    .iter()
-                    .filter_map(|a| match a {
-                        OscType::Int(i) => Some(*i as i64),
-                        OscType::Long(l) => Some(*l),
-                        OscType::Float(f) => Some(*f as i64),
-                        _ => None,
-                    })
-                    .collect();
+            // Embed the plugin's host window into a Godot window (ADR 0016)
+            ["gui", "embed"] => {
                 let process_key = device_path.to_window_key(channel_id);
-                let is_embed = action_refs.last() == Some(&"embed");
-                // embed: xid x y w h [sx sy]; bounds: x y w h [sx sy]
-                let off = if is_embed { 1 } else { 0 };
-                if ints.len() < off + 4 {
-                    warn!("gui/embed|bounds: expected {} ints, got {:?}", off + 4, args);
-                } else {
-                    let rect = crate::window_manager::EmbedRect {
-                        x: ints[off] as i32,
-                        y: ints[off + 1] as i32,
-                        width: ints[off + 2].max(1) as u32,
-                        height: ints[off + 3].max(1) as u32,
-                        scroll_x: ints.get(off + 4).copied().unwrap_or(0) as i32,
-                        scroll_y: ints.get(off + 5).copied().unwrap_or(0) as i32,
-                    };
-                    if is_embed {
-                        window_manager.embed_window(&process_key, ints[0] as u64, rect);
-                    } else {
-                        window_manager.set_embed_bounds(&process_key, rect);
+                match parse_embed_args(args, true) {
+                    Some((parent_xid, rect)) => {
+                        if window_manager.embed_window(&process_key, parent_xid, rect) {
+                            self.send_gui_embedded(channel_id, &device_path, parent_xid);
+                        }
                     }
+                    None => warn!(
+                        "gui/embed: expected parent_xid x y w h [scroll_x scroll_y], got {:?}",
+                        args
+                    ),
+                }
+            }
+            ["gui", "bounds"] => {
+                let process_key = device_path.to_window_key(channel_id);
+                match parse_embed_args(args, false) {
+                    Some((_, rect)) => window_manager.set_embed_bounds(&process_key, rect),
+                    None => warn!(
+                        "gui/bounds: expected x y w h [scroll_x scroll_y], got {:?}",
+                        args
+                    ),
                 }
             }
             ["gui", "unembed"] => {
                 let process_key = device_path.to_window_key(channel_id);
-                window_manager.unembed_window(&process_key);
+                if window_manager.unembed_window(&process_key) {
+                    self.send_gui_embedded(channel_id, &device_path, 0);
+                }
             }
+            ["gui", "visible"] => match args.first().and_then(osc_int) {
+                Some(visible) => {
+                    let visible = visible != 0;
+                    let process_key = device_path.to_window_key(channel_id);
+                    window_manager.set_window_visible(&process_key, visible);
+                    command_tx.send(AudioCommand::SetPluginGuiVisible {
+                        channel_id,
+                        device_path,
+                        visible,
+                    })?;
+                }
+                None => warn!("gui/visible: expected visible:i, got {:?}", args),
+            },
+            ["gui", "size"] => match (
+                args.first().and_then(osc_int),
+                args.get(1).and_then(osc_int),
+            ) {
+                (Some(width), Some(height)) if width > 0 && height > 0 => {
+                    command_tx.send(AudioCommand::SetPluginGuiSize {
+                        channel_id,
+                        device_path,
+                        width: width as u32,
+                        height: height as u32,
+                    })?;
+                }
+                _ => warn!("gui/size: expected w:i h:i (positive), got {:?}", args),
+            },
             ["gui", "close"] => {
+                // Hide the host window and take it out of the Godot window first, so Godot can
+                // free its window at once. It is destroyed once the plugin confirms the close.
                 let process_key = device_path.to_window_key(channel_id);
-                window_manager.destroy_window(&process_key);
+                if window_manager.release_window(&process_key) {
+                    self.send_gui_embedded(channel_id, &device_path, 0);
+                }
                 command_tx.send(AudioCommand::ClosePluginGui {
                     channel_id,
                     device_path,
@@ -2004,8 +2090,24 @@ impl OscServer {
                     OscType::Int(pid as i32),
                 ],
             ),
-            // The main loop also resizes the host window; Godot needs the size to lay out an
-            // embedded GUI (SPIKE).
+            EngineStatus::PluginGuiOpened {
+                channel_id,
+                device_path,
+                width,
+                height,
+                resizable,
+                floating,
+            } => (
+                device_path.to_osc_addr(channel_id, "gui/opened"),
+                vec![
+                    OscType::Int(width as i32),
+                    OscType::Int(height as i32),
+                    OscType::Int(resizable as i32),
+                    OscType::Int(floating as i32),
+                ],
+            ),
+            // The main loop also resizes a floating host window; Godot needs the size to lay out
+            // an embedded GUI.
             EngineStatus::PluginGuiResizeRequest {
                 channel_id,
                 device_path,
@@ -2701,6 +2803,17 @@ impl OscServer {
     }
 
     /// Send a message to the client
+    /// `{device}/gui/embedded parent_xid`: the host window is now in `parent_xid` (0 = out of
+    /// any Godot window). Godot waits for it before hiding or freeing a window the plugin was in:
+    /// Godot destroys a native window's X window when it hides it, and every child with it.
+    fn send_gui_embedded(&self, channel_id: usize, device_path: &DevicePath, parent_xid: u64) {
+        let addr = device_path.to_osc_addr(channel_id, "gui/embedded");
+        // X11 XIDs are 29 bits, so an Int carries them
+        if let Err(e) = self.send_message(&addr, vec![OscType::Int(parent_xid as i32)]) {
+            warn!("Failed to send {}: {}", addr, e);
+        }
+    }
+
     fn send_message(&self, addr: &str, args: Vec<OscType>) -> Result<()> {
         let msg = OscMessage {
             addr: addr.to_string(),
@@ -2835,6 +2948,47 @@ fn parse_clip_note_args(addr: &str, args: &[OscType]) -> Option<ClipNoteArgs> {
         osc_arg_types(args)
     );
     None
+}
+
+/// An integer arg; Godot may send ints as `h` or `f` depending on how they were built.
+fn osc_int(arg: &OscType) -> Option<i64> {
+    match arg {
+        OscType::Int(i) => Some(*i as i64),
+        OscType::Long(l) => Some(*l),
+        OscType::Float(f) => Some(*f as i64),
+        _ => None,
+    }
+}
+
+/// Parse plugin GUI embed args: `[parent_xid] x y w h [scroll_x scroll_y]` (all ints), with the
+/// parent XID only when `with_xid`. The XID is 0 without it. None for a short list, a
+/// non-numeric arg or a non-positive XID; width and height are at least 1.
+fn parse_embed_args(
+    args: &[OscType],
+    with_xid: bool,
+) -> Option<(u64, crate::window_manager::EmbedRect)> {
+    let ints = args.iter().map(osc_int).collect::<Option<Vec<i64>>>()?;
+    let (xid, rest) = if with_xid {
+        let (&xid, rest) = ints.split_first()?;
+        if xid <= 0 {
+            return None;
+        }
+        (xid as u64, rest)
+    } else {
+        (0, &ints[..])
+    };
+    let [x, y, w, h, ref scroll @ ..] = *rest else {
+        return None;
+    };
+    let rect = crate::window_manager::EmbedRect {
+        x: x as i32,
+        y: y as i32,
+        width: w.max(1) as u32,
+        height: h.max(1) as u32,
+        scroll_x: scroll.first().copied().unwrap_or(0) as i32,
+        scroll_y: scroll.get(1).copied().unwrap_or(0) as i32,
+    };
+    Some((xid, rect))
 }
 
 /// OSC type tags of `args` separated by spaces (`"i i f"`), for warnings.
@@ -3329,6 +3483,84 @@ fn sfz_key_info_args(keys: &[(u8, bool, String)], ranges: &[(u8, u8)]) -> Vec<Os
 
 #[cfg(test)]
 mod tests {
+    use crate::window_manager::EmbedRect;
+
+    fn rect(x: i32, y: i32, width: u32, height: u32, sx: i32, sy: i32) -> EmbedRect {
+        EmbedRect {
+            x,
+            y,
+            width,
+            height,
+            scroll_x: sx,
+            scroll_y: sy,
+        }
+    }
+
+    #[test]
+    fn parse_embed_args_with_xid() {
+        use rosc::OscType::*;
+        let parsed = super::parse_embed_args(
+            &[Int(0x3a00007), Int(10), Int(20), Int(920), Int(345)],
+            true,
+        );
+        assert_eq!(parsed, Some((0x3a00007, rect(10, 20, 920, 345, 0, 0))));
+        // Long and float args, plus scroll
+        let parsed = super::parse_embed_args(
+            &[
+                Long(77),
+                Float(1.0),
+                Int(2),
+                Int(300),
+                Long(200),
+                Int(40),
+                Float(5.0),
+            ],
+            true,
+        );
+        assert_eq!(parsed, Some((77, rect(1, 2, 300, 200, 40, 5))));
+        // Only scroll_x given
+        let parsed =
+            super::parse_embed_args(&[Int(5), Int(0), Int(0), Int(10), Int(10), Int(3)], true);
+        assert_eq!(parsed, Some((5, rect(0, 0, 10, 10, 3, 0))));
+    }
+
+    #[test]
+    fn parse_embed_args_without_xid() {
+        use rosc::OscType::*;
+        let parsed =
+            super::parse_embed_args(&[Int(4), Int(8), Int(0), Int(-3), Int(12), Int(6)], false);
+        // Width and height are at least 1
+        assert_eq!(parsed, Some((0, rect(4, 8, 1, 1, 12, 6))));
+    }
+
+    #[test]
+    fn parse_embed_args_rejects_bad_input() {
+        use rosc::OscType::*;
+        // Short lists
+        assert_eq!(super::parse_embed_args(&[], true), None);
+        assert_eq!(
+            super::parse_embed_args(&[Int(1), Int(0), Int(0), Int(10)], true),
+            None
+        );
+        assert_eq!(
+            super::parse_embed_args(&[Int(0), Int(0), Int(10)], false),
+            None
+        );
+        // Non-numeric arg
+        assert_eq!(
+            super::parse_embed_args(
+                &[Int(1), Int(0), String("x".into()), Int(10), Int(10)],
+                true
+            ),
+            None
+        );
+        // No parent window
+        assert_eq!(
+            super::parse_embed_args(&[Int(0), Int(0), Int(0), Int(10), Int(10)], true),
+            None
+        );
+    }
+
     /// rosc 0.10 demanded 4 padding bytes after a blob already on a 4-byte boundary, so every
     /// 16-byte Drum Machine choke mask was dropped as undecodable.
     #[test]

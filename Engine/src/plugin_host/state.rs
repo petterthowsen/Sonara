@@ -113,6 +113,8 @@ pub struct PluginState {
     pub instance: PluginInstance<SubprocessHost>,
     pub shared: Arc<SubprocessHostShared>,
     pub gui_open: bool,
+    /// The open GUI runs in its own window (see `OpenedGui::floating`)
+    pub gui_floating: bool,
     pub activated: bool,
     pub processing: bool,
     pub sample_rate: f32,

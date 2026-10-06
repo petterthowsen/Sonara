@@ -22,6 +22,9 @@ signal crashed(reason: String, stderr: String)  # Plugin host died; see reload()
 signal host_changed()  # Plugin loaded into a host process; see host_mode / host_pid
 signal stats_changed()  # New processing stats for a CLAP plugin (1 Hz); see plugin_stats
 signal plugin_gui_closed()  # Emitted when plugin GUI window is closed
+signal gui_opened(size: Vector2i, resizable: bool, floating: bool)  # After every successful GUI open; see gui_size
+signal gui_size_changed(size: Vector2i)  # Plugin GUI resized (on request or by itself)
+signal gui_embedded(parent_xid: int)  # The GUI's host window moved into parent_xid (0 = out of Godot's windows)
 signal plugin_state_saved(ok: bool)  # Answer to save_plugin_state(); see plugin_state
 signal child_added(device_instance: DeviceInstance, position: int)
 signal child_removed(position: int, device_id: String)
@@ -189,6 +192,17 @@ var crash_log_path: String = ""
 var host_mode: String = ""
 var host_key: String = ""
 var host_pid: int = 0
+
+## Native plugin GUI as the engine last reported it (`gui/opened`, `gui/size`): size in pixels,
+## whether the plugin accepts resizes, and whether it refused embedding and runs in its own
+## window. Not synced or saved: a GUI is reopened by the UI, never restored.
+var gui_size: Vector2i = Vector2i.ZERO
+var gui_resizable: bool = false
+var gui_floating: bool = false
+## X11 window the GUI's host window is in, as the engine last confirmed (`gui/embedded`); 0 when
+## it's in none of Godot's windows. A Godot window must not hide or free while a GUI is in it:
+## hiding a native window destroys its X window and the plugin's with it.
+var gui_parent_xid: int = 0
 
 ## One second of a CLAP plugin's processing, from `<device addr>/stats`. Loads are the plugin's
 ## process() time as a share of real time (1.0 = 100% of the block time).
@@ -1364,6 +1378,58 @@ func close_gui() -> void:
 	AudioEngineOSC.send(osc_addr("gui/close"), [])
 
 
+## Open the native GUI embedded in the X11 window `parent_xid`, shown in `rect` (window pixels).
+## The engine embeds it before first showing it, so no floating window flashes. The answer is
+## `gui_opened`; with `floating` set the plugin refused embedding and opened in its own window.
+func open_gui_embedded(parent_xid: int, rect: Rect2i) -> void:
+	if not device.has_gui():
+		push_warning("[DeviceInstance] Device %s does not have a native GUI" % device.name)
+		return
+
+	if active:
+		AudioEngineOSC.send(osc_addr("gui/open"), [parent_xid] + _rect_args(rect))
+
+
+## Move the open GUI into another window (attach, detach, tear-off) without reopening it.
+func embed_gui(parent_xid: int, rect: Rect2i, scroll: Vector2i = Vector2i.ZERO) -> void:
+	if not device.has_gui():
+		return
+	AudioEngineOSC.send(osc_addr("gui/embed"), [parent_xid] + _rect_args(rect) + [scroll.x, scroll.y])
+
+
+## New viewport for the embedded GUI (window pixels) and the scroll offset of the GUI inside it.
+func set_gui_bounds(rect: Rect2i, scroll: Vector2i = Vector2i.ZERO) -> void:
+	if not device.has_gui():
+		return
+	AudioEngineOSC.send(osc_addr("gui/bounds"), _rect_args(rect) + [scroll.x, scroll.y])
+
+
+## Take the embedded GUI back out into a floating OS window (embedding switched off).
+func unembed_gui() -> void:
+	if not device.has_gui():
+		return
+	AudioEngineOSC.send(osc_addr("gui/unembed"), [])
+
+
+## Hide or show the open GUI (tab switch, frame hidden) without closing it.
+func set_gui_visible(visible: bool) -> void:
+	if not device.has_gui():
+		return
+	AudioEngineOSC.send(osc_addr("gui/visible"), [1 if visible else 0])
+
+
+## Ask a resizable plugin to resize its GUI. It may adjust the size to its limits; the size it
+## settles on comes back as `gui_size_changed`.
+func request_gui_size(size: Vector2i) -> void:
+	if not device.has_gui():
+		return
+	AudioEngineOSC.send(osc_addr("gui/size"), [size.x, size.y])
+
+
+func _rect_args(rect: Rect2i) -> Array:
+	return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
+
+
 ## Ask the engine to respawn this device's crashed plugin host and restore its state.
 ## Safe to call for a non-crashed device (the engine ignores it) but intended for a
 ## device whose `loading_state` begins with "crashed:".
@@ -1509,6 +1575,9 @@ func connect_to_engine() -> void:
 	AudioEngineOSC.listen(param_info_addr, _on_param_info_received)
 	AudioEngineOSC.listen(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.listen(gui_closed_addr, _on_gui_closed_received)
+	AudioEngineOSC.listen(osc_addr("gui/opened"), _on_gui_opened_received)
+	AudioEngineOSC.listen(osc_addr("gui/size"), _on_gui_size_received)
+	AudioEngineOSC.listen(osc_addr("gui/embedded"), _on_gui_embedded_received)
 	AudioEngineOSC.listen(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.listen(host_addr, _on_host_received)
 	AudioEngineOSC.listen(stats_addr, _on_stats_received)
@@ -1559,6 +1628,9 @@ func disconnect_from_engine() -> void:
 	AudioEngineOSC.unlisten(osc_addr("modulator/clear"), _on_modulator_clear_received)
 	AudioEngineOSC.unlisten(loading_state_addr, _on_loading_state_received)
 	AudioEngineOSC.unlisten(gui_closed_addr, _on_gui_closed_received)
+	AudioEngineOSC.unlisten(osc_addr("gui/opened"), _on_gui_opened_received)
+	AudioEngineOSC.unlisten(osc_addr("gui/size"), _on_gui_size_received)
+	AudioEngineOSC.unlisten(osc_addr("gui/embedded"), _on_gui_embedded_received)
 	AudioEngineOSC.unlisten(crashed_addr, _on_crashed_received)
 	AudioEngineOSC.unlisten(host_addr, _on_host_received)
 	AudioEngineOSC.unlisten(stats_addr, _on_stats_received)
@@ -1606,7 +1678,40 @@ func _on_loading_state_received(values: Array) -> void:
 func _on_gui_closed_received(_values: Array) -> void:
 	"""Handle GUI closed notification from engine."""
 	logger.info("[%s] Plugin GUI closed by engine" % device.name)
+	gui_parent_xid = 0
 	plugin_gui_closed.emit()
+
+
+func _on_gui_opened_received(values: Array) -> void:
+	"""Handle a successful GUI open: size, resizability, and whether it fell back to floating."""
+	if values.size() < 4:
+		push_warning("[DeviceInstance %s] gui/opened needs 4 args, got %d" % [device.name, values.size()])
+		return
+	gui_size = Vector2i(int(values[0]), int(values[1]))
+	gui_resizable = int(values[2]) != 0
+	gui_floating = int(values[3]) != 0
+	logger.info("[%s] Plugin GUI opened: %dx%d, resizable %s, floating %s"
+		% [device.name, gui_size.x, gui_size.y, gui_resizable, gui_floating])
+	gui_opened.emit(gui_size, gui_resizable, gui_floating)
+
+
+func _on_gui_embedded_received(values: Array) -> void:
+	"""The engine finished moving the GUI's host window (embed, unembed, or release on close)."""
+	if values.size() < 1:
+		return
+	gui_parent_xid = int(values[0])
+	gui_embedded.emit(gui_parent_xid)
+
+
+func _on_gui_size_received(values: Array) -> void:
+	"""Handle the plugin GUI's new size (after request_gui_size(), or a resize by the plugin)."""
+	if values.size() < 2:
+		return
+	var new_size := Vector2i(int(values[0]), int(values[1]))
+	if new_size == gui_size:
+		return
+	gui_size = new_size
+	gui_size_changed.emit(gui_size)
 
 
 func _on_crashed_received(values: Array) -> void:

@@ -148,8 +148,13 @@ var selected_tracks: Array[Track] = []
 var _syncing_selection: bool = false
 
 # View state
-enum View { ARRANGER, MIXER, EDITOR }
+## DEVICE shows the attached device frame (spec 022); only while one is attached.
+enum View { ARRANGER, MIXER, EDITOR, DEVICE }
 var current_view: View = View.ARRANGER
+## Device frame attached to the Primary area (DeviceWindowManager owns it), or null.
+var attached_frame: DeviceFrame = null
+## View to return to when the attached frame is hidden or detached.
+var _view_before_device: View = View.ARRANGER
 
 # ============================================================================
 # LIFECYCLE
@@ -169,6 +174,8 @@ func _ready():
 
 	# Set initial view
 	_update_view_visibility()
+	# Device frames attach to the Primary area through us
+	DeviceWindowManager.attach_host = self
 	
 	# Disable processing until playback starts
 	set_process(false)
@@ -368,6 +375,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_assistant"):
 		toggle_assistant()
 		accept_event()
+	elif event.is_action_pressed("toggle_device_frame"):
+		toggle_device_frame()
+		accept_event()
 
 
 # ============================================================================
@@ -419,6 +429,9 @@ func close_project() -> void:
 	# TODO: Prompt to save if modified
 	if is_modified:
 		logger.warn("[Editor] Closing modified project without saving")
+
+	# Device frames and plugin windows belong to the project's devices
+	DeviceWindowManager.close_all()
 
 	# Disconnect from audio engine
 	project.disconnect_from_engine()
@@ -742,6 +755,49 @@ func show_clip_editor() -> void:
 	_update_view_visibility()
 
 
+## Put a device frame in the Primary area and show it (DeviceWindowManager.attach).
+## The manager detaches any previous frame first (one attached frame, REQ-007).
+func attach_frame(frame: DeviceFrame) -> void:
+	attached_frame = frame
+	if frame.get_parent():
+		frame.get_parent().remove_child(frame)
+	primary_panel.add_child(frame)
+	show_attached_frame()
+
+
+## Take the attached frame out of the Primary area and return to the view shown before it.
+func detach_frame(frame: DeviceFrame) -> void:
+	if frame != attached_frame:
+		return
+	attached_frame = null
+	if frame.get_parent() == primary_panel:
+		primary_panel.remove_child(frame)
+	if current_view == View.DEVICE:
+		current_view = _view_before_device
+		_update_view_visibility()
+
+
+## Switch the Primary area to the attached frame (REQ-006).
+func show_attached_frame() -> void:
+	if attached_frame == null or current_view == View.DEVICE:
+		return
+	_view_before_device = current_view
+	current_view = View.DEVICE
+	_update_view_visibility()
+
+
+## Show or hide the attached frame; it keeps its state while hidden (REQ-006).
+func toggle_device_frame() -> void:
+	if attached_frame == null:
+		logger.info("[Editor] No device frame is attached")
+		return
+	if current_view == View.DEVICE:
+		current_view = _view_before_device
+		_update_view_visibility()
+	else:
+		show_attached_frame()
+
+
 ## Show or hide the AI Chat dock panel without affecting other docked panels.
 func toggle_assistant() -> void:
 	if dock_host == null:
@@ -943,6 +999,8 @@ func _update_view_visibility() -> void:
 	arranger.visible = (current_view == View.ARRANGER)
 	mixer.visible = (current_view == View.MIXER)
 	clip_editor.visible = (current_view == View.EDITOR)
+	if attached_frame:
+		attached_frame.visible = (current_view == View.DEVICE)
 	view_changed.emit(current_view)
 
 	if clip_editor.visible:

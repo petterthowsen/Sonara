@@ -844,6 +844,50 @@ impl CommandWorker {
                     device_path,
                 }),
             },
+            AudioCommand::SetPluginGuiVisible {
+                channel_id,
+                device_path,
+                visible,
+            } => match self.plugin_handle(channel_id, &device_path) {
+                Some(handle) => {
+                    if let Err(e) = handle.set_gui_visible(visible) {
+                        warn!(
+                            "Failed to {} plugin GUI at channel {} device {}: {}",
+                            if visible { "show" } else { "hide" },
+                            channel_id,
+                            device_path,
+                            e
+                        );
+                    }
+                }
+                None => warn!(
+                    "SetPluginGuiVisible: no subprocess plugin at channel {} device {}",
+                    channel_id, device_path
+                ),
+            },
+            AudioCommand::SetPluginGuiSize {
+                channel_id,
+                device_path,
+                width,
+                height,
+            } => match self.plugin_handle(channel_id, &device_path) {
+                Some(handle) => match handle.set_gui_size(width, height) {
+                    Ok((width, height)) => self.send_status(EngineStatus::PluginGuiResizeRequest {
+                        channel_id,
+                        device_path,
+                        width,
+                        height,
+                    }),
+                    Err(e) => warn!(
+                        "Failed to resize plugin GUI at channel {} device {} to {}x{}: {}",
+                        channel_id, device_path, width, height, e
+                    ),
+                },
+                None => warn!(
+                    "SetPluginGuiSize: no subprocess plugin at channel {} device {}",
+                    channel_id, device_path
+                ),
+            },
             other => self.apply_locked(other),
         }
     }
@@ -1275,7 +1319,8 @@ impl CommandWorker {
         });
     }
 
-    /// Open a subprocess plugin's GUI with the lock released, then ask Godot to size its window.
+    /// Open a subprocess plugin's GUI with the lock released, then report its size so the host
+    /// window is sized and Godot can lay it out. An already-open GUI reports its current state.
     fn open_plugin_gui(
         &self,
         handle: PluginIpcHandle,
@@ -1283,37 +1328,29 @@ impl CommandWorker {
         device_path: DevicePath,
         window_handle: Option<u64>,
     ) {
-        let already_open = self
-            .with_plugin(channel_id, &device_path, |plugin| plugin.is_gui_open())
-            .unwrap_or(false);
-
-        let (width, height) = if already_open {
-            (800, 600)
-        } else {
-            match handle.open_gui(window_handle) {
-                Ok((width, height, is_resizable)) => {
-                    self.with_plugin(channel_id, &device_path, |plugin| plugin.set_gui_open(true));
-                    info!(
-                        "Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{}, resizable: {})",
-                        channel_id, device_path, window_handle, width, height, is_resizable
-                    );
-                    (width, height)
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to open subprocess plugin GUI at channel {} device {}: {}",
-                        channel_id, device_path, e
-                    );
-                    return;
-                }
+        let gui = match handle.open_gui(window_handle) {
+            Ok(gui) => gui,
+            Err(e) => {
+                warn!(
+                    "Failed to open subprocess plugin GUI at channel {} device {}: {}",
+                    channel_id, device_path, e
+                );
+                return;
             }
         };
+        self.with_plugin(channel_id, &device_path, |plugin| plugin.set_gui_open(true));
+        info!(
+            "Opened GUI for subprocess plugin at channel {} device {} (window_handle: {:?}, size: {}x{}, resizable: {}, floating: {})",
+            channel_id, device_path, window_handle, gui.width, gui.height, gui.resizable, gui.floating
+        );
 
-        self.send_status(EngineStatus::PluginGuiResizeRequest {
+        self.send_status(EngineStatus::PluginGuiOpened {
             channel_id,
             device_path,
-            width,
-            height,
+            width: gui.width,
+            height: gui.height,
+            resizable: gui.resizable,
+            floating: gui.floating,
         });
     }
 

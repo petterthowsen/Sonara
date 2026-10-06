@@ -28,6 +28,9 @@ func run_tests() -> void:
 	_test_custom_control_scene()
 	_test_search()
 	_test_grid_spacing_defaults()
+	_test_device_frame_settings()
+	_test_available_if()
+	_test_unavailable_row_disabled()
 
 
 ## The two grid spacing settings exist with their intended defaults; the MIDI
@@ -128,3 +131,54 @@ func _test_search() -> void:
 	for s in second_call:
 		second_keys.append(s.key)
 	_assert(first_keys == second_keys, "search results are stable across two calls")
+
+
+## Spec 022: the window grouping and plugin embedding settings, and the frame toggle shortcut.
+func _test_device_frame_settings() -> void:
+	var grouping = _settings.get_setting("devices/window_grouping")
+	_assert(grouping != null and grouping.type == _settings.Type.CHOICE and grouping.default == "Per channel"
+		and grouping.options == ["Per channel", "Per device"] and grouping.category == _settings.CATEGORY_BEHAVIOR,
+		"devices/window_grouping is a Behavior choice defaulting to Per channel")
+	var embed = _settings.get_setting("plugins/embed_gui")
+	_assert(embed != null and embed.type == _settings.Type.BOOL and embed.default == false
+		and embed.category == _settings.CATEGORY_AUDIO and embed.sub_category == "Plugins",
+		"plugins/embed_gui is an Audio > Plugins bool, off by default")
+	_assert(_settings.is_available("plugins/embed_gui") == (DisplayServer.get_name() == "X11"),
+		"plugins/embed_gui is available only on X11 (display server: %s)" % DisplayServer.get_name())
+	_assert(_settings.is_available("devices/window_grouping"), "a setting without available_if is available")
+	_assert(InputMap.has_action("toggle_device_frame"), "the toggle_device_frame action exists")
+
+
+func _test_available_if() -> void:
+	var s = _settings.Setting.new("test/avail", "Avail", _settings.Type.BOOL, false, _settings.CATEGORY_BEHAVIOR)
+	_assert(s.is_available(), "a setting is available by default")
+	var on := [true]
+	var ret = s.available_if(func() -> bool: return on[0], "Needs a thing.")
+	_assert(ret == s, "available_if() returns the same Setting for chaining")
+	_assert(s.is_available() and s.unavailable_reason == "Needs a thing.", "available while the check passes")
+	on[0] = false
+	_assert(not s.is_available(), "unavailable once the check fails")
+
+
+func _test_unavailable_row_disabled() -> void:
+	var scene: PackedScene = load("res://settings/SettingRow.tscn")
+	var row = scene.instantiate()
+	root.add_child(row)
+	# Registered for the duration, so the row can read a value for them
+	var setting = _settings._register(_settings.Setting.new(
+		"test/unavailable_setting", "Unavailable", _settings.Type.BOOL, false, _settings.CATEGORY_BEHAVIOR, "Some help."
+	)).available_if(func() -> bool: return false, "Needs X11.")
+	var available = _settings._register(_settings.Setting.new(
+		"test/available_setting", "Available", _settings.Type.BOOL, false, _settings.CATEGORY_BEHAVIOR))
+	row.bind(setting)
+	_assert(row._editor_widget is CheckBox and row._editor_widget.disabled, "an unavailable setting's checkbox is disabled")
+	_assert(row.help_label.visible and row.help_label.text.contains("Needs X11.") and row.help_label.text.contains("Some help."),
+		"the row shows the reason under the help text (got '%s')" % row.help_label.text)
+
+	row.bind(available)
+	_assert(not row._editor_widget.disabled, "an available setting's checkbox is enabled")
+	_settings._settings.erase(setting.key)
+	_settings._settings.erase(available.key)
+	row.detach()
+	root.remove_child(row)
+	row.queue_free()

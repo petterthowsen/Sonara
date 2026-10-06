@@ -6,7 +6,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 1 — Engine: plugin GUI embedding end to end
 
-- [ ] **T-001** [REQ-022, REQ-024, REQ-020] Plugin host GUI commands and floating fallback.
+- [x] **T-001** [REQ-022, REQ-024, REQ-020] Plugin host GUI commands and floating fallback.
   - _Files_: `Engine/src/audio/ipc/protocol.rs`, `Engine/src/plugin_host/operations.rs`, `Engine/src/plugin_host/commands.rs`
   - _Output_:
     - New commands `PluginCommand::SetGuiVisible { visible }` and `PluginCommand::SetGuiSize { width, height }`.
@@ -15,9 +15,10 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     - `set_plugin_gui_visible` calls `show`/`hide`.
     - `set_plugin_gui_size` runs `adjust_size` → `set_size` → `get_size`.
   - _Verify_: `cargo build --release` and `cargo test` pass. Existing GUI open/close still works live (floating plugin window opens and closes).
+  - _Note_: The floating fallback isn't exercised live yet; no installed plugin refuses embedded mode.
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-022, REQ-020, REQ-024] Engine commands and statuses.
+- [x] **T-002** [REQ-022, REQ-020, REQ-024] Engine commands and statuses.
   - _Files_: `Engine/src/audio/commands.rs`, `Engine/src/audio/command_worker.rs`, `Engine/src/audio/devices/clap_host/subprocess_adapter/gui.rs`, `Engine/src/audio/devices/clap_host/subprocess_adapter/plugin_ipc.rs`
   - _Output_:
     - New commands `AudioCommand::SetPluginGuiVisible` and `SetPluginGuiSize`, handled with the state lock released.
@@ -26,7 +27,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: `cargo test` passes. The engine log shows the `PluginGuiOpened` size matching the plugin (Dragonfly: 920×345) on first and repeated opens.
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-018, REQ-021, REQ-022, REQ-023] Window manager embedding, productionized.
+- [x] **T-003** [REQ-018, REQ-021, REQ-022, REQ-023] Window manager embedding, productionized.
   - _Files_: `Engine/src/window_manager.rs`
   - _Output_:
     - `HostWindow` holds its embed state and visibility.
@@ -37,7 +38,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: `cargo build --release`. `grep -n SPIKE Engine/src/window_manager.rs` finds nothing.
   - _Depends on_: —
 
-- [ ] **T-004** [REQ-018–023] OSC handlers and status mapping.
+- [x] **T-004** [REQ-018–023] OSC handlers and status mapping.
   - _Files_: `Engine/src/osc/server.rs`
   - _Output_:
     - `gui/open` takes optional embed args.
@@ -53,8 +54,8 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
 
 ## Phase 2 — Godot: model and settings
 
-- [ ] **T-005** [REQ-018–022] `DeviceInstance` GUI state and embed methods.
-  - _Files_: `Godot/data/DeviceInstance.gd`
+- [x?] **T-005** [REQ-018–022] `DeviceInstance` GUI state and embed methods.
+  - _Files_: `Godot/data/DeviceInstance.gd`, `Godot/tests/test_device_gui_embed.gd`
   - _Output_:
     - State `gui_size`, `gui_resizable` and `gui_floating`.
     - Signals `gui_opened` and `gui_size_changed`.
@@ -63,25 +64,27 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: `Godot/tests/run_all.sh device` passes. A test-mode check that `embed_gui` sends the expected OSC address and args through the test OSC stub.
   - _Depends on_: T-004
 
-- [ ] **T-006** [REQ-010, REQ-017, REQ-025, REQ-006] Settings, `available_if`, shortcut action.
-  - _Files_: `Godot/settings/Settings.gd`, `Godot/settings/SettingRow.gd`, `Godot/project.godot`
+- [x?] **T-006** [REQ-010, REQ-017, REQ-025, REQ-006] Settings, `available_if`, shortcut action.
+  - _Files_: `Godot/settings/Settings.gd`, `Godot/settings/SettingRow.gd`, `Godot/project.godot`, `Godot/tests/test_settings_registry.gd`
   - _Output_:
     - New settings `devices/window_grouping` and `plugins/embed_gui`.
     - `Setting.available_if(check, reason)`; `SettingRow` shows such a setting disabled, with the reason.
     - A `toggle_device_frame` action, listed in the "View" shortcut group.
   - _Verify_: `Godot/tests/run_all.sh settings_registry` passes. The Settings dialog shows both settings. Under `--display-driver wayland`, the embed setting is disabled with the X11 note.
+  - _Note_: `toggle_device_frame` has no default key, and `get_shortcut_list()` skips unbound actions, so it won't appear in the Shortcuts page until it's bound.
   - _Depends on_: —
 
 ## Phase 3 — Godot: frames
 
-- [ ] **T-007** [REQ-019, REQ-021] `PluginGuiSlot.compute_viewport` and its tests.
+- [x?] **T-007** [REQ-019, REQ-021] `PluginGuiSlot.compute_viewport` and its tests.
   - _Files_: `Godot/devices/frame/PluginGuiSlot.gd`, `Godot/tests/test_device_frames.gd`
   - _Output_: The static layout function: centering, clipping, scrollbars that take their own width, and scroll clamping.
   - _Verify_: `Godot/tests/run_all.sh device_frames`. The viewport cases pass, including a 920×345 GUI in a larger area, a smaller area, and areas exactly one scrollbar wide.
   - _Depends on_: —
 
-- [ ] **T-008** [REQ-001, REQ-003, REQ-014] `DeviceFrame` chrome, tabs and pages.
-  - _Files_: `Godot/devices/frame/DeviceFrame.gd`, `Godot/devices/frame/DeviceFrame.tscn`
+- [x?] **T-008** [REQ-001, REQ-003, REQ-014] `DeviceFrame` chrome, tabs and pages.
+  - _Files_: `Godot/devices/frame/DeviceFrame.gd`
+  - _Note_: The chrome is built in code (as `DockPanel` does), so there is no `.tscn`.
   - _Output_:
     - Title bar with title, tab bar, and attach/detach, minimize, maximize and close buttons.
     - `set_mode(floating)` hides minimize and maximize when attached.
@@ -90,7 +93,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: The frame test cases in `test_device_frames.gd` cover the title text, buttons per mode, a single view per page across selection changes, and `show_view`/`hide_view` calls.
   - _Depends on_: —
 
-- [ ] **T-009** [REQ-002, REQ-003, REQ-008] `FrameWindow`.
+- [x?] **T-009** [REQ-002, REQ-003, REQ-008] `FrameWindow`.
   - _Files_: `Godot/devices/frame/FrameWindow.gd`
   - _Output_: A borderless native window holding a `DeviceFrame`:
     - Dragging the title bar moves it, and edge grips resize it.
@@ -100,8 +103,10 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: Live: drag, edge-resize to the EQ minimum, maximize and restore, minimize. Headless: `min_size` follows the active page's minimum size.
   - _Depends on_: T-008
 
-- [ ] **T-010** [REQ-004, REQ-011–016] `DeviceWindowManager` rewritten around frames; spike removed.
-  - _Files_: `Godot/devices/DeviceWindowManager.gd`, `Godot/tests/test_device_window_persist.gd`, `Godot/tests/test_device_frames.gd`; delete `Godot/devices/PluginEmbedSpike.gd` and `.uid`
+- [x?] **T-010** [REQ-004, REQ-011–016] `DeviceWindowManager` rewritten around frames; spike removed.
+  - _Files_: `Godot/devices/DeviceWindowManager.gd`, `Godot/tests/test_device_window_persist.gd`, `Godot/tests/test_device_frames.gd`, `Godot/data/Channel.gd`; delete `Godot/devices/PluginEmbedSpike.gd` and `.uid`
+  - _Note_: `Channel.remove_device` emitted the device *type* id in `device_removed`/`child_removed`, so removing a device never closed its window. It now emits the instance id, as the signals document.
+  - _Note_: With embedding off, a plugin opened while its channel has no frame opens in its own window with no frame (as before). With a channel frame open, its tab is selected and shows the note (REQ-017). `close_all()` runs on project close.
   - _Output_:
     - Grouping per channel or per device; nested devices get their own frame.
     - Tabs follow the chain, and frames close when their channel or device is removed.
@@ -109,7 +114,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: `Godot/tests/run_all.sh device_window_persist device_frames`. The per-channel, per-device, nested and chain-edit cases pass.
   - _Depends on_: T-006, T-008, T-009
 
-- [ ] **T-011** [REQ-005–009] Attach and detach in the Primary area.
+- [x?] **T-011** [REQ-005–009] Attach and detach in the Primary area.
   - _Files_: `Godot/editor/Editor.gd`, `Godot/devices/DeviceWindowManager.gd`
   - _Output_:
     - `View.DEVICE`, plus `attach_frame`, `detach_frame` and `toggle_device_frame`.
@@ -118,7 +123,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: The `test_device_frames.gd` attach cases pass: the same `DeviceView` instance id survives attach and detach, a second attach detaches the first, and the previous view is restored. Live: the EQ analyzer keeps running across attach and detach.
   - _Depends on_: T-010
 
-- [ ] **T-012** [REQ-013] Tab tear-off.
+- [x?] **T-012** [REQ-013] Tab tear-off.
   - _Files_: `Godot/devices/frame/DeviceFrame.gd`, `Godot/devices/DeviceWindowManager.gd`
   - _Output_:
     - A tab dragged out of its frame becomes a frame of its own at the drop position.
@@ -126,7 +131,7 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
   - _Verify_: Live: tear off Reverb, then click its tab in the channel frame. Headless: calling the manager's tear-off entry point creates the frame and redirects selection.
   - _Depends on_: T-010
 
-- [ ] **T-013** [REQ-017–022, REQ-024] `PluginGuiSlot` embedding.
+- [x?] **T-013** [REQ-017–022, REQ-024] `PluginGuiSlot` embedding.
   - _Files_: `Godot/devices/frame/PluginGuiSlot.gd`
   - _Output_:
     - Opens the GUI embedded, and re-embeds it when the frame changes window.
@@ -142,16 +147,17 @@ Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
     - With embedding off, the plugin opens its own window and the tab shows the note.
   - _Depends on_: T-005, T-011
 
-- [ ] **T-014** [REQ-004, REQ-023] Close lifecycle.
+- [x?] **T-014** [REQ-004, REQ-023] Close lifecycle.
   - _Files_: `Godot/devices/DeviceWindowManager.gd`, `Godot/devices/frame/FrameWindow.gd`
   - _Output_:
     - Closing a frame closes every GUI in it.
     - The frame window hides at once and is freed after `plugin_gui_closed`, or after 2 s.
     - Built-in views are freed.
   - _Verify_: Live: close floating and attached frames that hold Dragonfly. Nothing flashes, and `grep -i "x11\|BadWindow" Engine/logs/last_combined.log` finds nothing new.
+  - _Note_: Godot destroys a native subwindow's X window on `hide()`, which took the embedded plugin with it on attach (BadWindow). The engine now confirms every host-window move with `gui/embedded` (`WindowManager::embed_window`/`unembed_window`/`release_window` wait for the winit thread), and the manager hides or frees a frame window only once its GUIs have left it (`_when_vacated`, 2 s fallback).
   - _Depends on_: T-013
 
-- [ ] **T-015** [REQ-026, REQ-027] Crash and engine-loss states in the slot.
+- [x?] **T-015** [REQ-026, REQ-027] Crash and engine-loss states in the slot.
   - _Files_: `Godot/devices/frame/PluginGuiSlot.gd`
   - _Output_:
     - A crashed plugin shows the crash note with a Reload button, and its GUI re-embeds once the plugin is `ready`.

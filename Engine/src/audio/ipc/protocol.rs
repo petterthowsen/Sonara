@@ -123,6 +123,13 @@ pub enum PluginCommand {
     /// Close plugin GUI
     CloseGui,
 
+    /// Show or hide an open GUI (CLAP `gui.show()`/`gui.hide()`). Answered with `GuiSize`.
+    SetGuiVisible { visible: bool },
+
+    /// Ask a resizable GUI to take this size: `adjust_size`, then `set_size`. Answered with
+    /// `GuiSize` carrying the size the plugin settled on.
+    SetGuiSize { width: u32, height: u32 },
+
     /// Check if GUI is supported
     HasGui,
 
@@ -192,7 +199,12 @@ pub enum PluginResponse {
         width: u32,
         height: u32,
         is_resizable: bool,
+        /// The plugin runs in its own window: it was asked to embed but only supports floating.
+        floating: bool,
     },
+
+    /// Current GUI size (answer to `SetGuiVisible` and `SetGuiSize`)
+    GuiSize { width: u32, height: u32 },
 
     /// GUI closed
     GuiClosed,

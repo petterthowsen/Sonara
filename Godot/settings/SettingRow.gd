@@ -108,9 +108,12 @@ func _refresh_ui() -> void:
 	elif Sonara:
 		start_value = Sonara.get_config(setting.key, setting.default)
 
-	if not setting.control_scene.is_empty() and _build_custom_widget(start_value):
-		return
+	if setting.control_scene.is_empty() or not _build_custom_widget(start_value):
+		_build_widget(start_value)
+	_apply_availability()
 
+
+func _build_widget(start_value) -> void:
 	match setting.type:
 		Type.BOOL:
 			var cb = CheckBox.new()
@@ -205,6 +208,28 @@ func _refresh_ui() -> void:
 			wide_editor_container.add_child(vbox)
 			wide_editor_container.visible = true
 			_editor_widget = vbox
+
+
+## A setting registered with available_if() whose check fails here is shown disabled, with the
+## reason under its help text.
+func _apply_availability() -> void:
+	if setting.is_available():
+		return
+	var reason: String = setting.unavailable_reason
+	help_label.text = reason if help_label.text.is_empty() else help_label.text + "\n" + reason
+	help_label.visible = not help_label.text.is_empty()
+	name_label.tooltip_text = (setting.description + "\n\n" + reason).strip_edges()
+	_disable_editor(editor_container)
+	_disable_editor(wide_editor_container)
+
+
+static func _disable_editor(node: Node) -> void:
+	if node is BaseButton:
+		node.disabled = true
+	elif node is LineEdit or node is TextEdit or node is SpinBox:
+		node.editable = false
+	for child in node.get_children():
+		_disable_editor(child)
 
 
 ## Instantiate setting.control_scene into editor_container. Returns true on success;
