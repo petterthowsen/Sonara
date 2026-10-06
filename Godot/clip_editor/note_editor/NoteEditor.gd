@@ -188,47 +188,53 @@ func _gui_input(event: InputEvent) -> void:
 
 func handle_key_input(event: InputEventKey) -> void:
 	"""Handle keyboard input."""
-	if event.pressed and event.is_command_or_control_pressed() and event.keycode == KEY_A:
+	if Hotkeys.pressed(event, "edit_select_all"):
 		# Clip mode: every note in the clip. Track mode: every note on the active track
 		# (the active editor is the one bound to it).
 		selection_manager.select_all(get_all_visual_notes())
 		accept_event()
 
-	elif event.is_action_pressed("ui_copy"):
+	elif Hotkeys.pressed(event, "edit_copy"):
 		copy_to_clipboard()
 		accept_event()
 
-	elif event.is_action_pressed("ui_cut"):
+	elif Hotkeys.pressed(event, "edit_cut"):
 		_cut_selection()
 		accept_event()
 
-	elif event.is_action_pressed("ui_paste"):
+	elif Hotkeys.pressed(event, "edit_paste"):
 		paste_clipboard()
 		accept_event()
 
-	elif event.is_action_pressed("ui_duplicate"):
+	elif Hotkeys.pressed(event, "edit_duplicate"):
 		_duplicate_selection()
 		accept_event()
 
-	elif event.is_action_pressed("ui_delete"):
+	elif Hotkeys.pressed(event, "edit_delete"):
 		_delete_selection()
 		accept_event()
 
-	elif event.is_action_pressed("ui_up"):
-		var semitones = 12 if event.ctrl_pressed else 1
-		_move_selection_vertical(semitones)
+	elif Hotkeys.pressed(event, "notes_octave_up"):
+		_move_selection_vertical(12)
 		accept_event()
 
-	elif event.is_action_pressed("ui_down"):
-		var semitones = 12 if event.ctrl_pressed else 1
-		_move_selection_vertical(-semitones)
+	elif Hotkeys.pressed(event, "notes_octave_down"):
+		_move_selection_vertical(-12)
 		accept_event()
 
-	elif event.is_action_pressed("ui_left"):
+	elif Hotkeys.pressed(event, "notes_transpose_up"):
+		_move_selection_vertical(1)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_transpose_down"):
+		_move_selection_vertical(-1)
+		accept_event()
+
+	elif Hotkeys.pressed(event, "notes_nudge_left"):
 		_move_selection_horizontal(-get_snap_interval())
 		accept_event()
 
-	elif event.is_action_pressed("ui_right"):
+	elif Hotkeys.pressed(event, "notes_nudge_right"):
 		_move_selection_horizontal(get_snap_interval())
 		accept_event()
 

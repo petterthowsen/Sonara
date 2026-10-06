@@ -70,7 +70,7 @@ func _test_sub_categories() -> void:
 func _test_categories_hide_empty() -> void:
 	var categories: Array = _settings.get_categories()
 	_assert(categories.has("Audio"), "get_categories() shows Audio (plugin hosting is registered there)")
-	_assert(not categories.has("Shortcuts"), "get_categories() hides Shortcuts (no registered settings)")
+	_assert(categories.has("Shortcuts"), "get_categories() shows Shortcuts (one setting per hotkey action)")
 
 
 func _test_coerce_clamps() -> void:

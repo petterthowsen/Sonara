@@ -206,7 +206,11 @@ func _input(event: InputEvent):
 		handle_physical_midi_event(event)
 		return
 
-	if event is InputEventKey and not event.is_echo() and event.is_action_pressed("toggle_computer_keyboard"):
+	# A chord is being captured in Settings › Shortcuts: don't play it.
+	if Hotkeys.capturing:
+		return
+
+	if event is InputEventKey and not event.is_echo() and Hotkeys.pressed(event, "toggle_computer_keyboard"):
 		if not _is_gui_text_editing():
 			set_virtual_keyboard_enabled(not virtual_keyboard_enabled)
 		return
@@ -229,7 +233,7 @@ func _input(event: InputEvent):
 				"keyboard_c4", "keyboard_c#4", "keyboard_d4", "keyboard_d#4",
 				"keyboard_transpose_up", "keyboard_transpose_down",
 				"keyboard_velocity_up", "keyboard_velocity_down"]:
-			if event.is_action(action):
+			if Hotkeys.matches(event, action):
 				is_keyboard_action = true
 				break
 
@@ -281,54 +285,54 @@ func handle_virtual_keyboard_action(event: InputEventKey):
 	## Process virtual keyboard input actions.
 
 	# Transpose controls
-	if event.is_action_pressed("keyboard_transpose_up"):
+	if Hotkeys.pressed(event, "keyboard_transpose_up"):
 		Settings.set_value("midi/virtual_keyboard/transpose", keyboard_transpose + 12)
 		return
-	elif event.is_action_pressed("keyboard_transpose_down"):
+	elif Hotkeys.pressed(event, "keyboard_transpose_down"):
 		Settings.set_value("midi/virtual_keyboard/transpose", keyboard_transpose - 12)
 		return
 
 	# Velocity controls
-	elif event.is_action_pressed("keyboard_velocity_up"):
+	elif Hotkeys.pressed(event, "keyboard_velocity_up"):
 		Settings.set_value("midi/virtual_keyboard/velocity", keyboard_velocity + VELOCITY_STEP)
 		return
-	elif event.is_action_pressed("keyboard_velocity_down"):
+	elif Hotkeys.pressed(event, "keyboard_velocity_down"):
 		Settings.set_value("midi/virtual_keyboard/velocity", keyboard_velocity - VELOCITY_STEP)
 		return
 
 	# Note actions (keyboard_c3, keyboard_d#4, etc.)
 	var note = ""
-	if event.is_action("keyboard_c3"):
+	if Hotkeys.matches(event, "keyboard_c3"):
 		note = "C3"
-	elif event.is_action("keyboard_c#3"):
+	elif Hotkeys.matches(event, "keyboard_c#3"):
 		note = "C#3"
-	elif event.is_action("keyboard_d3"):
+	elif Hotkeys.matches(event, "keyboard_d3"):
 		note = "D3"
-	elif event.is_action("keyboard_d#3"):
+	elif Hotkeys.matches(event, "keyboard_d#3"):
 		note = "D#3"
-	elif event.is_action("keyboard_e3"):
+	elif Hotkeys.matches(event, "keyboard_e3"):
 		note = "E3"
-	elif event.is_action("keyboard_f3"):
+	elif Hotkeys.matches(event, "keyboard_f3"):
 		note = "F3"
-	elif event.is_action("keyboard_f#3"):
+	elif Hotkeys.matches(event, "keyboard_f#3"):
 		note = "F#3"
-	elif event.is_action("keyboard_g3"):
+	elif Hotkeys.matches(event, "keyboard_g3"):
 		note = "G3"
-	elif event.is_action("keyboard_g#3"):
+	elif Hotkeys.matches(event, "keyboard_g#3"):
 		note = "G#3"
-	elif event.is_action("keyboard_a3"):
+	elif Hotkeys.matches(event, "keyboard_a3"):
 		note = "A3"
-	elif event.is_action("keyboard_a#3"):
+	elif Hotkeys.matches(event, "keyboard_a#3"):
 		note = "A#3"
-	elif event.is_action("keyboard_b3"):
+	elif Hotkeys.matches(event, "keyboard_b3"):
 		note = "B3"
-	elif event.is_action("keyboard_c4"):
+	elif Hotkeys.matches(event, "keyboard_c4"):
 		note = "C4"
-	elif event.is_action("keyboard_c#4"):
+	elif Hotkeys.matches(event, "keyboard_c#4"):
 		note = "C#4"
-	elif event.is_action("keyboard_d4"):
+	elif Hotkeys.matches(event, "keyboard_d4"):
 		note = "D4"
-	elif event.is_action("keyboard_d#4"):
+	elif Hotkeys.matches(event, "keyboard_d#4"):
 		note = "D#4"
 
 	if note != "":

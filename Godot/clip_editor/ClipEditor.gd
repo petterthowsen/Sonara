@@ -222,7 +222,7 @@ func _on_next_value_edited(v: float) -> void:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if is_visible_in_tree() and event.is_action_pressed("toggle_note_value_lanes"):
+	if is_visible_in_tree() and Hotkeys.pressed(event, "toggle_note_value_lanes"):
 		value_lanes_toggle.button_pressed = not value_lanes_toggle.button_pressed
 		get_viewport().set_input_as_handled()
 

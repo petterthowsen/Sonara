@@ -6,7 +6,7 @@
 class_name SettingRow extends VBoxContainer
 
 
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT }
 
 signal value_changed(key: String, value)
 ## Emitted when a Path / PATH_ARRAY browse button is pressed.

@@ -286,3 +286,5 @@ The user has made several changes:
 However, we should ensure they are concise and not full of detail that might not be needed at the time. Also, if there are large amounts of changes - probably just say "The user has made significant changes to X, Y, Z".
 
 We can check how many clip modifications, if it's a lot, we can collapse to "modified 4 clips" or such.
+- [ ] Dead actions dropped from `project.godot` during the hotkey migration (no handler existed): `pause`, `stop_here`, `toggle_clip_editor`, `toggle_secondary_mixer`. Implement any that are wanted as registry actions in `HotkeyActions.gd`.
+- [ ] `Timeline.gd:570`, `TimelineTrack.gd:69` and `TimelineClip.gd:596` read `Input.is_action_pressed("ui_select")` as an additive-select modifier. `ui_select` is a joypad button, so it is effectively dead. Remove it or give additive select a real binding.

@@ -198,11 +198,10 @@ func _prune_selection() -> void:
 func handle_shortcut(event: InputEvent) -> bool:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return false
-	var key := event as InputEventKey
-	if key.keycode == KEY_DELETE:
+	if Hotkeys.pressed(event, "zones_delete"):
 		delete_selected()
 		return true
-	if key.keycode == KEY_A and key.is_command_or_control_pressed():
+	if Hotkeys.pressed(event, "zones_select_all"):
 		select_all()
 		return true
 	return false

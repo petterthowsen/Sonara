@@ -16,6 +16,14 @@
 - `Settings` is registered before other consumer autoloads in `project.godot` and builds its registry in `_init`.
 - Settings that the engine applies live have a model that listens to `Settings.setting_changed` and sends the OSC: `data/PluginHosting.gd` (`plugins/hosting_mode`) and the `AudioConfig` autoload (`audio/output_device`, `audio/sample_rate`, `audio/buffer_size`, with the custom control `settings/AudioSettingControl.tscn` filled from the engine's device list).
 
+## Shortcuts
+- Keyboard shortcuts are settings too: `Settings` registers one `shortcuts/<action id>` setting (type `SHORTCUT`, an array of at most two chord strings such as `["Ctrl+D"]`) for every row in `HotkeyActions.ACTIONS`. Defaults live only in that table, never in `project.godot`.
+- The `Hotkeys` autoload applies the stored chords to `InputMap` and re-applies them on `setting_changed`. Handlers match with `Hotkeys.pressed(event, "<id>")`, never with `KEY_*` checks or Godot's `ui_*` actions. Matching is exact, so Space does not match Shift+Space.
+- To add an action: add one row to `HotkeyActions.ACTIONS` (id, label, group, context, defaults) and call `Hotkeys.pressed` in the handler. It then appears in Settings › Shortcuts with no other work.
+- The row control is `settings/ShortcutControl.tscn`: click to capture (Escape cancels, right-click clears), conflict warnings with "Unbind there", and one read-only line per double tap. Cancel in the dialog restores bindings through the normal snapshot. "Reset all shortcuts" calls `Settings.reset_shortcuts()`.
+- Search matches the bound chords, so typing `ctrl+d` finds Duplicate.
+- Design record: `docs/adr/0017-hotkey-registry.md`.
+
 ## Config Access (unregistered internal state)
 - Use `Sonara.get_config("section/key", default_value)` to read settings. Slash notation walks nested dictionaries and falls back to the provided default on missing keys.
 - Use `Sonara.set_config("section/key", value)` to write settings. It auto-creates intermediate dictionaries; there is no need to pre-check for existence.

@@ -404,17 +404,21 @@ func _input(event: InputEvent) -> void:
 			_layout.row_height = clampf(_layout.row_height + step, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT)
 			set_input_as_handled()
 	elif event is InputEventKey and event.pressed and not event.echo:
-		var key := event as InputEventKey
-		match key.keycode:
-			KEY_DELETE, KEY_BACKSPACE:
-				_disconnect_selection()
-				set_input_as_handled()
-			KEY_UP:
-				_shift_selection(12 if key.shift_pressed else 1)
-				set_input_as_handled()
-			KEY_DOWN:
-				_shift_selection(-12 if key.shift_pressed else -1)
-				set_input_as_handled()
+		if Hotkeys.pressed(event, "layers_delete"):
+			_disconnect_selection()
+			set_input_as_handled()
+		elif Hotkeys.pressed(event, "layers_shift_octave_up"):
+			_shift_selection(12)
+			set_input_as_handled()
+		elif Hotkeys.pressed(event, "layers_shift_octave_down"):
+			_shift_selection(-12)
+			set_input_as_handled()
+		elif Hotkeys.pressed(event, "layers_shift_up"):
+			_shift_selection(1)
+			set_input_as_handled()
+		elif Hotkeys.pressed(event, "layers_shift_down"):
+			_shift_selection(-1)
+			set_input_as_handled()
 
 
 func _pointer_over(control: Control) -> bool:

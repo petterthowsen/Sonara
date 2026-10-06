@@ -19,7 +19,7 @@ extends Node
 
 
 ## Setting type enum — drives which editor widget the dialog uses.
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT }
 
 
 ## Data class describing one registered setting.
@@ -549,6 +549,8 @@ func _register_all_settings() -> void:
 		"How many raw request/response JSON records to keep per conversation (next to the chat files) for the request viewer. 0 turns logging off. Each record holds the full request, so long chats use several MB."
 	)).sub("Debug").range(0, 2000, 50)
 
+	_register_shortcut_settings()
+
 
 static func _is_x11() -> bool:
 	return DisplayServer.get_name() == "X11"
@@ -622,6 +624,8 @@ func search(query: String) -> Array[Setting]:
 		score = maxf(score, 0.8 * Utils.fuzzy_match(q, s.category))
 		score = maxf(score, 0.7 * Utils.fuzzy_match(q, s.description))
 		score = maxf(score, 0.6 * Utils.fuzzy_match(q, s.key))
+		if s.type == Type.SHORTCUT:
+			score = maxf(score, _chord_match_score(q, s))
 		if score >= SEARCH_MIN_SCORE:
 			scored.append([score, idx, s])
 		idx += 1
@@ -704,7 +708,21 @@ func _coerce(s: Setting, value):
 			return value
 		Type.CHOICE_MULTI, Type.PATH_ARRAY:
 			return (value as Array).duplicate() if value is Array else s.default.duplicate()
+		Type.SHORTCUT:
+			return _coerce_shortcut(s, value)
 	return value
+
+
+## 0.95 when *q* is part of one of the setting's bound chords ("ctrl+d" finds Duplicate).
+func _chord_match_score(q: String, s: Setting) -> float:
+	var physical: bool = HotkeyActions.get_action(s.key.trim_prefix(SHORTCUT_PREFIX)).get("physical", false)
+	var ql := q.to_lower()
+	var value = get_value(s.key)
+	if value is Array:
+		for chord in value:
+			if str(chord).to_lower().contains(ql) or KeyChord.display(str(chord), physical).to_lower().contains(ql):
+				return 0.95
+	return 0.0
 
 
 func reset_to_defaults() -> void:
@@ -718,67 +736,49 @@ func reset_to_defaults() -> void:
 
 
 # ---------------------------------------------------------------------------
-# SHORTCUTS (read-only view of Godot's InputMap)
+# SHORTCUTS (one setting per HotkeyActions entry; Hotkeys applies them to InputMap)
 # ---------------------------------------------------------------------------
 
-func get_shortcut_list() -> Array[Dictionary]:
-	"""Return a list of user-defined input actions grouped by function.
+## Reset only the "shortcuts/" settings to their defaults.
+func reset_shortcuts() -> void:
+	for key in _settings.keys():
+		var s = _settings[key]
+		if s.type == Type.SHORTCUT:
+			set_value(key, s.default.duplicate())
 
-	Each entry is { category, action, display }.
-	Keyboard note keys (keyboard_c3, etc.) are excluded.
-	"""
-	var groups: Array[Dictionary] = [
-		{ "name" = "Transport", "actions" = ["play", "pause", "pause_here", "stop_here", "toggle_computer_keyboard"] },
-		{ "name" = "View", "actions" = ["switch_view", "switch_extra_view", "toggle_clip_editor", "toggle_note_value_lanes", "toggle_secondary_mixer", "toggle_device_lane", "toggle_device_frame", "toggle_assistant"] },
-		{ "name" = "Edit", "actions" = ["ui_undo", "ui_redo", "ui_duplicate", "ui_delete"] },
-		{ "name" = "Keyboard", "actions" = ["keyboard_transpose_up", "keyboard_transpose_down", "keyboard_velocity_up", "keyboard_velocity_down"] },
-	]
 
-	var result: Array[Dictionary] = []
-	for group in groups:
-		for action in group.actions:
-			if not InputMap.has_action(action):
-				continue
-			var events: Array[InputEvent] = InputMap.action_get_events(action)
-			if events.is_empty():
-				continue
-			var parts: Array[String] = []
-			for ev in events:
-				var lbl = _event_to_string(ev)
-				if not lbl.is_empty():
-					parts.append(lbl)
-			if parts.is_empty():
-				continue
-			result.append({
-				category = group.name,
-				action = action,
-				display = " + ".join(parts),
-			})
+const SHORTCUT_PREFIX := "shortcuts/"
+const SHORTCUT_CONTROL_SCENE := "res://settings/ShortcutControl.tscn"
+## Most chords one action can have (primary + secondary).
+const MAX_CHORDS := 2
+
+
+func _register_shortcut_settings() -> void:
+	for a in HotkeyActions.ACTIONS:
+		if a.has("double_tap_of"):
+			continue  # follows its parent's chord, nothing to store
+		var desc: String = HotkeyActions.CONTEXT_LABELS.get(a.context, a.context)
+		if a.has("description"):
+			desc += ": " + a.description
+		var s := Setting.new(SHORTCUT_PREFIX + a.id, a.label, Type.SHORTCUT, a.defaults.duplicate(),
+				CATEGORY_SHORTCUTS, desc).sub(a.group)
+		if ResourceLoader.exists(SHORTCUT_CONTROL_SCENE):
+			s.scene(SHORTCUT_CONTROL_SCENE)
+		_register(s)
+
+
+## A SHORTCUT value is an Array of at most MAX_CHORDS distinct chord strings KeyChord can
+## parse. [] (unbound) is valid and different from the default.
+func _coerce_shortcut(s: Setting, value) -> Array:
+	var result: Array = []
+	if not value is Array:
+		push_warning("Settings: '%s' expects an array of chords" % s.key)
+		return s.default.duplicate()
+	var physical: bool = HotkeyActions.get_action(s.key.trim_prefix(SHORTCUT_PREFIX)).get("physical", false)
+	for c in value:
+		var chord := str(c)
+		if KeyChord.parse(chord, physical) == null:
+			push_warning("Settings: dropping invalid chord '%s' for '%s'" % [chord, s.key])
+		elif chord not in result and result.size() < MAX_CHORDS:
+			result.append(chord)
 	return result
-
-
-func _event_to_string(event: InputEvent) -> String:
-	"""Human-readable representation of one InputEventKey."""
-	if event is InputEventKey:
-		var key := event as InputEventKey
-		var mods: Array[String] = []
-		if key.ctrl_pressed:
-			mods.append("Ctrl")
-		if key.shift_pressed:
-			mods.append("Shift")
-		if key.alt_pressed:
-			mods.append("Alt")
-		if key.meta_pressed:
-			mods.append("Cmd")
-		var key_name: String
-		if key.physical_keycode:
-			key_name = OS.get_keycode_string(key.physical_keycode)
-		else:
-			key_name = OS.get_keycode_string(key.keycode)
-		if key_name.is_empty():
-			key_name = "?"
-		mods.append(key_name)
-		return " + ".join(mods)
-	elif event is InputEventMouseButton:
-		return "Mouse " + str((event as InputEventMouseButton).button_index)
-	return ""

@@ -129,6 +129,8 @@ func _restore_snapshot() -> void:
 
 func _populate_rows(category: String) -> void:
 	_clear_content()
+	if category == "Shortcuts":
+		_add_reset_shortcuts_button()
 
 	var sub_categories = _settings.call("get_sub_categories", category)
 	var all_settings = _settings.call("get_settings_for_category", category)
@@ -189,6 +191,24 @@ func _clear_content() -> void:
 		content_container.remove_child(header)
 		header.queue_free()
 	_sub_headers.clear()
+
+
+func _add_reset_shortcuts_button() -> void:
+	var bar := HBoxContainer.new()
+	var button := Button.new()
+	button.text = "Reset all shortcuts"
+	button.tooltip_text = "Restore every keyboard shortcut to its default"
+	button.pressed.connect(_on_reset_shortcuts_pressed)
+	bar.add_child(button)
+	content_container.add_child(bar)
+	_sub_headers.append(bar)
+
+
+func _on_reset_shortcuts_pressed() -> void:
+	_settings.call("reset_shortcuts")
+	_dirty = true
+	_enable_save_buttons(true)
+	_refresh_rows()
 
 
 func _add_sub_header(header_title: String, is_first: bool) -> void:

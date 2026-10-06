@@ -501,23 +501,28 @@ func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null or not key.pressed or current_project == null or not is_visible_in_tree():
 		return
-	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
-		return
 	var focus_owner := get_viewport().gui_get_focus_owner()
 	if focus_owner is LineEdit or focus_owner is TextEdit:
 		return
 	if not get_global_rect().has_point(get_global_mouse_position()):
 		return
-	match key.keycode:
-		KEY_LEFT, KEY_RIGHT:
-			_select_adjacent(-1 if key.keycode == KEY_LEFT else 1)
-		KEY_UP, KEY_DOWN:
-			_nudge_volume((1.0 if key.keycode == KEY_UP else -1.0) * (0.1 if key.shift_pressed else 1.0))
-		KEY_ENTER, KEY_KP_ENTER:
-			if key.echo or not _rename_focused():
-				return
-		_:
+	if Hotkeys.pressed(key, "mixer_select_prev"):
+		_select_adjacent(-1)
+	elif Hotkeys.pressed(key, "mixer_select_next"):
+		_select_adjacent(1)
+	elif Hotkeys.pressed(key, "mixer_volume_up_fine"):
+		_nudge_volume(0.1)
+	elif Hotkeys.pressed(key, "mixer_volume_down_fine"):
+		_nudge_volume(-0.1)
+	elif Hotkeys.pressed(key, "mixer_volume_up"):
+		_nudge_volume(1.0)
+	elif Hotkeys.pressed(key, "mixer_volume_down"):
+		_nudge_volume(-1.0)
+	elif Hotkeys.pressed(key, "mixer_rename"):
+		if key.echo or not _rename_focused():
 			return
+	else:
+		return
 	get_viewport().set_input_as_handled()
 
 

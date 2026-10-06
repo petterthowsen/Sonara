@@ -9,9 +9,9 @@ Phase 2 depends on Phase 1. The help bar reads its labels, contexts and current 
 
 ## Checklist
 
-- [ ] Phase 1a: Action registry + `Hotkeys` autoload (bindings applied to `InputMap` from Settings)
-- [ ] Phase 1b: Migrate call sites to registry actions (no behavior change)
-- [ ] Phase 1c: Settings › Shortcuts page with key capture and conflict warnings
+- [x?] Phase 1a: Action registry + `Hotkeys` autoload (bindings applied to `InputMap` from Settings)
+- [x?] Phase 1b: Migrate call sites to registry actions (no behavior change)
+- [x?] Phase 1c: Settings › Shortcuts page with key capture and conflict warnings
 - [ ] Phase 2a: Context resolution (hover + focus + interaction state)
 - [ ] Phase 2b: Gesture declarations and the `HelpBar` component
 - [ ] Phase 2c: Wire contexts into the editors and generic controls
@@ -101,7 +101,7 @@ Action list. Keep existing ids where they already exist so `MidiManager`'s note 
 | Mixer | mixer | `mixer_select_prev` / `_next` (Left/Right), `mixer_volume_up` / `_down` (Up/Down), `mixer_volume_up_fine` / `_down_fine` (Shift+Up/Down), `mixer_rename` (Enter, KP Enter) |
 | View | global | `switch_view` (Tab), `switch_extra_view` (Shift+Tab), `toggle_device_lane` (D), `toggle_device_frame` (unbound), `toggle_assistant` (Ctrl+Shift+A) |
 | Computer Keyboard | computer_keyboard | `toggle_computer_keyboard` (context `global`, Caps Lock, `physical_keycode=4194329` today), the 16 `keyboard_*` notes, `keyboard_transpose_up/down` (X/Z), `keyboard_velocity_up/down` (V/C). All `physical: true`. |
-| Devices | sampler_zones, layer_mapping | `zones_delete` (Delete), `zones_select_all` (Ctrl+A), `layers_delete` (Delete, Backspace), `layers_select_prev/next` (Up/Down) |
+| Devices | sampler_zones, layer_mapping | `zones_delete` (Delete), `zones_select_all` (Ctrl+A), `layers_delete` (Delete, Backspace), `layers_shift_up/down` (Up/Down) and `layers_shift_octave_up/down` (Shift+Up/Down). The layer mapping Up/Down shifts the selected notes, it is not list navigation |
 
 Don't register the dead actions (`pause`, `stop_here`, `toggle_clip_editor`, `toggle_secondary_mixer`). Add a TODO.md line for each one that seems worth implementing later. A binding with no handler shouldn't appear in Settings.
 

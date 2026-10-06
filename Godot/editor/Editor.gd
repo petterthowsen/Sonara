@@ -338,58 +338,49 @@ func _on_audio_notice(text: String) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Handle input actions."""
-	if event.is_action_pressed("ui_undo"):
+	if Hotkeys.pressed(event, "edit_undo"):
 		undo()
 		accept_event()
 		return
-	if event.is_action_pressed("ui_redo"):
+	if Hotkeys.pressed(event, "edit_redo"):
 		redo()
 		accept_event()
 		return
 
-	# Check for pause_here with shift modifier
-	if event.is_action_pressed("pause_here"):
-		if event is InputEventKey and event.shift_pressed:
-			if is_playing:
-				# Pause without seeking
-				pause()
-			else:
-				# Start playback from current position
-				play()
-			accept_event()
-			return
+	if Hotkeys.pressed(event, "transport_pause_here"):
+		if is_playing:
+			# Pause without seeking
+			pause()
+		else:
+			# Start playback from current position
+			play()
+		accept_event()
+		return
 
-	# Check for play/pause without shift
-	if event.is_action_pressed("play"):
-		# Only handle if shift is NOT pressed (to avoid conflict with pause_here)
-		if event is InputEventKey and not event.shift_pressed:
-			if is_playing:
-				# When playing, pause and seek to start_position
-				pause()
-				if project:
-					set_playhead(project.start_position_ticks)
-			else:
-				play()
-			accept_event()
-			return
-	elif event.is_action_pressed("switch_extra_view"):
+	if Hotkeys.pressed(event, "transport_play_toggle"):
+		if is_playing:
+			# When playing, pause and seek to start_position
+			pause()
+			if project:
+				set_playhead(project.start_position_ticks)
+		else:
+			play()
+		accept_event()
+		return
+	elif Hotkeys.pressed(event, "switch_extra_view"):
 		switch_extra_view()
 		accept_event()
-	elif event.is_action_pressed("switch_view"):
+	elif Hotkeys.pressed(event, "switch_view"):
 		switch_view()
 		accept_event()
-	
-	if event.is_action_pressed("toggle_device_lane"):
-		# only if no modifiers are pressed
-		if event is InputEventKey:
-			var kevent = event as InputEventKey
-			if kevent.get_modifiers_mask() == 0:
-				toggle_device_lane()
-				accept_event()
-	elif event.is_action_pressed("toggle_assistant"):
+
+	if Hotkeys.pressed(event, "toggle_device_lane"):
+		toggle_device_lane()
+		accept_event()
+	elif Hotkeys.pressed(event, "toggle_assistant"):
 		toggle_assistant()
 		accept_event()
-	elif event.is_action_pressed("toggle_device_frame"):
+	elif Hotkeys.pressed(event, "toggle_device_frame"):
 		toggle_device_frame()
 		accept_event()
 

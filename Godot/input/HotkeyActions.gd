@@ -1,0 +1,221 @@
+# HotkeyActions.gd
+# The one table of rebindable keyboard actions: id, label, group, context and default
+# chords. Settings builds its "shortcuts/<id>" settings from ACTIONS, and Hotkeys applies
+# the stored bindings to InputMap. Static data only (no autoload), because Settings
+# registers its settings in _init, before any other autoload exists.
+#
+# To add an action: add one row to ACTIONS and call Hotkeys.pressed(event, "<id>") in the
+# handler. See docs/hotkeys-and-help-bar-plan.md.
+#
+# Per-action fields:
+#   id, label, group, context, defaults   required. defaults are chord strings ("Ctrl+Shift+Z")
+#   description                           optional help text (shown in Settings)
+#   physical    bool, default false       bind the physical key (piano layout), not the logical one
+#   help        bool, default true        show in the help bar
+#   priority    int                       sort order in the help bar
+#   allow_echo  bool, default false       fire on key repeat (nudge actions)
+#   double_tap_of  String                 parent action id. No keys of its own: it follows the
+#                                         parent's binding and fires on a quick second press
+class_name HotkeyActions
+
+const ACTIONS := [
+	# --- Transport ---
+	{ "id": "transport_play_toggle", "label": "Play / Stop", "group": "Transport", "context": "global",
+		"defaults": ["Space"],
+		"description": "Start playback, or stop and return to the start position." },
+	{ "id": "transport_pause_here", "label": "Pause / Resume here", "group": "Transport", "context": "global",
+		"defaults": ["Shift+Space"],
+		"description": "Pause without moving the playhead, or play if stopped." },
+
+	# --- Edit ---
+	{ "id": "edit_undo", "label": "Undo", "group": "Edit", "context": "global",
+		"defaults": ["Ctrl+Z"] },
+	{ "id": "edit_redo", "label": "Redo", "group": "Edit", "context": "global",
+		"defaults": ["Ctrl+Shift+Z", "Ctrl+Y"] },
+	{ "id": "edit_copy", "label": "Copy", "group": "Edit", "context": "workspace",
+		"defaults": ["Ctrl+C", "Ctrl+Insert"] },
+	{ "id": "edit_cut", "label": "Cut", "group": "Edit", "context": "workspace",
+		"defaults": ["Ctrl+X", "Shift+Delete"] },
+	{ "id": "edit_paste", "label": "Paste", "group": "Edit", "context": "workspace",
+		"defaults": ["Ctrl+V", "Shift+Insert"] },
+	{ "id": "edit_duplicate", "label": "Duplicate", "group": "Edit", "context": "workspace",
+		"defaults": ["Ctrl+D"] },
+	{ "id": "edit_delete", "label": "Delete", "group": "Edit", "context": "workspace",
+		"defaults": ["Delete", "Backspace"] },
+	{ "id": "edit_select_all", "label": "Select all", "group": "Edit", "context": "workspace",
+		"defaults": ["Ctrl+A"] },
+	{ "id": "edit_select_all_tracks", "label": "Select all (all tracks)", "group": "Edit", "context": "arranger",
+		"double_tap_of": "edit_select_all",
+		"description": "Press the Select all key twice quickly to select the clips on every track." },
+
+	# --- Arranger ---
+	{ "id": "arranger_move_left", "label": "Move clips left", "group": "Arranger", "context": "arranger",
+		"defaults": ["Left"], "allow_echo": true },
+	{ "id": "arranger_move_right", "label": "Move clips right", "group": "Arranger", "context": "arranger",
+		"defaults": ["Right"], "allow_echo": true },
+	{ "id": "arranger_move_track_up", "label": "Move clips to track above", "group": "Arranger", "context": "arranger",
+		"defaults": ["Up"], "allow_echo": true },
+	{ "id": "arranger_move_track_down", "label": "Move clips to track below", "group": "Arranger", "context": "arranger",
+		"defaults": ["Down"], "allow_echo": true },
+
+	# --- Clip Editor ---
+	{ "id": "notes_nudge_left", "label": "Nudge notes left", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Left"], "allow_echo": true, "description": "By the snap interval." },
+	{ "id": "notes_nudge_right", "label": "Nudge notes right", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Right"], "allow_echo": true, "description": "By the snap interval." },
+	{ "id": "notes_transpose_up", "label": "Transpose notes up", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Up"], "allow_echo": true, "description": "One semitone." },
+	{ "id": "notes_transpose_down", "label": "Transpose notes down", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Down"], "allow_echo": true, "description": "One semitone." },
+	{ "id": "notes_octave_up", "label": "Transpose notes up an octave", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Ctrl+Up"], "allow_echo": true },
+	{ "id": "notes_octave_down", "label": "Transpose notes down an octave", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": ["Ctrl+Down"], "allow_echo": true },
+	{ "id": "toggle_note_value_lanes", "label": "Toggle note value lanes", "group": "Clip Editor", "context": "clip_editor",
+		"defaults": [] },
+
+	# --- Mixer ---
+	{ "id": "mixer_select_prev", "label": "Select previous channel", "group": "Mixer", "context": "mixer",
+		"defaults": ["Left"], "allow_echo": true },
+	{ "id": "mixer_select_next", "label": "Select next channel", "group": "Mixer", "context": "mixer",
+		"defaults": ["Right"], "allow_echo": true },
+	{ "id": "mixer_volume_up", "label": "Fader up", "group": "Mixer", "context": "mixer",
+		"defaults": ["Up"], "allow_echo": true },
+	{ "id": "mixer_volume_down", "label": "Fader down", "group": "Mixer", "context": "mixer",
+		"defaults": ["Down"], "allow_echo": true },
+	{ "id": "mixer_volume_up_fine", "label": "Fader up (fine)", "group": "Mixer", "context": "mixer",
+		"defaults": ["Shift+Up"], "allow_echo": true },
+	{ "id": "mixer_volume_down_fine", "label": "Fader down (fine)", "group": "Mixer", "context": "mixer",
+		"defaults": ["Shift+Down"], "allow_echo": true },
+	{ "id": "mixer_rename", "label": "Rename channel", "group": "Mixer", "context": "mixer",
+		"defaults": ["Enter", "Kp Enter"] },
+
+	# --- View ---
+	{ "id": "switch_view", "label": "Next view", "group": "View", "context": "global",
+		"defaults": ["Tab"] },
+	{ "id": "switch_extra_view", "label": "Previous view", "group": "View", "context": "global",
+		"defaults": ["Shift+Tab"] },
+	{ "id": "toggle_device_lane", "label": "Show device lane", "group": "View", "context": "global",
+		"defaults": ["D"] },
+	{ "id": "toggle_device_frame", "label": "Toggle device frame", "group": "View", "context": "global",
+		"defaults": [] },
+	{ "id": "toggle_assistant", "label": "Toggle assistant", "group": "View", "context": "global",
+		"defaults": ["Ctrl+Shift+A"] },
+
+	# --- Computer Keyboard (physical keys, a piano layout on any keyboard layout) ---
+	{ "id": "toggle_computer_keyboard", "label": "Toggle computer keyboard", "group": "Computer Keyboard", "context": "global",
+		"defaults": ["CapsLock"], "physical": true,
+		"description": "Play notes with the computer keyboard." },
+	{ "id": "keyboard_c3", "label": "Note C3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["Q"], "physical": true, "help": false },
+	{ "id": "keyboard_c#3", "label": "Note C#3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["2"], "physical": true, "help": false },
+	{ "id": "keyboard_d3", "label": "Note D3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["W"], "physical": true, "help": false },
+	{ "id": "keyboard_d#3", "label": "Note D#3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["3"], "physical": true, "help": false },
+	{ "id": "keyboard_e3", "label": "Note E3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["E"], "physical": true, "help": false },
+	{ "id": "keyboard_f3", "label": "Note F3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["R"], "physical": true, "help": false },
+	{ "id": "keyboard_f#3", "label": "Note F#3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["5"], "physical": true, "help": false },
+	{ "id": "keyboard_g3", "label": "Note G3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["T"], "physical": true, "help": false },
+	{ "id": "keyboard_g#3", "label": "Note G#3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["6"], "physical": true, "help": false },
+	{ "id": "keyboard_a3", "label": "Note A3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["Y"], "physical": true, "help": false },
+	{ "id": "keyboard_a#3", "label": "Note A#3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["7"], "physical": true, "help": false },
+	{ "id": "keyboard_b3", "label": "Note B3", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["U"], "physical": true, "help": false },
+	{ "id": "keyboard_c4", "label": "Note C4", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["I"], "physical": true, "help": false },
+	{ "id": "keyboard_c#4", "label": "Note C#4", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["9"], "physical": true, "help": false },
+	{ "id": "keyboard_d4", "label": "Note D4", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["O"], "physical": true, "help": false },
+	{ "id": "keyboard_d#4", "label": "Note D#4", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["0"], "physical": true, "help": false },
+	{ "id": "keyboard_transpose_down", "label": "Keyboard octave down", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["Z"], "physical": true },
+	{ "id": "keyboard_transpose_up", "label": "Keyboard octave up", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["X"], "physical": true },
+	{ "id": "keyboard_velocity_down", "label": "Keyboard velocity down", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["C"], "physical": true },
+	{ "id": "keyboard_velocity_up", "label": "Keyboard velocity up", "group": "Computer Keyboard", "context": "computer_keyboard",
+		"defaults": ["V"], "physical": true },
+
+	# --- Devices ---
+	{ "id": "zones_delete", "label": "Delete zones", "group": "Devices", "context": "sampler_zones",
+		"defaults": ["Delete"] },
+	{ "id": "zones_select_all", "label": "Select all zones", "group": "Devices", "context": "sampler_zones",
+		"defaults": ["Ctrl+A"] },
+	{ "id": "layers_delete", "label": "Delete layers", "group": "Devices", "context": "layer_mapping",
+		"defaults": ["Delete", "Backspace"] },
+	{ "id": "layers_shift_up", "label": "Shift selected notes up", "group": "Devices", "context": "layer_mapping",
+		"defaults": ["Up"] },
+	{ "id": "layers_shift_down", "label": "Shift selected notes down", "group": "Devices", "context": "layer_mapping",
+		"defaults": ["Down"] },
+	{ "id": "layers_shift_octave_up", "label": "Shift selected notes up an octave", "group": "Devices", "context": "layer_mapping",
+		"defaults": ["Shift+Up"] },
+	{ "id": "layers_shift_octave_down", "label": "Shift selected notes down an octave", "group": "Devices", "context": "layer_mapping",
+		"defaults": ["Shift+Down"] },
+]
+
+## Context tree: id -> parent id. "" is the root. Two actions conflict only when they share a
+## chord and one context is the other or an ancestor of it.
+## `workspace` groups the panels that share the edit commands (copy, paste, delete, ...).
+const CONTEXTS := {
+	"global": "",
+	"workspace": "global",
+	"arranger": "workspace",
+	"clip_editor": "workspace",
+	"mixer": "global",
+	"device_panel": "global",
+	"sampler_zones": "device_panel",
+	"layer_mapping": "global",
+	"computer_keyboard": "global",
+}
+
+const CONTEXT_LABELS := {
+	"global": "Global",
+	"workspace": "Editing",
+	"arranger": "Arranger",
+	"clip_editor": "Clip Editor",
+	"mixer": "Mixer",
+	"device_panel": "Devices",
+	"sampler_zones": "Sampler zones",
+	"layer_mapping": "Layer mapping",
+	"computer_keyboard": "Computer keyboard",
+}
+
+static var _by_id: Dictionary = {}
+
+
+## The action definition for *id*, or {} when unknown.
+static func get_action(id: String) -> Dictionary:
+	if _by_id.is_empty():
+		for a in ACTIONS:
+			_by_id[a.id] = a
+	return _by_id.get(id, {})
+
+
+## True for an action that follows its parent's keys instead of having its own.
+static func is_double_tap(id: String) -> bool:
+	return get_action(id).has("double_tap_of")
+
+
+## *ctx*, its parent, ... up to "global". Empty for an unknown context.
+static func context_chain(ctx: String) -> Array[String]:
+	var chain: Array[String] = []
+	while CONTEXTS.has(ctx):
+		chain.append(ctx)
+		ctx = CONTEXTS[ctx]
+	return chain
+
+
+## True when one context is the other or an ancestor of it.
+static func contexts_overlap(a: String, b: String) -> bool:
+	return a in context_chain(b) or b in context_chain(a)
