@@ -99,14 +99,18 @@ pub fn process_audio(
     let mut tick_events = std::mem::take(&mut state.render_scratch.tick_events);
     let mut note_events = std::mem::take(&mut state.render_scratch.note_events);
     let emit_playhead = state.take_playhead_midi_dispatch();
+    let loop_region = state.loop_region;
+    let mut loop_wraps = std::mem::take(&mut state.render_scratch.loop_wraps);
     let (tick_cursor, acc) = rt_debug::section("tick events", || {
-        collect_tick_events(
+        collect_tick_events_looped(
             start_tick,
             acc,
             frames,
             &tick_rates,
             emit_playhead,
+            loop_region,
             &mut tick_events,
+            &mut loop_wraps,
         )
     });
 
@@ -116,7 +120,17 @@ pub fn process_audio(
 
     // Dispatch MIDI for each tick event at its exact frame offset
     rt_debug::section("clip MIDI", || {
-        for &(current_tick, frame_offset) in &tick_events {
+        let mut next_wrap = 0;
+        for (event_idx, &(current_tick, frame_offset)) in tick_events.iter().enumerate() {
+            // A loop wrap ends every clip note still sounding, at the wrap frame, before the
+            // note-ons at the loop start
+            if loop_wraps.get(next_wrap) == Some(&event_idx) {
+                next_wrap += 1;
+                for channel in state.channels.values_mut() {
+                    channel.release_clip_notes_at(frame_offset);
+                }
+            }
+
             // Collect note on/off events from clip instances
             note_events.clear();
 
@@ -234,6 +248,7 @@ pub fn process_audio(
         }
     });
     state.render_scratch.tick_events = tick_events;
+    state.render_scratch.loop_wraps = loop_wraps;
     state.render_scratch.note_events = note_events;
 
     // Generate audio clip content per frame while advancing a local tick cursor
@@ -246,8 +261,17 @@ pub fn process_audio(
             render_acc += frame_rate;
             if render_acc >= 1.0 {
                 let inc = render_acc.floor() as Tick;
-                render_tick += inc;
+                let (next, wrapped) = advance_tick(render_tick, inc, loop_region);
+                render_tick = next;
                 render_acc -= inc as f64;
+                if wrapped {
+                    // Audio clips re-seat at the loop start like after a seek
+                    for track in state.tracks.values_mut() {
+                        for instance in &mut track.clip_instances {
+                            instance.playback_position = None;
+                        }
+                    }
+                }
             }
 
             let current_tick = render_tick;
@@ -488,13 +512,51 @@ fn frame_rate_at(rates: &[f64], frame_idx: usize) -> f64 {
 /// double-triggers note on/off at buffer boundaries.
 fn collect_tick_events(
     start_tick: Tick,
-    mut acc: f64,
+    acc: f64,
     frame_count: usize,
     tick_rates: &[f64],
     emit_start_tick: bool,
     tick_events: &mut Vec<(Tick, usize)>,
 ) -> (Tick, f64) {
+    collect_tick_events_looped(
+        start_tick,
+        acc,
+        frame_count,
+        tick_rates,
+        emit_start_tick,
+        None,
+        tick_events,
+        &mut Vec::new(),
+    )
+}
+
+/// Advance `tick` by `inc`, folding a crossing of the loop end back to the loop start. A
+/// playhead already at or past the loop end plays on without wrapping. Returns the new tick
+/// and whether it wrapped. `process_audio` and the per-frame clip render both use this, so
+/// they always agree on where the loop wraps.
+fn advance_tick(tick: Tick, inc: Tick, loop_region: Option<(Tick, Tick)>) -> (Tick, bool) {
+    let next = tick + inc;
+    match loop_region {
+        Some((start, end)) if tick < end && next >= end => (start + (next - end), true),
+        _ => (next, false),
+    }
+}
+
+/// `collect_tick_events` that also wraps at `loop_region`. The first event after each wrap
+/// is the loop start; its index in `tick_events` goes into `loop_wraps` (extras past the
+/// vec's capacity are dropped, so nothing allocates).
+fn collect_tick_events_looped(
+    start_tick: Tick,
+    mut acc: f64,
+    frame_count: usize,
+    tick_rates: &[f64],
+    emit_start_tick: bool,
+    loop_region: Option<(Tick, Tick)>,
+    tick_events: &mut Vec<(Tick, usize)>,
+    loop_wraps: &mut Vec<usize>,
+) -> (Tick, f64) {
     tick_events.clear();
+    loop_wraps.clear();
     if emit_start_tick {
         tick_events.push((start_tick, 0));
     }
@@ -503,7 +565,11 @@ fn collect_tick_events(
         acc += frame_rate_at(tick_rates, frame_idx);
         while acc >= 1.0 {
             acc -= 1.0;
-            tick_cursor += 1;
+            let (next, wrapped) = advance_tick(tick_cursor, 1, loop_region);
+            tick_cursor = next;
+            if wrapped && loop_wraps.len() < loop_wraps.capacity() {
+                loop_wraps.push(tick_events.len());
+            }
             tick_events.push((tick_cursor, frame_idx));
         }
     }
@@ -513,6 +579,7 @@ fn collect_tick_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::commands::AudioCommand;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
     use crate::audio::midi_types::{MidiEvent, NoteEvent};
     use crate::audio::tempo_map::TempoMap;
@@ -539,6 +606,93 @@ mod tests {
             .iter()
             .map(|e| e.frame_offset)
             .collect()
+    }
+
+    fn looped_ticks(
+        start: Tick,
+        frames: usize,
+        loop_region: Option<(Tick, Tick)>,
+    ) -> (Vec<Tick>, Vec<usize>, Tick) {
+        let mut events = Vec::with_capacity(64);
+        let mut wraps = Vec::with_capacity(8);
+        let (end, _) = collect_tick_events_looped(
+            start,
+            0.0,
+            frames,
+            &[1.0],
+            true,
+            loop_region,
+            &mut events,
+            &mut wraps,
+        );
+        (events.iter().map(|e| e.0).collect(), wraps, end)
+    }
+
+    #[test]
+    fn loop_wraps_on_the_exact_frame_and_never_reaches_the_end() {
+        let (ticks, wraps, end) = looped_ticks(0, 8, Some((0, 4)));
+        assert_eq!(ticks, vec![0, 1, 2, 3, 0, 1, 2, 3, 0]);
+        assert_eq!(wraps, vec![4, 8]);
+        assert_eq!(end, 0);
+    }
+
+    #[test]
+    fn loop_wrap_events_carry_the_frame_of_the_wrap() {
+        let mut events = Vec::with_capacity(64);
+        let mut wraps = Vec::with_capacity(8);
+        collect_tick_events_looped(
+            0,
+            0.0,
+            8,
+            &[1.0],
+            false,
+            Some((2, 5)),
+            &mut events,
+            &mut wraps,
+        );
+        // Tick 5 is reached on frame 4 and folds to the loop start
+        assert_eq!(events[wraps[0]], (2, 4));
+    }
+
+    #[test]
+    fn playhead_past_the_loop_end_plays_on_and_loop_off_never_wraps() {
+        let (ticks, wraps, _) = looped_ticks(10, 3, Some((0, 4)));
+        assert_eq!(ticks, vec![10, 11, 12, 13]);
+        assert!(wraps.is_empty());
+
+        let (ticks, wraps, _) = looped_ticks(0, 6, None);
+        assert_eq!(ticks, vec![0, 1, 2, 3, 4, 5, 6]);
+        assert!(wraps.is_empty());
+    }
+
+    #[test]
+    fn advance_tick_keeps_the_overshoot_after_a_multi_tick_step() {
+        assert_eq!(advance_tick(3, 1, Some((0, 5))), (4, false));
+        assert_eq!(advance_tick(3, 4, Some((1, 5))), (3, true));
+    }
+
+    #[test]
+    fn set_loop_command_enables_and_clears_the_region() {
+        let mut state = EngineState::default();
+        let (tx, _rx) = crossbeam::channel::unbounded();
+        let apply = |state: &mut EngineState, enabled, start, end| {
+            crate::audio::commands::process_command(
+                state,
+                AudioCommand::SetLoop {
+                    enabled,
+                    start,
+                    end,
+                },
+                64,
+                &tx,
+            );
+        };
+        apply(&mut state, true, 960, 1920);
+        assert_eq!(state.loop_region, Some((960, 1920)));
+        apply(&mut state, false, 960, 1920);
+        assert_eq!(state.loop_region, None);
+        apply(&mut state, true, 960, 960);
+        assert_eq!(state.loop_region, None);
     }
 
     #[test]

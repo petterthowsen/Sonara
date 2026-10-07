@@ -37,9 +37,9 @@ func _dispatch(ev: InputEvent, ids: Array) -> String:
 
 
 func _test_transport() -> void:
-	var ids := ["transport_pause_here", "transport_play_toggle"]
-	_assert(_dispatch(_key(KEY_SPACE, {"shift": true}), ids) == "transport_pause_here", "Shift+Space pauses here")
-	_assert(_dispatch(_key(KEY_SPACE), ids) == "transport_play_toggle", "Space toggles play")
+	var ids := ["transport_pause_to_start", "transport_play"]
+	_assert(_dispatch(_key(KEY_SPACE, {"shift": true}), ids) == "transport_pause_to_start", "Shift+Space pauses here")
+	_assert(_dispatch(_key(KEY_SPACE), ids) == "transport_play", "Space toggles play")
 	var view := ["switch_extra_view", "switch_view"]
 	_assert(_dispatch(_key(KEY_TAB, {"shift": true}), view) == "switch_extra_view", "Shift+Tab is the previous view")
 	_assert(_dispatch(_key(KEY_TAB), view) == "switch_view", "Tab is the next view")

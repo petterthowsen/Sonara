@@ -88,6 +88,12 @@ pub enum AudioCommand {
     Pause,
     Stop,
     Seek(Tick),
+    /// Loop playback over `[start, end)` ticks. Disabled or `end <= start` means no loop.
+    SetLoop {
+        enabled: bool,
+        start: Tick,
+        end: Tick,
+    },
     /// Render a range offline (export, stems). Live output is silent until it finishes.
     StartRender(super::render::RenderJob),
     /// Cancel the running render with this job id. It ends with `RenderFailed("cancelled")`.
@@ -1003,6 +1009,8 @@ pub struct EngineState {
     pub fractional_tick_accumulator: AtomicI64,
     /// When true, the next playing callback dispatches MIDI at the playhead tick (play/seek).
     pub dispatch_playhead_tick: AtomicBool,
+    /// Active loop region `[start, end)` in ticks; `None` while loop is off or the region is empty.
+    pub loop_region: Option<(Tick, Tick)>,
     /// One absolute plugin deadline per callback, shared with subprocess plugin adapters.
     pub block_clock: Arc<BlockClock>,
     /// An offline render owns the devices and the transport (`audio/render`). The live
@@ -1102,6 +1110,7 @@ impl Default for EngineState {
             current_tick: AtomicI64::new(0),
             fractional_tick_accumulator: AtomicI64::new(0),
             dispatch_playhead_tick: AtomicBool::new(false),
+            loop_region: None,
             block_clock: Arc::new(BlockClock::new()),
             rendering: Arc::new(AtomicBool::new(false)),
         }
@@ -1330,6 +1339,18 @@ pub fn process_command(
                 }
             }
             info!("Seeked to tick {}", tick);
+        }
+        AudioCommand::SetLoop {
+            enabled,
+            start,
+            end,
+        } => {
+            state.loop_region = if enabled && start >= 0 && end > start {
+                Some((start, end))
+            } else {
+                None
+            };
+            info!("Loop {:?}", state.loop_region);
         }
         AudioCommand::SetTempo(tempo) => {
             state.settings.tempo = tempo;

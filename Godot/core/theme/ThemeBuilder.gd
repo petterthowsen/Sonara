@@ -32,6 +32,7 @@ const VARIATIONS := {
 	&"RecordButton": &"Button",
 	&"SoloButton": &"Button",
 	&"MuteButton": &"Button",
+	&"LoopButton": &"Button",
 	&"HeaderSmall": &"Label",
 	&"HeaderMedium": &"Label",
 	&"HeaderLarge": &"Label",
@@ -457,6 +458,7 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"beat_line_color": border.lightened(0.3),
 		&"subdivision_line_color": border,
 		&"start_arrow_color": accent,
+		&"loop_color": p.role(&"accent_secondary"),
 	})
 	t.set_stylebox(&"normal", &"Ruler", box(p, p.role(&"editor_bg"), -1.0))
 
@@ -493,7 +495,8 @@ static func _variations(t: Theme, p: ThemePalette) -> void:
 		})
 
 	# Status buttons: the pressed background is the status colour, the text contrasts with it.
-	for entry in [[&"RecordButton", &"record"], [&"SoloButton", &"solo"], [&"MuteButton", &"mute"]]:
+	for entry in [[&"RecordButton", &"record"], [&"SoloButton", &"solo"], [&"MuteButton", &"mute"],
+			[&"LoopButton", &"accent_secondary"]]:
 		var bg := p.role(entry[1])
 		var text := Utils.contrasting_text_color(bg)
 		t.set_stylebox(&"pressed", entry[0], box(p, bg, 2 * u))
@@ -501,4 +504,6 @@ static func _variations(t: Theme, p: ThemePalette) -> void:
 		_set_colors(t, entry[0], {
 			&"font_pressed_color": text,
 			&"font_hover_pressed_color": text,
+			&"icon_pressed_color": text,
+			&"icon_hover_pressed_color": text,
 		})

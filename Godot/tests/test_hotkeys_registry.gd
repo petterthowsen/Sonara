@@ -103,35 +103,35 @@ func _test_input_map() -> void:
 	_assert(ok, "InputMap holds the default events of every action")
 	var shift_space := _key(KEY_SPACE, {"shift": true})
 	var space := _key(KEY_SPACE)
-	_assert(Hotkeys.pressed(shift_space, "transport_pause_here"), "Shift+Space presses pause_here")
-	_assert(not Hotkeys.pressed(shift_space, "transport_play_toggle"), "Shift+Space doesn't press play")
-	_assert(Hotkeys.pressed(space, "transport_play_toggle"), "Space presses play")
-	_assert(not Hotkeys.pressed(space, "transport_pause_here"), "Space doesn't press pause_here")
+	_assert(Hotkeys.pressed(shift_space, "transport_pause_to_start"), "Shift+Space presses pause_here")
+	_assert(not Hotkeys.pressed(shift_space, "transport_play"), "Shift+Space doesn't press play")
+	_assert(Hotkeys.pressed(space, "transport_play"), "Space presses play")
+	_assert(not Hotkeys.pressed(space, "transport_pause_to_start"), "Space doesn't press pause_here")
 	var ctrl_d := _key(KEY_D, {"ctrl": true})
 	_assert(Hotkeys.pressed(ctrl_d, "edit_duplicate"), "Ctrl+D presses duplicate")
 	_assert(not Hotkeys.pressed(ctrl_d, "toggle_device_lane"), "Ctrl+D doesn't press toggle_device_lane")
 	_assert(Hotkeys.pressed(_key(KEY_D), "toggle_device_lane"), "D presses toggle_device_lane")
 	_assert(Hotkeys.pressed(_key(KEY_Q, {}, true), "keyboard_c3"), "physical Q presses keyboard_c3")
 	Hotkeys.capturing = true
-	_assert(not Hotkeys.pressed(space, "transport_play_toggle"), "nothing is pressed while capturing")
+	_assert(not Hotkeys.pressed(space, "transport_play"), "nothing is pressed while capturing")
 	Hotkeys.capturing = false
 	var echo := _key(KEY_SPACE)
 	echo.echo = true
-	_assert(not Hotkeys.pressed(echo, "transport_play_toggle"), "key repeat doesn't press a normal action")
+	_assert(not Hotkeys.pressed(echo, "transport_play"), "key repeat doesn't press a normal action")
 	var left_echo := _key(KEY_LEFT)
 	left_echo.echo = true
 	_assert(Hotkeys.pressed(left_echo, "arranger_move_left"), "key repeat presses an allow_echo action")
 	# Rebinding goes through Settings and reaches InputMap.
 	var changed: Array = []
 	Hotkeys.bindings_changed.connect(func(id): changed.append(id))
-	Settings.set_value("shortcuts/transport_play_toggle", ["P"])
-	_assert(changed == ["transport_play_toggle"], "bindings_changed fires for the rebound action")
-	_assert(Hotkeys.pressed(_key(KEY_P), "transport_play_toggle"), "rebound play answers to P")
-	_assert(not Hotkeys.pressed(space, "transport_play_toggle"), "rebound play no longer answers to Space")
-	_assert(Hotkeys.get_display("transport_play_toggle") == "P", "get_display reflects the rebinding")
-	Settings.set_value("shortcuts/transport_play_toggle", [])
-	_assert(Hotkeys.get_display("transport_play_toggle") == "", "unbound action has an empty display")
-	Settings.set_value("shortcuts/transport_play_toggle", ["Space"])
+	Settings.set_value("shortcuts/transport_play", ["P"])
+	_assert(changed == ["transport_play"], "bindings_changed fires for the rebound action")
+	_assert(Hotkeys.pressed(_key(KEY_P), "transport_play"), "rebound play answers to P")
+	_assert(not Hotkeys.pressed(space, "transport_play"), "rebound play no longer answers to Space")
+	_assert(Hotkeys.get_display("transport_play") == "P", "get_display reflects the rebinding")
+	Settings.set_value("shortcuts/transport_play", [])
+	_assert(Hotkeys.get_display("transport_play") == "", "unbound action has an empty display")
+	Settings.set_value("shortcuts/transport_play", ["Space"])
 
 
 func _test_coerce() -> void:

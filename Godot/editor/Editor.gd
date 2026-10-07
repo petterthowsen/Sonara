@@ -208,6 +208,7 @@ func _connect_ui_signals():
 	# Transport controls
 	play_button.toggled.connect(_on_play_toggled)
 	stop_button.pressed.connect(_on_stop_pressed)
+	_setup_transport_buttons()
 	
 	# View buttons: one ButtonGroup so exactly one stays pressed
 	var view_group := ButtonGroup.new()
@@ -347,27 +348,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		accept_event()
 		return
 
-	if Hotkeys.pressed(event, "transport_pause_here"):
-		if is_playing:
-			# Pause without seeking
-			pause()
-		else:
-			# Start playback from current position
-			play()
+	if _handle_transport_hotkey(event):
 		accept_event()
 		return
-
-	if Hotkeys.pressed(event, "transport_play_toggle"):
-		if is_playing:
-			# When playing, pause and seek to start_position
-			pause()
-			if project:
-				set_playhead(project.start_position_ticks)
-		else:
-			play()
-		accept_event()
-		return
-	elif Hotkeys.pressed(event, "switch_extra_view"):
+	if Hotkeys.pressed(event, "switch_extra_view"):
 		switch_extra_view()
 		accept_event()
 	elif Hotkeys.pressed(event, "switch_view"):
@@ -402,9 +386,14 @@ func open_project(p: Project, path: String = "") -> void:
 		project.tempo_map.changed.connect(_update_transport_ui)
 	if not project.time_signature_map.changed.is_connected(_update_transport_ui):
 		project.time_signature_map.changed.connect(_update_transport_ui)
+	if not project.loop_changed.is_connected(_on_loop_changed):
+		project.loop_changed.connect(_on_loop_changed)
+	if not project.loop_follow_changed.is_connected(_on_loop_follow_changed):
+		project.loop_follow_changed.connect(_on_loop_follow_changed)
 
 	# Update UI state
 	_update_transport_ui()
+	_update_loop_button()
 
 	# Emit project opened/activated signals for UI
 	project_opened.emit(project)
@@ -444,6 +433,10 @@ func close_project() -> void:
 		project.tempo_map.changed.disconnect(_update_transport_ui)
 	if project.time_signature_map.changed.is_connected(_update_transport_ui):
 		project.time_signature_map.changed.disconnect(_update_transport_ui)
+	if project.loop_changed.is_connected(_on_loop_changed):
+		project.loop_changed.disconnect(_on_loop_changed)
+	if project.loop_follow_changed.is_connected(_on_loop_follow_changed):
+		project.loop_follow_changed.disconnect(_on_loop_follow_changed)
 
 	project = null
 	project_path = ""
@@ -607,22 +600,124 @@ func pause() -> void:
 	logger.info("[Editor] Pause command sent to audio engine")
 
 
-func stop() -> void:
-	"""Stop playback and handle start position based on playback state."""
+## Move the playhead to the project's start position and play.
+func play_from_start_position() -> void:
+	if is_rendering():
+		return
+	set_playhead(project.start_position_ticks if project else 0)
+	if is_playing:
+		return
+	play()
+
+
+## Pause (if playing) and move the playhead to the start position.
+func pause_to_start_position() -> void:
 	if is_rendering():
 		return
 	if is_playing:
-		# If playing, stop and seek to start_position
-		AudioEngineOSC.send("/transport/stop", [])
-		logger.info("[Editor] Stop command sent to audio engine (seeking to start position)")
-		if project:
-			set_playhead(project.start_position_ticks)
-	else:
-		# If not playing, reset start_position to origin and seek there
-		if project:
-			project.set_start_position(0)
+		pause()
+	set_playhead(project.start_position_ticks if project else 0)
+
+
+## Pause (if playing), reset the start position to bar 0 and move the playhead there.
+func pause_to_origin() -> void:
+	if is_rendering():
+		return
+	if is_playing:
+		pause()
+	if project:
+		project.set_start_position(0)
+	set_playhead(0)
+
+
+## The Stop action. While playing it stops at the start position. While stopped each call goes
+## one step further (see TransportCycle).
+func stop_cycle() -> void:
+	if is_rendering():
+		return
+	if is_playing:
+		pause()
+		set_playhead(project.start_position_ticks if project else 0)
+		return
+	if project == null:
 		set_playhead(0)
-		logger.info("[Editor] Stop: reset start position and playhead to origin")
+		return
+	var marker_starts: Array = project.markers.map(func(m: SongMarker): return m.start_ticks)
+	var step := TransportCycle.next_step(playhead_ticks, project.start_position_ticks, marker_starts)
+	if step.start != project.start_position_ticks:
+		project.set_start_position(step.start)
+	if step.playhead != playhead_ticks:
+		set_playhead(step.playhead)
+
+
+## Stop button and Ctrl+Space share this.
+func stop() -> void:
+	stop_cycle()
+
+
+## Turn looping on or off. With no loop region yet, the arranger's time-range selection
+## becomes the region. Without a usable selection looping stays off.
+func toggle_loop() -> void:
+	if project == null:
+		return
+	if project.loop_enabled:
+		project.set_loop_enabled(false)
+		return
+	if not project.has_loop_region() and not _set_loop_from_selection():
+		logger.info("[Editor] Loop: select a time range first (Ctrl+drag on the ruler)")
+		_update_loop_button()
+		return
+	project.set_loop_enabled(true)
+
+
+## True when the arranger has a time range with both a start and an end.
+func has_loop_selection() -> bool:
+	var r := get_time_range()
+	return r.has and r.has_end and r.end > r.start
+
+
+## Make the selected time range the loop region and turn looping on.
+func loop_selected_region() -> void:
+	if project == null or not _set_loop_from_selection():
+		return
+	project.set_loop_enabled(true)
+
+
+## Copy the selected time range into the loop region. Returns false without a usable selection.
+func _set_loop_from_selection() -> bool:
+	if project == null or not has_loop_selection():
+		return false
+	var r := get_time_range()
+	project.set_loop_region(r.start, r.end)
+	return true
+
+
+## Called whenever the arranger's time range changes: with the follow toggle on, the loop
+## region tracks the selection. Loop on/off is never touched, and no selection leaves it alone.
+func sync_loop_to_selection() -> void:
+	if project and project.loop_follows_selection:
+		_set_loop_from_selection()
+
+
+## Run the transport action matching `event`. Returns true when one handled it.
+func _handle_transport_hotkey(event: InputEvent) -> bool:
+	if Hotkeys.pressed(event, "transport_pause") and is_playing:
+		pause()
+	elif Hotkeys.pressed(event, "transport_play") and not is_playing:
+		play()
+	elif Hotkeys.pressed(event, "transport_play_from_start"):
+		play_from_start_position()
+	elif Hotkeys.pressed(event, "transport_pause_to_start"):
+		pause_to_start_position()
+	elif Hotkeys.pressed(event, "transport_pause_to_origin"):
+		pause_to_origin()
+	elif Hotkeys.pressed(event, "transport_stop_cycle"):
+		stop_cycle()
+	elif Hotkeys.pressed(event, "transport_loop_toggle"):
+		toggle_loop()
+	else:
+		return false
+	return true
 
 
 ## `{has: bool, start: int, has_end: bool, end: int}` — the arranger's active time-range
@@ -862,6 +957,90 @@ func toggle_device_lane():
 # UI CALLBACKS
 # ============================================================================
 
+const PLAY_ICON := preload("res://assets/icons/play.svg")
+const PAUSE_ICON := preload("res://assets/icons/pause.svg")
+const LOOP_ICON := preload("res://assets/icons/repeat.svg")
+
+const LOOP_FOLLOW_ICON := preload("res://assets/icons/link.svg")
+
+var loop_button: Button
+var loop_follow_button: Button
+
+
+## Tooltips with the live hotkeys, the Loop toggle next to Stop, and the Play icon swap.
+func _setup_transport_buttons() -> void:
+	loop_button = Button.new()
+	loop_button.name = "LoopButton"
+	loop_button.toggle_mode = true
+	loop_button.custom_minimum_size = Vector2(64, 0)
+	loop_button.icon = LOOP_ICON
+	loop_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loop_button.focus_mode = Control.FOCUS_NONE
+	loop_button.theme_type_variation = &"LoopButton"
+	stop_button.get_parent().add_child(loop_button)
+	loop_button.toggled.connect(_on_loop_button_toggled)
+
+	loop_follow_button = Button.new()
+	loop_follow_button.name = "LoopFollowButton"
+	loop_follow_button.toggle_mode = true
+	loop_follow_button.custom_minimum_size = Vector2(40, 0)
+	loop_follow_button.icon = LOOP_FOLLOW_ICON
+	loop_follow_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loop_follow_button.focus_mode = Control.FOCUS_NONE
+	loop_follow_button.theme_type_variation = &"LoopButton"
+	stop_button.get_parent().add_child(loop_follow_button)
+	loop_follow_button.toggled.connect(_on_loop_follow_toggled)
+	play_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_update_play_button()
+	_update_button_tooltips()
+	Hotkeys.bindings_changed.connect(func(_ids): _update_button_tooltips())
+
+
+func _update_button_tooltips() -> void:
+	play_button.tooltip_text = "Play / pause (%s)" % _chord_text("transport_play")
+	stop_button.tooltip_text = "Stop: back to the start position; press again to step to the nearest marker, then bar 0 (%s)" % _chord_text("transport_stop_cycle")
+	loop_button.tooltip_text = "Loop playback (%s). With no loop region, select a time range first." % _chord_text("transport_loop_toggle")
+	loop_follow_button.tooltip_text = "Loop region follows the selected time range (does not turn looping on or off)"
+
+
+func _chord_text(action_id: String) -> String:
+	var chords := Hotkeys.get_chords(action_id)
+	return ", ".join(chords) if not chords.is_empty() else "unbound"
+
+
+func _update_play_button() -> void:
+	if play_button:
+		play_button.icon = PAUSE_ICON if is_playing else PLAY_ICON
+
+
+func _update_loop_button() -> void:
+	if loop_button:
+		loop_button.set_pressed_no_signal(project != null and project.loop_enabled)
+	if loop_follow_button:
+		loop_follow_button.set_pressed_no_signal(project != null and project.loop_follows_selection)
+
+
+func _on_loop_follow_toggled(pressed: bool) -> void:
+	if project:
+		project.set_loop_follows_selection(pressed)
+		sync_loop_to_selection()
+	_update_loop_button()
+
+
+func _on_loop_changed(_enabled: bool, _start: int, _end: int) -> void:
+	_update_loop_button()
+
+
+func _on_loop_follow_changed(_follows: bool) -> void:
+	_update_loop_button()
+
+
+func _on_loop_button_toggled(pressed: bool) -> void:
+	if project and pressed != project.loop_enabled:
+		toggle_loop()
+	_update_loop_button()
+
+
 func _on_play_toggled(pressed: bool) -> void:
 	"""Play button toggled."""
 	if pressed:
@@ -870,8 +1049,8 @@ func _on_play_toggled(pressed: bool) -> void:
 		pause()  # Use pause instead of stop to preserve playhead position
 
 func _on_stop_pressed() -> void:
-	"""Stop button pressed - stop and reset to 0."""
-	stop()  # This will reset playhead to 0 in the engine
+	"""Stop button pressed - the stop cycle."""
+	stop_cycle()
 
 func _on_tempo_changed(value: float) -> void:
 	set_tempo(value)
@@ -1136,6 +1315,7 @@ func _on_playing_received(values) -> void:
 		# Update UI
 		if play_button:
 			play_button.set_pressed_no_signal(playing)
+			_update_play_button()
 
 		# Emit signals
 		if playing:

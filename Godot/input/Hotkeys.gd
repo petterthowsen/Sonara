@@ -176,6 +176,8 @@ func find_conflicts(id: String, chord: String) -> Array[String]:
 	for a in HotkeyActions.ACTIONS:
 		if a.id == id or a.has("double_tap_of"):
 			continue
+		if def.get("exclusive_with", "") == a.id or a.get("exclusive_with", "") == id:
+			continue
 		if not HotkeyActions.contexts_overlap(def.context, a.context):
 			continue
 		if chord in get_chords(a.id):

@@ -24,6 +24,7 @@ channel root, or `{position}/child/{i}/child/{j}/...` for devices nested in cont
 | `/transport/pause` | - | Pause playback |
 | `/transport/stop` | - | Stop and reset to 0 |
 | `/transport/seek` | `i:ticks` | Seek to tick position |
+| `/transport/loop` | `i:enabled, i:start, i:end` | Godot → engine. Loop playback over `[start, end)` ticks. While enabled with `end > start`, the audio callback wraps the playhead from the loop end to the loop start on the exact frame (clip notes released, MIDI and audio clips re-seated at the loop start). A playhead already at or past the end plays on without wrapping. `enabled = 0`, or an empty region, clears the loop. Not persisted by the engine: Godot resends it on connect, and `/project/clear` clears it |
 | `/transport/tempo` | `f:bpm` | Set tempo |
 | `/transport/time_signature_map` | `i:bar, i:numerator, i:denominator, …` (triples) | Godot → engine. Replace the whole time signature map: changes after the base signature (`/transport/time_signature`), 1-based bars ≥ 2. No args clears it. Numerator 1–32 and denominator 1/2/4/8/16/32 only; invalid triples are dropped with a warning, and a repeated bar keeps the last |
 | `/transport/tempo_map` | `i:tick, f:bpm, …` (pairs) | Godot → engine. Replace the whole tempo map. No args clears it and the static tempo applies |

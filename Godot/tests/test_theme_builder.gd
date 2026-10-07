@@ -120,6 +120,8 @@ func _test_buttons() -> void:
 		_assert(bg.is_equal_approx(Color(entry[1])), "%s pressed uses its status colour" % entry[0])
 		_assert(t.get_color(&"font_pressed_color", entry[0]) == Utils.contrasting_text_color(bg),
 			"%s pressed text contrasts with its background" % entry[0])
+	var loop_bg := _flat(t, &"pressed", &"LoopButton").bg_color
+	_assert(loop_bg.is_equal_approx(p.role(&"accent_secondary")), "LoopButton pressed uses the secondary accent")
 	_assert(_flat(t, &"pressed", &"FlatButton") != null and t.get_stylebox(&"normal", &"FlatButton") is StyleBoxEmpty,
 		"FlatButton is empty until pressed")
 

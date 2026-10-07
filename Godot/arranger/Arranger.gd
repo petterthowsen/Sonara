@@ -207,6 +207,7 @@ func _ready():
 	_ensure_selection_bounds_overlay()
 	if timeline and timeline.clip_selection_manager:
 		timeline.clip_selection_manager.range_changed.connect(_sync_ruler_selection)
+		timeline.clip_selection_manager.range_changed.connect(_on_selection_range_changed)
 
 	# Connect to Editor signals for project lifecycle, playhead, and musical properties
 	Sonara.editor.project_activated.connect(_on_project_activated)
@@ -870,6 +871,7 @@ func _on_project_activated(project: Project) -> void:
 	current_project.track_added.connect(_on_track_added)
 	current_project.track_removed.connect(_on_track_removed)
 	current_project.start_position_changed.connect(_on_start_position_changed)
+	current_project.loop_changed.connect(_on_loop_changed)
 	
 	# Initialize timeline with project
 	timeline.set_project(project)
@@ -882,7 +884,11 @@ func _on_project_activated(project: Project) -> void:
 	for r: BaseRuler in [ruler, real_ruler]:
 		if r:
 			r.start_position_requested.connect(_on_ruler_start_position_requested)
+			r.loop_edge_requested.connect(_on_ruler_loop_edge_requested)
+			r.context_menu_requested.connect(_on_ruler_context_menu_requested)
+			r.show_loop = true
 			r.set_start_position(project.start_position_ticks)
+			r.set_loop(project.loop_enabled, project.loop_start_ticks, project.loop_end_ticks)
 
 	logger.info("Project activated: ", project.project_name)
 
@@ -903,10 +909,16 @@ func _unbind_from_project() -> void:
 			current_project.track_removed.disconnect(_on_track_removed)
 		if current_project.start_position_changed.is_connected(_on_start_position_changed):
 			current_project.start_position_changed.disconnect(_on_start_position_changed)
+		if current_project.loop_changed.is_connected(_on_loop_changed):
+			current_project.loop_changed.disconnect(_on_loop_changed)
 
 	for r: BaseRuler in [ruler, real_ruler]:
 		if r and r.start_position_requested.is_connected(_on_ruler_start_position_requested):
 			r.start_position_requested.disconnect(_on_ruler_start_position_requested)
+		if r and r.loop_edge_requested.is_connected(_on_ruler_loop_edge_requested):
+			r.loop_edge_requested.disconnect(_on_ruler_loop_edge_requested)
+		if r and r.context_menu_requested.is_connected(_on_ruler_context_menu_requested):
+			r.context_menu_requested.disconnect(_on_ruler_context_menu_requested)
 
 	if marker_track:
 		marker_track.bind_project(null)
@@ -1042,6 +1054,48 @@ func _on_start_position_changed(ticks: int) -> void:
 	for r: BaseRuler in [ruler, real_ruler]:
 		if r:
 			r.set_start_position(ticks)
+
+
+func _on_loop_changed(enabled: bool, start: int, end: int) -> void:
+	for r: BaseRuler in [ruler, real_ruler]:
+		if r:
+			r.set_loop(enabled, start, end)
+
+
+const RULER_MENU_LOOP_SELECTED := 0
+
+var _ruler_menu: PopupMenu
+
+
+## Keep the loop region on the selected range while the "follow selection" toggle is on.
+func _on_selection_range_changed() -> void:
+	if Sonara and Sonara.editor:
+		Sonara.editor.sync_loop_to_selection()
+
+
+## Right click on a ruler: a small menu about the time range.
+func _on_ruler_context_menu_requested(global_pos: Vector2) -> void:
+	if _ruler_menu == null:
+		_ruler_menu = PopupMenu.new()
+		_ruler_menu.theme_type_variation = &"ContextMenuList"
+		_ruler_menu.id_pressed.connect(_on_ruler_menu_id_pressed)
+		add_child(_ruler_menu)
+	_ruler_menu.clear()
+	_ruler_menu.add_item("Loop Selected Region", RULER_MENU_LOOP_SELECTED)
+	var has_selection: bool = Sonara.editor.has_loop_selection()
+	_ruler_menu.set_item_disabled(_ruler_menu.get_item_index(RULER_MENU_LOOP_SELECTED), not has_selection)
+	_ruler_menu.popup(Rect2(global_pos, Vector2.ZERO))
+
+
+func _on_ruler_menu_id_pressed(id: int) -> void:
+	if id == RULER_MENU_LOOP_SELECTED:
+		Sonara.editor.loop_selected_region()
+
+
+## Handle a loop triangle drag on the ruler.
+func _on_ruler_loop_edge_requested(is_end: bool, ticks: int) -> void:
+	if current_project:
+		current_project.move_loop_edge(is_end, ticks)
 
 
 ## Handle ruler click/drag: move start position and seek the playhead together.

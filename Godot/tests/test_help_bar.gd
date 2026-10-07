@@ -72,11 +72,11 @@ func _test_double_tap_entry() -> void:
 
 
 func _test_rebind() -> void:
-	Settings.set_value("shortcuts/transport_pause_here", ["Ctrl+P"])
+	Settings.set_value("shortcuts/transport_pause_to_start", ["Ctrl+P"])
 	_assert("Ctrl+P pause" in _plain(_bar("arranger", KEY_MASK_CTRL)), "rebound Pause shows Ctrl+P")
-	Settings.set_value("shortcuts/transport_pause_here", [])
+	Settings.set_value("shortcuts/transport_pause_to_start", [])
 	_assert(not "ause" in _plain(_bar("arranger", KEY_MASK_SHIFT)), "unbound Pause disappears")
-	Settings.set_value("shortcuts/transport_pause_here", ["Shift+Space"])
+	Settings.set_value("shortcuts/transport_pause_to_start", ["Shift+Space"])
 	Settings.set_value("shortcuts/edit_select_all", ["Ctrl+L"])
 	_assert("Ctrl+L ×2" in _plain(_bar("arranger", KEY_MASK_CTRL)), "double tap follows the new chord")
 	Settings.set_value("shortcuts/edit_select_all", ["Ctrl+A"])

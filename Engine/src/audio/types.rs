@@ -1059,9 +1059,14 @@ impl Channel {
     /// Send a note-off for every clip note still sounding, with the release it started with.
     /// Live MIDI isn't touched, so keys held on a controller keep playing.
     pub fn release_clip_notes(&mut self) {
+        self.release_clip_notes_at(0);
+    }
+
+    /// Like `release_clip_notes`, with the note-offs placed `frame_offset` frames into the buffer.
+    pub fn release_clip_notes_at(&mut self, frame_offset: usize) {
         let devices = &mut self.devices;
         self.active_notes
-            .release_clip(|off| send_note_event_to(devices, &off, 0));
+            .release_clip(|off| send_note_event_to(devices, &off, frame_offset));
     }
 
     /// Send a note event to every top-level device with a frame offset, like scheduled notes.

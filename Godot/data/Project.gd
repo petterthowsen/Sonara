@@ -23,6 +23,10 @@ signal channel_removed(channel: Channel)
 signal clip_added(clip: Clip)
 signal clip_removed(clip_id: String)
 signal start_position_changed(ticks: int)
+## Loop region or on/off changed. `start`/`end` are 0/0 while there is no region.
+signal loop_changed(enabled: bool, start: int, end: int)
+## The "loop follows the selected region" toggle changed.
+signal loop_follow_changed(follows: bool)
 signal marker_added(marker: SongMarker)
 signal marker_removed(marker: SongMarker)
 signal connection_state_changed(state: ConnectionState)
@@ -47,6 +51,12 @@ var time_denominator: int = 4
 var ppq: int = 960  # Pulses per quarter note
 var sample_rate: int = 48000
 var start_position_ticks: int = 0  # Playback start position
+## Loop playback region [start, end) in ticks. No region while end <= start.
+var loop_enabled: bool = false
+var loop_start_ticks: int = 0
+var loop_end_ticks: int = 0
+## While on, the arranger's selected time range becomes the loop region. Never changes loop_enabled.
+var loop_follows_selection: bool = false
 
 # Project data
 var channels: Array[Channel] = []
@@ -218,6 +228,7 @@ func _on_engine_confirmed_connected() -> void:
 
 	_sync_tempo_map_to_engine()
 	_sync_time_signature_map_to_engine()
+	_sync_loop_to_engine()
 
 	logger.info("[Project] Connected to audio engine")
 	_schedule_device_state_resync()
@@ -238,6 +249,13 @@ func _sync_tempo_map_to_engine() -> void:
 	if tempo_map.points.size() > MAX_TEMPO_POINTS_WARN:
 		logger.warn("[Project] %d tempo points is a lot to send in one packet" % tempo_map.points.size())
 	AudioEngineOSC.send("/transport/tempo_map", args)
+
+
+## Send the loop region and on/off state to the engine.
+func _sync_loop_to_engine() -> void:
+	if _connection_state != ConnectionState.CONNECTED:
+		return
+	AudioEngineOSC.send("/transport/loop", [int(loop_enabled), loop_start_ticks, loop_end_ticks])
 
 
 ## Send the whole time signature map to the engine (empty clears it). Called on every map change.
@@ -1734,6 +1752,8 @@ func to_json() -> Dictionary:
 		"next_note_id": next_note_id,
 		"next_marker_id": next_marker_id,
 		"markers": markers.map(func(m): return m.to_json()),
+		"loop": {"enabled": loop_enabled, "start": loop_start_ticks, "end": loop_end_ticks,
+				"follows_selection": loop_follows_selection},
 		"ruler_lanes": ruler_lanes.duplicate(),
 		"tempo_map": tempo_map.to_json(),
 		"time_signature_map": time_signature_map.to_json(),
@@ -1774,6 +1794,16 @@ static func from_json(data: Dictionary) -> Project:
 		# Fall back to this build's default per key, so a project saved before a flag existed
 		# (e.g. "automation_follows_clips") loads with that flag's default, not `true`.
 		project.arranger_view[key] = bool(saved_view.get(key, project.arranger_view[key]))
+
+	var saved_loop: Dictionary = data.get("loop", {})
+	project.loop_enabled = bool(saved_loop.get("enabled", false))
+	project.loop_start_ticks = int(saved_loop.get("start", 0))
+	project.loop_end_ticks = int(saved_loop.get("end", 0))
+	project.loop_follows_selection = bool(saved_loop.get("follows_selection", false))
+	if not project.has_loop_region():
+		project.loop_enabled = false
+		project.loop_start_ticks = 0
+		project.loop_end_ticks = 0
 
 	project.markers.clear()
 	for marker_data in data.get("markers", []):
@@ -1868,6 +1898,58 @@ func set_start_position(ticks: int) -> void:
 	"""Set the playback start position in ticks."""
 	start_position_ticks = ticks
 	start_position_changed.emit(ticks)
+
+
+# ============================================================================
+# LOOP REGION
+# ============================================================================
+
+func has_loop_region() -> bool:
+	return loop_end_ticks > loop_start_ticks
+
+
+## Set the loop region. The end is kept at least one beat after the start.
+func set_loop_region(start: int, end: int) -> void:
+	start = maxi(0, start)
+	end = maxi(end, start + get_ticks_per_beat())
+	if start == loop_start_ticks and end == loop_end_ticks:
+		return
+	loop_start_ticks = start
+	loop_end_ticks = end
+	_loop_modified()
+
+
+## Turn looping on or off. Turning it on without a region does nothing: callers create the
+## region first (see Editor.toggle_loop). Returns the resulting on/off state.
+func set_loop_enabled(enabled: bool) -> bool:
+	enabled = enabled and has_loop_region()
+	if enabled != loop_enabled:
+		loop_enabled = enabled
+		_loop_modified()
+	return loop_enabled
+
+
+func set_loop_follows_selection(follows: bool) -> void:
+	if follows == loop_follows_selection:
+		return
+	loop_follows_selection = follows
+	loop_follow_changed.emit(follows)
+
+
+## Drag one loop edge to `ticks`, never crossing the other edge (one beat minimum length).
+func move_loop_edge(is_end: bool, ticks: int) -> void:
+	if not has_loop_region():
+		return
+	var beat := get_ticks_per_beat()
+	if is_end:
+		set_loop_region(loop_start_ticks, maxi(ticks, loop_start_ticks + beat))
+	else:
+		set_loop_region(mini(ticks, loop_end_ticks - beat), loop_end_ticks)
+
+
+func _loop_modified() -> void:
+	_sync_loop_to_engine()
+	loop_changed.emit(loop_enabled, loop_start_ticks, loop_end_ticks)
 
 
 # ============================================================================

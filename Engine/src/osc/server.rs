@@ -1002,6 +1002,18 @@ impl OscServer {
                     command_tx.send(AudioCommand::Seek(*ticks as i64))?;
                 }
             }
+            ["transport", "loop"] => {
+                if let [OscType::Int(enabled), OscType::Int(start), OscType::Int(end)] =
+                    args.as_slice()
+                {
+                    info!("Loop enabled={} {}..{}", enabled, start, end);
+                    command_tx.send(AudioCommand::SetLoop {
+                        enabled: *enabled != 0,
+                        start: *start as i64,
+                        end: *end as i64,
+                    })?;
+                }
+            }
             ["transport", "tempo"] => {
                 if let Some(OscType::Float(tempo)) = args.first() {
                     info!("Set tempo to {}", tempo);

@@ -12,6 +12,10 @@ class_name BaseRuler extends Control
 
 ## Click or drag on the ruler to move start position (and playhead, via listeners).
 signal start_position_requested(ticks: int)
+## The user dragged a loop triangle: `is_end` picks the edge, `ticks` is the snapped target.
+signal loop_edge_requested(is_end: bool, ticks: int)
+## Right click on the ruler, with the click's global position.
+signal context_menu_requested(global_position: Vector2)
 ## Ctrl/Cmd click without drag: set the time-range start.
 signal selection_start_requested(ticks: int)
 ## Ctrl/Cmd drag: begin a full-height box select at timeline content X.
@@ -78,6 +82,20 @@ const ADDITIVE_DRAG_THRESHOLD := 6.0
 # Grid helper for calculations
 var grid_helper: GridHelper = GridHelper.new()
 var start_position_ticks: int = 0
+
+## Loop region triangles. Owners that show song ticks turn `show_loop` on.
+var show_loop: bool = false:
+	set(value):
+		if show_loop != value:
+			show_loop = value
+			queue_redraw()
+var loop_enabled: bool = false
+var loop_start_ticks: int = 0
+var loop_end_ticks: int = 0
+const LOOP_TRIANGLE_WIDTH := 9.0
+const LOOP_TRIANGLE_HEIGHT := 12.0
+## -1 = no drag, 0 = dragging the start triangle, 1 = the end triangle
+var _loop_drag_edge: int = -1
 ## Hide the start arrow (e.g. an owner with nothing to point at).
 var show_start_position: bool = true:
 	set(value):
@@ -125,6 +143,19 @@ func set_start_position(ticks: int) -> void:
 	if start_position_ticks != ticks:
 		start_position_ticks = ticks
 		queue_redraw()
+
+
+## Update the loop region (no region while end <= start) and redraw.
+func set_loop(enabled: bool, start: int, end: int) -> void:
+	if loop_enabled != enabled or loop_start_ticks != start or loop_end_ticks != end:
+		loop_enabled = enabled
+		loop_start_ticks = start
+		loop_end_ticks = end
+		queue_redraw()
+
+
+func _has_loop() -> bool:
+	return show_loop and loop_end_ticks > loop_start_ticks
 
 
 ## Replace the background regions (see `regions`).
@@ -188,6 +219,8 @@ func _draw() -> void:
 		_draw_ruler()
 		if show_start_position:
 			_draw_start_position_arrow()
+		if _has_loop():
+			_draw_loop_triangles()
 
 
 ## Draw the ruler's lines and labels. Override in subclasses.
@@ -263,6 +296,49 @@ func _draw_start_position_arrow() -> void:
 	draw_line(Vector2(start_pixel_x, size.y - arrow_height), Vector2(start_pixel_x, size.y - line_height), start_position_color, 1.0, true)
 
 
+## Colour of the loop triangles, dimmed while looping is off.
+func _loop_draw_color() -> Color:
+	var c := ruler_color(&"loop_color") if _has_ruler_color(&"loop_color") else Color(0.21, 0.85, 0.62)
+	if not loop_enabled:
+		c.a = 0.4
+	return c
+
+
+## Right triangles standing on the bottom edge: the vertical side sits on the region edge and
+## the hypotenuse slopes down toward the inside of the region.
+func _loop_triangle_points(is_end: bool) -> PackedVector2Array:
+	var x := _tick_to_local_x(loop_end_ticks if is_end else loop_start_ticks)
+	var dir := -1.0 if is_end else 1.0
+	return PackedVector2Array([
+		Vector2(x, size.y),
+		Vector2(x + dir * LOOP_TRIANGLE_WIDTH, size.y),
+		Vector2(x, size.y - LOOP_TRIANGLE_HEIGHT),
+	])
+
+
+func _draw_loop_triangles() -> void:
+	var color := _loop_draw_color()
+	for is_end in [false, true]:
+		var pts := _loop_triangle_points(is_end)
+		if pts[0].x < offset_x - LOOP_TRIANGLE_WIDTH or pts[0].x > size.x + LOOP_TRIANGLE_WIDTH:
+			continue
+		draw_colored_polygon(pts, color)
+
+
+## 0 = start triangle, 1 = end triangle, -1 = neither, for a ruler-local position.
+func _loop_edge_at(pos: Vector2) -> int:
+	if not _has_loop():
+		return -1
+	# The end triangle wins when both overlap (a one-beat region at low zoom).
+	for is_end in [true, false]:
+		var pts := _loop_triangle_points(is_end)
+		var left := minf(pts[0].x, pts[1].x) - 2.0
+		var right := maxf(pts[0].x, pts[1].x) + 2.0
+		if pos.x >= left and pos.x <= right and pos.y >= size.y - LOOP_TRIANGLE_HEIGHT - 2.0:
+			return 1 if is_end else 0
+	return -1
+
+
 ## Convert a ruler-local X into timeline content pixels (scroll + offset accounted for).
 func _content_x_from_local(local_x: float) -> float:
 	return grid_helper.scroll_position + local_x - offset_x
@@ -280,8 +356,21 @@ func _snapped_ticks_from_local(local_x: float) -> int:
 # ============================================================================
 
 func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		if grid_helper and event.position.x >= offset_x:
+			context_menu_requested.emit(get_global_mouse_position())
+			get_tree().root.set_input_as_handled()
+		return
+
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not grid_helper or event.position.x < offset_x:
+			return
+
+		var loop_edge := _loop_edge_at(event.position)
+		if loop_edge >= 0:
+			_loop_drag_edge = loop_edge
+			loop_edge_requested.emit(loop_edge == 1, _snapped_ticks_from_local(event.position.x))
+			get_tree().root.set_input_as_handled()
 			return
 
 		if enable_time_range_gestures and (event.ctrl_pressed or event.meta_pressed):
@@ -296,12 +385,30 @@ func _gui_input(event: InputEvent) -> void:
 
 ## Finish a pending Ctrl/Cmd click, hand a drag to box-select, or scrub playhead/start.
 func _input(event: InputEvent) -> void:
+	if _loop_drag_edge >= 0:
+		_handle_loop_drag_input(event)
+		return
+
 	if _additive_pending:
 		_handle_additive_input(event)
 		return
 
 	if _scrubbing:
 		_handle_scrub_input(event)
+
+
+## Move a loop edge with the mouse until the button is released.
+func _handle_loop_drag_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_loop_drag_edge = -1
+		get_tree().root.set_input_as_handled()
+		return
+	if not is_visible_in_tree():
+		_loop_drag_edge = -1
+		return
+	if event is InputEventMouseMotion:
+		loop_edge_requested.emit(_loop_drag_edge == 1, _snapped_ticks_from_local(get_local_mouse_position().x))
+		get_tree().root.set_input_as_handled()
 
 
 ## Resolve a pending Ctrl/Cmd click or start a full-height box select after a drag.

@@ -12,6 +12,8 @@
 #   description                           optional help text (shown in Settings)
 #   physical    bool, default false       bind the physical key (piano layout), not the logical one
 #   help        bool, default true        show in the help bar
+#   exclusive_with  String                action id that shares this action's chord on purpose: the two
+#                                         apply in disjoint states, so it isn't reported as a conflict
 #   requires    String                    help-bar condition that must be set (Hotkeys.set_condition),
 #                                         e.g. "clip_selection": hidden while it is not met
 #   priority    int                       sort order in the help bar
@@ -22,12 +24,27 @@ class_name HotkeyActions
 
 const ACTIONS := [
 	# --- Transport ---
-	{ "id": "transport_play_toggle", "label": "Play / Stop", "group": "Transport", "context": "global",
-		"defaults": ["Space"], "help": false,
-		"description": "Start playback, or stop and return to the start position." },
-	{ "id": "transport_pause_here", "label": "Pause / Resume here", "group": "Transport", "context": "global",
+	{ "id": "transport_play", "label": "Play", "group": "Transport", "context": "global",
+		"defaults": ["Space"], "help": false, "exclusive_with": "transport_pause",
+		"description": "Start playback at the playhead." },
+	{ "id": "transport_pause", "label": "Pause", "group": "Transport", "context": "global",
+		"defaults": ["Space"], "help": false, "exclusive_with": "transport_play",
+		"description": "Pause playback where it is." },
+	{ "id": "transport_play_from_start", "label": "Play from start position", "group": "Transport", "context": "global",
+		"defaults": [],
+		"description": "Move the playhead to the blue start position and play." },
+	{ "id": "transport_pause_to_start", "label": "Pause and go to start position", "group": "Transport", "context": "global",
 		"defaults": ["Shift+Space"],
-		"description": "Pause without moving the playhead, or play if stopped." },
+		"description": "Pause and move the playhead to the blue start position." },
+	{ "id": "transport_pause_to_origin", "label": "Pause and reset start to bar 0", "group": "Transport", "context": "global",
+		"defaults": [],
+		"description": "Pause, move the start position to bar 0 and the playhead with it." },
+	{ "id": "transport_stop_cycle", "label": "Stop (cycle)", "group": "Transport", "context": "global",
+		"defaults": ["Ctrl+Space"],
+		"description": "While playing: stop and return to the start position. While stopped, each press goes one step further: playhead to the start position, then start position to the nearest Marker, then to bar 0." },
+	{ "id": "transport_loop_toggle", "label": "Toggle loop", "group": "Transport", "context": "global",
+		"defaults": ["L"],
+		"description": "Loop playback over the loop region. With no region yet, it is created from the selected time range." },
 
 	# --- Edit ---
 	{ "id": "edit_undo", "label": "Undo", "group": "Edit", "context": "global",
