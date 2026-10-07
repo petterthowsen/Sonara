@@ -277,7 +277,7 @@ func _devices() -> String:
 	if ch.devices.is_empty():
 		return "_No devices on channel \"%s\"._" % ch.name
 	var p := _project()
-	var lines: PackedStringArray = ["Address devices by `path` (e.g. `%s/Delay`). `get_device` is paged; `set_device_params` takes a `{name: value}` map. Audio samples go on a Drum Machine via `add_device` (`parent` + `asset_path`)." % ch.name]
+	var lines: PackedStringArray = ["Address devices by `path` (e.g. `%s/Delay`). `get_device` is paged; `set_device_params` takes a `{name: value}` map. Audio samples go on a Drum Machine via `add_device` (`parent` + `asset_path`), or into a Sampler (several files make a multisample; `edit_sampler` sets up its zones)." % ch.name]
 	lines.append("| path | name | device_id | bypass | note |")
 	lines.append("|---|---|---|---|---|")
 	_append_device_rows(lines, p, ch.devices)
@@ -291,6 +291,9 @@ func _append_device_rows(lines: PackedStringArray, project: Project, host: Array
 			continue
 		var inst: DeviceInstance = d
 		var note := str(inst.slot_note) if inst.slot_note >= 0 else "—"
+		if SamplerToolUtil.is_multisample(inst):
+			var zones_text := "multisample, %d zones" % inst.multisample.zones.size()
+			note = zones_text if inst.slot_note < 0 else "%s, %s" % [note, zones_text]
 		lines.append("| `%s` | %s | `%s` | %s | %s |" % [
 			inst.address_path(project),
 			_md_cell(inst.get_display_name()),

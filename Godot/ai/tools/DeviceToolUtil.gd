@@ -316,12 +316,12 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 		asset = resolve_asset({"asset_path": spec.get("asset_path", "")})
 	if asset == null:
 		return AiTool.fail("Asset not found: %s" % str(spec.get("asset_path", "")))
+	if asset.type == Asset.TYPE.Audio and not is_drum_machine(parent):
+		return add_sampler(channel, parent, [asset], {"name": spec.get("name", ""), "position": args.get("position", -1)})
 	if parent:
 		if not DeviceDropUtil.can_drop_on_container(channel, parent, asset):
 			return AiTool.fail("Cannot add that asset into %s" % parent.get_display_name())
 	elif not DeviceDropUtil.can_drop_asset_on_channel(channel, asset):
-		if asset.type == Asset.TYPE.Audio:
-			return AiTool.fail("Audio samples go on a Drum Machine: pass parent (e.g. Drums/Drum Machine)")
 		return AiTool.fail("Cannot add that asset to channel %d (%s)" % [channel.id, channel.name])
 	var host: Array[DeviceInstance] = parent.children if parent else channel.devices
 	var before: Dictionary = {}
@@ -329,7 +329,11 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 		if d is DeviceInstance:
 			before[d.id] = true
 	var position := int(args.get("position", -1))
-	if parent and asset.type == Asset.TYPE.Audio and parent.device and parent.device.device_id == "sonara.builtin.drum_machine":
+	if is_drum_machine(parent):
+		# Samples and devices alike become a pad on the asked note (else a guessed or free one).
+		var taken := taken_note_error(parent, int(spec.get("note", -1)))
+		if not taken.is_empty():
+			return AiTool.fail(taken)
 		var identity := resolve_pad_identity(spec, asset.get_display_name(), _used_notes(parent))
 		var note := int(identity.note)
 		if note < 0:
@@ -337,7 +341,7 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 		DeviceDropUtil.drop_on_drum_pad(channel, parent, note, asset)
 		var pad := _find_added(host, before)
 		if pad == null:
-			return AiTool.fail("Sample pad was not added")
+			return AiTool.fail("Pad was not added")
 		if not str(identity.name).is_empty():
 			pad.set_name(str(identity.name))
 		return pad
@@ -354,7 +358,71 @@ static func add_one(channel: Channel, parent: DeviceInstance, spec: Dictionary, 
 	return added
 
 
+## Add a Sampler holding the audio `assets` to a channel or container (null `parent` = channel
+## root): one file loads in single-sample mode, several become a multisample with one zone each,
+## laid out from the note names in the file names. On a Drum Machine `parent` the Sampler goes on
+## pad `args.note` (default: the next free pad). Returns the new Sampler, or `AiTool.fail(...)`.
+static func add_sampler(channel: Channel, parent: DeviceInstance, assets: Array, args: Dictionary) -> Variant:
+	if channel == null or channel.channel_type != Channel.ChannelType.INSTRUMENT or channel.is_master:
+		return AiTool.fail("A Sampler needs an instrument channel; \"%s\" is not one" % (channel.name if channel else "?"))
+	var audio: Array[Asset] = []
+	for asset in assets:
+		if not (asset is Asset and asset.type == Asset.TYPE.Audio):
+			return AiTool.fail("Only audio files go into a Sampler")
+		audio.append(asset)
+	if audio.is_empty():
+		return AiTool.fail("No audio files given")
+	if parent and not parent.is_container():
+		return AiTool.fail("Parent is not a container device")
+	var host: Array[DeviceInstance] = parent.children if parent else channel.devices
+	var before: Dictionary = {}
+	for d in host:
+		if d is DeviceInstance:
+			before[d.id] = true
+	var pad_name := ""
+	if is_drum_machine(parent):
+		var used := _used_notes(parent)
+		var note := int(args.get("note", -1))
+		var taken := taken_note_error(parent, note)
+		if not taken.is_empty():
+			return AiTool.fail(taken)
+		var identity := resolve_pad_identity({"name": args.get("name", ""), "note": note}, audio[0].get_display_name(), used)
+		note = int(identity.note)
+		pad_name = str(identity.name)
+		if note < 0:
+			note = parent.next_free_drum_note()
+		DeviceDropUtil.drop_on_drum_pad(channel, parent, note, audio if audio.size() > 1 else audio[0])
+	elif audio.size() > 1:
+		DeviceDropUtil.drop_samples(channel, audio, int(args.get("position", -1)), parent)
+	else:
+		var inst := DeviceDropUtil.sampler_for_sample(audio[0], channel.id)
+		if inst:
+			HistoryUtil.execute(DeviceAddCommand.new(channel, inst, int(args.get("position", -1)), parent))
+	var added := _find_added(host, before)
+	if added == null:
+		return AiTool.fail("Sampler was not added (is the audio engine connected?)")
+	var extra_name := pad_name if not pad_name.is_empty() else NameStyle.format(str(args.get("name", "")))
+	if not extra_name.is_empty():
+		added.set_name(extra_name)
+	return added
+
+
+## True for a built-in Drum Machine.
+static func is_drum_machine(inst: DeviceInstance) -> bool:
+	return inst != null and inst.device != null and inst.device.device_id == "sonara.builtin.drum_machine"
+
+
 ## MIDI notes already used by drum-machine children.
+## An error when `note` (an asked pad note; negative = none asked) is already a pad of `parent`.
+static func taken_note_error(parent: DeviceInstance, note: int) -> String:
+	if note < 0 or parent == null:
+		return ""
+	for child in parent.children:
+		if child and child.slot_note == note:
+			return "Pad note %d is taken by %s (path \"%s\"); pick a free note, or edit that pad" % [note, child.get_display_name(), child.address_path()]
+	return ""
+
+
 static func _used_notes(parent: DeviceInstance) -> Dictionary:
 	var used := {}
 	if parent == null:

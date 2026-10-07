@@ -74,6 +74,7 @@ static func create_default() -> ToolRegistry:
 	reg.register(GetDeviceTool.new())
 	reg.register(SetDeviceParamsTool.new())
 	reg.register(LoadDeviceFileTool.new())
+	reg.register(EditSamplerTool.new())
 	reg.register(MoveDeviceTool.new())
 	reg.register(ListClipsTool.new())
 	reg.register(ReadClipTool.new())

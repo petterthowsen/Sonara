@@ -650,13 +650,13 @@ static func drop_on_drum_pad(
 		if can_drop_file_on_device(target, asset):
 			target.load_file(asset.path)
 		elif occupied.is_container():
-			var added := _sampler_for(asset, channel.id) if asset.type == Asset.TYPE.Audio else instance_for_asset(asset, channel.id, -1, channel.get_project())
+			var added := sampler_for_sample(asset, channel.id) if asset.type == Asset.TYPE.Audio else instance_for_asset(asset, channel.id, -1, channel.get_project())
 			if added:
 				HistoryUtil.execute(DeviceAddCommand.new(channel, added, -1, occupied))
 		return
 	var device_instance: DeviceInstance = null
 	if asset.type == Asset.TYPE.Audio:
-		device_instance = _sampler_for(asset, channel.id)
+		device_instance = sampler_for_sample(asset, channel.id)
 	else:
 		device_instance = instance_for_asset(asset, channel.id, -1, channel.get_project())
 	if device_instance == null:
@@ -789,7 +789,7 @@ static func _child_for_note(container: DeviceInstance, note: int) -> DeviceInsta
 
 
 ## New sampler instance with the audio `asset` queued for loading.
-static func _sampler_for(asset: Asset, channel_id: int) -> DeviceInstance:
+static func sampler_for_sample(asset: Asset, channel_id: int) -> DeviceInstance:
 	var sampler_device := AssetService.get_device(SAMPLER_ID)
 	if sampler_device == null:
 		push_error("[DeviceDropUtil] Failed to get sampler device")

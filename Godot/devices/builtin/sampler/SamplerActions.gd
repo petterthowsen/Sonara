@@ -102,57 +102,84 @@ static func drop_files(inst: DeviceInstance, paths: Array, at_key: int = -1) -> 
 		return
 	var model := inst.ensure_multisample()
 	var old_state := capture_state(inst)
-	if model.active:
-		model.add_files(paths, at_key)
-	elif paths.size() == 1:
+	if not model.active and paths.size() == 1:
 		inst.load_file(str(paths[0]))
 	else:
-		var new_zones: Array[SamplerZone] = []
-		var roots: Array = []
-		if not inst.loaded_file_path.is_empty():
-			new_zones.append(zone_from_params(inst))
-			roots.append(new_zones[0].root)
-		for path in ZoneLayout.sorted_paths(paths):
-			new_zones.append(SamplerZone.new(0, str(path)))
-			roots.append(ZoneLayout.parse_root(str(path).get_file()))
-		model.place_zones(new_zones, roots, at_key)
-		inst.loaded_file_path = ""
+		add_zone_files(inst, paths, at_key)
 	_record(inst, "Add Samples" if model.active else "Load Sample", old_state)
+
+
+## Add one zone per file, not recorded (`drop_files` and the assistant record it). In single mode it
+## switches to multisample mode, keeping a sample the Sampler already holds as a zone laid out
+## together with the new ones. Returns the ids of the files' zones.
+static func add_zone_files(inst: DeviceInstance, paths: Array, at_key: int = -1) -> Array[int]:
+	var model := inst.ensure_multisample()
+	if model.active:
+		return model.add_files(paths, at_key)
+	var new_zones: Array[SamplerZone] = []
+	var roots: Array = []
+	var kept := 0
+	if not inst.loaded_file_path.is_empty():
+		new_zones.append(zone_from_params(inst))
+		roots.append(new_zones[0].root)
+		kept = 1
+	for path in ZoneLayout.sorted_paths(paths):
+		new_zones.append(SamplerZone.new(0, str(path)))
+		roots.append(ZoneLayout.parse_root(str(path).get_file()))
+	var ids := model.place_zones(new_zones, roots, at_key)
+	inst.loaded_file_path = ""
+	return ids.slice(kept)
 
 
 ## "Convert to Multisample" (REQ-013) and the empty Sampler's "Create Multisample" (REQ-010): the
 ## current sample becomes one zone over all keys and velocities, with its settings copied from the
 ## parameters. Without a sample the multisample starts empty.
 static func convert_to_multisample(inst: DeviceInstance) -> void:
-	var model := inst.ensure_multisample()
-	if model.active:
+	if inst.ensure_multisample().active:
 		return
 	var old_state := capture_state(inst)
-	if inst.loaded_file_path.is_empty():
-		model.set_active(true)
-	else:
-		var zone := zone_from_params(inst)
-		model.place_zones([zone] as Array[SamplerZone], [zone.root])
-		inst.loaded_file_path = ""
+	make_multisample(inst)
 	_record(inst, "Convert to Multisample", old_state)
 
 
 ## "Convert to Single Sample" (REQ-014): keeps only the focused zone, copies its settings into the
 ## parameters and leaves multisample mode.
 static func convert_to_single(inst: DeviceInstance) -> void:
-	var model := inst.multisample
-	if model == null or not model.active:
+	if inst.multisample == null or not inst.multisample.active:
 		return
 	var old_state := capture_state(inst)
+	make_single(inst)
+	_record(inst, "Convert to Single Sample", old_state)
+
+
+## `convert_to_multisample` without the undo step.
+static func make_multisample(inst: DeviceInstance) -> void:
+	var model := inst.ensure_multisample()
+	if model.active:
+		return
+	if inst.loaded_file_path.is_empty():
+		model.set_active(true)
+	else:
+		var zone := zone_from_params(inst)
+		model.place_zones([zone] as Array[SamplerZone], [zone.root])
+		inst.loaded_file_path = ""
+
+
+## `convert_to_single` without the undo step. Returns the kept zone's name ("" when there was none).
+static func make_single(inst: DeviceInstance) -> String:
+	var model := inst.multisample
+	if model == null or not model.active:
+		return ""
 	var zone := model.focused_zone()
 	if zone == null and not model.zones.is_empty():
 		zone = model.zones[0]
 	var keep := zone.to_json() if zone else {}
 	model.set_active(false)
-	if not keep.is_empty():
-		write_params(inst, SamplerZone.from_json(keep))
-		inst.load_file(str(keep["path"]))
-	_record(inst, "Convert to Single Sample", old_state)
+	if keep.is_empty():
+		return ""
+	write_params(inst, SamplerZone.from_json(keep))
+	inst.load_file(str(keep["path"]))
+	return str(keep["name"])
 
 
 ## A zone for the Sampler's current single-mode sample, over all keys and velocities, with its

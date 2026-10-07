@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Inspect one device (path) and a page of parameters. Default limit 32. Optional group param/cc/all and query substring."
+	return "Inspect one device (path) and a page of parameters. Default limit 32. Optional group param/cc/all and query substring. A multisample Sampler also lists its groups and zones (100 per page, zone_offset)."
 
 
 func get_parameters() -> Dictionary:
@@ -23,6 +23,7 @@ func get_parameters() -> Dictionary:
 				"description": "Parameter group filter",
 			},
 			"query": {"type": "string", "description": "Case-insensitive parameter name substring"},
+			"zone_offset": {"type": "integer", "description": "Multisample Sampler: first zone listed (default 0)"},
 		},
 		"required": ["path"],
 	}
@@ -51,6 +52,8 @@ func execute(args: Dictionary) -> Dictionary:
 	data["limit"] = page.limit
 	data["next_offset"] = page.next_offset
 	data["params"] = params
+	if SamplerToolUtil.is_multisample(inst):
+		data["multisample"] = SamplerToolUtil.describe(inst, int(args.get("zone_offset", 0))).split("\n")
 	if inst.device and inst.get_parameters().is_empty() and str(inst.loading_state).begins_with("loading"):
 		data["params"] = []
 	return ok(data)

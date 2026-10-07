@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Set several device parameters at once. params is a map of parameter name to real value, bool, or enum label. Unknown names fail the whole call. Undoable."
+	return "Set several device parameters at once. params is a map of parameter name to real value, bool, or enum label. Unknown names fail the whole call. The result lists changed parameters and, as unchanged, those that already had the value. Undoable."
 
 
 func get_parameters() -> Dictionary:
@@ -43,6 +43,8 @@ func execute(args: Dictionary) -> Dictionary:
 	var unknown: PackedStringArray = []
 	var errors: PackedStringArray = []
 	var planned: Array = []
+	# Already at the asked value: reported, so a no-op call doesn't look like it was ignored.
+	var unchanged: Array = []
 	for key in raw.keys():
 		var pname := str(key).strip_edges()
 		var param := DeviceToolUtil.match_param(all_params, pname)
@@ -56,6 +58,7 @@ func execute(args: Dictionary) -> Dictionary:
 		var new_n := float(parsed.normalized)
 		var old_n := inst.get_parameter_normalized(param.id)
 		if abs(old_n - new_n) <= 0.0001:
+			unchanged.append({"name": param.name, "value": DeviceToolUtil.current_param_value(inst, param)})
 			continue
 		planned.append({"param": param, "old": old_n, "new": new_n})
 	if not unknown.is_empty() or not errors.is_empty():
@@ -66,7 +69,10 @@ func execute(args: Dictionary) -> Dictionary:
 			parts.append("Invalid values: %s" % "; ".join(errors))
 		return fail("%s. Nothing was changed." % ". ".join(parts))
 	if planned.is_empty():
-		return ok(compact_device(project, inst))
+		var same := compact_device(project, inst)
+		same["unchanged"] = unchanged
+		same["note"] = "Every parameter already had that value; nothing changed."
+		return ok(same)
 	var cmds: Array[Command] = []
 	for item in planned:
 		var param: DeviceParameter = item.param
@@ -89,6 +95,8 @@ func execute(args: Dictionary) -> Dictionary:
 			"value": DeviceToolUtil.current_param_value(inst, p),
 		})
 	data["changed"] = applied
+	if not unchanged.is_empty():
+		data["unchanged"] = unchanged
 	return ok(data)
 
 

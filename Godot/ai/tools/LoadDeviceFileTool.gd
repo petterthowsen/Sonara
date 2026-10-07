@@ -7,7 +7,7 @@ func get_name() -> String:
 
 
 func get_description() -> String:
-	return "Load an audio or SFZ file into an existing Sampler/Sfizz. To add a new drum pad, use add_device on the Drum Machine instead."
+	return "Load an audio or SFZ file into an existing Sampler/Sfizz. On a multisample Sampler the file is added as a zone (edit_sampler sets zones up). To add a new drum pad, use add_device on the Drum Machine instead."
 
 
 func get_parameters() -> Dictionary:
@@ -38,14 +38,23 @@ func execute(args: Dictionary) -> Dictionary:
 	var asset: Asset = resolved.asset
 	if not DeviceDropUtil.can_drop_file_on_device(inst, asset):
 		return fail("Cannot load that file into %s" % inst.get_display_name())
-	var old_path := inst.loaded_file_path
-	var cmd := PropertyCommand.new("Load Device File", inst, "load_file", old_path, asset.path)
-	# Connect before loading: the engine reports an SFZ's keyswitches after the async load.
-	var key_info_wait := SfzKeyInfoUtil.watch(inst)
-	HistoryUtil.execute(cmd)
-	await key_info_wait.call()
-	var data := compact_device(project, inst)
-	var text := "Loaded into %s" % data.path
+	var data: Dictionary
+	var text: String
+	if inst.is_sampler():
+		# The Sampler's own undo step: it also covers multisample mode, where the file becomes a zone.
+		var was_multisample := SamplerToolUtil.is_multisample(inst)
+		SamplerActions.drop_files(inst, [asset.path])
+		data = compact_device(project, inst)
+		text = ("Added a zone to %s" if was_multisample else "Loaded into %s") % data.path
+	else:
+		var old_path := inst.loaded_file_path
+		var cmd := PropertyCommand.new("Load Device File", inst, "load_file", old_path, asset.path)
+		# Connect before loading: the engine reports an SFZ's keyswitches after the async load.
+		var key_info_wait := SfzKeyInfoUtil.watch(inst)
+		HistoryUtil.execute(cmd)
+		await key_info_wait.call()
+		data = compact_device(project, inst)
+		text = "Loaded into %s" % data.path
 	var key_text := SfzKeyInfoUtil.text_for(inst, data.path)
 	if not key_text.is_empty():
 		text += "\n%s" % key_text

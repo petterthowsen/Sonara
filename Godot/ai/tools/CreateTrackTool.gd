@@ -20,7 +20,8 @@ func get_parameters() -> Dictionary:
 				"enum": ["instrument", "audio", "folder", "group"],
 				"description": "Track kind (maps to TrackCreateCommand)",
 			},
-			"asset_path": {"type": "string", "description": "Instrument tracks only: SFZ/plugin asset path from search_assets, added to the new channel"},
+			"asset_path": {"type": "string", "description": "Instrument tracks only: SFZ/plugin/audio asset path from search_assets, added to the new channel (an audio file makes a Sampler)"},
+			"asset_paths": {"type": "array", "items": {"type": "string"}, "description": "Instrument tracks only: audio files for one multisample Sampler, a zone per file"},
 			"device_id": {"type": "string", "description": "Instrument tracks only: built-in or plugin device id, added to the new channel"},
 			"output": {"type": "string", "description": "Route the new channel's output: a channel name, Master, None, or Hardware Out [N]"},
 		},
@@ -45,6 +46,19 @@ func execute(args: Dictionary) -> Dictionary:
 		if resolved_v.get("ok") == false:
 			return resolved_v
 		resolved = resolved_v
+	var samples: Array = []
+	var sample_notes: Array[String] = []
+	for item in args.get("asset_paths", []):
+		var sample_v := DeviceToolUtil.resolve_asset_fuzzy({"asset_path": str(item)}, "audio")
+		if sample_v.get("ok") == false:
+			return sample_v
+		if sample_v.asset.type != Asset.TYPE.Audio:
+			return fail("asset_paths takes audio files; %s is not one" % str(item))
+		samples.append(sample_v.asset)
+		if not str(sample_v.get("note", "")).is_empty():
+			sample_notes.append(str(sample_v.note))
+	if not samples.is_empty() and (kind != "instrument" or not resolved.is_empty()):
+		return fail("asset_paths needs kind instrument and no asset_path or device_id")
 	var cmd := TrackCreateCommand.new(project, kind, track_name)
 	HistoryUtil.execute(cmd)
 	if cmd.track == null:
@@ -55,7 +69,7 @@ func execute(args: Dictionary) -> Dictionary:
 		data["channel"] = compact_channel(project, cmd.channel)
 	var warnings: Array[String] = []
 	var note := ""
-	var sfz_text := ""
+	var device_text := ""
 	if cmd.channel and not resolved.is_empty():
 		var asset: Asset = resolved.asset
 		var spec := {"asset_path": asset.path, "_asset": asset}
@@ -65,9 +79,19 @@ func execute(args: Dictionary) -> Dictionary:
 			data["device"] = compact_device(project, device_v)
 			text += " with %s" % device_v.get_display_name()
 			note = str(resolved.get("note", ""))
-			sfz_text = SfzKeyInfoUtil.text_for(device_v, data["device"].path)
+			device_text = SfzKeyInfoUtil.text_for(device_v, data["device"].path)
 		else:
 			warnings.append("device not added: %s" % str(device_v.get("error", "")))
+	if cmd.channel and not samples.is_empty():
+		var sampler_v: Variant = DeviceToolUtil.add_sampler(cmd.channel, null, samples, {})
+		if sampler_v is DeviceInstance:
+			data["device"] = compact_device(project, sampler_v)
+			text += " with %s" % sampler_v.get_display_name()
+			if SamplerToolUtil.is_multisample(sampler_v):
+				device_text = SamplerToolUtil.describe(sampler_v)
+			note = "\n".join(sample_notes)
+		else:
+			warnings.append("Sampler not added: %s" % str(sampler_v.get("error", "")))
 	if cmd.channel and args.has("output"):
 		var route_v: Variant = _route(project, cmd.channel, args)
 		if route_v is String:
@@ -76,8 +100,8 @@ func execute(args: Dictionary) -> Dictionary:
 			warnings.append("output not routed: %s" % str(route_v.get("error", "")))
 	if not note.is_empty():
 		text += "\n%s" % note
-	if not sfz_text.is_empty():
-		text += "\n%s" % sfz_text
+	if not device_text.is_empty():
+		text += "\n%s" % device_text
 	for w in warnings:
 		text += "\nWarning: %s" % w
 	return ok_text(text, data)
