@@ -100,6 +100,15 @@ func _init(ppq_val: int = 960, time_num: int = 4, time_denom: int = 4, tempo_val
 const SPACING_SETTING := "appearance/grid_min_line_spacing"
 const MIDI_EDITOR_SPACING_SETTING := "appearance/midi_editor_min_line_spacing"
 
+## Subdivision levels as divisors of a quarter note, finest first: 1/2, 1/4, 1/8 and 1/16 beat.
+const SUBDIVISION_DIVS := [16, 8, 4, 2]
+## Bar lines are 2 px wide and carry numbers, so they want this many times min_line_spacing.
+const BAR_SPACING_FACTOR := 2.0
+## Bar numbers are drawn on bars at least this many pixels apart.
+const BAR_LABEL_MIN_SPACING := 48.0
+## Line strength steps from the finest visible level up to the strongest.
+const WEIGHT_STEPS := 3.0
+
 ## The key this instance follows (see SPACING_SETTING). Setting it re-reads the
 ## value and keeps tracking changes of the new key.
 var spacing_setting: String = SPACING_SETTING:
@@ -200,7 +209,7 @@ func get_snap_interval_at(ticks: int) -> int:
 	return _snap_interval_for(seg["beat_ticks"], seg["bar_ticks"])
 
 func _snap_interval_for(beat: int, bar: int) -> int:
-	# Snap to the finest visible grid line
+	# Snap to the finest line that is drawn at all, even one still fading in
 	var subdivision_interval := _subdivision_for(beat)
 	if subdivision_interval > 0:
 		return subdivision_interval
@@ -218,12 +227,19 @@ func get_subdivision_interval() -> int:
 	return _subdivision_for(get_ticks_per_beat())
 
 func _subdivision_for(beat: int) -> int:
-	for div in [16, 8, 4, 2]:
+	for div in SUBDIVISION_DIVS:
 		@warning_ignore("integer_division")
 		var interval: int = maxi(1, ppq / div)
 		if interval < beat and ticks_to_pixels(interval) >= min_line_spacing:
 			return interval
 	return 0
+
+## How far a line level is faded in: 0 at `threshold` pixels of spacing, 1 at twice that.
+## A level is only drawn once its spacing reaches the threshold, but it takes the same
+## again before it is at full strength, so zooming brings lines in smoothly.
+static func fade_of(spacing_px: float, threshold: float) -> float:
+	var th := maxf(1.0, threshold)
+	return clampf((spacing_px - th) / th, 0.0, 1.0)
 
 # ============================================================================
 # SNAPPING
@@ -333,11 +349,70 @@ class GridLine:
 	var x: float
 	var type: GridLineType
 	var bar_number: int = 0  # Only for bar lines
-	
+	## 0 (faintest) to 1 (strongest). Rank among the visible levels, counted from the
+	## finest, so a grid with few levels is quiet and each level added pushes the
+	## coarser ones up a step. Continuous while the finest level fades in.
+	var weight: float = 1.0
+	## Opacity factor 0..1 for the level fading in or out with zoom.
+	var alpha: float = 1.0
+	## Bar lines only: draw the bar number here. Bar numbers thin out like bar lines do.
+	var labeled: bool = false
+
 	func _init(x_pos: float, line_type: GridLineType, bar_num: int = 0):
 		x = x_pos
 		type = line_type
 		bar_number = bar_num
+
+	## Colour for this line from a three-colour palette: `faint` (weight 0), `mid` and
+	## `strong` (weight 1), with the level's fade folded into alpha. Even the faintest
+	## line sits a quarter of the way to `mid`, so a lone level is always legible.
+	func color(faint: Color, mid: Color, strong: Color) -> Color:
+		var t := 0.25 + 0.75 * weight
+		var c := faint.lerp(mid, t * 2.0) if t < 0.5 else mid.lerp(strong, (t - 0.5) * 2.0)
+		c.a *= alpha
+		return c
+
+	## Whole-pixel width: bars read as heavier through width, the rest through colour.
+	func width() -> float:
+		return 2.0 if type == GridLineType.BAR else 1.0
+
+## The line levels of one signature stretch, coarsest first. Each is a Dictionary:
+## `interval` (ticks), `type`, `bars` (bar levels: draw every Nth bar), `fade`, `weight`.
+## Bars come in power-of-two groups once they get too close, 1 bar, 2, 4 and so on;
+## below them the beat and its 1/2, 1/4, 1/8 and 1/16 subdivisions.
+func _levels_for(beat: int, bar: int) -> Array[Dictionary]:
+	var th := maxf(1.0, min_line_spacing)
+	var bar_th := th * BAR_SPACING_FACTOR
+	var levels: Array[Dictionary] = []
+
+	var k := 1
+	while ticks_to_pixels(bar * k) < bar_th and k < (1 << 24):
+		k *= 2
+	var k_fade := fade_of(ticks_to_pixels(bar * k), bar_th)
+	if k_fade < 1.0:
+		# The group is still fading in; the next coarser one carries the grid meanwhile.
+		levels.append({"interval": bar * k * 2, "type": GridLineType.BAR, "bars": k * 2, "fade": 1.0})
+	levels.append({"interval": bar * k, "type": GridLineType.BAR, "bars": k, "fade": k_fade})
+
+	if beat < bar and ticks_to_pixels(beat) >= th:
+		levels.append({"interval": beat, "type": GridLineType.BEAT, "bars": 0, "fade": fade_of(ticks_to_pixels(beat), th)})
+		for i in range(SUBDIVISION_DIVS.size() - 1, -1, -1):
+			@warning_ignore("integer_division")
+			var interval: int = maxi(1, ppq / int(SUBDIVISION_DIVS[i]))
+			if interval < beat and ticks_to_pixels(interval) >= th:
+				levels.append({"interval": interval, "type": GridLineType.SUBDIVISION, "bars": 0, "fade": fade_of(ticks_to_pixels(interval), th)})
+
+	# Weights count from the finest level. The finest sits at the bottom; the next one up
+	# rises with its fade, so nothing jumps when a level appears.
+	var n := levels.size() - 1
+	var finest_fade: float = levels[n]["fade"]
+	for i in levels.size():
+		var steps := 0.0 if i == n else clampf(float(n - i) - 1.0 + finest_fade, 0.0, WEIGHT_STEPS)
+		var w := steps / WEIGHT_STEPS
+		if levels[i]["type"] == GridLineType.BAR:
+			w = 0.4 + 0.6 * w  # a bar is never the faintest thing on screen
+		levels[i]["weight"] = w
+	return levels
 
 func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0, use_scroll: bool = true) -> Array[GridLine]:
 	"""
@@ -345,15 +420,16 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 	start_x/end_x are in pixel space (before scroll adjustment).
 	offset_x is horizontal offset (e.g., piano keyboard width).
 	use_scroll: if true, adjust for scroll_position (for fixed overlays like Ruler). If false, don't adjust (for scrolled content like Timeline).
-	Returns array of GridLine objects ready for drawing.
+	Returns array of GridLine objects ready for drawing. Each tick appears once, at the
+	coarsest level it falls on; see _levels_for.
 	"""
 	var lines: Array[GridLine] = []
-	
+
 	# Convert to ticks, accounting for scroll position if requested
 	var scroll_offset = scroll_position if use_scroll else 0.0
 	var start_ticks = pixels_to_ticks(start_x + scroll_offset)
 	var end_ticks = pixels_to_ticks(end_x + scroll_offset)
-	
+
 	var segs := get_signature_segments()
 	for seg in segs:
 		var seg_start: int = seg["tick"]
@@ -367,38 +443,55 @@ func get_visible_grid_lines(start_x: float, end_x: float, offset_x: float = 0.0,
 		var first_tick: int = maxi(start_ticks, seg_start)
 		var ticks_per_bar: int = seg["bar_ticks"]
 		var ticks_per_beat: int = seg["beat_ticks"]
+		var first_bar: int = seg["bar"]
 
-		# Bar lines
-		@warning_ignore("integer_division")
-		var first_bar_index: int = (first_tick - seg_start) / ticks_per_bar
-		var tick := seg_start + first_bar_index * ticks_per_bar
-		var bar_number: int = int(seg["bar"]) + first_bar_index
-		while tick <= last_tick:
-			var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-			lines.append(GridLine.new(x, GridLineType.BAR, bar_number))
-			tick += ticks_per_bar
-			bar_number += 1
+		var levels := _levels_for(ticks_per_beat, ticks_per_bar)
 
-		# Beat lines (skip bars)
-		if ticks_to_pixels(ticks_per_beat) >= min_line_spacing:
-			@warning_ignore("integer_division")
-			tick = seg_start + ((first_tick - seg_start) / ticks_per_beat) * ticks_per_beat
-			while tick <= last_tick:
-				if ((tick - seg_start) % ticks_per_bar) != 0:
-					var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-					lines.append(GridLine.new(x, GridLineType.BEAT))
-				tick += ticks_per_beat
+		# Numbers go on every Nth bar, N the smallest power of two that leaves them room
+		var label_every := 1
+		while ticks_to_pixels(ticks_per_bar * label_every) < BAR_LABEL_MIN_SPACING and label_every < (1 << 24):
+			label_every *= 2
 
-		# Subdivision lines (skip bars and beats)
-		var ticks_per_subdivision := _subdivision_for(ticks_per_beat)
-		if ticks_per_subdivision > 0:
-			@warning_ignore("integer_division")
-			tick = seg_start + ((first_tick - seg_start) / ticks_per_subdivision) * ticks_per_subdivision
-			while tick <= last_tick:
-				var rel := tick - seg_start
-				if (rel % ticks_per_bar) != 0 and (rel % ticks_per_beat) != 0:
-					var x = ticks_to_pixels(tick) - scroll_offset + offset_x
-					lines.append(GridLine.new(x, GridLineType.SUBDIVISION))
-				tick += ticks_per_subdivision
+		var coarser_intervals: Array[int] = []  # beat and subdivision levels already emitted
+		var coarser_bars := 0  # bar group of the level above
+		for level in levels:
+			var interval: int = level["interval"]
+			var level_type: GridLineType = level["type"]
+			var fade: float = level["fade"]
+			var weight: float = level["weight"]
+
+			if level_type == GridLineType.BAR:
+				var every: int = level["bars"]
+				@warning_ignore("integer_division")
+				var idx: int = maxi(0, (first_tick - seg_start) / ticks_per_bar)
+				# Step to the first bar of the group (bar numbers are global and 1-based)
+				idx += posmod(-(first_bar - 1 + idx), every)
+				var tick := seg_start + idx * ticks_per_bar
+				while tick <= last_tick:
+					var bar_number := first_bar + idx
+					if coarser_bars == 0 or (bar_number - 1) % coarser_bars != 0:
+						var line := GridLine.new(ticks_to_pixels(tick) - scroll_offset + offset_x, GridLineType.BAR, bar_number)
+						line.weight = weight
+						line.alpha = fade
+						line.labeled = (bar_number - 1) % maxi(label_every, every) == 0
+						lines.append(line)
+					idx += every
+					tick += every * ticks_per_bar
+				coarser_bars = every
+			else:
+				@warning_ignore("integer_division")
+				var tick := seg_start + ((first_tick - seg_start) / interval) * interval
+				while tick <= last_tick:
+					var rel := tick - seg_start
+					var covered := rel % ticks_per_bar == 0
+					for c in coarser_intervals:
+						covered = covered or rel % c == 0
+					if not covered:
+						var line := GridLine.new(ticks_to_pixels(tick) - scroll_offset + offset_x, level_type)
+						line.weight = weight
+						line.alpha = fade
+						lines.append(line)
+					tick += interval
+				coarser_intervals.append(interval)
 
 	return lines

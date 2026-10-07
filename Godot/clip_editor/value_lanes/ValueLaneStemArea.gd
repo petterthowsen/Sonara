@@ -196,13 +196,7 @@ func _draw_grid() -> void:
 		var x: float = line.x + off
 		if x < 0.0 or x > size.x:
 			continue
-		match line.type:
-			GridHelper.GridLineType.BAR:
-				_draw_grid_line(x, GridRenderer.BAR_LINE_WIDTH, renderer.bar_line_color)
-			GridHelper.GridLineType.BEAT:
-				_draw_grid_line(x, GridRenderer.BEAT_LINE_WIDTH, renderer.beat_line_color)
-			GridHelper.GridLineType.SUBDIVISION:
-				_draw_grid_line(x, GridRenderer.SUBDIVISION_LINE_WIDTH, renderer.subdivision_line_color)
+		_draw_grid_line(x, line.width(), line.color(renderer.subdivision_line_color, renderer.beat_line_color, renderer.bar_line_color))
 
 
 ## Same pixel-snapped line as GridRenderer._draw_grid_line.

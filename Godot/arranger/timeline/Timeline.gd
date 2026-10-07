@@ -29,13 +29,13 @@ const TimelineTrackScene = preload("res://arranger/timeline/TimelineTrack.tscn")
 		grid_color_bar = value
 		queue_redraw()
 
-## Beat line (not a bar). Hidden when beats are closer than GridHelper.min_line_spacing.
+## Palette middle: beat lines. Also where a bar sits when it is the only level visible.
 @export var grid_color_beat: Color = Color(0.35, 0.35, 0.35, 0.47):
 	set(value):
 		grid_color_beat = value
 		queue_redraw()
 
-## Subdivision line between beats: the finest level at least GridHelper.min_line_spacing apart.
+## Palette faint end: the finest subdivision level. Lines pick a point between the three colours by weight.
 @export var grid_color_tick: Color = Color(0.21, 0.21, 0.21, 0.2):
 	set(value):
 		grid_color_tick = value
@@ -1868,13 +1868,11 @@ func _draw_grid_lines(start_x: float, end_x: float, bottom: float) -> void:
 		var x: float = line.x
 		if x < start_x or x > end_x:
 			continue
-		match line.type:
-			GridHelper.GridLineType.BAR:
-				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_bar, 2.0)
-			GridHelper.GridLineType.BEAT:
-				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_beat, 1.0)
-			GridHelper.GridLineType.SUBDIVISION:
-				draw_line(Vector2(x, 0.0), Vector2(x, bottom), grid_color_tick, 1.0)
+		# Whole-pixel rects at the rounded x, as GridRenderer draws them, so every line of a
+		# level has the same strength at any zoom or scroll.
+		var width: float = line.width()
+		var left := roundf(x) - floorf(width * 0.5)
+		draw_rect(Rect2(left, 0.0, width, bottom), line.color(grid_color_tick, grid_color_beat, grid_color_bar), true, -1.0, false)
 
 
 func _on_clip_selection_changed(instances: Array[ClipInstance]) -> void:

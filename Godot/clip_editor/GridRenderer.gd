@@ -18,12 +18,10 @@ class_name GridRenderer extends Control
 		subdivision_line_color = slc
 		queue_redraw()
 
-# Line widths in whole pixels. Bars read as heavier than beats through width,
-# beats as heavier than subdivisions through colour: a sub-pixel width cannot be
-# drawn crisply, so the hierarchy below one pixel is carried by the colours.
-const BAR_LINE_WIDTH: float = 2.0
-const BEAT_LINE_WIDTH: float = 1.0
-const SUBDIVISION_LINE_WIDTH: float = 1.0
+# Line widths come from GridHelper.GridLine.width(), in whole pixels: bars read as
+# heavier than beats through width, the rest through colour (a sub-pixel width cannot
+# be drawn crisply). Colour comes from GridHelper.GridLine.color(): the three colours
+# above are the palette, and a line's weight picks a point on it.
 
 # Grid helper for calculations
 var grid_helper: GridHelper = GridHelper.new()
@@ -69,15 +67,7 @@ func _draw_ruler() -> void:
 
 		# Only draw if within visible bounds
 		if x >= 0 and x <= size.x:
-			match line.type:
-				GridHelper.GridLineType.BAR:
-					_draw_grid_line(x, BAR_LINE_WIDTH, bar_line_color)
-
-				GridHelper.GridLineType.BEAT:
-					_draw_grid_line(x, BEAT_LINE_WIDTH, beat_line_color)
-
-				GridHelper.GridLineType.SUBDIVISION:
-					_draw_grid_line(x, SUBDIVISION_LINE_WIDTH, subdivision_line_color)
+			_draw_grid_line(x, line.width(), line.color(subdivision_line_color, beat_line_color, bar_line_color))
 
 
 ## Draw one vertical line snapped to the pixel grid.
