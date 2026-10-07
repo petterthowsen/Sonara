@@ -74,6 +74,7 @@ func run_tests() -> void:
 	_test_write_section_rollback()
 	_test_write_section_header_mismatch()
 	# T-012
+	_test_prompt_example()
 	_test_performance()
 
 
@@ -751,6 +752,28 @@ func _test_write_section_header_mismatch() -> void:
 
 
 # --- T-012 ------------------------------------------------------------------------------------
+
+## REQ-022: the score example in the system prompt writes cleanly to a matching project.
+func _test_prompt_example() -> void:
+	var prompt := FileAccess.get_file_as_string("res://ai/prompt/system_prompt.md")
+	var open_at := prompt.find("```score\n")
+	_assert(open_at >= 0, "system prompt has a ```score example")
+	if open_at < 0:
+		return
+	var body_at := open_at + "```score\n".length()
+	var example := prompt.substr(body_at, prompt.find("\n```", body_at) - body_at)
+	var s := _setup(["Bass", "Guitar", "Lead", "Drums"])
+	var p: Object = s.project
+	p.time_numerator = 7
+	p.time_denominator = 8
+	_sfz(s.Guitar, [[19, "Sus_Alt"], [20, "Mute_Down"]])
+	var out := _write({"text": example})
+	_assert(out.get("ok", false), "prompt example writes: %s" % out.get("error", ""))
+	if out.get("ok", false):
+		_assert(out.data.added > 0 and not str(out.text).contains("- "), "prompt example writes notes with no warnings:\n%s" % out.text)
+		var back := _read({"bars": "1-2"})
+		_assert(str(back.get("text", "")).contains("ks:Sus_Alt") and str(back.text).contains("Drums:"), "prompt example reads back:\n%s" % back.get("text", ""))
+
 
 func _test_performance() -> void:
 	var names: Array = []

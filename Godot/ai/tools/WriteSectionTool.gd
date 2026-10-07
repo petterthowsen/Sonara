@@ -12,10 +12,13 @@ func get_name() -> String:
 
 func get_description() -> String:
 	return (
-		"Write score text for bars of the song: one line per track (read_section shows the format). "
-		+ "Replaces the notes of each track named, inside those bars only; other tracks and bars are untouched, "
-		+ "and notes you leave unchanged keep their velocity and timing. Every bar must add up to the bar's length "
-		+ "(the error says what it added up to). Clips are found or created. One undo step."
+		"Write score text for bars of the song, one line per track with `|` between bars, e.g. "
+		+ "`Bass: ks:Sus_Alt D1/8 D1 F1 D1 G1 G#1 D1 | D1/4. r/8 F1/8 G1/4 |`. Tokens: note `D1/8` (value right after the pitch; "
+		+ "dotted `/4.`, triplet `/8t`), chord `[D2 A2]/8`, rest `r/8`, tie `A3/4~`, velocity `@90`, keyswitch `ks:Name`; "
+		+ "a token without a value or velocity repeats the previous one on that line. Voices: `Piano.1:` / `Piano.2:`. "
+		+ "A drum track is `Drums:` with its grid indented below. Every bar must add up to the bar's length "
+		+ "(the error says what it added up to). Replaces the notes of each track named, inside those bars only; "
+		+ "notes you leave unchanged keep their velocity and timing. Clips are found or created. One undo step."
 	)
 
 

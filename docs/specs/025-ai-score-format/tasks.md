@@ -152,7 +152,7 @@ Test commands (from `AGENTS.md`):
 
 ## Phase 4 — guidance and docs
 
-- [ ] **T-013** [REQ-022] System prompt and tool descriptions.
+- [x] **T-013** [REQ-022] System prompt and tool descriptions.
   - _Files_: `Godot/ai/prompt/system_prompt.md`, `Godot/ai/tools/ReadSectionTool.gd`,
     `Godot/ai/tools/WriteSectionTool.gd`, `Godot/ai/tests/test_section_tools.gd`
   - _Output_: a "Composing with sections" block (tokens, sticky values, barline checks, voices,
@@ -162,7 +162,7 @@ Test commands (from `AGENTS.md`):
     `write_section`, with no error. Review against the REQ-022 list.
   - _Depends on_: T-011
 
-- [ ] **T-014** [REQ-010, REQ-011] Update `docs/clip-text-format.md`.
+- [x] **T-014** [REQ-010, REQ-011] Update `docs/clip-text-format.md`.
   - _Files_: `docs/clip-text-format.md`
   - _Output_: a "Score text (sections)" chapter covering the grammar, reading rules and the diff
     rule for section writes. The Round-tripping section notes the exception. "Serve one clip per
@@ -172,7 +172,7 @@ Test commands (from `AGENTS.md`):
 
 ## Phase 5 — verification
 
-- [ ] **T-015** [REQ-all] Full regression run.
+- [x] **T-015** [REQ-all] Full regression run.
   - _Files_: —
   - _Output_: a clean suite apart from known failures.
   - _Verify_: `Godot/tests/run_all.sh` passes. The only failure allowed is the existing
