@@ -9,7 +9,7 @@
 - [ ] migrate TODO.md to gh issues.
 - [x?] Sampler v2: loop modes with crossfade, reverse, per-voice filter, fine tune, root note, interactive sample display. Engine (phase 1) is `[x?]` except 1.9 (waveform loading reliability: logging added, waiting on a repro log); Godot UI (phase 2) is `[x?]` except the 1.9 resend hook in 2.6. Spec: `docs/specs/021-sampler-v2/`
 - [ ] Sampler multisample: Window and Companion views, multisample mode with zones (key/velocity ranges, per-zone settings), groups (gain/mute/solo, round robin/random), zone crossfades, multisample editor (group bar, sample list, zone map, batch operations). Spec: `docs/specs/023-sampler-multisample/`. Follow-up: spec 024 Sampler group outputs
-- [ ] Theme system: one generated theme from eight Appearance settings (main colour, two accents, record/solo/mute, corner radius, spacing); semantic panel styles, colour roles and live update. Spec: `docs/specs/024-theme-system/`
+- [x] Theme system: one generated theme from eight Appearance settings (main colour, two accents, record/solo/mute, corner radius, spacing); semantic panel styles, colour roles and live update. Spec: `docs/specs/024-theme-system/`
 ## Audio Engine
 
 ### Mixing & Playback

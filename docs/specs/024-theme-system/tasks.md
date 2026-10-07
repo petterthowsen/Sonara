@@ -2,14 +2,14 @@
 
 Implements [design.md](./design.md).
 
-Legend: `[ ]` open · `[x?]` implemented, not verified · `[x]` verified
+Legend: `[ ]` open · `[x]` implemented, not verified · `[x]` verified
 
 Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test`
 (`Godot/tests/run_all.sh theme` runs every `test_theme_*`).
 
 ## Phase 1 — Foundation: settings, palette, builder
 
-- [x?] **T-001** [REQ-001] Audit the current theme, extract the font, and add the backlog entry.
+- [x] **T-001** [REQ-001] Audit the current theme, extract the font, and add the backlog entry.
   - _Files_: `docs/specs/024-theme-system/theme-audit.md` (new),
     `Godot/assets/fonts/OpenSans-SemiBold.woff2` (new), `TODO.md`
   - _Output_:
@@ -24,7 +24,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - The font loads with `load()` and reports `font_name == "Open Sans SemiBold"`.
   - _Depends on_: —
 
-- [x?] **T-002** [REQ-003, REQ-020] Add the `COLOR` setting type.
+- [x] **T-002** [REQ-003, REQ-020] Add the `COLOR` setting type.
   - _Files_: `Godot/settings/Settings.gd`, `Godot/settings/SettingRow.gd`,
     `Godot/tests/test_settings_registry.gd`
   - _Output_:
@@ -35,7 +35,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     string, `"#abc123"` is unchanged, and `"nope"` gives the default.
   - _Depends on_: —
 
-- [x?] **T-003** [REQ-020, REQ-021] Register the eight theme settings and add `reset_theme()`.
+- [x] **T-003** [REQ-020, REQ-021] Register the eight theme settings and add `reset_theme()`.
   - _Files_: `Godot/settings/Settings.gd`, `Godot/tests/test_settings_registry.gd`
   - _Output_: the `appearance/theme/*` keys with the defaults and ranges from the design table
     (sub-category `"Theme"`), and `reset_theme()`.
@@ -43,7 +43,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     restores all eight keys after they were changed.
   - _Depends on_: T-002
 
-- [x?] **T-004** [REQ-001, REQ-003, REQ-004, REQ-022] `ThemePalette`.
+- [x] **T-004** [REQ-001, REQ-003, REQ-004, REQ-022] `ThemePalette`.
   - _Files_: `Godot/core/theme/ThemePalette.gd` (new), `Godot/tests/test_theme_palette.gd` (new)
   - _Output_: `ThemePalette.from_settings(values)`, which produces every role in the design
     table. It clamps the main colour, applies per-key fallback, and includes `unit` and
@@ -55,7 +55,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - the RGB spread of `app_bg` is ≤ 0.01
   - _Depends on_: T-003
 
-- [x?] **T-005** [REQ-001, REQ-008, REQ-010, REQ-011, REQ-013, REQ-015, REQ-025] `ThemeBuilder`:
+- [x] **T-005** [REQ-001, REQ-008, REQ-010, REQ-011, REQ-013, REQ-015, REQ-025] `ThemeBuilder`:
   defaults, Godot base types and variations.
   - _Files_: `Godot/core/theme/ThemeBuilder.gd` (new), `Godot/tests/test_theme_builder.gd` (new)
   - _Output_:
@@ -73,7 +73,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
       colours
   - _Depends on_: T-001, T-004
 
-- [x?] **T-006** [REQ-013, REQ-014, REQ-016, REQ-018] `ThemeBuilder`: component theme types.
+- [x] **T-006** [REQ-013, REQ-014, REQ-016, REQ-018] `ThemeBuilder`: component theme types.
   - _Files_: `Godot/core/theme/ThemeBuilder.gd`, `Godot/tests/test_theme_builder.gd`
   - _Output_: the `RotaryKnob`, `Fader`, `VolumeSlider`, `HorSlider`, `HDualSlider`, `Meter`,
     `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `XYSlider`,
@@ -83,7 +83,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     `XYSlider/bg == well`.
   - _Depends on_: T-005
 
-- [x?] **T-007** [REQ-002, REQ-004] `UiTheme` autoload.
+- [x] **T-007** [REQ-002, REQ-004] `UiTheme` autoload.
   - _Files_: `Godot/core/theme/UiTheme.gd` (new), `Godot/project.godot`
   - _Output_:
     - Builds and merges into the project theme on `_ready`.
@@ -97,7 +97,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - The app starts with no theme errors in `Godot/logs/last.log`.
   - _Depends on_: T-006
 
-- [x?] **T-008** [REQ-023] Generate `Sonara_Theme.tres`.
+- [x] **T-008** [REQ-023] Generate `Sonara_Theme.tres`.
   - _Files_: `Godot/core/theme/build_theme_resource.gd` (new), `Godot/assets/Sonara_Theme.tres`,
     `Godot/tests/test_theme_resource_fresh.gd` (new)
   - _Output_: the regenerated `.tres` with the same UID (`uid://c77m063o570pp`), much smaller
@@ -110,7 +110,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 2 — Surfaces and layout
 
-- [x?] **T-009** [REQ-004, REQ-005] Editor sections.
+- [x] **T-009** [REQ-004, REQ-005] Editor sections.
   - _Files_: `Godot/editor/Editor.tscn`, `Godot/ai/ui/AssistantPanel.tscn`,
     `Godot/editor/docks/DockPanel.gd`, `Godot/devices/frame/DeviceFrame.gd`,
     `Godot/tests/test_theme_usage.gd` (new)
@@ -126,7 +126,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - `grep -rn "PrimaryPanel\|DarkPanel" Godot --include=*.tscn --include=*.gd` finds nothing.
   - _Depends on_: T-008
 
-- [x?] **T-010** [REQ-006, REQ-012] Device cards.
+- [x] **T-010** [REQ-006, REQ-012] Device cards.
   - _Files_: `Godot/devices/device_lane/DevicePanel.gd` + `.tscn`,
     `Godot/devices/compact/CompactDevicePanel.gd` + `.tscn`, `Godot/tests/test_theme_usage.gd`
   - _Output_:
@@ -136,7 +136,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
   - _Verify_: `test_theme_usage.gd` (cards part) and `test_compact_device_panel.gd` pass.
   - _Depends on_: T-009
 
-- [x?] **T-011** [REQ-009] Floating surfaces.
+- [x] **T-011** [REQ-009] Floating surfaces.
   - _Files_: `Godot/components/ValueTooltip.gd`, `Godot/components/LabelOverlay.gd`,
     `Godot/tests/test_theme_usage.gd`
   - _Output_: both use `Floating`, and the plain `ValueTooltip` keeps an empty style.
@@ -146,7 +146,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 3 — Colour roles
 
-- [x?] **T-012** [REQ-001] `UiColors` becomes a facade over the theme.
+- [x] **T-012** [REQ-001] `UiColors` becomes a facade over the theme.
   - _Files_: `Godot/core/UiColors.gd`, plus every caller of the removed constants (found by
     `grep -rn "UiColors\." Godot`)
   - _Output_:
@@ -157,7 +157,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     script errors), and `run_all.sh theme compressor` passes.
   - _Depends on_: T-007
 
-- [x?] **T-013** [REQ-013, REQ-014, REQ-018] Value controls take their colours from the theme.
+- [x] **T-013** [REQ-013, REQ-014, REQ-018] Value controls take their colours from the theme.
   - _Files_: `Godot/components/RotaryKnob.gd`, `Fader.gd`, `VSlider.gd`, `HSlider.gd`,
     `HDualSlider.gd`, `XYSlider.gd`, `EnvelopeControl.gd`, `SegmentedControl.gd`,
     `LightButton.gd`
@@ -168,7 +168,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     change) pass.
   - _Depends on_: T-006, T-012
 
-- [x?] **T-014** [REQ-013, REQ-016, REQ-018] Meters and rulers take their colours from the theme.
+- [x] **T-014** [REQ-013, REQ-016, REQ-018] Meters and rulers take their colours from the theme.
   - _Files_: `Godot/components/meter/Meter.gd`, `meter/LevelMeter.gd`,
     `Godot/components/Volumeter.gd`, `Godot/components/Ruler.gd`, `RealTimeRuler.gd`,
     `BaseRuler.gd`
@@ -178,7 +178,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     the accent, warn and clip stay fixed) pass.
   - _Depends on_: T-013
 
-- [x?] **T-015** [REQ-007, REQ-018] Wells, and the sweep of colours baked into scenes.
+- [x] **T-015** [REQ-007, REQ-018] Wells, and the sweep of colours baked into scenes.
   - _Files_: `Godot/mixer/device_list/ChannelDeviceList.tscn`, `Godot/mixer/MixerChannel.tscn`,
     `Godot/components/gallery/ComponentGallery.tscn`, plus any other `*.tscn` setting the old
     colour exports
@@ -192,7 +192,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
       lists only reviewed exceptions, which are noted in this task when it is marked done.
   - _Depends on_: T-014
 
-- [x?] **T-016** [REQ-012] Neutral selection borders on track items and mixer strips.
+- [x] **T-016** [REQ-012] Neutral selection borders on track items and mixer strips.
   - _Files_: `Godot/mixer/MixerChannel.gd`, `Godot/arranger/tracklist/TrackItem.gd`,
     `Godot/clip_editor/tracklist/ClipEditorTrackListItem.gd`, `Godot/tests/test_theme_usage.gd`
   - _Output_:
@@ -206,7 +206,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
       `clip_editor` tests pass.
   - _Depends on_: T-010
 
-- [x?] **T-017** [REQ-015, REQ-017] Status colours.
+- [x] **T-017** [REQ-015, REQ-017] Status colours.
   - _Files_: `Godot/arranger/tracklist/TrackItem.tscn`, `Godot/mixer/MixerChannel.tscn`,
     `Godot/clip_editor/tracklist/ClipEditorTrackListItem.gd`, `Godot/tests/test_theme_usage.gd`,
     `Godot/tests/test_theme_live.gd`
@@ -220,7 +220,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - `test_theme_live.gd` (changing the accent leaves a track's colour unchanged) passes.
   - _Depends on_: T-016
 
-- [x?] **T-018** [REQ-019] Device views: instruments.
+- [x] **T-018** [REQ-019] Device views: instruments.
   - _Files_: the polysynth, sampler, sfizz and drum view scripts and scenes under
     `Godot/devices/builtin/`, `Godot/tests/test_theme_literals.gd` (new)
   - _Output_:
@@ -231,14 +231,14 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
   - _Verify_: `test_theme_literals.gd` passes for the instrument files.
   - _Depends on_: T-013
 
-- [x?] **T-019** [REQ-019] Device views: effects and utility.
+- [x] **T-019** [REQ-019] Device views: effects and utility.
   - _Files_: the views for the spec 012 effects, compressor, multiband and utility under
     `Godot/devices/builtin/`
   - _Output_: the same as T-018. The temporary allowlist is removed.
   - _Verify_: `test_theme_literals.gd` passes over all of `devices/builtin/`.
   - _Depends on_: T-018
 
-- [x?] **T-020** [REQ-002] Live update across the whole editor.
+- [x] **T-020** [REQ-002] Live update across the whole editor.
   - _Files_: `Godot/tests/test_theme_live.gd`
   - _Output_: test cases for the editor scene:
     - an accent change updates a knob and a fader after one frame
@@ -248,7 +248,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 4 — Settings UI
 
-- [x?] **T-021** [REQ-020, REQ-021] "Reset theme" button on the Appearance page.
+- [x] **T-021** [REQ-020, REQ-021] "Reset theme" button on the Appearance page.
   - _Files_: `Godot/settings/SettingsDialog.gd`
   - _Output_: the button, shown when the category is Appearance, following
     `_add_reset_shortcuts_button`.
@@ -258,7 +258,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 5 — Docs
 
-- [x?] **T-022** [REQ-024] Documentation and ADR.
+- [x] **T-022** [REQ-024] Documentation and ADR.
   - _Files_: `docs/subsystems/godot-ui-components.md`, `docs/subsystems/godot-config-system.md`,
     `docs/adr/0018-theme-generated-from-settings.md` (new), `AGENTS.md`
   - _Output_:
@@ -274,7 +274,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 6 — Visual pass and live verification
 
-- [ ] **T-023** [REQ-004, REQ-005, REQ-025] Visual pass and layout fixes.
+- [x] **T-023** [REQ-004, REQ-005, REQ-025] Visual pass and layout fixes.
   - _Files_: whichever scenes need layout fixes after the 14 px font and the new spacing
   - _Output_: screenshots with default settings of the whole editor, the arranger with tracks,
     the mixer with devices, the device lane, the clip editor, a context menu and the Settings
@@ -282,7 +282,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
   - _Verify_: the screenshots are reviewed with the user, and the fixes are committed.
   - _Depends on_: T-020
 
-- [ ] **T-024** [REQ-002, REQ-020, REQ-023] Live verification.
+- [x] **T-024** [REQ-002, REQ-020, REQ-023] Live verification.
   - _Files_: `TODO.md`
   - _Output_: the TODO entry is marked `[x]`.
   - _Verify_:
