@@ -8,11 +8,35 @@ class_name Volumeter extends Control
 		custom_minimum_size.x = min_width
 
 # Colors default to the mixer strip's Meter so the two read as one system.
-@export var bg_color := Color(0.0627451, 0.0627451, 0.0627451, 1)
-@export var handle_color := Color(0.9607843, 0.9607843, 0.9607843, 1)
-@export var bar_color_low := Color(0.728, 0.8, 0.08, 1) ## Level color below warn_db
-@export var bar_color_high := Color(0.8, 0.416, 0.08, 1) ## Level color between warn_db and 0 dB
-@export var bar_color_clip := Color(0.8, 0.08, 0.08, 1) ## Level color above 0 dB, and the clip line
+var _tc := ThemedColors.new(self, &"Volumeter")
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
+	set(c):
+		_tc.set_color(&"bg", c)
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
+	set(c):
+		_tc.set_color(&"handle", c)
+## Level color below warn_db
+var bar_color_low: Color:
+	get:
+		return _tc.get_color(&"bar_low")
+	set(c):
+		_tc.set_color(&"bar_low", c)
+## Level color between warn_db and 0 dB
+var bar_color_high: Color:
+	get:
+		return _tc.get_color(&"bar_high")
+	set(c):
+		_tc.set_color(&"bar_high", c)
+## Level color above 0 dB, and the clip line
+var bar_color_clip: Color:
+	get:
+		return _tc.get_color(&"bar_clip")
+	set(c):
+		_tc.set_color(&"bar_clip", c)
 @export var warn_db := -6.0 ## Level where the bar color switches from low to high
 
 @export_range(0.0, 1.0) var peak_bar_alpha := 0.45 ## Opacity of the peak bar drawn behind the solid RMS bar
@@ -134,6 +158,9 @@ func _ready() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()
 	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
 		if not is_visible_in_tree():
 			mouse_hovered = false

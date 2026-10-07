@@ -51,22 +51,31 @@ var _hold_timer_right := 0.0
 	set(v):
 		bars_spacing = v
 		_wake()
-@export var bar_bg_color := Color.DIM_GRAY: ## Background fill of each meter bar
-	set(v):
-		bar_bg_color = v
-		_wake()
-@export var bar_color_low := Color(0.21, 0.85, 0.62): ## Bar color when the level is in the normal range
-	set(v):
-		bar_color_low = v
-		_wake()
-@export var bar_color_high := Color(1.0, 0.75, 0.15): ## Bar color for the part of the bar between warn_db and 0 dB
-	set(v):
-		bar_color_high = v
-		_wake()
-@export var bar_color_clip := Color(1.0, 0.25, 0.25): ## Bar/peak-hold/LED color when the level clips (>= 0 dB)
-	set(v):
-		bar_color_clip = v
-		_wake()
+var _tc := ThemedColors.new(self, &"Meter")
+## Background fill of each meter bar
+var bar_bg_color: Color:
+	get:
+		return _tc.get_color(&"bar_bg")
+	set(c):
+		_tc.set_color(&"bar_bg", c)
+## Bar color when the level is in the normal range
+var bar_color_low: Color:
+	get:
+		return _tc.get_color(&"bar_low")
+	set(c):
+		_tc.set_color(&"bar_low", c)
+## Bar color for the part of the bar between warn_db and 0 dB
+var bar_color_high: Color:
+	get:
+		return _tc.get_color(&"bar_high")
+	set(c):
+		_tc.set_color(&"bar_high", c)
+## Bar/peak-hold/LED color when the level clips (>= 0 dB)
+var bar_color_clip: Color:
+	get:
+		return _tc.get_color(&"bar_clip")
+	set(c):
+		_tc.set_color(&"bar_clip", c)
 @export var warn_db := -6.0: ## Level where the bar color switches from low to high
 	set(v):
 		warn_db = v
@@ -75,18 +84,24 @@ var _hold_timer_right := 0.0
 	set(v):
 		peak_bar_alpha = v
 		_wake()
-@export var tick_color := Color(0.75, 0.75, 0.75, 0.5): ## Color of the dB tick lines and labels
-	set(v):
-		tick_color = v
-		_wake()
-@export var tick_minor_color := Color(0.7, 0.7, 0.7, 0.25): ## Color of minor tick lines (unused unless show_minor_ticks is on)
-	set(v):
-		tick_minor_color = v
-		_wake()
-@export var zero_db_color := Color(1,1,1,0.75): ## Color of the 0 dB tick line and label
-	set(v):
-		zero_db_color = v
-		_wake()
+## Color of the dB tick lines and labels
+var tick_color: Color:
+	get:
+		return _tc.get_color(&"tick")
+	set(c):
+		_tc.set_color(&"tick", c)
+## Color of minor tick lines (unused unless show_minor_ticks is on)
+var tick_minor_color: Color:
+	get:
+		return _tc.get_color(&"tick_minor")
+	set(c):
+		_tc.set_color(&"tick_minor", c)
+## Color of the 0 dB tick line and label
+var zero_db_color: Color:
+	get:
+		return _tc.get_color(&"zero_db")
+	set(c):
+		_tc.set_color(&"zero_db", c)
 @export var tick_font_size := 12: ## Font size for tick labels
 	set(v):
 		tick_font_size = v
@@ -107,32 +122,40 @@ var _hold_timer_right := 0.0
 	set(v):
 		show_fader = v
 		_wake()
-@export var fader_color := Color("#624d99"): ## Fill color of the fader's filled (below-handle) portion
-	set(v):
-		fader_color = v
-		_wake()
-@export var fader_bg_color := Color.DIM_GRAY: ## Background fill behind the fader
-	set(v):
-		fader_bg_color = v
-		_wake()
+## Fill color of the fader's filled (below-handle) portion
+var fader_color: Color:
+	get:
+		return _tc.get_color(&"fader")
+	set(c):
+		_tc.set_color(&"fader", c)
+## Background fill behind the fader
+var fader_bg_color: Color:
+	get:
+		return _tc.get_color(&"fader_bg")
+	set(c):
+		_tc.set_color(&"fader_bg", c)
 @export var volume_db := -6.0: ## Current fader value in dB; drives volume_changed when edited by the user
 	set(v):
 		volume_db = v
 		queue_redraw()
 		if _tooltip and _tooltip.visible:
 			_refresh_tooltip()
-@export var fader_handle_color := Color.WHITE_SMOKE: ## Fader handle color when not hovered
-	set(v):
-		fader_handle_color = v
-		_wake()
+## Fader handle color when not hovered
+var fader_handle_color: Color:
+	get:
+		return _tc.get_color(&"fader_handle")
+	set(c):
+		_tc.set_color(&"fader_handle", c)
 @export var fader_handle_height := 8.0: ## Height of the cap-style fader handle
 	set(v):
 		fader_handle_height = v
 		_wake()
-@export var fader_handle_color_hover := Color.WHITE: ## Fader handle color while hovered
-	set(v):
-		fader_handle_color_hover = v
-		_wake()
+## Fader handle color while hovered
+var fader_handle_color_hover: Color:
+	get:
+		return _tc.get_color(&"fader_handle_hover")
+	set(c):
+		_tc.set_color(&"fader_handle_hover", c)
 
 # scale
 @export var db_top := 6.0: ## dB value at the top of the meter/fader range
@@ -231,6 +254,10 @@ func _wake() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		_wake()
+		queue_redraw()
 	if what == NOTIFICATION_VISIBILITY_CHANGED:
 		set_process(is_visible_in_tree())
 	if (what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE) \

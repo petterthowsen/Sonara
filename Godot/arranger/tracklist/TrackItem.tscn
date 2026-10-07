@@ -40,44 +40,6 @@ corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 corner_detail = 5
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_q68hb"]
-content_margin_left = 2.0
-content_margin_top = 2.0
-content_margin_right = 2.0
-content_margin_bottom = 2.0
-bg_color = Color(0.1, 0.1, 0.1, 0.6)
-corner_radius_top_left = 16
-corner_radius_top_right = 16
-corner_radius_bottom_right = 16
-corner_radius_bottom_left = 16
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bcy77"]
-content_margin_left = 2.0
-content_margin_top = 2.0
-content_margin_right = 2.0
-content_margin_bottom = 2.0
-bg_color = Color(1, 0, 0, 0.5568628)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ks7bc"]
-content_margin_left = 2.0
-content_margin_top = 2.0
-content_margin_right = 2.0
-content_margin_bottom = 2.0
-bg_color = Color(0.8, 0.65333337, 0, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_shsim"]
-bg_color = Color(0.8, 0.41333333, 0, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-
 [node name="TrackItem" type="PanelContainer" unique_id=1262671214 node_paths=PackedStringArray("content_box", "volumeter", "label", "arm_toggle", "solo_toggle", "mute_toggle", "automation_toggle", "automation_menu_button", "foldout_toggle", "io_button")]
 custom_minimum_size = Vector2(100, 24)
 offset_right = 233.0
@@ -112,7 +74,7 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 script = ExtResource("2_shsim")
 min_width = 12
-bg_color = Color(0.0627451, 0.0627451, 0.0627451, 0)
+theme_override_colors/bg = Color(0.0627451, 0.0627451, 0.0627451, 0)
 drag_scale = 0.4
 peak = 0.655
 volume_db = -60.0
@@ -187,8 +149,7 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 focus_mode = 0
 theme_override_font_sizes/font_size = 12
-theme_override_styles/normal = SubResource("StyleBoxFlat_q68hb")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_bcy77")
+theme_type_variation = &"RecordButton"
 toggle_mode = true
 text = "R"
 icon_alignment = 1
@@ -199,9 +160,8 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
-theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
 theme_override_font_sizes/font_size = 12
-theme_override_styles/pressed = SubResource("StyleBoxFlat_ks7bc")
+theme_type_variation = &"SoloButton"
 toggle_mode = true
 text = "S"
 icon_alignment = 1
@@ -213,9 +173,8 @@ custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_stretch_ratio = 0.0
 focus_mode = 0
-theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
 theme_override_font_sizes/font_size = 12
-theme_override_styles/pressed = SubResource("StyleBoxFlat_shsim")
+theme_type_variation = &"MuteButton"
 toggle_mode = true
 text = "M"
 script = ExtResource("dragtoggle_btn")

@@ -52,19 +52,45 @@ var resize_width_start := 0
 		if not is_resizing:
 			mouse_default_cursor_shape = Control.CURSOR_ARROW
 
-@export var border_color := Color("#333")
-@export var border_color_selected := Color("#999")
-
 var is_selected := false:
 	set(selected):
 		if is_selected == selected:
 			return
 		is_selected = selected
 		if is_inside_tree():
-			var bc = border_color_selected if is_selected else border_color
-			var stylebox: StyleBoxFlat = get_theme_stylebox("panel")
-			stylebox.border_color = bc
+			_apply_border()
 			_apply_selection_layout()
+
+
+## Strip border from the theme: the card border, or the neutral selection border.
+func _apply_border() -> void:
+	# Editing the stylebox notifies THEME_CHANGED, which comes back here.
+	if _applying_border:
+		return
+	_applying_border = true
+	_apply_border_unguarded()
+	_applying_border = false
+
+
+var _applying_border := false
+
+
+func _apply_border_unguarded() -> void:
+	var stylebox := get_theme_stylebox("panel") as StyleBoxFlat
+	if stylebox == null:
+		return
+	stylebox.border_color = UiColors.role(&"border_selected" if is_selected else &"border")
+	var card := get_theme_stylebox(&"panel", &"DeviceCard") as StyleBoxFlat
+	if card:
+		stylebox.border_width_left = card.border_width_left
+		stylebox.border_width_top = card.border_width_top
+		stylebox.border_width_right = card.border_width_right
+		stylebox.border_width_bottom = card.border_width_bottom
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED and is_node_ready():
+		_apply_border()
 
 
 signal request_show_context_menu
@@ -135,6 +161,7 @@ static var _applying_sends_scroll := false
 var _peak_readout: Label
 
 func _ready():
+	_apply_border()
 	if header:
 		_base_header_height = header.custom_minimum_size.y
 	if side_pane:

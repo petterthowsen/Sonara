@@ -121,17 +121,18 @@ func set_value_no_signal(val: float) -> void:
 		if is_inside_tree():
 			queue_redraw()
 
-@export var bg_color :Color = "#121212":
+var _tc := ThemedColors.new(self, &"HorSlider")
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
 	set(c):
-		bg_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"bg", c)
 
-@export var fill_color := Color.DARK_ORANGE:
+var fill_color: Color:
+	get:
+		return _tc.get_color(&"fill")
 	set(c):
-		fill_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"fill", c)
 
 @export var handle_width := 4.0:
 	set(hw):
@@ -139,11 +140,11 @@ func set_value_no_signal(val: float) -> void:
 		if is_inside_tree():
 			queue_redraw()
 
-@export var handle_color := Color.WHITE:
-	set(hc):
-		handle_color = hc
-		if is_inside_tree():
-			queue_redraw()
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
+	set(c):
+		_tc.set_color(&"handle", c)
 
 
 ## Draw the handle only while hovered or dragged; the fill alone shows the value otherwise.
@@ -185,6 +186,9 @@ func _set_hovered(hovered: bool) -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
 		_hovered = false
 

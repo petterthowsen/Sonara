@@ -1,6 +1,6 @@
 @tool
 ## A row of exclusive toggle buttons (Clean | Glue | Punch | Opto) in the app's colours. The
-## selected segment is filled with `UiColors.PRIMARY`. `Simple View` and the compressor view
+## selected segment is filled with the theme accent. `Simple View` and the compressor view
 ## share it.
 class_name SegmentedControl extends HBoxContainer
 
@@ -18,9 +18,22 @@ signal selected_changed(index: int)
 		clip_labels = v
 		for btn in _buttons:
 			btn.clip_text = v
-@export var selected_color := UiColors.PRIMARY
-@export var idle_color := Color(0.16, 0.16, 0.18)
-@export var hover_color := Color(0.22, 0.22, 0.25)
+var _tc := ThemedColors.new(self, &"SegmentedControl")
+var selected_color: Color:
+	get:
+		return _tc.get_color(&"selected")
+	set(c):
+		_tc.set_color(&"selected", c)
+var idle_color: Color:
+	get:
+		return _tc.get_color(&"idle")
+	set(c):
+		_tc.set_color(&"idle", c)
+var hover_color: Color:
+	get:
+		return _tc.get_color(&"hover")
+	set(c):
+		_tc.set_color(&"hover", c)
 
 ## The segment labels. Set in the scene to see them in the editor; `set_items` does the same.
 @export var items := PackedStringArray():
@@ -114,3 +127,9 @@ func _style(btn: Button, index: int, count: int) -> void:
 		box.content_margin_top = 3
 		box.content_margin_bottom = 3
 		btn.add_theme_stylebox_override(state, box)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()

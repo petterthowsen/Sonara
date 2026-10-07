@@ -33,7 +33,15 @@ signal automation_menu_requested(track: Track, mouse_position: Vector2)
 @export var unselected_saturation := Utils.HEADER_RESTING_SATURATION
 @export var selected_brightness := 1.05
 @export var active_brightness := 1.25
-@export var selected_outline_color := Color(1, 1, 1, 0.35)
+## Neutral selection border, the same colour every selectable item uses (theme `border_selected`).
+var selected_outline_color: Color:
+	get:
+		if not _border_selected_cached:
+			_border_selected = UiColors.role(&"border_selected")
+			_border_selected_cached = true
+		return _border_selected
+var _border_selected := Color.WHITE
+var _border_selected_cached := false
 @export var active_outline_color := Color(1, 1, 1, 0.9)
 
 # UI References
@@ -132,7 +140,10 @@ func _ready():
 
 ## Redraw on resize; unbind on free (not _exit_tree: DockHost reparents the arranger).
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_border_selected_cached = false
+		queue_redraw()
+	elif what == NOTIFICATION_RESIZED:
 		queue_redraw()
 		_sync_layout_height()
 	elif what == NOTIFICATION_PREDELETE:

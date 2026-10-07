@@ -6,9 +6,9 @@ class_name Ruler extends BaseRuler
 
 ## Bar lines with numbers, then half-height beat and quarter-height subdivision ticks.
 func _draw_ruler() -> void:
-	var bar_line_color = get_theme_color("bar_line_color", "Ruler")
-	var beat_line_color = get_theme_color("beat_line_color", "Ruler")
-	var subdivision_line_color = get_theme_color("subdivision_line_color", "Ruler")
+	var bar_line_color = ruler_color(&"bar_line_color")
+	var beat_line_color = ruler_color(&"beat_line_color")
+	var subdivision_line_color = ruler_color(&"subdivision_line_color")
 
 	# GridHelper accounts for scroll, so line.x is already in ruler space
 	var grid_lines = grid_helper.get_visible_grid_lines(0.0, size.x - offset_x, offset_x)

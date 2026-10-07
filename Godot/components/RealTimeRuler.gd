@@ -125,8 +125,8 @@ func _format_time_label(ticks: int, scale: RulerScale) -> String:
 func _draw_ruler() -> void:
 	"""Draw ruler with time markers."""
 
-	var major_line_color = get_theme_color("bar_line_color", "Ruler")
-	var minor_line_color = get_theme_color("beat_line_color", "Ruler")
+	var major_line_color = ruler_color(&"bar_line_color")
+	var minor_line_color = ruler_color(&"beat_line_color")
 	if not major_line_color:
 		major_line_color = Color(0.8, 0.8, 0.8)
 	if not minor_line_color:

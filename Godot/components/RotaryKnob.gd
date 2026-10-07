@@ -67,17 +67,18 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
-@export var knob_color := Color.DIM_GRAY:
+var _tc := ThemedColors.new(self, &"RotaryKnob")
+var knob_color: Color:
+	get:
+		return _tc.get_color(&"knob")
 	set(c):
-		knob_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"knob", c)
 
-@export var shadow_color := Color(0.30323273, 0.30323285, 0.30323282, 1):
+var shadow_color: Color:
+	get:
+		return _tc.get_color(&"shadow")
 	set(c):
-		shadow_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"shadow", c)
 
 
 ## Thickness of the shadow around the knob, in pixels.
@@ -102,23 +103,23 @@ var _tooltip: ValueTooltip = null
 		if is_inside_tree():
 			queue_redraw()
 
-@export var knob_line_color := Color(0.6789437, 0.6789437, 0.6789437, 1):
+var knob_line_color: Color:
+	get:
+		return _tc.get_color(&"knob_line")
 	set(c):
-		knob_line_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"knob_line", c)
 
-@export var value_arc_bg := Color.GRAY:
+var value_arc_bg: Color:
+	get:
+		return _tc.get_color(&"value_arc_bg")
 	set(c):
-		value_arc_bg = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"value_arc_bg", c)
 
-@export var value_arc_color := Color.ORANGE:
+var value_arc_color: Color:
+	get:
+		return _tc.get_color(&"value_arc")
 	set(c):
-		value_arc_color = c
-		if is_inside_tree():
-			queue_redraw()
+		_tc.set_color(&"value_arc", c)
 
 @export var arc_width := 6.0:
 	set(w):
@@ -478,6 +479,9 @@ func _on_mouse_exited() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()
 	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
 		if not is_visible_in_tree() and _tooltip:
 			_tooltip.visible = false

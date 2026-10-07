@@ -2,7 +2,6 @@
 # editability toggle.
 class_name ClipEditorTrackListItem extends PanelContainer
 
-const SOLO_COLOR := Color("#ffb13b")
 const EYE_ON := preload("res://assets/icons/eye.svg")
 const EYE_OFF := preload("res://assets/icons/eye-off.svg")
 const PENCIL_ON := preload("res://assets/icons/pencil.svg")
@@ -20,6 +19,9 @@ var track: Track:
 	set = set_track
 
 var _selected := false
+var _styling := false
+## The last state `refresh_toggles` was given, to repaint the solo colour on a theme change.
+var _toggle_state: TrackToggleState
 
 ## shift: add to the shown/editable tracks instead of becoming the only editable one.
 signal pressed(shift: bool)
@@ -88,15 +90,31 @@ func _update_style() -> void:
 	style.content_margin_top = 4
 	style.content_margin_bottom = 4
 	if _selected:
-		style.set_border_width_all(2)
-		style.border_color = Color.WHITE
+		style.set_border_width_all(_card_border_width())
+		style.border_color = UiColors.role(&"border_selected")
 	else:
 		style.set_border_width_all(1)
 		var border := bg.lightened(0.25)
 		border.a = 0.5
 		style.border_color = border
+	# Setting the override notifies THEME_CHANGED, which would restyle again.
+	_styling = true
 	add_theme_stylebox_override("panel", style)
+	_styling = false
 	_update_label_color()
+
+
+## Width of the theme's card border, so selection reads the same here as on a device card.
+func _card_border_width() -> int:
+	var card := get_theme_stylebox(&"panel", &"DeviceCard") as StyleBoxFlat
+	return card.border_width_left if card else 1
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED and is_node_ready() and not _styling:
+		_update_style()
+		if _toggle_state:
+			refresh_toggles(_toggle_state)
 
 
 ## Black/white label based on the drawn track color.
@@ -111,6 +129,7 @@ func _update_label_color() -> void:
 func refresh_toggles(state: TrackToggleState) -> void:
 	if not track or not state:
 		return
+	_toggle_state = state
 	var visible_on := state.is_on(track, TrackToggleState.Kind.VISIBLE)
 	var edit_on := state.is_on(track, TrackToggleState.Kind.EDITABLE)
 	visible_toggle.icon = EYE_ON if visible_on else EYE_OFF
@@ -123,7 +142,7 @@ func refresh_toggles(state: TrackToggleState) -> void:
 
 
 func _set_toggle_color(button: Button, soloed: bool) -> void:
-	var c := SOLO_COLOR if soloed else Color.WHITE
+	var c := UiColors.role(&"solo") if soloed else Color.WHITE
 	button.add_theme_color_override("icon_normal_color", c)
 	button.add_theme_color_override("icon_hover_color", c)
 	button.add_theme_color_override("icon_pressed_color", c)

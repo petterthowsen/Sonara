@@ -22,15 +22,18 @@ const STAGE_LABEL_FONT_SIZE := 10
 ## Height below which the stage letters are left out.
 const MIN_HEIGHT_FOR_LABELS := 48.0
 
-@export var bg_color := Color("#111111"):
+var _tc := ThemedColors.new(self, &"EnvelopeControl")
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
 	set(c):
-		bg_color = c
-		queue_redraw()
+		_tc.set_color(&"bg", c)
 
-@export var line_color := Color(0.73, 0.73, 0.73):
+var line_color: Color:
+	get:
+		return _tc.get_color(&"line")
 	set(c):
-		line_color = c
-		queue_redraw()
+		_tc.set_color(&"line", c)
 
 @export var line_width := 1.5:
 	set(w):
@@ -43,25 +46,28 @@ const MIN_HEIGHT_FOR_LABELS := 48.0
 		fill_alpha = a
 		queue_redraw()
 
-@export var grid_color := Color(1, 1, 1, 0.06):
+var grid_color: Color:
+	get:
+		return _tc.get_color(&"grid")
 	set(c):
-		grid_color = c
-		queue_redraw()
+		_tc.set_color(&"grid", c)
 
 @export var grid_width := 1.0:
 	set(w):
 		grid_width = w
 		queue_redraw()
 
-@export var handle_color := Color(0.83, 0.83, 0.83, 0.6):
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
 	set(c):
-		handle_color = c
-		queue_redraw()
+		_tc.set_color(&"handle", c)
 
-@export var handle_color_hover := Color.WHITE:
+var handle_color_hover: Color:
+	get:
+		return _tc.get_color(&"handle_hover")
 	set(c):
-		handle_color_hover = c
-		queue_redraw()
+		_tc.set_color(&"handle_hover", c)
 
 @export var handle_radius := 4.0:
 	set(r):
@@ -94,6 +100,9 @@ func _get_minimum_size() -> Vector2:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()
 	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE:
 		if not is_visible_in_tree():
 			_drag = Handle.NONE

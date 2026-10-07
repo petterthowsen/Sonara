@@ -143,8 +143,40 @@ func set_selection_range(start: int, end: int) -> void:
 		queue_redraw()
 
 
+## The `Ruler` theme type's colours and background, cached so `_draw` never looks them up.
+var _ruler_colors := {}
+var _ruler_stylebox: StyleBox
+var _ruler_stylebox_cached := false
+
+
+func ruler_color(item: StringName) -> Color:
+	var c = _ruler_colors.get(item)
+	if c == null:
+		c = get_theme_color(item, &"Ruler")
+		_ruler_colors[item] = c
+	return c
+
+
+func _has_ruler_color(item: StringName) -> bool:
+	return has_theme_color(item, &"Ruler")
+
+
+func _ruler_box() -> StyleBox:
+	if not _ruler_stylebox_cached:
+		_ruler_stylebox = get_theme_stylebox(&"normal", &"Ruler")
+		_ruler_stylebox_cached = true
+	return _ruler_stylebox
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_ruler_colors.clear()
+		_ruler_stylebox_cached = false
+		queue_redraw()
+
+
 func _draw() -> void:
-	var sb_normal := get_theme_stylebox("normal", "Ruler")
+	var sb_normal := _ruler_box()
 	if sb_normal:
 		draw_style_box(sb_normal, Rect2(0, 0, size.x, size.y))
 	else:
@@ -210,9 +242,8 @@ func _draw_tick_line(x: float, height_fraction: float, color: Color) -> void:
 
 ## Draw the start-position arrow (pointing up from the bottom edge) with a short stem.
 func _draw_start_position_arrow() -> void:
-	var start_arrow_color := get_theme_color("start_arrow_color", "Ruler")
-	if not has_theme_color("start_arrow_color", "Ruler"):
-		start_arrow_color = start_position_color
+	var start_arrow_color := ruler_color(&"start_arrow_color") if _has_ruler_color(&"start_arrow_color") \
+			else start_position_color
 
 	var start_pixel_x := _tick_to_local_x(start_position_ticks)
 	if start_pixel_x < offset_x or start_pixel_x > size.x:

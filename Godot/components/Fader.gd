@@ -55,18 +55,22 @@ var from_position: Callable
 	set(v):
 		fill_origin = v
 		queue_redraw()
-@export var fill_color := UiColors.PRIMARY:
+var _tc := ThemedColors.new(self, &"Fader")
+var fill_color: Color:
+	get:
+		return _tc.get_color(&"fill")
 	set(c):
-		fill_color = c
-		queue_redraw()
-@export var track_color := UiColors.TRACK_BG:
+		_tc.set_color(&"fill", c)
+var track_color: Color:
+	get:
+		return _tc.get_color(&"track")
 	set(c):
-		track_color = c
-		queue_redraw()
-@export var handle_color := UiColors.HANDLE:
+		_tc.set_color(&"track", c)
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
 	set(c):
-		handle_color = c
-		queue_redraw()
+		_tc.set_color(&"handle", c)
 @export var track_width := 16.0:
 	set(w):
 		track_width = w
@@ -93,7 +97,11 @@ var overlay_level := NAN:
 	set(v):
 		overlay_level = v
 		queue_redraw()
-@export var overlay_color := Color(1, 1, 1, 0.55)
+var overlay_color: Color:
+	get:
+		return _tc.get_color(&"overlay")
+	set(c):
+		_tc.set_color(&"overlay", c)
 ## A faint marker at this value (NAN for none), e.g. the Auto Gain makeup estimate.
 var ghost_value := NAN:
 	set(v):
@@ -396,6 +404,9 @@ func _on_mouse_exited() -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()
 	if (what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_EXIT_TREE) \
 			and not is_visible_in_tree() and _tooltip:
 		_tooltip.visible = false

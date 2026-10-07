@@ -19,6 +19,8 @@ func run_tests() -> void:
 	_test_sections()
 	await _test_cards()
 	await _test_floating()
+	await _test_wells()
+	await _test_selection()
 
 
 ## Property value `prop` of the node at `path` as stored in the scene file, or null.
@@ -107,3 +109,53 @@ func _test_floating() -> void:
 	for variation in [&"ContextMenu", &"ContextMenuList"]:
 		_assert((theme.get_stylebox(&"panel", variation) as StyleBoxFlat).bg_color == floating.bg_color,
 			"%s has the floating look" % variation)
+
+
+func _test_wells() -> void:
+	var list: PackedScene = load("res://mixer/device_list/ChannelDeviceList.tscn")
+	_assert(_scene_prop(list, ".", &"theme_type_variation") == &"Well", "the channel device list uses Well")
+	_assert(_scene_prop(list, ".", &"theme_override_styles/panel") == null, "the device list has no local panel stylebox")
+	var well := UiColors.role(&"well")
+	for control in [XYSlider.new(), EnvelopeControl.new()]:
+		root.add_child(control)
+		await process_frame
+		_assert(control.bg_color == well, "%s draws the well colour" % control.get_script().get_global_name())
+		control.queue_free()
+
+
+## Every selectable item draws the same neutral border when selected (REQ-012).
+func _test_selection() -> void:
+	var want := UiColors.role(&"border_selected")
+	var track_script: GDScript = load("res://data/Track.gd")
+	var track = track_script.new(2)
+	for path in CARD_SCENES:
+		var panel: Control = load(path).instantiate()
+		root.add_child(panel)
+		await process_frame
+		panel.is_selected = true
+		_assert((panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color == want,
+			"%s selected border is border_selected" % path.get_file())
+		panel.queue_free()
+
+	var strip = load("res://mixer/MixerChannel.tscn").instantiate()
+	root.add_child(strip)
+	await process_frame
+	strip.is_selected = true
+	_assert((strip.get_theme_stylebox("panel") as StyleBoxFlat).border_color == want, "MixerChannel selected border is border_selected")
+	strip.is_selected = false
+	_assert((strip.get_theme_stylebox("panel") as StyleBoxFlat).border_color == UiColors.role(&"border"), "MixerChannel unselected border is the card border")
+	strip.queue_free()
+
+	var item = load("res://clip_editor/tracklist/ClipEditorTrackListItem.tscn").instantiate()
+	root.add_child(item)
+	item.track = track
+	item.set_selected(true)
+	await process_frame
+	_assert((item.get_theme_stylebox("panel") as StyleBoxFlat).border_color == want, "ClipEditorTrackListItem selected border is border_selected")
+	item.queue_free()
+
+	var row = load("res://arranger/tracklist/TrackItem.tscn").instantiate()
+	root.add_child(row)
+	await process_frame
+	_assert(row.selected_outline_color == want, "TrackItem selection outline is border_selected")
+	row.queue_free()

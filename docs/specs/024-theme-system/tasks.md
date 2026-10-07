@@ -146,7 +146,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 3 — Colour roles
 
-- [ ] **T-012** [REQ-001] `UiColors` becomes a facade over the theme.
+- [x?] **T-012** [REQ-001] `UiColors` becomes a facade over the theme.
   - _Files_: `Godot/core/UiColors.gd`, plus every caller of the removed constants (found by
     `grep -rn "UiColors\." Godot`)
   - _Output_:
@@ -157,7 +157,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     script errors), and `run_all.sh theme compressor` passes.
   - _Depends on_: T-007
 
-- [ ] **T-013** [REQ-013, REQ-014, REQ-018] Value controls take their colours from the theme.
+- [x?] **T-013** [REQ-013, REQ-014, REQ-018] Value controls take their colours from the theme.
   - _Files_: `Godot/components/RotaryKnob.gd`, `Fader.gd`, `VSlider.gd`, `HSlider.gd`,
     `HDualSlider.gd`, `XYSlider.gd`, `EnvelopeControl.gd`, `SegmentedControl.gd`,
     `LightButton.gd`
@@ -168,7 +168,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     change) pass.
   - _Depends on_: T-006, T-012
 
-- [ ] **T-014** [REQ-013, REQ-016, REQ-018] Meters and rulers take their colours from the theme.
+- [x?] **T-014** [REQ-013, REQ-016, REQ-018] Meters and rulers take their colours from the theme.
   - _Files_: `Godot/components/meter/Meter.gd`, `meter/LevelMeter.gd`,
     `Godot/components/Volumeter.gd`, `Godot/components/Ruler.gd`, `RealTimeRuler.gd`,
     `BaseRuler.gd`
@@ -178,7 +178,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     the accent, warn and clip stay fixed) pass.
   - _Depends on_: T-013
 
-- [ ] **T-015** [REQ-007, REQ-018] Wells, and the sweep of colours baked into scenes.
+- [x?] **T-015** [REQ-007, REQ-018] Wells, and the sweep of colours baked into scenes.
   - _Files_: `Godot/mixer/device_list/ChannelDeviceList.tscn`, `Godot/mixer/MixerChannel.tscn`,
     `Godot/components/gallery/ComponentGallery.tscn`, plus any other `*.tscn` setting the old
     colour exports
@@ -192,7 +192,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
       lists only reviewed exceptions, which are noted in this task when it is marked done.
   - _Depends on_: T-014
 
-- [ ] **T-016** [REQ-012] Neutral selection borders on track items and mixer strips.
+- [x?] **T-016** [REQ-012] Neutral selection borders on track items and mixer strips.
   - _Files_: `Godot/mixer/MixerChannel.gd`, `Godot/arranger/tracklist/TrackItem.gd`,
     `Godot/clip_editor/tracklist/ClipEditorTrackListItem.gd`, `Godot/tests/test_theme_usage.gd`
   - _Output_:
@@ -206,7 +206,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
       `clip_editor` tests pass.
   - _Depends on_: T-010
 
-- [ ] **T-017** [REQ-015, REQ-017] Status colours.
+- [x?] **T-017** [REQ-015, REQ-017] Status colours.
   - _Files_: `Godot/arranger/tracklist/TrackItem.tscn`, `Godot/mixer/MixerChannel.tscn`,
     `Godot/clip_editor/tracklist/ClipEditorTrackListItem.gd`, `Godot/tests/test_theme_usage.gd`,
     `Godot/tests/test_theme_live.gd`
@@ -220,7 +220,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
     - `test_theme_live.gd` (changing the accent leaves a track's colour unchanged) passes.
   - _Depends on_: T-016
 
-- [ ] **T-018** [REQ-019] Device views: instruments.
+- [x?] **T-018** [REQ-019] Device views: instruments.
   - _Files_: the polysynth, sampler, sfizz and drum view scripts and scenes under
     `Godot/devices/builtin/`, `Godot/tests/test_theme_literals.gd` (new)
   - _Output_:
@@ -231,14 +231,14 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
   - _Verify_: `test_theme_literals.gd` passes for the instrument files.
   - _Depends on_: T-013
 
-- [ ] **T-019** [REQ-019] Device views: effects and utility.
+- [x?] **T-019** [REQ-019] Device views: effects and utility.
   - _Files_: the views for the spec 012 effects, compressor, multiband and utility under
     `Godot/devices/builtin/`
   - _Output_: the same as T-018. The temporary allowlist is removed.
   - _Verify_: `test_theme_literals.gd` passes over all of `devices/builtin/`.
   - _Depends on_: T-018
 
-- [ ] **T-020** [REQ-002] Live update across the whole editor.
+- [x?] **T-020** [REQ-002] Live update across the whole editor.
   - _Files_: `Godot/tests/test_theme_live.gd`
   - _Output_: test cases for the editor scene:
     - an accent change updates a knob and a fader after one frame
@@ -248,7 +248,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 4 — Settings UI
 
-- [ ] **T-021** [REQ-020, REQ-021] "Reset theme" button on the Appearance page.
+- [x?] **T-021** [REQ-020, REQ-021] "Reset theme" button on the Appearance page.
   - _Files_: `Godot/settings/SettingsDialog.gd`
   - _Output_: the button, shown when the category is Appearance, following
     `_add_reset_shortcuts_button`.
@@ -258,7 +258,7 @@ Test command form: `godot --headless --path Godot -s tests/<script>.gd -- --test
 
 ## Phase 5 — Docs
 
-- [ ] **T-022** [REQ-024] Documentation and ADR.
+- [x?] **T-022** [REQ-024] Documentation and ADR.
   - _Files_: `docs/subsystems/godot-ui-components.md`, `docs/subsystems/godot-config-system.md`,
     `docs/adr/0018-theme-generated-from-settings.md` (new), `AGENTS.md`
   - _Output_:

@@ -104,7 +104,6 @@ max_value = 30.0
 value = 30.0
 value_default = 4.0
 fill_origin = nan
-track_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 track_width = 18.0
 scale_marks = Array[Dictionary]([{
 "label": "1",
@@ -233,7 +232,6 @@ script = ExtResource("3_meter")
 mode = 1
 min_db = 0.0
 max_db = 24.0
-background_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 show_hold = false
 readout = 2
 caption = "GR"
@@ -244,7 +242,6 @@ custom_minimum_size = Vector2(36, 80)
 layout_mode = 2
 script = ExtResource("3_meter")
 bar_count = 2
-background_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 readout = 2
 caption = "OUT"
 
@@ -277,7 +274,6 @@ script = ExtResource("2_fader")
 min_value = -12.0
 max_value = 24.0
 fill_origin = 0.0
-track_color = Color(0.06666667, 0.06666667, 0.06666667, 1)
 track_width = 18.0
 scale_marks = Array[Dictionary]([{
 "label": "+24",
@@ -333,7 +329,6 @@ mouse_default_cursor_shape = 2
 script = ExtResource("5_slider")
 max_value = 1.0
 bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
 handle_on_hover_only = false
 
 [node name="KneeValue" type="Label" parent="MainPage/Bottom/KneeGroup" unique_id=26643817]
@@ -382,7 +377,6 @@ mouse_default_cursor_shape = 2
 script = ExtResource("5_slider")
 max_value = 1.0
 bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
 handle_on_hover_only = false
 
 [node name="MixValue" type="Label" parent="MainPage/Bottom/MixGroup" unique_id=1288417075]
@@ -411,7 +405,6 @@ mouse_default_cursor_shape = 2
 script = ExtResource("5_slider")
 max_value = 1.0
 bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
 handle_on_hover_only = false
 
 [node name="AttackValue" type="Label" parent="MainPage/Bottom/AttackGroup" unique_id=1628062414]
@@ -440,7 +433,6 @@ mouse_default_cursor_shape = 2
 script = ExtResource("5_slider")
 max_value = 1.0
 bidirectional = false
-fill_color = Color(0.384, 0.302, 0.6, 1)
 handle_on_hover_only = false
 
 [node name="ReleaseValue" type="Label" parent="MainPage/Bottom/ReleaseGroup" unique_id=1716924601]

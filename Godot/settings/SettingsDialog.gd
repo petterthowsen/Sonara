@@ -131,6 +131,8 @@ func _populate_rows(category: String) -> void:
 	_clear_content()
 	if category == "Shortcuts":
 		_add_reset_shortcuts_button()
+	elif category == "Appearance":
+		_add_reset_theme_button()
 
 	var sub_categories = _settings.call("get_sub_categories", category)
 	var all_settings = _settings.call("get_settings_for_category", category)
@@ -206,6 +208,24 @@ func _add_reset_shortcuts_button() -> void:
 
 func _on_reset_shortcuts_pressed() -> void:
 	_settings.call("reset_shortcuts")
+	_dirty = true
+	_enable_save_buttons(true)
+	_refresh_rows()
+
+
+func _add_reset_theme_button() -> void:
+	var bar := HBoxContainer.new()
+	var button := Button.new()
+	button.text = "Reset theme"
+	button.tooltip_text = "Restore the theme colours, corner radius and spacing to their defaults"
+	button.pressed.connect(_on_reset_theme_pressed)
+	bar.add_child(button)
+	content_container.add_child(bar)
+	_sub_headers.append(bar)
+
+
+func _on_reset_theme_pressed() -> void:
+	_settings.call("reset_theme")
 	_dirty = true
 	_enable_save_buttons(true)
 	_refresh_rows()

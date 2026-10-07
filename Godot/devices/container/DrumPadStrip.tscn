@@ -49,8 +49,6 @@ script = ExtResource("3_hslider")
 min_value = -100.0
 max_value = 100.0
 step = 1.0
-bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 
 [node name="DualPanSlider" type="Control" parent="Pan"]
 visible = false
@@ -63,9 +61,6 @@ min_value = -100.0
 max_value = 100.0
 a_value = -0.5
 b_value = 0.0
-bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
-alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
 
 [node name="PanModePopup" type="PopupMenu" parent="Pan"]
 oversampling_override = 1.0
@@ -95,16 +90,8 @@ peak_right = 0.0
 rms_left = 0.0
 rms_right = 0.0
 rms_release_time = 0.1
-bar_bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
-bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
-bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
-tick_color = Color(1, 1, 1, 0.39215687)
-zero_db_color = Color(1, 1, 1, 0.74509805)
-fader_bg_color = Color(0.14642392, 0.11433411, 0.23046875, 1)
 show_fader = true
 volume_db = -6.0
-fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 fader_handle_height = 10.0
 
 [node name="SoloMute" type="HBoxContainer" parent="."]

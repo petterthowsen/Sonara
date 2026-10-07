@@ -197,9 +197,9 @@ func _test_item_style() -> void:
 
 	var sa: StyleBoxFlat = ia.get_theme_stylebox("panel")
 	var sb: StyleBoxFlat = ib.get_theme_stylebox("panel")
-	_assert(sa.border_color == Color.WHITE, "selected item has a white border")
-	_assert(sb.border_color != Color.WHITE, "unselected item has a soft, non-white border")
-	_assert(sa.border_width_left > sb.border_width_left, "selected border is thicker")
+	_assert(sa.border_color == UiColors.role(&"border_selected"), "selected item has the neutral selection border")
+	_assert(sb.border_color != UiColors.role(&"border_selected"), "unselected item has a soft border")
+	_assert(sa.border_width_left == 1, "selected border is the 1 px card border")
 	_assert(sa.bg_color.a == 1.0 and sb.bg_color.a < 1.0, "unselected background is translucent")
 
 	ia.refresh_toggles(state)
@@ -216,11 +216,11 @@ func _test_item_style() -> void:
 	state.toggle_solo(a, 0)
 	ia.refresh_toggles(state)
 	ib.refresh_toggles(state)
-	_assert(ia.visible_toggle.get_theme_color("icon_normal_color") == ia.SOLO_COLOR,
+	_assert(ia.visible_toggle.get_theme_color("icon_normal_color") == UiColors.role(&"solo"),
 		"soloed visibility toggle uses the solo colour")
-	_assert(ia.edit_toggle.get_theme_color("icon_normal_color") != ia.SOLO_COLOR,
+	_assert(ia.edit_toggle.get_theme_color("icon_normal_color") != UiColors.role(&"solo"),
 		"edit toggle not in solo colour when only visibility is soloed")
-	_assert(ib.visible_toggle.get_theme_color("icon_normal_color") != ia.SOLO_COLOR,
+	_assert(ib.visible_toggle.get_theme_color("icon_normal_color") != UiColors.role(&"solo"),
 		"other item not in solo colour")
 
 	# Toggle press reports kind and shift, and does not emit `pressed`.

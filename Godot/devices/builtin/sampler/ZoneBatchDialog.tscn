@@ -84,9 +84,9 @@ min_value = 0.0
 max_value = 127.0
 a_value = 0.0
 b_value = 127.0
-bg_color = Color(0.1, 0.1, 0.13, 1)
-fill_color = Color(0.35, 0.62, 1, 0.8)
-alt_fill_color = Color(0.35, 0.62, 1, 0.8)
+theme_override_colors/bg = Color(0.1, 0.1, 0.13, 1)
+theme_override_colors/fill = Color(0.35, 0.62, 1, 0.8)
+theme_override_colors/alt_fill = Color(0.35, 0.62, 1, 0.8)
 
 [node name="SingleCheck" type="CheckBox" parent="Margin/VBox"]
 unique_name_in_owner = true

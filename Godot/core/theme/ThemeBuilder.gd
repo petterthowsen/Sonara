@@ -407,7 +407,7 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"handle": handle,
 	})
 	_set_colors(t, &"Meter", {
-		&"bar_bg": track,
+		&"bar_bg": well,
 		&"bar_low": accent,
 		&"bar_high": p.role(&"meter_warn"),
 		&"bar_clip": p.role(&"meter_clip"),
@@ -415,7 +415,7 @@ static func _components(t: Theme, p: ThemePalette) -> void:
 		&"tick_minor": _with_alpha(p.role(&"text"), 0.25),
 		&"zero_db": _with_alpha(p.role(&"text_bright"), 0.75),
 		&"fader": accent,
-		&"fader_bg": track,
+		&"fader_bg": well,
 		&"fader_handle": handle,
 		&"fader_handle_hover": Color.WHITE,
 	})

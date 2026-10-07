@@ -66,7 +66,6 @@ script = ExtResource("2_ietmg")
 max_value = 1.0
 value = 0.5
 bidirectional = false
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 metadata/_custom_type_script = "uid://l2x0algtfqv5"
 
 [node name="HSeparator" type="HSeparator" parent="." unique_id=1022881042]

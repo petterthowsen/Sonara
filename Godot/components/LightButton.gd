@@ -15,22 +15,26 @@ var radius:
 		diameter = r * 2
 		queue_redraw()
 
-@export var light_color := Color.YELLOW:
-	set(lc):
-		light_color = lc
-		queue_redraw()
+var _tc := ThemedColors.new(self, &"LightButton")
+var light_color: Color:
+	get:
+		return _tc.get_color(&"light")
+	set(c):
+		_tc.set_color(&"light", c)
 
 @export var light_texture : GradientTexture2D
 
-@export var bg_color := Color("#333"):
-	set(bg_c):
-		bg_color = bg_c
-		queue_redraw()
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
+	set(c):
+		_tc.set_color(&"bg", c)
 
-@export var border_color := Color("#333"):
-	set(b_c):
-		border_color = b_c
-		queue_redraw()
+var border_color: Color:
+	get:
+		return _tc.get_color(&"border")
+	set(c):
+		_tc.set_color(&"border", c)
 
 var _value := false
 
@@ -84,3 +88,9 @@ func _draw() -> void:
 	
 	if value:
 		draw_texture_rect(light_texture, Rect2(0, 0, size.x, size.y), false, Color.WHITE)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()

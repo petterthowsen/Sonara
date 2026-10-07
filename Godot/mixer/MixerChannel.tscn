@@ -64,43 +64,6 @@ content_margin_right = 4.0
 content_margin_bottom = 2.0
 draw_center = false
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_xa46q"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.14117648, 0.14117648, 0.14117648, 1)
-corner_radius_top_left = 14
-corner_radius_top_right = 14
-corner_radius_bottom_right = 14
-corner_radius_bottom_left = 14
-corner_detail = 10
-shadow_size = 1
-shadow_offset = Vector2(1, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pfcwk"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.6, 0.12, 0.12, 1)
-corner_radius_top_left = 14
-corner_radius_top_right = 14
-corner_radius_bottom_right = 14
-corner_radius_bottom_left = 14
-corner_detail = 10
-shadow_size = 1
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_m2250"]
-bg_color = Color(0.8, 0.65333337, 0, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cybrc"]
-bg_color = Color(0.8, 0.41333333, 0, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_573y5"]
 content_margin_left = 4.0
 content_margin_top = 2.0
@@ -235,16 +198,9 @@ peak_right = 0.0
 rms_left = 0.0
 rms_right = 0.0
 bars_spacing = 2
-bar_bg_color = Color(0.0859375, 0.0859375, 0.0859375, 1)
-bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
-bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
-bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
-tick_color = Color(1, 1, 1, 0.39215687)
-zero_db_color = Color(1, 1, 1, 0.74509805)
 tick_font_size = 14
 show_fader = false
 volume_db = -6.0
-fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 
 [node name="VSplit" type="VSplitContainer" parent="HBox/VBox/MainAndSideBox/MainPane" unique_id=1201822014]
 layout_mode = 2
@@ -292,8 +248,7 @@ custom_minimum_size = Vector2(16, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.3
-theme_override_styles/normal = SubResource("StyleBoxFlat_xa46q")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_pfcwk")
+theme_type_variation = &"RecordButton"
 toggle_mode = true
 text = "R"
 
@@ -307,8 +262,7 @@ last_wrap_alignment = 2
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_colors/font_pressed_color = Color(0.0625, 0.0625, 0.0625, 1)
-theme_override_styles/pressed = SubResource("StyleBoxFlat_m2250")
+theme_type_variation = &"SoloButton"
 toggle_mode = true
 text = "S"
 script = ExtResource("dragtoggle_btn")
@@ -319,8 +273,7 @@ drag_region = NodePath("../../../../../..")
 custom_minimum_size = Vector2(22, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_colors/font_pressed_color = Color(0.05859375, 0.05859375, 0.05859375, 1)
-theme_override_styles/pressed = SubResource("StyleBoxFlat_cybrc")
+theme_type_variation = &"MuteButton"
 toggle_mode = true
 text = "M"
 script = ExtResource("dragtoggle_btn")
@@ -342,8 +295,6 @@ script = ExtResource("3_m2250")
 min_value = -100.0
 max_value = 100.0
 step = 1.0
-bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 
 [node name="DualPanSlider" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=1577488519]
 visible = false
@@ -356,9 +307,6 @@ min_value = -100.0
 max_value = 100.0
 a_value = -0.5
 b_value = 0.0
-bg_color = Color(0.08627451, 0.08627451, 0.08627451, 1)
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
-alt_fill_color = Color(0.30196083, 0.5930147, 0.6, 1)
 
 [node name="PanModePopup" type="PopupMenu" parent="HBox/VBox/MainAndSideBox/MainPane/Panning" unique_id=506406282]
 oversampling_override = 1.0
@@ -395,16 +343,8 @@ peak_right = 0.0
 rms_left = 0.0
 rms_right = 0.0
 rms_release_time = 0.1
-bar_bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-bar_color_low = Color(0.728, 0.8, 0.08000002, 1)
-bar_color_high = Color(0.8, 0.41600004, 0.08000002, 1)
-bar_color_clip = Color(0.8, 0.08000002, 0.08000002, 1)
-tick_color = Color(1, 1, 1, 0.39215687)
-zero_db_color = Color(1, 1, 1, 0.74509805)
 tick_font_size = 14
-fader_bg_color = Color(0.14642392, 0.11433411, 0.23046875, 1)
 volume_db = -6.0
-fader_handle_color = Color(0.9607843, 0.9607843, 0.9607843, 1)
 fader_handle_height = 12.0
 
 [node name="Fader" type="Control" parent="HBox/VBox/MainAndSideBox/MainPane/Volume" unique_id=1988525762 groups=["mixer_channel_fader"]]
@@ -414,8 +354,6 @@ size_flags_horizontal = 3
 mouse_default_cursor_shape = 2
 script = ExtResource("6_1hr2l")
 value = -6.0
-bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-fill_color = Color(0.38431373, 0.3019608, 0.6, 1)
 
 [node name="SmartLineEdit" parent="HBox/VBox/MainAndSideBox/MainPane/Volume/Fader" unique_id=1108990559 instance=ExtResource("2_xa46q")]
 layout_mode = 1

@@ -94,18 +94,62 @@ start copying the same behavior, extract it into a component. That's how `ValueT
   draws and edits it.
 
 ### 5. One visual system
-- Level meters use the mixer strip's colors everywhere (a Volumeter or any new meter matches
-  `Meter` in `MixerChannel.tscn`): low `(0.728, 0.8, 0.08)`, high `(0.8, 0.416, 0.08)`, clip
-  `(0.8, 0.08, 0.08)`, dark background, white-smoke handle.
+The look comes from a theme generated in code from eight settings (`appearance/theme/*`: main
+colour, two accents, record, solo and mute colours, corner radius, spacing). `ThemePalette` turns
+the settings into roles, `ThemeBuilder` turns the roles into a `Theme`, and the `UiTheme` autoload
+merges it into the project theme and rebuilds it (once per frame) when a setting changes.
+`assets/Sonara_Theme.tres` is generated output (`core/theme/build_theme_resource.gd`), never
+hand-edited. Design record: `docs/adr/0018-theme-generated-from-settings.md`.
+
+**Say what a thing is, not how it looks.** Scenes pick a theme type variation and carry no colours
+or styleboxes of their own:
+
+| Variation | Base | Use |
+|---|---|---|
+| `AppRoot`, `SectionStack` | MarginContainer, VBoxContainer | Editor root margin and the stack of sections |
+| `SectionPanel`, `SectionHeader` | PanelContainer | Editor sections; dock and device-frame title bars |
+| `DeviceCard`, `DeviceCardSelected`, `DeviceCardHeader` | PanelContainer | Device cards (lane and compact). Selection swaps `DeviceCard` for `DeviceCardSelected` |
+| `Well` | PanelContainer | Recessed areas, e.g. the channel device list |
+| `Floating` | PanelContainer | Tooltips and overlays (`ValueTooltip`, `LabelOverlay`) |
+| `ContextMenu`, `ContextMenuList` | PopupPanel, PopupMenu | Context menus |
+| `FlatButton`, `FlatMenuButton` | Button, MenuButton | Borderless buttons |
+| `RecordButton`, `SoloButton`, `MuteButton` | Button | Toggles whose pressed state is the status colour |
+| `HeaderSmall`, `HeaderMedium`, `HeaderLarge` | Label | 20, 24 and 28 px headings (body text is 14) |
+
+**Roles.** Every palette role is also a colour of the `Sonara` theme type. Read one from code with
+`UiColors.role(&"accent_primary")`, cache it, and refresh the cache on
+`NOTIFICATION_THEME_CHANGED`; never call it from a draw loop. Roles: `app_bg`, `section`,
+`section_header`, `card`, `card_header`, `well`, `nest_overlay`, `floating`, `border`,
+`border_selected`, `control_bg`, `control_hover`, `text`, `text_dim`, `text_disabled`,
+`text_bright`, `editor_bg`, `grid_line`, `handle`, `accent_primary`, `accent_secondary`, `record`,
+`solo`, `mute`, `meter_warn`, `meter_clip`. The `Sonara` type also holds the constants `unit`
+(spacing) and `radius`.
+
+**Spacing** is multiples of `unit` (separations `unit`, section margins `2·unit`). Do not set
+margins or separations on scenes that a variation already covers.
+
+**Selection** looks the same everywhere: a 1 px `border_selected` border, neutral so it never
+competes with track or status colours.
+
+**Custom-drawn controls** (`RotaryKnob`, `Fader`, `VolumeSlider`, `HorSlider`, `HDualSlider`,
+`Meter`, `LevelMeter`, `Volumeter`, `LightButton`, `SegmentedControl`, `XYSlider`,
+`EnvelopeControl`, `Ruler`) have their own theme type with one colour item per property, named
+without the `_color` suffix (`Fader/colors/fill`). Their colour properties are not exported:
+reading one returns the resolved theme colour, and writing one (`knob.value_arc_color = X`) sets a
+per-instance theme override, so it survives theme changes. In a scene, override with
+`theme_override_colors/<item>` (e.g. `theme_override_colors/fill`). The pattern lives in
+`components/ThemedColors.gd`: hold one, route the properties through it, and call `refresh()` and
+`queue_redraw()` on `NOTIFICATION_THEME_CHANGED`.
+
+- Level meters: the safe zone follows `accent_primary`. Warn and clip stay fixed
+  (`UiColors.METER_WARN`, `METER_CLIP`), so a loud signal never looks safe whatever the accent.
 - `LevelMeter` has two colour modes. ZONES uses `safe_color` below `warn_db`, then the warn and
-  clip colours; SOLID uses `safe_color` only. The compressor view sets the safe colour to
-  `UiColors.PRIMARY`. Whether the mixer meter follows is left to the theme follow-up
-  (spec 015 §2.6).
+  clip colours; SOLID uses `safe_color` only.
 - Volume controls share the -60 to +6 dB range of the mixer fader.
-- Editor backgrounds are near-black (`#111`), not pure black. Grid lines are faint white
-  (`Color(1, 1, 1, 0.06)`).
-- Floating panels (tooltips, overlays) use the dark rounded style in `ValueTooltip` and
-  `LabelOverlay`: `Color(0.08, 0.08, 0.1, 0.94)`, 3 px corners.
+- Per-track colours (track items, mixer headers) are data, not theme. They are unaffected by the
+  accent.
+- Colours that carry meaning on their own (EQ band colours, the spectrum gradient, compressor
+  reduction red) stay fixed in the device views.
 
 ## Shared pieces
 
@@ -117,7 +161,8 @@ start copying the same behavior, extract it into a component. That's how `ValueT
 | `FloatingValueEditor.gd` | Double-click value entry |
 | `LabeledKnob.gd` | Knob plus caption (`label_position` TOP/BOTTOM, `label_width`, `knob_size`) |
 | `DropIndicator.gd` | Drop position glow (see `godot-drag-and-drop.md`) |
-| `core/UiColors.gd` | Colour tokens (`PRIMARY` `#624d99`, `TRACK_BG`, the meter palette). New components default to these |
+| `core/UiColors.gd` | `UiColors.role(&"name")` reads a theme palette role. Also holds the fixed meter colours (`METER_WARN`, `METER_CLIP`, `METER_HOLD`) |
+| `components/ThemedColors.gd` | Colour cache for a custom-drawn control: routes its colour properties through theme overrides (see §5) |
 | `Fader.gd` | Vertical value control (the knob's sibling): `min/max/value_default`, `logarithmic` or `to_position`/`from_position`, `fill_origin`, `scale_marks` + `scale_side`, `overlay_level`, `ghost_value`, mod contract. `value_to_position(v)` maps a value onto the track |
 | `ScaleMarks.gd` | Tick/label layout through a value→0..1 Callable, so marks sit where the fill does |
 | `SegmentedControl.gd` | Exclusive toggle-button row: `set_items`, `selected` / `set_selected_no_signal`, `selected_changed` |
@@ -189,4 +234,4 @@ The bar at the bottom of the editor (`editor/HelpBar.gd`) shows the hotkeys and 
 
 ## Component gallery
 
-Open `Godot/components/ComponentGallery.tscn` in the editor to preview the reusable controls together. Its `PanelContainer` holds an `HFlowContainer` of component cards with fixed sample values; `ComponentGallery.gd` seeds the meters and knob modulation ranges/live markers for a useful static preview. The gallery is presentation-only and does not bind to project or engine state.
+Open `Godot/components/gallery/ComponentGallery.tscn` in the editor to preview the reusable controls together. Its `PanelContainer` holds an `HFlowContainer` of component cards with fixed sample values; `ComponentGallery.gd` seeds the meters and knob modulation ranges/live markers for a useful static preview. The gallery is presentation-only and does not bind to project or engine state.

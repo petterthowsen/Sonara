@@ -24,7 +24,8 @@ const COLUMN_WIDTH := 2.0
 ## Records kept when the sample rate is unknown.
 const DEFAULT_CAPACITY := 4096
 
-const BG_COLOR := Color(0.067, 0.067, 0.067)
+## Plot background: the theme's well colour, refreshed on theme change.
+var _bg_color := UiColors.role(&"well")
 const GRID_COLOR := Color(1, 1, 1, 0.07)
 const LABEL_COLOR := Color(1, 1, 1, 0.4)
 const BEYOND_COLOR := Color(0.58, 0.58, 0.62)
@@ -43,7 +44,17 @@ const THRESHOLD_COLOR := Color(0.95, 0.75, 0.25)
 	set(v):
 		max_db = v
 		queue_redraw()
-@export var input_color := UiColors.PRIMARY
+## The input-level bar. Follows the accent unless a colour is set explicitly.
+var input_color: Color:
+	get:
+		return _input_color if _input_color_set else _accent
+	set(c):
+		_input_color = c
+		_input_color_set = true
+		queue_redraw()
+var _input_color := Color.WHITE
+var _input_color_set := false
+var _accent := UiColors.role(&"accent_primary")
 @export var beyond_color := BEYOND_COLOR
 @export var reduction_color := REDUCTION_COLOR
 @export var show_grid := true:
@@ -242,6 +253,10 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_bg_color = UiColors.role(&"well")
+		_accent = UiColors.role(&"accent_primary")
+		queue_redraw()
 	match what:
 		NOTIFICATION_RESIZED:
 			queue_redraw()
@@ -255,7 +270,7 @@ func _notification(what: int) -> void:
 # ============================================================================
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), BG_COLOR)
+	draw_rect(Rect2(Vector2.ZERO, size), _bg_color)
 	if show_grid:
 		_draw_grid()
 	_draw_columns(_columns())

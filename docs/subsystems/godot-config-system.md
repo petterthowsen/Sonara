@@ -24,6 +24,12 @@
 - Search matches the bound chords, so typing `ctrl+d` finds Duplicate.
 - Design record: `docs/adr/0017-hotkey-registry.md`.
 
+## Theme
+- `Settings.Type.COLOR` stores a colour as an `"#rrggbb"` string (no alpha). `_coerce` accepts a `Color` or a string; an invalid value warns and returns the default. The row widget is a `ColorPickerButton`.
+- The theme settings are `appearance/theme/*`: `main_color`, `accent_primary`, `accent_secondary`, `record_color`, `solo_color`, `mute_color`, `corner_radius` (0-4) and `spacing` (1-4). The palette clamps the main colour's brightness so panels stay dark.
+- The `UiTheme` autoload listens to `setting_changed` for that prefix and rebuilds the theme once per frame, so everything (including device windows) updates live. `Settings.reset_theme()` restores all eight keys; the Appearance page has a "Reset theme" button for it.
+- Details: `godot-ui-components.md` §5 and `docs/adr/0018-theme-generated-from-settings.md`.
+
 ## Config Access (unregistered internal state)
 - Use `Sonara.get_config("section/key", default_value)` to read settings. Slash notation walks nested dictionaries and falls back to the provided default on missing keys.
 - Use `Sonara.set_config("section/key", value)` to write settings. It auto-creates intermediate dictionaries; there is no need to pre-check for existence.

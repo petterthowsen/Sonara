@@ -14,7 +14,8 @@ const NODE_RADIUS := 6.0
 const HIT_RADIUS := 14.0
 const GRID_DB := 12.0
 
-const BG_COLOR := Color(0.067, 0.067, 0.067)
+## Plot background: the theme's well colour, refreshed on theme change.
+var _bg_color := UiColors.role(&"well")
 const GRID_COLOR := Color(1, 1, 1, 0.07)
 const LABEL_COLOR := Color(1, 1, 1, 0.4)
 const UNITY_COLOR := Color(1, 1, 1, 0.22)
@@ -206,6 +207,9 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_bg_color = UiColors.role(&"well")
+		queue_redraw()
 	match what:
 		NOTIFICATION_RESIZED:
 			queue_redraw()
@@ -221,7 +225,7 @@ func _notification(what: int) -> void:
 func _draw() -> void:
 	_update_layout()
 	var plot := plot_rect()
-	draw_rect(plot, BG_COLOR)
+	draw_rect(plot, _bg_color)
 	var font := _font if _font != null else ThemeDB.fallback_font
 	_draw_input_grid(font)
 	db_grid.draw_grid(self, font, 10, GRID_COLOR, UNITY_COLOR, LABEL_COLOR)

@@ -11,17 +11,18 @@ class_name XYSlider extends Control
 		if is_inside_tree():
 			queue_redraw()
 
-@export var handle_color := Color.WHITE:
-	set(hc):
-		handle_color = hc
-		if is_inside_tree():
-			queue_redraw()
+var _tc := ThemedColors.new(self, &"XYSlider")
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
+	set(c):
+		_tc.set_color(&"handle", c)
 
-@export var bg_color := Color.BLACK:
-	set(bc):
-		bg_color = bc
-		if is_inside_tree():
-			queue_redraw()
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
+	set(c):
+		_tc.set_color(&"bg", c)
 
 @export var show_axis_lines := true:
 	set(s):
@@ -29,11 +30,11 @@ class_name XYSlider extends Control
 		if is_inside_tree():
 			queue_redraw()
 
-@export var axis_line_color := Color.WHITE:
-	set(ac):
-		axis_line_color = ac
-		if is_inside_tree():
-			queue_redraw()
+var axis_line_color: Color:
+	get:
+		return _tc.get_color(&"axis_line")
+	set(c):
+		_tc.set_color(&"axis_line", c)
 
 @export var axis_line_width := 1.0:
 	set(aw):
@@ -47,11 +48,11 @@ class_name XYSlider extends Control
 		if is_inside_tree():
 			queue_redraw()
 
-@export var value_label_color := Color.WHITE:
-	set(vc):
-		value_label_color = vc
-		if is_inside_tree():
-			queue_redraw()
+var value_label_color: Color:
+	get:
+		return _tc.get_color(&"value_label")
+	set(c):
+		_tc.set_color(&"value_label", c)
 
 @export var value_label_font_size := 12:
 	set(vls):
@@ -217,3 +218,9 @@ func _draw():
 	#if show_value_labels:
 	#	draw_string(get_theme_default_font(), Vector2(x - 10, y - 10), str(_x), HORIZONTAL_ALIGNMENT_LEFT, -1.0, value_label_font_size, value_label_color)
 	#	draw_string(get_theme_default_font(), Vector2(x - 10, y + 10), str(_y), HORIZONTAL_ALIGNMENT_LEFT, -1.0, value_label_font_size, value_label_color)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()

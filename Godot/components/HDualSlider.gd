@@ -67,9 +67,22 @@ func set_values_no_signal(a : float, b : float):
 	if is_inside_tree():
 		queue_redraw()
 
-@export var bg_color := Color.BLACK
-@export var fill_color := Color.DARK_ORANGE
-@export var alt_fill_color := Color.DARK_RED  # Used when a_value > b_value
+var _tc := ThemedColors.new(self, &"HDualSlider")
+var bg_color: Color:
+	get:
+		return _tc.get_color(&"bg")
+	set(c):
+		_tc.set_color(&"bg", c)
+var fill_color: Color:
+	get:
+		return _tc.get_color(&"fill")
+	set(c):
+		_tc.set_color(&"fill", c)
+var alt_fill_color: Color:
+	get:
+		return _tc.get_color(&"alt_fill")
+	set(c):
+		_tc.set_color(&"alt_fill", c)
 
 @export var handle_width := 4.0:
 	set(hw):
@@ -77,11 +90,11 @@ func set_values_no_signal(a : float, b : float):
 		if is_inside_tree():
 			queue_redraw()
 
-@export var handle_color := Color.WHITE:
-	set(hc):
-		handle_color = hc
-		if is_inside_tree():
-			queue_redraw()
+var handle_color: Color:
+	get:
+		return _tc.get_color(&"handle")
+	set(c):
+		_tc.set_color(&"handle", c)
 
 func _ready():
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -226,4 +239,10 @@ func _set_both(a: float, b: float) -> void:
 		b_value_changed.emit(b)
 	values_changed.emit(a, b)
 	if is_inside_tree():
+		queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
 		queue_redraw()

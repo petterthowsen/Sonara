@@ -46,11 +46,33 @@ const FONT_SIZE := 10
 	set(v):
 		color_mode = v
 		queue_redraw()
-@export var safe_color := UiColors.PRIMARY ## ZONES: below `warn_db`. SOLID: the only colour
-@export var warn_color := UiColors.METER_WARN
-@export var clip_color := UiColors.METER_CLIP
-@export var background_color := UiColors.METER_BG
-@export var hold_color := UiColors.METER_HOLD
+var _tc := ThemedColors.new(self, &"LevelMeter")
+## ZONES: below `warn_db`. SOLID: the only colour
+var safe_color: Color:
+	get:
+		return _tc.get_color(&"safe")
+	set(c):
+		_tc.set_color(&"safe", c)
+var warn_color: Color:
+	get:
+		return _tc.get_color(&"warn")
+	set(c):
+		_tc.set_color(&"warn", c)
+var clip_color: Color:
+	get:
+		return _tc.get_color(&"clip")
+	set(c):
+		_tc.set_color(&"clip", c)
+var background_color: Color:
+	get:
+		return _tc.get_color(&"background")
+	set(c):
+		_tc.set_color(&"background", c)
+var hold_color: Color:
+	get:
+		return _tc.get_color(&"hold")
+	set(c):
+		_tc.set_color(&"hold", c)
 @export var warn_db := -6.0
 @export var clip_db := -0.1
 @export var display := Display.PEAK:
@@ -313,3 +335,9 @@ func _wake() -> void:
 	if not is_processing() and is_visible_in_tree():
 		set_process(true)
 	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_tc.refresh()
+		queue_redraw()

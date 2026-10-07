@@ -51,9 +51,7 @@ max_value = 100.0
 value = 46.735
 value_default = 50.0
 radius = 24.0
-shadow_color = Color(0.30323273, 0.30323285, 0.30323282, 1)
 shadow_width = 2.0
-knob_line_color = Color(0.6789437, 0.6789437, 0.6789437, 1)
 arc_width = 6.0
 arc_offset = 0.0
 knob_line_width = 3.0
@@ -106,7 +104,6 @@ script = ExtResource("3_hslider")
 min_value = -100.0
 max_value = 100.0
 value = 34.0
-fill_color = Color(0.384314, 0.301961, 0.6, 1)
 
 [node name="DualPanCard" type="VBoxContainer" parent="Flow" unique_id=843575913]
 custom_minimum_size = Vector2(160, 0)
@@ -126,8 +123,6 @@ mouse_default_cursor_shape = 2
 script = ExtResource("4_dual")
 a_value = -0.62
 b_value = 0.35
-fill_color = Color(0.384314, 0.301961, 0.6, 1)
-alt_fill_color = Color(0.301961, 0.593015, 0.6, 1)
 
 [node name="VolumeSliderCard" type="VBoxContainer" parent="Flow" unique_id=358018413]
 custom_minimum_size = Vector2(72, 0)

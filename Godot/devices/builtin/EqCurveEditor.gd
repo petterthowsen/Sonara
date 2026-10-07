@@ -30,14 +30,15 @@ const SPECTRUM_HEADER_LEN := 4
 ## The display tilt pivots here: this frequency reads the same at every tilt.
 const TILT_PIVOT_HZ := 1000.0
 
-const BG_COLOR := Color(0.067, 0.067, 0.067)
+## Plot background: the theme's well colour, refreshed on theme change.
+var _bg_color := UiColors.role(&"well")
 const GRID_COLOR := Color(1, 1, 1, 0.06)
 const GRID_MAJOR_COLOR := Color(1, 1, 1, 0.12)
 const ZERO_COLOR := Color(1, 1, 1, 0.3)
 const LABEL_COLOR := Color(1, 1, 1, 0.45)
 const TOTAL_COLOR := Color(0.96, 0.96, 0.96, 0.95)
-const POST_FILL := Color(0.3, 0.55, 1.0, 0.3)
-const POST_LINE := Color(0.45, 0.68, 1.0, 0.9)
+var _post_line := UiColors.role(&"accent_primary").lightened(0.2)
+var _post_fill := Color(_post_line, 0.3)
 const PRE_LINE := Color(1, 1, 1, 0.22)
 
 ## The DeviceInstance (typed loosely: this script must not depend on autoload-using classes).
@@ -448,6 +449,11 @@ func _on_mouse_motion(motion: InputEventMouseMotion) -> void:
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_bg_color = UiColors.role(&"well")
+		_post_line = UiColors.role(&"accent_primary").lightened(0.2)
+		_post_fill = Color(_post_line, 0.3)
+		queue_redraw()
 	match what:
 		NOTIFICATION_RESIZED:
 			_curves_dirty = true
@@ -549,7 +555,7 @@ func _draw() -> void:
 	if _curves_dirty:
 		_update_curves()
 	var plot := plot_rect()
-	draw_rect(plot, BG_COLOR)
+	draw_rect(plot, _bg_color)
 	var font := _font if _font != null else ThemeDB.fallback_font
 	freq_axis.draw_grid(self, font, 10, GRID_COLOR, GRID_MAJOR_COLOR, LABEL_COLOR)
 	db_grid.draw_grid(self, font, 10, GRID_MAJOR_COLOR, ZERO_COLOR, LABEL_COLOR)
@@ -626,9 +632,9 @@ func _draw_analyser() -> void:
 	match state.analyser:
 		EqViewState.Analyser.POST:
 			_draw_points(_pre_points, PRE_LINE, Color(0, 0, 0, 0))
-			_draw_points(_post_points, POST_LINE, POST_FILL)
+			_draw_points(_post_points, _post_line, _post_fill)
 		EqViewState.Analyser.PRE:
-			_draw_points(_pre_points, POST_LINE, POST_FILL)
+			_draw_points(_pre_points, _post_line, _post_fill)
 
 
 ## A spectrum as a line (and optional fill) over the plot. The engine already smoothed it into
