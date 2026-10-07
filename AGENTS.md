@@ -112,7 +112,7 @@ The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you
 
 - `CONTEXT.md` is the domain glossary and `docs/adr/` holds the decision records. Read the ADRs that touch the area you're working in. Use the glossary's terms in issues, proposals and test names. If your change contradicts an ADR, say so explicitly instead of silently overriding it.
 - Issues live in GitHub Issues (petterthowsen/Sonara); use the `gh` CLI (`gh issue list/view/create/comment/edit/close`).
-- Triage labels: `needs-triage`, `needs-info`, `ready-for-agent` (fully specified, ready for an AFK agent), `ready-for-human`, `wontfix`. Area labels: `engine`, `godot`, `device`, `builtins`, `arranger`, `editor`, `mixer`, `ai`, `export`.
+- Triage labels: `needs-triage`, `needs-info`, `ready-for-agent` (fully specified, ready for an AFK agent), `ready-for-human`, `wontfix`. Area labels: `engine`, `godot`, `device`, `builtins`, `arranger`, `editor`, `midi-editor`, `mixer`, `ai`, `export`.
 
 ## Project tracking
 

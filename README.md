@@ -1,12 +1,14 @@
-# Sonara
+![Sonara](Godot/assets/sonara/logo_image.png)
 
-Linux-first DAW: Godot 4 for the UI, Rust for the audio engine, OSC between them.
+Sonara is a Linux-first DAW. It's a Rust audio engine and a Godot 4 UI.
+
+It is close to a beta release - most of the basic features are in, plus many quality of life features that other DAWS don't have, such as built-in support for SFZ, A powerful Drum Machine, Sampler with multisampling and automatic note mapping (keyswitches etc).
+
+The goal of sonara is to provide a seamless, frictionless UI that makes it fun to composer, arrange and mix music - whether you place notes using a mouse, the computer keyboard or by midi keyboard.
+
+I don't build binaries yet, but will soon. If you'd like to try, download the repo and follow the instructions to build it - it's fairly straight-forward. It's early though, so expect some bugs here and there.
 
 ![Sonara arranger with MIDI clips, an automation lane and a CLAP reverb in the device lane](screenshot_01.png)
-
-> [!WARNING]
-> Sonara is in early development (alpha). Expect bugs, missing features and project-format
-> changes between versions. Don't trust it with work you can't afford to lose.
 
 ## Features
 
@@ -21,16 +23,19 @@ Linux-first DAW: Godot 4 for the UI, Rust for the audio engine, OSC between them
   plugins can be reloaded with their state. Plugins can share host processes (per plugin, per
   vendor or all together). Plugin GUIs are supported, and plugins without one get a generated
   panel.
-- **Live MIDI**: MIDI keyboards and a virtual keyboard, routed to armed channels.
 - **Audio settings**: pick the output device, sample rate and buffer size from the UI.
 - **Asset browser**: audio files, MIDI files, SFZ instruments and devices.
 - **Undo/redo** for editing.
 - **AI assistant** (optional): chat that can read and edit the project, via OpenRouter.
 
+- Simple, customizable theme system.
 ## Current limitations
 
-- Audio clips have limited features.
-- No audio export or rendering yet.
+- Midi editor has limited power features such as mirror, stretch, chord-entry and the like.
+- The audio engine needs performance improvements, especailly for real-time recording.
+- There is no support for hardware midi controllers yet.
+- Only supports wav audio files.
+- Themeing only supports dark mode currently.
 - Linux only.
 
 ## Prerequisites
