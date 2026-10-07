@@ -35,6 +35,7 @@ var snap_enabled := true
 
 
 func _ready() -> void:
+	Hotkeys.set_context(self, "sampler_zones")
 	if device != null:
 		_bind_children()
 

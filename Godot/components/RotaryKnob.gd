@@ -297,6 +297,8 @@ var mod_live_values := PackedFloat32Array():
 
 
 func _ready() -> void:
+	if not Engine.is_editor_hint():
+		HotkeyActions.declare_context(self, "control_knob")
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if not mouse_entered.is_connected(_on_mouse_entered):
 		mouse_entered.connect(_on_mouse_entered)

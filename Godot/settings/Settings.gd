@@ -338,6 +338,14 @@ func _register_all_settings() -> void:
 
 	# --- Appearance ---
 	_register(Setting.new(
+		"appearance/show_help_bar",
+		"Show Help Bar",
+		Type.BOOL,
+		true,
+		CATEGORY_APPEARANCE,
+		"Show the hotkeys and mouse gestures for whatever the pointer is over in the bar at the bottom of the window.",
+	)).sub("Editor")
+	_register(Setting.new(
 		"appearance/automation_lane_height",
 		"Automation Lane Height",
 		Type.INT,

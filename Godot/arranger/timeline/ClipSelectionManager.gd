@@ -275,6 +275,7 @@ func start_box_selection(pos: Vector2, span_all_tracks: bool = false, from_ruler
 	is_additive_pending = false
 	_pending_additive_clip = null
 	is_box_selecting = true
+	Hotkeys.begin_state(self, "box_select")
 	_box_span_all_tracks = span_all_tracks or from_ruler
 	_box_from_ruler = from_ruler
 	box_start = pos
@@ -301,6 +302,7 @@ func end_box_selection() -> void:
 	var end_tick := maxi(box_start_tick, box_end_tick)
 	var snap_to_clips := _range_snaps_to_clips()
 	is_box_selecting = false
+	Hotkeys.end_state(self)
 	_box_span_all_tracks = false
 	_box_from_ruler = false
 	_preserve_range = true

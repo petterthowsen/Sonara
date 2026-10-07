@@ -13,8 +13,8 @@ Phase 2 depends on Phase 1. The help bar reads its labels, contexts and current 
 - [x?] Phase 1b: Migrate call sites to registry actions (no behavior change)
 - [x?] Phase 1c: Settings › Shortcuts page with key capture and conflict warnings
 - [x?] Phase 2a: Context resolution (hover + focus + interaction state)
-- [ ] Phase 2b: Gesture declarations and the `HelpBar` component
-- [ ] Phase 2c: Wire contexts into the editors and generic controls
+- [x?] Phase 2b: Gesture declarations and the `HelpBar` component
+- [x?] Phase 2c: Wire contexts into the editors and generic controls
 
 Run `Godot/tests/run_all.sh` after each sub-phase. Phase 1b is a pure refactor, so after it every existing shortcut must still behave exactly as before. Mark items `[x?]` when done, never `[x]`.
 

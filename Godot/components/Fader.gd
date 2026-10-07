@@ -181,6 +181,8 @@ func _get_minimum_size() -> Vector2:
 
 
 func _ready() -> void:
+	if not Engine.is_editor_hint():
+		HotkeyActions.declare_context(self, "control_knob")
 	if not mouse_entered.is_connected(_on_mouse_entered):
 		mouse_entered.connect(_on_mouse_entered)
 		mouse_exited.connect(_on_mouse_exited)

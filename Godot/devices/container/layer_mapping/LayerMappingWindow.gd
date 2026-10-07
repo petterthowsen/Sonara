@@ -62,6 +62,7 @@ static func open_for(p_layer: DeviceInstance) -> LayerMappingWindow:
 
 
 func _ready() -> void:
+	Hotkeys.set_context(self, "layer_mapping")
 	title = "Layer Mapping — %s" % layer.get_display_name()
 	size = Vector2i(640, 640)
 	min_size = Vector2i(480, 360)

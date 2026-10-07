@@ -987,6 +987,7 @@ func _on_clip_drag_begin_requested(clip_ui: TimelineClip, press_global: Vector2)
 	if not clip_ui or not clip_ui.clip_instance:
 		return
 	_drag_active = true
+	Hotkeys.begin_state(self, "clip_drag")
 	_drag_anchor_instance = clip_ui.clip_instance
 	_drag_origin_clip_ui = clip_ui
 	_drag_press_global = press_global
@@ -1138,6 +1139,7 @@ func _finish_drag() -> void:
 
 func _reset_drag_state() -> void:
 	_drag_active = false
+	Hotkeys.end_state(self)
 	_drag_anchor_instance = null
 	_drag_origin_clip_ui = null
 	_drag_initial_positions.clear()

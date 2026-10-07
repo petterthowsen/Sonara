@@ -37,6 +37,7 @@ var _pending_single: DeviceInstance = null
 var _scroll_tween: Tween = null
 
 func _ready():
+	Hotkeys.set_context(self, "device_panel")
 	# Root panels start below the color strip of the slots beside them, so the two line up.
 	devices.panel_top_inset = DeviceSlotGroup.STRIP_HEIGHT
 	devices.context_menu_requested.connect(_on_device_context_menu_requested)

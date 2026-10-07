@@ -14,6 +14,12 @@ signal bindings_changed(action_id: String)
 ## state id from HotkeyActions; *modifiers* is a mask of the held KEY_MASK_CTRL/SHIFT/ALT/META.
 signal help_context_changed(ctx: String, modifiers: int)
 
+## Emitted when the transient help-bar hint changes ("" = none, show the computed text).
+signal hint_changed(text: String)
+
+## Emitted when a help-bar condition (see set_condition) turns on or off.
+signal conditions_changed()
+
 ## Two presses of the same key within this window count as a double tap.
 const DOUBLE_TAP_MS := 400
 const SETTING_PREFIX := "shortcuts/"
@@ -38,6 +44,8 @@ var help_context := "global"
 var help_modifiers := 0
 ## Interaction state stack, oldest first: { "owner": Object, "state": String }.
 var _states: Array[Dictionary] = []
+var _hints: Array[Dictionary] = []
+var _conditions := {}
 var _held_mods := 0
 var _motion_dirty := false
 var _last_resolve_msec := 0
@@ -176,11 +184,62 @@ func find_conflicts(id: String, chord: String) -> Array[String]:
 
 
 # ---------------------------------------------------------------------------
+# CONDITIONS
+# ---------------------------------------------------------------------------
+
+## Turn a help-bar condition ("clip_selection", "note_selection") on or off. Actions that
+## declare `requires` only show in the bar while their condition is on.
+func set_condition(name: String, on: bool) -> void:
+	if _conditions.get(name, false) == on:
+		return
+	_conditions[name] = on
+	conditions_changed.emit()
+
+
+func has_condition(name: String) -> bool:
+	return _conditions.get(name, false)
+
+
+# ---------------------------------------------------------------------------
+# TRANSIENT HINT
+# ---------------------------------------------------------------------------
+
+## Show a one-off line in the help bar ("Drop to add sampler zone") until clear_hint(owner).
+## One hint per owner; the newest one is shown.
+func show_hint(text: String, owner: Object) -> void:
+	_remove_hint(owner)
+	_hints.append({"owner": owner, "text": text})
+	hint_changed.emit(current_hint())
+
+
+func clear_hint(owner: Object) -> void:
+	if _remove_hint(owner):
+		hint_changed.emit(current_hint())
+
+
+## The newest hint whose owner is still alive, or "".
+func current_hint() -> String:
+	for i in range(_hints.size() - 1, -1, -1):
+		if is_instance_valid(_hints[i].owner):
+			return _hints[i].text
+		_hints.remove_at(i)
+	return ""
+
+
+func _remove_hint(owner: Object) -> bool:
+	for i in range(_hints.size() - 1, -1, -1):
+		if _hints[i].owner == owner:
+			_hints.remove_at(i)
+			return true
+	return false
+
+
+# ---------------------------------------------------------------------------
 # HELP CONTEXT (what is the pointer over / what is going on right now)
 # ---------------------------------------------------------------------------
 
 ## Mark *control* and its descendants as belonging to context *ctx*. Call once in `_ready`.
-func set_context(control: Control, ctx: String) -> void:
+func set_context(control: Node, ctx: String) -> void:
 	if not HotkeyActions.CONTEXTS.has(ctx):
 		push_warning("Hotkeys.set_context: unknown context '%s'" % ctx)
 	control.set_meta(META_KEY, ctx)
@@ -260,10 +319,18 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_motion_dirty = true
 	if event is InputEventWithModifiers:
-		var mods: int = event.get_modifiers_mask() & MOD_MASK
+		# A modifier key's own event may report the mask from before it changed, so poll.
+		var mods := _poll_modifiers()
 		if mods != _held_mods:
 			_held_mods = mods
 			resolve_help_context()
+
+
+func _poll_modifiers() -> int:
+	return ((KEY_MASK_CTRL if Input.is_key_pressed(KEY_CTRL) else 0)
+			| (KEY_MASK_SHIFT if Input.is_key_pressed(KEY_SHIFT) else 0)
+			| (KEY_MASK_ALT if Input.is_key_pressed(KEY_ALT) else 0)
+			| (KEY_MASK_META if Input.is_key_pressed(KEY_META) else 0))
 
 
 func _process(_delta: float) -> void:

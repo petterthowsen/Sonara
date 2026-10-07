@@ -165,6 +165,8 @@ var _hovered := false
 
 
 func _ready() -> void:
+	if not Engine.is_editor_hint():
+		HotkeyActions.declare_context(self, "control_knob")
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	mouse_entered.connect(_set_hovered.bind(true))
 	mouse_exited.connect(_set_hovered.bind(false))

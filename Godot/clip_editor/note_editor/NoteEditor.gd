@@ -23,7 +23,13 @@ var interaction_mode: InteractionMode = InteractionMode.NONE
 
 
 # Drag/resize state
-var dragging_note: VisualNote = null
+var dragging_note: VisualNote = null:
+	set(value):
+		dragging_note = value
+		if value:
+			Hotkeys.begin_state(self, "note_drag")
+		else:
+			Hotkeys.end_state(self)
 var drag_start_midi_note: int = 0
 var drag_start_mouse_pos: Vector2 = Vector2.ZERO
 var drag_start_positions: Dictionary = {}  # note_id -> {start_tick, note, velocity, clip_instance}
@@ -74,6 +80,8 @@ func _ready():
 
 	# Create selection manager (grid_helper will be set via override below)
 	selection_manager = NoteSelectionManager.new(grid_helper)
+	selection_manager.selection_changed.connect(
+			func(notes): Hotkeys.set_condition("note_selection", not notes.is_empty()))
 
 	# Provide coordinate conversion callback to selection manager
 	# This allows it to work in the correct coordinate space without tight coupling

@@ -102,6 +102,7 @@ var bound_clip_instance: ClipInstance = null
 var _named_clip: Clip = null
 
 func _ready():
+	Hotkeys.set_context(self, "clip_editor")
 	grid_helper = GridHelper.new()
 	# The MIDI editor grid follows its own spacing setting, independent of the
 	# arranger's (a piano roll wants a finer grid than the timeline).

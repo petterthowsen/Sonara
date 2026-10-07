@@ -177,6 +177,16 @@ modulated (mixer parameters are out of scope for spec 018).
       `tests/test_envelope_control.gd`). The headless pointer sits at (0, 0), so place test
       controls elsewhere to avoid spurious hovers.
 
+## Help bar
+
+The bar at the bottom of the editor (`editor/HelpBar.gd`) shows the hotkeys and mouse gestures for whatever the pointer is over. It never shows a stale key: entries come from `HotkeyActions.ACTIONS` (bound chords) and `HotkeyActions.GESTURES` (read-only mouse gestures).
+
+- **Declare a context.** Call `Hotkeys.set_context(control, "ctx")` once in `_ready`. The nearest ancestor with a context wins, so hovering a knob inside the device panel shows `control_knob`, not `device_panel`. Skip it in `@tool` scripts when `Engine.is_editor_hint()`. Add new contexts to `HotkeyActions.CONTEXTS` and `CONTEXT_LABELS`, and give them rows in `GESTURES` copied from the real input code.
+- **Interaction states.** Wrap a gesture in progress with `Hotkeys.begin_state(owner, state)` / `end_state(owner)` (`clip_drag`, `clip_resize`, `box_select`, `note_drag`, `value_lane_draw`). The state wins over hover until it ends, so the bar keeps showing the drag's modifiers when the pointer leaves the panel. When a gesture has many exit paths, put the call in a property setter on the variable that marks the gesture (as `NoteEditor.dragging_note` and `TimelineClip.is_resizing` do) rather than on each exit. States whose owner was freed are dropped automatically.
+- **Transient hint.** `Hotkeys.show_hint(text, owner)` / `clear_hint(owner)` shows a one-off line such as "Drop to add sampler zone", overriding the computed text.
+- **Computer keyboard.** While `midi/virtual_keyboard/enabled` is on, `computer_keyboard` is added to every chain.
+- The bar follows the main window. A focused device window resolves to `device_panel`. `LayerMappingWindow` has its own viewport, so its `layer_mapping` context is declared but not yet reached by hover.
+
 ## Component gallery
 
 Open `Godot/components/ComponentGallery.tscn` in the editor to preview the reusable controls together. Its `PanelContainer` holds an `HFlowContainer` of component cards with fixed sample values; `ComponentGallery.gd` seeds the meters and knob modulation ranges/live markers for a useful static preview. The gallery is presentation-only and does not bind to project or engine state.

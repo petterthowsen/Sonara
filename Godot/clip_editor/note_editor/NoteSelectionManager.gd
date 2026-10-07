@@ -63,6 +63,7 @@ func start_box_selection(pos: Vector2) -> void:
 	box_selection_start = pos
 	box_selection_current = pos
 	is_box_selecting = true
+	Hotkeys.begin_state(self, "box_select")
 	_update_box_selection(pos)
 
 
@@ -97,6 +98,7 @@ func end_box_selection(notes_in_box: Array[VisualNote]) -> void:
 		return
 
 	is_box_selecting = false
+	Hotkeys.end_state(self)
 
 	# Update selection with provided notes
 	_set_selected_notes(notes_in_box)

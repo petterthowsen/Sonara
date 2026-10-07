@@ -97,6 +97,7 @@ func get_multi_edit_peers(channel: Channel) -> Array[Channel]:
 
 
 func _ready():
+	Hotkeys.set_context(self, "mixer")
 	# clear
 	_clear_all_channels()
 

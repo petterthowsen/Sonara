@@ -12,6 +12,8 @@
 #   description                           optional help text (shown in Settings)
 #   physical    bool, default false       bind the physical key (piano layout), not the logical one
 #   help        bool, default true        show in the help bar
+#   requires    String                    help-bar condition that must be set (Hotkeys.set_condition),
+#                                         e.g. "clip_selection": hidden while it is not met
 #   priority    int                       sort order in the help bar
 #   allow_echo  bool, default false       fire on key repeat (nudge actions)
 #   double_tap_of  String                 parent action id. No keys of its own: it follows the
@@ -21,7 +23,7 @@ class_name HotkeyActions
 const ACTIONS := [
 	# --- Transport ---
 	{ "id": "transport_play_toggle", "label": "Play / Stop", "group": "Transport", "context": "global",
-		"defaults": ["Space"],
+		"defaults": ["Space"], "help": false,
 		"description": "Start playback, or stop and return to the start position." },
 	{ "id": "transport_pause_here", "label": "Pause / Resume here", "group": "Transport", "context": "global",
 		"defaults": ["Shift+Space"],
@@ -29,19 +31,19 @@ const ACTIONS := [
 
 	# --- Edit ---
 	{ "id": "edit_undo", "label": "Undo", "group": "Edit", "context": "global",
-		"defaults": ["Ctrl+Z"] },
+		"defaults": ["Ctrl+Z"], "help": false },
 	{ "id": "edit_redo", "label": "Redo", "group": "Edit", "context": "global",
-		"defaults": ["Ctrl+Shift+Z", "Ctrl+Y"] },
+		"defaults": ["Ctrl+Shift+Z", "Ctrl+Y"], "help": false },
 	{ "id": "edit_copy", "label": "Copy", "group": "Edit", "context": "workspace",
-		"defaults": ["Ctrl+C", "Ctrl+Insert"] },
+		"defaults": ["Ctrl+C", "Ctrl+Insert"], "help": false },
 	{ "id": "edit_cut", "label": "Cut", "group": "Edit", "context": "workspace",
-		"defaults": ["Ctrl+X", "Shift+Delete"] },
+		"defaults": ["Ctrl+X", "Shift+Delete"], "help": false },
 	{ "id": "edit_paste", "label": "Paste", "group": "Edit", "context": "workspace",
-		"defaults": ["Ctrl+V", "Shift+Insert"] },
+		"defaults": ["Ctrl+V", "Shift+Insert"], "help": false },
 	{ "id": "edit_duplicate", "label": "Duplicate", "group": "Edit", "context": "workspace",
 		"defaults": ["Ctrl+D"] },
 	{ "id": "edit_delete", "label": "Delete", "group": "Edit", "context": "workspace",
-		"defaults": ["Delete", "Backspace"] },
+		"defaults": ["Delete", "Backspace"], "help": false },
 	{ "id": "edit_select_all", "label": "Select all", "group": "Edit", "context": "workspace",
 		"defaults": ["Ctrl+A"] },
 	{ "id": "edit_select_all_tracks", "label": "Select all (all tracks)", "group": "Edit", "context": "arranger",
@@ -50,26 +52,36 @@ const ACTIONS := [
 
 	# --- Arranger ---
 	{ "id": "arranger_move_left", "label": "Move clips left", "group": "Arranger", "context": "arranger",
+		"requires": "clip_selection",
 		"defaults": ["Left"], "allow_echo": true },
 	{ "id": "arranger_move_right", "label": "Move clips right", "group": "Arranger", "context": "arranger",
+		"requires": "clip_selection",
 		"defaults": ["Right"], "allow_echo": true },
 	{ "id": "arranger_move_track_up", "label": "Move clips to track above", "group": "Arranger", "context": "arranger",
+		"requires": "clip_selection",
 		"defaults": ["Up"], "allow_echo": true },
 	{ "id": "arranger_move_track_down", "label": "Move clips to track below", "group": "Arranger", "context": "arranger",
+		"requires": "clip_selection",
 		"defaults": ["Down"], "allow_echo": true },
 
 	# --- Clip Editor ---
 	{ "id": "notes_nudge_left", "label": "Nudge notes left", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Left"], "allow_echo": true, "description": "By the snap interval." },
 	{ "id": "notes_nudge_right", "label": "Nudge notes right", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Right"], "allow_echo": true, "description": "By the snap interval." },
 	{ "id": "notes_transpose_up", "label": "Transpose notes up", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Up"], "allow_echo": true, "description": "One semitone." },
 	{ "id": "notes_transpose_down", "label": "Transpose notes down", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Down"], "allow_echo": true, "description": "One semitone." },
 	{ "id": "notes_octave_up", "label": "Transpose notes up an octave", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Ctrl+Up"], "allow_echo": true },
 	{ "id": "notes_octave_down", "label": "Transpose notes down an octave", "group": "Clip Editor", "context": "clip_editor",
+		"requires": "note_selection",
 		"defaults": ["Ctrl+Down"], "allow_echo": true },
 	{ "id": "toggle_note_value_lanes", "label": "Toggle note value lanes", "group": "Clip Editor", "context": "clip_editor",
 		"defaults": [] },
@@ -177,6 +189,9 @@ const CONTEXTS := {
 	"sampler_zones": "device_panel",
 	"layer_mapping": "global",
 	"computer_keyboard": "global",
+	"value_lanes": "clip_editor",
+	"automation_lane": "arranger",
+	"control_knob": "global",
 	# A text control has focus: the help bar shows nothing but Escape/Enter hints.
 	"text": "global",
 }
@@ -201,10 +216,79 @@ const CONTEXT_LABELS := {
 	"sampler_zones": "Sampler zones",
 	"layer_mapping": "Layer mapping",
 	"computer_keyboard": "Computer keyboard",
+	"value_lanes": "Value lanes",
+	"automation_lane": "Automation lane",
+	"control_knob": "Control",
 	"text": "Text input",
 }
 
+## Mouse gestures and held modifiers for the help bar. Read-only: they can't be rebound.
+## `context` is a CONTEXTS or STATES id, `mods` a "+"-joined subset of Ctrl/Shift/Alt/Meta ("" =
+## none), `input` one of GESTURE_INPUTS ("" = only the modifier is held during a state).
+## Each row mirrors the code named in its comment. Where code and label disagree, the code wins.
+const GESTURE_INPUTS := ["click", "double_click", "right_click", "drag", "right_drag",
+		"middle_drag", "wheel", ""]
+
+const GESTURES := [
+	# --- Arranger: Arranger._on_scroll_gui_input, Arranger._input, Timeline/TimelineTrack/TimelineClip ---
+	{ "context": "arranger", "mods": "", "input": "wheel", "label": "scroll" },
+	{ "context": "arranger", "mods": "Shift", "input": "wheel", "label": "zoom horizontally" },
+	{ "context": "arranger", "mods": "Ctrl", "input": "wheel", "label": "track height" },
+	{ "context": "arranger", "mods": "Alt", "input": "wheel", "label": "scroll horizontally" },
+	{ "context": "arranger", "mods": "", "input": "middle_drag", "label": "pan" },
+	{ "context": "arranger", "mods": "", "input": "click", "label": "select clip / set playhead" },
+	{ "context": "arranger", "mods": "", "input": "drag", "label": "move clips" },
+	{ "context": "arranger", "mods": "", "input": "double_click", "label": "open clip / add instance" },
+	{ "context": "arranger", "mods": "", "input": "right_click", "label": "menu" },
+	{ "context": "arranger", "mods": "Shift", "input": "click", "label": "add to selection" },
+	{ "context": "arranger", "mods": "Ctrl", "input": "click", "label": "toggle selection" },
+	{ "context": "arranger", "mods": "Ctrl", "input": "drag", "label": "box select" },
+	# --- Clip move / resize in progress: Timeline._handle_clip_drag_input, TimelineClip._gui_input ---
+	{ "context": "clip_drag", "mods": "Shift", "input": "", "label": "move freely (no snap)" },
+	{ "context": "clip_resize", "mods": "Shift", "input": "", "label": "resize freely (no snap)" },
+	# --- Automation lane: AutomationLaneRow._gui_input ---
+	{ "context": "automation_lane", "mods": "", "input": "double_click", "label": "add point" },
+	{ "context": "automation_lane", "mods": "Shift", "input": "click", "label": "toggle point" },
+	{ "context": "automation_lane", "mods": "Ctrl", "input": "drag", "label": "select range" },
+	# --- Clip editor: MidiEditor._gui_input and the left/right press handlers ---
+	{ "context": "clip_editor", "mods": "", "input": "wheel", "label": "scroll" },
+	{ "context": "clip_editor", "mods": "Shift", "input": "wheel", "label": "zoom horizontally" },
+	{ "context": "clip_editor", "mods": "Ctrl", "input": "wheel", "label": "zoom vertically" },
+	{ "context": "clip_editor", "mods": "Alt", "input": "wheel", "label": "scroll horizontally" },
+	{ "context": "clip_editor", "mods": "", "input": "middle_drag", "label": "pan" },
+	{ "context": "clip_editor", "mods": "Shift", "input": "middle_drag", "label": "zoom horizontally" },
+	{ "context": "clip_editor", "mods": "", "input": "click", "label": "place / move note" },
+	{ "context": "clip_editor", "mods": "Ctrl", "input": "click", "label": "toggle note selection" },
+	{ "context": "clip_editor", "mods": "Ctrl", "input": "drag", "label": "box select / duplicate note" },
+	{ "context": "clip_editor", "mods": "", "input": "right_drag", "label": "erase" },
+	{ "context": "clip_editor", "mods": "Alt", "input": "right_click", "label": "hear chord (hold)" },
+	# --- Note drag in progress: NoteEditor._on_drag_updated ---
+	{ "context": "note_drag", "mods": "Shift", "input": "", "label": "change length" },
+	{ "context": "note_drag", "mods": "Alt", "input": "", "label": "change velocity" },
+	# --- Value lanes: ValueLaneStemArea._begin / _on_motion ---
+	{ "context": "value_lanes", "mods": "", "input": "drag", "label": "paint values" },
+	{ "context": "value_lanes", "mods": "Ctrl", "input": "drag", "label": "straight line" },
+	{ "context": "value_lanes", "mods": "Alt", "input": "drag", "label": "offset values" },
+	{ "context": "value_lanes", "mods": "Ctrl+Alt", "input": "drag", "label": "scale values" },
+	{ "context": "value_lanes", "mods": "", "input": "double_click", "label": "exact value" },
+	{ "context": "value_lane_draw", "mods": "Shift", "input": "", "label": "fine adjust" },
+	# --- Knobs and sliders: RotaryKnob/Fader/HorSlider/HDualSlider._gui_input, FineDrag ---
+	{ "context": "control_knob", "mods": "", "input": "drag", "label": "change value" },
+	{ "context": "control_knob", "mods": "Shift", "input": "drag", "label": "fine adjust" },
+	{ "context": "control_knob", "mods": "", "input": "double_click", "label": "type value" },
+	{ "context": "control_knob", "mods": "Ctrl", "input": "click", "label": "reset to default" },
+]
+
+
 static var _by_id: Dictionary = {}
+
+
+## Declare *control*'s help context from a script that can be compiled before the autoloads
+## exist (a headless test script), where the `Hotkeys` global name does not resolve.
+static func declare_context(control: Node, ctx: String) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree and tree.root.has_node("Hotkeys"):
+		tree.root.get_node("Hotkeys").set_context(control, ctx)
 
 
 ## The action definition for *id*, or {} when unknown.

@@ -26,7 +26,13 @@ var descriptor: NoteValueDescriptor = null:
 		descriptor = d
 		queue_redraw()
 
-var _gesture := Gesture.NONE
+var _gesture := Gesture.NONE:
+	set(value):
+		_gesture = value
+		if value == Gesture.NONE:
+			Hotkeys.end_state(self)
+		else:
+			Hotkeys.begin_state(self, "value_lane_draw")
 var _press_pos := Vector2.ZERO
 var _fine := FineDrag.new()
 var _last_point := Vector2.ZERO
@@ -52,6 +58,7 @@ var _playhead: TextureRect = null
 
 
 func _ready() -> void:
+	Hotkeys.set_context(self, "value_lanes")
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_tooltip = ValueTooltip.attach(self)

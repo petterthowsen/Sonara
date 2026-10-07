@@ -46,7 +46,10 @@ var drag_threshold: float = 10.0  # pixels before drag activates
 var _drag_handed_off: bool = false  # Timeline runs the move; this node only swallows the release
 
 # Resize state
-var is_resizing: bool = false
+var is_resizing: bool = false:
+	set(value):
+		is_resizing = value
+		_sync_resize_state()
 var resize_edge: String = ""  # "left" or "right"
 var resize_start_pos: Vector2 = Vector2.ZERO
 var resize_start_ticks: int = 0
@@ -73,8 +76,19 @@ var _resize_group: Array[TimelineClip] = []
 @export var name_settings: LabelSettings = null
 @export_group("")
 
+## Help-bar interaction state: resizing an edge or dragging a loop divider.
+func _sync_resize_state() -> void:
+	if is_resizing or _loop_drag_pass > 0:
+		Hotkeys.begin_state(self, "clip_resize")
+	else:
+		Hotkeys.end_state(self)
+
+
 ## Loop-point drag: `_loop_drag_pass` is the 1-based divider being dragged (0 = none).
-var _loop_drag_pass: int = 0
+var _loop_drag_pass: int = 0:
+	set(value):
+		_loop_drag_pass = value
+		_sync_resize_state()
 var _loop_drag_start_state: Array = []
 var _loop_drag_start_content: int = 0
 ## Pixels either side of a divider that grab it.

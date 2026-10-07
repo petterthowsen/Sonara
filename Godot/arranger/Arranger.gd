@@ -127,6 +127,9 @@ var grid_helper: GridHelper = GridHelper.new()  # Default grid helper instance
 signal clips_selected(clips: Array[ClipInstance], multi_track: bool)
 
 func _ready():
+	Hotkeys.set_context(self, "arranger")
+	timeline.clip_selection_manager.selection_changed.connect(
+			func(_i): Hotkeys.set_condition("clip_selection", timeline.clip_selection_manager.has_selection()))
 	# Initialize target scroll positions to current values
 	target_scroll_vertical = v_scroll.scroll_vertical
 	target_scroll_horizontal = h_scroll.scroll_horizontal

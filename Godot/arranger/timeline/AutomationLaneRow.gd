@@ -72,6 +72,7 @@ var _tooltip: ValueTooltip = null
 
 
 func _ready() -> void:
+	Hotkeys.set_context(self, "automation_lane")
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
