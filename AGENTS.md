@@ -117,7 +117,7 @@ The full OSC address reference is in `docs/subsystems/osc-protocol.md`. When you
 ## Project tracking
 
 - `STATUS.md` is a scratchpad for the current complex investigation, with "Working" and "Not Working" sections.
-- `TODO.md` is the checkbox backlog. Mark an item `[x?]` after implementing a fix, and `[x]` when verified.
+- The backlog lives in GitHub Issues (see above), not in `TODO.md`. Use `[ ]` open, `[x?]` implemented but not verified, `[x]` verified for checklist items in issue bodies, and comment on the issue after implementing a fix.
 
 ## Library docs (Context7 IDs)
 
