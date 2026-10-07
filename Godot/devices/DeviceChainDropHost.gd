@@ -139,6 +139,8 @@ func can_drop(data: Variant, position: int = -1) -> bool:
 		return DeviceDropUtil.can_drop_on_drum_pad(data, null, channel, slot_owner)
 	if slot_owner and parent == null:
 		return false
+	if data is Array:
+		return not PadLane.is_pad_lane(channel) and (DeviceDropUtil.can_drop_on_container(channel, parent, data) if parent else DeviceDropUtil.can_drop_samples_on_channel(channel, data))
 	if parent == null and PadLane.is_pad_lane(channel):
 		return PadLane.can_drop(channel, data, position)
 	if data is DeviceInstance:
@@ -175,6 +177,8 @@ func drop(data: Variant, position: int = -1) -> bool:
 	data = DeviceDrag.unwrap(data)
 	if pad_note >= 0:
 		DeviceDropUtil.drop_on_drum_pad(channel, slot_owner, pad_note, data)
+	elif data is Array:
+		DeviceDropUtil.drop_samples(channel, DeviceDropUtil.multi_audio_assets(data), position, parent)
 	elif parent == null and PadLane.is_pad_lane(channel):
 		PadLane.drop(channel, data, position)
 	elif data is DeviceInstance:

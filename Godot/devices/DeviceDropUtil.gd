@@ -112,6 +112,53 @@ static func drop_asset(
 		HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, position, parent))
 
 
+## The audio files of a multi-selection drag: two or more Assets, all audio. Empty for anything else
+## (one file, a mixed list, a device), so single-file drops keep their own rules.
+static func multi_audio_assets(data: Variant) -> Array[Asset]:
+	var out: Array[Asset] = []
+	if not data is Array or (data as Array).size() < 2:
+		return out
+	for item in data:
+		if not (item is Asset) or (item as Asset).type != Asset.TYPE.Audio:
+			return [] as Array[Asset]
+		out.append(item)
+	return out
+
+
+## Whether a Sampler for a multi-file drop can live on `channel` (an instrument track).
+static func can_drop_samples_on_channel(channel: Channel, data: Variant) -> bool:
+	return channel != null and channel.channel_type == Channel.ChannelType.INSTRUMENT and not channel.is_master \
+			and not multi_audio_assets(data).is_empty()
+
+
+## New Sampler in multisample mode with one zone per audio asset (default name order, layout from the
+## file names). The zones travel to the engine when the device is added, as for a loaded preset.
+static func sampler_for_samples(assets: Array[Asset], channel_id: int) -> DeviceInstance:
+	var sampler_device := AssetService.get_device(SAMPLER_ID)
+	if sampler_device == null:
+		push_error("[DeviceDropUtil] Failed to get sampler device")
+		return null
+	var inst := DeviceInstance.new(sampler_device, channel_id, -1)
+	var model := SamplerMultisample.new()
+	model.add_files(assets.map(func(a: Asset): return a.path))  # Unbound: model only, no OSC yet.
+	inst.multisample = model
+	model.bind(inst)
+	return inst
+
+
+## Add a multisample Sampler holding `assets` into `parent` (null = channel root). A Drum Machine
+## `parent` puts it on the next free pad.
+static func drop_samples(channel: Channel, assets: Array[Asset], position: int, parent: DeviceInstance) -> void:
+	if channel == null or assets.is_empty():
+		return
+	if _is_drum_machine(parent):
+		drop_on_drum_pad(channel, parent, parent.next_free_drum_note(), assets)
+		return
+	var inst := sampler_for_samples(assets, channel.id)
+	if inst:
+		HistoryUtil.execute(DeviceAddCommand.new(channel, inst, position, parent))
+
+
 ## New instance for a Device asset, a Preset asset (the preset's device tree, named after the
 ## preset) or an sfizz instance with the SFZ queued. Null for other assets. `project` supplies ids for
 ## a preset's return channels (default: the open project).
@@ -507,6 +554,8 @@ static func can_drop_on_container(channel: Channel, container: DeviceInstance, d
 		return false
 	if data is DeviceInstance:
 		return can_drop_instance_on_host(channel, data, container)
+	if data is Array:
+		return can_drop_samples_on_channel(channel, data)
 	if data is Asset:
 		if data.type == Asset.TYPE.Audio and _is_drum_machine(container):
 			return channel.channel_type == Channel.ChannelType.INSTRUMENT
@@ -526,7 +575,9 @@ static func drop_on_container(
 	if data is DeviceInstance:
 		drop_instance(channel, data, container, -1)
 		return
-	if data is Asset:
+	if data is Array:
+		drop_samples(channel, multi_audio_assets(data), -1, container)
+	elif data is Asset:
 		drop_asset(channel, data, -1, container)
 
 
@@ -552,6 +603,11 @@ static func can_drop_on_drum_pad(
 		if channel != null and container != null:
 			return can_drop_instance_on_host(channel, inst, container)
 		return true
+	if data is Array:
+		# Several samples: an empty pad gets a multisample Sampler, an occupied pad's Sampler takes them as zones.
+		if occupied:
+			return not audio_assets_for_sampler(find_file_loading_descendant(occupied), data).is_empty()
+		return not multi_audio_assets(data).is_empty()
 	if not data is Asset:
 		return false
 	var asset := data as Asset
@@ -583,6 +639,9 @@ static func drop_on_drum_pad(
 	if data is DeviceInstance:
 		_drop_instance_on_drum_pad(channel, container, note, data, occupied)
 		return
+	if data is Array:
+		_drop_samples_on_drum_pad(channel, container, note, data, occupied)
+		return
 	if not data is Asset:
 		return
 	var asset := data as Asset
@@ -604,6 +663,25 @@ static func drop_on_drum_pad(
 		return
 	device_instance.slot_note = note
 	HistoryUtil.execute(DeviceAddCommand.new(channel, device_instance, -1, container))
+
+
+## Several samples on a pad: a new multisample Sampler on an empty pad, else zones added to the
+## pad's own Sampler.
+static func _drop_samples_on_drum_pad(channel: Channel, container: DeviceInstance, note: int, data: Array, occupied: DeviceInstance) -> void:
+	if occupied:
+		var target := find_file_loading_descendant(occupied)
+		var samples := audio_assets_for_sampler(target, data)
+		if not samples.is_empty():
+			SamplerActions.drop_files(target, samples.map(func(a: Asset): return a.path))
+		return
+	var assets := multi_audio_assets(data)
+	if assets.is_empty():
+		return
+	var inst := sampler_for_samples(assets, channel.id)
+	if inst == null:
+		return
+	inst.slot_note = note
+	HistoryUtil.execute(DeviceAddCommand.new(channel, inst, -1, container))
 
 
 ## True when `data` drags several pads of `container` together.

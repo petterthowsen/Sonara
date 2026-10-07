@@ -163,7 +163,7 @@ func _test_multi_file_drop_onto_sampler() -> void:
 	s.channel.add_device(plain)
 	await process_frame
 	await process_frame
-	_assert(not _drop_target.resolve(_list, files, _panel(plain).header.get_global_rect().get_center()).is_valid(), "an Array doesn't drop on a device that isn't a Sampler")
+	_assert(_drop_target.resolve(_list, files, _panel(plain).header.get_global_rect().get_center()).kind != _drop_target.Kind.ONTO, "an Array doesn't drop onto a device that isn't a Sampler (it inserts a new Sampler beside it)")
 
 
 func _test_empty_list_outlines() -> void:
