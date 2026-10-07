@@ -12,8 +12,6 @@ extends RichTextLabel
 
 const SETTING_KEY := "appearance/show_help_bar"
 const KEYBOARD_SETTING_KEY := "midi/virtual_keyboard/enabled"
-const CHIP_COLOR := "gold"
-const DIM_COLOR := "#8a8a8a"
 const SEPARATOR := "  "
 const ELLIPSIS := "…"
 
@@ -42,6 +40,20 @@ static func _hk() -> Node:
 
 static func _settings() -> Node:
 	return (Engine.get_main_loop() as SceneTree).root.get_node("Settings")
+
+
+## Theme roles as bbcode colours, read per build (builds are rare, so no cache to invalidate).
+static func _chip_color() -> String:
+	return "#" + UiColors.role(&"accent_primary").to_html(false)
+
+
+static func _dim_color() -> String:
+	return "#" + UiColors.role(&"text_dim").to_html(false)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED and is_node_ready():
+		_rebuild()
 
 
 func _ready() -> void:
@@ -133,7 +145,7 @@ static func build(ctx: String, mods: int, width: float, font: Font = null, font_
 		used += w
 		parts.append(shown[i].bb)
 	if dropped:
-		parts.append("[color=%s]%s[/color]" % [DIM_COLOR, ELLIPSIS])
+		parts.append("[color=%s]%s[/color]" % [_dim_color(), ELLIPSIS])
 	for h in hints:
 		parts.append(h.bb)
 	return SEPARATOR.join(parts)
@@ -200,13 +212,13 @@ static func _entry(mask: int, chips: Array[String], label: String, suffix: Strin
 	var plain := "+".join(chips) + suffix + " " + label
 	var bb := "+".join(bb_chips)
 	if suffix != "":
-		bb += " [color=%s]%s[/color]" % [DIM_COLOR, suffix.strip_edges()]
+		bb += " [color=%s]%s[/color]" % [_dim_color(), suffix.strip_edges()]
 	bb += " " + _escape(label)
 	return {"mask": mask, "plain": plain, "bb": bb, "sort": sort}
 
 
 static func _chip(key: String) -> String:
-	return "[color=%s]%s[/color]" % [CHIP_COLOR, _escape(key)]
+	return "[color=%s]%s[/color]" % [_chip_color(), _escape(key)]
 
 
 static func _escape(s: String) -> String:

@@ -2,12 +2,15 @@
 # Channel pan strip for the four pan modes: a single slider (Balance, Mono) or a dual slider
 # (Dual, Combined), with a right-click mode menu. Reads and writes the bound Channel through its
 # setters and records undo as set_pan_state snapshots. The value readout is a plain overlay
-# drawn over the slider while it is hovered or dragged, so a long value never widens the strip.
+# drawn over the slider, on the side away from the knob, while it is hovered or dragged, so a long value never widens the strip.
 class_name PanControl extends PanelContainer
 
 @onready var _single_slider: HorSlider = $HSlider
 @onready var _dual_slider: HDualSlider = $DualPanSlider
 @onready var _mode_popup: PopupMenu = $PanModePopup
+
+## Pixels kept between the knob and the readout.
+const KNOB_CLEARANCE := 6.0
 
 var channel: Channel = null
 var _drag_start_pan := 0.0
@@ -174,12 +177,37 @@ func _refresh_value_tip() -> void:
 	set_process(should_show)
 	if should_show:
 		_value_tip.set_text(get_value_text())
-		_value_tip.place_over(get_global_rect())
+		_place_value_tip()
 
 
 ## Follow the strip while visible (scroll containers move it).
 func _process(_delta: float) -> void:
-	_value_tip.place_over(get_global_rect())
+	_place_value_tip()
+
+
+## Where the knob (the middle of the handles) sits along the strip, 0 = left edge, 1 = right edge.
+func _knob_fraction() -> float:
+	var pan := channel.pan
+	match channel.pan_mode:
+		Channel.PanMode.STEREO_DUAL:
+			pan = (channel.pan_left + channel.pan_right) * 0.5
+		Channel.PanMode.STEREO_COMBINED:
+			var handles := _combined_handles()
+			pan = (handles.x + handles.y) * 0.5
+	return clampf((pan + 1.0) * 0.5, 0.0, 1.0)
+
+
+## Center the readout in the half of the strip the knob is not in, so it never covers the knob.
+func _place_value_tip() -> void:
+	if channel == null:
+		return
+	var rect := get_global_rect()
+	var knob_x := rect.position.x + rect.size.x * _knob_fraction()
+	if knob_x > rect.get_center().x:
+		rect.end.x = knob_x - KNOB_CLEARANCE
+	else:
+		rect.position.x = knob_x + KNOB_CLEARANCE
+	_value_tip.place_over(rect)
 
 
 func _set_hovered(hovered: bool) -> void:

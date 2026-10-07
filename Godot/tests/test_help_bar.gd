@@ -53,7 +53,7 @@ func _test_no_modifiers() -> void:
 	_assert("Shift …" in text, "arranger hints at Shift")
 	_assert("Ctrl …" in text, "arranger hints at Ctrl")
 	_assert(not "zoom horizontally" in text, "Shift entries stay hidden without Shift")
-	_assert("[color=gold]Wheel[/color]" in _bar("arranger", 0), "chips use the chip colour")
+	_assert("[color=%s]Wheel[/color]" % HelpBar._chip_color() in _bar("arranger", 0), "chips use the chip colour")
 
 
 func _test_shift_held() -> void:

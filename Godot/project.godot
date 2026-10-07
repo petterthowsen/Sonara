@@ -16,10 +16,12 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="Sonara"
 config/description="Digital Audio Workstation"
+config/version="0.1"
 run/main_scene="uid://ckggccuur2ds"
 config/features=PackedStringArray("4.7")
-boot_splash/show_image=false
-config/icon="res://icon.svg"
+boot_splash/stretch_mode=0
+boot_splash/image="uid://cekx6p4gh0xlq"
+config/icon="uid://di1nxd4g8p8mj"
 
 [autoload]
 

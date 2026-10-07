@@ -745,10 +745,13 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 			device_instance.slot_note = parent.next_free_drum_note()
 	var host: Array[DeviceInstance] = parent.children if parent else devices
 	_ensure_device_name(device_instance, host)
+	var shifted: Array[DeviceInstance] = []
 	if position < 0 or position >= host.size():
 		host.append(device_instance)
 		position = host.size() - 1
 	else:
+		shifted = host.slice(position)
+		_disconnect_devices(shifted)
 		host.insert(position, device_instance)
 
 	device_instance.channel_id = id
@@ -768,6 +771,7 @@ func add_device(device_instance: DeviceInstance, position: int = -1, parent: Dev
 		_send_add_device_osc(device_instance, parent)
 		_sync_device_tree_to_engine(device_instance)
 		device_instance.connect_to_engine()
+		_reconnect_devices(shifted)
 
 	if parent:
 		parent.child_added.emit(device_instance, position)
@@ -797,6 +801,8 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 
 	var removed_device = host[position]
 	var device_id = removed_device.device.device_id
+	var shifted: Array[DeviceInstance] = host.slice(position + 1)
+	_disconnect_devices(shifted)
 
 	if _is_connected:
 		removed_device.disconnect_from_engine()
@@ -817,6 +823,8 @@ func remove_device(position: int, parent: DeviceInstance = null) -> void:
 	removed_device.set_parent_device(null)
 	removed_device.set_channel(null)
 	_reindex_host(host)
+	if _is_connected:
+		_reconnect_devices(shifted)
 
 	# Listeners get the instance id (as the signals document), not the device type id
 	if parent:
@@ -870,6 +878,19 @@ func move_device(from_position: int, to_position: int, parent: DeviceInstance = 
 		device_moved.emit(from_position, to_position)
 	logger.info("[%d] Device moved from %d to %d: %s" % [id, from_position, to_position, device_instance.device.name])
 	AuxReturnSync.on_device_moved(get_project(), self, parent)
+
+
+## Drop the OSC listeners of devices whose position is about to change. Listeners are
+## registered on position-based paths, so this must run before `_reindex_host`.
+func _disconnect_devices(insts: Array[DeviceInstance]) -> void:
+	for inst in insts:
+		inst.disconnect_from_engine()
+
+
+## Re-register listeners for devices at their new positions (after `_reindex_host`).
+func _reconnect_devices(insts: Array[DeviceInstance]) -> void:
+	for inst in insts:
+		inst.connect_to_engine()
 
 
 func _reindex_host(host: Array[DeviceInstance]) -> void:

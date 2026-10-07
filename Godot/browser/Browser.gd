@@ -313,7 +313,7 @@ func _populate_samples_tab() -> void:
 	# Add Audio section
 	if not scored_audio.is_empty():
 		var header_idx = item_list.add_item("Audio Files")
-		item_list.set_item_custom_fg_color(header_idx, Color.YELLOW)
+		item_list.set_item_custom_fg_color(header_idx, UiColors.role(&"accent_primary"))
 		item_list.set_item_disabled(header_idx, true)
 
 		for result in scored_audio:
@@ -324,7 +324,7 @@ func _populate_samples_tab() -> void:
 	# Add MIDI section
 	if not scored_midi.is_empty():
 		var header_idx = item_list.add_item("MIDI Files")
-		item_list.set_item_custom_fg_color(header_idx, Color.YELLOW)
+		item_list.set_item_custom_fg_color(header_idx, UiColors.role(&"accent_primary"))
 		item_list.set_item_disabled(header_idx, true)
 
 		for result in scored_midi:
@@ -414,7 +414,7 @@ func _populate_samples_tree() -> void:
 	if not filtered_audio.is_empty():
 		var audio_parent = tree.create_item(root)
 		audio_parent.set_text(0, "Audio Files")
-		audio_parent.set_custom_color(0, Color.YELLOW)
+		audio_parent.set_custom_color(0, UiColors.role(&"accent_primary"))
 		audio_parent.set_selectable(0, false)
 		audio_parent.set_collapsed(true)
 		_build_asset_tree(audio_parent, filtered_audio, tree)
@@ -425,7 +425,7 @@ func _populate_samples_tree() -> void:
 	if not filtered_midi.is_empty():
 		var midi_parent = tree.create_item(root)
 		midi_parent.set_text(0, "MIDI Files")
-		midi_parent.set_custom_color(0, Color.YELLOW)
+		midi_parent.set_custom_color(0, UiColors.role(&"accent_primary"))
 		midi_parent.set_selectable(0, false)
 		midi_parent.set_collapsed(true)
 		_build_asset_tree(midi_parent, filtered_midi, tree)
@@ -547,14 +547,14 @@ func _build_device_hierarchy_tree(root: TreeItem, devices: Array[Asset], tree: T
 		var category_item = tree.create_item(root)
 		category_item.set_text(0, category)
 		category_item.set_selectable(0, false)
-		category_item.set_custom_color(0, Color.YELLOW)
+		category_item.set_custom_color(0, UiColors.role(&"accent_primary"))
 		category_item.set_collapsed(true)
 
 		for vendor in hierarchy[category].keys():
 			var vendor_item = tree.create_item(category_item)
 			vendor_item.set_text(0, vendor)
 			vendor_item.set_selectable(0, false)
-			vendor_item.set_custom_color(0, Color(0.7, 0.7, 0.7))
+			vendor_item.set_custom_color(0, UiColors.role(&"text_dim"))
 			vendor_item.set_collapsed(true)
 
 			for device_name in hierarchy[category][vendor].keys():
@@ -625,7 +625,7 @@ func _build_asset_tree(parent: TreeItem, assets: Array[Asset], tree: Tree) -> vo
 				dir_item = tree.create_item(current_parent)
 				dir_item.set_text(0, part)
 				dir_item.set_selectable(0, false)
-				dir_item.set_custom_color(0, Color(0.7, 0.7, 0.7))
+				dir_item.set_custom_color(0, UiColors.role(&"text_dim"))
 				dir_item.set_collapsed(true)  # Collapse directories by default
 			
 			current_parent = dir_item
@@ -713,7 +713,7 @@ func _prune_empty_directories(parent: TreeItem) -> bool:
 	# Exception: Don't remove special category headers (colored yellow)
 	if parent.get_child_count() == 0:
 		var color = parent.get_custom_color(0)
-		if color == Color.YELLOW:
+		if color == UiColors.role(&"accent_primary"):
 			return true  # Keep category headers even if empty
 		return false  # Remove empty directories
 	
