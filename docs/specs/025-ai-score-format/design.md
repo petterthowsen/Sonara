@@ -264,6 +264,40 @@ that call them replay as before. Section tools are additive.
 | Many placements and odd instance states (trimmed, transposed, looped) make gathering wrong. | Gathering uses only `clip_to_song_ticks`, `first_run_range` and `transpose`, the same ones the arranger draws with. Looping inside the span counts as shared. Tests cover a trimmed and a transposed placement. |
 | Drum blocks can't span meter changes. | An explicit refusal with the bar to split at. Revisit if live use needs it. |
 
+## Implementation notes
+
+Decisions made during phases 1–3 that refine the design above.
+
+- **Section membership is by snapped onset.** A note belongs to the section its onset falls in
+  *as read* (`ScoreText.snap`). A downbeat played a few ticks early belongs to its own section,
+  with a slightly negative section-local start. A note a few ticks before the end belongs to the
+  next section. Off-grid notes go by their exact onset. Without this, a read and an unchanged
+  write-back dropped or doubled notes at section edges.
+- **Clip names for one bar** are `Bass 2-2`, not `Bass 2`, because `unique_clip_name` reads a lone
+  trailing number as a counter. New clips cover exactly the uncovered ticks, which equals whole
+  bars when placements are bar-aligned.
+- **Drum tracks across a meter change** are *read* as note lines with a `# Drums: …` comment.
+  Only a drum *block* on write is refused with "split the section at bar N".
+- **Off-grid fallback listing** counts positions from the section start (`1.1.000` = first
+  section bar), and says so in its comment. Those positions are not the clip-local times that
+  `write_clip` ops use.
+- **Held notes:** a non-held written note that matches an existing note running past the section
+  end sets its length to the written length, so a model can shorten a held note.
+- **Velocity:** a matched note whose written velocity differs from `round(v * 127)` gets a
+  velocity-only change. Sticky velocity can't be told apart from an explicit one, and the reader
+  prints every change, so a read written back is still a no-op.
+- **Keyswitch ownership:** a keyswitch note belongs to the section its following note starts in.
+  Its anchor is its end, or its start when a non-switch note starts at the same tick. A `ks:` on a
+  track whose instrument reports no keyswitches is an error that says so. A plain note on a
+  keyswitch key warns "write ks:Name".
+- **Shared clips:** any other placement of the clip counts, so two in-span placements of one clip
+  count as shared. Notes that would land in a loop repeat are skipped with a warning.
+- **Limits:** `write_section` takes at most 64 bars. A drum block with more steps than the section
+  is an error. `ScoreText.values()` is cached per PPQ for speed (a 16-bar × 8-track read takes about
+  18 ms).
+- **Bar-sum message** expresses the total in the bar's own beats (`adds up to 8/8 (3840 ticks); a
+  7/8 bar is 3360 ticks`), not as `4/4`.
+
 ## Open questions
 
 - [x] `3/8`-style values: no colon form. Non-unit lengths are dotted values or ties (decided 2026-10-07).

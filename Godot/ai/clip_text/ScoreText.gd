@@ -24,6 +24,8 @@ static var _re_note: RegEx
 static var _re_rest: RegEx
 static var _re_chord: RegEx
 static var _re_pitch: RegEx
+## values() per ppq: split_span runs once per note and rest, and the table never changes.
+static var _values_cache: Dictionary = {}
 
 
 # --- Bar plan ---------------------------------------------------------------------------------
@@ -63,6 +65,8 @@ static func bar_index_at(plan: Array, t: int) -> int:
 ## off-beat eighth is fine), the undotted half for dotted ones, its own length for triplets.
 static func values(ppq: int) -> Array:
 	var p := maxi(1, ppq)
+	if _values_cache.has(p):
+		return _values_cache[p]
 	var out: Array = []
 	for d in [1, 2, 4, 8, 16, 32]:
 		var straight := int(p * 4 / d)
@@ -73,6 +77,7 @@ static func values(ppq: int) -> Array:
 			var trip := straight * 2 / 3
 			out.append({"ticks": trip, "text": "/%dt" % d, "align": trip})
 	out.sort_custom(func(a, b): return int(a.ticks) > int(b.ticks))
+	_values_cache[p] = out
 	return out
 
 

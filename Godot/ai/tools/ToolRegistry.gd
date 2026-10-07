@@ -85,5 +85,7 @@ static func create_default() -> ToolRegistry:
 	reg.register(DeleteClipsTool.new())
 	reg.register(RenameClipTool.new())
 	reg.register(MakeClipUniqueTool.new())
+	reg.register(ReadSectionTool.new())
+	reg.register(WriteSectionTool.new())
 	reg.register(AnalyzeTool.new())
 	return reg

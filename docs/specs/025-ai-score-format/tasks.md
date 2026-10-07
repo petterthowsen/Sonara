@@ -60,7 +60,7 @@ Test commands (from `AGENTS.md`):
 
 ## Phase 2 — project layer
 
-- [ ] **T-005** [REQ-001, REQ-004] `ScoreSection.bar_plan` and `gather`.
+- [x] **T-005** [REQ-001, REQ-004] `ScoreSection.bar_plan` and `gather`.
   - _Files_: `Godot/ai/clip_text/ScoreSection.gd` (new), `Godot/ai/tests/test_section_tools.gd` (new)
   - _Output_: a bar plan for song bars N–M from `TimeSignatureMap.segments`. `gather(project,
     track, s, e)` returns section notes from overlapping placements using `clip_to_song_ticks`,
@@ -71,7 +71,7 @@ Test commands (from `AGENTS.md`):
     gives bar 2 = 3360 ticks.
   - _Depends on_: T-001
 
-- [ ] **T-006** [REQ-010, REQ-011, REQ-017, REQ-021] `ScoreSection.write`: diff, clip ownership,
+- [x] **T-006** [REQ-010, REQ-011, REQ-017, REQ-021] `ScoreSection.write`: diff, clip ownership,
   clip creation.
   - _Files_: `Godot/ai/clip_text/ScoreSection.gd`, `Godot/ai/tests/test_section_tools.gd`
   - _Output_: matching by pitch, onset and length within `SNAP_TICKS`, where a matched note is left
@@ -87,7 +87,7 @@ Test commands (from `AGENTS.md`):
     playable from F#0 gives a warning.
   - _Depends on_: T-005, T-003
 
-- [ ] **T-007** [REQ-018] Shared-clip detection with the `unique` and `all` options.
+- [x] **T-007** [REQ-018] Shared-clip detection with the `unique` and `all` options.
   - _Files_: `Godot/ai/clip_text/ScoreSection.gd`, `Godot/ai/tests/test_section_tools.gd`
   - _Output_: a clip counts as shared when it has placements outside the span or loops inside it.
     By default the write is refused, naming the placements (`Bass @ 9.1.000`) and both options.
@@ -95,7 +95,7 @@ Test commands (from `AGENTS.md`):
   - _Verify_: test_section_tools passes all three branches, with a clip placed at bars 1 and 9.
   - _Depends on_: T-006
 
-- [ ] **T-008** [REQ-016, REQ-004] Drum blocks through a scratch clip.
+- [x] **T-008** [REQ-016, REQ-004] Drum blocks through a scratch clip.
   - _Files_: `Godot/ai/clip_text/ScoreSection.gd`, `Godot/ai/clip_text/ScoreText.gd`,
     `Godot/ai/tests/test_section_tools.gd`
   - _Output_: a drum track is detected by `NoteMapResolver.wants_drum_view` or
@@ -109,7 +109,7 @@ Test commands (from `AGENTS.md`):
     a drum block is refused.
   - _Depends on_: T-006
 
-- [ ] **T-009** [REQ-015] Keyswitch placement on write.
+- [x] **T-009** [REQ-015] Keyswitch placement on write.
   - _Files_: `Godot/ai/clip_text/ScoreSection.gd`, `Godot/ai/tests/test_section_tools.gd`
   - _Output_: a `ks:` becomes a note on the switch key, 1/64 long and ending at the next note's
     onset, or starting at the onset when the clip has no room before it. On read, keyswitch notes
@@ -121,7 +121,7 @@ Test commands (from `AGENTS.md`):
 
 ## Phase 3 — tools
 
-- [ ] **T-010** [REQ-001, REQ-002, REQ-006, REQ-007, REQ-008] `read_section` tool.
+- [x] **T-010** [REQ-001, REQ-002, REQ-006, REQ-007, REQ-008] `read_section` tool.
   - _Files_: `Godot/ai/tools/ReadSectionTool.gd` (new), `Godot/ai/tools/ToolRegistry.gd`,
     `Godot/ai/tests/test_section_tools.gd`
   - _Output_: arguments `bars` (or the selected range), `tracks` and `key`. The default track set
@@ -131,7 +131,7 @@ Test commands (from `AGENTS.md`):
   - _Verify_: test_section_tools passes the REQ-001, 002, 006, 007 and 008 acceptance checks.
   - _Depends on_: T-008, T-009
 
-- [ ] **T-011** [REQ-009, REQ-020, REQ-021] `write_section` tool and one undo step.
+- [x] **T-011** [REQ-009, REQ-020, REQ-021] `write_section` tool and one undo step.
   - _Files_: `Godot/ai/tools/WriteSectionTool.gd` (new), `Godot/ai/tools/ToolRegistry.gd`,
     `Godot/ai/tests/test_section_tools.gd`
   - _Output_: arguments `text`, `bars` and `shared_clips`, with a header/`bars` mismatch as an
@@ -144,7 +144,7 @@ Test commands (from `AGENTS.md`):
     error on track 2 leaves track 1 unchanged.
   - _Depends on_: T-010
 
-- [ ] **T-012** [non-functional] Performance check.
+- [x] **T-012** [non-functional] Performance check.
   - _Files_: `Godot/ai/tests/test_section_tools.gd`
   - _Output_: a timed test that reads and then writes 16 bars × 8 tracks.
   - _Verify_: the test asserts each is under 50 ms headless.
