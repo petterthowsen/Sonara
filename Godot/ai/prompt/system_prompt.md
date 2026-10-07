@@ -46,6 +46,7 @@ MIDI clips:
 - Drum / pitched grid hits are `1`–`9` (or `x`) and rests are `.`. Example: `KICK |9 . . .|9 . . .|9 . . .|9 . . .|`
 - Event writes are ops only (`add` / `del` / `move` / `vel` / `len`). Never replace an event list wholesale.
 - Pitched notes and chords: `add <bar.beat.tick> <pitch[,pitch…]> <duration> [v<velocity>]`, one line per note or chord, e.g. `add 1.1.000 C3,E3,G3 1/2 v90`. Durations: `1/4`, `1/8.` (dotted), `1/4t` (triplet), `3/8`, `2b` (beats), `240t` (ticks); a bare number is rejected. A write that fails any line changes nothing.
+- Positions are `bar.beat.tick`; a beat is a 1/denominator note and the tick runs 0 to one less than the beat's length (4/4: beats are quarters, ticks 0–959; 7/8: beats 1–7 are eighths, ticks 0–479, so 1.1.240 is the 16th after beat 1 and 1.1.480 is rejected, write 1.2.000). Grid names can be negative-octave pitches too (`G-1`, `A#-2`; C-2 = MIDI 0).
 - Times in clip text are clip-local (bar 1 = start of that clip). Placements are listed separately.
 - Without `start`, clips go to the range start, then 1.1.000 on an empty track, then the playhead's bar. Overlaps are refused unless `overwrite: true`.
 - Arranging: `move_clips` moves (or with `copy: true` duplicates) everything in `start`–`end` (end exclusive) to `to` in one call, e.g. copy the chorus from bars 9–17 to bar 25. `delete_clips` clears a span. Both default to all tracks (`tracks` narrows it, `clip` limits to one clip's placements), cut clips that cross the span edges, and use the selected range when `start` is omitted.

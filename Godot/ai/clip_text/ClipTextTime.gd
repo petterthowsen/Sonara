@@ -64,25 +64,44 @@ static func format_bbt(ticks: int, ppq: int, numerator: int, denominator: int = 
 	return "%d.%d.%03d" % [bbt.bar, bbt.beat, bbt.tick]
 
 
-## Parse `5.1.000`, `5:1:000`, or a bare bar number. -1 on failure.
+## Parse `5.1.000`, `5:1:000`, or a bare bar number. -1 on failure (including a beat or
+## tick that runs past its bar/beat; see check_bbt for the message).
 static func parse_bbt(text: String, ppq: int, numerator: int, denominator: int = 4) -> int:
+	var r := check_bbt(text, ppq, numerator, denominator)
+	return int(r.ticks) if r.has("ticks") else -1
+
+
+## Like parse_bbt but explains failures: `{ticks}` or `{error}`.
+## Ticks must stay inside their beat and beats inside the bar, so `1.1.480` in 7/8
+## (a beat is an eighth, 480 ticks) is refused instead of silently becoming `1.2.000`.
+static func check_bbt(text: String, ppq: int, numerator: int, denominator: int = 4) -> Dictionary:
 	var s := text.strip_edges()
+	var bad := {"error": "bad position '%s' (bar.beat.tick, e.g. 3.2.240)" % text.strip_edges()}
 	if s.is_empty():
-		return -1
+		return bad
 	s = s.replace(":", ".")
 	var parts := s.split(".", false)
 	if parts.is_empty():
-		return -1
+		return bad
 	var bar := parts[0].to_int()
 	if bar <= 0:
-		return -1
+		return bad
 	var beat := 1
 	var tick := 0
 	if parts.size() >= 2:
 		beat = maxi(1, parts[1].to_int())
 	if parts.size() >= 3:
 		tick = maxi(0, parts[2].to_int())
-	return bbt_to_ticks(bar, beat, tick, ppq, numerator, denominator)
+	var beat_t := GridHelper.beat_ticks(ppq, denominator)
+	var sig := "%d/%d" % [numerator, denominator]
+	if beat > numerator:
+		return {"error": "`%s`: beat %d is past the end of the bar — in %s a bar has beats 1–%d (a beat is 1/%d = %d ticks); use %d.1.000 for the next bar" % [
+			text.strip_edges(), beat, sig, numerator, denominator, beat_t, bar + 1]}
+	if tick >= beat_t:
+		var carried := format_bbt(bbt_to_ticks(bar, beat, tick, ppq, numerator, denominator), ppq, numerator, denominator)
+		return {"error": "`%s`: tick %d is past the end of beat %d — in %s a beat is 1/%d = %d ticks (ticks 0–%d); use %s" % [
+			text.strip_edges(), tick, beat, sig, denominator, beat_t, beat_t - 1, carried]}
+	return {"ticks": bbt_to_ticks(bar, beat, tick, ppq, numerator, denominator)}
 
 
 ## Inclusive bar range `5-8` → `{start:5, end:8, bars:4}`. Also accepts `2` as 1–2.

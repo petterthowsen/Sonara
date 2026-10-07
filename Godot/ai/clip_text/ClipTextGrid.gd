@@ -90,6 +90,7 @@ static func parse(text: String, opts: Dictionary) -> Dictionary:
 	var order: Array[int] = []
 	var block_offset := 0
 	var saw_header := false
+	var block_labels: Dictionary = {}  # pitch -> label, for lanes seen in the current block
 	for raw in text.split("\n"):
 		var line := raw.rstrip("\r")
 		var trimmed := line.strip_edges()
@@ -98,6 +99,7 @@ static func parse(text: String, opts: Dictionary) -> Dictionary:
 		if _is_beat_header(trimmed):
 			if saw_header:
 				block_offset += _header_step_count(trimmed)
+				block_labels.clear()
 			saw_header = true
 			continue
 		if not trimmed.contains("|"):
@@ -112,6 +114,12 @@ static func parse(text: String, opts: Dictionary) -> Dictionary:
 			if order.is_empty():
 				return {"error": "Grid lane needs a name (KICK, C1, …). Example: KICK |9 . . .|9 . . .|9 . . .|9 . . .|"}
 			pitch = order[order.size() - 1]
+		var lane_label := raw.substr(0, raw.find("|")).strip_edges()
+		if not lane_label.is_empty():
+			if block_labels.has(pitch):
+				return {"error": "Lanes `%s` and `%s` both resolve to %s (%d) in the same block; each pitch may appear once per block. Give each lane a distinct pitch or name, or merge their hits into one lane." % [
+					block_labels[pitch], lane_label, ClipTextKey.pitch_name(pitch, key), pitch]}
+			block_labels[pitch] = lane_label
 		hint_oct = Midi.get_octave(pitch)
 		var cells: PackedStringArray = parsed.cells
 		if not by_pitch.has(pitch):
@@ -421,6 +429,10 @@ static func _parse_lane_label(
 	if bits.is_empty():
 		return -1
 	if drums:
+		# Whole label first: pad names like "Kick R" / "Hat Open" are multi-word.
+		var full := _norm_label(label)
+		if inv_drums.has(full):
+			return int(inv_drums[full])
 		var up := bits[0].to_upper()
 		if inv_drums.has(up):
 			return int(inv_drums[up])
@@ -451,8 +463,13 @@ static func _is_latin_letter(ch: String) -> bool:
 static func _invert_drum_names(drum_names: Dictionary) -> Dictionary:
 	var inv := {}
 	for midi in drum_names:
-		inv[str(drum_names[midi]).to_upper()] = int(midi)
+		inv[_norm_label(str(drum_names[midi]))] = int(midi)
 	return inv
+
+
+## Case-insensitive, whitespace-collapsed lane label for matching drum names.
+static func _norm_label(label: String) -> String:
+	return " ".join(label.replace("\t", " ").split(" ", false)).to_upper()
 
 
 static func _notes_from_row(pitch: int, row: PackedStringArray, step_ticks: int) -> Array:

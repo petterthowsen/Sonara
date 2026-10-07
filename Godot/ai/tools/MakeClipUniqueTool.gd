@@ -42,6 +42,9 @@ func execute(args: Dictionary) -> Dictionary:
 			return track_v
 		var track: Track = track_v
 		instances = instances.filter(func(inst): return inst.track == track)
+	var perr := position_error(project, args, "start")
+	if not perr.is_empty():
+		return perr
 	if args.has("start"):
 		var start_ticks := resolve_start_ticks(project, args)
 		instances = instances.filter(func(inst): return inst.start_ticks == start_ticks)

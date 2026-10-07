@@ -37,6 +37,10 @@ func execute(args: Dictionary) -> Dictionary:
 	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
 	var time_range: Dictionary = Sonara.editor.get_time_range() if Sonara and Sonara.editor else {}
 	var has_range: bool = time_range.get("has", false)
+	for k in ["start", "end"]:
+		var perr := position_error(project, args, k)
+		if not perr.is_empty():
+			return perr
 	var start: int
 	if args.has("start"):
 		start = resolve_start_ticks(project, args)

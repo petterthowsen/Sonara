@@ -54,15 +54,30 @@ static func looks_like_list(text: String) -> bool:
 	return false
 
 
-## Apply ops, or treat a full list as adds when the clip is empty.
+## Apply ops. A read_clip listing pasted back is refused with a pointer to the ops.
 static func apply(clip: Object, project: Object, text: String, opts: Dictionary) -> Dictionary:
-	if looks_like_list(text):
-		if clip.midi_notes.is_empty():
-			return _apply_list_as_adds(clip, project, text, opts)
-		return {
-			"error": "Event lists are not rewritten whole. Use add / del / move / vel / len (ids from the last read_clip)."
-		}
+	var lines := text.split("\n")
+	for i in range(lines.size()):
+		var err := listing_line_error(lines[i], i + 1)
+		if not err.is_empty():
+			return {"error": err, "changes": []}
 	return _apply_ops(clip, project, text, opts)
+
+
+## Error text when `raw` is a read_clip listing line (`n81  1.1.000  D2  1/8  v100`), else "".
+static func listing_line_error(raw: String, line_no: int) -> String:
+	var line := raw.strip_edges()
+	if line.is_empty() or line.begins_with("#") or line.begins_with("clip "):
+		return ""
+	var toks := _tokens(line)
+	if toks.size() < 2:
+		return ""
+	var id := toks[0].to_lower()
+	if not (id.begins_with("n") and id.substr(1).is_valid_int()) or not _looks_like_bbt(toks[1]):
+		return ""
+	var add_example := "add %s %s %s %s" % [toks[1], toks[2] if toks.size() > 2 else "C3", toks[3] if toks.size() > 3 else "1/8", toks[4] if toks.size() > 4 else "v100"]
+	return "Line %d looks like a read_clip listing line (`%s`). The listing is read-only; writes are ops: to move %s use `move %s <bar.beat.tick>`, to change its length `len %s <duration>`, to change velocity `vel %s <1-127>`, to delete `del %s`; new notes use `%s`." % [
+		line_no, line, toks[0], toks[0], toks[0], toks[0], toks[0], add_example]
 
 
 static func _apply_ops(clip: Object, project: Object, text: String, opts: Dictionary) -> Dictionary:
@@ -79,27 +94,6 @@ static func _apply_ops(clip: Object, project: Object, text: String, opts: Dictio
 		var err := _apply_one(clip, project, line, ppq, numerator, denominator, key, changes)
 		if not err.is_empty():
 			return {"error": "Line %d `%s`: %s" % [i + 1, line, err], "changes": changes}
-	return {"changes": changes}
-
-
-static func _apply_list_as_adds(clip: Object, project: Object, text: String, opts: Dictionary) -> Dictionary:
-	var ppq: int = int(opts.get("ppq", 960))
-	var numerator: int = int(opts.get("numerator", 4))
-	var denominator: int = int(opts.get("denominator", 4))
-	var key: Dictionary = opts.get("key", {})
-	var changes: Array = []
-	for raw in text.split("\n"):
-		var line := raw.strip_edges()
-		if line.is_empty() or line.begins_with("#") or line.begins_with("clip "):
-			continue
-		var toks := _tokens(line)
-		if toks.size() < 5:
-			return {"error": "Event line needs id start pitch duration velocity: %s" % line}
-		# n01  5.1.000  C2  1/4  v104
-		var add_line := "add %s %s %s %s" % [toks[1], toks[2], toks[3], toks[4]]
-		var err := _apply_one(clip, project, add_line, ppq, numerator, denominator, key, changes)
-		if not err.is_empty():
-			return {"error": err, "changes": changes}
 	return {"changes": changes}
 
 
@@ -145,9 +139,12 @@ static func _op_add(
 	# add  6.3.000  Ab2  1/8  v76   /   add  1.1.000  C3,E3,G3  1/2  v90
 	if toks.size() < 4 or toks.size() > 5:
 		return "expected %s, e.g. %s" % [ADD_SYNTAX, ADD_EXAMPLE]
-	var start := ClipTextTime.parse_bbt(toks[1], ppq, numerator, denominator)
-	if start < 0 or not _looks_like_bbt(toks[1]):
+	if not _looks_like_bbt(toks[1]):
 		return "bad start '%s' (bar.beat.tick, e.g. 3.2.240). Syntax: %s" % [toks[1], ADD_SYNTAX]
+	var start_r := ClipTextTime.check_bbt(toks[1], ppq, numerator, denominator)
+	if start_r.has("error"):
+		return "%s. Syntax: %s" % [start_r.error, ADD_SYNTAX]
+	var start := int(start_r.ticks)
 	var pitches: Array[int] = []
 	for name in toks[2].split(",", false):
 		var pitch := ClipTextKey.parse_pitch(name, key)
@@ -206,10 +203,10 @@ static func _op_move(
 			return "bad move delta '%s' (e.g. +1/16, -2b, +240t)" % dest
 		note.start_tick = maxi(0, note.start_tick + ClipTextTime.parse_signed_delta(dest, ppq))
 	else:
-		var abs_t := ClipTextTime.parse_bbt(dest, ppq, numerator, denominator)
-		if abs_t < 0:
-			return "Bad move target: %s" % dest
-		note.start_tick = abs_t
+		var dest_r := ClipTextTime.check_bbt(dest, ppq, numerator, denominator)
+		if dest_r.has("error"):
+			return "Bad move target: %s" % dest_r.error
+		note.start_tick = int(dest_r.ticks)
 	ClipTextGrid._touch_note(clip, note)
 	changes.append("move %s" % toks[1])
 	return ""

@@ -42,14 +42,17 @@ static func note_name_to_midi(note_name: String) -> int:
 	var i = 0
 	
 	# Extract note name (C, C#, Db, etc.)
+	# The octave starts at the first digit, or at a `-` that precedes one (G-1, C-2).
 	while i < note_name.length() and not note_name[i].is_valid_int():
+		if note_name[i] == "-" and i + 1 < note_name.length() and note_name[i + 1].is_valid_int():
+			break
 		note_part += note_name[i]
 		i += 1
 	
 	# Extract octave (including negative)
 	octave_part = note_name.substr(i)
 	
-	if note_part.is_empty() or octave_part.is_empty():
+	if note_part.is_empty() or not octave_part.is_valid_int():
 		return -1
 	
 	# Convert note name to semitone (0-11)

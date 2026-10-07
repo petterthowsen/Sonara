@@ -54,6 +54,9 @@ func execute(args: Dictionary) -> Dictionary:
 	if tracks_v is Dictionary:
 		return tracks_v
 	var tracks: Array[Track] = tracks_v
+	var perr := position_error(project, args, "to")
+	if not perr.is_empty():
+		return perr
 	var to := resolve_start_ticks(project, args, "to")
 	var copy := bool(args.get("copy", false))
 	if to == span.start and not copy:

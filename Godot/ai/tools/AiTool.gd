@@ -329,6 +329,20 @@ static func compact_instance(project: Project, inst: ClipInstance) -> Dictionary
 	}
 
 
+## fail(...) when args[key] is a bar.beat.tick whose beat or tick runs past its bar/beat
+## (e.g. `1.1.480` in 7/8), else {}. Bare bar numbers, ticks and a missing key pass.
+static func position_error(project: Project, args: Dictionary, key: String = "start") -> Dictionary:
+	if not args.has(key) or args[key] is float or args[key] is int:
+		return {}
+	var s := str(args[key]).strip_edges()
+	if s.is_valid_int() or not s.contains(".") and not s.contains(":"):
+		return {}
+	var r := ClipTextTime.check_bbt(s, project.ppq, project.time_numerator, project.time_denominator)
+	if r.has("error"):
+		return fail("%s: %s" % [key, r.error])
+	return {}
+
+
 ## Parse `start` as bar.beat.tick, a bar number, or ticks. Defaults to the playhead.
 static func resolve_start_ticks(project: Project, args: Dictionary, key: String = "start") -> int:
 	if not args.has(key):
@@ -357,6 +371,10 @@ static func resolve_start_ticks(project: Project, args: Dictionary, key: String 
 static func resolve_time_span(project: Project, args: Dictionary, allow_all: bool = false) -> Dictionary:
 	var tpb := ClipTextTime.ticks_per_bar(project.ppq, project.time_numerator, project.time_denominator)
 	var time_range: Dictionary = Sonara.editor.get_time_range() if Sonara and Sonara.editor else {}
+	for k in ["start", "end"]:
+		var perr := position_error(project, args, k)
+		if not perr.is_empty():
+			return perr
 	var start: int
 	if args.has("start"):
 		start = resolve_start_ticks(project, args)
@@ -424,6 +442,9 @@ static func resolve_placement(project: Project, track: Track, args: Dictionary, 
 	var start: int
 	var reason: String
 	var out_length := length
+	var perr := position_error(project, args, "start")
+	if not perr.is_empty():
+		return perr
 	if args.has("start"):
 		start = resolve_start_ticks(project, args)
 		reason = "at %s" % ClipTextTime.format_bbt(start, project.ppq, project.time_numerator, project.time_denominator)
