@@ -239,15 +239,14 @@ func _test_selection_border() -> void:
 	var pa: Control = lane.find_device_panel(a)
 	var pb: Control = lane.find_device_panel(b)
 	pa.is_selected = true
-	var style_a: StyleBoxFlat = pa.get_theme_stylebox("panel")
-	var style_b: StyleBoxFlat = pb.get_theme_stylebox("panel")
-	_assert(style_a != style_b, "each panel owns its stylebox copy")
-	_assert(style_a.border_color == pa.BORDER_COLOR_SELECTED and style_a.get_border_width(SIDE_TOP) == pa.BORDER_WIDTH_SELECTED,
-		"selecting shows the white border")
+	_assert(pa.theme_type_variation == &"DeviceCardSelected", "selecting swaps to DeviceCardSelected")
+	var theme_sel := ThemeDB.get_project_theme()
+	_assert(pa.get_theme_stylebox("panel") is StyleBoxFlat
+			and (pa.get_theme_stylebox("panel") as StyleBoxFlat).border_color == theme_sel.get_color(&"border_selected", &"Sonara"),
+		"selecting shows the neutral selection border")
+	_assert(pb.theme_type_variation == &"DeviceCard", "the untouched panel keeps DeviceCard")
 	pa.is_selected = false
-	_assert(style_a.border_color == style_b.border_color and style_a.get_border_width(SIDE_TOP) == style_b.get_border_width(SIDE_TOP),
-		"deselecting restores the plain border")
-	_assert(style_b.border_color == style_a.border_color, "the untouched panel keeps the plain border")
+	_assert(pa.theme_type_variation == &"DeviceCard", "deselecting restores DeviceCard")
 
 
 func _test_modulators_toggle_and_scroll() -> void:

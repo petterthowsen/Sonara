@@ -9,33 +9,6 @@
 [ext_resource type="Texture2D" uid="uid://dgly7yhcs5bw4" path="res://assets/icons/square-arrow-out-up-right.svg" id="7_ohvca"]
 [ext_resource type="Texture2D" uid="uid://dutkm4ba5qf0r" path="res://assets/icons/bookmark.svg" id="9_preset"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1cidk"]
-content_margin_left = 1.0
-content_margin_top = 1.0
-content_margin_right = 1.0
-content_margin_bottom = 1.0
-bg_color = Color(0.0627451, 0.0627451, 0.0627451, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.32172796, 0.321728, 0.32172775, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_khhpn"]
-content_margin_left = 2.0
-content_margin_top = 1.0
-content_margin_right = 2.0
-content_margin_bottom = 1.0
-bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_detail = 5
-
 [sub_resource type="Gradient" id="Gradient_jx3fc"]
 interpolation_mode = 2
 offsets = PackedFloat32Array(0.005, 0.40784314, 1, 1.025)
@@ -134,7 +107,7 @@ corner_detail = 5
 custom_minimum_size = Vector2(0, 350)
 offset_right = 346.0
 offset_bottom = 350.0
-theme_override_styles/panel = SubResource("StyleBoxFlat_1cidk")
+theme_type_variation = &"DeviceCard"
 script = ExtResource("1_v0u3q")
 
 [node name="VBox" type="VBoxContainer" parent="." unique_id=590796349]
@@ -144,7 +117,7 @@ theme_override_constants/separation = 0
 [node name="TopHeader" type="PanelContainer" parent="VBox" unique_id=1456966153]
 layout_mode = 2
 mouse_filter = 1
-theme_override_styles/panel = SubResource("StyleBoxFlat_khhpn")
+theme_type_variation = &"DeviceCardHeader"
 
 [node name="HBox" type="HBoxContainer" parent="VBox/TopHeader" unique_id=1851421730]
 layout_mode = 2

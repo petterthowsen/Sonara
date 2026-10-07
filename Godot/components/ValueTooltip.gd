@@ -15,25 +15,12 @@ func _init() -> void:
 	top_level = true
 	z_index = 128
 	visible = false
-	_init_panel_style()
+	theme_type_variation = &"Floating"
 	_label = Label.new()
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.add_theme_font_size_override("font_size", 12)
 	add_child(_label)
-
-
-func _init_panel_style() -> void:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.08, 0.1, 0.94)
-	style.border_color = Color(1, 1, 1, 0.12)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 6
-	style.content_margin_right = 6
-	style.content_margin_top = 2
-	style.content_margin_bottom = 2
-	add_theme_stylebox_override("panel", style)
 
 
 ## Create a hidden tooltip as an unsaved internal child of `host`.
@@ -60,7 +47,7 @@ func set_plain(plain: bool) -> void:
 		_label.add_theme_constant_override("shadow_offset_x", 1)
 		_label.add_theme_constant_override("shadow_offset_y", 1)
 	else:
-		_init_panel_style()
+		remove_theme_stylebox_override("panel")
 		for c in ["font_outline_color", "font_shadow_color"]:
 			_label.remove_theme_color_override(c)
 		for c in ["outline_size", "shadow_offset_x", "shadow_offset_y"]:

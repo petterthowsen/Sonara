@@ -3,22 +3,19 @@
 # Foldable panel showing a device instance via the universal ParameterList.
 # For use in ChannelDeviceList.
 
-class_name CompactDevicePanel extends VBoxContainer
+class_name CompactDevicePanel extends PanelContainer
 
 var logger : Log = Log.make("CompactDevicePanel")
 
 # ============================================================================
 # NODE REFS
 # ============================================================================
-@onready var parameters : PanelContainer = $Parameters
-@onready var parameters_box : VBoxContainer = $Parameters/VBox
-@onready var header : PanelContainer = $Header
-@onready var device_light: DeviceLightButton = $Header/HBoxContainer/DeviceLight
-@onready var name_label : SmartLineEdit = $Header/HBoxContainer/Name
-@onready var collapse_button : ToggleIconButton = $Header/HBoxContainer/CollapseToggle
-
-const BORDER_COLOR_SELECTED := Color("#999999")
-const BORDER_WIDTH_SELECTED := 2
+@onready var parameters : PanelContainer = %Parameters
+@onready var parameters_box : VBoxContainer = %Parameters/VBox
+@onready var header : PanelContainer = %Header
+@onready var device_light: DeviceLightButton = %DeviceLight
+@onready var name_label : SmartLineEdit = %Name
+@onready var collapse_button : ToggleIconButton = %CollapseToggle
 
 const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
 
@@ -36,15 +33,13 @@ const ICON_WINDOW := preload("res://assets/icons/square-arrow-out-up-right.svg")
 var device_instance: DeviceInstance = null
 var _param_list: ParameterList = null
 var _hovered := false
-var _header_style: StyleBoxFlat = null
-var _border_base := Color.BLACK
-var _border_base_widths: Array[int] = []
 
-## True while the ChannelDeviceList selected this panel's device (same border as DevicePanel).
+## True while the ChannelDeviceList selected this panel's device. Selection swaps the theme
+## variation (`DeviceCard` / `DeviceCardSelected`), the same border as DevicePanel.
 var is_selected := false:
 	set(selected):
 		is_selected = selected
-		_apply_selection_border()
+		theme_type_variation = &"DeviceCardSelected" if selected else &"DeviceCard"
 var _button_hovered := false
 var _name_hovered := false
 
@@ -63,13 +58,6 @@ signal select_released(panel: CompactDevicePanel)
 # ============================================================================
 
 func _ready() -> void:
-	# Own copy of the header stylebox so the selection border doesn't select every panel.
-	_header_style = (header.get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
-	_border_base = _header_style.border_color
-	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
-		_border_base_widths.append(_header_style.get_border_width(side))
-	header.add_theme_stylebox_override("panel", _header_style)
-	_apply_selection_border()
 	collapse_button.toggled.connect(_on_collapse_button_toggled)
 	collapse_button.set_state(not collapsed)
 	collapse_button.gui_input.connect(_on_collapse_button_gui_input)
@@ -105,15 +93,6 @@ func _unbind() -> void:
 	if _param_list:
 		_param_list.unbind()
 	device_instance = null
-
-
-func _apply_selection_border() -> void:
-	if _header_style == null:
-		return
-	_header_style.border_color = BORDER_COLOR_SELECTED if is_selected else _border_base
-	var sides := [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]
-	for i in sides.size():
-		_header_style.set_border_width(sides[i], BORDER_WIDTH_SELECTED if is_selected else _border_base_widths[i])
 
 
 func _gui_input(event: InputEvent) -> void:

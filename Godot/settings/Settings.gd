@@ -19,7 +19,7 @@ extends Node
 
 
 ## Setting type enum — drives which editor widget the dialog uses.
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT, COLOR }
 
 
 ## Data class describing one registered setting.
@@ -345,6 +345,7 @@ func _register_all_settings() -> void:
 		CATEGORY_APPEARANCE,
 		"Show the hotkeys and mouse gestures for whatever the pointer is over in the bar at the bottom of the window.",
 	)).sub("Editor")
+	_register_theme_settings()
 	_register(Setting.new(
 		"appearance/automation_lane_height",
 		"Automation Lane Height",
@@ -560,6 +561,45 @@ func _register_all_settings() -> void:
 	_register_shortcut_settings()
 
 
+## Prefix of the theme settings; UiTheme rebuilds when one of them changes.
+const THEME_PREFIX := "appearance/theme/"
+
+
+func _register_theme_settings() -> void:
+	var d := ThemePalette.DEFAULTS
+	var colors := [
+		["main_color", "Main Color",
+			"The color panels are derived from. Only dark colors are accepted: lighter ones are darkened to the limit, so text stays readable."],
+		["accent_primary", "Primary Accent",
+			"Highlights active state: pressed toggles, fader and slider fills, knob arcs and the first curve in device views."],
+		["accent_secondary", "Secondary Accent",
+			"The second highlight, for the second fill or curve in a control or device view."],
+		["record_color", "Record Color", "The record-arm button when on."],
+		["solo_color", "Solo Color", "The solo button when on."],
+		["mute_color", "Mute Color", "The mute button when on."],
+	]
+	for c in colors:
+		_register(Setting.new(THEME_PREFIX + c[0], c[1], Type.COLOR, d[c[0]], CATEGORY_APPEARANCE, c[2])).sub("Theme")
+	var radius := ThemePalette.RADIUS_RANGE
+	_register(Setting.new(
+		THEME_PREFIX + "corner_radius",
+		"Corner Radius",
+		Type.INT,
+		d["corner_radius"],
+		CATEGORY_APPEARANCE,
+		"Corner radius, in pixels, of panels, buttons and other generated styles.",
+	)).sub("Theme").range(radius.x, radius.y, 1)
+	var spacing := ThemePalette.SPACING_RANGE
+	_register(Setting.new(
+		THEME_PREFIX + "spacing",
+		"Spacing",
+		Type.INT,
+		d["spacing"],
+		CATEGORY_APPEARANCE,
+		"Base spacing unit, in pixels. Sections sit two units apart, cards and wells use one unit of padding.",
+	)).sub("Theme").range(spacing.x, spacing.y, 1)
+
+
 static func _is_x11() -> bool:
 	return DisplayServer.get_name() == "X11"
 
@@ -718,7 +758,20 @@ func _coerce(s: Setting, value):
 			return (value as Array).duplicate() if value is Array else s.default.duplicate()
 		Type.SHORTCUT:
 			return _coerce_shortcut(s, value)
+		Type.COLOR:
+			return _coerce_color(s, value)
 	return value
+
+
+## A COLOR value is stored as an "#rrggbb" string (the config is JSON). Accepts a Color or a
+## string Color can parse; anything else warns and gives the default.
+func _coerce_color(s: Setting, value) -> String:
+	if value is Color:
+		return "#" + (value as Color).to_html(false)
+	if value is String and Color.html_is_valid(value):
+		return "#" + Color.html(value).to_html(false)
+	push_warning("Settings: invalid colour '%s' for '%s'" % [value, s.key])
+	return s.default
 
 
 ## 0.95 when *q* is part of one of the setting's bound chords ("ctrl+d" finds Duplicate).
@@ -753,6 +806,13 @@ func reset_shortcuts() -> void:
 		var s = _settings[key]
 		if s.type == Type.SHORTCUT:
 			set_value(key, s.default.duplicate())
+
+
+## Reset only the "appearance/theme/" settings to their defaults.
+func reset_theme() -> void:
+	for key in _settings.keys():
+		if key.begins_with(THEME_PREFIX):
+			set_value(key, _settings[key].default)
 
 
 const SHORTCUT_PREFIX := "shortcuts/"

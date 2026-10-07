@@ -11,10 +11,6 @@ const ICON_VIEW_CLOSED := preload("res://assets/icons/chevron-left.svg")
 ## Widest the device name gets while view tabs share the header with it.
 const NAME_MAX_WIDTH := 140.0
 
-## Panel border, and the selection border with the look of MixerChannel and TrackItem.
-const BORDER_COLOR := Color("#525252")
-const BORDER_COLOR_SELECTED := Color("#999999")
-const BORDER_WIDTH_SELECTED := 2
 ## Seconds a pane (View, Parameters/CCs/Modulators/File) takes to slide open/closed and fade.
 const PANE_ANIM_DURATION := 0.15
 
@@ -46,18 +42,12 @@ var logger : Log = Log.make("DevicePanel")
 @onready var params_button : Button = $VBox/HBox/LeftHeader/VBox/TabButtons/Parameters
 @onready var file_button: Button = $VBox/HBox/LeftHeader/VBox/TabButtons/File
 
-## True while the DeviceLane selected this panel's device (white border, like the mixer).
+## True while the DeviceLane selected this panel's device. Selection swaps the theme variation
+## (`DeviceCard` / `DeviceCardSelected`), so every selectable item shares the neutral border.
 var is_selected := false:
 	set(selected):
 		is_selected = selected
-		if _panel_style:
-			_panel_style.border_color = BORDER_COLOR_SELECTED if selected else _border_base
-			_panel_style.set_border_width_all(BORDER_WIDTH_SELECTED if selected else _border_base_width)
-## Per-instance copy of the panel stylebox, so the selection border is this panel's alone.
-## The base border is captured from the duplicate, so deselect restores the scene's exact look.
-var _panel_style: StyleBoxFlat = null
-var _border_base := BORDER_COLOR
-var _border_base_width := 1
+		theme_type_variation = &"DeviceCardSelected" if selected else &"DeviceCard"
 ## MIDI CC tab (duplicated from Parameters at runtime until it gets its own icon)
 var cc_button: Button
 var ccs_pane: Control
@@ -129,12 +119,6 @@ signal select_released(panel: DevicePanel)
 
 func _ready() -> void:
 	custom_minimum_size.y = HEIGHT
-	# Own copy of the panel stylebox: the selection border must not select every panel.
-	# The base border comes from the duplicate, so deselect restores the scene's exact color.
-	_panel_style = (get_theme_stylebox("panel") as StyleBoxFlat).duplicate()
-	_border_base = _panel_style.border_color
-	_border_base_width = _panel_style.get_border_width(SIDE_TOP)
-	add_theme_stylebox_override("panel", _panel_style)
 	DeviceWindowManager.state_changed.connect(_on_window_state_changed)
 	_create_cc_tab()
 	_create_modulators_tab()

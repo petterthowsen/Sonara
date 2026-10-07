@@ -12,6 +12,7 @@ func run_tests() -> void:
 	sc.custom_minimum_size = Vector2(100, 100)
 	sc.size = Vector2(100, 100)
 	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)  # pinned: the theme's separation is the spacing unit
 	for i in 5:
 		var item := Control.new()
 		item.custom_minimum_size = Vector2(100, 60)

@@ -77,7 +77,7 @@ func _build_title(title: String) -> void:
 	_title_bar = PanelContainer.new()
 	_title_bar.name = "TitleBar"
 	_title_bar.custom_minimum_size = Vector2(0, TITLE_HEIGHT)
-	_title_bar.theme_type_variation = "DarkPanel"
+	_title_bar.theme_type_variation = "SectionHeader"
 	_title_bar.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	_title_bar.set_drag_forwarding(_get_drag_data, Callable(), Callable())
 	_title_label = Label.new()
@@ -110,7 +110,7 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 ## Floating title chip shown under the cursor while dragging.
 func _make_preview() -> Control:
 	var preview := PanelContainer.new()
-	preview.theme_type_variation = "DarkPanel"
+	preview.theme_type_variation = "SectionHeader"
 	preview.custom_minimum_size = Vector2(140, TITLE_HEIGHT)
 	var label := Label.new()
 	label.text = get_title()

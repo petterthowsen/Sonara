@@ -25,6 +25,8 @@ const FILL_FILLED := Color(0.17, 0.17, 0.18)
 const FILL_HIT := Color(0.34, 0.34, 0.36)
 const BORDER_IDLE := Color(0.55, 0.55, 0.57)
 const CORNER_RADIUS := 2
+## Border width of a selected pad.
+const SELECTED_BORDER_WIDTH := 2
 const COLOR_STRIP_HEIGHT := 3.0
 
 var _idle_style: StyleBoxFlat = null
@@ -44,13 +46,18 @@ var _press_modifiers: int = 0
 var co_selected: Array[DeviceInstance] = []
 
 
+## Neutral selection border colour, shared with the device cards (theme role `border_selected`).
+func _selection_color() -> Color:
+	return ThemeDB.get_project_theme().get_color(&"border_selected", &"Sonara")
+
+
 ## Apply pad chrome once the scene labels are ready.
 func _ready() -> void:
 	_idle_style = _make_style(FILL_EMPTY)
 	_filled_style = _make_style(FILL_FILLED)
-	_selected_style = _make_style(FILL_FILLED, DevicePanel.BORDER_COLOR_SELECTED, DevicePanel.BORDER_WIDTH_SELECTED)
+	_selected_style = _make_style(FILL_FILLED, _selection_color(), SELECTED_BORDER_WIDTH)
 	_hit_style = _make_style(FILL_HIT)
-	_primary_style = _make_style(FILL_FILLED, Color.WHITE, DevicePanel.BORDER_WIDTH_SELECTED)
+	_primary_style = _make_style(FILL_FILLED, Color.WHITE, SELECTED_BORDER_WIDTH)
 	# The color strip is an overlay child so it draws above the panel stylebox.
 	_strip = Control.new()
 	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE

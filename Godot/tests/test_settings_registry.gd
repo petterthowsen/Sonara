@@ -24,6 +24,9 @@ func run_tests() -> void:
 	_test_sub_categories()
 	_test_categories_hide_empty()
 	_test_coerce_clamps()
+	_test_coerce_color()
+	_test_color_row()
+	_test_theme_settings()
 	_test_type_enum_parity()
 	_test_custom_control_scene()
 	_test_search()
@@ -77,6 +80,63 @@ func _test_coerce_clamps() -> void:
 	var setting = _settings.get_setting("midi/virtual_keyboard/transpose")
 	var coerced = _settings._coerce(setting, 99)
 	_assert(coerced == 24, "transpose clamps 99 down to its max of 24")
+
+
+func _test_coerce_color() -> void:
+	var s = _settings.Setting.new("test/color", "Colour", _settings.Type.COLOR, "#2b2b2b", _settings.CATEGORY_APPEARANCE)
+	_assert(_settings._coerce(s, Color(1, 0, 0)) == "#ff0000", "a Color is stored as a hex string")
+	_assert(_settings._coerce(s, "#abc123") == "#abc123", "a valid hex string is unchanged")
+	_assert(_settings._coerce(s, "nope") == "#2b2b2b", "an invalid string falls back to the default")
+	_assert(_settings._coerce(s, 42) == "#2b2b2b", "a non-colour value falls back to the default")
+
+
+## A COLOR row builds a ColorPickerButton without alpha, reads back a hex string and applies one.
+func _test_color_row() -> void:
+	var scene: PackedScene = load("res://settings/SettingRow.tscn")
+	var row = scene.instantiate()
+	root.add_child(row)
+	var setting = _settings.Setting.new("test/color_row", "Colour", _settings.Type.COLOR, "#2b2b2b", _settings.CATEGORY_APPEARANCE)
+	row._settings = null
+	row.bind(setting)
+	var picker := row.find_children("*", "ColorPickerButton", true, false)
+	_assert(picker.size() == 1, "a COLOR row builds one ColorPickerButton")
+	if picker.size() == 1:
+		_assert(not picker[0].edit_alpha, "the colour picker has no alpha")
+		_assert(row.get_current_value() == "#2b2b2b", "the row reads back the default as hex")
+		row.set_value_no_signal("#336699")
+		_assert(row.get_current_value() == "#336699", "set_value_no_signal applies a hex string")
+	row.queue_free()
+
+
+func _test_theme_settings() -> void:
+	var keys := ["main_color", "accent_primary", "accent_secondary", "record_color", "solo_color",
+		"mute_color", "corner_radius", "spacing"]
+	for k in keys:
+		var s = _settings.get_setting("appearance/theme/" + k)
+		_assert(s != null and s.category == "Appearance" and s.sub_category == "Theme",
+			"theme setting '%s' is registered under Appearance > Theme" % k)
+	var radius = _settings.get_setting("appearance/theme/corner_radius")
+	var spacing = _settings.get_setting("appearance/theme/spacing")
+	_assert(radius.default == 2 and radius.min_val == 0 and radius.max_val == 4, "corner radius defaults to 2, range 0-4")
+	_assert(spacing.default == 2 and spacing.min_val == 1 and spacing.max_val == 4, "spacing defaults to 2, range 1-4")
+	_assert(_settings.get_setting("appearance/theme/accent_primary").default == "#624d99", "primary accent default is #624d99")
+	_assert(_settings.get_setting("appearance/theme/main_color").type == _settings.Type.COLOR, "main colour is a COLOR setting")
+
+	var before := {}
+	for k in keys:
+		before[k] = _settings.get_value("appearance/theme/" + k)
+	_settings.set_value("appearance/theme/main_color", "#101820")
+	_settings.set_value("appearance/theme/accent_primary", "#ff0000")
+	_settings.set_value("appearance/theme/corner_radius", 4)
+	_settings.set_value("appearance/theme/spacing", 3)
+	_assert(_settings.get_value("appearance/theme/spacing") == 3, "a theme setting can be changed")
+	_settings.reset_theme()
+	for k in keys:
+		_assert(_settings.get_value("appearance/theme/" + k) == _settings.get_setting("appearance/theme/" + k).default,
+			"reset_theme restores '%s'" % k)
+	# Leave the user's real config as it was.
+	for k in keys:
+		_settings.set_value("appearance/theme/" + k, before[k])
 
 
 func _test_type_enum_parity() -> void:

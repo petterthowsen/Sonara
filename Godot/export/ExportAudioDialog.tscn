@@ -19,7 +19,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_type_variation = &"PrimaryPanel"
+theme_type_variation = &"SectionPanel"
 
 [node name="Margin" type="MarginContainer" parent="Background" unique_id=1804776249]
 layout_mode = 2

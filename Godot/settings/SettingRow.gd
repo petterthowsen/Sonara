@@ -6,7 +6,7 @@
 class_name SettingRow extends VBoxContainer
 
 
-enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT }
+enum Type { BOOL, INT, FLOAT, STRING, CHOICE, CHOICE_MULTI, PATH, PATH_ARRAY, SECRET, TEXT, SHORTCUT, COLOR }
 
 signal value_changed(key: String, value)
 ## Emitted when a Path / PATH_ARRAY browse button is pressed.
@@ -80,6 +80,8 @@ func get_current_value():
 			return (_editor_widget as LineEdit).text
 		Type.PATH_ARRAY:
 			return _read_path_array()
+		Type.COLOR:
+			return "#" + (_editor_widget as ColorPickerButton).color.to_html(false)
 	return null
 
 
@@ -134,6 +136,16 @@ func _build_widget(start_value) -> void:
 			editor_container.add_child(sb)
 			_editor_widget = sb
 			sb.set_value_no_signal(float(start_value))
+
+		Type.COLOR:
+			var cpb = ColorPickerButton.new()
+			cpb.edit_alpha = false
+			cpb.custom_minimum_size = Vector2(64, 0)
+			cpb.color_changed.connect(_on_edited)
+			editor_container.add_child(cpb)
+			_editor_widget = cpb
+			var hex := str(start_value)
+			cpb.color = Color.html(hex) if Color.html_is_valid(hex) else setting.default
 
 		Type.STRING, Type.SECRET:
 			var le = LineEdit.new()
@@ -304,6 +316,8 @@ func _apply_value_to_widget(value) -> void:
 			_apply_choice_value(value)
 		Type.CHOICE_MULTI:
 			_apply_choice_multi_value(value)
+		Type.COLOR:
+			(_editor_widget as ColorPickerButton).color = Color.html(str(value)) if Color.html_is_valid(str(value)) else setting.default
 
 
 func _read_choice_multi() -> Array:

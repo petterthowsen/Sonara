@@ -300,7 +300,7 @@ layout_mode = 2
 
 [node name="BottomPanel" type="PanelContainer" parent="." unique_id=1605161909]
 layout_mode = 2
-theme_type_variation = &"PrimaryPanel"
+theme_type_variation = &"SectionPanel"
 
 [node name="Toolbar" type="HBoxContainer" parent="BottomPanel" unique_id=910585644]
 layout_mode = 2

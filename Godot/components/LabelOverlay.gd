@@ -16,12 +16,7 @@ func _init() -> void:
 	top_level = true
 	z_index = 127
 	visible = false
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.08, 0.1, 0.94)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 4
-	style.content_margin_right = 4
-	add_theme_stylebox_override("panel", style)
+	theme_type_variation = &"Floating"
 	_text_label = Label.new()
 	_text_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_text_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

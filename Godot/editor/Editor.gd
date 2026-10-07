@@ -43,7 +43,7 @@ signal view_changed(view: int)  # Editor.View
 # Top-Level Nodes in the top VBOX:
 
 # main_bar houses main menu, audio engine status, transport controls and window buttons
-@onready var main_bar: HBoxContainer = $VBoxContainer/Top
+@onready var main_bar: HBoxContainer = $VBoxContainer/Header/Top
 
 # main area has arranger/mixer/editor, and left/right side docks
 @onready var main: BoxContainer = $VBoxContainer/Middle
@@ -53,10 +53,10 @@ signal view_changed(view: int)  # Editor.View
 @onready var bottom: VBoxContainer = $VBoxContainer/Bottom
 
 # file, edit etc
-@onready var main_menu: MainMenu = $VBoxContainer/Top/MainMenu
+@onready var main_menu: MainMenu = $VBoxContainer/Header/Top/MainMenu
 
 # engine panel shows connect/disconnect button and engine status
-@onready var engine_panel: EnginePanel = $VBoxContainer/Top/EnginePanel
+@onready var engine_panel: EnginePanel = $VBoxContainer/Header/Top/EnginePanel
 
 @onready var file_dialog : FileDialog = $FileDialog
 
@@ -64,18 +64,18 @@ signal view_changed(view: int)  # Editor.View
 @onready var transfer_report_dialog: TransferReportDialog = $TransferReportDialog
 @onready var export_audio_dialog: ExportAudioDialog = $ExportAudioDialog
 
-@onready var play_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/PlayButton
-@onready var stop_button: Button = $VBoxContainer/Top/Transport/TransportControls/Buttons/StopButton
+@onready var play_button: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/PlayButton
+@onready var stop_button: Button = $VBoxContainer/Header/Top/Transport/TransportControls/Buttons/StopButton
 
-@onready var tempo_spinbox: SpinBox = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/Tempo
-@onready var time_signature_edit: LineEdit = $VBoxContainer/Top/Transport/TransportStatus/HBox/Options/TimeSignature
+@onready var tempo_spinbox: SpinBox = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/Tempo
+@onready var time_signature_edit: LineEdit = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Options/TimeSignature
 
 @onready var settings_dialog: SettingsDialog = $SettingsDialog
 
 @onready var popup_message: PopupMessage = $PopupMessage
 
-@onready var transport_position_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Position
-@onready var transport_time_label: Label = $VBoxContainer/Top/Transport/TransportStatus/HBox/Status/Time
+@onready var transport_position_label: Label = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Status/Position
+@onready var transport_time_label: Label = $VBoxContainer/Header/Top/Transport/TransportStatus/HBox/Status/Time
 
 @onready var arrange_button: Button = $VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons/Arrange
 @onready var mix_button: Button = $VBoxContainer/Bottom/InfoPanel/HBoxContainer/ViewButtons/Mix

@@ -18,7 +18,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_type_variation = &"PrimaryPanel"
+theme_type_variation = &"SectionPanel"
 
 [node name="MarginContainer" type="MarginContainer" parent="." unique_id=2100000001]
 anchors_preset = 15
@@ -51,7 +51,7 @@ size_flags_vertical = 3
 [node name="LeftPanel" type="PanelContainer" parent="MarginContainer/VBoxContainer/HSplitContainer" unique_id=2100000004]
 custom_minimum_size = Vector2(180, 0)
 layout_mode = 2
-theme_type_variation = &"DarkPanel"
+theme_type_variation = &"Well"
 
 [node name="Tree" type="Tree" parent="MarginContainer/VBoxContainer/HSplitContainer/LeftPanel" unique_id=2100000005]
 custom_minimum_size = Vector2(160, 0)
@@ -61,7 +61,7 @@ hide_root = true
 [node name="RightPanel" type="PanelContainer" parent="MarginContainer/VBoxContainer/HSplitContainer" unique_id=2100000006]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_type_variation = &"DarkPanel"
+theme_type_variation = &"Well"
 
 [node name="ScrollContainer" type="ScrollContainer" parent="MarginContainer/VBoxContainer/HSplitContainer/RightPanel" unique_id=2100000007]
 layout_mode = 2

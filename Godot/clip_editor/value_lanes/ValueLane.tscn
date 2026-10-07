@@ -17,16 +17,6 @@ corner_detail = 5
 color = Color(0.3032328, 0.30323285, 0.30323276, 1)
 thickness = 2
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4kjny"]
-content_margin_left = 6.0
-content_margin_top = 4.0
-content_margin_right = 6.0
-content_margin_bottom = 4.0
-bg_color = Color(0.16924512, 0.16924536, 0.16924521, 1)
-border_width_right = 1
-border_color = Color(0.3032328, 0.30323285, 0.30323276, 1)
-corner_detail = 5
-
 [node name="ValueLane" type="PanelContainer" unique_id=1742175985]
 anchors_preset = 15
 anchor_right = 1.0
@@ -57,8 +47,7 @@ theme_override_constants/separation = 0
 [node name="LaneHeader" type="PanelContainer" parent="VBox/Row" unique_id=817795265]
 custom_minimum_size = Vector2(60, 0)
 layout_mode = 2
-theme_type_variation = &"PrimaryPanel"
-theme_override_styles/panel = SubResource("StyleBoxFlat_4kjny")
+theme_type_variation = &"SectionHeader"
 
 [node name="VBox" type="VBoxContainer" parent="VBox/Row/LaneHeader" unique_id=1372186195]
 layout_mode = 2

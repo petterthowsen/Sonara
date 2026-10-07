@@ -87,7 +87,7 @@ func _build_title_bar() -> void:
 	title_bar = PanelContainer.new()
 	title_bar.name = "TitleBar"
 	title_bar.custom_minimum_size = Vector2(0, TITLE_HEIGHT)
-	title_bar.theme_type_variation = "DarkPanel"
+	title_bar.theme_type_variation = "SectionHeader"
 	title_bar.gui_input.connect(_on_title_bar_input)
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_PASS

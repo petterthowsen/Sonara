@@ -26,6 +26,7 @@ config/icon="res://icon.svg"
 Sonara="*res://Sonara.gd"
 AudioEngineOSC="*res://core/AudioEngineOSC.gd"
 Settings="*res://settings/Settings.gd"
+UiTheme="*res://core/theme/UiTheme.gd"
 Hotkeys="*res://input/Hotkeys.gd"
 AudioConfig="*res://data/AudioConfig.gd"
 AssetService="*res://browser/AssetService.gd"
@@ -132,4 +133,4 @@ ui_delete={
 
 [rendering]
 
-environment/defaults/default_clear_color=Color(0.09411765, 0.09803922, 0.12156863, 1)
+environment/defaults/default_clear_color=Color(0.06745098, 0.06745098, 0.06745098, 1)

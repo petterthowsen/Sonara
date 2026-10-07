@@ -14,7 +14,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-theme_type_variation = &"PrimaryPanel"
+theme_type_variation = &"SectionPanel"
 script = ExtResource("1_m4ute")
 
 [node name="Content" type="VBoxContainer" parent="." unique_id=1138733423]

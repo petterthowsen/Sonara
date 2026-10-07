@@ -8,18 +8,6 @@
 [ext_resource type="Texture2D" uid="uid://biiuelqttj3sc" path="res://assets/icons/chevron-right.svg" id="5_chevron_right"]
 [ext_resource type="Texture2D" uid="uid://drvwseugs802i" path="res://assets/icons/chevron-down.svg" id="6_chevron_down"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6d71u"]
-content_margin_left = 2.0
-content_margin_top = 0.0
-content_margin_right = 0.0
-content_margin_bottom = 0.0
-bg_color = Color(0.14509805, 0.14509805, 0.14509805, 1)
-border_width_bottom = 1
-border_color = Color(0, 0, 0, 1)
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_detail = 5
-
 [sub_resource type="Gradient" id="Gradient_jx3fc"]
 interpolation_mode = 2
 offsets = PackedFloat32Array(0.005, 0.40784314, 1, 1.025)
@@ -36,36 +24,30 @@ font_size = 12
 shadow_size = 2
 shadow_color = Color(0, 0, 0, 0.6745098)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_o5nab"]
-content_margin_left = 2.0
-content_margin_top = 4.0
-content_margin_right = 2.0
-content_margin_bottom = 4.0
-bg_color = Color(0.05, 0.05, 0.05, 0.49803922)
-draw_center = false
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-corner_detail = 5
-
-[node name="CompactDevicePanel" type="VBoxContainer" unique_id=401728466]
+[node name="CompactDevicePanel" type="PanelContainer" unique_id=401728466]
 offset_right = 136.0
 offset_bottom = 131.0
+theme_type_variation = &"DeviceCard"
 script = ExtResource("1_6d71u")
 collapsed = true
 
-[node name="Header" type="PanelContainer" parent="." unique_id=997467900]
+[node name="Body" type="VBoxContainer" parent="." unique_id=1409211003]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="Body" unique_id=997467900]
+unique_name_in_owner = true
 layout_mode = 2
 mouse_filter = 1
-theme_override_styles/panel = SubResource("StyleBoxFlat_6d71u")
+theme_type_variation = &"DeviceCardHeader"
 
-[node name="HBoxContainer" type="HBoxContainer" parent="Header" unique_id=1737818139]
+[node name="HBoxContainer" type="HBoxContainer" parent="Body/Header" unique_id=1737818139]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="DeviceLight" type="Control" parent="Header/HBoxContainer" unique_id=1505394947]
+[node name="DeviceLight" type="Control" parent="Body/Header/HBoxContainer" unique_id=1505394947]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 4
 tooltip_text = "Enabled (Audio is processed. Ctrl-click to deactivate and save RAM)"
@@ -81,21 +63,23 @@ border_thickness = 1.5
 test_active = true
 test_enabled = true
 
-[node name="Name" parent="Header/HBoxContainer" unique_id=1029266992 instance=ExtResource("3_smle")]
+[node name="Name" parent="Body/Header/HBoxContainer" unique_id=1029266992 instance=ExtResource("3_smle")]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 1
 value_type = 1
 display_format = "%s"
 
-[node name="Label" parent="Header/HBoxContainer/Name" index="0" unique_id=448001948]
+[node name="Label" parent="Body/Header/HBoxContainer/Name" index="0" unique_id=448001948]
 text = "Device Name"
 label_settings = SubResource("LabelSettings_ngmsh")
 horizontal_alignment = 0
 autowrap_mode = 1
 clip_text = true
 
-[node name="CollapseToggle" type="Button" parent="Header/HBoxContainer" unique_id=517518463]
+[node name="CollapseToggle" type="Button" parent="Body/Header/HBoxContainer" unique_id=517518463]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 size_flags_horizontal = 8
@@ -109,19 +93,19 @@ script = ExtResource("4_toggle")
 icon_default = ExtResource("5_chevron_right")
 icon_pressed = ExtResource("6_chevron_down")
 
-[node name="Parameters" type="PanelContainer" parent="." unique_id=942853079]
+[node name="Parameters" type="PanelContainer" parent="Body" unique_id=942853079]
+unique_name_in_owner = true
 layout_mode = 2
 mouse_filter = 1
-theme_override_styles/panel = SubResource("StyleBoxFlat_o5nab")
 
-[node name="VBox" type="VBoxContainer" parent="Parameters" unique_id=762984356]
+[node name="VBox" type="VBoxContainer" parent="Body/Parameters" unique_id=762984356]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="Parameter" parent="Parameters/VBox" unique_id=1356010699 instance=ExtResource("1_o5nab")]
+[node name="Parameter" parent="Body/Parameters/VBox" unique_id=1356010699 instance=ExtResource("1_o5nab")]
 layout_mode = 2
 
-[node name="Parameter2" parent="Parameters/VBox" unique_id=139159913 instance=ExtResource("1_o5nab")]
+[node name="Parameter2" parent="Body/Parameters/VBox" unique_id=139159913 instance=ExtResource("1_o5nab")]
 layout_mode = 2
 
-[editable path="Header/HBoxContainer/Name"]
+[editable path="Body/Header/HBoxContainer/Name"]
