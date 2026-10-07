@@ -25,7 +25,7 @@ static func row_fields(inst: DeviceInstance) -> Dictionary:
 	var switches: Array = []
 	for info in inst.key_labels:
 		if info.keyswitch:
-			switches.append({"key": Midi.midi_to_note_name(info.key), "name": _switch_name(info)})
+			switches.append({"key": Midi.midi_to_note_name(info.key), "name": switch_name(info)})
 	if not switches.is_empty():
 		out["keyswitches"] = switches
 	return out
@@ -48,7 +48,7 @@ static func text_for(inst: DeviceInstance, path: String) -> String:
 	var switches: Array[String] = []
 	for info in inst.key_labels:
 		if info.keyswitch:
-			switches.append("%s %s" % [Midi.midi_to_note_name(info.key), _switch_name(info)])
+			switches.append("%s %s" % [Midi.midi_to_note_name(info.key), switch_name(info)])
 	if not switches.is_empty():
 		parts.append("Keyswitches (not notes: play one briefly before a phrase to pick the articulation): %s." % ", ".join(switches))
 	return " ".join(parts)
@@ -72,9 +72,28 @@ static func watch(inst: DeviceInstance) -> Callable:
 			inst.key_labels_changed.disconnect(on_info)
 
 
-static func _switch_name(info: Dictionary) -> String:
+static func switch_name(info: Dictionary) -> String:
 	var label: String = info.label
 	return label if not label.is_empty() else "(unnamed)"
+
+
+## Keyswitches of `inst` by name for score text `ks:` tokens (spec 025):
+## {normalized name: {key, name}}.
+## Names are normalized with ScoreText.normalize_name; an unnamed switch goes by its note name.
+## The first switch wins when two share a name. Empty for anything but an SFZ with key info.
+static func keyswitch_map(inst: DeviceInstance) -> Dictionary:
+	var out := {}
+	if inst == null:
+		return out
+	for info in inst.key_labels:
+		if not info.keyswitch:
+			continue
+		var label: String = info.label
+		var name := label if not label.is_empty() else Midi.midi_to_note_name(info.key)
+		var k := ScoreText.normalize_name(name)
+		if not out.has(k):
+			out[k] = {"key": int(info.key), "name": name}
+	return out
 
 
 static func _engine_connected(inst: DeviceInstance) -> bool:

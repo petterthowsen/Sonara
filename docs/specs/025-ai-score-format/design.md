@@ -46,8 +46,9 @@ a list of section notes back as a diff against what is there. The two tools are 
 arguments, build the bar plan, call the two layers, format the short result.
 
 **Writing is a diff, not delete-and-re-add.** For each track, existing notes that start in the
-section are matched against the written notes by pitch, onset and length (within `SNAP_TICKS`, the
-same tolerance the reader rounds with). Matched notes are left untouched, unless a written velocity
+section are matched against the written notes by pitch, onset and length, comparing the written
+note with `ScoreText.snap_note` of the existing one: what the reader showed for it. A held written
+note matches on pitch and onset and keeps the existing length. Matched notes are left untouched, unless a written velocity
 differs from theirs, in which case only the velocity changes. Unmatched existing notes are removed
 and unmatched written notes are added. This gives REQ-011 (read and write back unchanged is a
 no-op) and the readable added/changed/removed summary for REQ-020. It's also why replacing is safe
@@ -120,10 +121,14 @@ vel       := "@" 1..127
    the voices and emitted as `ks:<name>` on voice 1, immediately before the first token that starts
    at or after the keyswitch note.
 4. **Durations.** The timeline of each voice (notes and the gaps between them) is cut at barlines.
-   Each piece is written as the fewest tokens from the value table (whole, half, quarter, 1/8, 1/16,
-   1/32, each straight, dotted or triplet), longest first, so that every piece starts on a multiple
-   of its own value where possible (no dotted quarter starting on an off-beat 16th). A note cut by a
-   barline becomes `X~ | X`. Gaps become rests.
+   Each piece is written with values from the table (whole to 1/32 straight, 1/2. to 1/16. dotted,
+   1/2t to 1/32t triplet), found by a longest-first search with backtracking. A value may start on
+   a multiple of its *alignment* within the bar: half its length for straight values (a quarter on
+   an off-beat eighth is fine), the undotted half for dotted ones (a dotted quarter may start on any
+   eighth, never on an off-beat 16th), and its own length for triplets. A note cut by a barline, or
+   split into several values, becomes `X/4~ X/16`. Gaps become rests. A note running past the
+   section end gets a final `~` (*held*), which the parser accepts on the last bar only. Its length
+   is cut at the section end, and the project layer keeps the real length when the note is matched.
 5. **Velocity** is printed only where it changes from the previous token on that line, as
    `round(velocity * 127)`.
 6. **Pitch spelling** uses `ClipTextKey.pitch_name(note, key)` when the call passes `key`.
@@ -132,7 +137,9 @@ vel       := "@" 1..127
 
 Parse each line into a section-note list, checking as it goes: unknown token (REQ-019), a bar that
 doesn't add up (REQ-012, the error gives both the musical value and ticks), a line with the wrong
-bar count (REQ-013), and a tie to a different pitch, or a tie with nothing after it (REQ-014). The
+bar count (REQ-013), and a tie to a different pitch, or a tie with nothing after it before the last bar (REQ-014).
+A tie out of the last bar marks the note `held`, so a read with a note running past the section
+writes back unchanged. The
 first error aborts the whole write before any model is touched. Bar sums are compared exactly in
 ticks, so triplets have to complete within the bar.
 
@@ -212,7 +219,8 @@ models and commands.
 | `Godot/ai/tools/ReadSectionTool.gd` | **New.** `read_section`. Resolves tracks, the bar range (or the selected range, as `resolve_time_span` does), the 16-bar cap (REQ-008), per-track fallback reasons, and the empty-tracks line. |
 | `Godot/ai/tools/WriteSectionTool.gd` | **New.** `write_section`. Parses, checks the constant meter for drum blocks, writes each track, records one history step, and formats the summary (REQ-020, REQ-021). |
 | `Godot/ai/tools/ToolRegistry.gd` | Register both tools in `create_default()`. |
-| `Godot/ai/tools/SfzKeyInfoUtil.gd` | Make the keyswitch name lookup public (`switch_name`, plus a `keyswitch_map(inst) -> {norm_name: key}` helper that normalizes case, `_` and spaces) so `ScoreSection` and the existing text share one spelling. |
+| `Godot/ai/tools/SfzKeyInfoUtil.gd` | Make the keyswitch name lookup public (`switch_name`, plus a `keyswitch_map(inst) -> {norm_name: {key, name}}` helper that normalizes case, `_`, `-` and
+spaces; the display name is used in "Available:" errors) so `ScoreSection` and the existing text share one spelling. |
 | `Godot/ai/prompt/system_prompt.md` | New "Composing with sections" block (REQ-022): format summary, one example, when to use the section tools and when to use `write_clip` ops. Trim the MIDI clips block so it doesn't repeat it. |
 | `docs/clip-text-format.md` | New "Score text (sections)" chapter: grammar, reading rules, the diff rule replacing "never apply a serialization as a replacement" for sections. Drop "serve one clip per call" from Limits. |
 | `Godot/ai/tests/test_score_text.gd` | **New.** Pure text-layer tests. |

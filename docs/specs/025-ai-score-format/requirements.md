@@ -116,7 +116,7 @@ IF a track's notes can't be shown as durations down to 1/32 (straight, dotted or
 moving them, THEN the read-section tool shall show that track as the existing event listing,
 with a one-line reason, and keep the other tracks in score text.
 
-- **Acceptance:** Godot test — a played-in track with notes 13 ticks off the grid comes out as
+- **Acceptance:** Godot test — a played-in track with notes 30 ticks off the grid comes out as
   an event listing with `# Keys: off-grid timing, shown as events`, and the other tracks stay in
   score text.
 

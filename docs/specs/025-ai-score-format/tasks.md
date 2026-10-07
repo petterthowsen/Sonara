@@ -12,18 +12,18 @@ Test commands (from `AGENTS.md`):
 
 ## Phase 1 — text layer (no project)
 
-- [ ] **T-001** [REQ-003, REQ-004] Bar plan and duration splitting in `ScoreText`.
+- [x] **T-001** [REQ-003, REQ-004] Bar plan and duration splitting in `ScoreText`.
   - _Files_: `Godot/ai/clip_text/ScoreText.gd` (new), `Godot/ai/tests/test_score_text.gd` (new)
   - _Output_: the bar plan type (`[{start, length, numerator, denominator}]` in section-local
     ticks), the value table (whole to 1/32, each straight, dotted or triplet), and
     `split_span(start, length, plan)`, which gives tokens cut at barlines and aligned to their own
     grid. `SNAP_TICKS = 20`.
   - _Verify_: test_score_text passes. A 4/4 + 7/8 plan has bar lengths 3840 and 3360. A gap of
-    1.1.240–1.3.000 in 7/8 splits as `/16 /8` (not `/8.`). A 1.5-bar note in 4/4 splits into a
+    1.1.240–1.3.000 in 7/8 splits as `/8.`, and no dotted quarter starts on an off-beat 16th. A 1.5-bar note in 4/4 splits into a
     tie across the barline.
   - _Depends on_: —
 
-- [ ] **T-002** [REQ-012, REQ-013, REQ-014, REQ-019] `ScoreText.parse` for note lines.
+- [x] **T-002** [REQ-012, REQ-013, REQ-014, REQ-019] `ScoreText.parse` for note lines.
   - _Files_: `Godot/ai/clip_text/ScoreText.gd`, `Godot/ai/tests/test_score_text.gd`
   - _Output_: parsing of labels (with `.N` voices, and continuation across systems), notes, chords,
     rests, `~` ties (across barlines), `@vel`, sticky duration and velocity per line (default 100,
@@ -36,7 +36,7 @@ Test commands (from `AGENTS.md`):
     is an error showing the `<pitch>/<value>` form.
   - _Depends on_: T-001
 
-- [ ] **T-003** [REQ-003, REQ-005, REQ-007] `ScoreText.serialize` for note lines.
+- [x] **T-003** [REQ-003, REQ-005, REQ-007] `ScoreText.serialize` for note lines.
   - _Files_: `Godot/ai/clip_text/ScoreText.gd`, `Godot/ai/tests/test_score_text.gd`
   - _Output_: snapping to the 1/32 straight or triplet grid within `SNAP_TICKS`, and an
     `off_grid` result for a track that can't be snapped. Chords (same onset and length), voice
@@ -44,10 +44,10 @@ Test commands (from `AGENTS.md`):
     systems of 4 bars with `# bars N-M` comments, and the `section …` header with its meters.
   - _Verify_: test_score_text passes. Serialize → parse returns the same notes for a set of 4/4,
     7/8 and mixed-meter fixtures. A sustained C3 under a moving line gives `.1` and `.2` voices. A
-    note 13 ticks off gives `off_grid`. A note 8 ticks off snaps.
+    note 30 ticks off gives `off_grid`. A note 8 ticks off snaps.
   - _Depends on_: T-002
 
-- [ ] **T-004** [REQ-006, REQ-015] Keyswitch tokens in the text layer, and a shared name lookup.
+- [x] **T-004** [REQ-006, REQ-015] Keyswitch tokens in the text layer, and a shared name lookup.
   - _Files_: `Godot/ai/clip_text/ScoreText.gd`, `Godot/ai/tools/SfzKeyInfoUtil.gd`,
     `Godot/ai/tests/test_score_text.gd`
   - _Output_: `ks:<name>` and `ks:"<name>"` parsed against a per-track `{norm_name: key}` map
