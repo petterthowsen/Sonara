@@ -11,7 +11,7 @@ order. When a phase has to deviate from this plan, update this file first.
 ## Checklist
 
 - [x] Phase 0: Baseline
-- [ ] Phase 1: Unused dependencies and dead code
+- [x] Phase 1: Unused dependencies and dead code
 - [ ] Phase 2: `main.rs` uses the library crate; logging module
 - [ ] Phase 3: Split `audio/types.rs`
 - [ ] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
@@ -608,3 +608,41 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | Phase | Date | Tests (passed / ignored) | Warnings | Notes |
 |---|---|---|---|---|
 | 0 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (duplicate run) | release 138; test build 117 | Baseline. No flaky test seen. Port 7000 held by user's engine (live checks pending). |
+| 1 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (unchanged) | lib crate 0; `engine` bin 58 (was 138) | See notes below. |
+
+Phase 1 notes:
+
+- Deviation: the `engine` bin build still reports 58 warnings. All of them are closed-world artifacts of
+  `main.rs` declaring its own copy of the modules: `pub use` re-exports and `pub` items that only the
+  library, `plugin_host` or tests use (`DeviceVariant`, `AudioPort`/`MidiPort`/`PortType`, `from_fd`,
+  test-only helpers such as `magnitude_db`, `set_sleep_timeout`, ...). Deleting those would break
+  `plugin_host` or tests, so they stay and Phase 2 (one crate, no duplicate module tree) removes the
+  warnings. The library crate itself is at 0 warnings. Phase 2 re-checks for 0 across all targets.
+- Dependencies: `byteorder`, `libloading`, `tracing-appender`, `once_cell` removed (`LazyLock` instead);
+  `tempfile` moved to `[dev-dependencies]`.
+- Deleted: in-process CLAP adapter (`adapter.rs`, `host_impl.rs`, 1,097 lines) and the
+  `downcast_mut::<ClapDeviceAdapter>` block in `forward_device_events` (own commit);
+  `dsp/simd.rs` (only `mix_blocks`, never called); `CommandResponse`; `EngineStatus::DeviceReady`
+  (never constructed; `AudioCommand::DeviceReady` stays); `AudioEngine::{new, send_command,
+  status_sender, is_playing, current_tick}` and its `status_tx` field; `Channel::{resize_buffers,
+  mix_into, process_device_chain_from, set_device_parameter, get_device_parameter}`;
+  `AudioPlayback` fields/`new`/`advance_and_get_sample`/`calculate_stretch_factor`/`lerp` (it stays as a
+  namespace for `clip_source_frame` and friends); `ProjectSettings::{ticks_per_sample, ticks_per_second,
+  seconds_per_tick, samples_to_ticks, ticks_to_samples}`; `AudioFileService::active_jobs` (worker handles
+  were only stored, never joined); `DecodedInfo::source_frames`; `PluginDescriptor::url`;
+  `PluginError::{NotFound, InitializationFailed, ActivationFailed}`; the unreachable `_ =>` arm in
+  `plugin_host::process_command`; the plugin scanner's `get_plugin`/`plugin_count`/`clear`; the `has_gui`
+  chain; phaser module-id constants; `ParamValues::{table, norm_at}`, `ModParams::{kind, norm_at}`,
+  `AdsrEnvelope::{set_decay, set_sustain, set_release, process_block}`, `Ladder/LinearSvf/PinkNoise::reset`,
+  `Waveform` enum, `SweepOsc::phase`, `EnvFollower::set_detection`, `MultibandSplitter::crossover_count`,
+  `PluginProcess/InstanceConnection::{log_path, host_key}`, `ProcessManager::shutdown_all`,
+  `load_audio_file`, `clamped_count`, `MidiEvent::{note_off, control_change}`, `PeakBuilder::frames`,
+  `WindowManager::get_window_handle`, `ChainDevice::volume`, `StreamInfo::buffer_frames`.
+- `multiband.rs` `band_*_id` and `DEFAULT_EDGES`, `AudioFileService::wait_for_events` and `read_texel` are
+  now `#[cfg(test)]` (tests use them). `PeakHeader` fields read only by tests carry `#[allow(dead_code)]`.
+- Fixed: `EventLoopBuilder::new()` (deprecated) -> `EventLoop::builder()`; `unsafe` around the safe
+  `HostSharedMemory::from_fd` in `plugin_host.rs`; `did_process` flag in `mixing.rs` (always true).
+- Flaky: `audio::ipc::process_manager::tests::stderr_tail_keeps_only_the_last_lines` failed once in the
+  `--bin engine` run and passed on rerun.
+- Docs mentioning deleted names remain in older design notes (`docs/specs/008`, `010`, `waveform-plan.md`
+  mention `calculate_stretch_factor`); they are historical and were left alone.

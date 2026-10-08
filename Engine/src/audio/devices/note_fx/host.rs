@@ -454,12 +454,6 @@ impl<P: NoteProcessor> NoteFxHost<P> {
         host
     }
 
-    /// The processor, for tests and device-specific queries.
-    #[cfg(test)]
-    pub fn processor(&self) -> &P {
-        &self.processor
-    }
-
     fn apply_slot(&mut self, slot: usize) {
         let spec = &self.table.specs[slot];
         let effective = (self.norm[slot] + self.offset[slot]).clamp(0.0, 1.0);

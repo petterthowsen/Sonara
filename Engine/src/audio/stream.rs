@@ -882,7 +882,7 @@ mod tests {
         let state = Mutex::new(state);
         let (status_tx, _status_rx) = crossbeam::channel::unbounded();
 
-        let mut run = |data: &mut [f32]| {
+        let run = |data: &mut [f32]| {
             run_live_block(
                 &state,
                 &rendering,

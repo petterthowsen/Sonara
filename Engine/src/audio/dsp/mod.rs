@@ -26,7 +26,7 @@ pub mod test_util;
 
 pub use noise::{PinkNoise, Rng, WhiteNoise};
 pub use one_shot_env::{BurstEnvelope, OneShotEnvelope};
-pub use oscillator::{fast_sin, Oscillator, Waveform};
+pub use oscillator::{fast_sin, Oscillator};
 pub use saturate::{drive, drive_params, fast_tanh, soft_clip};
 pub use smoothing::SmoothedParam;
 pub use svf::{FilterMode, Svf, SvfCoefs};

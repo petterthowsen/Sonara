@@ -87,7 +87,7 @@ Engine/src/
       utility.rs         # Utility effect (spec 017): gain, balance, width, mono/bass mono, phase invert
       sfizz_device.rs    # SFZ sampler backed by sfizz
       spectrum_analyzer.rs# Utility pass-through FFT analyzer
-      clap_host/         # CLAP subprocess adapter (in-use) + legacy in-process adapter.rs (unused)
+      clap_host/         # CLAP subprocess adapter and plugin scanner
     dsp/
       mod.rs             # Shared DSP primitives (oscillators, envelopes, SIMD helpers)
       delay_line.rs      # Ring buffer with linear/Hermite fractional reads
@@ -105,7 +105,6 @@ Engine/src/
       svf.rs             # ZDF state-variable filter, drive, resonance compensation (synth filter)
       tempo_sync.rs      # Shared sync choice list (Off, 4/1 … 1/32 straight/dotted/triplet)
       test_util.rs       # Test-only signals and measurements (tone amplitude, spectrum, T60)
-      simd.rs
     ipc/
       mod.rs             # Shared-memory IPC for out-of-process plugin hosting
       protocol.rs
@@ -178,7 +177,7 @@ Godot/              # Godot 4.7 UI App
 - During `mixing.rs` pass 1 and post-routing bus processing the engine calls `device.poll_device_data()`; any yielded `(data_type, Vec<u8>)` becomes `EngineStatus::DeviceData`, which `osc::server` forwards as `/channel/{id}/device/{pos}/data` with `[String data_type, Blob payload]`.
 
 ### DSP Utilities
-- `Engine/src/audio/dsp` centralizes real-time safe building blocks (`Oscillator`, `AdsrEnvelope`, `mix_blocks`) so instruments and effects share optimized code paths.
+- `Engine/src/audio/dsp` centralizes real-time safe building blocks (`Oscillator`, `AdsrEnvelope`) so instruments and effects share optimized code paths.
 - SIMD variants (AVX/SSE/NEON) live alongside scalar fallbacks; callers never branch on CPU features—the helpers detect support internally.
 - DSP helpers must remain allocation-free during audio callbacks; any scratch buffers are pre-sized by the caller (e.g., `PolySynthDevice` reuses `voice_buffer`/`temp_buffer`).
 

@@ -2158,11 +2158,6 @@ impl OscServer {
                 device_path.to_osc_addr(channel_id, "enabled"),
                 vec![OscType::Int(if enabled { 1 } else { 0 })],
             ),
-            EngineStatus::DeviceReady { .. } => {
-                // DeviceReady is handled internally (triggers parameter re-send)
-                // No need to send it to Godot
-                return;
-            }
             EngineStatus::DeviceLoadingStateChanged {
                 channel_id,
                 device_path,

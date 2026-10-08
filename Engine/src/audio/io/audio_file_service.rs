@@ -431,7 +431,6 @@ fn sanitize_for_filename(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// Tests that point XDG_CACHE_HOME at a temp dir hold this, since the env is process-wide.
     static CACHE_ENV_LOCK: Mutex<()> = Mutex::new(());

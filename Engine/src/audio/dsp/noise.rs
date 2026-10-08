@@ -86,13 +86,6 @@ impl PinkNoise {
         }
     }
 
-    pub fn reset(&mut self, seed: u32) {
-        self.rng = Rng::new(seed);
-        self.b0 = 0.0;
-        self.b1 = 0.0;
-        self.b2 = 0.0;
-    }
-
     #[inline]
     pub fn next(&mut self) -> f32 {
         let w = self.rng.bipolar();

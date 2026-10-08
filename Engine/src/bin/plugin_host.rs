@@ -196,8 +196,7 @@ fn main() {
     // descriptor 4.
     const DOORBELL_FD: i32 = 4;
     claim_fd(DOORBELL_FD, "Doorbell");
-    // SAFETY: same contract as the socket descriptor.
-    let doorbell = unsafe { HostSharedMemory::from_fd(DOORBELL_FD) }.unwrap_or_else(|e| {
+    let doorbell = HostSharedMemory::from_fd(DOORBELL_FD).unwrap_or_else(|e| {
         error!("Failed to map host doorbell: {}", e);
         std::process::exit(1);
     });

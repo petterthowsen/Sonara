@@ -740,19 +740,6 @@ impl Channel {
         self.buffer_right.fill(0.0);
     }
 
-    /// Resize all buffers (L/R and device buffers)
-    pub fn resize_buffers(&mut self, new_size: usize) {
-        self.buffer_left.resize(new_size, 0.0);
-        self.buffer_right.resize(new_size, 0.0);
-        // Device buffers are interleaved stereo (frames * 2)
-        self.device_input_buffer.resize(new_size * 2, 0.0);
-        self.device_output_buffer.resize(new_size * 2, 0.0);
-        for buf in &mut self.extra_out_buffers {
-            buf.resize(new_size * 2, 0.0);
-        }
-        self.mix.resize(new_size);
-    }
-
     /// Map extra device bus `bus_index` to `target_id` (0 clears). Allocates on the command thread.
     pub fn set_aux_out(&mut self, bus_index: usize, target_id: ChannelId) {
         let interleaved = self.buffer_left.len().saturating_mul(2);
@@ -817,25 +804,6 @@ impl Channel {
         meters
     }
 
-    /// Mix this channel into another channel with volume and pan applied
-    pub fn mix_into(&self, target: &mut Channel, gain_multiplier: f32) {
-        if self.mute {
-            return;
-        }
-
-        let gain = self.get_gain() * gain_multiplier;
-        let pan = self.get_pan_coefficients();
-
-        // Apply 4-coefficient stereo-to-stereo panning matrix
-        for i in 0..self.buffer_left.len().min(target.buffer_left.len()) {
-            let left_in = self.buffer_left[i] * gain;
-            let right_in = self.buffer_right[i] * gain;
-
-            target.buffer_left[i] += left_in * pan.left_to_left + right_in * pan.right_to_left;
-            target.buffer_right[i] += left_in * pan.left_to_right + right_in * pan.right_to_right;
-        }
-    }
-
     /// Turn this buffer's scheduled live MIDI into note events for the channel's devices.
     ///
     /// A note-on with velocity > 0 starts a note at `v/127`. A note-off ends it with release
@@ -878,6 +846,7 @@ impl Channel {
 
     /// Process channel audio through the top-level device chain. Sleep state changes are
     /// appended to `sleep_changes`.
+    #[cfg(test)]
     pub fn process_device_chain(&mut self, sample_count: usize) {
         let mut step = self.begin_device_chain(0, sample_count);
         while step == ChainStep::Parked {
@@ -954,14 +923,6 @@ impl Channel {
                 super::devices::DevicePath::root(src),
                 self.devices[src].is_sleeping(),
             ));
-        }
-    }
-
-    /// Process devices starting at `start` (no MIDI dispatch). Used after aux children mix in.
-    pub fn process_device_chain_from(&mut self, start: usize, sample_count: usize) {
-        let mut step = self.begin_chain_from(start, sample_count);
-        while step == ChainStep::Parked {
-            step = self.resume_device_chain(sample_count);
         }
     }
 
@@ -1140,32 +1101,6 @@ impl Channel {
         send_note_event_to(&mut self.devices, event, frame_offset);
     }
 
-    /// Set a device parameter by path.
-    pub fn set_device_parameter(
-        &mut self,
-        path: &super::devices::DevicePath,
-        param_id: u32,
-        value: f32,
-    ) -> bool {
-        if let Some(device) = super::devices::container::device_at_path_mut(&mut self.devices, path)
-        {
-            device.set_parameter(param_id, value);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get a device parameter by path.
-    pub fn get_device_parameter(
-        &self,
-        path: &super::devices::DevicePath,
-        param_id: u32,
-    ) -> Option<f32> {
-        super::devices::container::device_at_path(&self.devices, path)
-            .and_then(|device| device.get_parameter(param_id))
-    }
-
     /// Mutable device at `path`, including nested container children.
     pub fn device_at_path_mut(
         &mut self,
@@ -1212,35 +1147,12 @@ impl Track {
     }
 }
 
-/// Audio playback state for clips (handles time-stretching and fractional sample position)
+/// Namespace for the audio clip time-stretch maths (source frame and advance rate per device
+/// frame). It holds no state; playback position lives in the clip instance render loop.
 #[derive(Debug, Clone)]
-pub struct AudioPlayback {
-    pub clip_instance_id: ClipInstanceId,
-    pub current_sample_pos: f64, // Fractional sample position for smooth playback
-    pub is_playing: bool,
-}
+pub struct AudioPlayback;
 
 impl AudioPlayback {
-    pub fn new(clip_instance_id: ClipInstanceId) -> Self {
-        Self {
-            clip_instance_id,
-            current_sample_pos: 0.0,
-            is_playing: true,
-        }
-    }
-
-    /// Calculate stretch factor: how many samples to advance per sample in time
-    /// Stretch > 1.0 = speed up (pitch up)
-    /// Stretch < 1.0 = slow down (pitch down)
-    /// Example: recorded at 120 BPM, playing at 200 BPM → stretch = 200/120 = 1.667
-    pub fn calculate_stretch_factor(project_bpm: f32, recorded_bpm: f32) -> f32 {
-        if recorded_bpm <= 0.0 {
-            1.0 // Fallback to 1:1 if invalid BPM
-        } else {
-            project_bpm / recorded_bpm
-        }
-    }
-
     /// Source frame reached `offset_ticks` into an audio clip recorded at `recorded_bpm`. Depends
     /// only on the clip's own timeline, never on the project tempo.
     pub fn clip_source_frame(offset_ticks: Tick, recorded_bpm: f32, ppq: i32, clip_sr: f64) -> f64 {
@@ -1261,65 +1173,6 @@ impl AudioPlayback {
     /// centre, so position 0 reads the last frame. Positions past the end clamp to frame 0.
     pub fn reverse_source_frame(playback_pos: f64, sample_len: f64) -> f64 {
         ((sample_len - 1.0) - playback_pos).max(0.0)
-    }
-
-    /// Advance playback position by the stretch factor
-    /// Returns the interpolated sample value (handles fractional positions)
-    pub fn advance_and_get_sample(
-        &mut self,
-        audio_samples: &[f32],
-        stretch_factor: f32,
-        channels: usize,
-    ) -> Option<(f32, f32)> {
-        // Check if we've reached end of audio
-        let total_samples = (audio_samples.len() / channels) as f64;
-        if self.current_sample_pos >= total_samples {
-            self.is_playing = false;
-            return None;
-        }
-
-        // Get current and next sample indices for linear interpolation
-        let sample_idx = self.current_sample_pos.floor() as usize;
-        let next_idx = sample_idx + 1;
-        let frac = (self.current_sample_pos.fract()) as f32;
-
-        // Extract left and right samples with interpolation
-        let (left_sample, right_sample) = if channels == 1 {
-            // Mono - use same sample for both channels
-            let s0 = audio_samples.get(sample_idx).copied().unwrap_or(0.0);
-            let s1 = audio_samples.get(next_idx).copied().unwrap_or(0.0);
-            let interpolated = Self::lerp(s0, s1, frac);
-            (interpolated, interpolated)
-        } else if channels == 2 {
-            // Stereo - interleaved samples
-            let left_idx = sample_idx * 2;
-            let right_idx = sample_idx * 2 + 1;
-            let next_left_idx = next_idx * 2;
-            let next_right_idx = next_idx * 2 + 1;
-
-            let left_0 = audio_samples.get(left_idx).copied().unwrap_or(0.0);
-            let right_0 = audio_samples.get(right_idx).copied().unwrap_or(0.0);
-            let left_1 = audio_samples.get(next_left_idx).copied().unwrap_or(0.0);
-            let right_1 = audio_samples.get(next_right_idx).copied().unwrap_or(0.0);
-
-            (
-                Self::lerp(left_0, left_1, frac),
-                Self::lerp(right_0, right_1, frac),
-            )
-        } else {
-            // Fallback for other channel counts
-            (0.0, 0.0)
-        };
-
-        // Advance position by stretch factor
-        self.current_sample_pos += stretch_factor as f64;
-
-        Some((left_sample, right_sample))
-    }
-
-    /// Linear interpolation helper
-    fn lerp(a: f32, b: f32, t: f32) -> f32 {
-        a + (b - a) * t
     }
 }
 
@@ -1350,33 +1203,6 @@ impl Default for ProjectSettings {
 }
 
 impl ProjectSettings {
-    /// Calculate ticks per sample
-    pub fn ticks_per_sample(&self) -> f64 {
-        (self.tempo as f64 * self.ppq as f64) / (60.0 * self.sample_rate as f64)
-    }
-
-    /// Ticks per second at constant tempo
-    pub fn ticks_per_second(&self) -> f64 {
-        (self.tempo as f64 * self.ppq as f64) / 60.0
-    }
-
-    /// Seconds per tick at constant tempo
-    pub fn seconds_per_tick(&self) -> f64 {
-        1.0 / self.ticks_per_second()
-    }
-
-    /// Convert sample count to ticks using a given sample rate (constant tempo)
-    pub fn samples_to_ticks(&self, samples: u64, sample_rate: f32) -> i64 {
-        let seconds = samples as f64 / sample_rate as f64;
-        (seconds * self.ticks_per_second()).floor() as i64
-    }
-
-    /// Convert ticks to samples using a given sample rate (constant tempo)
-    pub fn ticks_to_samples(&self, ticks: Tick, sample_rate: f32) -> u64 {
-        let seconds = ticks as f64 * self.seconds_per_tick();
-        (seconds * sample_rate as f64).floor() as u64
-    }
-
     /// Convert tick position to bars.beats.sixteenths.ticks format
     /// Returns (bars, beats, sixteenths, ticks) - 1-indexed for bars/beats/sixteenths, 0-indexed for ticks
     pub fn tick_to_musical_time(&self, tick: Tick) -> (i64, i32, i32, i32) {

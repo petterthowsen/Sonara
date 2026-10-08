@@ -706,10 +706,6 @@ pub enum EngineStatus {
         device_path: DevicePath,
         enabled: bool,
     },
-    DeviceReady {
-        channel_id: ChannelId,
-        device_path: DevicePath,
-    },
     DeviceLoadingStateChanged {
         channel_id: ChannelId,
         device_path: DevicePath,
@@ -3497,7 +3493,7 @@ mod tests {
         use super::super::devices::sampler_zones::{ZoneRanges, ZoneSettings};
         let mut state = EngineState::default();
         let (status_tx, status_rx) = crossbeam::channel::unbounded();
-        let mut run = |state: &mut EngineState, cmd| {
+        let run = |state: &mut EngineState, cmd| {
             process_command(state, cmd, 128, &status_tx);
         };
         run(

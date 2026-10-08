@@ -45,11 +45,6 @@ impl GlobalParams {
         }
     }
 
-    /// The table these three parameters live in.
-    pub fn table() -> &'static ParamTable {
-        &GLOBAL_TABLE
-    }
-
     /// Store `norm` if `id` is a shared parameter; false otherwise.
     pub fn set(&mut self, id: ParamId, norm: f32) -> bool {
         self.values.set(id, norm).is_some()

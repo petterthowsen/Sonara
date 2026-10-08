@@ -18,27 +18,6 @@ pub fn fast_sin(phase: f64) -> f32 {
     SINE_TABLE[idx]
 }
 
-/// Waveform types supported by the oscillator
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Waveform {
-    Sine = 0,
-    Square = 1,
-    Saw = 2,
-    Triangle = 3,
-}
-
-impl From<u8> for Waveform {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Waveform::Sine,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            3 => Waveform::Triangle,
-            _ => Waveform::Sine,
-        }
-    }
-}
-
 /// Four-point polynomial band-limited step residual: the cubic B-spline smoothed step minus the
 /// ideal step, scaled to a unit-height (0..1 step -> 2.0 jump) convention so it can be added to
 /// a naive waveform per discontinuity. `t` is the phase (0..1), `dt` the phase increment.

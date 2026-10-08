@@ -16,7 +16,6 @@ pub struct PluginDescriptor {
     pub category: DeviceCategory,
     pub path: PathBuf, // Path to .clap bundle
     pub description: Option<String>,
-    pub url: Option<String>,
     /// CLAP feature tags, e.g. ["audio-effect", "reverb"]
     pub features: Vec<String>,
 }
@@ -268,11 +267,6 @@ impl PluginScanner {
             .and_then(|d| d.to_str().ok())
             .map(|s| s.to_string());
 
-        let url = descriptor
-            .url()
-            .and_then(|u| u.to_str().ok())
-            .map(|s| s.to_string());
-
         // Infer category from plugin features
         let category = Self::infer_category(&descriptor);
 
@@ -289,7 +283,6 @@ impl PluginScanner {
             category,
             path: bundle_path.to_path_buf(),
             description,
-            url,
             features,
         })
     }
