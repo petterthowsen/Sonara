@@ -49,6 +49,10 @@ func get_device(device_id: String) -> Device:
 	return _devices.get(device_id)
 
 
+## True once the engine finished advertising its built-in devices (/builtin/complete).
+var builtins_complete: bool = false
+
+
 ## All registered devices.
 func get_devices() -> Array[Device]:
 	var out: Array[Device] = []
@@ -344,6 +348,7 @@ func _on_modulator_kinds_complete(args: Array) -> void:
 func _on_builtin_complete(args: Array) -> void:
 	var count := int(args[0]) if args.size() > 0 else -1
 	logger.info("Builtin advertisement complete: %d devices" % count)
+	builtins_complete = true
 	var builtins := _devices_of_kind(true)
 	if not builtins.is_empty():
 		devices_changed.emit(builtins, [] as Array[Device])

@@ -6,7 +6,7 @@ var logger : Log = Log.make("MainMenu")
 
 enum  MENU { File, Edit, View, AI }
 
-enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
+enum FILE { New, Open, Open_Recent, Close, Sep1, Save, Save_As, Save_Startup, Clear_Startup, Sep2, Import_DAWproject, Export_DAWproject, Export_Audio, Sep3, Quit}
 enum EDIT { Undo, Redo, Sep1, Scan_Plugins, Scan_Assets, Sep2, Preferences }
 enum AI_ITEMS { Toggle_Assistant, New_Conversation, Test_Connection }
 
@@ -35,10 +35,13 @@ func _ready() -> void:
 	_recent_menu.id_pressed.connect(_on_recent_item_pressed)
 	file.add_submenu_node_item("Open Recent", _recent_menu, FILE.Open_Recent)
 	file.about_to_popup.connect(_rebuild_recent_menu)
+	file.about_to_popup.connect(_update_startup_items)
 	file.add_item("Close", FILE.Close)
 	file.add_separator("", FILE.Sep1)
 	file.add_item("Save", FILE.Save)
 	file.add_item("Save As", FILE.Save_As)
+	file.add_item("Save as Startup Project", FILE.Save_Startup)
+	file.add_item("Clear Startup Project", FILE.Clear_Startup)
 	file.add_separator("", FILE.Sep2)
 	file.add_item("Import DAWproject…", FILE.Import_DAWproject)
 	file.add_item("Export DAWproject…", FILE.Export_DAWproject)
@@ -108,6 +111,10 @@ func _on_item_pressed(item_id : int, menu_id : int):
 				_on_save_project()
 			FILE.Save_As:
 				_on_save_project_as()
+			FILE.Save_Startup:
+				await Sonara.editor.save_startup_project()
+			FILE.Clear_Startup:
+				Sonara.clear_startup_project()
 			FILE.Import_DAWproject:
 				_on_import_dawproject()
 			FILE.Export_DAWproject:
@@ -158,11 +165,20 @@ func _set_project_dependent_items_enabled(enabled: bool) -> void:
 	file.set_item_disabled(file.get_item_index(FILE.Close), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Save_As), not enabled)
+	file.set_item_disabled(file.get_item_index(FILE.Save_Startup), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Export_DAWproject), not enabled)
 	file.set_item_disabled(file.get_item_index(FILE.Export_Audio), not enabled)
 	
 	# Edit menu undo/redo depend on history, not just project open
 	_update_undo_redo_menu()
+
+
+## Save is off while the startup project is open (use Save As); Clear needs a startup project.
+func _update_startup_items() -> void:
+	var on_startup: bool = Sonara.editor.project != null and Sonara.is_startup_project_path(Sonara.editor.project_path)
+	var has_project: bool = Sonara.editor.project != null
+	file.set_item_disabled(file.get_item_index(FILE.Save), on_startup or not has_project)
+	file.set_item_disabled(file.get_item_index(FILE.Clear_Startup), not Sonara.has_startup_project())
 
 
 ## Refresh Undo/Redo labels and enabled state from CommandHistory.
@@ -284,7 +300,7 @@ func _on_close_project() -> void:
 
 func _on_save_project() -> void:
 	"""Save current project. Show save dialog if no path."""
-	if Sonara.editor.project_path.is_empty():
+	if Sonara.editor.project_path.is_empty() or Sonara.is_startup_project_path(Sonara.editor.project_path):
 		_on_save_project_as()
 	else:
 		await Sonara.editor.save_project()

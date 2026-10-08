@@ -118,6 +118,20 @@ func clear_recent_projects() -> void:
 	set_config("recent_projects", [])
 	save_config()
 
+## Fixed location of the startup project; it opens on launch instead of a blank project.
+func get_startup_project_path() -> String:
+	return get_config_dir() + "/startup.sonara"
+
+func has_startup_project() -> bool:
+	return FileAccess.file_exists(get_startup_project_path())
+
+func is_startup_project_path(path: String) -> bool:
+	return not path.is_empty() and path == get_startup_project_path()
+
+func clear_startup_project() -> void:
+	if has_startup_project():
+		DirAccess.remove_absolute(get_startup_project_path())
+
 ## Ensure the configuration directory exists
 func _ensure_config_dir() -> void:
 	var dir = DirAccess.open(OS.get_environment("HOME"))

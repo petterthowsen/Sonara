@@ -104,6 +104,8 @@ signal view_changed(view: int)  # Editor.View
 # Current project instance
 var project: Project = null
 
+const STARTUP_DEVICES_TIMEOUT_MS := 8000
+
 # Project file path
 var project_path: String = ""
 
@@ -190,11 +192,25 @@ func _ready():
 	device_lane.hide()
 	seconday_panel.hide()
 
-	# Initialize a new, blank project and open it
+	# Blank project first; a startup project replaces it once the devices it uses are known
 	var new_project = Project.new()
 	new_project.project_name = "Untitled"
 	new_project.created_date = Time.get_unix_time_from_system()
 	open_project(new_project)
+
+	if not Utils.is_test_mode() and Sonara.has_startup_project():
+		_load_startup_project()
+
+
+## Built-in devices arrive from the engine after launch and project loading drops devices it
+## doesn't know yet, so wait for them (bounded, in case the engine isn't running).
+func _load_startup_project() -> void:
+	var registry: DeviceRegistry = AssetService.device_registry
+	var deadline := Time.get_ticks_msec() + STARTUP_DEVICES_TIMEOUT_MS
+	while not registry.builtins_complete and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	if project_path.is_empty() and not is_modified and Sonara.has_startup_project():
+		load_project(Sonara.get_startup_project_path())
 
 
 ## Show an error/message in the shared PopupMessage window. `actions` entries are
@@ -451,14 +467,24 @@ func close_project() -> void:
 	project_closed.emit()
 	logger.info("[Editor] Project closed")
 
-func save_project(path: String = "") -> bool:
-	"""Save the current project to a file."""
+## Stores the open project as the startup project and keeps it open from there.
+func save_startup_project() -> bool:
+	Sonara._ensure_config_dir()
+	return await save_project(Sonara.get_startup_project_path(), true)
+
+func save_project(path: String = "", allow_startup: bool = false) -> bool:
+	"""Save the current project to a file. The startup project is only written by save_startup_project()."""
 	if project == null:
 		push_error("[Editor] Cannot save: No project open")
 		return false
 	
 	# Use provided path or existing path
 	var save_path = path if path != "" else project_path
+	
+	if Sonara.is_startup_project_path(save_path) and not allow_startup:
+		show_error("Startup project is protected",
+			"This is the startup project and can't be overwritten. Use Save As to save a copy, or Save as Startup Project to replace it.")
+		return false
 	
 	if save_path == "":
 		push_error("[Editor] Cannot save: No file path specified")
@@ -489,7 +515,8 @@ func save_project(path: String = "") -> bool:
 	is_modified = false
 	history.mark_save_point()
 
-	Sonara.add_recent_project(save_path)
+	if not Sonara.is_startup_project_path(save_path):
+		Sonara.add_recent_project(save_path)
 	project_saved.emit(save_path)
 	logger.info("[Editor] Project saved: ", save_path)
 	return true
@@ -515,7 +542,8 @@ func load_project(path: String) -> bool:
 		return false
 	
 	open_project(loaded_project, path)
-	Sonara.add_recent_project(path)
+	if not Sonara.is_startup_project_path(path):
+		Sonara.add_recent_project(path)
 	logger.info("[Editor] Project loaded: ", path)
 	return true
 
