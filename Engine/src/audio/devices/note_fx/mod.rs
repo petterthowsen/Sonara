@@ -17,9 +17,13 @@ pub mod clock;
 mod conformance;
 pub mod host;
 pub mod ids;
+pub mod latch;
+pub mod note_echo;
 pub mod note_filter;
+pub mod note_length;
 pub mod routing;
 pub mod scale;
+pub mod step_sequencer;
 pub mod transpose;
 pub mod velocity;
 

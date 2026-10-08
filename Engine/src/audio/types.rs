@@ -1603,6 +1603,47 @@ mod tests {
     }
 
     #[test]
+    fn latch_keeps_instrument_awake() {
+        use crate::audio::devices::note_fx::latch::Latch;
+        use crate::audio::devices::note_fx::NoteFxHost;
+        use crate::audio::devices::PolySynthDevice;
+        const SR: f32 = 48_000.0;
+        const BLOCK: usize = 256;
+        let mut channel = Channel::new(2, "test".to_string(), BLOCK, SR);
+        channel.devices.push(Box::new(NoteFxHost::<Latch>::new(SR)));
+        channel.devices.push(Box::new(PolySynthDevice::new(SR)));
+        // A sustaining amp envelope: the held note keeps sounding instead of decaying away.
+        let sustain = channel.devices[1]
+            .parameters()
+            .into_iter()
+            .find(|p| p.name == "Amp Sustain")
+            .expect("amp sustain parameter");
+        channel.devices[1].set_parameter(sustain.id, 1.0);
+        // One live note-on held for the whole run: the latch swallows its note-off.
+        channel.send_note_event_to_devices(
+            &NoteEvent::On {
+                note_id: 1,
+                key: 60,
+                velocity: 0.8,
+            },
+            0,
+        );
+        let blocks = (10.0 * SR / BLOCK as f32).ceil() as usize;
+        for _ in 0..blocks {
+            channel.process_device_chain(BLOCK);
+        }
+        // The note is still sounding (the latch never passed a note-off): the instrument's
+        // audio keeps it awake and neither device ever slept.
+        assert!(!channel.devices[0].is_sleeping());
+        assert!(!channel.devices[1].is_sleeping());
+        assert!(
+            channel.sleep_changes.iter().all(|(_, sleeping)| !*sleeping),
+            "{:?}",
+            channel.sleep_changes
+        );
+    }
+
+    #[test]
     fn live_note_off_carries_release() {
         let events = dispatch_live(&[
             (MidiMessageType::NoteOn, 60, 127),

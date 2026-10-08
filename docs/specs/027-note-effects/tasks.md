@@ -256,7 +256,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
 
 ## Phase 5: Step Sequencer, Note Echo, Note Length, Latch (wave 3)
 
-- [ ] **T-024** [REQ-024, REQ-025, REQ-026] Step Sequencer.
+- [x] **T-024** [REQ-024, REQ-025, REQ-026] Step Sequencer.
   - _Files_: `Engine/src/audio/devices/note_fx/step_sequencer.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_:
     - 16 steps with Length;
@@ -270,7 +270,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     passes.
   - _Depends on_: T-019
 
-- [ ] **T-025** [REQ-003, REQ-027] Note Echo.
+- [x] **T-025** [REQ-003, REQ-027] Note Echo.
   - _Files_: `Engine/src/audio/devices/note_fx/note_echo.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: Repeats, synced or ms Time, Decay, Pitch Step, source length kept, and the cutoff
     below 1/127.
@@ -279,14 +279,14 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     Conformance passes.
   - _Depends on_: T-005, T-019
 
-- [ ] **T-026** [REQ-029] Note Length.
+- [x] **T-026** [REQ-029] Note Length.
   - _Files_: `Engine/src/audio/devices/note_fx/note_length.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: Fixed and Minimum modes, synced or ms Length, and Legato.
   - _Verify_: `cargo test note_length` passes with the REQ-029 examples (50 ms and 1 s inputs in
     both modes, Legato cut). Conformance passes.
   - _Depends on_: T-005, T-019
 
-- [ ] **T-027** [REQ-012, REQ-030] Latch.
+- [x] **T-027** [REQ-012, REQ-030] Latch.
   - _Files_: `Engine/src/audio/devices/note_fx/latch.rs` (new), `Engine/src/audio/devices/factory.rs`,
     `Engine/src/audio/types.rs` (test)
   - _Output_: Chord and Toggle modes, Release All, and release on bypass.
@@ -307,7 +307,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     - a fake blob highlights step 3.
   - _Depends on_: T-024, T-016
 
-- [ ] **T-029** [REQ-041] Automation, modulation and preset round trip for note effects.
+- [x] **T-029** [REQ-041] Automation, modulation and preset round trip for note effects.
   - _Files_: `Godot/tests/test_note_fx_presets.gd` (new)
   - _Output_: a test that saves a Step Sequencer preset with non-default steps, loads it on a new
     instance, and checks every step value. Every note-effect parameter except momentary ones is
