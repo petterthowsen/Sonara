@@ -169,7 +169,12 @@ var _frame_view: View = View.ARRANGER
 # LIFECYCLE
 # ============================================================================
 
+## Smallest the main window can be resized to.
+const MIN_WINDOW_SIZE := Vector2i(1200, 700)
+
+
 func _ready():
+	get_window().min_size = MIN_WINDOW_SIZE
 	render_service = RenderService.new()
 	render_service.name = "RenderService"
 	add_child(render_service)

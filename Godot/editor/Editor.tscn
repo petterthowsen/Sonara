@@ -14,6 +14,7 @@
 [ext_resource type="PackedScene" uid="uid://x0b4w4e0igbg" path="res://mixer/Mixer.tscn" id="9_l57s6"]
 [ext_resource type="PackedScene" uid="uid://iq3vudg11v8b" path="res://devices/device_lane/DeviceLane.tscn" id="10_2m1gq"]
 [ext_resource type="PackedScene" uid="uid://v2yhv0y6irr0" path="res://clip_editor/ClipEditor.tscn" id="10_kc5d4"]
+[ext_resource type="Texture2D" uid="uid://0j3yu1y6sx6f" path="res://assets/icons/maximize-2.svg" id="11_libn5"]
 [ext_resource type="PackedScene" uid="uid://clpf2lap035t1" path="res://settings/SettingsDialog.tscn" id="12_10umj"]
 [ext_resource type="PackedScene" uid="uid://b7xa8h62aocl5" path="res://ai/ui/AssistantPanel.tscn" id="12_cnodj"]
 [ext_resource type="PackedScene" uid="uid://8vyptyjju6y8" path="res://browser/Browser.tscn" id="13_p3vu2"]
@@ -22,6 +23,9 @@
 [ext_resource type="PackedScene" uid="uid://wd107ykpmm32" path="res://export/ExportAudioDialog.tscn" id="20_flnwk"]
 [ext_resource type="Script" uid="uid://bg4ly5f4mmkcy" path="res://editor/ScalePicker.gd" id="21_scalepick"]
 [ext_resource type="Script" uid="uid://n6e4x2uxjs21" path="res://editor/HelpBar.gd" id="helpbar_gd"]
+[ext_resource type="Script" path="res://editor/ResizeGrip.gd" id="resize_grip_gd"]
+[ext_resource type="Texture2D" uid="uid://sdwtbedbsin0" path="res://assets/icons/x.svg" id="win_close"]
+[ext_resource type="Texture2D" uid="uid://b4cmo7tg2llix" path="res://assets/icons/minus.svg" id="win_min"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cnodj"]
 content_margin_left = 4.0
@@ -55,9 +59,6 @@ border_color = Color(0.34375, 0.34375, 0.34375, 1)
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[sub_resource type="LabelSettings" id="LabelSettings_darnh"]
-font_size = 14
-
 [node name="Editor" type="MarginContainer" unique_id=930057261]
 anchors_preset = 15
 anchor_right = 1.0
@@ -78,6 +79,7 @@ theme_type_variation = &"SectionPanel"
 
 [node name="Top" type="HBoxContainer" parent="VBoxContainer/Header" unique_id=2065853292]
 layout_mode = 2
+theme_override_constants/separation = 8
 
 [node name="MainMenu" type="MenuBar" parent="VBoxContainer/Header/Top" unique_id=339831624]
 layout_mode = 2
@@ -92,7 +94,7 @@ oversampling_override = 1.0
 
 [node name="Transport" type="HBoxContainer" parent="VBoxContainer/Header/Top" unique_id=1075672108]
 layout_mode = 2
-size_flags_horizontal = 3
+size_flags_horizontal = 6
 theme_override_constants/separation = 2
 alignment = 1
 
@@ -175,59 +177,69 @@ script = ExtResource("5_yh6b6")
 [node name="HBox" type="HBoxContainer" parent="VBoxContainer/Header/Top/EnginePanel" unique_id=694543686]
 layout_mode = 2
 
-[node name="StatusLabel" type="Label" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=596975121]
-modulate = Color(0.7578125, 0.33746338, 0.33746338, 1)
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-text = "Disconnected"
-label_settings = SubResource("LabelSettings_darnh")
-horizontal_alignment = 1
-vertical_alignment = 1
-
 [node name="ConnectButton" type="Button" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=1159673598]
+custom_minimum_size = Vector2(130, 0)
 layout_mode = 2
-toggle_mode = true
-text = "Connect"
+text = "● Disconnected"
 
-[node name="EngineLoadGraph" type="Control" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=1318737213]
-custom_minimum_size = Vector2(120, 32)
+[node name="PerformanceButton" type="Button" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=1159673599]
+custom_minimum_size = Vector2(70, 0)
 layout_mode = 2
-size_flags_horizontal = 0
+theme_override_font_sizes/font_size = 12
+disabled = true
+text = "Load ▾"
+
+[node name="PerformancePopup" type="PopupPanel" parent="VBoxContainer/Header/Top/EnginePanel" unique_id=1235519997]
+size = Vector2i(380, 200)
+
+[node name="VBox" type="VBoxContainer" parent="VBoxContainer/Header/Top/EnginePanel/PerformancePopup" unique_id=694543687]
+custom_minimum_size = Vector2(360, 0)
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 376.0
+offset_bottom = 196.0
+
+[node name="EngineLoadGraph" type="Control" parent="VBoxContainer/Header/Top/EnginePanel/PerformancePopup/VBox" unique_id=1318737213]
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
 script = ExtResource("6_js5sm")
 max_data_points = 120
 auto_scale = false
 value_max = 1.5
 
-[node name="PerformanceText" type="RichTextLabel" parent="VBoxContainer/Header/Top/EnginePanel/HBox" unique_id=789078649]
+[node name="PerformanceText" type="RichTextLabel" parent="VBoxContainer/Header/Top/EnginePanel/PerformancePopup/VBox" unique_id=789078649]
 layout_mode = 2
-size_flags_horizontal = 3
 theme_override_font_sizes/normal_font_size = 12
 bbcode_enabled = true
 text = "Performance statistics"
 fit_content = true
-autowrap_mode = 0
-vertical_alignment = 1
 
 [node name="WindowButtons" type="HBoxContainer" parent="VBoxContainer/Header/Top" unique_id=1013391728]
 layout_mode = 2
 size_flags_horizontal = 8
-size_flags_vertical = 0
+size_flags_vertical = 4
 script = ExtResource("7_30oug")
 
 [node name="Minimize" type="Button" parent="VBoxContainer/Header/Top/WindowButtons" unique_id=1229703618]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
-text = "_"
+tooltip_text = "Minimize"
+icon = ExtResource("win_min")
+icon_alignment = 1
 
 [node name="Maximize" type="Button" parent="VBoxContainer/Header/Top/WindowButtons" unique_id=1368621904]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
-text = "+"
+tooltip_text = "Maximize"
+icon = ExtResource("11_libn5")
+icon_alignment = 1
 
 [node name="Quit" type="Button" parent="VBoxContainer/Header/Top/WindowButtons" unique_id=1298956965]
 custom_minimum_size = Vector2(28, 0)
 layout_mode = 2
-text = "X"
+tooltip_text = "Close"
+icon = ExtResource("win_close")
+icon_alignment = 1
 
 [node name="Middle" type="BoxContainer" parent="VBoxContainer" unique_id=509370854]
 layout_mode = 2
@@ -466,3 +478,20 @@ oversampling_override = 1.0
 oversampling_override = 1.0
 
 [node name="ExportAudioDialog" parent="." unique_id=576359315 instance=ExtResource("20_flnwk")]
+
+[node name="ResizeOverlay" type="Control" parent="." unique_id=1900000001]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="ResizeGrip" type="Control" parent="ResizeOverlay" unique_id=1900000002]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -16.0
+offset_top = -16.0
+grow_horizontal = 0
+grow_vertical = 0
+script = ExtResource("resize_grip_gd")

@@ -1,11 +1,12 @@
-# Shows Engine Status, Performance Metrics
-# and a connect/disconnect button
+# One status button that shows the engine connection and toggles it, plus a load button that
+# drops down the load graph and performance details.
 class_name EnginePanel extends PanelContainer
 
-@onready var performance_text: RichTextLabel = $HBox/PerformanceText
-@onready var status_label: Label = $HBox/StatusLabel
 @onready var connect_button: Button = $HBox/ConnectButton
-@onready var engine_load_graph: Graph = $HBox/EngineLoadGraph
+@onready var performance_button: Button = $HBox/PerformanceButton
+@onready var performance_popup: PopupPanel = $PerformancePopup
+@onready var performance_text: RichTextLabel = $PerformancePopup/VBox/PerformanceText
+@onready var engine_load_graph: Graph = $PerformancePopup/VBox/EngineLoadGraph
 
 ## Last Time.get_ticks_msec() that received /status/engine_stats (0 = never).
 var _last_engine_load_msec: int = 0
@@ -16,6 +17,8 @@ const AUDIO_STALL_MSEC := 2000
 const COUNTER_ALERT_MSEC := 5000
 const COLOR_WARN := "#e0b050"
 const COLOR_ALERT := "#e05a5a"
+const COLOR_OK := "#6cc070"
+const COLOR_IDLE := "#9a9a9a"
 ## Plugins listed in the tooltip, worst first. The panel itself names only the worst one, and
 ## only while it drops out or runs heavy.
 const WORST_PLUGINS_IN_TOOLTIP := 10
@@ -30,6 +33,9 @@ const PERFORMANCE_TOOLTIP := (
 		+ "The panel shows these counters only once they are above zero, and names a plugin\n"
 		+ "only while it drops out or takes 50% or more of a block (PLUGIN_PEAK_WARN).")
 
+const POPUP_REOPEN_GUARD_MSEC := 250
+var _popup_hidden_msec: int = -1000000
+
 var _last_xruns: int = -1
 var _last_lock_misses: int = -1
 var _last_plugin_underruns: int = -1
@@ -42,6 +48,9 @@ func _ready() -> void:
 	set_process(true)
 	# Connect to button signal
 	connect_button.pressed.connect(_on_connect_button_pressed)
+	performance_button.toggle_mode = true
+	performance_button.pressed.connect(_on_performance_button_pressed)
+	performance_popup.popup_hide.connect(_on_performance_popup_hidden)
 	
 	# Connect to editor signals
 	Sonara.editor.project_opened.connect(_on_project_opened)
@@ -74,6 +83,40 @@ func _on_connection_state_changed(state: Project.ConnectionState) -> void:
 	_update_ui_from_state(state)
 
 
+## The popup closes itself on a press outside it, which includes a press on this button, so by
+## the time the click arrives the popup is already hidden. Treat that click as the "close".
+func _on_performance_button_pressed() -> void:
+	var just_closed := Time.get_ticks_msec() - _popup_hidden_msec < POPUP_REOPEN_GUARD_MSEC
+	if performance_popup.visible or just_closed:
+		performance_popup.hide()
+		performance_button.set_pressed_no_signal(false)
+		return
+	var origin := Vector2i(performance_button.get_screen_position()
+			+ Vector2(0, performance_button.size.y))
+	performance_popup.popup(Rect2i(origin, Vector2i.ZERO))
+	performance_button.set_pressed_no_signal(true)
+
+
+func _on_performance_popup_hidden() -> void:
+	_popup_hidden_msec = Time.get_ticks_msec()
+	performance_button.set_pressed_no_signal(false)
+
+
+## Dot + state on the connect button; the click action goes in the tooltip.
+func _set_status(text: String, color: String, tooltip: String, enabled: bool) -> void:
+	connect_button.text = "● " + text
+	connect_button.tooltip_text = tooltip
+	connect_button.disabled = not enabled
+	var c := Color(color)
+	for prop in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color",
+			"font_disabled_color"]:
+		connect_button.add_theme_color_override(prop, c)
+
+
+func _set_load_text(text: String) -> void:
+	performance_button.text = text + " ▾"
+
+
 func _on_connect_button_pressed() -> void:
 	"""Handle connect/disconnect button press."""
 	if not Sonara.editor.project:
@@ -91,9 +134,10 @@ func _on_connect_button_pressed() -> void:
 
 func _update_ui_no_project() -> void:
 	"""Update UI when no project is active."""
-	status_label.text = "No Project"
-	connect_button.text = "Connect"
-	connect_button.disabled = true
+	_set_status("No Project", COLOR_IDLE, "Open a project to connect to the engine.", false)
+	performance_button.disabled = true
+	performance_popup.hide()
+	_set_load_text("Load")
 	performance_text.text = ""
 	_show_connected = false
 	_last_engine_load_msec = 0
@@ -103,9 +147,10 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 	"""Update UI based on connection state."""
 	match state:
 		Project.ConnectionState.DISCONNECTED:
-			status_label.text = "Disconnected"
-			connect_button.text = "Connect"
-			connect_button.disabled = false
+			_set_status("Disconnected", COLOR_ALERT, "Click to connect to the engine.", true)
+			performance_button.disabled = true
+			performance_popup.hide()
+			_set_load_text("Load")
 			_show_connected = false
 			_last_engine_load_msec = 0
 			_last_xruns = -1
@@ -115,14 +160,11 @@ func _update_ui_from_state(state: Project.ConnectionState) -> void:
 			if engine_load_graph:
 				engine_load_graph.clear()
 		Project.ConnectionState.CONNECTING:
-			status_label.text = "Connecting..."
-			connect_button.text = "Cancel"
-			connect_button.disabled = false
+			_set_status("Connecting...", COLOR_WARN, "Click to cancel.", true)
 			_show_connected = false
 		Project.ConnectionState.CONNECTED:
-			status_label.text = "Connected"
-			connect_button.text = "Disconnect"
-			connect_button.disabled = false
+			_set_status("Connected", COLOR_OK, "Click to disconnect from the engine.", true)
+			performance_button.disabled = false
 			_show_connected = true
 			_last_engine_load_msec = Time.get_ticks_msec()
 
@@ -139,6 +181,7 @@ func _process(_delta: float) -> void:
 		return
 	if Time.get_ticks_msec() - _last_engine_load_msec > AUDIO_STALL_MSEC:
 		performance_text.text = "Audio stalled (no callback)"
+		_set_load_text("Stalled")
 
 
 func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
@@ -180,7 +223,18 @@ func _on_engine_stats_received(stats: EngineStatus.Stats) -> void:
 			WORST_PLUGINS_IN_TOOLTIP)
 	if not ranked.is_empty() and _is_plugin_notable(ranked[0]):
 		parts.append(_plugin_text(ranked[0]))
-	performance_text.text = "  ".join(parts)
+	performance_text.text = "\n".join(parts)
+	_set_load_text("%.0f%%" % (stats.load_avg * 100.0))
+	var load_color := ""
+	if stats.load_peak >= 1.0 or stats.xruns > 0 and now - _xrun_msec < COUNTER_ALERT_MSEC:
+		load_color = COLOR_ALERT
+	elif stats.load_peak >= 0.8:
+		load_color = COLOR_WARN
+	for prop in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		if load_color.is_empty():
+			performance_button.remove_theme_color_override(prop)
+		else:
+			performance_button.add_theme_color_override(prop, Color(load_color))
 	var totals := "\n\nXruns %d, lock misses %d, plugin dropouts %d since the engine started." % [
 		stats.xruns, stats.lock_misses, stats.plugin_underruns]
 	performance_text.tooltip_text = PERFORMANCE_TOOLTIP + totals + _plugins_tooltip(ranked)
