@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use super::clip::AudioPlayback;
 use super::commands::EngineState;
 use super::devices::apply_transport;
 use super::render_scratch::ClipNoteEvent;
@@ -292,7 +293,7 @@ pub fn process_audio(
                     }
 
                     if let Some(clip) = state.clips.get(&instance.clip_id) {
-                        if clip.clip_type == super::types::ClipType::Audio
+                        if clip.clip_type == super::clip::ClipType::Audio
                             && !clip.audio_samples.is_empty()
                         {
                             let current_pos_in_instance = current_tick - instance.start_tick;
@@ -579,10 +580,14 @@ fn collect_tick_events_looped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::channel::Channel;
+    use crate::audio::clip::{Clip, ClipInstance, ClipNote, ClipType};
     use crate::audio::commands::AudioCommand;
     use crate::audio::devices::{DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue};
     use crate::audio::midi_types::{MidiEvent, NoteEvent};
+    use crate::audio::project::ProjectSettings;
     use crate::audio::tempo_map::TempoMap;
+    use crate::audio::track::Track;
     use std::time::Duration;
 
     /// Build a state with one channel holding note-ons that arrived `ages_ms` before `now`.

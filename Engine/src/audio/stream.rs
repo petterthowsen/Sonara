@@ -858,8 +858,8 @@ mod tests {
 
     #[test]
     fn live_output_is_silent_while_rendering() {
+        use crate::audio::channel::Channel;
         use crate::audio::devices::{AudioDevice, PolySynthDevice};
-        use crate::audio::types::Channel;
 
         let mut state = EngineState::default();
         state.ensure_master_channel(MAX_BLOCK_FRAMES);

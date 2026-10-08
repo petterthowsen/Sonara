@@ -1204,6 +1204,7 @@ pub fn unwrap_at_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::channel::Channel;
     use crate::audio::devices::container::{move_device, DeviceContainer};
     use crate::audio::devices::param_table::{linear, slot_table, spec, ParamSpec, ParamTable};
     use crate::audio::devices::{
@@ -1212,7 +1213,6 @@ mod tests {
     };
     use crate::audio::dsp::test_util::{render, stereo, white_noise};
     use crate::audio::modulation::kinds::{ENV_ATTACK, ENV_RELEASE, LFO_RATE};
-    use crate::audio::types::Channel;
     use std::any::Any;
     use std::time::Duration;
 

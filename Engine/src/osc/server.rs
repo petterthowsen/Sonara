@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::audio::automation::{AutomationPoint, AutomationPointId, AutomationTarget, CurveKind};
+use crate::audio::clip::ClipLoadState;
 use crate::audio::commands::BuiltinParamInfo;
 use crate::audio::devices::sampler_zones::{GroupPlayMode, ZoneRanges, ZoneSettings};
 use crate::audio::devices::{parse_osc_device_addr, DevicePath};
 use crate::audio::io::{AfsEvent, AudioFileService};
-use crate::audio::types::ClipLoadState;
 use crate::audio::{AudioCommand, EngineStatus, ProjectSettings};
 use crate::logging::{rotate_log_files, LogWriters};
 use crate::window_manager::WindowManager;

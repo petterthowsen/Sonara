@@ -1,6 +1,7 @@
 use crossbeam::channel::Sender;
 use std::collections::{HashMap, VecDeque};
 
+use super::channel::Channel;
 use super::commands::{EngineState, EngineStatus};
 use super::devices::container::{self, ChainStep};
 use super::render_scratch::{RenderScratch, SoloRole};
@@ -698,11 +699,11 @@ fn write_master_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::channel::{Channel, PanMode, Send};
     use crate::audio::commands::EngineState;
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
     };
-    use crate::audio::types::{Channel, PanMode, Send};
     use crossbeam::channel::unbounded;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

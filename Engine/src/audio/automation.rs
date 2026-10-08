@@ -13,9 +13,10 @@ use std::fmt;
 
 use tracing::warn;
 
+use super::channel::Channel;
 use super::commands::EngineState;
 use super::devices::DevicePath;
-use super::types::{Channel, Tick, TrackId};
+use super::types::{Tick, TrackId};
 
 /// Identifier for a point within a lane. Allocated by Godot, mirroring `NoteId`.
 pub type AutomationPointId = u64;
@@ -611,12 +612,13 @@ pub fn apply_tension(t: f32, tension: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::channel::{Channel, PanMode, Send};
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue,
     };
     use crate::audio::modulation::kinds::ENV_ATTACK;
     use crate::audio::modulation::{wrap_at_path, ModulatorKind};
-    use crate::audio::types::{Channel, PanMode, Send, Track};
+    use crate::audio::track::Track;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -1009,7 +1011,7 @@ mod tests {
 
     #[test]
     fn automation_overrides_base_but_preserves_it() {
-        use super::super::types::{Channel, PanMode};
+        use crate::audio::channel::{Channel, PanMode};
 
         let mut channel = Channel::new(2, "Synth".to_string(), 128, 48_000.0);
         channel.volume_db = 0.0;

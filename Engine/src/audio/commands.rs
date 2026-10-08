@@ -10,12 +10,16 @@ use super::automation::{
     AutomationLane, AutomationLaneId, AutomationPoint, AutomationPointId, AutomationTarget,
 };
 use super::block_clock::BlockClock;
+use super::channel::Channel;
+use super::clip::{Clip, ClipInstance, ClipLoadState, ClipNote};
 use super::devices::sampler_zones::{GroupPlayMode, ZoneSettings};
 use super::devices::DevicePath;
 use super::midi_types::{NoteEvent, AUDITION_NOTE_ID};
+use super::project::ProjectSettings;
 use super::render_scratch::RenderScratch;
 use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
+use super::track::Track;
 use super::types::*;
 
 /// Parameter information for builtin devices
@@ -1518,7 +1522,7 @@ pub fn process_command(
                         channel_id, target_channel_id
                     );
                 } else {
-                    channel.send_channels.push(super::types::Send {
+                    channel.send_channels.push(super::channel::Send {
                         target_channel_id,
                         amount_db,
                         pre_fader,
@@ -1797,7 +1801,7 @@ pub fn process_command(
             name,
             clip_type,
         } => {
-            use super::types::ClipType;
+            use super::clip::ClipType;
             let clip_type_enum = match clip_type.as_str() {
                 "midi" | "Midi" => ClipType::Midi,
                 "audio" | "Audio" => ClipType::Audio,

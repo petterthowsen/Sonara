@@ -7,6 +7,7 @@ pub mod delay_line;
 pub mod denormal;
 pub mod env_follower;
 pub mod gain;
+pub mod interleave;
 pub mod ladder;
 pub mod linear_svf;
 pub mod log_spectrum;

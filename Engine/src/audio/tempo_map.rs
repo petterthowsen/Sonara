@@ -3,7 +3,8 @@
 //! The engine gets the whole map from Godot and replaces it on every change. Seconds come from the
 //! closed-form integral of a linear ramp, so the same maths as Godot's `TempoMap.gd` applies.
 
-use super::types::{ProjectSettings, Tick};
+use super::project::ProjectSettings;
+use super::types::Tick;
 
 pub const MIN_BPM: f64 = 20.0;
 pub const MAX_BPM: f64 = 999.0;

@@ -13,13 +13,14 @@ use super::wav::WavOutput;
 use super::{AnalysisTaps, RenderJob, RenderTail};
 use crate::audio::analysis::{Analyzer, AnalyzerConfig};
 use crate::audio::block_clock::{BlockClock, OFFLINE_BLOCK_TIMEOUT};
+use crate::audio::clip::{ClipLoadState, ClipType};
 use crate::audio::commands::{EngineState, EngineStatus};
 use crate::audio::devices::clap_host::subprocess_adapter::PluginIpcHandle;
 use crate::audio::devices::clap_host::SubprocessClapAdapter;
 use crate::audio::devices::container;
 use crate::audio::mixing::mix_and_output;
 use crate::audio::processing::{frames_before_tick, process_audio};
-use crate::audio::types::{ChannelId, ClipLoadState, ClipType, Tick};
+use crate::audio::types::{ChannelId, Tick};
 
 /// Master channel ID.
 const MASTER_CHANNEL_ID: ChannelId = 1;
@@ -705,11 +706,13 @@ mod tests {
     use super::super::{AnalysisSpec, PreRoll, RenderJob};
     use super::*;
     use crate::audio::analysis::{AnalysisResult, Resolution};
+    use crate::audio::channel::Channel;
+    use crate::audio::clip::{Clip, ClipInstance, ClipNote};
     use crate::audio::devices::{
         AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, ParamValue, PolySynthDevice,
     };
     use crate::audio::stream::MAX_BLOCK_FRAMES;
-    use crate::audio::types::{Channel, Clip, ClipInstance, ClipNote, Track};
+    use crate::audio::track::Track;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;

@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use self::filters::{BandBank, Frame, KWeight, PinkCalibration, BAND_COUNT, BAND_EDGES};
 use self::scale::{FLOOR_DB, LUFS_OFFSET_DB, SCALE_VERSION};
+use super::project::ProjectSettings;
 use super::tempo_map::{fill_tick_rates, TempoMap};
 use super::time_signature_map::TimeSignatureMap;
-use super::types::ProjectSettings;
 
 pub const BAND_NAMES: [&str; BAND_COUNT] = ["sub", "bass", "lowmid", "mid", "himid", "air"];
 

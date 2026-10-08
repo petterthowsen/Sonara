@@ -1,8 +1,8 @@
 //! Per-block transport snapshot handed to every device.
 
+use super::project::ProjectSettings;
 use super::tempo_map::TempoMap;
 use super::time_signature_map::TimeSignatureMap;
-use super::types::ProjectSettings;
 
 /// Transport state at a block's first frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
