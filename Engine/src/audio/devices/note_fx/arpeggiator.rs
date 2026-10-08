@@ -35,7 +35,7 @@ const SPECS: [ParamSpec; 9] = [
     spec(REVERSE, "Reverse", "Pattern", "", Kind::Bool, 0.0),
     spec(PING_PONG, "Ping-Pong", "Pattern", "", Kind::Bool, 0.0),
     spec(REPEAT_ENDS, "Repeat Ends", "Pattern", "", Kind::Bool, 0.0),
-    spec(OCTAVES, "Octaves", "Pattern", "", linear(1.0, 4.0), 1.0),
+    spec(OCTAVES, "Octaves", "Pattern", "oct", linear(1.0, 4.0), 1.0),
     spec(
         RATE,
         "Rate",

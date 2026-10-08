@@ -26,6 +26,7 @@ func run_tests() -> void:
 	_strip_script = load("res://devices/builtin/NoteStrip.gd")
 	_test_blob_decodes()
 	_test_strip_highlights()
+	_test_strip_range()
 	await _test_view_in_the_tree()
 
 
@@ -138,3 +139,13 @@ func _find_nodes_of_script(node: Node, script_path: String, out: Array) -> void:
 		if script != null and script.resource_path == script_path:
 			out.append(child)
 		_find_nodes_of_script(child, script_path, out)
+
+
+func _test_strip_range() -> void:
+	var strip: Control = _strip_script.new()
+	_assert(strip.key_range() == Vector2i(36, 72), "an idle strip shows the default range")
+	strip.set_state(_strip_script.decode(PackedByteArray([0xFF, 0xFF, 0xFF, 3, 60, 64, 67])))
+	_assert(strip.key_range() == Vector2i(60, 72), "C3 E3 G3 span C3 to C4 (got %s)" % strip.key_range())
+	strip.octaves = 3
+	_assert(strip.key_range() == Vector2i(60, 96), "three octaves reach the C above G5 (got %s)" % strip.key_range())
+	strip.free()

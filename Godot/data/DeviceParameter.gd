@@ -204,10 +204,54 @@ func format_value(value: float) -> String:
 
 	if not display_curve.is_empty():
 		return format_display(display_value(value), unit)
+	if is_whole_number():
+		var whole := roundi(value)
+		match unit:
+			"key":
+				return Midi.midi_to_note_name(whole)
+			"%":
+				return "%d%%" % whole
+			_:
+				return "%d %s" % [whole, unit]
 	if unit.is_empty():
 		return "%.2f" % value
 	else:
 		return "%.2f %s" % [value, unit]
+
+
+## Units of built-in parameters that only make sense in whole steps (semitones, octaves, whole
+## percent, MIDI keys). Plugin parameters never match: they either carry a display curve or use
+## other units.
+const WHOLE_NUMBER_UNITS := ["st", "oct", "%", "key"]
+
+
+## True for a linear float in `WHOLE_NUMBER_UNITS` with whole-number bounds: shown as integers and
+## snapped to whole steps by the Simple View.
+func is_whole_number() -> bool:
+	if param_type != "float" or is_logarithmic or skew != 1.0 or not display_curve.is_empty():
+		return false
+	if not unit in WHOLE_NUMBER_UNITS or max_value - min_value < 1.0:
+		return false
+	return is_equal_approx(min_value, roundf(min_value)) and is_equal_approx(max_value, roundf(max_value))
+
+
+## Text for typing `value` into a knob: the real number, without unit decoration.
+func edit_text(value: float) -> String:
+	if is_whole_number():
+		return "%d" % roundi(value)
+	return "%.2f" % value
+
+
+## Parse text typed into a knob (a real number, optionally with a trailing unit, or a note name for
+## "key" parameters) into a real value. Returns NAN when it isn't a value.
+func parse_edit_text(text: String) -> float:
+	var trimmed := text.strip_edges()
+	if unit == "key" and not trimmed.is_empty() and not trimmed[0] in "-0123456789.":
+		var note := Midi.note_name_to_midi(trimmed)
+		return float(note) if note >= 0 else NAN
+	if not unit.is_empty() and trimmed.to_lower().ends_with(unit.to_lower()):
+		trimmed = trimmed.substr(0, trimmed.length() - unit.length()).strip_edges()
+	return float(trimmed) if trimmed.is_valid_float() else NAN
 
 
 ## The value to show for real `value`: read off `display_curve` when there is one, else `value`.

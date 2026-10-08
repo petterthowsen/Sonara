@@ -14,8 +14,15 @@ pub const VELOCITY_HIGH: ParamId = 3;
 pub const INVERT: ParamId = 4;
 
 const SPECS: [ParamSpec; 5] = [
-    spec(KEY_LOW, "Key Low", "Keys", "", linear(0.0, 127.0), 0.0),
-    spec(KEY_HIGH, "Key High", "Keys", "", linear(0.0, 127.0), 127.0),
+    spec(KEY_LOW, "Key Low", "Keys", "key", linear(0.0, 127.0), 0.0),
+    spec(
+        KEY_HIGH,
+        "Key High",
+        "Keys",
+        "key",
+        linear(0.0, 127.0),
+        127.0,
+    ),
     spec(
         VELOCITY_LOW,
         "Velocity Low",

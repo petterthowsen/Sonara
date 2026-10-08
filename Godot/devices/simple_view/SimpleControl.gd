@@ -214,11 +214,26 @@ func _build_knob() -> RotaryKnob:
 	knob.max_value = 1.0
 	knob.value_default = _param(0).value_to_normalized(_param(0).default_value) if _param(0) else 0.5
 	knob.value_text_callback = _format_value
+	_use_real_units(knob)
 	# the title sits above, so keep the value readout from covering it
 	knob.tooltip_side = RotaryKnob.TooltipSide.BELOW
 	knob.value_font_size = VALUE_FONT_SIZE
 	knob.value_changed.connect(func(v): _commit(0, v))
 	return knob
+
+
+## Make typing into the knob work in the parameter's real units (and snap whole-number
+## parameters like semitones to whole steps) instead of the knob's 0–1.
+func _use_real_units(knob: RotaryKnob) -> void:
+	var param := _param(0)
+	if param == null or param.param_type != "float" or not _unit_override().is_empty():
+		return
+	if param.is_whole_number():
+		knob.step = 1.0 / (param.max_value - param.min_value)
+	knob.edit_text_callback = func(n: float) -> String: return param.edit_text(param.normalized_to_value(n))
+	knob.edit_parse_callback = func(text: String) -> float:
+		var real := param.parse_edit_text(text)
+		return NAN if is_nan(real) else param.value_to_normalized(real)
 
 
 func _build_slider() -> HorSlider:

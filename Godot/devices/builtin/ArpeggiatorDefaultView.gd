@@ -6,18 +6,21 @@
 class_name ArpeggiatorDefaultView extends DeviceView
 
 const DATA_TYPE := "note_state"
+const OCTAVES_PARAM_ID := 4
 const SIMPLE_VIEW_SCENE := preload("res://devices/simple_view/SimpleView.tscn")
 
 var strip: NoteStrip
 var simple: DeviceView
 var _subscribed_path := ""
+var _box: VBoxContainer
 
 
 func _init() -> void:
 	custom_minimum_size = Vector2(200, 100)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var box := VBoxContainer.new()
+	_box = VBoxContainer.new()
+	var box := _box
 	box.set_anchors_preset(Control.PRESET_FULL_RECT)
 	box.add_theme_constant_override("separation", 4)
 	add_child(box)
@@ -28,14 +31,36 @@ func _init() -> void:
 	simple.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(simple)
 	simple.header_tabs_changed.connect(func() -> void: header_tabs_changed.emit())
+	# A plain Control doesn't size to its children, so report the box's minimum or the panel clips
+	# the Simple View's right edge.
+	box.minimum_size_changed.connect(update_minimum_size)
+
+
+func _get_minimum_size() -> Vector2:
+	return _box.get_combined_minimum_size() if _box else Vector2.ZERO
 
 
 func _on_bind() -> void:
 	simple.set_view_type(view_type)
 	simple.bind_to_device(device)
+	if not device.parameter_changed.is_connected(_on_parameter_changed):
+		device.parameter_changed.connect(_on_parameter_changed)
+	_update_octaves()
+
+
+func _on_parameter_changed(param_id: int, _value: float) -> void:
+	if param_id == OCTAVES_PARAM_ID:
+		_update_octaves()
+
+
+func _update_octaves() -> void:
+	if device and device.get_parameter(OCTAVES_PARAM_ID):
+		strip.octaves = roundi(device.get_parameter_real(OCTAVES_PARAM_ID))
 
 
 func _on_unbind() -> void:
+	if device and device.parameter_changed.is_connected(_on_parameter_changed):
+		device.parameter_changed.disconnect(_on_parameter_changed)
 	if is_instance_valid(simple):
 		simple.call("_unbind")
 

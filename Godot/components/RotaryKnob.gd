@@ -231,6 +231,14 @@ enum TooltipSide { ABOVE, BELOW }
 ## Optional Callable(value: float) -> String. Overrides value_format/unit.
 var value_text_callback: Callable
 
+## Optional Callable(value: float) -> String: the text a typed edit starts with (default
+## `value_format`). Pair with `edit_parse_callback` when the knob's value isn't what the user types.
+var edit_text_callback: Callable
+
+## Optional Callable(text: String) -> float: turns typed text into a knob value, or NAN when the
+## text isn't one (default: the text as a number).
+var edit_parse_callback: Callable
+
 
 @export_category("Interaction")
 
@@ -463,14 +471,20 @@ func _start_editing() -> void:
 	add_child(editor)
 	editor.committed.connect(_on_edit_committed)
 	var editor_size := Vector2(56.0, 22.0)
-	editor.open(value_format % _value, FloatingValueEditor.position_above(self, editor_size), editor_size)
+	var initial: String = str(edit_text_callback.call(_value)) if edit_text_callback.is_valid() else value_format % _value
+	editor.open(initial, FloatingValueEditor.position_above(self, editor_size), editor_size)
 
 
 func _on_edit_committed(text: String) -> void:
 	var trimmed := text.strip_edges()
-	if trimmed.is_valid_float():
+	var parsed := NAN
+	if edit_parse_callback.is_valid():
+		parsed = float(edit_parse_callback.call(trimmed))
+	elif trimmed.is_valid_float():
+		parsed = float(trimmed)
+	if not is_nan(parsed):
 		last_edit_kind = ValueEditKind.Kind.TYPED
-		value = float(trimmed)
+		value = parsed
 		last_edit_kind = ValueEditKind.Kind.DRAG
 
 
