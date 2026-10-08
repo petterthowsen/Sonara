@@ -817,16 +817,24 @@ func _on_clip_note_changed(note_data: MidiNoteData, source_clip: Clip) -> void:
 ## what playback actually sounds.
 func pitches_sounding_at(tick: int, only_played: bool = true) -> Dictionary:
 	var out := {}
+	for vn in visuals_sounding_at(tick, only_played):
+		var nd: MidiNoteData = vn.midi_note_data
+		out[nd.note] = maxf(out.get(nd.note, 0.0), nd.velocity)
+	return out
+
+
+## The note visuals that sound at `tick` (same rules as pitches_sounding_at).
+func visuals_sounding_at(tick: int, only_played: bool = true) -> Array[VisualNote]:
+	var out: Array[VisualNote] = []
 	if only_played and not multi_clip_mode and clip_instance:
 		if not clip_instance.plays_content_tick(tick):
 			return out
 	for child in get_children():
 		if not (child is VisualNote and child.visible and child.midi_note_data) or child.is_pending:
 			continue
-		var nd: MidiNoteData = child.midi_note_data
 		var pos := get_note_song_position(child)
 		if tick >= pos.start_tick and tick < pos.end_tick:
-			out[nd.note] = maxf(out.get(nd.note, 0.0), nd.velocity)
+			out.append(child)
 	return out
 
 

@@ -446,6 +446,8 @@ func _process(delta: float):
 
 	# Update playhead position based on scroll/zoom
 	_update_playhead_position()
+	if _scrubbing:
+		_update_scrub()
 	_update_hovered_key()
 	_update_active_keys()
 
@@ -1019,7 +1021,7 @@ func _handle_note_editing_mouse_button(mevent: InputEventMouseButton) -> void:
 		elif mevent.is_pressed():
 			_handle_right_mouse_press(note_editor_pos, mevent)
 		elif mevent.is_released():
-			if _chord_preview_notes.is_empty():
+			if not _scrubbing:
 				_handle_right_mouse_release()
 			else:
 				_stop_chord_preview()
@@ -1942,24 +1944,69 @@ func _stop_preview_note() -> void:
 # CHORD PREVIEW (Alt + right mouse button)
 # ============================================================================
 
-## Pitches currently sounding from an Alt+right-click, with the channel they went to.
+## True from an Alt+right press until the button is released: a vertical line follows the
+## mouse and sounds whatever it crosses.
+var _scrubbing := false
+## Pitches currently sounding from the scrub, with the channel they went to.
 var _chord_preview_notes: Array[int] = []
 var _chord_preview_channel_id := -1
+var _scrub_tick := -1
 
 
-## Play every note of the active editor that sounds at `tick`, until released.
+## Start the scrub: play every note of the active editor that sounds at `tick`. While held,
+## `_update_scrub` follows the mouse and sounds notes the line moves onto.
 func _start_chord_preview(tick: int) -> void:
 	_stop_chord_preview()
-	var active_editor := get_active_note_editor()
-	var channel_id := _get_preview_channel_id()
-	if not active_editor or channel_id < 0:
+	if not get_active_note_editor() or _get_preview_channel_id() < 0:
 		return
+	_scrubbing = true
+	_chord_preview_channel_id = _get_preview_channel_id()
+	_apply_scrub_tick(tick)
+	_update_scrub_line()
+
+
+## Move the line to `tick`: release pitches it left, sound (and flash) the ones it reached.
+## A pitch that stays under the line keeps ringing instead of retriggering.
+func _apply_scrub_tick(tick: int) -> void:
+	var active_editor := get_active_note_editor()
+	if not active_editor:
+		return
+	_scrub_tick = tick
 	# Trimmed-away content still previews: the click is about what is drawn there.
-	var chord := active_editor.pitches_sounding_at(tick, false)
-	_chord_preview_channel_id = channel_id
-	for pitch in chord:
+	var visuals := active_editor.visuals_sounding_at(tick, false)
+	var now := {}
+	for vn in visuals:
+		var pitch := vn.midi_note_data.note
+		now[pitch] = maxf(now.get(pitch, 0.0), vn.midi_note_data.velocity)
+	for pitch in _chord_preview_notes.duplicate():
+		if not now.has(pitch):
+			MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, MidiManager.NOTE_OFF_RELEASE, false)
+			_chord_preview_notes.erase(pitch)
+	for pitch in now:
+		if _chord_preview_notes.has(pitch):
+			continue
 		_chord_preview_notes.append(pitch)
-		MidiManager.send_note_to_channel(channel_id, pitch, MidiNoteData.to_midi_velocity(chord[pitch]), true)
+		MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, MidiNoteData.to_midi_velocity(now[pitch]), true)
+		for vn in visuals:
+			if vn.midi_note_data.note == pitch:
+				overlays.add_glow(vn)
+
+
+## Called every frame while scrubbing, so scrolling under a held mouse keeps it going.
+func _update_scrub() -> void:
+	var active_editor := get_active_note_editor()
+	if not active_editor:
+		_stop_chord_preview()
+		return
+	var tick := active_editor.pixels_to_ticks(active_editor.make_canvas_position_local(get_global_mouse_position()).x)
+	if tick != _scrub_tick:
+		_apply_scrub_tick(tick)
+	_update_scrub_line()
+
+
+func _update_scrub_line() -> void:
+	var x := overlays.make_canvas_position_local(get_global_mouse_position()).x
+	overlays.set_scrub_x(clampf(x, 0.0, overlays.size.x))
 
 
 func _stop_chord_preview() -> void:
@@ -1967,6 +2014,11 @@ func _stop_chord_preview() -> void:
 		MidiManager.send_note_to_channel(_chord_preview_channel_id, pitch, MidiManager.NOTE_OFF_RELEASE, false)
 	_chord_preview_notes.clear()
 	_chord_preview_channel_id = -1
+	_scrub_tick = -1
+	if _scrubbing:
+		_scrubbing = false
+		if overlays:
+			overlays.set_scrub_x(-1.0)
 
 
 # ============================================================================

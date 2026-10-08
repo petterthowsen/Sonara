@@ -11,6 +11,13 @@ var show_selection_markers: bool = false
 var selection_start_x: float = 0.0
 var selection_end_x: float = 0.0
 
+# Alt+right-click scrub line (x in this control's space, < 0 when off) and the notes it has
+# sounded, which flash in the theme accent and fade out.
+const GLOW_SECONDS := 1.0
+var _scrub_x := -1.0
+var _accent := Color(0.3, 0.55, 1.0)
+var _glows: Array = []  # [{note: VisualNote, age: float}]
+
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -20,6 +27,44 @@ func _ready() -> void:
 	# the note area paints over the piano keys / outside the editor.
 	clip_contents = true
 	set_process(false)
+	_refresh_theme_colors()
+
+
+func set_scrub_x(x: float) -> void:
+	_scrub_x = x
+	set_process(_scrub_x >= 0.0 or not _glows.is_empty())
+	queue_redraw()
+
+
+## Flash `note` (a VisualNote) in the accent colour; re-sounding it restarts the fade.
+func add_glow(note: Control) -> void:
+	for g in _glows:
+		if g.note == note:
+			g.age = 0.0
+			return
+	_glows.append({"note": note, "age": 0.0})
+	set_process(true)
+
+
+func _process(delta: float) -> void:
+	for g in _glows:
+		g.age += delta
+	_glows = _glows.filter(func(g): return g.age < GLOW_SECONDS and is_instance_valid(g.note))
+	if _scrub_x < 0.0 and _glows.is_empty():
+		set_process(false)
+	queue_redraw()
+
+
+func _refresh_theme_colors() -> void:
+	var theme := ThemeDB.get_project_theme()
+	if theme != null and theme.has_color(&"accent_primary", &"Sonara"):
+		_accent = UiColors.role(&"accent_primary")
+	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_THEME_CHANGED:
+		_refresh_theme_colors()
 
 
 func _draw() -> void:
@@ -46,3 +91,18 @@ func _draw() -> void:
 
 		# Draw end marker
 		draw_line(Vector2(end_x, 0), Vector2(end_x, height), line_color, line_width)
+
+	# Notes the scrub line has sounded: a soft halo plus a bright fill that fade together.
+	for g in _glows:
+		var note: Control = g.note
+		var rect := Rect2(make_canvas_position_local(note.get_global_rect().position), note.get_global_rect().size)
+		var k: float = 1.0 - float(g.age) / GLOW_SECONDS
+		k *= k
+		draw_rect(rect.grow(4.0), Color(_accent, 0.2 * k))
+		draw_rect(rect.grow(2.0), Color(_accent, 0.25 * k))
+		draw_rect(rect, Color(_accent, 0.3 * k))
+
+	# The scrub line itself.
+	if _scrub_x >= 0.0:
+		draw_line(Vector2(_scrub_x, 0), Vector2(_scrub_x, size.y), Color(_accent, 0.35), 5.0)
+		draw_line(Vector2(_scrub_x, 0), Vector2(_scrub_x, size.y), _accent, 2.0)
