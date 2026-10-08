@@ -18,7 +18,7 @@ var next_values := NextNoteValues.new()
 var selection_manager: NoteSelectionManager
 
 # Interaction state
-enum InteractionMode { NONE, DRAGGING, RESIZING, ERASING, PLACING_AND_DRAGGING, BOX_SELECTING, DUPLICATING }
+enum InteractionMode { NONE, DRAGGING, RESIZING, ERASING, PLACING_AND_DRAGGING, BOX_SELECTING, DUPLICATING, SCALING }
 var interaction_mode: InteractionMode = InteractionMode.NONE
 
 
@@ -101,6 +101,8 @@ func _ready():
 	# This allows it to work in the correct coordinate space without tight coupling
 	selection_manager.get_note_song_position = get_note_song_position
 	selection_manager.selection_changed.connect(_on_selection_touched)
+	selection_manager.selection_changed.connect(func(_notes): queue_redraw())
+	selection_manager.selection_set_changed.connect(queue_redraw)
 
 
 func _on_selection_touched(notes: Array[VisualNote]) -> void:
@@ -222,6 +224,9 @@ func get_note_at_position(pos: Vector2) -> VisualNote:
 ## the rest of a note. Notes ignore the mouse themselves, and this editor is the control
 ## under the pointer, so it carries the cursor. Only this editor's notes are checked.
 func update_hover_cursor(pos: Vector2) -> void:
+	if is_over_group_scale_handle(pos):
+		mouse_default_cursor_shape = Control.CURSOR_HSIZE
+		return
 	var note := get_note_at_position(pos)
 	mouse_default_cursor_shape = note.cursor_shape_at(pos - note.position) if note else Control.CURSOR_ARROW
 
@@ -261,6 +266,10 @@ func _gui_input(event: InputEvent) -> void:
 
 func handle_key_input(event: InputEventKey) -> void:
 	"""Handle keyboard input."""
+	if interaction_mode == InteractionMode.SCALING and event.pressed and event.keycode == KEY_ESCAPE:
+		cancel_group_scale()
+		accept_event()
+		return
 	if Hotkeys.pressed(event, "edit_select_all"):
 		# Clip mode: every note in the clip. Track mode: every note on the active track
 		# (the active editor is the one bound to it).
@@ -1304,7 +1313,12 @@ func _apply_selection_edit(history_name: String, edit: Callable) -> void:
 		notes.append(sel_note.midi_note_data)
 	edit.call(notes)
 	_refresh_notes(edited)
+	_sync_edited_notes(edited)
+	_history_commit(history_name)
 
+
+## After an edit: cut same-pitch overlaps, sync the engine and fix the content width.
+func _sync_edited_notes(edited: Array[VisualNote]) -> void:
 	for sel_note in edited:
 		var note_data := sel_note.midi_note_data
 		var note_clip: Clip = _clip_for_visual_note(sel_note)
@@ -1321,7 +1335,6 @@ func _apply_selection_edit(history_name: String, edit: Callable) -> void:
 
 	queue_redraw()
 	update_container_width()
-	_history_commit(history_name)
 
 
 const QUANTIZE_STRENGTH_KEY := "clip_editor/quantize_strength"
@@ -1473,6 +1486,7 @@ func _on_clip_note_removed(note_data: MidiNoteData, source_clip: Clip) -> void:
 			gone.append(note_instance)
 	for vn in gone:
 		selection_manager.selected_notes.erase(vn)
+		queue_redraw()
 		if selection_manager.selected_note == vn:
 			selection_manager.selected_note = null
 
@@ -1757,6 +1771,7 @@ func _instance_for_visual_note(vn: VisualNote) -> ClipInstance:
 ## A visual is freed (its note or loop pass went away): nothing may keep using it.
 func _forget_visual(vn: VisualNote) -> void:
 	selection_manager.selected_notes.erase(vn)
+	queue_redraw()
 	if selection_manager.selected_note == vn:
 		selection_manager.selected_note = selection_manager.selected_notes[0] if not selection_manager.selected_notes.is_empty() else null
 	var fallback: VisualNote = null
@@ -1794,3 +1809,174 @@ func _get_clip_for_note(note_id: int) -> Clip:
 	if clip_instance:
 		return clip_instance.clip
 	return null
+
+
+# ============================================================================
+# GROUP LENGTH-SCALE HANDLE
+# ============================================================================
+
+const SCALE_HANDLE_SIZE := Vector2(18.0, 22.0)
+## Space between the end of the last note and the handle.
+const SCALE_HANDLE_GAP := 5.0
+const SCALE_HANDLE_ICON := preload("res://assets/icons/move-horizontal.svg")
+const SCALE_HANDLE_ICON_SIZE := 14.0
+
+var _scale_notes: Array[MidiNoteData] = []
+var _scale_visuals: Array[VisualNote] = []
+var _scale_starts := PackedInt32Array()
+var _scale_durations := PackedInt32Array()
+var _scale_anchor := 0
+var _scale_end := 0
+var _scale_mouse_x := 0.0
+var _scale_range := Vector2i.ZERO
+var _scale_had_range := false
+var _scale_loop_owners: Dictionary = {}
+
+
+## The handle just past the end of the selection, in this editor's space; an empty Rect2 when
+## there is none. Needs two or more selected notes of one clip, outside Drum View (hits have
+## no length). Among the notes that end last it sits on the one nearest the middle of their
+## pitch range.
+func group_scale_handle_rect() -> Rect2:
+	if layout.is_folded():
+		return Rect2()
+	var visuals := _selected_note_visuals()
+	if visuals.size() < 2:
+		return Rect2()
+	var the_clip: Clip = _clip_for_visual_note(visuals[0])
+	var right := -INF
+	for vn in visuals:
+		if _clip_for_visual_note(vn) != the_clip:
+			return Rect2()
+		right = maxf(right, vn.position.x + vn.size.x)
+	var last_ending: Array[VisualNote] = []
+	var lo := 127
+	var hi := 0
+	for vn in visuals:
+		if vn.position.x + vn.size.x >= right - 0.5:
+			last_ending.append(vn)
+			lo = mini(lo, vn.midi_note_data.note)
+			hi = maxi(hi, vn.midi_note_data.note)
+	var pick: VisualNote = last_ending[0]
+	for vn in last_ending:
+		if absf(vn.midi_note_data.note - (lo + hi) * 0.5) < absf(pick.midi_note_data.note - (lo + hi) * 0.5):
+			pick = vn
+	var h := maxf(SCALE_HANDLE_SIZE.y, 0.0)
+	return Rect2(right + SCALE_HANDLE_GAP, pick.position.y + pick.size.y * 0.5 - h * 0.5, SCALE_HANDLE_SIZE.x, h)
+
+
+func is_over_group_scale_handle(pos: Vector2) -> bool:
+	var r := group_scale_handle_rect()
+	return r.size != Vector2.ZERO and r.grow(2.0).has_point(pos)
+
+
+func _draw() -> void:
+	var r := group_scale_handle_rect()
+	if r.size == Vector2.ZERO:
+		return
+	var active := interaction_mode == InteractionMode.SCALING
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0.12, 0.12, 0.14, 0.95) if not active else Color(0.3, 0.55, 0.85, 0.95)
+	box.border_color = Color(1, 1, 1, 0.55)
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(5)
+	draw_style_box(box, r)
+	var icon := Rect2(r.get_center() - Vector2.ONE * SCALE_HANDLE_ICON_SIZE * 0.5, Vector2.ONE * SCALE_HANDLE_ICON_SIZE)
+	draw_texture_rect(SCALE_HANDLE_ICON, icon, false, Color(1, 1, 1, 0.95))
+
+
+func _on_grid_scale_changed() -> void:
+	super()
+	queue_redraw()
+
+
+func _on_layout_changed() -> void:
+	super()
+	queue_redraw()
+
+
+## Start scaling the selected notes from the handle (grabbed at editor x `mouse_x`).
+## Returns false when there is no handle.
+func begin_group_scale(mouse_x: float = 0.0) -> bool:
+	if group_scale_handle_rect().size == Vector2.ZERO:
+		return false
+	_scale_visuals = _selected_note_visuals()
+	_scale_notes.clear()
+	_scale_starts = PackedInt32Array()
+	_scale_durations = PackedInt32Array()
+	for vn in _scale_visuals:
+		_scale_notes.append(vn.midi_note_data)
+		_scale_starts.append(vn.midi_note_data.start_tick)
+		_scale_durations.append(vn.midi_note_data.duration_ticks)
+	var span := NoteTransforms.tick_bounds(_scale_notes)
+	_scale_anchor = span.x
+	_scale_end = span.y
+	_scale_mouse_x = mouse_x
+	_scale_loop_owners = _loop_owners()
+	_scale_had_range = selection_manager.has_range() and not multi_clip_mode
+	_scale_range = Vector2i(selection_manager.box_selection_start_tick, selection_manager.box_selection_end_tick)
+	_history_begin_selection()
+	interaction_mode = InteractionMode.SCALING
+	queue_redraw()
+	return true
+
+
+## Preview with the group's end at `new_end` ticks. Always scales from the snapshot taken at
+## the start, so many updates never accumulate rounding. The end stays past the anchor and no
+## note shrinks below one tick.
+func update_group_scale(new_end: int) -> void:
+	if interaction_mode != InteractionMode.SCALING:
+		return
+	var span := _scale_end - _scale_anchor
+	var min_factor := NoteTransforms.min_scale_factor(_scale_durations)
+	new_end = maxi(new_end, _scale_anchor + ceili(span * min_factor))
+	NoteTransforms.scale(_scale_notes, _scale_anchor, float(new_end - _scale_anchor) / float(span),
+			_scale_starts, _scale_durations)
+	_refresh_notes(_scale_visuals)
+	queue_redraw()
+
+
+## Same, from the mouse at editor position `pos`, snapped to the grid (Shift: free).
+func update_group_scale_from_mouse(pos: Vector2) -> void:
+	update_group_scale(_snap_unless_shift(_scale_end + pixels_to_ticks(pos.x - _scale_mouse_x)))
+
+
+## Commit the preview as one undo step ("Scale Notes").
+func end_group_scale() -> void:
+	if interaction_mode != InteractionMode.SCALING:
+		return
+	interaction_mode = InteractionMode.NONE
+	_fold_into_loops(_scale_notes, _scale_loop_owners)
+	_refresh_notes(_scale_visuals)
+	if _scale_had_range:
+		var new_end := NoteTransforms.tick_bounds(_scale_notes).y
+		var factor := float(new_end - _scale_anchor) / float(_scale_end - _scale_anchor)
+		selection_manager.box_selection_start_tick = _scaled_tick(_scale_range.x, factor)
+		selection_manager.box_selection_end_tick = _scaled_tick(_scale_range.y, factor)
+		selection_manager.selection_changed.emit(selection_manager.selected_notes)
+	_sync_edited_notes(_scale_visuals)
+	_history_commit("Scale Notes")
+	_scale_clear()
+
+
+func _scaled_tick(tick: int, factor: float) -> int:
+	return maxi(0, _scale_anchor + roundi((tick - _scale_anchor) * factor))
+
+
+## Abort the gesture: notes go back to the snapshot and no undo step is recorded.
+func cancel_group_scale() -> void:
+	if interaction_mode != InteractionMode.SCALING:
+		return
+	interaction_mode = InteractionMode.NONE
+	NoteTransforms.scale(_scale_notes, _scale_anchor, 1.0, _scale_starts, _scale_durations)
+	_refresh_notes(_scale_visuals)
+	_history_clip_snapshots.clear()
+	_scale_clear()
+	queue_redraw()
+
+
+func _scale_clear() -> void:
+	_scale_notes.clear()
+	_scale_visuals.clear()
+	_scale_loop_owners.clear()
+	queue_redraw()

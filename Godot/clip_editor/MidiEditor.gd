@@ -1064,6 +1064,13 @@ func _handle_left_mouse_press(note_editor_pos: Vector2, mevent: InputEventMouseB
 	if not active_editor:
 		return
 
+	# The group-scale handle sits past the notes, so it wins over everything under it.
+	if not mevent.ctrl_pressed and active_editor.is_over_group_scale_handle(note_editor_pos) \
+			and active_editor.begin_group_scale(note_editor_pos.x):
+		accept_event()
+		_update_selection_overlays()
+		return
+
 	# A note of another editable track switches to that track before the gesture starts: the
 	# note editor is rebound to it and the press carries on as a press on its note.
 	var hit := _note_hit(mevent.global_position)
@@ -1151,6 +1158,12 @@ func _handle_left_mouse_release(note_editor_pos: Vector2, mevent: InputEventMous
 			active_editor._on_drag_ended(active_editor.dragging_note)
 		active_editor.interaction_mode = NoteEditor.InteractionMode.NONE
 		on_interaction_finished()
+		accept_event()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.SCALING:
+		active_editor.end_group_scale()
+		on_interaction_finished()
+		_update_selection_overlays()
 		accept_event()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.RESIZING:
@@ -1269,6 +1282,11 @@ func _handle_note_editing_mouse_motion(mevent: InputEventMouseMotion) -> void:
 			active_editor._on_resize_updated(active_editor.resizing_note, note_editor_pos)
 			accept_event()
 			_update_selection_overlays()
+
+	elif active_editor.interaction_mode == NoteEditor.InteractionMode.SCALING:
+		active_editor.update_group_scale_from_mouse(note_editor_pos)
+		accept_event()
+		_update_selection_overlays()
 
 	elif active_editor.interaction_mode == NoteEditor.InteractionMode.ERASING:
 		var hit := _note_hit(mevent.global_position)

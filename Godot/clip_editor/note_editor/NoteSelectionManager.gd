@@ -8,6 +8,10 @@ static var logger := Log.make("NoteSelectionManager")
 
 signal selection_changed(notes: Array[VisualNote])
 
+## The set of selected notes changed without selection_changed (box select, clear): visuals
+## that depend on the selection, like the group-scale handle, redraw on this.
+signal selection_set_changed
+
 
 # Selection state
 var selected_note: VisualNote = null  # Currently selected note (legacy single selection)
@@ -164,6 +168,7 @@ func _set_selected_notes(notes: Array[VisualNote]) -> void:
 		selected_note = selected_notes[0]
 	else:
 		selected_note = null
+	selection_set_changed.emit()
 
 
 # caller should snap the position to the grid
@@ -222,6 +227,7 @@ func clear_selection() -> void:
 			note.set_selected(false)
 	selected_notes.clear()
 	selected_note = null
+	selection_set_changed.emit()
 
 	box_selection_start_tick = 0
 	box_selection_end_tick = 0

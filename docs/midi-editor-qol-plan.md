@@ -126,24 +126,26 @@ Goal: with notes selected, a handle appears at the end of the right-most selecte
 
 Scaling semantics (confirm before building): this scales both start offsets and durations relative to the left edge of the selection, so the group stretches like a clip: `start' = anchor + (start - anchor) × f`, `duration' = duration × f`, where the anchor is the earliest selected start and `f` is the drag-driven factor. If only lengths should scale (starts stay put), change the formula and say so in the tooltip. This is the main open question for this phase.
 
-- [ ] Add a handle overlay, drawn and hit-tested in `MidiEditorOverlays.gd` or as a node in the `NoteEditor` layer. `MidiEditor._note_hit` and `VisualNote.RESIZE_HANDLE_WIDTH` show how hit testing is done there, because notes never take part in GUI picking.
-- [ ] Show the handle only when two or more notes are selected, or one note (it duplicates the per-note resize, so probably two or more only). Hide it in Drum View.
-- [ ] Handle position: at the right edge of the right-most selected note's end (`max(start + duration)`), vertically on that note. It must track zoom, scroll and selection changes, so reposition it from the same signals the selection overlays use.
-- [ ] Drag behaviour:
+- [x?] Add a handle overlay, drawn and hit-tested in `MidiEditorOverlays.gd` or as a node in the `NoteEditor` layer. `MidiEditor._note_hit` and `VisualNote.RESIZE_HANDLE_WIDTH` show how hit testing is done there, because notes never take part in GUI picking.
+- [x?] Show the handle only when two or more notes are selected, or one note (it duplicates the per-note resize, so probably two or more only). Hide it in Drum View.
+- [x?] Handle position: at the right edge of the right-most selected note's end (`max(start + duration)`), vertically on that note. It must track zoom, scroll and selection changes, so reposition it from the same signals the selection overlays use.
+- [x?] Drag behaviour:
   - Snap the new group end to the grid via `GridHelper`, as `_on_resize_updated` does for single notes (`_snapped_duration`).
   - Clamp the minimum factor so no note collapses below 1 tick (or a minimum grid step).
   - Work from a snapshot taken at drag start (like `_snapshot_selection`), so repeated mouse moves do not accumulate rounding.
   - Live preview by moving the visuals during the drag, then commit `MidiNoteData` at release.
   - One undo step ("Scale Notes") through `_history_begin_selection` and `_history_commit`.
   - Escape cancels and restores the snapshot.
-- [ ] Overlap handling on commit: `cut_overlapping_notes_at_pitch`, as in the nudge functions.
-- [ ] Cursor: use a horizontal resize cursor over the handle (`update_hover_cursor`). Handle hit-testing takes priority over note resize and box selection.
-- [ ] Looped instances and linked instances: shared `MidiNoteData` is scaled once. Notes in a loop region must stay inside the loop (see `fold_into_loop`).
-- [ ] Reuse `NoteTransforms.scale(notes, anchor, factor)`, put in the pure module, so it is unit-testable.
-- [ ] Tests (`test_note_group_scale.gd`): factor 2.0 and 0.5, an anchor note that does not move, minimum clamp, the snapshot gives the same result after many drag updates, and cancel restores the original notes.
+- [x?] Overlap handling on commit: `cut_overlapping_notes_at_pitch`, as in the nudge functions.
+- [x?] Cursor: use a horizontal resize cursor over the handle (`update_hover_cursor`). Handle hit-testing takes priority over note resize and box selection.
+- [x?] Looped instances and linked instances: shared `MidiNoteData` is scaled once. Notes in a loop region must stay inside the loop (see `fold_into_loop`).
+- [x?] Reuse `NoteTransforms.scale(notes, anchor, factor)`, put in the pure module, so it is unit-testable.
+- [x?] Tests (`test_note_group_scale.gd`): factor 2.0 and 0.5, an anchor note that does not move, minimum clamp, the snapshot gives the same result after many drag updates, and cancel restores the original notes.
 - [ ] Manual check: handle follows scrolling and zoom, handle disappears when the selection is cleared, and it behaves in both clip mode and track mode.
 
 ---
+
+Done as: semantics decided as the clip-like stretch above (starts and durations scale about the earliest start). `NoteTransforms.scale` / `min_scale_factor`; `NoteEditor.group_scale_handle_rect` / `begin_group_scale` / `update_group_scale(_from_mouse)` / `end_group_scale` / `cancel_group_scale`; the handle is drawn by `NoteEditor._draw` (not the overlays, so it scrolls and zooms with the notes) and hit-tested first in `MidiEditor._handle_left_mouse_press`. The handle needs two or more selected notes of the same clip, so it is hidden in track mode when the selection spans clips. The selection range, if any, is scaled with the notes (clip mode only). Test `test_note_group_scale.gd`. `_apply_selection_edit`'s sync tail is now `_sync_edited_notes`.
 
 ## Out of scope
 

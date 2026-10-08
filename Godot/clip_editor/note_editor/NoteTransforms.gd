@@ -129,3 +129,30 @@ static func strum(notes: Array[MidiNoteData], spread_ticks: int, direction: Stru
 			if n.start_tick != old_start or n.velocity != old_velocity:
 				changed += 1
 	return changed
+
+
+## Smallest scale factor at which no note of `durations` shrinks below one tick.
+static func min_scale_factor(durations: PackedInt32Array) -> float:
+	var shortest := 0
+	for d in durations:
+		shortest = d if shortest == 0 else mini(shortest, d)
+	return 1.0 / float(maxi(1, shortest))
+
+
+## Stretch the notes like a clip around `anchor`: both starts and ends move to
+## `anchor + (tick - anchor) * factor`, so the anchor stays put and gaps scale with the notes.
+## `orig_starts` / `orig_durations` (parallel to `notes`) are the snapshot to scale from, so
+## repeated calls with a changing factor never accumulate rounding; omit them to scale the
+## notes' current values. Starts stop at tick 0 and a note keeps at least one tick.
+static func scale(notes: Array[MidiNoteData], anchor: int, factor: float,
+		orig_starts: PackedInt32Array = PackedInt32Array(),
+		orig_durations: PackedInt32Array = PackedInt32Array()) -> void:
+	var from_snapshot := orig_starts.size() == notes.size() and orig_durations.size() == notes.size()
+	for i in notes.size():
+		var n := notes[i]
+		var start := orig_starts[i] if from_snapshot else n.start_tick
+		var duration := orig_durations[i] if from_snapshot else n.duration_ticks
+		var new_start := maxi(0, anchor + roundi((start - anchor) * factor))
+		var new_end := anchor + roundi((start + duration - anchor) * factor)
+		n.start_tick = new_start
+		n.duration_ticks = maxi(1, new_end - new_start)
