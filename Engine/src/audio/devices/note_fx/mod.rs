@@ -9,6 +9,10 @@
 //!   bypass, release) around a small [`NoteProcessor`] per device.
 //! - [`ids`]: engine-wide ids for generated notes, in the ranges `midi_types` documents.
 
+pub mod arpeggiator;
+pub mod chance;
+pub mod chord;
+pub mod clock;
 #[cfg(test)]
 mod conformance;
 pub mod host;

@@ -195,7 +195,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
 
 ## Phase 4: Chord, Arpeggiator, Chance (wave 2)
 
-- [ ] **T-018** [REQ-018, REQ-019] Chord.
+- [x] **T-018** [REQ-018, REQ-019] Chord.
   - _Files_: `Engine/src/audio/devices/note_fx/chord.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: 6 voices, Play Original, de-duplication, Strum with Up/Down, and strum cancellation
     on an early note-off.
@@ -203,7 +203,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     0.8/0.8/0.4, a single 72, strum offsets of 0/2400/4800 at 48 kHz). Conformance passes.
   - _Depends on_: T-008
 
-- [ ] **T-019** [REQ-021, REQ-026] `StepClock`.
+- [x] **T-019** [REQ-021, REQ-026] `StepClock`.
   - _Files_: `Engine/src/audio/devices/note_fx/clock.rs` (new)
   - _Output_: grid-locked steps while playing (including `tempo_inc`), free-running steps while
     stopped, swing, and the skip-near-grid-point rule.
@@ -215,7 +215,7 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     - an anchor 5 frames before a grid point skips that point.
   - _Depends on_: T-002
 
-- [ ] **T-020** [REQ-020, REQ-021, REQ-022, REQ-023] Arpeggiator.
+- [x] **T-020** [REQ-020, REQ-021, REQ-022, REQ-023] Arpeggiator.
   - _Files_: `Engine/src/audio/devices/note_fx/arpeggiator.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: the four Modes, Octaves, Reverse, Ping-Pong with Repeat Ends, Rate, Gate, Swing,
     immediate start, continuing without a restart when notes change, Latch, and the `note_state`
@@ -225,14 +225,14 @@ The phases follow the four delivery waves in requirements.md. Each wave ends wit
     passes.
   - _Depends on_: T-018, T-019
 
-- [ ] **T-021** [REQ-028] Chance.
+- [x] **T-021** [REQ-028] Chance.
   - _Files_: `Engine/src/audio/devices/note_fx/chance.rs` (new), `Engine/src/audio/devices/factory.rs`
   - _Output_: per-note-on probability, with note-offs paired to their note-ons.
   - _Verify_: `cargo test note_fx::chance` passes: at 0 % and 100 %, and at 50 % over 10 000 notes
     45–55 % pass with exact pairing. Conformance passes.
   - _Depends on_: T-008
 
-- [ ] **T-022** [REQ-037, REQ-039] Arpeggiator view.
+- [x] **T-022** [REQ-037, REQ-039] Arpeggiator view.
   - _Files_: `Godot/devices/builtin/ArpeggiatorDefaultView.gd` / `.tscn` (new),
     `Godot/devices/DeviceViewFactory.gd`, `Godot/devices/simple_view/ParamRules.gd` (Repeat Ends
     rule shared), `Godot/tests/test_arpeggiator_view.gd` (new)

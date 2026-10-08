@@ -8,7 +8,8 @@
 
 ### Not Working / To do
 - Simple View controls for the note effects show normalized knob values instead of real ones (semitones, %, key). Likely a general Simple View issue, not specific to note effects.
-- Waves 2–4 (T-018 onwards) not started.
+- Wave 2 engine and UI (T-018…T-022): Chord, `StepClock`, Arpeggiator, Chance and the Arpeggiator view (held-keys strip from `note_state`). `cargo test` and the targeted Godot tests pass. Clip arpeggio over a loop region verified live (a loop wrap on a block boundary used to repeat the first step). Rest of the T-023 live check still to do (virtual keyboard vs clip arpeggio, highlight walks low to high in Up mode, Chord → Arpeggiator → Chance, transport stop mid clip arpeggio).
+- Waves 3–4 (T-024 onwards) not started.
 
 
 ## Built-in effects UI (spec 012 follow-up)

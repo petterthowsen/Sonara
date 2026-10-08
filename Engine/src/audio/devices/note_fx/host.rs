@@ -89,6 +89,40 @@ pub trait NoteProcessor: Send + 'static {
     fn set_transport(&mut self, _transport: &Transport) {}
 
     fn set_sample_rate(&mut self, _sample_rate: f32) {}
+
+    /// Whether the effect feeds the `note_state` data stream (Arpeggiator, Step Sequencer).
+    const HAS_STATE: bool = false;
+
+    /// Fill the `note_state` view: current step, last sounding key and held keys. Only called
+    /// while subscribed, at the polling rate.
+    fn state(&self, _out: &mut NoteState) {}
+}
+
+/// What the `note_state` stream shows (design: Data and protocol changes). `0xFF` means none.
+pub struct NoteState {
+    pub step: u8,
+    pub key: u8,
+    pub branch: u8,
+    /// Held keys, in any order; the host sorts them.
+    pub held: Vec<u8>,
+}
+
+impl NoteState {
+    fn new() -> Self {
+        Self {
+            step: 0xFF,
+            key: 0xFF,
+            branch: 0xFF,
+            held: Vec::with_capacity(HELD_CAPACITY),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.step = 0xFF;
+        self.key = 0xFF;
+        self.branch = 0xFF;
+        self.held.clear();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -254,6 +288,25 @@ impl NoteCx<'_> {
         self.emit_at(at, off, sounding.parent);
     }
 
+    /// Schedule the note-off of generated note `id` (sounding key `key`) at `at`, even when its
+    /// note-on is itself still scheduled. Unlike [`Self::emit_off`], this never cancels the
+    /// note-on.
+    pub fn end_note_at(
+        &mut self,
+        id: SoundingNoteId,
+        key: u8,
+        at: u64,
+        release: f32,
+        parent: SoundingNoteId,
+    ) {
+        let off = NoteEvent::Off {
+            note_id: id,
+            key,
+            release,
+        };
+        self.emit_at(at, off, parent);
+    }
+
     /// Pass an input event on unchanged. A note-on is tracked as its own parent, so
     /// `release_children` with its id ends it.
     pub fn pass(&mut self, event: &NoteEvent, at: u64) {
@@ -365,6 +418,9 @@ pub struct NoteFxHost<P: NoteProcessor> {
 
     dropped: u32,
     last_warning: Option<u64>,
+
+    state_subscribed: bool,
+    state: NoteState,
 }
 
 impl<P: NoteProcessor> NoteFxHost<P> {
@@ -389,6 +445,8 @@ impl<P: NoteProcessor> NoteFxHost<P> {
             held: Vec::with_capacity(HELD_CAPACITY),
             dropped: 0,
             last_warning: None,
+            state_subscribed: false,
+            state: NoteState::new(),
         };
         for slot in 0..host.norm.len() {
             host.apply_slot(slot);
@@ -601,6 +659,41 @@ impl<P: NoteProcessor> AudioDevice for NoteFxHost<P> {
 
     fn note_discontinuity(&mut self) {
         self.discontinuity_pending = true;
+    }
+
+    fn subscribe_data(&mut self, data_type: &str) -> Result<(), String> {
+        if P::HAS_STATE && data_type == "note_state" {
+            self.state_subscribed = true;
+            return Ok(());
+        }
+        Err(format!(
+            "Device '{}' does not support '{}' data stream",
+            P::device_name(),
+            data_type
+        ))
+    }
+
+    fn unsubscribe_data(&mut self, data_type: &str) {
+        if data_type == "note_state" {
+            self.state_subscribed = false;
+        }
+    }
+
+    fn poll_device_data(&mut self) -> Option<(String, Vec<u8>)> {
+        if !P::HAS_STATE || !self.state_subscribed {
+            return None;
+        }
+        self.state.clear();
+        self.processor.state(&mut self.state);
+        self.state.held.sort_unstable();
+        self.state.held.dedup();
+        let mut bytes = Vec::with_capacity(4 + self.state.held.len());
+        bytes.push(self.state.step);
+        bytes.push(self.state.key);
+        bytes.push(self.state.branch);
+        bytes.push(self.state.held.len().min(255) as u8);
+        bytes.extend_from_slice(&self.state.held);
+        Some(("note_state".to_string(), bytes))
     }
 
     fn set_parameter(&mut self, param_id: ParamId, value: ParamValue) {

@@ -234,6 +234,9 @@ pub const NOTE_EFFECT_IDS: &[&str] = &[
     "sonara.builtin.transpose",
     "sonara.builtin.note_filter",
     "sonara.builtin.velocity",
+    "sonara.builtin.chord",
+    "sonara.builtin.arpeggiator",
+    "sonara.builtin.chance",
 ];
 
 /// Create a built-in note effect from [`NOTE_EFFECT_IDS`], prepared for `sample_rate`. Command
@@ -244,12 +247,16 @@ pub fn create_note_effect(
     max_frames: usize,
 ) -> Option<Box<dyn AudioDevice>> {
     use super::note_fx::{
-        note_filter::NoteFilter, transpose::Transpose, velocity::Velocity, NoteFxHost,
+        arpeggiator::Arpeggiator, chance::Chance, chord::Chord, note_filter::NoteFilter,
+        transpose::Transpose, velocity::Velocity, NoteFxHost,
     };
     let mut device: Box<dyn AudioDevice> = match device_id {
         "sonara.builtin.transpose" => Box::new(NoteFxHost::<Transpose>::new(sample_rate)),
         "sonara.builtin.note_filter" => Box::new(NoteFxHost::<NoteFilter>::new(sample_rate)),
         "sonara.builtin.velocity" => Box::new(NoteFxHost::<Velocity>::new(sample_rate)),
+        "sonara.builtin.chord" => Box::new(NoteFxHost::<Chord>::new(sample_rate)),
+        "sonara.builtin.arpeggiator" => Box::new(NoteFxHost::<Arpeggiator>::new(sample_rate)),
+        "sonara.builtin.chance" => Box::new(NoteFxHost::<Chance>::new(sample_rate)),
         _ => return None,
     };
     device.prepare(sample_rate, max_frames);
