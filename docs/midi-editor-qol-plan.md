@@ -149,7 +149,7 @@ Done as: semantics decided as the clip-like stretch above (starts and durations 
 
 ## Out of scope
 
-- Item 2, scale support (highlighted lanes and optional snapping). It likely needs its own spec under `docs/specs/` (project-level scale state, lane rendering in `NoteLanes.gd`, snapping rules), so it is better to track separately.
+- Item 2, scale support (now [#82](https://github.com/petterthowsen/Sonara/issues/82)) (highlighted lanes and optional snapping). It likely needs its own spec under `docs/specs/` (project-level scale state, lane rendering in `NoteLanes.gd`, snapping rules), so it is better to track separately.
 
 ## Suggested order and commits
 
