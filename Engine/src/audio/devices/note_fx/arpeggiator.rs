@@ -363,7 +363,9 @@ impl NoteProcessor for Arpeggiator {
     fn run_until(&mut self, cx: &mut NoteCx, until: u64) {
         self.ensure_built();
         self.start_pending(cx, until);
-        if self.seq.is_empty() || !self.running {
+        // A chord still arriving at its start frame: step 1 starts the clock, so don't ask the
+        // clock (still anchored to the last arpeggio) for steps before then.
+        if self.seq.is_empty() || !self.running || self.pending_start.is_some() {
             return;
         }
         while let Some(step) = self.clock.next(cx.now(), until) {
@@ -647,6 +649,32 @@ mod tests {
         release(&mut d, 1, 60, 0);
         let rest = collect(&mut d, 13, 60);
         assert!(on_keys(&rest).is_empty());
+    }
+
+    #[test]
+    fn a_chord_pressed_after_idling_starts_with_one_step_and_no_catch_up() {
+        let mut d = device();
+        press(&mut d, 1, 60, 0);
+        collect(&mut d, 0, 30);
+        release(&mut d, 1, 60, 0);
+        collect(&mut d, 30, 10);
+        // Idle, then a three-note chord (as a Chord device delivers it) at one frame.
+        collect(&mut d, 40, 100);
+        for (i, k) in [60u8, 64, 67].iter().enumerate() {
+            press(&mut d, 10 + i as u32, *k, 123);
+        }
+        let events = collect(&mut d, 140, 13);
+        let ons: Vec<(usize, u8)> = events.iter().filter(|e| e.1).map(|e| (e.0, e.2)).collect();
+        assert_eq!(ons, vec![(140 * BLOCK + 123, 60), (140 * BLOCK + 6123, 64)]);
+        // Every note-off comes after its note-on (nothing left hanging).
+        for (i, on) in events.iter().enumerate().filter(|(_, e)| e.1) {
+            assert!(
+                !events[..i]
+                    .iter()
+                    .any(|e| !e.1 && e.2 == on.2 && e.0 == on.0),
+                "{events:?}"
+            );
+        }
     }
 
     #[test]

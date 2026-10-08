@@ -184,10 +184,29 @@ func _update_tooltip() -> void:
 		tooltip_text = ""
 
 func _ready() -> void:
+	# Lights built in code (Layer slot rows) get the same glow the panel scenes set.
+	if light_texture == null:
+		light_texture = _default_light_texture()
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	_update_tooltip()
 	set_process(loading_state == "loading")
+
+
+static func _default_light_texture() -> GradientTexture2D:
+	var gradient := Gradient.new()
+	gradient.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_CUBIC
+	gradient.offsets = PackedFloat32Array([0.005, 0.40784314, 1.0, 1.025])
+	gradient.colors = PackedColorArray([
+		Color(1, 1, 1, 1), Color(1, 1, 1, 0.8235294),
+		Color(1, 1, 1, 0.023529412), Color(1, 0.63390625, 0.33999997, 0),
+	])
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill = GradientTexture2D.FILL_RADIAL
+	texture.fill_from = Vector2(0.4957265, 0.5)
+	texture.fill_to = Vector2(0.14529915, 0.14102565)
+	return texture
 
 
 func _process(delta: float) -> void:

@@ -235,6 +235,14 @@ impl StepClock {
         self.last_step = Some(at);
     }
 
+    /// Swung start sample of free-running step `next_k`.
+    fn free_step_at(&self) -> u64 {
+        (self.free_base
+            + self.swing_beats(self.next_k) * 60.0 / self.transport.tempo.max(1.0)
+                * self.sample_rate)
+            .round() as u64
+    }
+
     /// Align to the grid without playing a step now: the next step is the first grid point at
     /// or after `at` (the Step Sequencer's start while playing). Does nothing while stopped.
     #[allow(dead_code)] // The Step Sequencer (wave 3) uses it.
@@ -259,10 +267,19 @@ impl StepClock {
         let at = if self.transport.playing {
             self.playing_step_at(now, self.next_k)
         } else if self.free_active {
-            (self.free_base
-                + self.swing_beats(self.next_k) * 60.0 / self.transport.tempo.max(1.0)
-                    * self.sample_rate)
-                .round() as u64
+            // Never hand out a step from before the block (a stale anchor): skip ahead to the
+            // first step at or after `now`, keeping the phase.
+            let step = self.step_samples().max(1.0);
+            if self.free_base + step <= now as f64 {
+                let behind = ((now as f64 - self.free_base) / step).floor();
+                self.free_base += behind * step;
+                self.next_k += behind as i64;
+            }
+            if self.free_step_at() < now {
+                self.free_base += step;
+                self.next_k += 1;
+            }
+            self.free_step_at()
         } else {
             return None;
         };
@@ -456,5 +473,18 @@ mod tests {
     fn an_idle_stopped_clock_gives_no_steps() {
         let mut clock = StepClock::new(SR);
         assert!(run_stopped(&mut clock, 50).is_empty());
+    }
+
+    #[test]
+    fn a_stale_free_running_anchor_gives_no_steps_in_the_past() {
+        let mut clock = StepClock::new(SR);
+        let map = TempoMap::default();
+        clock.set_transport(&transport_at(&map, 0.0, false));
+        clock.start_at(0, 0);
+        // Asked again long after its anchor, it skips to the first step not before the block.
+        let now = 100 * BLOCK;
+        let step = clock.next(now, now + 6000).unwrap();
+        assert!(step.at >= now, "{step:?}");
+        assert_eq!(step.at % 6000, 0, "phase kept");
     }
 }
