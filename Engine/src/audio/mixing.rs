@@ -2,7 +2,6 @@ use crossbeam::channel::Sender;
 use std::collections::{HashMap, VecDeque};
 
 use super::commands::{EngineState, EngineStatus};
-use super::devices::clap_host::ClapDeviceAdapter;
 use super::devices::container::{self, ChainStep};
 use super::devices::AudioDevice;
 use super::render_scratch::{RenderScratch, SoloRole};
@@ -514,17 +513,6 @@ fn forward_device_events(channel: &mut Channel, status_tx: &Sender<EngineStatus>
     });
 
     container::visit_devices_mut(&mut channel.devices, &mut |device_path, device| {
-        if let Some(clap_adapter) = device.as_any_mut().downcast_mut::<ClapDeviceAdapter>() {
-            for (param_id, value) in clap_adapter.take_pending_param_changes() {
-                let _ = status_tx.try_send(EngineStatus::PluginParameterValueChanged {
-                    channel_id,
-                    device_path: *device_path,
-                    param_id,
-                    value,
-                });
-            }
-        }
-
         let data = rt_debug::section("poll_device_data", || device.poll_device_data());
         if let Some((data_type, data)) = data {
             let _ = status_tx.try_send(EngineStatus::DeviceData {
