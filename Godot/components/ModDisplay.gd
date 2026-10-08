@@ -26,30 +26,42 @@ const SOURCE_COLORS: Array[Color] = [
 const LIVE_MARKER_COLOR := Color(1, 1, 1, 0.9)
 
 
-## Alpha of the body overlay, shared by assign targets and a hovered modulator's bound controls.
+const _MOD_PULSE := preload("res://components/ModPulse.gd")
+
+## Alpha of the body overlay on assign targets that the focused modulator isn't bound to yet.
 const FILL_ALPHA := 0.28
+## Alpha range and rate of the pulsing overlay on controls the focused modulator is bound to.
+const PULSE_ALPHA_MIN := 0.2
+const PULSE_ALPHA_MAX := 0.65
+const PULSE_HZ := 2.0
 
 
 ## Overlay on a control's main part (a knob uses `draw_fill_circle`).
-static func draw_fill(item: CanvasItem, rect: Rect2, color: Color) -> void:
-	item.draw_rect(rect, Color(color, FILL_ALPHA), true)
+static func draw_fill(item: CanvasItem, rect: Rect2, color: Color, alpha := FILL_ALPHA) -> void:
+	item.draw_rect(rect, Color(color, alpha), true)
 
 
-static func draw_fill_circle(item: CanvasItem, center: Vector2, radius: float, color: Color) -> void:
-	item.draw_circle(center, radius, Color(color, FILL_ALPHA), true, -1.0, true)
+static func draw_fill_circle(item: CanvasItem, center: Vector2, radius: float, color: Color, alpha := FILL_ALPHA) -> void:
+	item.draw_circle(center, radius, Color(color, alpha), true, -1.0, true)
 
 
-## Centered amount readout ("+35 %") over a control's body.
-static func draw_hint_text(item: CanvasItem, rect: Rect2, text: String) -> void:
-	if text.is_empty():
-		return
-	var font := ThemeDB.fallback_font
-	var font_size := clampi(int(minf(rect.size.x, rect.size.y) * 0.32), 8, 12)
-	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
-	var pos := Vector2(rect.get_center().x - width * 0.5,
-		rect.get_center().y + font.get_ascent(font_size) * 0.5 - font.get_descent(font_size) * 0.5)
-	item.draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 3, Color(0, 0, 0, 0.85))
-	item.draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+## Current alpha of the bound-control overlay: a sine at `PULSE_HZ`, shared clock so every bound
+## control pulses in step.
+static func pulse_alpha() -> float:
+	var phase := Time.get_ticks_msec() / 1000.0 * PULSE_HZ * TAU
+	return lerpf(PULSE_ALPHA_MIN, PULSE_ALPHA_MAX, 0.5 + 0.5 * sin(phase))
+
+
+## Start or stop redrawing `control` every frame for the pulsing overlay.
+static func set_pulsing(control: Control, on: bool) -> void:
+	var pulse: Node = control.get_meta(&"_mod_pulse", null)
+	if on and pulse == null:
+		pulse = _MOD_PULSE.new()
+		control.add_child(pulse, false, Node.INTERNAL_MODE_BACK)
+		control.set_meta(&"_mod_pulse", pulse)
+	elif not on and pulse != null:
+		control.remove_meta(&"_mod_pulse")
+		pulse.queue_free()
 
 
 static func source_color(index: int) -> Color:

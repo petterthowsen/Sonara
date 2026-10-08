@@ -98,11 +98,12 @@ var mod_ranges: Array[Dictionary] = []:
 	set(r):
 		mod_ranges = r
 		queue_redraw()
-## Amount readout ("+35 %") and color of the focused modulator's binding to this control, shown
-## while a modulator is hovered or being assigned; empty when this control isn't bound to it.
-var mod_hint_text := "":
-	set(t):
-		mod_hint_text = t
+## True while the focused (hovered or assigning) modulator is bound to this control; the
+## overlay in `mod_hint_color` then pulses.
+var mod_hint_active := false:
+	set(a):
+		mod_hint_active = a
+		ModDisplay.set_pulsing(self, a)
 		queue_redraw()
 
 var mod_hint_color := Color.WHITE:
@@ -235,11 +236,10 @@ func _draw_modulation() -> void:
 			route["color"], true)
 	for live in mod_live_values:
 		draw_rect(Rect2(0, (1.0 - clampf(live, 0.0, 1.0)) * size.y - 0.5, size.x, 1.5), ModDisplay.LIVE_MARKER_COLOR, true)
-	if mod_assign_active:
+	if mod_hint_active:
+		ModDisplay.draw_fill(self, Rect2(Vector2.ZERO, size), mod_hint_color, ModDisplay.pulse_alpha())
+	elif mod_assign_active:
 		ModDisplay.draw_fill(self, Rect2(Vector2.ZERO, size), mod_assign_color)
-	elif not mod_hint_text.is_empty():
-		ModDisplay.draw_fill(self, Rect2(Vector2.ZERO, size), mod_hint_color)
-	ModDisplay.draw_hint_text(self, Rect2(Vector2.ZERO, size), mod_hint_text)
 
 
 ## Assign mode input: drags edit the amount, double-click removes the route.

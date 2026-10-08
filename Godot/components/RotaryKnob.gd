@@ -177,6 +177,7 @@ var value_arc_color: Color:
 @export var preview_modulation := false:
 	set(p):
 		preview_modulation = p
+		_update_pulsing()
 		queue_redraw()
 
 @export_range(-1.0, 1.0, 0.01) var preview_mod_amount := 0.25:
@@ -194,10 +195,11 @@ var value_arc_color: Color:
 		preview_mod_color = c
 		queue_redraw()
 
-## Shows the focus fill and amount readout, as when the source modulator is hovered.
+## Shows the pulsing bound fill, as when the source modulator is hovered.
 @export var preview_mod_focused := false:
 	set(f):
 		preview_mod_focused = f
+		_update_pulsing()
 		queue_redraw()
 
 ## Live marker position (0..1); below 0 hides it.
@@ -248,11 +250,12 @@ var mod_ranges: Array[Dictionary] = []:
 	set(r):
 		mod_ranges = r
 		queue_redraw()
-## Amount readout ("+35 %") and color of the focused modulator's binding to this control, shown
-## while a modulator is hovered or being assigned; empty when this control isn't bound to it.
-var mod_hint_text := "":
-	set(t):
-		mod_hint_text = t
+## True while the focused (hovered or assigning) modulator is bound to this control; the
+## overlay in `mod_hint_color` then pulses.
+var mod_hint_active := false:
+	set(a):
+		mod_hint_active = a
+		_update_pulsing()
 		queue_redraw()
 
 var mod_hint_color := Color.WHITE:
@@ -376,16 +379,16 @@ func _live_arc_angle(min_rad: float, max_rad: float) -> float:
 
 
 ## Draw the focused route's range over the value arc, live-value markers on the ring, and the
-## focus fill and amount readout on the knob body.
+## assign or bound fill on the knob body.
 func _draw_modulation(center: Vector2, arc_radius: float, knob_radius: float, min_rad: float, max_rad: float) -> void:
 	var route := {}
 	var live_values := mod_live_values
-	var hint_text := mod_hint_text
+	var hint_active := mod_hint_active
 	var hint_color := mod_hint_color
 	if preview_modulation:
 		route = {"amount": preview_mod_amount, "color": preview_mod_color, "bipolar": preview_mod_bipolar}
 		live_values = PackedFloat32Array([preview_mod_live]) if preview_mod_live >= 0.0 else PackedFloat32Array()
-		hint_text = ModDisplay.default_amount_text(preview_mod_amount) if preview_mod_focused else ""
+		hint_active = preview_mod_focused
 		hint_color = preview_mod_color
 	elif not mod_ranges.is_empty():
 		route = mod_ranges[0]
@@ -398,11 +401,14 @@ func _draw_modulation(center: Vector2, arc_radius: float, knob_radius: float, mi
 		var angle := lerpf(min_rad, max_rad, clampf(live, 0.0, 1.0))
 		draw_circle(center + Vector2.from_angle(angle) * arc_radius,
 			maxf(arc_width * mod_live_marker_radius_scale, 1.5), mod_live_marker_color, true, -1.0, true)
-	if mod_assign_active:
+	if hint_active:
+		ModDisplay.draw_fill_circle(self, center, knob_radius, hint_color, ModDisplay.pulse_alpha())
+	elif mod_assign_active:
 		ModDisplay.draw_fill_circle(self, center, knob_radius, mod_assign_color)
-	elif not hint_text.is_empty():
-		ModDisplay.draw_fill_circle(self, center, knob_radius, hint_color)
-	ModDisplay.draw_hint_text(self, Rect2(center - Vector2.ONE * knob_radius, Vector2.ONE * knob_radius * 2.0), hint_text)
+
+
+func _update_pulsing() -> void:
+	ModDisplay.set_pulsing(self, mod_hint_active or (preview_modulation and preview_mod_focused))
 
 
 func _gui_input(event: InputEvent) -> void:

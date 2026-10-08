@@ -260,19 +260,18 @@ static func _refresh_node(node: Control, device, param_id: int) -> void:
 		node.mod_assign_amount = amount_for(device, param_id)
 
 
-## Amount readout and colour of the focused modulator's route into this control (cleared when
-## it has none).
+## Whether the focused modulator has a route into this control, and its colour.
 static func _refresh_hint(node: Control, device, param_id: int) -> void:
-	var text := ""
+	var bound := false
 	var focused := focus()
 	if not focused.is_empty() and is_instance_valid(focused["device"]):
 		var owner = focused["device"]
 		var mod = owner.get_modulator(int(focused["mod_id"]))
 		var target := relative_target(owner, device, param_id)
 		if mod != null and target != "" and mod.routes.has(target) and absf(mod.get_route(target)) > 0.001:
-			text = amount_text(device, param_id, mod.get_route(target))
+			bound = true
 			node.mod_hint_color = ModDisplay.source_color(maxi(owner.modulators.find(mod), 0))
-	node.mod_hint_text = text
+	node.mod_hint_active = bound
 
 
 ## Re-emit `changed` so every attached control redraws (the pane calls this after editing a
