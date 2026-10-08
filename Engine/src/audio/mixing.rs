@@ -1,9 +1,10 @@
 use crossbeam::channel::Sender;
 use std::collections::{HashMap, VecDeque};
 
-use super::channel::Channel;
+use super::channel::{fader_gain, Channel};
 use super::commands::{EngineState, EngineStatus};
 use super::devices::container::{self, ChainStep};
+use super::dsp::interleave::deinterleave_stereo;
 use super::render_scratch::{RenderScratch, SoloRole};
 use super::rt_debug;
 use super::types::*;
@@ -13,15 +14,6 @@ const MASTER_CHANNEL_ID: ChannelId = 1;
 
 /// Max hops when walking output chains so a routing cycle cannot spin forever.
 const SOLO_WALK_LIMIT: usize = 64;
-
-/// Convert a fader or send level in dB to linear gain (-60 dB and below is silence).
-fn db_to_gain(db: f32) -> f32 {
-    if db <= -60.0 {
-        0.0
-    } else {
-        10.0_f32.powf(db / 20.0)
-    }
-}
 
 /// True if this channel contributes no audio this buffer (muted or excluded by solo).
 fn is_silenced(channel: &Channel) -> bool {
@@ -295,7 +287,7 @@ fn route_channel(
         if !send_allowed || target.mix.done {
             continue;
         }
-        let gain = db_to_gain(send.amount_db) * target.get_gain();
+        let gain = fader_gain(send.amount_db) * target.get_gain();
         if gain <= 0.0 {
             continue;
         }
@@ -479,15 +471,13 @@ fn copy_extra_outs_to_targets(
 fn deinterleave_extra(extra: &[f32], target: &mut Channel, frames: usize) {
     let frames = frames
         .min(target.buffer_left.len())
-        .min(target.buffer_right.len());
-    for i in 0..frames {
-        let idx = i * 2;
-        if idx + 1 >= extra.len() {
-            break;
-        }
-        target.buffer_left[i] = extra[idx];
-        target.buffer_right[i] = extra[idx + 1];
-    }
+        .min(target.buffer_right.len())
+        .min(extra.len() / 2);
+    deinterleave_stereo(
+        &extra[..frames * 2],
+        &mut target.buffer_left[..frames],
+        &mut target.buffer_right[..frames],
+    );
 }
 
 /// Send a channel's device events to Godot: sleep changes and device data streams.
@@ -916,7 +906,7 @@ mod tests {
         let output = mix(&mut state);
 
         // Track fader in pass 2, then the bus fader while routing into the bus
-        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0);
         assert!((state.channels[&2].buffer_left[0] - expected).abs() < 1e-5);
         assert!((state.channels[&1].buffer_left[0] - expected).abs() < 1e-5);
         assert!((output[0] - expected).abs() < 1e-5);
@@ -929,7 +919,7 @@ mod tests {
         state.channels.get_mut(&3).unwrap().solo = true;
         let output = mix(&mut state);
 
-        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0);
         assert!((state.channels[&2].buffer_left[0] - expected).abs() < 1e-5);
         assert!((state.channels[&1].buffer_left[0] - expected).abs() < 1e-5);
         assert!((output[0] - expected).abs() < 1e-5);
@@ -946,7 +936,7 @@ mod tests {
         state.channels.get_mut(&3).unwrap().solo = true;
         let output = mix(&mut state);
 
-        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0);
         assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
         assert!((output[0] - expected).abs() < 1e-5);
     }
@@ -961,7 +951,7 @@ mod tests {
         state.channels.get_mut(&2).unwrap().solo = true;
         let output = mix(&mut state);
 
-        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0);
+        let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0);
         assert!(state.channels[&4].buffer_left[0].abs() < 1e-6);
         assert!((output[0] - expected).abs() < 1e-5);
     }
@@ -980,7 +970,7 @@ mod tests {
         state.channels.get_mut(&2).unwrap().solo = true;
         let output = mix(&mut state);
 
-        let expected = 0.5 * db_to_gain(-6.0) * db_to_gain(-6.0) * db_to_gain(-6.0);
+        let expected = 0.5 * fader_gain(-6.0) * fader_gain(-6.0) * fader_gain(-6.0);
         assert!((output[0] - expected).abs() < 1e-5);
     }
 
@@ -1105,7 +1095,7 @@ mod tests {
         ]);
         let output = mix(&mut state);
 
-        let gain = db_to_gain(-6.0);
+        let gain = fader_gain(-6.0);
         let expected = 0.5 * gain * gain * gain + 0.5 * gain * gain;
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert!((output[0] - expected).abs() < 1e-5);

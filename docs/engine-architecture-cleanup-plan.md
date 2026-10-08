@@ -13,7 +13,7 @@ order. When a phase has to deviate from this plan, update this file first.
 - [x] Phase 0: Baseline
 - [x] Phase 1: Unused dependencies and dead code
 - [x] Phase 2: `main.rs` uses the library crate; logging module
-- [ ] Phase 3: Split `audio/types.rs`
+- [x] Phase 3: Split `audio/types.rs`
 - [ ] Phase 4: Split `audio/commands.rs`; `EngineState` gets its own module
 - [ ] Phase 5: Command effects: statuses and drops after the lock is released (prep for #1)
 - [ ] Phase 6: Device lookup helpers
@@ -610,6 +610,7 @@ lines except the two dispatch matches (`commands/mod.rs`, `command_worker/mod.rs
 | 0 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (duplicate run) | release 138; test build 117 | Baseline. No flaky test seen. Port 7000 held by user's engine (live checks pending). |
 | 1 | 2026-10-09 | lib 804 / 14; bin engine 789 / 14 (unchanged) | lib crate 0; `engine` bin 58 (was 138) | See notes below. |
 | 2 | 2026-10-09 | lib 804 / 14; bin engine 0 / 0 | release 0; test build 0 | New baseline: 804 passed, 14 ignored. Live check pending (see notes). |
+| 3 | 2026-10-09 | lib 807 / 14 (804 + 3 new tests) | release 0; test build 0 | Commits `Engine cleanup phase 3` (a) pure move, (b) improvements. See notes below. |
 
 Phase 1 notes:
 
@@ -660,3 +661,20 @@ Phase 2 notes:
   Phase 1 notes stayed as library API.
 - Live check (engine on port 7000, `last_*.log` written, `/project/init` rotation) is pending: the
   user's engine held port 7000 while this was done, so no engine was started.
+
+Phase 3 notes:
+
+- Layout: `audio/channel/{mod 203, chain 516, meter 185, pan 251, send 10}`, `audio/clip.rs` 201,
+  `audio/track.rs` 33, `audio/project.rs` 61, `audio/dsp/interleave.rs` 300, `audio/types.rs` 39 (aliases and
+  `ParamSetValue`). Line counts include tests.
+- `types.rs` became `channel/mod.rs` with `git mv`; a new `types.rs` holds the aliases. `audio/mod.rs` re-exports
+  `Channel`, `PanMode`, `PanCoefficients`, `Send`, the clip types, `ProjectSettings` and `Track` so `crate::audio::X`
+  paths are unchanged. Imports of `audio::types::<moved item>` were updated at their call sites.
+- Child modules see `Channel`'s private fields, so no `pub(super)` on fields was needed. Only
+  `gain_smoothing_alpha` is `pub(super)`.
+- Improvements: `channel::fader_gain` (the -60 dB floor) replaces `mixing.rs` `db_to_gain` and the inline formula in
+  `Channel::get_gain`; the clip instance gain in `processing.rs` uses `dsp::gain::db_to_gain` (no floor, as before);
+  `mixing.rs` `deinterleave_extra` now calls `dsp::interleave::deinterleave_stereo` (same clamping, so same output).
+  `devices/container.rs` `copy_interleaved` is a plain slice copy, not an interleave, so it was left alone.
+  New tests: `fader_gain` floor, interleave/deinterleave round-trips over SIMD and tail lengths.
+- Flaky: one `cargo test` run in the (b) commit failed one lib test (name not captured); the rerun passed 807.

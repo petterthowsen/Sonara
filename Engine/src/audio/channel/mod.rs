@@ -8,6 +8,7 @@ mod meter;
 mod pan;
 mod send;
 
+pub(crate) use meter::fader_gain;
 pub use pan::{PanCoefficients, PanMode};
 pub use send::Send;
 

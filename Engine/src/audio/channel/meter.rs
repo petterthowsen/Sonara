@@ -12,6 +12,16 @@ pub(super) fn gain_smoothing_alpha(sample_rate: f32) -> f32 {
     1.0 - (-1.0 / (tau * sample_rate as f64)).exp() as f32
 }
 
+/// Convert a fader or send level in dB to linear gain. -60 dB and below is silence (0.0), not a
+/// very quiet signal.
+pub(crate) fn fader_gain(db: f32) -> f32 {
+    if db <= -60.0 {
+        0.0
+    } else {
+        10.0_f32.powf(db / 20.0)
+    }
+}
+
 impl Channel {
     /// Convert dB to linear gain (target value, not smoothed)
     ///
@@ -22,11 +32,7 @@ impl Channel {
             Some(normalized) => crate::audio::automation::normalized_to_db(normalized),
             None => self.volume_db,
         };
-        if db <= -60.0 {
-            0.0
-        } else {
-            10.0_f32.powf(db / 20.0)
-        }
+        fader_gain(db)
     }
 
     /// Get smoothed gain value (advances smoothing by one sample)
@@ -109,6 +115,15 @@ mod meter_tests {
             channel.buffer_right[i] = amplitude;
         }
         channel
+    }
+
+    #[test]
+    fn fader_gain_floors_at_minus_60_db() {
+        assert_eq!(fader_gain(-60.0), 0.0);
+        assert_eq!(fader_gain(-90.0), 0.0);
+        assert!((fader_gain(0.0) - 1.0).abs() < 1e-6);
+        assert!((fader_gain(-6.0) - 0.501_187).abs() < 1e-5);
+        assert!(fader_gain(-59.9) > 0.0);
     }
 
     #[test]

@@ -1,3 +1,6 @@
+//! Identifier and position aliases shared across the engine (`Tick`, `ChannelId`, ...) and the
+//! device parameter value type.
+
 /// Value kind for setting device parameters
 #[derive(Debug, Clone, Copy)]
 pub enum ParamSetValue {

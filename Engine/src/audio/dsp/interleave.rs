@@ -262,3 +262,39 @@ unsafe fn deinterleave_stereo_neon(
         i += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frame counts that cover the SIMD bodies and every scalar tail length.
+    const LENGTHS: [usize; 8] = [0, 1, 3, 4, 7, 8, 9, 37];
+
+    #[test]
+    fn interleave_matches_the_scalar_layout() {
+        for frames in LENGTHS {
+            let left: Vec<f32> = (0..frames).map(|i| i as f32).collect();
+            let right: Vec<f32> = (0..frames).map(|i| -(i as f32) - 0.5).collect();
+            let mut out = vec![0.0; frames * 2];
+            interleave_stereo(&left, &right, &mut out);
+            for i in 0..frames {
+                assert_eq!(out[i * 2], left[i], "frames {frames}, left {i}");
+                assert_eq!(out[i * 2 + 1], right[i], "frames {frames}, right {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn deinterleave_inverts_interleave() {
+        for frames in LENGTHS {
+            let left: Vec<f32> = (0..frames).map(|i| i as f32 * 0.25).collect();
+            let right: Vec<f32> = (0..frames).map(|i| 1.0 - i as f32).collect();
+            let mut interleaved = vec![0.0; frames * 2];
+            interleave_stereo(&left, &right, &mut interleaved);
+            let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+            deinterleave_stereo(&interleaved, &mut l, &mut r);
+            assert_eq!(l, left, "frames {frames}");
+            assert_eq!(r, right, "frames {frames}");
+        }
+    }
+}

@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::clip::AudioPlayback;
 use super::commands::EngineState;
 use super::devices::apply_transport;
+use super::dsp::gain::db_to_gain;
 use super::render_scratch::ClipNoteEvent;
 use super::rt_debug;
 use super::tempo_map::fill_tick_rates;
@@ -403,7 +404,7 @@ pub fn process_audio(
                                     }
 
                                     // Apply gain offset
-                                    let gain_linear = 10.0_f32.powf(instance.gain_offset / 20.0);
+                                    let gain_linear = db_to_gain(instance.gain_offset);
                                     sample_left *= gain_linear;
                                     sample_right *= gain_linear;
                                 }
