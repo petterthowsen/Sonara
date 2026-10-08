@@ -621,7 +621,6 @@ dependencies = [
  "anyhow",
  "assert_no_alloc",
  "bincode",
- "byteorder",
  "chrono",
  "clack-extensions",
  "clack-host",
@@ -631,9 +630,7 @@ dependencies = [
  "half",
  "hound",
  "libc",
- "libloading",
  "nix",
- "once_cell",
  "raw-window-handle",
  "realfft",
  "rosc",
@@ -644,7 +641,6 @@ dependencies = [
  "symphonia",
  "tempfile",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
  "winit",
  "x11",
@@ -2131,18 +2127,6 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-appender"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3566e8ce28cc0a3fe42519fc80e6b4c943cc4c8cef275620eb8dac2d3d4e06cf"
-dependencies = [
- "crossbeam-channel",
- "thiserror",
- "time",
- "tracing-subscriber",
 ]
 
 [[package]]
