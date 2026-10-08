@@ -266,7 +266,7 @@ impl OscServer {
 
             // Check for AudioFileService events
             let events = {
-                let mut service = self.audio_file_service.lock().unwrap();
+                let service = self.audio_file_service.lock().unwrap();
                 service.poll_events()
             };
             for event in events {
@@ -1575,8 +1575,8 @@ impl OscServer {
             ["clip", id_str, "load_audio_file"] => {
                 if let (
                     Some(OscType::String(file_path)),
-                    Some(OscType::Int(sample_rate)),
-                    Some(OscType::Int(channels)),
+                    Some(OscType::Int(_sample_rate)),
+                    Some(OscType::Int(_channels)),
                 ) = (args.get(0), args.get(1), args.get(2))
                 {
                     let req_id = Self::generate_clip_request_id(id_str);
@@ -1988,7 +1988,7 @@ impl OscServer {
                     (args.get(0), args.get(1))
                 {
                     info!("AudioFile decode request: {} for {}", req_id, abs_path);
-                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                    if let Ok(afs) = self.audio_file_service.lock() {
                         let _ = afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone());
                     }
                 }
@@ -1998,7 +1998,7 @@ impl OscServer {
                     (args.get(0), args.get(1))
                 {
                     info!("AudioFile waveform request: {} for {}", req_id, abs_path);
-                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                    if let Ok(afs) = self.audio_file_service.lock() {
                         let _ = afs.submit_decode_and_waveform(req_id.clone(), abs_path.clone());
                     }
                 }
@@ -2047,7 +2047,7 @@ impl OscServer {
             ["audiofile", "waveform", "cancel"] => {
                 if let Some(OscType::String(req_id)) = args.first() {
                     info!("AudioFile cancel request: {}", req_id);
-                    if let Ok(mut afs) = self.audio_file_service.lock() {
+                    if let Ok(afs) = self.audio_file_service.lock() {
                         let _ = afs.cancel_job(req_id.clone());
                     }
                 }

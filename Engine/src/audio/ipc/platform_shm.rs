@@ -7,7 +7,7 @@
 
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 use nix::unistd::ftruncate;
-use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tracing::{error, info};
 
 /// Platform-specific shared memory region

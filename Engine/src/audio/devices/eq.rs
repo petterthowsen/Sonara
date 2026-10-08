@@ -238,7 +238,7 @@ impl BandFilter {
             pole_g: 0.0,
             scale: 1.0,
         };
-        let mut push = |f: &mut Self, shape: SvfShape, q: f32, gain: f32| {
+        let push = |f: &mut Self, shape: SvfShape, q: f32, gain: f32| {
             f.svf[f.stages] = SvfCoefs::new(shape, freq, q, gain, sample_rate);
             f.stages += 1;
         };

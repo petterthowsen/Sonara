@@ -526,7 +526,7 @@ impl PolySynthDevice {
 
     /// Effective normalized value of `slot` on one voice: the base (mono offset included) plus
     /// the voice's own routed modulators, clamped, as the `modulation` data stream reports it.
-    fn voice_mod_value(&self, voice: &Voice, param_id: ParamId, slot: usize, base: f32) -> f32 {
+    fn voice_mod_value(&self, voice: &Voice, param_id: ParamId, _slot: usize, base: f32) -> f32 {
         let mut sum = 0.0;
         for route in self.voice_spec.routes() {
             if route.param_id != param_id {

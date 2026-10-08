@@ -380,7 +380,7 @@ impl PhaserDevice {
             let lfo = self.lfo.value_at(shape, offset);
             let env = self.followers[ch].value();
             let base = 2f32.powf(sweep_oct + lfo * depth + env * amount);
-            let mut set = |g: f32, cur: &mut f32, step: &mut f32| {
+            let set = |g: f32, cur: &mut f32, step: &mut f32| {
                 let gp = g / (1.0 + g);
                 if snap {
                     *cur = gp;

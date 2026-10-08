@@ -23,7 +23,6 @@ use super::{AudioDevice, DeviceCategory, DeviceVariant, ParamId, ParamInfo, Para
 use crate::audio::dsp::delay_line::DelayLine;
 use crate::audio::dsp::env_follower::{Detection, EnvFollower};
 use crate::audio::dsp::gain::{db_to_gain, dry_wet_gains, gain_to_db, MixLaw};
-use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
 use crate::audio::dsp::one_pole::{one_pole_g, OnePole};
 use crate::audio::dsp::smoothing::SmoothedParam;
 use crate::audio::modulation::lfo::{Lfo, LfoShape};
@@ -1220,6 +1219,7 @@ impl AudioDevice for ReverbDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::dsp::linear_svf::{LinearSvf, SvfCoefs, SvfShape};
     use crate::audio::dsp::test_util::schroeder_t60;
     use crate::audio::dsp::test_util::{
         impulse, left, peak, pink_noise, render, right, rms, spectrum_db, stereo, tone_amplitude,
